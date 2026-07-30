@@ -58,6 +58,31 @@ vi.mock("next/cache", () => ({
   revalidatePath: (...a: unknown[]) => revalidatePath(...a),
 }));
 
+// cinatra#1942 (archive V2) — the archived-org guard is mocked WHOLESALE
+// (never touches `betterAuthDb.execute`, so it cannot disturb the FIFO
+// `queuedRows`/`executed` bookkeeping every other test in this file relies
+// on). Default: resolves (not archived) — every existing test above this
+// comment is byte-identical in behavior. `vi.hoisted` per the project's
+// vi.mock convention (factories may only reference hoisted values).
+const { assertTargetOrgNotArchived, OrganizationArchivedError } = vi.hoisted(() => {
+  class OrganizationArchivedError extends Error {
+    readonly reason = "org_archived" as const;
+    constructor(organizationId: string) {
+      super(`Organization ${organizationId} is archived.`);
+      this.name = "OrganizationArchivedError";
+    }
+  }
+  return {
+    assertTargetOrgNotArchived: vi.fn(async (_organizationId: string) => {}),
+    OrganizationArchivedError,
+  };
+});
+vi.mock("@/lib/organization-archive-guard", () => ({
+  assertTargetOrgNotArchived: (...a: unknown[]) =>
+    assertTargetOrgNotArchived(...(a as [string])),
+  OrganizationArchivedError,
+}));
+
 // Recorded raw-SQL executor: every `betterAuthDb.execute` / `tx.execute`
 // call is recorded and answered from a FIFO of queued row sets. The recorded
 // drizzle `sql` objects are real SQL trees we can walk for bound params.
@@ -165,6 +190,9 @@ beforeEach(() => {
   executed.length = 0;
   queuedRows = [];
   teamMemberRoleColumnExists.mockImplementation(async () => false);
+  // cinatra#1942 (archive V2) — default every test to "org not archived";
+  // individual tests below flip this to throw for the archived-org cases.
+  assertTargetOrgNotArchived.mockImplementation(async () => {});
 });
 
 // ---------------------------------------------------------------------------
@@ -680,5 +708,89 @@ describe("searchTeamMemberCandidates", () => {
     const r = await searchTeamMemberCandidates("team-1", "ad");
     expect(r).toEqual({ ok: false, error: "forbidden" });
     expect(executed).toHaveLength(1); // team lookup only — no user query
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Archived-org guard (cinatra#1942 archive V2 — the app-native bypass audit)
+//
+// `assertTeamMemberAuthority` calls the shared `assertTargetOrgNotArchived`
+// guard AFTER authority resolves (never before — an unauthorized caller must
+// learn nothing about the org's lifecycle state, the same "no existence
+// oracle" posture as the team-not-found case). The guard module is mocked
+// wholesale above; these tests only exercise how each action's `catch`
+// block maps `OrganizationArchivedError` to a result, and that authority
+// still runs (and can still fail) BEFORE the archived check.
+// ---------------------------------------------------------------------------
+describe("archived-org guard (cinatra#1942 archive V2)", () => {
+  it("addTeamMemberAction refuses with org_archived and performs NO mutation", async () => {
+    primeManagerSession();
+    assertTargetOrgNotArchived.mockImplementation(async () => {
+      throw new OrganizationArchivedError("org-of-team");
+    });
+    queuedRows = [[TEAM_ROW]]; // team lookup only — the guard throws right after
+    const r = await addTeamMemberAction("team-1", "user-2");
+    expect(r).toEqual({ ok: false, error: "org_archived" });
+    expect(executed).toHaveLength(1); // no org-membership probe, no INSERT
+    expect(transaction).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("removeTeamMemberAction refuses with org_archived and performs NO deletion", async () => {
+    primeManagerSession();
+    assertTargetOrgNotArchived.mockImplementation(async () => {
+      throw new OrganizationArchivedError("org-of-team");
+    });
+    queuedRows = [[TEAM_ROW]];
+    const r = await removeTeamMemberAction("team-1", "user-2");
+    expect(r).toEqual({ ok: false, error: "org_archived" });
+    expect(executed).toHaveLength(1);
+    expect(transaction).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("updateTeamMemberRoleAction refuses with org_archived and performs NO update", async () => {
+    primeManagerSession();
+    assertTargetOrgNotArchived.mockImplementation(async () => {
+      throw new OrganizationArchivedError("org-of-team");
+    });
+    queuedRows = [[TEAM_ROW]];
+    const r = await updateTeamMemberRoleAction("team-1", "user-2", "admin");
+    expect(r).toEqual({ ok: false, error: "org_archived" });
+    expect(executed).toHaveLength(1);
+    expect(transaction).not.toHaveBeenCalled();
+    expect(revalidatePath).not.toHaveBeenCalled();
+  });
+
+  it("searchTeamMemberCandidates returns a clean org_archived result (never throws to the caller)", async () => {
+    primeManagerSession();
+    assertTargetOrgNotArchived.mockImplementation(async () => {
+      throw new OrganizationArchivedError("org-of-team");
+    });
+    queuedRows = [[TEAM_ROW]];
+    const r = await searchTeamMemberCandidates("team-1", "ad");
+    expect(r).toEqual({ ok: false, error: "org_archived" });
+    expect(executed).toHaveLength(1); // no candidate query
+  });
+
+  it("authority is checked BEFORE the archived guard — a non-manager still gets 'forbidden', not 'org_archived'", async () => {
+    primeManagerSession({ orgRole: "member" });
+    // Even if the guard WOULD throw archived, a plain member never reaches
+    // it — authority fails first (assertTargetOrgNotArchived is never called).
+    assertTargetOrgNotArchived.mockImplementation(async () => {
+      throw new OrganizationArchivedError("org-of-team");
+    });
+    queuedRows = [[TEAM_ROW]];
+    const r = await addTeamMemberAction("team-1", "user-2");
+    expect(r).toEqual({ ok: false, error: "forbidden" });
+    expect(assertTargetOrgNotArchived).not.toHaveBeenCalled();
+  });
+
+  it("a passing guard (active org) is transparent — add still succeeds exactly as before", async () => {
+    primeManagerSession();
+    queuedRows = [[TEAM_ROW], [{ id: "m-1" }], [], [{ id: "tm-new" }]];
+    const r = await addTeamMemberAction("team-1", "user-2");
+    expect(r).toEqual({ ok: true });
+    expect(assertTargetOrgNotArchived).toHaveBeenCalledWith("org-of-team");
   });
 });

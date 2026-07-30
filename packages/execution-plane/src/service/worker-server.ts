@@ -55,9 +55,11 @@ import {
 import { execServerTlsOptions, type ExecTlsMaterial } from "./mtls";
 import {
   EXEC_ERROR_STATUS,
+  EXEC_PROTOCOL_VERSION,
   execErrorResponse,
   execOkResponse,
   parseWorkerRequest,
+  type WorkerHealthResultPayload,
   type WorkerRequest,
 } from "./protocol";
 import {
@@ -85,6 +87,7 @@ export type WorkerServiceConfig = {
   ledger?: CommandLedger;
   maxBodyBytes?: number;
   onRefusal?: ExecRpcListenerConfig["onRefusal"];
+  nowMs?: () => number;
 };
 
 export type WorkerService = {
@@ -122,6 +125,7 @@ export function createWorkerDispatch(
 ): (raw: unknown, ctx: ExecRpcContext) => Promise<ExecRpcReply> {
   const docker = config.docker ?? runDocker;
   const containerOps = config.containerOps ?? createLocalDockerContainerOps(docker);
+  const now = config.nowMs ?? (() => Date.now());
 
   async function handle(request: WorkerRequest): Promise<ExecRpcReply> {
     switch (request.op) {
@@ -260,6 +264,18 @@ export function createWorkerDispatch(
         const jobId = assertDrainJobId(request.payload.jobId);
         const cancelled = await containerOps.cancelJobContainers(jobId);
         return { status: 200, body: execOkResponse({ cancelled }) };
+      }
+      case "health": {
+        // exec-plane L4. Answering AT ALL is the evidence: the caller already
+        // passed mTLS, the byte-exact `broker-client` URI SAN + EKU check, the
+        // service token and the protocol-version check to get here. It runs no
+        // container and touches no volume ON PURPOSE — a liveness probe that
+        // did would make polling it a way to spend the host's resources.
+        const result: WorkerHealthResultPayload = {
+          protocolVersion: EXEC_PROTOCOL_VERSION,
+          atMs: now(),
+        };
+        return { status: 200, body: execOkResponse(result) };
       }
     }
   }

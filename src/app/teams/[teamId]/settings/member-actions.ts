@@ -45,6 +45,10 @@ import {
 } from "@/lib/better-auth-db";
 import { AuthzError } from "@/lib/authz/errors";
 import { entityId } from "@/lib/id-policy";
+import {
+  assertTargetOrgNotArchived,
+  OrganizationArchivedError,
+} from "@/lib/organization-archive-guard";
 
 import { canManageTeamMembers } from "./team-member-authority";
 
@@ -97,24 +101,38 @@ async function assertTeamMemberAuthority(teamId: string): Promise<{
   // Platform admin is an INDEPENDENT authority — checked before the org-role
   // resolution so an admin without a membership row in the team's org still
   // passes (the grant-candidate precedent).
+  let authorityTier: TeamAuthorityTier;
   if (isPlatformAdmin(session)) {
-    return { team, authorityTier: "platform", callerUserId };
+    authorityTier = "platform";
+  } else {
+    const orgRole = await resolveOrgRoleForUser(team.organizationId, callerUserId);
+    if (canManageTeamMembers({ platformAdmin: false, orgRole })) {
+      authorityTier = "org";
+    } else {
+      // Team-admin tier (cinatra#1566), resolved LAZILY: only after the org
+      // tiers failed, and only when the app-owned role column is
+      // provisioned — so the common paths cost nothing extra and
+      // un-migrated deployments behave exactly as before the role model
+      // landed.
+      const teamRole = await resolveCallerTeamRole(team.id, callerUserId);
+      if (!canManageTeamMembers({ platformAdmin: false, orgRole, teamRole })) {
+        throw forbidden();
+      }
+      authorityTier = "team_admin";
+    }
   }
 
-  const orgRole = await resolveOrgRoleForUser(team.organizationId, callerUserId);
-  if (canManageTeamMembers({ platformAdmin: false, orgRole })) {
-    return { team, authorityTier: "org", callerUserId };
-  }
+  // Archived-org guard (cinatra#1942 archive V2 — the app-native bypass
+  // audit). Checked AFTER authority resolves, so an unauthorized caller
+  // learns nothing about the org's lifecycle state (same "no existence
+  // oracle" posture as the team lookup above) — only a caller who already
+  // has team-member-management authority gets the `org_archived` refusal.
+  // This raw `teamMember` writer is entirely outside Better Auth's endpoint
+  // surface (the dispatch-hook policy in `@/lib/organization-dispatch-policy`
+  // cannot see it), so it must call the shared guard directly.
+  await assertTargetOrgNotArchived(team.organizationId);
 
-  // Team-admin tier (cinatra#1566), resolved LAZILY: only after the org tiers
-  // failed, and only when the app-owned role column is provisioned — so the
-  // common paths cost nothing extra and un-migrated deployments behave
-  // exactly as before the role model landed.
-  const teamRole = await resolveCallerTeamRole(team.id, callerUserId);
-  if (!canManageTeamMembers({ platformAdmin: false, orgRole, teamRole })) {
-    throw forbidden();
-  }
-  return { team, authorityTier: "team_admin", callerUserId };
+  return { team, authorityTier, callerUserId };
 }
 
 /** The caller's own role in the team (DB vocabulary), or `undefined` when
@@ -184,6 +202,9 @@ export type TeamMemberActionResult =
         | "last_member"
         | "last_admin"
         | "role_unavailable"
+        // cinatra#1942 (archive V2) — the team's organization is archived;
+        // the archived-org guard (`assertTeamMemberAuthority`) refused.
+        | "org_archived"
         | "unknown_error";
     };
 
@@ -251,6 +272,12 @@ export async function addTeamMemberAction(
     return { ok: true };
   } catch (err) {
     if (err instanceof AuthzError) return { ok: false, error: "forbidden" };
+    // cinatra#1942 (archive V2) — the archived-org guard threw; map to a
+    // clean result instead of re-throwing (mirrors the AuthzError handling
+    // immediately above).
+    if (err instanceof OrganizationArchivedError) {
+      return { ok: false, error: "org_archived" };
+    }
     throw err;
   }
 }
@@ -353,6 +380,12 @@ export async function removeTeamMemberAction(
     return result;
   } catch (err) {
     if (err instanceof AuthzError) return { ok: false, error: "forbidden" };
+    // cinatra#1942 (archive V2) — the archived-org guard threw; map to a
+    // clean result instead of re-throwing (mirrors the AuthzError handling
+    // immediately above).
+    if (err instanceof OrganizationArchivedError) {
+      return { ok: false, error: "org_archived" };
+    }
     throw err;
   }
 }
@@ -434,6 +467,12 @@ export async function updateTeamMemberRoleAction(
     return { ok: true };
   } catch (err) {
     if (err instanceof AuthzError) return { ok: false, error: "forbidden" };
+    // cinatra#1942 (archive V2) — the archived-org guard threw; map to a
+    // clean result instead of re-throwing (mirrors the AuthzError handling
+    // immediately above).
+    if (err instanceof OrganizationArchivedError) {
+      return { ok: false, error: "org_archived" };
+    }
     throw err;
   }
 }
@@ -498,6 +537,11 @@ export async function searchTeamMemberCandidates(
     };
   } catch (err) {
     if (err instanceof AuthzError) return { ok: false, error: err.reason };
+    // cinatra#1942 (archive V2) — stable machine-checkable reason, matching
+    // the mutating actions' `"org_archived"` code (not the full sentence).
+    if (err instanceof OrganizationArchivedError) {
+      return { ok: false, error: "org_archived" };
+    }
     return {
       ok: false,
       error: err instanceof Error ? err.message : "unknown_error",
