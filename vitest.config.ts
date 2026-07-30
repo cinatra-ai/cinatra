@@ -459,6 +459,10 @@ export default defineConfig({
       "scripts/audit/__tests__/sdk-abi-readme-gate.test.mjs",
       "scripts/audit/__tests__/sdk-public-surface-ban.test.mjs",
       "scripts/audit/__tests__/skill-frontmatter-gate.test.mjs",
+      // exec-compose-scoping-check is the same convention: a dependency-free
+      // `node --test` gate (it must run without a pnpm install, like the
+      // actions-pin gate above), run by `pnpm gate:exec-compose-scoping:test`.
+      "scripts/audit/__tests__/exec-compose-scoping-check.test.mjs",
       // DB-integration tier: needs a live Postgres (ECONNREFUSED 5432 in the
       // unit sandbox; the perpetual-loops-invariants CI job has no DB service).
       // Mirrors the `*.integration.test.ts` exclusion above. Lifted when
