@@ -17,6 +17,11 @@
 
 import type { SearchParamToastConfig } from "@cinatra-ai/sdk-ui/search-param-toast";
 
+import {
+  OPENAI_PARTIAL_SAVE_NOTICE_CODE,
+  OPENAI_PARTIAL_SAVE_NOTICE_MESSAGE,
+} from "@/lib/openai-partial-save-notice";
+
 export const SETUP_ERROR_MESSAGES = {
   // S6 (cinatra#2093) AI step: the provider choice + the readiness saga.
   // The saga's ACTIONABLE detail (and its fix-forward prompt) is rendered
@@ -65,14 +70,34 @@ export const SETUP_ERROR_MESSAGES = {
 
 export type SetupErrorCode = keyof typeof SETUP_ERROR_MESSAGES;
 
-// One <SearchParamToast> config entry per code: all on the `error` param,
-// rendered as an error-variant toast, with the STATIC message above. Passed to
-// the island mounted in src/app/setup/layout.tsx.
-export const SETUP_FLASH_TOASTS: SearchParamToastConfig[] = Object.entries(
-  SETUP_ERROR_MESSAGES,
-).map(([code, message]) => ({
-  param: "error",
-  value: code,
-  message,
-  variant: "error" as const,
-}));
+/**
+ * PARTIAL-SUCCESS codes, on their own `?notice=` param (cinatra#2094 F9).
+ *
+ * The `?error=` channel above is for outcomes where nothing usable was stored. A
+ * partial success is neither that nor a clean success: the OpenAI key IS saved and
+ * usable, but the connection-service copy did not complete, and the step's own
+ * "OpenAI connection saved" alert — which reads off DB readiness, now genuinely
+ * true — would otherwise be the only thing the operator sees. Same codes-only
+ * protocol: a code maps to a STATIC message here, never to URL-derived text.
+ */
+export const SETUP_NOTICE_MESSAGES = {
+  [OPENAI_PARTIAL_SAVE_NOTICE_CODE]: OPENAI_PARTIAL_SAVE_NOTICE_MESSAGE,
+} as const;
+
+// One <SearchParamToast> config entry per code: the `error` param renders an
+// error-variant toast, the `notice` param a warning-variant one, each with the
+// STATIC message above. Passed to the island mounted in src/app/setup/layout.tsx.
+export const SETUP_FLASH_TOASTS: SearchParamToastConfig[] = [
+  ...Object.entries(SETUP_ERROR_MESSAGES).map(([code, message]) => ({
+    param: "error",
+    value: code,
+    message,
+    variant: "error" as const,
+  })),
+  ...Object.entries(SETUP_NOTICE_MESSAGES).map(([code, message]) => ({
+    param: "notice",
+    value: code,
+    message,
+    variant: "warning" as const,
+  })),
+];
