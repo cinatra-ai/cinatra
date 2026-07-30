@@ -65,10 +65,18 @@ vi.mock("@cinatra-ai/llm", () => ({
     status: "reachable",
     url: "https://mcp.example.test/api/mcp",
   })),
+  // S6 exact binding (cinatra#2093): the runtime resolves the STORED provider
+  // through `resolveBoundDefaultAdapter`, which THROWS a named error instead of
+  // returning null so an unavailable stored provider is a VISIBLE failure.
   resolveDefaultAdapter: vi.fn(async () => ({
     provider: "openai",
     defaultModel: "gpt-4o",
   })),
+  resolveBoundDefaultAdapter: vi.fn(async () => ({
+    provider: "openai",
+    defaultModel: "gpt-4o",
+  })),
+  BoundDefaultProviderUnavailableError: class BoundDefaultProviderUnavailableError extends Error {},
   // cinatra#2091 S4: the runtime routes skill delivery through the provider
   // seam (and, on an inline-mechanism provider, through core expansion) instead
   // of calling buildSkillTools directly.

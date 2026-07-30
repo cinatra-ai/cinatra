@@ -68,7 +68,23 @@ export type LlmCapability = (typeof LLM_CAPABILITIES)[number];
 // (that branch is DERIVED from this schema in a later slice). Bump only on a
 // breaking change to the declaration shape.
 // ---------------------------------------------------------------------------
-export const LLM_PROVIDER_ABI_VERSION = 1 as const;
+export const LLM_PROVIDER_ABI_VERSION = 2 as const;
+
+// ---------------------------------------------------------------------------
+// ABI v2 — the setup-time provider-choice flags (cinatra#2093, epic #2086 S6).
+//
+// `defaultCapable` / `wizardEligible` turn "which providers may be the global
+// default" from an imperative core secret (four hardcoded `["openai","gemini"]`
+// fences that barred Anthropic architecturally) into DECLARED data every fence
+// derives from. `wizardEligible` is a strict subset of `defaultCapable` — the
+// wizard's only act is committing the stored default.
+//
+// RE-DECLARED, not imported, from the sdk leaf's
+// `BUILD_KNOWN_LLM_PROVIDER_FLAGS` — the same single-authority discipline the
+// rest of this model follows (the leaf is a TRUE leaf; this host model
+// re-states the shape and `llm-provider-leaf-mirror.test.ts` proves the two
+// never drift, now including the flag matrix itself).
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // native_mcp status vocabulary. A three-value status so a connector can ship
@@ -136,8 +152,20 @@ export const LlmProviderDeclarationSchema = z
     provider: z.enum(LLM_PROVIDERS),
     capabilities: LlmProviderCapabilitiesSchema,
     models: LlmProviderModelsSchema,
+    // --- ABI v2 (cinatra#2093, epic #2086 S6) ------------------------------
+    /** May this provider be the resolved GLOBAL default (`llm_default_provider`)? */
+    defaultCapable: z.boolean(),
+    /** May the SETUP WIZARD offer it as the owner's first-run choice? */
+    wizardEligible: z.boolean(),
   })
-  .strict();
+  .strict()
+  // Wizard eligibility is a strict SUBSET of default capability (mirror of the
+  // leaf's refine): the wizard's only act is committing the stored default, so
+  // offering a provider that could never BE the default is incoherent.
+  .refine((d) => !d.wizardEligible || d.defaultCapable, {
+    message: "wizardEligible requires defaultCapable (wizard eligibility is a subset of default capability)",
+    path: ["wizardEligible"],
+  });
 
 export type LlmProviderNativeMcp = z.infer<typeof LlmProviderNativeMcpSchema>;
 export type LlmProviderCapabilities = z.infer<typeof LlmProviderCapabilitiesSchema>;
@@ -179,6 +207,10 @@ export const BUILD_KNOWN_LLM_PROVIDER_DECLARATIONS: Readonly<
   openai: {
     abiVersion: LLM_PROVIDER_ABI_VERSION,
     provider: "openai",
+    // S6 flag matrix (cinatra#2093): OpenAI is default-capable AND offered by
+    // the first-run wizard.
+    defaultCapable: true,
+    wizardEligible: true,
     capabilities: {
       function_tools: true,
       media_input: false,
@@ -202,6 +234,11 @@ export const BUILD_KNOWN_LLM_PROVIDER_DECLARATIONS: Readonly<
   anthropic: {
     abiVersion: LLM_PROVIDER_ABI_VERSION,
     provider: "anthropic",
+    // S6 UN-FENCING (cinatra#2093): Anthropic becomes default-capable and
+    // wizard-eligible. Before S6 it was barred from the global default in four
+    // hardcoded places; those now derive from THIS flag.
+    defaultCapable: true,
+    wizardEligible: true,
     capabilities: {
       function_tools: true,
       media_input: false,
@@ -224,6 +261,10 @@ export const BUILD_KNOWN_LLM_PROVIDER_DECLARATIONS: Readonly<
   gemini: {
     abiVersion: LLM_PROVIDER_ABI_VERSION,
     provider: "gemini",
+    // S6 flag matrix (cinatra#2093): a perfectly valid GLOBAL default, but
+    // admin-configured after setup rather than offered in the first-run wizard.
+    defaultCapable: true,
+    wizardEligible: false,
     capabilities: {
       function_tools: true,
       media_input: true,
@@ -260,6 +301,43 @@ export function declarationSatisfiesCapability(
       // Defense-in-depth: any future enum member is unsatisfied until declared.
       return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// v2 flag projections (cinatra#2093, epic #2086 S6) — the host-side mirror of
+// the leaf's `providersWithDefaultCapable` / `providersWithWizardEligible`.
+//
+// These answer the two setup-time questions off the DECLARATION catalog rather
+// than off a re-listed provider-id set:
+//   defaultCapableProviders() — who may be stored in `llm_default_provider`
+//   wizardEligibleProviders() — who `/setup/ai` may offer as the first-run pick
+//
+// The RUNTIME un-fencing chokepoints (`src/lib/database.ts`'s eligibility
+// predicate and `packages/llm`'s two implicit-global resolvers) deliberately
+// read the SDK LEAF's projection instead of these — `@cinatra-ai/agents`
+// depends on `@cinatra-ai/llm`, so those layers cannot import this module. The
+// drift-guard mirror test pins the two projections equal, so there is one
+// effective authority with two layering-legal entry points.
+// ---------------------------------------------------------------------------
+
+/** Providers whose declaration permits them to be the resolved GLOBAL default. */
+export function defaultCapableProviders(): LlmProvider[] {
+  return LLM_PROVIDERS.filter(
+    (p) => BUILD_KNOWN_LLM_PROVIDER_DECLARATIONS[p].defaultCapable === true,
+  );
+}
+
+/**
+ * Providers the setup wizard may OFFER. Re-asserts the subset invariant at read
+ * time so a hand-built declaration that bypassed schema validation still cannot
+ * be wizard-eligible without being default-capable.
+ */
+export function wizardEligibleProviders(): LlmProvider[] {
+  return LLM_PROVIDERS.filter(
+    (p) =>
+      BUILD_KNOWN_LLM_PROVIDER_DECLARATIONS[p].wizardEligible === true &&
+      BUILD_KNOWN_LLM_PROVIDER_DECLARATIONS[p].defaultCapable === true,
+  );
 }
 
 // ---------------------------------------------------------------------------

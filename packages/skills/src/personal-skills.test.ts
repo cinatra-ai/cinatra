@@ -44,7 +44,7 @@ const {
     // no-provider branches via mockResolvedValue/mockImplementation.
     resolveConfiguredLlmRuntimeMock: vi.fn(
       async (
-        _input?: { allowAnthropicFallback?: boolean; preferredProviders?: string[] },
+        _input?: { preferredProviders?: string[] },
       ): Promise<
         | { provider: "openai"; connection: { apiKey: string } }
         | { provider: "anthropic" }
@@ -328,7 +328,14 @@ describe("createOrUpdatePersonalSkillForAgent — based_on frontmatter injection
 // Anthropic last-resort fallback so the persist succeeds instead of silently
 // throwing "No LLM provider configured for personal skill generation."
 // ---------------------------------------------------------------------------
-describe("createOrUpdateCustomSkillForAgent — Anthropic-only persist (cinatra#1850)", () => {
+// cinatra#2093 (epic #2086 S6) RETIRED the `allowAnthropicFallback` opt-in this
+// block was written for. It existed ONLY because Anthropic was architecturally
+// barred from the global default, so an Anthropic-only install needed a
+// per-purpose escape hatch to reach it. With Anthropic `defaultCapable`, an
+// Anthropic-only install resolves Anthropic because it IS the stored default —
+// so the OUTCOME these tests protect (a personal skill persists on an
+// Anthropic-only install) is asserted through the plain, unflagged call.
+describe("createOrUpdateCustomSkillForAgent — Anthropic-only persist (cinatra#1850, un-flagged by #2093)", () => {
   const promptEntries = [
     { id: "p1", kind: "initial" as const, prompt: "be more concise", savedAt: new Date().toISOString() },
   ];
@@ -386,7 +393,7 @@ describe("createOrUpdateCustomSkillForAgent — Anthropic-only persist (cinatra#
     listPersonalSkillsForCurrentUserAndAgentMock.mockResolvedValue([]);
   });
 
-  it("resolves the runtime WITH the Anthropic last-resort fallback opted in", async () => {
+  it("resolves the runtime with NO per-purpose flag (exact-default purpose policy)", async () => {
     resolveConfiguredLlmRuntimeMock.mockResolvedValue({
       provider: "openai" as const,
       connection: { apiKey: "sk-test" },
@@ -399,18 +406,17 @@ describe("createOrUpdateCustomSkillForAgent — Anthropic-only persist (cinatra#
       userId: "u-1",
     });
 
-    expect(resolveConfiguredLlmRuntimeMock).toHaveBeenCalledWith({ allowAnthropicFallback: true });
+    // The decisive assertion: NO argument at all. A flag here would mean this
+    // purpose could silently run on a provider the operator did not choose.
+    expect(resolveConfiguredLlmRuntimeMock).toHaveBeenCalledWith();
   });
 
-  it("persists a personal skill on an Anthropic-only install (runtime resolves ONLY via the fallback)", async () => {
-    // Mirror the real resolver: on an Anthropic-only stack the implicit-global
-    // call returns null, and the Anthropic runtime is returned ONLY when the
-    // caller opts into the fallback. Because the generator passes the flag, the
-    // upsert succeeds — the drawer preview is non-null — rather than throwing.
-    resolveConfiguredLlmRuntimeMock.mockImplementation(
-      async (arg?: { allowAnthropicFallback?: boolean }) =>
-        arg?.allowAnthropicFallback ? { provider: "anthropic" as const } : null,
-    );
+  it("persists a personal skill on an Anthropic-only install (Anthropic IS the stored default)", async () => {
+    // Mirror the POST-S6 resolver: on an Anthropic-only stack the plain
+    // implicit-global call returns the Anthropic runtime, because Anthropic is
+    // the stored `llm_default_provider` and is `defaultCapable`. No flag, no
+    // special case — and the upsert still succeeds (drawer preview non-null).
+    resolveConfiguredLlmRuntimeMock.mockResolvedValue({ provider: "anthropic" as const });
 
     const persisted = await createOrUpdateCustomSkillForAgent({
       agentId: "agent-x",
@@ -427,7 +433,7 @@ describe("createOrUpdateCustomSkillForAgent — Anthropic-only persist (cinatra#
     expect(taskArg.runtime).toEqual({ provider: "anthropic" });
   });
 
-  it("still throws the explicit no-provider error when NOTHING is configured (even with the fallback)", async () => {
+  it("still throws the explicit no-provider error when NOTHING is configured", async () => {
     resolveConfiguredLlmRuntimeMock.mockResolvedValue(null);
 
     await expect(

@@ -69,11 +69,30 @@ describe("provider-id capability-decision ledger (#1712 AC5)", () => {
     );
   });
 
-  it("EXEMPT — the two core PLATFORM policies stay provider-id lists (resolution order / fallback scan, not capability)", () => {
+  it("RESOLVED — global-default eligibility is now DERIVED from the ABI v2 declaration, not a provider-id list", () => {
+    // cinatra#2093 (epic #2086 S6) closed the first half of this exemption.
+    // The implicit-global resolution ORDER used to be the hardcoded
+    // `["openai", "gemini"]` literal that architecturally barred Anthropic; it
+    // now derives from the `defaultCapable` flag via the SDK leaf (which
+    // `@cinatra-ai/llm` MAY import — the cycle that forced the exemption only
+    // applies to the `@cinatra-ai/agents` catalog).
     const registry = read("packages/llm/src/registry.ts");
-    // Global-default resolution ORDER (Anthropic-excluded implicit fallthrough).
-    expect(registry).toContain('const globalEligible: LlmProvider[] = ["openai", "gemini"]');
-    // Image-provider fallback SCAN order.
+    expect(registry).not.toContain('const globalEligible: LlmProvider[] = ["openai", "gemini"]');
+    expect(registry).toContain("buildKnownDefaultCapableProviders()");
+
+    const llmIndex = read("packages/llm/src/index.ts");
+    // The SECOND implicit-global resolver derives from the SAME helper rather
+    // than carrying its own copy of the list.
+    expect(llmIndex).not.toContain('const globalEligible: LlmProvider[] = ["openai", "gemini"]');
+    expect(llmIndex).toContain("resolveImplicitGlobalProviderOrder()");
+  });
+
+  it("EXEMPT — the image-provider fallback SCAN order stays a provider-id list (order, not capability)", () => {
+    const registry = read("packages/llm/src/registry.ts");
+    // Image generation is the `separate-default` purpose: it resolves through
+    // its OWN stored preference and deliberately does not follow
+    // `llm_default_provider`, so its scan order is a platform policy rather
+    // than a capability question.
     expect(registry).toContain('const allProviders: LlmProvider[] = ["openai", "anthropic", "gemini"]');
   });
 

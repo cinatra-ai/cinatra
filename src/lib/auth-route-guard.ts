@@ -26,6 +26,7 @@ const PUBLIC_PATH_PREFIXES = [
   "/.well-known",  // OAuth / OIDC discovery metadata (RFC 8414, RFC 8707)
   "/api/webhooks/wordpress", // WordPress publish-event webhook receiver — auth enforced inside route handler (HMAC-SHA256)
   "/api/connect/token", // cinatra#221 Connect provisioning code/install-code exchange — server-to-server (CMS backend); auth enforced inside via the authorization-code/PKCE/install-code itself (no session, no cookies), mirrors /api/webhooks/wordpress. NOTE: /connect/authorize is NOT exempted — it stays session-gated (org-admin consent screen).
+  "/api/connect/site-inventory", // cinatra#2018 (S3) PR-D, absorbed by cinatra#2021 (S6): the authenticated WordPress site-inventory intake — server-to-server (the site plugin, never a browser); auth enforced inside via the per-site `cnx_` credential + paired Origin binding (no session, no cookies), mirrors /api/connect/token.
   "/api/widget-auth/init", // cinatra#407 hosted /widget-auth PKCE login — server-to-server transaction init; auth enforced inside via the per-site `cnx_` credential (no session). NOTE: the /widget-auth PAGE is exempted separately below (it must render the login form for a SESSIONLESS visitor instead of 307→/sign-in).
   "/api/widget-auth/token", // cinatra#407 hosted /widget-auth PKCE login — server-to-server code→user-token redeem; auth enforced inside via the per-site `cnx_` credential + PKCE (no session), mirrors /api/connect/token.
   "/api/health",   // Unauthenticated host-native Next.js health probe for local startup polling; no session is available

@@ -209,6 +209,13 @@ const SYSTEM_JOBS = new Set<string>([
   // additionally notifies admins itself when a request exhausts its retries).
   "anthropic-skill-upload-reconcile",
   "anthropic-skill-upload-reconcile-sweep",
+  // Lease-expiry finalizer (cinatra#1940 P4). Boot-seeded ~60-second
+  // self-rescheduling sweep (canonical-id re-delay) that settles expired
+  // `org_archive_lease` rows: durable runtime cancel with retry/escalation,
+  // then the audited settle under the archive fence. System-initiated (no
+  // user initiator). Silent on success; an unexpected cycle failure fans out
+  // to admins.
+  "lease-expiry-finalize",
 ]);
 
 // `started` is included so worker.on("active") can resolve a recipient for

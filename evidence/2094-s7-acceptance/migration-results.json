@@ -1,0 +1,998 @@
+{
+  "driver": "cinatra#2094 S7 org-wide migration regression",
+  "ranAt": "2026-07-29T21:31:47.393Z",
+  "arms": {
+    "A_defaultBranchCensus": {
+      "verdict": "PASS",
+      "scannedRepos": 111,
+      "unreachableRepos": 1,
+      "counts": {
+        "agentRepos": 29,
+        "nonSkillRepos": 83,
+        "skillRepos": 27,
+        "embeddedSkillViolations": 0,
+        "skillReposNotExactlyOneBundle": 0
+      },
+      "embeddedSkillViolations": [],
+      "skillReposNotExactlyOneBundle": [],
+      "perRepo": [
+        {
+          "repo": "a2a-server-connector",
+          "pkg": "@cinatra-ai/a2a-server-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "anthropic-connector",
+          "pkg": "@cinatra-ai/anthropic-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "apify-connector",
+          "pkg": "@cinatra-ai/apify-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "apollo-connector",
+          "pkg": "@cinatra-ai/apollo-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "apollo-prospecting-agent",
+          "pkg": "@cinatra-ai/apollo-prospecting-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "audio-artifact",
+          "pkg": "@cinatra-ai/audio-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "author-agent",
+          "pkg": "@cinatra-ai/author-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "automation-authoring-skill",
+          "pkg": "@cinatra-ai/automation-authoring-skill",
+          "kind": "skill",
+          "skillRole": "injectable",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "blog-connector",
+          "pkg": "@cinatra-ai/blog-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "blog-content-skill",
+          "pkg": "@cinatra-ai/blog-content-skill",
+          "kind": "skill",
+          "skillRole": "injectable",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "blog-draft-writer-agent",
+          "pkg": "@cinatra-ai/blog-draft-writer-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "blog-idea-artifact",
+          "pkg": "@cinatra-ai/blog-idea-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "blog-idea-authoring-skill",
+          "pkg": "@cinatra-ai/blog-idea-authoring-skill",
+          "kind": "skill",
+          "skillRole": "injectable",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "blog-idea-generator-agent",
+          "pkg": "@cinatra-ai/blog-idea-generator-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "blog-idea-matcher-skill",
+          "pkg": "@cinatra-ai/blog-idea-matcher-skill",
+          "kind": "skill",
+          "skillRole": "matcher",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "blog-image-artifact",
+          "pkg": "@cinatra-ai/blog-image-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "blog-image-matcher-skill",
+          "pkg": "@cinatra-ai/blog-image-matcher-skill",
+          "kind": "skill",
+          "skillRole": "matcher",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "blog-image-prompt-agent",
+          "pkg": "@cinatra-ai/blog-image-prompt-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "blog-linkedin-publish-agent",
+          "pkg": "@cinatra-ai/blog-linkedin-publish-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "blog-linkedin-writer-agent",
+          "pkg": "@cinatra-ai/blog-linkedin-writer-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "blog-pipeline-agent",
+          "pkg": "@cinatra-ai/blog-pipeline-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "blog-post-artifact",
+          "pkg": "@cinatra-ai/blog-post-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "blog-post-matcher-skill",
+          "pkg": "@cinatra-ai/blog-post-matcher-skill",
+          "kind": "skill",
+          "skillRole": "matcher",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "blog-wordpress-publish-agent",
+          "pkg": "@cinatra-ai/blog-wordpress-publish-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "blog-writing-skill",
+          "pkg": "@cinatra-ai/blog-writing-skill",
+          "kind": "skill",
+          "skillRole": "injectable",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "brand-voice-artifact",
+          "pkg": "@cinatra-ai/brand-voice-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "brand-voice-matcher-skill",
+          "pkg": "@cinatra-ai/brand-voice-matcher-skill",
+          "kind": "skill",
+          "skillRole": "matcher",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "chart-artifact",
+          "pkg": "@cinatra-ai/chart-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "chat-assistant-core-skill",
+          "pkg": "@cinatra-ai/chat-assistant-core-skill",
+          "kind": "skill",
+          "skillRole": "injectable",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "cms-snapshot-artifact",
+          "pkg": "@cinatra-ai/cms-snapshot-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "code-reviewer-agent",
+          "pkg": "@cinatra-ai/code-reviewer-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "company-discovery-agent",
+          "pkg": "@cinatra-ai/company-discovery-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "company-research-skill",
+          "pkg": "@cinatra-ai/company-research-skill",
+          "kind": "skill",
+          "skillRole": "injectable",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "competitive-analysis-artifact",
+          "pkg": "@cinatra-ai/competitive-analysis-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "competitive-analysis-matcher-skill",
+          "pkg": "@cinatra-ai/competitive-analysis-matcher-skill",
+          "kind": "skill",
+          "skillRole": "matcher",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "contact-discovery-agent",
+          "pkg": "@cinatra-ai/contact-discovery-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "context-selection-agent",
+          "pkg": "@cinatra-ai/context-selection-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "contract-artifact",
+          "pkg": "@cinatra-ai/contract-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "contract-matcher-skill",
+          "pkg": "@cinatra-ai/contract-matcher-skill",
+          "kind": "skill",
+          "skillRole": "matcher",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "crm-connector",
+          "pkg": "@cinatra-ai/crm-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "dashboard-artifact",
+          "pkg": "@cinatra-ai/dashboard-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "document-artifact",
+          "pkg": "@cinatra-ai/document-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "drupal-agent",
+          "pkg": "@cinatra-ai/drupal-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "drupal-artifacts",
+          "pkg": "@cinatra-ai/drupal-artifacts",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "drupal-assistant-connector",
+          "pkg": "@cinatra-ai/drupal-assistant-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "drupal-mcp-connector",
+          "pkg": "@cinatra-ai/drupal-mcp-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "drupal-widget-chat-skill",
+          "pkg": "@cinatra-ai/drupal-widget-chat-skill",
+          "kind": "skill",
+          "skillRole": "injectable",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "email-artifacts",
+          "pkg": "@cinatra-ai/email-artifacts",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "email-body-matcher-skill",
+          "pkg": "@cinatra-ai/email-body-matcher-skill",
+          "kind": "skill",
+          "skillRole": "matcher",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "email-connector",
+          "pkg": "@cinatra-ai/email-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "email-delivery-agent",
+          "pkg": "@cinatra-ai/email-delivery-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "email-drafting-agent",
+          "pkg": "@cinatra-ai/email-drafting-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "email-follow-up-agent",
+          "pkg": "@cinatra-ai/email-follow-up-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "email-outreach-agent",
+          "pkg": "@cinatra-ai/email-outreach-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "email-recipient-selection-agent",
+          "pkg": "@cinatra-ai/email-recipient-selection-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "email-test-delivery-agent",
+          "pkg": "@cinatra-ai/email-test-delivery-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "extension-authoring-skill",
+          "pkg": "@cinatra-ai/extension-authoring-skill",
+          "kind": "skill",
+          "skillRole": "injectable",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "gemini-connector",
+          "pkg": "@cinatra-ai/gemini-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "github-connector",
+          "pkg": "@cinatra-ai/github-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "gmail-connector",
+          "pkg": "@cinatra-ai/gmail-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "google-calendar-connector",
+          "pkg": "@cinatra-ai/google-calendar-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "google-oauth-connector",
+          "pkg": "@cinatra-ai/google-oauth-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "hitl-prompt-drive-skill",
+          "pkg": "@cinatra-ai/hitl-prompt-drive-skill",
+          "kind": "skill",
+          "skillRole": "internal",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "image-artifact",
+          "pkg": "@cinatra-ai/image-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "json-artifact",
+          "pkg": "@cinatra-ai/json-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "linkedin-artifacts",
+          "pkg": "@cinatra-ai/linkedin-artifacts",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "linkedin-connector",
+          "pkg": "@cinatra-ai/linkedin-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "linkedin-oauth-connector",
+          "pkg": "@cinatra-ai/linkedin-oauth-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "lint-policy-agent",
+          "pkg": "@cinatra-ai/lint-policy-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "list-curation-skill",
+          "pkg": "@cinatra-ai/list-curation-skill",
+          "kind": "skill",
+          "skillRole": "injectable",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "list-curator-agent",
+          "pkg": "@cinatra-ai/list-curator-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "marketing-icp-artifact",
+          "pkg": "@cinatra-ai/marketing-icp-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "marketing-icp-authoring-skill",
+          "pkg": "@cinatra-ai/marketing-icp-authoring-skill",
+          "kind": "skill",
+          "skillRole": "injectable",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "marketing-icp-matcher-skill",
+          "pkg": "@cinatra-ai/marketing-icp-matcher-skill",
+          "kind": "skill",
+          "skillRole": "matcher",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "marketing-strategy-artifact",
+          "pkg": "@cinatra-ai/marketing-strategy-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "marketing-strategy-matcher-skill",
+          "pkg": "@cinatra-ai/marketing-strategy-matcher-skill",
+          "kind": "skill",
+          "skillRole": "matcher",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "mcp-client-connector",
+          "kind": "connector",
+          "reachable": false,
+          "error": "gh: Not Found (HTTP 404)\n"
+        },
+        {
+          "repo": "mcp-server-connector",
+          "pkg": "@cinatra-ai/mcp-server-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "media-feed-lister-agent",
+          "pkg": "@cinatra-ai/media-feed-lister-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "media-feeds-connector",
+          "pkg": "@cinatra-ai/media-feeds-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "media-transcript-agent",
+          "pkg": "@cinatra-ai/media-transcript-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "nango-connector",
+          "pkg": "@cinatra-ai/nango-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "openai-connector",
+          "pkg": "@cinatra-ai/openai-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "pdf-artifact",
+          "pkg": "@cinatra-ai/pdf-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "plane-connector",
+          "pkg": "@cinatra-ai/plane-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "planner-agent",
+          "pkg": "@cinatra-ai/planner-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "product-portfolio-artifact",
+          "pkg": "@cinatra-ai/product-portfolio-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "product-portfolio-matcher-skill",
+          "pkg": "@cinatra-ai/product-portfolio-matcher-skill",
+          "kind": "skill",
+          "skillRole": "matcher",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "resend-connector",
+          "pkg": "@cinatra-ai/resend-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "sales-playbook-artifact",
+          "pkg": "@cinatra-ai/sales-playbook-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "sales-playbook-matcher-skill",
+          "pkg": "@cinatra-ai/sales-playbook-matcher-skill",
+          "kind": "skill",
+          "skillRole": "matcher",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "screenshot-artifact",
+          "pkg": "@cinatra-ai/screenshot-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "screenshot-matcher-skill",
+          "pkg": "@cinatra-ai/screenshot-matcher-skill",
+          "kind": "skill",
+          "skillRole": "matcher",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "security-reviewer-agent",
+          "pkg": "@cinatra-ai/security-reviewer-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "skill-prefill-generation-skill",
+          "pkg": "@cinatra-ai/skill-prefill-generation-skill",
+          "kind": "skill",
+          "skillRole": "internal",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "slide-deck-artifact",
+          "pkg": "@cinatra-ai/slide-deck-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "slide-deck-matcher-skill",
+          "pkg": "@cinatra-ai/slide-deck-matcher-skill",
+          "kind": "skill",
+          "skillRole": "matcher",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "social-media-connector",
+          "pkg": "@cinatra-ai/social-media-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "tailscale-connector",
+          "pkg": "@cinatra-ai/tailscale-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "text-artifact",
+          "pkg": "@cinatra-ai/text-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "twenty-connector",
+          "pkg": "@cinatra-ai/twenty-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "video-artifact",
+          "pkg": "@cinatra-ai/video-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "web-research-agent",
+          "pkg": "@cinatra-ai/web-research-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "web-research-skill",
+          "pkg": "@cinatra-ai/web-research-skill",
+          "kind": "skill",
+          "skillRole": "injectable",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "web-scrape-agent",
+          "pkg": "@cinatra-ai/web-scrape-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "wordpress-agent",
+          "pkg": "@cinatra-ai/wordpress-agent",
+          "kind": "agent",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "wordpress-assistant-connector",
+          "pkg": "@cinatra-ai/wordpress-assistant-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "wordpress-mcp-connector",
+          "pkg": "@cinatra-ai/wordpress-mcp-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "wordpress-widget-chat-skill",
+          "pkg": "@cinatra-ai/wordpress-widget-chat-skill",
+          "kind": "skill",
+          "skillRole": "injectable",
+          "skillMdCount": 1,
+          "embeddedViolation": null,
+          "bundleCount": 1
+        },
+        {
+          "repo": "youtube-connector",
+          "pkg": "@cinatra-ai/youtube-connector",
+          "kind": "connector",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        },
+        {
+          "repo": "zip-artifact",
+          "pkg": "@cinatra-ai/zip-artifact",
+          "kind": "artifact",
+          "skillRole": null,
+          "skillMdCount": 0,
+          "embeddedViolation": null
+        }
+      ]
+    },
+    "B_rawSkillIdCensus": {
+      "verdict": "CONTEXT",
+      "authority": "packages/skills/src/injection/__tests__/no-bypass-arch.test.ts (run in the skills suite)",
+      "totalDeclarations": 29,
+      "postResolutionDeliveryWire": 10,
+      "testAndHelperDeclarations": 2,
+      "otherDeclarations": 17,
+      "otherDeclarationSites": [
+        "packages/agents/src/agent-creation-review.ts:282:  skillIds: string[];",
+        "packages/agents/src/agent-creation-review.ts:329:  let skillIds: string[] = preResolvedSkillIds ?? [];",
+        "packages/agents/src/preflight-agent-creation.ts:95:  laneSkillSets: Array<{ agentPackageName: string; skillIds: string[] }>;",
+        "packages/agents/src/resolve-required-creation-skill-ids.ts:29:  skillIds: string[];",
+        "packages/agents/src/skill-actions.ts:55:  const resolved = await callSkills<{ skillIds: string[] }>(\"skills_installed_resolve_for_agent\", { agentId });",
+        "packages/llm/src/index.ts:634:   * #2086 S4). This replaces the former `skillIds: string[]` /",
+        "packages/skills/src/mcp/client/deterministic-client.ts:71:        invoke<{ skillIds: string[]; customSkillContent?: string }>(",
+        "packages/skills/src/prefill-generation.ts:108:  data: { skillIds: string[] },",
+        "packages/skills/src/recommendation/selection.ts:189:}): { skillIds: string[]; source: DeliverySource } {",
+        "packages/skills/src/recommendation/selection.ts:192:    const skillIds: string[] = [];",
+        "src/app/api/auditor/run-skills/route.ts:296:    let skillIds: string[];",
+        "src/app/api/auditor/run-skills/route.ts:300:      const resolved = await callSkills<{ skillIds?: string[] }>(",
+        "src/lib/assistant-runtime/ports.ts:67:  skillIds: string[];",
+        "src/lib/assistant-runtime/runtime.ts:318:async function ensureAssistantSkillsRegistered(skillIds: string[]): Promise<void> {",
+        "src/lib/background-jobs-registry.ts:1222:      await runSkillPrefillGenerationJob(job.data as { skillIds: string[] }, jobId);",
+        "src/lib/skill-efficacy.ts:60:function readSkillMetaByIds(skillIds: string[]): Map<string, SkillMeta> {",
+        "src/lib/skill-lifecycle-store.ts:380:export function readSkillLifecycleStates(skillIds: string[]): SkillLifecycleStatesResult {"
+      ],
+      "note": "A bare string[] is legitimate on the POST-resolution delivery wire and inside tests. The arch gate is what decides whether any of the remaining sites is a skill-aware ENTRY POINT."
+    },
+    "C_assistantRequiredSet": {
+      "verdict": "PASS",
+      "totalSkillPackages": 27,
+      "requiredSkillPackages": 6,
+      "injectableCount": 5,
+      "cap": 8,
+      "injectable": [
+        "@cinatra-ai/automation-authoring-skill",
+        "@cinatra-ai/blog-content-skill",
+        "@cinatra-ai/chat-assistant-core-skill",
+        "@cinatra-ai/company-research-skill",
+        "@cinatra-ai/extension-authoring-skill"
+      ],
+      "internalExcludedFromInjectionAndUpload": [
+        "@cinatra-ai/hitl-prompt-drive-skill"
+      ],
+      "roleBreakdownAllSkillPackages": {
+        "injectable": 12,
+        "matcher": 13,
+        "internal": 2
+      },
+      "note": "Injectable counts toward the 8 cap; internal is never injected and never uploaded."
+    },
+    "D_edgeResolvedTrust": {
+      "verdict": "PASS",
+      "residualSamePackageTrustHits": [],
+      "roleAwareResolverHits": 15,
+      "note": "Trust must key on the RESOLVED target of a declared role-carrying edge, not same-package ownership."
+    }
+  },
+  "summary": {
+    "arms": 4,
+    "pass": 3,
+    "fail": 0,
+    "review": 0
+  }
+}

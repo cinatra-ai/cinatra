@@ -766,21 +766,89 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     // folded into transitionRunStatus's terminal transaction (status + meta +
     // derivation + LEASE DELETE in one guarded commit). capability is
     // `run.complete` — the terminal-edge capability the fold already runs under.
-    // VOCAB-CLEAN by design: `run.lease-expire` (the finalizer's capability) is
-    // P2's vocab addition and the `conditionalCapabilities:["run.lease-expire"]`
-    // annotation + the finalizer-module import allowlist are added by P4 — this
-    // P1 row references ONLY existing vocabulary. importBanned stays `false` in
-    // step with every S2 row and its sibling `snapshotLeasesQuery`: the R4
-    // boundary gate (wave-3 stage A — not yet on main; adds `allowedImporters`)
-    // is what flips it `true` + records the run-transition.ts allowlist, per the
-    // "the ban flips per-writer" convention the lockstep test pins.
+    // cinatra#1940 P4: `conditionalCapabilities` now also names
+    // `run.lease-expire` — the SAME statement is called a second way, from
+    // `finalizeExpiredLeaseRun`'s fenced settle (also in run-transition.ts, so
+    // this is not a new import edge). importBanned stays `false` in step with
+    // every S2 row and its sibling `snapshotLeasesQuery`: the R4 boundary gate
+    // (wave-3 stage A) is what flips it `true` + records the run-transition.ts
+    // allowlist, per the "the ban flips per-writer" convention the lockstep
+    // test pins.
     module: "packages/org-write-kernel/src/leases.ts",
     exportName: "settleLeaseForRunStatement",
     capability: "run.complete",
+    conditionalCapabilities: ["run.lease-expire"],
     orgIdExtractor: "explicit input.orgId (per-run terminal settle; the caller's guarded org)",
     storageReferences: ["org_archive_lease"],
     cascadeOwnership: "app-furniture",
     importBanned: false,
+  },
+  {
+    // cinatra#1940 P4: the lease-expiry finalizer's phase-2
+    // audited settle — a SIBLING entry point of transitionRunStatus (same
+    // module, same discipline), never a second parallel transition API.
+    // Registered + import-banned to the finalizer runner module ONLY: being
+    // the sole minting site of its authority is not the same as being the
+    // sole authorized caller of the writer itself.
+    module: "packages/agents/src/run-transition.ts",
+    exportName: "finalizeExpiredLeaseRun",
+    capability: "run.lease-expire",
+    orgIdExtractor: "explicit orgId argument (the fence's own org axis; the lease row's org)",
+    storageReferences: ["agent_runs", "org_archive_lease"],
+    cascadeOwnership: "inert-history",
+    importBanned: true,
+    allowedImporters: ["packages/agents/src/lease-expiry-finalizer.ts"],
+  },
+  {
+    // cinatra#1940 P4: the finalizer's phase-1 durable
+    // bookkeeping — an atomic conditional UPDATE...RETURNING that increments
+    // `finalize_attempts` and re-verifies expiry in one round trip. A
+    // write-capable, independently-exported SQL builder touching
+    // `org_archive_lease` — NOT wrapped inside an already-registered writer
+    // (unlike `expiredLeaseForUpdateStatement`, which only ever runs inside
+    // `finalizeExpiredLeaseRun`'s own guarded tx), so it needs its own row.
+    // Deliberately POOLED and UNGUARDED (no `guardOrgMutation`/
+    // `guardOrgLifecycleMutation`, no capability check at call time — see
+    // leases.ts's own module comment): this is durable retry/escalation
+    // bookkeeping on a purpose-scoped table the app never surfaces to a
+    // session, not a lifecycle decision. `capability` here documents which
+    // vocabulary entry the bookkeeping belongs to, not a runtime-enforced
+    // gate — the fenced settle it feeds (`finalizeExpiredLeaseRun`) is the
+    // actual capability-checked write.
+    module: "packages/org-write-kernel/src/leases.ts",
+    exportName: "incrementLeaseFinalizeAttemptsQuery",
+    capability: "run.lease-expire",
+    orgIdExtractor: "explicit input.orgId (from the sweep's own row; POOLED, unguarded — no authority)",
+    storageReferences: ["org_archive_lease"],
+    cascadeOwnership: "app-furniture",
+    importBanned: true,
+    // Same allowlist shape as `snapshotLeasesQuery` above: the kernel's own
+    // index.ts barrel re-export IS an import edge the boundary gate tracks
+    // (R4-writer-import), so it must be named here too, alongside the sole
+    // real production caller.
+    allowedImporters: [
+      "packages/org-write-kernel/src/index.ts",
+      "packages/agents/src/lease-expiry-finalizer.ts",
+    ],
+  },
+  {
+    // cinatra#1940 P4: the finalizer's phase-1
+    // escalation stamp — idempotent UPDATE...WHERE finalize_escalated_at IS
+    // NULL...RETURNING. Same POOLED/unguarded posture and same sole caller as
+    // its `incrementLeaseFinalizeAttemptsQuery` sibling above; registered
+    // separately (per-function, not per-module, per this registry's own
+    // discipline) since it is its own independently-exported write shape.
+    module: "packages/org-write-kernel/src/leases.ts",
+    exportName: "escalateLeaseFinalizeQuery",
+    capability: "run.lease-expire",
+    orgIdExtractor: "explicit input.orgId (from the sweep's own row; POOLED, unguarded — no authority)",
+    storageReferences: ["org_archive_lease"],
+    cascadeOwnership: "app-furniture",
+    importBanned: true,
+    allowedImporters: [
+      "packages/org-write-kernel/src/index.ts",
+      "packages/agents/src/lease-expiry-finalizer.ts",
+    ],
   },
 ];
 

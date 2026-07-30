@@ -22,6 +22,7 @@
     "./manifest-dependencies": "./src/manifest-dependencies.ts",
     "./cross-kind-dep-graph": "./src/cross-kind-dep-graph.ts",
     "./system-extension-inventory": "./src/system-extension-inventory.ts",
+    "./protected-extension": "./src/protected-extension.ts",
     "./dev-version": "./src/dev-version.ts",
     "./publish-authority": "./src/publish-authority.ts",
     "./add-from-chat": "./src/add-from-chat.ts",

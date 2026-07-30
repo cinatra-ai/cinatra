@@ -5,6 +5,9 @@
 //   - CINATRA_ENCRYPTION_KEY ready/not-ready states
 //   - Gemini step is NOT present
 //   - isSetupWizardComplete() gate behavior
+//   - the AI step's readiness is RECEIPT VALIDITY (cinatra#2093, epic #2086 S6),
+//     not a cached OpenAI connection boolean — so it is provider-agnostic and a
+//     saved key alone never completes the step.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,8 +26,13 @@ vi.mock("@cinatra-ai/openai-connector", () => ({
 vi.mock("@/lib/nango-system", () => ({
   getNangoStatus: () => ({ status: "connected" }),
 }));
-vi.mock("@/lib/openai-connection-store", () => ({
-  readOpenAIConnection: () => null,
+// S6 (cinatra#2093): the AI step reads the setup READINESS RECEIPT. Stubbed at
+// the readiness-state seam so the wizard's step/gate logic is exercised in
+// isolation; the receipt's own validity + invalidation rules are pinned by
+// setup-readiness-receipt.test.ts.
+const readinessState = { ready: false as boolean };
+vi.mock("@/lib/setup-readiness-saga", () => ({
+  readSetupReadinessState: () => ({ ready: readinessState.ready, receipt: null }),
 }));
 
 import { getSetupWizardSteps, isSetupWizardComplete } from "@/lib/setup-wizard";
@@ -47,6 +55,7 @@ const ORIGINAL_KEY = process.env.CINATRA_ENCRYPTION_KEY;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  readinessState.ready = false;
   // Default: set a valid 64-char hex key so CINATRA_ENCRYPTION_KEY tests
   // don't bleed onto unrelated tests.
   process.env.CINATRA_ENCRYPTION_KEY =
@@ -133,10 +142,36 @@ describe("getSetupWizardSteps - no gemini step", () => {
   });
 
   it("isSetupWizardComplete returns false when ai is NOT ready", async () => {
-    // openai (ai step) is mocked as not ready above; identity present so name is ready
+    // No valid readiness receipt (the default); identity present so name is ready.
     vi.mocked(readInstanceIdentity).mockReturnValue(SAMPLE_IDENTITY);
     const result = await isSetupWizardComplete();
     // ai not ready -> false
     expect(result).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S6 (cinatra#2093): the AI step is RECEIPT-driven and provider-agnostic
+// ---------------------------------------------------------------------------
+
+describe("getSetupWizardSteps - the AI step follows the readiness receipt", () => {
+  it("the ai step is NOT ready without a valid receipt, whatever any connection says", async () => {
+    vi.mocked(readInstanceIdentity).mockReturnValue(SAMPLE_IDENTITY);
+    readinessState.ready = false;
+    const steps = await getSetupWizardSteps();
+    expect(steps.find((s) => s.id === "ai")?.ready).toBe(false);
+  });
+
+  it("the ai step IS ready with a valid receipt — no OpenAI-specific read involved", async () => {
+    vi.mocked(readInstanceIdentity).mockReturnValue(SAMPLE_IDENTITY);
+    readinessState.ready = true;
+    const steps = await getSetupWizardSteps();
+    expect(steps.find((s) => s.id === "ai")?.ready).toBe(true);
+  });
+
+  it("a valid receipt completes the wizard (every other gate satisfied)", async () => {
+    vi.mocked(readInstanceIdentity).mockReturnValue(SAMPLE_IDENTITY);
+    readinessState.ready = true;
+    await expect(isSetupWizardComplete()).resolves.toBe(true);
   });
 });
