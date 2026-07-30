@@ -1,0 +1,74 @@
+{
+  "arm": "anthropic",
+  "label": "LIVE — real anthropic API; provider boundary OBSERVED (pass-through), never stubbed",
+  "expectedMechanism": "container",
+  "hardCap": 8,
+  "at": "2026-07-30T12:47:55.192Z",
+  "succeeded": false,
+  "successAttempt": null,
+  "attempts": [
+    {
+      "attempt": 1,
+      "outcome": "error",
+      "providerMessageCalls": 0,
+      "statuses": []
+    },
+    {
+      "attempt": 2,
+      "outcome": "error",
+      "providerMessageCalls": 0,
+      "statuses": []
+    },
+    {
+      "attempt": 3,
+      "outcome": "error",
+      "providerMessageCalls": 0,
+      "statuses": []
+    }
+  ],
+  "checks": [
+    {
+      "id": "R1",
+      "what": "a REAL assistant turn completed on anthropic",
+      "verdict": "FAIL",
+      "detail": "no attempt answered in 3"
+    },
+    {
+      "id": "R2",
+      "what": "skill delivery on the completed turn was CONTAINER-based (container.skills on the wire)",
+      "verdict": "FAIL",
+      "detail": "no container.skills request recorded"
+    },
+    {
+      "id": "R3",
+      "what": "the injected set on the wire is <= 8",
+      "verdict": "FAIL",
+      "detail": "containerSkillCount=null"
+    },
+    {
+      "id": "R4",
+      "what": "every container.skills reference carries BOTH halves (skill_id + version)",
+      "verdict": "FAIL"
+    },
+    {
+      "id": "R5",
+      "what": "each delivered reference resolves to a real anthropic_skill_sync mapping",
+      "verdict": "FAIL",
+      "detail": "0/0 mapped"
+    },
+    {
+      "id": "R6",
+      "what": "the turn used the container mechanism ONLY — no function-tool skill fallback",
+      "verdict": "FAIL"
+    },
+    {
+      "id": "R8",
+      "what": "the chat surface wrote NO durable per-run delivery record (global count is 0)",
+      "verdict": "PASS",
+      "detail": "agent_run_skills_used rows with a delivery_mode at end of arm: 0 (finding F8; no turn completed in this arm, so this is corroboration, not a per-turn measurement)"
+    }
+  ],
+  "pageErrors": [],
+  "wireRecordForCompletedTurn": null,
+  "agentRunSkillsUsedRowsWithDeliveryMode": 0
+}
