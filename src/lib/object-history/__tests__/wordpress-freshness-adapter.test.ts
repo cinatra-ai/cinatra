@@ -89,6 +89,38 @@ describe("wordpressFreshnessAdapter", () => {
     expect(mocks.invokeConnectorInstanceTool).not.toHaveBeenCalled();
   });
 
+  // A non-numeric remoteId must never reach `Number()` unvalidated: NaN
+  // serializes to `null`, which would silently send `{ post_id: null }` to
+  // the WordPress MCP tool instead of failing fast. Each malformed shape
+  // below must short-circuit to 'unknown' BEFORE the invoker stack (and
+  // therefore the tool) is ever touched.
+  it("returns 'unknown' (never probes) when remoteId is a slug, not a numeric id", async () => {
+    const r = await check(ref({ remoteId: "my-post-slug" }));
+    expect(r.state).toBe("unknown");
+    if (r.state === "unknown") expect(r.reason).toContain("remoteId");
+    expect(mocks.invokeConnectorInstanceTool).not.toHaveBeenCalled();
+  });
+
+  it("returns 'unknown' (never probes) when remoteId is \"0\"", async () => {
+    const r = await check(ref({ remoteId: "0" }));
+    expect(r.state).toBe("unknown");
+    if (r.state === "unknown") expect(r.reason).toContain("remoteId");
+    expect(mocks.invokeConnectorInstanceTool).not.toHaveBeenCalled();
+  });
+
+  it("returns 'unknown' (never probes) when remoteId is negative", async () => {
+    const r = await check(ref({ remoteId: "-5" }));
+    expect(r.state).toBe("unknown");
+    if (r.state === "unknown") expect(r.reason).toContain("remoteId");
+    expect(mocks.invokeConnectorInstanceTool).not.toHaveBeenCalled();
+  });
+
+  it("returns 'unsupported' (never probes) for an empty-string remoteId — caught by the pre-existing not-WordPress-tagged guard before id-format validation even runs", async () => {
+    const r = await check(ref({ remoteId: "" }));
+    expect(r.state).toBe("unsupported");
+    expect(mocks.invokeConnectorInstanceTool).not.toHaveBeenCalled();
+  });
+
   it("returns 'unknown' (never probes) when no trusted actor resolves — the re-point's authz posture", async () => {
     mocks.resolveTrustedWriteActor.mockResolvedValue(null);
     const r = await check(ref());

@@ -115,6 +115,16 @@ type ProbeResult =
   | { ok: false; kind: "missing" }
   | { ok: false; kind: "unknown"; reason: string };
 
+/** True ONLY for a canonical positive-integer WordPress id string ("42" —
+ * never "042", "0", "-3", "3.5", "", or a slug). `remoteId` must pass this
+ * check BEFORE it is coerced with `Number()`: a non-numeric string (a slug,
+ * an empty string) coerces to `NaN`, which `JSON.stringify`s to `null`, so
+ * an unvalidated coercion would silently send `{ post_id: null }` to the
+ * WordPress MCP tool instead of failing fast to the `unknown` verdict. */
+function isPositiveIntegerId(value: string): boolean {
+  return /^[1-9]\d*$/.test(value);
+}
+
 /** Case-insensitive substring check against a handful of "the remote object
  * doesn't exist" phrasings a WP_Error passthrough or an ability's own
  * `{success:false, error}` envelope plausibly uses. Deliberately permissive
@@ -302,6 +312,17 @@ export const wordpressFreshnessAdapter: FreshnessAdapter = {
       return {
         state: "unknown",
         reason: "remoteRevisionRef missing extra.instanceId",
+      };
+    }
+    // Validate BEFORE any coercion (see isPositiveIntegerId's header note) —
+    // a slug, empty string, "0", or a negative id must never reach
+    // `Number()` in fetchPostStatus. Fail fast to `unknown` here, before the
+    // invoker stack is even loaded, so a malformed remoteId never triggers a
+    // probe.
+    if (!isPositiveIntegerId(ref.remoteId)) {
+      return {
+        state: "unknown",
+        reason: `remoteRevisionRef.remoteId is not a valid positive-integer wordpress id: ${JSON.stringify(ref.remoteId)}`,
       };
     }
 
