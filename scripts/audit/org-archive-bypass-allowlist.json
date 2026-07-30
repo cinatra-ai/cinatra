@@ -49,6 +49,18 @@
       "ref": "session-column:activeOrganizationId",
       "count": 1,
       "reason": "Same disclosed, gate-controlled infrastructure as this file's raw-sql:invitation row above — see that reason. Clears activeOrganizationId for sessions pointed at the deleted org, inside the same guarded transaction."
+    },
+    {
+      "file": "src/lib/organization-archive.ts",
+      "ref": "session-column:activeOrganizationId",
+      "count": 1,
+      "reason": "Guarded infrastructure (not a bypass): the real archive transaction (cinatra#1942 V5) clears activeOrganizationId to NULL for sessions pointed at the org being archived, inside guardOrgLifecycleMutation's exclusive fence (both org locks). Clearing to NULL is the narrow cleanup class the #1937 session-activation guard trigger permits by construction (it only fires on non-null values); the same trigger then PREVENTS any re-point at the archived org."
+    },
+    {
+      "file": "src/lib/organization-archive.ts",
+      "ref": "session-column:activeTeamId",
+      "count": 1,
+      "reason": "Guarded infrastructure (not a bypass): the same archive transaction clears activeTeamId to NULL for sessions whose active team belongs to the org being archived (team-by-ownership resolution, cinatra#1942 Decision 2a — archive keeps teams, so this is the archive path's net-new session write vs delete). Same fence, same NULL-clearing permit class as the activeOrganizationId row above."
     }
   ]
 }

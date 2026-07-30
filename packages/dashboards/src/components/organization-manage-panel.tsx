@@ -21,8 +21,12 @@
  *
  * Presentational only — the screen resolves the VIEWED-org capabilities + reads
  * and hands them in, so this stays a pure render (unit-testable without a DB).
- * ARCHIVE ships via the #1510 archive program — substrate dark since S1
- * (cinatra#1937); S6 (cinatra#1942) mounts its controls here.
+ * ARCHIVE controls (cinatra#1942 V5, archive program S6): the screen computes
+ * `archiveControl` — "archive" for an active org when the viewer holds
+ * `canArchive` AND the `org_archive_activation` gate is on (no dead button
+ * pre-flip), "unarchive" for an archived org when `canArchive` (deliberately
+ * NOT gated — recovery always renders, Decision 2 asymmetry) — and this panel
+ * renders the matching card.
  *
  * Read-only posture while archived (cinatra#1942 V4): when
  * `isArchived`, the Settings and Members & invitations cards still render
@@ -61,6 +65,7 @@ import type {
 import { OrganizationSettingsForm } from "./organization-settings-form";
 import { OrganizationMembersManager } from "./organization-members-manager";
 import { OrganizationDeleteDangerForm } from "./organization-delete-danger-form";
+import { OrganizationArchiveDangerForm } from "./organization-archive-danger-form";
 
 export type OrganizationManagePanelProps = {
   readonly organizationId: string;
@@ -83,6 +88,13 @@ export type OrganizationManagePanelProps = {
    * defaults to `false` so every pre-#1942 call site is unaffected.
    */
   readonly isArchived?: boolean;
+  /**
+   * Which archive-direction card to render (cinatra#1942 V5), computed by the
+   * screen: "archive" (active org + `canArchive` + activation gate on),
+   * "unarchive" (archived org + `canArchive` — never gate-checked), or
+   * absent (no card). Defaults to none so pre-V5 call sites are unaffected.
+   */
+  readonly archiveControl?: "archive" | "unarchive";
 };
 
 export function OrganizationManagePanel({
@@ -97,6 +109,7 @@ export function OrganizationManagePanel({
   members,
   invitations,
   isArchived = false,
+  archiveControl,
 }: OrganizationManagePanelProps) {
   return (
     <div className="flex flex-col gap-6" data-cinatra-org-manage="true">
@@ -189,6 +202,43 @@ export function OrganizationManagePanel({
           </div>
         </CardContent>
       </Card>
+
+      {archiveControl === "archive" ? (
+        <Card className="border-destructive/40 bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle className="text-base">Archive</CardTitle>
+            <CardDescription>
+              Make {orgName || "this organization"} read-only. Reversible at
+              any time.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <OrganizationArchiveDangerForm
+              organizationId={organizationId}
+              orgName={orgName}
+              mode="archive"
+            />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {archiveControl === "unarchive" ? (
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle className="text-base">Unarchive</CardTitle>
+            <CardDescription>
+              Make {orgName || "this organization"} active again.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <OrganizationArchiveDangerForm
+              organizationId={organizationId}
+              orgName={orgName}
+              mode="unarchive"
+            />
+          </CardContent>
+        </Card>
+      ) : null}
 
       {canDelete && deleteBlockers ? (
         <Card className="border-destructive/40 bg-surface backdrop-blur-none">

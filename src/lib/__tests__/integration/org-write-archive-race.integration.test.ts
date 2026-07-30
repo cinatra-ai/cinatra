@@ -49,7 +49,10 @@ import {
   simulateArchiveTransition,
   holdOrgLocks,
 } from "@cinatra-ai/org-write-kernel/testing";
-import { ensureAuthFloorArchiveGuardTriggers } from "../../../../scripts/better-auth-migrate.mts";
+import {
+  ensureAuthFloorArchiveGuardTriggers,
+  ensureSessionActivationGuardTrigger,
+} from "../../../../scripts/better-auth-migrate.mts";
 
 const dbUrl = process.env.SUPABASE_DB_URL ?? "";
 const enabled =
@@ -562,6 +565,152 @@ describe.skipIf(!enabled)("org-write archive race — kernel harness on live Pos
       expect(fenceResult).toBe("fenced");
       expect(fenceRan).toBe(true);
     } finally {
+      await dropOrg();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // cinatra#1942 V5 — the REAL archive transaction's DB-layer semantics,
+  // proven on live Postgres UNDER THE ARMED GUARDS (the #1937 session
+  // activation guard + the Stage E auth-floor triggers). The statements
+  // exercised here are the EXACT shapes `archiveOrganization` /
+  // `unarchiveOrganization` issue in-fence (their wire order is pinned
+  // statement-by-statement in src/lib/__tests__/organization-archive-tx.test.ts;
+  // the full app writer itself is unit-tier-driven there because it binds the
+  // app auth stack, per the guarded-delete precedent).
+  // -------------------------------------------------------------------------
+
+  it("V5 session deactivation: clearing activeOrganizationId AND activeTeamId to NULL is PERMITTED under the armed guards even while the org is archived — and re-pointing back is BLOCKED (the Decision 2a contract pin)", async () => {
+    // Arm BOTH DB floors (idempotent CREATE OR REPLACE): the #1937 session
+    // activation guard and the Stage E member/invitation floor.
+    await ensureSessionActivationGuardTrigger(pool);
+    await ensureAuthFloorArchiveGuardTriggers(pool);
+    const teamId = `team_${randomUUID().slice(0, 8)}`;
+    const s1 = `sess_${randomUUID().slice(0, 8)}`;
+    const s2 = `sess_${randomUUID().slice(0, 8)}`;
+    try {
+      await root.query(
+        `INSERT INTO public."team" (id, name, "organizationId", "createdAt", slug)
+         VALUES ($1, 'Archive Team', $2, now(), $1)`,
+        [teamId, orgId],
+      );
+      // Planted while the org is ACTIVE — the guard resolves and allows.
+      await root.query(
+        `INSERT INTO public."session" (id, "expiresAt", token, "updatedAt", "userId", "activeOrganizationId")
+         VALUES ($1, now() + interval '1 hour', $1, now(), 'user_v5', $2)`,
+        [s1, orgId],
+      );
+      await root.query(
+        `INSERT INTO public."session" (id, "expiresAt", token, "updatedAt", "userId", "activeTeamId")
+         VALUES ($1, now() + interval '1 hour', $1, now(), 'user_v5', $2)`,
+        [s2, teamId],
+      );
+
+      await simulateArchiveTransition(db, { schema, orgId, to: "archived" });
+
+      // The archive tx's two session clears (verbatim shapes) — the guard
+      // trigger only fires on NON-NULL values, so the NULL-clearing cleanup
+      // class passes even though the org is already archived at this point
+      // (exactly the in-tx ordering: archivedAt is set BEFORE the clears).
+      await root.query(
+        `UPDATE public."session" SET "activeOrganizationId" = NULL
+         WHERE "activeOrganizationId" = $1`,
+        [orgId],
+      );
+      await root.query(
+        `UPDATE public."session" SET "activeTeamId" = NULL
+         WHERE "activeTeamId" IN (SELECT id FROM public."team" WHERE "organizationId" = $1)`,
+        [orgId],
+      );
+      const cleared = await root.query(
+        `SELECT id FROM public."session"
+         WHERE "activeOrganizationId" = $1
+            OR "activeTeamId" IN (SELECT id FROM public."team" WHERE "organizationId" = $1)`,
+        [orgId],
+      );
+      expect((cleared as { rows: unknown[] }).rows).toHaveLength(0);
+
+      // Positive control: the SAME guard now BLOCKS any re-point at the
+      // archived org — directly, or via one of its teams.
+      await expect(
+        root.query(
+          `UPDATE public."session" SET "activeOrganizationId" = $2 WHERE id = $1`,
+          [s1, orgId],
+        ),
+      ).rejects.toThrow(/organization-archived/);
+      await expect(
+        root.query(
+          `UPDATE public."session" SET "activeTeamId" = $2 WHERE id = $1`,
+          [s2, teamId],
+        ),
+      ).rejects.toThrow(/team-organization-archived/);
+    } finally {
+      await root.query(`DELETE FROM public."session" WHERE id IN ($1, $2)`, [s1, s2]);
+      await root.query(`DELETE FROM public."team" WHERE id = $1`, [teamId]);
+      await dropOrg();
+    }
+  });
+
+  it("V5 total freeze + epoch-keyed leases: a LIVE run gets a lease at the NEW epoch, a PARKED run gets none and stays byte-untouched; unarchive invalidates the superseded epoch (Decision 11 default (A) + Decision 2b)", async () => {
+    const liveRun = `run_live_${randomUUID().slice(0, 8)}`;
+    const parkedRun = `run_parked_${randomUUID().slice(0, 8)}`;
+    const attemptId = `att_${randomUUID().slice(0, 8)}`;
+    try {
+      // A LIVE attempt (running, current attempt id, unexpired deadline) and
+      // a PARKED pre-dispatch run (queued, no attempt id — the kernel
+      // live-attempt predicate rejects it).
+      await root.query(
+        `INSERT INTO "${schema}"."agent_runs"
+           (id, template_id, status, input_params, org_id, execution_attempt_id, execution_deadline_at)
+         VALUES ($1, 'tpl_v5', 'running', '{}', $2, $3, now() + interval '1 hour')`,
+        [liveRun, orgId, attemptId],
+      );
+      await root.query(
+        `INSERT INTO "${schema}"."agent_runs"
+           (id, template_id, status, input_params, org_id)
+         VALUES ($1, 'tpl_v5', 'queued', '{}', $2)`,
+        [parkedRun, orgId],
+      );
+
+      const { archiveEpoch } = await simulateArchiveTransition(db, {
+        schema,
+        orgId,
+        to: "archived",
+      });
+      expect(archiveEpoch).toBe(1);
+
+      const leases = await root.query(
+        `SELECT run_id, archive_epoch FROM "${schema}"."org_archive_lease" WHERE org_id = $1`,
+        [orgId],
+      );
+      const leaseRows = (leases as { rows: { run_id: string; archive_epoch: number }[] }).rows;
+      expect(leaseRows).toHaveLength(1);
+      expect(leaseRows[0].run_id).toBe(liveRun);
+      expect(Number(leaseRows[0].archive_epoch)).toBe(1);
+
+      // TOTAL FREEZE (owner-ruled total freeze): the parked run was not stopped,
+      // settled, or otherwise touched by the transition.
+      const parked = await root.query(
+        `SELECT status, execution_attempt_id FROM "${schema}"."agent_runs" WHERE id = $1`,
+        [parkedRun],
+      );
+      const parkedRow = (parked as { rows: { status: string; execution_attempt_id: string | null }[] }).rows[0];
+      expect(parkedRow.status).toBe("queued");
+      expect(parkedRow.execution_attempt_id).toBeNull();
+
+      // Unarchive (epoch 1 → 2): every lease of the superseded epoch dies.
+      const unarchived = await simulateArchiveTransition(db, { schema, orgId, to: "active" });
+      expect(unarchived.archiveEpoch).toBe(2);
+      const after = await root.query(
+        `SELECT run_id FROM "${schema}"."org_archive_lease" WHERE org_id = $1`,
+        [orgId],
+      );
+      expect((after as { rows: unknown[] }).rows).toHaveLength(0);
+    } finally {
+      await root.query(`DELETE FROM "${schema}"."agent_runs" WHERE id IN ($1, $2)`, [
+        liveRun,
+        parkedRun,
+      ]);
       await dropOrg();
     }
   });

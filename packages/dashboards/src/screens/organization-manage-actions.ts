@@ -22,7 +22,14 @@
  * blocked for the default org and single-org mode, name-confirmed server-side,
  * and executed by the reference-guarded transactional core in
  * `@/lib/organization-delete` (block-if-referenced, never cascade).
- * DEFERRED: archive (no schema/catalog basis — owner proposal pending).
+ * ARCHIVE/UNARCHIVE ship the same way (cinatra#1942 V5, archive program S6):
+ * gated on `organization.archive` (org_owner) via the same gate's
+ * `canArchive`, archive name-confirmed server-side, executed by the guarded
+ * transactional core in `@/lib/organization-archive` (the kernel exclusive
+ * fence; archive additionally refuses behind the default-off
+ * `org_archive_activation` gate until the owner-gated flip). Unarchive is
+ * deliberately reachable regardless of that gate — an archived org must
+ * always be recoverable.
  * Invitation CREATE is the client
  * `InviteMemberDialog` (org-id-parameterized `authClient.organization.inviteMember`),
  * rendered only when `canManageMembers`.
@@ -51,6 +58,11 @@ import {
   deleteOrganizationReferenceGuarded,
   type OrganizationDeleteBlockers,
 } from "@/lib/organization-delete";
+import {
+  archiveOrganization,
+  unarchiveOrganization,
+  type OrganizationArchiveResult,
+} from "@/lib/organization-archive";
 
 export type OrgManageActionResult =
   | { readonly ok: true }
@@ -335,5 +347,165 @@ export async function cancelOrganizationInvitationAction(
     return { ok: true };
   } catch (err) {
     return { ok: false, error: toErrorMessage(err, "Could not cancel the invitation.") };
+  }
+}
+
+/** Map an archive/unarchive core refusal to the user-facing error string.
+ *  Success (incl. the idempotent no-op) never reaches this. */
+function describeArchiveFailure(
+  result: Extract<OrganizationArchiveResult, { ok: false }>,
+  verb: "archive" | "unarchive",
+): string {
+  switch (result.reason) {
+    case "activation-gate-off":
+      return "Archiving is not enabled on this instance.";
+    case "single-org-mode":
+      return "Organizations cannot be archived in single-organization mode.";
+    case "default-org":
+      return "The default organization cannot be archived.";
+    case "not-found":
+      return "This organization no longer exists.";
+    case "denied":
+      return `You do not have permission to ${verb} this organization.`;
+    case "error":
+      return `Could not ${verb} the organization.`;
+  }
+}
+
+/**
+ * Archive the organization (cinatra#1942 V5). Gated on `organization.archive`
+ * (org_owner) via the shared capabilities gate (which folds in the structural
+ * hazards), name-confirmed SERVER-side against the live row, then the guarded
+ * archive transaction runs (which re-checks the activation gate FIRST, the
+ * eligibility fence, and the actor's ownership under the kernel's exclusive
+ * org fence). Re-archiving an archived org is an idempotent success — the
+ * action never errors on idempotency.
+ */
+export async function archiveOrganizationAction(
+  formData: FormData,
+): Promise<OrgManageActionResult> {
+  try {
+    const organizationId = readRequiredString(formData, "organizationId");
+    const session = await getAuthSession();
+    if (!session) {
+      return {
+        ok: false,
+        error: "You do not have permission to archive this organization.",
+      };
+    }
+    const capabilities = await resolveOrganizationManageCapabilities(
+      session,
+      organizationId,
+    );
+    if (!capabilities.canArchive) {
+      return {
+        ok: false,
+        error: "You do not have permission to archive this organization.",
+      };
+    }
+
+    const confirmName = readRequiredString(formData, "confirmName");
+    const orgRows = await betterAuthDb
+      .select({ name: betterAuthOrganizations.name })
+      .from(betterAuthOrganizations)
+      .where(eq(betterAuthOrganizations.id, organizationId))
+      .limit(1);
+    const org = orgRows[0];
+    if (!org) {
+      return { ok: false, error: "This organization no longer exists." };
+    }
+    if (confirmName !== org.name) {
+      return {
+        ok: false,
+        error: "The name you typed does not match the organization's name.",
+      };
+    }
+
+    const result = await archiveOrganization(organizationId, session.user.id);
+    if (!result.ok) {
+      return { ok: false, error: describeArchiveFailure(result, "archive") };
+    }
+
+    // Fire-and-forget by contract — never turns the committed archive into a
+    // failure result. An idempotent re-archive still audits `allowed`.
+    await logAuditEvent({
+      organizationId,
+      actorPrincipalId: session.user.id,
+      actorPrincipalType: "human",
+      authSource: "ui",
+      resourceType: "organization",
+      resourceId: organizationId,
+      operation: "organization.archive",
+      decision: "allowed",
+      metadata: {
+        organizationName: org.name,
+        ...(result.idempotent ? { idempotent: true } : {}),
+      },
+    });
+    revalidatePath(`/organizations/${organizationId}`);
+    revalidatePath("/organizations");
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: toErrorMessage(err, "Could not archive the organization."),
+    };
+  }
+}
+
+/**
+ * Unarchive the organization (cinatra#1942 V5). Gated on
+ * `organization.archive` (the same permission covers both directions) via the
+ * shared gate's `canArchive`. No name confirmation — recovery should be easy;
+ * the destructive direction is the one that arms. The core transaction is
+ * deliberately NOT gated on the activation flag (rollback depends on it).
+ */
+export async function unarchiveOrganizationAction(
+  formData: FormData,
+): Promise<OrgManageActionResult> {
+  try {
+    const organizationId = readRequiredString(formData, "organizationId");
+    const session = await getAuthSession();
+    if (!session) {
+      return {
+        ok: false,
+        error: "You do not have permission to unarchive this organization.",
+      };
+    }
+    const capabilities = await resolveOrganizationManageCapabilities(
+      session,
+      organizationId,
+    );
+    if (!capabilities.canArchive) {
+      return {
+        ok: false,
+        error: "You do not have permission to unarchive this organization.",
+      };
+    }
+
+    const result = await unarchiveOrganization(organizationId, session.user.id);
+    if (!result.ok) {
+      return { ok: false, error: describeArchiveFailure(result, "unarchive") };
+    }
+
+    await logAuditEvent({
+      organizationId,
+      actorPrincipalId: session.user.id,
+      actorPrincipalType: "human",
+      authSource: "ui",
+      resourceType: "organization",
+      resourceId: organizationId,
+      operation: "organization.unarchive",
+      decision: "allowed",
+      metadata: result.idempotent ? { idempotent: true } : {},
+    });
+    revalidatePath(`/organizations/${organizationId}`);
+    revalidatePath("/organizations");
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: toErrorMessage(err, "Could not unarchive the organization."),
+    };
   }
 }

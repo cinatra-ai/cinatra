@@ -30,6 +30,7 @@ const h = vi.hoisted(() => {
     resolveCaps: vi.fn(),
     countBlockers: vi.fn(),
     getAuthSession: vi.fn(),
+    archiveGateEnabled: vi.fn(),
   };
 });
 
@@ -56,6 +57,9 @@ vi.mock("@/lib/authz/organization-manage-gate", () => ({
 vi.mock("@/lib/organization-delete", () => ({
   countOrganizationDeleteBlockers: h.countBlockers,
 }));
+vi.mock("@/lib/organization-archive", () => ({
+  isArchiveActivationEnabled: h.archiveGateEnabled,
+}));
 vi.mock("next/navigation", () => ({
   notFound: () => {
     throw new Error("NEXT_NOT_FOUND");
@@ -75,6 +79,11 @@ vi.mock("../../components/organization-members-manager", () => ({
 }));
 vi.mock("../../components/organization-delete-danger-form", () => ({
   OrganizationDeleteDangerForm: () => <div data-testid="delete-danger-form" />,
+}));
+vi.mock("../../components/organization-archive-danger-form", () => ({
+  OrganizationArchiveDangerForm: ({ mode }: { mode: string }) => (
+    <div data-testid={`archive-danger-form-${mode}`} />
+  ),
 }));
 
 import { OrganizationSettingsPage } from "../organization-settings";
@@ -124,6 +133,8 @@ beforeEach(() => {
   h.resolveCaps.mockReset();
   h.countBlockers.mockReset();
   h.getAuthSession.mockReset();
+  h.archiveGateEnabled.mockReset();
+  h.archiveGateEnabled.mockResolvedValue(false);
   h.state.queue = [];
 });
 
@@ -227,5 +238,58 @@ describe("archived org read-only posture (cinatra#1942 V4)", () => {
     expect(html).not.toContain("Read-only — this organization is archived.");
     expect(html).not.toMatch(/<fieldset[^>]*disabled/);
     expect(html).not.toMatch(/<fieldset[^>]*inert/);
+  });
+});
+
+describe("archive/unarchive control (cinatra#1942 V5)", () => {
+  const ARCHIVE_CAPS = { ...ALL_CAPS, canArchive: true };
+
+  function primeManager(orgRowToUse: typeof ORG_ROW) {
+    primeSession();
+    h.isMember.mockResolvedValue(true);
+    h.state.queue = [[orgRowToUse], MEMBER_ROWS];
+    h.listTeams.mockResolvedValue([]);
+    h.execute.mockResolvedValue({ rows: [] });
+    h.countBlockers.mockResolvedValue(NO_BLOCKERS);
+  }
+
+  test("active org + canArchive + gate ON → the Archive card renders", async () => {
+    primeManager(ORG_ROW);
+    h.resolveCaps.mockResolvedValue(ARCHIVE_CAPS);
+    h.archiveGateEnabled.mockResolvedValue(true);
+
+    const html = await renderScreen();
+    expect(html).toContain("archive-danger-form-archive");
+    expect(html).not.toContain("archive-danger-form-unarchive");
+  });
+
+  test("active org + canArchive + gate OFF → NO Archive card (no dead button pre-flip)", async () => {
+    primeManager(ORG_ROW);
+    h.resolveCaps.mockResolvedValue(ARCHIVE_CAPS);
+    h.archiveGateEnabled.mockResolvedValue(false);
+
+    const html = await renderScreen();
+    expect(html).not.toContain("archive-danger-form-archive");
+    expect(html).not.toContain("archive-danger-form-unarchive");
+  });
+
+  test("archived org + canArchive → the Unarchive card renders WITHOUT consulting the gate (Decision 2 asymmetry)", async () => {
+    primeManager(ARCHIVED_ORG_ROW);
+    h.resolveCaps.mockResolvedValue(ARCHIVE_CAPS);
+
+    const html = await renderScreen();
+    expect(html).toContain("archive-danger-form-unarchive");
+    expect(html).not.toContain("archive-danger-form-archive");
+    // Recovery is never gate-checked — the gate read must not even run.
+    expect(h.archiveGateEnabled).not.toHaveBeenCalled();
+  });
+
+  test("no canArchive → no card, and the gate read never runs (negative loader pin)", async () => {
+    primeManager(ORG_ROW);
+    h.resolveCaps.mockResolvedValue(ALL_CAPS); // canArchive: false
+
+    const html = await renderScreen();
+    expect(html).not.toContain("archive-danger-form");
+    expect(h.archiveGateEnabled).not.toHaveBeenCalled();
   });
 });
