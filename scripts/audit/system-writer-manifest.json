@@ -9,6 +9,16 @@
     },
     {
       "file": "scripts/seed.mjs",
+      "ref": "raw-sql:assistant_threads",
+      "count": 2
+    },
+    {
+      "file": "scripts/seed.mjs",
+      "ref": "raw-sql:assistant_turns",
+      "count": 1
+    },
+    {
+      "file": "scripts/seed.mjs",
       "ref": "raw-sql:objects",
       "count": 6
     },
