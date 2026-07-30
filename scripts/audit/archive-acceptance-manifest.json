@@ -82,29 +82,45 @@
     {
       "criterion": "Cross-job capability misuse",
       "owner": "self",
+      "kernelProof": {
+        "file": "src/lib/org-write/__tests__/job-system-authority-mint-adversarial.test.ts",
+        "testName": "every real mintable job refuses every purpose NOT in its own declared allowedPurposes"
+      },
       "ciDependency": { "workflow": "build-image.yml", "job": "perpetual-loops-invariants" },
-      "status": "red",
-      "trackingIssue": 1941
+      "status": "green",
+      "trackingIssue": 1943
     },
     {
       "criterion": "Pre-archive parent spawning post-archive child denied",
       "owner": "self",
-      "ciDependency": { "workflow": "build-image.yml", "job": "test" },
+      "kernelProof": {
+        "file": "packages/agents/src/__tests__/run-creation-race.integration.test.ts",
+        "testName": "a child-run creation blocked behind an in-progress archive LOSES the race: refused, and no child row ever lands"
+      },
+      "ciDependency": { "workflow": "build-image.yml", "job": "agents-integration-db" },
       "status": "red",
-      "trackingIssue": 1940
+      "trackingIssue": 1943
     },
     {
       "criterion": "Lease expiry mid-completion → cancel-then-settle",
       "owner": "self",
-      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
+      "kernelProof": {
+        "file": "packages/agents/src/__tests__/lease-expiry-finalizer-adversarial.integration.test.ts",
+        "testName": "a genuinely expired lease on a non-terminal run settles to a typed FAILURE, never a bare denial — real CAS + real lease DELETE"
+      },
+      "ciDependency": { "workflow": "build-image.yml", "job": "agents-integration-db" },
       "status": "red",
-      "trackingIssue": 1940
+      "trackingIssue": 1943
     },
     {
       "criterion": "Archive-vs-terminal-CAS race",
       "owner": "sibling",
-      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
-      "status": "red",
+      "kernelProof": {
+        "file": "packages/agents/src/__tests__/run-transition-lease-settle.test.ts",
+        "testName": "archived org + held lease + run.complete ⇒ CAS + meta + lease DELETE commit together"
+      },
+      "ciDependency": { "workflow": "build-image.yml", "job": "test" },
+      "status": "green",
       "trackingIssue": 1940
     },
     {
