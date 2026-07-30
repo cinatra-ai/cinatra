@@ -1,0 +1,353 @@
+{
+  "probe": "cinatra#2094 S7 LIVE post-fix re-verification (F1 + F2 landed)",
+  "ranAt": "2026-07-30T00:33:13.225Z",
+  "live": true,
+  "reverificationOf": {
+    "firstRun": "live-results.json",
+    "firstRunVerdict": "7 PASS / 3 FAIL (C3, C4 = finding F1; C10 = finding F2)",
+    "fixesUnderTest": [
+      "F1 — both Skills-API list walks paginate on the REAL {data,has_more,next_page} cursor (forward cursor on the `page` param)",
+      "F2 — ANTHROPIC_SKILL_MAX_UPLOAD_BYTES raised 30,000,000 -> 31,457,280 (30 MiB). The C10/R10 evidence refutes the OLD value (a confirmed false rejection); the NEW value is the docs-based policy reading (30 MiB), consistent with but not derived from the measurement — see R10.whatIsLiveVsLocal"
+    ],
+    "drivesRealProductionCode": true
+  },
+  "docsPin": {
+    "surface": "Anthropic Skills API",
+    "betaRevision": "skills-2025-10-02",
+    "stackedBetas": "code-execution-2025-08-25,skills-2025-10-02,files-api-2025-04-14",
+    "anthropicVersion": "2023-06-01",
+    "consulted": "claude-api skill reference bundle 2.1.220 (shared/managed-agents-api-reference.md Skills + Pagination sections — `GET /v1/skills` is named as a `page`/`next_page` endpoint that also returns `has_more`; `after_id`/`last_id` belongs to Batches/Files/Models); live API authoritative where docs prose and wire disagree"
+  },
+  "checks": [
+    {
+      "name": "R1 rooted-zip multipart create accepted through the shipped client (display_title + single files[] zip)",
+      "verdict": "PASS",
+      "via": "FetchAnthropicCustomSkillsClient.createSkill",
+      "request": {
+        "zipRootedAt": "c2094-rv-a-u8slfiss/",
+        "zipEntries": [
+          "c2094-rv-a-u8slfiss/SKILL.md"
+        ],
+        "archiveBytes": 334
+      },
+      "responseRedacted": {
+        "id": "sk#923fe66f",
+        "version": "1785371593520107"
+      },
+      "error": null
+    },
+    {
+      "name": "R2 POST /v1/skills/{id}/versions mints a NEW immutable version (multi-file bundle)",
+      "verdict": "PASS",
+      "via": "FetchAnthropicCustomSkillsClient.createSkillVersion",
+      "zipEntries": [
+        "c2094-rv-a-u8slfiss/SKILL.md",
+        "c2094-rv-a-u8slfiss/references/notes.md"
+      ],
+      "versionChanged": true,
+      "responseRedacted": {
+        "version": "1785371594389872"
+      },
+      "error": null
+    },
+    {
+      "name": "R3 collision reconciliation resolves a display_title BEYOND the page GET /v1/skills serves",
+      "verdict": "FAIL",
+      "via": "FetchAnthropicCustomSkillsClient.createSkill (collision -> findCustomSkillByDisplayTitle) at pageLimit=1",
+      "responseShape": [
+        "data",
+        "has_more",
+        "next_page"
+      ],
+      "cursorScheme": "page / next_page, no last_id — the client's post-F1 shape matches the envelope it is given",
+      "observed": {
+        "customSkillsPresent": 4,
+        "rowServedAtLimit1Redacted": "sk#2e4f80c0",
+        "targetWasOutsideTheServedPage": true,
+        "targetRedacted": "sk#923fe66f",
+        "listRequestsMadeByTheWalk": 1,
+        "adoptedTheExistingIdentity": false,
+        "rethrewInstead": true,
+        "errorRedacted": "[anthropic-custom-skills] POST /v1/skills failed: 400 {\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Skill cannot reuse an existing display_title: cinatra 2094 S7 reverify A u8slfiss\"},\"request_id\":\"req_011CdXJTrvbrXpfaCapcYZRe\"}"
+      },
+      "positiveControl": {
+        "purpose": "the same reconciliation on a title INSIDE the served page — isolates the page ceiling as the cause",
+        "adopted": true,
+        "errorRedacted": null
+      },
+      "paginationProbe": {
+        "rowsPresent": 4,
+        "shortPages": [
+          {
+            "request": "?source=custom&limit=1",
+            "rows": 1,
+            "has_more": false,
+            "next_page": null
+          },
+          {
+            "request": "?source=custom&limit=2",
+            "rows": 2,
+            "has_more": false,
+            "next_page": null
+          }
+        ],
+        "truncatesWithoutOfferingACursor": true,
+        "bogusCursor": {
+          "request": "?source=custom&page=bogus-cursor-c2094",
+          "status": 200,
+          "accepted": true,
+          "rowsReturned": 4,
+          "verdict": "an unknown cursor is accepted and silently ignored"
+        },
+        "displayTitleFilter": {
+          "request": "?source=custom&display_title=<title>",
+          "status": 200,
+          "rowsReturned": 4,
+          "filtered": false,
+          "verdict": "accepted and ignored — NOT a usable server-side exact lookup"
+        },
+        "largerLimits": [
+          {
+            "limit": 101,
+            "status": 200,
+            "rows": 4
+          },
+          {
+            "limit": 1000,
+            "status": 200,
+            "rows": 4
+          }
+        ],
+        "largerLimitsVerdict": "accepted without a 400, but with only these rows present it cannot be proven that a limit above 100 is HONOURED — so raising the page size is not evidence-backed from this run"
+      },
+      "finding": {
+        "id": "F6 (NEW — measured by this re-verification)",
+        "statement": "GET /v1/skills does not paginate: it truncates to `limit` and never returns a cursor.",
+        "contrast": "the VERSIONS endpoint does paginate — R4 walked a 4-version history across 4 pages on has_more + next_page",
+        "blastRadius": "findCustomSkillByDisplayTitle requests limit=100, so it can only ever observe the first 100 custom skills. Past 100, a lost create response rethrows instead of adopting the existing remote identity — the retry-stability property S0 claimed. F1's fix removes the wrong-cursor bug and is load-bearing for the GC walk (R4), but exhaustion on THIS endpoint is unreachable by paginating.",
+        "whyNotPatchedHere": "no client-side change is evidence-backed from this run (see paginationProbe): the display_title filter is ignored, and a larger limit is accepted but unproven. A defensible partial mitigation does exist and is recommended rather than silently applied — when a no-cursor page comes back FULL (rows == limit) with no match, the walk should report the result as TRUNCATED/indeterminate instead of treating it as exhaustive, so a caller can fail loudly rather than duplicate a remote identity. That is a product change outside this lane's authorised F1/F2 scope."
+      },
+      "note": "MEASURED FAILURE, reported not hidden: the reconciliation could not resolve a title outside the single page this endpoint serves, and rethrew. The positive control shows the path itself works within that page, so the ceiling — not the reconciliation logic — is the cause. This is F6."
+    },
+    {
+      "name": "R4 versions-list pagination to exhaustion over a genuinely multi-page history",
+      "verdict": "PASS",
+      "via": "FetchAnthropicCustomSkillsGcClient.listSkillVersions at pageLimit=1",
+      "observed": {
+        "versionsCreated": 4,
+        "pageSizeDriven": 1,
+        "versionsReturnedByTheWalk": 4,
+        "versionRequestsMadeByTheWalk": 4,
+        "walkSawEveryVersion": true,
+        "sameVersionSet": true
+      },
+      "regressionDelta": {
+        "legacyCursorWalkReturned": 1,
+        "legacyCursorShape": "has_more + last_id -> after_id (the pre-fix client)",
+        "note": "the pre-fix cursor shape returned 1 of 4 versions over the same history — which is the GC's non-convergence: it would delete only what it saw, then be refused the skill delete (R5) forever"
+      },
+      "error": null,
+      "note": "the shipped GC walk requested 4 pages at limit=1 and returned all 4 versions — the S0 deliverable \"paginate listSkillVersions to exhaustion before any deleteSkill\" is restored on the wire"
+    },
+    {
+      "name": "R5 skill delete is REFUSED while undeleted versions remain (delete-order enforcement)",
+      "verdict": "PASS",
+      "status": 400,
+      "refused": true,
+      "refusalAttributedToVersionsRemaining": true,
+      "errorRedacted": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Cannot delete skill with existing versions. Delete all versions first.\"},\"request_id\":\"req_011CdXJUKP5BFUKEXcFBbMrn\"}",
+      "note": "the API refuses the skill delete until every version is gone — which is why R4's exhaustion matters"
+    },
+    {
+      "name": "R6 versions-then-skill delete order reclaims the remote skill",
+      "verdict": "PASS",
+      "versionsDeleted": 4,
+      "everyVersionDeleteAccepted": true,
+      "skillDeleteStatus": 200,
+      "note": "the same order the GC performs, over a history it could only enumerate because R4's walk exhausts"
+    },
+    {
+      "name": "R7 display_title collision is rejected AND classified by the shipped isDisplayTitleConflict",
+      "verdict": "PASS",
+      "secondCreateStatus": 400,
+      "duplicateAccepted": false,
+      "coreClassifierMatchesRealBody": true,
+      "errorRedacted": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Skill cannot reuse an existing display_title: cinatra 2094 S7 reverify A u8slfiss\"},\"request_id\":\"req_011CdXJUcJ4WmyT756oC83hv\"}",
+      "note": "the shipped predicate is what gates R3's reconciliation — a body it fails to classify would rethrow instead of adopting"
+    },
+    {
+      "name": "R8 container.skills per-request cap — 8 accepted, 9 rejected",
+      "verdict": "PASS",
+      "uploadedRefs": 9,
+      "at8": {
+        "n": 8,
+        "status": 200,
+        "accepted": true,
+        "errorRedacted": null
+      },
+      "at9": {
+        "n": 9,
+        "status": 400,
+        "accepted": false,
+        "errorRedacted": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"container.ContainerParams.skills: List should have at most 8 items after validation, not 9\"},\"request_id\":\"req_011CdXJVbPGj5Zqgy5pZvEvJ\"}"
+      },
+      "note": "the 8-per-request ceiling is the server's own — the cross-provider suite's INJECTED_SKILL_CAP mirrors a real limit"
+    },
+    {
+      "name": "R9 an unresolvable container.skills reference fails CLOSED at the API boundary",
+      "verdict": "PASS",
+      "status": 400,
+      "rejected": true,
+      "rejectionAttributedToTheUnknownSkill": true,
+      "errorRedacted": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"Skill not found: sk#49edec0a\"},\"request_id\":\"req_011CdXJVdQK3fV4uFrbVAtKW\"}",
+      "note": "a stale mapping surfaces as an error rather than silently dropping the skill"
+    },
+    {
+      "name": "R10 the upload gate agrees with the live API — the measured false rejection is lifted, the gate is not removed",
+      "verdict": "PASS",
+      "shippedConstant": 31457280,
+      "previousConstant": 30000000,
+      "archiveBytes": 30000513,
+      "uncompressedTotalBytes": 30000189,
+      "observed": {
+        "apiAcceptedTheArtifact": true,
+        "apiStatus": 200,
+        "shippedGateAcceptsIt": true,
+        "oldGateWouldHaveRejectedIt": true,
+        "oldGateRejectionDimension": "uncompressed",
+        "gateStillRejectsAtTheNewConstant": true
+      },
+      "whatIsLiveVsLocal": {
+        "live": "ONLY `apiAcceptedTheArtifact` — a real POST /v1/skills returned 200 for this artifact.",
+        "local": "`shippedGateAcceptsIt`, `oldGateWouldHaveRejectedIt` and `gateStillRejectsAtTheNewConstant` are in-process checkSkillBoundary() calls, and the at-limit case is a SYNTHETIC object, not an upload. They prove the gate's own arithmetic, not server agreement.",
+        "doNotSay": "'live-proven in all three directions' — that would be false. One direction is live; two are local."
+      },
+      "note": "the API accepts an artifact the 30,000,000 gate refused (LIVE), and the shipped gate both accepts that artifact and still rejects at/above its own constant (LOCAL) — the false rejection is lifted and the gate was raised rather than removed",
+      "boundsCaveat": "this measures a LOWER bound only: the server's threshold is strictly greater than the largest artifact it accepted (see archiveBytes/uncompressedTotalBytes above). An evidence-only constant under `>=` semantics would be that value + 1. The shipped 31,457,280 is instead the docs-based policy reading (30 MiB) — consistent with the measurement but NOT derived from it, since nothing between the observed floor and 31,457,280 was probed in either direction. Probing near 31,457,280 is the follow-up that would upgrade the top of that band from inference to evidence."
+    }
+  ],
+  "cleanup": {
+    "attempted": [
+      {
+        "skill": "sk#923fe66f",
+        "versionsFound": 2,
+        "versionDeletesAccepted": 2,
+        "skillDeleteStatus": 200,
+        "skillDeleteAccepted": true
+      },
+      {
+        "skill": "sk#2509a0c7",
+        "versionsFound": 1,
+        "versionDeletesAccepted": 1,
+        "skillDeleteStatus": 200,
+        "skillDeleteAccepted": true
+      },
+      {
+        "skill": "sk#f0251eca",
+        "versionsFound": 1,
+        "versionDeletesAccepted": 1,
+        "skillDeleteStatus": 200,
+        "skillDeleteAccepted": true
+      },
+      {
+        "skill": "sk#2e4f80c0",
+        "versionsFound": 1,
+        "versionDeletesAccepted": 1,
+        "skillDeleteStatus": 200,
+        "skillDeleteAccepted": true
+      },
+      {
+        "skill": "sk#7bb9f00d",
+        "versionsFound": 0,
+        "versionDeletesAccepted": 0,
+        "skillDeleteStatus": 404,
+        "skillDeleteAccepted": true
+      },
+      {
+        "skill": "sk#1a234800",
+        "versionsFound": 1,
+        "versionDeletesAccepted": 1,
+        "skillDeleteStatus": 200,
+        "skillDeleteAccepted": true
+      },
+      {
+        "skill": "sk#cfb4e351",
+        "versionsFound": 1,
+        "versionDeletesAccepted": 1,
+        "skillDeleteStatus": 200,
+        "skillDeleteAccepted": true
+      },
+      {
+        "skill": "sk#b1b1802e",
+        "versionsFound": 1,
+        "versionDeletesAccepted": 1,
+        "skillDeleteStatus": 200,
+        "skillDeleteAccepted": true
+      },
+      {
+        "skill": "sk#94d51aa9",
+        "versionsFound": 1,
+        "versionDeletesAccepted": 1,
+        "skillDeleteStatus": 200,
+        "skillDeleteAccepted": true
+      },
+      {
+        "skill": "sk#205d4fb6",
+        "versionsFound": 1,
+        "versionDeletesAccepted": 1,
+        "skillDeleteStatus": 200,
+        "skillDeleteAccepted": true
+      },
+      {
+        "skill": "sk#7d131b6a",
+        "versionsFound": 1,
+        "versionDeletesAccepted": 1,
+        "skillDeleteStatus": 200,
+        "skillDeleteAccepted": true
+      },
+      {
+        "skill": "sk#66d157ea",
+        "versionsFound": 1,
+        "versionDeletesAccepted": 1,
+        "skillDeleteStatus": 200,
+        "skillDeleteAccepted": true
+      },
+      {
+        "skill": "sk#1772f6f7",
+        "versionsFound": 1,
+        "versionDeletesAccepted": 1,
+        "skillDeleteStatus": 200,
+        "skillDeleteAccepted": true
+      },
+      {
+        "skill": "sk#726791d5",
+        "versionsFound": 1,
+        "versionDeletesAccepted": 1,
+        "skillDeleteStatus": 200,
+        "skillDeleteAccepted": true
+      },
+      {
+        "skill": "sk#d3b489d6",
+        "versionsFound": 1,
+        "versionDeletesAccepted": 1,
+        "skillDeleteStatus": 200,
+        "skillDeleteAccepted": true
+      }
+    ],
+    "versionDeletes": 15,
+    "skillDeletes": 15,
+    "order": "versions-then-skill",
+    "allReclaimed": true,
+    "leftoverCount": 0,
+    "indeterminateCount": 0
+  },
+  "requestCount": 105,
+  "summary": {
+    "total": 10,
+    "pass": 9,
+    "fail": 1,
+    "other": []
+  },
+  "exitCode": 1,
+  "headline": "9 PASS / 1 FAIL — acceptance NOT complete (see the FAIL check's `finding`)"
+}

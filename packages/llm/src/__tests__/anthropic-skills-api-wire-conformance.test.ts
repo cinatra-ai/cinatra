@@ -218,6 +218,23 @@ describe("display_title collision reconciliation against the real list envelope"
    * reject a duplicate title (HTTP 4xx, body matched by the shipped
    * `isDisplayTitleConflict` predicate), so this reconciliation path is load
    * bearing — it is what keeps a lost create response from stranding a skill.
+   * The S7 post-fix re-verification then drove this path against the LIVE API
+   * and confirmed a real collision does adopt the existing remote identity.
+   *
+   * ## What the multi-page case below does and does NOT claim
+   *
+   * The paged arm proves the CLIENT's walk shape: given the documented
+   * `{data, has_more, next_page}` envelope, it follows the cursor instead of the
+   * `after_id` it used pre-F1. That is a real regression guard on our own code.
+   *
+   * It is NOT a claim about the live wire for this endpoint. The S7 re-verify
+   * measured that `GET /v1/skills` never offers a second page — it truncates to
+   * `limit` and answers `has_more:false` / `next_page:null` even with more rows
+   * present (finding F6; `live-reverify-results.json`, check R3). So these
+   * stubbed pages describe the documented scheme the client is written against,
+   * not observed live behaviour, and the residual risk for workspaces with more
+   * than one page of custom skills is recorded on the client method itself.
+   * The versions walk above is the arm whose exhaustion IS live-proven (R4).
    */
   function stubCollisionThenThreePageList(): { cursors: (string | null)[] } {
     const cursors: (string | null)[] = [];

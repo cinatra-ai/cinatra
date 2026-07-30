@@ -143,21 +143,32 @@ export function computeSkillContentHash(
  * server's true bound is strictly greater than 30,000,505, so the old constant
  * was a confirmed client-side FALSE REJECTION.
  *
- * The narrowest reading of the same "under 30 MB" prose that is consistent with
- * that observation is binary MB — 30 MiB = 31,457,280 — and 30,000,505 sits
- * comfortably inside it. Independently, the API's documented request-size
- * ceiling is 32 MB (`413 request_too_large`), so 30 MiB also leaves headroom
- * for the multipart envelope that wraps these bytes on the wire under either
- * reading of that 32.
+ * ## This value is a DOCS-BASED POLICY READING, not a measured server limit
  *
- * ## What the evidence does NOT establish
+ * Be precise about what each part rests on, because conflating the two is how a
+ * guess starts being cited as a measurement:
  *
- * Only a LOWER bound. A bundle between 30,000,505 and 31,457,280 bytes has not
- * been observed in either direction, and no upper bound was probed to a
- * rejection, so this stays a deliberately conservative client-side gate rather
- * than a mirror of a known server limit. It is raised to the narrowest
- * defensible value, not to the transport ceiling. Moving it again requires the
- * same thing this move required: a live measurement, recorded.
+ *   - **Measured (live):** the server's true threshold is strictly greater than
+ *     the largest artifact it accepted — 30,000,513 archive bytes / 30,000,189
+ *     uncompressed in the S7 post-fix re-verification (check R10,
+ *     `evidence/2094-s7-acceptance/live-reverify-results.json`). That is a LOWER
+ *     bound and nothing more. An evidence-only constant under this module's `>=`
+ *     semantics would therefore be 30,000,514.
+ *   - **Inferred (docs policy):** 30 MiB = 31,457,280 is the binary-MB reading of
+ *     the docs' "under 30 MB". It is consistent with the measurement, and it
+ *     stays under the documented 32 MB request-size ceiling with headroom for the
+ *     multipart envelope — but NO artifact between 30,000,514 and 31,457,280 has
+ *     been probed in either direction, and no upper bound was probed to a
+ *     rejection. Nothing live confirms the server agrees at the top of that band.
+ *
+ * The value is chosen as the documented policy reading rather than the bare
+ * observed floor so the gate tracks the published contract instead of an
+ * artifact size that happened to be tested. That is a deliberate product choice,
+ * NOT a measured fact — do not describe it as one. Moving it again requires the
+ * same thing this move required: a live measurement, recorded. Probing near
+ * 31,457,280 would upgrade the upper half of this rationale from inference to
+ * evidence, and is the follow-up worth doing before anyone treats 30 MiB as the
+ * server's own limit.
  */
 export const ANTHROPIC_SKILL_MAX_UPLOAD_BYTES = 31_457_280;
 

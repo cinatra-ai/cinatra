@@ -1,8 +1,9 @@
 /**
  * Anthropic Custom Skills HTTP client.
  *
- * VERIFIED API facts (spec §3): `POST /v1/skills` (multipart, <30 MiB — the
- * bound the S7 live acceptance measured) returns a
+ * VERIFIED API facts (spec §3): `POST /v1/skills` (multipart; the client-side
+ * upload bound is 30 MiB — a docs-based policy reading, NOT a measured server
+ * limit; see {@link ANTHROPIC_SKILL_MAX_UPLOAD_BYTES}) returns a
  * `skill_id` + an immutable epoch `latest_version`; `POST /v1/skills/{id}/versions`
  * creates a NEW immutable version to update. Custom Skills require betas
  * `code-execution-2025-08-25,skills-2025-10-02,files-api-2025-04-14` and are
@@ -28,10 +29,17 @@ export const ANTHROPIC_SKILLS_BETAS =
   "code-execution-2025-08-25,skills-2025-10-02,files-api-2025-04-14";
 
 /**
- * Default page size for the two list walks. Both walks paginate to exhaustion
- * regardless of this value; it is injectable purely so a conformance probe can
- * drive a genuinely multi-page walk against the real API without uploading
- * `limit + 1` versions.
+ * Default page size for the two list walks.
+ *
+ * Both walks follow the documented cursor to exhaustion — but only ONE of the
+ * two endpoints actually offers a cursor. `GET /v1/skills/{id}/versions`
+ * paginates and its walk is live-proven exhaustive; `GET /v1/skills` truncates
+ * to this value and returns no cursor at all, so there this is a hard ceiling on
+ * what the walk can observe (finding F6 — see
+ * {@link FetchAnthropicCustomSkillsClient} `findCustomSkillByDisplayTitle`).
+ *
+ * Injectable purely so a conformance probe can drive a genuinely multi-page walk
+ * against the real API without uploading `limit + 1` versions.
  */
 export const ANTHROPIC_SKILLS_LIST_PAGE_LIMIT = 100;
 
@@ -233,11 +241,31 @@ export class FetchAnthropicCustomSkillsClient implements AnthropicCustomSkillsCl
    * null. Used ONLY to reconcile a lost create response.
    *
    * Walks the REAL envelope (`{data, has_more, next_page}`, forward cursor on
-   * the `page` param — see {@link SkillsListEnvelope}). Exhaustion matters here
-   * for the same reason it matters in the GC: a workspace with more custom
-   * skills than one page holds would otherwise rethrow the collision instead of
-   * adopting the existing remote identity, losing the retry-stability property
-   * this reconciliation exists to provide.
+   * the `page` param — see {@link SkillsListEnvelope}), so the cursor this walk
+   * keys on is the one the API actually documents and returns.
+   *
+   * ## KNOWN RESIDUAL RISK — finding F6, live-measured (cinatra#2094 S7)
+   *
+   * Unlike `GET /v1/skills/{id}/versions` (which genuinely paginates — the S7
+   * post-fix re-verification walked a 4-version history across 4 pages), the
+   * **workspace skills list does not paginate at all**. Measured on the live API
+   * with 8 rows present: `limit=1` returned 1 row and `limit=2` returned 2 rows,
+   * and EVERY response carried `has_more:false` with `next_page:null`; an
+   * unknown `page` value is accepted and silently ignored. See
+   * `evidence/2094-s7-acceptance/live-reverify-results.json`, check R3.
+   *
+   * Consequence: this walk can only ever observe the FIRST `pageLimit` rows. In
+   * a workspace holding more than {@link ANTHROPIC_SKILLS_LIST_PAGE_LIMIT}
+   * custom skills, a `display_title` beyond that row is invisible here, so a
+   * lost create response rethrows instead of adopting the existing remote
+   * identity — the retry-stability property this reconciliation exists to
+   * provide. Nothing in this walk can fix that: the server hands back no cursor
+   * to paginate with, `display_title` is not a supported server-side filter (it
+   * is accepted and ignored), and a larger `limit` is accepted without error but
+   * could not be proven honoured beyond the rows available to measure. Raising
+   * the bound on that unproven basis would be a guess, so the risk is RECORDED
+   * here rather than papered over. Do not describe this walk as "paginating to
+   * exhaustion" against the live API — on this endpoint it does not, and cannot.
    */
   private async findCustomSkillByDisplayTitle(
     displayTitle: string,
