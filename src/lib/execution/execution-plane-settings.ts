@@ -4,11 +4,26 @@ import "server-only";
 // deliverable 5; epic #1705).
 //
 // The persisted MODE VOCABULARY is the full `remote | local-dev | disabled`
-// set — S4 (cinatra-cli) consumes the same vocabulary — but in THIS slice only
-// `local-dev` and `disabled` are OPERABLE. `remote` renders on the settings
-// screen and is deliberately not selectable: the remote placement's service
-// boundary (HTTP/mTLS to an out-of-process broker) is not wired here, and a
-// selectable-but-inert mode would be a lie in the admin surface.
+// set — S4 (cinatra-cli) consumes the same vocabulary — and since exec-plane L4
+// ALL THREE are operable. `remote` was previously rendered-but-unselectable for
+// one honest reason: the remote placement's service boundary (HTTP/mTLS to an
+// out-of-process broker) did not exist, so offering the choice would have been
+// a lie in the admin surface. That boundary is now merged — the versioned wire
+// protocol, the mutual-TLS identities, the thin broker/worker services and the
+// clients (`@cinatra-ai/execution-plane`'s `service/*`) — and the boot phase
+// constructs a real client against it, so the choice is now true.
+//
+// WHAT "OPERABLE" DOES AND DOES NOT MEAN. It means the mode can be PERSISTED
+// and the boot phase knows how to honor it. It does NOT promise the placement
+// will come up: a `remote` instance whose broker is unreachable, unconfigured
+// or unhealthy registers NOTHING and reports `unavailable` with the verbatim
+// reason, exactly as a `local-dev` instance without docker does. Selecting a
+// mode is a statement of intent; the boot handshake is what makes it real.
+//
+// UNCHANGED BY DESIGN: `DEFAULT_EXECUTION_PLANE_MODE` is still `disabled`, and
+// every write still passes the default-off `CINATRA_EXECUTION_PLANE_ROLLOUT`
+// gate. Making a mode operable is not the same decision as turning the plane on
+// for users, and this slice does not make the second one.
 //
 // Storage: the EXISTING platform key-value metadata store
 // (`connector_config:execution_plane`, the same schema-config seam
@@ -31,8 +46,14 @@ export const EXECUTION_PLANE_MODES: readonly ExecutionPlaneMode[] = [
   "disabled",
 ] as const;
 
-/** The subset this slice can actually honor. `remote` is renders-only. */
+/**
+ * The subset the boot phase can actually honor. Since exec-plane L4 that is the
+ * WHOLE vocabulary — the constant is kept (rather than deleted as a tautology)
+ * because it is the seam a future mode is added through, and because the write
+ * path's fail-closed refusal reads from it rather than from a hard-coded list.
+ */
 export const OPERABLE_EXECUTION_PLANE_MODES: readonly ExecutionPlaneMode[] = [
+  "remote",
   "local-dev",
   "disabled",
 ] as const;
@@ -148,15 +169,21 @@ export class ExecutionPlaneRolloutDisabledError extends Error {
 }
 
 /**
- * Raised when an admin attempts to persist a mode this slice cannot honor.
- * `remote` is the only such value today (S4 makes it operable).
+ * Raised when an admin attempts to persist a mode the boot phase cannot honor.
+ *
+ * Since exec-plane L4 every mode in the vocabulary is operable, so nothing
+ * reaches this today — and the guard STAYS, unreachable-but-armed, because it
+ * is the fail-closed edge of the vocabulary: the next mode added to
+ * `EXECUTION_PLANE_MODES` before its boot branch exists must be refused by the
+ * write path, not stored and silently ignored. Deleting the guard would make
+ * that failure mode reappear silently.
  */
 export class ExecutionPlaneModeNotOperableError extends Error {
   readonly mode: ExecutionPlaneMode;
   constructor(mode: ExecutionPlaneMode) {
     super(
-      `Execution-plane mode "${mode}" is part of the persisted vocabulary but is ` +
-        `not operable on this instance yet; choose one of ` +
+      `Execution-plane mode "${mode}" is part of the persisted vocabulary but this ` +
+        `instance cannot honor it; choose one of ` +
         `${OPERABLE_EXECUTION_PLANE_MODES.join(" / ")}.`,
     );
     this.name = "ExecutionPlaneModeNotOperableError";
