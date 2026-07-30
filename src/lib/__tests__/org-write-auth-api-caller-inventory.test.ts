@@ -29,7 +29,17 @@
 // access would evade the anchor. None exists in the tree today, and the
 // convention pin below (`auth.api.` is the one sanctioned spelling) makes
 // introducing one a reviewable style deviation rather than a silent bypass.
-import { readFileSync, readdirSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 
 function stripComments(text: string): string {
@@ -230,22 +240,88 @@ const OUT_OF_SCOPE_METHODS = new Set([
   "signUpEmail",
 ]);
 
+// Directory names never descended into. Same name set the previous path-regex
+// filtered AFTER the fact — pruning must happen DURING the walk (see below).
+const PRUNED_DIR_NAMES = new Set([
+  "node_modules",
+  "__tests__",
+  "__mocks__",
+  "dist",
+  "build",
+  "coverage",
+  ".next",
+]);
+
 /** Repo-wide walk (the boundary gate's scan roots) yielding every candidate
- *  production source file, repo-relative with forward slashes. */
-function walkProductionSources(): string[] {
+ *  production source file, repo-relative with forward slashes.
+ *
+ *  Deliberately a MANUAL stack walk, not `readdirSync(..., { recursive:
+ *  true })`: the recursive flag FOLLOWS symlinked directories, so on any
+ *  pnpm-installed tree (CI runs `pnpm install` before the suite) every
+ *  workspace link `packages/<x>/node_modules/@cinatra-ai/<y>` re-enters a
+ *  sibling package — and the third-party links re-enter the pnpm store —
+ *  making the traversal combinatorially explosive. In CI that walk allocated
+ *  ~4 GB of ever-longer path strings and OOM-killed the vitest worker before
+ *  the first assertion could run (post-hoc filtering of the RESULT list never
+ *  got the chance to matter). Pruning excluded directories at descent time
+ *  and never descending into ANY symlink keeps the walk on real source
+ *  directories only, installed tree or not. */
+function walkProductionSources(roots: readonly string[] = ["src", "packages", "scripts"]): string[] {
   const out: string[] = [];
-  for (const root of ["src", "packages", "scripts"]) {
-    for (const rel of readdirSync(root, { recursive: true }) as string[]) {
-      const path = `${root}/${rel.replaceAll("\\", "/")}`;
+  const stack = [...roots];
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = `${dir}/${entry.name}`;
+      // Never follow a symlink — a symlinked dir is how the pnpm-installed
+      // tree loops back on itself, and the repo tracks no symlinked sources
+      // (so skipping them changes nothing on a clean checkout).
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) {
+        if (!PRUNED_DIR_NAMES.has(entry.name)) stack.push(path);
+        continue;
+      }
+      if (!entry.isFile()) continue;
       if (!/\.(ts|tsx|mts|cts)$/.test(path)) continue;
       if (path.endsWith(".d.ts")) continue;
-      if (/(^|\/)(node_modules|__tests__|__mocks__|dist|build|coverage|\.next)\//.test(path)) continue;
       if (/\.(test|spec)\.[a-z]+$/.test(path)) continue;
       out.push(path);
     }
   }
   return out;
 }
+
+describe("walkProductionSources — positive control (proves the walker survives an installed tree before trusting the sweep)", () => {
+  it("terminates on a pnpm-shaped symlink cycle, never descends node_modules or symlinks, and still finds the real sources", () => {
+    // A miniature of the layout that OOM'd CI: two workspace packages whose
+    // node_modules symlink to each OTHER (pnpm workspace links), plus a
+    // symlinked dir at package level. The old recursive readdir followed
+    // these links into an unbounded traversal; the pruned walk must return
+    // exactly the two real sources and nothing under node_modules.
+    const fixtureRoot = mkdtempSync(join(tmpdir(), "auth-api-walk-fixture-"));
+    try {
+      const pkgs = join(fixtureRoot, "pkgs");
+      mkdirSync(join(pkgs, "a", "node_modules", "@org"), { recursive: true });
+      mkdirSync(join(pkgs, "b", "node_modules", "@org"), { recursive: true });
+      writeFileSync(join(pkgs, "a", "real-a.ts"), "export const a = 1;\n");
+      writeFileSync(join(pkgs, "b", "real-b.ts"), "export const b = 1;\n");
+      // The trap file: reachable ONLY through a symlink or node_modules —
+      // appearing in the result would mean the walk followed one of them.
+      writeFileSync(
+        join(pkgs, "a", "node_modules", "@org", "trap.ts"),
+        "export const trap = 1;\n",
+      );
+      symlinkSync(join(pkgs, "b"), join(pkgs, "a", "node_modules", "@org", "b"));
+      symlinkSync(join(pkgs, "a"), join(pkgs, "b", "node_modules", "@org", "a"));
+      symlinkSync(join(pkgs, "a"), join(pkgs, "link-to-a"));
+
+      const found = walkProductionSources([pkgs]).sort();
+      expect(found).toEqual([join(pkgs, "a", "real-a.ts"), join(pkgs, "b", "real-b.ts")]);
+    } finally {
+      rmSync(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("internal auth.api.* caller inventory — exhaustive REPO-WIDE sweep", () => {
   it("repo-wide: every mutating auth.api.* call site in src/ + packages/ + scripts/ is in the inventory, and no inventory row is stale", () => {
