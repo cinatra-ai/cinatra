@@ -256,28 +256,51 @@ The outbound path moves to `@modelcontextprotocol/client@2.0.0`. This is a
 contains zero occurrences of `2026-07-28`, so the v1 line is not a route to this
 revision.
 
-`client@2.0.0` negotiates through a `versionNegotiation` option:
+`client@2.0.0` negotiates through a `versionNegotiation` option. **It is an
+options object, and its default mode is `'legacy'`** — the client resolves
+`options?.mode ?? 'legacy'`, so a bare string (`versionNegotiation: 'auto'`)
+leaves `mode` undefined and silently selects the legacy path. Measured against
+`client@2.0.0` + `server@2.0.0`: written as the bare string, `connect()`
+negotiated `2025-11-25` with **no `server/discover` request on the wire at all**;
+written as `{ mode: 'auto' }` it negotiated `2026-07-28` in two requests. Migrating
+the package is therefore **not** sufficient to reach the revision — the mode must
+be passed explicitly.
 
-- **`'auto'` (default)** — probe `server/discover` for a modern revision; on no
+- **`{ mode: 'auto' }`** — probe `server/discover` for a modern revision; on no
   modern overlap, fall back to the legacy `initialize` handshake. Legacy fallback
   is available unless `supportedProtocolVersions` is set to a modern-only list.
-- **`'legacy'`** — skip the probe, `initialize` directly.
-- **`{ pin: '<modern revision>' }`** — pin a modern revision; pinning a legacy
-  revision is a `TypeError`.
+- **`{ mode: 'legacy' }`, or the option omitted entirely (the default)** — skip
+  the probe, `initialize` directly.
+- **`{ mode: { pin: '<modern revision>' } }`** — pin a modern revision; pinning a
+  legacy revision is a `TypeError`.
 
-**TARGET outbound policy: `versionNegotiation: 'auto'` on every surface, no pins,
-no modern-only surface.** cinatra calls third-party MCP servers it does not
-control, so preferring `2026-07-28` while retaining the legacy fallback is the
-only posture that does not break existing connector instances.
+**TARGET outbound policy: `versionNegotiation: { mode: 'auto' }` on every surface
+whose peer may plausibly speak `2026-07-28`, no pins, no modern-only surface.**
+cinatra calls third-party MCP servers it does not control, so preferring
+`2026-07-28` while retaining the legacy fallback is the only posture that does not
+break existing connector instances.
+
+`'auto'` is not free against a peer that cannot answer the probe. Measured on one
+connect-per-call cycle against a 2025-era-only peer: `{ mode: 'auto' }` costs
+**five** HTTP requests (`server/discover` rejected, then `initialize`,
+`notifications/initialized`, the `GET` stream open, `tools/call`) where today's
+client costs **four**. On a surface whose peer is *known* 2025-era — and whose
+transport reconnects per call — an explicit `{ mode: 'legacy' }` is the correct
+setting until that peer's posture changes, not a regression from this policy.
 
 Per surface:
 
 | Surface | TARGET client | TARGET negotiation | TARGET accepted from server |
 | --- | --- | --- | --- |
-| `src/lib/connector-instance-mcp-transport.ts` | `@modelcontextprotocol/client@2.0.0` | `'auto'` | `2026-07-28` preferred; the five legacy revisions via fallback |
-| `http-client.ts` in `packages/marketplace-mcp-client` | `@modelcontextprotocol/client@2.0.0` | `'auto'` | `2026-07-28` preferred; the five legacy revisions via fallback |
-| `packages/objects/src/graphiti-client.ts` | `@modelcontextprotocol/client@2.0.0` | `'auto'` | `2026-07-28` preferred; the five legacy revisions via fallback |
-| `packages/agents/src/external-mcp-caller.ts` | `@modelcontextprotocol/client@2.0.0` — **migrate off hand-rolled `fetch`** | `'auto'` | `2026-07-28` preferred; the five legacy revisions via fallback |
+| `src/lib/connector-instance-mcp-transport.ts` | `@modelcontextprotocol/client@2.0.0` | `{ mode: 'auto' }` — or explicit `{ mode: 'legacy' }` while the peer is the sessionful 2025-era gateway | `2026-07-28` preferred; the five legacy revisions via fallback |
+| `http-client.ts` in `packages/marketplace-mcp-client` | `@modelcontextprotocol/client@2.0.0` | `{ mode: 'auto' }` | `2026-07-28` preferred; the five legacy revisions via fallback |
+| `packages/objects/src/graphiti-client.ts` | `@modelcontextprotocol/client@2.0.0` | `{ mode: 'auto' }` — the era choice tracks the pinned peer image | `2026-07-28` preferred; the five legacy revisions via fallback |
+| `packages/agents/src/external-mcp-caller.ts` | `@modelcontextprotocol/client@2.0.0` — **migrate off hand-rolled `fetch`** | `{ mode: 'auto' }` | `2026-07-28` preferred; the five legacy revisions via fallback |
+
+Whichever mode a surface lands on, the migration must **prove** it: an assertion
+that `server/discover` was (or was not) issued and that the expected revision was
+negotiated. A package version is not evidence of a negotiation — the bare-string
+trap above produces a fully working client on the wrong era.
 
 The last row is a decision, not a deferral. `external-mcp-caller.ts` negotiates
 nothing today, which means it fails silently against a modern-only peer and can
@@ -307,9 +330,9 @@ why. So "negotiates nothing" is not "unaffected" — it means the surface has no
 revision posture to state and no diagnostic when a peer's posture excludes it.
 
 **TARGET.** Unchanged in outcome for the three SDK-client surfaces, by design:
-under `versionNegotiation: 'auto'` an older-revision server is detected by the
-absent or non-overlapping `server/discover` probe and served through the legacy
-`initialize` path, so the five legacy revisions stay reachable outbound.
+under `versionNegotiation: { mode: 'auto' }` an older-revision server is detected
+by the absent or non-overlapping `server/discover` probe and served through the
+legacy `initialize` path, so the five legacy revisions stay reachable outbound.
 **cinatra does not drop support for calling 2025-era MCP servers.** Any future
 change to that is a separate decision with its own release communication.
 
@@ -317,6 +340,53 @@ For `external-mcp-caller.ts` the TARGET is a strict improvement rather than pari
 after the migration an older-revision peer is reached through the same legacy
 fallback as the other three, and a modern-only peer becomes reachable instead of
 silently failing.
+
+### What outbound clients do with the `DiscoverResult` (cinatra#2222)
+
+**CURRENT and TARGET, both: `server/discover` is a version probe only.** No
+outbound surface caches a `DiscoverResult`, holds a prior across connections, or
+reads the capabilities/instructions it carries. `client@2.0.0` can adopt a
+validated prior discovery with zero extra round trips
+(`connect(transport, { prior: { kind: 'modern', discover } })`); cinatra does not
+use it. Three separable decisions, recorded separately because they have
+different costs:
+
+| Decision | Posture |
+| --- | --- |
+| **Prior reuse** (transport optimization) | **No.** Measured saving is one HTTP request per connect-per-call cycle (2 → 1 against a modern peer). `server/discover` is a *cacheable result* on `2026-07-28` — it carries a server-authored `ttlMs` / `cacheScope` — and a default-configured `server@2.0.0` answers `ttlMs: 0` / `cacheScope: 'private'`, i.e. SHOULD be treated as immediately stale. cinatra will not routinely reuse a modern prior past its advertised freshness horizon, so `ttlMs: 0` disables routine reuse. `validatePrior()` schema-checks only — no TTL, no expiry, no identity binding — so freshness would be entirely ours to get right. |
+| **Capability consumption** (dispatch) | **No.** The advertised set is a server self-report and does not prove a given tool exists (`tools/list` does). Under the SDK default (`enforceStrictCapabilities: false`) nothing reads it; under strict enforcement a stale set blocks a supported call with zero requests on the wire. |
+| **Instruction consumption** (model-facing) | **No, and it is not a discovery question.** The legacy `initialize` result already carries `instructions` and the installed v1 client already exposes it; all four surfaces discard it. Putting peer-authored text into model context is a prompt-injection decision on its own merits, identical on both eras. |
+
+**Standing invariant, whatever the outcome above.** Server-advertised capabilities
+may suppress or route *dispatch*; the server remains the authorization and
+enforcement point. Nothing derived from a peer's self-report may widen, narrow or
+substitute for an authorization decision on our side.
+
+**Why a cache is not merely "unbanked value".** Measured: a cached *modern* prior
+against a peer that has since gone 2025-era-only fails the call outright —
+`connect({ prior })` never re-probes and has no fallback, where `{ mode: 'auto' }`
+with no prior detects the peer and succeeds. A cache converts a recoverable
+negotiation into an outage.
+
+**Reopen trigger.** Conditions 1 and 2 are prerequisites for evaluating at all;
+condition 3 decides whether it is worth implementing:
+
+1. A surface has actually migrated to `@modelcontextprotocol/client@2.0.0` with
+   `{ mode: 'auto' }` (nothing here is expressible on the v1 client); **and**
+2. a real peer on that surface answers `server/discover` with a **positive
+   `ttlMs`**; **and**
+3. the probe is a measured, material share of that surface's per-call cost —
+   recorded at migration time as negotiated era, discovery latency, total
+   connect-plus-call latency, `ttlMs` and `cacheScope`, and crossing a threshold
+   declared before the measurement rather than after.
+
+Any cache built after that trigger is keyed by canonical endpoint **and**
+authorization/tenant context **and** client negotiation configuration, stores the
+receipt time (a `DiscoverResult` alone cannot express its own expiry), carries a
+local maximum TTL, invalidates and re-probes only on an unambiguous *pre-dispatch*
+protocol/version rejection — never by retrying an arbitrary failed `tools/call`,
+whose execution may be non-idempotent — and single-flights refresh so expiry does
+not stampede.
 
 ## Asymmetry, stated deliberately
 
@@ -337,5 +407,9 @@ inferred from the installed package version alone.
   REQUIRED request headers of `2026-07-28` (a modern request missing either is
   answered `-32020` by `validateStandardRequestHeaders`), so adopting the
   revision forces their admission; there is no separate adoption decision.
+- ~~**Whether outbound clients consume the `server/discover` payload as a
+  capability / instructions source.**~~ **Settled: no** (cinatra#2222) — probe
+  only, no prior held across connections, with the reopen trigger recorded
+  above.
 - **Anything about conformance.** The presence of a TARGET paragraph is not
   evidence that any surface implements it.
