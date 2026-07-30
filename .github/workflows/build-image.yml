@@ -639,7 +639,14 @@ jobs:
   #     - name: Integration tests (packages/agents)
   #       if: env.CINATRA_TEST_DB_URL != ''
   #       env:
-  #         CINATRA_TEST_DB_URL: ${{ secrets.CINATRA_TEST_DB_URL }}
+  #         CINATRA_TEST_DB_URL: <the repo secret of the same name>
+  #
+  # (That last line is PARAPHRASED on purpose. secrets-required-gate scans this
+  # file for `secrets.<NAME>` tokens WITHOUT skipping comments, so writing the
+  # real `${{ secrets.… }}` expression here — even quoted inside a comment —
+  # makes the gate believe the workflow still consumes a secret that
+  # .github/secrets-required.txt has retired, and it fails CLOSED. Do not
+  # "restore" the literal.)
   #
   # A step-level `if:` is evaluated BEFORE that step's own `env:` block is
   # applied, so `env.CINATRA_TEST_DB_URL` was always the empty string and the
