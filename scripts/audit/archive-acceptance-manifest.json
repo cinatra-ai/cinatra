@@ -152,8 +152,12 @@
         "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
         "testName": "bounded contention: a fixed, finite set of concurrent guarded writers never blocks the exclusive fence past a generous deadline, and the fence succeeds once the writers drain"
       },
+      "e2eProof": {
+        "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
+        "testName": "bounded contention against the REAL archiveOrganization action: a fixed, finite set of concurrent guarded writers never blocks it past a generous deadline, and it succeeds once they drain (Decision 8's two-phase criterion, e2e half)"
+      },
       "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
-      "status": "red",
+      "status": "green",
       "trackingIssue": 1943
     },
     {

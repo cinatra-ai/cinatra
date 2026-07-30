@@ -27,6 +27,14 @@
  * SQL re-derives the lease decision rather than trusting a caller's claim);
  * and the kernel half of the bounded-contention / eventual-successful-archive
  * criterion (Decision 8 — the end-to-end half lands with #1942 V5, tier A6).
+ *
+ * EXTENDED again for cinatra#1943 tier A6, now that #1942 V5 (the real
+ * archiveOrganization/unarchiveOrganization transaction, including its
+ * owner-ruled lock_timeout + bounded-retry wrapper) has landed on main: a
+ * third describe block below drives that REAL product entry point under
+ * contention, closing manifest row 14's e2e subproof (Decision 1's
+ * AND-of-subproofs rule — the kernel subproof in the first block below is
+ * not, by itself, enough once the criterion is live/product-level).
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -53,6 +61,10 @@ import {
   ensureAuthFloorArchiveGuardTriggers,
   ensureSessionActivationGuardTrigger,
 } from "../../../../scripts/better-auth-migrate.mts";
+import {
+  archiveOrganization,
+  ORG_ARCHIVE_ACTIVATION_CONFIG_KEY,
+} from "@/lib/organization-archive";
 
 const dbUrl = process.env.SUPABASE_DB_URL ?? "";
 const enabled =
@@ -1013,6 +1025,264 @@ describe.skipIf(!enabled)(
       } finally {
         await archiverConn.end();
         await writerConn.end();
+        await dropFixtures();
+      }
+    });
+  },
+);
+
+// =============================================================================
+// cinatra#1943 A6 — manifest row 14 (BOUNDED, deterministic
+// eventual-successful-archive under contention), the E2E SUBPROOF. The
+// kernel-level subproof (the first describe block in this file) already
+// proves the bounded-deadline ACQUISITION PATTERN against
+// `guardOrgLifecycleMutation` directly. This block proves the SAME criterion
+// against the REAL PRODUCT ENTRY POINT — src/lib/organization-archive.ts's
+// `archiveOrganization` — including its owner-ruled explicit `lock_timeout`
+// + bounded-retry-with-backoff wrapper (Decision 8's revised recommendation,
+// landed with #1942 V5). Per Decision 1's AND-of-subproofs rule this is the
+// piece that flips manifest row 14 from red to green: a kernel stand-in
+// passing is not enough once the issue's own language implies
+// live/product-level behavior.
+//
+// Deliberately does NOT re-prove the retry wrapper's internal MECHANICS
+// (exact attempt counts against injected 55P03s) — that is already pinned
+// against a fake db in src/lib/__tests__/organization-archive-tx.test.ts.
+// This suite proves the OUTCOME against REAL, CONCURRENT Postgres: bounded
+// wall-clock behavior under genuine contention, a typed non-hanging failure
+// when contention outlasts the retry budget, and — the criterion's other
+// half — that the SAME org archives successfully the moment contention
+// clears.
+//
+// Own describe block (own root/pool/beforeAll/afterAll/beforeEach), same
+// shape as the "BA-DML-vs-archive" block above, rather than reusing the
+// first block's isolated `schema`: this suite needs `process.env.
+// SUPABASE_SCHEMA` pointed at its OWN isolated schema before the FIRST call
+// that lazily imports `@/lib/database` (organization-archive.ts's
+// activation-gate read, and `@/lib/postgres-config`'s module-level
+// `postgresSchema` constant, captured at first import in this worker) — so
+// it cannot share a beforeAll with a block whose tests might run first
+// without that env var set. `archiveOrganization`'s own schema resolution
+// (`appSchema()`) re-reads the env var on every call, so setting it once in
+// this block's `beforeAll`, before any test body runs, is sufficient.
+// =============================================================================
+
+describe.skipIf(!enabled)(
+  "archiveOrganization under real contention — the e2e subproof for the bounded-contention criterion (cinatra#1943 A6, manifest row 14)",
+  () => {
+    let root: Client;
+    let pool: Pool;
+    let db: OrgWriteDb<OrgWriteTx>;
+    let schema: string;
+    let orgId: string;
+    let ownerId: string;
+    let previousSupabaseSchema: string | undefined;
+
+    beforeAll(async () => {
+      root = new Client({ connectionString: dbUrl });
+      await root.connect();
+      await root.query(readFileSync(PUBLIC_SCHEMA_SQL, "utf8"));
+      schema = `cinatra_test_a6_${randomUUID().replace(/-/g, "").slice(0, 8)}`;
+      await root.query(`CREATE SCHEMA "${schema}"`);
+      await applyStoreDdl(root, schema);
+      pool = new Pool({ connectionString: dbUrl });
+      db = drizzle(pool) as unknown as OrgWriteDb<OrgWriteTx>;
+
+      previousSupabaseSchema = process.env.SUPABASE_SCHEMA;
+      process.env.SUPABASE_SCHEMA = schema;
+
+      // Flip the activation gate ON for THIS isolated schema only — the same
+      // real write path scripts/ops/flip-org-archive-activation-staging.mjs
+      // uses (writeConnectorConfigToDatabase against the real connector-
+      // config store), never the production closeout script itself. Done
+      // once here (not per-test): the metadata row persists in this
+      // isolated schema for the whole block, and this is also the FIRST
+      // call in this file that reaches `@/lib/database`, which is what
+      // locks in `postgresSchema` at this schema for the block.
+      const { writeConnectorConfigToDatabase } = await import("@/lib/database");
+      writeConnectorConfigToDatabase(ORG_ARCHIVE_ACTIVATION_CONFIG_KEY, { enabled: true });
+    });
+
+    afterAll(async () => {
+      process.env.SUPABASE_SCHEMA = previousSupabaseSchema;
+      await pool?.end();
+      if (root) {
+        await root.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+        await root.end();
+      }
+    });
+
+    beforeEach(async () => {
+      orgId = `org_a6_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+      ownerId = `user_a6_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+      await root.query(
+        `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now())`,
+        [orgId, "A6 Contention", orgId],
+      );
+      await root.query(
+        `INSERT INTO public."user" (id, name, email, "emailVerified") VALUES ($1, $2, $3, false)`,
+        [ownerId, "A6 Owner", `${ownerId}@example.test`],
+      );
+      await root.query(
+        `INSERT INTO public."member" (id, "organizationId", "userId", "role", "createdAt") VALUES ($1, $2, $3, 'owner', now())`,
+        [`member_${ownerId}`, orgId, ownerId],
+      );
+    });
+
+    async function dropFixtures(): Promise<void> {
+      await root.query(`DELETE FROM public."organization" WHERE id = $1`, [orgId]);
+      await root.query(`DELETE FROM public."user" WHERE id = $1`, [ownerId]);
+    }
+
+    async function readOrgState(): Promise<{ archivedAt: Date | null; archiveEpoch: number }> {
+      const res = await root.query<{ archivedAt: Date | null; archiveEpoch: number | string }>(
+        `SELECT "archivedAt", COALESCE("archiveEpoch", 0) AS "archiveEpoch" FROM public."organization" WHERE id = $1`,
+        [orgId],
+      );
+      const row = res.rows[0];
+      return { archivedAt: row?.archivedAt ?? null, archiveEpoch: Number(row?.archiveEpoch ?? 0) };
+    }
+
+    it("concurrent archive attempts on a fresh org: exactly one call lands the real transition, every other call is an idempotent no-op, and the epoch bumps exactly once", async () => {
+      try {
+        const CONCURRENT_CALLERS = 5;
+        const results = await Promise.all(
+          Array.from({ length: CONCURRENT_CALLERS }, () => archiveOrganization(orgId, ownerId)),
+        );
+        for (const r of results) {
+          expect(r.ok).toBe(true);
+        }
+        const winners = results.filter((r) => r.ok && !r.idempotent);
+        const idempotentNoOps = results.filter((r) => r.ok && r.idempotent === true);
+        expect(winners).toHaveLength(1);
+        expect(idempotentNoOps).toHaveLength(CONCURRENT_CALLERS - 1);
+
+        const state = await readOrgState();
+        expect(state.archivedAt).not.toBeNull();
+        expect(state.archiveEpoch).toBe(1);
+      } finally {
+        await dropFixtures();
+      }
+    });
+
+    it("bounded contention against the REAL archiveOrganization action: a fixed, finite set of concurrent guarded writers never blocks it past a generous deadline, and it succeeds once they drain (Decision 8's two-phase criterion, e2e half)", async () => {
+      try {
+        const WRITER_COUNT = 4;
+        const ITERATIONS_PER_WRITER = 3;
+        const DEADLINE_MS = 10_000;
+
+        // Resolves the first time ANY writer is actually inside its guarded
+        // critical section — the fence request below is deliberately not
+        // issued until this resolves, so real contention against the REAL
+        // archiveOrganization action is guaranteed, not merely likely (same
+        // discipline as the kernel-level subproof above).
+        let signalWriterEntered: () => void;
+        const firstWriterEntered = new Promise<void>((resolve) => {
+          signalWriterEntered = resolve;
+        });
+
+        async function writerCycle(): Promise<void> {
+          for (let i = 0; i < ITERATIONS_PER_WRITER; i++) {
+            await guardOrgMutation(
+              db,
+              { orgId, capability: "content.write", authority: anyAuthority(orgId) },
+              async () => {
+                signalWriterEntered();
+                await new Promise((r) => setTimeout(r, 15));
+              },
+            );
+          }
+        }
+
+        const writers = Array.from({ length: WRITER_COUNT }, () => writerCycle());
+        await firstWriterEntered;
+
+        // The REAL production entry point, default retry options (the
+        // owner-ruled default: lock_timeout + bounded retry with backoff).
+        const fencePromise = archiveOrganization(orgId, ownerId);
+        const contentionSettled = Promise.all([fencePromise, ...writers]);
+
+        // Phase 1 (bounded): no ordering/fairness claim (PostgreSQL
+        // documents no waiter-FIFO guarantee for advisory locks) — only
+        // that the whole contention window resolves, one way or another,
+        // inside a generous deadline.
+        const raced = await Promise.race([
+          contentionSettled.then(() => "settled" as const),
+          new Promise<"deadline-exceeded">((resolve) =>
+            setTimeout(() => resolve("deadline-exceeded"), DEADLINE_MS),
+          ),
+        ]);
+        expect(raced).toBe("settled");
+
+        // Phase 2 (eventual success): the REAL action actually SUCCEEDS once
+        // the fixed, finite writer set drains — "bounded" alone would pass
+        // even if the fence never got in.
+        const [fenceResult] = await contentionSettled;
+        expect(fenceResult).toEqual({ ok: true });
+
+        const state = await readOrgState();
+        expect(state.archivedAt).not.toBeNull();
+        expect(state.archiveEpoch).toBe(1);
+      } finally {
+        await dropFixtures();
+      }
+    });
+
+    it("forced lock-exhaustion: every bounded attempt hits 55P03 under a continuously held fence → a typed busy error, never a hang and never a silent {ok:true} — then the SAME org archives successfully the instant contention clears (eventual success, the criterion's other half)", async () => {
+      const holder = new Client({ connectionString: dbUrl });
+      await holder.connect();
+      try {
+        // A second connection holds BOTH lifecycle locks continuously — a
+        // sustained contender, forced deterministically (not a timing
+        // guess) via the same harness the kernel-level races use.
+        const hold = await holdOrgLocks(holder, { orgId, epoch: true });
+
+        // Tight, test-only retry options — organization-archive.ts's own
+        // public ArchiveLockRetryOptions knob (never a private constant),
+        // the SAME shape V5's lock_timeout + bounded-retry-with-backoff
+        // design exposes to a caller. This proves the OUTCOME (bounded and
+        // typed) under a real, sustained lock hold; the exact DEFAULT
+        // ceiling's attempt-by-attempt mechanics are already pinned against
+        // a fake db in organization-archive-tx.test.ts.
+        const started = Date.now();
+        const result = await archiveOrganization(orgId, ownerId, {
+          lockTimeoutMs: 200,
+          maxAttempts: 3,
+          backoffBaseMs: 20,
+        });
+        const elapsedMs = Date.now() - started;
+
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.reason).toBe("error");
+          expect(result.error).toMatch(/bounded attempts/);
+        }
+        // Bounded: the whole exhausted attempt sequence finishes well inside
+        // one generous deadline — never an unbounded stall. (~3 * 200ms
+        // lock_timeout + backoff in the worst case; budgeted generously so
+        // this never flakes on a loaded CI runner.)
+        expect(elapsedMs).toBeLessThan(5_000);
+
+        // Never a silent success: the org is still genuinely active while
+        // the holder keeps the fence.
+        const duringHold = await readOrgState();
+        expect(duringHold.archivedAt).toBeNull();
+        expect(duringHold.archiveEpoch).toBe(0);
+
+        // Contention clears.
+        await hold.release();
+
+        // Eventual success (Decision 8's Phase 2): the SAME org, the SAME
+        // caller, now archives cleanly with the production default retry
+        // options — proves the bounded failure above was genuinely about
+        // contention, not a permanently broken path.
+        const recovered = await archiveOrganization(orgId, ownerId);
+        expect(recovered).toEqual({ ok: true });
+        const after = await readOrgState();
+        expect(after.archivedAt).not.toBeNull();
+        expect(after.archiveEpoch).toBe(1);
+      } finally {
+        await holder.end();
         await dropFixtures();
       }
     });
