@@ -1206,14 +1206,24 @@ export async function runAssistantTurn(
   //     was consumed and its final response read — every error path `break`s
   //     before reaching it — so a completed step is provider-produced.
   //
-  // KNOWN, DELIBERATE UNDER-REPORT: a provider that REJECTS the request outright
-  // (the issue-#47 400s that motivated #2094 F11) produces no output, so its
-  // turn records nothing. Recording it would require an adapter signal that
-  // separates "the request was sent and refused" from "the request never went
-  // out", and the delivery ABI does not expose one. Under-reporting is the
-  // correct side of that trade: an absent record reads as "not auditable" and is
-  // logged loudly, while a false one is indistinguishable from the truth and,
-  // because the write is an idempotent insert, can never be repaired.
+  // KNOWN, DELIBERATE UNDER-REPORTS — two shapes, both accepted:
+  //
+  //   1. A provider that REJECTS the request outright (the issue-#47 400s that
+  //      motivated #2094 F11) produces no output, so its turn records nothing.
+  //   2. A turn whose only provider output was a BUFFERED tool call, cut off
+  //      mid-stream: every adapter accumulates tool-call chunks and emits
+  //      `onToolCall`/`onStepEnd` only after the step's stream is consumed, so a
+  //      mid-iteration `ECONNRESET` reports through `onError` alone and this
+  //      gate sees nothing.
+  //
+  // Neither is fixable from this seam WITHOUT reintroducing the false-fact
+  // hazard: the only earlier signal is `onError`, which is exactly the callback
+  // a pre-egress connection failure also uses. Separating "sent, then cut off"
+  // from "never sent" needs an adapter signal the delivery ABI does not expose.
+  // Under-reporting is the correct side of that trade — an absent record reads
+  // as "not auditable" and is logged loudly, while a false one is
+  // indistinguishable from the truth and, because the write is an idempotent
+  // insert, can never be repaired.
   let providerStepStarted = false;
   let providerResponded = false;
 

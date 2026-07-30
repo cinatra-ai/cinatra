@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1653,
-    "/api/mcp": 1649,
-    "/chat": 1727,
-    "/api/a2a": 1654,
-    "/api/llm-bridge": 1664
+    "/sign-in": 1654,
+    "/api/mcp": 1650,
+    "/chat": 1728,
+    "/api/a2a": 1655,
+    "/api/llm-bridge": 1665
   },
   "absorbs": {
-    "/api/a2a": {
+    "/sign-in": {
       "from": 1653,
       "to": 1654,
-      "reason": "cinatra#2290 \u2014 the selective required-lock bump advances @cinatra-ai/openai-connector 255a44b2 -> d733250a to cure F9 (cinatra-ai/openai-connector#75: an unreachable connection service rolled the whole OpenAI key save back and reported failure, so a valid key could not be saved from the setup form; the pin is the only thing that carries that fix to instances). That range adds exactly ONE first-party module, extensions/cinatra-ai/openai-connector/src/partial-save-outcome.ts (confirmed with git diff --diff-filter=A between the two shas; the only other addition is a workflow YAML), statically reachable from all five locked routes through the generated extension map: +1 module on each. It is irreducible, not an un-narrowed barrel \u2014 it is new companion source in a repo this PR does not own, and scripts/route-graph.mjs follows dynamic import(), so a lazy import would move runtime cost while pretending the graph shrank. The +1 is attributed, not assumed: diffing analyzeRoute().byOwner per owner package between the base pin set and this head shows extensions/cinatra-ai/openai-connector as the ONLY owner that grows, +1 on every route and no other owner moving anywhere. Measured on this PR head with the companion extension repos cloned pinned exactly as CI does (111/111, missingCount 0); the base pin set reproduced the committed ceilings exactly, which is what makes the attribution trustworthy. The #2242 records this raise supersedes are retired by --write-baseline per the gate's retire-on-re-raise rule; from = main's committed ceiling at branch time, to = that ceiling + the irreducible +1 this record absorbs.",
-      "pr": 2290
-    },
-    "/api/llm-bridge": {
-      "from": 1663,
-      "to": 1664,
-      "reason": "cinatra#2290 \u2014 the selective required-lock bump advances @cinatra-ai/openai-connector 255a44b2 -> d733250a to cure F9 (cinatra-ai/openai-connector#75: an unreachable connection service rolled the whole OpenAI key save back and reported failure, so a valid key could not be saved from the setup form; the pin is the only thing that carries that fix to instances). That range adds exactly ONE first-party module, extensions/cinatra-ai/openai-connector/src/partial-save-outcome.ts (confirmed with git diff --diff-filter=A between the two shas; the only other addition is a workflow YAML), statically reachable from all five locked routes through the generated extension map: +1 module on each. It is irreducible, not an un-narrowed barrel \u2014 it is new companion source in a repo this PR does not own, and scripts/route-graph.mjs follows dynamic import(), so a lazy import would move runtime cost while pretending the graph shrank. The +1 is attributed, not assumed: diffing analyzeRoute().byOwner per owner package between the base pin set and this head shows extensions/cinatra-ai/openai-connector as the ONLY owner that grows, +1 on every route and no other owner moving anywhere. Measured on this PR head with the companion extension repos cloned pinned exactly as CI does (111/111, missingCount 0); the base pin set reproduced the committed ceilings exactly, which is what makes the attribution trustworthy. The #2242 records this raise supersedes are retired by --write-baseline per the gate's retire-on-re-raise rule; from = main's committed ceiling at branch time, to = that ceiling + the irreducible +1 this record absorbs.",
-      "pr": 2290
+      "reason": "cinatra#2240 adds ONE module: src/lib/assistant-runtime/skill-delivery-record.ts, the pure per-turn skill-delivery row builder. Its two siblings were folded away rather than added \u2014 the bootstrap DDL into assistant-thread-schema.ts (beside its FK parent) and the store into agent-run-skills-used.ts (beside the rollup that unions the same table) \u2014 so this is the residue after narrowing, not the unnarrowed cost. The builder stays a separate module deliberately: it is dependency-free and DB-free, which is what lets its ~500 lines of unit tests cover every vehicle and the refusal path without a database, a provider, or the runtime import graph. Folding it into the server-only store would force server-only mocking into a pure-logic suite and couple delivery semantics to DB infrastructure \u2014 a worse design bought purely to satisfy a module count. Rebased over the ceilings current at merge time (which had absorbed the #2290 connector-pin raise, its records retiring per the gate's retire-on-re-raise rule): from = the committed ceiling at rebase time, to = that ceiling + the same irreducible +1 this record has always absorbed.",
+      "pr": 2282
     },
     "/api/mcp": {
-      "from": 1648,
-      "to": 1649,
-      "reason": "cinatra#2290 \u2014 the selective required-lock bump advances @cinatra-ai/openai-connector 255a44b2 -> d733250a to cure F9 (cinatra-ai/openai-connector#75: an unreachable connection service rolled the whole OpenAI key save back and reported failure, so a valid key could not be saved from the setup form; the pin is the only thing that carries that fix to instances). That range adds exactly ONE first-party module, extensions/cinatra-ai/openai-connector/src/partial-save-outcome.ts (confirmed with git diff --diff-filter=A between the two shas; the only other addition is a workflow YAML), statically reachable from all five locked routes through the generated extension map: +1 module on each. It is irreducible, not an un-narrowed barrel \u2014 it is new companion source in a repo this PR does not own, and scripts/route-graph.mjs follows dynamic import(), so a lazy import would move runtime cost while pretending the graph shrank. The +1 is attributed, not assumed: diffing analyzeRoute().byOwner per owner package between the base pin set and this head shows extensions/cinatra-ai/openai-connector as the ONLY owner that grows, +1 on every route and no other owner moving anywhere. Measured on this PR head with the companion extension repos cloned pinned exactly as CI does (111/111, missingCount 0); the base pin set reproduced the committed ceilings exactly, which is what makes the attribution trustworthy. The #2242 records this raise supersedes are retired by --write-baseline per the gate's retire-on-re-raise rule; from = main's committed ceiling at branch time, to = that ceiling + the irreducible +1 this record absorbs.",
-      "pr": 2290
+      "from": 1649,
+      "to": 1650,
+      "reason": "cinatra#2240 \u2014 same single module as /sign-in: the pure skill-delivery row builder, kept separate to preserve its DB-free unit-test boundary after its DDL and store siblings were folded into existing owners. Rebased over the ceilings current at merge time (which had absorbed the #2290 connector-pin raise, its records retiring per the gate's retire-on-re-raise rule): from = the committed ceiling at rebase time, to = that ceiling + the same irreducible +1 this record has always absorbed.",
+      "pr": 2282
     },
     "/chat": {
-      "from": 1726,
-      "to": 1727,
-      "reason": "cinatra#2290 \u2014 the selective required-lock bump advances @cinatra-ai/openai-connector 255a44b2 -> d733250a to cure F9 (cinatra-ai/openai-connector#75: an unreachable connection service rolled the whole OpenAI key save back and reported failure, so a valid key could not be saved from the setup form; the pin is the only thing that carries that fix to instances). That range adds exactly ONE first-party module, extensions/cinatra-ai/openai-connector/src/partial-save-outcome.ts (confirmed with git diff --diff-filter=A between the two shas; the only other addition is a workflow YAML), statically reachable from all five locked routes through the generated extension map: +1 module on each. It is irreducible, not an un-narrowed barrel \u2014 it is new companion source in a repo this PR does not own, and scripts/route-graph.mjs follows dynamic import(), so a lazy import would move runtime cost while pretending the graph shrank. The +1 is attributed, not assumed: diffing analyzeRoute().byOwner per owner package between the base pin set and this head shows extensions/cinatra-ai/openai-connector as the ONLY owner that grows, +1 on every route and no other owner moving anywhere. Measured on this PR head with the companion extension repos cloned pinned exactly as CI does (111/111, missingCount 0); the base pin set reproduced the committed ceilings exactly, which is what makes the attribution trustworthy. The #2242 records this raise supersedes are retired by --write-baseline per the gate's retire-on-re-raise rule; from = main's committed ceiling at branch time, to = that ceiling + the irreducible +1 this record absorbs.",
-      "pr": 2290
+      "from": 1727,
+      "to": 1728,
+      "reason": "cinatra#2240 \u2014 same single module as /sign-in: the pure skill-delivery row builder, kept separate to preserve its DB-free unit-test boundary after its DDL and store siblings were folded into existing owners. Rebased over the ceilings current at merge time (which had absorbed the #2290 connector-pin raise, its records retiring per the gate's retire-on-re-raise rule): from = the committed ceiling at rebase time, to = that ceiling + the same irreducible +1 this record has always absorbed.",
+      "pr": 2282
     },
-    "/sign-in": {
-      "from": 1652,
-      "to": 1653,
-      "reason": "cinatra#2290 \u2014 the selective required-lock bump advances @cinatra-ai/openai-connector 255a44b2 -> d733250a to cure F9 (cinatra-ai/openai-connector#75: an unreachable connection service rolled the whole OpenAI key save back and reported failure, so a valid key could not be saved from the setup form; the pin is the only thing that carries that fix to instances). That range adds exactly ONE first-party module, extensions/cinatra-ai/openai-connector/src/partial-save-outcome.ts (confirmed with git diff --diff-filter=A between the two shas; the only other addition is a workflow YAML), statically reachable from all five locked routes through the generated extension map: +1 module on each. It is irreducible, not an un-narrowed barrel \u2014 it is new companion source in a repo this PR does not own, and scripts/route-graph.mjs follows dynamic import(), so a lazy import would move runtime cost while pretending the graph shrank. The +1 is attributed, not assumed: diffing analyzeRoute().byOwner per owner package between the base pin set and this head shows extensions/cinatra-ai/openai-connector as the ONLY owner that grows, +1 on every route and no other owner moving anywhere. Measured on this PR head with the companion extension repos cloned pinned exactly as CI does (111/111, missingCount 0); the base pin set reproduced the committed ceilings exactly, which is what makes the attribution trustworthy. The #2242 records this raise supersedes are retired by --write-baseline per the gate's retire-on-re-raise rule; from = main's committed ceiling at branch time, to = that ceiling + the irreducible +1 this record absorbs.",
-      "pr": 2290
+    "/api/a2a": {
+      "from": 1654,
+      "to": 1655,
+      "reason": "cinatra#2240 \u2014 same single module as /sign-in: the pure skill-delivery row builder, kept separate to preserve its DB-free unit-test boundary after its DDL and store siblings were folded into existing owners. Rebased over the ceilings current at merge time (which had absorbed the #2290 connector-pin raise, its records retiring per the gate's retire-on-re-raise rule): from = the committed ceiling at rebase time, to = that ceiling + the same irreducible +1 this record has always absorbed.",
+      "pr": 2282
+    },
+    "/api/llm-bridge": {
+      "from": 1664,
+      "to": 1665,
+      "reason": "cinatra#2240 \u2014 same single module as /sign-in: the pure skill-delivery row builder, kept separate to preserve its DB-free unit-test boundary after its DDL and store siblings were folded into existing owners. Rebased over the ceilings current at merge time (which had absorbed the #2290 connector-pin raise, its records retiring per the gate's retire-on-re-raise rule): from = the committed ceiling at rebase time, to = that ceiling + the same irreducible +1 this record has always absorbed.",
+      "pr": 2282
     }
   }
 }
