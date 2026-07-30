@@ -1631,6 +1631,23 @@ jobs:
       - name: Root Vitest suite (wholesale — gate of record)
         run: pnpm test:root
 
+      # #1939 Stage E repo-wide auth.api.* caller inventory — pinned in its
+      # OWN vitest process instead of riding the wholesale step above. The
+      # wholesale run's reused fork workers accumulate per-file module graphs
+      # up to Node's default ~4 GB heap ceiling, and this file's repo-wide
+      # source scan landed on a worker that hit that ceiling (fatal
+      # "Ineffective mark-compacts near heap limit", worker killed before the
+      # file could report — reproduced twice at the same commit). A fresh
+      # process gives the scan its own full heap (~65 MB is all it needs).
+      # The carve-out is documented in vitest.config.ts `test.exclude`; the
+      # env flag lifts that exclusion for THIS step only (a CLI positional is
+      # only a filter and cannot override `exclude`). A red here fails this
+      # required job exactly like the wholesale step.
+      - name: Org-write auth.api caller inventory (own process — carve-out in vitest.config.ts)
+        env:
+          CINATRA_AUTH_API_INVENTORY_STEP: "1"
+        run: pnpm exec vitest run src/lib/__tests__/org-write-auth-api-caller-inventory.test.ts --no-coverage
+
       # Live Runtime Extension Installer. The per-file pins below are now
       # REDUNDANT belt-and-suspenders: the wholesale `test:root` step above runs
       # the full root include, so new src/lib tests are gated by default. The

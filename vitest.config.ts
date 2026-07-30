@@ -504,6 +504,24 @@ export default defineConfig({
       // QUARANTINE (sandbox gap): brittle `(\w+)\(\)`
       // scanner regex matches `resolveExtensionActorSummary()`; ungated in CI.
       "src/__tests__/mcp-server-tool-count.test.ts",
+      // CARVE-OUT (memory isolation — still fully gated, NOT a quarantine):
+      // the #1939 Stage E repo-wide auth.api.* caller inventory reads every
+      // production source under src/ + packages/ + scripts/ (~2400 files) at
+      // runtime. Inside the wholesale run the reused fork workers already sit
+      // near Node's default ~4 GB heap ceiling from accumulated per-file
+      // module graphs, and the worker this file landed on hit the ceiling
+      // before the file could report ("Ineffective mark-compacts near heap
+      // limit" → "Worker exited unexpectedly", reproduced twice at the same
+      // commit). The perpetual-loops-invariants job runs the file as its own
+      // dedicated step instead (fresh process; the scan itself needs ~65 MB),
+      // setting CINATRA_AUTH_API_INVENTORY_STEP=1 to lift this exclusion —
+      // the same flag idiom as the DB tiers above (a CLI positional is only a
+      // FILTER, so without the flag the dedicated step would match zero
+      // files). A red on that step fails the required job exactly like the
+      // wholesale step.
+      ...(process.env.CINATRA_AUTH_API_INVENTORY_STEP === "1"
+        ? []
+        : ["src/lib/__tests__/org-write-auth-api-caller-inventory.test.ts"]),
     ],
     env: {
       SUPABASE_DB_URL:
