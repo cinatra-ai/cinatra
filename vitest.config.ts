@@ -414,6 +414,38 @@ export default defineConfig({
       "packages/dashboards/src/cubes/__tests__/runtime-cube-serve-gate.test.ts",
       "packages/dashboards/src/__tests__/runtime-portlet-kind.test.ts",
       "packages/sdk-dashboard/src/adapters/drizzle-cube/__tests__/alias-cube.test.ts",
+      // packages/mcp-server unit tier — the inbound MCP surface (protocol
+      // revisions, tool-input schemas, OBO ceilings, tool policies, actor
+      // identity, advertised-URL/origin handling). The package HAS a full
+      // suite and its own `pnpm test`, but no workflow ran it wholesale:
+      // exactly two of its files were pinned anywhere in CI
+      // (`advertised-url-routes.test.ts` in mcp-route-gate.yml,
+      // `auth-plugins.test.ts` in build-image.yml), so the other 20 files —
+      // including the revision-conformance suites added with the 2.0.0
+      // inbound cutover (supported-revisions-inbound, tool-input-schema) —
+      // executed on no PR at all, so nothing in CI turned red when one broke.
+      // Wiring the tier into this include makes it ride the existing "Root
+      // Vitest suite (wholesale — gate of record)" step: no new required
+      // context, no branch-protection change, and new files under the glob
+      // are gated by default (subject to the global `exclude` below — the
+      // `*.integration.test.ts` tier still needs a DB-provisioned runner).
+      // Node env, no DB/DOM; measured locally at ~0.8s of vitest for the
+      // current 22 files / 356 tests.
+      //
+      // The package keeps `packages/mcp-server/vitest.config.ts` for the
+      // standalone `pnpm --filter @cinatra-ai/mcp-server test` run and for
+      // the two pinned CI steps. Its two aliases are covered here:
+      // `server-only` → tests/__stubs__/server-only.ts (identical empty stub)
+      // and `@cinatra-ai/skills` → tests/__stubs__/cinatra-skills.ts. The
+      // latter is EQUIVALENT for the call this tier makes (a repo-root-CWD
+      // read of a packages/*/skills SKILL.md) but is not the production
+      // reader the package config points at — it omits that module's
+      // __dirname-relative candidates, so the two can drift.
+      // A NEW mcp-server test needing an alias only present in the package
+      // config must have it mirrored above to preserve package-config
+      // semantics: an unmirrored specifier does not reliably fail, it may
+      // resolve through tsconfig paths to a different real module.
+      "packages/mcp-server/src/**/__tests__/**/*.test.ts",
     ],
     // The wholesale root suite (`pnpm test:root`) runs every `include` glob.
     // The exclusions below are the STABILIZED-set carve-outs — each one is a

@@ -380,7 +380,43 @@ export async function hasConfiguredLlmRuntime(preferredProviders?: LlmProvider[]
   // set there, and the scripted stream itself fail-closes outside an explicit
   // development runtime (assertScriptedProviderNotProduction at the stream entry).
   if (isScriptedTestProviderEnabled()) return true;
-  return Boolean(await resolveFirstAvailableAdapter(preferredProviders));
+  // An EXPLICIT list is authoritative and walked as-is (the per-purpose pin).
+  if (preferredProviders) return Boolean(await resolveFirstAvailableAdapter(preferredProviders));
+  // No explicit preference: delegate to the reason-carrying primitive so the
+  // boolean and the REASON can never disagree about the same world
+  // (cinatra#2094 F10 — the parity is structural here, not merely asserted).
+  return (await describeLlmRuntimeUnavailability()) === null;
+}
+
+/**
+ * The provider-NAMING reason no LLM runtime is available — or `null` when one
+ * IS available.
+ *
+ * WHY THIS EXISTS (cinatra#2094 F10). `hasConfiguredLlmRuntime()` answers a
+ * BOOLEAN, and its callers turned that boolean into the fixed string
+ * *"No LLM provider configured."*. Under the shipped EXACT binding
+ * ({@link resolveImplicitGlobalProviderOrder} — `policy !== "ordered"` walks
+ * ONLY the stored provider) that string is exactly the "useless generic" S6
+ * replaced: it is emitted for a stored provider that is down even while other
+ * providers are configured and usable, and it never says WHICH provider the
+ * operator has to fix. A pre-stream guard built on the boolean therefore
+ * SHADOWS {@link BoundDefaultProviderUnavailableError} — the class whose whole
+ * purpose is to name the provider — because the turn 400s before the producer
+ * that would have thrown it ever runs.
+ *
+ * The DECISION here is byte-identical to `hasConfiguredLlmRuntime()` (same
+ * scripted-provider seam, same implicit order, same per-provider resolution) —
+ * only the REASON is carried out. Callers that need to reject before a stream
+ * exists use this instead of the boolean so the rejection names the provider,
+ * and the wording stays in one place: the error class itself.
+ */
+export async function describeLlmRuntimeUnavailability(): Promise<string | null> {
+  if (isScriptedTestProviderEnabled()) return null;
+  const { providers, storedProvider, policy } = resolveImplicitGlobalProviderOrder();
+  for (const provider of providers) {
+    if (await resolveProviderAdapter(provider)) return null;
+  }
+  return new BoundDefaultProviderUnavailableError(storedProvider, policy).message;
 }
 
 /**

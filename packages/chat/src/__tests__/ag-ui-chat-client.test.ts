@@ -218,6 +218,78 @@ describe("streamAssistantTurn", () => {
     ).rejects.toThrow("Chat request failed.");
   });
 
+  // -------------------------------------------------------------------------
+  // cinatra#2094 F10 — the ALLOW-LIST for a server-supplied rejection reason.
+  // -------------------------------------------------------------------------
+  // Exactly one shape is rendered: HTTP 400 + code "llm-provider-unavailable" +
+  // a string `error`. That is where the exact-binding failure NAMES the stored
+  // provider (which the client used to discard one line before the banner). Every
+  // other non-ok response — any status, any body — keeps the generic text, so a
+  // 5xx / HTML proxy page / stack-bearing JSON can never reach the banner.
+  const PROVIDER_UNAVAILABLE_BODY = {
+    code: "llm-provider-unavailable",
+    error:
+      'The configured default LLM provider "anthropic" is not available (its connector is not ' +
+      "installed/active, or its credentials are missing or invalid). Fix that provider's " +
+      "configuration, choose a different default provider, or enable ordered failover in LLM settings.",
+  };
+  const rejectWith = (body: BodyInit, status: number) => {
+    globalThis.fetch = vi.fn(async () => new Response(body, { status })) as unknown as typeof fetch;
+    return streamAssistantTurn({
+      threadId: "th1",
+      messages: [],
+      signal: new AbortController().signal,
+      onState: () => {},
+    });
+  };
+
+  it("F10: an ADMITTED 400 rejection NAMES the stored provider", async () => {
+    await expect(rejectWith(JSON.stringify(PROVIDER_UNAVAILABLE_BODY), 400)).rejects.toThrow(
+      PROVIDER_UNAVAILABLE_BODY.error,
+    );
+  });
+
+  it("F10: refuses every body OUTSIDE the allow-list (fail closed)", async () => {
+    const refused: Array<[string, BodyInit, number]> = [
+      // Right shape, wrong status — a 5xx must never render a server reason.
+      ["500 with the right code", JSON.stringify(PROVIDER_UNAVAILABLE_BODY), 500],
+      // 400 with NO code — e.g. the schema-validation rejection.
+      ["400 without a code", JSON.stringify({ error: "Invalid assistant chat request shape" }), 400],
+      // 400 with a DIFFERENT code.
+      ["400 with another code", JSON.stringify({ code: "something-else", error: "leak me" }), 400],
+      // A JSON body whose `error` is not a string.
+      ["400 with a non-string error", JSON.stringify({ code: "llm-provider-unavailable", error: { stack: "x" } }), 400],
+      // An HTML proxy/error page.
+      ["400 HTML page", "<html><body>Internal stack trace here</body></html>", 400],
+      // A body-less failure.
+      ["empty body", "", 502],
+    ];
+    for (const [label, body, status] of refused) {
+      await expect(rejectWith(body, status), label).rejects.toThrow("Chat request failed.");
+    }
+  });
+
+  it("F10: an oversized admitted reason cannot flood the banner", async () => {
+    // Two independent bounds, both exercised. Passing the UNWRAPPED reason into
+    // the normalizer restores its 300-char guard (the normalizer applies that cap
+    // BEFORE its own `{error}` unwrap, which is why handing it the raw body
+    // bypassed it), and the explicit slice below backstops a reason that is
+    // ITSELF nested JSON — the one shape that still slips past the normalizer.
+    await expect(
+      rejectWith(JSON.stringify({ code: "llm-provider-unavailable", error: "x".repeat(5000) }), 400),
+    ).rejects.toThrow("The request failed. Please try again in a moment.");
+
+    await expect(
+      rejectWith(
+        JSON.stringify({
+          code: "llm-provider-unavailable",
+          error: JSON.stringify({ message: "y".repeat(5000) }),
+        }),
+        400,
+      ),
+    ).rejects.toThrow(/^y{299}…$/);
+  });
+
   it("resumes ONCE from the durable-log tail after a mid-stream transport drop", async () => {
     const frames = turnFrames();
     // POST body: RUN_STARTED delivered, then the stream ERRORS mid-run.
@@ -433,6 +505,30 @@ describe("driveAssistantChatTurn", () => {
       ui: f.port,
     });
     expect(f.messages[0].error).toBe("Chat request failed.");
+  });
+
+  it("F10: the error bubble NAMES the unavailable stored provider", async () => {
+    const reason =
+      'The configured default LLM provider "anthropic" is not available (its connector is not ' +
+      "installed/active, or its credentials are missing or invalid). Fix that provider's " +
+      "configuration, choose a different default provider, or enable ordered failover in LLM settings.";
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ code: "llm-provider-unavailable", error: reason }), {
+          status: 400,
+        }),
+    ) as unknown as typeof fetch;
+    const f = fakePort();
+    await driveAssistantChatTurn({
+      threadId: "th1",
+      assistantId: "a1",
+      messages: [],
+      slack: false,
+      signal: new AbortController().signal,
+      ui: f.port,
+    });
+    expect(f.messages[0].error).toContain("anthropic");
+    expect(f.messages[0].error).toBe(reason);
   });
 
   it("Slack mode surfaces a caught error as an error bubble in finally", async () => {

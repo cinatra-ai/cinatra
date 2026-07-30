@@ -50,10 +50,19 @@
  * so one leaf cannot serve both hops. `EXEC_TLS_CERT_FILE`/`_KEY_FILE` is the
  * listening leaf; `EXEC_TLS_CLIENT_CERT_FILE`/`_KEY_FILE` is the dialing one;
  * `EXEC_TLS_CA_FILE` is shared (one PKI, two leaves). Both are required.
+ *
+ * THE PER-COMMAND VOUCHER (epic #1705 L2, `authz/voucher.ts`). This service
+ * holds VERIFY-ONLY Ed25519 public key material — `EXEC_VOUCHER_VERIFY_PUBLIC_KEY_FILE`,
+ * an SPKI PEM file path — and is structurally unable to mint (the signing half
+ * lives solely in the app's mint site). `aud` is derived from this broker's own
+ * `broker-server` URI SAN (`EXEC_INSTANCE`), never separately configured, so a
+ * voucher's audience and this service's mTLS identity can never drift apart.
  */
 
+import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
+import { ExecutionVoucherVerifier } from "../authz/voucher";
 import { ExecutionBroker } from "../broker";
 import { DEFAULT_SANDBOX_NETWORK } from "../egress";
 import type {
@@ -76,10 +85,17 @@ import {
   createBufferedAuditRelay,
   type BrokerService,
 } from "./broker-server";
-import { loadExecClientTlsMaterial, loadExecTlsMaterial } from "./mtls";
+import { execServiceUri, loadExecClientTlsMaterial, loadExecTlsMaterial } from "./mtls";
 import { EXEC_PROTOCOL_VERSION, EXEC_PROTOCOL_VERSION_ENV } from "./protocol";
 import { describeThrown } from "./rpc-transport";
 import { WorkerServiceClient } from "./worker-client";
+
+/**
+ * Scoped env var carrying the path to the broker's VERIFY-ONLY Ed25519 voucher
+ * key (SPKI PEM). Mirrors the `EXEC_TLS_*_FILE` convention: an ops-provisioned
+ * file path, never the key material itself in the environment.
+ */
+export const EXEC_VOUCHER_VERIFY_PUBLIC_KEY_FILE_ENV = "EXEC_VOUCHER_VERIFY_PUBLIC_KEY_FILE";
 
 export const DEFAULT_BROKER_LISTEN_PORT = 4100;
 
@@ -255,6 +271,18 @@ export function composeBrokerService(env: Env = process.env): BrokerEntryComposi
   const tls = loadExecTlsMaterial(env);
   const clientTls = loadExecClientTlsMaterial(env);
 
+  // The per-command authorization boundary (epic #1705 L2). VERIFY-ONLY: this
+  // service only ever holds the Ed25519 PUBLIC half (see `authz/voucher.ts`'s
+  // header — the private/signing half lives solely in the app's mint site).
+  // `aud` is this broker's own `broker-server` identity — the exact URI SAN
+  // the mTLS peer check terminates on for this role — so "who is this voucher
+  // for" and "who am I" read from the same source of truth.
+  const voucherPublicKeyPath = required(env, EXEC_VOUCHER_VERIFY_PUBLIC_KEY_FILE_ENV);
+  const voucherVerifier = new ExecutionVoucherVerifier({
+    publicKey: readFileSync(voucherPublicKeyPath, "utf8"),
+    aud: execServiceUri(instance, "broker-server"),
+  });
+
   const policy = egressPolicyFromEnv(env);
   const gateway = gatewayFromEnv(env, policy);
   const network = env.EXEC_SANDBOX_NETWORK?.trim() || DEFAULT_SANDBOX_NETWORK;
@@ -275,6 +303,7 @@ export function composeBrokerService(env: Env = process.env): BrokerEntryComposi
     stdioSink: relay.stdioSink,
     // Acknowledged above: bounded by carrier TTL, not by the run store.
     livenessProbe: async () => "alive",
+    voucherVerifier,
     egressPolicyResolver: () => policy,
     sandboxNetwork: network,
     ...(gateway ? { gateway } : {}),

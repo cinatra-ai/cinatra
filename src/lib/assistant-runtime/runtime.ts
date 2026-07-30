@@ -46,7 +46,7 @@ import { getAllManifests } from "@/lib/wizard-manifest-registry";
 import { buildChatUserContextSections } from "@/app/api/chat/chat-user-context";
 import { shouldDeliverChatShellSkillTools } from "@/app/api/chat/shell-skill-gate";
 import {
-  hasConfiguredLlmRuntime,
+  describeLlmRuntimeUnavailability,
   stream,
   selectSkillDeliveryAdapter,
   deliverInjectedSkillsInline,
@@ -169,7 +169,7 @@ export type RunChatTurnArgs = {
   widgetPrincipal?: WidgetPrincipal | null;
 };
 
-export { hasConfiguredLlmRuntime };
+export { describeLlmRuntimeUnavailability };
 
 // ---------------------------------------------------------------------------
 // Presentation helpers (SSE surface — unchanged; P2b/P3 own the wire change)
@@ -502,8 +502,9 @@ export async function runAssistantTurn(
   // (cinatra#1919 AC3). The deterministic WP/Drupal Playwright UAT app carries
   // NO real provider creds, so `resolveDefaultAdapter()` below resolves null and
   // the turn dies with "No LLM provider configured." before the scripted stream
-  // can answer (the `hasConfiguredLlmRuntime` broker gate shares the blind spot;
-  // fixed in registry.ts). When the deterministic provider is enabled, stream
+  // can answer (the endpoint's pre-stream availability gate — today
+  // `describeLlmRuntimeUnavailability` — shares the blind spot; fixed in
+  // registry.ts). When the deterministic provider is enabled, stream
   // the deterministic content-editor reply directly through the SAME `send` sink
   // the real turn uses — text → sentinel; an edit intent → a
   // `*_content_editor_run` tool_call + tool_result — then finish.
