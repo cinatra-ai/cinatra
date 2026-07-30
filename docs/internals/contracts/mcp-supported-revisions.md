@@ -173,6 +173,44 @@ Two adjacent CURRENT behaviours that interact with the above:
   change as the revision, or `2026-07-28` would be unusable from any
   browser-origin client.
 
+  Three consequences of that, decided on cinatra#2221 and recorded here. The two
+  header SETS below, and the OPTIONS seam that emits them, are pinned by
+  `src/lib/__tests__/mcp-cors-admission-contract.test.ts`; the routing position
+  and the security boundary are recorded, not machine-enforced.
+
+  1. **The expose list deliberately does not carry them.**
+     `Access-Control-Expose-Headers` governs which RESPONSE headers a browser
+     may read; `Mcp-Method` / `Mcp-Name` are request headers, and no audited path
+     — the SDK's or cinatra's — writes either onto a response. Admitting inbound
+     and exposing outbound are different questions with different answers. (The
+     existing `MCP-Protocol-Version` expose entry predates this and is not
+     re-litigated here.)
+  2. **Cinatra adopts no header-based ROUTING.** The headers exist so an
+     intermediary can dispatch without parsing the JSON body. No audited
+     cinatra-managed ingress makes any routing, throttling or caching decision on
+     an MCP header, so there is nothing to consume them; they travel for the
+     SDK's own header/body cross-check and for whatever a CALLER chooses to put
+     in front of us. Adding a header-keyed rule with no consumer would be
+     adoption for its own sake.
+  3. **A mirrored header is a client-supplied claim, not authenticated truth.**
+     The revision expressly contemplates intermediaries routing or rate-limiting
+     on these headers, but only because the destination re-validates the
+     header/body cross-check. Any intermediary may therefore dispatch on them; none
+     may widen access on them, and every routed destination must still enforce the
+     cross-check.
+
+  **Trigger that reopens the browser-client CORS design:** if a tool declares
+  `x-mcp-header` on an input property, then whenever that argument is present and
+  non-null the matching `Mcp-Param-{Name}` header must accompany the call and is
+  cross-checked at tool resolution (`-32020` on disagreement). Such a header has
+  to be admitted **by concrete name** — CORS has no `Mcp-Param-*` prefix
+  wildcard — so the allow list stops being a fixed list. Upstream's own TypeScript
+  client currently declines to mirror these headers in a browser for CORS reasons,
+  which makes this a browser-compatibility design question and not a one-line
+  allow-list edit. No tracked tool declares `x-mcp-header` today, but tool input
+  schemas can arrive from extensions at runtime, so this is a live trigger rather
+  than a closed question.
+
 ### TARGET
 
 None outstanding for the inbound surface. Row A is implemented; a later
@@ -411,5 +449,10 @@ inferred from the installed package version alone.
   capability / instructions source.**~~ **Settled: no** (cinatra#2222) — probe
   only, no prior held across connections, with the reopen trigger recorded
   above.
+- ~~**Header-based routing on `Mcp-Method` / `Mcp-Name`, and the expose list.**~~
+  **Settled on cinatra#2221: no routing adopted, expose list unchanged** — see
+  the CORS bullet above for the reasoning, the security boundary, and the
+  `x-mcp-header` / `Mcp-Param-{Name}` trigger that would reopen the
+  browser-client CORS design.
 - **Anything about conformance.** The presence of a TARGET paragraph is not
   evidence that any surface implements it.
