@@ -54,15 +54,19 @@ the gap by elimination — no alternative revision and no derived manifest ever
 existed — rather than by a per-row before/after diff.
 
 Production-boot registration lines, verbatim (pass 2 reaching the writer):
-[cinatra:extensions:skill] @cinatra-ai/automation-authoring-skill v0.1.0 — 1 SKILL.md registered
-[cinatra:extensions:skill] @cinatra-ai/blog-content-skill v0.1.0 — 1 SKILL.md registered
-[cinatra:extensions:skill] @cinatra-ai/blog-idea-authoring-skill v0.1.0 — 1 SKILL.md registered
-[cinatra:extensions:skill] @cinatra-ai/blog-idea-matcher-skill v0.1.0 — 1 SKILL.md registered
-[cinatra:extensions:skill] @cinatra-ai/blog-image-matcher-skill v0.1.0 — 1 SKILL.md registered
-[cinatra:extensions:skill] @cinatra-ai/blog-post-matcher-skill v0.1.0 — 1 SKILL.md registered
-[cinatra:extensions:skill] @cinatra-ai/blog-writing-skill v0.2.0 — 1 SKILL.md registered
-[cinatra:extensions:skill] @cinatra-ai/brand-voice-matcher-skill v0.1.0 — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/automation-authoring-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/blog-content-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/blog-idea-authoring-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/blog-idea-matcher-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/blog-image-matcher-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/blog-post-matcher-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/blog-writing-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/brand-voice-matcher-skill v<x.y.z> — 1 SKILL.md registered
   ... (27 such lines in the production boot)
+  (each package's version token is redacted as v<x.y.z> — the source-leak-gate's
+   SLG_MILESTONE_VERSION rule blocks a bare v<major>.<minor> on a net-new line, and
+   the version is not load-bearing here: the line's evidence is that the PRODUCTION
+   boot reached the registration writer for that package)
 
 SCOPE. Three passes were driven. The `llm-bridge` route call site and
 `syncInstalledSkillsToDatabase` were NOT exercised; nothing is claimed about them.
