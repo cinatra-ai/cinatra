@@ -13,7 +13,7 @@ import "server-only";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { lt } from "drizzle-orm";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { auditEvents } from "./audit-schema";
 
 export type AuditEvent = {
@@ -540,17 +540,27 @@ export type ExecutionAuditEventInput = AuditEventInput & {
 };
 
 /**
- * A stable UUID for a delivery key. Derived, not random: two deliveries of one
- * record name the same row id, so even a driver that reported no rows from the
+ * A stable row id for a delivery key. DERIVED, not random: two deliveries of one
+ * record name the same row, so even a driver that reported no rows from the
  * conflict path cannot end up with two ids for one execution.
  *
- * Shape is a v4-looking UUID over a sha256 of the key — the column is `text`
- * with a PK constraint and the value only has to be unique and deterministic,
- * not a registered UUID version.
+ * It is the delivery key under a namespace prefix, and deliberately NOT a hash
+ * of it. `audit_events.id` is `text PRIMARY KEY` with no format contract — every
+ * consumer compares it for equality and nothing parses it as a UUID — so a hash
+ * bought no property this does not already have: the delivery key is
+ * `<spoolId>:<recordId>`, already unique by construction across the fleet, and
+ * the prefix is what keeps it disjoint from the `randomUUID()` ids every other
+ * producer writes.
+ *
+ * Hashing it was also actively worse: the value is not a secret (it rides its
+ * own indexed column in the same row), and a bare `sha256` over a variable whose
+ * name ends in "Key" is exactly the shape a credential-hashing scanner is built
+ * to flag — `js/insufficient-password-hash` did flag it. Removing the hash
+ * removes the finding at its source rather than dismissing a true reading of a
+ * misleading construction.
  */
 export function executionAuditRowId(deliveryKey: string): string {
-  const h = createHash("sha256").update(`cinatra:execution-audit:${deliveryKey}`).digest("hex");
-  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+  return `exec-audit:${deliveryKey}`;
 }
 
 export async function logExecutionAuditEventDurable(
