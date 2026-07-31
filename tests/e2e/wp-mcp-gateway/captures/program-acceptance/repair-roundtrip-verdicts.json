@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "description": "cinatra#2286 S10 (deliverable 7) — repair round-trip on the pinned community-stack fixture (#2016 S1). WP-side leg driven live via the gateway execute triad against the booted pinned WordPress: produce (draft) → reviewer-requested changes applied through ewpa/update-post (the connector's content-review-keyed write the producer repair re-drives) → read-back of the repaired fields with draft status preserved → stability re-read. The cinatra-side leg (changes_requested → producer_repair route off the wordpress-agent v0.1.5 manifest → dispatch → CMS completion drain → repaired capture → re-review approve → effect release → read-back binding) runs on a real Postgres in packages/agents/src/__tests__/lifecycle-repair-cms-roundtrip.integration.test.ts (the agents-integration-db CI job) and is cited as its own row below, per the S9 evidence convention (do-not-duplicate-assertions).",
+  "description": "cinatra#2286 S10 (deliverable 7) — repair round-trip on the pinned community-stack fixture (#2016 S1). WP-side leg driven live via the gateway execute triad against the booted pinned WordPress: produce (draft) → reviewer-requested changes applied through ewpa/update-post (the connector's content-review-keyed write the producer repair re-drives) → read-back of the repaired fields with draft status preserved → stability re-read. The cinatra-side leg (changes_requested → producer_repair route off the lock-pinned wordpress-agent manifest → dispatch → CMS completion drain → repaired capture → re-review approve → effect release → read-back binding) runs on a real Postgres in packages/agents/src/__tests__/lifecycle-repair-cms-roundtrip.integration.test.ts (the agents-integration-db CI job) and is cited as its own row below, per the S9 evidence convention (do-not-duplicate-assertions).",
   "exposureMode": "triad-only",
-  "determinedAt": "2026-07-31T09:24:27.493Z",
-  "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30619665405",
+  "determinedAt": "2026-07-31T09:56:37.668Z",
+  "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30621632168",
   "verdicts": [
     {
       "item": "repair-roundtrip/base-production",
@@ -90,19 +90,19 @@
       "detail": {
         "reason": "DB-backed leg — executes in the agents-integration-db CI job (real Postgres) of the PR that carries it; the authoring box cannot boot a database by standing rule, so this row records the executor honestly instead of fabricating a local result.",
         "runsIn": "build-image.yml → agents-integration-db (gated set)",
-        "routesOffManifest": "@cinatra-ai/wordpress-agent v0.1.5 cinatra.lifecycle.repairCapable=true (the pin this change advances)"
+        "routesOffManifest": "@cinatra-ai/wordpress-agent cinatra.lifecycle.repairCapable=true at the lock-pinned release 8528fbf04c73c83452beae6e8e718fda95484efc"
       }
     }
   ],
   "provenance": {
-    "capturedAtCommit": "7ac7d983c652415b40bea1d1bf2d1e7e1ee8dcf0",
-    "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30619665405",
-    "capturedAt": "2026-07-31T09:24:27.493Z",
+    "capturedAtCommit": "6477f48e10e5422e9524a6893ef1842e2185d12d",
+    "runUrl": "https://github.com/cinatra-ai/cinatra/actions/runs/30621632168",
+    "capturedAt": "2026-07-31T09:56:37.668Z",
     "pinsLockSha256": "7bddc5015bbbf794a15229a4753d7973b40dfd364e0050e578e7121bab72ad7a",
     "fixturePluginSha256": "435ff97d89701d402398d589aa5b4570cc77b6ac65e8fa8c74be0e9c07195231",
     "producerSha256": "2c8ad16e064f20f534305d12f70f0f6d87e8016239fb30e6491f32e5277cff6c",
     "apiMapSha256": "55749cb32fb96c5443510eb61a353bb63a9277c1600af212e25846b997c2dac8",
-    "repairRoundtripSpecSha256": "d9dfeff360b4dee4597406501f9a5275a876d0031b550a6f9a552727c74108df",
+    "repairRoundtripSpecSha256": "11f47a59093da770a7336620730d94765267a848281c9a549272cd4630cfd772",
     "hashingConvention": "sha256OfFile / sha256OfTree from tests/e2e/wp-mcp-gateway/provenance.mjs — computed fresh on the capture runner at write time"
   }
 }
