@@ -134,6 +134,9 @@ function makeArgs(send: (event: string, data: unknown) => void) {
     platformRole: "member" as const,
     sessionOrgId: null,
     send,
+    // cinatra#2240 — every chat entry point mints a turn/run pair before the
+    // producer runs; the runtime requires it to key the delivery record.
+    turnIdentity: { turnId: "turn-parity", runId: "run-parity" },
   };
 }
 

@@ -14,7 +14,7 @@ import {
   projectInstancesSchemaQueries,
   widgetStreamMetadataGrantSchemaQueries,
 } from "@/lib/extension-grant-schema";
-import { assistantThreadSchemaQueries, assistantHandleSchemaQueries } from "@/lib/assistant-thread-schema";
+import { assistantThreadSchemaQueries, assistantHandleSchemaQueries, assistantTurnSkillDeliverySchemaQueries } from "@/lib/assistant-thread-schema"; // + cinatra#2240 per-turn skill-delivery record (same pure-strings leaf as its FK parent)
 import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema";
@@ -888,7 +888,7 @@ $body$` },
     // Idempotent (singleton PK). Not a chat_threads write, so the fence never
     // blocks it.
     { text: `INSERT INTO "${schemaName.replaceAll('"', '""')}"."assistant_cutover_marker" (id) VALUES (true) ON CONFLICT (id) DO NOTHING` },
-    ...assistantThreadSchemaQueries(schemaName), // structured assistant threads + turns (cinatra#1037 P2a), additive
+    ...assistantThreadSchemaQueries(schemaName), ...assistantTurnSkillDeliverySchemaQueries(schemaName), // structured assistant threads + turns (cinatra#1037 P2a), additive; + the per-turn skill-delivery record (cinatra#2240, FK -> assistant_turns so it MUST follow), additive bootstrap DDL, no numbered migration
     ...assistantHandleSchemaQueries(schemaName), // assistant handle registry (cinatra#1037 P1.2/P5.1) + origin/package_name (#1874 W1), additive — mirrors core__0046/0065
     ...assistantRegistrySchemaQueries(schemaName), // assistant audience + tag-alias registry (cinatra#1874 W1), additive — mirrors core__0065
     ...assistantPauseSchemaQueries(schemaName), // installation-wide assistant pause, principal-keyed (cinatra#1880 W5), additive — mirrors core__0076

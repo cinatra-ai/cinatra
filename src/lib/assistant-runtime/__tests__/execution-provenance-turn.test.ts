@@ -146,6 +146,8 @@ function makeArgs(send: (event: string, data: unknown) => void) {
     platformRole: "member" as const,
     sessionOrgId: "org-1",
     send,
+    // cinatra#2240 — required turn/run identity (see runtime RunChatTurnArgs).
+    turnIdentity: { turnId: "turn-provenance", runId: "run-provenance" },
   };
 }
 
