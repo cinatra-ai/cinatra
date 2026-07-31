@@ -58,6 +58,7 @@ on:
       - "scripts/wordpress-entrypoint.sh"
       - "tests/e2e/wp-mcp-gateway/capture-*.mjs"
       - "tests/e2e/wp-mcp-gateway/equivalence.spec.ts"
+      - "tests/e2e/wp-mcp-gateway/repair-roundtrip.spec.ts"
 
 permissions:
   contents: read
@@ -209,6 +210,21 @@ jobs:
           CAPTURE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           CAPTURE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: node --test tests/e2e/wp-mcp-gateway/equivalence.spec.ts
+      - name: Run repair round-trip suite (cinatra#2286 S10 deliverable 7)
+        # The WP-side leg of the CMS repair round trip, driven live via the
+        # gateway execute triad (produce draft → requested changes via
+        # ewpa/update-post → read-back with draft preserved → stability). Writes
+        # captures/program-acceptance/repair-roundtrip-verdicts.json (the S9
+        # evidence convention — NOT part of the canonical freshness-hash set).
+        # Same discipline as the equivalence suite: verdicts are DATA; only an
+        # unreachable gateway reds the run.
+        if: ${{ !cancelled() }}
+        env:
+          WP_BASE_URL: http://localhost:8080
+          WP_MCP_BASIC_AUTH: ${{ env.WP_MCP_BASIC_AUTH }}
+          CAPTURE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CAPTURE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: node --test tests/e2e/wp-mcp-gateway/repair-roundtrip.spec.ts
       - name: Upload captures
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
