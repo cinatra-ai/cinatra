@@ -11,7 +11,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { ExecutionBroker } from "../broker";
-import { createMemoryAuditSpool } from "../service/audit-spool";
+import {
+  AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES,
+  createMemoryAuditSpool,
+} from "../service/audit-spool";
 import { createAuditRelay } from "../service/broker-server";
 import {
   DEFAULT_SANDBOX_LIMITS,
@@ -191,6 +194,79 @@ describe("pre-dispatch reservation — a reservation failure PREVENTS dispatch",
     const entries = spool.read().entries;
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ decision: "refused", reason: "worker_error" });
+  });
+});
+
+describe("the terminal record fits the capacity its reservation claimed", () => {
+  it("bounds a hostile egress attribution in BYTES, so the spool headroom is sound", async () => {
+    // cinatra#2266, Codex rounds 2+3. The terminal record repeats the prepared
+    // one and adds the command's outcome, and the reservation claims capacity
+    // for exactly that BEFORE dispatch. The gateway's per-destination list is
+    // in the COMMAND's control, so without a byte-sound cap one chatty (or
+    // hostile) command makes the reservation's arithmetic a fiction — 253
+    // three-byte characters are 759 bytes, and one control character escapes
+    // to six.
+    const spool = createMemoryAuditSpool();
+    const relay = createAuditRelay({ spool });
+    let n = 0;
+    const worker: SandboxWorker = {
+      async runCommand(): Promise<SandboxCommandResult> {
+        return {
+          ...RESULT,
+          imageDigest: `sha256:${"e".repeat(4_000)}\u0000<script>`,
+          egress: {
+            totalBytes: 1,
+            destinations: Array.from({ length: 500 }, (_, i) => ({
+              // Three-byte characters AND JSON-escapable ones, at length.
+              host: `${"あ".repeat(400)}"\n${i}`,
+              port: 443,
+              allowed: true,
+              bytesIn: 1,
+              bytesOut: 1,
+            })),
+          },
+        };
+      },
+    };
+    const { broker, jobId } = await brokerWith({
+      worker,
+      auditSink: relay.auditSink,
+      auditReserver: relay.auditReserver,
+      commandId: () => `cmd-${(n += 1)}`,
+    });
+
+    expect((await broker.exec(jobId, "echo hi", "voucher")).ok).toBe(true);
+    const entries = spool.read().entries;
+    expect(entries).toHaveLength(1);
+    const terminal = entries[0]!;
+
+    // The list is capped, and the TRUE count is still on the record.
+    expect(terminal.egressDestinations).toHaveLength(32);
+    expect(terminal.egressDestinationsTotal).toBe(500);
+    // Every surviving host is ASCII and JSON-escape-free, so its length IS its
+    // encoded byte count — which is what makes the headroom a real bound.
+    for (const d of terminal.egressDestinations ?? []) {
+      expect(Buffer.byteLength(d.host, "utf8")).toBe(d.host.length);
+      expect(d.host.length).toBeLessThanOrEqual(253);
+      expect(JSON.stringify(d.host).length).toBe(d.host.length + 2);
+    }
+    expect(Buffer.byteLength(terminal.imageDigest ?? "", "utf8")).toBeLessThanOrEqual(512);
+
+    // THE LOAD-BEARING ASSERTION: what the terminal record ADDS to the prepared
+    // one fits inside the headroom the reservation claimed for it.
+    const prepared = { ...terminal, decision: "outcome_unknown" as const };
+    delete (prepared as Partial<ExecutionAuditRecord>).exitCode;
+    delete (prepared as Partial<ExecutionAuditRecord>).termination;
+    delete (prepared as Partial<ExecutionAuditRecord>).imageDigest;
+    delete (prepared as Partial<ExecutionAuditRecord>).wallMs;
+    delete (prepared as Partial<ExecutionAuditRecord>).workspaceKb;
+    delete (prepared as Partial<ExecutionAuditRecord>).egressDestinations;
+    delete (prepared as Partial<ExecutionAuditRecord>).egressDestinationsTotal;
+    delete (prepared as Partial<ExecutionAuditRecord>).egressTotalBytes;
+    const grew =
+      Buffer.byteLength(JSON.stringify(terminal), "utf8") -
+      Buffer.byteLength(JSON.stringify(prepared), "utf8");
+    expect(grew).toBeLessThanOrEqual(AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES);
   });
 });
 

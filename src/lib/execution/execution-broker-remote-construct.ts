@@ -109,6 +109,9 @@ export const AUDIT_DRAIN_MAX_RECORDS = 512;
  */
 export const AUDIT_DRAIN_MAX_PASSES = 8;
 
+/** Hard ceiling on `maxPasses`, whatever a caller asks for. */
+export const AUDIT_DRAIN_PASS_CEILING = 1_000;
+
 /**
  * Stdio entries this loop pulls per pass: ZERO, deliberately (cinatra#2266,
  * the #2258 stdio discard).
@@ -182,7 +185,14 @@ export async function drainAuditPasses(
   writeRecord: DurableAuditWriter,
   opts?: { maxPasses?: number; onGap?: (message: string) => void },
 ): Promise<void> {
-  const maxPasses = opts?.maxPasses ?? AUDIT_DRAIN_MAX_PASSES;
+  // CLAMPED, not merely defaulted (Codex convergence, adopted). The bound is
+  // the whole point of a pass budget: a caller that passed `Infinity` — or a
+  // fraction, or a negative — would turn a broker producing records faster than
+  // the app can write them into a loop that never yields.
+  const requested = opts?.maxPasses ?? AUDIT_DRAIN_MAX_PASSES;
+  const maxPasses = Number.isFinite(requested)
+    ? Math.max(1, Math.min(Math.floor(requested), AUDIT_DRAIN_PASS_CEILING))
+    : AUDIT_DRAIN_MAX_PASSES;
   const onGap = opts?.onGap ?? ((message: string) => console.error(message));
   for (let pass = 0; pass < maxPasses; pass += 1) {
     const batch = await source.drainAudit({

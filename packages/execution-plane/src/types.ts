@@ -350,7 +350,19 @@ export type ExecutionAuditRecord = {
     egressMode: EgressMode;
     limits: SandboxResourceLimits;
   };
+  /**
+   * Per-destination egress attribution, TRUNCATED to a bound (cinatra#2266
+   * slice 2): the durable spool reserves capacity for this record's terminal
+   * form before the command is dispatched, and a list one command can grow
+   * without limit would make that reservation unsound.
+   */
   egressDestinations?: Array<{ host: string; port: number; allowed: boolean }>;
+  /**
+   * The TRUE number of destinations, whether or not the list above carries them
+   * all. Present whenever `egressDestinations` is: the bound truncates the
+   * sample, never the fact.
+   */
+  egressDestinationsTotal?: number;
   egressTotalBytes?: number;
   wallMs?: number;
   workspaceKb?: number;

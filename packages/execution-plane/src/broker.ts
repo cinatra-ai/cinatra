@@ -221,6 +221,56 @@ const MAX_TRACKED_COMMAND_IDS = 20_000;
  */
 const COMMAND_ID_RETENTION_MS = 15 * 60 * 1000;
 
+/**
+ * Per-destination egress entries one audit record carries (cinatra#2266 slice
+ * 2). The gateway attributes one entry per host a command contacted, which is
+ * unbounded in the command's own control — and since the durable spool reserves
+ * capacity for a record's terminal form BEFORE dispatch, an unbounded list
+ * would make that reservation unsound. The true count always rides
+ * `egressDestinationsTotal`, so the bound truncates the SAMPLE and never the
+ * fact.
+ */
+const MAX_AUDITED_EGRESS_DESTINATIONS = 32;
+
+/**
+ * Per-destination host length carried on an audit record. 253 is the maximum
+ * length of a DNS name; the gateway reports what the SANDBOX asked for, which
+ * is not obliged to be one (Codex round 3, adopted). Capping it is what makes
+ * the spool's terminal-frame headroom a real bound rather than an estimate.
+ */
+const MAX_AUDITED_EGRESS_HOST_CHARS = 253;
+
+/** Image-digest length carried on an audit record. A sha256 reference is far
+ *  shorter; the cap exists so no field of the terminal record is unbounded. */
+const MAX_AUDITED_IMAGE_DIGEST_CHARS = 512;
+
+/**
+ * Narrow a gateway-reported string to a form whose JSON encoding is EXACTLY one
+ * byte per character, then cap its length (cinatra#2266, Codex round 3 —
+ * adopted twice).
+ *
+ * A plain `.slice(n)` is NOT a byte bound: it counts UTF-16 code units, so 253
+ * three-byte characters are 759 bytes, and JSON escaping can inflate a single
+ * control character to six. Either is enough to push a terminal audit frame
+ * past the capacity its pre-dispatch reservation claimed — and that capacity is
+ * the whole reason a command that HAS RUN can always be recorded.
+ *
+ * Restricting to the characters a hostname or an image reference can actually
+ * contain fixes both at once: every survivor is ASCII (one byte) and none of
+ * them is escaped by `JSON.stringify` (no quote, no backslash, no control
+ * character), so `length` IS the encoded byte count. It is also the honest
+ * shape — a "host" outside this set is not one — and anything dropped is
+ * operator-facing decoration on the record, never a decision.
+ */
+function boundAuditText(text: string, maxChars: number, allowed: RegExp): string {
+  return text.replace(allowed, "").slice(0, maxChars);
+}
+
+/** Everything a hostname / IPv4 / bracketed IPv6 literal can contain. */
+const NOT_HOST_CHARS = /[^A-Za-z0-9.:_\-[\]]/g;
+/** Everything a docker image reference can contain. */
+const NOT_DIGEST_CHARS = /[^A-Za-z0-9.:@/_\-]/g;
+
 type BrokerJob = {
   jobId: string;
   jobToken: string;
@@ -1441,14 +1491,40 @@ export class ExecutionBroker {
         ? {
             exitCode: detail.result.exitCode,
             termination: detail.result.termination,
-            imageDigest: detail.result.imageDigest,
+            imageDigest: boundAuditText(
+              detail.result.imageDigest,
+              MAX_AUDITED_IMAGE_DIGEST_CHARS,
+              NOT_DIGEST_CHARS,
+            ),
             wallMs: detail.result.wallMs,
             workspaceKb: detail.result.workspaceKb,
             ...(detail.result.egress
               ? {
-                  egressDestinations: detail.result.egress.destinations.map(
-                    (d) => ({ host: d.host, port: d.port, allowed: d.allowed }),
-                  ),
+                  // BOUNDED (cinatra#2266, Codex round 2 — adopted). This list
+                  // is one entry per host the sandbox contacted, so it is
+                  // bounded only by what a command chose to do. That was fine
+                  // while the record lived in a ring buffer; it is not fine now
+                  // that the record's TERMINAL form has to fit inside capacity
+                  // reserved before the command ran — an unbounded list makes
+                  // the reservation's headroom unsound and lets one chatty
+                  // command push the spool past its byte bound.
+                  //
+                  // The count is never hidden: `egressDestinationsTotal` always
+                  // carries the true number, and `egressTotalBytes` is
+                  // unaffected, so an egress investigation sees that it is
+                  // looking at a sample and how large the sample is of.
+                  egressDestinations: detail.result.egress.destinations
+                    .slice(0, MAX_AUDITED_EGRESS_DESTINATIONS)
+                    .map((d) => ({
+                      host: boundAuditText(
+                        d.host,
+                        MAX_AUDITED_EGRESS_HOST_CHARS,
+                        NOT_HOST_CHARS,
+                      ),
+                      port: d.port,
+                      allowed: d.allowed,
+                    })),
+                  egressDestinationsTotal: detail.result.egress.destinations.length,
                   egressTotalBytes: detail.result.egress.totalBytes,
                 }
               : {}),

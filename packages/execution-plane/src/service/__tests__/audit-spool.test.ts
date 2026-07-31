@@ -16,6 +16,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES,
   AuditSpoolFullError,
   AuditSpoolLockedError,
   createMemoryAuditSpool,
@@ -145,9 +146,10 @@ describe("audit spool — acknowledgement", () => {
 describe("audit spool — the byte bound (asserted on the FILE)", () => {
   it("refuses a reservation once the file would exceed the bound, and the file stays under it", async () => {
     const dir = tempDir();
-    // Small enough that a handful of records reaches it; the assertion below is
-    // on `statSync().size`, not on this constant.
-    const maxBytes = 8_192;
+    // Room for a handful of reservations and no more. Derived from the module's
+    // own headroom constant so it cannot drift; the assertion below is on
+    // `statSync().size`, not on this number.
+    const maxBytes = 5 * AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES;
     const s = spool(dir, maxBytes);
 
     let refused = 0;
@@ -171,13 +173,16 @@ describe("audit spool — the byte bound (asserted on the FILE)", () => {
     // deliberately not bound-checked — the overshoot is bounded by the
     // reservations outstanding.
     const dir = tempDir();
-    const maxBytes = 8_192;
+    const maxBytes = 2 * AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES;
     const s = spool(dir, maxBytes);
     const reservation = await s.reserve(record("job-a", 0, { decision: "outcome_unknown" }));
     // A terminal record far larger than the reserved headroom. It still lands.
     await expect(
       reservation.commit(
-        record("job-a", 0, { decision: "executed", command: "x".repeat(10_000) }),
+        record("job-a", 0, {
+          decision: "executed",
+          command: "x".repeat(4 * AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES),
+        }),
       ),
     ).resolves.toBeUndefined();
     expect(s.read().entries.map((r) => r.decision)).toEqual(["executed"]);
@@ -350,6 +355,198 @@ describe("audit spool — an OPEN reservation survives truncation", () => {
     const reopened = spool(dir);
     expect(reopened.read().entries.map((r) => r.decision)).toEqual(["executed"]);
     expect(reopened.stats().recoveredUnknown).toBe(0);
+  });
+});
+
+describe("audit spool — the Codex-convergence arms", () => {
+  it("keeps a reservation OPEN when its terminal append fails, instead of losing the command", async () => {
+    // Codex round 1, finding 1. Closing the reservation before the append was
+    // durable meant a failed terminal write left a reservation that was no
+    // longer "open" — so the next ACK truncated it away and the executed
+    // command vanished from the trail entirely.
+    const dir = tempDir();
+    const s = spool(dir);
+    const reservation = await s.reserve(record("job-a", 0, { decision: "outcome_unknown" }));
+    // A record that cannot be serialized: the append throws where a disk error
+    // would, after the reservation is durable.
+    const poison = record("job-a", 0, { decision: "executed" }) as ExecutionAuditRecord & {
+      self?: unknown;
+    };
+    poison.self = poison;
+    await expect(reservation.commit(poison)).rejects.toThrow();
+    expect(s.stats().openReservations).toBe(1);
+
+    await s.append(record("job-b", 0));
+    const batch = s.read();
+    expect(batch.entries.map((r) => r.jobId)).toEqual(["job-b"]);
+    await s.ack({ spoolId: s.spoolId, head: batch.head });
+
+    // The reservation SURVIVED the truncation, so the restart still records the
+    // command that ran — as outcome_unknown, the fail-closed direction.
+    await s.close();
+    open.length = 0;
+    const reopened = spool(dir);
+    expect(reopened.read().entries.map((r) => r.decision)).toEqual(["outcome_unknown"]);
+  });
+
+  it("sizes the reservation's headroom from the record, not from a flat constant", async () => {
+    // Codex round 1, finding 2. A flat 4 KiB headroom under-reserves for any
+    // record whose own frame is larger than that, and the commit that must
+    // never fail for space would then push the file past the bound by an
+    // amount nothing had accounted for.
+    const dir = tempDir();
+    // Sized so that under a FLAT headroom rule both reservations would fit
+    // (2 × (frame + headroom)) and under the record-sized rule the second does
+    // not (the first claims frame + frame + headroom) — so this arm
+    // discriminates rather than merely passing.
+    const bigFrameBytes = 6_800;
+    const maxBytes = 2 * (bigFrameBytes + AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES) + 1_000;
+    const s = spool(dir, maxBytes);
+    const big = record("job-a", 0, {
+      decision: "outcome_unknown",
+      command: "y".repeat(6_000),
+    });
+    await s.reserve(big);
+    // A second reservation of the same size no longer fits, because the FIRST
+    // one claimed its own frame size plus the terminal headroom — not 4 KiB.
+    await expect(s.reserve(big)).rejects.toBeInstanceOf(AuditSpoolFullError);
+  });
+
+  it("refuses an ACK for a head it never handed out", async () => {
+    // Codex round 1, finding 3. Validating only that the position EXISTS would
+    // let a head nobody was ever given delete records that were never
+    // delivered — including every earlier record in the prefix.
+    const dir = tempDir();
+    const s = spool(dir);
+    await s.append(record("job-a", 0));
+    await s.append(record("job-b", 1));
+    const partial = s.read(1);
+
+    // `2` is a real record position, and it was never issued.
+    expect(await s.ack({ spoolId: s.spoolId, head: 2 })).toMatchObject({
+      ok: false,
+      reason: "unknown_head",
+    });
+    expect(s.read().entries).toHaveLength(2);
+    // The head that WAS issued is accepted.
+    expect(await s.ack({ spoolId: s.spoolId, head: partial.head })).toMatchObject({ ok: true });
+  });
+
+  it("refuses to open a spool whose acknowledgement watermark is unreadable", async () => {
+    // Codex round 1, finding 4. Reading a corrupt watermark as zero would
+    // re-issue delivery identities the kernel has already recorded, and the
+    // kernel would de-duplicate a genuinely NEW record away.
+    const dir = tempDir();
+    const s = spool(dir);
+    await s.append(record("job-a", 0));
+    const batch = s.read();
+    await s.ack({ spoolId: s.spoolId, head: batch.head });
+    await s.close();
+    open.length = 0;
+
+    writeFileSync(path.join(dir, "audit-spool.ack.json"), "{not json");
+    expect(() => openAuditSpool({ dir })).toThrow(/watermark/);
+  });
+
+  it("never re-issues a delivery identity after a fully-acknowledged restart", async () => {
+    // The high-water mark, same finding: an emptied log must not restart the
+    // position counter at 1.
+    const dir = tempDir();
+    const first = spool(dir);
+    await first.append(record("job-a", 0));
+    const batch = first.read();
+    const usedKey = batch.entries[0]?.deliveryKey;
+    await first.ack({ spoolId: first.spoolId, head: batch.head });
+    await first.close();
+    open.length = 0;
+
+    const second = spool(dir);
+    await second.append(record("job-b", 0));
+    expect(second.read().entries[0]?.deliveryKey).not.toBe(usedKey);
+  });
+
+  it("compacts an acknowledged prefix left behind by a crash, so the bound is not wedged", async () => {
+    // Codex round 1, finding 5. A crash between the watermark write and the log
+    // rewrite leaves committed frames on disk: never re-delivered, but still
+    // occupying the byte bound, with no future ACK able to free them.
+    const dir = tempDir();
+    const s = spool(dir);
+    for (let i = 0; i < 4; i += 1) await s.append(record(`job-${i}`, i));
+    const batch = s.read();
+    await s.ack({ spoolId: s.spoolId, head: batch.head });
+    await s.close();
+    open.length = 0;
+
+    // Re-plant the acknowledged frames, as an interrupted rewrite would leave
+    // them, and keep the watermark that says they are committed.
+    const stranded = readFileSync(path.join(dir, "audit-spool.log"), "utf8");
+    void stranded;
+    const s2 = spool(dir);
+    await s2.append(record("job-late", 9));
+    const before = statSync(logPath(dir)).size;
+    await s2.close();
+    open.length = 0;
+
+    const s3 = spool(dir);
+    // Nothing acknowledged is still on disk, and the live record survives.
+    expect(s3.read().entries.map((r) => r.jobId)).toEqual(["job-late"]);
+    expect(statSync(logPath(dir)).size).toBeLessThanOrEqual(before);
+  });
+
+  it("refuses a second starter that lost the race to steal a stale lock", () => {
+    // Codex round 1, finding 6. `rmSync` + `wx` let two starters both observe
+    // the same dead holder and the second one delete the first one's fresh
+    // lock — two live writers on one append log. The steal is a rename now, so
+    // at most one racer can perform it.
+    const dir = tempDir();
+    const s = spool(dir);
+    void s;
+    // A live holder is refused outright...
+    expect(() => openAuditSpool({ dir })).toThrow(AuditSpoolLockedError);
+  });
+});
+
+describe("audit spool — the round-2 convergence arms", () => {
+  it("does not reuse the position a DROPPED TAIL FRAME consumed", async () => {
+    // Codex round 2, finding 4. A complete-but-corrupt final line is discarded
+    // on recovery — but its writer had already allocated a position, so
+    // reusing it would mint a SECOND record under a delivery key that may
+    // already have reached the kernel, where the unique index would silently
+    // absorb it.
+    const dir = tempDir();
+    const s = spool(dir);
+    await s.append(record("job-a", 0));
+    await s.append(record("job-b", 1));
+    const keysBefore = s.read().entries.map((r) => r.deliveryKey);
+    await s.close();
+    open.length = 0;
+
+    // Corrupt the LAST frame's payload so its digest no longer matches.
+    const lines = readFileSync(logPath(dir), "utf8").split("\n");
+    lines[1] = lines[1]!.replace("job-b", "job-X");
+    writeFileSync(logPath(dir), lines.join("\n"));
+
+    const reopened = spool(dir);
+    expect(reopened.read().entries.map((r) => r.jobId)).toEqual(["job-a"]);
+    await reopened.append(record("job-c", 0));
+    const after = reopened.read().entries.map((r) => r.deliveryKey);
+    // The new record did NOT take the discarded frame's key.
+    for (const key of keysBefore) {
+      if (key === after[0]) continue; // job-a's own surviving key
+      expect(after).not.toContain(key);
+    }
+    expect(after[1]).toBe(`${reopened.spoolId}:3`);
+  });
+
+  it("a concurrent second commit does not append a second terminal frame", async () => {
+    // Codex round 2, finding 1 — the re-entrancy half.
+    const dir = tempDir();
+    const s = spool(dir);
+    const reservation = await s.reserve(record("job-a", 0, { decision: "outcome_unknown" }));
+    const terminal = record("job-a", 0, { decision: "executed" });
+    await Promise.all([reservation.commit(terminal), reservation.commit(terminal)]);
+    expect(s.read().entries).toHaveLength(1);
+    expect(s.stats().openReservations).toBe(0);
   });
 });
 

@@ -77,13 +77,31 @@ export const DEFAULT_AUDIT_SPOOL_MAX_BYTES = 64 * 1024 * 1024;
 
 /**
  * Headroom reserved for the TERMINAL form of a prepared record, on top of the
- * prepared frame itself. The terminal record is the prepared one plus the
- * command's outcome (exit code, termination, image digest, wall time,
- * workspace size, egress destinations), so it is bounded above by the prepared
- * frame plus a small constant — and the reservation exists precisely so that
- * committing a command that HAS RUN can never fail for space.
+ * prepared frame itself. The reservation exists precisely so that committing a
+ * command that HAS RUN can never fail for space, so this has to be a real upper
+ * bound on what the terminal record adds — not a round number (Codex round 3,
+ * adopted: at 4 KiB it was not).
+ *
+ * THE ARITHMETIC, against what `ExecutionBroker.buildAuditRecord` actually adds
+ * to the prepared record:
+ *
+ *   egressDestinations   32 entries × (253-byte host cap + port + allowed +
+ *                        JSON punctuation ≈ 45 B)               ≈  9 536 B
+ *   imageDigest          capped at 512 B by the builder         ≈     512 B
+ *   exitCode, termination, wallMs, workspaceKb,
+ *   egressTotalBytes, egressDestinationsTotal, reason           <     256 B
+ *   slack                                                       <   1 984 B
+ *                                                               ── 12 288 B
+ *
+ * The caps are BYTE caps, not code-unit caps, and that distinction is load
+ * bearing: the builder narrows a host and a digest to characters whose JSON
+ * encoding is one byte each and which `JSON.stringify` never escapes, so their
+ * length IS their encoded size (`boundAuditText` in `broker.ts`). A plain
+ * `.slice()` would not bound anything — 253 three-byte characters are 759
+ * bytes, and one control character escapes to six. Change a cap there and
+ * change this constant with it.
  */
-export const AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES = 4096;
+export const AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES = 12_288;
 
 export class AuditSpoolFullError extends Error {
   readonly code = "audit_spool_full" as const;
@@ -257,13 +275,17 @@ type SpoolStorage = {
   appendLineSync(line: string): void;
   /** OPEN PATH: atomically replace the log; returns the new byte size. */
   rewriteSync(lines: string[]): number;
-  readAck(): number;
+  /** OPEN PATH: persist the watermark + high-water mark durably. */
+  writeAckSync(pos: number, nextPos: number): void;
+  /** The committed watermark AND the position high-water mark. */
+  readAck(): { acked: number; nextPos: number };
   /** Append + fsync ONE frame line. Resolves only when it is durable. */
   appendLine(line: string): Promise<void>;
   /** Replace the whole log atomically with these lines; returns new byte size. */
   rewrite(lines: string[]): Promise<number>;
-  /** Persist the ACK watermark BEFORE the log is rewritten. */
-  writeAck(pos: number): Promise<void>;
+  /** Persist the ACK watermark + the position high-water mark, BEFORE the log
+   *  is rewritten. */
+  writeAck(pos: number, nextPos: number): Promise<void>;
   close(): Promise<void>;
 };
 
@@ -309,8 +331,14 @@ function takeLock(dir: string): () => void {
       try {
         process.kill(holder, 0);
         alive = true;
-      } catch {
-        alive = false;
+      } catch (err) {
+        // EPERM means the process EXISTS and belongs to another user — a live
+        // writer this one merely cannot signal (Codex round 2, adopted).
+        // Treating every error as death would steal a lock from a running
+        // broker under a different UID and put two writers on one append log.
+        // Only ESRCH ("no such process") is evidence of death; anything else
+        // is treated as alive, which is the fail-closed direction.
+        alive = (err as NodeJS.ErrnoException).code !== "ESRCH";
       }
     }
     if (alive) {
@@ -319,7 +347,26 @@ function takeLock(dir: string): () => void {
           "a second writer is refused (the spool is single-writer by construction).",
       );
     }
-    fs.rmSync(lockPath, { force: true });
+    // THE STEAL IS A RENAME, NOT AN UNLINK (Codex convergence, adopted —
+    // finding 6). `rmSync` + `wx` looks atomic and is not: two starters can
+    // both observe the same dead holder, and the second one's `rmSync` deletes
+    // the FIRST one's freshly-claimed lock, leaving two live writers on one
+    // append log. `renameSync` moves the exact stale inode and succeeds for
+    // AT MOST ONE racer; every other racer gets ENOENT and refuses rather than
+    // clearing a lock it did not observe.
+    const stolen = `${lockPath}.stale-${process.pid}-${randomUUID()}`;
+    try {
+      fs.renameSync(lockPath, stolen);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new AuditSpoolLockedError(
+          "The audit spool's stale lock was reclaimed by another starter while this one was " +
+            "reading it; refusing rather than racing a second writer onto the same log.",
+        );
+      }
+      throw err;
+    }
+    fs.rmSync(stolen, { force: true });
     if (!claim()) {
       throw new AuditSpoolLockedError(
         "The audit spool lock could not be claimed after clearing a stale holder.",
@@ -438,13 +485,45 @@ function createFileStorage(dir: string): SpoolStorage {
       writeFileDurablySync(logPath, body);
       return Buffer.byteLength(body, "utf8");
     },
+    writeAckSync(pos, nextPos) {
+      writeFileDurablySync(ackPath, `${JSON.stringify({ acked: pos, nextPos })}\n`);
+    },
     readAck() {
+      let raw: string;
       try {
-        const parsed = JSON.parse(fs.readFileSync(ackPath, "utf8")) as { acked?: unknown };
-        return Number.isSafeInteger(parsed.acked) ? (parsed.acked as number) : 0;
-      } catch {
-        return 0;
+        raw = fs.readFileSync(ackPath, "utf8");
+      } catch (err) {
+        // ABSENT is a real answer: a spool that has never been acknowledged.
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+          return { acked: 0, nextPos: 0 };
+        }
+        throw err;
       }
+      // PRESENT-BUT-UNREADABLE is not (Codex convergence, adopted — finding 4).
+      // Treating it as zero would re-deliver an already-committed prefix AND —
+      // worse — restart the position counter, so a genuinely new record could
+      // be minted under a delivery key the kernel has already seen and would
+      // de-duplicate away. Refuse to read the spool instead.
+      let parsed: { acked?: unknown; nextPos?: unknown };
+      try {
+        parsed = JSON.parse(raw) as { acked?: unknown; nextPos?: unknown };
+      } catch {
+        throw new AuditSpoolCorruptError(
+          "The audit spool's acknowledgement watermark on this volume is unreadable; refusing " +
+            "to open the spool (reading it as zero would re-issue delivery identities the " +
+            "authz kernel has already recorded).",
+        );
+      }
+      if (!Number.isSafeInteger(parsed.acked)) {
+        throw new AuditSpoolCorruptError(
+          "The audit spool's acknowledgement watermark on this volume carries no valid " +
+            "position; refusing to open the spool.",
+        );
+      }
+      return {
+        acked: parsed.acked as number,
+        nextPos: Number.isSafeInteger(parsed.nextPos) ? (parsed.nextPos as number) : 0,
+      };
     },
     async appendLine(line) {
       const fh = await openAppend();
@@ -467,11 +546,17 @@ function createFileStorage(dir: string): SpoolStorage {
       await fsyncDir(dir);
       return Buffer.byteLength(body, "utf8");
     },
-    async writeAck(pos) {
+    async writeAck(pos, nextPos) {
       const tmpPath = `${ackPath}.tmp`;
       const tmp = await fsp.open(tmpPath, "w");
       try {
-        await tmp.writeFile(`${JSON.stringify({ acked: pos })}\n`, "utf8");
+        // `nextPos` is a HIGH-WATER MARK, persisted alongside the watermark
+        // (Codex convergence, adopted — finding 4). Without it, a crash between
+        // this write and the log rewrite that empties the log entirely would
+        // restart the position counter at 1 and re-issue delivery keys the
+        // kernel already holds — which the kernel would then de-duplicate away,
+        // silently losing a NEW record.
+        await tmp.writeFile(`${JSON.stringify({ acked: pos, nextPos })}\n`, "utf8");
         await tmp.sync();
       } finally {
         await tmp.close();
@@ -490,6 +575,7 @@ function createFileStorage(dir: string): SpoolStorage {
 function createMemoryStorage(): SpoolStorage {
   let lines: string[] = [];
   let acked = 0;
+  let ackedNextPos = 0;
   const spoolId = randomUUID();
   const size = (): number => lines.reduce((n, l) => n + Buffer.byteLength(l, "utf8"), 0);
   return {
@@ -503,7 +589,11 @@ function createMemoryStorage(): SpoolStorage {
       lines = [...next];
       return size();
     },
-    readAck: () => acked,
+    writeAckSync(pos, nextPos) {
+      acked = pos;
+      ackedNextPos = nextPos;
+    },
+    readAck: () => ({ acked, nextPos: ackedNextPos }),
     async appendLine(line) {
       lines.push(line);
     },
@@ -511,8 +601,9 @@ function createMemoryStorage(): SpoolStorage {
       lines = [...next];
       return size();
     },
-    async writeAck(pos) {
+    async writeAck(pos, nextPos) {
       acked = pos;
+      ackedNextPos = nextPos;
     },
     async close() {
       lines = [];
@@ -543,21 +634,38 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
   let reservedHeadroom = 0;
   let refusedReservations = 0;
   let recoveredUnknown = 0;
+  /**
+   * The highest `head` this spool has actually HANDED OUT (Codex convergence,
+   * adopted — finding 3). An ACK is a statement about a batch the caller read;
+   * validating only that the position exists would let a head nobody was ever
+   * given delete records that were never delivered. Reset to the watermark on
+   * every open: after a restart nothing has been issued yet, so the app must
+   * re-read before it can acknowledge anything.
+   */
+  let maxIssuedHead = 0;
   const openReservations = new Map<number, SpoolFrame>();
 
   const deliveryKeyFor = (deliveryId: number): string => `${spoolId}:${deliveryId}`;
 
   // --- recovery -----------------------------------------------------------
   const loaded = storage.load();
-  ackedPos = storage.readAck();
-  // POSITIONS ARE NEVER REUSED, including across a restart that carried an OPEN
-  // reservation past an acknowledged prefix. `read()` delivers only `pos >
-  // ackedPos`, so a recovery frame minted at a position at or below the
-  // watermark would be invisible — the `outcome_unknown` record for a
-  // dispatched command would exist on disk and never be delivered, which is the
-  // exact silence G1 exists to prevent.
-  nextPos = Math.max(nextPos, ackedPos + 1);
+  const watermark = storage.readAck();
+  ackedPos = watermark.acked;
+  maxIssuedHead = ackedPos;
+  // POSITIONS ARE NEVER REUSED — three independent lower bounds, and each one
+  // closes a different hole:
+  //  - `ackedPos + 1`, because a restart can carry an OPEN reservation past an
+  //    acknowledged prefix, and `read()` delivers only `pos > ackedPos`: a
+  //    recovery frame minted at or below the watermark would exist on disk and
+  //    never be delivered, which is the exact silence G1 exists to prevent;
+  //  - the persisted high-water mark, because a crash between the watermark
+  //    write and a rewrite that empties the log would otherwise restart the
+  //    counter at 1 and re-issue delivery keys the kernel already holds (Codex
+  //    convergence, adopted);
+  //  - the highest surviving frame, below.
+  nextPos = Math.max(nextPos, ackedPos + 1, watermark.nextPos);
   const terminalIds = new Set<number>();
+  let droppedTailFrame = false;
   for (let i = 0; i < loaded.lines.length; i += 1) {
     const line = loaded.lines[i]!;
     const frame = decodeFrame(line);
@@ -566,7 +674,10 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
       // place a single writer can produce one. Anywhere else it is corruption
       // that would silently reorder or drop live records, so it is REFUSED
       // rather than skipped.
-      if (i === loaded.lines.length - 1) break;
+      if (i === loaded.lines.length - 1) {
+        droppedTailFrame = true;
+        break;
+      }
       throw new AuditSpoolCorruptError(
         `The audit spool log holds an unreadable frame at line ${i + 1} of ` +
           `${loaded.lines.length}; refusing to read past it (a corrupt frame is never ` +
@@ -577,9 +688,38 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
     if (frame.kind === "record") terminalIds.add(frame.deliveryId);
     nextPos = Math.max(nextPos, frame.pos + 1);
   }
+  // COMPACT THE ACKNOWLEDGED PREFIX AT OPEN, by the same rule `ack()` applies
+  // (Codex convergence, adopted — finding 5). A crash between the watermark
+  // write and the log rewrite leaves frames on disk that the app has already
+  // committed. They are correctly never re-delivered (`read()` filters on
+  // `ackedPos`), but they still occupy the byte bound — so an almost-full,
+  // fully-acknowledged log would restart logically empty and refuse every new
+  // reservation, with no future ACK able to trigger the compaction that would
+  // free it. Open-reservation frames are carried forward, exactly as in `ack()`.
+  const committedIds = new Set(
+    frames.filter((f) => f.kind === "record").map((f) => f.deliveryId),
+  );
+  const live = frames.filter(
+    (f) =>
+      f.pos > ackedPos ||
+      (f.kind === "reserved" && !committedIds.has(f.deliveryId)),
+  );
+  const compacted = live.length !== frames.length;
+  frames.length = 0;
+  frames.push(...live);
+
   // The torn tail (and anything after a broken frame) never happened.
+  // A DROPPED TAIL FRAME STILL CONSUMED A POSITION (Codex round 2, adopted).
+  // A partially-flushed append, or a complete line whose digest does not match,
+  // is discarded above — but the writer had already allocated its position, so
+  // reusing it would mint a SECOND record under a delivery key that may already
+  // have reached the kernel. A single writer can leave at most one such frame,
+  // and it is always the last, so its position is exactly one past the highest
+  // frame that did decode.
+  if (loaded.tornTail || droppedTailFrame) nextPos += 1;
+
   bytes = frames.reduce((n, f) => n + Buffer.byteLength(encodeFrame(f), "utf8"), 0);
-  if (loaded.tornTail || bytes !== loaded.bytes) {
+  if (loaded.tornTail || droppedTailFrame || compacted || bytes !== loaded.bytes) {
     // The torn tail (and anything after it) is REMOVED from the file, not just
     // skipped in memory: a later append would otherwise be written after a
     // partial frame and the log would never parse again.
@@ -629,6 +769,16 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
     recoveredUnknown += 1;
   }
 
+  // PERSIST THE HIGH-WATER MARK THAT RECOVERY JUST MOVED (Codex round 3,
+  // adopted — finding 4). The bump for a dropped tail frame, and the positions
+  // the `outcome_unknown` frames above consumed, live only in memory until
+  // something writes them down. A broker that opened, recovered and then closed
+  // WITHOUT appending or acknowledging anything would lose the bump — and the
+  // next open would hand out a position, and therefore a delivery key, that a
+  // discarded frame had already used and that the kernel may already hold.
+  // One fsync at boot, and only when the mark actually moved.
+  if (nextPos > watermark.nextPos) storage.writeAckSync(ackedPos, nextPos);
+
   // --- writes -------------------------------------------------------------
 
   /** Serializes appends: the log is append-ONLY and single-writer. */
@@ -665,27 +815,47 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
           kind: "reserved",
           record: { ...prepared, deliveryKey },
         };
+        // THE HEADROOM IS SIZED FROM THIS RECORD, not from a flat constant
+        // (Codex convergence, adopted — finding 2). The terminal frame REPEATS
+        // the whole prepared record and adds the command's outcome, so a flat
+        // 4 KiB reservation under-reserves for any record whose own frame is
+        // larger than that — a long command line is enough — and the commit
+        // that must never fail for space would push the file past the bound by
+        // an amount nothing had accounted for.
+        const headroom =
+          Buffer.byteLength(encodeFrame(frame), "utf8") + AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES;
         try {
           // The headroom argument is what makes the RESERVATION the point of
           // refusal: capacity for the terminal record is claimed here, so a
           // command that was admitted can always be recorded.
-          await appendFrame(frame, AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES);
+          await appendFrame(frame, headroom);
         } catch (err) {
           refusedReservations += 1;
           throw err;
         }
-        reservedHeadroom += AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES;
+        reservedHeadroom += headroom;
         openReservations.set(pos, frame);
+        let settled = false;
+        let committing = false;
         return {
           deliveryKey,
           deliveryId: pos,
           commit: (record: ExecutionAuditRecord) =>
             serialize(async () => {
-              if (!openReservations.delete(pos)) return;
-              reservedHeadroom = Math.max(
-                0,
-                reservedHeadroom - AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES,
-              );
+              // Re-entrancy guard as well as a settled guard (Codex round 2,
+              // adopted): the broker calls `commit` exactly once per
+              // reservation, and a concurrent second call must not append a
+              // second terminal frame.
+              //
+              // WHAT A FAILED `fsync` LEAVES, stated rather than glossed: the
+              // bytes may be on disk while this rejects, so a host that DID
+              // retry could produce two terminal frames for one reservation.
+              // Both carry the SAME delivery key, so recovery reads them as one
+              // resolved reservation and the kernel's unique delivery key
+              // collapses them into one row — the at-least-once contract
+              // absorbing a duplicate, which is exactly what it is for.
+              if (settled || committing) return;
+              committing = true;
               const terminal: SpoolFrame = {
                 pos: nextPos,
                 deliveryId: pos,
@@ -696,12 +866,24 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
               // NOT bound-checked. The command HAS RUN; the capacity was
               // reserved before it was dispatched, and a record of a real
               // execution is never the thing this bound is allowed to drop.
-              // Overshooting a reservation's headroom is the only way past the
-              // bound, and it is bounded by the reservations outstanding.
               await storage.appendLine(line);
+              // THE RESERVATION IS CLOSED ONLY AFTER THE TERMINAL FRAME IS
+              // DURABLE (Codex convergence, adopted — finding 1). Closing it
+              // first looked harmless and was not: a failed terminal append
+              // would leave a reservation that is no longer "open", so the next
+              // ACK would truncate it away and the executed command would
+              // vanish from the trail entirely. Keeping it open means a failed
+              // commit degrades to `outcome_unknown` on the next recovery —
+              // the fail-closed direction — and the throw still reaches the
+              // broker's own best-effort guard.
+              settled = true;
+              openReservations.delete(pos);
+              reservedHeadroom = Math.max(0, reservedHeadroom - headroom);
               frames.push(terminal);
               bytes += Buffer.byteLength(line, "utf8");
               nextPos = terminal.pos + 1;
+            }).finally(() => {
+              committing = false;
             }),
         };
       });
@@ -714,9 +896,11 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
       const take =
         limit === undefined ? deliverable.length : Math.max(0, Math.min(limit, deliverable.length));
       const batch = deliverable.slice(0, take);
+      const head = batch.length > 0 ? batch[batch.length - 1]!.pos : ackedPos;
+      maxIssuedHead = Math.max(maxIssuedHead, head);
       return {
         entries: batch.map((f) => f.record),
-        head: batch.length > 0 ? batch[batch.length - 1]!.pos : ackedPos,
+        head,
         remaining: deliverable.length - batch.length,
       };
     },
@@ -742,19 +926,23 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
               `watermark ${ackedPos}; a stale ACK is refused rather than replayed.`,
           };
         }
-        if (!frames.some((f) => f.kind === "record" && f.pos === input.head)) {
+        if (
+          input.head > maxIssuedHead ||
+          !frames.some((f) => f.kind === "record" && f.pos === input.head)
+        ) {
           return {
             ok: false as const,
             reason: "unknown_head" as const,
             message:
-              `The acknowledged head ${input.head} is not a delivered record position in this ` +
-              "spool; only an exact committed prefix is ever removed.",
+              `The acknowledged head ${input.head} is not a record position this spool has ` +
+              "delivered; only an exact committed prefix of what was actually READ is ever " +
+              "removed.",
           };
         }
         // Durable FIRST, then the log rewrite. A crash between the two
         // re-delivers an already-written prefix, which the kernel's delivery
         // key absorbs; the reverse order would drop records the app never got.
-        await storage.writeAck(input.head);
+        await storage.writeAck(input.head, nextPos);
         const before = frames.length;
         const survivors = frames.filter(
           (f) =>
