@@ -636,6 +636,44 @@ describe("bridge run-token selection for MCP OBO minting", () => {
     expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
   });
 
+  it("FAIL CLOSED: a present-but-UNRESOLVABLE context-id is a conflict, not a missing cross-check", async () => {
+    // The header is dispatch-owned, so a value naming no run means the request is
+    // corrupt or forged. Treating it as "absent" would fail OPEN — the context
+    // routes already 403 this exact shape.
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    readAgentRunByContextIdMock.mockResolvedValue(null); // resolves to nothing
+    const res = await POST(
+      makeReqH(
+        { user: "hi" },
+        {
+          "x-cinatra-run-token": RUN_TOKEN,
+          "x-cinatra-a2a-context-id": "ctx-ghost",
+        },
+      ),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ code: "run_mismatch" }),
+    );
+  });
+
+  it("FAIL CLOSED: a context-id LOOKUP FAILURE is not evidence of agreement", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    readAgentRunByContextIdMock.mockRejectedValue(new Error("db down"));
+    const res = await POST(
+      makeReqH(
+        { user: "hi" },
+        {
+          "x-cinatra-run-token": RUN_TOKEN,
+          "x-cinatra-a2a-context-id": "ctx-1",
+        },
+      ),
+    );
+    expect(res.status).toBe(403);
+  });
+
   it("the identity gate precedes every dispatch path in the source", () => {
     const src = readFileSync(join(__dirname, "..", "route.ts"), "utf8");
     const gate = src.indexOf("#1193 RUN-IDENTITY GATE");

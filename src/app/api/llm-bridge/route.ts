@@ -912,15 +912,22 @@ export async function POST(req: Request): Promise<Response> {
   // bindings must never disagree. The header itself stays on the wire — other
   // surfaces (the passthrough / auditor bridge-run binding) and the #907
   // per-node context attestation still require it.
+  const a2aContextId = req.headers.get("x-cinatra-a2a-context-id");
   let runFromContextId: Awaited<ReturnType<typeof readAgentRunByContextId>> =
     null;
-  try {
-    const a2aContextId = req.headers.get("x-cinatra-a2a-context-id");
-    if (a2aContextId) {
+  let contextIdUnresolved = false;
+  if (a2aContextId) {
+    try {
       runFromContextId = await readAgentRunByContextId(a2aContextId);
+      // PRESENT-but-unresolvable is a POSITIVE conflict signal, not "no
+      // cross-check": the header is dispatch-owned, so a value that names no run
+      // means the request is corrupt or forged. Treating it as absent would let
+      // it fail OPEN — the context routes already 403 this exact shape.
+      contextIdUnresolved = runFromContextId === null;
+    } catch {
+      // A lookup FAILURE is likewise not evidence of agreement — fail closed.
+      contextIdUnresolved = true;
     }
-  } catch {
-    // non-fatal — the cross-check simply does not fire.
   }
 
   // BOTH disagreement cases are decided HERE, not later. They must clear the
@@ -940,7 +947,9 @@ export async function POST(req: Request): Promise<Response> {
   const bodyRunMismatch =
     claimsRun && !!runFromToken && body.agent_run_id !== runFromToken.id;
   const runTokenDivergent =
-    !!runFromToken && !!runFromContextId && runFromContextId.id !== runFromToken.id;
+    !!runFromToken &&
+    (contextIdUnresolved ||
+      (!!runFromContextId && runFromContextId.id !== runFromToken.id));
   if (bodyRunMismatch || runTokenDivergent) {
     console.warn(
       `[llm-bridge-run-select] REFUSED code=run_mismatch ` +
