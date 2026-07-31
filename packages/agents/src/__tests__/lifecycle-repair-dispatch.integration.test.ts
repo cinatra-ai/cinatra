@@ -46,6 +46,15 @@ const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2047-d1";
+/** cinatra#2286 S10 PR2 — the principal fix. A dispatched repair now requires
+ * the ORIGINATING producing run's `runBy` to resolve a LIVE org membership
+ * (`resolveOrgRoleForUser`, re-verified at dispatch time), so this suite seeds
+ * a real `public."organization"` / `public."user"` / `public."member"` row for
+ * a producing-run principal — mirrors the `a2a-internal-dispatch-actor`
+ * integration suite's pattern (better-auth's `member` table lives in `public`,
+ * UNAFFECTED by this suite's `TEST_SCHEMA` swap for the lifecycle tables). */
+const MEMBER_USER = "user-2047-d1-member";
+const OUTSIDER_USER = "user-2047-d1-outsider";
 /** The MANIFEST-declared form of the capability (an extension that implements its
  * own repair) — the shape `installAgentFromPackage` now compiles onto the row. */
 const MANIFEST_REPAIR_CAPABLE = JSON.stringify({ repairCapable: true });
@@ -87,12 +96,15 @@ async function seedTemplate(packageName: string, lifecycleConfig: string | null)
   return templateId;
 }
 
-async function seedRun(templateId: string): Promise<string> {
+/** `runBy` defaults to the seeded real member (cinatra#2286 S10 PR2 — the
+ * dispatch-time principal gate needs a live-resolvable org role); pass
+ * `runBy: null` explicitly for the no-human-principal cases. */
+async function seedRun(templateId: string, runBy: string | null = MEMBER_USER): Promise<string> {
   const runId = `run-${randomUUID()}`;
   await pool(
-    `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs" (id, template_id, org_id, input_params)
-     VALUES ($1,$2,$3,'{}')`,
-    [runId, templateId, ORG],
+    `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs" (id, template_id, org_id, run_by, input_params)
+     VALUES ($1,$2,$3,$4,'{}')`,
+    [runId, templateId, ORG, runBy],
   );
   return runId;
 }
@@ -181,6 +193,34 @@ beforeAll(async () => {
   await admin.end();
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
 
+  // cinatra#2286 S10 PR2 — seed a REAL better-auth org/user/member row so the
+  // dispatch-time principal gate (`resolveOrgRoleForUser`) resolves a live
+  // role for the producing run's `runBy`. `public."member"` is NOT part of
+  // `TEST_SCHEMA` (better-auth tables are unqualified, always `public`), so
+  // this rides a separate connection against the shared `public` schema —
+  // mirrors `a2a-internal-dispatch-actor.integration.test.ts` exactly.
+  const authAdmin = new Client({ connectionString: DB_URL });
+  await authAdmin.connect();
+  await authAdmin.query(
+    `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
+    [ORG, ORG, ORG],
+  );
+  for (const userId of [MEMBER_USER, OUTSIDER_USER]) {
+    await authAdmin.query(
+      `INSERT INTO public."user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+       VALUES ($1, $2, $3, false, now(), now()) ON CONFLICT (id) DO NOTHING`,
+      [userId, userId, `${userId}@2047-d1.test`],
+    );
+  }
+  // MEMBER_USER is a real member of ORG. OUTSIDER_USER exists but has NO
+  // membership row anywhere — the "runBy no longer resolves a live role" case.
+  await authAdmin.query(
+    `INSERT INTO public."member" (id, "organizationId", "userId", role, "createdAt")
+     VALUES ($1, $2, $3, 'member', now()) ON CONFLICT (id) DO NOTHING`,
+    [`m-2047-d1-${ORG}`, ORG, MEMBER_USER],
+  );
+  await authAdmin.end();
+
   outboxStore = await import("../lifecycle-produced-outbox-store");
   gateStore = await import("../artifact-review-gate-store");
   orch = await import("../lifecycle-review-orchestration-store");
@@ -208,6 +248,16 @@ afterAll(async () => {
   await admin.connect();
   await admin.query(`DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`).catch(() => {});
   await admin.end().catch(() => {});
+  const authAdmin = new Client({ connectionString: DB_URL });
+  await authAdmin.connect();
+  await authAdmin
+    .query(`DELETE FROM public."member" WHERE "userId" = ANY($1)`, [[MEMBER_USER, OUTSIDER_USER]])
+    .catch(() => {});
+  await authAdmin
+    .query(`DELETE FROM public."user" WHERE id = ANY($1)`, [[MEMBER_USER, OUTSIDER_USER]])
+    .catch(() => {});
+  await authAdmin.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]).catch(() => {});
+  await authAdmin.end().catch(() => {});
   delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized;
 });
 
@@ -340,12 +390,17 @@ describe.skipIf(!HAS_DB)("cinatra#2047 D-1 — the repair round-trip is reachabl
       representationRevisionId: ev.representationRevisionId,
     });
     expect(delivered!.findings.length).toBeGreaterThan(0);
+    // cinatra#2286 S10 PR2 — the principal fix: the delivered request carries
+    // the LIVE-VERIFIED originating human, and the repair run's own `run_by`
+    // is attributed to that SAME human (never the system dispatch authority).
+    expect(delivered!.originatingRunBy).toBe(MEMBER_USER);
     // The repair run rides the producing template (the agent that must repair).
     const runRow = await pool(
-      `SELECT template_id, source_type FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`,
+      `SELECT template_id, source_type, run_by FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`,
       [repairRunId],
     );
     expect((runRow.rows[0] as { template_id: string }).template_id).toBe(templateId);
+    expect((runRow.rows[0] as { run_by: string | null }).run_by).toBe(MEMBER_USER);
 
     // Idempotent re-drain: nothing pending, no second run.
     expect((await dispatchStore.dispatchPendingProducerRepairs()).dispatched).toBe(0);
@@ -521,6 +576,82 @@ describe.skipIf(!HAS_DB)("cinatra#2047 D-1 — the repair round-trip is reachabl
       }),
     ).toContain("resume");
     // No repair run was created for a checkpointed repair.
+    const runs = await pool(`SELECT id FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`, [
+      dispatchStore.repairRunId(cr.repairId),
+    ]);
+    expect(runs.rows.length).toBe(0);
+  });
+
+  it("PRINCIPAL (no runBy): a producing run with NO human runBy is escalated, never dispatched (cinatra#2286 S10 PR2)", async () => {
+    // The confused-deputy hazard, closed: a producing run with no delegating
+    // human must never dispatch a repair that runs (and could write) under a
+    // generic worker identity.
+    const templateId = await seedTemplate(
+      `@cinatra-ai/declared-${randomUUID()}-agent`,
+      MANIFEST_REPAIR_CAPABLE,
+    );
+    const producerRunId = await seedRun(templateId, null);
+    const ev = await produce({ producerRunId });
+    await orch.sweepReviewOrchestration({ limit: 50 });
+    const baseTaskId = autoReviewTaskId(ev.eventId);
+
+    const cr = await crStore.recordReviewSurfaceChangesRequested({
+      runId: producerRunId,
+      reviewTaskId: baseTaskId,
+      baseTarget: { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId },
+      currentBaseRevisionId: ev.representationRevisionId,
+      feedback: "tighten the headline",
+    });
+    expect(cr.ok).toBe(true);
+    if (!cr.ok) return;
+    expect(cr.route.kind).toBe("producer_repair");
+
+    const summary = await dispatchStore.dispatchPendingProducerRepairs();
+    expect(summary.escalated).toBeGreaterThanOrEqual(1);
+    expect(summary.dispatched).toBe(0);
+    const row = await repairRow(cr.repairId);
+    expect(row!.status).toBe("escalated");
+    expect(
+      dispatchStore.dispatchEscalationReason({ status: row!.status, changeSummary: row!.change_summary }),
+    ).toContain("no human runBy");
+    // No repair run was ever minted — the gate runs BEFORE any dispatch.
+    const runs = await pool(`SELECT id FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`, [
+      dispatchStore.repairRunId(cr.repairId),
+    ]);
+    expect(runs.rows.length).toBe(0);
+  });
+
+  it("PRINCIPAL (stale runBy): a runBy that no longer resolves a live org membership is escalated, never dispatched (cinatra#2286 S10 PR2)", async () => {
+    // The LIVE re-verify, exercised: OUTSIDER_USER is a real user with NO
+    // membership row in ORG (revoked, or never a member) — the dispatch-time
+    // check must never trust whatever the producing run carried at produce time.
+    const templateId = await seedTemplate(
+      `@cinatra-ai/declared-${randomUUID()}-agent`,
+      MANIFEST_REPAIR_CAPABLE,
+    );
+    const producerRunId = await seedRun(templateId, OUTSIDER_USER);
+    const ev = await produce({ producerRunId });
+    await orch.sweepReviewOrchestration({ limit: 50 });
+    const baseTaskId = autoReviewTaskId(ev.eventId);
+
+    const cr = await crStore.recordReviewSurfaceChangesRequested({
+      runId: producerRunId,
+      reviewTaskId: baseTaskId,
+      baseTarget: { artifactId: ev.artifactId, representationRevisionId: ev.representationRevisionId },
+      currentBaseRevisionId: ev.representationRevisionId,
+      feedback: "tighten the headline",
+    });
+    expect(cr.ok).toBe(true);
+    if (!cr.ok) return;
+
+    const summary = await dispatchStore.dispatchPendingProducerRepairs();
+    expect(summary.escalated).toBeGreaterThanOrEqual(1);
+    expect(summary.dispatched).toBe(0);
+    const row = await repairRow(cr.repairId);
+    expect(row!.status).toBe("escalated");
+    expect(
+      dispatchStore.dispatchEscalationReason({ status: row!.status, changeSummary: row!.change_summary }),
+    ).toContain("no longer a verified member");
     const runs = await pool(`SELECT id FROM "${q(TEST_SCHEMA)}"."agent_runs" WHERE id=$1`, [
       dispatchStore.repairRunId(cr.repairId),
     ]);
