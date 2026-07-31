@@ -30,8 +30,6 @@ const {
   resolveProviderAdapterMock,
   resolveConfiguredLlmRuntimeMock,
   getLlmMcpCredentialsMock,
-  setRunContextMock,
-  clearRunContextMock,
   consoleWarnSpy,
 } = vi.hoisted(() => ({
   runResolvedSkillAwareDeterministicLlmTaskMock: vi.fn(
@@ -56,8 +54,6 @@ const {
     deterministic: false,
   })),
   getLlmMcpCredentialsMock: vi.fn((): { clientId: string; clientSecret: string } | null => null),
-  setRunContextMock: vi.fn(),
-  clearRunContextMock: vi.fn(),
   consoleWarnSpy: vi.spyOn(console, "warn").mockImplementation(() => {}),
 }));
 
@@ -82,10 +78,6 @@ vi.mock("@cinatra-ai/llm", () => ({
   },
 }));
 
-vi.mock("@/lib/agent-run-context-registry", () => ({
-  setRunContext: setRunContextMock,
-  clearRunContext: clearRunContextMock,
-}));
 
 vi.mock("@/lib/a2a-auth", () => ({
   verifyLangGraphBridgeToken: vi.fn(async () => ({

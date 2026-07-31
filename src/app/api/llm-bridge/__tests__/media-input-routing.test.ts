@@ -41,8 +41,6 @@ const {
   resolveProviderAdapterMock,
   resolveConfiguredLlmRuntimeMock,
   getLlmMcpCredentialsMock,
-  setRunContextMock,
-  clearRunContextMock,
   emitUsageEventMock,
   consoleWarnSpy,
   adapterMock,
@@ -93,8 +91,6 @@ const {
       deterministic: false,
     })),
     getLlmMcpCredentialsMock: vi.fn((): { clientId: string; clientSecret: string } | null => null),
-    setRunContextMock: vi.fn(),
-    clearRunContextMock: vi.fn(),
     emitUsageEventMock: vi.fn(),
     consoleWarnSpy: vi.spyOn(console, "warn").mockImplementation(() => {}),
     adapterMock: adapter,
@@ -130,10 +126,6 @@ vi.mock("@cinatra-ai/metric-usage-api", () => ({
   emitUsageEvent: emitUsageEventMock,
 }));
 
-vi.mock("@/lib/agent-run-context-registry", () => ({
-  setRunContext: setRunContextMock,
-  clearRunContext: clearRunContextMock,
-}));
 
 vi.mock("@/lib/a2a-auth", () => ({
   verifyLangGraphBridgeToken: vi.fn(async () => ({

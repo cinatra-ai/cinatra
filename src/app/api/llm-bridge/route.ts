@@ -14,7 +14,6 @@ import {
   createLocalSkillShellTool,
   buildLlmMcpServerToolForAgentRun,
   buildLlmMcpServerTool,
-  getLlmMcpCredentials,
   PreferredProviderUnavailableError,
   type LlmTool,
   type LlmResponse,
@@ -83,7 +82,6 @@ import { buildBridgeAttachmentResolverPorts } from "./attachment-resolver-ports"
 import { parseUserEnvelope, UserEnvelopeParseError } from "./user-envelope";
 import { isAuthorizedBridgeRequest } from "@/lib/wayflow-bridge-auth";
 import { verifyLangGraphBridgeToken } from "@/lib/a2a-auth";
-import { setRunContext, clearRunContext } from "@/lib/agent-run-context-registry";
 import {
   writeDurableRunContextBinding,
   clearDurableRunContextBindings,
@@ -1283,13 +1281,14 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // ---------------------------------------------------------------------------
-  // Run-context registry — stamps every objects_save call during this LLM step
-  // with the Cinatra run id and agent provenance metadata.
+  // Run identity for this LLM step — which `agent_runs` row this call belongs
+  // to, so MCP writes made during the step can be attributed to it.
   //
-  // Client ID resolution: try to decode the Bearer JWT's sub/clientId claim
-  // first (Python containers send A2A Bearer tokens); fall back to the
-  // OAuth client ID from getLlmMcpCredentials (TS callers using bridge token
-  // where no Authorization header is present).
+  // cinatra#1195: the in-process run-context registry that used to carry this
+  // (keyed on a decoded Bearer clientId, with a SHARED per-provider clientId
+  // fallback) is DELETED. Attribution now rides two verified channels only: the
+  // per-run OBO token, and — for the machine-token fallback — the durable
+  // run-token-keyed redis binding written below.
   // ---------------------------------------------------------------------------
   // Resolve effective run ID — WayFlow Python containers always send
   // agent_run_id="" (empty string) because the StartNode binding bug prevents
@@ -1444,15 +1443,12 @@ export async function POST(req: Request): Promise<Response> {
       }
     }
   }
-  // `effectiveRunId` drives the best-effort run-context registry wiring used
-  // for objects_save run tagging. It may use the caller-supplied
-  // body.agent_run_id (no token minting depends on it) but prefers the
-  // binding-verified / context-resolved run id when available.
-  // An invalid/tampered token suppresses even the best-effort run-context
-  // registry tagging (never let a bad token drive tagging off a body id).
-  const effectiveRunId = runTokenInvalid
-    ? undefined
-    : bindingVerifiedRunId || runFromContext?.id || body.agent_run_id || undefined;
+  // (cinatra#1195) The `effectiveRunId` computed here fed ONLY the deleted
+  // in-process registry, and it could fall back to the FORGEABLE
+  // `body.agent_run_id` for best-effort MCP tagging. Removing the registry
+  // removes that body-derived tagging key entirely: run attribution for MCP
+  // writes now rides the per-run OBO token or the durable run-token-keyed
+  // binding, both of which resolve through the run row.
   // Run usable for building the artifact resolver ports AND for minting the
   // MCP OBO actor token — ONLY a run resolved via the auth-injected
   // context-id OR a verified dispatcher-signed binding. `body.agent_run_id`
@@ -1500,51 +1496,18 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  let registryClientId: string | undefined;
   // #1195 — redis keys of the durable run-context bindings THIS request wrote
   // (one per machine-token mint inside cinatraMcpToolOverride below). Keys are
   // per-invocation-unique, so the finally-clear can plain-DEL exactly these.
+  //
+  // The in-process run-context registry this route used to write ALONGSIDE the
+  // durable binding is DELETED (cinatra#1195 flip). It was keyed on a decoded
+  // Bearer clientId with a SHARED per-provider clientId FALLBACK, so two
+  // concurrent runs on the same provider client could alias each other's
+  // binding, and it could not survive a second app instance/worker at all. The
+  // durable run-token-keyed binding below is now the only run-context channel
+  // the bridge writes; the per-run OBO token is the other (verified) channel.
   const durableBindingKeys: string[] = [];
-  if (effectiveRunId) {
-    try {
-      let registryKey: string | undefined;
-      const authorizationHeader = req.headers.get("authorization") ?? "";
-      if (authorizationHeader) {
-        const token = authorizationHeader.startsWith("Bearer ")
-          ? authorizationHeader.slice("Bearer ".length).trim()
-          : authorizationHeader.trim();
-        const parts = token.split(".");
-        if (parts.length === 3) {
-          const jwtPayload = JSON.parse(
-            Buffer.from(parts[1], "base64url").toString("utf8"),
-          ) as Record<string, unknown>;
-          registryKey =
-            typeof jwtPayload.clientId === "string"
-              ? jwtPayload.clientId
-              : typeof jwtPayload.sub === "string"
-                ? jwtPayload.sub
-                : undefined;
-        } else if (token) {
-          registryKey = token;
-        }
-      }
-      if (!registryKey) {
-        const mcpCreds = getLlmMcpCredentials("openai");
-        if (mcpCreds?.clientId) registryKey = mcpCreds.clientId;
-      }
-      if (registryKey) {
-        registryClientId = registryKey;
-        setRunContext(registryKey, {
-          runId: effectiveRunId,
-          agentId: body.agent_id,
-          packageVersion: body.package_version,
-          agentSpecVersion: body.agent_spec_version,
-        });
-      }
-    } catch {
-      // non-fatal — context propagation best-effort
-    }
-  }
 
   try {
     // Typed injection contract (cinatra#2091, epic #2086 S4). The bridge no
@@ -1714,7 +1677,8 @@ export async function POST(req: Request): Promise<Response> {
       // THAT provider. Gating on the configured provider would silently
       // skip the OBO + durable-binding path whenever dispatch diverges
       // (configured gemini, dispatched openai), leaving that run's machine
-      // token unbound on the alias-prone process-local registry.
+      // token with NO run attribution at all now that the alias-prone
+      // process-local registry is gone.
       const mcpEffectiveProvider =
         dispatch.kind === "dispatch"
           ? dispatch.effectiveProvider
@@ -1740,10 +1704,12 @@ export async function POST(req: Request): Promise<Response> {
               // The binding value is the run's dispatch-minted credential HASH
               // (never a raw run id): the MCP reader resolves it back through
               // readAgentRunByTokenHash, keeping the run ROW the source of
-              // truth. Legacy runs without a credential hash write nothing and
-              // stay on the in-process registry (the measured transition
-              // fallback). Redis failure ⇒ no binding, same registry fallback:
-              // availability is never worse than today.
+              // truth. A run without a dispatch-minted credential hash writes
+              // nothing, and a redis failure writes nothing — post-#1195 there
+              // is no legacy channel underneath, so such a step simply carries
+              // NO run attribution (an unattributed write, never a misattributed
+              // one; a forged x-cinatra-run-id claim is refused at the MCP
+              // transport).
               const buildMachineToolWithDurableBinding = async () => {
                 // Byte-equivalence with the orchestration fallback this
                 // replaces requires the EFFECTIVE provider (the gate above
@@ -1768,8 +1734,8 @@ export async function POST(req: Request): Promise<Response> {
                     if (runTokenHash) {
                       const key = await writeDurableRunContextBinding(bearer, {
                         tokenHash: runTokenHash,
-                        // Untrusted provenance for tagging only — mirrors the
-                        // legacy registry payload; never an authz input.
+                        // Untrusted provenance for tagging only — never an
+                        // authorization input.
                         agentId: body.agent_id,
                         packageVersion: body.package_version,
                         agentSpecVersion: body.agent_spec_version,
@@ -1778,7 +1744,8 @@ export async function POST(req: Request): Promise<Response> {
                     }
                   }
                 } catch {
-                  // best-effort — binding absent ⇒ registry fallback covers.
+                  // best-effort — binding absent ⇒ the step carries no run
+                  // attribution (never a weaker, forgeable substitute).
                 }
                 return machineTool;
               };
@@ -2106,7 +2073,6 @@ export async function POST(req: Request): Promise<Response> {
     console.error("[llm-bridge] LLM task failed:", message, stack);
     return NextResponse.json({ error: "Internal server error", detail: message }, { status: 500 });
   } finally {
-    if (registryClientId) clearRunContext(registryClientId);
     // #1195 — clear exactly the durable bindings this request wrote (keys are
     // per-invocation-unique; the 300s TTL is the crash backstop).
     if (durableBindingKeys.length > 0) {

@@ -35,6 +35,7 @@ import {
   resolveInboundEra,
   serveLegacyEra,
   unclassifiableEraResponse,
+  runContextDeniedResponse,
 } from "./inbound-era";
 import {
   createMcpRuntimeServer,
@@ -137,21 +138,15 @@ export type CreateMcpServerMountOptions = {
    * the connectivity check button. Optional — omitting it hides the selector.
    */
   readConfiguredLlmProviders?: () => Promise<string[]>;
-  /**
-   * In-process run-context registry callback. Called by the transport handler
-   * to retrieve run context (runId, agentId, packageVersion, agentSpecVersion)
-   * set by the bridge route before each LLM step. Primary mechanism for OpenAI
-   * MCP calls (which strip X-Cinatra-* headers). Optional — callers without
-   * agent run-context propagation omit it.
-   */
-  getRunContext?: (key: string) => { runId?: string; agentId?: string; packageVersion?: string; agentSpecVersion?: string } | undefined;
   /** #1195 durable run-context binding resolver (run-token-keyed redis binding
    *  written by /api/llm-bridge; resolved via readAgentRunByTokenHash), called ONCE
-   *  per request with the RAW bearer. "resolved" beats registry/header; "invalid"
-   *  FAILS CLOSED and suppresses them; "absent" falls through. App-wired in
-   *  src/lib/mcp-server.ts; precedence contract in request-context.ts. */
+   *  per request with the RAW bearer. "resolved" beats the header channel;
+   *  "invalid" FAILS CLOSED and suppresses it; "absent" falls through. App-wired
+   *  in src/lib/mcp-server.ts; precedence contract in request-context.ts. The
+   *  in-process `getRunContext` registry callback that sat beside this was
+   *  deleted with the registry itself. */
   resolveDurableRunContext?: (rawBearerToken: string) => Promise<DurableRunContextResolution>;
-  /** #1195 cutover metric: which channel served the run id (ids only). */
+  /** #1195 metric: which channel served the run id (ids only). */
   onRunContextServedBy?: (channel: RunContextServedBy, info: { runId?: string; suppressed?: boolean }) => void;
   /**
    * Optional app-layer verifier for delegated on-behalf-of actor tokens.
@@ -1038,8 +1033,7 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
     // Inject clientId from the JWT into AsyncLocalStorage so tool handlers can
     // resolve the calling assistant's identity without SDK changes.
     // Fall back to the raw token when decodeJwtClientId returns undefined
-    // (e.g. A2A_DEV_BYPASS sentinel "dev-bypass" is not a 3-part JWT) so the
-    // in-process registry writer and reader agree on the same key.
+    // (e.g. A2A_DEV_BYPASS sentinel "dev-bypass" is not a 3-part JWT).
     const authHeader = earlyAuthHeader;
     const rawToken = authHeader?.startsWith("Bearer ")
       ? authHeader.slice("Bearer ".length).trim()
@@ -1184,11 +1178,9 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
     // authenticated llm-bridge call before the LLM step), treat it as a
     // trusted internal actor and apply the same org fallback.
     if (!resolvedOrgId && process.env.A2A_DEV_BYPASS === "true") {
-      // #1195 — durable first; "invalid" suppresses the registry consult.
-      const earlyRunId =
-        durableRunContext?.outcome === "resolved" ? durableRunContext.ctx.runId
-        : durableRunContext?.outcome === "invalid" ? undefined
-        : requestClientId ? options.getRunContext?.(requestClientId)?.runId : undefined;
+      // #1195 — the durable binding is the only channel here now: the legacy
+      // in-process registry consult that used to back-fill this was deleted.
+      const earlyRunId = durableRunContext?.outcome === "resolved" ? durableRunContext.ctx.runId : undefined;
       if (earlyRunId) {
         try {
           const result = await betterAuthPool.query<{ id: string }>(
@@ -1211,19 +1203,27 @@ export function createMcpServerMount(options: CreateMcpServerMountOptions) {
       userId: resolvedUserId,
       pool: betterAuthPool,
     });
-    // Resolve agent run-context (#1195): obo > durable > registry > header;
-    // durable-"invalid" suppresses the legacy channels (contract + rationale in
-    // request-context.ts); the cutover metric hook gets the channel.
+    // Resolve agent run-context (#1195): obo > durable > header (contract in
+    // request-context.ts). `failClosed: true` is the ACTIVATED cutover posture
+    // — a run id only the forgeable x-cinatra-* headers could supply is
+    // REFUSED, never tagged; the refusal itself is the paired enforcement below.
     const runContext = resolveRequestRunContext({
       delegatedRunId: delegatedActor?.delegation === "agent_run" ? delegatedActor.runId : undefined,
       durable: durableRunContext,
-      registryCtx: requestClientId ? options.getRunContext?.(requestClientId) : undefined,
       headerRunId: request.headers.get("x-cinatra-run-id") ?? undefined,
       headerAgentId: request.headers.get("x-cinatra-agent-id") ?? undefined,
       headerPackageVersion: request.headers.get("x-cinatra-package-version") ?? undefined,
       headerAgentSpecVersion: request.headers.get("x-cinatra-agent-spec-version") ?? undefined,
+      failClosed: true,
     });
     options.onRunContextServedBy?.(runContext.servedBy, { runId: runContext.runId, suppressed: runContext.suppressed });
+    // ENFORCEMENT POINT for `failClosed` (#1195) — landed in the SAME change as
+    // the flag; splitting them would be fail-OPEN. Rationale: runContextDeniedResponse.
+    if (runContext.denied) {
+      console.warn(`[mcp-run-ctx] denied channel=${runContext.deniedChannel ?? "-"} (cinatra#1195)`);
+      await modernHandler.close().catch(() => undefined);
+      return appendCorsHeaders(runContextDeniedResponse());
+    }
     const orgWriteAuthority = await resolveFrameOrgWriteAuthority({ delegatedActor, options, resolvedUserId, resolvedOrgId, resolvedOrgRole });
     const requestStore: McpRequestContext = {
       clientId: requestClientId,
