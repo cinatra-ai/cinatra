@@ -1,0 +1,1 @@
+[execution-plane] chat: execution claim with NO sandbox dispatch that reached a sandbox — marking the turn unverified (claims: ran.first_person, ran.the_command, stdout.qualified, output.here_is, sandbox.location)

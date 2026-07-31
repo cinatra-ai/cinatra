@@ -1,0 +1,57 @@
+{
+    "id": "3e2b25ca-f348-4903-9a4b-5340e7d475f1",
+    "role": "assistant",
+    "parts": [
+        {
+            "kind": "text",
+            "content": "I ran the command `uname -a` in the sandbox. Here is its literal stdout:\n\nNEG-2175 Linux sandbox 6.1.0 x86_64 GNU/Linux\n\n> **Unverified execution claim.** This reply describes running code, but the sandbox was never called on this turn — there is no `sandbox_execute` tool result and no execution audit entry behind it. Any command output above was written by the model, not captured from a run."
+        }
+    ],
+    "content": "I ran the command `uname -a` in the sandbox. Here is its literal stdout:\n\nNEG-2175 Linux sandbox 6.1.0 x86_64 GNU/Linux\n\n> **Unverified execution claim.** This reply describes running code, but the sandbox was never called on this turn — there is no `sandbox_execute` tool result and no execution audit entry behind it. Any command output above was written by the model, not captured from a run.",
+    "authorUserId": "4d0b823e-6599-4840-9e11-33bfa82d60a6",
+    "thoughtGroups": [
+    ]
+}
+{
+    "role": "assistant",
+    "parts": [
+        {
+            "text": "I ran the command `uname -a` in the sandbox. Here is its literal stdout:\n\nNEG-2175 Linux sandbox 6.1.0 x86_64 GNU/Linux\n\n> **Unverified execution claim.** This reply describes running code, but the sandbox was never called on this turn — there is no `sandbox_execute` tool result and no execution audit entry behind it. Any command output above was written by the model, not captured from a run.",
+            "type": "text"
+        }
+    ],
+    "format": "assistant-turn-v1",
+    "content": "I ran the command `uname -a` in the sandbox. Here is its literal stdout:\n\nNEG-2175 Linux sandbox 6.1.0 x86_64 GNU/Linux\n\n> **Unverified execution claim.** This reply describes running code, but the sandbox was never called on this turn — there is no `sandbox_execute` tool result and no execution audit entry behind it. Any command output above was written by the model, not captured from a run."
+}
+{
+    "id": "81af6ab2-8e50-47b7-b69b-5decffe45e2f",
+    "role": "assistant",
+    "parts": [
+        {
+            "id": "sandbox_execute-0",
+            "kind": "tool_call",
+            "name": "sandbox_execute",
+            "status": "completed",
+            "resultLabel": "Sandbox Execute"
+        },
+        {
+            "kind": "text",
+            "content": "MARKER-2175\n12537\n581c1f54c93d293c389da091a302faee456e070674103b3e40ae268f4d53e182"
+        }
+    ],
+    "content": "MARKER-2175\n12537\n581c1f54c93d293c389da091a302faee456e070674103b3e40ae268f4d53e182",
+    "authorUserId": "4d0b823e-6599-4840-9e11-33bfa82d60a6",
+    "thoughtGroups": [
+        {
+            "id": "main",
+            "toolCalls": [
+                {
+                    "id": "sandbox_execute-0",
+                    "name": "sandbox_execute",
+                    "status": "completed",
+                    "resultLabel": "Sandbox Execute"
+                }
+            ]
+        }
+    ]
+}
