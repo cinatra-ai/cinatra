@@ -77,6 +77,8 @@ import {
   type ExecFailureReason,
   type ExecResult,
   type ExecutionAuditRecord,
+  type ExecutionAuditReservation,
+  type ExecutionAuditReserver,
   type ExecutionAuditSink,
   type ExecutionStdioRedactor,
   type ExecutionStdioSink,
@@ -93,9 +95,29 @@ import {
 } from "./types";
 import { SANDBOX_WORKSPACE_DIR } from "./l0-profile";
 
+/** The fields one audit record is built from (`buildAuditRecord`). */
+type AuditRecordDetail = {
+  decision: "executed" | "refused" | "outcome_unknown";
+  reason?: string;
+  result?: SandboxCommandResult;
+  policy: EgressPolicy;
+  commandId?: string;
+  voucherRejection?: string;
+  egressClamped?: readonly EgressClampAxis[];
+};
+
 export type ExecutionBrokerOptions = {
   worker: SandboxWorker;
   auditSink: ExecutionAuditSink;
+  /**
+   * The DURABLE PRE-DISPATCH RESERVATION seam (cinatra#2266 G1). Present ⇒ the
+   * broker reserves an audit record — durably, on the broker's own volume —
+   * before it hands a command to the sandbox, and a rejected reservation
+   * REFUSES the command (`audit_spool_unavailable`) rather than running one it
+   * cannot account for. Absent ⇒ no reservation and the pre-#2266 behaviour,
+   * which is what the in-process placement (sink → kernel, no spool) keeps.
+   */
+  auditReserver?: ExecutionAuditReserver;
   livenessProbe: RunLivenessProbe;
   /**
    * The per-command authorization boundary (epic #1705). REQUIRED, not optional:
@@ -199,6 +221,56 @@ const MAX_TRACKED_COMMAND_IDS = 20_000;
  */
 const COMMAND_ID_RETENTION_MS = 15 * 60 * 1000;
 
+/**
+ * Per-destination egress entries one audit record carries (cinatra#2266 slice
+ * 2). The gateway attributes one entry per host a command contacted, which is
+ * unbounded in the command's own control — and since the durable spool reserves
+ * capacity for a record's terminal form BEFORE dispatch, an unbounded list
+ * would make that reservation unsound. The true count always rides
+ * `egressDestinationsTotal`, so the bound truncates the SAMPLE and never the
+ * fact.
+ */
+const MAX_AUDITED_EGRESS_DESTINATIONS = 32;
+
+/**
+ * Per-destination host length carried on an audit record. 253 is the maximum
+ * length of a DNS name; the gateway reports what the SANDBOX asked for, which
+ * is not obliged to be one (Codex round 3, adopted). Capping it is what makes
+ * the spool's terminal-frame headroom a real bound rather than an estimate.
+ */
+const MAX_AUDITED_EGRESS_HOST_CHARS = 253;
+
+/** Image-digest length carried on an audit record. A sha256 reference is far
+ *  shorter; the cap exists so no field of the terminal record is unbounded. */
+const MAX_AUDITED_IMAGE_DIGEST_CHARS = 512;
+
+/**
+ * Narrow a gateway-reported string to a form whose JSON encoding is EXACTLY one
+ * byte per character, then cap its length (cinatra#2266, Codex round 3 —
+ * adopted twice).
+ *
+ * A plain `.slice(n)` is NOT a byte bound: it counts UTF-16 code units, so 253
+ * three-byte characters are 759 bytes, and JSON escaping can inflate a single
+ * control character to six. Either is enough to push a terminal audit frame
+ * past the capacity its pre-dispatch reservation claimed — and that capacity is
+ * the whole reason a command that HAS RUN can always be recorded.
+ *
+ * Restricting to the characters a hostname or an image reference can actually
+ * contain fixes both at once: every survivor is ASCII (one byte) and none of
+ * them is escaped by `JSON.stringify` (no quote, no backslash, no control
+ * character), so `length` IS the encoded byte count. It is also the honest
+ * shape — a "host" outside this set is not one — and anything dropped is
+ * operator-facing decoration on the record, never a decision.
+ */
+function boundAuditText(text: string, maxChars: number, allowed: RegExp): string {
+  return text.replace(allowed, "").slice(0, maxChars);
+}
+
+/** Everything a hostname / IPv4 / bracketed IPv6 literal can contain. */
+const NOT_HOST_CHARS = /[^A-Za-z0-9.:_\-[\]]/g;
+/** Everything a docker image reference can contain. */
+const NOT_DIGEST_CHARS = /[^A-Za-z0-9.:@/_\-]/g;
+
 type BrokerJob = {
   jobId: string;
   jobToken: string;
@@ -256,7 +328,43 @@ export function verifyServiceToken(
   return timingSafeEqual(a, b);
 }
 
+/**
+ * This producer's denied-cooldown POSTURE (cinatra#2266 AC1).
+ *
+ * Every record this mapper emits pins `resourceType` / `operation` to
+ * `execution_sandbox` / `sandbox_execute`, and the actor is always the same
+ * user, so the kernel's default cooldown key (`actor : resourceType :
+ * operation`) is ONE constant string per user. Under that key the kernel
+ * recorded the FIRST refusal in a 60 s window and silently discarded every
+ * later one — across different jobs, different commands and different reasons.
+ * Ten forged vouchers in a minute produced one audit row.
+ *
+ * `record_every` rather than a finer key, and the reason is not convenience
+ * (Codex convergence, adopted over two rounds). A finer key has to be built
+ * from something the record carries, and the refusal paths that matter most
+ * carry nothing that distinguishes them: a voucher is rejected BEFORE its
+ * claims are trusted, so a forged, expired or replayed voucher has no
+ * `commandId` at all, and neither does a job-level refusal. Keying on
+ * job + reason + rejection collapses exactly the burst an investigation needs
+ * to see; adding the record's own `atMs` only shrinks the collision to
+ * "inside the same millisecond", which two concurrent refusals on one job can
+ * still hit. A refusal is an authorization DECISION, and one that is discarded
+ * makes an investigation read "no record" as "it did not happen" — so this
+ * producer states plainly that it has no repeat semantics, instead of
+ * approximating one it cannot express.
+ *
+ * ACCEPTED VOLUME: a refusal loop now writes one row per refusal instead of
+ * one per minute. That is the point. The rate is bounded by what the app
+ * submits — every refusal costs a full app→broker round trip carrying a
+ * voucher — not by the audit kernel.
+ *
+ * The MINT side is deliberately different (`execution-broker-construct.ts`):
+ * a mint event carries a REQUIRED `commandId`, so it CAN say what makes two
+ * denials the same event, and it opts into the finer key instead.
+ */
+
 /** Map a broker audit record onto the authz audit-kernel input vocabulary. */
+
 export function toAuthzAuditEventInput(record: ExecutionAuditRecord): {
   organizationId: string;
   actorPrincipalId: string;
@@ -267,6 +375,15 @@ export function toAuthzAuditEventInput(record: ExecutionAuditRecord): {
   operation: string;
   decision: "allowed" | "denied";
   runId?: string;
+  deniedCooldown: "record_every";
+  /**
+   * The spool's PHYSICAL delivery identity (cinatra#2266 G2/G4), when this
+   * record came off a spool. It is the kernel's idempotent-insert key: a
+   * re-delivery after a crash carries the SAME value, so the second insert is
+   * reported as a duplicate instead of writing a second row for one execution.
+   * Absent on the in-process placement, whose records never enter a spool.
+   */
+  executionDeliveryKey?: string;
   metadata: Record<string, unknown>;
 } {
   return {
@@ -277,11 +394,30 @@ export function toAuthzAuditEventInput(record: ExecutionAuditRecord): {
     resourceType: "execution_sandbox",
     resourceId: record.jobId,
     operation: "sandbox_execute",
-    decision: record.decision === "executed" ? "allowed" : "denied",
+    // THE AUTHZ AXIS IS THE AUTHORIZATION DECISION, not the execution outcome
+    // — which is what makes `outcome_unknown` map to `allowed` and not to a
+    // refusal (cinatra#2266 G1). That record exists because the command passed
+    // EVERY authorization gate and was handed to the sandbox; what the broker
+    // never learned is how it ended. Projecting it as `denied` would assert an
+    // authorization refusal that did not happen and would hide a real
+    // execution from a "what did this user actually run" query. The unknown
+    // half is not lost: it rides `reason` and `metadata.outcome`, both of which
+    // say `outcome_unknown` in as many words.
+    decision: record.decision === "refused" ? "denied" : "allowed",
     ...(record.runId ? { runId: record.runId } : {}),
+    ...(record.deliveryKey ? { executionDeliveryKey: record.deliveryKey } : {}),
+    // Cooldown CONTROL field, not audit data: the kernel reads it to decide
+    // whether to suppress a denied event and never persists it. Allowed rows
+    // are never suppressed and ignore it.
+    deniedCooldown: "record_every",
     metadata: {
       surface: record.surface,
       cwd: record.cwd,
+      // The LOGICAL correlation key's own terms (`jobId + seq + decision`) —
+      // `jobId` already rides `resourceId`. Kept as payload, deliberately NOT
+      // as the delivery key: see `executionDeliveryKey` above and #2266 G2.
+      seq: record.seq,
+      outcome: record.decision,
       reason: record.reason,
       exitCode: record.exitCode,
       termination: record.termination,
@@ -579,8 +715,18 @@ export class ExecutionBroker {
         message: `Unknown execution job "${jobId}".`,
       };
     }
+    // THE ATTEMPT SEQUENCE, allocated HERE and not at dispatch (cinatra#2266
+    // AC2). It used to be `const seq = job.seq++` immediately before
+    // `worker.runCommand`, which is after every pre-dispatch refusal path has
+    // already returned — so refusals carried no sequence at all, two identical
+    // refusals on one job were indistinguishable, and a dispatch failure
+    // consumed a sequence the refusal path never saw. One sequence per exec()
+    // attempt, allocated before the first path that can refuse, fixes all
+    // three. It is the LOGICAL correlation key; the physical delivery key is
+    // the spool's (see `ExecutionAuditRecord.deliveryKey`).
+    const seq = job.seq++;
     if (job.terminated) {
-      return this.refuse(job, command, "job_terminated",
+      return this.refuse(job, seq, command, "job_terminated",
         `The job was terminated (${job.terminationReason ?? "unspecified"}); no further commands run on it.`);
     }
 
@@ -590,7 +736,7 @@ export class ExecutionBroker {
     // commands would keep placing containers on a host that is no longer ours.
     const admissionPlacement = await this.checkPlacement();
     if (!admissionPlacement.ok) {
-      return this.refuse(job, command, "placement_revoked", admissionPlacement.message);
+      return this.refuse(job, seq, command, "placement_revoked", admissionPlacement.message);
     }
 
     // --- the authorization boundary ----------------------------------------
@@ -621,6 +767,7 @@ export class ExecutionBroker {
       // The MODEL sees only the coarse reason; the precise rejection is audited.
       return this.refuse(
         job,
+        seq,
         command,
         reason,
         "The command is not authorized: its per-command authorization voucher was " +
@@ -661,7 +808,7 @@ export class ExecutionBroker {
       this.executedCommandIds.has(claims.commandId) ||
       this.inFlightCommandIds.has(claims.commandId)
     ) {
-      return this.refuse(job, command, "command_replayed",
+      return this.refuse(job, seq, command, "command_replayed",
         `Command ${claims.commandId} already executed (or is in flight) on this broker; the repeat is refused (idempotency).`,
         clampedPolicy, detail);
     }
@@ -694,7 +841,7 @@ export class ExecutionBroker {
       const liveness = await this.probeLiveness(job);
       if (liveness === "gone") {
         this.terminate(job, "run_removed");
-        return await this.refuse(job, command, "run_removed",
+        return await this.refuse(job, seq, command, "run_removed",
           "The bound run was hard-removed mid-job; the command is refused and the job is terminated (fail-closed).",
           clampedPolicy, detail);
       }
@@ -702,14 +849,14 @@ export class ExecutionBroker {
       if (this.opts.commandPolicy) {
         const verdict = this.opts.commandPolicy(job.session, command);
         if (!verdict.allowed) {
-          return await this.refuse(job, command, "command_blocked", verdict.reason,
+          return await this.refuse(job, seq, command, "command_blocked", verdict.reason,
             clampedPolicy, detail);
         }
       }
 
       const orgAdmission = orgSem.tryAcquire();
       if (orgAdmission === "saturated") {
-        return await this.refuse(job, command, "queue_saturated",
+        return await this.refuse(job, seq, command, "queue_saturated",
           "The org's execution queue is full; retry later (bounded queueing).",
           clampedPolicy, detail);
       }
@@ -717,7 +864,7 @@ export class ExecutionBroker {
       const globalAdmission = this.globalSemaphore.tryAcquire();
       if (globalAdmission === "saturated") {
         orgSem.release();
-        return await this.refuse(job, command, "queue_saturated",
+        return await this.refuse(job, seq, command, "queue_saturated",
           "The global execution queue is full; retry later (bounded queueing).",
           clampedPolicy, detail);
       }
@@ -735,7 +882,7 @@ export class ExecutionBroker {
       // authorized too early). Re-check termination, the voucher's freshness, and
       // re-probe liveness here.
       if (job.terminated) {
-        return await this.refuse(job, command, "job_terminated",
+        return await this.refuse(job, seq, command, "job_terminated",
           `The job was terminated (${job.terminationReason ?? "unspecified"}) while queued; the command is refused.`,
           policy, detail);
       }
@@ -754,7 +901,7 @@ export class ExecutionBroker {
         const attempts = this.revalidationAttempts.get(claims.commandId)?.count ?? 0;
         if (attempts >= 1) {
           this.revalidationChallenges.delete(claims.commandId);
-          return await this.refuse(job, command, "revalidation_exhausted",
+          return await this.refuse(job, seq, command, "revalidation_exhausted",
             "The command's authorization expired again before it could run; it will not " +
               "be revalidated a second time (fail-closed). Resubmit as a new command.",
             policy, { ...detail, voucherRejection: fresh.rejection });
@@ -765,14 +912,14 @@ export class ExecutionBroker {
         ) {
           // Cannot track the retry ⇒ cannot cap it ⇒ refuse rather than issue an
           // untracked challenge.
-          return await this.refuse(job, command, "revalidation_exhausted",
+          return await this.refuse(job, seq, command, "revalidation_exhausted",
             "The broker cannot track another revalidation; the command is refused (fail-closed).",
             policy, { ...detail, voucherRejection: fresh.rejection });
         }
         this.revalidationAttempts.set(claims.commandId, { count: attempts + 1, atMs });
         const nonce = this.opts.nonceFactory?.() ?? randomUUID();
         this.revalidationChallenges.set(claims.commandId, { nonce, atMs });
-        await this.audit(job, command, {
+        await this.audit(job, seq, command, {
           decision: "refused",
           reason: "revalidation_required",
           policy,
@@ -800,7 +947,7 @@ export class ExecutionBroker {
       const postQueueLiveness = await this.probeLiveness(job);
       if (postQueueLiveness === "gone") {
         this.terminate(job, "run_removed");
-        return await this.refuse(job, command, "run_removed",
+        return await this.refuse(job, seq, command, "run_removed",
           "The bound run was hard-removed while the command was queued; refused and the job is terminated (fail-closed).",
           policy, detail);
       }
@@ -816,7 +963,7 @@ export class ExecutionBroker {
           gateway: this.opts.gateway,
         });
       } catch (err) {
-        return await this.refuse(job, command, "egress_unavailable",
+        return await this.refuse(job, seq, command, "egress_unavailable",
           `Failed to resolve egress for the command: ${(err as Error).message}`, policy,
           detail);
       }
@@ -833,7 +980,7 @@ export class ExecutionBroker {
           );
         } catch (err) {
           if (err instanceof EgressRegistrationError) {
-            return await this.refuse(job, command, "egress_unavailable",
+            return await this.refuse(job, seq, command, "egress_unavailable",
               `Egress gateway registration failed (${err.message}); the command is refused (fail-closed).`, policy,
               detail);
           }
@@ -861,7 +1008,7 @@ export class ExecutionBroker {
       // between — it reads the lease on every call.
       const dispatchPlacement = await this.checkPlacement();
       if (!dispatchPlacement.ok) {
-        return await this.refuse(job, command, "placement_revoked",
+        return await this.refuse(job, seq, command, "placement_revoked",
           dispatchPlacement.message, policy, detail);
       }
 
@@ -872,7 +1019,47 @@ export class ExecutionBroker {
       // is a refusal the client may legitimately retry, everything below has
       // (or may have) touched the sandbox.
       this.recordExecutedCommandId(claims.commandId, this.opts.nowMs?.() ?? Date.now());
-      const seq = job.seq++;
+
+      // THE DURABLE PRE-DISPATCH RESERVATION (cinatra#2266 G1/AC4). The last
+      // thing before the sandbox is handed the command, and the first thing
+      // that can stop it from being handed at all.
+      //
+      // WHY IT CANNOT BE AN APPEND AFTER THE RUN. The terminal decision is only
+      // known once `runCommand` returns, so a crash in between loses the
+      // command entirely — however durable the append would have been. The
+      // reservation writes the prepared record (and claims the capacity its
+      // terminal form needs) BEFORE dispatch, and spool recovery converts an
+      // unresolved one into an explicit `outcome_unknown` record.
+      //
+      // A REJECTION REFUSES THE COMMAND. Not "log and run anyway": an execution
+      // the plane cannot account for must not happen, which is the exact
+      // inversion of the pre-#2266 relay (it discarded an older record and ran
+      // the command). NOT ITSELF AUDITED — the audit path is what just failed,
+      // and minting a record per refused attempt is the unbounded write G5
+      // names; the spool counts them instead (slice 3 turns that count into one
+      // bounded, durable episode record).
+      let reservation: ExecutionAuditReservation | undefined;
+      if (this.opts.auditReserver) {
+        try {
+          reservation = await this.opts.auditReserver(
+            this.buildAuditRecord(job, seq, command, {
+              decision: "outcome_unknown",
+              reason: "outcome_unknown",
+              policy,
+              ...detail,
+            }),
+          );
+        } catch (err) {
+          return {
+            ok: false,
+            reason: "audit_spool_unavailable",
+            message:
+              "The command was not dispatched: the execution plane could not durably reserve " +
+              `an audit record for it (${describeThrownValue(err)}). The sandbox is never ` +
+              "handed a command the plane cannot account for (fail-closed).",
+          };
+        }
+      }
       job.lastActivityMs = this.opts.nowMs?.() ?? Date.now();
       job.inFlightCommands += 1;
       let result: SandboxCommandResult;
@@ -901,13 +1088,13 @@ export class ExecutionBroker {
         // (cinatra#1708 AC4) — surfaced with its OWN audited reason, never
         // masked as a generic worker error.
         if (err instanceof EnvironmentMountRefusedError) {
-          return await this.refuse(job, command, "environment_untrusted",
+          return await this.refuse(job, seq, command, "environment_untrusted",
             `The job's declared execution environment could not be trusted (${err.reason}); the command is refused (fail-closed).`, policy,
-            detail);
+            { ...detail, ...(reservation ? { reservation } : {}) });
         }
-        return await this.refuse(job, command, "worker_error",
+        return await this.refuse(job, seq, command, "worker_error",
           `The sandbox worker failed to run the command: ${(err as Error).message}`, policy,
-          detail);
+          { ...detail, ...(reservation ? { reservation } : {}) });
       }
 
       if (result.termination === "disk_quota_exceeded") {
@@ -924,7 +1111,7 @@ export class ExecutionBroker {
         // stdio retention is observability, never the decision.
       }
       try {
-        await this.audit(job, command, {
+        const terminal = this.buildAuditRecord(job, seq, command, {
           decision: "executed",
           reason:
             result.termination === "exited" ? undefined : result.termination,
@@ -932,6 +1119,12 @@ export class ExecutionBroker {
           policy,
           ...detail,
         });
+        // The reservation OWNS this attempt's delivery slot: committing through
+        // it upgrades the prepared record to the terminal one under the same
+        // delivery key, so a crash after this point re-delivers ONE record, not
+        // an `outcome_unknown` beside an `executed` (cinatra#2266 G1/G2).
+        if (reservation) await reservation.commit(terminal);
+        else await this.opts.auditSink(terminal);
       } catch {
         // Same posture as the host sink's own guard.
       }
@@ -1213,6 +1406,7 @@ export class ExecutionBroker {
 
   private async refuse(
     job: BrokerJob,
+    seq: number,
     command: string,
     reason: ExecFailureReason,
     message: string,
@@ -1221,9 +1415,17 @@ export class ExecutionBroker {
       commandId?: string;
       voucherRejection?: string;
       egressClamped?: readonly EgressClampAxis[];
+      /**
+       * A POST-DISPATCH refusal (the two `runCommand` throw paths) resolves the
+       * pre-dispatch reservation instead of appending a second record: the
+       * reservation already owns this attempt's delivery slot, and leaving it
+       * open would have spool recovery mint a spurious `outcome_unknown` for a
+       * command whose real outcome is right here (cinatra#2266 G1).
+       */
+      reservation?: ExecutionAuditReservation;
     },
   ): Promise<ExecResult> {
-    await this.audit(job, command, {
+    const record = this.buildAuditRecord(job, seq, command, {
       decision: "refused",
       reason,
       // No signed policy yet (a pre-voucher refusal) ⇒ fall back to the resolver
@@ -1233,22 +1435,33 @@ export class ExecutionBroker {
       policy: policy ?? this.resolvePolicyForAudit(job),
       ...(voucherDetail ?? {}),
     });
+    if (voucherDetail?.reservation) await voucherDetail.reservation.commit(record);
+    else await this.opts.auditSink(record);
     return { ok: false, reason, message };
   }
 
   private async audit(
     job: BrokerJob,
+    seq: number,
     command: string,
-    detail: {
-      decision: "executed" | "refused";
-      reason?: string;
-      result?: SandboxCommandResult;
-      policy: EgressPolicy;
-      commandId?: string;
-      voucherRejection?: string;
-      egressClamped?: readonly EgressClampAxis[];
-    },
+    detail: AuditRecordDetail,
   ): Promise<void> {
+    await this.opts.auditSink(this.buildAuditRecord(job, seq, command, detail));
+  }
+
+  /**
+   * Build one attempt's audit record. Split out from the emit so the PREPARED
+   * record a pre-dispatch reservation carries is built by exactly the same code
+   * as the terminal one it is later upgraded to (cinatra#2266 G1) — two
+   * builders would drift, and the reservation is the record an investigation
+   * reads when the broker died mid-command.
+   */
+  private buildAuditRecord(
+    job: BrokerJob,
+    seq: number,
+    command: string,
+    detail: AuditRecordDetail,
+  ): ExecutionAuditRecord {
     const record: ExecutionAuditRecord = {
       jobId: job.jobId,
       orgId: job.session.orgId,
@@ -1265,6 +1478,7 @@ export class ExecutionBroker {
       // projection.
       command,
       cwd: SANDBOX_WORKSPACE_DIR,
+      seq,
       decision: detail.decision,
       ...(detail.reason ? { reason: detail.reason } : {}),
       ...(detail.commandId ? { commandId: detail.commandId } : {}),
@@ -1277,14 +1491,40 @@ export class ExecutionBroker {
         ? {
             exitCode: detail.result.exitCode,
             termination: detail.result.termination,
-            imageDigest: detail.result.imageDigest,
+            imageDigest: boundAuditText(
+              detail.result.imageDigest,
+              MAX_AUDITED_IMAGE_DIGEST_CHARS,
+              NOT_DIGEST_CHARS,
+            ),
             wallMs: detail.result.wallMs,
             workspaceKb: detail.result.workspaceKb,
             ...(detail.result.egress
               ? {
-                  egressDestinations: detail.result.egress.destinations.map(
-                    (d) => ({ host: d.host, port: d.port, allowed: d.allowed }),
-                  ),
+                  // BOUNDED (cinatra#2266, Codex round 2 — adopted). This list
+                  // is one entry per host the sandbox contacted, so it is
+                  // bounded only by what a command chose to do. That was fine
+                  // while the record lived in a ring buffer; it is not fine now
+                  // that the record's TERMINAL form has to fit inside capacity
+                  // reserved before the command ran — an unbounded list makes
+                  // the reservation's headroom unsound and lets one chatty
+                  // command push the spool past its byte bound.
+                  //
+                  // The count is never hidden: `egressDestinationsTotal` always
+                  // carries the true number, and `egressTotalBytes` is
+                  // unaffected, so an egress investigation sees that it is
+                  // looking at a sample and how large the sample is of.
+                  egressDestinations: detail.result.egress.destinations
+                    .slice(0, MAX_AUDITED_EGRESS_DESTINATIONS)
+                    .map((d) => ({
+                      host: boundAuditText(
+                        d.host,
+                        MAX_AUDITED_EGRESS_HOST_CHARS,
+                        NOT_HOST_CHARS,
+                      ),
+                      port: d.port,
+                      allowed: d.allowed,
+                    })),
+                  egressDestinationsTotal: detail.result.egress.destinations.length,
                   egressTotalBytes: detail.result.egress.totalBytes,
                 }
               : {}),
@@ -1296,6 +1536,6 @@ export class ExecutionBroker {
       },
       atMs: this.opts.nowMs?.() ?? Date.now(),
     };
-    await this.opts.auditSink(record);
+    return record;
   }
 }

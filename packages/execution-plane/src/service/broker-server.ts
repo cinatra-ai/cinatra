@@ -16,11 +16,15 @@
  *    a model-authored command. (Durability of that ledger is a binding — see
  *    that module's header; the default is process-local.)
  *
- *  - AN AUDIT RELAY. A remote broker holds no authz kernel and no stdio store,
- *    so it BUFFERS `ExecutionAuditRecord`s and stdio entries in bounded ring
- *    buffers and the app pulls them with `drainAudit`. The sinks stay the app's
- *    (`toAuthzAuditEventInput` → the kernel); the broker never grows a second
- *    audit implementation. Overflow is COUNTED and reported, never silent.
+ *  - AN AUDIT RELAY. A remote broker holds no authz kernel and no stdio store.
+ *    Since cinatra#2266 slice 2 the two halves are handled differently on
+ *    purpose: AUDIT records go to a DURABLE, ACK-ed spool on the broker's own
+ *    volume (`audit-spool.ts`) — read non-destructively, removed only after the
+ *    app confirms a durable kernel write, and never dropped for capacity
+ *    (a full spool refuses the command's pre-dispatch reservation instead) —
+ *    while STDIO stays a bounded, explicitly lossy ring buffer whose drops are
+ *    COUNTED and reported. The sinks stay the app's (`toAuthzAuditEventInput`
+ *    → the kernel); the broker never grows a second audit implementation.
  *
  *  - TWO INDEPENDENT FACTORS. mTLS role identity AND the pre-existing
  *    `verifyServiceToken`. Both, on every request (see `rpc-transport.ts`).
@@ -36,11 +40,13 @@ import type { ResolvedEnvironmentMount } from "../environment/mount";
 import type {
   ExecResult,
   ExecutionAuditRecord,
+  ExecutionAuditReserver,
   ExecutionAuditSink,
   ExecutionStdioSink,
   OpenJobResult,
   StagedSkillInput,
 } from "../types";
+import type { AuditSpool, AuditSpoolAckResult } from "./audit-spool";
 import {
   createInMemoryCommandLedger,
   type CommandLedger,
@@ -51,6 +57,8 @@ import {
   execErrorResponse,
   execOkResponse,
   parseBrokerRequest,
+  type AckAuditPayload,
+  type AckAuditResultPayload,
   type BrokerRequest,
   type DrainAuditPayload,
   type DrainAuditResultPayload,
@@ -96,44 +104,66 @@ export type BrokerServiceBroker = {
 // Audit relay
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_AUDIT_RELAY_MAX_RECORDS = 4096;
 export const DEFAULT_AUDIT_RELAY_MAX_STDIO = 1024;
 
 export type ExecAuditRelay = {
   /** Pass to `ExecutionBrokerOptions.auditSink`. */
   auditSink: ExecutionAuditSink;
+  /** Pass to `ExecutionBrokerOptions.auditReserver` (cinatra#2266 G1). */
+  auditReserver: ExecutionAuditReserver;
   /** Pass to `ExecutionBrokerOptions.stdioSink`. */
   stdioSink: ExecutionStdioSink;
-  /** Remove and return buffered records; resets the drop counters. */
-  drain(limits?: DrainAuditPayload): DrainAuditResultPayload;
+  /** READ the un-acknowledged prefix. Non-destructive: repeat it and the head
+   *  is the same. Nothing leaves the spool until `ack`. */
+  read(limits?: DrainAuditPayload): DrainAuditResultPayload;
+  /** Commit an exact prefix the app has durably written. */
+  ack(payload: AckAuditPayload): Promise<AuditSpoolAckResult>;
+  /** The spool behind this relay (its id/durability ride every read). */
+  readonly spool: AuditSpool;
 };
 
 /**
- * Bounded buffers between a REMOTE broker's sinks and the app that owns them.
+ * The relay between a REMOTE broker's sinks and the app that owns them.
  *
- * Overflow policy: drop the OLDEST and COUNT it. An unbounded buffer would turn
- * an app that stops draining into an OOM on the broker — a worse failure than a
- * reported gap — and a silent drop would be an audit lie. `droppedAudit` /
- * `droppedStdio` ride the drain response so the app can log the gap explicitly.
+ * WHAT CHANGED IN cinatra#2266 SLICE 2, and why the two halves are no longer
+ * symmetric:
+ *
+ *  - AUDIT records go to a DURABLE SPOOL (`audit-spool.ts`) on the broker's own
+ *    volume, are read non-destructively and leave only on an ACK. There is no
+ *    audit ring buffer any more and no `audit.shift()` overflow: an audit
+ *    record is never dropped to make room, because the spool refuses the
+ *    command's PRE-DISPATCH RESERVATION instead. "Cannot store this" now
+ *    refuses the execution rather than discarding the record and running it.
+ *
+ *  - STDIO stays a bounded in-memory ring buffer with the pre-existing
+ *    drop-the-oldest-and-COUNT policy, and it is DESTRUCTIVELY drained. That
+ *    is deliberate and stated rather than implied (cinatra#2266 AC9 owns the
+ *    full separation): stdout/stderr is observability, it is unbounded in a way
+ *    an audit record is not, and giving it the spool's fail-closed backpressure
+ *    would let a chatty command refuse an authorized one. The two now have
+ *    genuinely separate buffers, bounds and delivery semantics — which is the
+ *    property that was missing when they shared one drain.
  */
-export function createBufferedAuditRelay(opts?: {
-  maxAuditRecords?: number;
+export function createAuditRelay(opts: {
+  spool: AuditSpool;
   maxStdioEntries?: number;
 }): ExecAuditRelay {
-  const maxAudit = opts?.maxAuditRecords ?? DEFAULT_AUDIT_RELAY_MAX_RECORDS;
-  const maxStdio = opts?.maxStdioEntries ?? DEFAULT_AUDIT_RELAY_MAX_STDIO;
-  const audit: ExecutionAuditRecord[] = [];
+  const maxStdio = opts.maxStdioEntries ?? DEFAULT_AUDIT_RELAY_MAX_STDIO;
+  const spool = opts.spool;
   const stdio: ExecutionStdioEntry[] = [];
-  let droppedAudit = 0;
   let droppedStdio = 0;
 
   return {
-    auditSink: (record: ExecutionAuditRecord): void => {
-      audit.push(record);
-      while (audit.length > maxAudit) {
-        audit.shift();
-        droppedAudit += 1;
-      }
+    spool,
+    auditSink: async (record: ExecutionAuditRecord): Promise<void> => {
+      await spool.append(record);
+    },
+    auditReserver: async (prepared: ExecutionAuditRecord) => {
+      const reservation = await spool.reserve(prepared);
+      return {
+        deliveryKey: reservation.deliveryKey,
+        commit: (record: ExecutionAuditRecord) => reservation.commit(record),
+      };
     },
     stdioSink: (entry: ExecutionStdioEntry): void => {
       stdio.push(entry);
@@ -142,22 +172,31 @@ export function createBufferedAuditRelay(opts?: {
         droppedStdio += 1;
       }
     },
-    drain: (limits?: DrainAuditPayload): DrainAuditResultPayload => {
-      const auditTake = limits?.maxAuditRecords ?? audit.length;
+    read: (limits?: DrainAuditPayload): DrainAuditResultPayload => {
+      const batch = spool.read(limits?.maxAuditRecords);
       const stdioTake = limits?.maxStdioEntries ?? stdio.length;
-      const takenAudit = audit.splice(0, auditTake);
       const takenStdio = stdio.splice(0, stdioTake);
+      const stats = spool.stats();
       const result: DrainAuditResultPayload = {
-        audit: takenAudit,
+        audit: batch.entries,
         stdio: takenStdio,
-        droppedAudit,
+        head: batch.head,
+        spoolId: spool.spoolId,
+        remaining: batch.remaining,
+        durable: spool.durable,
+        refusedReservations: stats.refusedReservations,
+        recoveredUnknown: stats.recoveredUnknown,
+        // Audit records are never dropped for capacity any more; the field
+        // stays on the wire (and stays 0) so a reader that checks it keeps
+        // working and a future producer of a real gap has somewhere to say so.
+        droppedAudit: 0,
         droppedStdio,
         relayed: true,
       };
-      droppedAudit = 0;
       droppedStdio = 0;
       return result;
     },
+    ack: (payload: AckAuditPayload) => spool.ack(payload),
   };
 }
 
@@ -177,7 +216,8 @@ export type BrokerServiceConfig = {
   /**
    * The audit relay whose sinks were handed to the broker. Omit for an
    * in-process placement whose sinks already reach the app — `drainAudit` then
-   * answers honestly with `relayed: false` instead of a misleading empty batch.
+   * answers honestly with `relayed: false` instead of a misleading empty batch,
+   * and `ackAudit` refuses instead of confirming a commit that never happened.
    */
   relay?: ExecAuditRelay;
   /** Idempotency ledger; defaults to the process-local one. */
@@ -348,6 +388,12 @@ export function createBrokerDispatch(
           const empty: DrainAuditResultPayload = {
             audit: [],
             stdio: [],
+            head: 0,
+            spoolId: "",
+            remaining: 0,
+            durable: false,
+            refusedReservations: 0,
+            recoveredUnknown: 0,
             droppedAudit: 0,
             droppedStdio: 0,
             relayed: false,
@@ -356,8 +402,40 @@ export function createBrokerDispatch(
         }
         return {
           status: 200,
-          body: execOkResponse(config.relay.drain(request.payload)),
+          body: execOkResponse(config.relay.read(request.payload)),
         };
+      }
+      case "ackAudit": {
+        if (!config.relay) {
+          // Nothing here spools, so nothing here can be acknowledged. Refused
+          // rather than answered with a cheerful `acked: true`, which would
+          // tell an app its records are committed somewhere they never were.
+          return {
+            status: EXEC_ERROR_STATUS.audit_ack_refused,
+            body: execErrorResponse(
+              "audit_ack_refused",
+              "This broker was composed without an audit relay, so it holds no spool to " +
+                "acknowledge (an in-process placement's sinks already reach the app).",
+            ),
+          };
+        }
+        const outcome = await config.relay.ack(request.payload);
+        if (!outcome.ok) {
+          return {
+            status: EXEC_ERROR_STATUS.audit_ack_refused,
+            body: execErrorResponse(
+              "audit_ack_refused",
+              `${outcome.reason}: ${outcome.message}`,
+            ),
+          };
+        }
+        const result: AckAuditResultPayload = {
+          acked: true,
+          head: outcome.head,
+          removed: outcome.removed,
+          remaining: outcome.remaining,
+        };
+        return { status: 200, body: execOkResponse(result) };
       }
       case "health": {
         const composite = config.composite

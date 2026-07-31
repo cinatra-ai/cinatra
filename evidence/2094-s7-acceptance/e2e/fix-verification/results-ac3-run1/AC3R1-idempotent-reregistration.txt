@@ -1,0 +1,46 @@
+cinatra#2274 AC5 — IDEMPOTENT under re-registration (measured across three passes)
+
+AC5 asks that a second registration pass does not regress a head back to a
+bundle of one and does not churn a fresh revision per boot. Three passes ran
+against ONE database in this lane, each reaching the registration writer:
+
+  pass 1  dev boot          — src/lib/extensions-dev-watcher.ts skill-walk scan
+  pass 2  next start boot   — the production server's own boot registration
+                              (its log lines are quoted below)
+  pass 3  chat turns        — packages/skills/src/extension-skill-resolver.ts via
+                              ensureAssistantSkillsRegistered on every native-MCP turn
+
+Row counts after each pass:
+  after pass 1 : revisions=28 files=52 heads=28 skills=28
+  after pass 2 : revisions=28 files=52 heads=28 skills=28
+  after pass 3 : revisions=28 files=52 heads=28 skills=28
+
+ZERO new revisions, ZERO new manifest rows, ZERO head churn across all three.
+52 = 22 single-file bundles + (8+6+5+4+4+3) for the six multi-file bundles.
+
+Head revision ids are unchanged and none is derived (`bundle:` prefix):
+0|28
+  (derived / total)
+
+Production-boot registration lines, verbatim (pass 2 reaching the writer):
+[cinatra:extensions:skill] @cinatra-ai/automation-authoring-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/blog-content-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/blog-idea-authoring-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/blog-idea-matcher-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/blog-image-matcher-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/blog-post-matcher-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/blog-writing-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/brand-voice-matcher-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/chat-assistant-core-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/company-research-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/competitive-analysis-matcher-skill v<x.y.z> — 1 SKILL.md registered
+[cinatra:extensions:skill] @cinatra-ai/contract-matcher-skill v<x.y.z> — 1 SKILL.md registered
+  ... (27 such lines in the production boot)
+  (each package's version token is redacted as v<x.y.z> — the source-leak-gate's
+   SLG_MILESTONE_VERSION rule blocks a bare v<major>.<minor> on a net-new line, and
+   the version is not load-bearing here: the line's evidence is that the PRODUCTION
+   boot reached the registration writer for that package)
+
+SCOPE. This measures the three passes this lane actually drove. The
+`llm-bridge` route call site and `syncInstalledSkillsToDatabase` were NOT
+exercised, and nothing here is claimed about them.

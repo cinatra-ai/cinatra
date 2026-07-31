@@ -1,0 +1,79 @@
+cinatra#2274 AC3 — public MCP ingress, configured and EXERCISED
+
+PRE-RUN tailscale serve state (captured before anything was changed):
+{
+  "TCP": {
+    "443": {
+      "HTTPS": true
+    }
+  },
+  "Web": {
+    "<lane-funnel-origin>:443": {
+      "Handlers": {
+        "/": {
+          "Proxy": "http://127.0.0.1:3000"
+        }
+      }
+    }
+  },
+  "AllowFunnel": {
+    "<lane-funnel-origin>:443": true
+  }
+}
+
+DURING-RUN state (the SAME standard :443 origin; ONE handler added,
+path-scoped to /api/mcp; the pre-existing '/' handler left byte-identical):
+{
+  "TCP": {
+    "443": {
+      "HTTPS": true
+    }
+  },
+  "Web": {
+    "<lane-funnel-origin>:443": {
+      "Handlers": {
+        "/": {
+          "Proxy": "http://127.0.0.1:3000"
+        },
+        "/api/mcp": {
+          "Proxy": "http://127.0.0.1:3289/api/mcp"
+        }
+      }
+    }
+  },
+  "AllowFunnel": {
+    "<lane-funnel-origin>:443": true
+  }
+}
+
+Public reachability, measured from the internet-facing origin:
+  HEAD https://<lane-funnel-origin>/api/mcp -> 405
+  POST https://<lane-funnel-origin>/api/mcp -> 401 {"error":"unauthorized","message":"Authentication is required to access the Cinatra MCP server."}
+  => the request reaches the CINATRA MCP transport, not a proxy error page.
+
+connector_config:mcp_server.publicBaseUrl was written BEFORE the server booted,
+so no cached null could survive into the run (getMcpPublicBaseUrl() is read at
+module eval by src/lib/auth.ts).
+
+MEASURED — '[mcp-run-ctx] served-by=' is emitted once per request SERVED by the
+MCP transport. Counted from the production server log:
+  before the AC3c assistant run : 6
+  after  the AC3c assistant run : 12
+  delta for ONE completed turn  : 6
+
+CONTROL that the prior round did not have — an UNAUTHENTICATED probe does NOT
+increment the counter. Measured immediately before the AC3c run:
+  2 x public HEAD  -> served-by delta 0
+  1 x public POST  -> served-by delta 0
+So all 12 counted requests are AUTHENTICATED MCP calls. The only party holding
+this instance's actor token besides the instance itself is the hosted-MCP relay
+the turn handed the public URL to.
+
+STILL AN INFERENCE, stated as one: no per-request access log was captured, so
+the attribution of those 6 to Anthropic's relay rests on (a) the public origin
+being the only MCP URL any provider was given, (b) unauthenticated traffic
+provably not counting, and (c) the delta landing exactly on the one turn that
+carried an mcp_toolset. It is not a recorded request identity.
+
+TEARDOWN: the /api/mcp handler was removed and 'tailscale serve status --json'
+diffed against the pre-run capture — see AC3-mcp-ingress-teardown.txt.

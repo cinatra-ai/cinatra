@@ -14,7 +14,7 @@ import {
   projectInstancesSchemaQueries,
   widgetStreamMetadataGrantSchemaQueries,
 } from "@/lib/extension-grant-schema";
-import { assistantThreadSchemaQueries, assistantHandleSchemaQueries } from "@/lib/assistant-thread-schema";
+import { assistantThreadSchemaQueries, assistantHandleSchemaQueries, assistantTurnSkillDeliverySchemaQueries } from "@/lib/assistant-thread-schema"; // + cinatra#2240 per-turn skill-delivery record (same pure-strings leaf as its FK parent)
 import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema";
@@ -27,6 +27,7 @@ import {
 } from "@/lib/artifact-claim-schema";
 import { publicationOperationLedgerSchemaQueries } from "@/lib/artifacts/publication-operation-schema";
 import { environmentLayerStoreSchemaQueries, agentExecutionConfigSchemaQueries } from "@/lib/execution/environment-layer-schema";
+import { auditEventsSchemaQueries } from "@/lib/authz/audit-events-schema";
 import { auditorSnapshotSchemaQueries } from "@/lib/auditor-snapshot-schema";
 import { artifactReviewGateSchemaQueries, lifecycleInterceptionsSchemaQueries, lifecycleRepairSchemaQueries } from "@/lib/artifacts/artifact-review-gate-schema";
 import { graphitiProjectionPolicySchemaQueries } from "@/lib/graphiti-projection-policy-schema";
@@ -888,7 +889,7 @@ $body$` },
     // Idempotent (singleton PK). Not a chat_threads write, so the fence never
     // blocks it.
     { text: `INSERT INTO "${schemaName.replaceAll('"', '""')}"."assistant_cutover_marker" (id) VALUES (true) ON CONFLICT (id) DO NOTHING` },
-    ...assistantThreadSchemaQueries(schemaName), // structured assistant threads + turns (cinatra#1037 P2a), additive
+    ...assistantThreadSchemaQueries(schemaName), ...assistantTurnSkillDeliverySchemaQueries(schemaName), // structured assistant threads + turns (cinatra#1037 P2a), additive; + the per-turn skill-delivery record (cinatra#2240, FK -> assistant_turns so it MUST follow), additive bootstrap DDL, no numbered migration
     ...assistantHandleSchemaQueries(schemaName), // assistant handle registry (cinatra#1037 P1.2/P5.1) + origin/package_name (#1874 W1), additive — mirrors core__0046/0065
     ...assistantRegistrySchemaQueries(schemaName), // assistant audience + tag-alias registry (cinatra#1874 W1), additive — mirrors core__0065
     ...assistantPauseSchemaQueries(schemaName), // installation-wide assistant pause, principal-keyed (cinatra#1880 W5), additive — mirrors core__0076
@@ -1124,69 +1125,15 @@ END $$`,
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_template_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (template_id)` },
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_status_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (status)` },
     // planned_actions and review_tasks tables are absent; synthetic IDs are used.
-    // audit_events for @cinatra/authz: structured authorization audit log.
-    // Full authorization-audit column set, all fields nullable except id (PK) and created_at.
-    // Replaces the legacy HITL audit_events shape; the review_task_id
-    // surface was retired. Drop block above (line ~135) handles legacy reset.
-    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."audit_events" (
-      id text PRIMARY KEY,
-      organization_id text,
-      actor_principal_id text,
-      actor_principal_type text,
-      auth_source text,
-      delegated_by text,
-      impersonated_user_id text,
-      resource_type text,
-      resource_id text,
-      operation text,
-      decision text,
-      policy_version text,
-      request_id text,
-      run_id text,
-      a2a_task_id text,
-      ip text,
-      metadata jsonb,
-      created_at timestamptz NOT NULL DEFAULT now()
-    )` },
-    // Forward migration: upgrade legacy audit_events schemas that have the
-    // legacy (review_task_id, actor_id, event_type, payload) HITL shape. The new
-    // structured columns are ADDED idempotently; legacy columns are kept (NULL on
-    // new rows) to avoid data loss for any historical HITL audit entries.
-    { text: `DO $$ BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_schema = '${schemaName.replaceAll("'", "''")}' AND table_name = 'audit_events' AND column_name = 'actor_principal_id'
-  ) THEN
-    ALTER TABLE "${schemaName.replaceAll('"', '""')}"."audit_events"
-      ADD COLUMN IF NOT EXISTS organization_id text,
-      ADD COLUMN IF NOT EXISTS actor_principal_id text,
-      ADD COLUMN IF NOT EXISTS actor_principal_type text,
-      ADD COLUMN IF NOT EXISTS auth_source text,
-      ADD COLUMN IF NOT EXISTS delegated_by text,
-      ADD COLUMN IF NOT EXISTS impersonated_user_id text,
-      ADD COLUMN IF NOT EXISTS resource_type text,
-      ADD COLUMN IF NOT EXISTS resource_id text,
-      ADD COLUMN IF NOT EXISTS operation text,
-      ADD COLUMN IF NOT EXISTS decision text,
-      ADD COLUMN IF NOT EXISTS policy_version text,
-      ADD COLUMN IF NOT EXISTS request_id text,
-      ADD COLUMN IF NOT EXISTS run_id text,
-      ADD COLUMN IF NOT EXISTS a2a_task_id text,
-      ADD COLUMN IF NOT EXISTS ip text,
-      ADD COLUMN IF NOT EXISTS metadata jsonb;
-    -- Drop NOT NULL constraints on legacy HITL columns so the structured
-    -- INSERT (which supplies none of these) does not fail on upgraded DBs.
-    ALTER TABLE "${schemaName.replaceAll('"', '""')}"."audit_events"
-      ALTER COLUMN review_task_id DROP NOT NULL,
-      ALTER COLUMN actor_id DROP NOT NULL,
-      ALTER COLUMN event_type DROP NOT NULL;
-  END IF;
-END $$` },
-    // Drop the legacy review_task_id index if present — replaced by the new indexes below.
-    { text: `DROP INDEX IF EXISTS "${schemaName.replaceAll('"', '""')}".audit_events_review_task_id_idx` },
-    { text: `CREATE INDEX IF NOT EXISTS audit_events_actor_principal_id_idx ON "${schemaName.replaceAll('"', '""')}"."audit_events" (actor_principal_id)` },
-    { text: `CREATE INDEX IF NOT EXISTS audit_events_resource_idx ON "${schemaName.replaceAll('"', '""')}"."audit_events" (resource_type, resource_id)` },
-    { text: `CREATE INDEX IF NOT EXISTS audit_events_created_at_idx ON "${schemaName.replaceAll('"', '""')}"."audit_events" (created_at DESC)` },
+    // audit_events for @cinatra/authz: the structured authorization audit log.
+    // DDL in the pure-strings leaf src/lib/authz/audit-events-schema.ts —
+    // extracted from here in cinatra#2266 slice 2, byte-identical plus that
+    // slice's `execution_delivery_key` column + unique index (existing
+    // deployments converge via core__0088). The legacy-HITL upgrade DO-block
+    // rides with it, so an operator-upgraded database still reaches the
+    // structured column set the indexes are built on. Drop block above
+    // (line ~135) handles the legacy reset.
+    ...auditEventsSchemaQueries(schemaName),
     // auditor review companion (cinatra#1625): immutable per-run proposal
     // snapshot + single-use SoD approval receipts. Additive; mirrors core__0058.
     ...auditorSnapshotSchemaQueries(schemaName),

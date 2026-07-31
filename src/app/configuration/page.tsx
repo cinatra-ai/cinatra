@@ -2,10 +2,11 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import {
   Code2,
+  Tag,
   TriangleAlert,
 } from "lucide-react";
 
-import { domainIcons } from "@/components/domain-icons";
+import { domainIcons, type DomainIcon } from "@/components/domain-icons";
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
@@ -18,12 +19,33 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { APP_VERSION } from "@/lib/app-version";
 import { requireAdminSession } from "@/lib/auth-session";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 
 export const metadata: Metadata = { title: "Configuration" };
 
-const administrationSections = [
+/** Public releases index for this app — the Version card's CTA target. */
+const RELEASES_URL = "https://github.com/cinatra-ai/cinatra/releases";
+
+type AdministrationSection = {
+  title: string;
+  description: string;
+  href: string;
+  icon: DomainIcon;
+  links: { label: string; href: string }[];
+  /**
+   * Optional value shown beside the title, for a card whose whole point is a
+   * fact the reader should see WITHOUT navigating (the Version card's release
+   * identifier). Rendered in the app's established version treatment — mono,
+   * muted, small (same as the installed-extension card's version line).
+   */
+  value?: string;
+  /** CTA label; every card defaults to "Manage" — override only where that verb is wrong. */
+  ctaLabel?: string;
+};
+
+const administrationSections: AdministrationSection[] = [
   {
     title: "Environment",
     description: "Runtime mode, instance identity, and registry connections.",
@@ -236,6 +258,24 @@ const administrationSections = [
       { label: "Public base URL", href: "/configuration/development?tab=tunnel" },
     ],
   },
+  {
+    // LAST card by design (cinatra#2260): "which cinatra release am I running?"
+    // is a read, not a control surface — so it closes the grid rather than
+    // pushing an operational card down. `value` puts the answer on the card
+    // itself (no navigation); it is imported from the package manifest, never
+    // restated here, so a version bump can never leave this page stale. There
+    // is no in-app releases page, so the CTA is the public releases index and
+    // is labelled for it ("Manage" would be the wrong verb for a read-only fact).
+    title: "Version",
+    description: "The cinatra release this instance is running.",
+    href: RELEASES_URL,
+    icon: Tag,
+    value: APP_VERSION,
+    ctaLabel: "Releases",
+    links: [
+      { label: "Changelog", href: "https://github.com/cinatra-ai/cinatra/blob/main/CHANGELOG.md" },
+    ],
+  },
 ];
 
 export default async function AdministrationPage() {
@@ -260,12 +300,17 @@ export default async function AdministrationPage() {
                       <section.icon className="size-5" />
                     </div>
                     <CardTitle>{section.title}</CardTitle>
+                    {section.value ? (
+                      <span className="font-mono text-xs text-muted-foreground">
+                        {section.value}
+                      </span>
+                    ) : null}
                   </div>
                   <CardDescription className="leading-6">{section.description}</CardDescription>
                 </div>
                 <CardAction>
                   <Button asChild variant="outline" size="sm">
-                    <Link href={section.href}>Manage</Link>
+                    <Link href={section.href}>{section.ctaLabel ?? "Manage"}</Link>
                   </Button>
                 </CardAction>
               </CardHeader>

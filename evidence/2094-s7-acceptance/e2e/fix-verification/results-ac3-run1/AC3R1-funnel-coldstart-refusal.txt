@@ -1,0 +1,40 @@
+cinatra#2274 AC3 — the assistant-run attempt that FAILED, and exactly why
+
+Between the two answered turns this lane drove a THIRD assistant run
+(phase AC3b) which failed 3/3 with ZERO provider calls. It is recorded here
+rather than dropped, because a reader must be able to see it and judge it.
+
+It is NOT a skill-delivery failure and NOT AnthropicSkillNotSyncedError.
+The production server refused the turn BEFORE any provider call, with the
+cinatra#1699 ingress-reachability guard, verbatim from the server log:
+
+[assistant-runtime] public MCP URL https://<lane-funnel-origin>/api/mcp is unreachable (no response within 2500ms) — refusing to run the turn without Cinatra tools (#1699)
+[assistant-runtime] public MCP URL https://<lane-funnel-origin>/api/mcp is unreachable (no response within 2500ms) — refusing to run the turn without Cinatra tools (#1699)
+[assistant-runtime] public MCP URL https://<lane-funnel-origin>/api/mcp is unreachable (no response within 2500ms) — refusing to run the turn without Cinatra tools (#1699)
+
+MECHANISM, measured. packages/llm/src/mcp-access.ts probes the public MCP URL
+with a HEAD under a 2500ms timeout (MCP_REACHABILITY_TIMEOUT_MS). This lane's
+Tailscale Funnel path has a COLD-START penalty well past that budget:
+
+  HEAD 1 (cold)  : 405 in 6.514s   <- past the 2500ms guard
+  HEAD 2 (warm)  : 405 in 0.544s
+  HEAD 3 (warm)  : 405 in 0.272s
+  HEAD 4 (after 20s idle) : 405 in 0.802s
+  HEAD 5 (warm)  : 405 in 0.320s
+
+The driver's attempts are minutes apart, so each one re-paid the cold start.
+Warming the path with three UNAUTHENTICATED HEADs immediately before the run
+(proven above not to touch any counted state) made the turn complete on
+attempt 1 — that is the AC3c run in AC3-anthropic-assistant-run.json.
+
+SCOPE, stated exactly: this is a property of THIS LANE'S public ingress path,
+not of the code under change, and the product's behaviour under it is CORRECT
+(it refuses loudly rather than answering as a tool-less assistant). Nothing
+here claims the guard's 2500ms budget is right or wrong for a real deployment.
+
+ARTIFACT STATUS: the AC3b run's own results JSON was OVERWRITTEN by the AC3c
+run (the committed driver writes to a fixed LANE_RESULTS path). Its verdicts
+are therefore reported as OBSERVED, not artifact-backed: R1-R6 FAIL, R8 PASS,
+3/3 attempts 'error' with 0 provider message calls. What IS artifact-backed is
+the server-log refusal above and the three screenshots
+screenshots-ac3/AC3b-A-attempt-{1,2,3}-error.png.

@@ -474,6 +474,47 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     cascadeOwnership: "app-furniture",
     importBanned: false,
   },
+  // cinatra#1942 V5 (archive program S6): the REAL archive/unarchive
+  // transaction — guardOrgLifecycleMutation's SECOND consumer (delete is the
+  // first), replacing the #1937 S1 refusing stub. Both rows banned from day
+  // one (the wave-3 default posture for a NEW writer): the danger-zone server
+  // actions are the sole sanctioned production callers.
+  {
+    module: "src/lib/organization-archive.ts",
+    exportName: "archiveOrganization",
+    capability: "org.lifecycle",
+    orgIdExtractor: "explicit orgId argument (owner re-verified in-tx)",
+    // organization (archivedAt + archiveEpoch), org_archive_lease (the
+    // in-fence snapshot; reads agent_runs via the kernel's live-attempt
+    // predicate), session (activeOrganizationId + activeTeamId → NULL).
+    // Deliberately NO run writes (owner-ruled total freeze —
+    // parked runs drain via unarchive, never a special-case write path).
+    storageReferences: [
+      "organization",
+      "org_archive_lease",
+      "agent_runs",
+      "session",
+    ],
+    cascadeOwnership: "app-furniture",
+    importBanned: true,
+    allowedImporters: [
+      "packages/dashboards/src/screens/organization-manage-actions.ts",
+    ],
+  },
+  {
+    module: "src/lib/organization-archive.ts",
+    exportName: "unarchiveOrganization",
+    capability: "org.lifecycle",
+    orgIdExtractor: "explicit orgId argument (owner re-verified in-tx)",
+    // organization (archivedAt=NULL + epoch bump), org_archive_lease
+    // (superseded-epoch invalidation). Sessions untouched by design.
+    storageReferences: ["organization", "org_archive_lease"],
+    cascadeOwnership: "app-furniture",
+    importBanned: true,
+    allowedImporters: [
+      "packages/dashboards/src/screens/organization-manage-actions.ts",
+    ],
+  },
 
   // — better-auth org furniture (public schema; real FK cascades) —
   {
@@ -1179,9 +1220,37 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     // harness cannot drift from the real archive tx's lease bookkeeping. The
     // /testing subpath itself is R1-fenced to test files, so this widens the
     // ban to one kernel-internal, test-only consumer — not to production code.
+    // cinatra#1942 V5: organization-archive.ts is the REAL archive
+    // transaction — the production consumer this shape was minted for (its
+    // in-fence snapshot executes the query verbatim, Decision 2b).
     allowedImporters: [
       "packages/org-write-kernel/src/index.ts",
       "packages/org-write-kernel/src/testing.ts",
+      "src/lib/organization-archive.ts",
+    ],
+  },
+  {
+    // cinatra#1942 V5: the unarchive half of the archive-transition lease
+    // bookkeeping — every lease of a superseded epoch dies with the epoch.
+    // A write-capable, independently-exported SQL builder touching
+    // `org_archive_lease`, previously consumed only by the kernel's own
+    // test harness (simulateArchiveTransition) and therefore unregistered;
+    // registered now that `unarchiveOrganization` is its first production
+    // caller (per-function registry discipline, the
+    // `incrementLeaseFinalizeAttemptsQuery` precedent). Same allowlist shape
+    // as its `snapshotLeasesQuery` sibling above: the kernel's index.ts
+    // barrel re-export IS an import edge the boundary gate tracks.
+    module: "packages/org-write-kernel/src/leases.ts",
+    exportName: "invalidateLeasesBeforeEpochQuery",
+    capability: "org.lifecycle",
+    orgIdExtractor: "explicit input.orgId (archive transaction only)",
+    storageReferences: ["org_archive_lease"],
+    cascadeOwnership: "app-furniture",
+    importBanned: true,
+    allowedImporters: [
+      "packages/org-write-kernel/src/index.ts",
+      "packages/org-write-kernel/src/testing.ts",
+      "src/lib/organization-archive.ts",
     ],
   },
   {

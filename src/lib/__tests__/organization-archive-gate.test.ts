@@ -1,8 +1,9 @@
-// cinatra#1937 (archive S1) — the default-OFF activation gate + refusing
-// archive stub. Pins: fail-CLOSED gate reads (error/absent/non-true → OFF —
-// the deliberate inversion of the fail-open instance-mode toggles), the stub
-// refusing with `activation-gate-off` while off, and refusing as
-// `not-implemented` even when the gate is on (no S1 code path archives).
+// cinatra#1937 (archive S1) — the default-OFF activation gate. Pins:
+// fail-CLOSED gate reads (error/absent/non-true → OFF — the deliberate
+// inversion of the fail-open instance-mode toggles) and the archive entry
+// point refusing with `activation-gate-off` while off, BEFORE anything else
+// runs (the stub's invariant, preserved verbatim by the real V5 transaction —
+// whose own six-cell/wire-shape suite is organization-archive-tx.test.ts).
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
@@ -12,6 +13,21 @@ const readConnectorConfigFromDatabase = vi.fn();
 vi.mock("@/lib/database", () => ({
   readConnectorConfigFromDatabase: (...a: unknown[]) =>
     readConnectorConfigFromDatabase(...a),
+}));
+
+// The V5 transaction's other collaborators — mocked inert so THIS file stays
+// the gate's own unit tier (none of these is ever reached while the gate is
+// off; organization-archive-tx.test.ts drives them for real).
+vi.mock("@/lib/auth-session", () => ({
+  resolveOrgRoleForUser: vi.fn(),
+}));
+vi.mock("@/lib/authz/instance-mode", () => ({
+  isSingleOrgMode: vi.fn(),
+  readSingleOrgModeStrict: vi.fn(),
+}));
+vi.mock("@/lib/better-auth-db", () => ({
+  betterAuthOrganizations: {},
+  betterAuthDb: {},
 }));
 
 import {
@@ -53,8 +69,8 @@ describe("isArchiveActivationEnabled — fail-closed gate", () => {
   });
 });
 
-describe("archiveOrganization — S1 refusing stub", () => {
-  it("refuses with activation-gate-off while the gate is off", async () => {
+describe("archiveOrganization — the gate check stays FIRST (stub invariant, kept by V5)", () => {
+  it("refuses with activation-gate-off while the gate is off — before ANY other read runs", async () => {
     readConnectorConfigFromDatabase.mockReturnValue(null);
     await expect(archiveOrganization("org_1", "user_1")).resolves.toEqual({
       ok: false,
@@ -62,11 +78,11 @@ describe("archiveOrganization — S1 refusing stub", () => {
     });
   });
 
-  it("refuses as not-implemented even with the gate on — no S1 path archives", async () => {
-    readConnectorConfigFromDatabase.mockReturnValue({ enabled: true });
-    await expect(archiveOrganization("org_1", "user_1")).resolves.toEqual({
+  it("refuses gate-off regardless of arguments (no code path reaches the transaction)", async () => {
+    readConnectorConfigFromDatabase.mockReturnValue({ enabled: false });
+    await expect(archiveOrganization("", "")).resolves.toEqual({
       ok: false,
-      reason: "not-implemented",
+      reason: "activation-gate-off",
     });
   });
 });

@@ -118,6 +118,40 @@ export async function readCmsSnapshotTargetByArtifact(
   };
 }
 
+/** Read the CMS snapshot target by its artifact id AND its specific snapshot
+ * revision id — a narrowly-scoped variant of `readCmsSnapshotTargetByArtifact`
+ * for a caller (the repair-completion bridge) that already knows which
+ * revision it is trying to match and must not have `.limit(1)` silently hand
+ * it an unrelated row when one artifact carries more than one
+ * `cms_snapshot_targets` row (e.g. re-captured). Null when absent. */
+export async function readCmsSnapshotTargetByArtifactAndRevision(
+  artifactId: string,
+  snapshotRevisionId: string,
+): Promise<CmsSnapshotTargetRow | null> {
+  const [row] = await db
+    .select()
+    .from(cmsSnapshotTargets)
+    .where(
+      and(
+        eq(cmsSnapshotTargets.artifactId, artifactId),
+        eq(cmsSnapshotTargets.snapshotRevisionId, snapshotRevisionId),
+      ),
+    )
+    .limit(1);
+  if (!row) return null;
+  return {
+    id: row.id,
+    artifactId: row.artifactId,
+    snapshotRevisionId: row.snapshotRevisionId,
+    scopeManifest: coerceScopeManifest(row.scopeManifest),
+    connectorInstance: row.connectorInstance,
+    resourceType: row.resourceType,
+    resourceId: row.resourceId ?? null,
+    baseRemoteRevisionRef: row.baseRemoteRevisionRef ?? null,
+    operationId: row.operationId,
+  };
+}
+
 export type RecordCmsApplyVerificationResult =
   | VerificationRecordResult
   | { ok: false; code: "target-not-found"; error: string }

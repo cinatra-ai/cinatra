@@ -57,13 +57,18 @@ import {
   createRemoteSandboxExecutor,
   execServiceUri,
   ExecutionVoucherVerifier,
+  type AckAuditPayload,
+  type AckAuditResultPayload,
   type CommandVoucherMinter,
+  type DrainAuditPayload,
+  type DrainAuditResultPayload,
+  type ExecutionAuditRecord,
 } from "@cinatra-ai/execution-plane";
 import { DEFAULT_CARRIER_TTL_MS } from "@cinatra-ai/llm/execution-plane";
 import type { SandboxExecutor } from "@cinatra-ai/llm";
 
 import {
-  createExecutionAuditSink,
+  createDurableExecutionAuditWriter,
   createRunLivenessProbe,
   createVoucherMintAuditSink,
   egressPolicyFromSettings,
@@ -104,8 +109,157 @@ export const AUDIT_DRAIN_MAX_RECORDS = 512;
  */
 export const AUDIT_DRAIN_MAX_PASSES = 8;
 
+/** Hard ceiling on `maxPasses`, whatever a caller asks for. */
+export const AUDIT_DRAIN_PASS_CEILING = 1_000;
+
+/**
+ * Stdio entries this loop pulls per pass: ZERO, deliberately (cinatra#2266,
+ * the #2258 stdio discard).
+ *
+ * `drainAudit` is DESTRUCTIVE — `drain()` splices what it returns out of the
+ * broker's buffers — and `maxStdioEntries` defaults to "all of it". So a drain
+ * that asked only for audit records still pulled EVERY retained stdout/stderr
+ * entry into `batch.stdio`, and this loop has no stdio consumer to hand them
+ * to: no app-side `ExecutionStdioSink` exists on either placement (the local
+ * placement wires none at all). Retained remote stdio was therefore destroyed
+ * on a 15-second cycle, silently.
+ *
+ * Asking for ZERO is the fix that the surrounding design supports: the entries
+ * stay retained in the broker's own buffer, under the bound that buffer already
+ * declares, until a consumer lands. The alternative — keep pulling and write
+ * them somewhere — has no somewhere to write to, and inventing one here would
+ * put unredacted sandbox output into app logs.
+ *
+ * THE CONSEQUENCE, stated: the broker's stdio buffer now sits at its bound
+ * (`DEFAULT_AUDIT_RELAY_MAX_STDIO` entries, each capped at the per-stream
+ * `maxStdioBytes`) instead of being emptied every interval. That bound is the
+ * relay's own declared overflow contract — "an app that stops draining is
+ * bounded, and the drop is COUNTED" — not a new one, and `droppedStdio` is now
+ * logged below so the loss is visible as a gap rather than a reset counter.
+ * Giving stdio its own delivery and capacity semantics is #2266 AC9's job.
+ */
+export const AUDIT_DRAIN_MAX_STDIO_ENTRIES = 0;
+
 /** The voucher SIGNING key. Required for this placement and no other. */
 export const VOUCHER_SIGNING_KEY_ENV = "EXECUTION_VOUCHER_SIGNING_KEY";
+
+/** The two ops this loop needs; narrowed so a test drives it with a plain object. */
+export type AuditDrainSource = {
+  drainAudit(limits?: DrainAuditPayload): Promise<DrainAuditResultPayload>;
+  ackAudit(payload: AckAuditPayload): Promise<AckAuditResultPayload>;
+};
+
+/** What the loop does with one record. Resolves ⇒ the row is durably in the
+ *  kernel (freshly inserted, or already there under the same delivery key). */
+export type DurableAuditWriter = (
+  record: ExecutionAuditRecord,
+) => Promise<{ state: "inserted" | "duplicate"; id: string }>;
+
+/**
+ * ONE drain — bounded READ → WRITE → ACK passes over the remote broker's
+ * durable audit spool (cinatra#2266 slice 2).
+ *
+ * THE ORDER IS THE WHOLE CONTRACT, and it is the exact inversion of what this
+ * loop used to do. It used to call a DESTRUCTIVE `drainAudit` — the records
+ * were spliced out of the broker's buffers as the response was built — and then
+ * write them, so an app that died partway through the write loop lost the
+ * remainder of a batch that no longer existed anywhere. Now:
+ *
+ *   1. READ. `drainAudit` removes nothing. Repeat it and the same `head` comes
+ *      back, so a crash here loses exactly nothing.
+ *   2. WRITE, one record at a time, IN ORDER, through the strict idempotent
+ *      kernel path. A failure STOPS the pass at that record. Ordering matters
+ *      because the ACK is a prefix: acknowledging past a record that failed
+ *      would delete it.
+ *   3. ACK the head, and ONLY once every record in the batch is durably
+ *      inserted or recognized as a duplicate. That is when the broker is free
+ *      to remove them.
+ *
+ * A re-delivery after a crash is EXPECTED and correct — the spool's delivery
+ * key is what makes it harmless (one kernel row per key, however many times it
+ * arrives). Exported rather than closed over inside the composition so this
+ * posture is testable without mTLS, a handshake and a live broker.
+ */
+export async function drainAuditPasses(
+  source: AuditDrainSource,
+  writeRecord: DurableAuditWriter,
+  opts?: { maxPasses?: number; onGap?: (message: string) => void },
+): Promise<void> {
+  // CLAMPED, not merely defaulted (Codex convergence, adopted). The bound is
+  // the whole point of a pass budget: a caller that passed `Infinity` — or a
+  // fraction, or a negative — would turn a broker producing records faster than
+  // the app can write them into a loop that never yields.
+  const requested = opts?.maxPasses ?? AUDIT_DRAIN_MAX_PASSES;
+  const maxPasses = Number.isFinite(requested)
+    ? Math.max(1, Math.min(Math.floor(requested), AUDIT_DRAIN_PASS_CEILING))
+    : AUDIT_DRAIN_MAX_PASSES;
+  const onGap = opts?.onGap ?? ((message: string) => console.error(message));
+  for (let pass = 0; pass < maxPasses; pass += 1) {
+    const batch = await source.drainAudit({
+      maxAuditRecords: AUDIT_DRAIN_MAX_RECORDS,
+      maxStdioEntries: AUDIT_DRAIN_MAX_STDIO_ENTRIES,
+    });
+    if (!batch.relayed) return;
+    // A NON-DURABLE spool is a real reduction in the guarantee, so it is
+    // reported rather than inferred from a config file nobody reads. The
+    // records are still written and acknowledged — the delivery protocol is
+    // identical — but they do not survive a broker restart.
+    if (!batch.durable) {
+      onGap(
+        "[execution-plane] the remote broker's audit spool is NOT durable " +
+          "(EXEC_AUDIT_SPOOL_DIR=memory-nondurable): buffered records do not survive a broker " +
+          "restart",
+      );
+    }
+    if (batch.recoveredUnknown > 0) {
+      onGap(
+        `[execution-plane] the remote broker recovered ${batch.recoveredUnknown} command(s) as ` +
+          "outcome_unknown — it died between dispatching them and learning how they ended",
+      );
+    }
+    if (batch.refusedReservations > 0) {
+      onGap(
+        `[execution-plane] the remote broker has refused ${batch.refusedReservations} command(s) ` +
+          "because its audit spool could not accept a pre-dispatch reservation (fail-closed: " +
+          "nothing ran)",
+      );
+    }
+    if (batch.droppedAudit > 0) {
+      onGap(
+        `[execution-plane] the remote broker dropped ${batch.droppedAudit} audit record(s) ` +
+          "before this drain — the audit trail has a gap",
+      );
+    }
+    // Stdio is drained destructively and this loop asks for ZERO of it (see
+    // AUDIT_DRAIN_MAX_STDIO_ENTRIES), so its buffer can reach its bound and shed
+    // the oldest — that is exactly the event this reports.
+    if (batch.droppedStdio > 0) {
+      onGap(
+        `[execution-plane] the remote broker dropped ${batch.droppedStdio} retained stdio ` +
+          "entry(ies) — its stdio buffer is at its bound and no consumer drains it",
+      );
+    }
+    if (batch.audit.length === 0) return;
+
+    for (const record of batch.audit) {
+      // NOT wrapped in a try/catch. A write that failed must abort the pass
+      // BEFORE the ACK, or the broker would delete a record the kernel never
+      // took. The caller's own guard turns this into "retry on the next tick",
+      // and the records are still spooled, untouched, on the broker.
+      await writeRecord(record);
+    }
+    await source.ackAudit({ spoolId: batch.spoolId, head: batch.head });
+
+    // `remaining` is the broker's own answer, not an inference from a short
+    // batch: the read is capped, so a full batch does not by itself mean more
+    // is waiting and a short one does not by itself mean the spool is empty.
+    if (batch.remaining === 0) return;
+  }
+  onGap(
+    `[execution-plane] the remote broker still had spooled audit records after ` +
+      `${maxPasses} drain passes — the next drain continues from there`,
+  );
+}
 
 type Env = Record<string, string | undefined>;
 
@@ -282,45 +436,31 @@ async function composeAgainst(
 
   // Header note 2 — the audit pull.
   //
-  // THE DELIVERY POSTURE, stated rather than implied: `drainAudit` REMOVES what
-  // it returns, and the wire has no acknowledgement op, so this is at-most-once
-  // — the same best-effort posture the in-process placement's sink already has
-  // (`logAuditEvent` never throws by contract and the sink swallows). What must
-  // NOT be silent is the GAP, so `droppedAudit` is logged BEFORE the batch is
-  // written: if the process dies mid-batch, the gap was still reported (Codex
-  // convergence, adopted).
+  // THE DELIVERY POSTURE, stated rather than implied: `drainAudit` is a READ
+  // that removes nothing, and `ackAudit` is what commits an exact prefix — so
+  // this is AT-LEAST-ONCE. An app that dies mid-batch re-reads the same records
+  // with the same delivery keys and the kernel's unique delivery key turns the
+  // second write into a recognized duplicate rather than a second row. What
+  // must NOT be silent is a gap, so every gap counter the broker reports is
+  // logged BEFORE the batch is written (Codex convergence, adopted).
   //
   // SINGLE-FLIGHT (Codex convergence, adopted). The interval is a timer, not a
   // scheduler: a drain slower than the interval would otherwise overlap itself,
   // pull two batches concurrently and write them to the kernel interleaved. One
   // tracked promise makes drains strictly sequential and gives `stop()`
   // something to await instead of racing.
-  const auditSink = createExecutionAuditSink();
+  //
+  // The pass loop itself is `drainAuditPasses` above — extracted so the posture
+  // it encodes (what it ASKS the broker for, what it writes, what it reports as
+  // a gap) is testable without mTLS and a live broker. In particular it asks for
+  // ZERO stdio entries, because this side has no stdio consumer to hand them to
+  // and a destructive drain would otherwise delete them (cinatra#2266).
+  const writeRecord = createDurableExecutionAuditWriter();
   let draining: Promise<void> | null = null;
-
-  const drainPasses = async (maxPasses: number): Promise<void> => {
-    for (let pass = 0; pass < maxPasses; pass += 1) {
-      const batch = await client.drainAudit({ maxAuditRecords: AUDIT_DRAIN_MAX_RECORDS });
-      if (batch.droppedAudit > 0) {
-        console.error(
-          `[execution-plane] the remote broker dropped ${batch.droppedAudit} audit record(s) ` +
-            "before this drain — the audit trail has a gap",
-        );
-      }
-      for (const record of batch.audit) await auditSink(record);
-      // A short batch means the buffer is drained; anything else means the
-      // broker had more than one pass' worth and we keep going, bounded.
-      if (batch.audit.length < AUDIT_DRAIN_MAX_RECORDS) return;
-    }
-    console.error(
-      `[execution-plane] the remote broker still had buffered audit records after ` +
-        `${maxPasses} drain passes — the next drain continues from there`,
-    );
-  };
 
   const drainOnce = (maxPasses = AUDIT_DRAIN_MAX_PASSES): Promise<void> => {
     if (draining) return draining;
-    draining = drainPasses(maxPasses).finally(() => {
+    draining = drainAuditPasses(client, writeRecord, { maxPasses }).finally(() => {
       draining = null;
     });
     return draining;

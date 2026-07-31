@@ -239,6 +239,16 @@ import {
   createConfirmationPolicySurfaceMembers,
   type WordPressConfirmationPolicySurface,
 } from "@/lib/connector-instance-confirmation-policy-surface";
+// cinatra#2022 S7 (the PR-λ companion seam) — the org-admin read/write surface
+// over the per-instance tool-policy store, bound onto the `wordpress-mcp`
+// publication below (same S4/S5 structural-member pattern). This is the
+// settings UI's ONLY sanctioned path to the record PR-δ's restricted+empty
+// default flip made load-bearing: the gate lives INSIDE the members; this
+// binder only WIRES the live host deps.
+import {
+  createInstanceToolPolicySurfaceMembers,
+  type WordPressInstanceToolPolicySurface,
+} from "@/lib/connector-instance-tool-policy-surface";
 // cinatra#2020 S5 (PR-3) — the destructive-confirmation hook impl. The surface
 // matrix + park + §7.3 audits live in the sibling module; this binder only
 // BINDS it into the invoker deps literal, derives the host-side
@@ -1282,6 +1292,26 @@ export function registerHostConnectorServices(): void {
       },
       resolveOrgRole: (orgId, userId) => resolveOrgRoleForUser(orgId, userId),
     }),
+    // --- per-instance tool-policy settings surface (cinatra#2022 S7, the
+    // PR-λ companion seam). ADDITIVE host-local members (same precedent as
+    // the consent members above; frozen SDK contract untouched). Reads render
+    // the SAME record the governed invoker's step-2 evaluator enforces
+    // (absent row → the post-δ restricted+empty default, honestly); writes
+    // are shape-validated at the seam and audited by the store
+    // (`policy_update`). This is the site owner's self-service path to
+    // re-select tools after the δ default flip emptied every implicit
+    // allow-list — the settings UI (wordpress-mcp-connector) consumes these
+    // two members structurally.
+    ...createInstanceToolPolicySurfaceMembers({
+      connectorKey: "wordpress",
+      requireSession: () => requireAuthSession(),
+      resolveInstanceOrgId: (instanceId) => {
+        const row = resolveWordPressInstanceAdmin()?.readInstanceById(instanceId) ?? null;
+        if (!row) return null;
+        return typeof row.orgId === "string" && row.orgId.trim() ? row.orgId.trim() : null;
+      },
+      resolveOrgRole: (orgId, userId) => resolveOrgRoleForUser(orgId, userId),
+    }),
     // --- trusted-site native READ-INJECTION builder + preview (cinatra#2019
     // S4 verifier slice). ADDITIVE host-local members (same structural
     // precedent as the consent members above): `buildNativeReadInjection` is
@@ -1344,6 +1374,7 @@ export function registerHostConnectorServices(): void {
   } satisfies HostWordPressMcpServerEnrollmentSurface &
     WordPressNativeInjectionConsentSurface &
     WordPressConfirmationPolicySurface &
+    WordPressInstanceToolPolicySurface &
     WordPressNativeReadInjectionSurface &
     WordPressSiteMetadataSurface);
 

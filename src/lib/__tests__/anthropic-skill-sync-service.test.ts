@@ -72,6 +72,14 @@ type FakeBundle = {
   files: { path: string; digest: string; byteLength: number; mode: number; isRouter: boolean; bytes: Buffer }[];
 };
 const bundleHeads = new Map<string, FakeBundle>();
+// cinatra#2265 gap (b): the store's structured "this skill's lifecycle revision
+// resolves to no durable blob, so its bundle fell back to disk" signal. Keyed by
+// skill id and injected per test; the real detection is proven on a live DB by
+// skill-bundle-store.integration.test.ts.
+const unresolvedLifecycleContentBySkill = new Map<
+  string,
+  { revisionId: string; contentDigest: string | null }
+>();
 const { lintRouterOneHopReferences } = await import(
   "../../../scripts/audit/_lib/skill-packaging-verdict.mjs"
 );
@@ -99,6 +107,7 @@ vi.mock("@/lib/skill-bundle-store", () => ({
       changed,
       authorityOwnedDivergence: false,
       lint: { ok: true, missing: [] },
+      unresolvedLifecycleContent: unresolvedLifecycleContentBySkill.get(skillId) ?? null,
     };
   },
   readCurrentSkillBundleFromDatabase: (skillId: string) => {
@@ -373,6 +382,50 @@ describe("broad recommendable-pool sync", () => {
       expect(candidates[0].bundleDigest).toMatch(/^bundle-/);
     } finally {
       syncLifecycleReader = () => ({ ok: true, states: new Map() });
+    }
+  });
+
+  it("cinatra#2265 gap (b): a DANGLING content_digest reaches captureDiagnostics, named", async () => {
+    // The store declines the pre-S1 re-baseline (there is nothing authoritative
+    // to seed from) and capture records the DISK bundle under a derived head.
+    // That classification is correct and unchanged — but before this it was
+    // SILENT, so an operator could not tell a skill that FELL BACK to disk from
+    // one that was always disk-owned. The report must name the skill, its
+    // revision, and the digest that resolved to no blob.
+    tmpRoot = mkdtempSync(nodePath.join(tmpdir(), "unresolved-digest-"));
+    const mk = (id: string) => {
+      const dir = nodePath.join(tmpRoot, id);
+      mkdirSync(dir, { recursive: true });
+      const p = nodePath.join(dir, "SKILL.md");
+      writeFileSync(p, `# ${id}\nbody`);
+      return p;
+    };
+    vi.mocked(skillsPkg.readSkillsCatalogSnapshot)
+      .mockReset()
+      .mockResolvedValue({
+        skills: [
+          { id: "fell-back", name: "Fell Back", sourcePath: mk("fell-back") },
+          { id: "sound-one", name: "Sound", sourcePath: mk("sound-one") },
+        ],
+      } as never);
+    vi.mocked(skillsPkg.getSkillAnthropicUploadFlag).mockReset().mockReturnValue(true as never);
+    unresolvedLifecycleContentBySkill.set("fell-back", {
+      revisionId: "rev-fell-back",
+      contentDigest: "a".repeat(64),
+    });
+    try {
+      const report = await captureSkillBundlesFromDisk();
+      expect(report.unresolvedLifecycleContent).toEqual([
+        {
+          catalogSkillId: "fell-back",
+          revisionId: "rev-fell-back",
+          contentDigest: "a".repeat(64),
+        },
+      ]);
+      // Specific: a skill whose authority resolves reports nothing.
+      expect(report.unresolvedLifecycleContent.map((u) => u.catalogSkillId)).not.toContain("sound-one");
+    } finally {
+      unresolvedLifecycleContentBySkill.clear();
     }
   });
 

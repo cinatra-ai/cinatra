@@ -48,7 +48,11 @@ export function ReviewPinnedCapture({ pair }: { pair: PinnedCapturePairView | nu
         className="font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground"
         data-capture-pair={pair.kind}
       >
-        {pair.kind === "review" ? "Visual before / after" : "Reviewed / applied"}
+        {pair.kind === "review"
+          ? "Visual before / after"
+          : pair.kind === "repair"
+            ? "Reviewed / repaired"
+            : "Reviewed / applied"}
       </p>
       <div className="grid gap-3 md:grid-cols-2">
         <PinnedCaptureBlock side="left" label={pair.leftLabel} capture={pair.left} />

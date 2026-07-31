@@ -356,8 +356,11 @@ export function resetInternalReadAuthzDropMetric(): void {
 //
 // Automatic agent runContext propagation. Resolution order: explicit
 // `actor.<field>` (set by deterministic in-process callers) wins over the
-// AsyncLocalStorage fallback (populated by the MCP transport handler from
-// X-Cinatra-* headers attached by /api/llm-bridge). Both fall back to null
+// AsyncLocalStorage fallback (populated by the MCP transport handler from the
+// resolved run context — the signed agent-run OBO token or the durable
+// run-token-keyed binding; cinatra#1195 deleted the in-process registry, and a
+// run id claimed only by the caller-controlled `x-cinatra-run-id` header is
+// REFUSED at the transport rather than landing here). Both fall back to null
 // when neither is present so save-paths without an active run continue to work
 // unchanged.
 // ---------------------------------------------------------------------------

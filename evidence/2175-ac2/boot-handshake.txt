@@ -1,0 +1,1 @@
+[execution-broker] local-dev broker wired — handshake completed in 810 ms over image cinatra-sandbox-l0@sha256:a69c6642f8ac1d233beb0b2992d7c3f5249434850319534c63a7d93a809362f1 (egress via cinatra-exec-gateway:3128)

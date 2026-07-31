@@ -46,10 +46,6 @@ vi.mock("@cinatra-ai/llm", () => ({
   },
 }));
 
-vi.mock("@/lib/agent-run-context-registry", () => ({
-  setRunContext: vi.fn(),
-  clearRunContext: vi.fn(),
-}));
 
 vi.mock("@/lib/a2a-auth", () => ({
   verifyLangGraphBridgeToken: vi.fn(async () => ({

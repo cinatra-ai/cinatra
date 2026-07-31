@@ -1,4 +1,5 @@
-# Build and publish the execution-plane images (cinatra#1779; epic #1705).
+# Build and publish the execution-plane images (cinatra#1779 + exec-plane L6;
+# epic #1705).
 #
 # WHAT THIS BUILDS — and, deliberately, what it does NOT:
 #
@@ -12,17 +13,32 @@
 #     gated by the SAME release-approval Environment + clearance gate the app
 #     image publish uses.
 #
-#   broker + worker service images — NOT built here (they ride the APP image).
-#     ExecutionBroker and LocalDevSandboxWorker are library classes in
-#     packages/execution-plane; their HTTP/mTLS service boundary is explicitly
-#     "still OUTSIDE this package" (see packages/execution-plane/src/index.ts),
-#     so there is no standalone entrypoint to containerise. Their runtime code
-#     already ships INSIDE the app image (the monorepo build), so the service
-#     containers are that same image (ghcr.io/<repo>) launched with the exec
-#     entrypoint/command — the deploy digest-pins the app image for broker +
-#     worker. A dedicated slim broker/worker image is a follow-up optimisation
-#     for the slice that lands the service boundary (later exec-plane S-series),
-#     not a prerequisite for the deploy's digest-pin.
+#   WORKER image (docker/exec-worker/Dockerfile) — BUILT + PUBLISHED here
+#     (exec-plane L6). When this workflow was first written the worker was a
+#     library class with no standalone entrypoint, so the note here said the
+#     worker "rides the app image". That is no longer true: the service slice
+#     landed a real worker entrypoint (bundled by scripts/build-exec-service-
+#     bundle.mjs) and its OWN slim image — because the worker holds
+#     /var/run/docker.sock, which is root on the host, and the deploy guard
+#     refuses to hand an app container a socket in any class. docker-compose.
+#     exec.yml therefore requires CINATRA_EXEC_WORKER_IMAGE as a digest-pinned
+#     ref for BOTH the `cinatra-exec-worker` service and the
+#     `cinatra-exec-gateway` service (the gateway runs the egress-gateway
+#     script that rides in this same image) — and until this slice, NO CI job
+#     built that image at all. Only the E2E battery built it, locally, at test
+#     time. So there was again nothing to pin. Published amd64 on the release
+#     trigger; see the platform note on the publish job.
+#
+#   BROKER ("coordinator") — no image of its own, BY DESIGN, and that is not a
+#     gap this slice leaves open. The broker is pure Node (it opens the sealed
+#     carrier, authorizes, bounds load, audits, talks mTLS) and needs no docker
+#     binary, so it rides the APP image: the app Dockerfile's runtime stage
+#     already COPYs scripts/exec-broker-service.bundle.mjs, and
+#     docker-compose.exec.yml runs the broker as ${CINATRA_APP_IMAGE} launched
+#     straight at that bundle with NO app env_file. The broker's published,
+#     digest-pinnable artifact is therefore the app image that build-image.yml
+#     already publishes on the same v* tag — a second, near-identical image
+#     would add a supply-chain surface and buy nothing.
 #
 #   trusted environment builder (epic D2 / S3, #1708) — DEFERRED, with reason.
 #     TrustedEnvironmentBuilder is a HOST-SIDE library that renders a Dockerfile
@@ -35,44 +51,60 @@
 #     slice", index.ts). There is no builder artifact to publish yet; revisit
 #     when the builder's build-sandbox is containerised.
 #
-# Digest recording: the release publish records the pushed L0 digest to the run
-# summary and exposes it as a job output. The exec-plane deploy pipeline pins L0
-# the same way it pins the app image — resolving ghcr.io/<repo>-sandbox-l0:<tag>
-# to its immutable digest via `docker buildx imagetools inspect`. Forwarding the
-# digest into the cross-repo release dispatch payload is left to the deploy
-# slice that owns that payload contract.
+# Digest recording: each release publish records the pushed digest to the run
+# summary and exposes it as a job output. The exec-plane deploy pipeline pins
+# these the same way it pins the app image — resolving ghcr.io/<repo>-sandbox-l0
+# / ghcr.io/<repo>-exec-worker at the release tag to their immutable digests via
+# `docker buildx imagetools inspect`. Forwarding the digests into the cross-repo
+# release dispatch payload is left to the deploy slice that owns that payload
+# contract.
 #
-# WHY A SEPARATE WORKFLOW (not added jobs in build-image.yml): the L0 image is a
-# tiny apt-layer image with no `next build`, so it needs none of build-image's
-# heavy scaffolding (disk-prune / swap / prod-boot e2e / upgrade-proof). Keeping
-# it standalone also means it CANNOT disturb the app image's required status
-# checks — none of the jobs here is a required context, and build-image.yml is
-# untouched. The org Actions SHA-pin gate scans every workflow, so the `uses:`
-# pins below are held to the same format (40-char SHA + version comment).
+# WHY A SEPARATE WORKFLOW (not added jobs in build-image.yml): neither image
+# runs `next build`, so neither needs build-image's heavy scaffolding (disk-
+# prune / swap / prod-boot e2e / upgrade-proof). Keeping them standalone also
+# means they CANNOT disturb the app image's required status checks — none of the
+# jobs here is a required context, and build-image.yml is untouched. The org
+# Actions SHA-pin gate scans every workflow, so the `uses:` pins below are held
+# to the same format (40-char SHA + version comment).
 name: Build and publish exec-plane images
 
 on:
-  # Release publish: every v* tag republishes the L0 image as a per-release,
-  # digest-pinnable artifact (gated). Tag pushes are not paths-filtered — a
-  # release always produces a resolvable per-tag L0 ref even if the Dockerfile
-  # did not change (the cache makes an unchanged rebuild a fast re-export).
+  # Release publish: every v* tag republishes the exec-plane images as
+  # per-release, digest-pinnable artifacts (gated). Tag pushes are not
+  # paths-filtered — a release always produces resolvable per-tag refs even if
+  # nothing changed (the cache makes an unchanged rebuild a fast re-export).
   push:
     tags: ['v*']
-  # Build proof: a PR touching the L0 image (or this workflow) builds +
-  # smoke-tests it on the PR branch. Paths-scoped and NON-required, so it never
-  # reports on unrelated PRs — the economics equivalent of build-image.yml's
-  # docs-only detect-skip, achieved structurally with a paths filter.
+  # Build proof: a PR touching an exec-plane image's OWN inputs builds +
+  # smoke-tests that image on the PR branch. Paths-scoped and NON-required, so
+  # it never reports on unrelated PRs — the economics equivalent of
+  # build-image.yml's docs-only detect-skip, achieved structurally with a paths
+  # filter. This list is the UNION of the per-image filters in the `changes`
+  # job below (the workflow-level filter decides whether the workflow runs at
+  # all; `changes` decides WHICH image builds), so a PR that touches only the
+  # sandbox never pays for the worker build and vice versa.
   pull_request:
     paths:
       - 'docker/sandbox/**'
+      - 'docker/exec-worker/**'
+      - 'packages/**'
+      - 'scripts/**'
+      - 'patches/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.pnpmfile.cjs'
+      - 'cinatra-required-extensions.lock.json'
+      - 'tsconfig.json'
+      - '.dockerignore'
       - '.github/workflows/build-exec-images.yml'
   # Manual build proof (post-merge, on the default branch). Build + smoke only;
   # it never publishes (only the v*-tag release path publishes).
   workflow_dispatch:
 
-# Least privilege: the default is read-only; only the release publish job below
-# elevates to packages:write. The build+smoke job loads the image locally
-# (never pushes), so it needs no registry write.
+# Least privilege: the default is read-only; only the release publish jobs below
+# elevate to packages:write. The build+smoke jobs load their image locally
+# (never push), so they need no registry write.
 permissions:
   contents: read
 
@@ -82,17 +114,78 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # build-and-smoke — the merge/proof gate. Runs on EVERY trigger (PR / tag /
-  # dispatch): builds the L0 image single-arch (amd64, `load:true` — native, no
-  # QEMU) and functionally smoke-tests it. On a v* tag it also gates the release
-  # publish below (via `needs`) and warms the gha cache the publish re-exports.
+  # changes — which exec-plane image does THIS event actually touch?
+  #
+  # Both build jobs are expensive in different ways (the worker build installs
+  # the whole workspace and bundles the service), and the two images share no
+  # inputs, so a per-image filter keeps a sandbox-only PR from paying for the
+  # worker and vice versa. On a tag push / workflow_dispatch there is no PR to
+  # diff and both outputs are 'true' — a release always builds everything.
+  #
+  # No checkout: dorny reads the PR's changed files from the REST API (needs
+  # `pull-requests: read`). Fast (~5s), no services.
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Detect which exec-plane images this event touches
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      l0: ${{ github.event_name != 'pull_request' || steps.filter.outputs.l0 == 'true' }}
+      worker: ${{ github.event_name != 'pull_request' || steps.filter.outputs.worker == 'true' }}
+    steps:
+      - id: filter
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
+        with:
+          filters: |
+            l0:
+              - 'docker/sandbox/**'
+              - '.github/workflows/build-exec-images.yml'
+            # The worker filter is the Dockerfile's ACTUAL build context, not
+            # a guess at which packages matter. `COPY packages packages` +
+            # `COPY scripts scripts` means the bundle can change because of
+            # any workspace sibling it pulls in (@cinatra-ai/llm,
+            # @cinatra-ai/sdk-extensions today) and the install can change
+            # because of any package manifest or postinstall script — so the
+            # filter names the whole copied surface. Narrower lists were tried
+            # and are false-green by construction: the miss only shows up at
+            # release-tag time, which is the one moment a broken worker build
+            # is most expensive. Over-triggering is the cheap side of that
+            # trade (and .dockerignore drops every test file, so a test-only
+            # change is a total cache hit).
+            worker:
+              - 'docker/exec-worker/**'
+              - 'packages/**'
+              - 'scripts/**'
+              - 'patches/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.pnpmfile.cjs'
+              - 'cinatra-required-extensions.lock.json'
+              - 'tsconfig.json'
+              - '.dockerignore'
+              - '.github/workflows/build-exec-images.yml'
+
+  # ---------------------------------------------------------------------------
+  # build-and-smoke — the merge/proof gate for the L0 image. Runs on every
+  # trigger where the L0 inputs are in play (a tag / dispatch always; a PR only
+  # when `changes` saw docker/sandbox or this workflow move): builds the L0
+  # image single-arch (amd64, `load:true` — native, no QEMU) and functionally
+  # smoke-tests it. On a v* tag it also gates the release publish below (via
+  # `needs`) and warms the gha cache the publish re-exports.
   # ---------------------------------------------------------------------------
   build-and-smoke:
     name: Build + smoke-test the L0 sandbox image
+    needs: changes
+    if: ${{ needs.changes.outputs.l0 == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
@@ -192,15 +285,15 @@ jobs:
           fi
           echo "::notice::Release clearance confirmed for '$TAG'."
 
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # QEMU registers the binfmt handlers buildx needs to cross-build arm64 on
       # the amd64 runner (multi-arch release artifact).
-      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
       - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Login to GHCR
-        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -214,6 +307,15 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository }}-sandbox-l0
+          # ADJACENT CORRECTION (exec-plane L6 review): the comment above always
+          # said "no floating latest", but metadata-action's DEFAULT
+          # `flavor.latest=auto` emits one for a semver tag push — so every v*
+          # release has in fact been moving `:latest` on this package. Nothing
+          # consumes that tag (the deploy pins by digest, and compose demands a
+          # digest-pinned ref), so turning it off makes the contract true
+          # instead of aspirational.
+          flavor: |
+            latest=false
           tags: |
             type=ref,event=tag
             type=semver,pattern={{version}}
@@ -254,4 +356,305 @@ jobs:
             echo "| platforms | \`linux/amd64, linux/arm64\` |"
             echo ""
             echo "Pin in the exec-plane deploy as \`${IMAGE}@${DIGEST}\` (CINATRA_SANDBOX_L0_IMAGE)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # build-and-smoke-worker — the merge/proof gate for the WORKER image
+  # (exec-plane L6). Runs on every trigger where the worker's inputs are in
+  # play: builds docker/exec-worker/Dockerfile single-arch (amd64, `load:true` —
+  # native, no QEMU) from the REPO ROOT context and functionally smoke-tests it.
+  # On a v* tag it also gates the release publish below (via `needs`) and warms
+  # the gha cache that publish re-exports.
+  #
+  # Before this job existed the worker image was built by NOTHING in CI — only
+  # by the L5 service-boundary battery, locally, at test time — so a change that
+  # broke `pnpm build:exec-service-bundle`, the install shape, or the runtime
+  # stage surfaced first at deploy time.
+  # ---------------------------------------------------------------------------
+  build-and-smoke-worker:
+    name: Build + smoke-test the exec worker image
+    needs: changes
+    if: ${{ needs.changes.outputs.worker == 'true' }}
+    # Deliberately the default GitHub-hosted (amd64) runner rather than
+    # build-image.yml's `vars.CI_BUILD_RUNNER` escape hatch: the image below is
+    # pinned to linux/amd64, and a runner variable that could later name an arm64
+    # label would either emulate the whole workspace install or smoke-test an
+    # architecture nobody publishes. Native build, native smoke, no drift.
+    runs-on: ubuntu-latest
+    # Generous: the build installs the whole pnpm workspace and runs esbuild.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      # Context = the REPO ROOT (the Dockerfile COPYs package manifests,
+      # packages/, patches/, scripts/ and tsconfig.json), Dockerfile named
+      # explicitly. .dockerignore keeps node_modules, the extension tree and
+      # every test file out of the context — which is also why a test-only
+      # change to packages/execution-plane is a total cache hit here.
+      # Cache scope `exec-worker` never collides with the L0 or app scopes.
+      - name: Build worker image (load for smoke test)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/exec-worker/Dockerfile
+          # Explicit, not implied by the runner: the published artifact below is
+          # linux/amd64, so the architecture the smoke test exercises is stated
+          # here rather than inherited from whatever daemon happens to build. If
+          # this workflow is ever moved to a non-amd64 runner it fails loudly
+          # here instead of silently proving the wrong architecture.
+          platforms: linux/amd64
+          load: true
+          tags: cinatra-exec-worker:ci
+          cache-from: type=gha,scope=exec-worker
+          cache-to: type=gha,mode=max,scope=exec-worker
+
+      # Functional proof, not just "it built". The worker image's contract has
+      # two halves and this asserts BOTH: what it MUST carry (docker CLI, the
+      # worker service bundle, the egress-gateway script the gateway service
+      # runs from this same image) and what it must NOT (app code, app
+      # node_modules) — the scoping claim the Dockerfile and
+      # scripts/audit/exec-compose-scoping-check.mjs both rest on. It then runs
+      # both entrypoints for real: each must LOAD (proving the bundle resolved
+      # every import) and REFUSE to start without its scoped configuration.
+      - name: Smoke-test the worker image contract
+        env:
+          IMG: cinatra-exec-worker:ci
+        run: |
+          set -euo pipefail
+
+          # 1. The docker CLI — the entire reason this image is not the app
+          #    image. Print the version so a regression is legible in the log.
+          docker run --rm "$IMG" docker --version \
+            || { echo "::error::worker image carries no docker CLI"; exit 1; }
+
+          # 2. Payload + scoping contract.
+          docker run --rm "$IMG" sh -c '
+            set -e
+            test -f /srv/exec-worker/worker-service.mjs || { echo "missing worker service bundle"; exit 1; }
+            test -f /srv/exec-worker/runtime/egress-gateway.cjs || { echo "missing egress gateway script"; exit 1; }
+            test ! -e /app || { echo "app tree /app leaked into the worker image"; exit 1; }
+            test ! -e /srv/exec-worker/node_modules || { echo "node_modules leaked into the worker image"; exit 1; }
+          ' || { echo "::error::worker image payload/scoping contract broken"; exit 1; }
+
+          # 3. Runtime identity. root is DELIBERATE here (this container gets
+          #    /var/run/docker.sock, which is root on the host anyway; a
+          #    host-matching `docker` group GID is a portability trap) — the
+          #    opposite of the L0 contract above, so it is asserted rather than
+          #    assumed. A silent switch to a non-root USER would break socket
+          #    access at deploy time.
+          uid="$(docker run --rm "$IMG" id -u)"
+          if [ "$uid" != "0" ]; then
+            echo "::error::worker image runs as uid ${uid}; it needs uid 0 to reach the docker socket"
+            exit 1
+          fi
+
+          # 4. The worker entrypoint LOADS and FAILS CLOSED without scoped env.
+          #    Exit 2 + the EXEC_INSTANCE refusal is worker-entry.ts's contract;
+          #    an import that did not resolve in the bundle would exit 1 with a
+          #    module error instead, which is exactly what this catches.
+          set +e
+          worker_out="$(docker run --rm "$IMG" 2>&1)"
+          worker_code=$?
+          set -e
+          if [ "$worker_code" != "2" ] || ! printf '%s' "$worker_out" | grep -q 'EXEC_INSTANCE is required'; then
+            echo "::error::worker entrypoint did not fail closed (exit ${worker_code}): ${worker_out}"
+            exit 1
+          fi
+
+          # 5. Same for the egress gateway entrypoint (it refuses without
+          #    EGRESS_CONTROL_SECRET).
+          set +e
+          gw_out="$(docker run --rm "$IMG" node /srv/exec-worker/runtime/egress-gateway.cjs 2>&1)"
+          gw_code=$?
+          set -e
+          if [ "$gw_code" != "2" ] || ! printf '%s' "$gw_out" | grep -q 'EGRESS_CONTROL_SECRET is required'; then
+            echo "::error::egress gateway did not fail closed (exit ${gw_code}): ${gw_out}"
+            exit 1
+          fi
+
+          # 6. Positive control for the gateway: configured, it must actually
+          #    LISTEN on both ports. Nothing is published to the host — the
+          #    proof is the process's own audit lines.
+          cid="$(docker run -d -e EGRESS_CONTROL_SECRET=ci-smoke-not-a-secret "$IMG" \
+            node /srv/exec-worker/runtime/egress-gateway.cjs)"
+          # Removed on EVERY exit path, including the `exit 1`s below and any
+          # unexpected `set -e` abort — `--rm` is not usable here because the
+          # container has to survive long enough to be inspected.
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          listening=0
+          for _ in $(seq 1 30); do
+            logs="$(docker logs "$cid" 2>&1 || true)"
+            if printf '%s' "$logs" | grep -q '"role":"proxy"' \
+              && printf '%s' "$logs" | grep -q '"role":"admin"'; then
+              listening=1
+              break
+            fi
+            sleep 1
+          done
+          logs="$(docker logs "$cid" 2>&1 || true)"
+          if [ "$listening" != "1" ]; then
+            echo "::error::egress gateway never reported both listeners: ${logs}"
+            exit 1
+          fi
+          # A listen line is history, not health: a process that logged both
+          # listeners and then died would otherwise pass. Require it to still be
+          # running.
+          running="$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || echo 'gone')"
+          if [ "$running" != "true" ]; then
+            echo "::error::egress gateway exited after announcing its listeners (state: ${running}): ${logs}"
+            exit 1
+          fi
+
+          echo "::notice::Worker smoke passed — docker CLI present, no app payload, uid 0, both entrypoints load and fail closed, gateway listens."
+
+  # ---------------------------------------------------------------------------
+  # publish-worker-release — GATED v*-tag publish of the WORKER image
+  # (exec-plane L6).
+  #
+  # A real release artifact, so it takes the SAME route as the app image and L0
+  # publishes: it pauses behind the `release-approval` Environment (required
+  # reviewer @groganz, provisioned in this repo) AND is fail-closed on the org
+  # clearance variable RELEASE_CLEARED_VERSION. Only the canonical repo
+  # publishes (a fork/clone with a v* tag never does).
+  #
+  # PLATFORM — amd64 only, deliberately, and NOT an oversight next to the L0
+  # image's multi-arch publish. This image is one service of the
+  # docker-compose.exec.yml topology, whose `cinatra-exec-broker` service runs
+  # ${CINATRA_APP_IMAGE} — and build-image.yml publishes the app image for
+  # linux/amd64 only. An arm64 worker could therefore never be part of a
+  # runnable exec-plane stack today; publishing one would be a claim the
+  # topology cannot honour, and QEMU-emulating a full workspace install to
+  # produce it would cost the release path a great deal for that empty claim.
+  # When the app image goes multi-arch, add `platforms:` here in the same
+  # change. (L0 is different: it is the sandbox base the worker pulls, and it is
+  # already multi-arch for hosts that can use it.)
+  #
+  # KNOWN LIMITATION, stated rather than hidden: this job RE-SOLVES the build
+  # from the gha cache instead of promoting the exact artifact the smoke job
+  # proved. Normally that is a pure layer re-export of the same commit, but a
+  # cache eviction across the approval pause would re-resolve the mutable
+  # `node:24-alpine` base and re-run `apk add docker-cli`, so "published" and
+  # "smoke-tested" are the same bits by convention, not by construction. That is
+  # exactly how build-image.yml's app-image release publish and the L0 publish
+  # above already work; making only the worker promote-by-digest would leave
+  # three release publishes with two different integrity stories. The fix
+  # (export the tested OCI artifact and push it by digest) belongs to a slice
+  # that changes all three together.
+  # ---------------------------------------------------------------------------
+  publish-worker-release:
+    name: Publish worker image (release)
+    # Hard prerequisite (no always()): a red/skipped smoke skips this job, so
+    # the release-approval pause is never requested for an image that failed its
+    # contract check. On non-tag events the `if:` below is false anyway.
+    needs: build-and-smoke-worker
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'cinatra-ai/cinatra' }}
+    # Same default (amd64) runner as the build+smoke job above — see its note.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release-approval
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      # Release clearance gate (machine assertion, fail-closed) — byte-identical
+      # to the L0 job's above, which is itself identical to build-image.yml's,
+      # so all three publishes ride the same clearance for the same tag.
+      - name: Require release clearance for this tag
+        env:
+          TAG: ${{ github.ref_name }}
+          CLEARED: ${{ vars.RELEASE_CLEARED_VERSION }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?([.+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::notice::Tag '$TAG' is not a release tag — checkpoint image, clearance gate not applicable."
+            exit 0
+          fi
+          if [ -z "${CLEARED:-}" ]; then
+            echo "::error::Release clearance not set (RELEASE_CLEARED_VERSION is empty) — refusing to publish the worker image for '$TAG' (fail-closed)."
+            exit 1
+          fi
+          if [ "$CLEARED" != "$TAG" ]; then
+            echo "::error::Release clearance is for '$CLEARED', not '$TAG' — refusing to publish the worker image (fail-closed)."
+            exit 1
+          fi
+          echo "::notice::Release clearance confirmed for '$TAG'."
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Login to GHCR
+        uses: docker/login-action@371161bbe7024a29a25c5e19bfcbc0804fe9ad2c # v4.5.2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Its OWN GHCR package, ghcr.io/<repo>-exec-worker, distinct from the app
+      # image ghcr.io/<repo> and from ghcr.io/<repo>-sandbox-l0 (fork-safe via
+      # github.repository). No floating `latest`: the deploy pins per-release by
+      # the v-tag/digest.
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}-exec-worker
+          # Explicitly OFF (metadata-action defaults to `latest=auto`, which
+          # emits a floating `latest` on a semver tag push): a mutable tag on
+          # the image that gets a docker socket is exactly the thing a
+          # digest-pinned deploy exists to avoid.
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=sha,format=long,prefix=
+
+      # Pure cache re-export — the smoke job populated type=gha,mode=max for
+      # this scope on the same commit, so no layer is rebuilt.
+      - name: Build + push worker image
+        id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: docker/exec-worker/Dockerfile
+          # Pinned, so the recorded platform is a fact about the artifact and
+          # not about the runner that happened to produce it.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=exec-worker
+
+      # Record the immutable digest so the deploy can pin it (AC: digests
+      # emitted/recorded). Both exec-plane services that run this image —
+      # cinatra-exec-worker and cinatra-exec-gateway — read the one
+      # CINATRA_EXEC_WORKER_IMAGE ref, which compose requires to be set.
+      - name: Record published worker digest
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}-exec-worker
+          TAG: ${{ github.ref_name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          set -euo pipefail
+          echo "::notice::Published exec worker image ${IMAGE}:${TAG} @ ${DIGEST}"
+          {
+            echo "### Execution-plane worker image published"
+            echo ""
+            echo "| field | value |"
+            echo "| --- | --- |"
+            echo "| image | \`${IMAGE}\` |"
+            echo "| tag | \`${TAG}\` |"
+            echo "| digest | \`${DIGEST}\` |"
+            echo "| platforms | \`linux/amd64\` |"
+            echo ""
+            echo "Pin in the exec-plane deploy as \`${IMAGE}@${DIGEST}\` (CINATRA_EXEC_WORKER_IMAGE —"
+            echo "both the \`cinatra-exec-worker\` and \`cinatra-exec-gateway\` services run it)."
+            echo ""
+            echo "The broker service has no image of its own: pin the app image published by"
+            echo "\`build-image.yml\` for the same tag as \`CINATRA_APP_IMAGE\`."
           } >> "$GITHUB_STEP_SUMMARY"

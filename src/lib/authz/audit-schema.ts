@@ -12,7 +12,7 @@
  * camelCase property → snake_case column name via the column
  * constructor's first argument.
  */
-import { pgSchema, text, timestamp, jsonb, index } from "drizzle-orm/pg-core";
+import { pgSchema, text, timestamp, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
 
 const cinatraSchema = pgSchema(process.env.SUPABASE_SCHEMA?.trim() ?? "cinatra");
 
@@ -34,6 +34,18 @@ export const auditEvents = cinatraSchema.table("audit_events",
     runId:               text("run_id"),
     a2aTaskId:           text("a2a_task_id"),
     ip:                  text("ip"),
+    /**
+     * PHYSICAL DELIVERY IDENTITY of an execution-plane audit record
+     * (cinatra#2266 G4), `<spoolId>:<recordId>`. UNIQUE where present, so a
+     * re-delivery after a broker crash inserts nothing the second time and the
+     * writer can honestly report `duplicate` instead of minting a fresh
+     * `randomUUID()` row for a record that already exists.
+     *
+     * NULL for every other producer, and NULLs are distinct in a Postgres
+     * unique index — so the constraint applies to exactly this producer and to
+     * no existing row.
+     */
+    executionDeliveryKey: text("execution_delivery_key"),
     metadata:            jsonb("metadata"),
     createdAt:           timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -44,6 +56,9 @@ export const auditEvents = cinatraSchema.table("audit_events",
     // migrations (not drizzle-kit), so the Drizzle index is advisory only;
     // kept in sync to avoid confusion during future migration reviews.
     createdAtIdx:        index("audit_events_created_at_idx").on(t.createdAt.desc()),
+    executionDeliveryKeyIdx: uniqueIndex("audit_events_execution_delivery_key_key").on(
+      t.executionDeliveryKey,
+    ),
   }),
 );
 

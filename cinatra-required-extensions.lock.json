@@ -26,9 +26,9 @@
     {
       "packageName": "@cinatra-ai/blog-content-skill",
       "repo": "cinatra-ai/blog-content-skill",
-      "resolvedSha": "163f73c05b441b61799a2db203f8ce873ec8aae7",
+      "resolvedSha": "67fb0fa386413ad1e7597ff079c93421b497c56f",
       "packageVersion": "0.1.0",
-      "treeSha256": "2c3805d33f8c9493de8c284e0381d7647731386f01894edd5c05e902302b6d2c"
+      "treeSha256": "a310df4925a5e3e79d04bc51a928f55b60a51415996675e95d90256ae99cc4de"
     },
     {
       "packageName": "@cinatra-ai/chart-artifact",
@@ -40,9 +40,9 @@
     {
       "packageName": "@cinatra-ai/chat-assistant-core-skill",
       "repo": "cinatra-ai/chat-assistant-core-skill",
-      "resolvedSha": "2cb491e1e3ccf7fe946b253254f2e7a4d509bc55",
+      "resolvedSha": "9881905c879b60ab99b8a9e9d189458586afde03",
       "packageVersion": "0.1.0",
-      "treeSha256": "48c8552584aeb8fc0a5ce58341aab9d3363dc29047fc2de53b87d8c22c952559"
+      "treeSha256": "8794c484112b3725e1d0da8f2010010b249d43fb19ab516ee8e62c2cc7a4b20a"
     },
     {
       "packageName": "@cinatra-ai/code-reviewer-agent",
@@ -117,9 +117,9 @@
     {
       "packageName": "@cinatra-ai/openai-connector",
       "repo": "cinatra-ai/openai-connector",
-      "resolvedSha": "255a44b25a7f2dbcdd799d5127153e6a47cde322",
+      "resolvedSha": "d733250a986ebedd3c24d17eb33e32991981be6d",
       "packageVersion": "0.1.9",
-      "treeSha256": "a399142d5bb4ee69528b216da8022072563fdc8eeb09eb284408472a4286b33b"
+      "treeSha256": "427f5511ba7ed538c3eb5b475499a4abd1c4f08a4d498149614de4ec7c552c60"
     },
     {
       "packageName": "@cinatra-ai/pdf-artifact",

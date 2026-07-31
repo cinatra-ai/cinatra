@@ -854,6 +854,109 @@ export function derivedBundleRevisionId(skillId: string, bundleDigest: string): 
   return `${DERIVED_REVISION_PREFIX}${keyed}`;
 }
 
+/**
+ * Whether a revision id was minted by CAPTURE (disk-owned) rather than by an
+ * authority write. Exported so a WRITER can tell "the head already standing is
+ * my own authority" apart from "the head is a disk capture" without re-deriving
+ * the prefix (cinatra#2274).
+ */
+export function isDerivedBundleRevisionId(revisionId: string): boolean {
+  return typeof revisionId === "string" && revisionId.startsWith(DERIVED_REVISION_PREFIX);
+}
+
+/** The head + lifecycle-pointer state an idempotent AUTHORITY writer reads. */
+export interface AuthorityBundleHeadState {
+  headRevisionId: string;
+  headBundleDigest: string;
+  /** `skills.active_revision_id` — the lifecycle pointer, which the authority
+   * writer moves in the SAME transaction as the head. */
+  activeRevisionId: string | null;
+  /** False when the head is a `bundle:` capture — i.e. NOT written by an authority. */
+  isAuthorityOwned: boolean;
+}
+
+/**
+ * Read a skill's current-bundle pointer TOGETHER with its lifecycle pointer, in
+ * ONE statement (cinatra#2274). Two separate reads would each spawn their own
+ * synchronous pg worker and could observe different transactions, so the "is my
+ * authority already fully recorded?" question would be answered from a torn view.
+ */
+export function readAuthorityBundleHeadState(skillId: string): AuthorityBundleHeadState | null {
+  ensurePostgresSchema();
+  const s = postgresSchema.replaceAll('"', '""');
+  const results = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT h.revision_id, h.bundle_digest, sk.active_revision_id
+                 FROM "${s}"."skill_bundle_heads" h
+                 JOIN "${s}"."skills" sk ON sk.id = h.skill_id
+                WHERE h.skill_id = $1`,
+        values: [skillId],
+      },
+    ],
+  });
+  const row = results[0]?.rows?.[0] as
+    | { revision_id?: unknown; bundle_digest?: unknown; active_revision_id?: unknown }
+    | undefined;
+  if (!row) return null;
+  const headRevisionId = String(row.revision_id);
+  return {
+    headRevisionId,
+    headBundleDigest: String(row.bundle_digest),
+    activeRevisionId:
+      typeof row.active_revision_id === "string" ? row.active_revision_id : null,
+    isAuthorityOwned: !isDerivedBundleRevisionId(headRevisionId),
+  };
+}
+
+/**
+ * Whether an authority writer's lifecycle revision would record EXACTLY what the
+ * skill already carries — so recording it again would only append an immutable
+ * duplicate and re-point two pointers at it (cinatra#2274 AC5).
+ *
+ * Deliberately NOT applied to every `upsertSkill`: cinatra#1361 fixed that
+ * revision provenance is per EVENT, not per content digest, so a user re-saving
+ * identical text must still record a revision. `recordedDiskBundle` is the
+ * caller's assertion that this write is a DISK-DERIVED re-registration (the
+ * extension registration writer replaying a boot scan), where a per-boot
+ * revision is churn rather than provenance.
+ *
+ * Fail-open toward WRITING: every uncertainty (no head, a `bundle:` capture
+ * head, a lifecycle pointer that disagrees with the head, an undigestible file
+ * set) answers `false`, so the authority is recorded rather than assumed.
+ *
+ * NOT A COMPARE-AND-SWAP, and deliberately not pretending to be (codex round-1
+ * finding #3). It reads the head one statement before the transaction that acts
+ * on the answer, so a head moved in that window makes the skip wrong. It is not
+ * closable here — the decision feeds `replaceSkillCatalogInDatabase`, whose
+ * lifecycle write owns the head unconditionally — so the WRITER carries the
+ * proof instead: `registerExtensionSkill` re-reads the head after the write and
+ * REFUSES to report a registration whose head is not the bundle it just read
+ * (`assertRegistrationRecordedTheBundle`). A lost race therefore surfaces as a
+ * loud, retried registration rather than a silently stale authority.
+ */
+export function isRedundantSkillBundleWrite(
+  skillId: string,
+  bundleFiles: BundleFileInput[] | null | undefined,
+  recordedDiskBundle: boolean,
+): boolean {
+  if (!recordedDiskBundle || !bundleFiles || bundleFiles.length === 0) return false;
+  let digest: string;
+  try {
+    digest = bundleDigestForFiles(bundleFiles);
+  } catch {
+    return false;
+  }
+  const state = readAuthorityBundleHeadState(skillId);
+  return (
+    state != null &&
+    state.isAuthorityOwned &&
+    state.activeRevisionId === state.headRevisionId &&
+    state.headBundleDigest === digest
+  );
+}
+
 /** Outcome of a capture: the resolved head + whether disk content had changed. */
 export interface SkillBundleCapture {
   skillId: string;
@@ -876,6 +979,28 @@ export interface SkillBundleCapture {
   authorityOwnedDivergence: boolean;
   /** One-hop router-reference lint over the captured manifest (diagnostic). */
   lint: RouterReferenceLint;
+  /**
+   * Set when the pre-S1 re-baseline DECLINED because the skill's lifecycle
+   * revision resolves to no durable content blob (cinatra#2265, gap (b)).
+   *
+   * The classification outcome is unchanged — there is genuinely nothing
+   * authoritative to seed from, so capture records the DISK bundle under a
+   * derived head, exactly as cinatra#2088 documented. What changes is the
+   * SILENCE: the skill carries a lifecycle head and sits in the custom class,
+   * yet its current bundle is disk-owned, and nothing in the run's own output
+   * said why. This names the revision and the `content_digest` that resolved to
+   * no blob so the readiness/sync caller can report it.
+   */
+  unresolvedLifecycleContent: UnresolvedLifecycleContent | null;
+}
+
+/** A lifecycle revision whose `content_digest` resolves to no durable blob. */
+export interface UnresolvedLifecycleContent {
+  /** The `skills.active_revision_id` the seed was asked to re-baseline from. */
+  revisionId: string;
+  /** The digest that resolved to no `skill_revision_contents` row. Null when the
+   * revision carries no digest at all (a legacy row that never had content). */
+  contentDigest: string | null;
 }
 
 /**
@@ -908,6 +1033,12 @@ export interface SkillBundleCapture {
  * No-ops when a head already exists, when the skill has no lifecycle head, or
  * when that revision has no durable blob (nothing authoritative to seed from) —
  * in which case capture proceeds and records the disk bundle.
+ *
+ * That last case is REPORTED rather than absorbed (cinatra#2265, gap (b)): the
+ * returned `unresolvedContent` names the revision and the `content_digest` that
+ * resolved to no blob, so capture can carry it out as a structured diagnostic.
+ * The decision itself is unchanged — seeding from content that does not exist is
+ * not possible.
  */
 function seedBundleHeadFromLifecycleRevision(
   skillId: string,
@@ -917,19 +1048,34 @@ function seedBundleHeadFromLifecycleRevision(
    * bundle IS its router; see the multi-file guard below.
    */
   diskFileCount: number,
-): SkillBundleHead | null {
+): { head: SkillBundleHead | null; unresolvedContent: UnresolvedLifecycleContent | null } {
   // Every head write below is `only-if-absent`: this is a SEED, reached only
   // because the skill had no head a moment ago. If a lifecycle write installed
   // one in the meantime, that head is the authority's own and must win.
   const existing = readSkillBundleHeadFromDatabase(skillId);
-  if (existing) return existing;
+  // A skill already sitting under an AUTHORITY-OWNED head has neither a seed to
+  // perform nor a fallback to explain, so it costs exactly what it did before —
+  // no extra read. Every other case reads the lifecycle row below.
+  if (existing && !existing.revisionId.startsWith(DERIVED_REVISION_PREFIX)) {
+    return { head: existing, unresolvedContent: null };
+  }
   ensurePostgresSchema();
   const s = postgresSchema.replaceAll('"', '""');
   const results = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT sk.active_revision_id, sk.payload, c.content
+        // `active_manifest_file_count` answers "does the active revision already
+        // have a bundle manifest?" INSIDE this one statement (codex round-1
+        // finding). The diagnostic branch below must not call
+        // `readRevisionBundleFromDatabase`: that spawns a second synchronous
+        // worker AND throws on a blob-integrity / identity mismatch, which would
+        // turn a pure diagnostic into a capture failure and abort the whole sync.
+        text: `SELECT sk.active_revision_id, sk.payload, c.content,
+                      r.content_digest AS revision_content_digest,
+                      (SELECT count(*) FROM "${s}"."skill_revision_files" f
+                        WHERE f.revision_id = sk.active_revision_id
+                          AND f.skill_id = sk.id) AS active_manifest_file_count
                  FROM "${s}"."skills" sk
                  LEFT JOIN "${s}"."skill_revisions" r
                         ON r.id = sk.active_revision_id AND r.skill_id = sk.id
@@ -941,10 +1087,36 @@ function seedBundleHeadFromLifecycleRevision(
     ],
   });
   const row = results[0]?.rows?.[0] as
-    | { active_revision_id?: unknown; payload?: unknown; content?: unknown }
+    | {
+        active_revision_id?: unknown;
+        payload?: unknown;
+        content?: unknown;
+        revision_content_digest?: unknown;
+        active_manifest_file_count?: unknown;
+      }
     | undefined;
   const revisionId = typeof row?.active_revision_id === "string" ? row.active_revision_id : null;
-  if (!revisionId) return null;
+  const content = typeof row?.content === "string" ? row.content : null;
+  const revisionContentDigest =
+    typeof row?.revision_content_digest === "string" ? row.revision_content_digest : null;
+  if (existing) {
+    // A DERIVED head is already installed. Re-report the dangling digest as a
+    // STANDING condition (cinatra#2265, gap (b)) rather than only on the run
+    // that first installed it: the seam that consumes this — the readiness saga
+    // and the reconcile worker — runs long after provisioning, and a diagnostic
+    // that fired once and then went quiet leaves exactly the silence the gap is
+    // about. Reported only while the fallback is genuinely in force: the skill
+    // has a lifecycle revision, that revision resolves to no durable content AND
+    // to no manifest, and the current bundle is disk-owned. Every one of those
+    // facts came out of the single SELECT above — this branch performs no
+    // further query and cannot throw.
+    const unresolvedContent =
+      revisionId != null && content == null && Number(row?.active_manifest_file_count ?? 0) === 0
+        ? { revisionId, contentDigest: revisionContentDigest }
+        : null;
+    return { head: existing, unresolvedContent };
+  }
+  if (!revisionId) return { head: null, unresolvedContent: null };
   // Already has a manifest (a post-S1 lifecycle write) → just point the head at it.
   const stored = readRevisionBundleFromDatabase(skillId, revisionId);
   if (stored) {
@@ -956,10 +1128,16 @@ function seedBundleHeadFromLifecycleRevision(
       },
       { headGuard: "only-if-absent" },
     );
-    return readSkillBundleHeadFromDatabase(skillId);
+    return { head: readSkillBundleHeadFromDatabase(skillId), unresolvedContent: null };
   }
-  const content = typeof row?.content === "string" ? row.content : null;
-  if (content == null) return null; // no durable blob — nothing authoritative to seed
+  if (content == null) {
+    // NO DURABLE BLOB — nothing authoritative to seed from, so the seed declines
+    // and capture records the disk bundle under a derived head. Unchanged
+    // outcome, no longer silent (cinatra#2265, gap (b)): the skill DOES carry a
+    // lifecycle revision, so an operator seeing a disk-owned head here cannot
+    // otherwise tell it from a skill that was always disk-owned.
+    return { head: null, unresolvedContent: { revisionId, contentDigest: revisionContentDigest } };
+  }
   // MULTI-FILE GUARD (cinatra#2094 F7-A). A pre-S1 lifecycle revision stores
   // ONLY the router body, so seeding from it mints a bundle-of-ONE manifest.
   // That manifest is AUTHORITY-OWNED (its revision id carries no `bundle:`
@@ -993,7 +1171,9 @@ function seedBundleHeadFromLifecycleRevision(
   // violation on the FIRST capture, with no race involved. For that class the
   // bundle-of-one re-baseline is always the right answer, so the seed always
   // runs. Fail-closed: an unreadable payload counts as custom/personal.
-  if (diskFileCount > 1 && !isCustomOrPersonalSkillPayloadJson(row?.payload)) return null;
+  if (diskFileCount > 1 && !isCustomOrPersonalSkillPayloadJson(row?.payload)) {
+    return { head: null, unresolvedContent: null };
+  }
   writeRevisionBundleToDatabase(
     {
       revisionId,
@@ -1002,7 +1182,7 @@ function seedBundleHeadFromLifecycleRevision(
     },
     { headGuard: "only-if-absent" },
   );
-  return readSkillBundleHeadFromDatabase(skillId);
+  return { head: readSkillBundleHeadFromDatabase(skillId), unresolvedContent: null };
 }
 
 /**
@@ -1151,7 +1331,8 @@ export async function captureSkillBundleFromDisk(
   // Pre-S1 re-baseline: adopt an existing LIFECYCLE head before considering the
   // disk copy, so an upgraded deployment never lets stale disk bytes override
   // the authoritative stored revision.
-  const head = seedBundleHeadFromLifecycleRevision(skillId, files.length);
+  const { head, unresolvedContent: unresolvedLifecycleContent } =
+    seedBundleHeadFromLifecycleRevision(skillId, files.length);
   if (head && head.bundleDigest === bundleDigest) {
     return {
       skillId,
@@ -1160,6 +1341,7 @@ export async function captureSkillBundleFromDisk(
       changed: false,
       authorityOwnedDivergence: false,
       lint,
+      unresolvedLifecycleContent,
     };
   }
   // HEAL an instance already pinned by the pre-guard seed (cinatra#2094 F7-A).
@@ -1206,6 +1388,7 @@ export async function captureSkillBundleFromDisk(
       changed: false,
       authorityOwnedDivergence: true,
       lint,
+      unresolvedLifecycleContent,
     };
   }
   const revisionId = derivedBundleRevisionId(skillId, bundleDigest);
@@ -1244,7 +1427,16 @@ export async function captureSkillBundleFromDisk(
       changed: false,
       authorityOwnedDivergence: after != null,
       lint,
+      unresolvedLifecycleContent,
     };
   }
-  return { skillId, revisionId, bundleDigest, changed: true, authorityOwnedDivergence: false, lint };
+  return {
+    skillId,
+    revisionId,
+    bundleDigest,
+    changed: true,
+    authorityOwnedDivergence: false,
+    lint,
+    unresolvedLifecycleContent,
+  };
 }

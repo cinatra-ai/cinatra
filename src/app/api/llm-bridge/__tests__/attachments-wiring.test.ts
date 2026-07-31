@@ -18,8 +18,6 @@ const {
   resolveProviderAdapterMock,
   resolveConfiguredLlmRuntimeMock,
   getLlmMcpCredentialsMock,
-  setRunContextMock,
-  clearRunContextMock,
   readAgentRunByContextIdMock,
   consoleWarnSpy,
 } = vi.hoisted(() => ({
@@ -39,8 +37,6 @@ const {
   getLlmMcpCredentialsMock: vi.fn(
     (): { clientId: string; clientSecret: string } | null => null,
   ),
-  setRunContextMock: vi.fn(),
-  clearRunContextMock: vi.fn(),
   readAgentRunByContextIdMock: vi.fn(),
   consoleWarnSpy: vi.spyOn(console, "warn").mockImplementation(() => {}),
 }));
@@ -57,10 +53,6 @@ vi.mock("@cinatra-ai/llm", () => ({
   openAiModelSupportsShell: (modelId: string) => modelId !== "gpt-5" && modelId !== "gpt-5-mini",
   PreferredProviderUnavailableError: class extends Error {},
   uploadFile: vi.fn(),
-}));
-vi.mock("@/lib/agent-run-context-registry", () => ({
-  setRunContext: setRunContextMock,
-  clearRunContext: clearRunContextMock,
 }));
 vi.mock("@/lib/a2a-auth", () => ({
   verifyLangGraphBridgeToken: vi.fn(async () => ({
