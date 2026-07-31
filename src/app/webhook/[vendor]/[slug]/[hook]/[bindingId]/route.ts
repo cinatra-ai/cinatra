@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import { NextResponse } from "next/server";
 
 // Host-owned GENERIC inbound-webhook route (cinatra#340).
@@ -14,12 +12,11 @@ import { NextResponse } from "next/server";
 // idempotency ledger, delegates to the connector's handler, and normalizes the
 // business outcome to HTTP.
 //
-// Two auth modes per binding: the forward-default Standard-Webhooks signature,
-// and the #343 LEGACY bridge (D3c option A) — a binding flagged legacyEnabled
-// keeps its in-field sender's bespoke `sha256=<hex>` HMAC (the deployed
-// WordPress plugin) plus a required X-Cinatra-Webhook-Id idempotency key, so no
-// synchronized plugin rollout is needed. Both arms rejoin the shared
-// idempotency-ledger → dispatch → finalize path.
+// Standard-Webhooks is the ONLY auth mode. cinatra#2022 deleted the #343
+// legacy `sha256=<hex>` HMAC bridge that used to serve a pre-standard-webhooks
+// WordPress sender — a `legacyEnabled` binding (a pre-cinatra#2022 row, if any
+// still exists) now resolves with an empty candidate-secret list and fails
+// closed here (401), the same as any other unverifiable binding.
 //
 // The route stays INERT for any hook no extension declares: the registry is
 // empty until a connector ships cinatra.webhooks (the live WordPress declaration
@@ -28,7 +25,6 @@ import { NextResponse } from "next/server";
 
 import {
   verifyInbound,
-  verifyLegacyHmac,
   WebhookVerifyFailedError,
   webhookScopeKey,
   type VerifiedWebhook,
@@ -40,13 +36,6 @@ import { webhookSecretService } from "@/lib/webhook-secret-service";
 import { getWebhookIdempotencyLedger } from "@/lib/webhook-idempotency.server";
 
 export const dynamic = "force-dynamic";
-
-// #343 legacy-bridge headers (the in-field WordPress plugin's bespoke signing).
-// The plugin signs the raw body with `X-Cinatra-Sig-256: sha256=<hmac-hex>` and
-// carries no Standard-Webhooks `webhook-id`; we require an explicit
-// `X-Cinatra-Webhook-Id` to key the idempotency ledger (fail closed if absent).
-const LEGACY_SIG_HEADER = "x-cinatra-sig-256";
-const LEGACY_WEBHOOK_ID_HEADER = "x-cinatra-webhook-id";
 
 // Cap the raw body read. A webhook payload is small JSON; an unbounded
 // arrayBuffer() read is a memory-exhaustion vector, so we stream with a running
@@ -154,84 +143,26 @@ export async function POST(request: Request, { params }: RouteParams) {
     );
   }
 
-  // 4. Authenticate. The forward DEFAULT is Standard-Webhooks (legacyEnabled
-  // false). A LEGACY-bridge binding (#343 D3c option A) keeps the in-field
-  // sender's bespoke `sha256=<hex>` HMAC — it must NOT be fed through
-  // verifyInbound (which would always fail the Standard-Webhooks header check),
-  // so we branch on legacyEnabled FIRST and only verifyInbound otherwise. Both
-  // arms produce the same `verified` shape and rejoin the shared
-  // claim → dispatch → finalize path below.
+  // 4. Authenticate against the binding's candidate secrets (current, then a
+  // non-expired previous during a rotation window). A `legacyEnabled` binding
+  // (a pre-cinatra#2022 row, if any still exists) resolves with an empty
+  // candidate-secret list, so it fails closed here — the #343 legacy HMAC
+  // bridge that used to serve those bindings was deleted in cinatra#2022.
   let verified: { messageId: string; timestamp: Date; payload: unknown };
-  if (binding.legacyEnabled) {
-    // Legacy arm. The legacy sender carries no Standard-Webhooks webhook-id, so
-    // an explicit idempotency-key header is REQUIRED — absent → fail closed
-    // (same no-oracle 401 as a bad signature, so a probe cannot distinguish
-    // "no id" from "bad sig"). The header is part of the sender CONTRACT but is
-    // NOT the dedupe key: the legacy HMAC authenticates ONLY the raw body (not
-    // the headers), so trusting the header value to key the ledger would let
-    // anyone who captures one valid signed body replay it with a fresh
-    // X-Cinatra-Webhook-Id and bypass dedupe → repeated dispatch of the same
-    // authenticated event. Standard-Webhooks avoids this because its webhook-id
-    // is inside the signed content; the legacy HMAC is not. So we derive the
-    // ledger messageId from AUTHENTICATED material — a digest of the exact
-    // signed bytes — which is replay-stable (a true retry of the same event
-    // dedupes) and unforgeable (the body is HMAC-bound).
-    const idHeader = request.headers.get(LEGACY_WEBHOOK_ID_HEADER);
-    const sigHeader = request.headers.get(LEGACY_SIG_HEADER);
-    // binding.legacySecret is guaranteed present for a legacyEnabled binding
-    // (the secret service fails closed otherwise) — defensively treat a missing
-    // one as an auth failure rather than feeding undefined into the verifier.
-    if (
-      typeof idHeader !== "string" ||
-      idHeader.length === 0 ||
-      typeof binding.legacySecret !== "string" ||
-      !verifyLegacyHmac(rawBody, sigHeader, binding.legacySecret)
-    ) {
+  try {
+    verified = verifyInbound(rawBody, request.headers, binding.secrets);
+  } catch (err) {
+    if (err instanceof WebhookVerifyFailedError) {
+      // Log the user-agent for triage; NEVER echo a secret or the payload.
       console.warn(
-        `[webhook:${scope}] legacy signature verification failed (ua=${request.headers.get("user-agent") ?? "?"})`,
+        `[webhook:${scope}] signature verification failed (ua=${request.headers.get("user-agent") ?? "?"})`,
       );
       return NextResponse.json(
         { error: "Webhook authentication failed.", code: "webhook-unauthorized" },
         { status: 401 },
       );
     }
-    // Synthesize the verified shape from the authenticated legacy request. The
-    // body was authenticated by the HMAC over the exact bytes, so JSON.parse of
-    // the same bytes is the verified payload; a non-JSON body is an auth-context
-    // failure (the sender's contract is JSON) → 400.
-    let payload: unknown;
-    try {
-      payload = JSON.parse(rawBody.toString("utf8"));
-    } catch {
-      return NextResponse.json(
-        { error: "Webhook payload is not valid JSON.", code: "invalid-payload" },
-        { status: 400 },
-      );
-    }
-    // Authenticated idempotency key: sha256 of the exact signed bytes, prefixed
-    // to namespace it from any Standard-Webhooks messageId. The unsigned header
-    // is required (above) but never trusted as the dedupe key.
-    const messageId =
-      "sha256:" + createHash("sha256").update(rawBody).digest("hex");
-    verified = { messageId, timestamp: new Date(), payload };
-  } else {
-    // Standard-Webhooks arm — verify against the binding's candidate secrets
-    // (current, then a non-expired previous during a rotation window).
-    try {
-      verified = verifyInbound(rawBody, request.headers, binding.secrets);
-    } catch (err) {
-      if (err instanceof WebhookVerifyFailedError) {
-        // Log the user-agent for triage; NEVER echo a secret or the payload.
-        console.warn(
-          `[webhook:${scope}] signature verification failed (ua=${request.headers.get("user-agent") ?? "?"})`,
-        );
-        return NextResponse.json(
-          { error: "Webhook authentication failed.", code: "webhook-unauthorized" },
-          { status: 401 },
-        );
-      }
-      throw err;
-    }
+    throw err;
   }
 
   // 5. Leased idempotency CLAIM (the atomic UPSERT state machine).

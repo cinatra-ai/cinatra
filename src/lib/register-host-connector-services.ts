@@ -1502,8 +1502,9 @@ export function registerHostConnectorServices(): void {
   // wordpress-mcp-connector (cinatra#975 Wave 2): it now registers
   // `@cinatra-ai/host:wordpress-widget-auth` from its own `register(ctx)`
   // (persisting through the host connector-config capability), so the host
-  // publishes nothing here. The webhook HMAC verification is a generic
-  // mechanism kept host-side (@cinatra-ai/webhooks verifyLegacyHmac).
+  // publishes nothing here. The inbound-webhook verification (Standard-
+  // Webhooks only, since cinatra#2022 deleted the legacy HMAC bridge) is a
+  // generic mechanism kept host-side (@cinatra-ai/webhooks verifyInbound).
 
   register(svc.runtimeMode, {
     isDevelopment: isAppDevelopmentMode,

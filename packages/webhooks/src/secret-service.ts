@@ -29,7 +29,9 @@ export interface ResolvedBinding {
    * Candidate secrets in priority order: the current secret, then a non-expired
    * previous secret during a rotation window. Already filtered for expiry.
    * EMPTY for a `legacyEnabled` binding (a legacy binding carries no Standard-
-   * Webhooks secret — the route verifies it via {@link legacySecret} instead).
+   * Webhooks secret — and since cinatra#2022 deleted the route's legacy-HMAC
+   * verification arm, no legacy verification exists: the route rejects such a
+   * binding fail-closed).
    */
   readonly secrets: string[];
   /**
@@ -40,8 +42,13 @@ export interface ResolvedBinding {
   readonly legacyEnabled: boolean;
   /**
    * The single shared HMAC secret for a legacy-bridge binding — populated ONLY
-   * when `legacyEnabled` (undefined for a Standard-Webhooks binding). The route
-   * passes this to `verifyLegacyHmac`.
+   * when `legacyEnabled` (undefined for a Standard-Webhooks binding).
+   * cinatra#2022: the generic route no longer has a legacy-HMAC verification
+   * arm, so a `legacyEnabled` binding now fails closed at the route (empty
+   * `secrets`) regardless of this field; retained on the type only because the
+   * underlying `webhook_secret_bindings` columns are not dropped in this
+   * change (see the package's schema-helper module for the column-retirement
+   * note).
    */
   readonly legacySecret?: string;
 }
@@ -54,10 +61,12 @@ export interface MintBindingInput {
   /**
    * Mint a #343 legacy-bridge binding (the in-field sender keeps its bespoke
    * `sha256=<hex>` HMAC). When true, {@link legacySecret} MUST be supplied; the
-   * binding stores the encrypted legacy secret + `legacy_enabled=true` and the
-   * route verifies via `verifyLegacyHmac` rather than Standard-Webhooks. The
+   * binding stores the encrypted legacy secret + `legacy_enabled=true`. The
    * returned `MintedBinding.secret` is the same legacy secret (no new Standard-
-   * Webhooks secret is generated for a legacy binding).
+   * Webhooks secret is generated for a legacy binding). cinatra#2022: the
+   * generic route no longer verifies legacy bindings (the legacy HMAC arm was
+   * deleted), so a binding minted this way fails closed at the route; the flag
+   * survives only until the column-retirement follow-up removes this plumbing.
    */
   readonly legacyEnabled?: boolean;
   /** The shared HMAC secret to bridge (required when `legacyEnabled`). */
