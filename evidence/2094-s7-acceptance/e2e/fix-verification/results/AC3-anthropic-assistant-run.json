@@ -1,0 +1,129 @@
+{
+  "arm": "anthropic",
+  "label": "LIVE — real anthropic API; provider boundary OBSERVED (pass-through), never stubbed",
+  "expectedMechanism": "container",
+  "hardCap": 8,
+  "at": "2026-07-31T03:14:42.409Z",
+  "succeeded": true,
+  "successAttempt": 1,
+  "attempts": [
+    {
+      "attempt": 1,
+      "outcome": "answered",
+      "providerMessageCalls": 1,
+      "statuses": [
+        200
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "R1",
+      "what": "a REAL assistant turn completed on anthropic",
+      "verdict": "PASS",
+      "detail": "answered on attempt 1"
+    },
+    {
+      "id": "R2",
+      "what": "skill delivery on the completed turn was CONTAINER-based (container.skills on the wire)",
+      "verdict": "PASS",
+      "detail": "[{\"skill_id\":\"skill_01X2bC6ufCgAqgymmS7Vuk4Y\",\"version\":\"1785467323866571\",\"type\":\"custom\"},{\"skill_id\":\"skill_015PR88YtAfF7Nyie9FwG7fp\",\"version\":\"1785467326648942\",\"type\":\"custom\"},{\"skill_id\":\"skill_018BmCGAbFHriU3GLAAYo6HT\",\"version\":\"1785467322052810\",\"type\":\"custom\"},{\"skill_id\":\"skill_01NamPHEiZq1Rv1MT1zBLuhW\",\"version\":\"1785467340064700\",\"type\":\"custom\"},{\"skill_id\":\"skill_01FofiitU8UHUMRSoAGVyEGz\",\"version\":\"1785467320784789\",\"type\":\"custom\"}]"
+    },
+    {
+      "id": "R3",
+      "what": "the injected set on the wire is <= 8",
+      "verdict": "PASS",
+      "detail": "containerSkillCount=5"
+    },
+    {
+      "id": "R4",
+      "what": "every container.skills reference carries BOTH halves (skill_id + version)",
+      "verdict": "PASS"
+    },
+    {
+      "id": "R5",
+      "what": "each delivered reference resolves to a real anthropic_skill_sync mapping",
+      "verdict": "PASS",
+      "detail": "5/5 mapped"
+    },
+    {
+      "id": "R6",
+      "what": "the turn used the container mechanism ONLY — no function-tool skill fallback",
+      "verdict": "PASS",
+      "detail": "[\"code_execution_20250825\",\"web_search_20250305\",\"mcp_toolset\"]"
+    },
+    {
+      "id": "R8",
+      "what": "the chat surface wrote NO durable per-run delivery record (global count is 0)",
+      "verdict": "PASS",
+      "detail": "agent_run_skills_used rows with a delivery_mode at end of arm: 0 (finding F8; a turn DID complete in this arm (attempt 1) and the global count is still 0, so the chat surface wrote no per-run delivery record for it)"
+    }
+  ],
+  "pageErrors": [],
+  "wireRecordForCompletedTurn": {
+    "at": "2026-07-31T03:14:37.989Z",
+    "phase": "AC3-anthropic-assistant-run-attempt-1",
+    "provider": "anthropic",
+    "method": "POST",
+    "path": "/v1/messages",
+    "status": 200,
+    "ms": 13152,
+    "fingerprint": {
+      "model": "claude-sonnet-4-6",
+      "hasContainer": true,
+      "containerSkillCount": 5,
+      "containerSkillRefs": [
+        {
+          "skill_id": "skill_01X2bC6ufCgAqgymmS7Vuk4Y",
+          "version": "1785467323866571",
+          "type": "custom"
+        },
+        {
+          "skill_id": "skill_015PR88YtAfF7Nyie9FwG7fp",
+          "version": "1785467326648942",
+          "type": "custom"
+        },
+        {
+          "skill_id": "skill_018BmCGAbFHriU3GLAAYo6HT",
+          "version": "1785467322052810",
+          "type": "custom"
+        },
+        {
+          "skill_id": "skill_01NamPHEiZq1Rv1MT1zBLuhW",
+          "version": "1785467340064700",
+          "type": "custom"
+        },
+        {
+          "skill_id": "skill_01FofiitU8UHUMRSoAGVyEGz",
+          "version": "1785467320784789",
+          "type": "custom"
+        }
+      ],
+      "toolTypes": [
+        "code_execution_20250825",
+        "web_search_20250305",
+        "mcp_toolset"
+      ],
+      "toolNames": [
+        {
+          "type": "code_execution_20250825",
+          "name": "code_execution",
+          "shellSkillCount": null
+        },
+        {
+          "type": "web_search_20250305",
+          "name": "web_search",
+          "shellSkillCount": null
+        },
+        {
+          "type": "mcp_toolset",
+          "name": null,
+          "shellSkillCount": null
+        }
+      ],
+      "messageCount": 1,
+      "stream": true
+    }
+  },
+  "agentRunSkillsUsedRowsWithDeliveryMode": 0
+}

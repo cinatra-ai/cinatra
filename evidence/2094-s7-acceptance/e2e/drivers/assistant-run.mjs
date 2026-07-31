@@ -230,7 +230,17 @@ if (PROVIDER === "anthropic") {
   const refIds = withContainer?.fingerprint?.containerSkillRefs?.map((r) => r.skill_id) ?? [];
   let mapped = 0;
   for (const id of refIds) {
-    const n = Number(sql(`select count(*) from cinatra.anthropic_skill_sync where remote_skill_id = '${id.replace(/'/g, "''")}'`));
+    // COLUMN NAME FIX (cinatra#2274 AC3 re-drive). This read named
+    // `remote_skill_id`, a column `cinatra.anthropic_skill_sync` has never had —
+    // the remote id lives in `anthropic_skill_id` (see the table's own
+    // `anthropic_skill_sync_skill_idx`). The statement is only reached when a
+    // COMPLETED Anthropic turn put `container.skills` refs on the wire, which no
+    // prior round achieved: S7's turns threw before egress and the pre-merge
+    // GREEN never completed, so `refIds` was empty and the loop never ran
+    // (`GREEN-anthropic-assistant-run.json` records `R5 FAIL 0/0 mapped`). The
+    // AC3 re-drive is the first run to reach it, and it threw — taking the whole
+    // driver down after R1–R4 had already been scored. Reported in PROOF.md.
+    const n = Number(sql(`select count(*) from cinatra.anthropic_skill_sync where anthropic_skill_id = '${id.replace(/'/g, "''")}'`));
     if (n > 0) mapped += 1;
   }
   check(
@@ -324,7 +334,20 @@ check(
   "the chat surface wrote NO durable per-run delivery record (global count is 0)",
   exposureRows === 0,
   `agent_run_skills_used rows with a delivery_mode at end of arm: ${exposureRows} ` +
-    `(finding F8; no turn completed in this arm, so this is corroboration, not a per-turn measurement)`,
+    `(finding F8; ` +
+    // STALE-PROSE FIX (cinatra#2274 AC3 re-drive). This clause was a STATIC
+    // template asserting "no turn completed in this arm" — true when it was
+    // written (S7: every turn errored), and already recorded as a driver defect
+    // by the POST-MERGE round, whose OpenAI results file said `R1: answered`
+    // and `R8: no turn completed` in the same artifact. With a turn now
+    // completing on BOTH providers the sentence is simply false, so it is made
+    // conditional rather than left to contradict R1 a third time. The ASSERTION
+    // is unchanged: the count must be zero.
+    (succeeded
+      ? `a turn DID complete in this arm (attempt ${successAttempt}) and the global count is still ${exposureRows}, ` +
+        `so the chat surface wrote no per-run delivery record for it`
+      : `no turn completed in this arm, so this is corroboration, not a per-turn measurement`) +
+    `)`,
 );
 
 writeFileSync(

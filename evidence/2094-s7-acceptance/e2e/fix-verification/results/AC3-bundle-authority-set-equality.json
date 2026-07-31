@@ -1,0 +1,592 @@
+{
+  "at": "2026-07-31T03:16:52.994Z",
+  "catalogSkills": 28,
+  "headsPresent": 28,
+  "multiFileDiskBundles": 6,
+  "canonicalSetEqual": 28,
+  "sourceSetEqual": 28,
+  "allCanonicalSetEqual": true,
+  "allSourceSetEqual": true,
+  "results": [
+    {
+      "skillId": "@cinatra-ai/blog-idea-authoring-skill:blog-idea-authoring",
+      "packageId": "custom:cinatra-ai-blog-idea-authoring-skill",
+      "headRevisionId": "a2e78897-00ff-4bee-904a-f29233cd938e",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/blog-idea-authoring-skill/skills/blog-idea-authoring/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/blog-idea-matcher-skill:blog-idea-matcher",
+      "packageId": "custom:cinatra-ai-blog-idea-matcher-skill",
+      "headRevisionId": "31cfc985-35df-456c-8d14-0fe404008dfd",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/blog-idea-matcher-skill/skills/blog-idea-matcher/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/blog-image-matcher-skill:blog-image-matcher",
+      "packageId": "custom:cinatra-ai-blog-image-matcher-skill",
+      "headRevisionId": "ff07b89b-b19b-4ee4-a374-48359b4048de",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/blog-image-matcher-skill/skills/blog-image-matcher/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/blog-post-matcher-skill:blog-post-matcher",
+      "packageId": "custom:cinatra-ai-blog-post-matcher-skill",
+      "headRevisionId": "4ceddfa4-b5d8-45d1-9b03-e4849925b8b4",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/blog-post-matcher-skill/skills/blog-post-matcher/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/blog-writing-skill:blog-writing",
+      "packageId": "custom:cinatra-ai-blog-writing-skill",
+      "headRevisionId": "3f2c8480-806b-4b7e-a333-6b00bde3773e",
+      "headIsDerived": false,
+      "manifestFileCount": 4,
+      "manifestPaths": [
+        "SKILL.md",
+        "references/blog-ideas.md",
+        "references/blog-post-draft.md",
+        "references/linkedin-post.md"
+      ],
+      "diskFileCount": 4,
+      "diskPaths": [
+        "SKILL.md",
+        "references/blog-ideas.md",
+        "references/blog-post-draft.md",
+        "references/linkedin-post.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/blog-writing-skill/skills/blog-writing/SKILL.md",
+      "sourceFileCount": 4,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/brand-voice-matcher-skill:brand-voice-matcher",
+      "packageId": "custom:cinatra-ai-brand-voice-matcher-skill",
+      "headRevisionId": "52702897-5e40-4f73-8033-9d198fbe0d37",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/brand-voice-matcher-skill/skills/brand-voice-matcher/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/chat:blog-content",
+      "packageId": "custom:cinatra-ai-chat",
+      "headRevisionId": "9c7eaf88-4ea8-4813-8b1e-371a72dc7fe9",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/blog-content-skill/skills/blog-content/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/chat:chat-assistant-core",
+      "packageId": "custom:cinatra-ai-chat",
+      "headRevisionId": "3938aa09-b8a3-47b4-9638-c4e8089a7586",
+      "headIsDerived": false,
+      "manifestFileCount": 6,
+      "manifestPaths": [
+        "SKILL.md",
+        "references/chat-agent-dispatch.md",
+        "references/chat-appointment-schedules.md",
+        "references/chat-create-artifact.md",
+        "references/chat-extension-discovery.md",
+        "references/chat-run-polling.md"
+      ],
+      "diskFileCount": 6,
+      "diskPaths": [
+        "SKILL.md",
+        "references/chat-agent-dispatch.md",
+        "references/chat-appointment-schedules.md",
+        "references/chat-create-artifact.md",
+        "references/chat-extension-discovery.md",
+        "references/chat-run-polling.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/chat-assistant-core-skill/skills/chat-assistant-core/SKILL.md",
+      "sourceFileCount": 6,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/chat:chat-automation-authoring",
+      "packageId": "custom:cinatra-ai-chat",
+      "headRevisionId": "c15b70c2-8abf-4409-9fe3-dc44324f09ec",
+      "headIsDerived": false,
+      "manifestFileCount": 5,
+      "manifestPaths": [
+        "SKILL.md",
+        "references/chat-campaign-creation.md",
+        "references/chat-workflow-authoring.md",
+        "references/create-campaign.md",
+        "references/create-trigger.md"
+      ],
+      "diskFileCount": 5,
+      "diskPaths": [
+        "SKILL.md",
+        "references/chat-campaign-creation.md",
+        "references/chat-workflow-authoring.md",
+        "references/create-campaign.md",
+        "references/create-trigger.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/automation-authoring-skill/skills/chat-automation-authoring/SKILL.md",
+      "sourceFileCount": 5,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/chat:chat-extension-authoring",
+      "packageId": "custom:cinatra-ai-chat",
+      "headRevisionId": "fdf5916b-6aa5-4075-b1ad-7ce528032d69",
+      "headIsDerived": false,
+      "manifestFileCount": 8,
+      "manifestPaths": [
+        "SKILL.md",
+        "references/chat-agent-authoring.md",
+        "references/chat-agent-authoring/oas-authoring.md",
+        "references/chat-agent-authoring/review-lanes.md",
+        "references/chat-agent-authoring/speed-and-lifecycle.md",
+        "references/chat-artifact-extension-authoring.md",
+        "references/chat-skill-extension-authoring.md",
+        "references/chat-workflow-extension-authoring.md"
+      ],
+      "diskFileCount": 8,
+      "diskPaths": [
+        "SKILL.md",
+        "references/chat-agent-authoring.md",
+        "references/chat-agent-authoring/oas-authoring.md",
+        "references/chat-agent-authoring/review-lanes.md",
+        "references/chat-agent-authoring/speed-and-lifecycle.md",
+        "references/chat-artifact-extension-authoring.md",
+        "references/chat-skill-extension-authoring.md",
+        "references/chat-workflow-extension-authoring.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/extension-authoring-skill/skills/chat-extension-authoring/SKILL.md",
+      "sourceFileCount": 8,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/chat:company-research",
+      "packageId": "custom:cinatra-ai-chat",
+      "headRevisionId": "ebd1cfb7-8aa7-40f9-8269-4e189f6b2a3e",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/company-research-skill/skills/company-research/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/competitive-analysis-matcher-skill:competitive-analysis-matcher",
+      "packageId": "custom:cinatra-ai-competitive-analysis-matcher-skill",
+      "headRevisionId": "e2db5217-96f9-4033-b8ef-fa7e51563d46",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/competitive-analysis-matcher-skill/skills/competitive-analysis-matcher/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/contract-matcher-skill:contract-matcher",
+      "packageId": "custom:cinatra-ai-contract-matcher-skill",
+      "headRevisionId": "c736607d-7e04-4c05-aa8c-a2303ec5f39b",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/contract-matcher-skill/skills/contract-matcher/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/drupal-widget-chat-skill:drupal-widget-chat",
+      "packageId": "custom:cinatra-ai-drupal-widget-chat-skill",
+      "headRevisionId": "cc86a194-2674-455f-8233-5a4260581fa3",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/drupal-widget-chat-skill/skills/drupal-widget-chat/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/email-body-matcher-skill:email-body-matcher",
+      "packageId": "custom:cinatra-ai-email-body-matcher-skill",
+      "headRevisionId": "4b325f19-acc1-47b1-be4d-5260772ee927",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/email-body-matcher-skill/skills/email-body-matcher/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/hitl-prompt-drive-skill:chat-hitl-prompt-drive",
+      "packageId": "custom:cinatra-ai-hitl-prompt-drive-skill",
+      "headRevisionId": "5661dff7-fed9-4d5c-a25a-73044b7929e1",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/hitl-prompt-drive-skill/skills/chat-hitl-prompt-drive/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/list-curation-skill:list-curation",
+      "packageId": "custom:cinatra-ai-list-curation-skill",
+      "headRevisionId": "246ea6f2-ba45-48f3-9ca1-d54348de31a1",
+      "headIsDerived": false,
+      "manifestFileCount": 4,
+      "manifestPaths": [
+        "SKILL.md",
+        "references/hitl-payload-shapes.md",
+        "references/polling-and-caps.md",
+        "references/return-envelope.md"
+      ],
+      "diskFileCount": 4,
+      "diskPaths": [
+        "SKILL.md",
+        "references/hitl-payload-shapes.md",
+        "references/polling-and-caps.md",
+        "references/return-envelope.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/list-curation-skill/skills/list-curation/SKILL.md",
+      "sourceFileCount": 4,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/marketing-icp-authoring-skill:marketing-icp-authoring",
+      "packageId": "custom:cinatra-ai-marketing-icp-authoring-skill",
+      "headRevisionId": "6204110c-bdf8-4899-8eec-754afb5c7697",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/marketing-icp-authoring-skill/skills/marketing-icp-authoring/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/marketing-icp-matcher-skill:marketing-icp-matcher",
+      "packageId": "custom:cinatra-ai-marketing-icp-matcher-skill",
+      "headRevisionId": "9718df1f-28a4-4ebf-bb83-e44640e32f91",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/marketing-icp-matcher-skill/skills/marketing-icp-matcher/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/marketing-strategy-matcher-skill:marketing-strategy-matcher",
+      "packageId": "custom:cinatra-ai-marketing-strategy-matcher-skill",
+      "headRevisionId": "8822aed1-d5c3-462b-83f2-343dae7a7971",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/marketing-strategy-matcher-skill/skills/marketing-strategy-matcher/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/media-transcript-agent:transcribe-media",
+      "packageId": "custom:cinatra-ai-media-transcript-agent",
+      "headRevisionId": "22ae6ae4-77be-44e1-8230-770cb6e86b69",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/media-transcript-agent/skills/transcribe-media/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/product-portfolio-matcher-skill:product-portfolio-matcher",
+      "packageId": "custom:cinatra-ai-product-portfolio-matcher-skill",
+      "headRevisionId": "c7c9be5f-99f9-4427-935b-90a7359f2e4b",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/product-portfolio-matcher-skill/skills/product-portfolio-matcher/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/sales-playbook-matcher-skill:sales-playbook-matcher",
+      "packageId": "custom:cinatra-ai-sales-playbook-matcher-skill",
+      "headRevisionId": "42811511-1364-4e70-b4a9-e78d1dbec1f7",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/sales-playbook-matcher-skill/skills/sales-playbook-matcher/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/screenshot-matcher-skill:screenshot-matcher",
+      "packageId": "custom:cinatra-ai-screenshot-matcher-skill",
+      "headRevisionId": "1944c451-0948-47e4-bbcf-a2f76494ec32",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/screenshot-matcher-skill/skills/screenshot-matcher/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/skill-prefill-generation-skill:skill-prefill-generation",
+      "packageId": "custom:cinatra-ai-skill-prefill-generation-skill",
+      "headRevisionId": "2e91bbc4-7e9a-4399-a80e-040a41690434",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/skill-prefill-generation-skill/skills/skill-prefill-generation/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/slide-deck-matcher-skill:slide-deck-matcher",
+      "packageId": "custom:cinatra-ai-slide-deck-matcher-skill",
+      "headRevisionId": "a0efaca2-7e95-4f24-bfa4-d5f46cbf191e",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/slide-deck-matcher-skill/skills/slide-deck-matcher/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/web-research-skill:web-research",
+      "packageId": "custom:cinatra-ai-web-research-skill",
+      "headRevisionId": "d1d21e90-aab2-4ab9-a498-a996a48435d7",
+      "headIsDerived": false,
+      "manifestFileCount": 3,
+      "manifestPaths": [
+        "SKILL.md",
+        "references/example.md",
+        "references/output-envelopes.md"
+      ],
+      "diskFileCount": 3,
+      "diskPaths": [
+        "SKILL.md",
+        "references/example.md",
+        "references/output-envelopes.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/web-research-skill/skills/web-research/SKILL.md",
+      "sourceFileCount": 3,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    },
+    {
+      "skillId": "@cinatra-ai/wordpress-widget-chat-skill:wordpress-widget-chat",
+      "packageId": "custom:cinatra-ai-wordpress-widget-chat-skill",
+      "headRevisionId": "41d7679c-7446-4fc0-9c0e-9953cf5ebd4a",
+      "headIsDerived": false,
+      "manifestFileCount": 1,
+      "manifestPaths": [
+        "SKILL.md"
+      ],
+      "diskFileCount": 1,
+      "diskPaths": [
+        "SKILL.md"
+      ],
+      "canonicalSetEqual": true,
+      "sourceSkillMdRel": "extensions/cinatra-ai/wordpress-widget-chat-skill/skills/wordpress-widget-chat/SKILL.md",
+      "sourceFileCount": 1,
+      "sourceSetEqual": true,
+      "verdict": "SET-EQUAL"
+    }
+  ]
+}
