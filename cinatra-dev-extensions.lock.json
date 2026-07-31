@@ -330,7 +330,7 @@
     {
       "packageName": "@cinatra-ai/media-transcript-agent",
       "repo": "cinatra-ai/media-transcript-agent",
-      "resolvedSha": "7d93303ce4f8295c839d85150aa5aacf45d6231a"
+      "resolvedSha": "6a70d895894fc2ee89a40dfdc1b8c75e66ad6fbb"
     },
     {
       "packageName": "@cinatra-ai/plane-connector",
@@ -420,7 +420,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-agent",
       "repo": "cinatra-ai/wordpress-agent",
-      "resolvedSha": "9368ed03513cdb058c7e64b04a3c81850fc9cfa7"
+      "resolvedSha": "5780148f2ec3e8f58bdb3f94a13893f1adee45a0"
     },
     {
       "packageName": "@cinatra-ai/wordpress-assistant-connector",
@@ -430,7 +430,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-mcp-connector",
       "repo": "cinatra-ai/wordpress-mcp-connector",
-      "resolvedSha": "e46781db566c5538ce6ffe42df19c1662c9e2b79"
+      "resolvedSha": "479364d671e843389c0593e276c236798e8acef5"
     },
     {
       "packageName": "@cinatra-ai/wordpress-widget-chat-skill",
