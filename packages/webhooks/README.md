@@ -9,8 +9,8 @@ detail (secret service, storage, namespace) is injected as a parameter.
 ## What it provides
 
 - **Standard-Webhooks verify/sign primitives** — `verifyInbound`,
-  `signOutbound`, plus `verifyLegacyHmac` for pre-migration callers, and the
-  `WebhookVerifyFailedError` raised on a bad signature.
+  `signOutbound`, and the `WebhookVerifyFailedError` raised on a bad
+  signature.
 - **The import-free handler registry** — `createWebhookRegistry` /
   `webhookScopeKey` resolve a generated `"<vendor>/<slug>/<hook>"` map (no
   dynamic `import()` of connector code at request time).

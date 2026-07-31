@@ -833,14 +833,14 @@ async function provisionFromGrant(input: {
   //     webhookSecret as a #343 legacy-flagged binding on the GENERIC
   //     /webhook/<vendor>/<slug>/<hook>/<bindingId> route's own binding
   //     table — so a rolled-back plugin downgrade self-healed that binding on
-  //     the next reconnect. Removing this arm only stops NEW/refreshed legacy
-  //     bindings from being minted for WordPress; the generic /webhook route
-  //     itself, and its ability to resolve/verify any EXISTING legacy-flagged
-  //     binding (for WordPress or any other connector) via `verifyLegacyHmac`,
-  //     is untouched. Separately, in the same PR, the DEDICATED
+  //     the next reconnect. In the same PR the DEDICATED
   //     /api/webhooks/wordpress route — a different receiver entirely, which
-  //     never read this binding table — was also deleted (see that PR's
-  //     body for the DB-gate precondition covering both removals).
+  //     never read this binding table — was also deleted. A follow-up
+  //     cinatra#2022 change then deleted the generic route's legacy-HMAC
+  //     verification arm as well, so an EXISTING legacy-flagged binding (if
+  //     any row remains) now fails closed at the route until its site
+  //     reconnects with `webhook_contract: "standard-webhooks"` and
+  //     upsertStandard converts the row in place.
   // All upserts are tuple-scoped + idempotent across reconnects / credential
   // rotations (a reconnect re-issues a fresh secret here; the binding's stored
   // secret is updated in place — dual-window for standard — preserving its
