@@ -17,7 +17,7 @@
 // `--pin` prints the DIGEST-BOUND image the matrix records for a service — the
 // baseline engine pin, or (with `--coupled`) the coupled app image whose repo
 // matches. It is the single source of truth the works-after fixtures derive
-// their defaults from at RUNTIME (cinatra#2302) instead of carrying a third
+// their defaults from at RUNTIME (cinatra#2304) instead of carrying a third
 // hand-synced copy of the digest that compose + the matrix already carry
 // (Renovate pairs those two, cinatra#1863, but knows nothing about a fixture
 // literal). `--tag` prints the `tag@sha256:…` form (repo stripped) for the

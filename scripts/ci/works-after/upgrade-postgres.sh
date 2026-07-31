@@ -58,7 +58,7 @@ source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 # exception onto the bytes the hold actually ships. Sources are bare majors (no
 # canonical field digest — cinatra#1417).
 # The TARGET defaults are DERIVED from the matrix at runtime (wa_matrix_pin —
-# never a copied digest literal, cinatra#2302).
+# never a copied digest literal, cinatra#2304).
 PG_CASEA_FROM_TAG="${PG_CASEA_FROM_TAG:-17-alpine}"
 PG_CASEA_TO_TAG="${PG_CASEA_TO_TAG:-$(wa_matrix_pin platform-postgres --tag)}"
 PG_CASEB_FROM_TAG="${PG_CASEB_FROM_TAG:-15-alpine}"

@@ -42,7 +42,7 @@ wa_node() { node "$@"; }
 # hand-copied digest literal here was a THIRD carrier of a value docker-compose.yml
 # and the matrix already carry — Renovate pairs those two in one PR (cinatra#1863)
 # but knows nothing about a fixture literal, so every digest wave was born red on
-# the drift guard (cinatra#2194) until a human hand-synced this file (cinatra#2302).
+# the drift guard (cinatra#2194) until a human hand-synced this file (cinatra#2304).
 # Deriving deletes the carrier: there is one source of truth, and the compose↔matrix
 # equality is gated by scripts/check-upgrade-matrix.mjs check #4.
 #

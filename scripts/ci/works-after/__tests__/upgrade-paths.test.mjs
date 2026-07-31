@@ -49,7 +49,7 @@ function runBash(args, env = {}) {
 //   VAR="${VAR:-<default expression>}"
 // The default is either a literal (a fixture-only source pin the matrix does not
 // carry) or a RUNTIME DERIVATION from the upgrade matrix
-// (`$(wa_matrix_pin …)`, cinatra#2302). These helpers read the expression and
+// (`$(wa_matrix_pin …)`, cinatra#2304). These helpers read the expression and
 // EVALUATE it exactly as the arm does — with scripts/ci/works-after/lib.sh
 // sourced — so every assertion below is about the value the arm actually runs,
 // literal or derived.
@@ -334,14 +334,14 @@ test("upgrade-postgres fixture: digest-bound TARGET pins, bare-major sources, dr
   assert.match(src, /scripts\/upgrade\/postgres-upgrade-major\.sh/, "must drive the committed pg family path");
 });
 
-// ── the fixture defaults ARE the matrix pins (cinatra#2194 / cinatra#2302) ────
+// ── the fixture defaults ARE the matrix pins (cinatra#2194 / cinatra#2304) ────
 // Every candidate image below is a projection of ONE source of truth: the
 // docker-compose.yml pin, mirrored into config/upgrade/upgrade-matrix.json by
 // Renovate's paired custom manager (cinatra#1863) and gated equal by
 // scripts/check-upgrade-matrix.mjs check #4. A fixture that carried its own
 // copied literal was a THIRD carrier nothing co-updates: it drifted onto a
 // retired digest once (cinatra#2194) and made every Renovate digest PR born red
-// on the guard below (cinatra#2302, PR #2301). The defaults are now DERIVED at
+// on the guard below (cinatra#2304, PR #2301). The defaults are now DERIVED at
 // runtime, so the carrier is gone by construction — these tests prove the
 // derivation resolves to the matrix value and that no literal creeps back.
 const MATRIX_CARRIED_DEFAULTS = [
@@ -363,7 +363,7 @@ function matrixPinOf(matrix, serviceId, coupledRepo) {
   return hits[0].image;
 }
 
-test("works-after fixture defaults EQUAL the matrix pins (drift guard, cinatra#2194/cinatra#2302)", () => {
+test("works-after fixture defaults EQUAL the matrix pins (drift guard, cinatra#2194/cinatra#2304)", () => {
   const matrix = JSON.parse(readFileSync(resolve(REPO_ROOT, "config/upgrade/upgrade-matrix.json"), "utf8"));
   for (const [file, v, serviceId, coupledRepo, form] of MATRIX_CARRIED_DEFAULTS) {
     const pin = matrixPinOf(matrix, serviceId, coupledRepo);
@@ -399,7 +399,7 @@ test("the drift-guard table covers EVERY matrix-derived fixture default (no sile
   );
 });
 
-test("resolve-transition --pin/--image-repo fail closed on malformed invocations (cinatra#2302)", () => {
+test("resolve-transition --pin/--image-repo fail closed on malformed invocations (cinatra#2304)", () => {
   // A typo must never silently change WHICH pin is printed (codex round-1).
   for (const [args, code, why] of [
     [["--pin", "neo4j", "--tagg"], 2, "unknown flag must not be swallowed as a positional"],
@@ -467,7 +467,7 @@ test("--image-repo / --coupled parse a registry host:port ref correctly (codex r
   assert.equal(coupled.stdout, `registry:5000/org/app@${digest}`);
 });
 
-test("no works-after arm hardcodes a matrix pin digest — the third-carrier class stays gone (cinatra#2302)", () => {
+test("no works-after arm hardcodes a matrix pin digest — the third-carrier class stays gone (cinatra#2304)", () => {
   // Self-maintaining anti-carrier invariant: a digest the matrix carries must
   // never ALSO appear as a literal in an arm. (Fixture-only SOURCE pins — a
   // retired series the matrix does not model — are unaffected: their digests
@@ -492,7 +492,7 @@ test("no works-after arm hardcodes a matrix pin digest — the third-carrier cla
   assert.deepEqual(
     offenders,
     [],
-    `a works-after arm hardcodes a digest the upgrade matrix already carries — derive it with wa_matrix_pin instead (a copied literal is the carrier cinatra#2302 removed):\n  ${offenders.join("\n  ")}`,
+    `a works-after arm hardcodes a digest the upgrade matrix already carries — derive it with wa_matrix_pin instead (a copied literal is the carrier cinatra#2304 removed):\n  ${offenders.join("\n  ")}`,
   );
 });
 

@@ -53,7 +53,7 @@ source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 # unpinned manual run).
 NEO4J_FROM_TAG="${NEO4J_FROM_TAG:-5.26-community@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca}"
 # The TARGET is DERIVED from the matrix at runtime (wa_matrix_pin — never a
-# copied digest literal, cinatra#2302); the SOURCE is a retired-series fixture
+# copied digest literal, cinatra#2304); the SOURCE is a retired-series fixture
 # pin the matrix does not carry, so it stays an explicit literal.
 NEO4J_TO_TAG="${NEO4J_TO_TAG:-$(wa_matrix_pin neo4j --tag)}"
 # The MATRIX versions = the store-format series of each tag (strip the digest

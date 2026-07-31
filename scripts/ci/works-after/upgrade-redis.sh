@@ -48,7 +48,7 @@ source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 # 7-alpine pin (docker-compose.yml documents it as the rollback ref; the matrix
 # does not carry a retired source, so it stays an explicit literal), TO = the
 # platform-redis matrix pin, DERIVED at runtime (wa_matrix_pin — never a copied
-# digest literal, cinatra#2302). An override may be a bare tag (an
+# digest literal, cinatra#2304). An override may be a bare tag (an
 # intentionally unpinned manual run).
 REDIS_FROM_TAG="${REDIS_FROM_TAG:-7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99}"
 REDIS_TO_TAG="${REDIS_TO_TAG:-$(wa_matrix_pin platform-redis --tag)}"

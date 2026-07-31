@@ -40,7 +40,7 @@ source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 NEO4J_TAG="${NEO4J_TAG:-2026.05-community}"
 # Full pinned ref (tag@sha256) — authoritative for the pull, so the proof binds
 # the DIGEST. Defaults to the neo4j matrix pin (== the compose pin, gated equal
-# by the pin-drift check), DERIVED at runtime rather than copied (cinatra#2302),
+# by the pin-drift check), DERIVED at runtime rather than copied (cinatra#2304),
 # so a standalone run still proves the bytes the repo ships.
 NEO4J_IMAGE="${NEO4J_IMAGE:-$(wa_matrix_pin neo4j)}"
 GRAPHITI_IMAGE="${GRAPHITI_IMAGE:-zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2}"

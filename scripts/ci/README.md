@@ -112,7 +112,7 @@ never copied into the arm as a digest literal. The matrix is kept byte-equal to
 `docker-compose.yml` by the pin-drift gate and is bumped in the *same* Renovate
 PR as compose (cinatra#1863), so a digest wave moves ONE value and the fixtures
 follow — a copied literal was a third carrier nothing co-updated, which made
-every digest PR born red (cinatra#2194 / cinatra#2302). Fixture-only **source**
+every digest PR born red (cinatra#2194 / cinatra#2304). Fixture-only **source**
 pins (a retired series the matrix does not model, e.g. `REDIS_FROM_TAG`) stay
 explicit literals. Overrides are unchanged: an env value always wins, and the
 derivation is skipped entirely when one is set.

@@ -38,7 +38,7 @@ source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 
 # DERIVED (never a copied literal): the nango-server pin the upgrade matrix
 # couples to nango-postgres — the same digest docker-compose.yml runs, kept equal
-# by the pin-drift gate. See wa_matrix_pin in lib.sh (cinatra#2302).
+# by the pin-drift gate. See wa_matrix_pin in lib.sh (cinatra#2304).
 NANGO_SERVER_IMAGE="${NANGO_SERVER_IMAGE:-$(wa_matrix_pin nango-postgres --coupled nangohq/nango-server)}"
 NANGO_DB_TAG="${NANGO_DB_TAG:-17-alpine}"
 REDIS_TAG="${REDIS_TAG:-8-alpine}"

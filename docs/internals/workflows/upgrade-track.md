@@ -772,7 +772,7 @@ image with the sibling digest kept in sync and the gate green on a paired bump
 (and red on an unpaired one, the old status quo). The definitive proof is the
 first Renovate digest PR that lands green without a manual matrix sync.
 
-### 12.1 The third carrier — works-after fixtures now DERIVE their pins (cinatra#2302)
+### 12.1 The third carrier — works-after fixtures now DERIVE their pins (cinatra#2304)
 
 The live proof arrived on PR #2301 (`nangohq/nango-server` digest
 `1b3be71` → `94a7983`): the pairing worked exactly as designed — compose and the
