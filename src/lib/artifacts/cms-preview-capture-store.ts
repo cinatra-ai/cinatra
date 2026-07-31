@@ -69,8 +69,16 @@ export const CMS_PREVIEW_CAPTURE_OBJECT_TYPE = "@cinatra-ai/objects:cms-preview-
  *               fresh at read-back time. Paired with `current` on the S4
  *               verification view, this is #2044's "reviewed vs applied
  *               read-back render": drift the field diff reports gains a picture.
+ *   `repaired` — cinatra#2286 S10: the producer's RE-STAGED write for a repair
+ *               round, captured bound to the repair's SUCCESSOR target's own
+ *               `(artifactId, representationRevisionId)` through the same
+ *               unmodified `capturePinnedPreviewPair` pipeline every other
+ *               `current`/`before` pair goes through — nothing about that path
+ *               needs to know it is a repair. Paired with the repair's BASE
+ *               target's own `current` capture on the `repair` comparison
+ *               (`cms-preview-capture-view.ts`), never inferred from `current`.
  */
-export type CmsPreviewCaptureRole = "current" | "before" | "applied";
+export type CmsPreviewCaptureRole = "current" | "before" | "applied" | "repaired";
 
 /** A capture either produced a picture, or explains why it could not. */
 export type CmsPreviewCaptureStatus = "captured" | "degraded";
