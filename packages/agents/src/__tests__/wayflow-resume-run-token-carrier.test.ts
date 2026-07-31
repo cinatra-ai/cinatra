@@ -30,7 +30,12 @@ const sent: SentMessage[] = [];
 
 const { setAgentRunTokenHashMock, sendTaskMock } = vi.hoisted(() => ({
   setAgentRunTokenHashMock: vi.fn(async () => {}),
-  sendTaskMock: vi.fn(async () => ({ id: "task-1", status: { state: "completed" } })),
+  sendTaskMock: vi.fn(
+    async (_params: { message: SentMessage }) => ({
+      id: "task-1",
+      status: { state: "completed" },
+    }),
+  ),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -119,14 +124,10 @@ describe("resume sites attach the carrier to the A2A message", () => {
     const metadata = await mintResumeRunTokenMetadata("run-1");
     await sendTaskMock({
       message: {
-        role: "user",
-        kind: "message",
-        messageId: "m1",
-        contextId: "ctx-1",
         parts: [{ kind: "text", text: resumeText }],
         metadata,
       },
-    } as { message: SentMessage });
+    });
     return sent[0];
   }
 
