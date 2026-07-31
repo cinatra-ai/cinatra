@@ -29,7 +29,9 @@ export interface ResolvedBinding {
    * Candidate secrets in priority order: the current secret, then a non-expired
    * previous secret during a rotation window. Already filtered for expiry.
    * EMPTY for a `legacyEnabled` binding (a legacy binding carries no Standard-
-   * Webhooks secret — the route verifies it via {@link legacySecret} instead).
+   * Webhooks secret — and since cinatra#2022 deleted the route's legacy-HMAC
+   * verification arm, no legacy verification exists: the route rejects such a
+   * binding fail-closed).
    */
   readonly secrets: string[];
   /**
