@@ -104,6 +104,19 @@ version(s) set. `WORKS_AFTER_GATE_MODE=1` promotes a SKIP to a FAIL (no false
 green when a gate run can't actually exercise an arm). Throwaway crypto/users are
 minted per run — **no ops secret, no external OAuth, no private data**.
 
+**Where "the current pin" comes from.** Any candidate default that mirrors a
+stateful-service pin is **derived at runtime** from
+`config/upgrade/upgrade-matrix.json` (`wa_matrix_pin` in
+`scripts/ci/works-after/lib.sh` → `scripts/upgrade/resolve-transition.mjs --pin`),
+never copied into the arm as a digest literal. The matrix is kept byte-equal to
+`docker-compose.yml` by the pin-drift gate and is bumped in the *same* Renovate
+PR as compose (cinatra#1863), so a digest wave moves ONE value and the fixtures
+follow — a copied literal was a third carrier nothing co-updated, which made
+every digest PR born red (cinatra#2194 / cinatra#2302). Fixture-only **source**
+pins (a retired series the matrix does not model, e.g. `REDIS_FROM_TAG`) stay
+explicit literals. Overrides are unchanged: an env value always wins, and the
+derivation is skipped entirely when one is set.
+
 The harness is wired as a required check via
 `.github/workflows/works-after-proof.yml`, which runs the real multi-arm job
 only when an upgrade-relevant path changed (an internal `detect` paths-filter)

@@ -22,7 +22,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -42,6 +42,32 @@ function runNode(args, opts = {}) {
 }
 function runBash(args, env = {}) {
   return spawnSync("bash", args, { encoding: "utf8", env: { ...process.env, ...env } });
+}
+
+// ── fixture candidate defaults ───────────────────────────────────────────────
+// An arm declares each candidate image as an OVERRIDABLE default:
+//   VAR="${VAR:-<default expression>}"
+// The default is either a literal (a fixture-only source pin the matrix does not
+// carry) or a RUNTIME DERIVATION from the upgrade matrix
+// (`$(wa_matrix_pin …)`, cinatra#2302). These helpers read the expression and
+// EVALUATE it exactly as the arm does — with scripts/ci/works-after/lib.sh
+// sourced — so every assertion below is about the value the arm actually runs,
+// literal or derived.
+const LIB_SH = resolve(REPO_ROOT, "scripts/ci/works-after/lib.sh");
+
+function defaultExprOf(src, v, label = "") {
+  const m = src.match(new RegExp(`${v}="\\$\\{${v}:-([^}]+)\\}"`));
+  assert.ok(m, `${label}missing overridable default for ${v}`);
+  return m[1];
+}
+
+function resolveDefault(fileRel, v) {
+  const src = readFileSync(resolve(REPO_ROOT, fileRel), "utf8");
+  const expr = defaultExprOf(src, v, `${fileRel}: `);
+  assert.doesNotMatch(expr, /"/, `${fileRel}: ${v} default must not contain a double quote (unevaluable here)`);
+  const r = runBash(["-c", `set -euo pipefail; source "${LIB_SH}"; printf '%s' "${expr}"`]);
+  assert.equal(r.status, 0, `${fileRel}: ${v} default did not resolve (${expr}): ${r.stderr}`);
+  return r.stdout;
 }
 
 // ── resolve-transition.mjs (fail-closed eligibility) ─────────────────────────
@@ -213,9 +239,13 @@ test("upgrade-from fixtures default to digest-bound source AND target images", (
   ]) {
     const src = readFileSync(resolve(REPO_ROOT, file), "utf8");
     for (const v of [fromVar, toVar]) {
-      const m = src.match(new RegExp(`${v}="\\$\\{${v}:-([^}]+)\\}"`));
-      assert.ok(m, `${file}: missing overridable default for ${v}`);
-      assert.match(m[1], /@sha256:[0-9a-f]{64}$/, `${file}: ${v} default must be digest-bound (pins the fixture bytes)`);
+      // RESOLVED (a derived default resolves through wa_matrix_pin) — the arm
+      // must run digest-bound bytes however the default is expressed.
+      assert.match(
+        resolveDefault(file, v),
+        /@sha256:[0-9a-f]{64}$/,
+        `${file}: ${v} default must resolve digest-bound (pins the fixture bytes)`,
+      );
     }
     assert.match(src, /scripts\/upgrade\//, `${file} must drive the committed family path`);
   }
@@ -277,54 +307,156 @@ test("postgres path script runs with errtrace + the subshell trap guard", () => 
 
 test("upgrade-postgres fixture: digest-bound TARGET pins, bare-major sources, drives the committed pg family path", () => {
   const src = readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after/upgrade-postgres.sh"), "utf8");
+  const file = "scripts/ci/works-after/upgrade-postgres.sh";
   // Field pg SOURCES have no single canonical digest (cinatra#1417) — bare majors.
   for (const v of ["PG_CASEA_FROM_TAG", "PG_CASEB_FROM_TAG"]) {
-    const m = src.match(new RegExp(`${v}="\\$\\{${v}:-([^}]+)\\}"`));
-    assert.ok(m, `missing overridable default for ${v}`);
-    assert.doesNotMatch(m[1], /@sha256:/, `${v} is a field source (no canonical digest) — must be a bare tag`);
+    assert.doesNotMatch(
+      resolveDefault(file, v),
+      /@sha256:/,
+      `${v} is a field source (no canonical digest) — must be a bare tag`,
+    );
   }
   // TARGETS are the matrix pins — digest-bound (pins the fixture's proven bytes).
   for (const v of ["PG_CASEA_TO_TAG", "PG_CASEB_TO_TAG"]) {
-    const m = src.match(new RegExp(`${v}="\\$\\{${v}:-([^}]+)\\}"`));
-    assert.ok(m, `missing overridable default for ${v}`);
-    assert.match(m[1], /@sha256:[0-9a-f]{64}$/, `${v} default must be digest-bound (the matrix target pin)`);
+    assert.match(
+      resolveDefault(file, v),
+      /@sha256:[0-9a-f]{64}$/,
+      `${v} default must resolve digest-bound (the matrix target pin)`,
+    );
   }
   assert.match(src, /scripts\/upgrade\/postgres-upgrade-major\.sh/, "must drive the committed pg family path");
 });
 
-test("upgrade-postgres + nango fixture defaults EQUAL the matrix pins (drift guard, cinatra#2194)", () => {
-  // Digest-bound FORMAT alone let the Case B default drift onto a retired
-  // digest once (cinatra#2194) — pin the defaults to the matrix VALUES so a
-  // compose/matrix pin move reds this suite until the fixtures follow.
-  const matrix = JSON.parse(
-    readFileSync(resolve(REPO_ROOT, "config/upgrade/upgrade-matrix.json"), "utf8"),
+// ── the fixture defaults ARE the matrix pins (cinatra#2194 / cinatra#2302) ────
+// Every candidate image below is a projection of ONE source of truth: the
+// docker-compose.yml pin, mirrored into config/upgrade/upgrade-matrix.json by
+// Renovate's paired custom manager (cinatra#1863) and gated equal by
+// scripts/check-upgrade-matrix.mjs check #4. A fixture that carried its own
+// copied literal was a THIRD carrier nothing co-updates: it drifted onto a
+// retired digest once (cinatra#2194) and made every Renovate digest PR born red
+// on the guard below (cinatra#2302, PR #2301). The defaults are now DERIVED at
+// runtime, so the carrier is gone by construction — these tests prove the
+// derivation resolves to the matrix value and that no literal creeps back.
+const MATRIX_CARRIED_DEFAULTS = [
+  // [file, var, serviceId, coupledRepo|null, "ref" | "tag"]
+  ["scripts/ci/works-after/upgrade-postgres.sh", "PG_CASEA_TO_TAG", "platform-postgres", null, "tag"],
+  ["scripts/ci/works-after/upgrade-postgres.sh", "PG_CASEB_TO_TAG", "nango-postgres", null, "tag"],
+  ["scripts/ci/works-after/nango.sh", "NANGO_SERVER_IMAGE", "nango-postgres", "nangohq/nango-server", "ref"],
+  ["scripts/ci/works-after/upgrade-neo4j.sh", "NEO4J_TO_TAG", "neo4j", null, "tag"],
+  ["scripts/ci/works-after/graphiti.sh", "NEO4J_IMAGE", "neo4j", null, "ref"],
+  ["scripts/ci/works-after/upgrade-redis.sh", "REDIS_TO_TAG", "platform-redis", null, "tag"],
+];
+
+function matrixPinOf(matrix, serviceId, coupledRepo) {
+  const svc = matrix.services.find((s) => s.id === serviceId);
+  assert.ok(svc, `matrix must define service '${serviceId}'`);
+  if (!coupledRepo) return svc.baselinePin.image;
+  const hits = (svc.coupledAppImages ?? []).filter((c) => c.image.startsWith(`${coupledRepo}:`));
+  assert.equal(hits.length, 1, `matrix must couple exactly one ${coupledRepo} to ${serviceId}`);
+  return hits[0].image;
+}
+
+test("works-after fixture defaults EQUAL the matrix pins (drift guard, cinatra#2194/cinatra#2302)", () => {
+  const matrix = JSON.parse(readFileSync(resolve(REPO_ROOT, "config/upgrade/upgrade-matrix.json"), "utf8"));
+  for (const [file, v, serviceId, coupledRepo, form] of MATRIX_CARRIED_DEFAULTS) {
+    const pin = matrixPinOf(matrix, serviceId, coupledRepo);
+    // A "tag" var carries the pin with the image repo stripped (postgres:X -> X).
+    const expected = form === "tag" ? pin.slice(pin.split("@")[0].lastIndexOf(":") + 1) : pin;
+    assert.equal(
+      resolveDefault(file, v),
+      expected,
+      `${file}: ${v} default must resolve to the matrix ${serviceId}${coupledRepo ? ` / ${coupledRepo}` : ""} pin`,
+    );
+  }
+});
+
+test("the drift-guard table covers EVERY matrix-derived fixture default (no silent new projection)", () => {
+  // MATRIX_CARRIED_DEFAULTS is the only place a derivation's INTENT (which
+  // service/coupled image it must resolve to) is asserted; a new derived default
+  // that never reaches the table would be unchecked. Scan the arms and require
+  // every `VAR="${VAR:-$(wa_matrix_pin …)}"` to have a row.
+  const armsDir = resolve(REPO_ROOT, "scripts/ci/works-after");
+  const covered = new Set(MATRIX_CARRIED_DEFAULTS.map(([file, v]) => `${file}|${v}`));
+  const found = [];
+  for (const f of readdirSync(armsDir).filter((n) => n.endsWith(".sh"))) {
+    const src = readFileSync(join(armsDir, f), "utf8");
+    for (const m of src.matchAll(/^([A-Z0-9_]+)="\$\{\1:-\$\(wa_matrix_pin [^}]*\}"$/gm)) {
+      found.push(`scripts/ci/works-after/${f}|${m[1]}`);
+    }
+  }
+  assert.ok(found.length >= MATRIX_CARRIED_DEFAULTS.length, `expected at least ${MATRIX_CARRIED_DEFAULTS.length} derived defaults, found ${found.length}`);
+  assert.deepEqual(
+    found.filter((k) => !covered.has(k)),
+    [],
+    "a matrix-derived fixture default is missing from MATRIX_CARRIED_DEFAULTS — add a row so its intended service/pin is asserted",
   );
-  const byId = new Map(matrix.services.map((s) => [s.id, s]));
-  const defaultOf = (src, v) => {
-    const m = src.match(new RegExp(`${v}="\\$\\{${v}:-([^}]+)\\}"`));
-    assert.ok(m, `missing overridable default for ${v}`);
-    return m[1];
+});
+
+test("resolve-transition --pin/--image-repo fail closed on malformed invocations (cinatra#2302)", () => {
+  // A typo must never silently change WHICH pin is printed (codex round-1).
+  for (const [args, code, why] of [
+    [["--pin", "neo4j", "--tagg"], 2, "unknown flag must not be swallowed as a positional"],
+    [["--pin", "nango-postgres", "--couple", "nangohq/nango-server"], 2, "misspelled --coupled must not fall back to the baseline pin"],
+    [["--image-repo", "neo4j", "--pin", "platform-redis"], 2, "mixed modes must refuse"],
+    [["--pin", "neo4j", "stray"], 2, "a stray positional must refuse"],
+    [["--coupled", "x"], 2, "--coupled without --pin must refuse"],
+    [["--pin", "twenty-postgres"], 3, "a digestless matrix pin must refuse (a derived default pins bytes)"],
+    [["--pin", "nope"], 3, "an unknown service must refuse"],
+    [["--pin", "nango-postgres", "--coupled", "nope/nope"], 3, "an unmatched coupled repo must refuse"],
+  ]) {
+    const r = runNode([RESOLVE, ...args]);
+    assert.equal(r.status, code, `${args.join(" ")}: ${why} (stdout=${r.stdout} stderr=${r.stderr})`);
+    assert.equal(r.stdout, "", `${args.join(" ")}: a refusal must print no image`);
+  }
+});
+
+test("resolve-transition --tag projects repo:tag@digest and refuses a tagless ref (registry-port safe)", () => {
+  const matrix = JSON.parse(readFileSync(resolve(REPO_ROOT, "config/upgrade/upgrade-matrix.json"), "utf8"));
+  const digest = `sha256:${"a".repeat(64)}`;
+  const svc = matrix.services.find((s) => s.id === "platform-redis");
+  const write = (image) => {
+    svc.baselinePin.image = image;
+    svc.baselinePin.digest = digest;
+    const p = join(mkdtempSync(join(tmpdir(), "wa-pin-")), "upgrade-matrix.json");
+    writeFileSync(p, JSON.stringify(matrix));
+    return p;
   };
-  const upgSrc = readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after/upgrade-postgres.sh"), "utf8");
-  assert.equal(
-    `postgres:${defaultOf(upgSrc, "PG_CASEA_TO_TAG")}`,
-    byId.get("platform-postgres").baselinePin.image,
-    "PG_CASEA_TO_TAG default must be the platform-postgres matrix baseline pin",
-  );
-  assert.equal(
-    `postgres:${defaultOf(upgSrc, "PG_CASEB_TO_TAG")}`,
-    byId.get("nango-postgres").baselinePin.image,
-    "PG_CASEB_TO_TAG default must be the nango-postgres matrix baseline pin (the compose nango-db hold)",
-  );
-  const nangoSrc = readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after/nango.sh"), "utf8");
-  const coupled = (byId.get("nango-postgres").coupledAppImages ?? []).find((c) =>
-    c.image.startsWith("nangohq/nango-server:"),
-  );
-  assert.ok(coupled, "matrix must couple nangohq/nango-server to nango-postgres");
-  assert.equal(
-    defaultOf(nangoSrc, "NANGO_SERVER_IMAGE"),
-    coupled.image,
-    "NANGO_SERVER_IMAGE default must be the matrix coupled nango-server pin",
+  // A registry host:port colon must NOT be mistaken for the tag separator.
+  const withPort = runNode([RESOLVE, "--pin", "platform-redis", "--tag", "--matrix", write(`registry:5000/org/img:8-alpine@${digest}`)]);
+  assert.equal(withPort.status, 0, withPort.stderr);
+  assert.equal(withPort.stdout, `8-alpine@${digest}`);
+  // A digest-only (tagless) ref has nothing to project — refuse, never emit junk.
+  const tagless = runNode([RESOLVE, "--pin", "platform-redis", "--tag", "--matrix", write(`registry:5000/org/img@${digest}`)]);
+  assert.equal(tagless.status, 3, `a tagless ref must refuse: ${tagless.stdout}`);
+  assert.equal(tagless.stdout, "");
+});
+
+test("no works-after arm hardcodes a matrix pin digest — the third-carrier class stays gone (cinatra#2302)", () => {
+  // Self-maintaining anti-carrier invariant: a digest the matrix carries must
+  // never ALSO appear as a literal in an arm. (Fixture-only SOURCE pins — a
+  // retired series the matrix does not model — are unaffected: their digests
+  // are not matrix values.)
+  const matrix = JSON.parse(readFileSync(resolve(REPO_ROOT, "config/upgrade/upgrade-matrix.json"), "utf8"));
+  const matrixDigests = new Set();
+  for (const s of matrix.services) {
+    for (const pin of [s.baselinePin, ...(s.coupledAppImages ?? [])]) {
+      const m = /(sha256:[0-9a-f]{64})/.exec(pin?.image ?? "");
+      if (m) matrixDigests.add(m[1]);
+      if (pin?.digest) matrixDigests.add(pin.digest);
+    }
+  }
+  const armsDir = resolve(REPO_ROOT, "scripts/ci/works-after");
+  const offenders = [];
+  for (const f of readdirSync(armsDir).filter((f) => f.endsWith(".sh"))) {
+    const src = readFileSync(join(armsDir, f), "utf8");
+    for (const m of src.matchAll(/sha256:[0-9a-f]{64}/g)) {
+      if (matrixDigests.has(m[0])) offenders.push(`${f}: ${m[0]}`);
+    }
+  }
+  assert.deepEqual(
+    offenders,
+    [],
+    `a works-after arm hardcodes a digest the upgrade matrix already carries — derive it with wa_matrix_pin instead (a copied literal is the carrier cinatra#2302 removed):\n  ${offenders.join("\n  ")}`,
   );
 });
 
@@ -391,9 +523,11 @@ test("neo4j path script runs with errtrace + the subshell trap guard", () => {
 test("upgrade-neo4j fixture: digest-bound source AND target defaults, drives the committed neo4j family path", () => {
   const src = readFileSync(resolve(REPO_ROOT, "scripts/ci/works-after/upgrade-neo4j.sh"), "utf8");
   for (const v of ["NEO4J_FROM_TAG", "NEO4J_TO_TAG"]) {
-    const m = src.match(new RegExp(`${v}="\\$\\{${v}:-([^}]+)\\}"`));
-    assert.ok(m, `missing overridable default for ${v}`);
-    assert.match(m[1], /@sha256:[0-9a-f]{64}$/, `${v} default must be digest-bound (pins the fixture bytes)`);
+    assert.match(
+      resolveDefault("scripts/ci/works-after/upgrade-neo4j.sh", v),
+      /@sha256:[0-9a-f]{64}$/,
+      `${v} default must resolve digest-bound (pins the fixture bytes)`,
+    );
   }
   assert.match(src, /scripts\/upgrade\/neo4j-upgrade-major\.sh/, "must drive the committed neo4j family path");
 });

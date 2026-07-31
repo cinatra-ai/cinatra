@@ -52,7 +52,10 @@ source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 # AND target image bytes; an override may be a bare tag (an intentionally
 # unpinned manual run).
 NEO4J_FROM_TAG="${NEO4J_FROM_TAG:-5.26-community@sha256:4bae36aff76271e27fd6a6ed0835413f86a284cd179cfb1cb7d188f5f7533aca}"
-NEO4J_TO_TAG="${NEO4J_TO_TAG:-2026.05-community@sha256:6c162e2432f861f2c4e3da77a6ba478e7f10e2160b870541f85294532bc6ff5f}"
+# The TARGET is DERIVED from the matrix at runtime (wa_matrix_pin — never a
+# copied digest literal, cinatra#2302); the SOURCE is a retired-series fixture
+# pin the matrix does not carry, so it stays an explicit literal.
+NEO4J_TO_TAG="${NEO4J_TO_TAG:-$(wa_matrix_pin neo4j --tag)}"
 # The MATRIX versions = the store-format series of each tag (strip the digest
 # pin, then the -community variant suffix): 5.26-community@… -> 5.26.
 FROM_BARE="${NEO4J_FROM_TAG%%@*}"; FROM_SERIES="${FROM_BARE%%-*}"
