@@ -13,7 +13,7 @@ import "server-only";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import { lt } from "drizzle-orm";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { auditEvents } from "./audit-schema";
 
 export type AuditEvent = {
@@ -490,6 +490,118 @@ export async function logDeniedAuditEventStrictWithCooldown(
   // (Codex convergence, adopted).
   rememberDeniedCooldown(key, Date.now(), isScoped(input));
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// logExecutionAuditEventDurable — the STRICT, IDEMPOTENT execution-audit write
+// path (cinatra#2266 G4/AC6).
+//
+// WHY NEITHER SIBLING ABOVE CAN BE ACKED ON. The durable audit spool removes a
+// record only after the app says "this is durably in the kernel", so the write
+// it acknowledges has to be able to make that claim. `logAuditEvent` cannot:
+// it mints a fresh `randomUUID()` per call, has no unique delivery key, and
+// SWALLOWS insert failures — ACKing on the back of it would confirm writes that
+// never happened, and a re-delivery after a crash would write a SECOND row for
+// one execution. `logAuditEventStrict` propagates failures but has no delivery
+// key either, so it turns at-least-once delivery into duplicate rows.
+//
+// WHAT THIS ADDS, one property at a time:
+//
+//   1. A UNIQUE DELIVERY KEY. `execution_delivery_key` (migration core__0088),
+//      the spool's `<spoolId>:<recordId>`. Unique where present; NULL for every
+//      other producer, and NULLs are distinct, so nothing else is constrained.
+//   2. AN `inserted | duplicate` RETURN. `ON CONFLICT DO NOTHING RETURNING id`
+//      distinguishes the two without a read-then-write race: exactly one row
+//      back means this call wrote it, zero means someone already had.
+//   3. PROPAGATED FAILURES. No `.catch(() => {})`. A caller that cannot write
+//      must not acknowledge, and it can only know that if the write throws.
+//   4. THE COOLDOWN BYPASSED. Not "opted out via `deniedCooldown`" — SKIPPED
+//      outright. The cooldown is a NOISE control keyed on a time window; this
+//      path's de-dup is an IDENTITY control keyed on the delivery key. Running
+//      both would let the time window discard a record whose delivery key says
+//      it is new, and the spool would then ACK a row that was never inserted.
+//   5. A DETERMINISTIC ROW ID derived from the delivery key, so a re-delivery
+//      names the same row rather than racing to mint a second uuid for it.
+//
+// ORDERING IS PRESERVED BY THE CALLER, deliberately: this helper writes ONE
+// row per call and the drain loop awaits them in producer order, which is the
+// order the spool read them in. A batch insert would be faster and would lose
+// the "stop at the first failure, ACK nothing past it" property that makes the
+// ACK safe.
+// ---------------------------------------------------------------------------
+
+export type ExecutionAuditWriteOutcome =
+  | { state: "inserted"; id: string }
+  | { state: "duplicate"; id: string };
+
+export type ExecutionAuditEventInput = AuditEventInput & {
+  /** The spool's physical delivery identity. REQUIRED — it is the whole point. */
+  executionDeliveryKey: string;
+};
+
+/**
+ * A stable UUID for a delivery key. Derived, not random: two deliveries of one
+ * record name the same row id, so even a driver that reported no rows from the
+ * conflict path cannot end up with two ids for one execution.
+ *
+ * Shape is a v4-looking UUID over a sha256 of the key — the column is `text`
+ * with a PK constraint and the value only has to be unique and deterministic,
+ * not a registered UUID version.
+ */
+export function executionAuditRowId(deliveryKey: string): string {
+  const h = createHash("sha256").update(`cinatra:execution-audit:${deliveryKey}`).digest("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
+
+export async function logExecutionAuditEventDurable(
+  input: ExecutionAuditEventInput,
+): Promise<ExecutionAuditWriteOutcome> {
+  const deliveryKey = input.executionDeliveryKey;
+  if (typeof deliveryKey !== "string" || deliveryKey.length === 0) {
+    throw new Error(
+      "logExecutionAuditEventDurable requires a non-empty executionDeliveryKey: without it the " +
+        "insert has nothing to be idempotent on, and acknowledging it to the broker's spool " +
+        "would discard a record that could still be written twice.",
+    );
+  }
+  const id = executionAuditRowId(deliveryKey);
+  const rows = await getAuditDb()
+    .insert(auditEvents)
+    .values({
+      id,
+      organizationId: input.organizationId ?? null,
+      actorPrincipalId: input.actorPrincipalId ?? null,
+      actorPrincipalType: input.actorPrincipalType ?? null,
+      authSource: input.authSource ?? null,
+      delegatedBy: input.delegatedBy ?? null,
+      impersonatedUserId: input.impersonatedUserId ?? null,
+      resourceType: input.resourceType ?? null,
+      resourceId: input.resourceId ?? null,
+      operation: input.operation ?? null,
+      decision: input.decision ?? null,
+      policyVersion: input.policyVersion ?? null,
+      requestId: input.requestId ?? null,
+      runId: input.runId ?? null,
+      a2aTaskId: input.a2aTaskId ?? null,
+      ip: input.ip ?? null,
+      executionDeliveryKey: deliveryKey,
+      metadata: sanitizeMetadata(input.metadata) ?? null,
+      // createdAt is defaulted by Postgres (timestamptz NOT NULL DEFAULT now()).
+    })
+    // The conflict target is the DELIVERY KEY, not the primary key. Keying on
+    // `id` would look equivalent (the id is derived from the key) but would
+    // silently absorb a genuine id collision from any other producer as a
+    // "duplicate delivery"; naming the column states what is actually being
+    // de-duplicated.
+    .onConflictDoNothing({ target: auditEvents.executionDeliveryKey })
+    .returning({ id: auditEvents.id });
+  // Zero rows back means the unique index rejected it — the record is ALREADY
+  // durably in the kernel, which is exactly as good as having just written it,
+  // and the caller may acknowledge. This is the at-least-once contract paying
+  // off, not an error.
+  return rows.length > 0
+    ? { state: "inserted", id: rows[0]?.id ?? id }
+    : { state: "duplicate", id };
 }
 
 // ---------------------------------------------------------------------------

@@ -115,6 +115,11 @@ function brokerEnv(overrides: Record<string, string | undefined> = {}): Record<s
     EXEC_WORKER_SERVICE_TOKEN: "worker-token-bbbbbbbbbbbbbbbbbbbb",
     EXEC_BROKER_RUN_LIVENESS: "carrier-ttl-only",
     EXEC_BROKER_VOLUME_OPS: "host-docker",
+    // cinatra#2266 slice 2: the composition tests are about the OTHER seams,
+    // so they take the explicit non-durable opt-out rather than each standing
+    // up a temp volume. The spool's own durability is proven in
+    // audit-spool.test.ts against a real directory.
+    EXEC_AUDIT_SPOOL_DIR: "memory-nondurable",
     EXEC_EGRESS_MODE: "none",
     ...tlsEnv(BROKER_PEM),
     ...clientTlsEnv(BROKER_CLIENT_PEM),
@@ -146,6 +151,19 @@ describe("broker entry — fail-closed on unwired seams", () => {
     expect(() => composeBrokerService(brokerEnv({ EXEC_BROKER_VOLUME_OPS: undefined }))).toThrow(
       /EXEC_BROKER_VOLUME_OPS=host-docker/,
     );
+  });
+
+  it("refuses to start without the audit-spool acknowledgement (cinatra#2266)", () => {
+    // Unset is REFUSED, not defaulted: both plausible defaults are wrong. A
+    // path inside the container writes the only copy of an audit trail into an
+    // ephemeral layer, and a silent memory fallback reintroduces the
+    // at-most-once relay this slice replaced with nothing on the wire to say so.
+    expect(() => composeBrokerService(brokerEnv({ EXEC_AUDIT_SPOOL_DIR: undefined }))).toThrow(
+      /where its AUDIT SPOOL lives is not an inferable default/,
+    );
+    expect(() =>
+      composeBrokerService(brokerEnv({ EXEC_AUDIT_SPOOL_MAX_BYTES: "0" })),
+    ).toThrow(/EXEC_AUDIT_SPOOL_MAX_BYTES must be a positive number/);
   });
 
   it("refuses to start without an instance, a token, a worker URL or TLS material", () => {

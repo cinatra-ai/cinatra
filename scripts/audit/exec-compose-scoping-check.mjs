@@ -102,6 +102,11 @@ export const ALLOWED_INLINE_KEYS = new Set([
   // broker acknowledgements
   "EXEC_BROKER_RUN_LIVENESS",
   "EXEC_BROKER_VOLUME_OPS",
+  // durable audit spool (cinatra#2266 slice 2) — a PATH on a broker-owned
+  // volume and a byte bound. Exec-plane configuration by construction: the app
+  // never reads either, and neither can carry a credential.
+  "EXEC_AUDIT_SPOOL_DIR",
+  "EXEC_AUDIT_SPOOL_MAX_BYTES",
   // egress
   "EXEC_SANDBOX_NETWORK",
   "EXEC_EGRESS_MODE",

@@ -1145,6 +1145,13 @@ END $$`,
       run_id text,
       a2a_task_id text,
       ip text,
+      -- cinatra#2266 G4: the execution plane's PHYSICAL delivery identity
+      -- (spoolId:recordId), UNIQUE where present. It is what makes the
+      -- kernel insert idempotent, so a record re-delivered after a broker crash
+      -- writes one row, not two. NULL for every other producer; NULLs are
+      -- distinct in a Postgres unique index, so the constraint touches nothing
+      -- that already exists. Existing deployments converge via core__0088.
+      execution_delivery_key text,
       metadata jsonb,
       created_at timestamptz NOT NULL DEFAULT now()
     )` },
@@ -1187,6 +1194,10 @@ END $$` },
     { text: `CREATE INDEX IF NOT EXISTS audit_events_actor_principal_id_idx ON "${schemaName.replaceAll('"', '""')}"."audit_events" (actor_principal_id)` },
     { text: `CREATE INDEX IF NOT EXISTS audit_events_resource_idx ON "${schemaName.replaceAll('"', '""')}"."audit_events" (resource_type, resource_id)` },
     { text: `CREATE INDEX IF NOT EXISTS audit_events_created_at_idx ON "${schemaName.replaceAll('"', '""')}"."audit_events" (created_at DESC)` },
+    // The column is added for schemas that predate it; the UNIQUE index is what
+    // the idempotent execution-audit insert conflicts on (cinatra#2266 G4).
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."audit_events" ADD COLUMN IF NOT EXISTS execution_delivery_key text` },
+    { text: `CREATE UNIQUE INDEX IF NOT EXISTS audit_events_execution_delivery_key_key ON "${schemaName.replaceAll('"', '""')}"."audit_events" (execution_delivery_key)` },
     // auditor review companion (cinatra#1625): immutable per-run proposal
     // snapshot + single-use SoD approval receipts. Additive; mirrors core__0058.
     ...auditorSnapshotSchemaQueries(schemaName),

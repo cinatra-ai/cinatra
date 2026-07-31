@@ -82,10 +82,16 @@ import {
   startHostExclusivityRenewal,
 } from "./lease";
 import {
+  createAuditRelay,
   createBrokerService,
-  createBufferedAuditRelay,
   type BrokerService,
 } from "./broker-server";
+import {
+  createMemoryAuditSpool,
+  openAuditSpool,
+  DEFAULT_AUDIT_SPOOL_MAX_BYTES,
+  type AuditSpool,
+} from "./audit-spool";
 import {
   createCompositeHealthProvider,
   createGatewayHealthProbe,
@@ -101,6 +107,28 @@ import { WorkerServiceClient } from "./worker-client";
  * file path, never the key material itself in the environment.
  */
 export const EXEC_VOUCHER_VERIFY_PUBLIC_KEY_FILE_ENV = "EXEC_VOUCHER_VERIFY_PUBLIC_KEY_FILE";
+
+/**
+ * Where the DURABLE AUDIT SPOOL lives (cinatra#2266 slice 2). A directory on a
+ * volume this broker owns exclusively — the compose topology mounts one.
+ *
+ * NOT INFERABLE, so it is the third acknowledgement this entrypoint refuses to
+ * guess, alongside `EXEC_BROKER_RUN_LIVENESS` and `EXEC_BROKER_VOLUME_OPS`.
+ * Picking a default path would either write the only copy of an audit trail
+ * into a container's ephemeral layer (lost on every restart — the exact defect
+ * this slice exists to close) or into a directory the operator meant for
+ * something else. The explicit opt-out `memory-nondurable` keeps the
+ * pre-#2266 in-memory behaviour for a placement that genuinely has no volume,
+ * and it is loud: every drain response then carries `durable: false`, and the
+ * app logs that as a gap in the guarantee rather than inferring one.
+ */
+export const EXEC_AUDIT_SPOOL_DIR_ENV = "EXEC_AUDIT_SPOOL_DIR";
+
+/** Byte ceiling for the spool file; defaults to the module's own bound. */
+export const EXEC_AUDIT_SPOOL_MAX_BYTES_ENV = "EXEC_AUDIT_SPOOL_MAX_BYTES";
+
+/** The explicit, operator-stated opt-out of durability. */
+export const AUDIT_SPOOL_NONDURABLE = "memory-nondurable";
 
 export const DEFAULT_BROKER_LISTEN_PORT = 4100;
 
@@ -295,6 +323,49 @@ function composeHostExclusivity(
   };
 }
 
+/**
+ * Compose the DURABLE AUDIT SPOOL from scoped env (cinatra#2266 slice 2).
+ *
+ * THREE-VALUED, exactly like `EXEC_HOST_EXCLUSIVITY`: a directory path builds
+ * the real thing, `memory-nondurable` is an explicit operator statement that
+ * this placement accepts a non-durable audit relay, and anything else —
+ * including UNSET — refuses to start. Unset is refused rather than defaulted
+ * because both plausible defaults are wrong: a path inside the container writes
+ * the only copy of an audit trail into an ephemeral layer, and silently falling
+ * back to memory reintroduces the exact at-most-once relay this slice replaced,
+ * with nothing on the wire to say so.
+ *
+ * A LOCKED or CORRUPT spool is a START-UP refusal, not a runtime one. A second
+ * broker against one volume would interleave two writers into one append log,
+ * and a spool whose format this build does not speak must not be read past.
+ */
+export function composeAuditSpool(env: Env): AuditSpool {
+  const declared = env[EXEC_AUDIT_SPOOL_DIR_ENV]?.trim();
+  const rawMax = env[EXEC_AUDIT_SPOOL_MAX_BYTES_ENV]?.trim();
+  let maxBytes = DEFAULT_AUDIT_SPOOL_MAX_BYTES;
+  if (rawMax) {
+    const parsed = Number(rawMax);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error(
+        `${EXEC_AUDIT_SPOOL_MAX_BYTES_ENV} must be a positive number of bytes (got "${rawMax}").`,
+      );
+    }
+    maxBytes = Math.floor(parsed);
+  }
+  if (declared === AUDIT_SPOOL_NONDURABLE) return createMemoryAuditSpool({ maxBytes });
+  if (!declared) {
+    throw new Error(
+      "Refusing to start the execution-plane broker service: where its AUDIT SPOOL lives is " +
+        `not an inferable default. Set ${EXEC_AUDIT_SPOOL_DIR_ENV} to a directory on a volume ` +
+        "this broker owns exclusively (the shipped docker-compose.exec.yml mounts one) so audit " +
+        "records survive a restart and are removed only after the app acknowledges a durable " +
+        `write, or set ${EXEC_AUDIT_SPOOL_DIR_ENV}=${AUDIT_SPOOL_NONDURABLE} to acknowledge ` +
+        "that this placement accepts an in-memory relay whose records do NOT survive a restart.",
+    );
+  }
+  return openAuditSpool({ dir: declared, maxBytes });
+}
+
 export type BrokerEntryComposition = {
   service: BrokerService;
   port: number;
@@ -381,12 +452,16 @@ export function composeBrokerService(env: Env = process.env): BrokerEntryComposi
     tls: clientTls,
   });
 
-  const relay = createBufferedAuditRelay();
+  const relay = createAuditRelay({ spool: composeAuditSpool(env) });
   const hostExclusivity = composeHostExclusivity(env);
 
   const broker = new ExecutionBroker({
     worker: workerClient,
     auditSink: relay.auditSink,
+    // cinatra#2266 G1: the reservation the broker takes BEFORE dispatch. A
+    // rejection here refuses the command — the spool is what makes "we could
+    // not record this" stop meaning "we ran it anyway".
+    auditReserver: relay.auditReserver,
     stdioSink: relay.stdioSink,
     // Acknowledged above: bounded by carrier TTL, not by the run store.
     livenessProbe: async () => "alive",
@@ -495,6 +570,10 @@ export function composeBrokerService(env: Env = process.env): BrokerEntryComposi
       stopRenewal?.();
       workerClient.close();
       await service.close();
+      // Releases the spool's single-writer lock. Without it a restart in the
+      // same container would find a lock whose holder pid it has to prove dead
+      // before it can take over — correct, but noisier than closing cleanly.
+      await relay.spool.close();
     },
   };
 }

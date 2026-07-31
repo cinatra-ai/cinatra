@@ -47,7 +47,7 @@ services:
     environment:
       # --- identity + wire ---
       EXEC_INSTANCE: ${CINATRA_EXEC_INSTANCE:?set CINATRA_EXEC_INSTANCE}
-      EXEC_PROTOCOL_VERSION: "1"
+      EXEC_PROTOCOL_VERSION: "2"
       EXEC_BROKER_LISTEN_PORT: "4100"
       EXEC_LISTEN_ADDRESS: "0.0.0.0"
       # --- the two acknowledgements broker-entry.ts refuses to infer ---
@@ -57,6 +57,15 @@ services:
       # Volume + container operations run on the WORKER host. This is what lets
       # this container have no docker socket at all.
       EXEC_BROKER_VOLUME_OPS: "worker-routed"
+      # Where the DURABLE AUDIT SPOOL lives (cinatra#2266 slice 2). The third
+      # acknowledgement broker-entry.ts refuses to infer, for the same reason as
+      # the two above: a default path would put the ONLY copy of an audit trail
+      # in the container's ephemeral layer, where a restart destroys it. The
+      # directory is bind-mounted below, and it must be a volume THIS broker
+      # owns exclusively — the spool is single-writer and refuses a second live
+      # writer against the same directory.
+      EXEC_AUDIT_SPOOL_DIR: "/opt/cinatra-exec/audit-spool"
+      EXEC_AUDIT_SPOOL_MAX_BYTES: ${CINATRA_EXEC_AUDIT_SPOOL_MAX_BYTES:-67108864}
       # --- worker hop ---
       EXEC_WORKER_URL: "https://cinatra-exec-worker:4200"
       # --- egress ---
@@ -91,6 +100,16 @@ services:
       # exec root also holds every service's scoped env file. Provision the host
       # with a matching lease path so both sides agree on where it lives.
       - ${CINATRA_EXEC_LEASE_DIR:-/opt/cinatra-exec/lease}:/opt/cinatra-exec/lease:rw
+      # THE AUDIT SPOOL'S VOLUME (cinatra#2266 slice 2). Read-WRITE, its own
+      # directory, and NOT shared with another broker: the spool is a
+      # single-writer append log plus a lock file, and two brokers writing one
+      # log is how a spool silently corrupts itself. It is what makes a record
+      # survive `docker restart` — without this mount the spool would be
+      # durable only until the container layer is discarded, which is not
+      # durable at all. Sized by EXEC_AUDIT_SPOOL_MAX_BYTES above: past that
+      # bound the broker REFUSES new commands rather than dropping records, so
+      # the host must have at least that much room here.
+      - ${CINATRA_EXEC_AUDIT_SPOOL_DIR:-/opt/cinatra-exec/audit-spool}:/opt/cinatra-exec/audit-spool:rw
       - ${CINATRA_EXEC_TLS_DIR:-/opt/cinatra-exec/tls}:/etc/cinatra-exec/tls:ro
     networks:
       - cinatra-exec-internal
@@ -134,7 +153,7 @@ services:
         required: true
     environment:
       EXEC_INSTANCE: ${CINATRA_EXEC_INSTANCE:?set CINATRA_EXEC_INSTANCE}
-      EXEC_PROTOCOL_VERSION: "1"
+      EXEC_PROTOCOL_VERSION: "2"
       EXEC_WORKER_LISTEN_PORT: "4200"
       EXEC_LISTEN_ADDRESS: "0.0.0.0"
       # Digest-pinned L0 base. The worker records the RESOLVED digest of whatever

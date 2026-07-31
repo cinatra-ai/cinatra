@@ -6,7 +6,7 @@
  * placement introduces:
  *
  *   app ──▶ broker   openJob | exec | closeJob | terminateJobsForRun |
- *                    sweep | drainAudit | health
+ *                    sweep | drainAudit | ackAudit | health
  *   broker ──▶ worker runCommand | ensureWorkspace | removeWorkspace |
  *                    stageSkills | removeSkills
  *
@@ -60,8 +60,17 @@ import type {
  * The wire-contract version. Bumped ONLY on an incompatible change to any shape
  * in this module; every peer of a deployment must carry the same number (the
  * ops#517 scoped env sets `EXEC_PROTOCOL_VERSION` on the exec services).
+ *
+ * 1 → 2 (cinatra#2266 slice 2, THE DURABLE AUDIT SPOOL). This is a version bump
+ * and not an additive op, and the distinction matters: `drainAudit` stopped
+ * being a DESTRUCTIVE take and became a pure READ that must be followed by
+ * `ackAudit`. A v1 app against a v2 broker would read the same records forever
+ * and never acknowledge them, so the spool would fill and — correctly,
+ * fail-closed — start refusing commands. A behaviour change that turns a peer
+ * mismatch into an execution outage is exactly what the lockstep version exists
+ * to prevent, so the number moves and every compose peer moves with it.
  */
-export const EXEC_PROTOCOL_VERSION = 1;
+export const EXEC_PROTOCOL_VERSION = 2;
 
 /** Env var the service entrypoints read to assert the deployed version. */
 export const EXEC_PROTOCOL_VERSION_ENV = "EXEC_PROTOCOL_VERSION";
@@ -97,6 +106,7 @@ export const BROKER_OPS = [
   "terminateJobsForRun",
   "sweep",
   "drainAudit",
+  "ackAudit",
   "health",
 ] as const;
 export type BrokerOp = (typeof BROKER_OPS)[number];
@@ -170,6 +180,35 @@ export type DrainAuditPayload = {
   maxAuditRecords?: number;
   maxStdioEntries?: number;
 };
+
+/**
+ * The ACKNOWLEDGEMENT (cinatra#2266 AC5). `drainAudit` is a READ; this is what
+ * removes what it returned, and only after the app has durably written it.
+ *
+ * `spoolId` is not decoration. Replicas can share one logical mTLS instance
+ * identity while owning different volumes, so an ACK that arrived at the wrong
+ * replica must delete NOTHING — it names the spool whose head it is talking
+ * about, and a mismatch is refused (the minimal G3 hook this slice needs; the
+ * rest of fleet routing is slice 3).
+ *
+ * `head` is the exact `head` the drain response carried. A head at or behind
+ * the committed watermark (stale), or one that is not a delivered record
+ * position (out of order), is REFUSED — only an exact committed prefix is ever
+ * removed.
+ */
+export type AckAuditPayload = {
+  spoolId: string;
+  head: number;
+};
+
+export type AckAuditResultPayload = {
+  acked: true;
+  head: number;
+  /** Records removed from the spool by this acknowledgement. */
+  removed: number;
+  /** Deliverable records still spooled past `head`. */
+  remaining: number;
+};
 export type HealthPayload = Record<string, never>;
 
 export type CloseJobResultPayload = { closed: true };
@@ -192,7 +231,47 @@ export type ExecutionStdioEntry = {
 export type DrainAuditResultPayload = {
   audit: ExecutionAuditRecord[];
   stdio: ExecutionStdioEntry[];
-  /** Records dropped since the last drain because the ring buffer was full. */
+  /**
+   * THE ACK CURSOR for this batch (cinatra#2266 AC5) — the spool position of
+   * the last record in `audit`, or the current watermark when the batch is
+   * empty. Acknowledging it commits exactly this prefix. Repeating the read
+   * without acknowledging returns the SAME head.
+   */
+  head: number;
+  /**
+   * The spool's persisted identity. Carried on every read and required on
+   * every ACK so a misrouted acknowledgement deletes nothing.
+   */
+  spoolId: string;
+  /**
+   * Deliverable records still spooled past `head` — what a bounded pass could
+   * not carry, stated rather than inferred from a short batch.
+   */
+  remaining: number;
+  /**
+   * TRUE when the records above are on a real volume and survive a broker
+   * restart. FALSE when the broker was composed with the in-memory spool: the
+   * delivery protocol is identical, the DURABILITY is not, and an app that
+   * cannot tell the two apart would report a guarantee it does not have.
+   */
+  durable: boolean;
+  /**
+   * PRE-DISPATCH RESERVATIONS REFUSED because the spool could not accept them
+   * (cinatra#2266 G1). Each one is a command that was NOT run — fail-closed —
+   * and is deliberately not itself an audit record (that is the unbounded write
+   * G5 names). Cumulative for the life of the spool, so a reader sees the
+   * count move rather than a counter someone else reset.
+   */
+  refusedReservations: number;
+  /**
+   * Records this spool recovered as `outcome_unknown` — a command that was
+   * dispatched and whose broker died before it learned the outcome. Non-zero
+   * means a crash happened and the trail says so.
+   */
+  recoveredUnknown: number;
+  /** Records dropped since the last drain because the ring buffer was full.
+   *  AUDIT records can no longer be dropped — the spool refuses ADMISSION
+   *  instead — so this counts stdio-style loss only and stays 0 for audit. */
   droppedAudit: number;
   droppedStdio: number;
   /**
@@ -263,6 +342,7 @@ export type BrokerRequest =
   | { op: "terminateJobsForRun"; payload: TerminateJobsForRunPayload }
   | { op: "sweep"; payload: SweepPayload }
   | { op: "drainAudit"; payload: DrainAuditPayload }
+  | { op: "ackAudit"; payload: AckAuditPayload }
   | { op: "health"; payload: HealthPayload };
 
 /** Result type for each broker op (the `result` field of an ok response). */
@@ -278,9 +358,11 @@ export type BrokerResultFor<Op extends BrokerOp> = Op extends "openJob"
           ? SweepResultPayload
           : Op extends "drainAudit"
             ? DrainAuditResultPayload
-            : Op extends "health"
-              ? HealthResultPayload
-              : never;
+            : Op extends "ackAudit"
+              ? AckAuditResultPayload
+              : Op extends "health"
+                ? HealthResultPayload
+                : never;
 
 // ---------------------------------------------------------------------------
 // broker ──▶ worker payloads
@@ -389,6 +471,16 @@ export type ExecErrorCode =
    * `environment_untrusted` audit path fires identically to in-process.
    */
   | "environment_untrusted"
+  /**
+   * An audit acknowledgement was REFUSED (cinatra#2266 AC5): it named a
+   * different spool, a head at or behind the committed watermark, or a head
+   * that is not a delivered record position. Its OWN code, not
+   * `malformed_request`: the request was well-formed and the refusal is a
+   * durability verdict the app must act on (re-read, do not retry the same
+   * ACK), which is a different instruction from "you sent nonsense". Nothing
+   * is removed from the spool on this path.
+   */
+  | "audit_ack_refused"
   /** The underlying broker/worker call threw. */
   | "op_failed"
   | "internal_error";
@@ -425,6 +517,7 @@ export const EXEC_ERROR_STATUS: Record<ExecErrorCode, number> = {
   payload_too_large: 413,
   command_in_flight: 409,
   environment_untrusted: 422,
+  audit_ack_refused: 409,
   op_failed: 500,
   internal_error: 500,
 };
@@ -783,6 +876,19 @@ export function parseBrokerRequest(
               ? {}
               : { maxStdioEntries: p.maxStdioEntries as number }),
           },
+        },
+      };
+    }
+    case "ackAudit": {
+      if (!isNonEmptyString(p.spoolId)) return fail("`spoolId` is required.");
+      if (!isNonNegativeInt(p.head)) {
+        return fail("`head` must be a non-negative integer.");
+      }
+      return {
+        ok: true,
+        request: {
+          op: "ackAudit",
+          payload: { spoolId: p.spoolId, head: p.head as number },
         },
       };
     }

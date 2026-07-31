@@ -250,7 +250,30 @@ export const DEFAULT_BROKER_QUOTAS: BrokerQuotas = {
 };
 
 /**
- * Durable audit record for ONE broker-dispatched command (or a refusal).
+ * Audit record for ONE broker command ATTEMPT (an execution or a refusal).
+ *
+ * THE GUARANTEE THIS RECORD ACTUALLY CARRIES (cinatra#2266 AC10 — the docblock
+ * is meant to be true, not aspirational):
+ *
+ *  - BROKER-LOCAL DURABILITY UNTIL ACK, *when a spool is wired*. On the remote
+ *    placement the broker's sink is the durable spool (`service/audit-spool.ts`):
+ *    the record is `fsync`ed to the broker's own volume before it is considered
+ *    emitted, it survives a broker restart, and it leaves the spool only after
+ *    the app has acknowledged a durable kernel write. Delivery is therefore
+ *    AT-LEAST-ONCE — a re-delivery after a crash is expected and correct — and
+ *    `deliveryKey` is what makes it harmless.
+ *  - PRODUCER ORDERING. Records are appended in the order the broker produced
+ *    them and are read back in that order; `seq` is the per-job attempt
+ *    sequence within that stream.
+ *  - SPOOL DURABILITY IS NOT KERNEL PERSISTENCE. "The spool holds it" and "the
+ *    authz kernel has a row for it" are two different facts. The spool's ACK is
+ *    what joins them: the app ACKs only after every record in a batch is
+ *    durably inserted (or recognized as an already-inserted duplicate) in
+ *    `audit_events`. Until then the broker still holds the record.
+ *  - IN-PROCESS PLACEMENT. When the sink writes to the kernel directly (the
+ *    local-dev placement) there is no spool and none of the above applies:
+ *    delivery is a direct call and the kernel helper's own posture governs.
+ *
  * Emitted for every command — allowed, denied, and terminated alike — to the
  * host-injected sink; `toAuthzAuditEventInput` maps it onto the authz
  * audit-kernel vocabulary (`actorPrincipalType: "model"`). stdout/stderr are
@@ -265,7 +288,34 @@ export type ExecutionAuditRecord = {
   runId?: string;
   command: string;
   cwd: string;
-  decision: "executed" | "refused";
+  /**
+   * PER-JOB ATTEMPT SEQUENCE (cinatra#2266 AC2). Allocated once per `exec()`
+   * call, BEFORE any refusal path can return — so a pre-dispatch refusal has a
+   * real sequence instead of a defaulted one, two identical refusals on one job
+   * are distinguishable, and a dispatch failure never reuses a sequence a
+   * dispatch already consumed. It is the LOGICAL correlation key's middle term
+   * (`jobId + seq + decision`); it is deliberately NOT the delivery key — see
+   * `deliveryKey`.
+   */
+  seq: number;
+  /**
+   * PHYSICAL DELIVERY IDENTITY (cinatra#2266 G2), `<spoolId>:<recordId>`.
+   * Stamped by the spool when the record is appended, so it is unique per
+   * physical delivery slot and stable across a re-delivery. This — not
+   * `jobId + seq + decision` — is what the ACK protocol and the kernel's
+   * idempotent insert key on. Absent on the in-process placement, whose sink
+   * reaches the kernel without a spool.
+   */
+  deliveryKey?: string;
+  /**
+   * `outcome_unknown` is a THIRD terminal state, not a refusal (cinatra#2266
+   * G1): the command passed every authorization gate and was handed to the
+   * sandbox, and then the broker died before it learned what happened. It is
+   * minted by spool recovery from an unresolved pre-dispatch reservation, and
+   * it exists so that a crash mid-command produces a record rather than
+   * silence.
+   */
+  decision: "executed" | "refused" | "outcome_unknown";
   /** Refusal/termination detail, e.g. run_removed, queue_saturated, disk_quota_exceeded. */
   reason?: string;
   exitCode?: number | null;
@@ -310,6 +360,40 @@ export type ExecutionAuditRecord = {
 export type ExecutionAuditSink = (
   record: ExecutionAuditRecord,
 ) => void | Promise<void>;
+
+/**
+ * The DURABLE PRE-DISPATCH RESERVATION seam (cinatra#2266 G1).
+ *
+ * Appending the audit record AFTER `worker.runCommand` returns cannot satisfy
+ * "no unrecorded execution", however durable the append is: the terminal
+ * decision is only known once the command has finished, so a crash in between
+ * loses the command entirely. So the broker reserves FIRST — a prepared record
+ * plus the capacity its terminal form will need — and only then dispatches.
+ *
+ * THE CONTRACT THE BROKER RELIES ON, stated so an implementer cannot get it
+ * subtly wrong:
+ *
+ *  - The returned promise settles only when the reservation is DURABLE. A
+ *    reserver that resolves before its write is `fsync`ed provides nothing.
+ *  - A REJECTION MEANS "DO NOT DISPATCH". The broker refuses the command; it
+ *    does not run it and hope. That inverts the pre-#2266 behaviour, in which a
+ *    full buffer discarded an old record and ran the command anyway.
+ *  - `commit` is called at most once per reservation, with the terminal record
+ *    for the same attempt, and MUST NOT fail for capacity — the command has
+ *    already run, and a record of a real execution is not droppable.
+ *
+ * Absent ⇒ no reservation and no behaviour change (the in-process placement,
+ * whose sink writes to the kernel directly).
+ */
+export type ExecutionAuditReservation = {
+  /** `<spoolId>:<recordId>` — the delivery identity the terminal record rides. */
+  deliveryKey: string;
+  commit(record: ExecutionAuditRecord): Promise<void>;
+};
+
+export type ExecutionAuditReserver = (
+  prepared: ExecutionAuditRecord,
+) => Promise<ExecutionAuditReservation>;
 
 /**
  * Separated stdout/stderr retention (S1: "stdout/stderr retained separately
@@ -402,6 +486,23 @@ export type ExecFailureReason =
    * serving another tenant must not keep running ours.
    */
   | "placement_revoked"
+  /**
+   * The durable audit spool could not accept this command's PRE-DISPATCH
+   * reservation — it is at its byte bound, or its `fsync` failed (cinatra#2266
+   * G1/AC4). The command is refused and the sandbox is never handed it: an
+   * execution the plane cannot account for must not happen. This inverts the
+   * pre-#2266 behaviour, in which a full buffer discarded an older record and
+   * ran the command anyway.
+   *
+   * NOT AUDITED, deliberately and only for this reason: the audit path is the
+   * thing that just failed, so minting a record per refused attempt is exactly
+   * the unbounded write G5 names. The refusal is COUNTED
+   * (`AuditSpool.stats().refusedReservations`) and rides the drain response;
+   * turning that count into one bounded, durable `audit_spool_full` episode
+   * record plus a defined reopen condition is #2266 AC7 (slice 3), not this
+   * slice.
+   */
+  | "audit_spool_unavailable"
   | "worker_error";
 
 /**

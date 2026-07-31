@@ -52,6 +52,7 @@ const RECORD: ExecutionAuditRecord = {
   surface: "chat",
   command: "pip install pandas",
   cwd: "/workspace",
+  seq: 0,
   decision: "executed",
   exitCode: 0,
   termination: "exited",

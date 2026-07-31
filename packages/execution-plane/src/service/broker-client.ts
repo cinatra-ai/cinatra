@@ -54,6 +54,8 @@ import type { CommandVoucherMinter } from "../executor";
 import type { ExecResult, OpenJobResult, StagedSkillInput } from "../types";
 import type { ExecTlsMaterial } from "./mtls";
 import type {
+  AckAuditPayload,
+  AckAuditResultPayload,
   CloseJobResultPayload,
   DrainAuditPayload,
   DrainAuditResultPayload,
@@ -208,15 +210,35 @@ export class BrokerServiceClient {
   }
 
   /**
-   * Pull the audit records + stdio entries the remote broker buffered. The app
-   * feeds them to the SAME sinks it would have passed in-process
-   * (`toAuthzAuditEventInput` → the authz kernel), so the remote placement grows
-   * no second audit implementation. `droppedAudit` / `droppedStdio` are a
-   * reported gap, never a silent one.
+   * READ the audit records the remote broker spooled (plus its lossy stdio
+   * buffer). The app feeds them to the SAME sinks it would have passed
+   * in-process (`toAuthzAuditEventInput` → the authz kernel), so the remote
+   * placement grows no second audit implementation.
+   *
+   * SINCE cinatra#2266 SLICE 2 THIS IS A PURE READ. Nothing is removed by
+   * calling it — repeat it and the same `head` comes back — so a caller that
+   * pulls a batch and then dies loses nothing. `ackAudit` is what commits.
    */
   async drainAudit(limits?: DrainAuditPayload): Promise<DrainAuditResultPayload> {
     const outcome = await this.rpc.call<DrainAuditResultPayload>("drainAudit", limits ?? {});
     if (!outcome.ok) throw unavailable("drainAudit", outcome);
+    return outcome.result;
+  }
+
+  /**
+   * ACKNOWLEDGE an exact prefix (cinatra#2266 AC5). Call it ONLY after every
+   * record in the batch is durably in the authz kernel (inserted, or recognized
+   * as an already-inserted duplicate); the broker removes exactly that prefix
+   * and nothing else.
+   *
+   * A refused ACK — wrong spool, stale head, a head that is not a delivered
+   * position — arrives as `audit_ack_refused` and removes nothing. It is
+   * surfaced as a throw rather than a falsy return so a caller cannot treat
+   * "the broker rejected my commit" as "committed".
+   */
+  async ackAudit(payload: AckAuditPayload): Promise<AckAuditResultPayload> {
+    const outcome = await this.rpc.call<AckAuditResultPayload>("ackAudit", payload);
+    if (!outcome.ok) throw unavailable("ackAudit", outcome);
     return outcome.result;
   }
 
