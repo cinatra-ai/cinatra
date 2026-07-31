@@ -1784,6 +1784,60 @@ jobs:
       - name: Twenty connector tests
         run: cd extensions/cinatra-ai/twenty-connector && pnpm exec vitest run --no-coverage
 
+      # ── Required-lock extension suites (cinatra#2288 slice 1) ──────────────
+      #
+      # The four steps above (apollo / nango / crm / twenty) were, until this
+      # block, the ONLY extension test suites any workflow ran. A grep for
+      # `extensions/cinatra-ai/` across every workflow on main returns exactly
+      # those four test invocations; the remaining nine hits are the
+      # conformance / IoC / README loops and one `rm -rf` probe, none of which
+      # runs a suite. The root `vitest.config.ts` `include` has no
+      # `extensions/**` glob either, so `pnpm test:root` cannot reach them.
+      # Meanwhile every companion repo's own `ci.yml` SKIPS its tests, on the
+      # written grounds that "the cinatra monorepo runs these" — true for four
+      # packages, false for the other 32. The host `tsc` pass is the only thing
+      # that sees these files at all, so it catches TYPE defects and nothing
+      # else: a runtime regression in any of them reaches production ungated
+      # (openai-connector#75 → #76 is the concrete miss this closes).
+      #
+      # These four are the REQUIRED-lock members of that hole — they ship
+      # inside the production image (cinatra-required-extensions.lock.json), so
+      # they are wired first. Whole-dir, from the package dir, using each
+      # package's OWN vitest.config.ts (package-local `@/` + `server-only`
+      # aliases, jsx transform, environment) — the same shape as the
+      # apollo/nango/twenty steps, and the reason the #2249 remedy (folding a
+      # tier into the root include) does not transfer: the root config would
+      # have to absorb 30+ divergent alias sets.
+      #
+      # Riding THIS job rather than a job of its own, for the reason already
+      # recorded above for the seed-pack tier: the job already has the PINNED
+      # extension tree on disk (clone-extensions) and node_modules installed,
+      # so the marginal cost is four vitest processes. Measured at the pinned
+      # shas in `cinatra-required-extensions.lock.json` — 147 tests, ~3s of
+      # vitest total (openai 95, pdf 28, image 15, dashboard 9) — against this
+      # job's 15-minute `timeout-minutes`. One step per package so a failure
+      # names the package.
+      #
+      # SLICE 1 ONLY. The remaining ~25 dev-lock suites (~1,450 tests:
+      # drupal-mcp 241, wordpress-mcp 239, plane 113, anthropic 101, …) are
+      # slice 2 of cinatra#2288 and are deliberately NOT wired here; nor is the
+      # discovery loop of that issue's AC1, which supersedes hand-listing once
+      # the fleet is green. Three suites that a bare run turns red today
+      # (a2a-server-connector, email-artifacts, linkedin-connector) are
+      # test-infra defects being repaired in their own repos first; they are
+      # not carved out here because they are not wired here.
+      - name: OpenAI connector tests
+        run: cd extensions/cinatra-ai/openai-connector && pnpm exec vitest run --no-coverage
+
+      - name: PDF artifact tests
+        run: cd extensions/cinatra-ai/pdf-artifact && pnpm exec vitest run --no-coverage
+
+      - name: Image artifact tests
+        run: cd extensions/cinatra-ai/image-artifact && pnpm exec vitest run --no-coverage
+
+      - name: Dashboard artifact tests
+        run: cd extensions/cinatra-ai/dashboard-artifact && pnpm exec vitest run --no-coverage
+
       # Admin-namespace route reference gate. Hardens the admin route rename.
       # Permanent 308 redirects preserve external bookmarks via next.config.ts;
       # this gate prevents new in-tree references from silently routing
