@@ -47,6 +47,7 @@ import { TERMINAL_RUN_STATUSES, type AgentRunStatus } from "./run-status";
 import { readRepair, submitRepairResponse } from "./lifecycle-repair-store";
 import {
   readCmsSnapshotTargetByArtifact,
+  readCmsSnapshotTargetByArtifactAndRevision,
   type CmsSnapshotTargetRow,
 } from "./cms-snapshot-readback-store";
 import { repairRunId, readDeliveredRepairRequest } from "./lifecycle-repair-dispatch-store";
@@ -179,18 +180,24 @@ async function findMatchingCmsProduction(
     .orderBy(desc(artifactProducedOutbox.createdAt));
 
   for (const row of rows) {
-    const target = await readCmsSnapshotTargetByArtifact(row.artifactId);
+    // Scoped by BOTH the artifact id AND this outbox row's own
+    // `representationRevisionId` — `readCmsSnapshotTargetByArtifact` alone
+    // (artifact-only, `.limit(1)`) is ambiguous whenever one artifact carries
+    // more than one `cms_snapshot_targets` row (e.g. a re-capture); matching
+    // on the revision too guarantees the target row actually belongs to THIS
+    // produced revision, not merely some row that happens to share the
+    // artifact id.
+    const target = await readCmsSnapshotTargetByArtifactAndRevision(
+      row.artifactId,
+      row.representationRevisionId,
+    );
     if (
       target &&
       target.connectorInstance === baseTarget.connectorInstance &&
       target.resourceType === baseTarget.resourceType &&
       target.resourceId === baseTarget.resourceId
     ) {
-      // The target row's OWN snapshot revision id is authoritative (the outbox
-      // row's `representationRevisionId` agrees by construction — both are
-      // written in the SAME capture transaction — but the target row is the
-      // one the read-back verifier also trusts, so this stays single-sourced).
-      return { artifactId: row.artifactId, representationRevisionId: target.snapshotRevisionId };
+      return { artifactId: row.artifactId, representationRevisionId: row.representationRevisionId };
     }
   }
   return null;
@@ -266,10 +273,13 @@ export async function completeDispatchedProducerCmsRepairs(opts?: {
           .from(agentRuns)
           .where(eq(agentRuns.id, runId))
           .limit(1);
-        if (run && TERMINAL_RUN_STATUSES.has(run.status as AgentRunStatus)) {
-          // The run finished but produced no matching write. Leave the repair
-          // OPEN (dispatched) rather than silently finalizing wrong — ops sees
-          // it via the existing `dispatched` visibility.
+        if (!run || TERMINAL_RUN_STATUSES.has(run.status as AgentRunStatus)) {
+          // The run finished (or has vanished — a missing repair run can never
+          // land a matching write, so treating it as "still running" would
+          // leave the repair `pending` forever) but produced no matching
+          // write. Leave the repair OPEN (dispatched) rather than silently
+          // finalizing wrong — ops sees it via the existing `dispatched`
+          // visibility.
           summary.unresolved += 1;
         } else {
           summary.pending += 1;

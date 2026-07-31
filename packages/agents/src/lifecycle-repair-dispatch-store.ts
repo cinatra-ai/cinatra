@@ -360,15 +360,23 @@ export async function dispatchPendingProducerRepairs(opts?: {
       // The ActorContext is the LIVE-VERIFIED originating human resolved above
       // — never the system dispatch authority, never left to
       // `buildActorContextFromRun`'s runBy-less fallback (this run always
-      // carries a runBy, so that fallback is never reached for it). `jobId:
-      // runId` gives BullMQ-level dedup, so a re-drain (crash between mint and
-      // enqueue) is safe to re-call.
+      // carries a runBy, so that fallback is never reached for it). The
+      // BullMQ-level dedup key is DERIVED from `runId` (so a re-drain — a
+      // crash between mint and enqueue — is safe to re-call) but with its `:`
+      // stripped: `runId` carries the `lifecycle-repair-run:` prefix, and
+      // BullMQ's custom-jobId validation rejects any id containing exactly one
+      // `:` ("Custom Id cannot contain :" — reserved for its own 3-part
+      // repeatable-job ids). Same sanitization `skills-store.ts` already
+      // applies to its own colon-bearing jobIds.
       const actorContext = await buildActorContextFromRun({
         id: runId,
         runBy: originatingRunBy,
         orgId: row.orgId,
       });
-      await enqueueAgentRun({ runId }, { jobId: runId, actorContext });
+      await enqueueAgentRun(
+        { runId },
+        { jobId: runId.replace(/:/g, "_"), actorContext },
+      );
 
       const moved = await markRepairDispatched(row.id);
       if (moved) summary.dispatched += 1;

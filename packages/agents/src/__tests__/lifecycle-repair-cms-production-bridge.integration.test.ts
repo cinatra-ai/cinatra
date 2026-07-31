@@ -334,10 +334,16 @@ describe.skipIf(!HAS_DB)("cinatra#2286 S10 PR2 — the delivered-repair executio
     // capture path — simulated here by minting the SAME shape of production
     // (outbox row + cms_snapshot_targets row) `captureCmsContentSnapshot`
     // would have written, with `producerRunId` set to the REPAIR run's id.
+    // A FRESH artifact id (never `ctx.base.artifactId`) — the bridge's own
+    // doc comment states every capture mints a fresh artifact id, and
+    // reusing the base's here would leave two `cms_snapshot_targets` rows on
+    // ONE artifact id, a shape `findMatchingCmsProduction` cannot occur in
+    // production (and would ambiguate its lookup).
+    const successorArtifactId = `art-repaired-${randomUUID()}`;
     const successorRev = `rev-repaired-${randomUUID()}`;
-    await insertObject(ctx.base.artifactId, "document", ORG);
+    await insertObject(successorArtifactId, "document", ORG);
     await insertCmsSnapshotTarget({
-      artifactId: ctx.base.artifactId,
+      artifactId: successorArtifactId,
       snapshotRevisionId: successorRev,
       connectorInstance: ctx.connectorInstance,
       resourceType: ctx.resourceType,
@@ -345,9 +351,9 @@ describe.skipIf(!HAS_DB)("cinatra#2286 S10 PR2 — the delivered-repair executio
     });
     await outboxStore.emitArtifactProduced(
       {
-        eventId: producedEventId(ctx.base.artifactId, successorRev),
+        eventId: producedEventId(successorArtifactId, successorRev),
         orgId: ORG,
-        artifactId: ctx.base.artifactId,
+        artifactId: successorArtifactId,
         representationRevisionId: successorRev,
         eventKind: "artifact_produced",
         emitter: CMS_SNAPSHOT_EMITTER,
@@ -366,14 +372,19 @@ describe.skipIf(!HAS_DB)("cinatra#2286 S10 PR2 — the delivered-repair executio
 
     const row = await repairRow(ctx.repairId);
     expect(row!.status).toBe("repaired");
-    expect(row!.successor_artifact_id).toBe(ctx.base.artifactId);
+    expect(row!.successor_artifact_id).toBe(successorArtifactId);
     expect(row!.successor_representation_revision_id).toBe(successorRev);
     expect(row!.successor_gate_id).not.toBeNull();
 
     // Idempotent re-drain: the repair is already `repaired`, not `dispatched` —
-    // nothing left for this drain to do.
+    // nothing further should happen to THIS repair. Assert on `completed`
+    // (an outcome scoped to rows the drain actually finalizes) rather than
+    // `scanned`: the global `dispatched`/`producer_repair` scan is a
+    // system-wide sweep with no per-test/org filter, so earlier tests in this
+    // suite legitimately leave their own repairs sitting in `dispatched` —
+    // `scanned` picks those up too and is not a property this test owns.
     const again = await bridge.completeDispatchedProducerCmsRepairs({ limit: 50 });
-    expect(again.scanned).toBe(0);
+    expect(again.completed).toBe(0);
   });
 
   it("NO MATCH: a terminal run with no matching CMS production leaves the repair open (never silently finalized wrong)", async () => {
