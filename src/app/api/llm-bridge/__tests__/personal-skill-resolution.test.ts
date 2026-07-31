@@ -18,11 +18,11 @@
  *   - a token/context-id divergence is refused;
  *   - org/shared skill delivery (`getAssignedSkillIdsForAgent`) is unchanged.
  *
- * Also includes a clearRunContext-in-finally regression-lock test: when the
- * personal-skill lookup throws, the route's finally block must still call
- * clearRunContext.
+ * Also includes a lookup-inside-the-try regression-lock test: when the
+ * personal-skill lookup throws, the failure must be contained by the route's
+ * own try/finally rather than escaping the handler.
  *
- * Mock topology mirrors run-context-wiring.test.ts / run-binding-mcp-actor.test.ts:
+ * Mock topology mirrors run-binding-mcp-actor.test.ts:
  * vi.hoisted handles, vi.mock without importOriginal, dynamic import("../route")
  * in beforeEach, and CINATRA_BRIDGE_TOKEN test fixture for auth. The real
  * `@/lib/agent-run-token` module is used (verifyRunToken is pure sha256) and
@@ -40,8 +40,6 @@ const {
   runResolvedSkillAwareDeterministicLlmTaskMock,
   getCustomSkillForCurrentUserAndAgentMock,
   getAssignedSkillIdsForAgentMock,
-  clearRunContextMock,
-  setRunContextMock,
   getLlmMcpCredentialsMock,
   readAgentRunByContextIdMock,
   readAgentRunByIdMock,
@@ -78,8 +76,6 @@ const {
   getAssignedSkillIdsForAgentMock: vi.fn(async (_agentId: string) => [
     "@cinatra-ai/asset-blog:generate-blog-ideas",
   ]),
-  clearRunContextMock: vi.fn(),
-  setRunContextMock: vi.fn(),
   getLlmMcpCredentialsMock: vi.fn(
     (): { clientId: string; clientSecret: string } | null => ({
       clientId: "mock-client-id-1",
@@ -104,10 +100,6 @@ const {
 
 vi.mock("server-only", () => ({}));
 
-vi.mock("@/lib/agent-run-context-registry", () => ({
-  setRunContext: setRunContextMock,
-  clearRunContext: clearRunContextMock,
-}));
 
 vi.mock("@cinatra-ai/llm", () => ({
   runResolvedSkillAwareDeterministicLlmTask: runResolvedSkillAwareDeterministicLlmTaskMock,
@@ -586,10 +578,15 @@ describe("/api/llm-bridge personal skill resolution — resolver-null + cleanup"
     expect(deliveredDeltaContent()).toBeUndefined();
   });
 
-  it("clearRunContext still runs in finally even if the personal-skill lookup throws", async () => {
+  it("a throwing personal-skill lookup is contained by the route's try/finally (regression lock)", async () => {
     // Regression lock: the personal-skill lookup must be INSIDE the try block
-    // (with the LLM task) so the finally always calls clearRunContext, even when
-    // the lookup fails before the LLM task runs.
+    // (with the LLM task) that owns the request-scoped finally, so a failure
+    // there is handled by the route rather than escaping the handler.
+    //
+    // This used to assert on clearRunContext(), the in-process registry teardown
+    // the finally ran. That registry is DELETED (cinatra#1195) and the finally
+    // now only clears the DURABLE run-context bindings this request wrote, so
+    // the observable contract is that the turn still completes normally.
     getCustomSkillForCurrentUserAndAgentMock.mockRejectedValueOnce(
       new Error("personal-skill lookup failed"),
     );
@@ -598,7 +595,8 @@ describe("/api/llm-bridge personal skill resolution — resolver-null + cleanup"
       agent_run_id: "run-X",
       agent_id: "agent-x",
     });
-    await POST(req);
-    expect(clearRunContextMock).toHaveBeenCalledOnce();
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).toHaveBeenCalled();
   });
 });

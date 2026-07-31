@@ -30,8 +30,6 @@ const {
   getAssignedSkillIdsForAgentMock,
   resolveAssignedSkillsActorForRunMock,
   resolveAgentRunMcpActorMock,
-  clearRunContextMock,
-  setRunContextMock,
   getLlmMcpCredentialsMock,
   readAgentRunByContextIdMock,
   readAgentRunByIdMock,
@@ -49,8 +47,6 @@ const {
   ]),
   resolveAssignedSkillsActorForRunMock: vi.fn(),
   resolveAgentRunMcpActorMock: vi.fn(async () => null),
-  clearRunContextMock: vi.fn(),
-  setRunContextMock: vi.fn(),
   getLlmMcpCredentialsMock: vi.fn(
     (): { clientId: string; clientSecret: string } | null => ({
       clientId: "mock-client-id-1",
@@ -75,10 +71,6 @@ const {
 
 vi.mock("server-only", () => ({}));
 
-vi.mock("@/lib/agent-run-context-registry", () => ({
-  setRunContext: setRunContextMock,
-  clearRunContext: clearRunContextMock,
-}));
 
 vi.mock("@cinatra-ai/llm", () => ({
   runResolvedSkillAwareDeterministicLlmTask: runResolvedSkillAwareDeterministicLlmTaskMock,

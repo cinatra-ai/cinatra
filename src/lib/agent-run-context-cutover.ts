@@ -1,7 +1,26 @@
 // ---------------------------------------------------------------------------
-// Run-context registry-cutover analysis (#1195, pre-metric remainder).
+// Run-context registry-cutover analysis (#1195).
 //
-// The observability that judges parity for the metric-gated registry deletion.
+// STATUS — CUTOVER COMPLETED BY RULING, NOT BY THIS METRIC (2026-07-30). The
+// in-process registry is DELETED and the fail-closed deny posture is ENFORCED
+// at the MCP transport. The owner waived the production-observation fence this
+// analyzer was built to satisfy (backward compatibility was explicitly not
+// required), so the retirement landed without a CUTOVER-READY verdict ever
+// being produced against a fleet stream.
+//
+// This module is deliberately KEPT rather than deleted:
+//   - it is the honest record of the bar the cutover was designed to clear,
+//     and of the fact that the bar was waived rather than met;
+//   - an ARCHIVED log stream (from a build that still emitted `served-by=
+//     registry`) can still be evaluated after the fact;
+//   - the same predicate now reads as an ongoing regression check: a stream
+//     from a current build must show ZERO legacy-served requests, because the
+//     registry channel no longer exists and a header-only claim is refused.
+// `registry` therefore stays in the recognized-channel set — dropping it would
+// make a historical stream fail as "schema drift" and silently erase history.
+//
+// The observability that judges parity for the (now completed) registry
+// deletion.
 // PURE and dependency-free ON PURPOSE: no `server-only`, no `ioredis`, no
 // runtime state. It lives OUTSIDE src/lib/agent-run-context-durable.ts (which
 // imports `server-only` + constructs an ioredis client and is reachable from
@@ -10,17 +29,17 @@
 // to a locked route's reachable-module graph. durable.ts deliberately does NOT
 // re-export these symbols (a re-export would recreate that edge).
 //
-// WHAT IT DECIDES. #1195 acceptance requires PROOF that no production traffic
-// still rides the legacy in-process registry before it is deleted (and before
-// the fail-closed deny posture is activated). The MCP transport emits one
-// per-request line fleet-wide:
+// WHAT IT DECIDES. #1195 acceptance ASKED for proof that no production traffic
+// still rode the legacy in-process registry before it was deleted (and before
+// the fail-closed deny posture was activated) — see the STATUS note above for
+// how that fence was resolved. The MCP transport emits one per-request line
+// fleet-wide:
 //
 //   [mcp-run-ctx] served-by=<channel> run=<id|-> suppressed=<bool> count=<n>
 //
 // (see recordMcpRunContextServedBy in agent-run-context-durable.ts). This
-// module turns an AGGREGATED stream of those lines into the single go/no-go
-// verdict the owner-gated registry-removal (flip) slice consults, instead of
-// eyeballing counters.
+// module turns an AGGREGATED stream of those lines into a single go/no-go
+// verdict, instead of eyeballing counters.
 //
 // EVIDENCE INTEGRITY (converged with Codex, #1195 cutover-obs round). The
 // verdict green-lights an IRREVERSIBLE deletion, so the analysis is fail-
@@ -44,7 +63,8 @@
 
 export type RegistryCutoverReadiness = {
   /** True only when the legacy channels served nothing over a sufficient,
-   *  genuinely-active sample — the green light for the flip slice. */
+   *  genuinely-active sample. (Historically: the green light for the flip
+   *  slice. Post-flip: the regression check that no legacy channel is serving.) */
   ready: boolean;
   /** Human-readable why (the not-ready cause, or the ready confirmation). */
   reason: string;
@@ -57,13 +77,17 @@ export type RegistryCutoverReadiness = {
   total: number;
 };
 
-/** The closed set of served-by channels the gate understands. Kept in lockstep
- *  with RunContextServedBy in the mcp-server request-context module; an
- *  unrecognized key in the tally is treated as a schema drift and fails the
- *  gate closed rather than being silently ignored. */
+/** The closed set of served-by channels the gate understands. It is the UNION
+ *  of the live channels (RunContextServedBy in the mcp-server request-context
+ *  module) and the RETIRED `"registry"` channel — a current build can no longer
+ *  emit `registry`, but an ARCHIVED stream can contain it and must still be
+ *  evaluable (dropping it would misread history as schema drift). An
+ *  unrecognized key in the tally IS treated as schema drift and fails the gate
+ *  closed rather than being silently ignored. */
 const READINESS_KNOWN_CHANNELS: readonly string[] = [
   "obo",
   "durable",
+  // RETIRED (#1195 flip) — recognized for historical streams only.
   "registry",
   "header",
   "none",

@@ -215,6 +215,38 @@ export function unclassifiableEraResponse() {
 }
 
 /**
+ * The answer for a request whose ONLY run-identity claim arrived through a
+ * retired, forgeable channel (the caller-controlled `x-cinatra-*` run headers)
+ * while the #1195 fail-closed posture is active.
+ *
+ * This is the ENFORCEMENT POINT paired with `failClosed: true` in the transport
+ * (see resolveRequestRunContext). Serving the request with the run id merely
+ * dropped would be fail-OPEN — a run-scoped write would persist UNATTRIBUTED.
+ * Refusing the request before any handler runs is the fail-closed answer, and
+ * it subsumes "reject the run-scoped write": no write can start.
+ *
+ * A caller with genuine run identity (an agent-run OBO token, or the durable
+ * run-token-keyed binding) is never affected — those channels are verified and
+ * are never denied.
+ */
+export function runContextDeniedResponse() {
+  return Response.json(
+    {
+      jsonrpc: "2.0",
+      error: {
+        code: -32001,
+        message:
+          "Forbidden: run identity was claimed through a retired channel. The " +
+          "x-cinatra-run-id header is no longer accepted as run identity — call " +
+          "under an agent-run on-behalf-of token, or omit the header entirely.",
+      },
+      id: null,
+    },
+    { status: 403 },
+  );
+}
+
+/**
  * Re-wrap a streaming response so `onSettled` fires when the body drains (or
  * errors, or is cancelled), exactly once. Used to defer the modern handler's
  * teardown past an SSE upgrade — closing it while a stream is open would abort

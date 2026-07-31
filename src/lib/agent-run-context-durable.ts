@@ -4,16 +4,16 @@ import { createHash } from "node:crypto";
 import IORedis from "ioredis";
 
 // ---------------------------------------------------------------------------
-// Durable run-context binding (#1195, first slice — #1192 run-identity spine).
+// Durable run-context binding (#1195 — #1192 run-identity spine).
 //
-// PROBLEM. Run-tagging for MCP `objects_save` rides an in-process Map
-// (src/lib/agent-run-context-registry.ts) that cannot survive multiple app
-// instances/workers, and its shared per-provider client-id key can
-// misattribute concurrent runs even in one process.
+// PROBLEM. Run-tagging for MCP `objects_save` used to ride an in-process Map
+// that could not survive multiple app instances/workers, and whose shared
+// per-provider client-id key could misattribute concurrent runs even in one
+// process.
 //
-// THIS SLICE. A run-token-keyed DURABLE binding replaces the Map as the
-// primary channel; the Map stays as a measured legacy fallback during the
-// cutover:
+// STATE. The Map is DELETED (the #1195 flip). This run-token-keyed DURABLE
+// binding is now the ONLY non-OBO run-context channel; there is nothing
+// underneath it:
 //
 //   Writer  — /api/llm-bridge. When the OBO actor mint for a VERIFIED run
 //             falls back to the per-step machine client_credentials token,
@@ -38,20 +38,23 @@ import IORedis from "ioredis";
 //
 // Classification contract (converged with Codex, #1195 round-1..3):
 //   - redis GET null or redis transport failure        ⇒ "absent"
-//     (this transitional slice allows the legacy registry fallback)
+//     (no binding; post-flip there is no legacy channel to fall back TO — a
+//     request with no verified run identity simply carries none, and a
+//     header-only claim is REFUSED at the transport)
 //   - present but malformed / schema-invalid / non-64-hex
 //     token hash / DB miss / DB error after a binding
 //     was found                                        ⇒ "invalid"
-//     (FAIL CLOSED: the caller must suppress the registry AND header
-//     fallbacks and every provenance field — a positive stale-credential
-//     signal is never downgraded into weaker, forgeable channels)
+//     (FAIL CLOSED: the caller must suppress the header fallback and every
+//     provenance field — a positive stale-credential signal is never
+//     downgraded into a weaker, forgeable channel)
 //   - unique-index hit                                 ⇒ "resolved"
 // ---------------------------------------------------------------------------
 
 const KEY_PREFIX = "cinatra:run-ctx:v1:";
 
-/** Mirrors the legacy in-process registry TTL — a generous upper bound for a
- *  single LLM API call; the crash backstop when the finally-clear never runs. */
+/** A generous upper bound for any single LLM API call (it mirrors the TTL the
+ *  deleted in-process registry used); the crash backstop when the
+ *  finally-clear never runs. */
 export const DURABLE_RUN_CONTEXT_TTL_SECONDS = 300;
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
@@ -103,8 +106,8 @@ declare global {
  *  enableOfflineQueue:false would deterministically fail the first healthy
  *  write). Outage behavior stays bounded — maxRetriesPerRequest:1 +
  *  commandTimeout fail a command fast when redis is down — and every caller
- *  treats a transport failure as "absent" (write skipped / registry
- *  fallback), so the bridge and the MCP handler are never held hostage. */
+ *  treats a transport failure as "absent" (write skipped / no run
+ *  attribution), so the bridge and the MCP handler are never held hostage. */
 function getClient(): DurableBindingRedis {
   if (!globalThis.__cinatraDurableRunCtxRedis) {
     globalThis.__cinatraDurableRunCtxRedis = new IORedis(
@@ -129,12 +132,11 @@ export function durableRunContextKey(rawBearerToken: string): string {
 
 // --- cutover counters (ids only; snapshot exported for tests/ops) -----------
 
-export type RunContextServedBy =
-  | "obo"
-  | "durable"
-  | "registry"
-  | "header"
-  | "none";
+/** Kept in lockstep with RunContextServedBy in the mcp-server request-context
+ *  module. `"registry"` was REMOVED with the in-process registry (#1195 flip)
+ *  and can no longer be emitted; the cutover analyzer still RECOGNIZES it so a
+ *  historical log stream stays readable (see agent-run-context-cutover.ts). */
+export type RunContextServedBy = "obo" | "durable" | "header" | "none";
 
 type DurableCounters = {
   servedBy: Map<string, number>;
@@ -161,9 +163,11 @@ function bump(map: Map<string, number>, key: string): number {
   return next;
 }
 
-/** #1195 which-channel-served metric: feeds the registry-removal cutover gate
- *  (the acceptance requires proof that no production traffic still needs the
- *  legacy registry before it is deleted). Ids only — never a key or a hash. */
+/** #1195 which-channel-served metric. It once fed the registry-removal cutover
+ *  gate; the removal has LANDED (owner ruling — the observation fence was
+ *  waived), so it is now ongoing observability over the surviving channels.
+ *  The LINE SHAPE is deliberately unchanged so an existing log pipeline and the
+ *  cutover analyzer both keep parsing it. Ids only — never a key or a hash. */
 export function recordMcpRunContextServedBy(
   channel: RunContextServedBy,
   ids: { runId?: string; suppressed?: boolean },
@@ -192,10 +196,15 @@ export function resetDurableRunContextCountersForTest(): void {
   c.durableOutcome.clear();
 }
 
-// --- cutover readiness gate (#1195) -----------------------------------------
+// --- cutover readiness gate (#1195, HISTORICAL) ------------------------------
+//
+// The registry cutover it gated is DONE: the in-process registry is deleted and
+// the fail-closed posture is enforced at the transport. The predicate is kept
+// (not deleted) as the honest record of how the cutover was meant to be judged
+// and so an archived log stream can still be evaluated after the fact.
 //
 // The readiness predicate `evaluateRegistryCutoverReadiness` and the fleet
-// log-stream parser now live in the PURE, dependency-free leaf
+// log-stream parser live in the PURE, dependency-free leaf
 // src/lib/agent-run-context-cutover.ts (no `server-only`, no `ioredis`), so the
 // offline "judge parity" analysis can be imported by a plain ops script and so
 // this module — reachable from the LOCKED /api/mcp route — gains no dependency
@@ -213,8 +222,8 @@ export function resetDurableRunContextCountersForTest(): void {
  * Write the durable binding for one freshly-minted machine access token.
  * Returns the redis key written (for the request-scoped finally-clear) or
  * null when the write was skipped/failed — the caller proceeds either way
- * (binding absent ⇒ the legacy registry fallback covers, availability is
- * never worse than today).
+ * (binding absent ⇒ the step simply carries no run attribution; availability is
+ * never worse, and an unattributed write is never a MISattributed one).
  *
  * Refuses a value whose tokenHash is not 64-hex: a malformed hash could never
  * resolve and would only manufacture "invalid" (fail-closed) reads.
@@ -235,7 +244,7 @@ export async function writeDurableRunContextBinding(
     );
     return key;
   } catch {
-    // transport failure — binding absent; legacy registry covers.
+    // transport failure — binding absent; the step carries no attribution.
     return null;
   }
 }
@@ -308,8 +317,9 @@ export async function resolveDurableRunContext(
   try {
     raw = await client.get(durableRunContextKey(rawBearerToken));
   } catch {
-    // redis transport failure ⇒ absent (transitional availability policy —
-    // the legacy registry fallback still covers attribution).
+    // redis transport failure ⇒ absent (availability policy: a redis outage
+    // must not fail every MCP call; the request simply carries no run
+    // attribution — there is no weaker channel left to fall back to).
     bump(counters().durableOutcome, "absent_transport");
     return { outcome: "absent" };
   }
@@ -321,7 +331,7 @@ export async function resolveDurableRunContext(
   const binding = parseBinding(raw);
   if (!binding) {
     // present-but-malformed is a POSITIVE corrupt-state signal, never a
-    // downgrade into registry/header attribution.
+    // downgrade into header attribution.
     bump(counters().durableOutcome, "invalid_malformed");
     console.warn("[mcp-run-ctx] durable binding malformed — failing closed");
     return { outcome: "invalid" };

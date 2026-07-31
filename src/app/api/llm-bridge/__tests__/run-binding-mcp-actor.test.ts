@@ -101,10 +101,6 @@ vi.mock("@cinatra-ai/llm", () => ({
   PreferredProviderUnavailableError: class extends Error {},
   uploadFile: vi.fn(),
 }));
-vi.mock("@/lib/agent-run-context-registry", () => ({
-  setRunContext: vi.fn(),
-  clearRunContext: vi.fn(),
-}));
 vi.mock("@/lib/agent-run-context-durable", () => ({
   writeDurableRunContextBinding: writeDurableRunContextBindingMock,
   clearDurableRunContextBindings: clearDurableRunContextBindingsMock,
