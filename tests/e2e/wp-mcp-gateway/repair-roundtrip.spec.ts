@@ -41,7 +41,7 @@
 
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { buildProvenance, CANONICAL_PROVENANCE_KEYS, sha256OfFile } from "./provenance.mjs";
 
@@ -221,6 +221,19 @@ type Verdict = {
 const verdicts: Verdict[] = [];
 const record = (v: Verdict) => verdicts.push(v);
 
+/** The wordpress-agent release under proof, identified by the `resolvedSha`
+ * the committed dev lock pins — never a milestone-version literal. */
+function pinnedWordPressAgentSha(): string | null {
+  try {
+    const lock = JSON.parse(
+      readFileSync(path.join(REPO_ROOT, "cinatra-dev-extensions.lock.json"), "utf8"),
+    ) as { packages?: Array<{ packageName: string; resolvedSha: string }> };
+    return lock.packages?.find((p) => p.packageName === "@cinatra-ai/wordpress-agent")?.resolvedSha ?? null;
+  } catch {
+    return null;
+  }
+}
+
 let postId: number | null = null;
 let repairApplied = false;
 let firstReadBack: { title: string | null; content: string | null; status: string | null } | null = null;
@@ -239,6 +252,23 @@ before(async () => {
 
 after(() => {
   if (!HAVE_FIXTURE) return;
+  // The cinatra-side leg's row — recorded HERE, unconditionally, so a FAIL
+  // early-return in R3/R4 can never drop it from the committed evidence.
+  record({
+    item: "repair-roundtrip/cinatra-lifecycle-leg (request-changes → producer_repair → completion → repaired capture → approve → release)",
+    verdict: "PENDING_GATE",
+    evidence: "packages/agents/src/__tests__/lifecycle-repair-cms-roundtrip.integration.test.ts",
+    detail: {
+      reason:
+        "DB-backed leg — executes in the agents-integration-db CI job (real Postgres) of the PR that carries it; " +
+        "the authoring box cannot boot a database by standing rule, so this row records the executor honestly " +
+        "instead of fabricating a local result.",
+      runsIn: "build-image.yml → agents-integration-db (gated set)",
+      routesOffManifest:
+        "@cinatra-ai/wordpress-agent cinatra.lifecycle.repairCapable=true at the lock-pinned release " +
+        (pinnedWordPressAgentSha() ?? "(dev lock unreadable at capture time)"),
+    },
+  });
   mkdirSync(CAPTURES_DIR, { recursive: true });
   const provenance: Record<string, unknown> = buildProvenance(REPO_ROOT, {
     runUrl: RUN_URL,
@@ -261,7 +291,7 @@ after(() => {
       "WP-side leg driven live via the gateway execute triad against the booted pinned WordPress: produce (draft) → " +
       "reviewer-requested changes applied through ewpa/update-post (the connector's content-review-keyed write the " +
       "producer repair re-drives) → read-back of the repaired fields with draft status preserved → stability re-read. " +
-      "The cinatra-side leg (changes_requested → producer_repair route off the wordpress-agent v0.1.5 manifest → " +
+      "The cinatra-side leg (changes_requested → producer_repair route off the lock-pinned wordpress-agent manifest → " +
       "dispatch → CMS completion drain → repaired capture → re-review approve → effect release → read-back binding) " +
       "runs on a real Postgres in packages/agents/src/__tests__/lifecycle-repair-cms-roundtrip.integration.test.ts " +
       "(the agents-integration-db CI job) and is cited as its own row below, per the S9 evidence convention " +
@@ -327,11 +357,30 @@ test("REPAIR R2: requested changes applied via ewpa/update-post (the re-staged w
 });
 
 // R3 — read-back: the repaired fields landed exactly; draft status preserved.
+// Per this suite's contract, verdicts are DATA: a missing post id or a non-OK
+// read-back records a FAIL verdict and returns — it never throws, so only an
+// unreachable gateway can red the capture run.
 test("REPAIR R3: read-back returns the repaired fields with draft status preserved", skipOpts, async () => {
-  assert.notEqual(postId, null, "no post to read back (R1 did not yield an id)");
-  firstReadBack = await readPostBack(postId as number);
-  assert.notEqual(firstReadBack, null, "REST read-back unreachable");
-  const rb = firstReadBack!;
+  if (postId == null) {
+    record({
+      item: "repair-roundtrip/read-back",
+      verdict: "FAIL",
+      evidence: "captures/program-acceptance/repair-roundtrip-verdicts.json",
+      detail: { reason: "no post id from R1 (base production reported an ability-level failure)", postId: null },
+    });
+    return;
+  }
+  firstReadBack = await readPostBack(postId);
+  if (firstReadBack == null) {
+    record({
+      item: "repair-roundtrip/read-back",
+      verdict: "FAIL",
+      evidence: "captures/program-acceptance/repair-roundtrip-verdicts.json",
+      detail: { reason: "read-back returned no post (non-OK REST response)", postId },
+    });
+    return;
+  }
+  const rb = firstReadBack;
   const titleOk = typeof rb.title === "string" && rb.title.includes(REPAIRED_TITLE);
   const contentOk = typeof rb.content === "string" && rb.content.includes("Reviewer-approved excerpt wording");
   const placeholderGone = typeof rb.content === "string" && !rb.content.includes("TODO-EXCERPT");
@@ -346,35 +395,36 @@ test("REPAIR R3: read-back returns the repaired fields with draft status preserv
 });
 
 // R4 — stability: a second independent read returns the same repaired state.
+// Same verdicts-are-DATA discipline as R3: FAIL verdict + return, never a throw.
 test("REPAIR R4: a second read-back returns the same repaired state (durable)", skipOpts, async () => {
-  assert.notEqual(postId, null, "no post to read back (R1 did not yield an id)");
-  const second = await readPostBack(postId as number);
-  assert.notEqual(second, null, "REST read-back unreachable");
+  if (postId == null) {
+    record({
+      item: "repair-roundtrip/read-back-stability",
+      verdict: "FAIL",
+      evidence: "captures/program-acceptance/repair-roundtrip-verdicts.json",
+      detail: { reason: "no post id from R1 (base production reported an ability-level failure)", postId: null },
+    });
+    return;
+  }
+  const second = await readPostBack(postId);
+  if (second == null) {
+    record({
+      item: "repair-roundtrip/read-back-stability",
+      verdict: "FAIL",
+      evidence: "captures/program-acceptance/repair-roundtrip-verdicts.json",
+      detail: { reason: "second read-back returned no post (non-OK REST response)", postId },
+    });
+    return;
+  }
   const stable =
     firstReadBack != null &&
-    second!.title === firstReadBack.title &&
-    second!.content === firstReadBack.content &&
-    second!.status === firstReadBack.status;
+    second.title === firstReadBack.title &&
+    second.content === firstReadBack.content &&
+    second.status === firstReadBack.status;
   record({
     item: "repair-roundtrip/read-back-stability",
     verdict: stable ? "PASS" : "FAIL",
     evidence: "captures/program-acceptance/repair-roundtrip-verdicts.json",
     detail: { postId, first: firstReadBack, second },
-  });
-  // The cinatra-side leg's row, recorded once the live legs have run (kept
-  // last so the committed file lists the wire legs first).
-  record({
-    item: "repair-roundtrip/cinatra-lifecycle-leg (request-changes → producer_repair → completion → repaired capture → approve → release)",
-    verdict: "PENDING_GATE",
-    evidence: "packages/agents/src/__tests__/lifecycle-repair-cms-roundtrip.integration.test.ts",
-    detail: {
-      reason:
-        "DB-backed leg — executes in the agents-integration-db CI job (real Postgres) of the PR that carries it; " +
-        "the authoring box cannot boot a database by standing rule, so this row records the executor honestly " +
-        "instead of fabricating a local result.",
-      runsIn: "build-image.yml → agents-integration-db (gated set)",
-      routesOffManifest:
-        "@cinatra-ai/wordpress-agent v0.1.5 cinatra.lifecycle.repairCapable=true (the pin this change advances)",
-    },
   });
 });

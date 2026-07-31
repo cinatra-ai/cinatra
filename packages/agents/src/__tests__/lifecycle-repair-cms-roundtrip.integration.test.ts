@@ -1,9 +1,10 @@
 /**
  * cinatra#2286, epic S10 PR4 — the CMS repair ROUND TRIP, proven end-to-end
  * against a real Postgres, with the producing template carrying the REAL
- * `@cinatra-ai/wordpress-agent` identity + the lifecycle declaration its
- * v0.1.5 manifest ships (`cinatra.lifecycle: { repairCapable: true }` — the
- * exact block the pin this PR advances brings into the dev universe).
+ * `@cinatra-ai/wordpress-agent` identity + the lifecycle declaration the
+ * lock-pinned release ships (`cinatra.lifecycle: { repairCapable: true }` — the
+ * exact block the pin this PR advances brings into the dev universe; the
+ * release is identified by its `resolvedSha` in cinatra-dev-extensions.lock.json).
  *
  * What the sibling suites already prove is NOT re-argued here:
  *   - delivery + CMS task construction + completion adapter mechanics
@@ -69,8 +70,9 @@ const REPO_ROOT = resolve(__dirname, "..", "..", "..", "..");
 const WORDPRESS_AGENT_PACKAGE = "@cinatra-ai/wordpress-agent";
 
 /**
- * The lifecycle declaration `@cinatra-ai/wordpress-agent` v0.1.5 ships in its
- * `package.json#cinatra.lifecycle` (the release this PR pins). Kept as a
+ * The lifecycle declaration `@cinatra-ai/wordpress-agent` ships in its
+ * `package.json#cinatra.lifecycle` at the release the committed dev lock pins
+ * (its `resolvedSha` in cinatra-dev-extensions.lock.json). Kept as a
  * literal (the clone-back extension tree is not materialized in the DB-tier CI
  * job) but NEVER a free-floating stub:
  *   - it must PARSE through the real manifest contract
