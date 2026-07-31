@@ -492,13 +492,13 @@ describe("/api/llm-bridge personal delta-skill identity (#1360)", () => {
         "x-cinatra-a2a-context-id": "ctx-2",
       },
     );
-    await POST(req);
-    // Divergence nulls runForPorts → owner undefined → no personal delta.
-    // cinatra#2091 S4: with no server-verified owner the contract does not
-    // merely pass `undefined` — it never asks for a personal delta at all.
-    // Strictly stronger than the pre-contract fail-closed.
+    const res = await POST(req);
+    // #1193: divergence between two dispatch-owned bindings is now REFUSED at
+    // the identity gate rather than merely suppressing the OBO mint — and it is
+    // refused before any provider dispatch, so no delta is even considered.
+    expect(res.status).toBe(403);
     expect(getCustomSkillForCurrentUserAndAgentMock).not.toHaveBeenCalled();
-    expect(deliveredDeltaContent()).toBeUndefined();
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
   });
 
   it("MISMATCH: token probe resolves but the fresh re-read row DIVERGES (orgId changed) ⇒ refused", async () => {

@@ -1274,9 +1274,10 @@ export const projectInstances = cinatraSchema.table("project_instances", {
 //
 // `token_hash` is the PRIMARY KEY, so the verifier stays exactly what #1193
 // specified: ONE index probe resolving at most one run, with no newest-wins
-// tie-break and no body-id fallback. Growth is bounded by a per-run cap applied
-// on every insert (see pruneAgentRunTokens) — a run keeps only its newest
-// credentials, so a pathological resume loop cannot grow the table without limit.
+// tie-break and no body-id fallback. Rows are NEVER pruned: nothing here can
+// distinguish a live leg from a dead one (the A2A timeout is a client-side
+// abort, not a server-side execution bound), and a wrongly-pruned row 403s a
+// live callback — see run-token-store.ts. Growth is one small row per leg.
 // Only hashes are stored; a database read can never recover a live token.
 // ---------------------------------------------------------------------------
 

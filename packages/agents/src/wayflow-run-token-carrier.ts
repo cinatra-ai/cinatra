@@ -51,7 +51,8 @@ import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
 // In each case the older task would present a token that no longer resolves — a
 // 403 on a LIVE context/LLM callback, and a fail-closed (unattributed) MCP write
 // via the #1195 durable binding. Keeping earlier legs valid removes that class
-// entirely; growth is bounded by the per-run cap in `run-token-store.ts`.
+// entirely; credentials are never pruned (see `run-token-store.ts` for why no
+// count- or age-based retirement is safe here).
 // ---------------------------------------------------------------------------
 
 /**

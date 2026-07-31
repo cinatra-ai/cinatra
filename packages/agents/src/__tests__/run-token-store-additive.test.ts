@@ -74,53 +74,22 @@ describe("setAgentRunTokenHash — additive credential recording", () => {
     expect(insert!.sql.toLowerCase()).not.toContain("do update");
   });
 
-  it("retires by AGE, not by count — a cap could evict a LIVE leg", async () => {
-    const { setAgentRunTokenHash, AGENT_RUN_TOKEN_RETENTION_MS } = await import(
-      "../run-token-store"
-    );
-    const before = Date.now();
+  it("NEVER prunes — no design can tell a live leg from a dead one here", async () => {
+    const { setAgentRunTokenHash } = await import("../run-token-store");
     await setAgentRunTokenHash("run-1", "d".repeat(64));
-    const after = Date.now();
 
-    const del = captured.find((c) => /^\s*delete/i.test(c.sql));
-    expect(del).toBeDefined();
-    const sql = del!.sql.toLowerCase();
-    expect(sql).toContain("agent_run_tokens");
-    // Scoped to the run — pruning that could reach another run's live
-    // credential would be the stranding bug with extra steps.
-    expect(sql).toContain("run_id");
-
-    // A COUNT-based prune has no liveness information: with enough concurrent or
-    // retried legs it deletes a credential whose task is still executing. The
-    // predicate must therefore be a timestamp comparison, never a LIMIT/ORDER BY
-    // keep-set.
-    expect(sql).toContain("created_at");
-    expect(sql).not.toContain("limit");
-    expect(sql).not.toContain("order by");
-
-    // The cutoff is derived from the A2A ceiling, so anything older than it
-    // CANNOT belong to a live leg. The driver serializes the bound timestamp, so
-    // parse whichever param carries it back to millis.
-    // The cutoff is the LAST bound param (the run-id scope is bound first).
-    const rawCutoff = del!.params[del!.params.length - 1];
-    const cutoffMs =
-      rawCutoff instanceof Date ? rawCutoff.getTime() : Date.parse(String(rawCutoff));
-    expect(Number.isFinite(cutoffMs)).toBe(true);
-    expect(cutoffMs!).toBeGreaterThanOrEqual(
-      before - AGENT_RUN_TOKEN_RETENTION_MS - 1000,
-    );
-    expect(cutoffMs!).toBeLessThanOrEqual(
-      after - AGENT_RUN_TOKEN_RETENTION_MS + 1000,
-    );
-  });
-
-  it("the retention window exceeds the maximum A2A task lifetime", async () => {
-    const { AGENT_RUN_TOKEN_RETENTION_MS } = await import("../run-token-store");
-    const { WAYFLOW_A2A_TIMEOUT_MS } = await import("../wayflow-url");
-    // A blocking A2A task cannot outlive the transport ceiling, so a credential
-    // older than it cannot be held by a running leg. Anything at or below the
-    // ceiling would be able to strand one.
-    expect(AGENT_RUN_TOKEN_RETENTION_MS).toBeGreaterThan(WAYFLOW_A2A_TIMEOUT_MS);
+    // A COUNT cap prunes on cardinality (no liveness information). An AGE cap
+    // derived from WAYFLOW_A2A_TIMEOUT_MS assumes that ceiling stops server-side
+    // execution — it does not: the timeout is a CLIENT AbortSignal, while the
+    // container awaits `conversation.execute_async()` unbounded, a flow chains
+    // several ApiNodes each with their own ceiling, and `created_at` is the DB
+    // clock while a cutoff would come from the app clock. Either design can
+    // delete a credential whose task is still running, which 403s a live
+    // callback — the exact failure this table exists to prevent.
+    //
+    // So the store issues NO delete at all. A stale row can only ever resolve to
+    // the run it was minted for; a wrongly-pruned row breaks a live leg.
+    expect(captured.some((c) => /^\s*delete/i.test(c.sql))).toBe(false);
   });
 
   it("fails closed on empty input (never a silent no-op)", async () => {

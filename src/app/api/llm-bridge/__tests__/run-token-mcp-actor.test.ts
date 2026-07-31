@@ -568,25 +568,6 @@ describe("bridge run-token selection for MCP OBO minting", () => {
     expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
   });
 
-  it("FAIL CLOSED: a claimed run whose token DIVERGES from a co-present context-id is refused", async () => {
-    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
-    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
-    readAgentRunByContextIdMock.mockResolvedValue(TARGET_RUN); // names ANOTHER run
-    const res = await POST(
-      makeReqH(
-        { user: "hi", agent_run_id: VICTIM_RUN.id },
-        {
-          "x-cinatra-run-token": RUN_TOKEN,
-          "x-cinatra-a2a-context-id": "ctx-other",
-        },
-      ),
-    );
-    expect(res.status).toBe(403);
-    expect(await res.json()).toEqual(
-      expect.objectContaining({ code: "run_mismatch" }),
-    );
-  });
-
   it("REFUSES a claimed run BEFORE dispatch resolution runs (placement lock)", async () => {
     // A `cinatra_llm` body drives provider/capability resolution, and the Gemini
     // media-input branch downstream returns its OWN response. An identity check
@@ -606,6 +587,53 @@ describe("bridge run-token selection for MCP OBO minting", () => {
     // Neither the provider nor the dispatch resolver was consulted.
     expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
     expect(resolveProviderAdapterMock).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a body/token mismatch BEFORE dispatch resolution (media-path lock)", async () => {
+    // The disagreement cases used to be decided after the Gemini media branch,
+    // which returns its OWN response — so a valid token for run A plus
+    // agent_run_id=run-B could upload and call the model, then return 200.
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    const res = await POST(
+      makeReqH(
+        {
+          user: "hi",
+          agent_run_id: TARGET_RUN.id,
+          cinatra_llm: { preferredProvider: "gemini" },
+        },
+        { "x-cinatra-run-token": RUN_TOKEN },
+      ),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ code: "run_mismatch" }),
+    );
+    expect(resolveProviderAdapterMock).not.toHaveBeenCalled();
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a token/context-id divergence even when the body claims NO run", async () => {
+    // WayFlow often sends an EMPTY agent_run_id. Conditioning the divergence
+    // check on a non-empty body id would let two disagreeing dispatch-owned
+    // bindings through, served "anonymously" — silently dropping a real conflict.
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    readAgentRunByContextIdMock.mockResolvedValue(TARGET_RUN);
+    const res = await POST(
+      makeReqH(
+        { user: "hi" },
+        {
+          "x-cinatra-run-token": RUN_TOKEN,
+          "x-cinatra-a2a-context-id": "ctx-other",
+        },
+      ),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ code: "run_mismatch" }),
+    );
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
   });
 
   it("the identity gate precedes every dispatch path in the source", () => {
@@ -777,7 +805,7 @@ describe("bridge run-token-first selection (W3)", () => {
     expect(resolveAgentRunMcpActorMock).not.toHaveBeenCalled();
   });
 
-  it("DIVERGENCE: token selects a run but a co-present context-id names a DIFFERENT run → refuse OBO", async () => {
+  it("DIVERGENCE: token selects a run but a co-present context-id names a DIFFERENT run → REFUSED", async () => {
     readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
     readAgentRunByContextIdMock.mockResolvedValue(TARGET_RUN); // disagrees
@@ -790,9 +818,13 @@ describe("bridge run-token-first selection (W3)", () => {
         },
       ),
     );
-    expect(res.status).toBe(200);
-    await invokeOverride();
-    // A divergent trustworthy context-id refuses the OBO mint (W2 invariant).
+    // Two dispatch-owned bindings disagreeing is corrupt or forged. This used to
+    // be served with the OBO mint merely suppressed; it is now refused outright,
+    // and refused EARLY (before any provider dispatch).
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ code: "run_mismatch" }),
+    );
     expect(resolveAgentRunMcpActorMock).not.toHaveBeenCalled();
   });
 

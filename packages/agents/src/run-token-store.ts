@@ -1,31 +1,27 @@
-import { and, eq, lt } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "./db";
 import { agentRuns, agentRunTokens } from "./schema";
-import { WAYFLOW_A2A_TIMEOUT_MS } from "./wayflow-url";
 
-/**
- * How long a credential stays honored after it was minted, in milliseconds.
- *
- * Retirement is by AGE, deliberately NOT by count. A count cap prunes on
- * cardinality, which carries no information about whether a leg is still
- * running: with enough concurrent or retried legs it evicts a credential whose
- * task is mid-flight, and the next callback from that live task 403s — exactly
- * the stranding this table exists to prevent. Recorded-but-unused credentials
- * (a resume that persisted its hash and then threw before `sendTask` was
- * accepted) would make that worse, since they consume cap slots while no leg
- * holds them.
- *
- * An age bound derived from the transport's own ceiling cannot make that
- * mistake. `WAYFLOW_A2A_TIMEOUT_MS` (24h) is the maximum lifetime of a single
- * blocking A2A task, so a credential older than that ceiling CANNOT belong to a
- * leg that is still executing. The 2x margin absorbs clock skew and the gap
- * between minting and the send actually starting.
- *
- * Growth is bounded by "legs a single run can start within the window", which
- * for a real flow is its gate count; each row is a hash, a run id and a
- * timestamp.
- */
-export const AGENT_RUN_TOKEN_RETENTION_MS = 2 * WAYFLOW_A2A_TIMEOUT_MS;
+// NO PRUNING — deliberately. Two designs were tried and both could evict a
+// credential whose leg was still executing, which is the exact stranding this
+// table exists to prevent:
+//
+//   - a per-run COUNT cap prunes on cardinality, which says nothing about
+//     liveness (and recorded-but-unused credentials from a resume that threw
+//     before its send consume slots no leg holds);
+//   - an AGE cap derived from `WAYFLOW_A2A_TIMEOUT_MS` assumed that ceiling
+//     terminates server-side execution. It does not: the timeout is a CLIENT
+//     AbortSignal on the HTTP call, while the container's worker awaits
+//     `conversation.execute_async()` with no wall-clock bound, a flow can chain
+//     several ApiNodes each with their own ceiling, an accepted task can sit
+//     queued before the worker starts, and `created_at` is the DATABASE clock
+//     while any cutoff would be computed from the APP clock.
+//
+// Retiring a credential therefore requires real per-leg terminal state, which
+// this table does not carry. Until it does, the safe posture is to keep every
+// credential: a stale row can only ever resolve to the run it was minted for,
+// whereas a wrongly-pruned row 403s a live callback. Growth is one small row
+// (hash, run id, timestamp) per leg, i.e. per HITL gate of a run.
 
 /**
  * #1193 run-token spine: record a freshly-minted per-run credential.
@@ -72,23 +68,6 @@ export async function setAgentRunTokenHash(
       .insert(agentRunTokens)
       .values({ tokenHash, runId })
       .onConflictDoNothing();
-    // Retire credentials older than the transport's own maximum task lifetime.
-    // Age-based, never count-based: a credential older than the A2A ceiling
-    // cannot belong to a leg that is still executing, so this can never evict a
-    // live one. Scoped to THIS run, and it deliberately never touches the row
-    // just inserted. Piggy-backing on the mint keeps it self-cleaning with no
-    // sweep job.
-    await tx
-      .delete(agentRunTokens)
-      .where(
-        and(
-          eq(agentRunTokens.runId, runId),
-          lt(
-            agentRunTokens.createdAt,
-            new Date(Date.now() - AGENT_RUN_TOKEN_RETENTION_MS),
-          ),
-        ),
-      );
   });
 }
 
