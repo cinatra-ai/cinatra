@@ -51,6 +51,14 @@ const KEEPALIVE_MS = 15_000;
 export type AgUiChatRunProducer = (
   send: (event: string, data: unknown) => void,
   signal: AbortSignal,
+  /**
+   * The DURABLE identity of the turn the harness just bound (cinatra#2240) —
+   * the `assistant_turns` row id plus the freshly-minted AG-UI run id. Handed
+   * to the producer so the assistant runtime can key its per-turn
+   * skill-delivery record to the same row the resume/authorization paths use,
+   * instead of the runtime inventing a second identity nothing else knows.
+   */
+  turnIdentity: { turnId: string; runId: string },
 ) => Promise<void>;
 
 export type ThreadAuthorization =
@@ -251,7 +259,7 @@ export async function streamAgUiChatTurn(params: {
   const runPromise = (async () => {
     adapter.start();
     try {
-      await runProducer(adapter.send, runAbort.signal);
+      await runProducer(adapter.send, runAbort.signal, { turnId: turn.id, runId });
       adapter.ensureTerminal();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Chat request failed.";

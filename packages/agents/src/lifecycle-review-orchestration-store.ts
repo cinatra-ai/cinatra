@@ -1327,6 +1327,14 @@ export interface GateMaintenanceSummary {
   repairsDispatched: number;
   /** Repairs escalated because no producer could be resolved to deliver to. */
   repairsEscalated: number;
+  /** CMS producer_repair repairs COMPLETED this pass (cinatra#2286 S10 PR2) —
+   * a dispatched repair run's produced CMS-snapshot capture was found and
+   * submitted as the repair response. */
+  cmsRepairsCompleted: number;
+  /** Dispatched CMS repairs whose run finished with no matching production, or
+   * whose completion failed live re-authorization — left `dispatched`/open
+   * rather than silently finalized wrong (cinatra#2286 S10 PR2). */
+  cmsRepairsUnresolved: number;
 }
 
 /**
@@ -1356,6 +1364,8 @@ export async function sweepLifecycleGateMaintenance(opts?: {
     parksPolicyUnresolved: 0,
     repairsDispatched: 0,
     repairsEscalated: 0,
+    cmsRepairsCompleted: 0,
+    cmsRepairsUnresolved: 0,
   };
   if (!isLifecycleReviewOrchestrationActive()) return summary;
   const limit = Math.max(1, Math.min(opts?.limit ?? 100, 500));
@@ -1373,6 +1383,11 @@ export async function sweepLifecycleGateMaintenance(opts?: {
   //    the typed request to the producing agent (or escalates when there is no
   //    producer to deliver to).
   await dispatchRepairs(summary);
+  // 5. CMS repair COMPLETION (cinatra#2286 S10 PR2). A dispatched CMS repair
+  //    run that has produced its matching CMS-snapshot capture is submitted as
+  //    the repair response; a non-CMS repair (e.g. blog) is left untouched for
+  //    its own producer's inline completion path.
+  await completeCmsRepairs(summary);
 
   return summary;
 }
@@ -1388,6 +1403,28 @@ async function dispatchRepairs(summary: GateMaintenanceSummary): Promise<void> {
   } catch (err) {
     console.error(
       `[lifecycle-review-orchestration] repair dispatch drain failed: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
+/** Run the CMS repair-completion drain, folding its counters into the
+ * maintenance summary. Best-effort: a completion failure must never abort the
+ * maintenance pass (the repair stays `dispatched` and the next pass retries).
+ * Dynamically imported so a deployment with no CMS repair producer never pulls
+ * this module's reads into the common maintenance-sweep load path. */
+async function completeCmsRepairs(summary: GateMaintenanceSummary): Promise<void> {
+  try {
+    const { completeDispatchedProducerCmsRepairs } = await import(
+      "./lifecycle-repair-cms-production-bridge"
+    );
+    const completion = await completeDispatchedProducerCmsRepairs();
+    summary.cmsRepairsCompleted += completion.completed;
+    summary.cmsRepairsUnresolved += completion.unresolved;
+  } catch (err) {
+    console.error(
+      `[lifecycle-review-orchestration] CMS repair completion drain failed: ${
         err instanceof Error ? err.message : String(err)
       }`,
     );

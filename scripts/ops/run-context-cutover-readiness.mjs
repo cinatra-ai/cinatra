@@ -1,18 +1,32 @@
 #!/usr/bin/env node
 /**
- * Run-context registry cutover readiness (#1195, pre-metric remainder).
+ * Run-context registry cutover readiness (#1195).
+ *
+ * STATUS — THE CUTOVER IS COMPLETE. It was completed BY OWNER RULING
+ * (2026-07-30), not by a verdict from this tool: the ruling waived the
+ * production-observation fence (backward compatibility explicitly not
+ * required), so the in-process registry was DELETED and the fail-closed deny
+ * posture ACTIVATED without this tool ever reporting CUTOVER-READY against a
+ * fleet stream. That is recorded here rather than papered over.
+ *
+ * The tool is KEPT and still runnable, with two honest uses now:
+ *   1. HISTORICAL — evaluate an archived stream from a build that still emitted
+ *      `served-by=registry` (the channel stays recognized for exactly this).
+ *   2. REGRESSION — against a CURRENT stream the same verdict asserts what the
+ *      retirement guarantees: zero legacy-served requests. The registry channel
+ *      no longer exists, and a header-only run-identity claim is REFUSED at the
+ *      MCP transport rather than served, so a nonzero `legacy served` count on a
+ *      current stream means something is wrong.
  *
  * Turns an AGGREGATED fleet log stream of the per-request emission
  *
  *   [mcp-run-ctx] served-by=<channel> run=<id|-> suppressed=<bool> count=<n>
  *
  * (emitted by recordMcpRunContextServedBy in src/lib/agent-run-context-durable.ts)
- * into the single go/no-go verdict that gates the owner-approved registry-
- * removal (flip) slice of #1195 — i.e. the PROOF that no production traffic
- * still rides the legacy in-process registry before it is deleted and before
- * the fail-closed deny posture is activated.
+ * into a single go/no-go verdict.
  *
- * FAIL-CLOSED. The verdict green-lights an IRREVERSIBLE deletion, so:
+ * FAIL-CLOSED (the posture is unchanged — it was built to green-light an
+ * IRREVERSIBLE deletion, and it stays strict as a regression check):
  *   - only full-shape emission lines are counted (one per line); a marker line
  *     that is not a well-formed emission is flagged and makes the stream
  *     untrustworthy (not ready);
@@ -95,13 +109,17 @@ const tally = Object.entries(parse.servedBy)
 process.stdout.write(
   [
     "run-context registry cutover readiness (#1195)",
+    "  cutover status:      COMPLETED 2026-07-30 by owner ruling (observation",
+    "                       fence waived) — registry deleted, fail-closed posture",
+    "                       enforced. This verdict is now a HISTORICAL replay of an",
+    "                       archived stream, or a REGRESSION check on a current one.",
     `  source:              ${file ?? "<stdin>"}`,
     `  lines scanned:       ${parse.linesScanned}`,
     `  emission lines:      ${parse.matchedLines}`,
     `  malformed markers:   ${parse.malformedMarkerLines}`,
     "  served-by tally:",
     tally || "    (none)",
-    `  legacy served:       ${readiness.legacyServed}  (registry + header — must be 0)`,
+    `  legacy served:       ${readiness.legacyServed}  (registry [retired] + header — must be 0)`,
     `  verified served:     ${readiness.verifiedServed}  (obo + durable — must be > 0)`,
     `  total observations:  ${readiness.total}  (threshold: ${minObservations})`,
     "",

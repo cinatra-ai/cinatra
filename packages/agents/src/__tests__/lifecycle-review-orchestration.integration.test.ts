@@ -1024,6 +1024,10 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       // fenced with the rest (the whole sweep short-circuits before it runs).
       repairsDispatched: 0,
       repairsEscalated: 0,
+      // cinatra#2286 S10 PR2 added the CMS repair-COMPLETION sub-drain; same
+      // fence, same short-circuit.
+      cmsRepairsCompleted: 0,
+      cmsRepairsUnresolved: 0,
     });
     // The event stays pending (unprocessed) while the fence is off.
     const row = await readEventRow(ev.eventId);

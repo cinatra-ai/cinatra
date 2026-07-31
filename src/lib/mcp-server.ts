@@ -2,7 +2,6 @@ import "@/lib/extensions"; // initialises extensionRegistry side effects
 import "@/lib/register-test-delivery-send-port"; // wires the run-scoped test-delivery send PORT (#1625)
 import { admitToolInputSchema, createMcpServerAuthPlugins, createMcpServerMount, type McpServerSettings, type McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import { CINATRA_MCP_INSTRUCTIONS, CINATRA_MCP_EXPERIMENTAL } from "./mcp-instructions";
-import { getRunContext } from "./agent-run-context-registry";
 import {
   resolveDurableRunContext,
   recordMcpRunContextServedBy,
@@ -501,17 +500,19 @@ export const mcpServerMount = createMcpServerMount({
   serverInstructions: CINATRA_MCP_INSTRUCTIONS,
   serverExperimental: CINATRA_MCP_EXPERIMENTAL,
   writeSettings: writeMcpServerSettings,
-  getRunContext,
   // #1195 durable run-context binding: resolve the run-token-keyed redis
   // binding through the ONE run-token seam (readAgentRunByTokenHash — the run
   // row stays the source of truth). App-wired because packages/mcp-server
   // cannot import the app layer. The resolver classifies its own failures
   // (transport ⇒ absent, present-but-unresolvable ⇒ invalid) and never throws.
+  // The in-process `getRunContext` registry callback that used to sit here was
+  // DELETED with the registry (#1195 flip): this is the only run-context
+  // channel the app wires besides the signed OBO token.
   resolveDurableRunContext: (rawBearerToken: string) =>
     resolveDurableRunContext(rawBearerToken, readAgentRunByTokenHash),
-  // #1195 cutover metric — counts which channel attributed each MCP request
-  // (the registry-removal gate needs proof no production traffic still rides
-  // the in-process registry).
+  // #1195 metric — counts which channel attributed each MCP request. It once
+  // gated the registry removal; the removal has LANDED, so it now records the
+  // surviving channels (obo / durable / header / none) as ongoing observability.
   onRunContextServedBy: recordMcpRunContextServedBy,
   readConfiguredLlmProviders: async () => {
     const providers = ["openai", "anthropic", "gemini"] as const;

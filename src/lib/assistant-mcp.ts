@@ -702,6 +702,11 @@ async function driveTurn(args: {
       userId: caller.userId,
       platformRole: userCtx.platformRole,
       sessionOrgId: userCtx.sessionOrgId,
+      // cinatra#2240 — the in-process `chat_thread_send` surface mints the same
+      // turn/run pair the HTTP harness does; it keys this turn's durable
+      // skill-delivery record so an MCP-driven chat turn is as auditable as a
+      // browser one.
+      turnIdentity: { turnId, runId },
       send: (event, data) => {
         const d = (data ?? {}) as Record<string, unknown>;
         if (event === "text") {

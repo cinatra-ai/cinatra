@@ -30,9 +30,12 @@ import "server-only";
 //   2. The live MCP transport frame's DELEGATED agent-run actor
 //      (`mcpRequestContextStorage` → `delegatedActor.delegation === "agent_run"`)
 //      — the run id from the SIGNED OBO token (#1195's "obo" channel). The
-//      frame's bare `runId` field is NOT consulted: it can be served by the
-//      legacy registry/header channels (forgeable; #1195 keeps them only for
-//      the cutover) and the frame does not record per-field provenance.
+//      frame's bare `runId` field is NOT consulted: the frame does not record
+//      per-field provenance, so this seam takes only the channel it can name.
+//      (#1195 has since deleted the in-process registry and made a header-only
+//      run-id claim a transport REFUSAL, so the bare field is no longer
+//      forgeable — but the explicit-channel rule stays: it is the invariant,
+//      not a consequence of one caller's current posture.)
 // From a verified run id, the dependent install id is the run row's
 // `dependent_install_id` — or, when the row predates the Gap-2 writer or the
 // run is TOP-LEVEL (no A2A edge created it), a DERIVED identity (below).

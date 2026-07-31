@@ -62,6 +62,13 @@ const DB_URL = process.env.SUPABASE_DB_URL ?? "";
 const HAS_DB = DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-2047-obs2";
+/** cinatra#2286 S10 PR2 — the principal fix: a dispatched repair now requires
+ * the ORIGINATING producing run's `runBy` to resolve a LIVE org membership
+ * (`resolveOrgRoleForUser`), so every `seedRun` in this suite needs a real
+ * `public."member"` row. `public."member"` is NOT part of `TEST_SCHEMA`
+ * (better-auth tables are unqualified, always `public`) — mirrors the sibling
+ * `lifecycle-repair-dispatch.integration.test.ts` suite's seeding. */
+const MEMBER_USER = "user-2047-obs2-member";
 /** The manifest-declared repair capability (`installAgentFromPackage` compiles this
  * onto `agent_templates.lifecycle_config`) — what routes `changes_requested` to the
  * producer instead of a human. */
@@ -101,9 +108,9 @@ async function seedTemplate(packageName: string, lifecycleConfig: string | null)
 async function seedRun(templateId: string): Promise<string> {
   const runId = `run-${randomUUID()}`;
   await pool(
-    `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs" (id, template_id, org_id, input_params)
-     VALUES ($1,$2,$3,'{}')`,
-    [runId, templateId, ORG],
+    `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs" (id, template_id, org_id, run_by, input_params)
+     VALUES ($1,$2,$3,$4,'{}')`,
+    [runId, templateId, ORG, MEMBER_USER],
   );
   return runId;
 }
@@ -214,6 +221,26 @@ beforeAll(async () => {
   await admin.end();
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized = true;
 
+  // cinatra#2286 S10 PR2 — seed a real better-auth org/user/member row (see the
+  // MEMBER_USER comment above); `public` schema, untouched by the TEST_SCHEMA swap.
+  const authAdmin = new Client({ connectionString: DB_URL });
+  await authAdmin.connect();
+  await authAdmin.query(
+    `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
+    [ORG, ORG, ORG],
+  );
+  await authAdmin.query(
+    `INSERT INTO public."user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+     VALUES ($1, $2, $3, false, now(), now()) ON CONFLICT (id) DO NOTHING`,
+    [MEMBER_USER, MEMBER_USER, `${MEMBER_USER}@2047-obs2.test`],
+  );
+  await authAdmin.query(
+    `INSERT INTO public."member" (id, "organizationId", "userId", role, "createdAt")
+     VALUES ($1, $2, $3, 'member', now()) ON CONFLICT (id) DO NOTHING`,
+    [`m-2047-obs2-${ORG}`, ORG, MEMBER_USER],
+  );
+  await authAdmin.end();
+
   outboxStore = await import("../lifecycle-produced-outbox-store");
   gateStore = await import("../artifact-review-gate-store");
   orch = await import("../lifecycle-review-orchestration-store");
@@ -236,6 +263,12 @@ afterAll(async () => {
   await admin.connect();
   await admin.query(`DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`).catch(() => {});
   await admin.end().catch(() => {});
+  const authAdmin = new Client({ connectionString: DB_URL });
+  await authAdmin.connect();
+  await authAdmin.query(`DELETE FROM public."member" WHERE "userId" = $1`, [MEMBER_USER]).catch(() => {});
+  await authAdmin.query(`DELETE FROM public."user" WHERE id = $1`, [MEMBER_USER]).catch(() => {});
+  await authAdmin.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]).catch(() => {});
+  await authAdmin.end().catch(() => {});
   delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized;
 });
 

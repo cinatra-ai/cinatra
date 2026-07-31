@@ -29,8 +29,6 @@ import path from "node:path";
 const {
   runResolvedSkillAwareDeterministicLlmTaskMock,
   createLocalSkillShellToolMock,
-  setRunContextMock,
-  clearRunContextMock,
   resolveConfiguredLlmRuntimeMock,
   getLlmMcpCredentialsMock,
   existsSyncMock,
@@ -43,8 +41,6 @@ const {
     type: "function",
     name: "local_skill_tool",
   })),
-  setRunContextMock: vi.fn(),
-  clearRunContextMock: vi.fn(),
   resolveConfiguredLlmRuntimeMock: vi.fn(async () => ({
     runtime: { provider: "openai" },
     agentId: "test",
@@ -77,10 +73,6 @@ vi.mock("@cinatra-ai/llm", () => ({
   },
 }));
 
-vi.mock("@/lib/agent-run-context-registry", () => ({
-  setRunContext: setRunContextMock,
-  clearRunContext: clearRunContextMock,
-}));
 
 vi.mock("@/lib/a2a-auth", () => ({
   verifyLangGraphBridgeToken: vi.fn(async () => ({ ok: false })),

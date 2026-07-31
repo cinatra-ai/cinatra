@@ -35,9 +35,9 @@ import "server-only";
 //     instead (Codex round, finding E).
 //
 // SCOPE, stated plainly: this drain DELIVERS the request and makes the hand-off
-// durable + idempotent; EXECUTING the repair run is the producing agent runtime's
-// job, exactly as executing any other agent run is. The `requested → dispatched`
-// move is therefore "the producer has been told", not "the repair has run"; a
+// durable + idempotent; the producing agent's own graph does the repairing work,
+// exactly like any other agent run. The `requested → dispatched` move is
+// therefore "the producer has been told AND set running", not merely "told"; a
 // producer that never answers leaves a `dispatched` repair and a PENDING base
 // produced-event — both ops-visible, neither silently dropped.
 //
@@ -45,8 +45,31 @@ import "server-only";
 // primitive (#1035) — as a CHILD DISPATCH under the producing run, threading the
 // producing run's PERSISTED ceiling chain as the compose operand. The child's own
 // ceiling is server-derived inside the primitive; a provably-disjoint composition
-// throws and the delivery fails closed with nothing written. The primitive mints
-// the row `queued`; no execution job is enqueued HERE (see the scope note below).
+// throws and the delivery fails closed with nothing written.
+//
+// cinatra#2286 S10 PR2 — THE EXECUTION BRIDGE + THE PRINCIPAL FIX. Before this
+// slice `createAgentRun` minted the row `queued` and NOTHING enqueued its BullMQ
+// execution job — a delivered repair sat forever un-run (dead code path; no
+// producer had ever declared `repairCapable`, so it was never reached in
+// production). This slice:
+//   • actually ENQUEUES the repair run (`enqueueAgentRun`, `jobId: runId` for
+//     BullMQ-level dedup across a re-drain) so a `dispatched` repair genuinely
+//     runs, dispatched exactly like any other agent run;
+//   • projects an optional CMS-generic task/`inputParams` addition (see
+//     `./lifecycle-repair-cms-production-bridge`) when the base target is a
+//     captured CMS snapshot — a no-op for every other producer (e.g. blog);
+//   • THE SECURITY FIX: the dispatched run's ActorContext is the ORIGINATING
+//     producing run's own `runBy`, re-verified LIVE at dispatch time via
+//     `resolveOrgRoleForUser` (never trusted from whatever the producing run
+//     carried at produce time, and never deferred to the write). Without this,
+//     `enqueueAgentRun`'s worker frame would carry NO actor for a runBy-less
+//     producing run, and `buildActorContextFromRun` degrades a runBy-less run to
+//     an `InternalWorker` principal with empty project grants — a
+//     system-authority principal masquerading as a content-write actor. A
+//     producing run with no human `runBy`, or whose `runBy` no longer resolves a
+//     live org membership, is ESCALATED to human review instead — the SAME
+//     `escalateRepair` path the checkpointed/no-producer guardrails already use,
+//     never dispatched "and hoped".
 //
 // No schema change: the run id is derived from the repair id (the same technique
 // `orphanRepairRunId` already uses for the successor gate's run slot), and the
@@ -73,6 +96,21 @@ import type { ChangesRequestedRequest, RepairFinding } from "@/lib/lifecycle/lif
 // `agent-run-dispatch` authority (a caller the design's caller matrix did not
 // enumerate; found while grounding P3 against live source).
 import { mintLifecycleRepairDispatchAuthority } from "@/lib/org-write/agent-run-authority-mint";
+// cinatra#2286 S10 PR2 — the execution bridge + the principal fix. The
+// SYSTEM dispatch authority above only ever covers minting the run ROW
+// (`run.execute`/`run.complete`); it structurally cannot authorize the
+// content-write the dispatched repair run will attempt through its own tool
+// call. That authorization must trace to an accountable HUMAN, never to a
+// generic worker identity — so this drain now (a) re-verifies LIVE, at
+// dispatch time, that the ORIGINATING producing run's `runBy` is still a real
+// member of the repair's org, and (b) threads that verified human as the
+// dispatched run's ActorContext, so `withActorContext` carries a real
+// `HumanUser` principal through to the connector's own write-authority check
+// — never the `InternalWorker`-with-empty-grants fallback
+// `buildActorContextFromRun` degrades to for a runBy-less run.
+import { resolveOrgRoleForUser } from "@/lib/auth-session";
+import { buildActorContextFromRun } from "@/lib/authz/build-actor-context-from-run";
+import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
 
 /** The prefix of the deterministic run a dispatched repair is delivered on. */
 export const REPAIR_RUN_PREFIX = "lifecycle-repair-run:";
@@ -125,6 +163,18 @@ export interface DeliveredRepairRequest {
   findings: RepairFinding[];
   continuationMode: string;
   continuationAddress: string | null;
+  /**
+   * The ORIGINATING producing run's `runBy` (cinatra#2286 S10 PR2, the
+   * principal fix) — the human this repair's authority traces to, re-verified
+   * live at dispatch time (`resolveOrgRoleForUser`) and threaded as the
+   * dispatched repair run's ActorContext. `null` only when the producing run
+   * itself had no human runBy, in which case the repair is ESCALATED rather
+   * than dispatched (see `dispatchPendingProducerRepairs`) — a `null` here on
+   * an actually-dispatched request is therefore unreachable in practice, but
+   * the field stays nullable so a pre-fix delivered row (read by
+   * `readDeliveredRepairRequest` after a rolling deploy) still parses.
+   */
+  originatingRunBy: string | null;
 }
 
 /** Known bound: the pass takes the OLDEST `limit` pending repairs. A row whose
@@ -196,6 +246,45 @@ export async function dispatchPendingProducerRepairs(opts?: {
         continue;
       }
 
+      // cinatra#2286 S10 PR2 — THE PRINCIPAL FIX. The re-staged write a
+      // dispatched repair run's own tool call makes must trace to an
+      // accountable HUMAN, never to the system dispatch authority above (which
+      // mints only `run.execute`/`run.complete`, never a content-write
+      // capability) and never to `buildActorContextFromRun`'s runBy-less
+      // `InternalWorker` fallback (empty project grants, but still a
+      // principal a looser or future connector policy could honor). So:
+      //   - no human runBy on the ORIGINATING producing run at all → refuse,
+      //     escalate to human review;
+      //   - a runBy that no longer resolves a LIVE org membership (revoked /
+      //     removed since the run was produced) → refuse, escalate — re-verified
+      //     NOW, never trusted from whatever the producing run carried at
+      //     produce time.
+      // Nothing here is dispatched "and hoped" — the gate runs BEFORE the
+      // repair run is even minted.
+      const originatingRunByCandidate = producer.originatingRunBy;
+      if (!originatingRunByCandidate) {
+        const escalated = await escalateRepair(
+          row.id,
+          "the originating producing run carries no human runBy — dispatching a repair with no verified principal is refused",
+        );
+        if (escalated) summary.escalated += 1;
+        else summary.raced += 1;
+        continue;
+      }
+      const originatingRole = await resolveOrgRoleForUser(row.orgId, originatingRunByCandidate);
+      if (!originatingRole) {
+        const escalated = await escalateRepair(
+          row.id,
+          "the originating producing run's runBy is no longer a verified member of this organization",
+        );
+        if (escalated) summary.escalated += 1;
+        else summary.raced += 1;
+        continue;
+      }
+      // Narrowed + stable for the rest of this iteration (never re-read off
+      // `producer` again, so no ambiguity across the `await`s below).
+      const originatingRunBy: string = originatingRunByCandidate;
+
       const request: DeliveredRepairRequest = {
         kind: "lifecycle_repair_request",
         repairId: row.id,
@@ -210,9 +299,22 @@ export async function dispatchPendingProducerRepairs(opts?: {
         findings: (row.findings as RepairFinding[]) ?? [],
         continuationMode: row.continuationMode,
         continuationAddress: row.continuationAddress ?? null,
+        originatingRunBy,
       };
 
       const runId = repairRunId(row.id);
+
+      // CMS-generic task-construction (cinatra#2286 S10 PR2 — the execution
+      // bridge). Dynamically imported so a non-CMS repairing producer (e.g.
+      // the blog pipeline) never pulls this module's DB reads into the common
+      // dispatch path; it resolves to `{}` (no-op) whenever the base target is
+      // not itself a captured CMS snapshot, so dispatch stays byte-identical
+      // for every other producer.
+      const { projectCmsRepairInputParams } = await import(
+        "./lifecycle-repair-cms-production-bridge"
+      );
+      const cmsInputParams = await projectCmsRepairInputParams(request);
+
       const [already] = await db
         .select({ id: agentRuns.id })
         .from(agentRuns)
@@ -229,8 +331,12 @@ export async function dispatchPendingProducerRepairs(opts?: {
               id: runId,
               templateId: producer.templateId,
               orgId: row.orgId,
-              inputParams: { lifecycleRepairRequest: request },
+              inputParams: { lifecycleRepairRequest: request, ...cmsInputParams },
               sourceType: "lifecycle_repair",
+              // Attribution: the repair run is the ORIGINATING human's, never
+              // the system dispatcher's — mirrors the ActorContext threaded to
+              // the enqueue below (cinatra#2286 S10 PR2, the principal fix).
+              runBy: originatingRunBy,
               // CHILD DISPATCH (#1035): the repair run runs under the producing
               // run. Its own ceiling is server-derived inside the primitive; the
               // parent's PERSISTED chain is the compose operand only, never copied.
@@ -247,6 +353,30 @@ export async function dispatchPendingProducerRepairs(opts?: {
           if ((err as { code?: string } | null)?.code !== "23505") throw err;
         }
       }
+
+      // cinatra#2286 S10 PR2 — actually EXECUTE the repair run. Before this,
+      // `createAgentRun` above only minted the row `queued`; nothing enqueued
+      // the BullMQ execution job, so a delivered repair sat forever un-run.
+      // The ActorContext is the LIVE-VERIFIED originating human resolved above
+      // — never the system dispatch authority, never left to
+      // `buildActorContextFromRun`'s runBy-less fallback (this run always
+      // carries a runBy, so that fallback is never reached for it). The
+      // BullMQ-level dedup key is DERIVED from `runId` (so a re-drain — a
+      // crash between mint and enqueue — is safe to re-call) but with its `:`
+      // stripped: `runId` carries the `lifecycle-repair-run:` prefix, and
+      // BullMQ's custom-jobId validation rejects any id containing exactly one
+      // `:` ("Custom Id cannot contain :" — reserved for its own 3-part
+      // repeatable-job ids). Same sanitization `skills-store.ts` already
+      // applies to its own colon-bearing jobIds.
+      const actorContext = await buildActorContextFromRun({
+        id: runId,
+        runBy: originatingRunBy,
+        orgId: row.orgId,
+      });
+      await enqueueAgentRun(
+        { runId },
+        { jobId: runId.replace(/:/g, "_"), actorContext },
+      );
 
       const moved = await markRepairDispatched(row.id);
       if (moved) summary.dispatched += 1;
@@ -271,10 +401,23 @@ async function resolveProducingTemplate(producerRunId: string | null): Promise<{
   /** The producing run's PERSISTED OBO ceiling chain — the compose operand for
    * the child repair run (server-read, never caller input). */
   parentOboCeiling: OboCeilingChain | null;
+  /**
+   * The ORIGINATING producing run's `runBy` (cinatra#2286 S10 PR2, the
+   * principal fix) — read off the SAME already-open run row (a one-line
+   * addition, no second query). `null` when the producing run itself had no
+   * human runBy (a system/A2A/scheduled write with no delegating human), in
+   * which case the caller refuses to dispatch rather than falling through to
+   * a system-authority principal.
+   */
+  originatingRunBy: string | null;
 } | null> {
   if (!producerRunId) return null;
   const [run] = await db
-    .select({ templateId: agentRuns.templateId, oboCeiling: agentRuns.oboCeiling })
+    .select({
+      templateId: agentRuns.templateId,
+      oboCeiling: agentRuns.oboCeiling,
+      runBy: agentRuns.runBy,
+    })
     .from(agentRuns)
     .where(eq(agentRuns.id, producerRunId))
     .limit(1);
@@ -293,7 +436,12 @@ async function resolveProducingTemplate(producerRunId: string | null): Promise<{
       parentOboCeiling = null;
     }
   }
-  return { templateId: tmpl.id, packageName: tmpl.packageName ?? null, parentOboCeiling };
+  return {
+    templateId: tmpl.id,
+    packageName: tmpl.packageName ?? null,
+    parentOboCeiling,
+    originatingRunBy: run.runBy ?? null,
+  };
 }
 
 /** CAS a `requested` repair to `escalated`, recording WHY on `change_summary`

@@ -277,9 +277,10 @@ export type McpRequestContext = {
    * A run id VERIFIED by a trusted server-side run-bound seam (e.g.
    * `/api/agents/passthrough` after `bindBridgeRunId` proves the executing run
    * from the auth-injected context-id). Run-scoped primitives read THIS — never
-   * the ambient `runId` above, which the transport also fills from the
-   * caller-controlled `x-cinatra-run-id` header (a legacy/forgeable channel while
-   * the #1195 fail-closed cutover is off). The transport NEVER writes this field
+   * the ambient `runId` above. (Since the #1195 fail-closed cutover the ambient
+   * `runId` can only come from a VERIFIED channel — a header-only claim is
+   * refused at the transport — but the separation is kept: it is the invariant,
+   * not a consequence of one call site.) The transport NEVER writes this field
    * from any request input; only in-process seam code that has itself verified
    * the run may set it. Undefined for every ordinary request. (An OBO
    * `delegation:"agent_run"` actor is the OTHER verified run source — its runId
@@ -330,31 +331,36 @@ export const mcpRequestContextStorage = new AsyncLocalStorage<McpRequestContext>
 //                   durable "invalid" outcome.
 //   2. "durable"  — the durable binding resolved through the run row
 //                   (readAgentRunByTokenHash) — verified run identity.
-//   3. "registry" — the legacy in-process registry (transition fallback,
-//                   consulted ONLY when the durable outcome is "absent").
-//   4. "header"   — the legacy x-cinatra-* headers (last resort, same gate).
+//   3. "header"   — the caller-controlled x-cinatra-* headers. The ONLY
+//                   remaining legacy/forgeable channel, and it no longer
+//                   SERVES: see the retirement note below.
+//
+// RETIRED (cinatra#1195, this change): the in-process registry channel. The
+// module (src/lib/agent-run-context-registry.ts), its shared per-provider
+// clientId fallback key, and the `getRunContext` transport wiring are DELETED,
+// so `registry` is no longer an input, a precedence step, or a servedBy value.
 //
 // FAIL-CLOSED SUPPRESSION: a durable outcome of "invalid" (present-but-
 // malformed value, token-miss, or verification error after a binding was
-// found) suppresses the registry AND header channels entirely — the run id
-// AND every provenance field. A positive stale/corrupt-credential signal is
-// never downgraded into weaker, forgeable channels. Provenance metadata
-// (agentId / packageVersion / agentSpecVersion) is UNTRUSTED tagging input
-// on every channel — never an authorization input.
+// found) suppresses the header channel entirely — the run id AND every
+// provenance field. A positive stale/corrupt-credential signal is never
+// downgraded into a weaker, forgeable channel. Provenance metadata (agentId /
+// packageVersion / agentSpecVersion) is UNTRUSTED tagging input on every
+// channel — never an authorization input.
 //
-// FAIL-CLOSED CUTOVER DENIAL (`failClosed`, dormant until the flip slice):
-// once the durable path dominates, the legacy registry + header channels are
-// retired. `failClosed` is the verified core of that retirement — when set, a
-// run id that ONLY a legacy channel could supply is REFUSED (`denied` + the
-// `deniedChannel`), never tagged via the forgeable key. Verified channels
-// (obo/durable) are untouched. It is left OFF in production wiring: the
-// enforcement point that turns `denied` into a rejected run-scoped write, and
-// the switch that activates it, land TOGETHER in the owner-gated registry-
-// removal slice, which only runs once evaluateRegistryCutoverReadiness
-// (agent-run-context-durable.ts) reports the served-by metric has proven no
-// production traffic still rides the registry. Dropping the run id WITHOUT a
-// paired enforcement point would be fail-OPEN (an unattributed run-scoped
-// write, worse than a denied one), so the two are never split.
+// Suppression and DENIAL compose: under `failClosed` a header run id that
+// suppression already dropped is STILL refused, because serving the request
+// with the id merely dropped would persist an unattributed run-scoped write.
+//
+// FAIL-CLOSED CUTOVER DENIAL (`failClosed`, now ACTIVE in production wiring):
+// a run id that ONLY a legacy/forgeable channel could supply is REFUSED
+// (`denied` + the `deniedChannel`), never tagged. Verified channels
+// (obo/durable) are untouched. Dropping the run id WITHOUT a paired
+// enforcement point would be fail-OPEN (an unattributed run-scoped write,
+// worse than a denied one), so the switch and its enforcement point landed
+// TOGETHER: the transport (index.tsx) passes `failClosed: true` AND refuses the
+// request outright when `denied` is set, so no write can proceed unattributed
+// off a refused claim.
 // ---------------------------------------------------------------------------
 
 export type DurableRunContextResolution =
@@ -370,23 +376,14 @@ export type DurableRunContextResolution =
   | { outcome: "invalid" }
   | { outcome: "absent" };
 
-export type RunContextServedBy =
-  | "obo"
-  | "durable"
-  | "registry"
-  | "header"
-  | "none";
+/** The channels that can serve a run id. `"registry"` was removed with the
+ *  in-process registry (cinatra#1195) and can no longer be emitted. */
+export type RunContextServedBy = "obo" | "durable" | "header" | "none";
 
-export type RegistryRunContext = {
-  runId?: string;
-  agentId?: string;
-  packageVersion?: string;
-  agentSpecVersion?: string;
-};
-
-/** The two legacy/forgeable run-id channels (in-process registry + the raw
- *  x-cinatra-* headers). obo and durable are the VERIFIED channels. */
-export type LegacyRunContextChannel = "registry" | "header";
+/** The remaining legacy/forgeable run-id channel (the raw x-cinatra-* headers)
+ *  after the in-process registry was deleted. obo and durable are the VERIFIED
+ *  channels. */
+export type LegacyRunContextChannel = "header";
 
 export type ResolvedRequestRunContext = {
   runId?: string;
@@ -399,15 +396,16 @@ export type ResolvedRequestRunContext = {
   suppressed: boolean;
   /**
    * True when `failClosed` REFUSED a run id that only a legacy/forgeable
-   * channel could supply (#1195 fail-closed cutover posture). The run id and
-   * legacy provenance are dropped and `servedBy` collapses to "none"; a
-   * verified channel (obo / durable) is NEVER denied. Always false when
-   * `failClosed` is not set (the transition default). Distinct from
-   * `suppressed`: suppression is the durable-"invalid" self-defense that fires
-   * regardless of the flag; denial is the deliberate cutover refusal of the
-   * weak channels — an enforcement point must treat `denied` (not merely a
-   * missing run id) as the signal to reject a run-scoped write before it
-   * persists (see the module note on the flip slice).
+   * channel could supply (#1195 fail-closed posture, now ACTIVE). The run id
+   * and legacy provenance are dropped and `servedBy` collapses to "none"; a
+   * verified channel (obo / durable) is NEVER denied. False when `failClosed`
+   * is not set. Distinct from `suppressed`: suppression is the
+   * durable-"invalid" self-defense that fires regardless of the flag; denial is
+   * the deliberate refusal of the weak channel — the enforcement point treats
+   * `denied` (not merely a missing run id) as the signal to reject the request
+   * before any run-scoped write can persist (see the transport in index.tsx).
+   * The two are NOT mutually exclusive: a suppressed legacy claim is still a
+   * claim and is also denied (see `legacyChannel` below).
    */
   denied: boolean;
   /** The legacy channel whose run id was fail-closed-refused, if any. */
@@ -420,23 +418,19 @@ export function resolveRequestRunContext(input: {
   /** The ONE per-request durable resolution (undefined when not consulted —
    *  e.g. a delegated request or no bearer). */
   durable?: DurableRunContextResolution;
-  registryCtx?: RegistryRunContext;
   headerRunId?: string;
   headerAgentId?: string;
   headerPackageVersion?: string;
   headerAgentSpecVersion?: string;
   /**
-   * Fail-closed cutover control (#1195). When true, a run id that would be
-   * served ONLY by a legacy/forgeable channel (registry or header — i.e. no
-   * verified obo/durable id is available) is REFUSED rather than tagged:
-   * the run id and all legacy provenance are dropped, `servedBy` becomes
-   * "none", and `denied`/`deniedChannel` report the refusal. Verified
-   * channels are never affected. DEFAULT (unset / false) is byte-identical to
-   * the transition behavior. This is the verified core of the deny posture;
-   * production wiring keeps it OFF until the registry-removal (flip) slice
-   * lands the enforcement + activation together, gated on the served-by
-   * cutover metric proving no production traffic still rides the registry
-   * (see evaluateRegistryCutoverReadiness).
+   * Fail-closed control (#1195). When true, a run id that would be served ONLY
+   * by the legacy/forgeable header channel (i.e. no verified obo/durable id is
+   * available) is REFUSED rather than tagged: the run id and all legacy
+   * provenance are dropped, `servedBy` becomes "none", and
+   * `denied`/`deniedChannel` report the refusal. Verified channels are never
+   * affected. Production wiring passes `true` (the transport also enforces the
+   * refusal); the parameter stays explicit so the pure contract is directly
+   * testable in both postures.
    */
   failClosed?: boolean;
 }): ResolvedRequestRunContext {
@@ -444,8 +438,7 @@ export function resolveRequestRunContext(input: {
   const durableCtx =
     input.durable?.outcome === "resolved" ? input.durable.ctx : undefined;
 
-  // Legacy channels are gated by suppression as a UNIT (run id + provenance).
-  const registryCtx = suppressed ? undefined : input.registryCtx;
+  // The legacy channel is gated by suppression as a UNIT (run id + provenance).
   const headerRunId = suppressed ? undefined : input.headerRunId;
   const headerAgentId = suppressed ? undefined : input.headerAgentId;
   const headerPackageVersion = suppressed
@@ -465,54 +458,53 @@ export function resolveRequestRunContext(input: {
   const verifiedRunId =
     nonEmpty(input.delegatedRunId) ?? nonEmpty(durableCtx?.runId);
 
-  // The legacy channel that WOULD supply the run id when no verified id exists.
-  const legacyChannel: LegacyRunContextChannel | undefined = registryCtx?.runId
-    ? "registry"
-    : headerRunId
-      ? "header"
-      : undefined;
+  // The legacy channel that CLAIMED a run id on this request.
+  //
+  // Read from the RAW input, DELIBERATELY before the durable-"invalid"
+  // suppression above (codex round-1 finding, #1195 flip). A suppressed claim is
+  // still a claim: computing this from the post-suppression value would make
+  // `durable:"invalid"` + a header run id resolve to suppressed-but-NOT-denied,
+  // so the transport would serve the request with the run id merely dropped —
+  // an UNATTRIBUTED run-scoped write off a request that did claim run identity
+  // through a retired channel. That is precisely the fail-OPEN outcome this
+  // posture exists to prevent, so a claim is refused whether it was dropped by
+  // suppression or by denial.
+  const legacyChannel: LegacyRunContextChannel | undefined = input.headerRunId
+    ? "header"
+    : undefined;
 
-  // Fail-closed refusal applies ONLY to a legacy-only run id. It is orthogonal
-  // to `suppressed`: when a durable "invalid" already dropped the legacy
-  // channels, `legacyChannel` is undefined here, so `denied` stays false.
+  // Fail-closed refusal applies ONLY to a legacy-only run id: a request that
+  // never claimed one (including a durable-"invalid" with no header) is still
+  // SERVED without run attribution — an availability decision, and an
+  // unattributed write is never a misattributed one.
   const denied =
     input.failClosed === true &&
     verifiedRunId === undefined &&
     legacyChannel !== undefined;
   const deniedChannel = denied ? legacyChannel : undefined;
 
-  // Under denial the legacy channels are dropped as a UNIT (run id +
-  // provenance), exactly like suppression — never a partial downgrade.
-  const effRegistryCtx = denied ? undefined : registryCtx;
+  // Under denial the legacy channel is dropped as a UNIT (run id + provenance),
+  // exactly like suppression — never a partial downgrade.
   const effHeaderRunId = denied ? undefined : headerRunId;
   const effHeaderAgentId = denied ? undefined : headerAgentId;
   const effHeaderPackageVersion = denied ? undefined : headerPackageVersion;
   const effHeaderAgentSpecVersion = denied ? undefined : headerAgentSpecVersion;
 
-  const legacyRunId = effRegistryCtx?.runId ?? effHeaderRunId;
-  const runId = verifiedRunId ?? legacyRunId;
+  const runId = verifiedRunId ?? effHeaderRunId;
 
   const servedBy: RunContextServedBy = input.delegatedRunId
     ? "obo"
     : durableCtx?.runId
       ? "durable"
-      : effRegistryCtx?.runId
-        ? "registry"
-        : effHeaderRunId
-          ? "header"
-          : "none";
+      : effHeaderRunId
+        ? "header"
+        : "none";
 
   return {
     runId,
-    agentId: durableCtx?.agentId ?? effRegistryCtx?.agentId ?? effHeaderAgentId,
-    packageVersion:
-      durableCtx?.packageVersion ??
-      effRegistryCtx?.packageVersion ??
-      effHeaderPackageVersion,
-    agentSpecVersion:
-      durableCtx?.agentSpecVersion ??
-      effRegistryCtx?.agentSpecVersion ??
-      effHeaderAgentSpecVersion,
+    agentId: durableCtx?.agentId ?? effHeaderAgentId,
+    packageVersion: durableCtx?.packageVersion ?? effHeaderPackageVersion,
+    agentSpecVersion: durableCtx?.agentSpecVersion ?? effHeaderAgentSpecVersion,
     servedBy,
     suppressed,
     denied,
