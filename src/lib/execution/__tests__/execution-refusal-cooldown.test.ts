@@ -52,10 +52,18 @@ import {
 } from "@cinatra-ai/execution-plane";
 
 /**
- * The rows the kernel attempted, reconstructed by zipping the INSERT's own
- * column list with its parameters — so this reads the write the way Postgres
+ * The rows the kernel attempted, reconstructed by pairing the INSERT's own
+ * column list with its VALUES list — so this reads the write the way Postgres
  * would, not by index into an argument array that a schema change could
  * silently reorder.
+ *
+ * The pairing walks the VALUES list rather than the parameter array, because a
+ * column the statement leaves to the database appears there as a literal
+ * `default` and consumes NO parameter (`created_at` always does;
+ * `execution_delivery_key` does on every producer but the execution plane's own
+ * durable path). Zipping columns to parameters positionally silently shifted
+ * every column after the first `default` onto the wrong value — which is how an
+ * additive column made assertions about `metadata` read `undefined`.
  */
 type InsertedRow = Record<string, unknown> & { metadata: Record<string, unknown> };
 function insertedRows(): InsertedRow[] {
@@ -65,10 +73,17 @@ function insertedRows(): InsertedRow[] {
       .slice(text.indexOf("(") + 1, text.indexOf(")"))
       .split(",")
       .map((column) => column.trim().replaceAll('"', ""));
+    const valuesClause = text.slice(text.indexOf("values (") + "values (".length);
+    const slots = valuesClause
+      .slice(0, valuesClause.indexOf(")"))
+      .split(",")
+      .map((slot) => slot.trim());
     const values = params as unknown[];
     const row: Record<string, unknown> = {};
     columns.forEach((column, index) => {
-      row[column] = values[index];
+      const slot = slots[index];
+      if (slot === undefined || !slot.startsWith("$")) return; // `default`
+      row[column] = values[Number(slot.slice(1)) - 1];
     });
     const metadata = row.metadata;
     row.metadata = typeof metadata === "string" ? JSON.parse(metadata) : {};
@@ -84,6 +99,7 @@ const REFUSAL: ExecutionAuditRecord = {
   runId: "run-1",
   command: "pip install pandas",
   cwd: "/workspace",
+  seq: 0,
   decision: "refused",
   reason: "voucher_invalid",
   commandId: "cmd-1",

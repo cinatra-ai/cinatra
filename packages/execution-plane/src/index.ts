@@ -183,6 +183,8 @@ export {
   type CommandPolicyHook,
   type BrokerQuotas,
   type ExecutionAuditRecord,
+  type ExecutionAuditReservation,
+  type ExecutionAuditReserver,
   type ExecutionAuditSink,
   type ExecutionStdioSink,
   type ExecutionStdioRedactor,
@@ -334,6 +336,8 @@ export {
   type CloseJobPayload,
   type TerminateJobsForRunPayload,
   type SweepPayload,
+  type AckAuditPayload,
+  type AckAuditResultPayload,
   type DrainAuditPayload,
   type DrainAuditResultPayload,
   type HealthResultPayload,
@@ -416,14 +420,34 @@ export {
 export {
   createBrokerService,
   createBrokerDispatch,
-  createBufferedAuditRelay,
-  DEFAULT_AUDIT_RELAY_MAX_RECORDS,
+  createAuditRelay,
   DEFAULT_AUDIT_RELAY_MAX_STDIO,
   type BrokerService,
   type BrokerServiceConfig,
   type BrokerServiceBroker,
   type ExecAuditRelay,
 } from "./service/broker-server";
+
+// The DURABLE AUDIT SPOOL (cinatra#2266 slice 2, design gaps G1 + G2): a
+// bounded, crash-safe, single-writer append log on the broker's own volume,
+// with a pre-dispatch reservation that REFUSES a command it cannot account for
+// and a physical delivery identity the ACK protocol and the kernel's
+// idempotent insert both key on.
+export {
+  openAuditSpool,
+  createMemoryAuditSpool,
+  AuditSpoolCorruptError,
+  AuditSpoolFullError,
+  AuditSpoolLockedError,
+  AUDIT_SPOOL_FORMAT_VERSION,
+  AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES,
+  DEFAULT_AUDIT_SPOOL_MAX_BYTES,
+  type AuditSpool,
+  type AuditSpoolAckResult,
+  type AuditSpoolReadResult,
+  type AuditSpoolReservation,
+  type AuditSpoolStats,
+} from "./service/audit-spool";
 
 export {
   createWorkerService,
