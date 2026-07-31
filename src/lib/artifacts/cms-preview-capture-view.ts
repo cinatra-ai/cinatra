@@ -137,7 +137,13 @@ export type PinnedCapturePairKind =
   /** Gate creation: the live page vs the proposal composed into its chrome. */
   | "review"
   /** S4 read-back: the reviewed proposal vs the page as it actually landed. */
-  | "verification";
+  | "verification"
+  /** cinatra#2286 S10: a repair successor gate — the reviewed base target's
+   * proposal vs the producer's repaired re-stage. Unlike `review`/`verification`,
+   * the two sides are NOT projected from one shared `views` array (they come
+   * from two different targets' own capture reads — the repair's base and its
+   * successor) — see `buildPinnedRepairPair`. */
+  | "repair";
 
 export interface PinnedCapturePairView {
   kind: PinnedCapturePairKind;
@@ -165,6 +171,12 @@ const PAIR_ROLES: Record<
     right: "applied",
     leftLabel: "Reviewed — what you approved",
     rightLabel: "Applied — what the site now shows",
+  },
+  repair: {
+    left: "current",
+    right: "repaired",
+    leftLabel: "Reviewed — what you approved",
+    rightLabel: "Repaired — the producer's fix",
   },
 };
 
@@ -202,6 +214,25 @@ export function buildPinnedCapturePair(
     leftLabel: spec.leftLabel,
     rightLabel: spec.rightLabel,
   };
+}
+
+/**
+ * cinatra#2286 S10 — the REPAIR comparison. Unlike `review`/`verification`,
+ * whose two sides both live in ONE target's own capture set, a repair pair's
+ * two sides come from TWO DIFFERENT targets: the repair's BASE target's own
+ * `current` capture (what was reviewed) and its SUCCESSOR target's own
+ * `repaired` capture (the producer's fix), per two independent store reads
+ * (`review-gate-ports.ts`'s `loadPinnedRepairPair`). This mirrors
+ * `buildPinnedCapturePair`'s one-sided-degrade + drift-marking logic exactly —
+ * reused, not reinvented — by merging the two already-projected view lists
+ * into the one shared list the generic picker expects, then delegating to it.
+ */
+export function buildPinnedRepairPair(
+  baseViews: readonly PinnedCaptureView[],
+  successorViews: readonly PinnedCaptureView[],
+  driftedRegions: readonly string[] = [],
+): PinnedCapturePairView | null {
+  return buildPinnedCapturePair([...baseViews, ...successorViews], "repair", driftedRegions);
 }
 
 /**

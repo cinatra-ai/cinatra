@@ -41,6 +41,7 @@ import {
 import {
   buildPinnedCapturePair,
   buildPinnedCaptureViews,
+  buildPinnedRepairPair,
   findRemoteDocumentUrls,
   pinnedCaptureImageUrl,
 } from "@/lib/artifacts/cms-preview-capture-view";
@@ -280,6 +281,126 @@ describe("cinatra#2044 L-B — the review view path performs NO network fetch", 
 
   it("no captures at all ⇒ no pair (the surface renders nothing, not an empty frame)", () => {
     expect(buildPinnedCapturePair([], "review")).toBeNull();
+    expectNoNetwork();
+  });
+
+  // -------------------------------------------------------------------------
+  // cinatra#2286 S10 (PR1) — `buildPinnedRepairPair`'s one-sided-degrade
+  // matrix. Unlike `review`/`verification`, the two sides come from TWO
+  // DIFFERENT targets' own capture reads (the repair's base and its
+  // successor — `review-gate-ports.ts`'s `loadPinnedRepairPair`), so this
+  // proves the merge + pick + drift logic directly against two independent
+  // view lists rather than one shared list.
+  // -------------------------------------------------------------------------
+
+  it("projects the REPAIR pair: the base target's `current` vs the successor target's `repaired`", () => {
+    const baseViews = buildPinnedCaptureViews([
+      { captureArtifactId: "cap-base", representationRevisionId: "png-base", data: { ...capturedData, role: "current" } },
+    ]);
+    const successorViews = buildPinnedCaptureViews([
+      { captureArtifactId: "cap-successor", representationRevisionId: "png-successor", data: { ...capturedData, role: "repaired" } },
+    ]);
+    const pair = buildPinnedRepairPair(baseViews, successorViews);
+    expect(pair).not.toBeNull();
+    expect(pair!.kind).toBe("repair");
+    expect(pair!.left!.role).toBe("current");
+    expect(pair!.left!.captureArtifactId).toBe("cap-base");
+    expect(pair!.right!.role).toBe("repaired");
+    expect(pair!.right!.captureArtifactId).toBe("cap-successor");
+    expect(pair!.leftLabel).toBe("Reviewed — what you approved");
+    expect(pair!.rightLabel).toBe("Repaired — the producer's fix");
+    expectNoNetwork();
+  });
+
+  it("REPAIR pair — only the base side has a capture: renders left, right is honestly null", () => {
+    const baseViews = buildPinnedCaptureViews([
+      { captureArtifactId: "cap-base", representationRevisionId: "png-base", data: { ...capturedData, role: "current" } },
+    ]);
+    const pair = buildPinnedRepairPair(baseViews, []);
+    expect(pair).not.toBeNull();
+    expect(pair!.left!.role).toBe("current");
+    expect(pair!.right).toBeNull();
+    expectNoNetwork();
+  });
+
+  it("REPAIR pair — only the successor side has a capture: renders right, left is honestly null", () => {
+    const successorViews = buildPinnedCaptureViews([
+      { captureArtifactId: "cap-successor", representationRevisionId: "png-successor", data: { ...capturedData, role: "repaired" } },
+    ]);
+    const pair = buildPinnedRepairPair([], successorViews);
+    expect(pair).not.toBeNull();
+    expect(pair!.left).toBeNull();
+    expect(pair!.right!.role).toBe("repaired");
+    expectNoNetwork();
+  });
+
+  it("REPAIR pair — neither side has a capture ⇒ no pair", () => {
+    expect(buildPinnedRepairPair([], [])).toBeNull();
+    expectNoNetwork();
+  });
+
+  it("REPAIR pair — drift regions mark only the successor (right) side, exactly like the other pair kinds", () => {
+    const baseViews = buildPinnedCaptureViews([
+      { captureArtifactId: "cap-base", representationRevisionId: "png-base", data: { ...capturedData, role: "current" } },
+    ]);
+    const successorViews = buildPinnedCaptureViews([
+      { captureArtifactId: "cap-successor", representationRevisionId: "png-successor", data: { ...capturedData, role: "repaired" } },
+    ]);
+    const pair = buildPinnedRepairPair(baseViews, successorViews, ["content"]);
+    expect(pair!.right!.regions[0].drifted).toBe(true);
+    expect(pair!.left!.regions[0].drifted).toBeUndefined();
+    expectNoNetwork();
+  });
+
+  it("REPAIR pair ignores an irrelevant role on either side (e.g. a stray `before`/`applied` capture)", () => {
+    // A base target can carry `before` too; a successor target's re-stage
+    // capture pipeline can also leave `before`/`current` at its own
+    // coordinates — the repair pair must pick ONLY `current` (base) and
+    // `repaired` (successor), never accidentally pair an unrelated role.
+    const baseViews = buildPinnedCaptureViews([
+      { captureArtifactId: "cap-base-before", representationRevisionId: "png-1", data: { ...capturedData, role: "before" } },
+      { captureArtifactId: "cap-base-current", representationRevisionId: "png-2", data: { ...capturedData, role: "current" } },
+    ]);
+    const successorViews = buildPinnedCaptureViews([
+      { captureArtifactId: "cap-successor-current", representationRevisionId: "png-3", data: { ...capturedData, role: "current" } },
+      { captureArtifactId: "cap-successor-repaired", representationRevisionId: "png-4", data: { ...capturedData, role: "repaired" } },
+    ]);
+    const pair = buildPinnedRepairPair(baseViews, successorViews);
+    expect(pair!.left!.captureArtifactId).toBe("cap-base-current");
+    expect(pair!.right!.captureArtifactId).toBe("cap-successor-repaired");
+    expectNoNetwork();
+  });
+
+  // -------------------------------------------------------------------------
+  // Regression: adding the `repair` pair kind changes nothing about the
+  // pre-existing `review` / `verification` projections — same PAIR_ROLES
+  // entries, same labels, same shape, byte-unchanged.
+  // -------------------------------------------------------------------------
+
+  it("REGRESSION — `review` and `verification` pairs are byte-unchanged after adding the `repair` kind", () => {
+    const views = buildPinnedCaptureViews([
+      { captureArtifactId: "cap-b", representationRevisionId: "png-b", data: { ...capturedData, role: "before" } },
+      { captureArtifactId: "cap-c", representationRevisionId: "png-c", data: { ...capturedData, role: "current" } },
+      { captureArtifactId: "cap-a", representationRevisionId: "png-a", data: { ...capturedData, role: "applied" } },
+    ]);
+
+    const review = buildPinnedCapturePair(views, "review");
+    expect(review).toEqual({
+      kind: "review",
+      left: expect.objectContaining({ role: "before", captureArtifactId: "cap-b" }),
+      right: expect.objectContaining({ role: "current", captureArtifactId: "cap-c" }),
+      leftLabel: "Now — the published page",
+      rightLabel: "After this change — proposed",
+    });
+
+    const verification = buildPinnedCapturePair(views, "verification");
+    expect(verification).toEqual({
+      kind: "verification",
+      left: expect.objectContaining({ role: "current", captureArtifactId: "cap-c" }),
+      right: expect.objectContaining({ role: "applied", captureArtifactId: "cap-a" }),
+      leftLabel: "Reviewed — what you approved",
+      rightLabel: "Applied — what the site now shows",
+    });
     expectNoNetwork();
   });
 });

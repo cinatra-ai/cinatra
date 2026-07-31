@@ -36,6 +36,11 @@ import {
   recordReviewSurfaceChangesRequested,
   type RecordChangesRequestedResult,
 } from "@cinatra-ai/agents/lifecycle-review-changes-requested";
+// cinatra#2286 S10 (PR1) — the ONE new cross-package subpath this slice adds
+// (packages/agents/package.json's `exports`), precedented six times over by the
+// imports above it. Read-only: this port only CALLS the existing repair store,
+// never writes to it.
+import { readRepairBySuccessorGateId } from "@cinatra-ai/agents/lifecycle-repair-store";
 import {
   buildActorContextFromPrimitive,
   type ActorRoleHints,
@@ -57,9 +62,11 @@ import { readPinnedPreviewCaptures } from "@/lib/artifacts/cms-preview-capture-s
 import {
   buildPinnedCaptureViews,
   buildPinnedCapturePair,
+  buildPinnedRepairPair,
   type PinnedCapturePairKind,
   type PinnedCapturePairView,
 } from "@/lib/artifacts/cms-preview-capture-view";
+import { isRepairSuccessorTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 import {
   submitReviewDecisionCore,
   type ArtifactReviewDecision,
@@ -356,6 +363,26 @@ export async function loadReviewGateSurface(args: {
   ]);
 
   const targets: PreparedReviewTarget[] = prepared.prepared;
+
+  // cinatra#2286 S10 (PR1) — a REPAIR-SUCCESSOR gate's pinned pair is the
+  // repair comparison (reviewed vs repaired), never the generic "review" pair
+  // off its own single target (the wiring gap DESIGN identifies: this loader
+  // previously hardcoded "review" for every gate with no awareness of
+  // `isRepairSuccessorTaskId`). `readRepairBySuccessorGateId` is keyed on the
+  // gate's own row id, not its `reviewTaskId` string, so that id is resolved
+  // here — only for a repair-successor task — via one extra `readReviewGate`
+  // read (the gate row was already confirmed pending above; this re-read is
+  // for its id alone).
+  const repairSuccessorGateId = isRepairSuccessorTaskId(reviewTaskId)
+    ? ((await readReviewGate(runId, reviewTaskId))?.id ?? null)
+    : null;
+
+  const pinnedCapturePairs = await loadPinnedCapturePairsForTargets(
+    actorCtx.orgId,
+    targets,
+    repairSuccessorGateId,
+  );
+
   return {
     kind: "ready",
     runId,
@@ -367,7 +394,7 @@ export async function loadReviewGateSurface(args: {
     // network fetch at view time (the inert-by-contract rule, asserted by
     // `cms-preview-capture-view.test.ts`). A target with no capture yields an
     // empty list and renders nothing.
-    pinnedCapturePairs: loadPinnedCapturePairsForTargets(actorCtx.orgId, targets),
+    pinnedCapturePairs,
     // The producing agent's one-line summary (§I/II) is rendered "when present";
     // no gate/run column carries it in this slice, so it is absent (the chrome
     // renders nothing rather than an empty summary).
@@ -421,13 +448,82 @@ export function loadPinnedCapturePair(
   }
 }
 
-function loadPinnedCapturePairsForTargets(
+/**
+ * cinatra#2286 S10 (PR1) — the REPAIR comparison for a repair-successor gate:
+ * the repair's BASE target's own `current` capture (what was reviewed) vs its
+ * SUCCESSOR target's own `repaired` capture (the producer's fix).
+ *
+ * SECURITY SHAPE (matches the issue's acceptance criteria exactly):
+ *   - The BASE target is DERIVED from the repair row keyed on the successor
+ *     gate id — never supplied by the caller.
+ *   - The repair row's own `orgId` is the only org this pair may ever be built
+ *     for; a caller-supplied `orgId` that disagrees refuses (never trusted).
+ *   - The `successorTarget` argument is checked against the SAME row's
+ *     `successorArtifactId` / `successorRepresentationRevisionId` before
+ *     either read runs — a hand-supplied or mismatched successor target
+ *     refuses, rather than silently pairing an unrelated capture.
+ *   - Two independent, single-target `readPinnedPreviewCaptures` calls (never
+ *     a new/widened query shape) — mirrors `loadPinnedCapturePair`'s
+ *     degrade-to-null-on-failure contract.
+ */
+export async function loadPinnedRepairPair(
+  orgId: string,
+  successorGateId: string,
+  successorTarget: { artifactId: string; representationRevisionId: string },
+  driftedRegions: readonly string[] = [],
+): Promise<PinnedCapturePairView | null> {
+  try {
+    const repair = await readRepairBySuccessorGateId(successorGateId);
+    // Never trust a caller-supplied org — the repair row's own orgId is the
+    // only org this pair may ever be built for.
+    if (!repair || repair.orgId !== orgId) return null;
+    // Refuse a hand-supplied / mismatched successor target: this pair may
+    // only be built for the EXACT successor the repair row itself recorded
+    // (which is also, by construction, the same lineage as the base — both
+    // come off this one row).
+    if (
+      repair.successorArtifactId !== successorTarget.artifactId ||
+      repair.successorRepresentationRevisionId !== successorTarget.representationRevisionId
+    ) {
+      return null;
+    }
+
+    const baseCaptures = readPinnedPreviewCaptures({
+      orgId,
+      boundArtifactId: repair.baseArtifactId,
+      boundSnapshotRevisionId: repair.baseRepresentationRevisionId,
+    });
+    const successorCaptures = readPinnedPreviewCaptures({
+      orgId,
+      boundArtifactId: successorTarget.artifactId,
+      boundSnapshotRevisionId: successorTarget.representationRevisionId,
+    });
+    if (baseCaptures.length === 0 && successorCaptures.length === 0) return null;
+
+    return buildPinnedRepairPair(
+      buildPinnedCaptureViews(baseCaptures),
+      buildPinnedCaptureViews(successorCaptures),
+      driftedRegions,
+    );
+  } catch (err) {
+    console.warn(
+      "[review-gate-ports] pinned repair-pair lookup failed (the review is unaffected):",
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+async function loadPinnedCapturePairsForTargets(
   orgId: string,
   targets: readonly PreparedReviewTarget[],
-): Record<string, PinnedCapturePairView> {
+  repairSuccessorGateId: string | null,
+): Promise<Record<string, PinnedCapturePairView>> {
   const out: Record<string, PinnedCapturePairView> = {};
   for (const prepared of targets) {
-    const pair = loadPinnedCapturePair(orgId, prepared.target, "review");
+    const pair = repairSuccessorGateId
+      ? await loadPinnedRepairPair(orgId, repairSuccessorGateId, prepared.target)
+      : loadPinnedCapturePair(orgId, prepared.target, "review");
     if (pair) out[pinnedCaptureKey(prepared.target)] = pair;
   }
   return out;
