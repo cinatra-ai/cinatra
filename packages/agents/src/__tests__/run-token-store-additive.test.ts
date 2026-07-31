@@ -74,25 +74,53 @@ describe("setAgentRunTokenHash — additive credential recording", () => {
     expect(insert!.sql.toLowerCase()).not.toContain("do update");
   });
 
-  it("bounds growth with a per-run cap that can only prune THIS run", async () => {
-    const { setAgentRunTokenHash, AGENT_RUN_TOKEN_LIVE_CAP } = await import(
+  it("retires by AGE, not by count — a cap could evict a LIVE leg", async () => {
+    const { setAgentRunTokenHash, AGENT_RUN_TOKEN_RETENTION_MS } = await import(
       "../run-token-store"
     );
+    const before = Date.now();
     await setAgentRunTokenHash("run-1", "d".repeat(64));
+    const after = Date.now();
 
     const del = captured.find((c) => /^\s*delete/i.test(c.sql));
     expect(del).toBeDefined();
     const sql = del!.sql.toLowerCase();
     expect(sql).toContain("agent_run_tokens");
-    // Scoped to the run — a cap that could prune another run's live credential
-    // would be the stranding bug with extra steps.
+    // Scoped to the run — pruning that could reach another run's live
+    // credential would be the stranding bug with extra steps.
     expect(sql).toContain("run_id");
-    // Keeps the NEWEST cap-many (oldest pruned first — least likely to be live).
-    expect(sql).toContain("order by");
-    expect(sql).toContain("desc");
-    expect(del!.params).toContain(AGENT_RUN_TOKEN_LIVE_CAP);
-    // The run id is bound twice: the delete scope and the keep-set subquery.
-    expect(del!.params.filter((p) => p === "run-1").length).toBe(2);
+
+    // A COUNT-based prune has no liveness information: with enough concurrent or
+    // retried legs it deletes a credential whose task is still executing. The
+    // predicate must therefore be a timestamp comparison, never a LIMIT/ORDER BY
+    // keep-set.
+    expect(sql).toContain("created_at");
+    expect(sql).not.toContain("limit");
+    expect(sql).not.toContain("order by");
+
+    // The cutoff is derived from the A2A ceiling, so anything older than it
+    // CANNOT belong to a live leg. The driver serializes the bound timestamp, so
+    // parse whichever param carries it back to millis.
+    // The cutoff is the LAST bound param (the run-id scope is bound first).
+    const rawCutoff = del!.params[del!.params.length - 1];
+    const cutoffMs =
+      rawCutoff instanceof Date ? rawCutoff.getTime() : Date.parse(String(rawCutoff));
+    expect(Number.isFinite(cutoffMs)).toBe(true);
+    expect(cutoffMs!).toBeGreaterThanOrEqual(
+      before - AGENT_RUN_TOKEN_RETENTION_MS - 1000,
+    );
+    expect(cutoffMs!).toBeLessThanOrEqual(
+      after - AGENT_RUN_TOKEN_RETENTION_MS + 1000,
+    );
+  });
+
+  it("the retention window exceeds the maximum A2A task lifetime", async () => {
+    const { AGENT_RUN_TOKEN_RETENTION_MS } = await import("../run-token-store");
+    const { WAYFLOW_A2A_TIMEOUT_MS } = await import("../wayflow-url");
+    // A blocking A2A task cannot outlive the transport ceiling, so a credential
+    // older than it cannot be held by a running leg. Anything at or below the
+    // ceiling would be able to strand one.
+    expect(AGENT_RUN_TOKEN_RETENTION_MS).toBeGreaterThan(WAYFLOW_A2A_TIMEOUT_MS);
   });
 
   it("fails closed on empty input (never a silent no-op)", async () => {

@@ -835,30 +835,30 @@ def _patch_a2a_storage_scrub_run_token() -> None:
     caller's object AFTER a successful submit. Only those two are copied back:
     copying the scrubbed metadata back would defeat the whole patch.
 
-    Fails SAFE: if the upstream class or method cannot be resolved, the loader
-    logs LOUDLY and continues (the credential is still popped in the worker) —
-    silent patch drift would quietly reintroduce credential persistence, so the
-    warning is deliberately alarming rather than a debug line.
+    Fails CLOSED: if the upstream class or method cannot be resolved this RAISES
+    and the container does not start. Every other loader patch degrades to a
+    warning because losing it costs a convenience; losing THIS one silently
+    reintroduces durable credential persistence, which no operator would notice
+    from a log line. A startup failure is the correct, visible outcome.
     """
     try:
         from wayflowcore.agentserver.a2a._storage import (  # type: ignore[import-not-found]
             A2AStorage,
         )
     except Exception as exc:  # pragma: no cover - import shape guard
-        print(
-            "[agent_loader] WARNING: _patch_a2a_storage_scrub_run_token: cannot "
-            f"import A2AStorage ({exc}). The RAW run token will be PERSISTED in "
-            "A2A task history. Upstream layout changed — fix this patch."
-        )
-        return
+        raise RuntimeError(
+            "[agent_loader] FATAL: _patch_a2a_storage_scrub_run_token cannot import "
+            f"wayflowcore.agentserver.a2a._storage.A2AStorage ({exc}). Without this "
+            "patch the RAW per-run token is PERSISTED in A2A task history and echoed "
+            "in the JSON-RPC response. Refusing to start — fix the patch binding."
+        ) from exc
 
     if not hasattr(A2AStorage, "submit_task"):
-        print(
-            "[agent_loader] WARNING: _patch_a2a_storage_scrub_run_token: "
-            "A2AStorage has no submit_task; upstream renamed it. The RAW run "
-            "token will be PERSISTED in A2A task history."
+        raise RuntimeError(
+            "[agent_loader] FATAL: _patch_a2a_storage_scrub_run_token found no "
+            "A2AStorage.submit_task; upstream renamed it. Without this patch the RAW "
+            "per-run token is PERSISTED in A2A task history. Refusing to start."
         )
-        return
 
     if getattr(A2AStorage.submit_task, "__cinatra_patched__", False):
         return  # idempotent
@@ -1728,6 +1728,17 @@ _LIVE_CLASS_BINDINGS: Tuple[Tuple[str, str, Optional[str]], ...] = (
     ("wayflowcore.steps", "AgentExecutionStep", None),
     ("wayflowcore.a2a.a2aagent", "A2AAgent", "start_conversation"),
     ("wayflowcore.agentserver", "A2AServer", "serve_agent"),
+    # #1193 token hygiene. `A2AStorage.submit_task` persists the inbound A2A
+    # message into task history BEFORE the worker's pop runs, so an unpatched
+    # submit_task durably stores the RAW per-run credential and echoes it in the
+    # JSON-RPC response. The patch is startup-FATAL (see
+    # `_patch_a2a_storage_scrub_run_token`); this binding makes an upstream
+    # rename surface here too, rather than only as a patch-install failure.
+    (
+        "wayflowcore.agentserver.a2a._storage",
+        "A2AStorage",
+        "submit_task",
+    ),
     (
         "pyagentspec.serialization.pydanticdeserializationplugin",
         "PydanticComponentDeserializationPlugin",

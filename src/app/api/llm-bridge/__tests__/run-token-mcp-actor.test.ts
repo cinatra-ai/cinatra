@@ -587,6 +587,39 @@ describe("bridge run-token selection for MCP OBO minting", () => {
     );
   });
 
+  it("REFUSES a claimed run BEFORE dispatch resolution runs (placement lock)", async () => {
+    // A `cinatra_llm` body drives provider/capability resolution, and the Gemini
+    // media-input branch downstream returns its OWN response. An identity check
+    // placed after either would let the provider execute and return 200 with the
+    // caller's claim silently dropped. Refusal must win the race.
+    const res = await POST(
+      makeReq({
+        user: "hi",
+        agent_run_id: VICTIM_RUN.id,
+        cinatra_llm: { preferredProvider: "gemini" },
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ code: "run_token_absent" }),
+    );
+    // Neither the provider nor the dispatch resolver was consulted.
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
+    expect(resolveProviderAdapterMock).not.toHaveBeenCalled();
+  });
+
+  it("the identity gate precedes every dispatch path in the source", () => {
+    const src = readFileSync(join(__dirname, "..", "route.ts"), "utf8");
+    const gate = src.indexOf("#1193 RUN-IDENTITY GATE");
+    const dispatchResolve = src.indexOf("resolveCinatraLlmDispatch(body.cinatra_llm");
+    const mediaBranch = src.indexOf("const wantsMediaInput");
+    expect(gate).toBeGreaterThan(-1);
+    // A regression that moves the gate below either of these reopens the
+    // claimed-identity downgrade.
+    expect(gate).toBeLessThan(dispatchResolve);
+    expect(gate).toBeLessThan(mediaBranch);
+  });
+
   it("the route source consults no retired run selector", () => {
     const src = readFileSync(
       join(__dirname, "..", "route.ts"),

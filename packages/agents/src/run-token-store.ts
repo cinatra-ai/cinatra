@@ -1,17 +1,31 @@
-import { eq, sql } from "drizzle-orm";
+import { and, eq, lt } from "drizzle-orm";
 import { db } from "./db";
 import { agentRuns, agentRunTokens } from "./schema";
+import { WAYFLOW_A2A_TIMEOUT_MS } from "./wayflow-url";
 
 /**
- * How many credentials stay honored for one run. A WayFlow run executes as a
- * SEQUENCE of A2A tasks (initial dispatch + one resumed task per HITL gate) and
- * each leg mints its own token, so the live set grows with gate count. The cap
- * bounds the table against a pathological resume loop while leaving ample room
- * for a genuinely multi-gate flow and for the overlapping legs the at-least-once
- * resume outbox can create. Pruning is oldest-first, so the credentials most
- * likely to still be executing survive.
+ * How long a credential stays honored after it was minted, in milliseconds.
+ *
+ * Retirement is by AGE, deliberately NOT by count. A count cap prunes on
+ * cardinality, which carries no information about whether a leg is still
+ * running: with enough concurrent or retried legs it evicts a credential whose
+ * task is mid-flight, and the next callback from that live task 403s — exactly
+ * the stranding this table exists to prevent. Recorded-but-unused credentials
+ * (a resume that persisted its hash and then threw before `sendTask` was
+ * accepted) would make that worse, since they consume cap slots while no leg
+ * holds them.
+ *
+ * An age bound derived from the transport's own ceiling cannot make that
+ * mistake. `WAYFLOW_A2A_TIMEOUT_MS` (24h) is the maximum lifetime of a single
+ * blocking A2A task, so a credential older than that ceiling CANNOT belong to a
+ * leg that is still executing. The 2x margin absorbs clock skew and the gap
+ * between minting and the send actually starting.
+ *
+ * Growth is bounded by "legs a single run can start within the window", which
+ * for a real flow is its gate count; each row is a hash, a run id and a
+ * timestamp.
  */
-export const AGENT_RUN_TOKEN_LIVE_CAP = 16;
+export const AGENT_RUN_TOKEN_RETENTION_MS = 2 * WAYFLOW_A2A_TIMEOUT_MS;
 
 /**
  * #1193 run-token spine: record a freshly-minted per-run credential.
@@ -58,20 +72,23 @@ export async function setAgentRunTokenHash(
       .insert(agentRunTokens)
       .values({ tokenHash, runId })
       .onConflictDoNothing();
-    // Bound the live set: keep the newest AGENT_RUN_TOKEN_LIVE_CAP credentials
-    // for this run and drop the rest (oldest first — the least likely to still
-    // be executing). Scoped to THIS run, so it can never prune another run's
-    // credentials.
-    await tx.execute(sql`
-      DELETE FROM ${agentRunTokens}
-      WHERE ${agentRunTokens.runId} = ${runId}
-        AND ${agentRunTokens.tokenHash} NOT IN (
-          SELECT ${agentRunTokens.tokenHash} FROM ${agentRunTokens}
-          WHERE ${agentRunTokens.runId} = ${runId}
-          ORDER BY ${agentRunTokens.createdAt} DESC
-          LIMIT ${AGENT_RUN_TOKEN_LIVE_CAP}
-        )
-    `);
+    // Retire credentials older than the transport's own maximum task lifetime.
+    // Age-based, never count-based: a credential older than the A2A ceiling
+    // cannot belong to a leg that is still executing, so this can never evict a
+    // live one. Scoped to THIS run, and it deliberately never touches the row
+    // just inserted. Piggy-backing on the mint keeps it self-cleaning with no
+    // sweep job.
+    await tx
+      .delete(agentRunTokens)
+      .where(
+        and(
+          eq(agentRunTokens.runId, runId),
+          lt(
+            agentRunTokens.createdAt,
+            new Date(Date.now() - AGENT_RUN_TOKEN_RETENTION_MS),
+          ),
+        ),
+      );
   });
 }
 
