@@ -1702,6 +1702,22 @@ END $$` },
     // #1193 run-token spine: sha256-hex of the per-run credential (hash only; new all-NULL column, partial index safe). Mirrors schema.ts + migration core__0020.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS run_token_hash text` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_run_token_hash_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (run_token_hash) WHERE run_token_hash IS NOT NULL` },
+    // #1193 resume carrier: the SET of credentials currently honored for a run.
+    // A WayFlow run executes as a SEQUENCE of A2A tasks (initial dispatch + one
+    // resumed task per HITL gate) and only the HASH is persisted, so a resume
+    // must mint a FRESH token. Overwriting agent_runs.run_token_hash alone would
+    // invalidate a still-executing earlier leg (the at-least-once resume outbox,
+    // an accepted-but-response-lost retry, or a "stopped" run still mid-step) —
+    // a 403 on a live callback. This table makes rotation ADDITIVE. token_hash is
+    // the PRIMARY KEY, so the verifier stays a single index probe resolving at
+    // most one run (no newest-wins, no body fallback). New table ⇒ additive per
+    // migrations/README.md; growth is bounded by a per-run cap on insert.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_tokens" (
+      token_hash text PRIMARY KEY,
+      run_id     text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS agent_run_tokens_run_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_tokens" (run_id, created_at DESC)` },
     // cinatra#1392 Gap 2 — dependent_install_id: the installed_extension row id a
     // run executes AS, carried onto the run's signed lineage (ActorContext) so the
     // A2A dispatch seam resolves edge-bound serving against a TRUSTED dependent id

@@ -131,6 +131,13 @@ export {
   PinnedRunSnapshotUnreachableError,
 } from "./execution";
 export type { PinnedRunSnapshotFields, PinnedVersionRow } from "./execution";
+// #1193 run-token carrier — the ONE place a first-party WayFlow dispatch or
+// resume mints + persists a per-run credential and puts the RAW token on the
+// wire (initial message text for a dispatch, message metadata for a resume).
+export {
+  mintResumeRunTokenMetadata,
+  buildInitialMessagePayloadWithRunToken,
+} from "./wayflow-run-token-carrier";
 // Compile-time side-effects inference for the trigger gate and UI.
 export {
   collectGatedSteps,

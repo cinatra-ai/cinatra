@@ -33,10 +33,16 @@ import "server-only";
 
 export type ContextRouteKind = "resolve" | "finalize";
 
-/** Which binding selected the run in deriveContextRouteContext (#1193 W2):
- *  the dispatch-minted run token, the legacy a2a context-id header, or the
- *  legacy dev-loopback body id. */
-export type ContextRouteServedBy = "run_token" | "context_id" | "body";
+/** Which binding selected the run in deriveContextRouteContext.
+ *
+ *  #1193 legacy retirement: `run_token` is the ONLY member. The legacy
+ *  `context_id` (a2a context-id header) and `body` (dev-loopback body id)
+ *  channels are DELETED — they could promote a run from a signal weaker than the
+ *  one dispatch-minted credential. The union is deliberately kept as a named
+ *  single-member type rather than inlined: the `via=` metric line shape stays
+ *  unchanged for existing log pipelines, and re-adding a serving channel has to
+ *  be an explicit, reviewable edit here. */
+export type ContextRouteServedBy = "run_token";
 
 type CounterStore = {
   /** `${kind}.${code}` → count. `code` is a stable rejection code or "ok". */

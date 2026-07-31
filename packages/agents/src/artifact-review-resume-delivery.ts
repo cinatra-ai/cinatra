@@ -201,10 +201,22 @@ export async function deliverArtifactReviewResumeIntent(
     timeoutMs: WAYFLOW_A2A_TIMEOUT_MS,
     fetchImpl: createWayflowFetch(),
   });
+  // #1193 resume carrier: mint this leg's per-run credential and persist its hash
+  // BEFORE the blocking sendTask, then carry the RAW token in the A2A message
+  // METADATA. Metadata is required here rather than the text: this path delivers
+  // the typed decision VERBATIM by contract, so the text cannot be wrapped.
+  //
+  // Rotation is ADDITIVE (agent_run_tokens keeps earlier legs valid), which
+  // matters most on THIS path — delivery is at-least-once by design, so a lease
+  // that lapses mid-send can redeliver while the first accepted task is still
+  // executing. An overwrite-in-place rotation would 403 that live task.
+  const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
+  const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
   const task = await client.sendTask({
     message: {
       role: "user",
       kind: "message",
+      metadata: resumeMetadata,
       // DETERMINISTIC per-gate messageId (not random): a gate resumes exactly
       // once, so a stable id lets a dedup-aware receiver drop a duplicate re-send
       // (the at-least-once redelivery of the SAME gate's intent). Harmless if the
