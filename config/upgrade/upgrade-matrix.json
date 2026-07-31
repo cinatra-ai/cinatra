@@ -66,7 +66,7 @@
       "upstreamDictated": true,
       "baselinePin": { "image": "postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193", "major": "17", "digest": "sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193" },
       "coupledAppImages": [
-        { "image": "nangohq/nango-server:hosted@sha256:1b3be71c869cd480c24b2426bbc597e0447808db878896ccaa279f98c295431e", "major": "hosted", "digest": "sha256:1b3be71c869cd480c24b2426bbc597e0447808db878896ccaa279f98c295431e" }
+        { "image": "nangohq/nango-server:hosted@sha256:94a79833a766b79304ddd7c3f50bcaf02bd0975bec33a148b723d1f41a4b67b1", "major": "hosted", "digest": "sha256:94a79833a766b79304ddd7c3f50bcaf02bd0975bec33a148b723d1f41a4b67b1" }
       ],
       "notes": "Nango's own Postgres. Nango runs its OWN schema migrations at boot; the platform ledger does not cover it. nango-server is therefore a coupled app image: it owns no volume but migrates THIS data dir at boot, so its pin is drift-checked alongside the engine. HELD at 17 (Nango upstream reference compose pins 16, so 17 is already a validated divergence; 18 is unvalidated by upstream). Keeps the legacy .../data mount while <=17. The pre-baseline pg15 nango volume is a case exception (cinatra#1417), not a widening of the general baseline.",
       "transitions": [
