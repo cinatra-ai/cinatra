@@ -50,12 +50,18 @@ function usage(msg) {
 }
 
 // The image REPO component of an image ref (digest- and tag-aware):
-//   redis:8-alpine@sha256:…      -> redis
-//   valkey/valkey:7.2.11-alpine  -> valkey/valkey
+//   redis:8-alpine@sha256:…            -> redis
+//   valkey/valkey:7.2.11-alpine        -> valkey/valkey
+//   registry:5000/org/img@sha256:…     -> registry:5000/org/img
+// The tag separator is the first colon AFTER the last slash; a colon before it
+// belongs to a registry host:port. Using lastIndexOf(":") instead would shear a
+// tagless ported ref down to its hostname and silently mis-resolve a --coupled
+// lookup (codex round-1). No current pin carries a port, so this is a latent-bug
+// fix with no value change today.
 function imageRepoOf(ref) {
   const noDigest = ref.split("@")[0];
-  const lastColon = noDigest.lastIndexOf(":");
-  return lastColon === -1 ? noDigest : noDigest.slice(0, lastColon);
+  const tagColon = noDigest.indexOf(":", noDigest.lastIndexOf("/") + 1);
+  return tagColon === -1 ? noDigest : noDigest.slice(0, tagColon);
 }
 
 const argv = process.argv.slice(2);
@@ -66,22 +72,36 @@ let imageRepoService = null;
 let pinService = null;
 let coupledRepo = null;
 let tagOnly = false;
+// A REPEATED value flag must never silently win last-one-wins and change WHICH
+// pin is printed (codex round-1) — refuse the ambiguous invocation instead.
+const seen = new Set();
+const once = (flag) => {
+  if (seen.has(flag)) usage(`${flag} given more than once`);
+  seen.add(flag);
+};
+// A value that is itself a flag means the value was omitted (`--pin --tag`).
+// Swallowing it would turn a typo into a confusing "unknown service '--tag'"
+// instead of a usage error, so reject it here.
+const valueFor = (flag, v) => {
+  if (!v || v.startsWith("--")) usage(`missing value for ${flag}`);
+  return v;
+};
 for (let i = 0; i < argv.length; i += 1) {
   if (argv[i] === "--matrix") {
-    matrixPath = argv[i + 1];
-    if (!matrixPath) usage("missing value for --matrix");
+    once("--matrix");
+    matrixPath = valueFor("--matrix", argv[i + 1]);
     i += 1;
   } else if (argv[i] === "--image-repo") {
-    imageRepoService = argv[i + 1];
-    if (!imageRepoService) usage("missing value for --image-repo");
+    once("--image-repo");
+    imageRepoService = valueFor("--image-repo", argv[i + 1]);
     i += 1;
   } else if (argv[i] === "--pin") {
-    pinService = argv[i + 1];
-    if (!pinService) usage("missing value for --pin");
+    once("--pin");
+    pinService = valueFor("--pin", argv[i + 1]);
     i += 1;
   } else if (argv[i] === "--coupled") {
-    coupledRepo = argv[i + 1];
-    if (!coupledRepo) usage("missing value for --coupled");
+    once("--coupled");
+    coupledRepo = valueFor("--coupled", argv[i + 1]);
     i += 1;
   } else if (argv[i] === "--tag") {
     tagOnly = true;

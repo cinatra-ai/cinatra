@@ -55,10 +55,17 @@ function runBash(args, env = {}) {
 // literal or derived.
 const LIB_SH = resolve(REPO_ROOT, "scripts/ci/works-after/lib.sh");
 
+// ANCHORED to a whole line and required to be UNIQUE (codex round-1): an
+// unanchored first-match would happily read a commented-out or dead duplicate
+// assignment and prove drift against a line the arm never runs.
 function defaultExprOf(src, v, label = "") {
-  const m = src.match(new RegExp(`${v}="\\$\\{${v}:-([^}]+)\\}"`));
-  assert.ok(m, `${label}missing overridable default for ${v}`);
-  return m[1];
+  const hits = [...src.matchAll(new RegExp(`^${v}="\\$\\{${v}:-([^}]+)\\}"$`, "gm"))];
+  assert.equal(
+    hits.length,
+    1,
+    `${label}expected exactly one live assignment for ${v}, found ${hits.length}`,
+  );
+  return hits[0][1];
 }
 
 function resolveDefault(fileRel, v) {
@@ -403,6 +410,13 @@ test("resolve-transition --pin/--image-repo fail closed on malformed invocations
     [["--pin", "twenty-postgres"], 3, "a digestless matrix pin must refuse (a derived default pins bytes)"],
     [["--pin", "nope"], 3, "an unknown service must refuse"],
     [["--pin", "nango-postgres", "--coupled", "nope/nope"], 3, "an unmatched coupled repo must refuse"],
+    // A repeated value flag must not silently last-one-wins (codex round-1).
+    [["--pin", "neo4j", "--pin", "platform-redis"], 2, "a duplicate --pin must refuse, not print the second pin"],
+    [["--image-repo", "neo4j", "--image-repo", "platform-redis"], 2, "a duplicate --image-repo must refuse"],
+    [["--pin", "neo4j", "--coupled", "a", "--coupled", "b"], 2, "a duplicate --coupled must refuse"],
+    // An omitted value must be a usage error, not a swallowed flag.
+    [["--pin", "--tag"], 2, "--pin with no value must not swallow the next flag"],
+    [["--pin", "nango-postgres", "--coupled", "--tag"], 2, "--coupled with no value must not swallow the next flag"],
   ]) {
     const r = runNode([RESOLVE, ...args]);
     assert.equal(r.status, code, `${args.join(" ")}: ${why} (stdout=${r.stdout} stderr=${r.stderr})`);
@@ -429,6 +443,28 @@ test("resolve-transition --tag projects repo:tag@digest and refuses a tagless re
   const tagless = runNode([RESOLVE, "--pin", "platform-redis", "--tag", "--matrix", write(`registry:5000/org/img@${digest}`)]);
   assert.equal(tagless.status, 3, `a tagless ref must refuse: ${tagless.stdout}`);
   assert.equal(tagless.stdout, "");
+});
+
+test("--image-repo / --coupled parse a registry host:port ref correctly (codex round-1)", () => {
+  // imageRepoOf must split on the tag colon (first colon AFTER the last slash),
+  // never a registry port — otherwise a ported ref shears down to its hostname
+  // and a --coupled lookup silently mis-resolves.
+  const matrix = JSON.parse(readFileSync(resolve(REPO_ROOT, "config/upgrade/upgrade-matrix.json"), "utf8"));
+  const digest = `sha256:${"b".repeat(64)}`;
+  const svc = matrix.services.find((s) => s.id === "platform-redis");
+  svc.baselinePin.image = `registry:5000/org/img@${digest}`;
+  svc.baselinePin.digest = digest;
+  svc.coupledAppImages = [{ image: `registry:5000/org/app@${digest}`, major: "x", digest }];
+  const p = join(mkdtempSync(join(tmpdir(), "wa-repo-")), "upgrade-matrix.json");
+  writeFileSync(p, JSON.stringify(matrix));
+
+  const repo = runNode([RESOLVE, "--image-repo", "platform-redis", "--matrix", p]);
+  assert.equal(repo.status, 0, repo.stderr);
+  assert.equal(repo.stdout, "registry:5000/org/img", "a registry port must not be mistaken for a tag separator");
+
+  const coupled = runNode([RESOLVE, "--pin", "platform-redis", "--coupled", "registry:5000/org/app", "--matrix", p]);
+  assert.equal(coupled.status, 0, coupled.stderr);
+  assert.equal(coupled.stdout, `registry:5000/org/app@${digest}`);
 });
 
 test("no works-after arm hardcodes a matrix pin digest — the third-carrier class stays gone (cinatra#2302)", () => {
