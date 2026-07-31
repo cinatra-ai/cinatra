@@ -1380,8 +1380,8 @@ importers:
         version: 6.43.0(ws@8.21.0)(zod@4.4.3)
     devDependencies:
       '@typescript-eslint/parser':
-        specifier: 8.64.0
-        version: 8.64.0(eslint@10.7.0(jiti@2.7.0))(typescript@5.9.3)
+        specifier: 8.65.0
+        version: 8.65.0(eslint@10.7.0(jiti@2.7.0))(typescript@5.9.3)
       eslint:
         specifier: 10.7.0
         version: 10.7.0(jiti@2.7.0)

@@ -117,9 +117,9 @@
     {
       "packageName": "@cinatra-ai/openai-connector",
       "repo": "cinatra-ai/openai-connector",
-      "resolvedSha": "255a44b25a7f2dbcdd799d5127153e6a47cde322",
+      "resolvedSha": "d733250a986ebedd3c24d17eb33e32991981be6d",
       "packageVersion": "0.1.9",
-      "treeSha256": "a399142d5bb4ee69528b216da8022072563fdc8eeb09eb284408472a4286b33b"
+      "treeSha256": "427f5511ba7ed538c3eb5b475499a4abd1c4f08a4d498149614de4ec7c552c60"
     },
     {
       "packageName": "@cinatra-ai/pdf-artifact",
