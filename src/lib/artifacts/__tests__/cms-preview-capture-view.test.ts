@@ -352,6 +352,42 @@ describe("cinatra#2044 L-B — the review view path performs NO network fetch", 
     expectNoNetwork();
   });
 
+  it("REPAIR pair — a base with NO current + a successor carrying a stray current: left DEGRADES, the successor's current is never mislabeled as the reviewed picture", () => {
+    // The cross-target leak regression (CodeRabbit finding on PR #2287): the
+    // generic picker does one global find-by-role over the merged list, so
+    // without side-scoping a missing base `current` would let the SUCCESSOR's
+    // own stray `current` (its re-stage pipeline writes before/current at its
+    // own coordinates, so this is reachable) be picked for the left side — a
+    // cross-target picture that is NOT the base's reviewed capture, under the
+    // "Reviewed — what you approved" label. The left side must degrade
+    // honestly instead; the right side still shows the successor's repaired.
+    const successorViews = buildPinnedCaptureViews([
+      { captureArtifactId: "cap-successor-current", representationRevisionId: "png-sc", data: { ...capturedData, role: "current" } },
+      { captureArtifactId: "cap-successor-repaired", representationRevisionId: "png-sr", data: { ...capturedData, role: "repaired" } },
+    ]);
+    const pair = buildPinnedRepairPair([], successorViews);
+    expect(pair).not.toBeNull();
+    expect(pair!.left).toBeNull();
+    expect(pair!.right!.captureArtifactId).toBe("cap-successor-repaired");
+    expectNoNetwork();
+  });
+
+  it("REPAIR pair — a multi-round base carrying its own stray `repaired` + a successor with NO repaired: right DEGRADES, the base's repaired is never picked as the fix", () => {
+    // The mirror of the leak above: round N's base IS round N-1's successor,
+    // so a base legitimately carries its own `repaired` capture from the
+    // previous round. It must never be selected for the right ("Repaired —
+    // the producer's fix") side when the successor's own repaired is missing.
+    const baseViews = buildPinnedCaptureViews([
+      { captureArtifactId: "cap-base-current", representationRevisionId: "png-bc", data: { ...capturedData, role: "current" } },
+      { captureArtifactId: "cap-base-repaired", representationRevisionId: "png-br", data: { ...capturedData, role: "repaired" } },
+    ]);
+    const pair = buildPinnedRepairPair(baseViews, []);
+    expect(pair).not.toBeNull();
+    expect(pair!.left!.captureArtifactId).toBe("cap-base-current");
+    expect(pair!.right).toBeNull();
+    expectNoNetwork();
+  });
+
   it("REPAIR pair ignores an irrelevant role on either side (e.g. a stray `before`/`applied` capture)", () => {
     // A base target can carry `before` too; a successor target's re-stage
     // capture pipeline can also leave `before`/`current` at its own

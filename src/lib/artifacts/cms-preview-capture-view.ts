@@ -224,15 +224,36 @@ export function buildPinnedCapturePair(
  * `repaired` capture (the producer's fix), per two independent store reads
  * (`review-gate-ports.ts`'s `loadPinnedRepairPair`). This mirrors
  * `buildPinnedCapturePair`'s one-sided-degrade + drift-marking logic exactly —
- * reused, not reinvented — by merging the two already-projected view lists
- * into the one shared list the generic picker expects, then delegating to it.
+ * reused, not reinvented — by delegating to it over the two view lists.
+ *
+ * SIDE-SCOPED BY CONSTRUCTION: each list is filtered to ITS OWN side's role
+ * BEFORE the merge, because the generic picker does one global find-by-role
+ * over the whole list it is handed. Without the scoping, a base with no
+ * `current` (missing/degraded) plus a successor carrying a stray `current`
+ * (the successor's own re-stage capture pipeline writes `before`/`current` at
+ * its own coordinates, so this is reachable) would let the picker silently
+ * select the SUCCESSOR's `current` for the left side — a cross-target picture
+ * labeled "Reviewed — what you approved" that is not the base's reviewed
+ * capture. The mirror hazard is equally real: in a multi-round chain, round
+ * N's base IS round N-1's successor and carries its own `repaired` capture,
+ * which must never be picked for the right side. Scoping makes both
+ * impossible: a base-side gap degrades honestly (that side renders null),
+ * never substitutes from the other target.
  */
 export function buildPinnedRepairPair(
   baseViews: readonly PinnedCaptureView[],
   successorViews: readonly PinnedCaptureView[],
   driftedRegions: readonly string[] = [],
 ): PinnedCapturePairView | null {
-  return buildPinnedCapturePair([...baseViews, ...successorViews], "repair", driftedRegions);
+  const spec = PAIR_ROLES.repair;
+  return buildPinnedCapturePair(
+    [
+      ...baseViews.filter((v) => v.role === spec.left),
+      ...successorViews.filter((v) => v.role === spec.right),
+    ],
+    "repair",
+    driftedRegions,
+  );
 }
 
 /**
