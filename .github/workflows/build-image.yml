@@ -1055,7 +1055,31 @@ jobs:
     # path is unchanged.
     if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Least privilege, tightened with cinatra#2288 slice 2 and matching what
+    # actions-pin-gate / schema-migration-gate / archive-acceptance-gate in this
+    # same file already declare. Without it this job inherits the WORKFLOW-level
+    # `packages: write` (needed only by the image-publishing jobs). That matters
+    # more now than it did: the extension suite gate below executes the test
+    # code of every materialized companion repo — 44 independently maintained
+    # codebases, up from the 8 the hand-listed steps ran — and none of it has
+    # any business holding a package-write token. The checkout below drops the
+    # persisted credential for the same reason.
+    permissions:
+      contents: read
+    # 15 → 18 with cinatra#2288 slice 2, because this job was ALREADY riding its
+    # cap before the gate below existed: 10m17s wall on the last green main run
+    # (30650103197, 2026-07-31), 10m01s and 9m28s on the two before it, against
+    # a 15-minute limit.
+    #
+    # MEASURED ON THE HOSTED RUNNER, not estimated: the extension suite
+    # discovery gate below costs 58s (2,149 tests across 44 suites, 214.7s of
+    # vitest at the 4-way concurrency it pins), taking this job to 11m04s. So
+    # the gate is cheap and the margin is the real subject: 18 leaves ~7 minutes
+    # for fleet growth and runner variance on a REQUIRED check, where 15 would
+    # have left four. Sequential would not have fit that judgement — ~215s of
+    # vitest one suite after another is most of the remaining margin by itself,
+    # which is why the concurrency below is pinned rather than optional.
+    timeout-minutes: 18
     steps:
       # Hard-fail (definitive RED, never a non-failing "skip") when detect did
       # not pass. No-ops on the success path; its failure short-circuits every
@@ -1071,6 +1095,13 @@ jobs:
           # Full history so the touch-ratchet diff in admin-route + other
           # gates run from this job can resolve origin/<pr.base.ref>.
           fetch-depth: 0
+          # No git credential left on disk for companion test code to find
+          # (cinatra#2288 slice 2). Safe here and verified: after this checkout
+          # the job runs NO authenticated git — the only git in it is
+          # `git rev-parse` over refs this checkout already fetched, and
+          # clone-extensions clones the companion repos over public https with
+          # no token (its own action.yml records that).
+          persist-credentials: false
 
       - name: Compute diff base
         id: base
@@ -1742,101 +1773,66 @@ jobs:
           src/__tests__/blog-image-artifact-manifest.test.ts
           --no-coverage
 
-      # Apollo connector suite. Lives in the extension tree (not covered by the
-      # root vitest include), so it is run explicitly here from the package dir.
-      # Whole-dir (same shape as the nango/twenty steps below) — previously
-      # pinned to sync-and-readback.test.ts only, which silently left newer
-      # apollo tests (e.g. the save-apollo-form toast suite from
-      # apollo-connector#7) un-enforced by host CI (flagged on
-      # apollo-connector#7). Covers the verified write-then-read-back
-      # security behavior (import WITHOUT connectorKey → forceRefresh readback →
-      # compare to the submitted key → saveConnectionRecord only after verify)
-      # plus everything added since.
-      - name: Apollo connector tests
-        run: cd extensions/cinatra-ai/apollo-connector && pnpm exec vitest run --no-coverage
-
-      # Nango connector lives in the extension tree (not covered by the root
-      # vitest include), so its suite is run explicitly here from the package
-      # dir — covers the one-shot DELETE-only sanitization of the dead
-      # `nango_connection` key (incl. the exfiltration/MITM no-promote guards)
-      # plus the pre-existing nango cases. (The relocated-action manage-gate test
-      # lives under src/app/campaigns/__tests__ and is pinned in the block above.)
-      - name: Nango connector tests
-        run: cd extensions/cinatra-ai/nango-connector && pnpm exec vitest run --no-coverage
-
-      # CRM + Twenty connectors live in the extension tree (not covered by the
-      # root vitest include). The CRM contract/registry + the
-      # request-actor identity moved into @cinatra-ai/sdk-extensions; pin the pointer-
-      # write-repair suite (which exercises the host-bound CRM request-actor DI
-      # resolver path) + the Twenty provider suite so the decouple is gated.
-      # NOTE: the crm-connector suite is pinned by FILE, not whole-dir — the
-      # pre-existing crm-contact-finder.test.ts red (a UI @/components/ui import
-      # drift, unrelated to this work) is out of scope here. The objects-ctx
-      # follow-up routes the object-type registry + sync-adapter +
-      # objects_save + graphiti episode client through the SDK
-      # requireObjectsProvider() DI slot; both the pointer-write-repair and the
-      # retargeted twenty-to-graphiti-adapter suites are pinned so the decouple is
-      # gated (the host-side graphiti/no-uuid behavior is pinned via
-      # src/lib/__tests__/register-objects-provider.test.ts in the block above).
-      - name: CRM connector objects-ctx tests
-        run: cd extensions/cinatra-ai/crm-connector && pnpm exec vitest run src/__tests__/pointer-write-repair.test.ts src/__tests__/twenty-to-graphiti-adapter.test.ts --no-coverage
-
-      - name: Twenty connector tests
-        run: cd extensions/cinatra-ai/twenty-connector && pnpm exec vitest run --no-coverage
-
-      # ── Required-lock extension suites (cinatra#2288 slice 1) ──────────────
+      # ── Extension suite discovery gate (cinatra#2288 slice 2) ──────────────
       #
-      # The four steps above (apollo / nango / crm / twenty) were, until this
-      # block, the ONLY extension test suites any workflow ran. A grep for
-      # `extensions/cinatra-ai/` across every workflow on main returns exactly
-      # those four test invocations; the remaining nine hits are the
-      # conformance / IoC / README loops and one `rm -rf` probe, none of which
-      # runs a suite. The root `vitest.config.ts` `include` has no
-      # `extensions/**` glob either, so `pnpm test:root` cannot reach them.
-      # Meanwhile every companion repo's own `ci.yml` SKIPS its tests, on the
-      # written grounds that "the cinatra monorepo runs these" — true for four
-      # packages, false for the other 32. The host `tsc` pass is the only thing
-      # that sees these files at all, so it catches TYPE defects and nothing
-      # else: a runtime regression in any of them reaches production ungated
-      # (openai-connector#75 → #76 is the concrete miss this closes).
+      # REPLACES eight hand-listed per-package steps: apollo / nango / crm /
+      # twenty (which were, until #2295, the ONLY extension suites any workflow
+      # ran) plus openai / pdf / image / dashboard from #2295 itself.
       #
-      # These four are the REQUIRED-lock members of that hole — they ship
-      # inside the production image (cinatra-required-extensions.lock.json), so
-      # they are wired first. Whole-dir, from the package dir, using each
-      # package's OWN vitest.config.ts (package-local `@/` + `server-only`
-      # aliases, jsx transform, environment) — the same shape as the
-      # apollo/nango/twenty steps, and the reason the #2249 remedy (folding a
-      # tier into the root include) does not transfer: the root config would
-      # have to absorb 30+ divergent alias sets.
+      # Hand-listing is what let the hole grow: a newly cloned extension, or a
+      # new test file in an existing one, joined it BY DEFAULT because nobody
+      # edited this file. cinatra#2288 measured the result — ~1,600 tests across
+      # 30+ suites running in no gate anywhere, while every companion repo's own
+      # ci.yml SKIPPED its tests on the written grounds that "the cinatra
+      # monorepo runs these". The host `tsc` pass was the only thing that saw
+      # those files, so it caught TYPE defects and nothing else
+      # (openai-connector#75 → #76 is the concrete miss).
       #
-      # Riding THIS job rather than a job of its own, for the reason already
-      # recorded above for the seed-pack tier: the job already has the PINNED
-      # extension tree on disk (clone-extensions) and node_modules installed,
-      # so the marginal cost is four vitest processes. Measured at the pinned
-      # shas in `cinatra-required-extensions.lock.json` — 147 tests, ~3s of
-      # vitest total (openai 95, pdf 28, image 15, dashboard 9) — against this
-      # job's 15-minute `timeout-minutes`. One step per package so a failure
-      # names the package.
+      # The gate discovers every materialized package under extensions/, runs
+      # each vitest suite from its own package dir under its OWN config — the
+      # #2249 remedy (folding a tier into the root vitest include) does not
+      # transfer here, because the root config would have to absorb 30+
+      # divergent alias sets — and PRINTS A MANIFEST of every package with what
+      # ran, so a truncated run cannot pass for a clean one. It fails on: a red
+      # suite; an on-disk test file vitest never executed (a GREEN run can hide
+      # this — wordpress-assistant-connector reported "2 passed" while a whole
+      # wire-contract conformance suite went uncollected, found by this gate on
+      # its first run); a companion repo that skips its tests while this gate
+      # does not run them (cinatra#2288 AC6, enforced in the only place that can
+      # prove it); and zero discovered packages — the clone-back-failed case,
+      # the same fail-closed shape extension-conformance-gate.yml already uses.
+      # Its carve-out ledger is named, PINNED and SHAPE-BOUND: an entry
+      # tolerates ONE documented failure at ONE committed sha, the suite is
+      # still run, and any drift from the recorded shape — worse, different, or
+      # newly green — fails. Once the pin moves the entry stops applying at all
+      # and the package is enforced like any other, so an exemption can neither
+      # absorb a regression it was not written for nor outlive its defect. The
+      # rules are unit-tested in
+      # scripts/ci/__tests__/extension-suite-gate.test.mjs (57 cases, part of
+      # the root suite), so they are gated independently of the fleet's state.
       #
-      # SLICE 1 ONLY. The remaining ~25 dev-lock suites (~1,450 tests:
-      # drupal-mcp 241, wordpress-mcp 239, plane 113, anthropic 101, …) are
-      # slice 2 of cinatra#2288 and are deliberately NOT wired here; nor is the
-      # discovery loop of that issue's AC1, which supersedes hand-listing once
-      # the fleet is green. Three suites that a bare run turns red today
-      # (a2a-server-connector, email-artifacts, linkedin-connector) are
-      # test-infra defects being repaired in their own repos first; they are
-      # not carved out here because they are not wired here.
-      - name: OpenAI connector tests
-        run: cd extensions/cinatra-ai/openai-connector && pnpm exec vitest run --no-coverage
-
-      - name: PDF artifact tests
-        run: cd extensions/cinatra-ai/pdf-artifact && pnpm exec vitest run --no-coverage
-
-      - name: Image artifact tests
-        run: cd extensions/cinatra-ai/image-artifact && pnpm exec vitest run --no-coverage
-
-      - name: Dashboard artifact tests
-        run: cd extensions/cinatra-ai/dashboard-artifact && pnpm exec vitest run --no-coverage
+      # RUNTIME — why EXTENSION_SUITE_JOBS. The 44 discovered suites are 2,149
+      # tests. On the hosted runner this step measures 58s wall / 214.7s of
+      # vitest at the 4-way concurrency pinned below, with ONE inner vitest
+      # worker per package so the outer budget IS the budget; run one suite
+      # after another the same work is ~215s, which against a job that already
+      # took 10m17s of a 15-minute cap is most of the remaining margin. Hence
+      # the concurrency, and hence `timeout-minutes` 15 → 18, reasoned above.
+      # Concurrency is PINNED rather than derived from the runner's core count
+      # so it cannot silently move when the runner label does. The gate prints
+      # its own suite count and wall total every run, so this claim is checkable
+      # against the log rather than trusted from here.
+      #
+      # Rides THIS job for the reason already recorded above for the seed-pack
+      # tier: it already has the PINNED extension tree on disk
+      # (clone-extensions) and node_modules installed, and it is a REQUIRED
+      # status check whose `always()` + hard-fail guard shape means this gate
+      # inherits "definitive, never a silent skip" rather than needing a new
+      # required context.
+      - name: Extension suites — discovery gate (every materialized suite)
+        env:
+          EXTENSION_SUITE_JOBS: '4'
+        run: node scripts/ci/extension-suite-gate.mjs
 
       # Admin-namespace route reference gate. Hardens the admin route rename.
       # Permanent 308 redirects preserve external bookmarks via next.config.ts;
