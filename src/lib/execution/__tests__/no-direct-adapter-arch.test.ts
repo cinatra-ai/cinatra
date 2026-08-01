@@ -13,7 +13,7 @@
  * in the ROOT vitest suite (the `src/` gate of record), so a new bypass reds
  * the merge.
  *
- * FIVE ARMS, because any one of them alone is evadable:
+ * SIX ARMS, because any one of them alone is evadable:
  *
  *   1. ACQUISITION. Every resolver that hands back an `LlmProviderAdapter` is
  *      pinned to a committed allowlist of CALLERS, and so is
@@ -39,6 +39,11 @@
  *      asserts that structural property (`maxSteps: 1`) rather than trusting a
  *      comment. An exception that grows a tool loop stops being the documented
  *      exception and reds here.
+ *   6. EXTRACTION IS INVOCATION. `adapter.generate.bind(adapter)`, a
+ *      `const { stream } = adapter` destructure, or the method handed off as a
+ *      callback each produce a turn the call-site arm cannot see — its one
+ *      CallExpression has `.bind` (or nothing at all) as its callee. Taking
+ *      the method as a VALUE is therefore treated exactly like calling it.
  *
  * The scan is AST-based (`typescript`, already a repo devDependency) rather
  * than regex: `packages/llm/src/index.ts` and `src/lib/assistant-runtime/
@@ -442,7 +447,7 @@ type CallSite = {
  * value, and the whole point of the gate is that a bypass must not be one
  * refactor away.
  */
-function adapterCallSites(file: SourceFile): CallSite[] {
+function boundAdapterNames(file: SourceFile): Set<string> {
   const bound = new Set<string>();
   eachNode(file.ast, (node) => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
@@ -460,6 +465,35 @@ function adapterCallSites(file: SourceFile): CallSite[] {
       }
     }
   });
+  return bound;
+}
+
+/** The leftmost identifier of a receiver chain (`this.svc.adapter` -> "this"). */
+function leftmostIdentifier(expr: ts.Expression): string {
+  let leftmost: ts.Node = expr;
+  while (
+    ts.isPropertyAccessExpression(leftmost) ||
+    ts.isElementAccessExpression(leftmost) ||
+    ts.isCallExpression(leftmost) ||
+    ts.isNonNullExpression(leftmost) ||
+    ts.isParenthesizedExpression(leftmost)
+  ) {
+    leftmost = (leftmost as { expression: ts.Node }).expression;
+  }
+  return ts.isIdentifier(leftmost) ? leftmost.text : "";
+}
+
+function isAdapterReceiver(
+  file: SourceFile,
+  bound: ReadonlySet<string>,
+  receiverNode: ts.Expression,
+): boolean {
+  const receiver = receiverNode.getText(file.ast).replace(/\s+/g, "");
+  return bound.has(leftmostIdentifier(receiverNode)) || /adapter/i.test(receiver);
+}
+
+function adapterCallSites(file: SourceFile): CallSite[] {
+  const bound = boundAdapterNames(file);
 
   const sites: CallSite[] = [];
   eachNode(file.ast, (node) => {
@@ -469,19 +503,7 @@ function adapterCallSites(file: SourceFile): CallSite[] {
     const receiverNode = receiverOf(node.expression);
     if (!receiverNode) return;
     const receiver = receiverNode.getText(file.ast).replace(/\s+/g, "");
-    // The leftmost identifier of the receiver chain (`this.svc.adapter` -> "this").
-    let leftmost: ts.Node = receiverNode;
-    while (
-      ts.isPropertyAccessExpression(leftmost) ||
-      ts.isElementAccessExpression(leftmost) ||
-      ts.isCallExpression(leftmost) ||
-      ts.isNonNullExpression(leftmost) ||
-      ts.isParenthesizedExpression(leftmost)
-    ) {
-      leftmost = (leftmost as { expression: ts.Node }).expression;
-    }
-    const leftmostName = ts.isIdentifier(leftmost) ? leftmost.text : "";
-    if (!bound.has(leftmostName) && !/adapter/i.test(receiver)) return;
+    if (!isAdapterReceiver(file, bound, receiverNode)) return;
     sites.push({
       file: file.rel,
       line: lineOf(file, node),
@@ -495,7 +517,75 @@ function adapterCallSites(file: SourceFile): CallSite[] {
   return sites;
 }
 
+type MethodReference = {
+  file: string;
+  line: number;
+  fn: string;
+  method: "generate" | "stream";
+  text: string;
+};
+
+/**
+ * Adapter `.generate` / `.stream` taken as a VALUE rather than called.
+ *
+ * The call-site scan only recognizes a call whose direct callee is the method,
+ * so `const invoke = adapter.generate.bind(adapter); await invoke(opts)` walked
+ * straight past it: the one CallExpression it sees has `.bind` as its callee,
+ * and the invocation is a bare identifier. `const { stream } = adapter` and
+ * `queue.push(adapter.generate)` are the same move. Every one of them is a
+ * direct-adapter turn with the receiver laundered through one extra binding —
+ * which is precisely the class this gate exists to make impossible, so
+ * EXTRACTING the method is treated exactly like calling it.
+ *
+ * (Codex round 2 found this; it was not among the documented blind spots.)
+ */
+function adapterMethodReferences(file: SourceFile): MethodReference[] {
+  const bound = boundAdapterNames(file);
+  const refs: MethodReference[] = [];
+  const record = (node: ts.Node, method: "generate" | "stream"): void => {
+    refs.push({
+      file: file.rel,
+      line: lineOf(file, node),
+      fn: enclosingFunctionName(node),
+      method,
+      text: node.getText(file.ast).replace(/\s+/g, " ").slice(0, 120),
+    });
+  };
+  eachNode(file.ast, (node) => {
+    // `adapter.generate` / `adapter["stream"]` NOT in callee position.
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const method = memberName(node);
+      if (method !== "generate" && method !== "stream") return;
+      if (!isAdapterReceiver(file, bound, node.expression)) return;
+      const parent = node.parent;
+      const isCallee =
+        parent !== undefined &&
+        ts.isCallExpression(parent) &&
+        parent.expression === node;
+      if (isCallee) return; // a plain call — the call-site scan owns it
+      record(node, method);
+      return;
+    }
+    // `const { generate } = adapter` / `const { stream: run } = adapter`.
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isObjectBindingPattern(node.name) &&
+      node.initializer &&
+      isAdapterReceiver(file, bound, node.initializer)
+    ) {
+      for (const element of node.name.elements) {
+        const source = element.propertyName ?? element.name;
+        if (!ts.isIdentifier(source)) continue;
+        if (source.text !== "generate" && source.text !== "stream") continue;
+        record(element, source.text);
+      }
+    }
+  });
+  return refs;
+}
+
 const ALL_CALL_SITES = FILES.flatMap(adapterCallSites);
+const ALL_METHOD_REFERENCES = FILES.flatMap(adapterMethodReferences);
 
 const keyOf = (site: { file: string; fn: string; method: string }): string =>
   `${site.file} :: ${site.fn}() :: .${site.method}()`;
@@ -602,6 +692,19 @@ describe("direct-adapter architecture gate (epic #1705 AC8)", () => {
       miscounted,
       "The number of adapter calls in an allowlisted function changed. A NEW " +
         "call in an existing entry point is still a new direct-adapter path.",
+    ).toEqual([]);
+  });
+
+  it("nothing EXTRACTS an adapter turn as a value (bind / destructure / callback)", () => {
+    expect(
+      ALL_METHOD_REFERENCES.map(
+        (ref) => `${ref.file}:${ref.line} — ${ref.text} in ${ref.fn}()`,
+      ),
+      "An adapter's `generate`/`stream` is taken as a VALUE rather than called " +
+        "(`.bind(...)`, a destructure, a callback). The call-site arm cannot " +
+        "see the invocation that follows, so this is a direct-adapter turn " +
+        "with the receiver laundered through one extra binding — the exact " +
+        "AC8 bypass. Call the orchestration entry point instead.",
     ).toEqual([]);
   });
 

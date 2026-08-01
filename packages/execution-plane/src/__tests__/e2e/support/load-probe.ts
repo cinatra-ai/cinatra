@@ -28,6 +28,17 @@ export const sleep = (ms: number): Promise<void> =>
  * `docker ps` is the source of truth on purpose: the broker's own
  * `executingCount` lives in the broker process and would be the implementation
  * reporting on itself, while a container either exists on the host or does not.
+ *
+ * FAIL-CLOSED, and this is the whole point of the function. The `docker`
+ * wrapper RESOLVES on a non-zero exit rather than throwing, so a probe that
+ * could not answer returns empty stdout — and an empty listing is
+ * indistinguishable from the answer "no containers are running". Every clause
+ * this module supports would then be satisfiable by a BROKEN probe: "drained
+ * to zero" would pass, and a peak would be understated. So a failed `docker
+ * ps` throws. The sampler's loops catch and skip the sample (their sample
+ * COUNTS are asserted, so systematic failure still surfaces); the wait helpers
+ * and the direct assertions propagate it, which is the correct outcome — "I
+ * cannot see the host" is not evidence that the host is idle.
  */
 export async function liveSandboxes(
   jobIds: ReadonlySet<string>,
@@ -39,6 +50,12 @@ export async function liveSandboxes(
     "--format",
     `{{.ID}}\t{{.Label "${SANDBOX_CONTAINER_JOB_LABEL}"}}`,
   ]);
+  if (listed.exitCode !== 0) {
+    throw new Error(
+      `docker ps failed (exit ${listed.exitCode}); refusing to read that as "no ` +
+        `containers are running": ${listed.stderr.trim().slice(0, 300)}`,
+    );
+  }
   return listed.stdout
     .split("\n")
     .map((line) => line.trim())
@@ -112,6 +129,11 @@ export async function readHostStats(): Promise<Map<string, Reading>> {
     ["stats", "--no-stream", "--format", "{{.ID}}|{{.MemUsage}}|{{.CPUPerc}}|{{.PIDs}}"],
     { timeoutMs: 60_000 },
   );
+  if (out.exitCode !== 0) {
+    throw new Error(
+      `docker stats failed (exit ${out.exitCode}): ${out.stderr.trim().slice(0, 300)}`,
+    );
+  }
   const rows = new Map<string, Reading>();
   for (const line of out.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
     const [id, mem, cpu, pids] = line.split("|");
@@ -120,12 +142,20 @@ export async function readHostStats(): Promise<Map<string, Reading>> {
     const memBytes = parseStatsBytes((mem ?? "").split("/")[0] ?? "");
     const cpuPercent = Number((cpu ?? "").replace("%", "").trim());
     const pidCount = Number((pids ?? "").trim());
-    if (!Number.isFinite(memBytes) || !Number.isFinite(pidCount)) continue;
-    rows.set(containerId, {
-      memBytes,
-      pids: pidCount,
-      cpuPercent: Number.isFinite(cpuPercent) ? cpuPercent : 0,
-    });
+    // ALL THREE OR NOTHING. An unparseable CPU field used to be coerced to 0
+    // and folded into the sum, which made "CPU stayed under the ceiling" a
+    // clause a broken parse could satisfy: an upper bound is trivially met by
+    // a fabricated zero. A row is now either fully read or dropped, so an
+    // unreadable fleet shows up where it is already asserted — in the sample
+    // count — rather than as a comfortable-looking number.
+    if (
+      !Number.isFinite(memBytes) ||
+      !Number.isFinite(pidCount) ||
+      !Number.isFinite(cpuPercent)
+    ) {
+      continue;
+    }
+    rows.set(containerId, { memBytes, pids: pidCount, cpuPercent });
   }
   return rows;
 }
