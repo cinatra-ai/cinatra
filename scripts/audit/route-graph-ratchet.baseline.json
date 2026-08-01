@@ -1,42 +1,42 @@
 {
-  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
+  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1655,
-    "/api/mcp": 1651,
-    "/chat": 1729,
-    "/api/a2a": 1656,
-    "/api/llm-bridge": 1666
+    "/sign-in": 1659,
+    "/api/mcp": 1655,
+    "/chat": 1733,
+    "/api/a2a": 1660,
+    "/api/llm-bridge": 1670
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1654,
-      "to": 1655,
-      "reason": "cinatra#2022 S7-gamma post-merge repair (PR #2230): the freshness adapter's lazy invoker-stack resolution collapses four independent `Promise.all`-batched `import()` call sites (in wordpress-adapter.ts) into ONE dynamic entry point (the new src/lib/object-history/freshness/invoker-deps-lazy.ts), removing a Turbopack production-build chunk-naming collision ('Two or more assets with different content were emitted to the same output path') caused by those four split points reaching a module graph also statically reached elsewhere (S5 pending-call executor, blog WordPress client). The new file is exactly +1 first-party module reachable from all five locked routes. Re-anchored again during this merge-conflict resolution against origin/main, which had since independently absorbed cinatra#2240's skill-delivery-record module (PR #2282, +1/route, its own record now retired per the gate's retire-on-re-raise rule). This record's `from` is main's CURRENT committed ceiling (already including that #2282 raise) and this PR's own +1 stacks on top of it rather than re-deriving from an earlier base.",
-      "pr": 2230
+      "from": 1655,
+      "to": 1659,
+      "reason": "wordpress-mcp-connector pin advance e46781db -> 7b6a9ead: the connector ships the extracted directive-free wordpress-site-tools-health module plus facade-cutover module reshuffle, adding 4 reachable first-party modules to every route that can reach the connector surface",
+      "pr": 2319
     },
     "/api/mcp": {
-      "from": 1650,
-      "to": 1651,
-      "reason": "cinatra#2022 S7-gamma post-merge repair (PR #2230): the freshness adapter's lazy invoker-stack resolution collapses four independent `Promise.all`-batched `import()` call sites (in wordpress-adapter.ts) into ONE dynamic entry point (the new src/lib/object-history/freshness/invoker-deps-lazy.ts), removing a Turbopack production-build chunk-naming collision ('Two or more assets with different content were emitted to the same output path') caused by those four split points reaching a module graph also statically reached elsewhere (S5 pending-call executor, blog WordPress client). The new file is exactly +1 first-party module reachable from all five locked routes. Re-anchored again during this merge-conflict resolution against origin/main, which had since independently absorbed cinatra#2240's skill-delivery-record module (PR #2282, +1/route, its own record now retired per the gate's retire-on-re-raise rule). This record's `from` is main's CURRENT committed ceiling (already including that #2282 raise) and this PR's own +1 stacks on top of it rather than re-deriving from an earlier base.",
-      "pr": 2230
+      "from": 1651,
+      "to": 1655,
+      "reason": "wordpress-mcp-connector pin advance e46781db -> 7b6a9ead: the connector ships the extracted directive-free wordpress-site-tools-health module plus facade-cutover module reshuffle, adding 4 reachable first-party modules to every route that can reach the connector surface",
+      "pr": 2319
     },
     "/chat": {
-      "from": 1728,
-      "to": 1729,
-      "reason": "cinatra#2022 S7-gamma post-merge repair (PR #2230): the freshness adapter's lazy invoker-stack resolution collapses four independent `Promise.all`-batched `import()` call sites (in wordpress-adapter.ts) into ONE dynamic entry point (the new src/lib/object-history/freshness/invoker-deps-lazy.ts), removing a Turbopack production-build chunk-naming collision ('Two or more assets with different content were emitted to the same output path') caused by those four split points reaching a module graph also statically reached elsewhere (S5 pending-call executor, blog WordPress client). The new file is exactly +1 first-party module reachable from all five locked routes. Re-anchored again during this merge-conflict resolution against origin/main, which had since independently absorbed cinatra#2240's skill-delivery-record module (PR #2282, +1/route, its own record now retired per the gate's retire-on-re-raise rule). This record's `from` is main's CURRENT committed ceiling (already including that #2282 raise) and this PR's own +1 stacks on top of it rather than re-deriving from an earlier base.",
-      "pr": 2230
+      "from": 1729,
+      "to": 1733,
+      "reason": "wordpress-mcp-connector pin advance e46781db -> 7b6a9ead: the connector ships the extracted directive-free wordpress-site-tools-health module plus facade-cutover module reshuffle, adding 4 reachable first-party modules to every route that can reach the connector surface",
+      "pr": 2319
     },
     "/api/a2a": {
-      "from": 1655,
-      "to": 1656,
-      "reason": "cinatra#2022 S7-gamma post-merge repair (PR #2230): the freshness adapter's lazy invoker-stack resolution collapses four independent `Promise.all`-batched `import()` call sites (in wordpress-adapter.ts) into ONE dynamic entry point (the new src/lib/object-history/freshness/invoker-deps-lazy.ts), removing a Turbopack production-build chunk-naming collision ('Two or more assets with different content were emitted to the same output path') caused by those four split points reaching a module graph also statically reached elsewhere (S5 pending-call executor, blog WordPress client). The new file is exactly +1 first-party module reachable from all five locked routes. Re-anchored again during this merge-conflict resolution against origin/main, which had since independently absorbed cinatra#2240's skill-delivery-record module (PR #2282, +1/route, its own record now retired per the gate's retire-on-re-raise rule). This record's `from` is main's CURRENT committed ceiling (already including that #2282 raise) and this PR's own +1 stacks on top of it rather than re-deriving from an earlier base.",
-      "pr": 2230
+      "from": 1656,
+      "to": 1660,
+      "reason": "wordpress-mcp-connector pin advance e46781db -> 7b6a9ead: the connector ships the extracted directive-free wordpress-site-tools-health module plus facade-cutover module reshuffle, adding 4 reachable first-party modules to every route that can reach the connector surface",
+      "pr": 2319
     },
     "/api/llm-bridge": {
-      "from": 1665,
-      "to": 1666,
-      "reason": "cinatra#2022 S7-gamma post-merge repair (PR #2230): the freshness adapter's lazy invoker-stack resolution collapses four independent `Promise.all`-batched `import()` call sites (in wordpress-adapter.ts) into ONE dynamic entry point (the new src/lib/object-history/freshness/invoker-deps-lazy.ts), removing a Turbopack production-build chunk-naming collision ('Two or more assets with different content were emitted to the same output path') caused by those four split points reaching a module graph also statically reached elsewhere (S5 pending-call executor, blog WordPress client). The new file is exactly +1 first-party module reachable from all five locked routes. Re-anchored again during this merge-conflict resolution against origin/main, which had since independently absorbed cinatra#2240's skill-delivery-record module (PR #2282, +1/route, its own record now retired per the gate's retire-on-re-raise rule). This record's `from` is main's CURRENT committed ceiling (already including that #2282 raise) and this PR's own +1 stacks on top of it rather than re-deriving from an earlier base.",
-      "pr": 2230
+      "from": 1666,
+      "to": 1670,
+      "reason": "wordpress-mcp-connector pin advance e46781db -> 7b6a9ead: the connector ships the extracted directive-free wordpress-site-tools-health module plus facade-cutover module reshuffle, adding 4 reachable first-party modules to every route that can reach the connector surface",
+      "pr": 2319
     }
   }
 }

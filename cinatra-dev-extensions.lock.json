@@ -430,7 +430,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-mcp-connector",
       "repo": "cinatra-ai/wordpress-mcp-connector",
-      "resolvedSha": "e46781db566c5538ce6ffe42df19c1662c9e2b79"
+      "resolvedSha": "7b6a9ead7a9e35bf5e6c67e3a2a9b7bbd6317bd0"
     },
     {
       "packageName": "@cinatra-ai/wordpress-widget-chat-skill",
