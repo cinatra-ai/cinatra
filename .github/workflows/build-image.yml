@@ -1829,6 +1829,29 @@ jobs:
       # status check whose `always()` + hard-fail guard shape means this gate
       # inherits "definitive, never a silent skip" rather than needing a new
       # required context.
+      # ── DISPOSABLE — cinatra#2288 AC7 red-proof, NEVER merged ─────────────
+      # Plants one deliberately failing assertion into a suite that ran in NO
+      # gate anywhere before this change (plane-connector, 7 files / 113 tests,
+      # dev-lock tier), in the SAME place a real upstream regression would sit
+      # after clone-extensions: inside the materialized checkout, before the
+      # gate reads it. The gate must discover the package, run it, and turn this
+      # REQUIRED check red naming plane-connector. This branch exists only to
+      # produce that run link and is deleted immediately afterwards.
+      - name: AC7 red-proof — plant a failing assertion in a previously-ungated suite
+        run: |
+          set -euo pipefail
+          f=extensions/cinatra-ai/plane-connector/src/__tests__/actions.test.ts
+          test -f "$f"
+          cat >> "$f" <<'PLANT'
+
+          describe("cinatra#2288 AC7 red-proof (planted, disposable branch)", () => {
+            it("fails on purpose so the discovery gate must go red", () => {
+              expect(1).toBe(2);
+            });
+          });
+          PLANT
+          echo "planted into $f"
+
       - name: Extension suites — discovery gate (every materialized suite)
         env:
           EXTENSION_SUITE_JOBS: '4'
