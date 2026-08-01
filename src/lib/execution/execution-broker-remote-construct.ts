@@ -53,6 +53,7 @@ import "server-only";
 
 import { readAgentRunById, readAgentTemplateById } from "@cinatra-ai/agents";
 import {
+  BrokerFleetClient,
   BrokerServiceClient,
   createRemoteSandboxExecutor,
   execServiceUri,
@@ -77,7 +78,6 @@ import {
   runBrokerHandshake,
 } from "@/lib/execution/execution-broker-construct";
 import {
-  checkRemoteComposite,
   describeComposite,
   resolveRemoteBrokerConfig,
   sanitizeOperatorDetail,
@@ -143,7 +143,13 @@ export const AUDIT_DRAIN_MAX_STDIO_ENTRIES = 0;
 /** The voucher SIGNING key. Required for this placement and no other. */
 export const VOUCHER_SIGNING_KEY_ENV = "EXECUTION_VOUCHER_SIGNING_KEY";
 
-/** The two ops this loop needs; narrowed so a test drives it with a plain object. */
+/**
+ * The two ops this loop needs; narrowed so a test drives it with a plain object.
+ *
+ * In a FLEET this is one replica's `FleetDrainTarget` (cinatra#2266 G3), not a
+ * fleet-wide aggregate — an acknowledgement names a head in ONE spool's
+ * position space, so a merged batch could only be acknowledged by guessing.
+ */
 export type AuditDrainSource = {
   drainAudit(limits?: DrainAuditPayload): Promise<DrainAuditResultPayload>;
   ackAudit(payload: AckAuditPayload): Promise<AckAuditResultPayload>;
@@ -180,10 +186,31 @@ export type DurableAuditWriter = (
  * arrives). Exported rather than closed over inside the composition so this
  * posture is testable without mTLS, a handshake and a live broker.
  */
+/** Bound on the reported-episode memo; episodes are rare and ids are tiny. */
+export const MAX_REPORTED_EPISODES = 256;
+
+function remember(memo: Set<string>, id: string): void {
+  memo.add(id);
+  while (memo.size > MAX_REPORTED_EPISODES) {
+    const oldest = memo.values().next();
+    if (oldest.done) break;
+    memo.delete(oldest.value);
+  }
+}
+
 export async function drainAuditPasses(
   source: AuditDrainSource,
   writeRecord: DurableAuditWriter,
-  opts?: { maxPasses?: number; onGap?: (message: string) => void },
+  opts?: {
+    maxPasses?: number;
+    onGap?: (message: string) => void;
+    /**
+     * Episode ids whose RECOVERY has already been reported. Owned by the
+     * caller so it outlives one drain (see the once-per-episode note below);
+     * omitted ⇒ a fresh memo, which is what a one-shot test wants.
+     */
+    reportedEpisodes?: Set<string>;
+  },
 ): Promise<void> {
   // CLAMPED, not merely defaulted (Codex convergence, adopted). The bound is
   // the whole point of a pass budget: a caller that passed `Infinity` — or a
@@ -194,6 +221,7 @@ export async function drainAuditPasses(
     ? Math.max(1, Math.min(Math.floor(requested), AUDIT_DRAIN_PASS_CEILING))
     : AUDIT_DRAIN_MAX_PASSES;
   const onGap = opts?.onGap ?? ((message: string) => console.error(message));
+  const reported = opts?.reportedEpisodes ?? new Set<string>();
   for (let pass = 0; pass < maxPasses; pass += 1) {
     const batch = await source.drainAudit({
       maxAuditRecords: AUDIT_DRAIN_MAX_RECORDS,
@@ -223,6 +251,37 @@ export async function drainAuditPasses(
           "because its audit spool could not accept a pre-dispatch reservation (fail-closed: " +
           "nothing ran)",
       );
+    }
+    // THE SATURATION EPISODE (cinatra#2266 G5/AC7). A saturated spool refuses
+    // NEW commands and — this is the mechanism, not an omission — writes no
+    // record for the refusals. So the count of what was refused reaches an
+    // operator HERE and nowhere else; the single `audit_spool_full` record that
+    // opened the episode is in the trail, and the tail of the episode is this
+    // line. Recovery is reported too, so "the plane came back" is a statement
+    // rather than an inference from the refusals stopping.
+    if (batch.saturation?.state === "saturated" && batch.saturation.episode) {
+      const episode = batch.saturation.episode;
+      onGap(
+        `[execution-plane] the remote broker's audit spool is SATURATED (episode ${episode.id}, ` +
+          `open since ${new Date(episode.openedAtMs).toISOString()}): ${episode.refused} command ` +
+          "admission(s) refused and NOT recorded — one bounded episode record stands for all of " +
+          "them. Nothing ran unaccounted for; admission reopens once this drain has acknowledged " +
+          "enough of the spooled trail",
+      );
+    } else {
+      // ONCE PER EPISODE. `lastEpisode` is durable state and rides EVERY drain
+      // response from here on, so reporting it unconditionally would print a
+      // recovery line every 15 seconds for the life of the broker. The memo is
+      // the caller's, so it outlives one drain; it is bounded below.
+      const closed = batch.saturation?.lastEpisode;
+      if (closed?.closedAtMs !== undefined && !reported.has(closed.id)) {
+        remember(reported, closed.id);
+        onGap(
+          `[execution-plane] the remote broker's audit spool RECOVERED from episode ${closed.id} ` +
+            `at ${new Date(closed.closedAtMs).toISOString()} — it refused ${closed.refused} ` +
+            "command admission(s) while saturated and is admitting commands again",
+        );
+      }
     }
     if (batch.droppedAudit > 0) {
       onGap(
@@ -356,12 +415,22 @@ export async function constructRemoteExecutionBroker(input: {
     };
   }
 
-  // OWNERSHIP OF THE CLIENT TRANSFERS ONLY ON SUCCESS (Codex convergence,
+  // OWNERSHIP OF THE CLIENTS TRANSFERS ONLY ON SUCCESS (Codex convergence,
   // adopted). Everything from here to the successful return runs inside the
   // guard below: `createCommandVoucherMinter`, the executor factory and the
   // audit sink can all throw, and a throw past this line would strand a
-  // keep-alive agent on every failed boot attempt.
-  const client = new BrokerServiceClient(config.value);
+  // keep-alive agent per replica on every failed boot attempt.
+  //
+  // ONE CLIENT PER REPLICA, behind the fleet router (cinatra#2266 G3). A
+  // single-URL deployment yields a one-replica fleet whose behaviour is
+  // identical to the pre-slice-3 single client — sticky routing over one
+  // endpoint is just routing.
+  const client = new BrokerFleetClient({
+    replicas: config.value.baseUrls.map((baseUrl) => ({
+      endpoint: baseUrl,
+      client: new BrokerServiceClient({ ...config.value, baseUrl }),
+    })),
+  });
   try {
     return await composeAgainst(client, { policy, aud, signer });
   } catch (err) {
@@ -376,12 +445,72 @@ export async function constructRemoteExecutionBroker(input: {
 }
 
 /**
+ * THE FLEET COMPOSITE GATE (cinatra#2266 G3).
+ *
+ * The single-endpoint gate (`checkRemoteComposite`) is applied to EVERY replica
+ * and the conjunction is the verdict. Two properties this buys that a
+ * "check one, assume the rest" gate does not:
+ *
+ *  - a replica whose worker/gateway/lease is broken never receives its share of
+ *    a round-robin workload, and
+ *  - a replica the app cannot reach is a replica whose audit spool nobody is
+ *    draining, which is a spool that will fill and go fail-closed. Refusing to
+ *    activate is strictly better than activating into that.
+ *
+ * The composite REPORTED on success is the first replica's — they all passed,
+ * and the admin surface's shape is one composite, deliberately unchanged. On
+ * failure it is the FAILING replica's, because that is the one an operator has
+ * to go and look at.
+ */
+export async function checkFleetComposite(
+  fleet: Pick<BrokerFleetClient, "endpoints" | "health">,
+): Promise<
+  | { ok: true; composite: ExecutionBrokerComposite }
+  | { ok: false; reason: string; composite?: ExecutionBrokerComposite }
+> {
+  const entries = await fleet.health();
+  let first: ExecutionBrokerComposite | undefined;
+  for (const entry of entries) {
+    if (!entry.ok) {
+      return {
+        ok: false,
+        reason: `the broker replica ${entry.endpoint} did not answer a health call: ${entry.detail ?? "no detail"}`,
+      };
+    }
+    const health = entry.health;
+    if (!health?.composite) {
+      return {
+        ok: false,
+        reason:
+          `the broker replica ${entry.endpoint} answered but reported no composite readiness, so ` +
+          "its worker, gateway and host-exclusivity lease are unproven — the plane stays fail-closed",
+      };
+    }
+    if (!health.composite.ok) {
+      return {
+        ok: false,
+        reason: `the broker replica ${entry.endpoint} has unhealthy dependencies — ${describeComposite(health.composite)}`,
+        composite: health.composite,
+      };
+    }
+    first ??= health.composite;
+  }
+  if (!first) {
+    return {
+      ok: false,
+      reason: "the execution-plane broker fleet declares no replicas",
+    };
+  }
+  return { ok: true, composite: first };
+}
+
+/**
  * The composition proper, split out so the caller's `try/catch` owns the client
  * for the whole of it. Returns `ok:false` (client already closed) or `ok:true`
  * (the client's lifetime passes to the returned `stop`).
  */
 async function composeAgainst(
-  client: BrokerServiceClient,
+  client: BrokerFleetClient,
   ctx: {
     policy: ReturnType<typeof egressPolicyFromSettings>;
     aud: string;
@@ -390,7 +519,14 @@ async function composeAgainst(
 ): Promise<ConstructRemoteExecutionBrokerResult> {
   const { policy, aud, signer } = ctx;
 
-  const composite = await checkRemoteComposite(client);
+  // EVERY REPLICA MUST PASS THE COMPOSITE GATE, not merely one of them
+  // (cinatra#2266 G3). Registering an executor while a replica is unhealthy
+  // would hand round-robin a share of every workload that fails, and — worse —
+  // a replica whose audit spool cannot be reached is one whose records nobody
+  // is draining. Fail-closed on the FIRST failure, naming which endpoint it
+  // was: "a replica is down" tells an operator to look, "this replica is down"
+  // tells them where.
+  const composite = await checkFleetComposite(client);
   if (!composite.ok) {
     client.close();
     return {
@@ -455,12 +591,34 @@ async function composeAgainst(
   // a gap) is testable without mTLS and a live broker. In particular it asks for
   // ZERO stdio entries, because this side has no stdio consumer to hand them to
   // and a destructive drain would otherwise delete them (cinatra#2266).
+  //
+  // PER REPLICA, NOT PER FLEET (cinatra#2266 G3). Each drain target holds one
+  // replica's client and the spool identity that replica last served, so the
+  // read and its acknowledgement cannot land on different volumes — the ACK
+  // never even leaves this process if the ids disagree. A one-replica
+  // deployment has exactly one target and behaves as it did before.
   const writeRecord = createDurableExecutionAuditWriter();
+  const reportedEpisodes = new Set<string>();
   let draining: Promise<void> | null = null;
 
   const drainOnce = (maxPasses = AUDIT_DRAIN_MAX_PASSES): Promise<void> => {
     if (draining) return draining;
-    draining = drainAuditPasses(client, writeRecord, { maxPasses }).finally(() => {
+    draining = (async () => {
+      for (const target of client.drainTargets()) {
+        // ONE REPLICA'S FAILURE DOES NOT STRAND THE OTHERS' RECORDS. A throw
+        // here would leave every later replica undrained until the next tick,
+        // and on `stop()` that remainder is what a shutdown is trying to flush.
+        await drainAuditPasses(target, writeRecord, { maxPasses, reportedEpisodes }).catch(
+          (err: unknown) => {
+            console.error(
+              `[execution-plane] the audit drain against ${target.endpoint} failed: ` +
+                `${err instanceof Error ? err.message : String(err)} — its records stay spooled ` +
+                "and are re-delivered on the next pass",
+            );
+          },
+        );
+      }
+    })().finally(() => {
       draining = null;
     });
     return draining;
@@ -504,11 +662,13 @@ async function composeAgainst(
         if (cached && now - cached.at < LIVENESS_CACHE_MS) return cached.value;
         if (inFlight) return inFlight;
         inFlight = (async () => {
-          const result = await checkRemoteComposite(client);
+          const result = await checkFleetComposite(client);
           const value: ExecutionBrokerLiveness = result.ok
             ? {
                 ok: true,
-                detail: `The remote broker and its dependencies answered — ${describeComposite(result.composite)}.`,
+                detail:
+                  `The remote broker fleet (${client.size} replica(s)) and their dependencies ` +
+                  `answered — ${describeComposite(result.composite)}.`,
                 atMs: Date.now(),
                 composite: result.composite,
               }

@@ -462,6 +462,10 @@ export function composeBrokerService(env: Env = process.env): BrokerEntryComposi
     // rejection here refuses the command — the spool is what makes "we could
     // not record this" stop meaning "we ran it anyway".
     auditReserver: relay.auditReserver,
+    // cinatra#2266 G5: the saturation gate in front of the whole pipeline. A
+    // full spool refuses ADMISSION and writes nothing, so a permanently-full
+    // spool costs one episode record rather than one record per attempt.
+    auditAdmission: relay.auditAdmission,
     stdioSink: relay.stdioSink,
     // Acknowledged above: bounded by carrier TTL, not by the run store.
     livenessProbe: async () => "alive",

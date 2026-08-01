@@ -143,6 +143,83 @@ const HEALTHY = {
   lease: { state: "not-applicable" as const, detail: "not host-exclusive" },
 };
 
+// ---------------------------------------------------------------------------
+// THE FLEET (cinatra#2266 G3, slice 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * `EXECUTION_BROKER_URL` accepts a COMMA-SEPARATED list of replica origins,
+ * because broker replicas own different audit-spool volumes while sharing one
+ * logical mTLS identity — so a load balancer in front of them is
+ * indistinguishable from one broker at the transport layer and catastrophic
+ * above it. Routing has to be done by the party that knows which replica owns
+ * what, which is the app.
+ */
+describe("resolveRemoteBrokerConfig — a FLEET of replicas", () => {
+  it("a single URL yields a one-replica fleet whose baseUrl is unchanged", () => {
+    const result = resolveRemoteBrokerConfig(COMPLETE, readFile);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.baseUrl).toBe("https://broker.invalid:4100");
+    expect(result.value.baseUrls).toEqual(["https://broker.invalid:4100"]);
+  });
+
+  it("parses a comma-separated list in declaration order, tolerating whitespace", () => {
+    const result = resolveRemoteBrokerConfig(
+      {
+        ...COMPLETE,
+        [REMOTE_BROKER_URL_ENV]:
+          " https://a.invalid:4100 , https://b.invalid:4100,https://c.invalid:4100 ",
+      },
+      readFile,
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.baseUrls).toEqual([
+      "https://a.invalid:4100",
+      "https://b.invalid:4100",
+      "https://c.invalid:4100",
+    ]);
+    // The FIRST replica is what the single-endpoint boot probe dials.
+    expect(result.value.baseUrl).toBe("https://a.invalid:4100");
+  });
+
+  it("validates EVERY entry, not merely the first", () => {
+    // A typo in the second endpoint must fail at BOOT, not on whichever command
+    // round-robin happens to send there.
+    const http = resolveRemoteBrokerConfig(
+      { ...COMPLETE, [REMOTE_BROKER_URL_ENV]: "https://a.invalid:4100,http://b.invalid:4100" },
+      readFile,
+    );
+    expect(http).toMatchObject({ ok: false });
+    if (!http.ok) expect(http.reason).toContain("must be https");
+
+    const junk = resolveRemoteBrokerConfig(
+      { ...COMPLETE, [REMOTE_BROKER_URL_ENV]: "https://a.invalid:4100,not a url" },
+      readFile,
+    );
+    expect(junk).toMatchObject({ ok: false });
+  });
+
+  it("REFUSES a repeated origin — one replica the router would treat as two", () => {
+    const result = resolveRemoteBrokerConfig(
+      { ...COMPLETE, [REMOTE_BROKER_URL_ENV]: "https://a.invalid:4100,https://a.invalid:4100" },
+      readFile,
+    );
+    expect(result).toMatchObject({ ok: false });
+    if (result.ok) return;
+    expect(result.reason).toContain("more than once");
+  });
+
+  it("refuses a list that is only separators", () => {
+    const result = resolveRemoteBrokerConfig(
+      { ...COMPLETE, [REMOTE_BROKER_URL_ENV]: " , , " },
+      readFile,
+    );
+    expect(result).toMatchObject({ ok: false });
+  });
+});
+
 describe("checkRemoteComposite", () => {
   it("passes when the broker reports a healthy composite", async () => {
     const result = await checkRemoteComposite({

@@ -184,25 +184,100 @@ async function probeOnce(
   const config = resolveRemoteBrokerConfig(env);
   if (!config.ok) return { ok: false, reason: sanitizeOperatorDetail(config.reason) };
 
-  const client = new BrokerServiceClient({
-    ...config.value,
-    // The per-REQUEST timeout still applies; `withDeadline` above is what makes
-    // the whole probe bounded regardless of what an operator configured.
-    requestTimeoutMs: config.value.requestTimeoutMs ?? LIVE_PROBE_TIMEOUT_MS,
-  });
+  // EVERY REPLICA IS PROBED, not just the first (cinatra#2266 G3, Codex
+  // convergence, adopted).
+  //
+  // This dialled `config.value.baseUrl` — the FIRST declared origin — and
+  // reported the whole plane healthy on its answer alone. In a fleet that is a
+  // dishonest verdict with a concrete cost, and it is the cost `broker-fleet.ts`
+  // names in its own header: a replica the app cannot reach is a replica whose
+  // audit spool NOBODY IS DRAINING, and an undrained spool fills and goes
+  // fail-closed. So `EXECUTION_BROKER_URL=A,B` with B unreachable would show an
+  // operator a green boot phase right up until B stopped admitting commands.
+  //
+  // IN PARALLEL, because the whole probe is bounded by one `withDeadline` budget
+  // (LIVE_PROBE_TIMEOUT_MS): probing serially would make the deadline a function
+  // of the fleet size and turn a large healthy fleet into a timeout. The verdict
+  // is still read in DECLARATION order, so which replica gets named is
+  // deterministic rather than a race.
+  const fleet = config.value.baseUrls.length > 1;
+  // EVERY CLIENT THIS FUNCTION CREATES IS REGISTERED BEFORE IT CAN THROW (Codex
+  // round 3, adopted). Building the array outside the `try` meant a constructor
+  // that threw on the third replica leaked the two already built. Each client is
+  // pushed here, synchronously, in the same statement that constructs it — so
+  // the `finally` below closes exactly the set that exists.
+  const clients: Array<{ close(): void }> = [];
   try {
-    const composite = await checkRemoteComposite(client);
-    if (!composite.ok) return { ok: false, reason: sanitizeOperatorDetail(composite.reason) };
-    return { ok: true, detail: sanitizeOperatorDetail(describeComposite(composite.composite)) };
+    // `allSettled`, not `all`: a REJECTING probe would otherwise decide the
+    // verdict by which failure landed FIRST IN TIME and tear the clients down
+    // while its siblings were still in flight. Settling every probe keeps the
+    // verdict a function of DECLARATION order, which is the only order an
+    // operator can act on.
+    const verdicts = await Promise.allSettled(
+      config.value.baseUrls.map(async (baseUrl) => {
+        const client = new BrokerServiceClient({
+          ...config.value,
+          baseUrl,
+          // The per-REQUEST timeout still applies; `withDeadline` above is what
+          // makes the whole probe bounded regardless of what an operator
+          // configured.
+          requestTimeoutMs: config.value.requestTimeoutMs ?? LIVE_PROBE_TIMEOUT_MS,
+        });
+        clients.push(client);
+        return checkRemoteComposite(client);
+      }),
+    );
+    // Narrowed in ONE pass rather than re-indexed afterwards, so this file needs
+    // no type import from the execution-plane graph — the property its own
+    // header rests on.
+    let firstDetail: string | undefined;
+    for (const [index, settled] of verdicts.entries()) {
+      const endpoint = config.value.baseUrls[index];
+      if (settled.status === "rejected") {
+        // A single-replica deployment RETHROWS, so its behaviour is bit-for-bit
+        // what it was before this became a loop: the caller's guard turns the
+        // throw into the same `{ ok: false }` it always did.
+        if (!fleet) throw settled.reason;
+        return {
+          ok: false,
+          reason: sanitizeOperatorDetail(
+            `the broker replica ${endpoint} could not be probed: ${describeError(settled.reason)}`,
+          ),
+        };
+      }
+      const verdict = settled.value;
+      if (!verdict.ok) {
+        // The endpoint is named ONLY in a fleet: a single-replica deployment has
+        // exactly one place to look, and adding an origin to its message would
+        // change a string every existing reader already understands.
+        const reason = fleet
+          ? `the broker replica ${endpoint} is not ready — ${verdict.reason}`
+          : verdict.reason;
+        return { ok: false, reason: sanitizeOperatorDetail(reason) };
+      }
+      // Every replica passed. The FIRST one's composite is reported, matching
+      // `checkFleetComposite`'s convention and keeping the admin surface's shape
+      // one composite; the count is what says it stands for all of them.
+      firstDetail ??= describeComposite(verdict.composite);
+    }
+    if (firstDetail === undefined) {
+      return { ok: false, reason: "the execution-plane broker fleet declares no replicas" };
+    }
+    const detail = fleet
+      ? `${config.value.baseUrls.length} replicas ready; ${firstDetail}`
+      : firstDetail;
+    return { ok: true, detail: sanitizeOperatorDetail(detail) };
   } finally {
-    // Always release the keep-alive agent: a boot phase that leaked a socket
+    // Always release the keep-alive agents: a boot phase that leaked a socket
     // per attempt would make a retry loop a file-descriptor leak. Guarded
     // because `close()` on a half-built agent can itself throw, and a cleanup
     // failure must not become the reported outcome.
-    try {
-      client.close();
-    } catch {
-      /* nothing to do; the probe's verdict is already decided */
+    for (const client of clients) {
+      try {
+        client.close();
+      } catch {
+        /* nothing to do; the probe's verdict is already decided */
+      }
     }
   }
 }

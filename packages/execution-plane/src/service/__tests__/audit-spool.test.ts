@@ -13,9 +13,10 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  AUDIT_SPOOL_EPISODE_RESERVE_BYTES,
   AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES,
   AuditSpoolFullError,
   AuditSpoolLockedError,
@@ -24,6 +25,24 @@ import {
   type AuditSpool,
 } from "../audit-spool";
 import { DEFAULT_SANDBOX_LIMITS, type ExecutionAuditRecord } from "../../types";
+
+/**
+ * REAL FSYNCS NEED A REAL TIMEOUT, and the default 5 s one is not a statement
+ * about correctness — it is a statement about how loaded the host is.
+ *
+ * Every arm below drives the spool's actual durability path: `fsync` on the log,
+ * `fsync` on the directory, an atomic rename per watermark write. That is the
+ * behaviour under test, so it cannot be stubbed out to go faster. On a busy
+ * machine those syscalls are tens of milliseconds each and a single arm issues
+ * dozens, which put several arms within noise of the 5 s ceiling and made them
+ * flake — as TIMEOUTS, never as wrong assertions.
+ *
+ * The ceiling is raised rather than the fsyncs removed, because a spool that
+ * does not fsync is exactly the defect cinatra#2266 exists to fix. A genuine
+ * hang still fails, just later.
+ */
+vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
+
 
 const dirs: string[] = [];
 const open: AuditSpool[] = [];
@@ -173,7 +192,11 @@ describe("audit spool — the byte bound (asserted on the FILE)", () => {
     // deliberately not bound-checked — the overshoot is bounded by the
     // reservations outstanding.
     const dir = tempDir();
-    const maxBytes = 2 * AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES;
+    // `maxBytes` is the FILE bound; ADMISSION is bounded by `maxBytes` less the
+    // episode reserve (cinatra#2266 G5), so the reserve is added here to keep
+    // this arm's admission budget the two-headrooms it is written against.
+    // Derived from the module's own constants, never from a literal.
+    const maxBytes = 2 * AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES + AUDIT_SPOOL_EPISODE_RESERVE_BYTES;
     const s = spool(dir, maxBytes);
     const reservation = await s.reserve(record("job-a", 0, { decision: "outcome_unknown" }));
     // A terminal record far larger than the reserved headroom. It still lands.
@@ -400,7 +423,13 @@ describe("audit spool — the Codex-convergence arms", () => {
     // not (the first claims frame + frame + headroom) — so this arm
     // discriminates rather than merely passing.
     const bigFrameBytes = 6_800;
-    const maxBytes = 2 * (bigFrameBytes + AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES) + 1_000;
+    // + the episode reserve, which is held back from ADMISSION (cinatra#2266
+    // G5) and would otherwise make the FIRST reservation the one that fails,
+    // which is not what this arm discriminates.
+    const maxBytes =
+      2 * (bigFrameBytes + AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES) +
+      AUDIT_SPOOL_EPISODE_RESERVE_BYTES +
+      1_000;
     const s = spool(dir, maxBytes);
     const big = record("job-a", 0, {
       decision: "outcome_unknown",

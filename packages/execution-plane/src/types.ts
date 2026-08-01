@@ -366,6 +366,19 @@ export type ExecutionAuditRecord = {
   egressTotalBytes?: number;
   wallMs?: number;
   workspaceKb?: number;
+  /**
+   * THE SATURATION EPISODE this record OPENS (cinatra#2266 G5). Present on
+   * exactly one record per episode — the `audit_spool_full` refusal written the
+   * moment the spool stopped admitting commands — and on nothing else.
+   *
+   * Its absence on the refusals that FOLLOW is the mechanism, not an omission:
+   * a permanently-full spool refuses an unbounded stream of admissions and
+   * writes no record for any of them, because there is by construction no room
+   * for them. The episode record says the plane stopped admitting; the running
+   * refusal count rides the drain response (`saturation.episode.refused`) and
+   * the spool's own persisted state.
+   */
+  spoolEpisode?: { id: string; openedAtMs: number };
   atMs: number;
 };
 
@@ -406,6 +419,28 @@ export type ExecutionAuditReservation = {
 export type ExecutionAuditReserver = (
   prepared: ExecutionAuditRecord,
 ) => Promise<ExecutionAuditReservation>;
+
+/**
+ * THE SATURATION ADMISSION GATE (cinatra#2266 G5).
+ *
+ * The reservation seam above answers "can this command be accounted for?" by
+ * WRITING — and that is the problem it cannot solve on its own. Against a
+ * permanently-full spool, every attempt would still cost a refusal record, and
+ * "one record per refused attempt" is unbounded exactly when there is no room
+ * for even one. So the broker asks THIS first, before the earliest path that
+ * would mint a record, and a refusal here writes nothing at all.
+ *
+ * SYNCHRONOUS, deliberately: it sits in front of every refusal on the command
+ * path, and a saturated plane must be able to say no without touching a disk.
+ * The durable facts — that an episode opened, and roughly how many attempts it
+ * refused — are written by the spool at the transition and on a bounded
+ * checkpoint schedule, not per call.
+ *
+ * Absent ⇒ no gate and no behaviour change (the in-process placement).
+ */
+export type ExecutionAuditAdmission = () =>
+  | { admitted: true }
+  | { admitted: false; message: string };
 
 /**
  * Separated stdout/stderr retention (S1: "stdout/stderr retained separately

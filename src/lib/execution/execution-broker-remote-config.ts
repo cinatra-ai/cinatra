@@ -42,7 +42,27 @@ export const REMOTE_BROKER_CLIENT_KEY_PASSPHRASE_ENV =
 export const REMOTE_BROKER_REQUEST_TIMEOUT_ENV = "EXECUTION_BROKER_REQUEST_TIMEOUT_MS";
 
 export type RemoteBrokerConfig = {
+  /**
+   * The FIRST replica's origin. Kept as a single value because the boot
+   * health phase's cheap probe needs exactly one endpoint to dial, and because
+   * every deployment that is not a fleet has exactly one.
+   */
   baseUrl: string;
+  /**
+   * EVERY replica's origin, in declaration order (cinatra#2266 G3).
+   * `EXECUTION_BROKER_URL` accepts a comma-separated list; a single URL yields
+   * a one-entry array and behaves exactly as it did before.
+   *
+   * WHY THE APP HOLDS THE LIST RATHER THAN A LOAD BALANCER. Broker replicas own
+   * DIFFERENT audit-spool volumes but share one logical mTLS instance identity,
+   * so a balancer that spreads calls across them is indistinguishable from one
+   * broker at the transport layer and catastrophic above it: a job's commands
+   * land on a replica that never opened it, and an audit acknowledgement lands
+   * on a spool that never issued the head. Routing has to be done by something
+   * that knows which replica owns what, and the only party that knows is the
+   * app (`BrokerFleetClient`).
+   */
+  baseUrls: readonly string[];
   instance: string;
   serviceToken: string;
   tls: ExecTlsMaterial;
@@ -87,19 +107,49 @@ export function resolveRemoteBrokerConfig(
     };
   }
 
-  let parsed: URL;
-  try {
-    parsed = new URL(baseUrl);
-  } catch {
-    return { ok: false, reason: `${REMOTE_BROKER_URL_ENV} is not a valid URL` };
+  // ONE OR MORE ORIGINS (cinatra#2266 G3). A comma-separated list declares a
+  // FLEET; a single value is the same one-replica deployment as before. Every
+  // entry is validated — a fleet whose second endpoint is a typo must fail at
+  // boot, not on whichever command round-robin happens to send there.
+  const baseUrls = baseUrl
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  if (baseUrls.length === 0) {
+    return { ok: false, reason: `${REMOTE_BROKER_URL_ENV} is empty` };
   }
-  // https ONLY. The boundary IS mutual TLS; an http origin would silently drop
-  // both the server's identity check and the client certificate, which is the
-  // entire authorization story of this hop.
-  if (parsed.protocol !== "https:") {
+  const origins: string[] = [];
+  for (const url of baseUrls) {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return { ok: false, reason: `${REMOTE_BROKER_URL_ENV} is not a valid URL` };
+    }
+    // https ONLY. The boundary IS mutual TLS; an http origin would silently drop
+    // both the server's identity check and the client certificate, which is the
+    // entire authorization story of this hop.
+    if (parsed.protocol !== "https:") {
+      return {
+        ok: false,
+        reason: `${REMOTE_BROKER_URL_ENV} must be https (the broker boundary is mutual TLS; got ${parsed.protocol})`,
+      };
+    }
+    origins.push(parsed.origin);
+  }
+  // A repeated origin is not two replicas; it is one replica the router would
+  // treat as two, which is exactly the misrouting G3 exists to prevent. Refused
+  // here, at boot, where an operator can read the reason.
+  //
+  // COMPARED AS PARSED ORIGINS, not as raw strings (Codex convergence, adopted).
+  // `https://broker.example` and `https://BROKER.example:443/` are the same
+  // address written two ways: a raw-string `Set` sees two replicas, pins jobs
+  // across both "of them", and round-robins a job's commands at the one broker
+  // that never opened half of them — the exact defect the check exists to stop.
+  if (new Set(origins).size !== origins.length) {
     return {
       ok: false,
-      reason: `${REMOTE_BROKER_URL_ENV} must be https (the broker boundary is mutual TLS; got ${parsed.protocol})`,
+      reason: `${REMOTE_BROKER_URL_ENV} lists the same broker origin more than once; each entry must be a distinct replica`,
     };
   }
 
@@ -153,7 +203,8 @@ export function resolveRemoteBrokerConfig(
   return {
     ok: true,
     value: {
-      baseUrl,
+      baseUrl: baseUrls[0]!,
+      baseUrls,
       instance,
       serviceToken,
       tls,
