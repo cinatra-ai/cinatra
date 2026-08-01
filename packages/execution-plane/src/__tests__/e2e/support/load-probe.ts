@@ -75,41 +75,77 @@ export function parseStatsBytes(text: string): number {
 export type Reading = { memBytes: number; cpuPercent: number; pids: number };
 
 /**
- * `docker stats --no-stream` for a set of containers, summed.
+ * Do two docker container ids denote the same container?
  *
- * Sandbox containers are ephemeral by design, so a container named here can be
- * gone before `docker stats` reaches it. That is not an error condition — the
- * unreadable rows are simply dropped and the caller learns how many were read,
- * so a systematically failing probe is still visible as a zero sample count
- * rather than as a comfortable-looking zero usage.
+ * `docker compose ps -q` hands back the FULL 64-char id while `docker ps` and
+ * `docker stats` print the 12-char short form, so the two snapshots this module
+ * correlates never match with `===`. The length floor keeps a truncated or
+ * empty field from matching everything.
  */
-export async function readStats(containerIds: readonly string[]): Promise<{
-  total: Reading;
-  read: number;
-} | null> {
-  if (containerIds.length === 0) return null;
+export function sameContainer(a: string, b: string): boolean {
+  if (a.length < 12 || b.length < 12) return false;
+  return a.startsWith(b) || b.startsWith(a);
+}
+
+/**
+ * ONE `docker stats --no-stream` reading of EVERY running container, keyed by
+ * id.
+ *
+ * WHY THE WHOLE HOST rather than an explicit id list, which is what this
+ * module did first and what cost a real (and instructive) flake: `docker stats`
+ * fails the WHOLE invocation with `No such container` the moment ONE listed id
+ * has exited, printing nothing at all. Sandbox containers are ephemeral by
+ * design — a `docker ps` snapshot is stale within milliseconds — so an
+ * id-list reading of the sandbox fleet loses the containers that are still
+ * alive along with the one that is not. That surfaced as `sandboxStatSamples`
+ * of zero on a burst whose containers were all genuinely measured moments
+ * earlier: a probe that fails ENTIRELY, and a battery that reds for a reason
+ * that has nothing to do with the plane.
+ *
+ * A whole-host reading cannot fail that way (there is no id to be missing),
+ * and on a loaded host it is not even slower — one call for the worker AND the
+ * fleet instead of two. The caller filters by id, so a sibling lane's
+ * containers are read and discarded, never counted.
+ */
+export async function readHostStats(): Promise<Map<string, Reading>> {
   const out = await docker(
-    [
-      "stats",
-      "--no-stream",
-      "--format",
-      "{{.MemUsage}}|{{.CPUPerc}}|{{.PIDs}}",
-      ...containerIds,
-    ],
+    ["stats", "--no-stream", "--format", "{{.ID}}|{{.MemUsage}}|{{.CPUPerc}}|{{.PIDs}}"],
     { timeoutMs: 60_000 },
   );
-  const total: Reading = { memBytes: 0, cpuPercent: 0, pids: 0 };
-  let read = 0;
+  const rows = new Map<string, Reading>();
   for (const line of out.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
-    const [mem, cpu, pids] = line.split("|");
+    const [id, mem, cpu, pids] = line.split("|");
+    const containerId = (id ?? "").trim();
+    if (containerId.length === 0) continue;
     const memBytes = parseStatsBytes((mem ?? "").split("/")[0] ?? "");
     const cpuPercent = Number((cpu ?? "").replace("%", "").trim());
     const pidCount = Number((pids ?? "").trim());
     if (!Number.isFinite(memBytes) || !Number.isFinite(pidCount)) continue;
-    total.memBytes += memBytes;
-    total.pids += pidCount;
-    total.cpuPercent += Number.isFinite(cpuPercent) ? cpuPercent : 0;
-    read += 1;
+    rows.set(containerId, {
+      memBytes,
+      pids: pidCount,
+      cpuPercent: Number.isFinite(cpuPercent) ? cpuPercent : 0,
+    });
+  }
+  return rows;
+}
+
+/** Sum the readings of the containers in `ids` that this snapshot actually saw. */
+export function sumReadings(
+  stats: ReadonlyMap<string, Reading>,
+  ids: readonly string[],
+): { total: Reading; read: number } | null {
+  const total: Reading = { memBytes: 0, cpuPercent: 0, pids: 0 };
+  let read = 0;
+  for (const wanted of ids) {
+    for (const [id, reading] of stats) {
+      if (!sameContainer(id, wanted)) continue;
+      total.memBytes += reading.memBytes;
+      total.pids += reading.pids;
+      total.cpuPercent += reading.cpuPercent;
+      read += 1;
+      break;
+    }
   }
   return read === 0 ? null : { total, read };
 }
@@ -153,6 +189,11 @@ export type LoadSampler = {
  * exists for the length of one `sleep`, while `docker stats --no-stream` takes
  * on the order of a second. Interleaving them in one loop would let the slow
  * probe blind the fast one for exactly as long as the peak lasts.
+ *
+ * The resource loop reads the WHOLE host once per iteration and filters (see
+ * `readHostStats`), so the worker and the sandbox fleet come out of a single
+ * consistent reading and an exiting sandbox can no longer take the whole
+ * measurement down with it.
  */
 export function startLoadSampler(opts: {
   jobIds: ReadonlySet<string>;
@@ -194,7 +235,19 @@ export function startLoadSampler(opts: {
   const statsLoop = (async () => {
     while (running) {
       try {
-        const worker = await readStats([opts.workerContainerId]);
+        // Bracket the (slow) stats reading with two (fast) `docker ps`
+        // snapshots and take their UNION as the candidate fleet. A sandbox that
+        // STARTS during the reading is in the second snapshot; one that EXITS
+        // during it is in the first. Either way the id is offered to the
+        // filter, and the filter keeps only what the stats reading actually
+        // saw — so the fleet figure is never inflated by a container that was
+        // not measured, and never silently undercounts one that was.
+        const before = await liveSandboxes(opts.jobIds);
+        const stats = await readHostStats();
+        const after = await liveSandboxes(opts.jobIds);
+        const fleet = [...new Set([...before, ...after].map((row) => row.id))];
+
+        const worker = sumReadings(stats, [opts.workerContainerId]);
         if (worker) {
           envelope.workerSamples += 1;
           envelope.peakWorkerMemBytes = Math.max(
@@ -207,25 +260,23 @@ export function startLoadSampler(opts: {
           );
           envelope.peakWorkerPids = Math.max(envelope.peakWorkerPids, worker.total.pids);
         }
-        const live = await liveSandboxes(opts.jobIds);
-        if (live.length > 0) {
-          const sandboxes = await readStats(live.map((row) => row.id));
-          if (sandboxes) {
-            envelope.sandboxStatSamples += 1;
-            envelope.peakSandboxMemBytes = Math.max(
-              envelope.peakSandboxMemBytes,
-              sandboxes.total.memBytes,
-            );
-            envelope.peakSandboxCpuPercent = Math.max(
-              envelope.peakSandboxCpuPercent,
-              sandboxes.total.cpuPercent,
-            );
-            envelope.peakSandboxPids = Math.max(envelope.peakSandboxPids, sandboxes.total.pids);
-            envelope.peakSandboxesMeasured = Math.max(
-              envelope.peakSandboxesMeasured,
-              sandboxes.read,
-            );
-          }
+
+        const sandboxes = sumReadings(stats, fleet);
+        if (sandboxes) {
+          envelope.sandboxStatSamples += 1;
+          envelope.peakSandboxMemBytes = Math.max(
+            envelope.peakSandboxMemBytes,
+            sandboxes.total.memBytes,
+          );
+          envelope.peakSandboxCpuPercent = Math.max(
+            envelope.peakSandboxCpuPercent,
+            sandboxes.total.cpuPercent,
+          );
+          envelope.peakSandboxPids = Math.max(envelope.peakSandboxPids, sandboxes.total.pids);
+          envelope.peakSandboxesMeasured = Math.max(
+            envelope.peakSandboxesMeasured,
+            sandboxes.read,
+          );
         }
       } catch {
         // Same rationale as above.
