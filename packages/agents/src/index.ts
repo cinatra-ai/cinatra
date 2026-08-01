@@ -577,10 +577,13 @@ export {
   readActiveExtensionTemplates,
   readArchivedExtensionTemplates,
   readAgentTemplatesDependingOn,
-  // Destructive helper for extensionRegistry.forceDelete. NOT for general use;
-  // bypasses RESTRICT FKs.
-  removeReferencingRunRows,
 } from "./store";
+// Destructive helper for extensionRegistry.forceDelete. NOT for general use;
+// bypasses RESTRICT FKs. Its own vertical slice (see that module's header).
+export {
+  MAX_REPORTED_TEARDOWN_RUN_IDS,
+  removeReferencingRunRows,
+} from "./store-force-delete-runs";
 
 // ---------------------------------------------------------------------------
 // Origin JSONB helpers.
