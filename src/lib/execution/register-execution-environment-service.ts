@@ -78,8 +78,32 @@ export type ExecutionEnvironmentServiceSlot = {
   }) => Promise<{ reaped: string[] }>;
 };
 
+/**
+ * The hard-removal RUN-teardown participant (epic #1705 AC9): cancel the
+ * package's queued sandbox jobs, terminate its in-flight ones and collect its
+ * retained run workspaces.
+ *
+ * It lives in THIS module rather than a sibling one on purpose. Its only reader
+ * is `extension-data-teardown-wiring`, which already imports this module and is
+ * loaded on every path that can hard-remove an extension — including UI Server
+ * Actions and, transitively, hot routes. A second slot module would add a
+ * module to those routes' reachable graphs for nothing (the route-graph ratchet
+ * measures exactly that), so the two lightweight execution slots share one
+ * lightweight file.
+ *
+ * Best-effort and idempotent; resolves a small summary that is logged, never
+ * depended on.
+ */
+export type ExecutionRunTeardownParticipant = (input: {
+  packageName: string;
+  runIds: readonly string[];
+  /** True when the caller's id list was capped (there were MORE runs). */
+  runIdsTruncated?: boolean;
+}) => Promise<{ runs: number; terminatedJobs: number }>;
+
 declare global {
   var __cinatraExecutionEnvironmentService: ExecutionEnvironmentServiceSlot | undefined;
+  var __cinatraExecutionRunTeardown: ExecutionRunTeardownParticipant | undefined;
 }
 
 /** Install the slot (boot phase). Last write wins (idempotent re-boot). */
@@ -126,6 +150,33 @@ export function getEnvironmentArchiveReferenceDropper():
   const s = slot();
   if (!s || s.state !== "ready") return undefined;
   return s.dropEnvironmentReferences;
+}
+
+/**
+ * Install the run-teardown participant (boot phase). Last write wins.
+ *
+ * FAIL-QUIET DEFAULT: unregistered ⇒ `undefined` ⇒ the teardown half is a
+ * no-op. Correct rather than fail-closed, deliberately: an instance with no
+ * execution plane has no jobs to cancel and no workspaces to collect, and a
+ * hard removal that is ALREADY COMMITTED must never be aborted by a missing
+ * best-effort participant.
+ */
+export function registerExecutionRunTeardown(
+  participant: ExecutionRunTeardownParticipant,
+): void {
+  globalThis.__cinatraExecutionRunTeardown = participant;
+}
+
+/** Drop the participant — a re-boot that wires no broker must not leave a stale
+ *  one reachable (it would hold a closed remote client). */
+export function clearExecutionRunTeardown(): void {
+  globalThis.__cinatraExecutionRunTeardown = undefined;
+}
+
+export function getExecutionRunTeardownParticipant():
+  | ExecutionRunTeardownParticipant
+  | undefined {
+  return globalThis.__cinatraExecutionRunTeardown;
 }
 
 export function getEnvironmentLayerReaper():

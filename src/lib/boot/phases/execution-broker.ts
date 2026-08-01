@@ -81,7 +81,7 @@ export function executionBrokerPhases(
         // into `disabled` / a failed handshake cannot leave a participant
         // pointing at a broker (or a closed remote client) behind.
         const { clearExecutionRunTeardown, registerExecutionRunTeardown } =
-          await import("@/lib/execution/register-execution-run-teardown");
+          await import("@/lib/execution/register-execution-environment-service");
         const { createExecutionRunTeardownParticipant } = await import(
           "@/lib/execution/execution-run-teardown"
         );

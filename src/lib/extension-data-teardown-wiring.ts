@@ -22,11 +22,14 @@ import { deleteConnectorConfigByPrefix } from "@/lib/database";
 // TYPE-ERASED, LIGHTWEIGHT slot accessor (globalThis-backed; no heavy
 // execution-plane graph). Reaching the environment-teardown participant here
 // keeps this module cheap on every hard-remove path (incl. UI Server Actions).
-import { getEnvironmentTeardownParticipant } from "@/lib/execution/register-execution-environment-service";
-// Same lightweight slot pattern for the RUN half of the plane's teardown
-// (cinatra#1705 AC9): cancel the package's queued sandbox work and collect its
-// retained run workspaces. Reached lazily; no execution-plane graph is pulled.
-import { getExecutionRunTeardownParticipant } from "@/lib/execution/register-execution-run-teardown";
+// Both halves of the plane's teardown ride the SAME lightweight slot module —
+// the environment-layer reference drop and, since cinatra#1705 AC9, the RUN
+// teardown (cancel queued sandbox work, collect retained run workspaces).
+// Reached lazily; no execution-plane graph is pulled at this module's load.
+import {
+  getEnvironmentTeardownParticipant,
+  getExecutionRunTeardownParticipant,
+} from "@/lib/execution/register-execution-environment-service";
 import type { ExtensionDataTeardownContext } from "@cinatra-ai/extensions";
 
 let wired = false;

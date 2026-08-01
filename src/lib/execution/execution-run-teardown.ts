@@ -23,7 +23,7 @@ import "server-only";
 // liveness probe, and the retention GC eventually reaps the volume. This
 // participant is what makes those outcomes IMMEDIATE rather than eventual.
 
-import type { ExecutionRunTeardownParticipant } from "@/lib/execution/register-execution-run-teardown";
+import type { ExecutionRunTeardownParticipant } from "@/lib/execution/register-execution-environment-service";
 
 /** How many runs one teardown fire will drive. */
 export const MAX_TEARDOWN_RUNS = 5_000;

@@ -38,7 +38,7 @@ import { createExecutionRunTeardownParticipant } from "@/lib/execution/execution
 import {
   clearExecutionRunTeardown,
   registerExecutionRunTeardown,
-} from "@/lib/execution/register-execution-run-teardown";
+} from "@/lib/execution/register-execution-environment-service";
 
 const deletedPrefixes: string[] = [];
 vi.mock("@/lib/database", () => ({
