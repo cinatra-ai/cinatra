@@ -19,8 +19,6 @@ export type BuildWayflowInitialMessagePayloadInput = {
   inputParams: Record<string, unknown> | null | undefined;
   /** The authoritative `agent_runs.id` — dispatch owns run identity. */
   runId: string;
-  /** Optional dispatcher-signed run binding (LLM-bridge run selection). */
-  runBinding?: string;
   /**
    * The RAW dispatch-minted per-run token, carried under the reserved key so
    * the loader can pop it (later wave) / the container's schema filter drops
@@ -31,10 +29,16 @@ export type BuildWayflowInitialMessagePayloadInput = {
 
 /**
  * Build the WayFlow initial-message payload with spread-then-overwrite: author
- * inputs are spread first, then `cinatra_run_id`, the optional
- * `cinatra_run_binding`, and the reserved run-token key are written LAST, so a
- * malicious or compromised agent input can neither smuggle nor override the
- * dispatch-owned run identity.
+ * inputs are spread first, then `cinatra_run_id` and the reserved run-token key
+ * are written LAST, so a malicious or compromised agent input can neither
+ * smuggle nor override the dispatch-owned run identity.
+ *
+ * #1193 legacy retirement: the dispatcher-signed `cinatra_run_binding` is GONE.
+ * It existed only as a run SELECTOR for /api/llm-bridge, which now resolves run
+ * identity exclusively through the run token, so the binding was dead signed
+ * material — and unlike the token it was never scrubbed out of the message, so it
+ * stayed in the conversation and the persisted task history. Removing the
+ * selector without removing the mint would have left that exposure for nothing.
  */
 export function buildWayflowInitialMessagePayload(
   input: BuildWayflowInitialMessagePayloadInput,
@@ -42,7 +46,6 @@ export function buildWayflowInitialMessagePayload(
   return {
     ...(input.inputParams ?? {}),
     cinatra_run_id: input.runId,
-    ...(input.runBinding ? { cinatra_run_binding: input.runBinding } : {}),
     [CINATRA_RUN_TOKEN_MESSAGE_KEY]: input.runToken,
   };
 }

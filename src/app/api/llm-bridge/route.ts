@@ -91,7 +91,6 @@ import {
   resolveAgentRunMcpActor,
   resolveAssignedSkillsActorForRun,
 } from "@/lib/agent-run-actor-resolve";
-import { verifyAgentRunBinding } from "@/lib/agent-run-binding";
 import { verifyRunToken, RUN_TOKEN_HEADER } from "@/lib/agent-run-token";
 // exec-plane S3 A2 (cinatra#1708): the run-seam fail-closed decision matrix that
 // resolves a run's DECLARED L1 environment into a mountable layer + broker
@@ -171,7 +170,6 @@ const RequestSchema = z.object({
   // author cannot forge a cross-tenant run selection. Verified BEFORE any
   // run is selected for MCP OBO minting. `agent_run_id` alone is NEVER
   // authoritative for run selection.
-  cinatra_run_binding: z.string().optional(),
   agent_id: z.string().optional(),
   package_version: z.string().optional(),
   agent_spec_version: z.string().optional(),
@@ -820,6 +818,151 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // ---------------------------------------------------------------------------
+  // #1193 RUN-IDENTITY GATE — runs BEFORE dispatch resolution, the media branch,
+  // skill loading and any provider call.
+  //
+  // Placement is load-bearing. The Gemini media-input branch below RETURNS a
+  // response of its own, so an identity check placed after it would never run for
+  // those requests: a caller could claim `agent_run_id` with no credential, have
+  // the provider actually execute, and receive 200 with the claim silently
+  // dropped. That is the "claimed identity downgraded" shape the run-token spine
+  // exists to remove, so the gate is hoisted above every dispatch path.
+  // ---------------------------------------------------------------------------
+  // #1193 run-token spine (W3) — resolve the run TOKEN-FIRST off the ONE
+  // dispatch-minted credential before the legacy context-id / dispatcher-signed
+  // binding channels. The loader attaches X-Cinatra-Run-Token on the host-
+  // anchored llm-bridge call (a per-task ContextVar the OAS author cannot
+  // write); the verifier hashes it and resolves the run by the unique index
+  // (never a body id). Semantics, mirroring the context route (W2) and the
+  // durable-binding posture (#1195):
+  //   - token ABSENT            ⇒ the legacy context-id + binding paths below
+  //                               run UNCHANGED (additive + reversible against
+  //                               the not-yet-rebuilt WayFlow image);
+  //   - token PRESENT+resolved  ⇒ it selects the run; a co-present context-id
+  //                               MUST name the same run or OBO is refused;
+  //   - token PRESENT+unresolvable (or a probe/re-read divergence) ⇒ FAIL
+  //                               CLOSED: suppress the weaker context-id +
+  //                               binding channels and degrade to the anonymous
+  //                               machine-token path — never downgrade a
+  //                               tampered token to a forgeable selector.
+  let runFromToken: Awaited<ReturnType<typeof readAgentRunById>> = null;
+  let tokenResolvedRunId: string | undefined;
+  let runTokenInvalid = false;
+  // Only consult the verifier when the loader actually attached the credential
+  // on this host-anchored call. A null/empty header is the "absent" case — the
+  // legacy context-id + binding paths below then run entirely UNCHANGED
+  // (additive + reversible against the not-yet-rebuilt WayFlow image).
+  const rawRunToken = isBridgeAuthorized
+    ? req.headers.get(RUN_TOKEN_HEADER)
+    : null;
+  if (rawRunToken) {
+    const tokenResult = await verifyRunToken(rawRunToken, readAgentRunByTokenHash);
+    if (tokenResult.ok) {
+      try {
+        // Re-read the FULL row by the SERVER-DERIVED id (the unique-index probe
+        // returns {id,orgId,runBy} only; the resolver ports + the OBO mint need
+        // the whole record). Deny on any divergence between the probe and the
+        // fresh read (fail closed) — never a body id.
+        const runById = await readAgentRunById(tokenResult.run.id);
+        if (
+          runById &&
+          runById.id === tokenResult.run.id &&
+          runById.orgId === tokenResult.run.orgId &&
+          runById.runBy === tokenResult.run.runBy
+        ) {
+          runFromToken = runById;
+          tokenResolvedRunId = runById.id;
+        } else {
+          runTokenInvalid = true;
+        }
+      } catch {
+        runTokenInvalid = true;
+      }
+    } else if (tokenResult.reason === "unresolvable") {
+      // Present-but-unresolvable ⇒ fail closed (a non-empty token that hashes to
+      // no row is tampering / a bug, never a legacy dispatch).
+      runTokenInvalid = true;
+    }
+  }
+
+  // A request that CLAIMS a run must prove it. Enforced for BOTH auth modes: the
+  // token is only READ on the bridge-authorized path (a JWT-authed third-party
+  // peer is not a first-party WayFlow task and cannot present a run credential),
+  // so a JWT request naming a run can never satisfy this and is refused here
+  // rather than served unattributed.
+  //
+  // A request that claims NO run is unaffected — it has no identity to lose.
+  const claimsRun =
+    typeof body.agent_run_id === "string" && body.agent_run_id.length > 0;
+  if (claimsRun && !runFromToken) {
+    const code = runTokenInvalid ? "run_token_unresolvable" : "run_token_absent";
+    console.warn(
+      `[llm-bridge-run-select] REFUSED code=${code} ` +
+        `claimed=${String(body.agent_run_id).slice(0, 64)} ` +
+        `bridge-auth=${isBridgeAuthorized}`,
+    );
+    return NextResponse.json(
+      { error: "Run identity could not be verified", code },
+      { status: 403 },
+    );
+  }
+
+  // The auth-injected X-Cinatra-A2A-Context-Id header is RETIRED as a run
+  // SELECTOR (#1193) but is still read as a CROSS-CHECK: the two dispatch-owned
+  // bindings must never disagree. The header itself stays on the wire — other
+  // surfaces (the passthrough / auditor bridge-run binding) and the #907
+  // per-node context attestation still require it.
+  const a2aContextId = req.headers.get("x-cinatra-a2a-context-id");
+  let runFromContextId: Awaited<ReturnType<typeof readAgentRunByContextId>> =
+    null;
+  let contextIdUnresolved = false;
+  if (a2aContextId) {
+    try {
+      runFromContextId = await readAgentRunByContextId(a2aContextId);
+      // PRESENT-but-unresolvable is a POSITIVE conflict signal, not "no
+      // cross-check": the header is dispatch-owned, so a value that names no run
+      // means the request is corrupt or forged. Treating it as absent would let
+      // it fail OPEN — the context routes already 403 this exact shape.
+      contextIdUnresolved = runFromContextId === null;
+    } catch {
+      // A lookup FAILURE is likewise not evidence of agreement — fail closed.
+      contextIdUnresolved = true;
+    }
+  }
+
+  // BOTH disagreement cases are decided HERE, not later. They must clear the
+  // gate before any provider can be reached: the media-input branch below
+  // returns its OWN response, so a disagreement resolved after it would have
+  // already uploaded and called the model.
+  //
+  // `bodyRunMismatch` — the caller asserted one run while authenticating as
+  // another. The credential outranks the body id, so this could never MISselect;
+  // it is refused because asserting a foreign run is a forgery signal, and the
+  // context routes 403 the identical shape.
+  //
+  // `runTokenDivergent` — a co-present context-id names a different run. This is
+  // checked even when the body claims NO run: two dispatch-owned bindings
+  // disagreeing is a corrupt or forged request either way, and letting it
+  // proceed "anonymously" would silently drop a real conflict.
+  const bodyRunMismatch =
+    claimsRun && !!runFromToken && body.agent_run_id !== runFromToken.id;
+  const runTokenDivergent =
+    !!runFromToken &&
+    (contextIdUnresolved ||
+      (!!runFromContextId && runFromContextId.id !== runFromToken.id));
+  if (bodyRunMismatch || runTokenDivergent) {
+    console.warn(
+      `[llm-bridge-run-select] REFUSED code=run_mismatch ` +
+        `claimed=${claimsRun ? String(body.agent_run_id).slice(0, 64) : "-"} ` +
+        `body-mismatch=${bodyRunMismatch} token-divergent=${runTokenDivergent}`,
+    );
+    return NextResponse.json(
+      { error: "Run identity could not be verified", code: "run_mismatch" },
+      { status: 403 },
+    );
+  }
+
+  // ---------------------------------------------------------------------------
   // Provider-aware dispatch resolution.
   //
   // When body.cinatra_llm is undefined → kind: "passthrough" → legacy dispatch
@@ -1294,201 +1437,34 @@ export async function POST(req: Request): Promise<Response> {
   // agent_run_id="" (empty string) because the StartNode binding bug prevents
   // the run ID from flowing into the DFE context.
   //
-  // #1193 run-token spine (W3) — resolve the run TOKEN-FIRST off the ONE
-  // dispatch-minted credential before the legacy context-id / dispatcher-signed
-  // binding channels. The loader attaches X-Cinatra-Run-Token on the host-
-  // anchored llm-bridge call (a per-task ContextVar the OAS author cannot
-  // write); the verifier hashes it and resolves the run by the unique index
-  // (never a body id). Semantics, mirroring the context route (W2) and the
-  // durable-binding posture (#1195):
-  //   - token ABSENT            ⇒ the legacy context-id + binding paths below
-  //                               run UNCHANGED (additive + reversible against
-  //                               the not-yet-rebuilt WayFlow image);
-  //   - token PRESENT+resolved  ⇒ it selects the run; a co-present context-id
-  //                               MUST name the same run or OBO is refused;
-  //   - token PRESENT+unresolvable (or a probe/re-read divergence) ⇒ FAIL
-  //                               CLOSED: suppress the weaker context-id +
-  //                               binding channels and degrade to the anonymous
-  //                               machine-token path — never downgrade a
-  //                               tampered token to a forgeable selector.
-  let runFromToken: Awaited<ReturnType<typeof readAgentRunById>> = null;
-  let tokenResolvedRunId: string | undefined;
-  let runTokenInvalid = false;
-  // Only consult the verifier when the loader actually attached the credential
-  // on this host-anchored call. A null/empty header is the "absent" case — the
-  // legacy context-id + binding paths below then run entirely UNCHANGED
-  // (additive + reversible against the not-yet-rebuilt WayFlow image).
-  const rawRunToken = isBridgeAuthorized
-    ? req.headers.get(RUN_TOKEN_HEADER)
-    : null;
-  if (rawRunToken) {
-    const tokenResult = await verifyRunToken(rawRunToken, readAgentRunByTokenHash);
-    if (tokenResult.ok) {
-      try {
-        // Re-read the FULL row by the SERVER-DERIVED id (the unique-index probe
-        // returns {id,orgId,runBy} only; the resolver ports + the OBO mint need
-        // the whole record). Deny on any divergence between the probe and the
-        // fresh read (fail closed) — never a body id.
-        const runById = await readAgentRunById(tokenResult.run.id);
-        if (
-          runById &&
-          runById.id === tokenResult.run.id &&
-          runById.orgId === tokenResult.run.orgId &&
-          runById.runBy === tokenResult.run.runBy
-        ) {
-          runFromToken = runById;
-          tokenResolvedRunId = runById.id;
-        } else {
-          runTokenInvalid = true;
-        }
-      } catch {
-        runTokenInvalid = true;
-      }
-    } else if (tokenResult.reason === "unresolvable") {
-      // Present-but-unresolvable ⇒ fail closed (a non-empty token that hashes to
-      // no row is tampering / a bug, never a legacy dispatch).
-      runTokenInvalid = true;
-    }
-  }
-
-  // Legacy channel — the auth-injected X-Cinatra-A2A-Context-Id header
-  // (agent_loader.py inserts it), mapping to a unique context_id per WayFlow
-  // task. Read unconditionally so a resolved token can cross-check it, but it
-  // only SELECTS a run when no token was presented. Artifact resolver ports
-  // MUST be built only from a request-bound run; a caller-supplied
-  // body.agent_run_id alone is forgeable and would let a bridge token select
-  // another tenant's orgId as the resolver namespace. If BOTH context-id and
-  // body.agent_run_id resolve, they MUST match.
-  let runFromContextId: Awaited<ReturnType<typeof readAgentRunByContextId>> =
-    null;
-  try {
-    const a2aContextId = req.headers.get("x-cinatra-a2a-context-id");
-    if (a2aContextId) {
-      runFromContextId = await readAgentRunByContextId(a2aContextId);
-    }
-  } catch {
-    // non-fatal — fall through to the binding / body.agent_run_id paths below
-  }
-
-  // Selection precedence: run-token (W3) > context-id > dispatcher-signed
-  // binding. A resolved token wins; a co-present context-id that names a
-  // DIFFERENT run refuses OBO selection (the W2 divergence invariant carried to
-  // the bridge). An invalid token suppresses the context-id channel entirely.
-  let runFromContext: Awaited<ReturnType<typeof readAgentRunByContextId>> = null;
-  let runTokenDivergent = false;
-  if (runFromToken) {
-    runFromContext = runFromToken;
-    if (runFromContextId && runFromContextId.id !== runFromToken.id) {
-      runTokenDivergent = true;
-    }
-  } else if (!runTokenInvalid) {
-    runFromContext = runFromContextId;
-  }
-  // Fallback for the FIRST bridge call of a run. The context-id lookup
-  // misses on the first call because `updateAgentRunA2AContextId` only runs
-  // AFTER WayFlow returns its first task event — by then the LLM step is
-  // already past the boundary check. To still mint a scoped MCP OBO token
-  // for that step we must select the run from request data.
+  // #1193 legacy retirement — the run token is the ONLY accepted run identity.
+  // The context-id selection and the dispatcher-signed `cinatra_run_binding`
+  // selection are both GONE (the binding is no longer minted or verified
+  // anywhere).
   //
-  // SECURITY. `body.agent_run_id` is NEVER trusted as a
-  // run-selection source: it is threaded from `cinatra_run_id` through the
-  // OAS DataFlowEdge, which a malicious/compromised OAS author can rewrite
-  // to another tenant's run id (confused-deputy → cross-tenant OBO mint).
-  // The downstream live membership check validates the SELECTED run's
-  // identity, not the caller's entitlement to select it, so it does not
-  // stop this alone.
+  // By the time control reaches here the RUN-IDENTITY GATE far above has already
+  // resolved the token and REFUSED every failing shape — absent/unresolvable for
+  // a claimed run, a body id that disagrees with the token, and a co-present
+  // context-id naming a different run. It does so before dispatch resolution and
+  // before the media branch (which returns its own response), so no provider can
+  // run on an unproven or contradicted identity. Nothing is left to decide: the
+  // token-resolved run, or none.
   //
-  // Instead we require a DISPATCHER-SIGNED run binding (`cinatra_run_binding`)
-  // minted by the worker at dispatch over the run's authoritative
-  // {runId, orgId, runBy} keyed by BETTER_AUTH_SECRET (a key never exposed
-  // to OAS). The binding is verified BEFORE any run is selected; the run is
-  // then read by the VERIFIED runId and the freshly-read row must match the
-  // binding's orgId/runBy. A malicious OAS can drop/corrupt the binding —
-  // degrading to the anonymous machine-token MCP path (the same
-  // `not_org_member` outcome as no run, never an elevation) — but cannot
-  // forge a binding for a run it does not own.
-  //
-  // The fallback stays gated on `isBridgeAuthorized` (the WayFlow
-  // shared-secret `X-Cinatra-Bridge-Token`) as the first gate: a JWT-authed
-  // third-party A2A peer cannot reach it. The signed binding is the second,
-  // forgery-proof gate that closes the confused-deputy path the bridge-token
-  // gate alone left open.
-  let bindingVerifiedRunId: string | undefined;
-  if (
-    !runFromContext &&
-    !runTokenInvalid &&
-    isBridgeAuthorized &&
-    typeof body.cinatra_run_binding === "string" &&
-    body.cinatra_run_binding.length > 0
-  ) {
-    const verified = verifyAgentRunBinding(body.cinatra_run_binding);
-    if (verified.ok) {
-      try {
-        // Read the run by the SIGNED runId (never a raw body id) and confirm
-        // the freshly-read row matches the binding's identity tuple. A
-        // mismatch (e.g. the run's owner/org changed, or the binding was
-        // crafted for a non-existent run) refuses selection.
-        const runById = await readAgentRunById(verified.payload.runId);
-        if (
-          runById &&
-          runById.id === verified.payload.runId &&
-          runById.orgId === verified.payload.orgId &&
-          runById.runBy === verified.payload.runBy
-        ) {
-          runFromContext = runById;
-          bindingVerifiedRunId = runById.id;
-        }
-      } catch {
-        // non-fatal — degrade to anonymous machine-token path
-      }
-    }
-  }
-  // (cinatra#1195) The `effectiveRunId` computed here fed ONLY the deleted
-  // in-process registry, and it could fall back to the FORGEABLE
-  // `body.agent_run_id` for best-effort MCP tagging. Removing the registry
-  // removes that body-derived tagging key entirely: run attribution for MCP
-  // writes now rides the per-run OBO token or the durable run-token-keyed
-  // binding, both of which resolve through the run row.
-  // Run usable for building the artifact resolver ports AND for minting the
-  // MCP OBO actor token — ONLY a run resolved via the auth-injected
-  // context-id OR a verified dispatcher-signed binding. `body.agent_run_id`
-  // can NEVER promote a run into `runForPorts`. If a context-id resolved a
-  // run AND body.agent_run_id disagrees, refuse (defense in depth).
-  let runForPorts: typeof runFromContext = runFromContext;
-  if (
-    body.agent_run_id &&
-    runFromContext?.id &&
-    body.agent_run_id !== runFromContext.id &&
-    bindingVerifiedRunId !== runFromContext.id &&
-    tokenResolvedRunId !== runFromContext.id
-  ) {
-    // A non-empty body.agent_run_id that disagrees with the selected run refuses
-    // OBO — UNLESS the run was established by an authoritative credential (the
-    // dispatcher-signed binding or, W3, the run token), which outranks a
-    // forgeable body id.
-    runForPorts = null;
-  }
-  if (runTokenDivergent) {
-    // Token-selected run but a co-present context-id named a DIFFERENT run.
-    runForPorts = null;
-  }
-  if (!runFromContext) {
-    runForPorts = null;
-  }
+  // (cinatra#1195) The `effectiveRunId` once computed here fed ONLY the deleted
+  // in-process registry and could fall back to the FORGEABLE `body.agent_run_id`
+  // for best-effort MCP tagging. Run attribution now rides the per-run OBO token
+  // or the durable run-token-keyed binding, both of which resolve through the
+  // run row.
+  const runForPorts = runFromToken;
 
-  // #1193 run-token spine (W3) — which-path-served metric for the legacy-
-  // removal gate (a follow-up retires the context-id + binding precedence once
-  // the run-token path dominates production). Ids and outcome flags only — the
-  // raw token and its hash are NEVER logged.
+  // #1193 which-path-served metric. Only `run_token` and `none` remain emittable
+  // now that the legacy selectors are deleted; the LINE SHAPE is unchanged so an
+  // existing log pipeline keeps parsing it. Ids and outcome flags only — the raw
+  // token and its hash are NEVER logged.
   if (isBridgeAuthorized) {
-    const runSelectServedBy: "run_token" | "binding" | "context_id" | "none" =
-      tokenResolvedRunId
-        ? "run_token"
-        : bindingVerifiedRunId
-          ? "binding"
-          : runFromContext
-            ? "context_id"
-            : "none";
+    const runSelectServedBy: "run_token" | "none" = tokenResolvedRunId
+      ? "run_token"
+      : "none";
     console.info(
       `[llm-bridge-run-select] served-by=${runSelectServedBy} ` +
         `run=${runForPorts?.id ?? "-"} org=${runForPorts?.orgId ?? "-"} ` +

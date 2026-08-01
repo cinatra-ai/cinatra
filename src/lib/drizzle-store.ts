@@ -1642,17 +1642,16 @@ END $$`,
     // parent_run_id: self-referential FK for orchestrator sub-agent workspaces
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS parent_run_id text` },
     { text: `CREATE INDEX IF NOT EXISTS agent_runs_parent_run_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (parent_run_id) WHERE parent_run_id IS NOT NULL` },
-    // Idempotent child-run dispatch (additive; nullable). Same idempotency_key
-    // → same child run; the partial-unique index enforces it.
+    // Idempotent child-run dispatch (additive; nullable). Same idempotency_key → same child run; the partial-unique index enforces it.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS idempotency_key text` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_idempotency_key_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (idempotency_key) WHERE idempotency_key IS NOT NULL` },
-    // #1193 run-token spine: sha256-hex of the per-run credential (hash only; new all-NULL column, partial index safe). Mirrors schema.ts + migration core__0020.
+    // #1193 run-token spine. run_token_hash = the CURRENT leg's credential (hash only; all-NULL column, partial index safe; mirrors schema.ts + core__0020). agent_run_tokens = the SET still honored for a run: a run is a SEQUENCE of A2A tasks (dispatch + one resumed task per HITL gate) and only the HASH is stored, so each resume mints a FRESH token — overwriting one column would 403 a still-executing earlier leg (at-least-once resume outbox, accepted-but-response-lost retry, "stopped" run mid-step).
+    // token_hash is the PRIMARY KEY so the verifier stays ONE index probe (no newest-wins, no body fallback); new table ⇒ additive; rows are never pruned (nothing here can tell a live leg from a dead one) — see packages/agents/src/run-token-store.ts.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS run_token_hash text` },
     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_runs_run_token_hash_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (run_token_hash) WHERE run_token_hash IS NOT NULL` },
-    // cinatra#1392 Gap 2 — dependent_install_id: the installed_extension row id a
-    // run executes AS, carried onto the run's signed lineage (ActorContext) so the
-    // A2A dispatch seam resolves edge-bound serving against a TRUSTED dependent id
-    // (never client-supplied). Additive nullable; mirrors schema.ts + core__0030.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_tokens" (token_hash text PRIMARY KEY, run_id text NOT NULL, created_at timestamptz NOT NULL DEFAULT now())` },
+    { text: `CREATE INDEX IF NOT EXISTS agent_run_tokens_run_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_tokens" (run_id, created_at DESC)` },
+    // cinatra#1392 Gap 2 — dependent_install_id: the installed_extension row id a run executes AS, carried onto the run's signed lineage (ActorContext) so the A2A dispatch seam resolves edge-bound serving against a TRUSTED dependent id (never client-supplied). Additive nullable; mirrors schema.ts + core__0030.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS dependent_install_id text` },
     // human_present: cinatra#2067 run-start presence discriminator (additive nullable; NULL=headless). No migration — schema-migration-gate scopes a new nullable column additive (timeout_seconds/streamed_text precedent).
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_runs" ADD COLUMN IF NOT EXISTS human_present boolean` },

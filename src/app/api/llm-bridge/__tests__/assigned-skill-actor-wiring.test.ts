@@ -265,14 +265,16 @@ describe("/api/llm-bridge assigned-skills actor wiring (#1401) — VERIFIED run"
     expect(firstAssignedCall()).toEqual(["agent-x", SCOPED_ACTOR]);
   });
 
-  it("also wires the actor when the run is selected via the context-id channel", async () => {
+  it("RETIRED (#1193): the context-id channel selects NO run, so the assignment resolves ACTOR-LESS", async () => {
+    // Pre-#1193 the a2a context-id selected the run and the assignment got a
+    // scope-aware actor. The channel is retired: without the dispatch-minted run
+    // token there is no server-verified run, so the contract never asks for a
+    // scope-aware actor and delivery falls back to arity 1.
     readAgentRunByContextIdMock.mockResolvedValue(VERIFIED_RUN);
     resolveAssignedSkillsActorForRunMock.mockResolvedValue(SCOPED_ACTOR);
     await POST(makeRequestH({ user: "hi", agent_id: "agent-x" }, { "x-cinatra-a2a-context-id": "ctx-1" }));
-    expect(resolveAssignedSkillsActorForRunMock).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "run-1", runBy: "user-1" }),
-    );
-    expect(firstAssignedCall()).toEqual(["agent-x", SCOPED_ACTOR]);
+    expect(resolveAssignedSkillsActorForRunMock).not.toHaveBeenCalled();
+    expect(firstAssignedCall()).toEqual(["agent-x"]);
   });
 });
 
@@ -296,16 +298,14 @@ describe("/api/llm-bridge assigned-skills actor wiring (#1401) — fail-closed /
     expect(firstAssignedCall()).toEqual(["agent-x"]);
   });
 
-  it("a caller-supplied body.agent_run_id alone never promotes a run (resolver handed null)", async () => {
+  it("a caller-supplied body.agent_run_id alone never promotes a run — and is now REFUSED (#1193)", async () => {
     readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN); // would resolve IF the route read a body id
-    await POST(makeRequest({ user: "hi", agent_id: "agent-x", agent_run_id: VERIFIED_RUN.id }));
+    const res = await POST(
+      makeRequest({ user: "hi", agent_id: "agent-x", agent_run_id: VERIFIED_RUN.id }),
+    );
+    expect(res.status).toBe(403);
     expect(readAgentRunByIdMock).not.toHaveBeenCalled();
-    // cinatra#2091 S4: with NO server-verified run owner the contract does not
-    // even ask for a scope-aware actor — the assignment resolves actor-less
-    // (arity 1), which is the SAME delivery this pinned, reached one step
-    // earlier and strictly more fail-closed.
     expect(resolveAssignedSkillsActorForRunMock).not.toHaveBeenCalled();
-    expect(firstAssignedCall()).toEqual(["agent-x"]);
   });
 
   it("forged/unresolvable run token (suppresses a co-present context-id) ⇒ resolver handed null", async () => {

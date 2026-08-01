@@ -9,6 +9,8 @@
 //   - identifier hygiene: caller-supplied ids are charset-sanitized and
 //     length-capped (no log-line injection), absent ids render as "-".
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 vi.mock("server-only", () => ({}));
 
@@ -128,7 +130,7 @@ describe("success lifecycle trace (debug) — quiet on the warn channel", () => 
   });
 });
 
-describe("#1193 W2 which-path metric — token-first vs legacy split", () => {
+describe("#1193 which-path metric — run_token is the only serving channel", () => {
   it("bumps the per-(kind, via) counter and keeps the info line shape", () => {
     recordContextRouteResolutionPath({
       kind: "resolve",
@@ -144,29 +146,36 @@ describe("#1193 W2 which-path metric — token-first vs legacy split", () => {
     });
     recordContextRouteResolutionPath({
       kind: "finalize",
-      via: "context_id",
+      via: "run_token",
       runId: "run-3",
       contextId: "ctx-3",
-    });
-    recordContextRouteResolutionPath({
-      kind: "resolve",
-      via: "body",
-      runId: "run-4",
-      contextId: null,
     });
 
     expect(getContextRouteCounterSnapshot().resolutionPath).toEqual({
       "resolve.run_token": 2,
-      "finalize.context_id": 1,
-      "resolve.body": 1,
+      "finalize.run_token": 1,
     });
 
     const line = String(infoSpy.mock.calls[0][0]);
-    // The W3 legacy-removal gate greps this line — keep its shape stable.
+    // Existing log pipelines grep this line — keep its shape stable.
     expect(line).toContain("[context-route] run resolved kind=resolve via=run_token");
     expect(line).toContain("run=run-1");
     expect(line).toContain("ctx=-");
     expect(line).toContain("count=1");
+  });
+
+  // --- #1193 DELETION LOCK ---------------------------------------------------
+  it("ContextRouteServedBy admits ONLY run_token", () => {
+    const src = readFileSync(
+      join(__dirname, "..", "context-route-observability.ts"),
+      "utf8",
+    );
+    const decl = src.match(/export type ContextRouteServedBy =[^;]*;/);
+    expect(decl).not.toBeNull();
+    expect(decl![0]).toContain('"run_token"');
+    // The retired legacy serving channels must not reappear in the union.
+    expect(decl![0]).not.toContain('"context_id"');
+    expect(decl![0]).not.toContain('"body"');
   });
 });
 

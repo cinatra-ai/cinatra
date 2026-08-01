@@ -1028,6 +1028,7 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
       // fence, same short-circuit.
       cmsRepairsCompleted: 0,
       cmsRepairsUnresolved: 0,
+      cmsRepairsUncaptured: 0,
     });
     // The event stays pending (unprocessed) while the fence is off.
     const row = await readEventRow(ev.eventId);

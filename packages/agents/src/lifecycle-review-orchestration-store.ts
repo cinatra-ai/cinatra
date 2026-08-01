@@ -1335,6 +1335,11 @@ export interface GateMaintenanceSummary {
    * whose completion failed live re-authorization — left `dispatched`/open
    * rather than silently finalized wrong (cinatra#2286 S10 PR2). */
   cmsRepairsUnresolved: number;
+  /** Completed CMS repairs whose `repaired` picture could NOT be pinned and
+   * whose failure could not even be recorded on the gate (cinatra#2044 / #2046)
+   * — the successor gate shows an uncaptured side. Ops-visible here as well as
+   * logged, so a silently one-sided repair pair can never go unnoticed again. */
+  cmsRepairsUncaptured: number;
 }
 
 /**
@@ -1366,6 +1371,7 @@ export async function sweepLifecycleGateMaintenance(opts?: {
     repairsEscalated: 0,
     cmsRepairsCompleted: 0,
     cmsRepairsUnresolved: 0,
+    cmsRepairsUncaptured: 0,
   };
   if (!isLifecycleReviewOrchestrationActive()) return summary;
   const limit = Math.max(1, Math.min(opts?.limit ?? 100, 500));
@@ -1422,6 +1428,7 @@ async function completeCmsRepairs(summary: GateMaintenanceSummary): Promise<void
     const completion = await completeDispatchedProducerCmsRepairs();
     summary.cmsRepairsCompleted += completion.completed;
     summary.cmsRepairsUnresolved += completion.unresolved;
+    summary.cmsRepairsUncaptured += completion.repairedCaptureMissing;
   } catch (err) {
     console.error(
       `[lifecycle-review-orchestration] CMS repair completion drain failed: ${

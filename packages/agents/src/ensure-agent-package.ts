@@ -7,9 +7,13 @@
 // package.json#version.
 
 import { readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import * as semver from "semver";
 import { readAgentTemplateByPackageName, setAgentTemplatePackageName } from "./store";
+import {
+  normalizeLifecycle,
+  serializeLifecycleConfig,
+} from "@/lib/lifecycle/lifecycle-policy";
 import { isReservedWorkspaceSlug } from "./reserved-workspace-slugs";
 import { readZipFiles, createZipBuffer } from "./zip-helpers";
 import { importAgentTemplateCore } from "./import-agent-core";
@@ -57,6 +61,14 @@ export async function ensureAgentPackage(opts: {
   // inject the synthetic package.json and the (possibly renamed) agent.json.
   const allFiles: { name: string; content: string }[] = [];
   let packageJsonInjected = false;
+  // Did the ZIP carry a REAL, parseable author manifest — or is the
+  // `package.json` the importer will read one WE synthesized? (cinatra#2044 GAP 2,
+  // codex round 2.) Only the first speaks for the author's `cinatra.lifecycle`;
+  // a synthesized `{name, version}` carries none for reasons that have nothing to
+  // do with intent, and must never be projected as an explicit CLEAR over an
+  // installed row. Same rule `ensureAgentPackageFromGitFile` applies to its own
+  // synthesis below.
+  let authorManifestPresent = false;
   for (const [fileName, content] of files.entries()) {
     if (fileName === "agent.json") {
       allFiles.push({ name: fileName, content: JSON.stringify(agentJson, null, 2) });
@@ -67,7 +79,11 @@ export async function ensureAgentPackage(opts: {
         parsed.name = opts.packageName;
         if (opts.packageVersion !== undefined) parsed.version = opts.packageVersion;
         allFiles.push({ name: fileName, content: JSON.stringify(parsed, null, 2) });
+        // The author's own manifest, carried through with its cinatra block (and
+        // so its lifecycle declaration) intact — authoritative.
+        authorManifestPresent = true;
       } catch {
+        // Unparseable: REPLACED by our synthesis, which declares nothing.
         allFiles.push({ name: fileName, content: syntheticPackageJson });
       }
       packageJsonInjected = true;
@@ -76,13 +92,17 @@ export async function ensureAgentPackage(opts: {
     }
   }
   if (!packageJsonInjected) {
+    // No manifest in the ZIP at all — likewise our synthesis, not the author's.
     allFiles.push({ name: "package.json", content: syntheticPackageJson });
   }
   const modifiedZip = createZipBuffer(allFiles);
   const modifiedBase64 = modifiedZip.toString("base64");
 
   // --- Delegate to importAgentTemplate (handles upsert-by-packageName internally) ---
-  const result = await importAgentTemplateCore(modifiedBase64, opts.name, { redirect: false });
+  const result = await importAgentTemplateCore(modifiedBase64, opts.name, {
+    redirect: false,
+    lifecycleDeclarationAuthoritative: authorManifestPresent,
+  });
 
   // --- Set packageName identity (idempotent one-time write) ---
   // setAgentTemplatePackageName guards with WHERE package_name IS NULL, so calling it
@@ -104,12 +124,76 @@ export async function ensureAgentPackage(opts: {
 // derive packageName/packageVersion from the workspace package.json one level up
 // (agents/<slug>/package.json). That file is the source of truth for workspace
 // packages and already carries the canonical @cinatra/<slug> name.
-async function readSiblingPackageJsonIdentity(
-  oasSourcePath: string,
-): Promise<{ name?: string; version?: string; description?: string; license?: string; agentDependencies?: Record<string, string>; type?: string; produces?: unknown[] } | null> {
+//
+// The result is DISCRIMINATED, because "there is no sibling manifest" and "there
+// is one but it could not be read" must not be conflated (cinatra#2044 GAP 2).
+// The synthesized ZIP's `package.json` is AUTHORITATIVE at the persistence hop:
+// a manifest present in the ZIP that declares no `cinatra.lifecycle` CLEARS
+// `agent_templates.lifecycle_config`. So an unreadable sibling must never be
+// flattened into a hollow-but-well-formed synthesized manifest — that would let
+// one truncated write or a transient EACCES during a boot scan silently erase a
+// real `repairCapable` declaration and send every subsequent repair back to
+// `human_escalation`. `absent` is different and honest: with genuinely no
+// sibling manifest the git-file source declares nothing, and null is correct.
+type SiblingIdentity = {
+  name?: string;
+  version?: string;
+  description?: string;
+  license?: string;
+  agentDependencies?: Record<string, string>;
+  type?: string;
+  produces?: unknown[];
+  lifecycle?: unknown;
+};
+type SiblingRead =
+  | { status: "ok"; identity: SiblingIdentity }
+  /** No `package.json` beside the agent, on either supported layout (ENOENT). */
+  | { status: "absent" }
+  /** Present but unusable — EACCES, a truncated/invalid JSON body, etc. */
+  | { status: "unreadable"; reason: string };
+
+// The manifest location is DERIVED FROM THE LAYOUT, never guessed. Both shapes
+// the dev-boot scan (src/lib/boot/phases/dev-boot.ts) hands this loader are
+// distinguishable from the OAS path alone:
+//   agents/<slug>/cinatra/{oas,agent}.json -> ../package.json  (canonical)
+//   agents/<slug>/agent.json               -> ./package.json   (legacy flat,
+//                                                               dev-boot.ts:150)
+//
+// Resolving to ONE path rather than probing a candidate LIST is deliberate
+// (codex round 1). A list ordered [parent, adjacent] is ambiguous in both
+// directions: for the flat layout the parent candidate is an unrelated
+// VENDOR-level `package.json` (e.g. `extensions/<vendor>/package.json`) that
+// would silently shadow the agent's real adjacent manifest, and an unreadable
+// unrelated candidate would even refuse the import. No such file exists in the
+// tree today, so this was latent rather than live — but the layout is knowable,
+// so it is read directly instead of relying on that absence.
+//
+// Probing only the canonical location (the behaviour before cinatra#2044 GAP 2)
+// left the flat layout with NO manifest at all. That merely lost
+// `description`/`produces` before; WITH the version-skip drift check below it
+// would turn destructive — "declares nothing" would re-import on every boot and
+// CLEAR a legitimately-installed `lifecycle_config` (codex round 0).
+function siblingManifestPath(oasSourcePath: string): string {
+  const oasDir = dirname(oasSourcePath);
+  return basename(oasDir) === "cinatra"
+    ? join(oasDir, "..", "package.json")
+    : join(oasDir, "package.json");
+}
+
+async function readSiblingPackageJsonIdentity(oasSourcePath: string): Promise<SiblingRead> {
+  let raw: string;
   try {
-    const pkgPath = join(dirname(oasSourcePath), "..", "package.json");
-    const raw = await readFile(pkgPath, "utf8");
+    raw = await readFile(siblingManifestPath(oasSourcePath), "utf8");
+  } catch (err) {
+    // ENOENT — this layout's manifest genuinely does not exist. Identity falls
+    // back to the OAS and the synthesized ZIP honestly declares nothing.
+    if ((err as { code?: string } | null)?.code === "ENOENT") return { status: "absent" };
+    // EACCES, EISDIR, … — the agent's OWN manifest is there and unreadable.
+    // Refuse, so the caller never writes a synthesized "declares nothing" over
+    // a real declaration on the installed row.
+    return { status: "unreadable", reason: err instanceof Error ? err.message : String(err) };
+  }
+  try {
     const parsed = JSON.parse(raw) as { name?: unknown; version?: unknown; description?: unknown; license?: unknown; cinatra?: unknown };
     const name = typeof parsed.name === "string" && parsed.name ? parsed.name : undefined;
     const version =
@@ -132,11 +216,44 @@ async function readSiblingPackageJsonIdentity(
     const produces = Array.isArray(cinatraBlock?.produces)
       ? (cinatraBlock.produces as unknown[])
       : undefined;
-    if (!name) return null;
-    return { name, version, description, license, agentDependencies, type, produces };
-  } catch {
-    // ENOENT, EACCES, JSON.parse SyntaxError, etc. — fallback unavailable.
-    return null;
+    // `cinatra.lifecycle` is CONTRACT-LOAD-BEARING for the repair route
+    // (cinatra#2044 GAP 2): `importAgentTemplateCore` compiles it onto
+    // `agent_templates.lifecycle_config`, the column `resolveRepairCapable`
+    // reads to route a reviewer's `changes_requested` to the producer instead of
+    // a human. Dropping it during the ZIP synthesis is exactly the cinatra#2047
+    // D-1 failure re-introduced on the loader path: a real install of a
+    // repair-capable producer left the column NULL and every repair escalated.
+    // Carried as a raw passthrough (readManifestLifecycle/normalizeLifecycle in
+    // `@/lib/lifecycle/lifecycle-policy` is the fail-soft normalizer, applied
+    // once at the persistence hop).
+    // Arrays are excluded here as well as by `normalizeLifecycle` downstream —
+    // the declaration is an OBJECT, and the neighbouring `produces` reader keeps
+    // the same explicit-shape discipline.
+    const lifecycle =
+      cinatraBlock?.lifecycle &&
+      typeof cinatraBlock.lifecycle === "object" &&
+      !Array.isArray(cinatraBlock.lifecycle)
+        ? cinatraBlock.lifecycle
+        : undefined;
+    // A manifest that parsed but carries no usable `name` is still a REAL
+    // manifest, and its other declarations are still the author's intent. It is
+    // reported `ok` with `name: undefined` rather than `absent` so that:
+    //   - identity keeps falling back to the OAS's
+    //     `metadata.cinatra.packageName` exactly as before (the caller already
+    //     does `cinatraPackageName ?? sibling?.name`, and skips when BOTH are
+    //     missing), and
+    //   - its `lifecycle`/`produces`/`license` are NOT discarded — returning
+    //     `absent` here would synthesize an authoritative "declares nothing",
+    //     which the drift check below would then write over a real declaration
+    //     (codex round 0, adopted; same clobber class as the layout probe above).
+    return {
+      status: "ok",
+      identity: { name, version, description, license, agentDependencies, type, produces, lifecycle },
+    };
+  } catch (err) {
+    // A JSON.parse SyntaxError on a manifest we DID read. The file exists and is
+    // unusable, so this is a refusal, never a silent "declares nothing".
+    return { status: "unreadable", reason: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -172,7 +289,23 @@ export async function ensureAgentPackageFromGitFile(opts: {
   // Fall back to sibling package.json for the packageName and presentation
   // fields (description, agentDependencies) that live in package.json, not
   // the OAS source.
-  const sibling = await readSiblingPackageJsonIdentity(opts.oasSourcePath);
+  const siblingRead = await readSiblingPackageJsonIdentity(opts.oasSourcePath);
+  // A sibling manifest that EXISTS but cannot be read is a refusal, not a
+  // fallback (cinatra#2044 GAP 2). Every manifest-derived column — version,
+  // license, produces, agentDependencies and now lifecycle — would otherwise be
+  // synthesized as "declares nothing" and written to the row as if that were the
+  // author's intent. Skipping leaves the installed row exactly as it is; the
+  // next boot or watcher event picks the agent up once the file is readable
+  // again. (Matches this function's existing graceful skip contract — boot and
+  // watcher callers already handle `skipped`.)
+  if (siblingRead.status === "unreadable") {
+    console.warn(
+      `[cinatra:extensions:agent] skipped: sibling package.json beside ${opts.oasSourcePath} is unreadable (${siblingRead.reason}) — refusing to import a synthesized manifest over the installed row`,
+    );
+    return { templateId: "", upserted: false, skipped: true };
+  }
+  const sibling: SiblingIdentity | undefined =
+    siblingRead.status === "ok" ? siblingRead.identity : undefined;
   const packageName: string | undefined = cinatraPackageName ?? sibling?.name;
   // Version resolves SOLELY from the sibling package.json#version — the
   // canonical source. We intentionally do NOT read metadata.cinatra.packageVersion
@@ -204,10 +337,46 @@ export async function ensureAgentPackageFromGitFile(opts: {
   // Avoids redundant DB writes on every restart when the version is current.
   const existing = await readAgentTemplateByPackageName(packageName);
   if (existing && existing.packageVersion === packageVersion) {
+    // …but a version match alone is NOT "up to date": the row must also already
+    // carry every column this loader DERIVES from the manifest.
+    //
+    // cinatra#2044 GAP 2 — why this second condition exists. Until the change
+    // that introduced it, this path never projected `cinatra.lifecycle` onto
+    // `agent_templates.lifecycle_config` at all. So every instance that had
+    // ALREADY installed a repair-capable producer at the current version (the
+    // live wave124 state: `@cinatra-ai/wordpress-agent@0.1.6` installed, column
+    // NULL, every `changes_requested` escalating to a human) would take this
+    // early return on every boot forever — the fix would ship and change
+    // nothing until the next version bump. Comparing the compiled projection
+    // and falling through on drift REPAIRS such a row on the next boot.
+    //
+    // Convergent and self-limiting: the re-import writes exactly this projection
+    // (the synthesis below carries the same block the persistence hop compiles),
+    // so the very next boot matches and skips again. One extra import per
+    // drifted template, once — no re-import loop, and no cost at all for the
+    // overwhelmingly common already-current case (the sibling manifest is
+    // already read above, so this adds no I/O).
+    //
+    // The comparison is only meaningful when a sibling manifest was actually
+    // READ. With none on disk this loader derives no declaration at all, and the
+    // import below is told so (`lifecycleDeclarationAuthoritative: false`), so it
+    // leaves the column untouched — comparing anyway would report permanent
+    // "drift" against a populated row and re-import on EVERY boot without ever
+    // changing it. Treating absent as "nothing to compare" keeps the guard
+    // convergent in both directions (codex round 1).
+    const declaredLifecycleConfig =
+      siblingRead.status === "ok"
+        ? serializeLifecycleConfig(normalizeLifecycle(sibling?.lifecycle))
+        : (existing.lifecycleConfig ?? null);
+    if ((existing.lifecycleConfig ?? null) === declaredLifecycleConfig) {
+      console.info(
+        `[cinatra:extensions:agent] ${packageName} v${packageVersion ?? "unknown"} skipped — already up to date (bump packageVersion to force re-import)`,
+      );
+      return { templateId: existing.id, upserted: false, skipped: true };
+    }
     console.info(
-      `[cinatra:extensions:agent] ${packageName} v${packageVersion ?? "unknown"} skipped — already up to date (bump packageVersion to force re-import)`,
+      `[cinatra:extensions:agent] ${packageName} v${packageVersion ?? "unknown"} re-importing at the same version — the installed row's lifecycle_config drifted from the manifest declaration (cinatra#2044)`,
     );
-    return { templateId: existing.id, upserted: false, skipped: true };
   }
 
   // --- Downgrade guard — semver.gt check ---
@@ -251,6 +420,12 @@ export async function ensureAgentPackageFromGitFile(opts: {
   // dropping it here breaks dev git-file import of every binding-bearing agent
   // (cinatra#1454). Preserve the raw declared entries verbatim.
   if (sibling?.produces) cinatraForZip.produces = sibling.produces;
+  // Carry `cinatra.lifecycle` through the synthesis (cinatra#2044 GAP 2). Without
+  // it the ZIP the loader hands `importAgentTemplateCore` has no lifecycle
+  // declaration to compile, so `agent_templates.lifecycle_config` stays NULL for
+  // every git-file/ZIP install and a repair-capable producer's
+  // `changes_requested` routes `human_escalation` instead of `producer_repair`.
+  if (sibling?.lifecycle) cinatraForZip.lifecycle = sibling.lifecycle;
   const packageJsonForZip = JSON.stringify(
     {
       name: packageName,
@@ -313,6 +488,13 @@ export async function ensureAgentPackageFromGitFile(opts: {
     redirect: false,
     status: "published",
     licenseAcknowledged: (opts.licenseAcknowledged ?? false) && isFirstPartyInTree,
+    // The `package.json` in the ZIP above is SYNTHESIZED by this loader, so it
+    // only speaks for the author's lifecycle declaration when a sibling manifest
+    // was actually read (cinatra#2044 GAP 2, codex round 1). With none on disk
+    // the synthesis is hollow, and letting the importer read that as "the author
+    // declares nothing" would CLEAR a correct lifecycle_config off the installed
+    // row — including one the registry install path legitimately wrote.
+    lifecycleDeclarationAuthoritative: siblingRead.status === "ok",
   });
 
   // --- Set packageName identity (idempotent one-time write) ---

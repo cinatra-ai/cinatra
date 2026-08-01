@@ -94,14 +94,19 @@ describe("in-admin CMS egress guard — hosted WordPress connector", () => {
     expect(code).not.toMatch(/\.updatePost\s*\(/);
   });
 
-  it("routes the in-admin read/update through the MCP content tools (routing-edge positive control)", () => {
-    // The specific handler->MCP-helper->MCP-client edges — not just file-wide
-    // symbol presence.
+  it("routes the in-admin read/update through the governed invoker (routing-edge positive control)", () => {
+    // The specific handler->invoker edges — not just file-wide symbol
+    // presence. Since the facade cutover (connector c065128, pinned via
+    // cinatra#2319) the dedicated per-operation update tool is deleted: the
+    // in-admin update runs through `wordpress_site_tool_call` on the governed
+    // connector-instance invoker channel (`invokeSiteTool`), keyed by the
+    // `ewpa/*` ability constants; the current-content fetch and post-apply
+    // read-back still go through `readPostViaMcp`.
     expect(code).toContain("readPostViaMcp");
-    expect(code).toContain("updatePostViaMcp");
-    expect(code).toContain("callWordPressMcp");
-    expect(code).toContain("CINATRA_POST_GET_TOOL");
-    expect(code).toContain("CINATRA_POST_UPDATE_TOOL");
+    expect(code).toContain("wordpress_site_tool_call");
+    expect(code).toContain("invokeSiteTool");
+    expect(code).toContain("EWPA_GET_POST_ABILITY");
+    expect(code).toContain("EWPA_UPDATE_POST_ABILITY");
   });
 });
 

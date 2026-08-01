@@ -4,7 +4,7 @@ W1 (merged) mints a per-run token and embeds the RAW value in the initial A2A
 message under the reserved key ``__cinatra_run_token__``. This wave makes the
 loader:
 
-  1. POP that key out of the initial message (``_pop_run_token_from_message``)
+  1. POP that key out of the initial message (``_pop_run_token_from_text_part``)
      BEFORE the message is parsed for Flow inputs or converted + appended to the
      WayFlow conversation — the bearer must never enter prompt/history/
      persistence. The scrub preserves every other key (run id, binding, inputs).
@@ -25,7 +25,7 @@ from unittest.mock import MagicMock
 
 
 # ---------------------------------------------------------------------------
-# _pop_run_token_from_message — pure scrub helper (no wayflowcore needed).
+# _pop_run_token_from_text_part — pure scrub helper (no wayflowcore needed).
 # ---------------------------------------------------------------------------
 
 
@@ -39,7 +39,7 @@ def _msg(payload: dict) -> dict:
 
 def test_pop_extracts_token_and_scrubs_message() -> None:
     from agent_loader import (
-        _pop_run_token_from_message,
+        _pop_run_token_from_text_part,
         CINATRA_RUN_TOKEN_MESSAGE_KEY,
     )
 
@@ -47,11 +47,10 @@ def test_pop_extracts_token_and_scrubs_message() -> None:
         {
             CINATRA_RUN_TOKEN_MESSAGE_KEY: "raw-bearer-abc",
             "cinatra_run_id": "run-1",
-            "cinatra_run_binding": "sig",
-            "topic": "hello",
+                        "topic": "hello",
         }
     )
-    token, scrubbed = _pop_run_token_from_message(original)
+    token, scrubbed = _pop_run_token_from_text_part(original)
 
     assert token == "raw-bearer-abc"
     # The reserved key is gone from the scrubbed message; everything else stays.
@@ -59,35 +58,34 @@ def test_pop_extracts_token_and_scrubs_message() -> None:
     assert CINATRA_RUN_TOKEN_MESSAGE_KEY not in reparsed
     assert reparsed == {
         "cinatra_run_id": "run-1",
-        "cinatra_run_binding": "sig",
-        "topic": "hello",
+                "topic": "hello",
     }
     # The caller's message is never mutated in place (immutable scrub).
     assert CINATRA_RUN_TOKEN_MESSAGE_KEY in json.loads(original["parts"][0]["text"])
 
 
 def test_pop_is_noop_when_key_absent() -> None:
-    from agent_loader import _pop_run_token_from_message
+    from agent_loader import _pop_run_token_from_text_part
 
     original = _msg({"cinatra_run_id": "run-1"})
-    token, scrubbed = _pop_run_token_from_message(original)
+    token, scrubbed = _pop_run_token_from_text_part(original)
     assert token == ""
     # Unchanged message returned (same object identity, no needless copy).
     assert scrubbed is original
 
 
 def test_pop_fails_safe_on_non_json_and_missing_parts() -> None:
-    from agent_loader import _pop_run_token_from_message
+    from agent_loader import _pop_run_token_from_text_part
 
     # Non-JSON text part.
     bad = {"role": "user", "parts": [{"kind": "text", "text": "not json {"}]}
-    assert _pop_run_token_from_message(bad) == ("", bad)
+    assert _pop_run_token_from_text_part(bad) == ("", bad)
     # No message / no parts.
-    assert _pop_run_token_from_message(None) == ("", None)
-    assert _pop_run_token_from_message({"parts": []}) == ("", {"parts": []})
+    assert _pop_run_token_from_text_part(None) == ("", None)
+    assert _pop_run_token_from_text_part({"parts": []}) == ("", {"parts": []})
     # Non-string token value ⇒ treated as absent bearer ("") but still popped.
     weird = _msg({"__cinatra_run_token__": 123, "k": "v"})
-    token, scrubbed = _pop_run_token_from_message(weird)
+    token, scrubbed = _pop_run_token_from_text_part(weird)
     assert token == ""
     assert "__cinatra_run_token__" not in json.loads(scrubbed["parts"][0]["text"])
 
