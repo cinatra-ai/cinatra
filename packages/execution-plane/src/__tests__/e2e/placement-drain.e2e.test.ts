@@ -135,3 +135,12 @@ describe("host-exclusivity drain — real containers", () => {
     ).resolves.toEqual([]);
   }, 60_000);
 });
+
+// RED-PROOF PLANT (cinatra#2316) — TEMPORARY, removed before the real PR.
+// Proves the new Docker-battery matrix leg actually reds on a failing
+// assertion inside a real-Docker battery.
+describe("RED-PROOF plant — remove me", () => {
+  it("fails on purpose to prove the battery leg now gates CI", () => {
+    expect(1).toBe(2);
+  });
+});

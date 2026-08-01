@@ -193,3 +193,12 @@ describe("buildHardenedRunArgs — argv separator", () => {
     expect(imgIdx).toBe(sepIdx + 1);
   });
 });
+
+// RED-PROOF PLANT (cinatra#2316) — TEMPORARY, removed before the real PR.
+// Proves the new `execution-plane-unit` job actually reds on a failing
+// ASSERTION (the gap: typecheck already caught type errors here).
+describe("RED-PROOF plant — remove me", () => {
+  it("fails on purpose to prove the unit tier now gates CI", () => {
+    expect(1).toBe(2);
+  });
+});
