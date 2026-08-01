@@ -97,11 +97,18 @@ function main() {
     }
     return {
       name,
-      // Repo-relative: what the leg is called in logs, and (being a substring
-      // of the absolute path) a Vitest file filter that matches exactly one file.
+      // Repo-relative — for humans (log lines, the workflow's step names).
       file: `${E2E_DIR}/${file}`,
-      // Package-relative: the tier-coverage guard's `--expect` glob for this leg.
-      expect: `src/__tests__/e2e/${file}`,
+      // PACKAGE-relative, and that distinction is load-bearing. Vitest resolves
+      // a positional filter against the PROJECT root (here the package dir,
+      // because the runner is invoked through the package's own script), NOT
+      // against the repo root: a repo-relative positional matches nothing and
+      // Vitest exits "No test files found". Measured, not assumed — the first
+      // CI run of this workflow failed exactly that way on all five legs, and
+      // the tier-coverage guard is what named it. This one string is therefore
+      // both the Vitest filter AND the guard's `--expect` glob, so the thing
+      // that selects a battery and the thing that proves it ran can never drift.
+      filter: `src/__tests__/e2e/${file}`,
       timeout: budget.timeout,
       tier: budget.tier,
     };

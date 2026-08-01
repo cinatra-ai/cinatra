@@ -194,14 +194,20 @@ jobs:
           docker compose version
           df -h /
 
-      - name: Run battery — ${{ matrix.name }}
+      # `matrix.filter` is PACKAGE-relative on purpose: Vitest resolves a
+      # positional filter against the project root, which here is the package
+      # dir (the runner is the package's own `test:e2e` script), so a
+      # repo-relative positional selects nothing and Vitest exits "No test
+      # files found". The same string is handed to the coverage guard below as
+      # `--expect`, so selection and proof-of-execution cannot drift apart.
+      - name: Run battery — ${{ matrix.name }} (${{ matrix.file }})
         env:
-          BATTERY_FILE: ${{ matrix.file }}
+          BATTERY_FILTER: ${{ matrix.filter }}
           REPORT: ${{ github.workspace }}/e2e-report-${{ matrix.name }}.json
         run: |
           set -euo pipefail
           started=$(date +%s)
-          pnpm --filter @cinatra-ai/execution-plane run test:e2e "$BATTERY_FILE" \
+          pnpm --filter @cinatra-ai/execution-plane run test:e2e "$BATTERY_FILTER" \
             --reporter=default --reporter=json --outputFile.json="$REPORT"
           echo "battery wall time: $(( $(date +%s) - started ))s"
 
@@ -215,7 +221,7 @@ jobs:
           node scripts/ci/vitest-tier-coverage.mjs \
             --report "${{ github.workspace }}/e2e-report-${{ matrix.name }}.json" \
             --package-dir packages/execution-plane \
-            --expect '${{ matrix.expect }}' \
+            --expect '${{ matrix.filter }}' \
             --title 'Execution-plane battery — ${{ matrix.name }}' \
             --summary "$GITHUB_STEP_SUMMARY"
 
