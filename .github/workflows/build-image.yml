@@ -276,6 +276,86 @@ jobs:
       - name: A2A unit tests (full packages/a2a suite)
         run: cd packages/a2a && pnpm test
 
+  # Full packages/execution-plane UNIT suite (cinatra#2316). Third instance of
+  # the skills-unit / a2a-unit shape, and for the third time the identical
+  # reason: the package declares its own runners (`test` and `test:e2e`), the
+  # root `vitest.config.ts` enumerates workspace tiers glob-by-glob and has no
+  # `packages/execution-plane` entry, and NO workflow invoked either script — so
+  # 36 unit files and 5 real-Docker batteries executed on no PR at all. The
+  # repo-wide typecheck still covered the sources, so a TYPE error in a plane
+  # test reded CI while a FAILING ASSERTION did not; that distinction was the
+  # whole gap. Several of those unit files are the sole evidence behind AC
+  # verdicts in the #1705 acceptance audit (broker quotas and queue ceilings,
+  # voucher boundary, egress clamp, audit spool, lease, mTLS, environment
+  # recipe/builder/cache, idle-job reaper).
+  #
+  # This job owns the UNIT half. The real-Docker half (the batteries) runs in
+  # `.github/workflows/execution-plane-e2e.yml` — path-gated on PRs, plus every
+  # main push, plus a nightly floor, with EVERY battery on every one of those
+  # triggers (measured: the whole tier is ~7 minutes wall clock, so none of it
+  # needed a cheaper cadence). See that file's header for the per-battery
+  # figures.
+  #
+  # REQUIRED STRUCTURALLY, not via branch protection: the `build` job `needs` it
+  # and its "Guard prerequisite gates" step hard-fails the
+  # (branch-protection-required) `build` if this job did not succeed — the exact
+  # mechanism behind `test` / `skills-unit` / `a2a-unit`, so NO branch-protection
+  # contexts change is needed and this job's own context stays non-required.
+  #
+  # The tier-coverage guard after the run is not ceremony. The failure this
+  # issue fixed is a runner that proves nothing, and a `vitest run` whose
+  # include matches nothing exits GREEN. The guard reads Vitest's own JSON
+  # report and reds unless every file matching the tier contract actually
+  # executed — so this job cannot regress into the silent no-op it replaces.
+  #
+  # Self-contained: packages/execution-plane depends only on workspace siblings
+  # (@cinatra-ai/llm, @cinatra-ai/sdk-extensions), never on an extension, so a
+  # bare `pnpm install --frozen-lockfile` suffices — no companion-extension
+  # clone, no DB, no Redis, no docker. Measured suite runtime: ~3s (the job is
+  # dominated by checkout+install, ~1-2 min).
+  execution-plane-unit:
+    name: Execution-plane unit tests
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The package's own `test` script (vitest.config.ts), which excludes the
+      # real-Docker e2e directory — that tier has its own workflow.
+      - name: Execution-plane unit tests (full packages/execution-plane suite)
+        run: |
+          pnpm --filter @cinatra-ai/execution-plane run test \
+            --reporter=default --reporter=json \
+            --outputFile.json="${{ github.workspace }}/execution-plane-unit-report.json"
+
+      # Runs on a red suite too — the duration table is most useful when
+      # something failed, and the coverage verdict must not depend on the run
+      # having been green.
+      - name: Tier-coverage guard + duration table
+        if: ${{ always() }}
+        run: |
+          node scripts/ci/vitest-tier-coverage.mjs \
+            --report "${{ github.workspace }}/execution-plane-unit-report.json" \
+            --package-dir packages/execution-plane \
+            --expect 'src/**/__tests__/**/*.test.ts' \
+            --exclude 'src/__tests__/e2e/**/*.test.ts' \
+            --title 'Execution-plane unit tier' \
+            --summary "$GITHUB_STEP_SUMMARY"
+
   # RBAC authz unit tests — runs the whole `src/lib/authz` suite (20 files /
   # 160 tests), including the resolver matrix used by the e2e job as the
   # primary CI proof of resolver correctness. Lives in its own job (not
@@ -2353,8 +2433,10 @@ jobs:
     # `a2a-unit` (cinatra#2226) joins for the same reason `skills-unit` did: it is
     # the ONLY CI runner for packages/a2a, and coupling it here is what makes it a
     # merge gate WITHOUT adding a branch-protection context.
-    needs: [detect, test, skills-unit, a2a-unit]
-    # Run even when a prerequisite (`detect`/`test`/`skills-unit`/`a2a-unit`) FAILED, so the guard step
+    # `execution-plane-unit` (cinatra#2316) joins on the identical footing: it is
+    # the ONLY CI runner for the packages/execution-plane unit tier.
+    needs: [detect, test, skills-unit, a2a-unit, execution-plane-unit]
+    # Run even when a prerequisite (`detect`/`test`/`skills-unit`/`a2a-unit`/`execution-plane-unit`) FAILED, so the guard step
     # below reports a definitive job FAILURE instead of a SKIP. GitHub can count a
     # skipped required check as successful, so a failed `test` merely *skipping*
     # `build` would NOT block a merge gated on the build status. The guard closes
@@ -2383,10 +2465,10 @@ jobs:
       # Hard-fail the build (definitive RED, never a non-failing "skip") when a
       # prerequisite gate did not pass — the type-safety enforcement for the
       # CI-only in-build-tsc skip (see the `test` job). No-ops on the success path.
-      - name: Guard prerequisite gates (detect + test + skills-unit + a2a-unit)
-        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' || needs['a2a-unit'].result != 'success' }}
+      - name: Guard prerequisite gates (detect + test + skills-unit + a2a-unit + execution-plane-unit)
+        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' || needs['a2a-unit'].result != 'success' || needs['execution-plane-unit'].result != 'success' }}
         run: |
-          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }} a2a-unit=${{ needs['a2a-unit'].result }}. Refusing to build the image."
+          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }} a2a-unit=${{ needs['a2a-unit'].result }} execution-plane-unit=${{ needs['execution-plane-unit'].result }}. Refusing to build the image."
           exit 1
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
