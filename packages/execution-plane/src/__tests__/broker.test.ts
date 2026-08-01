@@ -14,6 +14,7 @@ import type {
   SandboxWorker,
 } from "../types";
 import type { DockerCli } from "../docker-cli";
+import { workspaceVolumeName } from "../workspace";
 import {
   EnvironmentMountRefusedError,
   type ResolvedEnvironmentMount,
@@ -87,6 +88,66 @@ const fakeDocker: DockerCli = async (args) => ({
   stdioOverflow: false,
   timedOut: false,
 });
+
+/** Same seam, but every argv is recorded — used to observe volume removals. */
+function recordingDocker(): DockerCli & { argv: string[][] } {
+  const argv: string[][] = [];
+  const cli = (async (args: string[]) => {
+    argv.push([...args]);
+    return fakeDocker(args);
+  }) as DockerCli & { argv: string[][] };
+  cli.argv = argv;
+  return cli;
+}
+
+/** Volume names this docker seam was asked to `volume rm`. */
+function removedVolumes(cli: { argv: string[][] }): string[] {
+  return cli.argv
+    .filter((args) => args[0] === "volume" && args[1] === "rm")
+    .map((args) => args[args.length - 1]);
+}
+
+/**
+ * A worker whose commands BLOCK until released — the only way to hold a
+ * concurrency permit open long enough for a second command to be observably
+ * PARKED in the admission queue.
+ */
+function blockingWorker(): SandboxWorker & {
+  specs: SandboxCommandSpec[];
+  release: () => void;
+  started: () => Promise<void>;
+} {
+  let releaseAll: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    releaseAll = resolve;
+  });
+  let announceStart: () => void = () => {};
+  const firstStarted = new Promise<void>((resolve) => {
+    announceStart = resolve;
+  });
+  const specs: SandboxCommandSpec[] = [];
+  return {
+    specs,
+    release: () => releaseAll(),
+    started: () => firstStarted,
+    async runCommand(spec: SandboxCommandSpec): Promise<SandboxCommandResult> {
+      specs.push(spec);
+      announceStart();
+      await gate;
+      return {
+        exitCode: 0,
+        stdout: "ok",
+        stderr: "",
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        termination: "exited",
+        wallMs: 1,
+        imageDigest: "sha256:test",
+        workspaceKb: 8,
+      };
+    },
+  };
+}
 
 function makeBroker(over: Partial<ConstructorParameters<typeof ExecutionBroker>[0]> = {}) {
   const audits: ExecutionAuditRecord[] = [];
@@ -345,6 +406,148 @@ describe("disk-quota termination + teardown hook", () => {
     expect(await execVouched(broker, a.jobId, "echo")).toMatchObject({ ok: false, reason: "job_terminated" });
     expect(await execVouched(broker, b.jobId, "echo")).toMatchObject({ ok: false, reason: "job_terminated" });
     expect((await execVouched(broker, c.jobId, "echo")).ok).toBe(true);
+  });
+});
+
+/**
+ * Hard-removal lifecycle battery (epic #1705 AC9).
+ *
+ * The AC asks for three observable duties, and the two that were MISSING are
+ * asserted here against the broker's own dispatch counts and volume ops — never
+ * against reference counts:
+ *   - a QUEUED-NOT-STARTED command is CANCELLED (it resolves without the
+ *     blocking command ever being released, and never reaches the worker);
+ *   - a RETAINED workspace — one whose jobs are all closed, which `closeJob`
+ *     deliberately leaves for the retention GC — is collected NOW.
+ */
+describe("hard-removal teardown — cancel queued work + GC retained workspaces (AC9)", () => {
+  /** Fail loudly instead of hanging when a cancellation regresses. */
+  async function withDeadline<T>(p: Promise<T>, label: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        p,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`${label} did not settle — it was never cancelled`)),
+            2_000,
+          );
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  it("cancels a command parked in the admission queue — it never dispatches", async () => {
+    const worker = blockingWorker();
+    const { broker } = makeBroker({
+      worker,
+      quotas: { maxConcurrentPerOrg: 1, maxGlobalConcurrent: 4, maxQueuedPerOrg: 8 },
+    });
+    const holder = await openVouched(broker, carrierFor({ runId: "run-cancel" }));
+    const parked = await openVouched(broker, carrierFor({ runId: "run-cancel" }));
+    if (!holder.ok || !parked.ok) throw new Error("open failed");
+
+    // Occupy the org's only concurrency permit with a command that never returns.
+    const holding = execVouched(broker, holder.jobId, "hold the permit");
+    await worker.started();
+    // This one cannot be admitted: it parks in the org admission queue.
+    const queued = execVouched(broker, parked.jobId, "must never run");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(worker.specs).toHaveLength(1);
+
+    // Hard removal. The blocking command is NEVER released — so the queued
+    // command can only settle by being cancelled, not by winning a permit.
+    expect(await broker.terminateJobsForRun("run-cancel", { removeWorkspace: true })).toBe(2);
+    expect(await withDeadline(queued, "the queued command")).toMatchObject({
+      ok: false,
+      reason: "job_terminated",
+    });
+    // Dispatch count is the proof it never ran: still just the holder's command.
+    expect(worker.specs).toHaveLength(1);
+    expect(worker.specs[0].command).toBe("hold the permit");
+
+    worker.release();
+    await holding;
+  });
+
+  it("releases the org permit when the GLOBAL wait is cancelled (no leak)", async () => {
+    const worker = blockingWorker();
+    const { broker } = makeBroker({
+      worker,
+      quotas: { maxConcurrentPerOrg: 1, maxGlobalConcurrent: 1, maxQueuedPerOrg: 8 },
+    });
+    const other = await openVouched(
+      broker,
+      carrierFor({ orgId: "org-holder", runId: "run-holder" }),
+    );
+    const victim = await openVouched(
+      broker,
+      carrierFor({ orgId: "org-victim", runId: "run-victim" }),
+    );
+    if (!other.ok || !victim.ok) throw new Error("open failed");
+
+    const holding = execVouched(broker, other.jobId, "hold the global permit");
+    await worker.started();
+    // org-victim's own permit is FREE, so this acquires it and then parks on the
+    // GLOBAL semaphore — the arm where a cancellation must hand the org permit
+    // back explicitly (the `finally` cannot: `permitsHeld` is still false).
+    const queued = execVouched(broker, victim.jobId, "must never run");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(await broker.terminateJobsForRun("run-victim")).toBe(1);
+    expect(await withDeadline(queued, "the globally-queued command")).toMatchObject({
+      ok: false,
+      reason: "job_terminated",
+    });
+    expect(worker.specs).toHaveLength(1);
+
+    worker.release();
+    await holding;
+    // org-victim's single permit must be usable again: a leaked one would park
+    // this command forever and trip the deadline.
+    const fresh = await openVouched(
+      broker,
+      carrierFor({ orgId: "org-victim", runId: "run-victim-2" }),
+    );
+    if (!fresh.ok) throw new Error("open failed");
+    expect(
+      await withDeadline(execVouched(broker, fresh.jobId, "echo"), "the follow-up command"),
+    ).toMatchObject({ ok: true });
+  });
+
+  it("collects a RETAINED run workspace even when no job is open any more", async () => {
+    const docker = recordingDocker();
+    const { broker } = makeBroker({ docker });
+    const opened = await openVouched(broker, carrierFor({ runId: "run-retained" }));
+    if (!opened.ok) throw new Error("open failed");
+    // `closeJob` without `removeWorkspace` is the RETAINED case: the run-keyed
+    // L2 volume is deliberately left behind for the retention GC.
+    await broker.closeJob(opened.jobId);
+    expect(removedVolumes(docker)).not.toContain(workspaceVolumeName("run-retained"));
+
+    // No job matches any more — the pre-existing loop would sweep nothing.
+    expect(await broker.terminateJobsForRun("run-retained", { removeWorkspace: true })).toBe(0);
+    expect(removedVolumes(docker)).toContain(workspaceVolumeName("run-retained"));
+  });
+
+  it("removes the run workspace exactly once per fire and RETRIES on a re-fire", async () => {
+    const docker = recordingDocker();
+    const { broker } = makeBroker({ docker });
+    const a = await openVouched(broker, carrierFor({ runId: "run-once" }));
+    const b = await openVouched(broker, carrierFor({ runId: "run-once" }));
+    if (!a.ok || !b.ok) throw new Error("open failed");
+
+    // Two jobs, ONE shared run-keyed volume ⇒ one removal, not two.
+    expect(await broker.terminateJobsForRun("run-once", { removeWorkspace: true })).toBe(2);
+    const volume = workspaceVolumeName("run-once");
+    expect(removedVolumes(docker).filter((name) => name === volume)).toHaveLength(1);
+
+    // A re-fire terminates nothing new (idempotent) but RE-ATTEMPTS the removal:
+    // the first attempt may have failed while a container still held the volume.
+    expect(await broker.terminateJobsForRun("run-once", { removeWorkspace: true })).toBe(0);
+    expect(removedVolumes(docker).filter((name) => name === volume)).toHaveLength(2);
   });
 });
 
