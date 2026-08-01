@@ -44,9 +44,9 @@ permissions:
 
 jobs:
   meta-commentary-gate:
-    uses: cinatra-ai/ci/.github/workflows/meta-commentary-gate.yml@1a34bf98a2e3c7cdeb08ed662670da628e06fd1f # v0.1.3-next.1a34bf9
+    uses: cinatra-ai/ci/.github/workflows/meta-commentary-gate.yml@533a12a64a596e6ce5df3887e0ebbad5a7d6b953 # v0.1.3-next.533a12a
     with:
       paths: |
         README.md
         CHANGELOG.md
-      ref: 1a34bf98a2e3c7cdeb08ed662670da628e06fd1f
+      ref: 533a12a64a596e6ce5df3887e0ebbad5a7d6b953
