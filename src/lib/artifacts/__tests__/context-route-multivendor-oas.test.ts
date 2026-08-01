@@ -36,6 +36,10 @@ vi.mock("@cinatra-ai/agents", () => ({
 }));
 vi.mock("@cinatra-ai/agents/agent-runtime-mount", () => ({
   resolveAgentRuntimeMountDir: () => MOUNT_ROOT,
+  // cinatra#2297 — the resolver now also names the DEV source root. Pointed at
+  // a non-existent dir and left dev-gated-OFF here so this suite keeps probing
+  // the mount alone (production posture).
+  resolveDevExtensionSourceRoot: () => join(MOUNT_ROOT, "__no_dev_source__"),
 }));
 vi.mock("@/lib/wayflow-bridge-auth", () => ({
   isAuthorizedBridgeRequest: () => true,

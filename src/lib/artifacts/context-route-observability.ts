@@ -77,6 +77,60 @@ function id(value: unknown): string {
   return cleaned.length > 64 ? `${cleaned.slice(0, 64)}…` : cleaned;
 }
 
+/** Sanitize a SERVER-DERIVED filesystem path for a single-line logfmt log.
+ *  Same injection defense as `id` (charset-restrict + cap) with the separator
+ *  charset a path needs and a longer cap. These values are deploy-owned, never
+ *  caller-supplied — and they stay SERVER-SIDE: the context routes' response
+ *  bodies carry only the stable code + message, never a path (cinatra#2297). */
+function fsPath(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) return "-";
+  const capped = value.length > 256 ? `${value.slice(0, 256)}…` : value;
+  // JSON-quote rather than charset-restrict: a real path may legitimately
+  // contain a space (`/Users/x/My Code/...`) that a `?` substitution would
+  // corrupt, and quoting escapes newlines/quotes — so the line stays one line
+  // and stays injection-safe while reproducing the path EXACTLY.
+  return JSON.stringify(capped);
+}
+
+/** cinatra#2297 — the context TRUST ROOT could not produce an installed OAS
+ *  for `packageName`. Emits one warn-level line naming the resolved extension
+ *  data root and EVERY read root that was probed, with its concrete path.
+ *
+ *  Why its own line rather than a field on the `oas_missing` rejection: the
+ *  same miss surfaces as TWO different rejections depending on the run shape —
+ *  `404 oas_missing` from `loadTrustedSlot` on a direct dispatch, and
+ *  `403 attestation_node_unrecognized` on a composed child, where the run-OAS
+ *  read misses BEFORE `loadTrustedSlot` ever runs. Logging at the probe site
+ *  explains both; extending only the `oas_missing` line would leave the
+ *  composed-child rejection just as opaque as before.
+ *
+ *  Not counted: this is a diagnostic for a rejection the route already counts
+ *  under its stable code — a second counter would double-count the same event. */
+export function recordContextTrustRootOasMiss(input: {
+  packageName: string;
+  /** `not_found` = no root had the file; `unreadable` = a root HAD it but the
+   *  read/parse failed (a truncated or hand-edited oas.json). */
+  reason: "not_found" | "unreadable";
+  /** The resolved extension data root (`CINATRA_EXTENSION_DATA_ROOT` > DB
+   *  metadata > the container default) — the value the mount hangs off. */
+  extensionDataRoot: string;
+  /** Every probed root, in precedence order. */
+  roots: ReadonlyArray<{ label: string; dir: string }>;
+  /** Set on `unreadable`: the path that resolved but could not be parsed. */
+  resolvedPath?: string | null;
+}): void {
+  const probed = input.roots
+    .map((r) => `${id(r.label)}=${fsPath(r.dir)}`)
+    .join(" ");
+  console.warn(
+    `[context-route] installed-oas miss pkg=${id(input.packageName)} ` +
+      `reason=${id(input.reason)} ` +
+      `extension-data-root=${fsPath(input.extensionDataRoot)} ` +
+      `probed=${input.roots.length}${probed ? ` ${probed}` : ""}` +
+      (input.resolvedPath ? ` path=${fsPath(input.resolvedPath)}` : ""),
+  );
+}
+
 /** Best-effort {runId, slotId} extraction from an UNVALIDATED request body for
  *  the invalid_body rejection line (ids only; values are sanitized by `id`). */
 export function extractContextRouteLogIds(raw: unknown): {

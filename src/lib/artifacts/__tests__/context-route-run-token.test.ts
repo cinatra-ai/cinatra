@@ -25,6 +25,8 @@ vi.mock("@cinatra-ai/agents", () => ({
 }));
 vi.mock("@cinatra-ai/agents/agent-runtime-mount", () => ({
   resolveAgentRuntimeMountDir: () => "/tmp/does-not-exist",
+  // cinatra#2297 — dev-gated second read root; inert (gate closed) here.
+  resolveDevExtensionSourceRoot: () => "/tmp/does-not-exist-dev-source",
 }));
 vi.mock("@/lib/wayflow-bridge-auth", () => ({
   isAuthorizedBridgeRequest: () => true,
