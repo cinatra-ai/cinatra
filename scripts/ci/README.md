@@ -109,7 +109,7 @@ stateful-service pin is **derived at runtime** from
 `config/upgrade/upgrade-matrix.json` (`wa_matrix_pin` in
 `scripts/ci/works-after/lib.sh` → `scripts/upgrade/resolve-transition.mjs --pin`),
 never copied into the arm as a digest literal. The matrix is kept byte-equal to
-`docker-compose.yml` by the pin-drift gate and is bumped in the *same* Renovate
+`docker-compose.yml` by the pin-drift check and is bumped in the *same* Renovate
 PR as compose (cinatra#1863), so a digest wave moves ONE value and the fixtures
 follow — a copied literal was a third carrier nothing co-updated, which made
 every digest PR born red (cinatra#2194 / cinatra#2304). Fixture-only **source**

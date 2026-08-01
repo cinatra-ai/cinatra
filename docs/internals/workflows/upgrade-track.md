@@ -776,7 +776,7 @@ first Renovate digest PR that lands green without a manual matrix sync.
 
 The live proof arrived on PR #2301 (`nangohq/nango-server` digest
 `1b3be71` → `94a7983`): the pairing worked exactly as designed — compose and the
-matrix moved together in one bot branch and the pin-drift gate was green — but
+matrix moved together in one bot branch and the pin-drift check was green — but
 the `works-after proof / proof` check went **red**. A **third** carrier of the
 same digest existed that neither the bot nor the pairing knows about: the
 works-after arms hard-coded the pin as their candidate default
