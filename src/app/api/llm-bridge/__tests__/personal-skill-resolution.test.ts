@@ -408,18 +408,19 @@ describe("/api/llm-bridge personal delta-skill identity (#1360)", () => {
     expect(deliveredDeltaContent()).toBe(PERSONAL_DELTA);
   });
 
-  it("VERIFIED run (context-id channel): delivers the run owner's personal delta", async () => {
+  it("RETIRED (#1193): the context-id channel no longer verifies a run, so NO personal delta is delivered", async () => {
+    // Pre-#1193 the a2a context-id selected the run and its owner received the
+    // personal delta. The channel is retired: only the dispatch-minted run token
+    // can establish an owner, so this request is owner-less and the contract
+    // never asks for a delta.
     readAgentRunByContextIdMock.mockResolvedValue(VERIFIED_RUN);
     const req = makeRequestH(
       { user: "hi", agent_id: "agent-x" },
       { "x-cinatra-a2a-context-id": "ctx-1" },
     );
     await POST(req);
-    expect(getCustomSkillForCurrentUserAndAgentMock).toHaveBeenCalledWith(
-      "agent-x",
-      VERIFIED_RUN.runBy,
-    );
-    expect(deliveredDeltaContent()).toBe(PERSONAL_DELTA);
+    expect(getCustomSkillForCurrentUserAndAgentMock).not.toHaveBeenCalled();
+    expect(deliveredDeltaContent()).toBeUndefined();
   });
 
   it("A3 (cinatra#1363): an ARCHIVED personal delta is WITHHELD from delivery (fail-closed), even for the verified owner", async () => {
@@ -491,13 +492,13 @@ describe("/api/llm-bridge personal delta-skill identity (#1360)", () => {
         "x-cinatra-a2a-context-id": "ctx-2",
       },
     );
-    await POST(req);
-    // Divergence nulls runForPorts → owner undefined → no personal delta.
-    // cinatra#2091 S4: with no server-verified owner the contract does not
-    // merely pass `undefined` — it never asks for a personal delta at all.
-    // Strictly stronger than the pre-contract fail-closed.
+    const res = await POST(req);
+    // #1193: divergence between two dispatch-owned bindings is now REFUSED at
+    // the identity gate rather than merely suppressing the OBO mint — and it is
+    // refused before any provider dispatch, so no delta is even considered.
+    expect(res.status).toBe(403);
     expect(getCustomSkillForCurrentUserAndAgentMock).not.toHaveBeenCalled();
-    expect(deliveredDeltaContent()).toBeUndefined();
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
   });
 
   it("MISMATCH: token probe resolves but the fresh re-read row DIVERGES (orgId changed) ⇒ refused", async () => {
@@ -515,18 +516,17 @@ describe("/api/llm-bridge personal delta-skill identity (#1360)", () => {
     expect(deliveredDeltaContent()).toBeUndefined();
   });
 
-  it("a forged body.agent_run_id can NEVER select the owner (only a verified run can)", async () => {
+  it("a forged body.agent_run_id can NEVER select the owner — and is now REFUSED (#1193)", async () => {
     // body.agent_run_id is caller-controlled; with no verified run it must not
     // promote any identity. readAgentRunById must never be called from a body id.
     readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN); // would resolve IF called
     const req = makeRequest({ user: "hi", agent_id: "agent-x", agent_run_id: VERIFIED_RUN.id });
-    await POST(req);
+    const res = await POST(req);
+    expect(res.status).toBe(403);
     expect(readAgentRunByIdMock).not.toHaveBeenCalled();
-    // cinatra#2091 S4: with no server-verified owner the contract does not
-    // merely pass `undefined` — it never asks for a personal delta at all.
-    // Strictly stronger than the pre-contract fail-closed.
     expect(getCustomSkillForCurrentUserAndAgentMock).not.toHaveBeenCalled();
-    expect(deliveredDeltaContent()).toBeUndefined();
+    // Refused before the provider dispatch — no delta, no model call.
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
   });
 });
 
@@ -590,11 +590,15 @@ describe("/api/llm-bridge personal skill resolution — resolver-null + cleanup"
     getCustomSkillForCurrentUserAndAgentMock.mockRejectedValueOnce(
       new Error("personal-skill lookup failed"),
     );
-    const req = makeRequest({
-      user: "hi",
-      agent_run_id: "run-X",
-      agent_id: "agent-x",
-    });
+    // Drive the containment lock through a VERIFIED run: a claimed-but-unproven
+    // run id is refused at the front door now (#1193), which would never reach
+    // the personal-skill lookup this test is about.
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN);
+    const req = makeRequestH(
+      { user: "hi", agent_id: "agent-x" },
+      { "x-cinatra-run-token": RUN_TOKEN },
+    );
     const res = await POST(req);
     expect(res.status).toBe(200);
     expect(runResolvedSkillAwareDeterministicLlmTaskMock).toHaveBeenCalled();

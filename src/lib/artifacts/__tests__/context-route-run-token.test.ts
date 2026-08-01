@@ -107,7 +107,7 @@ beforeEach(() => {
   resolveAgentRunMcpActor.mockResolvedValue({ platformRole: "member" });
 });
 
-describe("deriveContextRouteContext — run-token precedence (#1193 W2)", () => {
+describe("deriveContextRouteContext — the run token is the ONLY identity (#1193)", () => {
   it("present-but-unresolvable token ⇒ 403 run_token_unresolvable, NO fallback", async () => {
     readAgentRunByTokenHash.mockResolvedValue(null);
     await expectStatus(
@@ -124,11 +124,11 @@ describe("deriveContextRouteContext — run-token precedence (#1193 W2)", () => 
     expect(readAgentRunById).not.toHaveBeenCalled();
   });
 
-  it("empty token header ⇒ 403 (absent), NO fallback", async () => {
+  it("empty token header ⇒ 403 run_token_absent, NO fallback", async () => {
     await expectStatus(
       deriveContextRouteContext(req({ "x-cinatra-run-token": "" }), leafBody(), "resolve"),
       403,
-      "run_token_unresolvable",
+      "run_token_absent",
     );
     expect(readAgentRunByTokenHash).not.toHaveBeenCalled(); // verifier short-circuits on empty
   });
@@ -197,44 +197,66 @@ describe("deriveContextRouteContext — run-token precedence (#1193 W2)", () => 
     expect(readAgentRunById).toHaveBeenCalledWith("run-1");
   });
 
-  it("no token header ⇒ legacy context-id path still serves (additive, reversible)", async () => {
+  // --- #1193 RETIREMENT: the legacy serving channels are DELETED -------------
+
+  it("RETIRED: no token header + a RESOLVABLE context-id ⇒ 403 run_token_absent", async () => {
+    // Pre-#1193 this served via the context-id channel. It must now fail closed:
+    // the a2a context-id is a weaker signal than the one minted credential, and
+    // every first-party task (initial AND resumed) now carries a token.
     readAgentRunByContextId.mockResolvedValue(fullRun());
-    const res = await deriveContextRouteContext(
-      req({ "x-cinatra-a2a-context-id": "ctx-1" }),
-      leafBody(),
-      "resolve",
+    await expectStatus(
+      deriveContextRouteContext(
+        req({ "x-cinatra-a2a-context-id": "ctx-1" }),
+        leafBody(),
+        "resolve",
+      ),
+      403,
+      "run_token_absent",
     );
-    expect(res.run.id).toBe("run-1");
-    expect(res.servedBy).toBe("context_id");
-    expect(readAgentRunByTokenHash).not.toHaveBeenCalled();
-    expect(readAgentRunByContextId).toHaveBeenCalledWith("ctx-1");
+    // The retired channel is never even consulted for SELECTION.
+    expect(readAgentRunByContextId).not.toHaveBeenCalled();
+  });
+
+  it("RETIRED: no headers at all ⇒ 403 run_token_absent (dev-loopback body channel gone)", async () => {
+    readAgentRunById.mockResolvedValue(fullRun());
+    await expectStatus(
+      deriveContextRouteContext(req({}), leafBody(), "resolve"),
+      403,
+      "run_token_absent",
+    );
+    // A body parentRunId can never select a run.
+    expect(readAgentRunById).not.toHaveBeenCalled();
   });
 
   // #1197: the which-path-served metric is now a per-(kind, via) COUNTER (the
   // W3 legacy-removal gate input), not only a log line.
-  it("which-path metric: each served path bumps its per-(kind, via) counter", async () => {
+  it("which-path metric: only run_token is emittable now", async () => {
     const { getContextRouteCounterSnapshot, resetContextRouteCountersForTest } =
       await import("../context-route-observability");
     resetContextRouteCountersForTest();
 
-    // (a) token-served
     readAgentRunByTokenHash.mockResolvedValue({ id: "run-1", orgId: "org-1", runBy: "user-1" });
     readAgentRunById.mockResolvedValue(fullRun());
     await deriveContextRouteContext(req({ "x-cinatra-run-token": "t" }), leafBody(), "resolve");
-    // (b) legacy context-id-served
-    readAgentRunByContextId.mockResolvedValue(fullRun());
-    await deriveContextRouteContext(
-      req({ "x-cinatra-a2a-context-id": "ctx-1" }),
-      leafBody(),
-      "resolve",
-    );
-    // (c) legacy body-served (dev loopback)
-    await deriveContextRouteContext(req({}), leafBody(), "resolve");
+    await deriveContextRouteContext(req({ "x-cinatra-run-token": "t" }), leafBody(), "finalize");
 
+    // A retired channel can no longer contribute a counter key at all.
     expect(getContextRouteCounterSnapshot().resolutionPath).toEqual({
       "resolve.run_token": 1,
-      "resolve.context_id": 1,
-      "resolve.body": 1,
+      "finalize.run_token": 1,
     });
+  });
+
+  it("the resolver source contains no retired serving branch", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(__dirname, "..", "context-route-io.ts"), "utf8");
+    // The context-id may still be READ (attestation context + cross-check) but
+    // must never be ASSIGNED as the resolved run.
+    expect(src).not.toMatch(/run\s*=\s*await readAgentRunByContextId/);
+    // The dev-loopback body channel is gone: no body-id run read remains.
+    expect(src).not.toMatch(/readAgentRunById\(body\.parentRunId\)/);
+    expect(src).not.toMatch(/servedBy\s*=\s*"context_id"/);
+    expect(src).not.toMatch(/servedBy\s*=\s*"body"/);
   });
 });

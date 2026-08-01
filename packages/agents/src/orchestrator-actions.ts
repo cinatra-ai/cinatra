@@ -35,6 +35,7 @@ import {
   RunTransitionError,
 } from "./store";
 import { cancelOrchestratorRun } from "./orchestrator-execution";
+import { mintResumeRunTokenMetadata } from "./wayflow-run-token-carrier";
 import {
   WAYFLOW_A2A_TIMEOUT_MS,
   createWayflowFetch,
@@ -258,6 +259,13 @@ export async function resumeStoppedOrchestratorAction(
   }
 
   try {
+    // #1193 resume carrier: mint this leg's per-run credential and persist its
+    // hash BEFORE the blocking sendTask (dispatch's race-free ordering), then
+    // carry the RAW token in the A2A message METADATA. Without it the resumed
+    // task attaches no X-Cinatra-Run-Token and every run-identity resolution in
+    // the resumed leg fails closed. Metadata (not text) because the message text
+    // is what the gate's InputMessageNode yields to the flow.
+    const resumeMetadata = await mintResumeRunTokenMetadata(runId);
     // Send into the existing context so fasta2a routes to the paused conversation.
     // Resume MUST reuse run.a2aContextId; a fresh contextId
     // would start a new conversation and the flow would retry from the beginning.
@@ -268,6 +276,7 @@ export async function resumeStoppedOrchestratorAction(
         messageId: randomUUID(),
         contextId: run.a2aContextId,
         parts: [{ kind: "text", text: "[Resumed by operator after stop]" }],
+        metadata: resumeMetadata,
       },
       configuration: { acceptedOutputModes: ["text"] },
     });

@@ -55,6 +55,9 @@ type WriteHitlPromptInput = {
 const storeMock = vi.hoisted(() => ({
   readAgentRunById: vi.fn(),
   readAgentRunByTaskId: vi.fn(),
+  // #1193: each resume leg mints + records its own per-run credential before the
+  // blocking sendTask. Recording is ADDITIVE (earlier legs stay valid).
+  setAgentRunTokenHash: vi.fn(async () => {}),
   readAgentTemplateById: vi.fn(),
   writeHitlPrompt: vi.fn(async (_input: { submittedValues?: unknown }) => undefined),
 }));

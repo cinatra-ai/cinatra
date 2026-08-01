@@ -1,24 +1,26 @@
 /**
- * Regression: the LLM bridge must NOT mint an MCP OBO actor
- * token from a forgeable `body.agent_run_id`. Run selection for OBO minting
- * is only valid via:
- *   - an auth-injected `x-cinatra-a2a-context-id` lookup, OR
- *   - a dispatcher-signed `cinatra_run_binding` whose verified
- *     {runId, orgId, runBy} matches a freshly-read `agent_runs` row.
+ * The LLM bridge must resolve "which run is calling" from the ONE dispatch-minted
+ * per-run credential and nothing else (#1193).
  *
- * CRITICAL: unlike the existing attachment-wiring tests (which only mock
+ * Run selection for OBO minting is valid ONLY via the `X-Cinatra-Run-Token`
+ * header (verifyRunToken -> unique-index row -> re-read by the SERVER-DERIVED
+ * id). The two legacy selectors are RETIRED and locked out below:
+ *   - the auth-injected `x-cinatra-a2a-context-id` lookup, and
+ *   - the dispatcher-signed `cinatra_run_binding` (module deleted outright).
+ * A forgeable `body.agent_run_id` never could select, and still cannot — but it
+ * now also fails CLOSED (403) rather than silently proceeding unattributed.
+ *
+ * CRITICAL: unlike the attachment-wiring tests (which only mock
  * `readAgentRunByContextId`), this suite mocks the PRODUCTION
- * `readAgentRunById` fallback path so it actually exercises the code that
- * the vulnerability lived in. The OBO mint is observed via the
+ * `readAgentRunById` path so it actually exercises the code the original
+ * vulnerability lived in. The OBO mint is observed via the
  * `cinatraMcpToolOverride` passed to the orchestration layer:
- * `resolveAgentRunMcpActor` is only called when a run was selected for
- * minting, so its (non-)invocation is the load-bearing assertion.
+ * `resolveAgentRunMcpActor` is only called when a run was selected for minting,
+ * so its (non-)invocation is the load-bearing assertion.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import {
-  issueAgentRunBinding,
-  AGENT_RUN_BINDING_PURPOSE,
-} from "@/lib/agent-run-binding";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 type LlmProviderId = "openai" | "anthropic" | "gemini";
 
@@ -308,105 +310,68 @@ async function invokeOverride(): Promise<unknown> {
   return arg.cinatraMcpToolOverride();
 }
 
-describe("bridge run binding for MCP OBO minting", () => {
-  it("ATTACK: forged body.agent_run_id (no binding) must NOT select a run for OBO minting", async () => {
+const RUN_TOKEN = "raw-run-token-xyz";
+const PROBE = {
+  id: VICTIM_RUN.id,
+  orgId: VICTIM_RUN.orgId,
+  runBy: VICTIM_RUN.runBy,
+};
+
+describe("bridge run-token selection for MCP OBO minting", () => {
+  it("ATTACK: forged body.agent_run_id with no token must NOT select a run — and is now REFUSED", async () => {
     // readAgentRunById would return the target run if called — but it must
     // NEVER be called from a raw body id.
     readAgentRunByIdMock.mockResolvedValue(TARGET_RUN);
     const res = await POST(
       makeReq({ user: "hi", agent_run_id: TARGET_RUN.id }),
     );
-    expect(res.status).toBe(200);
-    // The production fallback must not promote a body id to a run read.
+    // #1193 strengthened this from "served, unattributed" to "refused": a body
+    // that CLAIMS a run it cannot prove is a forgery attempt, and continuing
+    // would run the model step with the claim silently dropped.
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ code: "run_token_absent" }),
+    );
+    // The forgeable body id never reached a run read.
     expect(readAgentRunByIdMock).not.toHaveBeenCalled();
-    // No cinatraMcpToolOverride should have been provided (no runForPorts).
-    await invokeOverride();
     expect(resolveAgentRunMcpActorMock).not.toHaveBeenCalled();
     expect(issueAgentRunMcpActorTokenMock).not.toHaveBeenCalled();
   });
 
-  it("ATTACK: valid binding for run-victim + forged body.agent_run_id=run-target mints OBO for run-victim ONLY", async () => {
-    const binding = issueAgentRunBinding({
-      runId: VICTIM_RUN.id,
-      orgId: VICTIM_RUN.orgId,
-      runBy: VICTIM_RUN.runBy,
-    });
-    // The binding's verified runId is run-victim; readAgentRunById is called
-    // with the SIGNED id, never the body id.
+  it("ATTACK: valid token for run-victim + forged body.agent_run_id=run-target is REFUSED (never mints for the forged run)", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     readAgentRunByIdMock.mockImplementation(async (id: string) =>
       id === VICTIM_RUN.id ? VICTIM_RUN : TARGET_RUN,
     );
     const res = await POST(
-      makeReq({
-        user: "hi",
-        agent_run_id: TARGET_RUN.id, // forged — must be ignored
-        cinatra_run_binding: binding,
-      }),
+      makeReqH(
+        { user: "hi", agent_run_id: TARGET_RUN.id }, // forged
+        { "x-cinatra-run-token": RUN_TOKEN },
+      ),
     );
-    expect(res.status).toBe(200);
-    expect(readAgentRunByIdMock).toHaveBeenCalledTimes(1);
-    expect(readAgentRunByIdMock).toHaveBeenCalledWith(VICTIM_RUN.id);
-    await invokeOverride();
-    // OBO mint resolves for the BINDING's run, not the forged body id.
-    expect(resolveAgentRunMcpActorMock).toHaveBeenCalledTimes(1);
-    expect(resolveAgentRunMcpActorMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runId: VICTIM_RUN.id,
-        orgId: VICTIM_RUN.orgId,
-        runBy: VICTIM_RUN.runBy,
-      }),
+    // The token outranks the body id, so the forged run could never have been
+    // SELECTED — but asserting one run while authenticating as another is a
+    // forgery signal, and the context routes 403 that same shape. Refuse.
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ code: "run_mismatch" }),
     );
-  });
-
-  it("ATTACK: binding with a tampered signature is rejected (no OBO mint)", async () => {
-    const binding = issueAgentRunBinding({
-      runId: VICTIM_RUN.id,
-      orgId: VICTIM_RUN.orgId,
-      runBy: VICTIM_RUN.runBy,
-    });
-    const tampered = binding.slice(0, -2) + "xx";
-    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
-    const res = await POST(
-      makeReq({ user: "hi", cinatra_run_binding: tampered }),
-    );
-    expect(res.status).toBe(200);
-    expect(readAgentRunByIdMock).not.toHaveBeenCalled();
-    await invokeOverride();
+    // Critically: the forged run was NEVER read, and nothing was minted for it.
+    expect(readAgentRunByIdMock).not.toHaveBeenCalledWith(TARGET_RUN.id);
     expect(resolveAgentRunMcpActorMock).not.toHaveBeenCalled();
+    expect(issueAgentRunMcpActorTokenMock).not.toHaveBeenCalled();
   });
 
-  it("ATTACK: binding signed with the WRONG secret is rejected", async () => {
-    process.env.BETTER_AUTH_SECRET = "attacker-secret";
-    const forged = issueAgentRunBinding({
-      runId: TARGET_RUN.id,
-      orgId: TARGET_RUN.orgId,
-      runBy: TARGET_RUN.runBy,
-    });
-    process.env.BETTER_AUTH_SECRET = AUTH_SECRET; // restore the real key
-    readAgentRunByIdMock.mockResolvedValue(TARGET_RUN);
-    const res = await POST(
-      makeReq({ user: "hi", cinatra_run_binding: forged }),
-    );
-    expect(res.status).toBe(200);
-    expect(readAgentRunByIdMock).not.toHaveBeenCalled();
-    await invokeOverride();
-    expect(resolveAgentRunMcpActorMock).not.toHaveBeenCalled();
-  });
-
-  it("DEFENSE-IN-DEPTH: binding runId resolves but the fresh row mismatches orgId → no mint", async () => {
-    const binding = issueAgentRunBinding({
-      runId: VICTIM_RUN.id,
-      orgId: VICTIM_RUN.orgId,
-      runBy: VICTIM_RUN.runBy,
-    });
-    // The live row now carries a DIFFERENT org (e.g. ownership moved / forged
-    // binding pointing at a non-matching row): must refuse.
+  it("DEFENSE-IN-DEPTH: token probe resolves but the fresh row mismatches orgId → no mint", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    // The live row now carries a DIFFERENT org (ownership moved, or a torn /
+    // rewritten row): the probe-vs-re-read divergence must refuse.
     readAgentRunByIdMock.mockResolvedValue({
       ...VICTIM_RUN,
       orgId: "org-changed",
     });
     const res = await POST(
-      makeReq({ user: "hi", cinatra_run_binding: binding }),
+      makeReqH({ user: "hi" }, { "x-cinatra-run-token": RUN_TOKEN }),
     );
     expect(res.status).toBe(200);
     expect(readAgentRunByIdMock).toHaveBeenCalledWith(VICTIM_RUN.id);
@@ -415,16 +380,12 @@ describe("bridge run binding for MCP OBO minting", () => {
   });
 
   it("DEFENSE-IN-DEPTH: resolveAgentRunMcpActor returning null falls back to the machine token (never an elevation) + durable binding (#1195)", async () => {
-    const binding = issueAgentRunBinding({
-      runId: VICTIM_RUN.id,
-      orgId: VICTIM_RUN.orgId,
-      runBy: VICTIM_RUN.runBy,
-    });
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
     resolveAgentRunMcpActorMock.mockResolvedValue(null); // demoted user
     readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
     const res = await POST(
-      makeReq({ user: "hi", cinatra_run_binding: binding }),
+      makeReqH({ user: "hi" }, { "x-cinatra-run-token": RUN_TOKEN }),
     );
     expect(res.status).toBe(200);
     const override = await invokeOverride();
@@ -447,16 +408,12 @@ describe("bridge run binding for MCP OBO minting", () => {
   });
 
   it("#1195: a run WITHOUT a dispatch-minted credential hash writes NO durable binding (registry-only legacy path)", async () => {
-    const binding = issueAgentRunBinding({
-      runId: VICTIM_RUN.id,
-      orgId: VICTIM_RUN.orgId,
-      runBy: VICTIM_RUN.runBy,
-    });
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
     resolveAgentRunMcpActorMock.mockResolvedValue(null);
     readAgentRunTokenHashByIdMock.mockResolvedValue(null); // legacy run
     const res = await POST(
-      makeReq({ user: "hi", cinatra_run_binding: binding }),
+      makeReqH({ user: "hi" }, { "x-cinatra-run-token": RUN_TOKEN }),
     );
     expect(res.status).toBe(200);
     const override = await invokeOverride();
@@ -466,15 +423,11 @@ describe("bridge run binding for MCP OBO minting", () => {
   });
 
   it("#1195: OBO mint SUCCESS writes NO durable binding (the OBO token itself carries run identity)", async () => {
-    const binding = issueAgentRunBinding({
-      runId: VICTIM_RUN.id,
-      orgId: VICTIM_RUN.orgId,
-      runBy: VICTIM_RUN.runBy,
-    });
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
     readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
     const res = await POST(
-      makeReq({ user: "hi", cinatra_run_binding: binding }),
+      makeReqH({ user: "hi" }, { "x-cinatra-run-token": RUN_TOKEN }),
     );
     expect(res.status).toBe(200);
     const override = await invokeOverride();
@@ -493,20 +446,15 @@ describe("bridge run binding for MCP OBO minting", () => {
     resolveConfiguredLlmRuntimeMock.mockResolvedValueOnce({
       provider: "gemini" as LlmProviderId,
     });
-    const binding = issueAgentRunBinding({
-      runId: VICTIM_RUN.id,
-      orgId: VICTIM_RUN.orgId,
-      runBy: VICTIM_RUN.runBy,
-    });
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
     resolveAgentRunMcpActorMock.mockResolvedValue(null); // machine fallback path
     readAgentRunTokenHashByIdMock.mockResolvedValue("a".repeat(64));
     const res = await POST(
-      makeReq({
-        user: "hi",
-        cinatra_run_binding: binding,
-        cinatra_llm: { preferredProvider: "openai" },
-      }),
+      makeReqH(
+        { user: "hi", cinatra_llm: { preferredProvider: "openai" } },
+        { "x-cinatra-run-token": RUN_TOKEN },
+      ),
     );
     expect(res.status).toBe(200);
     const override = await invokeOverride();
@@ -523,18 +471,13 @@ describe("bridge run binding for MCP OBO minting", () => {
     resolveConfiguredLlmRuntimeMock.mockResolvedValueOnce({
       provider: "gemini" as LlmProviderId,
     });
-    const binding = issueAgentRunBinding({
-      runId: VICTIM_RUN.id,
-      orgId: VICTIM_RUN.orgId,
-      runBy: VICTIM_RUN.runBy,
-    });
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
     const res = await POST(
-      makeReq({
-        user: "hi",
-        cinatra_run_binding: binding,
-        cinatra_llm: { preferredProvider: "anthropic" },
-      }),
+      makeReqH(
+        { user: "hi", cinatra_llm: { preferredProvider: "anthropic" } },
+        { "x-cinatra-run-token": RUN_TOKEN },
+      ),
     );
     expect(res.status).toBe(200);
     const override = await invokeOverride();
@@ -552,16 +495,14 @@ describe("bridge run binding for MCP OBO minting", () => {
     // carries NO packageName here (membership indeterminate / would be false),
     // and a runtime grant revoked AFTER run creation looks exactly like this —
     // the live widget-carrier run must NEVER widen to unrestricted self-MCP.
-    const binding = issueAgentRunBinding({
-      runId: VICTIM_RUN.id,
-      orgId: VICTIM_RUN.orgId,
-      runBy: VICTIM_RUN.runBy,
-    });
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     readAgentRunByIdMock.mockResolvedValue({
       ...VICTIM_RUN,
       sourceType: "public_site_widget",
     });
-    const res = await POST(makeReq({ user: "hi", cinatra_run_binding: binding }));
+    const res = await POST(
+      makeReqH({ user: "hi" }, { "x-cinatra-run-token": RUN_TOKEN }),
+    );
     expect(res.status).toBe(200);
     const tool = await invokeOverride();
     expect(tool).toEqual(expect.objectContaining({ type: "mcp-tool" }));
@@ -572,7 +513,13 @@ describe("bridge run binding for MCP OBO minting", () => {
     expect((allowlistArg as string[]).length).toBeGreaterThan(0);
   });
 
-  it("HAPPY PATH: a resolved x-cinatra-a2a-context-id still mints (binding-free legacy path preserved)", async () => {
+  // --- #1193 RETIREMENT: the context-id serving channel is GONE --------------
+
+  it("RETIRED: a resolvable x-cinatra-a2a-context-id no longer selects a run, and a claimed run without a token is REFUSED", async () => {
+    // Pre-#1193 this was the HAPPY PATH: the context-id header selected the run
+    // and minted OBO. It must no longer select anything — and because the body
+    // CLAIMS a run it cannot prove, the request now fails closed rather than
+    // executing the model step with the claim silently dropped.
     readAgentRunByContextIdMock.mockResolvedValue(VICTIM_RUN);
     const req = new Request("http://localhost:3000/api/llm-bridge", {
       method: "POST",
@@ -584,23 +531,180 @@ describe("bridge run binding for MCP OBO minting", () => {
       body: JSON.stringify({ user: "hi", agent_run_id: VICTIM_RUN.id }),
     });
     const res = await POST(req);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ code: "run_token_absent" }),
+    );
+    // Refused BEFORE the provider dispatch — never mid-stream.
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
+    expect(resolveAgentRunMcpActorMock).not.toHaveBeenCalled();
+  });
+
+  it("RETIRED: a context-id alone (no run claimed) selects no run but still SERVES", async () => {
+    // Availability carve-out: a request that never claimed a run has no identity
+    // to lose, so it proceeds unattributed rather than being refused.
+    readAgentRunByContextIdMock.mockResolvedValue(VICTIM_RUN);
+    const res = await POST(
+      makeReqH({ user: "hi" }, { "x-cinatra-a2a-context-id": "ctx-victim" }),
+    );
     expect(res.status).toBe(200);
-    // No body-id fallback read on the context-id-resolved path.
-    expect(readAgentRunByIdMock).not.toHaveBeenCalled();
     await invokeOverride();
-    expect(resolveAgentRunMcpActorMock).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: VICTIM_RUN.id }),
+    expect(resolveAgentRunMcpActorMock).not.toHaveBeenCalled();
+    expect(issueAgentRunMcpActorTokenMock).not.toHaveBeenCalled();
+  });
+
+  it("FAIL CLOSED: a claimed run with an UNRESOLVABLE token is refused with a distinct code", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(null);
+    const res = await POST(
+      makeReqH(
+        { user: "hi", agent_run_id: VICTIM_RUN.id },
+        { "x-cinatra-run-token": "garbage-token" },
+      ),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ code: "run_token_unresolvable" }),
+    );
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a claimed run BEFORE dispatch resolution runs (placement lock)", async () => {
+    // A `cinatra_llm` body drives provider/capability resolution, and the Gemini
+    // media-input branch downstream returns its OWN response. An identity check
+    // placed after either would let the provider execute and return 200 with the
+    // caller's claim silently dropped. Refusal must win the race.
+    const res = await POST(
+      makeReq({
+        user: "hi",
+        agent_run_id: VICTIM_RUN.id,
+        cinatra_llm: { preferredProvider: "gemini" },
+      }),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ code: "run_token_absent" }),
+    );
+    // Neither the provider nor the dispatch resolver was consulted.
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
+    expect(resolveProviderAdapterMock).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a body/token mismatch BEFORE dispatch resolution (media-path lock)", async () => {
+    // The disagreement cases used to be decided after the Gemini media branch,
+    // which returns its OWN response — so a valid token for run A plus
+    // agent_run_id=run-B could upload and call the model, then return 200.
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    const res = await POST(
+      makeReqH(
+        {
+          user: "hi",
+          agent_run_id: TARGET_RUN.id,
+          cinatra_llm: { preferredProvider: "gemini" },
+        },
+        { "x-cinatra-run-token": RUN_TOKEN },
+      ),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ code: "run_mismatch" }),
+    );
+    expect(resolveProviderAdapterMock).not.toHaveBeenCalled();
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a token/context-id divergence even when the body claims NO run", async () => {
+    // WayFlow often sends an EMPTY agent_run_id. Conditioning the divergence
+    // check on a non-empty body id would let two disagreeing dispatch-owned
+    // bindings through, served "anonymously" — silently dropping a real conflict.
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    readAgentRunByContextIdMock.mockResolvedValue(TARGET_RUN);
+    const res = await POST(
+      makeReqH(
+        { user: "hi" },
+        {
+          "x-cinatra-run-token": RUN_TOKEN,
+          "x-cinatra-a2a-context-id": "ctx-other",
+        },
+      ),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ code: "run_mismatch" }),
+    );
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
+  });
+
+  it("FAIL CLOSED: a present-but-UNRESOLVABLE context-id is a conflict, not a missing cross-check", async () => {
+    // The header is dispatch-owned, so a value naming no run means the request is
+    // corrupt or forged. Treating it as "absent" would fail OPEN — the context
+    // routes already 403 this exact shape.
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    readAgentRunByContextIdMock.mockResolvedValue(null); // resolves to nothing
+    const res = await POST(
+      makeReqH(
+        { user: "hi" },
+        {
+          "x-cinatra-run-token": RUN_TOKEN,
+          "x-cinatra-a2a-context-id": "ctx-ghost",
+        },
+      ),
+    );
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ code: "run_mismatch" }),
     );
   });
 
-  it("W1: mint carries the PERSISTED ceiling chain onto the actor + token", async () => {
-    const binding = issueAgentRunBinding({
-      runId: VICTIM_RUN.id,
-      orgId: VICTIM_RUN.orgId,
-      runBy: VICTIM_RUN.runBy,
-    });
+  it("FAIL CLOSED: a context-id LOOKUP FAILURE is not evidence of agreement", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
-    const res = await POST(makeReq({ user: "hi", cinatra_run_binding: binding }));
+    readAgentRunByContextIdMock.mockRejectedValue(new Error("db down"));
+    const res = await POST(
+      makeReqH(
+        { user: "hi" },
+        {
+          "x-cinatra-run-token": RUN_TOKEN,
+          "x-cinatra-a2a-context-id": "ctx-1",
+        },
+      ),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("the identity gate precedes every dispatch path in the source", () => {
+    const src = readFileSync(join(__dirname, "..", "route.ts"), "utf8");
+    const gate = src.indexOf("#1193 RUN-IDENTITY GATE");
+    const dispatchResolve = src.indexOf("resolveCinatraLlmDispatch(body.cinatra_llm");
+    const mediaBranch = src.indexOf("const wantsMediaInput");
+    expect(gate).toBeGreaterThan(-1);
+    // A regression that moves the gate below either of these reopens the
+    // claimed-identity downgrade.
+    expect(gate).toBeLessThan(dispatchResolve);
+    expect(gate).toBeLessThan(mediaBranch);
+  });
+
+  it("the route source consults no retired run selector", () => {
+    const src = readFileSync(
+      join(__dirname, "..", "route.ts"),
+      "utf8",
+    );
+    // The signed-binding module is deleted; no import or verify call may remain.
+    expect(src).not.toMatch(/verifyAgentRunBinding/);
+    expect(src).not.toMatch(/agent-run-binding/);
+    // The context-id may still be READ (cross-check) but must never be assigned
+    // as the selected run.
+    expect(src).not.toMatch(/runFromContext\s*=\s*runFromContextId/);
+  });
+
+  it("W1: mint carries the PERSISTED ceiling chain onto the actor + token", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
+    const res = await POST(
+      makeReqH({ user: "hi" }, { "x-cinatra-run-token": RUN_TOKEN }),
+    );
     expect(res.status).toBe(200);
     const tool = await invokeOverride();
     expect(tool).not.toBeNull();
@@ -619,14 +723,12 @@ describe("bridge run binding for MCP OBO minting", () => {
   });
 
   it("W1: persisted ceiling MISSING on the run → fail closed (no OBO mint)", async () => {
-    const binding = issueAgentRunBinding({
-      runId: VICTIM_RUN.id,
-      orgId: VICTIM_RUN.orgId,
-      runBy: VICTIM_RUN.runBy,
-    });
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     // A run whose backfill was missed / anchor was corrupt → obo_ceiling NULL.
     readAgentRunByIdMock.mockResolvedValue({ ...VICTIM_RUN, oboCeiling: null });
-    const res = await POST(makeReq({ user: "hi", cinatra_run_binding: binding }));
+    const res = await POST(
+      makeReqH({ user: "hi" }, { "x-cinatra-run-token": RUN_TOKEN }),
+    );
     expect(res.status).toBe(200);
     const override = await invokeOverride();
     expect(resolveAgentRunMcpActorMock).toHaveBeenCalledTimes(1);
@@ -638,11 +740,7 @@ describe("bridge run binding for MCP OBO minting", () => {
   });
 
   it("W1: mint-time ceiling mismatch (persisted does NOT contain re-derived) → fail closed", async () => {
-    const binding = issueAgentRunBinding({
-      runId: VICTIM_RUN.id,
-      orgId: VICTIM_RUN.orgId,
-      runBy: VICTIM_RUN.runBy,
-    });
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     // Persisted chain is org-only ([{organization, org-victim}]).
     readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
     // But the LOCKED template now anchors at USER tier → re-derived chain adds
@@ -651,7 +749,9 @@ describe("bridge run binding for MCP OBO minting", () => {
       ownerLevel: "user",
       ownerId: "user-victim",
     });
-    const res = await POST(makeReq({ user: "hi", cinatra_run_binding: binding }));
+    const res = await POST(
+      makeReqH({ user: "hi" }, { "x-cinatra-run-token": RUN_TOKEN }),
+    );
     expect(res.status).toBe(200);
     const override = await invokeOverride();
     expect(resolveAgentRunMcpActorMock).toHaveBeenCalledTimes(1);
@@ -661,9 +761,6 @@ describe("bridge run binding for MCP OBO minting", () => {
     expect(buildLlmMcpServerToolForAgentRunMock).not.toHaveBeenCalled();
   });
 
-  it("guards the binding purpose constant against accidental edits", () => {
-    expect(AGENT_RUN_BINDING_PURPOSE).toBe("llm-bridge-run-select");
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -674,13 +771,6 @@ describe("bridge run binding for MCP OBO minting", () => {
 // UNCHANGED (proven by every binding/context-id test in the block above, which
 // sends no run-token header); present-but-unresolvable ⇒ FAIL CLOSED.
 // ---------------------------------------------------------------------------
-const RUN_TOKEN = "raw-run-token-xyz";
-const PROBE = {
-  id: VICTIM_RUN.id,
-  orgId: VICTIM_RUN.orgId,
-  runBy: VICTIM_RUN.runBy,
-};
-
 describe("bridge run-token-first selection (W3)", () => {
   it("HAPPY: a valid run token selects the run for OBO, re-read by the SERVER-DERIVED id (never a body id)", async () => {
     readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
@@ -701,42 +791,18 @@ describe("bridge run-token-first selection (W3)", () => {
     );
   });
 
-  it("TOKEN WINS over a forged body.agent_run_id (token is authoritative)", async () => {
+  it("TOKEN AGREES with body.agent_run_id ⇒ mints for the token-resolved run", async () => {
     readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
     const res = await POST(
       makeReqH(
-        { user: "hi", agent_run_id: TARGET_RUN.id }, // forged — must be ignored
+        { user: "hi", agent_run_id: VICTIM_RUN.id }, // agrees
         { "x-cinatra-run-token": RUN_TOKEN },
       ),
     );
     expect(res.status).toBe(200);
+    // Selection still comes from the SERVER-DERIVED id, not the body value.
     expect(readAgentRunByIdMock).toHaveBeenCalledWith(VICTIM_RUN.id);
-    expect(readAgentRunByIdMock).not.toHaveBeenCalledWith(TARGET_RUN.id);
-    await invokeOverride();
-    expect(resolveAgentRunMcpActorMock).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: VICTIM_RUN.id }),
-    );
-  });
-
-  it("TOKEN OUTRANKS a co-present dispatcher-signed binding for a DIFFERENT run (binding channel not consulted)", async () => {
-    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
-    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
-    const attackerBinding = issueAgentRunBinding({
-      runId: TARGET_RUN.id,
-      orgId: TARGET_RUN.orgId,
-      runBy: TARGET_RUN.runBy,
-    });
-    const res = await POST(
-      makeReqH(
-        { user: "hi", cinatra_run_binding: attackerBinding },
-        { "x-cinatra-run-token": RUN_TOKEN },
-      ),
-    );
-    expect(res.status).toBe(200);
-    // Token selected the run first, so the binding path never reads TARGET.
-    expect(readAgentRunByIdMock).toHaveBeenCalledWith(VICTIM_RUN.id);
-    expect(readAgentRunByIdMock).not.toHaveBeenCalledWith(TARGET_RUN.id);
     await invokeOverride();
     expect(resolveAgentRunMcpActorMock).toHaveBeenCalledWith(
       expect.objectContaining({ runId: VICTIM_RUN.id }),
@@ -762,27 +828,6 @@ describe("bridge run-token-first selection (W3)", () => {
     expect(issueAgentRunMcpActorTokenMock).not.toHaveBeenCalled();
   });
 
-  it("FAIL CLOSED: a present-but-unresolvable token suppresses the dispatcher-signed binding fallback (no OBO mint)", async () => {
-    readAgentRunByTokenHashMock.mockResolvedValue(null); // unresolvable
-    const binding = issueAgentRunBinding({
-      runId: VICTIM_RUN.id,
-      orgId: VICTIM_RUN.orgId,
-      runBy: VICTIM_RUN.runBy,
-    });
-    readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
-    const res = await POST(
-      makeReqH(
-        { user: "hi", cinatra_run_binding: binding },
-        { "x-cinatra-run-token": "garbage-token" },
-      ),
-    );
-    expect(res.status).toBe(200);
-    // The binding channel is suppressed → the signed binding is never verified.
-    expect(readAgentRunByIdMock).not.toHaveBeenCalled();
-    await invokeOverride();
-    expect(resolveAgentRunMcpActorMock).not.toHaveBeenCalled();
-  });
-
   it("FAIL CLOSED: token probe resolves but the fresh re-read row DIVERGES (orgId changed) → no OBO mint", async () => {
     readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     readAgentRunByIdMock.mockResolvedValue({
@@ -798,7 +843,7 @@ describe("bridge run-token-first selection (W3)", () => {
     expect(resolveAgentRunMcpActorMock).not.toHaveBeenCalled();
   });
 
-  it("DIVERGENCE: token selects a run but a co-present context-id names a DIFFERENT run → refuse OBO", async () => {
+  it("DIVERGENCE: token selects a run but a co-present context-id names a DIFFERENT run → REFUSED", async () => {
     readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     readAgentRunByIdMock.mockResolvedValue(VICTIM_RUN);
     readAgentRunByContextIdMock.mockResolvedValue(TARGET_RUN); // disagrees
@@ -811,9 +856,13 @@ describe("bridge run-token-first selection (W3)", () => {
         },
       ),
     );
-    expect(res.status).toBe(200);
-    await invokeOverride();
-    // A divergent trustworthy context-id refuses the OBO mint (W2 invariant).
+    // Two dispatch-owned bindings disagreeing is corrupt or forged. This used to
+    // be served with the OBO mint merely suppressed; it is now refused outright,
+    // and refused EARLY (before any provider dispatch).
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ code: "run_mismatch" }),
+    );
     expect(resolveAgentRunMcpActorMock).not.toHaveBeenCalled();
   });
 

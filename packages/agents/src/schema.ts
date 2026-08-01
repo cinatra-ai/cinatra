@@ -1251,3 +1251,38 @@ export const projectInstances = cinatraSchema.table("project_instances", {
 }, (t) => ({
   pk: primaryKey({ columns: [t.orgId, t.projectRef] }),
 }));
+
+// ---------------------------------------------------------------------------
+// agent_run_tokens — the LIVE per-run credentials of the #1193 run-token spine
+//
+// WHY A SET AND NOT ONE COLUMN. `agent_runs.run_token_hash` holds the CURRENT
+// leg's credential, but a WayFlow run executes as a SEQUENCE of A2A tasks: the
+// initial dispatch, then one resumed task per HITL gate. Only the sha256 hash is
+// ever persisted, so a resume cannot re-send the original raw token — it must
+// mint a fresh one. Overwriting a single column would INVALIDATE the previous
+// leg's token, and the legs are not strictly serialized in practice:
+//   - the artifact-review resume outbox is at-least-once BY DESIGN (a lease can
+//     lapse while the first blocking send is still executing);
+//   - a send can be ACCEPTED by WayFlow and then lose its HTTP response, so the
+//     retry rotates while the accepted task is still running;
+//   - `agent_run_stop` documents that the background job may still be mid-step,
+//     so a "stopped" run is not provably parked at a gate.
+// In all three the older, still-executing task would present a token that no
+// longer resolves — a 403 on a LIVE callback and a fail-closed (unattributed)
+// MCP write. This table therefore holds EVERY credential currently honored for a
+// run, so a rotation is ADDITIVE and never strands an in-flight leg.
+//
+// `token_hash` is the PRIMARY KEY, so the verifier stays exactly what #1193
+// specified: ONE index probe resolving at most one run, with no newest-wins
+// tie-break and no body-id fallback. Rows are NEVER pruned: nothing here can
+// distinguish a live leg from a dead one (the A2A timeout is a client-side
+// abort, not a server-side execution bound), and a wrongly-pruned row 403s a
+// live callback — see run-token-store.ts. Growth is one small row per leg.
+// Only hashes are stored; a database read can never recover a live token.
+// ---------------------------------------------------------------------------
+
+export const agentRunTokens = cinatraSchema.table("agent_run_tokens", {
+  tokenHash: text("token_hash").primaryKey(),
+  runId:     text("run_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});

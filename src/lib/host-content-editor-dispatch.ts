@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { buildA2aBearerToken } from "@cinatra-ai/llm";
 import { createExternalA2AClient, type Task } from "@cinatra-ai/a2a";
 import {
+  buildInitialMessagePayloadWithRunToken,
   createAgentRun,
   readAgentTemplateByPackageName,
   readLatestAgentVersionIdForTemplate,
@@ -352,10 +353,15 @@ async function prepareDispatch(
       }
       throw err;
     }
-    const overrideText = JSON.stringify({
-      ...payloadObject,
-      cinatra_run_id: overrideRun.id,
-    });
+    // #1193 run-token spine: this is a real carrier `agent_run` that the WayFlow
+    // agent calls back against (llm-bridge / context routes), so it MUST carry
+    // the one run-identity credential like every other first-party dispatch.
+    // Mint + persist the hash BEFORE the blocking sendTask below, and embed the
+    // RAW token via the shared builder (spread-then-overwrite, so a payload key
+    // can neither smuggle nor override the dispatch-owned identity).
+    const overrideText = JSON.stringify(
+      await buildInitialMessagePayloadWithRunToken(payloadObject, overrideRun.id),
+    );
     return { text: overrideText, runId: overrideRun.id, orgId: input.actorOverride.orgId };
   }
 
@@ -433,8 +439,12 @@ async function prepareDispatch(
     throw err;
   }
 
-  // Inject cinatra_run_id into the message text (mirrors execution.ts:1332).
-  const text = JSON.stringify({ ...payloadObject, cinatra_run_id: run.id });
+  // Inject cinatra_run_id AND the #1193 per-run token into the message text
+  // (mirrors the worker dispatch in execution.ts). This carrier run is called
+  // back against by the WayFlow agent, so it needs the same one credential.
+  const text = JSON.stringify(
+    await buildInitialMessagePayloadWithRunToken(payloadObject, run.id),
+  );
   return { text, runId: run.id, orgId: identity.orgId };
 }
 
