@@ -1,7 +1,7 @@
 import "server-only";
 
 import { readFile } from "node:fs/promises";
-import { resolveInstalledOasPathForRead } from "@cinatra-ai/agents/installed-oas-path";
+import { probeInstalledOasPathForRead } from "@cinatra-ai/agents/installed-oas-path";
 import {
   readAgentRunById,
   readAgentRunByContextId,
@@ -41,8 +41,10 @@ import {
 } from "./context-attestation";
 import {
   recordContextRouteResolutionPath,
+  recordContextTrustRootOasMiss,
   type ContextRouteServedBy,
 } from "./context-route-observability";
+import { resolveExtensionDataRoot } from "@/lib/extension-data-root";
 
 // ---------------------------------------------------------------------------
 // Heavy IO for the context routes: auth + run + actor derivation (reuses the
@@ -55,17 +57,45 @@ async function readInstalledOas(
   packageName: string,
 ): Promise<Record<string, unknown> | null> {
   // cinatra#1196 — multi-vendor trust root: resolve the installed OAS via the
-  // SHARED runtime-mount resolver (scope-derived
-  // `<mount>/<vendor>/<slug>/cinatra/oas.json`), not the historical
-  // first-party-only regex + literal "cinatra-ai" path segment. An operator/
-  // third-party-vendor agent resolves identically to a first-party one; an
-  // unscoped/malformed name or an uninstalled package still yields null
-  // (→ oas_missing at the front door, unchanged #1197 rejection surface).
-  const oasPath = resolveInstalledOasPathForRead(packageName);
-  if (!oasPath) return null;
+  // SHARED resolver (scope-derived `<root>/<vendor>/<slug>/cinatra/oas.json`),
+  // not the historical first-party-only regex + literal "cinatra-ai" path
+  // segment. An operator/third-party-vendor agent resolves identically to a
+  // first-party one; an unscoped/malformed name or an uninstalled package
+  // still yields null (→ oas_missing at the front door, unchanged #1197
+  // rejection surface).
+  //
+  // cinatra#2297 — the PROBE form of that resolver. In production it is the
+  // same single deploy-owned runtime mount, resolved by the same guard and the
+  // same naming rule; in DEV ONLY it also probes the git-native dev source
+  // tree, the tree a stock `setup:dev` actually ingests and the dev wayflow
+  // container bind-mounts. Every miss now says WHICH roots were probed.
+  //
+  // `resolveExtensionDataRoot()` is called ONLY on the two miss branches, never
+  // on the hit path: with no `CINATRA_EXTENSION_DATA_ROOT` set it falls through
+  // to a SYNCHRONOUS Postgres metadata read, so it is paid on the rejection
+  // path (already the slow, logged path) and nowhere else.
+  const probe = probeInstalledOasPathForRead(packageName);
+  if (!probe.path) {
+    recordContextTrustRootOasMiss({
+      packageName,
+      reason: "not_found",
+      extensionDataRoot: resolveExtensionDataRoot(),
+      roots: probe.roots,
+    });
+    return null;
+  }
   try {
-    return JSON.parse(await readFile(oasPath, "utf8")) as Record<string, unknown>;
+    return JSON.parse(await readFile(probe.path, "utf8")) as Record<string, unknown>;
   } catch {
+    // Resolved but unreadable/unparseable — a distinct, equally opaque failure
+    // (the front door still answers oas_missing). Name the file.
+    recordContextTrustRootOasMiss({
+      packageName,
+      reason: "unreadable",
+      extensionDataRoot: resolveExtensionDataRoot(),
+      roots: probe.roots,
+      resolvedPath: probe.path,
+    });
     return null;
   }
 }
