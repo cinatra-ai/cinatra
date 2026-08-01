@@ -10,7 +10,7 @@
  * snapshot routed `human_escalation`, not `producer_repair`, with
  * `lifecycle_config = <NULL>` on the installed `@cinatra-ai/drupal-agent`
  * template: #2296 advanced ONLY `@cinatra-ai/wordpress-agent`, and the
- * lock-pinned drupal-agent v0.1.2 carried no `cinatra.lifecycle` block at all
+ * previously lock-pinned drupal-agent 0.1.2 carried no `cinatra.lifecycle` block
  * (evidence comment on cinatra#2046, 2026-07-31). This suite is the executable
  * form of that finding and of its fix: the SAME drive, on the SAME real package
  * identity, is asserted BOTH ways — escalation on the pre-pin (NULL) column, and
@@ -66,7 +66,7 @@ const DRUPAL_AGENT_PACKAGE = "@cinatra-ai/drupal-agent";
  */
 const DRUPAL_AGENT_LIFECYCLE = { repairCapable: true } as const;
 
-/** The pre-pin state this PR corrects: drupal-agent v0.1.2 declared no
+/** The pre-pin state this PR corrects: drupal-agent 0.1.2 declared no
  * `cinatra.lifecycle` block, so `installAgentFromPackage` compiled NOTHING onto
  * `agent_templates.lifecycle_config` and the column stayed NULL. */
 const PRE_PIN_LIFECYCLE_CONFIG = null;
@@ -321,7 +321,7 @@ describe.skipIf(!HAS_DB)("cinatra#2046 — the Drupal repair producer (pin activ
     }
   });
 
-  it("PRE-PIN (the recorded negative proof): with lifecycle_config NULL — drupal-agent v0.1.2 — a Drupal changes-request ESCALATES and dispatches nothing", async () => {
+  it("PRE-PIN (the recorded negative proof): with lifecycle_config NULL — drupal-agent 0.1.2 — a Drupal changes-request ESCALATES and dispatches nothing", async () => {
     const { cr } = await driveDrupalChangesRequest(PRE_PIN_LIFECYCLE_CONFIG);
     if (!cr.ok) throw new Error("unreachable");
 
