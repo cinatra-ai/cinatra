@@ -24,6 +24,10 @@ import type { CreateAgentTemplateInput } from "./store";
 // Origin is persisted after successful create/update to track package coordinates.
 import { resolvePublishDestination } from "@cinatra-ai/extensions/destination-resolver";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
+import {
+  readManifestLifecycle,
+  serializeLifecycleConfig,
+} from "@/lib/lifecycle/lifecycle-policy";
 import { readZipFiles } from "./zip-helpers";
 import { compileOasAgentJson } from "./oas-compiler";
 import {
@@ -66,6 +70,24 @@ export async function importAgentTemplateCore(
      *  so per-template ownership checks have a starting point. Undefined for
      *  legacy callers (back-compat). */
     creatorId?: string;
+    /** Does this ZIP's `package.json` carry the AUTHOR's lifecycle declaration?
+     *  (cinatra#2044 GAP 2 — codex round 1.)
+     *
+     *  Defaults TRUE, which is right for every user-uploaded ZIP: that
+     *  `package.json` IS the author's manifest, so a MISSING `cinatra.lifecycle`
+     *  in it means "the author dropped the block" and is projected as an
+     *  explicit clear.
+     *
+     *  `ensureAgentPackageFromGitFile` SYNTHESIZES the ZIP's `package.json`
+     *  (identity plus whatever it copied off the sibling manifest), so for that
+     *  caller the same absence is ambiguous — it means "the author dropped the
+     *  block" only when a sibling manifest was actually READ. With no sibling on
+     *  disk the loader has no declaration to speak for, and projecting its own
+     *  hollow synthesis as an explicit clear would WIPE a correct
+     *  `lifecycle_config` off an installed row (e.g. one the registry path wrote)
+     *  on the next boot scan. It passes false in that case and the absence
+     *  degrades to `undefined` — leave the column exactly as it is. */
+    lifecycleDeclarationAuthoritative?: boolean;
   },
 ): Promise<{ templateId: string; upserted: boolean }> {
   const zipBuf = Buffer.from(zipBase64, "base64");
@@ -94,6 +116,24 @@ export async function importAgentTemplateCore(
   let siblingPkgName: string | null = null;
   let siblingPkgVersion: string | null = null;
   let siblingAgentDependencies: Record<string, string> | undefined;
+  // The compiled `cinatra.lifecycle` declaration this ZIP's manifest carries
+  // (cinatra#2044 GAP 2 / the loader-path half of cinatra#2047 D-1).
+  //
+  // `undefined` and `null` are DIFFERENT here, and the difference is the whole
+  // contract:
+  //   - `undefined` = this ZIP carries NO manifest at all (no `package.json` —
+  //     an explicitly OPTIONAL member of the agent-ZIP shape, see the format
+  //     contract in import-export-actions.ts). There is nothing to project, so
+  //     the column is left UNCHANGED (the patch field is omitted).
+  //   - `null` = the ZIP DOES carry a manifest and that manifest declares no
+  //     (or a malformed) lifecycle block. The declaration is then re-projected
+  //     EXPLICITLY as null so a version that DROPS the block CLEARS the column
+  //     instead of leaving a stale `repairCapable` routing repairs to a producer
+  //     that no longer claims the capability — the same explicit-clear rule
+  //     `installAgentFromPackage` applies on all three of its install branches
+  //     (install-from-package.ts:491/596/632). An import re-projects every other
+  //     compiled column off the uploaded package the same way.
+  let manifestLifecycleConfig: string | null | undefined;
   if (siblingPkgRaw) {
     try {
       const parsed = JSON.parse(siblingPkgRaw) as {
@@ -104,8 +144,25 @@ export async function importAgentTemplateCore(
       siblingPkgName = typeof parsed.name === "string" ? parsed.name : null;
       siblingPkgVersion = typeof parsed.version === "string" ? parsed.version : null;
       siblingAgentDependencies = parsed.cinatra?.agentDependencies;
+      // readManifestLifecycle is the fail-soft reader ("quietly empty on bad
+      // input, never throws"), so a hostile/legacy manifest can never crash an
+      // import — it simply declares nothing.
+      manifestLifecycleConfig = serializeLifecycleConfig(readManifestLifecycle(parsed));
+      // …but "declares nothing" is only an authoritative CLEAR when this
+      // `package.json` is the author's manifest. A caller that SYNTHESIZED it
+      // without an author manifest to read (the git-file loader with no sibling
+      // on disk) opts out, and the absence degrades to "leave the column
+      // unchanged". A block that IS present still lands normally.
+      if (
+        manifestLifecycleConfig === null &&
+        options?.lifecycleDeclarationAuthoritative === false
+      ) {
+        manifestLifecycleConfig = undefined;
+      }
     } catch {
-      // ignore malformed package.json — fall through
+      // Malformed package.json — treated as no manifest at all (the identity
+      // fields below already fall through this way), so the column is left
+      // unchanged rather than cleared off unparseable input.
     }
   }
 
@@ -202,6 +259,11 @@ export async function importAgentTemplateCore(
           type: effectiveType === "orchestrator" ? "orchestrator" : "leaf",
           agentDependencies:
             Object.keys(effectiveAgentDeps).length > 0 ? effectiveAgentDeps : undefined,
+          // cinatra#2044 GAP 2: re-project the manifest LIFECYCLE declaration on
+          // re-import, exactly as installAgentFromPackage's upsert branch does.
+          // `undefined` (manifest-less ZIP) leaves the column untouched;
+          // an explicit null clears a dropped block. See the derivation above.
+          lifecycleConfig: manifestLifecycleConfig,
         });
 
         const snapshotObj = {
@@ -275,6 +337,11 @@ export async function importAgentTemplateCore(
         Object.keys(effectiveAgentDeps).length > 0 ? effectiveAgentDeps : undefined,
       type: effectiveType === "orchestrator" ? "orchestrator" : "leaf",
       status: options?.status ?? "draft",
+      // cinatra#2044 GAP 2: the manifest LIFECYCLE declaration rides the fresh
+      // create too, so a first install through the loader/ZIP path lands the
+      // same column value a registry install does (createAgentTemplate
+      // normalizes undefined to NULL — there is no prior value to preserve).
+      lifecycleConfig: manifestLifecycleConfig,
     });
 
     const snapshotObj = {
