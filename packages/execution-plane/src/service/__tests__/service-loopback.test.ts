@@ -28,10 +28,11 @@ import type {
 import { BrokerServiceClient, createRemoteSandboxExecutor } from "../broker-client";
 import {
   createBrokerService,
-  createBufferedAuditRelay,
+  createAuditRelay,
   type BrokerServiceBroker,
   type BrokerService,
 } from "../broker-server";
+import { createMemoryAuditSpool } from "../audit-spool";
 import { createCompositeHealthProvider } from "../composite-health";
 import { EKU_CLIENT_AUTH, EKU_SERVER_AUTH, execServiceUri, type ExecTlsMaterial } from "../mtls";
 import {
@@ -185,7 +186,7 @@ afterEach(async () => {
 async function startBroker(
   broker: BrokerServiceBroker,
   opts: {
-    relay?: ReturnType<typeof createBufferedAuditRelay>;
+    relay?: ReturnType<typeof createAuditRelay>;
     composite?: () => Promise<ExecCompositeHealth>;
   } = {},
 ): Promise<Started<BrokerService>> {
@@ -604,30 +605,68 @@ describe("broker service — protocol version over the wire", () => {
 });
 
 describe("broker service — audit relay", () => {
-  it("hands the app the buffered audit + stdio records", async () => {
-    const relay = createBufferedAuditRelay();
-    const record: ExecutionAuditRecord = {
-      jobId: "job-1",
-      orgId: "org-1",
-      userId: "user-1",
-      surface: "agent_run",
-      command: "printf hi",
-      cwd: "/workspace",
-      decision: "executed",
-      effectivePolicy: { egressMode: "none", limits: SPEC.limits },
-      atMs: 1234,
-    };
-    relay.auditSink(record);
+  const record = (jobId: string, seq = 0): ExecutionAuditRecord => ({
+    jobId,
+    orgId: "org-1",
+    userId: "user-1",
+    surface: "agent_run",
+    command: "printf hi",
+    cwd: "/workspace",
+    seq,
+    decision: "executed",
+    effectivePolicy: { egressMode: "none", limits: SPEC.limits },
+    atMs: 1234,
+  });
+
+  it("hands the app the spooled audit + buffered stdio records, and the read is NOT destructive", async () => {
+    const relay = createAuditRelay({ spool: createMemoryAuditSpool() });
+    await relay.auditSink(record("job-1"));
     relay.stdioSink({ jobId: "job-1", seq: 0, stdout: "hi", stderr: "" });
 
     const { port } = await startBroker(fakeBroker(), { relay });
     const client = brokerClient(port);
     const drained = await client.drainAudit();
     expect(drained.relayed).toBe(true);
-    expect(drained.audit).toEqual([record]);
+    expect(drained.audit).toHaveLength(1);
+    expect(drained.audit[0]?.jobId).toBe("job-1");
+    // cinatra#2266 G2: the spool stamps the physical delivery identity.
+    expect(drained.audit[0]?.deliveryKey).toBe(`${drained.spoolId}:1`);
     expect(drained.stdio).toEqual([{ jobId: "job-1", seq: 0, stdout: "hi", stderr: "" }]);
-    // A drain is destructive — the second one is empty, not a duplicate.
+
+    // THE READ REMOVES NOTHING (cinatra#2266 AC5): repeating it returns the
+    // SAME head and the same record. Only an ACK commits.
+    const again = await client.drainAudit();
+    expect(again.head).toBe(drained.head);
+    expect(again.audit.map((r) => r.deliveryKey)).toEqual(
+      drained.audit.map((r) => r.deliveryKey),
+    );
+
+    const acked = await client.ackAudit({ spoolId: drained.spoolId, head: drained.head });
+    expect(acked).toMatchObject({ acked: true, head: drained.head, remaining: 0 });
     expect((await client.drainAudit()).audit).toEqual([]);
+  });
+
+  it("refuses a stale, misrouted or out-of-order acknowledgement", async () => {
+    const relay = createAuditRelay({ spool: createMemoryAuditSpool() });
+    await relay.auditSink(record("job-1"));
+    const { port } = await startBroker(fakeBroker(), { relay });
+    const client = brokerClient(port);
+    const batch = await client.drainAudit();
+
+    await expect(
+      client.ackAudit({ spoolId: "some-other-volume", head: batch.head }),
+    ).rejects.toThrow(/ackAudit/);
+    await expect(
+      client.ackAudit({ spoolId: batch.spoolId, head: batch.head + 99 }),
+    ).rejects.toThrow(/ackAudit/);
+    // Nothing was removed by either refusal.
+    expect((await client.drainAudit()).audit).toHaveLength(1);
+
+    await client.ackAudit({ spoolId: batch.spoolId, head: batch.head });
+    // Replaying the same ACK is now STALE and is refused rather than replayed.
+    await expect(
+      client.ackAudit({ spoolId: batch.spoolId, head: batch.head }),
+    ).rejects.toThrow(/ackAudit/);
   });
 
   it("answers relayed:false when no relay is wired, instead of a misleading empty batch", async () => {
@@ -636,37 +675,34 @@ describe("broker service — audit relay", () => {
     expect(drained).toEqual({
       audit: [],
       stdio: [],
+      head: 0,
+      spoolId: "",
+      remaining: 0,
+      durable: false,
+      refusedReservations: 0,
+      recoveredUnknown: 0,
       droppedAudit: 0,
       droppedStdio: 0,
       relayed: false,
     });
+    // And it refuses an ACK rather than confirming a commit it cannot make.
+    await expect(
+      brokerClient(port).ackAudit({ spoolId: "anything", head: 1 }),
+    ).rejects.toThrow(/ackAudit/);
   });
 
-  it("counts overflow instead of dropping silently or growing unbounded", () => {
-    const relay = createBufferedAuditRelay({ maxAuditRecords: 2, maxStdioEntries: 1 });
-    const record = (jobId: string): ExecutionAuditRecord => ({
-      jobId,
-      orgId: "o",
-      userId: "u",
-      surface: "chat",
-      command: "x",
-      cwd: "/workspace",
-      decision: "executed",
-      effectivePolicy: { egressMode: "none", limits: SPEC.limits },
-      atMs: 1,
-    });
-    relay.auditSink(record("a"));
-    relay.auditSink(record("b"));
-    relay.auditSink(record("c"));
+  it("counts STDIO overflow instead of dropping silently or growing unbounded", () => {
+    const relay = createAuditRelay({ spool: createMemoryAuditSpool(), maxStdioEntries: 1 });
     relay.stdioSink({ jobId: "a", seq: 0, stdout: "", stderr: "" });
     relay.stdioSink({ jobId: "b", seq: 1, stdout: "", stderr: "" });
-    const drained = relay.drain();
-    expect(drained.audit.map((r) => r.jobId)).toEqual(["b", "c"]);
-    expect(drained.droppedAudit).toBe(1);
+    const drained = relay.read();
     expect(drained.stdio).toHaveLength(1);
     expect(drained.droppedStdio).toBe(1);
     // Counters reset with the drain, so a gap is reported once, not forever.
-    expect(relay.drain().droppedAudit).toBe(0);
+    expect(relay.read().droppedStdio).toBe(0);
+    // AUDIT has no drop counter to report any more: the spool refuses the
+    // pre-dispatch reservation rather than shedding a record (#2266 G1).
+    expect(drained.droppedAudit).toBe(0);
   });
 });
 

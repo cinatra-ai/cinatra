@@ -1,14 +1,14 @@
 diff --git a/src/lib/drizzle-store.ts b/src/lib/drizzle-store.ts
 --- a/src/lib/drizzle-store.ts
 +++ b/src/lib/drizzle-store.ts
-@@ -1050,6 +1050,7 @@
+@@ -1124,6 +1124,7 @@
      )` },
      { text: `CREATE INDEX IF NOT EXISTS agent_runs_template_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (template_id)` },
      { text: `CREATE INDEX IF NOT EXISTS agent_runs_status_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (status)` },
 +    { text: `CREATE INDEX IF NOT EXISTS agent_runs_run_by_idx ON "${schemaName.replaceAll('"', '""')}"."agent_runs" (run_by) WHERE run_by IS NOT NULL` },
      // planned_actions and review_tasks tables are absent; synthetic IDs are used.
-     // audit_events for @cinatra/authz: structured authorization audit log.
-     // Full authorization-audit column set, all fields nullable except id (PK) and created_at.
+     // audit_events for @cinatra/authz: the structured authorization audit log.
+     // DDL in the pure-strings leaf src/lib/authz/audit-events-schema.ts —
 diff --git a/src/lib/extension-migration-host.ts b/src/lib/extension-migration-host.ts
 --- a/src/lib/extension-migration-host.ts
 +++ b/src/lib/extension-migration-host.ts

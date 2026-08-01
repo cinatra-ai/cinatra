@@ -158,10 +158,21 @@ function execCommand(
   return app.exec(jobId, command, voucher, opts.commandId ? { commandId: opts.commandId } : {});
 }
 
-/** Pull every buffered audit record the remote broker holds. */
+/**
+ * Pull every spooled audit record the remote broker holds AND acknowledge it.
+ *
+ * Since cinatra#2266 slice 2 the read is NON-DESTRUCTIVE — repeating it returns
+ * the same head — so a helper that only read would hand every later arm the
+ * same records again. Acknowledging is what an app does once the rows are
+ * durably in its kernel, and this battery drives the broker directly, so the
+ * ACK here stands in for that write.
+ */
 async function drainAudit(): Promise<ExecutionAuditRecord[]> {
   const drained = await app.drainAudit({});
   expect(drained.relayed).toBe(true);
+  if (drained.audit.length > 0) {
+    await app.ackAudit({ spoolId: drained.spoolId, head: drained.head });
+  }
   return drained.audit;
 }
 
@@ -968,21 +979,37 @@ describe("6. audit: every executed AND refused command yields exactly one row", 
         ),
       ).toMatchObject({ ok: false, reason: "voucher_expired" });
 
-      // A PARTIAL drain, then the rest: no record is served twice and none is
-      // lost between the two calls.
+      // A PARTIAL read, ACKED, then the rest: no record is served twice and
+      // none is lost between the two calls.
       const firstBatch = await app.drainAudit({ maxAuditRecords: 2 });
       expect(firstBatch.audit).toHaveLength(2);
+      // The read alone removes NOTHING (cinatra#2266 AC5): repeating it returns
+      // the same head and the same delivery keys.
+      const repeated = await app.drainAudit({ maxAuditRecords: 2 });
+      expect(repeated.head).toBe(firstBatch.head);
+      expect(repeated.audit.map((r) => r.deliveryKey)).toEqual(
+        firstBatch.audit.map((r) => r.deliveryKey),
+      );
+      await app.ackAudit({ spoolId: firstBatch.spoolId, head: firstBatch.head });
       const secondBatch = await app.drainAudit({});
+      await app.ackAudit({ spoolId: secondBatch.spoolId, head: secondBatch.head });
       const all = [...firstBatch.audit, ...secondBatch.audit].filter((r) => r.jobId === jobId);
       expect(all).toHaveLength(4);
       expect(all.filter((r) => r.decision === "executed")).toHaveLength(2);
       expect(all.filter((r) => r.decision === "refused")).toHaveLength(2);
 
-      // Identity is unique per row: no duplicate (command, decision, atMs) pair.
-      const keys = new Set(all.map((r) => `${r.jobId}|${r.command}|${r.decision}|${r.atMs}`));
+      // Identity is the SPOOL's physical delivery key (cinatra#2266 G2), not a
+      // reconstructed tuple: unique per row, and the thing the ACK and the
+      // kernel's idempotent insert both key on.
+      const keys = new Set(all.map((r) => r.deliveryKey));
       expect(keys.size).toBe(all.length);
+      expect([...keys].every((k) => typeof k === "string" && k.length > 0)).toBe(true);
+      // Every row also carries a real producer sequence — including the two
+      // REFUSALS, which had none at all before this slice.
+      expect(all.every((r) => Number.isInteger(r.seq))).toBe(true);
+      expect(new Set(all.map((r) => r.seq)).size).toBe(4);
 
-      // A third drain returns nothing for this job — the relay is exhaustive.
+      // A third drain returns nothing for this job — the ACKed prefix is gone.
       const third = await app.drainAudit({});
       expect(third.audit.filter((r) => r.jobId === jobId)).toHaveLength(0);
     } finally {
@@ -990,53 +1017,108 @@ describe("6. audit: every executed AND refused command yields exactly one row", 
     }
   }, 300_000);
 
-  it("relay overflow is COUNTED and reported, never a silent gap", async () => {
+  it("the spool does NOT shed audit records under load — it refuses admission instead", async () => {
+    // REWRITTEN for cinatra#2266 slice 2. This arm used to assert the ring
+    // buffer's overflow policy: past 4096 records the OLDEST were discarded and
+    // the loss was counted. That policy is gone. Audit records are appended to
+    // a bounded, crash-safe spool and are never dropped to make room — when the
+    // spool cannot accept another record the broker refuses the COMMAND's
+    // pre-dispatch reservation, so nothing runs unaccounted for.
+    //
+    // WHAT THIS ARM PROVES: a burst of refusals produces a row each, with no
+    // drops reported, delivered across bounded ACKed passes.
+    //
+    // WHAT IT DOES NOT PROVE, stated rather than implied: full-spool
+    // BACKPRESSURE — driving the spool to its byte bound with the app not
+    // draining and asserting new commands are refused with a bounded
+    // `audit_spool_full` episode and a defined reopen condition — is #2266 AC7
+    // (design gap G5) and is NOT in this slice. Refusals take no reservation,
+    // so no volume of them can reach the bound; only dispatched commands can.
     restoreHealthyLease();
     await drainAudit();
-    const runId = `l5-overflow-${randomUUID()}`;
+    const runId = `l5-burst-${randomUUID()}`;
     const jobId = await openJob(runId);
     try {
       // Refusals are the cheap way to produce audit rows: no container, no
-      // volume, one row each. Push past the relay's 4096-record ring.
+      // volume, one row each.
       const total = 4_400;
       const batchSize = 32;
       for (let sent = 0; sent < total; sent += batchSize) {
         await Promise.all(
           Array.from({ length: Math.min(batchSize, total - sent) }, () =>
-            app.exec(jobId, "echo overflow", "not-a-voucher"),
+            app.exec(jobId, "echo burst", "not-a-voucher"),
           ),
         );
       }
-      const drained = await app.drainAudit({});
-      // The buffer is bounded — it did not grow with traffic.
-      expect(drained.audit.length).toBeLessThanOrEqual(4_096);
-      // And the gap is REPORTED rather than silently swallowed.
-      expect(drained.droppedAudit).toBeGreaterThan(0);
-      expect(drained.droppedAudit + drained.audit.length).toBeGreaterThanOrEqual(total);
-      // The counter resets on drain, so a caller can attribute the next gap.
-      expect((await app.drainAudit({})).droppedAudit).toBe(0);
+      const seen = new Set<string>();
+      let drops = 0;
+      for (let pass = 0; pass < 64; pass += 1) {
+        const batch = await app.drainAudit({ maxAuditRecords: 1_024 });
+        drops += batch.droppedAudit;
+        for (const row of batch.audit) {
+          if (row.jobId === jobId) seen.add(row.deliveryKey as string);
+        }
+        if (batch.audit.length === 0) break;
+        await app.ackAudit({ spoolId: batch.spoolId, head: batch.head });
+        if (batch.remaining === 0) break;
+      }
+      // Nothing was shed...
+      expect(drops).toBe(0);
+      // ...and every refusal is present exactly once, by DELIVERY KEY.
+      expect(seen.size).toBe(total);
     } finally {
       await app.closeJob(jobId, { removeWorkspace: true });
     }
   }, 600_000);
 
   it(
-    "RECORDED GAP: audit delivery is at-most-once — a broker restart drops what was buffered",
+    "kill the broker mid-drain: the SAME delivery keys are re-delivered, and none is lost",
     async () => {
-      // Characterization, not an endorsement. `drainAudit` SPLICES records out of
-      // the relay and the relay is process-local, so nothing survives a restart
-      // and nothing can be re-delivered. That is the merged contract; the epic's
-      // target (a spool with an ACK and a de-dup key, refusing new commands
-      // rather than dropping a record) is NOT implemented, and this arm exists so
-      // the gap is measured rather than assumed either way.
+      // REWRITTEN for cinatra#2266 slice 2 — this replaces the arm that recorded
+      // "audit delivery is at-most-once — a broker restart drops what was
+      // buffered". That was a true characterization of the ring-buffer relay and
+      // is now false: the spool lives on the broker's own volume, the read
+      // removes nothing, and records leave only on an ACK.
+      //
+      // THE SEQUENCE IS THE POINT, and it is the one #2266 AC8 spells out:
+      //   observe a batch on the wire → WITHHOLD the ack → kill and restart the
+      //   broker → observe the SAME delivery keys delivered again.
+      //
+      // A run in which zero records or zero executions occurred FAILS this arm
+      // rather than passing it — the assertions below are on nonzero counts.
+      //
+      // THE HALF THIS BATTERY CANNOT ASSERT: "exactly one kernel row per
+      // delivery key". This battery drives the BROKER directly and holds no
+      // authz kernel, so there are no rows to query. The kernel half is proven
+      // in `src/lib/authz/__tests__/execution-audit-delivery-key.test.ts`
+      // (`inserted` then `duplicate` for one key, through the real statement)
+      // and in `src/lib/execution/__tests__/execution-audit-drain-stdio.test.ts`
+      // (a failed write never acknowledges, so the same keys come back). Joining
+      // the two ends — a real app writing real rows against a killed broker —
+      // needs the app in the compose topology and belongs to the acceptance lane.
       restoreHealthyLease();
       await drainAudit();
       const runId = `l5-restart-${randomUUID()}`;
       const jobId = await openJob(runId);
-      expect((await execCommand(jobId, "echo before-restart")).ok).toBe(true);
+      expect((await execCommand(jobId, "echo before-restart-one")).ok).toBe(true);
+      expect((await execCommand(jobId, "echo before-restart-two")).ok).toBe(true);
 
+      // OBSERVE the batch on the wire, and DO NOT acknowledge it.
+      const observed = await app.drainAudit({});
+      const keysBefore = observed.audit
+        .filter((r) => r.jobId === jobId)
+        .map((r) => r.deliveryKey as string);
+      expect(observed.durable).toBe(true);
+      // Nonzero minimum: a run that recorded nothing must not pass.
+      expect(keysBefore.length).toBeGreaterThanOrEqual(2);
+      expect(keysBefore.every((k) => typeof k === "string" && k.length > 0)).toBe(true);
+      const spoolIdBefore = observed.spoolId;
+
+      // KILL, not a graceful stop: `docker kill` sends SIGKILL, so no shutdown
+      // hook runs and nothing but the fsynced spool survives.
       const brokerId = await stack.containerId(BROKER_SERVICE);
-      await docker(["restart", "-t", "2", brokerId], { timeoutMs: 120_000 });
+      await docker(["kill", brokerId], { timeoutMs: 120_000 });
+      await docker(["start", brokerId], { timeoutMs: 120_000 });
 
       // Wait for the broker to answer again.
       let healthy = false;
@@ -1052,12 +1134,23 @@ describe("6. audit: every executed AND refused command yields exactly one row", 
 
       const afterRestart = await app.drainAudit({});
       expect(afterRestart.relayed).toBe(true);
-      // The row that existed before the restart is NOT re-delivered, and the
-      // loss is not counted either — the drop counter is process-local too.
-      expect(afterRestart.audit.filter((r) => r.jobId === jobId)).toHaveLength(0);
+      // The SAME volume, so the SAME spool identity — an ACK routed here still
+      // means what it meant before the kill.
+      expect(afterRestart.spoolId).toBe(spoolIdBefore);
+      const keysAfter = afterRestart.audit
+        .filter((r) => r.jobId === jobId)
+        .map((r) => r.deliveryKey as string);
+      // RE-DELIVERED, byte-identical keys — at-least-once, which is the whole
+      // contract. The de-dup is the kernel's, on exactly these keys.
+      for (const key of keysBefore) expect(keysAfter).toContain(key);
 
-      // The job did not survive the restart either: broker state is in-process,
-      // so the app must re-open. Fail-closed, and visible.
+      // Now acknowledge, and they are gone for good.
+      await app.ackAudit({ spoolId: afterRestart.spoolId, head: afterRestart.head });
+      const finalBatch = await app.drainAudit({});
+      expect(finalBatch.audit.filter((r) => r.jobId === jobId)).toHaveLength(0);
+
+      // The JOB did not survive the restart — broker job state is in-process,
+      // and that is deliberate and visible. The AUDIT did, which is the change.
       const orphaned = await app.exec(
         jobId,
         "echo after-restart",

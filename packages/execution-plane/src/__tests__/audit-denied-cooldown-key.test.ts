@@ -26,6 +26,7 @@ const REFUSAL: ExecutionAuditRecord = {
   surface: "agent_run",
   command: "curl https://exfil.example",
   cwd: "/workspace",
+  seq: 0,
   decision: "refused",
   reason: "voucher_invalid",
   effectivePolicy: { egressMode: "allowlist", limits: DEFAULT_SANDBOX_LIMITS },

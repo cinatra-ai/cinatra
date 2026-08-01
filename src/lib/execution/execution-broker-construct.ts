@@ -59,7 +59,11 @@ import {
 } from "@cinatra-ai/llm/execution-plane";
 import type { SandboxExecutor } from "@cinatra-ai/llm";
 
-import { logAuditEvent } from "@/lib/authz/audit";
+import {
+  logAuditEvent,
+  logExecutionAuditEventDurable,
+  type ExecutionAuditWriteOutcome,
+} from "@/lib/authz/audit";
 import {
   createCommandVoucherMinter,
   createEd25519VoucherSigner,
@@ -152,6 +156,41 @@ export function createExecutionAuditSink(): (record: ExecutionAuditRecord) => Pr
       // Auditing is best-effort at the transport layer; the broker has already
       // enforced its decision before the sink runs.
     }
+  };
+}
+
+/**
+ * The DURABLE writer the ACKing drain loop uses (cinatra#2266 G4/AC6).
+ *
+ * The sibling above is fail-SILENT on purpose: it runs INSIDE a model's tool
+ * loop on the in-process placement, where the broker has already enforced its
+ * decision and a kernel blip must not become a thrown error the caller reads as
+ * "the command did not run". This one runs in a background drain that is about
+ * to tell a broker it may DELETE its only copy, and there the posture inverts:
+ * a failure must propagate, because acknowledging a write that did not happen
+ * is how an audit trail loses its tail.
+ *
+ * Returns which of the two acceptable outcomes happened. Both are ACKable —
+ * `duplicate` means a re-delivery found the row already durably present, which
+ * is the at-least-once contract working, not an error.
+ */
+export function createDurableExecutionAuditWriter(): (
+  record: ExecutionAuditRecord,
+) => Promise<ExecutionAuditWriteOutcome> {
+  return async (record: ExecutionAuditRecord): Promise<ExecutionAuditWriteOutcome> => {
+    const input = toAuthzAuditEventInput(record);
+    const deliveryKey = input.executionDeliveryKey;
+    if (!deliveryKey) {
+      // A spooled record ALWAYS carries one; a record without it cannot be
+      // acknowledged safely, so this refuses rather than silently degrading to
+      // the fail-silent path and letting the loop ACK it anyway.
+      throw new Error(
+        `The execution-plane audit record for job ${record.jobId} (seq ${record.seq}) carries no ` +
+          "delivery key, so its kernel write cannot be made idempotent and must not be " +
+          "acknowledged to the broker's spool.",
+      );
+    }
+    return logExecutionAuditEventDurable({ ...input, executionDeliveryKey: deliveryKey });
   };
 }
 

@@ -12,7 +12,7 @@
 
 export * from "./types";
 
-export { verifyInbound, verifyLegacyHmac, WebhookVerifyFailedError } from "./verify";
+export { verifyInbound, WebhookVerifyFailedError } from "./verify";
 export type { VerifiedInbound } from "./verify";
 
 export { signOutbound, signOutboundRaw } from "./sign";
