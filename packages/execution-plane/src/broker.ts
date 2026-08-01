@@ -529,13 +529,16 @@ class BoundedSemaphore {
   waitAcquire(cancel?: CancellationSource): Promise<"acquired" | "cancelled"> {
     return new Promise((resolve) => {
       let settled = false;
-      let unsubscribe: (() => void) | undefined;
+      // A holder rather than a bare `let`: `waiter` closes over the
+      // unsubscribe BEFORE it can exist (subscription has to happen after the
+      // push — see below), and a mutable box makes that ordering explicit.
+      const subscription: { off?: () => void } = {};
       const waiter = (): boolean => {
         // Already cancelled ⇒ decline the permit so `release` hands it to the
         // next real waiter instead of losing it.
         if (settled) return false;
         settled = true;
-        unsubscribe?.();
+        subscription.off?.();
         this.inFlight += 1;
         resolve("acquired");
         return true;
@@ -543,7 +546,7 @@ class BoundedSemaphore {
       this.waiters.push(waiter);
       // Subscribe AFTER the push so an already-cancelled source (the sticky
       // contract above) removes the waiter it can actually find.
-      unsubscribe = cancel?.onCancel(() => {
+      subscription.off = cancel?.onCancel(() => {
         if (settled) return;
         settled = true;
         const index = this.waiters.indexOf(waiter);
@@ -1329,15 +1332,15 @@ export class ExecutionBroker {
     runId: string,
     opts?: { removeWorkspace?: boolean },
   ): Promise<number> {
+    // PHASE 1 — TERMINATE EVERYTHING FIRST, synchronously, with no await in the
+    // loop (Codex review, finding 2). Cancelling the run's work is the duty that
+    // must not be delayed or skipped: an awaited volume removal in this loop
+    // would let one slow (or rejecting) docker call postpone — or, on a
+    // rejection, entirely skip — the cancellation of every later job of the same
+    // run. Cleanup is phase 2, and it cannot hold cancellation hostage.
     let terminated = 0;
-    // Removals are deduped by NAME: every job of a run shares one run-keyed
-    // workspace, and the retained-workspace removal below must not repeat it.
-    const removedWorkspaces = new Set<string>();
-    const removeWorkspace = async (volumeName: string): Promise<void> => {
-      if (removedWorkspaces.has(volumeName)) return;
-      removedWorkspaces.add(volumeName);
-      await this.volumeOps.removeWorkspace(volumeName);
-    };
+    const workspaces = new Set<string>();
+    const skillsVolumes: string[] = [];
     for (const job of this.jobs.values()) {
       if (job.session.runId !== runId) continue;
       // A job terminated by an EARLIER fire (or by a purged-liveness refusal)
@@ -1347,17 +1350,35 @@ export class ExecutionBroker {
         this.terminate(job, "run_removed");
         terminated += 1;
       }
-      if (opts?.removeWorkspace) await removeWorkspace(job.workspaceVolume);
-      // The skills volume is strictly per-job (never shared): remove eagerly.
-      if (job.skillsVolume) {
-        await this.volumeOps.removeSkills(job.skillsVolume);
+      // Deduped by NAME: every job of a run shares one run-keyed workspace.
+      if (opts?.removeWorkspace) workspaces.add(job.workspaceVolume);
+      // The skills volume is strictly per-job (never shared).
+      if (job.skillsVolume) skillsVolumes.push(job.skillsVolume);
+    }
+    // The RETAINED workspace: a run whose jobs are all closed still has its
+    // volume, because `closeJob` / `closeIdleJobs` leave it to the retention GC.
+    const retained = opts?.removeWorkspace
+      ? this.runWorkspaces.get(runId)
+      : undefined;
+    if (retained !== undefined) workspaces.add(retained);
+
+    // PHASE 2 — best-effort cleanup, each attempt ISOLATED so one failure never
+    // strands the rest. A failed removal is not lost work: the mapping is only
+    // forgotten on success, so the next fire retries it, and the retention GC is
+    // the backstop under that.
+    for (const volumeName of workspaces) {
+      try {
+        await this.volumeOps.removeWorkspace(volumeName);
+        if (retained === volumeName) this.runWorkspaces.delete(runId);
+      } catch {
+        // Tolerated: docker refuses a volume an attached container still holds.
       }
     }
-    if (opts?.removeWorkspace) {
-      const retained = this.runWorkspaces.get(runId);
-      if (retained !== undefined) {
-        await removeWorkspace(retained);
-        this.runWorkspaces.delete(runId);
+    for (const volumeName of skillsVolumes) {
+      try {
+        await this.volumeOps.removeSkills(volumeName);
+      } catch {
+        // Same posture — per-volume containment, retried on the next fire.
       }
     }
     return terminated;
@@ -1372,6 +1393,13 @@ export class ExecutionBroker {
     this.terminate(job, "closed");
     if (opts?.removeWorkspace) {
       await this.volumeOps.removeWorkspace(job.workspaceVolume);
+      // FORGET the run→workspace mapping when the volume it names is gone
+      // (Codex review, finding 1). A name left behind after its volume was
+      // removed is a name a later `ensureWorkspace` could legitimately hand to
+      // a DIFFERENT run — and hard-removal teardown would then delete that
+      // run's workspace. Conditioned on the name still matching, so a mapping
+      // already re-pointed by a newer open is never dropped.
+      this.forgetRunWorkspace(job.session.runId, job.workspaceVolume);
     }
     // The skills volume is strictly per-job (never shared): remove eagerly.
     if (job.skillsVolume) {
@@ -1487,6 +1515,14 @@ export class ExecutionBroker {
       if (oldest !== undefined) this.runWorkspaces.delete(oldest);
     }
     this.runWorkspaces.set(runId, volumeName);
+  }
+
+  /** Drop a run→workspace mapping IFF it still names the volume just removed. */
+  private forgetRunWorkspace(runId: string | undefined, volumeName: string): void {
+    if (!runId) return;
+    if (this.runWorkspaces.get(runId) === volumeName) {
+      this.runWorkspaces.delete(runId);
+    }
   }
 
   private terminate(job: BrokerJob, reason: string): void {

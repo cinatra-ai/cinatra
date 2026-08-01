@@ -4048,12 +4048,25 @@ export async function readAgentTemplatesReferencingChildPackage(
 // ---------------------------------------------------------------------------
 /**
  * Bound on the run ids a destructive lifecycle step reports back for
- * execution-plane teardown (epic #1705 AC9). The ids exist to cancel queued
- * sandbox work and collect retained workspaces for runs that are being deleted;
- * past this many runs the per-run teardown stops being the right instrument and
- * the plane's own backstops carry it (every job of a deleted run fails its next
- * command closed on the liveness probe, and the retention GC reaps the volume).
- * Truncation is REPORTED, never silent.
+ * execution-plane teardown (epic #1705 AC9).
+ *
+ * WHY A BOUND AT ALL: the teardown drives ONE broker call per id, and in the
+ * managed placement each of those is an mTLS RPC. An admin force-deleting a
+ * package with half a million historical runs must not turn one lifecycle
+ * operation into half a million round trips — that is a worse failure than the
+ * residual this cap leaves.
+ *
+ * WHY THE RESIDUAL IS THE RIGHT ONE: the ids are read MOST RECENT FIRST, and
+ * live plane state does not survive long enough to belong to an old run — an
+ * open job is idle-reaped, and a retained workspace is reaped by the retention
+ * GC. So the ids this cap drops are, by construction, the ones that cannot have
+ * a sandbox job or a workspace to collect. What it drops is the tail that was
+ * already collected, never the head that still holds something.
+ *
+ * And the residual is not "nothing happens" in any case: a job bound to a
+ * deleted run still fails its next command closed on the liveness probe, and
+ * the retention GC still reaps the volume. The cap costs immediacy, not
+ * eventual correctness. Truncation is REPORTED, never silent.
  */
 export const MAX_REPORTED_TEARDOWN_RUN_IDS = 5_000;
 
@@ -4119,6 +4132,9 @@ export async function removeReferencingRunRows(
       .select({ id: agentRuns.id })
       .from(agentRuns)
       .where(eq(agentRuns.templateId, templateId))
+      // MOST RECENT FIRST — see MAX_REPORTED_TEARDOWN_RUN_IDS: what the cap
+      // drops is the tail whose plane state is already gone.
+      .orderBy(desc(agentRuns.createdAt))
       .limit(MAX_REPORTED_TEARDOWN_RUN_IDS + 1);
     const runIdsTruncated = doomedRuns.length > MAX_REPORTED_TEARDOWN_RUN_IDS;
     const runIds = doomedRuns
@@ -4249,6 +4265,9 @@ export async function purgeAgentTemplateAtomic(
       .select({ id: agentRuns.id })
       .from(agentRuns)
       .where(eq(agentRuns.templateId, templateId))
+      // MOST RECENT FIRST — see MAX_REPORTED_TEARDOWN_RUN_IDS: what the cap
+      // drops is the tail whose plane state is already gone.
+      .orderBy(desc(agentRuns.createdAt))
       .limit(MAX_REPORTED_TEARDOWN_RUN_IDS + 1);
     const runIdsTruncated = doomedRuns.length > MAX_REPORTED_TEARDOWN_RUN_IDS;
     const runIds = doomedRuns

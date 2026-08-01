@@ -532,6 +532,49 @@ describe("hard-removal teardown — cancel queued work + GC retained workspaces 
     expect(removedVolumes(docker)).toContain(workspaceVolumeName("run-retained"));
   });
 
+  it("forgets the run→workspace mapping once closeJob already removed the volume", async () => {
+    const docker = recordingDocker();
+    const { broker } = makeBroker({ docker });
+    const opened = await openVouched(broker, carrierFor({ runId: "run-forget" }));
+    if (!opened.ok) throw new Error("open failed");
+    // closeJob WITH removeWorkspace: the volume is gone, so its name must not
+    // stay mapped — a later `ensureWorkspace` could legitimately hand that same
+    // name to a different run, and teardown would then delete ITS workspace.
+    await broker.closeJob(opened.jobId, { removeWorkspace: true });
+    const removedByClose = removedVolumes(docker).length;
+
+    // Nothing is open and nothing is mapped ⇒ teardown removes nothing further.
+    expect(await broker.terminateJobsForRun("run-forget", { removeWorkspace: true })).toBe(0);
+    expect(removedVolumes(docker)).toHaveLength(removedByClose);
+  });
+
+  it("one failing volume removal never strands the rest of the teardown", async () => {
+    const failing = {
+      ensureWorkspace: async (key: string) => `cinatra-exec-l2-${key}`,
+      removeWorkspace: async () => {
+        throw new Error("volume is in use by a running container");
+      },
+      stageSkills: async () => "cinatra-exec-skills-x",
+      removeSkills: async () => {},
+    };
+    const { broker } = makeBroker({ volumeOps: failing });
+    const a = await openVouched(broker, carrierFor({ runId: "run-fail" }));
+    const b = await openVouched(broker, carrierFor({ runId: "run-fail" }));
+    if (!a.ok || !b.ok) throw new Error("open failed");
+
+    // Cancellation is the duty that must not be held hostage by cleanup: BOTH
+    // jobs are terminated even though every workspace removal throws.
+    expect(await broker.terminateJobsForRun("run-fail", { removeWorkspace: true })).toBe(2);
+    expect(await execVouched(broker, a.jobId, "echo")).toMatchObject({
+      ok: false,
+      reason: "job_terminated",
+    });
+    expect(await execVouched(broker, b.jobId, "echo")).toMatchObject({
+      ok: false,
+      reason: "job_terminated",
+    });
+  });
+
   it("removes the run workspace exactly once per fire and RETRIES on a re-fire", async () => {
     const docker = recordingDocker();
     const { broker } = makeBroker({ docker });

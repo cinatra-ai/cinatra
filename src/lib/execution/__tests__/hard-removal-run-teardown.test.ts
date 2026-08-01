@@ -176,11 +176,17 @@ describe("hard removal → execution-plane run teardown (AC9)", () => {
       }),
     );
     await broker.openJob(carrierFor("run-keep"));
+    await broker.openJob(carrierFor("run-teardown-3"));
 
     await fireExtensionDataTeardown(PKG, { runIds: ["run-teardown-3"] });
 
+    // The TARGETED run was torn down — so the participant demonstrably ran, and
+    // this case is a real discrimination test rather than a no-op.
+    expect(removedVolumes(docker)).toContain("cinatra-exec-l2-run-teardown-3");
+    expect(await broker.terminateJobsForRun("run-teardown-3")).toBe(0);
+    // The unrelated one is untouched: no volume removed, still open, still
+    // terminable.
     expect(removedVolumes(docker)).not.toContain("cinatra-exec-l2-run-keep");
-    // Still open and still terminable — nothing touched it.
     expect(await broker.terminateJobsForRun("run-keep")).toBe(1);
   });
 
@@ -202,14 +208,41 @@ describe("hard removal → execution-plane run teardown (AC9)", () => {
   });
 
   it("a THROWING run-teardown participant never aborts the committed removal", async () => {
+    let invoked = 0;
     registerExecutionRunTeardown(async () => {
+      invoked += 1;
       throw new Error("broker unreachable");
     });
 
     await expect(
       fireExtensionDataTeardown(PKG, { runIds: ["run-teardown-4"] }),
     ).resolves.toBeUndefined();
+    // It genuinely ran and genuinely threw — the point is that the throw was
+    // contained, not that nothing happened.
+    expect(invoked).toBe(1);
     // Per-half isolation: the settings/secrets deletes still happened.
     expect(deletedPrefixes).toContain(`ext-secret:${PKG}:`);
+  });
+
+  // Per-RUN isolation inside the participant itself: one unreachable run must
+  // not strand the others.
+  it("keeps tearing down the remaining runs when one of them fails", async () => {
+    const attempted: string[] = [];
+    registerExecutionRunTeardown(
+      createExecutionRunTeardownParticipant({
+        terminateJobsForRun: async (runId) => {
+          attempted.push(runId);
+          if (runId === "run-bad") throw new Error("broker refused");
+          return 1;
+        },
+        warn: () => {},
+      }),
+    );
+
+    await fireExtensionDataTeardown(PKG, {
+      runIds: ["run-ok-1", "run-bad", "run-ok-2"],
+    });
+
+    expect(attempted).toEqual(["run-ok-1", "run-bad", "run-ok-2"]);
   });
 });
