@@ -228,9 +228,12 @@ export interface CmsRepairCompletionSummary {
   /** The capture failed for a NAMED reason AND that reason was pinned as a
    * degraded record: the successor gate states the gap. */
   repairedCaptureDegraded: number;
-  /** No picture and no stated reason on the gate (no port bound, the port threw,
-   * or the ceiling/record write lost the reason). The successor gate will show
-   * an uncaptured side — always logged, never silent. */
+  /** No CONFIRMED picture and no stated reason on the gate: no port bound, the
+   * port threw, a record was pinned without a reason, or the capture outran its
+   * ceiling (never cancelled, so that last class may still land — counted all
+   * the same, because a picture nothing can verify must reach ops). The
+   * successor gate may render a causeless one-sided pair — always logged, never
+   * silent. */
   repairedCaptureMissing: number;
 }
 
@@ -427,10 +430,12 @@ export async function completeDispatchedProducerCmsRepairs(opts?: {
         summary.completed += 1;
         // Accounted for ONLY here (a codex convergence finding): these counters
         // and their escalation are statements about the SUCCESSOR GATE, and
-        // `submitRepairResponse` is what creates it. A rejected submit leaves no
-        // gate that could be one-sided, and the repair stays open for the next
-        // drain — which retries the capture too, reusing whatever this attempt
-        // already pinned (the pinned write is immutable).
+        // `submitRepairResponse` is what creates it. A rejection leaves no gate
+        // that could be one-sided, so saying anything about one would be false —
+        // and how the repair proceeds from there is the repair store's business,
+        // not this counter's (a stale/tombstoned lineage moves it to `stale`; the
+        // other rejection codes leave it for a later drain, which re-captures and
+        // reuses whatever this attempt already pinned, the write being immutable).
         recordRepairedCaptureOutcome(summary, repair.id, capture);
       } else summary.unresolved += 1;
     } catch (err) {

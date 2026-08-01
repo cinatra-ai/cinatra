@@ -165,7 +165,7 @@ function createCmsReviewHostSeamDeps(): CmsReviewHostSeamDeps {
  */
 export function createCmsRepairedCapturePort(): CmsRepairedCapturePort {
   return async (request) => {
-    const { captureRepairedPreviewForGate } = await import(
+    const { captureRepairedPreviewForGate, captureStatesItsGap } = await import(
       "@/lib/artifacts/cms-preview-capture"
     );
     const outcome = await captureRepairedPreviewForGate({
@@ -180,9 +180,17 @@ export function createCmsRepairedCapturePort(): CmsRepairedCapturePort {
     });
     return outcome.status === "captured"
       ? { status: "captured" }
-      : // `capture !== null` ⇒ the named reason IS pinned, so the successor gate
-        // states the gap rather than showing a blank side.
-        { status: "degraded", reason: outcome.reason, recorded: outcome.capture !== null };
+      : {
+          status: "degraded",
+          reason: outcome.reason,
+          // `recorded` asks ONE question: can the successor gate state its own
+          // gap? Only a pinned record that CARRIES a reason can — the renderer
+          // prints the record's `degradedReason` verbatim, so a pinned record
+          // with a null reason renders a causeless blank side, which is the very
+          // thing this work exists to stop. A non-null `capture` alone is not
+          // that proof (a codex convergence finding).
+          recorded: captureStatesItsGap(outcome),
+        };
   };
 }
 

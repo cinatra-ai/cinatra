@@ -591,11 +591,21 @@ export async function captureCmsContentSnapshot(
 export async function readCmsSnapshotProposedFields(
   orgId: string,
   snapshotRevisionId: string,
+  /**
+   * Cap for the SYNCHRONOUS lookup below. `runPostgresQueriesSync` parks the
+   * event loop on `Atomics.wait`, so this read cannot be preempted by a caller's
+   * timer — a caller that advertises a wall-clock ceiling must therefore bound
+   * the read ITSELF or its ceiling is fiction (a codex convergence finding on
+   * cinatra#2044). Omitted ⇒ the sync helper's own default. A breach throws,
+   * which every caller already treats as an unreadable base and fails closed on.
+   */
+  timeoutMs?: number,
 ): Promise<Record<string, string> | null> {
   ensurePostgresSchema();
   const schema = q();
   const [res] = runPostgresQueriesSync({
     connectionString: conn(),
+    ...(timeoutMs === undefined ? {} : { timeoutMs }),
     queries: [
       {
         text: `SELECT r.metadata->>'storageKey' AS storage_key

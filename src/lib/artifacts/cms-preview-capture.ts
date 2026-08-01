@@ -69,6 +69,16 @@ import {
 /** Wall-clock ceiling for the whole capture (fetch + render). The staged-write
  * path awaits this, so it is bounded well under a request budget. */
 const CAPTURE_TOTAL_TIMEOUT_MS = 25_000;
+/**
+ * The slice of the repaired capture's budget the SYNCHRONOUS proposed-fields
+ * lookup may consume (cinatra#2044). That read parks the event loop, so nothing
+ * outside it can preempt it — its own timeout is the only bound it has, and the
+ * sync helper's default (30s) is LONGER than the whole capture ceiling. Capping
+ * it here keeps this writer from making the pre-existing softness of that
+ * ceiling measurably worse; see `captureRepairedPreviewForGate` for what the
+ * ceiling does and does not bound.
+ */
+const CAPTURE_SNAPSHOT_READ_TIMEOUT_MS = 5_000;
 /** The PAIR shares one fetch but runs two isolated renders, so its ceiling is
  * one render longer than a single capture's — still bounded, still awaited. */
 const CAPTURE_PAIR_TOTAL_TIMEOUT_MS = 40_000;
@@ -403,11 +413,31 @@ function reportStored(
   if (stored.data.status === "captured") return { status: "captured", capture: stored };
   return {
     status: "degraded",
-    // A degraded record always carries its reason; `intended` only covers a
-    // record shape that predates the field.
+    // The label a CALLER logs. It is deliberately NOT the same question as
+    // "can the gate state the gap": a stored degraded record may carry a null
+    // reason, in which case the gate renders no cause at all and this label —
+    // this attempt's own diagnosis — would be the only place it ever existed.
+    // So consumers that decide the honesty class read the RECORD
+    // (`capture.data.degradedReason`), never this field (a codex convergence
+    // finding); `captureStatesItsGap` below is that predicate.
     reason: (stored.data.degradedReason as CaptureDegradeReason | null) ?? intended ?? "render-failed",
     capture: stored,
   };
+}
+
+/**
+ * Whether an outcome leaves the review surface able to STATE why a picture is
+ * missing. True only when a record is pinned AND that record carries a reason
+ * the renderer will actually print. Records are read back as unvalidated JSON,
+ * so the test is the RENDERER's — a non-empty string — not `!== null`: an
+ * omitted, undefined or empty reason passes a null check but still renders a
+ * causeless "no capture" box, which is indistinguishable to a reviewer from the
+ * never-captured bug this work exists to fix (a codex convergence finding).
+ */
+export function captureStatesItsGap(outcome: CapturePinnedPreviewOutcome): boolean {
+  if (outcome.status === "captured") return true;
+  const reason = outcome.capture?.data.degradedReason;
+  return typeof reason === "string" && reason.trim().length > 0;
 }
 
 /** Write ONE degraded capture record for a role. Never throws. */
@@ -1196,13 +1226,26 @@ export async function capturePinnedPreviewPairForGate(
  * would delay a repair by exactly the amount the ceiling exists to bound (a
  * codex convergence finding).
  *
- * CEILING CAVEAT, stated rather than implied: `readCmsSnapshotProposedFields`
- * reaches the store through `runPostgresQueriesSync`, which parks the event loop
- * on `Atomics.wait`. No timer-based ceiling can preempt that — while it blocks,
- * the `setTimeout` below cannot fire. Its bound is the sync helper's OWN query
- * timeout, not this one. The ceiling still bounds every asynchronous phase (the
- * signed fetch, the headless render, the pinned write), which is where a capture
- * actually spends its time.
+ * WHAT THE CEILING ACTUALLY BOUNDS — stated plainly, because the honest answer
+ * is "less than its name suggests". Every store call underneath a capture
+ * (`readPinnedCaptures`, `writeCapture`, `listRegisteredSites`, and
+ * `ensurePostgresSchema` on a cold process) reaches Postgres through
+ * `runPostgresQueriesSync`, which parks the event loop on `Atomics.wait`. A
+ * `setTimeout` cannot fire while the loop is parked, so no timer-based ceiling
+ * here — or on the pre-existing `capturePinnedPreviewForGate` /
+ * `capturePinnedPreviewPairForGate`, which have always had the same shape — is a
+ * hard bound. It bounds the asynchronous phases (the signed fetch, the headless
+ * render), and each blocking call is bounded only by its OWN query timeout.
+ * Making it airtight means moving the capture store off the sync helper, which
+ * is a subsystem change well outside this writer; it is NOT claimed here.
+ *
+ * What this entry point does do is refuse to widen the hole it would otherwise
+ * add: the proposed-fields read is the one blocking call this writer introduces,
+ * and the sync helper's default (30s) is LONGER than the whole ceiling, so it is
+ * capped explicitly at `CAPTURE_SNAPSHOT_READ_TIMEOUT_MS`. A breach throws and
+ * is caught below as an unreadable base — which degrades `no-proposed-fields`
+ * UNLESS the coordinate recovery or the fetch fails first and names its own
+ * reason, since those run before composition.
  *
  * Swallows every failure — the repair completes either way.
  */
@@ -1223,6 +1266,7 @@ export async function captureRepairedPreviewForGate(input: {
       proposedFields = await readCmsSnapshotProposedFields(
         input.orgId,
         input.successorSnapshotRevisionId,
+        CAPTURE_SNAPSHOT_READ_TIMEOUT_MS,
       );
     } catch (err) {
       // Unreadable ⇒ `no-proposed-fields`, a NAMED degrade recorded below —

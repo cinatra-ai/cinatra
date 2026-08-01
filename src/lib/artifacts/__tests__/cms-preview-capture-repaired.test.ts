@@ -24,6 +24,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   captureRepairedPreview,
+  captureStatesItsGap,
   type CaptureRepairedPreviewInput,
   type PreviewCaptureDeps,
 } from "@/lib/artifacts/cms-preview-capture";
@@ -370,6 +371,75 @@ describe("cinatra#2044 — the `repaired` capture writer", () => {
     // there — the inverse of the bug this whole change exists to fix.
     expect(out.status).toBe("captured");
     expect(out.capture).not.toBeNull();
+  });
+
+  it("a pinned record with NO reason does not count as the gate stating its gap", async () => {
+    // The renderer prints `degradedReason` verbatim, so this record renders a
+    // blank "no capture" box with no cause — indistinguishable to a reviewer
+    // from the never-captured bug. A pinned record alone is therefore NOT proof
+    // the gate can state its gap; only a pinned REASON is.
+    const { deps } = stubDeps({
+      readPinnedCaptures: async () => [pinned("current")],
+      writeCapture: async () =>
+        ({
+          captureArtifactId: "cap-written",
+          representationRevisionId: null,
+          data: { role: "repaired", status: "degraded", degradedReason: null },
+        }) as unknown as StoredPreviewCapture,
+    });
+
+    const out = await captureRepairedPreview(input, deps);
+
+    expect(out.status).toBe("degraded");
+    expect(out.capture).not.toBeNull();
+    // The loud class, despite a non-null record.
+    expect(captureStatesItsGap(out)).toBe(false);
+  });
+
+  it.each([
+    ["an omitted reason", {}],
+    ["an undefined reason", { degradedReason: undefined }],
+    ["an empty reason", { degradedReason: "" }],
+    ["a whitespace reason", { degradedReason: "   " }],
+  ])("treats %s on a pinned record as NOT stating the gap", async (_label, over) => {
+    // Records come back as unvalidated JSON and the renderer prints the reason
+    // on a TRUTHINESS check, so each of these renders a causeless blank side
+    // while passing a naive `!== null` test.
+    const { deps } = stubDeps({
+      readPinnedCaptures: async () => [pinned("current")],
+      writeCapture: async () =>
+        ({
+          captureArtifactId: "cap-written",
+          representationRevisionId: null,
+          data: { role: "repaired", status: "degraded", ...over },
+        }) as unknown as StoredPreviewCapture,
+    });
+
+    const out = await captureRepairedPreview(input, deps);
+
+    expect(out.status).toBe("degraded");
+    expect(captureStatesItsGap(out)).toBe(false);
+  });
+
+  it("captureStatesItsGap is true only for a capture or a REASONED degrade", async () => {
+    const withReason = stubDeps({ readPinnedCaptures: async () => [] });
+    expect(captureStatesItsGap(await captureRepairedPreview(input, withReason.deps))).toBe(true);
+
+    const captured = stubDeps({ readPinnedCaptures: async () => [pinned("current")] });
+    expect(captureStatesItsGap(await captureRepairedPreview(input, captured.deps))).toBe(true);
+
+    const unwritable = stubDeps({
+      writeCapture: async () => {
+        throw new Error("write failed");
+      },
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // Nothing pinned at all — the class the drain escalates.
+      expect(captureStatesItsGap(await captureRepairedPreview(input, unwritable.deps))).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("stamps the accountable principal and the producing run onto the record", async () => {
