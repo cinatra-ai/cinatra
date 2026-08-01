@@ -330,7 +330,7 @@
     {
       "packageName": "@cinatra-ai/media-transcript-agent",
       "repo": "cinatra-ai/media-transcript-agent",
-      "resolvedSha": "7d93303ce4f8295c839d85150aa5aacf45d6231a"
+      "resolvedSha": "6a70d895894fc2ee89a40dfdc1b8c75e66ad6fbb"
     },
     {
       "packageName": "@cinatra-ai/plane-connector",
@@ -430,7 +430,7 @@
     {
       "packageName": "@cinatra-ai/wordpress-mcp-connector",
       "repo": "cinatra-ai/wordpress-mcp-connector",
-      "resolvedSha": "e46781db566c5538ce6ffe42df19c1662c9e2b79"
+      "resolvedSha": "e309af56f433fc32b72ea258f010dcd26da4aacf"
     },
     {
       "packageName": "@cinatra-ai/wordpress-widget-chat-skill",
