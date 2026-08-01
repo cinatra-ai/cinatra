@@ -772,6 +772,39 @@ image with the sibling digest kept in sync and the gate green on a paired bump
 (and red on an unpaired one, the old status quo). The definitive proof is the
 first Renovate digest PR that lands green without a manual matrix sync.
 
+### 12.1 The third carrier — works-after fixtures now DERIVE their pins (cinatra#2304)
+
+The live proof arrived on PR #2301 (`nangohq/nango-server` digest
+`1b3be71` → `94a7983`): the pairing worked exactly as designed — compose and the
+matrix moved together in one bot branch and the pin-drift check was green — but
+the `works-after proof / proof` check went **red**. A **third** carrier of the
+same digest existed that neither the bot nor the pairing knows about: the
+works-after arms hard-coded the pin as their candidate default
+(`NANGO_SERVER_IMAGE="${NANGO_SERVER_IMAGE:-nangohq/nango-server:hosted@sha256:…}"`),
+and the #2194 drift guard asserts that default EQUALS the matrix pin. Six such
+literals existed (nango-server, both postgres upgrade targets, neo4j ×2, redis),
+so every digest wave over a fixture-carried service was born red and needed a
+human to hand-sync a file Renovate cannot reach.
+
+**Fix: delete the carrier, don't synchronise it.** Each fixture default that
+mirrors a matrix pin is now **derived at runtime** —
+`wa_matrix_pin <serviceId> [--coupled <repo>] [--tag]`
+(`scripts/ci/works-after/lib.sh`), a thin wrapper over the shared fail-closed
+consumption contract (`scripts/upgrade/resolve-transition.mjs --pin`). One
+source of truth (compose), one gated mirror (the matrix), zero copies. The
+guard is kept and strengthened: it now resolves each default *through the
+derivation* and asserts it equals the matrix value, plus a self-maintaining
+invariant that **no arm may hard-code a digest the matrix already carries**.
+Fail-closed by construction — an unknown service, an ambiguous coupled image, a
+non-digest-bound pin or a matrix revision skew aborts the arm instead of
+silently floating the image. Overrides are untouched (an env pin still wins, and
+CI still derives the candidate from the PR's own compose ref).
+
+Adjacent, deliberately **not** folded in: the `works-after-proof.yml` `detect`
+paths-filter still omits `config/upgrade/**` (and `scripts/upgrade/**`), so a
+matrix-only PR green-stubs the harness — cinatra#1467 owns that (a
+`.github/workflows/**` change is the owner-review class).
+
 ---
 
 ## 13. Refresh 2026-07-28 — npm-major re-grounding: `cron-parser` 5 + `jsdom` 30 applied, `node-pg-migrate` 9 BLOCKED
