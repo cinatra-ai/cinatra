@@ -39,22 +39,25 @@
  *     refuses a stale head, a head that is not an exact delivered position, and
  *     a head presented against a different `spoolId`.
  *
- * WHAT IS DELIBERATELY NOT HERE (slice 3, and named so the boundary is not
- * discovered later):
+ *  5. THE SATURATION STATE MACHINE (G5, cinatra#2266 slice 3). "Refuse AND
+ *     audit every command" is unbounded when the consumer is gone: a
+ *     permanently-full spool would need one record per refused attempt, and
+ *     there is by definition no room for them. So the spool has two admission
+ *     states — `open` and `saturated` — and the transition into `saturated`
+ *     mints exactly ONE durable `audit_spool_full` record, out of a byte
+ *     RESERVE held back from admission precisely so that record can always be
+ *     written. Every further attempt while saturated is refused with NO record
+ *     at all, counted on a persisted counter instead. Admission reopens on a
+ *     defined condition — occupancy back at or below a LOW-WATER MARK, which is
+ *     what stops the machine flapping and minting an episode per flap.
  *
- *  - G3 FLEET ROUTING. The `spoolId` below is a per-volume identity, persisted
- *     in the spool's own metadata, and every read/ACK carries it — that much is
- *     forced by G2 (a delivery key must be unique across the fleet, or the
- *     kernel's unique index would collapse two replicas' records into one). The
- *     REST of G3 — sticky job routing so a replica's records are only ever
- *     ACKed by a reader that read them, and the fleet-level misdelivery
- *     analysis — is not in this slice.
- *  - G5 SATURATION. A full spool here refuses the RESERVATION, which refuses
- *     the command (fail-closed, the correct direction). The bounded
- *     `audit_spool_full` EPISODE record, the "do not mint a record per refused
- *     attempt" rule and the defined reopen condition are slice 3. This module
- *     counts refused reservations in memory (`stats().refusedReservations`) so
- *     the episode has something true to be built from.
+ * WHAT IS DELIBERATELY NOT HERE:
+ *
+ *  - FLEET ROUTING (G3) is not a spool concern and is not in this module. The
+ *    `spoolId` below is the per-volume identity every read and ACK carries, and
+ *    a misrouted ACK is refused here (`wrong_spool`); the ROUTING that keeps a
+ *    reader and its acknowledger on one replica lives one layer up, in
+ *    `broker-fleet.ts`.
  *
  * SINGLE WRITER. The log is append-only from ONE process. A second writer
  * against the same directory is refused (`AuditSpoolLockedError`) rather than
@@ -103,11 +106,131 @@ export const DEFAULT_AUDIT_SPOOL_MAX_BYTES = 64 * 1024 * 1024;
  */
 export const AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES = 12_288;
 
-export class AuditSpoolFullError extends Error {
-  readonly code = "audit_spool_full" as const;
+/**
+ * Bytes held back from ADMISSION so the one `audit_spool_full` episode record
+ * can always be written (cinatra#2266 G5). Admission is bounded by
+ * `maxBytes - AUDIT_SPOOL_EPISODE_RESERVE_BYTES`; the episode record itself is
+ * bounded by `maxBytes`. Without this the saturation record would be the one
+ * record a saturated spool cannot store, and the episode would be invisible
+ * exactly when it matters.
+ *
+ * THE ARITHMETIC, against `buildEpisodeRecord` below — which is deliberately a
+ * NARROW projection of the refused attempt rather than the whole prepared
+ * record, because a prepared record carries the command text and that is
+ * unbounded:
+ *
+ *   6 identity fields (jobId, orgId, userId, surface, runId, cwd)
+ *     × 256 code units × 6 bytes worst-case JSON escape         ≈ 9 216 B
+ *   effectivePolicy (an enum + six numbers)                     <   256 B
+ *   spoolEpisode { id, openedAtMs }                             <   256 B
+ *   decision/reason/seq/atMs/deliveryKey + framing              <   512 B
+ *                                                               ── 10 240 B
+ *
+ * 16 KiB, so the bound holds with room to spare, and
+ * `AUDIT_SPOOL_EPISODE_FIELD_CHARS` is what makes the first line true. A test
+ * drives hostile, control-character-laden identifiers through this and asserts
+ * the encoded frame against this constant — not against a number of its own.
+ */
+export const AUDIT_SPOOL_EPISODE_RESERVE_BYTES = 16 * 1024;
+
+/** Per-field code-unit cap on the episode record's identity fields. */
+export const AUDIT_SPOOL_EPISODE_FIELD_CHARS = 256;
+
+/**
+ * The smallest `maxBytes` this spool will open on (cinatra#2266 G5, Codex
+ * convergence, adopted).
+ *
+ * Its arithmetic, so a reader can check it rather than trust it: the episode
+ * reserve is held back from admission entirely, and what remains has to fit at
+ * least ONE minimal reservation plus the terminal record that reservation
+ * guarantees — which is `AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES` twice over. A
+ * bound below this admits nothing, which presents as a broker that refuses
+ * every command with no record explaining it.
+ */
+export const AUDIT_SPOOL_MIN_MAX_BYTES =
+  AUDIT_SPOOL_EPISODE_RESERVE_BYTES + 2 * AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES;
+
+/**
+ * THE REOPEN CONDITION (cinatra#2266 AC7), as a LOW-WATER MARK and not as
+ * "there is room again".
+ *
+ * Admission reopens when occupancy — bytes on disk plus the headroom reserved
+ * for in-flight commands — falls to or below
+ *
+ *     min( AUDIT_SPOOL_RESUME_RATIO × admissionBytes,
+ *          admissionBytes − AUDIT_SPOOL_RESUME_HEADROOM_MULTIPLE × terminalHeadroom )
+ *
+ * and BOTH terms are load bearing, because each one alone flaps on a different
+ * shape of spool. Reopening the instant one frame is acknowledged would admit a
+ * command, re-saturate on it, and mint a SECOND episode record — a spool
+ * oscillating at its bound would then produce exactly the unbounded stream of
+ * records G5 exists to prevent.
+ *
+ *  - THE RATIO alone is wrong on a spool whose bound is small relative to one
+ *    command's reserved headroom: saturation there happens BELOW 75 % of the
+ *    bound (a single reservation claims most of it), so the mark would already
+ *    be satisfied at the moment the episode opened.
+ *  - THE ABSOLUTE TERM alone is wrong on a large spool: freeing room for two
+ *    more worst-case commands is a rounding error against 64 MiB, so an episode
+ *    would close and reopen every few kilobytes the app acknowledges.
+ *
+ * Taking the smaller of the two makes reopening require whichever is the more
+ * demanding for THIS configuration, which is the fail-closed direction. It is
+ * also monotone in the bound, so a spool that restarts against a RAISED bound
+ * correctly stops being saturated instead of inheriting an episode the volume
+ * no longer justifies.
+ */
+export const AUDIT_SPOOL_RESUME_RATIO = 0.75;
+
+/** Worst-case reservations of room the reopen condition demands (see above). */
+export const AUDIT_SPOOL_RESUME_HEADROOM_MULTIPLE = 2;
+
+/**
+ * The record `reason` that names a saturation episode. NOT an
+ * `ExecFailureReason` — the model-visible refusal stays
+ * `audit_spool_unavailable` (one reason for "the plane cannot account for this
+ * command", whatever the spool's internal cause) and this is the audit trail's
+ * own, finer word for it.
+ */
+export const AUDIT_SPOOL_FULL_REASON = "audit_spool_full";
+
+/**
+ * A single record that cannot fit in an EMPTY spool (cinatra#2266 G5, Codex
+ * convergence, adopted).
+ *
+ * WHY THIS IS NOT SATURATION, which is the whole point of separating them. A
+ * saturated spool is a spool holding records nobody has acknowledged yet: it is
+ * a TRANSIENT state that the app's own draining resolves, and the episode plus
+ * the low-water mark exist to describe exactly that. A record too large for the
+ * admission bound resolves to nothing — draining every other record changes
+ * nothing about whether THIS one fits.
+ *
+ * Conflating them latched the plane: an oversized command on a nearly-empty
+ * spool opened an episode, the tiny episode record left occupancy far below the
+ * low-water mark, and nothing re-evaluated the reopen condition — so a spool
+ * with almost nothing in it stayed saturated, refusing every OTHER command,
+ * until the broker was restarted. One command could take the plane down.
+ *
+ * So it is refused on its own: fail-closed for the command that caused it (it
+ * is not dispatched, and it is not recorded, because the record is precisely
+ * what does not fit), and invisible to every other command.
+ */
+export class AuditSpoolRecordTooLargeError extends Error {
+  readonly code = "audit_spool_record_too_large" as const;
   constructor(message: string) {
     super(message);
+    this.name = "AuditSpoolRecordTooLargeError";
+  }
+}
+
+export class AuditSpoolFullError extends Error {
+  readonly code = "audit_spool_full" as const;
+  /** The saturation episode this refusal belongs to, once one is open. */
+  readonly episodeId: string | undefined;
+  constructor(message: string, episodeId?: string) {
+    super(message);
     this.name = "AuditSpoolFullError";
+    this.episodeId = episodeId;
   }
 }
 
@@ -181,10 +304,60 @@ export type AuditSpoolAckResult =
       message: string;
     };
 
+/**
+ * ONE SATURATION EPISODE (cinatra#2266 G5) — the bounded unit that replaces an
+ * unbounded stream of per-attempt refusal records.
+ *
+ * An episode opens when a reservation cannot fit inside the admission bound,
+ * and closes when occupancy falls back to the low-water mark. It costs exactly
+ * one durable audit record (written at OPEN, so a permanently-saturated spool
+ * still says so in the trail) plus this state, which is persisted next to the
+ * log and rides every drain response.
+ */
+export type AuditSpoolEpisode = {
+  /** `<spoolId>:episode:<n>` — stable, fleet-unique, on the opening record. */
+  id: string;
+  openedAtMs: number;
+  /**
+   * Admission attempts refused while this episode was open. Persisted at OPEN,
+   * at CLOSE, and at power-of-two crossings in between — a bounded number of
+   * writes for an unbounded number of refusals, which is the same discipline
+   * the episode record itself follows. A crash can therefore lose the tail of
+   * the count but never the episode; the drain response reports the count as
+   * what it is.
+   */
+  refused: number;
+  /** Set when admission reopened. Absent ⇒ the episode is still open. */
+  closedAtMs?: number;
+};
+
+export type AuditSpoolSaturation = {
+  state: "open" | "saturated";
+  /** Episodes this spool has opened, ever. */
+  episodes: number;
+  /** The OPEN episode, when `state` is `saturated`. */
+  episode?: AuditSpoolEpisode;
+  /** The most recently CLOSED episode — the recovery, stated rather than inferred. */
+  lastEpisode?: AuditSpoolEpisode;
+};
+
+/**
+ * The ADMISSION verdict (cinatra#2266 G5). Consulted by the broker BEFORE the
+ * first path that would mint a record, which is the whole mechanism: a refused
+ * admission writes nothing at all.
+ */
+export type AuditSpoolAdmission =
+  | { admitted: true }
+  | { admitted: false; episodeId: string; refused: number; message: string };
+
 export type AuditSpoolStats = {
   frames: number;
   bytes: number;
   maxBytes: number;
+  /** The bound NEW work is admitted against — `maxBytes` less the episode reserve. */
+  admissionBytes: number;
+  /** Occupancy at or below which admission reopens (the low-water mark). */
+  resumeBytes: number;
   openReservations: number;
   head: number;
   acked: number;
@@ -192,12 +365,20 @@ export type AuditSpoolStats = {
   refusedReservations: number;
   /** Records recovered as `outcome_unknown` since this process opened. */
   recoveredUnknown: number;
+  /** The G5 saturation state machine's current position. */
+  saturation: AuditSpoolSaturation;
 };
 
 export type AuditSpool = {
   readonly spoolId: string;
   /** False for the in-memory spool — an honest signal, never a silent one. */
   readonly durable: boolean;
+  /**
+   * G5: may a new command be admitted at all? Called BEFORE anything that
+   * would write a record. A refusal COUNTS and writes nothing — that is what
+   * makes a permanently-full spool bounded.
+   */
+  admission(): AuditSpoolAdmission;
   /** Append a terminal record that had no reservation (every refusal path). */
   append(record: ExecutionAuditRecord): Promise<string>;
   /** G1: prepare + reserve capacity BEFORE dispatch. Throws ⇒ do not dispatch. */
@@ -286,12 +467,55 @@ type SpoolStorage = {
   /** Persist the ACK watermark + the position high-water mark, BEFORE the log
    *  is rewritten. */
   writeAck(pos: number, nextPos: number): Promise<void>;
+  /** The persisted G5 saturation state. OPEN PATH. */
+  readEpisodeState(): PersistedEpisodeState;
+  /** OPEN PATH: persist the saturation state durably. */
+  writeEpisodeStateSync(state: PersistedEpisodeState): void;
+  /** Persist the saturation state durably (open, close, counter checkpoint). */
+  writeEpisodeState(state: PersistedEpisodeState): Promise<void>;
   close(): Promise<void>;
 };
+
+/**
+ * The saturation state as it lives on the volume. Persisted for one reason
+ * above all: a broker CRASH-LOOPING against a still-full spool must not mint a
+ * fresh `audit_spool_full` record on every boot. Reloading the open episode is
+ * what makes "one record per episode" survive a restart rather than degrade
+ * into "one record per restart".
+ */
+type PersistedEpisodeState = {
+  version: number;
+  /** Episodes opened by this spool, ever — the episode ids' counter. */
+  count: number;
+  open: AuditSpoolEpisode | null;
+  last: AuditSpoolEpisode | null;
+};
+
+const EMPTY_EPISODE_STATE: PersistedEpisodeState = {
+  version: AUDIT_SPOOL_FORMAT_VERSION,
+  count: 0,
+  open: null,
+  last: null,
+};
+
+function parseEpisode(value: unknown): AuditSpoolEpisode | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Partial<AuditSpoolEpisode>;
+  if (typeof raw.id !== "string" || raw.id.length === 0) return null;
+  if (!Number.isSafeInteger(raw.openedAtMs)) return null;
+  if (!Number.isSafeInteger(raw.refused)) return null;
+  return {
+    id: raw.id,
+    openedAtMs: raw.openedAtMs as number,
+    refused: raw.refused as number,
+    ...(Number.isSafeInteger(raw.closedAtMs) ? { closedAtMs: raw.closedAtMs as number } : {}),
+  };
+}
 
 const LOG_FILE = "audit-spool.log";
 const META_FILE = "audit-spool.meta.json";
 const ACK_FILE = "audit-spool.ack.json";
+const EPISODE_FILE = "audit-spool.episode.json";
 const LOCK_FILE = "audit-spool.lock";
 
 async function fsyncDir(dir: string): Promise<void> {
@@ -400,7 +624,10 @@ function createFileStorage(dir: string): SpoolStorage {
   const logPath = path.join(dir, LOG_FILE);
   const metaPath = path.join(dir, META_FILE);
   const ackPath = path.join(dir, ACK_FILE);
+  const episodePath = path.join(dir, EPISODE_FILE);
   let handle: fsp.FileHandle | undefined;
+  /** Serializes saturation-state writes — see `writeEpisodeState` below. */
+  let episodeTail: Promise<unknown> = Promise.resolve();
 
   const openAppend = async (): Promise<fsp.FileHandle> => {
     handle ??= await fsp.open(logPath, "a");
@@ -564,7 +791,86 @@ function createFileStorage(dir: string): SpoolStorage {
       await fsp.rename(tmpPath, ackPath);
       await fsyncDir(dir);
     },
+    readEpisodeState() {
+      let raw: string;
+      try {
+        raw = fs.readFileSync(episodePath, "utf8");
+      } catch (err) {
+        // ABSENT is a real answer: a spool that has never saturated.
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") return { ...EMPTY_EPISODE_STATE };
+        throw err;
+      }
+      // PRESENT-BUT-UNREADABLE is not — and the fail-closed direction here is
+      // the opposite of the ack watermark's. Reading it as "never saturated"
+      // would let a broker that is crash-looping against a full spool mint a
+      // fresh episode record on every boot, which is precisely the unbounded
+      // write G5 exists to prevent. Refuse to open instead.
+      let parsed: { version?: unknown; count?: unknown; open?: unknown; last?: unknown };
+      try {
+        parsed = JSON.parse(raw) as typeof parsed;
+      } catch {
+        throw new AuditSpoolCorruptError(
+          "The audit spool's saturation state on this volume is unreadable; refusing to open " +
+            "the spool (reading it as `never saturated` would mint a fresh episode record on " +
+            "every restart against a still-full spool).",
+        );
+      }
+      if (parsed.version !== AUDIT_SPOOL_FORMAT_VERSION) {
+        throw new AuditSpoolCorruptError(
+          `The audit spool's saturation state declares format version ${String(parsed.version)}, ` +
+            `this build speaks ${AUDIT_SPOOL_FORMAT_VERSION}; refusing to read it (fail-closed).`,
+        );
+      }
+      return {
+        version: AUDIT_SPOOL_FORMAT_VERSION,
+        count: Number.isSafeInteger(parsed.count) ? (parsed.count as number) : 0,
+        open: parseEpisode(parsed.open),
+        last: parseEpisode(parsed.last),
+      };
+    },
+    writeEpisodeStateSync(state) {
+      writeFileDurablySync(episodePath, `${JSON.stringify(state)}\n`);
+    },
+    /**
+     * SERIALIZED, and that is not incidental (Codex convergence, adopted —
+     * caught by the restart arm asserting a refusal count).
+     *
+     * The saturation counter is checkpointed from `admission()`, which sits on
+     * the synchronous command path and therefore fires this WITHOUT awaiting
+     * it. Two such writes in flight against one `.tmp` path both open it `"w"`,
+     * both write, and both rename — so the state that lands is whichever rename
+     * happened to run last, not the newest state, and a torn interleaving of
+     * the two bodies is reachable in between. `close()`'s final flush of the
+     * counter's tail lost exactly that race.
+     *
+     * Chaining them makes the ORDER of issue the order on disk, which is the
+     * property every caller here assumes: the last state issued is the state a
+     * restart reads.
+     */
+    writeEpisodeState(state) {
+      const body = `${JSON.stringify(state)}\n`;
+      const next = episodeTail.then(async () => {
+        const tmpPath = `${episodePath}.tmp`;
+        const tmp = await fsp.open(tmpPath, "w");
+        try {
+          await tmp.writeFile(body, "utf8");
+          await tmp.sync();
+        } finally {
+          await tmp.close();
+        }
+        await fsp.rename(tmpPath, episodePath);
+        await fsyncDir(dir);
+      });
+      // A failed write must not poison the chain for the next one: the counter
+      // is best-effort by design and the EPISODE is the durable fact.
+      episodeTail = next.catch(() => {});
+      return next;
+    },
     async close() {
+      // Drain the saturation-state chain BEFORE releasing the single-writer
+      // lock: a checkpoint still in flight would otherwise rename its `.tmp`
+      // into place after the next writer had already taken the volume.
+      await episodeTail.catch(() => {});
       await handle?.close().catch(() => {});
       handle = undefined;
       releaseLock();
@@ -576,6 +882,7 @@ function createMemoryStorage(): SpoolStorage {
   let lines: string[] = [];
   let acked = 0;
   let ackedNextPos = 0;
+  let episodeState: PersistedEpisodeState = { ...EMPTY_EPISODE_STATE };
   const spoolId = randomUUID();
   const size = (): number => lines.reduce((n, l) => n + Buffer.byteLength(l, "utf8"), 0);
   return {
@@ -605,6 +912,13 @@ function createMemoryStorage(): SpoolStorage {
       acked = pos;
       ackedNextPos = nextPos;
     },
+    readEpisodeState: () => ({ ...episodeState }),
+    writeEpisodeStateSync(state) {
+      episodeState = { ...state };
+    },
+    async writeEpisodeState(state) {
+      episodeState = { ...state };
+    },
     async close() {
       lines = [];
     },
@@ -622,10 +936,120 @@ export type OpenAuditSpoolOptions = {
   nowMs?: () => number;
 };
 
-function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSpool {
+/**
+ * The episode record's NARROW projection of the attempt that saturated the
+ * spool (cinatra#2266 G5).
+ *
+ * It is deliberately not the prepared record. A prepared record carries the raw
+ * command text, which is unbounded and model-authored, and the episode record
+ * is the ONE record that has to fit inside a fixed reserve — a reserve sized
+ * against an unbounded field is not a reserve. Every field here is capped at
+ * `AUDIT_SPOOL_EPISODE_FIELD_CHARS` code units, so the frame's encoded size is
+ * bounded by the arithmetic on `AUDIT_SPOOL_EPISODE_RESERVE_BYTES` even for
+ * hostile identifiers.
+ *
+ * What is NOT dropped: the job, org, user, surface, run and attempt sequence.
+ * An investigation reading "the plane stopped admitting commands at T" needs to
+ * know which command it stopped on.
+ */
+function buildEpisodeRecord(
+  prepared: ExecutionAuditRecord,
+  episode: AuditSpoolEpisode,
+  atMs: number,
+): ExecutionAuditRecord {
+  const cap = (value: string): string => value.slice(0, AUDIT_SPOOL_EPISODE_FIELD_CHARS);
+  return {
+    jobId: cap(prepared.jobId),
+    orgId: cap(prepared.orgId),
+    userId: cap(prepared.userId),
+    surface: cap(prepared.surface),
+    ...(prepared.runId ? { runId: cap(prepared.runId) } : {}),
+    // EMPTY, not truncated: the command text is unbounded and this record's
+    // whole job is to fit in a fixed reserve. The command's own record is the
+    // refusal the caller received, which carries no audit row at all — that is
+    // the trade G5 makes, and it is stated here rather than implied.
+    command: "",
+    cwd: cap(prepared.cwd),
+    seq: prepared.seq,
+    decision: "refused",
+    reason: AUDIT_SPOOL_FULL_REASON,
+    spoolEpisode: { id: episode.id, openedAtMs: episode.openedAtMs },
+    effectivePolicy: prepared.effectivePolicy,
+    atMs,
+  };
+}
+
+/** Powers of two — the checkpoint schedule for the refusal counter. */
+function isCounterCheckpoint(n: number): boolean {
+  return n > 0 && (n & (n - 1)) === 0;
+}
+
+/**
+ * The configured bound, VALIDATED (cinatra#2266 G5, Codex convergence, adopted).
+ *
+ * `EXEC_AUDIT_SPOOL_MAX_BYTES` accepted any positive number, and the clamp on
+ * `admissionBytes` turned a too-small one into ZERO: a broker that boots
+ * healthy, refuses the FIRST command it is ever given, and — because the episode
+ * record itself would not fit in what is left — writes no `audit_spool_full`
+ * record to say why. That is the failure mode this whole slice exists to
+ * prevent, arrived at through configuration instead of through load.
+ * `maxBytes = 1` is not a small spool; it is a dead plane.
+ *
+ * PURE, AND CALLED BEFORE THE VOLUME LOCK IS TAKEN. A refusal raised from inside
+ * `buildSpool` would already hold the single-writer lock on the volume, so a
+ * misconfigured bound would leave a lock behind that outlives the process's
+ * intent — and the operator who then FIXED the configuration would be met by a
+ * lock error instead of a working broker.
+ */
+function resolveMaxBytes(opts: OpenAuditSpoolOptions): number {
   const maxBytes = opts.maxBytes ?? DEFAULT_AUDIT_SPOOL_MAX_BYTES;
+  // FINITE FIRST (Codex round 3, adopted). `NaN < MIN` is FALSE and `Infinity`
+  // is genuinely greater, so both slipped past the floor below — and each
+  // defeats the thing the bound exists for: every capacity comparison against
+  // `NaN` is false, so the spool would admit without limit, and `Infinity` says
+  // so outright. A bound that cannot be compared is not a bound.
+  if (!Number.isFinite(maxBytes)) {
+    throw new AuditSpoolCorruptError(
+      `The audit spool was given a non-finite byte bound (${String(maxBytes)}). The bound is what ` +
+        "makes the spool refuse rather than grow without limit, and a value no comparison can " +
+        "order would silently disable every capacity check — so the spool refuses to open.",
+    );
+  }
+  if (maxBytes < AUDIT_SPOOL_MIN_MAX_BYTES) {
+    throw new AuditSpoolCorruptError(
+      `The audit spool is configured with a ${maxBytes}-byte bound, below the ` +
+        `${AUDIT_SPOOL_MIN_MAX_BYTES}-byte minimum. Below that the episode reserve ` +
+        `(${AUDIT_SPOOL_EPISODE_RESERVE_BYTES} bytes) leaves too little admission room to ` +
+        "record even one command, so the broker would refuse every command it is given and " +
+        "could not write the saturation record that explains why. Refusing to open is the " +
+        "honest outcome: a misconfigured bound is a start-up error, not a silent outage.",
+    );
+  }
+  return maxBytes;
+}
+
+function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSpool {
+  const maxBytes = resolveMaxBytes(opts);
   const now = opts.nowMs ?? (() => Date.now());
   const { spoolId } = storage.identity();
+
+  /**
+   * THE ADMISSION BOUND, which is NOT `maxBytes` (cinatra#2266 G5). New work —
+   * a reservation, a refusal record — is admitted against `maxBytes` less the
+   * episode reserve, so that the one record a saturated spool must still be
+   * able to write always has room. Clamped at zero so a pathologically small
+   * `maxBytes` degrades to "admit nothing" rather than to a negative bound that
+   * would silently admit everything.
+   */
+  const admissionBytes = Math.max(0, maxBytes - AUDIT_SPOOL_EPISODE_RESERVE_BYTES);
+  const resumeBytes = Math.max(
+    0,
+    Math.min(
+      Math.floor(admissionBytes * AUDIT_SPOOL_RESUME_RATIO),
+      admissionBytes -
+        AUDIT_SPOOL_RESUME_HEADROOM_MULTIPLE * AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES,
+    ),
+  );
 
   const frames: SpoolFrame[] = [];
   let bytes = 0;
@@ -634,6 +1058,11 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
   let reservedHeadroom = 0;
   let refusedReservations = 0;
   let recoveredUnknown = 0;
+  // --- G5 saturation state (loaded from the volume, see PersistedEpisodeState) -
+  const persistedEpisodes = storage.readEpisodeState();
+  let episodeCount = persistedEpisodes.count;
+  let episode: AuditSpoolEpisode | null = persistedEpisodes.open;
+  let lastEpisode: AuditSpoolEpisode | null = persistedEpisodes.last;
   /**
    * The highest `head` this spool has actually HANDED OUT (Codex convergence,
    * adopted — finding 3). An ACK is a statement about a batch the caller read;
@@ -726,13 +1155,24 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
     bytes = storage.rewriteSync(frames.map(encodeFrame));
   }
 
-  const appendFrame = async (frame: SpoolFrame, headroom: number): Promise<void> => {
+  /**
+   * @param limit the byte ceiling this append is checked against. Everything
+   *   admitted from outside uses `admissionBytes`; the ONE episode record uses
+   *   `maxBytes`, which is what the reserve between them is for.
+   */
+  const appendFrame = async (
+    frame: SpoolFrame,
+    headroom: number,
+    limit: number = admissionBytes,
+  ): Promise<void> => {
     const line = encodeFrame(frame);
     const len = Buffer.byteLength(line, "utf8");
-    if (bytes + reservedHeadroom + len + headroom > maxBytes) {
+    if (bytes + reservedHeadroom + len + headroom > limit) {
       throw new AuditSpoolFullError(
-        `The audit spool is at its ${maxBytes}-byte bound (${bytes} bytes on disk, ` +
-          `${reservedHeadroom} reserved); it cannot accept another record.`,
+        `The audit spool is at its ${limit}-byte admission bound of ${maxBytes} ` +
+          `(${bytes} bytes on disk, ${reservedHeadroom} reserved); it cannot accept ` +
+          "another record.",
+        episode?.id,
       );
     }
     await storage.appendLine(line);
@@ -780,6 +1220,10 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
   if (nextPos > watermark.nextPos) storage.writeAckSync(ackedPos, nextPos);
 
   // --- writes -------------------------------------------------------------
+  //
+  // (the G5 helpers below close over `bytes`/`reservedHeadroom`, so the
+  // boot-time reopen check runs after they are declared — see the call under
+  // `maybeReopen`'s definition.)
 
   /** Serializes appends: the log is append-ONLY and single-writer. */
   let tail: Promise<unknown> = Promise.resolve();
@@ -789,9 +1233,145 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
     return next;
   };
 
+  // --- G5: the saturation state machine -----------------------------------
+
+  const episodeState = (): PersistedEpisodeState => ({
+    version: AUDIT_SPOOL_FORMAT_VERSION,
+    count: episodeCount,
+    open: episode ? { ...episode } : null,
+    last: lastEpisode ? { ...lastEpisode } : null,
+  });
+
+  /** Bytes on disk PLUS the capacity in-flight commands have already claimed. */
+  const occupancy = (): number => bytes + reservedHeadroom;
+
+  /**
+   * ENTER SATURATION. Called from the ONE place a reservation can fail for
+   * space, and it does exactly two things the first time: mints the episode and
+   * writes its single `audit_spool_full` record out of the reserve. Every later
+   * refusal only moves a counter.
+   *
+   * The record append is BEST EFFORT and deliberately so: the spool is already
+   * full and the caller's command is already refused, so a failure here must not
+   * turn a fail-closed refusal into a throw the broker would surface as a
+   * different fault. Whether it lands or not, the episode is durable state and
+   * rides every drain response.
+   */
+  const enterSaturation = async (prepared: ExecutionAuditRecord): Promise<void> => {
+    if (episode) {
+      episode.refused += 1;
+      if (isCounterCheckpoint(episode.refused)) {
+        await storage.writeEpisodeState(episodeState()).catch(() => {});
+      }
+      return;
+    }
+    episodeCount += 1;
+    episode = {
+      id: `${spoolId}:episode:${episodeCount}`,
+      openedAtMs: now(),
+      refused: 1,
+    };
+    // Durable BEFORE the record: a crash between the two loses the record (the
+    // count and the episode survive), where the reverse order would lose the
+    // episode and mint a second record on the next boot — one bounded gap
+    // against an unbounded write.
+    //
+    // AND THE PERSIST'S OWN FAILURE GATES THE RECORD (Codex convergence,
+    // adopted). Swallowing it and appending anyway reproduced exactly the
+    // ordering this comment claims to avoid: the record lands, the episode
+    // state does not, and the next boot reads "never saturated" and mints a
+    // SECOND `audit_spool_full` record for one continuous saturation — one per
+    // restart, forever, on a crash-looping broker. Returning here keeps the
+    // in-memory episode (so THIS process still refuses without writing records)
+    // and leaves the volume saying nothing, which the next open re-derives from
+    // the occupancy it actually finds. The durable state is the authority for
+    // "an episode is open"; a record it cannot vouch for is not written.
+    let episodeDurable = true;
+    try {
+      await storage.writeEpisodeState(episodeState());
+    } catch {
+      episodeDurable = false;
+    }
+    if (!episodeDurable) return;
+    try {
+      const pos = nextPos;
+      await appendFrame(
+        {
+          pos,
+          deliveryId: pos,
+          kind: "record",
+          record: {
+            ...buildEpisodeRecord(prepared, episode, now()),
+            deliveryKey: deliveryKeyFor(pos),
+          },
+        },
+        0,
+        // THE RESERVE. This is the one append checked against `maxBytes`
+        // rather than the admission bound — the reserve exists for exactly
+        // this record and for nothing else.
+        maxBytes,
+      );
+    } catch {
+      /* see the docblock: the refusal stands either way */
+    }
+  };
+
+  /**
+   * REOPEN ADMISSION when occupancy is back at or below the low-water mark.
+   * Evaluated wherever occupancy can FALL — an acknowledgement (frames leave)
+   * and a commit (the terminal record replaces its larger reservation
+   * headroom). Never on a path where it can only rise.
+   */
+  const maybeReopen = (): boolean => {
+    if (!episode) return false;
+    if (occupancy() > resumeBytes) return false;
+    lastEpisode = { ...episode, closedAtMs: now() };
+    episode = null;
+    return true;
+  };
+
+  // BOOT-TIME REOPEN. A restart re-reads the persisted episode — which is what
+  // stops a crash-looping broker minting one record per boot — but the spool it
+  // reopens onto may have ROOM: recovery compacts an acknowledged prefix, and
+  // an operator may simply have raised the bound. Re-evaluating the same
+  // condition here means a restart never inherits a saturation the volume no
+  // longer justifies. Conversely, a spool that IS still full stays saturated
+  // under the SAME episode id, and mints no second record.
+  if (maybeReopen()) storage.writeEpisodeStateSync(episodeState());
+
   const spool: AuditSpool = {
     spoolId,
     durable: storage.durable,
+
+    /**
+     * G5, and the whole reason the state machine exists: while an episode is
+     * open this answers "no" and WRITES NOTHING. The counter is in memory and
+     * is checkpointed on a power-of-two schedule, so an unbounded stream of
+     * attempts costs a bounded number of fsyncs and exactly zero records.
+     *
+     * Synchronous by design — it sits on the command path in front of every
+     * refusal, and an await here would be an await the refusal does not need.
+     * The checkpoint write is therefore fire-and-forget and its failure is not
+     * the caller's problem: the durable fact is the EPISODE, written when it
+     * opened.
+     */
+    admission() {
+      if (!episode) return { admitted: true as const };
+      episode.refused += 1;
+      if (isCounterCheckpoint(episode.refused)) {
+        void storage.writeEpisodeState(episodeState()).catch(() => {});
+      }
+      return {
+        admitted: false as const,
+        episodeId: episode.id,
+        refused: episode.refused,
+        message:
+          `The execution plane's audit spool is saturated (episode ${episode.id}, ` +
+          `${episode.refused} admission(s) refused since ${new Date(episode.openedAtMs).toISOString()}). ` +
+          "New commands are refused rather than run unaccounted for; admission reopens once the " +
+          "app has acknowledged enough of the spooled trail to bring it back under its low-water mark.",
+      };
+    },
 
     append(record) {
       return serialize(async () => {
@@ -822,8 +1402,24 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
         // larger than that — a long command line is enough — and the commit
         // that must never fail for space would push the file past the bound by
         // an amount nothing had accounted for.
-        const headroom =
-          Buffer.byteLength(encodeFrame(frame), "utf8") + AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES;
+        const frameBytes = Buffer.byteLength(encodeFrame(frame), "utf8");
+        const headroom = frameBytes + AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES;
+        // TOO LARGE TO EVER FIT ⇒ REFUSED, NOT SATURATION (Codex convergence,
+        // adopted — see AuditSpoolRecordTooLargeError). Measured against an
+        // EMPTY spool: `bytes` and `reservedHeadroom` are excluded on purpose,
+        // because the question is whether draining could ever make room, and
+        // for this record it could not.
+        if (frameBytes + headroom > admissionBytes) {
+          refusedReservations += 1;
+          throw new AuditSpoolRecordTooLargeError(
+            `This command's audit record needs ${frameBytes + headroom} bytes (the record plus ` +
+              `the headroom its terminal form is guaranteed), which exceeds the spool's whole ` +
+              `${admissionBytes}-byte admission bound. An empty spool could not hold it either, ` +
+              "so the command is refused rather than opening a saturation episode that no amount " +
+              "of draining would ever close. The usual cause is a command line far larger than " +
+              "this deployment's audit spool was sized for.",
+          );
+        }
         try {
           // The headroom argument is what makes the RESERVATION the point of
           // refusal: capacity for the terminal record is claimed here, so a
@@ -831,6 +1427,11 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
           await appendFrame(frame, headroom);
         } catch (err) {
           refusedReservations += 1;
+          // G5: this is the ONE place saturation can begin. A space refusal
+          // opens an episode (and mints its single record); any OTHER failure
+          // — an I/O error, a closed handle — is not saturation and must not be
+          // reported as one.
+          if (err instanceof AuditSpoolFullError) await enterSaturation(prepared);
           throw err;
         }
         reservedHeadroom += headroom;
@@ -882,6 +1483,10 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
               frames.push(terminal);
               bytes += Buffer.byteLength(line, "utf8");
               nextPos = terminal.pos + 1;
+              // A commit releases MORE headroom than the terminal frame
+              // occupies (that is what the headroom was for), so occupancy
+              // falls here and the reopen condition can become true.
+              if (maybeReopen()) await storage.writeEpisodeState(episodeState()).catch(() => {});
             }).finally(() => {
               committing = false;
             }),
@@ -956,6 +1561,12 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
         frames.push(...survivors);
         bytes = await storage.rewrite(frames.map(encodeFrame));
         ackedPos = input.head;
+        // THE REOPEN CONDITION (G5/AC7), evaluated exactly where occupancy can
+        // fall: an acknowledgement is the only thing that removes frames, so it
+        // is the only thing that can end a saturation episode. Persisted before
+        // the caller is told, so a crash here cannot leave a closed episode
+        // looking open (which would refuse commands the spool has room for).
+        if (maybeReopen()) await storage.writeEpisodeState(episodeState()).catch(() => {});
         const remaining = frames.filter((f) => f.kind === "record" && f.pos > ackedPos).length;
         return { ok: true as const, head: ackedPos, removed: before - frames.length, remaining };
       });
@@ -966,16 +1577,28 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
         frames: frames.length,
         bytes,
         maxBytes,
+        admissionBytes,
+        resumeBytes,
         openReservations: openReservations.size,
         head: nextPos - 1,
         acked: ackedPos,
         refusedReservations,
         recoveredUnknown,
+        saturation: {
+          state: episode ? ("saturated" as const) : ("open" as const),
+          episodes: episodeCount,
+          ...(episode ? { episode: { ...episode } } : {}),
+          ...(lastEpisode ? { lastEpisode: { ...lastEpisode } } : {}),
+        },
       };
     },
 
     async close() {
       await tail.catch(() => {});
+      // Flush the refusal counter's tail. It is checkpointed on a power-of-two
+      // schedule while the process runs (bounded writes for unbounded attempts),
+      // so a clean shutdown is the cheap opportunity to persist the remainder.
+      await storage.writeEpisodeState(episodeState()).catch(() => {});
       await storage.close();
     },
   };
@@ -993,6 +1616,9 @@ function buildSpool(storage: SpoolStorage, opts: OpenAuditSpoolOptions): AuditSp
  * not a runtime one.
  */
 export function openAuditSpool(opts: OpenAuditSpoolOptions & { dir: string }): AuditSpool {
+  // BEFORE the volume lock — see `resolveMaxBytes`: a bound this build refuses
+  // must not leave a single-writer lock behind on the way out.
+  resolveMaxBytes(opts);
   return buildSpool(createFileStorage(opts.dir), opts);
 }
 

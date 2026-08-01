@@ -77,6 +77,7 @@ import {
   type ExecFailureReason,
   type ExecResult,
   type ExecutionAuditRecord,
+  type ExecutionAuditAdmission,
   type ExecutionAuditReservation,
   type ExecutionAuditReserver,
   type ExecutionAuditSink,
@@ -118,6 +119,15 @@ export type ExecutionBrokerOptions = {
    * which is what the in-process placement (sink → kernel, no spool) keeps.
    */
   auditReserver?: ExecutionAuditReserver;
+  /**
+   * THE SATURATION ADMISSION GATE (cinatra#2266 G5). Present ⇒ the broker asks
+   * whether the plane can account for ANY new command before it walks a
+   * pipeline whose every exit writes a record. A refusal here is fail-closed
+   * (`audit_spool_unavailable`) and — this is the point — mints NO record: a
+   * spool that cannot store a refusal record must not be asked to store one per
+   * attempt. Absent ⇒ no gate, which is the in-process placement's behaviour.
+   */
+  auditAdmission?: ExecutionAuditAdmission;
   livenessProbe: RunLivenessProbe;
   /**
    * The per-command authorization boundary (epic #1705). REQUIRED, not optional:
@@ -433,6 +443,11 @@ export function toAuthzAuditEventInput(record: ExecutionAuditRecord): {
       commandId: record.commandId,
       voucherRejection: record.voucherRejection,
       egressClamped: record.egressClamped,
+      // The G5 saturation episode this row OPENS, when it is that row. An
+      // investigation reading a gap in the trail needs the row that explains
+      // it: "the plane stopped admitting commands at T, under episode X".
+      spoolEpisodeId: record.spoolEpisode?.id,
+      spoolEpisodeOpenedAtMs: record.spoolEpisode?.openedAtMs,
     },
   };
 }
@@ -715,6 +730,28 @@ export class ExecutionBroker {
         message: `Unknown execution job "${jobId}".`,
       };
     }
+
+    // THE SATURATION ADMISSION GATE (cinatra#2266 G5/AC7), and it is FIRST for
+    // a reason that is the whole design: every path below this line ends in a
+    // record. Against a spool that is already full, "refuse and audit" is an
+    // unbounded write demand on a store that by definition has no room — so a
+    // saturated plane must be able to refuse WITHOUT writing anything, and the
+    // only place that is true is before the first refusal path.
+    //
+    // NO SEQUENCE IS ALLOCATED EITHER. `seq` is the per-job attempt sequence of
+    // the RECORDED stream; burning numbers on attempts that produce no record
+    // would put unexplained holes in it.
+    //
+    // The refusal is fail-closed and model-visible under the same reason a
+    // failed reservation uses — from the caller's seat both mean "the plane
+    // cannot account for this command, so it did not run it". The finer
+    // distinction (saturated vs. a reservation that threw) is the audit trail's,
+    // and it rides the episode record's own `audit_spool_full`.
+    const admission = this.opts.auditAdmission?.();
+    if (admission && !admission.admitted) {
+      return { ok: false, reason: "audit_spool_unavailable", message: admission.message };
+    }
+
     // THE ATTEMPT SEQUENCE, allocated HERE and not at dispatch (cinatra#2266
     // AC2). It used to be `const seq = job.seq++` immediately before
     // `worker.runCommand`, which is after every pre-dispatch refusal path has

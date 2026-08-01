@@ -183,6 +183,7 @@ export {
   type CommandPolicyHook,
   type BrokerQuotas,
   type ExecutionAuditRecord,
+  type ExecutionAuditAdmission,
   type ExecutionAuditReservation,
   type ExecutionAuditReserver,
   type ExecutionAuditSink,
@@ -338,6 +339,8 @@ export {
   type SweepPayload,
   type AckAuditPayload,
   type AckAuditResultPayload,
+  type AuditSpoolEpisodePayload,
+  type AuditSpoolSaturationPayload,
   type DrainAuditPayload,
   type DrainAuditResultPayload,
   type HealthResultPayload,
@@ -438,16 +441,42 @@ export {
   createMemoryAuditSpool,
   AuditSpoolCorruptError,
   AuditSpoolFullError,
+  AuditSpoolRecordTooLargeError,
   AuditSpoolLockedError,
   AUDIT_SPOOL_FORMAT_VERSION,
   AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES,
+  AUDIT_SPOOL_EPISODE_RESERVE_BYTES,
+  AUDIT_SPOOL_EPISODE_FIELD_CHARS,
+  AUDIT_SPOOL_MIN_MAX_BYTES,
+  AUDIT_SPOOL_RESUME_RATIO,
+  AUDIT_SPOOL_RESUME_HEADROOM_MULTIPLE,
+  AUDIT_SPOOL_FULL_REASON,
   DEFAULT_AUDIT_SPOOL_MAX_BYTES,
   type AuditSpool,
   type AuditSpoolAckResult,
+  type AuditSpoolAdmission,
+  type AuditSpoolEpisode,
   type AuditSpoolReadResult,
   type AuditSpoolReservation,
+  type AuditSpoolSaturation,
   type AuditSpoolStats,
 } from "./service/audit-spool";
+
+// FLEET-SAFE DELIVERY (cinatra#2266 slice 3, design gap G3): sticky job routing
+// to the replica that owns a job, and a drain SESSION whose acknowledgement
+// cannot leave the replica that served the read. Replicas share one logical
+// mTLS identity and own different volumes, so the routing — not the
+// certificate — is what keeps a spool's records and its ACKs together.
+export {
+  BrokerFleetClient,
+  FleetRoutingError,
+  MAX_PINNED_JOBS,
+  type BrokerFleetOptions,
+  type FleetDrainTarget,
+  type FleetHealthEntry,
+  type FleetReplica,
+  type FleetReplicaClient,
+} from "./service/broker-fleet";
 
 export {
   createWorkerService,
