@@ -1,0 +1,272 @@
+name: Execution-plane Docker batteries
+
+# ---------------------------------------------------------------------------
+# THE REAL-DOCKER HALF of the @cinatra-ai/execution-plane test tier (cinatra#2316).
+#
+# WHAT WAS BROKEN. No job in .github/workflows invoked EITHER of the package's
+# two Vitest runners, so none of its assertions executed on any PR: 36 unit
+# files and 5 real-Docker batteries, all of them green by hand and gating
+# nothing. The repo-wide typecheck still covered the SOURCES, so a type error in
+# a plane test reded CI while a failing assertion did not — which is exactly the
+# shape of coverage that reads as healthy and proves nothing. The unit half is
+# fixed in build-image.yml (`execution-plane-unit`, structurally REQUIRED). This
+# workflow owns the Docker half.
+#
+# WHAT THESE BATTERIES ARE. They are where epic #1705's AC6 security controls
+# are proven on REAL containers — secret absence, no host mounts, egress
+# clamping and gateway attribution, cross-org isolation, disk-quota enforcement,
+# mutual TLS on both service hops, host-exclusivity leases, and the AC7 bounded-
+# queueing envelope. Every one of them FAILS — never skips — when docker is
+# unavailable, by the batteries' own design, so a green leg here always means
+# the real topology ran. Nothing in this workflow weakens that: there is no
+# docs-only green stub, no `continue-on-error`, and no `|| true` anywhere.
+#
+# ONE LEG PER BATTERY, DISCOVERED FROM THE FILESYSTEM.
+# `vitest.e2e.config.ts` runs the batteries strictly serially because they share
+# one docker daemon, one fixed compose project, one fixed internal network name
+# and one fixed published broker port — mutually exclusive on a single host by
+# construction. A matrix honours that: each leg is a SEPARATE runner with its
+# own daemon. The legs are DISCOVERED by globbing the battery directory
+# (scripts/ci/execution-plane-e2e-matrix.mjs), never listed here — a hand-kept
+# list is how a tier goes dark one new file later, which is the whole defect
+# this workflow closes. A discovery that finds zero batteries is a hard failure,
+# not an empty green matrix.
+#
+# MEASURED RUNTIME (ubuntu-latest, 2 vCPU / 16 GB; job wall clock, i.e.
+# checkout + install + image builds + the battery itself). See the PR that
+# introduced this workflow for the run links these figures come from:
+#
+#   MEASURED_RUNTIME_TABLE
+#
+# TRIGGERS, and why each battery is where it is:
+#   - pull_request, path-gated  — the `pr`-tier batteries. Cheap enough to pay
+#     on every push to a PR that touches the plane or its images.
+#   - push to main, path-gated  — every battery, including the expensive ones,
+#     on the merged result.
+#   - schedule (nightly)        — every battery, unconditionally. This is the
+#     durable floor: a battery that is too expensive for per-PR cost still has a
+#     REAL runner on a STATED cadence. It is never "skipped".
+#   - workflow_dispatch         — every battery, on demand.
+#
+# NOT A REQUIRED STATUS CHECK, deliberately and explicitly. The required checks
+# on `main` live in build-image.yml and are made required STRUCTURALLY (the
+# `build` job's "Guard prerequisite gates" step), never by branch protection.
+# A path-gated workflow must not hold a required context: it does not trigger on
+# a PR that misses its paths, so the context never reports and GitHub blocks the
+# merge forever as "Expected — Waiting for status". Promoting a battery to
+# required therefore additionally needs the docs-only green-STUB pattern from
+# build-image.yml and an unconditional trigger — see that file's `detect` job.
+# ---------------------------------------------------------------------------
+
+# The two `paths:` lists below are deliberate duplicates. GitHub Actions does
+# not support YAML anchors in workflow files, and no other workflow in this repo
+# uses one — keep them in lockstep by hand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/execution-plane/**'
+      - 'packages/llm/src/execution-plane/**'
+      - 'docker/sandbox/**'
+      - 'docker/exec-worker/**'
+      - 'docker-compose.exec.yml'
+      - 'scripts/build-exec-service-bundle.mjs'
+      - 'scripts/ci/execution-plane-e2e-matrix.mjs'
+      - 'scripts/ci/vitest-tier-coverage.mjs'
+      - '.github/workflows/execution-plane-e2e.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/execution-plane/**'
+      - 'packages/llm/src/execution-plane/**'
+      - 'docker/sandbox/**'
+      - 'docker/exec-worker/**'
+      - 'docker-compose.exec.yml'
+      - 'scripts/build-exec-service-bundle.mjs'
+      - 'scripts/ci/execution-plane-e2e-matrix.mjs'
+      - 'scripts/ci/vitest-tier-coverage.mjs'
+      - '.github/workflows/execution-plane-e2e.yml'
+  schedule:
+    # Nightly 04:19 UTC — an off-minute away from the on-the-hour spikes and
+    # ahead of the 05:23 extension canary, so the plane's batteries and the
+    # extension canaries never contend for the same runner window.
+    - cron: '19 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Per-ref: a new push to a PR cancels its in-flight batteries (they are the
+  # expensive jobs on this repo). Scheduled and main-push runs get their own
+  # groups and are never cancelled by PR traffic.
+  group: execution-plane-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # -------------------------------------------------------------------------
+  # discover — one matrix leg per battery found on disk. No checkout cost worth
+  # optimising (a few seconds) and it keeps the battery list out of this file.
+  # -------------------------------------------------------------------------
+  discover:
+    name: Discover batteries
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.discover.outputs.matrix }}
+      count: ${{ steps.discover.outputs.count }}
+      discovered: ${{ steps.discover.outputs.discovered }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
+      - id: discover
+        name: Enumerate the battery tier
+        run: node scripts/ci/execution-plane-e2e-matrix.mjs --event "${{ github.event_name }}"
+
+  # -------------------------------------------------------------------------
+  # batteries — one real-Docker battery per leg, on its own runner and its own
+  # docker daemon. `fail-fast: false`: a failure in one battery must not hide
+  # the verdict of the others, which is half the reason for the matrix.
+  # -------------------------------------------------------------------------
+  batteries:
+    name: ${{ matrix.name }}
+    needs: discover
+    # A `pull_request` run whose tier selection is empty produces an empty
+    # matrix — legal, and the aggregator below still reports. Guard anyway so a
+    # discovery bug cannot present as "all batteries green".
+    if: ${{ needs.discover.outputs.count != '0' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The batteries build the L0 sandbox image (python:3.12-slim + ~15 apt
+      # packages) and, for the service-boundary/load pair, the worker image
+      # (node:24-alpine carrying a full workspace `pnpm install` in its build
+      # stage) — then run real containers and real volumes over them. Reclaim
+      # the ~25-30 GB of preinstalled toolchains this job never touches BEFORE
+      # any of that: an ENOSPC halfway through a docker build reads as a battery
+      # failure and costs an hour to diagnose. Best-effort — a prune hiccup
+      # never fails the job (identical shape to build-image.yml's `build` job).
+      - name: Free runner disk for the image builds
+        run: |
+          set -uxo pipefail
+          set +e
+          echo "disk before prune:"; df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          sudo docker system prune -af
+          echo "disk after prune:"; df -h /
+          exit 0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      # No companion-extension clone: packages/execution-plane depends only on
+      # workspace siblings (@cinatra-ai/llm, @cinatra-ai/sdk-extensions) and
+      # never on an extension — the same reason `skills-unit` and `a2a-unit` in
+      # build-image.yml install bare.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Name the missing prerequisite HERE rather than letting it surface as an
+      # opaque battery failure ten minutes into an image build. The batteries
+      # themselves also fail (never skip) on an absent daemon — this step only
+      # makes the reason legible.
+      - name: Docker preflight (fail loud, never skip)
+        run: |
+          set -euo pipefail
+          docker version
+          docker info --format 'server={{.ServerVersion}} storage={{.Driver}}'
+          docker compose version
+          df -h /
+
+      - name: Run battery — ${{ matrix.name }}
+        env:
+          BATTERY_FILE: ${{ matrix.file }}
+          REPORT: ${{ github.workspace }}/e2e-report-${{ matrix.name }}.json
+        run: |
+          set -euo pipefail
+          started=$(date +%s)
+          pnpm --filter @cinatra-ai/execution-plane run test:e2e "$BATTERY_FILE" \
+            --reporter=default --reporter=json --outputFile.json="$REPORT"
+          echo "battery wall time: $(( $(date +%s) - started ))s"
+
+      # Runs on a red battery too: the duration table and the coverage verdict
+      # are most useful precisely when something failed. Independently asserts
+      # that THIS leg's file actually executed — a filter that matches nothing
+      # is the silent-green failure mode this whole issue was about.
+      - name: Tier-coverage guard + duration table
+        if: ${{ always() }}
+        run: |
+          node scripts/ci/vitest-tier-coverage.mjs \
+            --report "${{ github.workspace }}/e2e-report-${{ matrix.name }}.json" \
+            --package-dir packages/execution-plane \
+            --expect '${{ matrix.expect }}' \
+            --title 'Execution-plane battery — ${{ matrix.name }}' \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Docker post-mortem (failure only)
+        if: ${{ failure() }}
+        run: |
+          set -uxo pipefail
+          set +e
+          docker ps -a
+          docker images
+          docker network ls
+          docker volume ls
+          docker system df
+          df -h /
+          exit 0
+
+      - name: Upload battery report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: execution-plane-e2e-${{ matrix.name }}
+          path: e2e-report-${{ matrix.name }}.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  # -------------------------------------------------------------------------
+  # verdict — ONE stable status name for the whole battery tier, so the tier's
+  # health is a single check rather than a shifting set of matrix-leg names
+  # (the leg set changes the moment a battery is added, which would silently
+  # unpin anything that referenced a leg by name). Fails on a red leg, on a
+  # failed discovery, and on a discovery that produced no batteries at all.
+  # -------------------------------------------------------------------------
+  verdict:
+    name: Execution-plane battery tier
+    needs: [discover, batteries]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Guard — discovery must have produced batteries
+        if: ${{ needs.discover.result != 'success' || needs.discover.outputs.discovered == '0' }}
+        run: |
+          echo "::error::Battery discovery did not produce a tier (result=${{ needs.discover.result }}, discovered=${{ needs.discover.outputs.discovered }}). Refusing to report the tier as healthy."
+          exit 1
+
+      - name: Guard — every selected battery must have passed
+        if: ${{ needs.batteries.result != 'success' && needs.discover.outputs.count != '0' }}
+        run: |
+          echo "::error::At least one execution-plane battery did not pass (result=${{ needs.batteries.result }})."
+          exit 1
+
+      - name: Report
+        run: |
+          echo "Discovered ${{ needs.discover.outputs.discovered }} batter(y|ies); ran ${{ needs.discover.outputs.count }} on ${{ github.event_name }}." >> "$GITHUB_STEP_SUMMARY"
