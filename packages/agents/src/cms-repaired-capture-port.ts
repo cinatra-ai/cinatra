@@ -112,8 +112,15 @@ export async function attemptRepairedCapture(
   }
 }
 
-/** Whether an attempt leaves the successor gate with NO right-hand picture and
- * no stated reason on it — the one outcome class that must be loud. */
+/**
+ * Whether an attempt leaves the successor gate with NO right-hand picture and
+ * no stated reason on it — the one outcome class that must be loud.
+ *
+ * Deliberately NOT a type predicate: `false` does not imply `captured` (a
+ * degrade that WAS recorded also answers false), so a predicate's implied
+ * false-branch narrowing would be unsound. Callers that need the cause narrow
+ * on `outcome` themselves.
+ */
 export function leavesUncapturedSide(attempt: CmsRepairedCaptureAttempt): boolean {
   return (
     attempt.outcome === "unavailable" ||
