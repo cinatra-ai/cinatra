@@ -52,6 +52,11 @@ import {
 } from "./cms-snapshot-readback-store";
 import { repairRunId, readDeliveredRepairRequest } from "./lifecycle-repair-dispatch-store";
 import type { DeliveredRepairRequest } from "./lifecycle-repair-dispatch-store";
+import {
+  attemptRepairedCapture,
+  leavesUncapturedSide,
+  type CmsRepairedCaptureAttempt,
+} from "./cms-repaired-capture-port";
 
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 
@@ -217,6 +222,62 @@ export interface CmsRepairCompletionSummary {
    */
   unresolved: number;
   failed: number;
+  /** The `repaired` picture was pinned against the successor target — the
+   * repair pair renders both halves (cinatra#2044 / #2046's visual row). */
+  repairedCaptured: number;
+  /** The capture failed for a NAMED reason AND that reason was pinned as a
+   * degraded record: the successor gate states the gap. */
+  repairedCaptureDegraded: number;
+  /** No picture and no stated reason on the gate (no port bound, the port threw,
+   * or the ceiling/record write lost the reason). The successor gate will show
+   * an uncaptured side — always logged, never silent. */
+  repairedCaptureMissing: number;
+}
+
+/**
+ * Fold one repaired-capture attempt into the drain's counters, and SAY SO when
+ * the successor gate is going to be left with an uncaptured right-hand side —
+ * the failure mode cinatra#2044's negative proof caught (a one-sided pair with
+ * nothing anywhere reporting why). Never throws.
+ */
+export function recordRepairedCaptureOutcome(
+  summary: CmsRepairCompletionSummary,
+  repairId: string,
+  attempt: CmsRepairedCaptureAttempt,
+): void {
+  if (attempt.outcome === "captured") {
+    summary.repairedCaptured += 1;
+    return;
+  }
+  if (leavesUncapturedSide(attempt)) {
+    summary.repairedCaptureMissing += 1;
+    // The ceiling class is UNCONFIRMED, not known-missing: a capture that
+    // outran its wall-clock ceiling was never cancelled and may still pin the
+    // picture. It is still counted and escalated — an unverifiable picture must
+    // reach ops — but claiming the gate WILL be one-sided would be a statement
+    // this code cannot make (a codex convergence finding).
+    const unconfirmed = attempt.outcome === "degraded" && attempt.reason === "capture-timeout";
+    const why =
+      attempt.outcome === "unavailable"
+        ? "no host capture port is bound in this process (boot phase `bind-cms-review-host-seam`)"
+        : attempt.outcome === "failed"
+          ? `the capture port threw: ${attempt.error}`
+          : unconfirmed
+            ? "the capture outran its wall-clock ceiling, so nothing was recorded and it may yet land"
+            : `the capture degraded (${attempt.reason}) without recording it`;
+    console.error(
+      `[lifecycle-repair-cms-production-bridge] no confirmed \`repaired\` picture for repair ${repairId} — ${why}; ` +
+        `its successor gate ${unconfirmed ? "may" : "will"} show an uncaptured side.`,
+    );
+    return;
+  }
+  // Degraded AND recorded: the gate itself carries the named reason.
+  summary.repairedCaptureDegraded += 1;
+  console.warn(
+    `[lifecycle-repair-cms-production-bridge] the \`repaired\` picture for repair ${repairId} degraded: ${
+      attempt.outcome === "degraded" ? attempt.reason : "unknown"
+    } (the successor gate states the gap).`,
+  );
 }
 
 /**
@@ -237,6 +298,9 @@ export async function completeDispatchedProducerCmsRepairs(opts?: {
     pending: 0,
     unresolved: 0,
     failed: 0,
+    repairedCaptured: 0,
+    repairedCaptureDegraded: 0,
+    repairedCaptureMissing: 0,
   };
 
   const pendingIds = await db
@@ -312,6 +376,28 @@ export async function completeDispatchedProducerCmsRepairs(opts?: {
         repair.baseRepresentationRevisionId,
       );
 
+      // THE THIRD PICTURE (cinatra#2044 / #2046). Taken BEFORE the response is
+      // submitted, because `submitRepairResponse` is what emits the successor
+      // gate: capturing first means the repair pair's right-hand side exists the
+      // moment a reviewer can first open that gate, instead of a window in which
+      // it honestly-but-needlessly reads "never captured". Bounded and
+      // non-blocking — whatever it reports, the repair still completes.
+      const capture = await attemptRepairedCapture({
+        orgId: repair.orgId,
+        successorTarget: {
+          artifactId: production.artifactId,
+          representationRevisionId: production.representationRevisionId,
+        },
+        baseTarget: {
+          artifactId: repair.baseArtifactId,
+          representationRevisionId: repair.baseRepresentationRevisionId,
+        },
+        title: `Repaired ${baseTarget.resourceType}`,
+        // The accountable human re-verified live above — never the system
+        // dispatcher authority (the PR2 principal fix).
+        createdBy: delivered.originatingRunBy ?? null,
+        producerRunId: runId,
+      });
       const result = await submitRepairResponse({
         repairId: repair.id,
         currentBaseRevisionId,
@@ -337,8 +423,16 @@ export async function completeDispatchedProducerCmsRepairs(opts?: {
         },
       });
 
-      if (result.ok) summary.completed += 1;
-      else summary.unresolved += 1;
+      if (result.ok) {
+        summary.completed += 1;
+        // Accounted for ONLY here (a codex convergence finding): these counters
+        // and their escalation are statements about the SUCCESSOR GATE, and
+        // `submitRepairResponse` is what creates it. A rejected submit leaves no
+        // gate that could be one-sided, and the repair stays open for the next
+        // drain — which retries the capture too, reusing whatever this attempt
+        // already pinned (the pinned write is immutable).
+        recordRepairedCaptureOutcome(summary, repair.id, capture);
+      } else summary.unresolved += 1;
     } catch (err) {
       summary.failed += 1;
       console.error(

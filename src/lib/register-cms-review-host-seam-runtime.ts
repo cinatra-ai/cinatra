@@ -39,6 +39,8 @@ import {
   type CmsReviewIdentity,
 } from "@/lib/cms-review-host-seam";
 import { isLifecycleReviewOrchestrationActive } from "@/lib/lifecycle/lifecycle-activation";
+import type { CmsRepairedCapturePort } from "@cinatra-ai/agents/cms-repaired-capture-port";
+import { publishCmsRepairedCapturePort } from "@cinatra-ai/agents/cms-repaired-capture-port";
 
 /**
  * Build the REAL `CmsReviewHostSeamDeps` (the injected core seams). Every
@@ -142,11 +144,56 @@ function createCmsReviewHostSeamDeps(): CmsReviewHostSeamDeps {
 }
 
 /**
- * Build the real CMS-review seam and install it into the globalThis DI slot.
+ * Publish the `repaired`-capture entry point (cinatra#2044 / #2046) on the
+ * agents-package port. The repair-completion drain
+ * (`lifecycle-repair-cms-production-bridge`) takes the round trip's THIRD
+ * picture through it when a producer's fix lands — the right-hand side of
+ * #2287's repair pair, which no production code wrote before this binding
+ * existed.
+ *
+ * Bound HERE, in the same boot-only module as the seam deps, for the same
+ * route-graph reason: the leaf agents package must not carry a literal
+ * dynamic-import edge to the capture module (a headless-browser + connect-store
+ * graph), so it reads this port off globalThis instead.
+ *
+ * The port never throws and never blocks the repair: it reports `captured`, or a
+ * NAMED degrade plus whether that reason was pinned onto the gate.
+ *
+ * EXPORTED so the repair round-trip integration test publishes THIS adapter —
+ * the one production boots — rather than restating it, which is what lets that
+ * test assert the real writer fired instead of hand-inserting a capture row.
+ */
+export function createCmsRepairedCapturePort(): CmsRepairedCapturePort {
+  return async (request) => {
+    const { captureRepairedPreviewForGate } = await import(
+      "@/lib/artifacts/cms-preview-capture"
+    );
+    const outcome = await captureRepairedPreviewForGate({
+      orgId: request.orgId,
+      successorArtifactId: request.successorTarget.artifactId,
+      successorSnapshotRevisionId: request.successorTarget.representationRevisionId,
+      baseArtifactId: request.baseTarget.artifactId,
+      baseSnapshotRevisionId: request.baseTarget.representationRevisionId,
+      title: request.title,
+      createdBy: request.createdBy ?? null,
+      producerRunId: request.producerRunId ?? null,
+    });
+    return outcome.status === "captured"
+      ? { status: "captured" }
+      : // `capture !== null` ⇒ the named reason IS pinned, so the successor gate
+        // states the gap rather than showing a blank side.
+        { status: "degraded", reason: outcome.reason, recorded: outcome.capture !== null };
+  };
+}
+
+/**
+ * Build the real CMS-review seam and install it into the globalThis DI slot,
+ * and publish the repaired-capture port beside it.
  * Called from the boot-only system-loops `bind-cms-review-host-seam` phase
  * (UNCONDITIONAL — capability publication is fence-independent; the fence is read
  * per-call by `isReviewActive`). Idempotent (last write wins).
  */
 export function bindCmsReviewHostSeamRuntime(): void {
   registerBuiltCmsReviewHostSeam(buildCmsReviewHostSeam(createCmsReviewHostSeamDeps()));
+  publishCmsRepairedCapturePort(createCmsRepairedCapturePort());
 }

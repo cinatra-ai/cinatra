@@ -367,12 +367,55 @@ function mergeCounts(
   return out;
 }
 
+/**
+ * The identity every capture write shares: WHICH gate target the picture is
+ * pinned to, and the provenance stamped on the record. Every capture input
+ * (`CapturePinnedPreviewInput`, `CapturePinnedPreviewPairInput`,
+ * `CaptureRepairedPreviewInput`) structurally satisfies it, so the write helpers
+ * below take this narrow shape rather than a union that has to grow with every
+ * new capture entry point.
+ */
+interface PinnedCaptureBinding {
+  orgId: string;
+  boundArtifactId: string;
+  boundSnapshotRevisionId: string;
+  createdBy?: string | null;
+  producerRunId?: string | null;
+}
+
+/**
+ * Report the record that is actually PINNED, not what this attempt intended.
+ *
+ * `writePinnedPreviewCapture` is immutable — a retry against an already-pinned
+ * (target, role) returns the FIRST record untouched — and the repair drain is
+ * retried whenever its completion did not land, so second attempts are
+ * reachable in production. Reporting this attempt's own intent would then lie in
+ * BOTH directions: a successful re-render would claim `captured` while the gate
+ * still renders the first attempt's stated gap, and a degrade after a good
+ * capture would raise a missing-picture alarm for a picture that is right there.
+ * Callers act on these outcomes (cinatra#2044's drain counts and escalates
+ * them), so every outcome must describe the STORE, never the attempt.
+ */
+function reportStored(
+  stored: StoredPreviewCapture,
+  intended: CaptureDegradeReason | null,
+): CapturePinnedPreviewOutcome {
+  if (stored.data.status === "captured") return { status: "captured", capture: stored };
+  return {
+    status: "degraded",
+    // A degraded record always carries its reason; `intended` only covers a
+    // record shape that predates the field.
+    reason: (stored.data.degradedReason as CaptureDegradeReason | null) ?? intended ?? "render-failed",
+    capture: stored,
+  };
+}
+
 /** Write ONE degraded capture record for a role. Never throws. */
 async function writeDegraded(
   role: CmsPreviewCaptureRole,
   reason: CaptureDegradeReason,
   ctx: {
-    input: CapturePinnedPreviewInput | CapturePinnedPreviewPairInput;
+    input: PinnedCaptureBinding;
     capturedAt: string;
     title: string;
     sourceOrigin: string | null;
@@ -402,7 +445,7 @@ async function writeDegraded(
         composition: null,
       },
     });
-    return { status: "degraded", reason, capture };
+    return reportStored(capture, reason);
   } catch (err) {
     // Even the degrade record failing must not surface to the gate.
     console.warn(
@@ -419,7 +462,7 @@ async function renderAndPin(
   html: string,
   page: FetchedBasePage,
   ctx: {
-    input: CapturePinnedPreviewInput | CapturePinnedPreviewPairInput;
+    input: PinnedCaptureBinding;
     capturedAt: string;
     title: string;
     composition: { substitutedRegions: string[]; unplacedFields: string[] } | null;
@@ -477,7 +520,85 @@ async function renderAndPin(
       composition: ctx.composition,
     },
   });
-  return { status: "captured", capture };
+  return reportStored(capture, null);
+}
+
+/**
+ * Compose a proposal into the fetched page's OWN adapter-marked regions and pin
+ * the result under `role`, degrading with a NAMED reason at every step that
+ * cannot honestly produce the picture.
+ *
+ * Shared by the two composed pictures the review surface shows — the stage-time
+ * `current` half of the L-D pair and cinatra#2286's repair-time `repaired`
+ * capture — so the reviewer's "reviewed proposal" and "the producer's fix" can
+ * never be produced by two subtly different pipelines (the comparison is only
+ * meaningful because both sides are composed the same way).
+ */
+async function composeAndPin(
+  role: CmsPreviewCaptureRole,
+  proposedFields: Readonly<Record<string, string>> | null,
+  page: FetchedBasePage,
+  ctx: { input: PinnedCaptureBinding; capturedAt: string; title: string },
+  deps: PreviewCaptureDeps,
+): Promise<CapturePinnedPreviewOutcome> {
+  const degrade = (reason: CaptureDegradeReason) =>
+    writeDegraded(
+      role,
+      reason,
+      {
+        input: ctx.input,
+        capturedAt: ctx.capturedAt,
+        title: ctx.title,
+        sourceOrigin: page.target.origin,
+        postId: page.target.postId,
+      },
+      deps,
+    );
+
+  if (!proposedFields || Object.keys(proposedFields).length === 0) {
+    return await degrade("no-proposed-fields");
+  }
+  const composed = composeProposedRegions(page.html, proposedFields);
+  if (composed.substitutedRegions.length === 0) {
+    // Nothing of the proposal reached the picture. Showing the base page a
+    // second time would imply the proposal looks identical, which is not known
+    // — so the proposal half states the gap, with the reason DISTINGUISHED:
+    // the site marked none of the changed fields, or it marked them and their
+    // elements could not be delimited.
+    return await degrade(composed.noMatchingAnchors ? "no-owned-regions" : "regions-unplaceable");
+  }
+  // The proposed values are remote-authored content too: re-verify the WHOLE
+  // composed document before it is rendered or stored (the base page was
+  // already proven inert; this checks what composition introduced).
+  const violations = findInertnessViolations(composed.html);
+  if (violations.length > 0) {
+    console.warn(
+      `[cms-preview-capture] refusing a composed proposal page that is still live: ${violations
+        .map((v) => v.kind)
+        .join(", ")}`,
+    );
+    return await degrade("composition-not-inert");
+  }
+
+  return await renderAndPin(
+    role,
+    composed.html,
+    page,
+    {
+      input: ctx.input,
+      capturedAt: ctx.capturedAt,
+      title: ctx.title,
+      composition: {
+        substitutedRegions: composed.substitutedRegions,
+        unplacedFields: composed.unplacedFields,
+      },
+      // The sanitizer's removals from the SUBSTITUTED VALUES are added to the
+      // base page's own, so the picture's caption reports everything that was
+      // stripped — not only what the site's markup carried (a codex finding).
+      extraSanitization: composed.removedFromValues,
+    },
+    deps,
+  );
 }
 
 /**
@@ -602,67 +723,11 @@ export async function capturePinnedPreviewPair(
     );
 
     // The proposal, composed into that page's adapter-marked regions.
-    const degradeCurrent = (reason: CaptureDegradeReason) =>
-      writeDegraded(
-        "current",
-        reason,
-        {
-          input,
-          capturedAt,
-          title,
-          sourceOrigin: page.target.origin,
-          postId: page.target.postId,
-        },
-        deps,
-      );
-
-    if (!input.proposedFields || Object.keys(input.proposedFields).length === 0) {
-      return { before, current: await degradeCurrent("no-proposed-fields") };
-    }
-    const composed = composeProposedRegions(page.html, input.proposedFields);
-    if (composed.substitutedRegions.length === 0) {
-      // Nothing of the proposal reached the picture. Showing the base page a
-      // second time would imply the proposal looks identical, which is not known
-      // — so the proposal half states the gap, with the reason DISTINGUISHED:
-      // the site marked none of the changed fields, or it marked them and their
-      // elements could not be delimited.
-      return {
-        before,
-        current: await degradeCurrent(
-          composed.noMatchingAnchors ? "no-owned-regions" : "regions-unplaceable",
-        ),
-      };
-    }
-    // The proposed values are remote-authored content too: re-verify the WHOLE
-    // composed document before it is rendered or stored (the base page was
-    // already proven inert; this checks what composition introduced).
-    const violations = findInertnessViolations(composed.html);
-    if (violations.length > 0) {
-      console.warn(
-        `[cms-preview-capture] refusing a composed proposal page that is still live: ${violations
-          .map((v) => v.kind)
-          .join(", ")}`,
-      );
-      return { before, current: await degradeCurrent("composition-not-inert") };
-    }
-
-    const current = await renderAndPin(
+    const current = await composeAndPin(
       "current",
-      composed.html,
+      input.proposedFields,
       page,
-      {
-        input,
-        capturedAt,
-        title,
-        composition: {
-          substitutedRegions: composed.substitutedRegions,
-          unplacedFields: composed.unplacedFields,
-        },
-        // The sanitizer's removals from the SUBSTITUTED VALUES are added to the
-        // base page's own, so the picture's caption reports everything that was
-        // stripped — not only what the site's markup carried (a codex finding).
-        extraSanitization: composed.removedFromValues,
-      },
+      { input, capturedAt, title },
       deps,
     );
     return { before, current };
@@ -672,6 +737,149 @@ export async function capturePinnedPreviewPair(
       err instanceof Error ? err.message : err,
     );
     return await bothDegraded("render-failed", null, null);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#2286 S10 — the REPAIRED picture (the repair pair's right-hand side).
+// ---------------------------------------------------------------------------
+
+/**
+ * Recover the site coordinates a target was ALREADY captured against — the
+ * origin + post id the capture-time SSRF policy resolved and the pinned record
+ * stored. Never re-derives an address from connector input, so a later capture
+ * of the same target can only ever photograph the same page the gate itself
+ * already resolved (the `capturePostApplyPreview` posture, factored out so the
+ * repair capture inherits it rather than re-deciding it).
+ *
+ * `excludeRole` skips the role being captured now, so a previously pinned
+ * DEGRADED record of that same role (which carries no coordinates) can never
+ * stand in for a real one.
+ */
+async function resolvePinnedTargetCoordinates(
+  target: { orgId: string; boundArtifactId: string; boundSnapshotRevisionId: string },
+  excludeRole: CmsPreviewCaptureRole,
+  deps: PreviewCaptureDeps,
+): Promise<{ sourceUrl: string | null; externalId: string | null }> {
+  try {
+    const pinned = await deps.readPinnedCaptures(target);
+    const withTarget = pinned.find(
+      (c) => c.data.sourceOrigin !== null && c.data.postId !== null && c.data.role !== excludeRole,
+    );
+    if (withTarget) {
+      return {
+        sourceUrl: withTarget.data.sourceOrigin,
+        externalId: withTarget.data.postId === null ? null : String(withTarget.data.postId),
+      };
+    }
+  } catch (err) {
+    console.warn(
+      "[cms-preview-capture] could not read a target's pinned captures for its site coordinates:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+  return { sourceUrl: null, externalId: null };
+}
+
+export interface CaptureRepairedPreviewInput {
+  orgId: string;
+  /** The repair SUCCESSOR target — the re-staged snapshot the successor gate
+   * pins, and the target this picture is bound to. */
+  boundArtifactId: string;
+  boundSnapshotRevisionId: string;
+  /** The repair's BASE target — the reviewed proposal the successor replaces.
+   * Used ONLY as the fallback source of the already-resolved site coordinates
+   * (both targets are, by the repair's own resource matching, the same CMS
+   * resource); nothing about the picture itself comes from it. */
+  baseArtifactId: string;
+  baseSnapshotRevisionId: string;
+  /** The REPAIRED proposal's canonical field map — the same serialization the
+   * successor gate pinned. `null` degrades the picture with a named reason
+   * instead of showing the live page and calling it the fix. */
+  proposedFields: Readonly<Record<string, string>> | null;
+  title?: string;
+  createdBy?: string | null;
+  producerRunId?: string | null;
+}
+
+/**
+ * Capture (or honestly degrade) the `repaired` picture — the third render of
+ * cinatra#2044's repair round trip, and the right-hand side of #2287's `repair`
+ * pair ("Reviewed — what you approved" vs "Repaired — the producer's fix").
+ *
+ * It is the SAME composed-proposal picture the stage-time `current` half is
+ * (`composeAndPin`): at repair-response time the producer's fix is a STAGED
+ * write whose external effect is still held by the successor gate, so the site
+ * does not carry it yet — the honest picture is the repaired proposal placed
+ * into the live page's own chrome, never a photograph of the site.
+ *
+ * NEVER throws, and never blocks the repair: every failure class becomes a
+ * stored DEGRADED `repaired` record with a named reason, so the successor gate
+ * states what is missing instead of rendering a silently one-sided pair.
+ */
+export async function captureRepairedPreview(
+  input: CaptureRepairedPreviewInput,
+  deps: PreviewCaptureDeps,
+): Promise<CapturePinnedPreviewOutcome> {
+  const capturedAt = deps.now().toISOString();
+  const title = input.title ?? "Repaired proposal";
+  try {
+    // The successor's own re-stage captures first; the base target's second
+    // (a re-stage whose capture pair degraded before it resolved a target
+    // still leaves the base's coordinates, which name the same CMS resource).
+    let coords = await resolvePinnedTargetCoordinates(
+      {
+        orgId: input.orgId,
+        boundArtifactId: input.boundArtifactId,
+        boundSnapshotRevisionId: input.boundSnapshotRevisionId,
+      },
+      "repaired",
+      deps,
+    );
+    if (coords.sourceUrl === null || coords.externalId === null) {
+      coords = await resolvePinnedTargetCoordinates(
+        {
+          orgId: input.orgId,
+          boundArtifactId: input.baseArtifactId,
+          boundSnapshotRevisionId: input.baseSnapshotRevisionId,
+        },
+        "repaired",
+        deps,
+      );
+    }
+
+    // A null selector resolves to the policy's `unusable-source-url` denial —
+    // the same closed, named degrade every other missing-target case takes.
+    const base = await fetchSanitizedBasePage(
+      { orgId: input.orgId, sourceUrl: coords.sourceUrl, externalId: coords.externalId },
+      deps,
+    );
+    if (!base.ok) {
+      return await writeDegraded(
+        "repaired",
+        base.reason,
+        { input, capturedAt, title, sourceOrigin: base.sourceOrigin, postId: base.postId },
+        deps,
+      );
+    }
+    return await composeAndPin(
+      "repaired",
+      input.proposedFields,
+      base.page,
+      { input, capturedAt, title },
+      deps,
+    );
+  } catch (err) {
+    console.warn(
+      "[cms-preview-capture] repaired capture failed:",
+      err instanceof Error ? err.message : err,
+    );
+    return await writeDegraded(
+      "repaired",
+      "render-failed",
+      { input, capturedAt, title, sourceOrigin: null, postId: null },
+      deps,
+    );
   }
 }
 
@@ -911,27 +1119,15 @@ export async function capturePostApplyPreview(
   },
   deps: PreviewCaptureDeps,
 ): Promise<CapturePinnedPreviewOutcome> {
-  let sourceUrl: string | null = null;
-  let externalId: string | null = null;
-  try {
-    const pinned = await deps.readPinnedCaptures({
+  const { sourceUrl, externalId } = await resolvePinnedTargetCoordinates(
+    {
       orgId: input.orgId,
       boundArtifactId: input.boundArtifactId,
       boundSnapshotRevisionId: input.boundSnapshotRevisionId,
-    });
-    const withTarget = pinned.find(
-      (c) => c.data.sourceOrigin !== null && c.data.postId !== null && c.data.role !== "applied",
-    );
-    if (withTarget) {
-      sourceUrl = withTarget.data.sourceOrigin;
-      externalId = withTarget.data.postId === null ? null : String(withTarget.data.postId);
-    }
-  } catch (err) {
-    console.warn(
-      "[cms-preview-capture] could not read the gate's pinned captures for the read-back render:",
-      err instanceof Error ? err.message : err,
-    );
-  }
+    },
+    "applied",
+    deps,
+  );
   // A null selector resolves to the policy's `unusable-source-url` denial — the
   // same closed, named degrade every other missing-target case takes.
   return capturePinnedPreview({ ...input, role: "applied", sourceUrl, externalId }, deps);
@@ -983,6 +1179,83 @@ export async function capturePinnedPreviewPairForGate(
     capturePinnedPreviewPair(input, createPreviewCaptureDeps()),
     () => ({ before: timedOut, current: timedOut }),
     CAPTURE_PAIR_TOTAL_TIMEOUT_MS,
+  );
+}
+
+/**
+ * The entry point the repair-completion drain reaches (through the boot-bound
+ * `@cinatra-ai/host:cms-repaired-capture` port) when a producer's repair lands —
+ * cinatra#2286's third picture, pinned against the SUCCESSOR target the repair
+ * row itself recorded.
+ *
+ * The repaired proposal's field map is read HERE from the successor snapshot's
+ * own stored serialization (`readCmsSnapshotProposedFields`) rather than taken
+ * from the caller: the picture may only ever show what the successor gate
+ * actually pins. That read is INSIDE the ceiling below — the repair drain awaits
+ * this call before it submits the repair response, so work outside the ceiling
+ * would delay a repair by exactly the amount the ceiling exists to bound (a
+ * codex convergence finding).
+ *
+ * CEILING CAVEAT, stated rather than implied: `readCmsSnapshotProposedFields`
+ * reaches the store through `runPostgresQueriesSync`, which parks the event loop
+ * on `Atomics.wait`. No timer-based ceiling can preempt that — while it blocks,
+ * the `setTimeout` below cannot fire. Its bound is the sync helper's OWN query
+ * timeout, not this one. The ceiling still bounds every asynchronous phase (the
+ * signed fetch, the headless render, the pinned write), which is where a capture
+ * actually spends its time.
+ *
+ * Swallows every failure — the repair completes either way.
+ */
+export async function captureRepairedPreviewForGate(input: {
+  orgId: string;
+  successorArtifactId: string;
+  successorSnapshotRevisionId: string;
+  baseArtifactId: string;
+  baseSnapshotRevisionId: string;
+  title?: string;
+  createdBy?: string | null;
+  producerRunId?: string | null;
+}): Promise<CapturePinnedPreviewOutcome> {
+  const work = (async (): Promise<CapturePinnedPreviewOutcome> => {
+    let proposedFields: Record<string, string> | null = null;
+    try {
+      const { readCmsSnapshotProposedFields } = await import("./cms-content-snapshot-capture");
+      proposedFields = await readCmsSnapshotProposedFields(
+        input.orgId,
+        input.successorSnapshotRevisionId,
+      );
+    } catch (err) {
+      // Unreadable ⇒ `no-proposed-fields`, a NAMED degrade recorded below —
+      // never a silent skip, and never the live page passed off as the fix.
+      console.warn(
+        "[cms-preview-capture] could not read the repaired proposal's fields:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+    return await captureRepairedPreview(
+      {
+        orgId: input.orgId,
+        boundArtifactId: input.successorArtifactId,
+        boundSnapshotRevisionId: input.successorSnapshotRevisionId,
+        baseArtifactId: input.baseArtifactId,
+        baseSnapshotRevisionId: input.baseSnapshotRevisionId,
+        proposedFields,
+        title: input.title,
+        createdBy: input.createdBy,
+        producerRunId: input.producerRunId,
+      },
+      createPreviewCaptureDeps(),
+    );
+  })();
+  return withCeiling(
+    work,
+    // A ceiling hit records NOTHING (the capture is still in flight, and a
+    // pinned record is immutable — writing a timeout record here would
+    // permanently displace the real picture it may be about to land). So the
+    // outcome is UNCONFIRMED rather than known-missing, and the drain reports it
+    // with that distinction intact.
+    () => ({ status: "degraded", reason: "capture-timeout", capture: null }),
+    CAPTURE_TOTAL_TIMEOUT_MS,
   );
 }
 

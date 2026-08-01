@@ -20,8 +20,10 @@
  *                    template's manifest declaration → dispatch → the producer's
  *                    re-staged CMS capture (fresh artifact, same resource
  *                    identity) → completion drain submits the repair response →
- *                    a `repaired` pinned capture is recorded against the
- *                    successor target → the repair-successor gate is re-reviewed
+ *                    the drain's PRODUCTION capture writer pins a `repaired`
+ *                    record against the successor target (cinatra#2044 / #2046 —
+ *                    this suite writes no capture row of its own; it asserts the
+ *                    shipped writer fired) → the repair-successor gate is re-reviewed
  *                    and APPROVED → the held external effect releases through
  *                    that gate (the apply authorization) → the successor's
  *                    read-back binding still names the same CMS resource.
@@ -42,7 +44,7 @@
  * DB-gated: self-skips unless a real SUPABASE_DB_URL is provided.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { randomUUID, createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { Client } from "pg";
@@ -53,8 +55,8 @@ import {
 } from "@/lib/lifecycle/lifecycle-produced-event";
 import { autoReviewTaskId, isRepairSuccessorTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 import { LIFECYCLE_REVIEW_ORCHESTRATION_ENV } from "@/lib/lifecycle/lifecycle-activation";
-
 import { agentLifecycleDeclarationSchema } from "../verdaccio/package-contract";
+import { publishCmsRepairedCapturePort } from "../cms-repaired-capture-port";
 
 const TEST_SCHEMA = "cinatra_test_lifecycle_2286_s10_pr4";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
@@ -85,13 +87,15 @@ const WORDPRESS_AGENT_PACKAGE = "@cinatra-ai/wordpress-agent";
 const WORDPRESS_AGENT_LIFECYCLE = { repairCapable: true } as const;
 const CMS_SNAPSHOT_EMITTER = "object_cms_snapshot_capture";
 
-/** Mirrors `CMS_PREVIEW_CAPTURE_OBJECT_TYPE` in
- * `src/lib/artifacts/cms-preview-capture-store.ts` (duplicated as a literal for
- * the same reason PR2's suite mirrors the snapshot-capture SQL: this
- * agents-package suite must not pull the host's blob-store-backed capture
- * writer into its module graph; the host store's own unit tests regress the
- * literal). */
-const CMS_PREVIEW_CAPTURE_OBJECT_TYPE = "@cinatra-ai/objects:cms-preview-capture";
+// The PRODUCTION repaired-capture chain (cinatra#2044 / #2046): the adapter the
+// boot binder publishes, and the capture store's own deterministic id. Loaded
+// REAL — the whole point of this suite's third-picture proof is that no test
+// code writes the capture row — but DYNAMICALLY, in `beforeAll` after
+// `SUPABASE_SCHEMA` is set: `postgresSchema` is a module-LOAD-time constant, so
+// a static import here would bind the host's capture writer to the default
+// `cinatra` schema and every one of its reads would miss this suite's schema.
+let captureBinder: typeof import("@/lib/register-cms-review-host-seam-runtime");
+let captureStore: typeof import("@/lib/artifacts/cms-preview-capture-store");
 
 let outboxStore: typeof import("../lifecycle-produced-outbox-store");
 let gateStore: typeof import("../artifact-review-gate-store");
@@ -256,134 +260,6 @@ async function runAppSweeps() {
   await orch.sweepReviewOrchestration({ limit: 50 });
 }
 
-/** The deterministic pinned-capture artifact id — the exact recipe of
- * `previewCaptureArtifactId` (src/lib/artifacts/cms-preview-capture-store.ts),
- * mirrored for the same module-graph reason as the emitter literal above; the
- * host store's own tests pin the recipe. */
-function mirroredPreviewCaptureArtifactId(
-  boundArtifactId: string,
-  boundSnapshotRevisionId: string,
-  role: string,
-): string {
-  const h = createHash("sha256")
-    .update(`${boundArtifactId}\u0000${boundSnapshotRevisionId}\u0000${role}`)
-    .digest("hex");
-  return [h.slice(0, 8), h.slice(8, 12), h.slice(12, 16), h.slice(16, 20), h.slice(20, 32)].join(
-    "-",
-  );
-}
-
-/**
- * Record the producer's `repaired` pinned capture against the SUCCESSOR target
- * — the round trip's third picture (cinatra#2286 deliverable 4, shipped in the
- * repair-capture-pair slice). SQL mirrored from `buildPreviewCaptureQueries`
- * (objects row + content-write CTE + writer witness, one transaction), with a
- * `captured`-status record shape.
- */
-async function recordRepairedCapture(input: {
-  successorArtifactId: string;
-  successorRevisionId: string;
-  producerRunId: string;
-}): Promise<string> {
-  const captureArtifactId = mirroredPreviewCaptureArtifactId(
-    input.successorArtifactId,
-    input.successorRevisionId,
-    "repaired",
-  );
-  const png = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
-    "base64",
-  );
-  const sha256 = createHash("sha256").update(png).digest("hex");
-  const data = {
-    role: "repaired",
-    status: "captured",
-    degradedReason: null,
-    boundArtifactId: input.successorArtifactId,
-    boundSnapshotRevisionId: input.successorRevisionId,
-    sourceOrigin: null,
-    postId: null,
-    capturedAt: new Date().toISOString(),
-    geometry: null,
-    sanitization: {},
-    network: { blockedRequests: 0, allowedRequests: 0 },
-    captureDigest: sha256,
-    title: "Repaired proposal (fixture)",
-    composition: null,
-  };
-  const representationRevisionId = `rrv-${randomUUID()}`;
-  const resourceId = `res-${randomUUID()}`;
-  const blobId = `blob-${randomUUID()}`;
-  const storageKey = `capture/${captureArtifactId}.png`;
-  const client = await dbMod.agentBuilderPool.connect();
-  try {
-    await client.query("BEGIN");
-    await client.query(
-      `INSERT INTO "${q(TEST_SCHEMA)}"."objects"
-         (id, type, data, org_id, run_id, created_by, owner_level, owner_id, visibility, version, graphiti_sync_status)
-       VALUES ($1::text, $2::text, $3::jsonb, $4::text, $5::text, $6::text,
-               'organization', $4::text, 'organization', 1, 'synced')`,
-      [captureArtifactId, CMS_PREVIEW_CAPTURE_OBJECT_TYPE, JSON.stringify(data), ORG, input.producerRunId, MEMBER_USER],
-    );
-    await client.query(
-      `WITH resource_op AS (
-        INSERT INTO "${q(TEST_SCHEMA)}"."resource"
-          (id, org_id, kind, substance_key, mime, size_bytes, created_by, metadata)
-        VALUES ($1::text, $2::text, 'blob', $3::text, 'image/png', $4::bigint, $5::text,
-                jsonb_build_object('storageKey', $6::text, 'blobId', $7::text))
-        ON CONFLICT (org_id, kind, substance_key) DO UPDATE SET org_id = EXCLUDED.org_id
-        RETURNING id, (xmax = 0) AS is_new
-      ),
-      blob_insert AS (
-        INSERT INTO "${q(TEST_SCHEMA)}"."artifact_blobs"
-          (id, org_id, storage_backend, storage_key, sha256, size_bytes, mime_detected, created_by)
-        SELECT $7::text, $2::text, 'local-disk', $6::text, $8::text, $4::bigint, 'image/png', $5::text
-        WHERE EXISTS (SELECT 1 FROM resource_op WHERE is_new)
-        RETURNING id
-      ),
-      rep_insert AS (
-        INSERT INTO "${q(TEST_SCHEMA)}"."representation"
-          (id, org_id, artifact_id, resource_id, revision, form, created_by, created_by_run_id)
-        SELECT $9::text, $2::text, $10::text, (SELECT id FROM resource_op), 1, 'file', $5::text, $11
-        RETURNING id
-      )
-      SELECT (SELECT id FROM rep_insert) AS representation_revision_id`,
-      [
-        resourceId,
-        ORG,
-        `sha256:${sha256}`,
-        png.length,
-        MEMBER_USER,
-        storageKey,
-        blobId,
-        sha256,
-        representationRevisionId,
-        captureArtifactId,
-        input.producerRunId,
-      ],
-    );
-    await client.query(
-      `INSERT INTO "${q(TEST_SCHEMA)}"."artifact_audit"
-         (id, org_id, artifact_id, representation_revision_id, action, actor, detail)
-       VALUES (gen_random_uuid()::text, $1::text, $2::text, $3::text, 'create', $4::text, $5::jsonb)`,
-      [
-        ORG,
-        captureArtifactId,
-        representationRevisionId,
-        MEMBER_USER,
-        JSON.stringify({ mime: "image/png", size: png.length, originKind: "preview_capture", role: "repaired" }),
-      ],
-    );
-    await client.query("COMMIT");
-  } catch (err) {
-    await client.query("ROLLBACK").catch(() => {});
-    throw err;
-  } finally {
-    client.release();
-  }
-  return captureArtifactId;
-}
-
 beforeAll(async () => {
   if (!HAS_DB) return;
   process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
@@ -433,6 +309,16 @@ beforeAll(async () => {
   dispatchStore = await import("../lifecycle-repair-dispatch-store");
   bridge = await import("../lifecycle-repair-cms-production-bridge");
   dbMod = await import("../db");
+
+  // Publish the PRODUCTION repaired-capture adapter — the same one the boot
+  // phase `bind-cms-review-host-seam` publishes via
+  // `bindCmsReviewHostSeamRuntime()`. Only the boot CALL SITE is stubbed out
+  // here (this suite never boots the app); the adapter, the capture
+  // orchestrator and the store writer behind it are all production code, so the
+  // `repaired` row this suite asserts is one NO test code wrote.
+  captureBinder = await import("@/lib/register-cms-review-host-seam-runtime");
+  captureStore = await import("@/lib/artifacts/cms-preview-capture-store");
+  publishCmsRepairedCapturePort(captureBinder.createCmsRepairedCapturePort());
 }, 90_000);
 
 beforeEach(() => {
@@ -443,6 +329,7 @@ beforeEach(() => {
 afterAll(async () => {
   if (!HAS_DB) return;
   delete process.env[LIFECYCLE_REVIEW_ORCHESTRATION_ENV];
+  publishCmsRepairedCapturePort(undefined);
   await dbMod?.agentBuilderPool?.end().catch(() => {});
   const admin = new Client({ connectionString: DB_URL });
   await admin.connect();
@@ -602,31 +489,60 @@ describe.skipIf(!HAS_DB)("cinatra#2286 S10 PR4 — the WordPress CMS repair roun
     const successorGateId = row!.successor_gate_id!;
     expect(successorGateId).not.toBeNull();
 
-    // The `repaired` pinned capture is recorded against the successor target
-    // (deterministic id, captured shape, writer witness — the third picture).
-    const captureId = await recordRepairedCapture({
-      successorArtifactId: repaired.artifactId,
-      successorRevisionId: repaired.revisionId,
-      producerRunId: ctx.repairRunId,
-    });
+    // THE THIRD PICTURE (cinatra#2044 / #2046) — written by PRODUCTION code
+    // inside the drain call above. NOTHING in this suite inserts it: the port
+    // published in `beforeAll` is `createCmsRepairedCapturePort()`, the very
+    // adapter `bindCmsReviewHostSeamRuntime()` publishes at boot, which drives
+    // the real `captureRepairedPreviewForGate` → `writePinnedPreviewCapture`.
+    // Before this writer existed the drain wrote no `repaired` record at all and
+    // the successor pair rendered "This side was never captured" forever.
+    //
+    // The drain's own counters first: the capture was ATTEMPTED and accounted
+    // for, and it was not the silent class — `repairedCaptureMissing` is the one
+    // outcome that leaves the gate with no picture AND no stated reason.
+    expect(
+      completion.repairedCaptured +
+        completion.repairedCaptureDegraded +
+        completion.repairedCaptureMissing,
+    ).toBeGreaterThanOrEqual(1);
+    expect(completion.repairedCaptureMissing).toBe(0);
+
+    // The row itself, at the STORE's own deterministic id (imported real, not
+    // mirrored), bound to the SUCCESSOR target — never the base. That binding is
+    // exactly what #2287's `loadPinnedRepairPair` reads for its right-hand side.
+    const captureId = captureStore.previewCaptureArtifactId(
+      repaired.artifactId,
+      repaired.revisionId,
+      "repaired",
+    );
     const captureRead = await pool(
       `SELECT data FROM "${q(TEST_SCHEMA)}"."objects" WHERE id=$1 AND type=$2 AND org_id=$3`,
-      [captureId, CMS_PREVIEW_CAPTURE_OBJECT_TYPE, ORG],
+      [captureId, captureStore.CMS_PREVIEW_CAPTURE_OBJECT_TYPE, ORG],
     );
     expect(captureRead.rows).toHaveLength(1);
     const captureData = captureRead.rows[0] as { data: unknown };
     const capture = (
       typeof captureData.data === "string" ? JSON.parse(captureData.data) : captureData.data
-    ) as { role: string; status: string; boundArtifactId: string; boundSnapshotRevisionId: string };
+    ) as {
+      role: string;
+      status: string;
+      degradedReason: string | null;
+      boundArtifactId: string;
+      boundSnapshotRevisionId: string;
+    };
     expect(capture.role).toBe("repaired");
-    expect(capture.status).toBe("captured");
     expect(capture.boundArtifactId).toBe(repaired.artifactId);
     expect(capture.boundSnapshotRevisionId).toBe(repaired.revisionId);
-    const witnessRead = await pool(
-      `SELECT action FROM "${q(TEST_SCHEMA)}"."artifact_audit" WHERE artifact_id=$1`,
-      [captureId],
-    );
-    expect(witnessRead.rows).toHaveLength(1);
+
+    // This suite seeds no connect-registered site (it proves the repair LOOP,
+    // not a live CMS), so the capture's addressing policy refuses first and the
+    // honest outcome is a degraded record carrying that NAMED reason. That is
+    // exactly the fix: the successor gate now STATES its gap instead of silently
+    // rendering "This side was never captured". The `captured` shape and every
+    // other degrade class are pinned against the real orchestrator in
+    // src/lib/artifacts/__tests__/cms-preview-capture-repaired.test.ts.
+    expect(capture.status).toBe("degraded");
+    expect(capture.degradedReason).toBe("no-registered-site");
 
     // App sweeps settle the successor's own event; the ORIGINAL producing
     // event's held effect was re-pointed onto the successor gate.
