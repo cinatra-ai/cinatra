@@ -1,0 +1,126 @@
+{
+  "sandbox": [
+    {
+      "id": "0e8767a9-d1d3-4595-87f9-db1254ac1252",
+      "organization_id": "ac123org-ac1-anthropic",
+      "actor_principal_id": "ac123user",
+      "resource_type": "execution_sandbox",
+      "operation": "sandbox_execute",
+      "decision": "allowed",
+      "run_id": null,
+      "metadata": {
+        "cwd": "/workspace",
+        "seq": 0,
+        "wallMs": 316,
+        "outcome": "executed",
+        "surface": "chat",
+        "exitCode": 0,
+        "commandId": "aff17ae3-04db-41c5-b683-94642cc089ba",
+        "egressMode": "default_internet",
+        "imageDigest": "cinatra-sandbox-l0@sha256:7bc8833e6ff18efd93427498a9a1796c22afef86d75fab67585f96b41a31b1c3",
+        "termination": "exited",
+        "workspaceKb": 32,
+        "egressTotalBytes": 0
+      },
+      "created_at": "2026-08-01T19:43:40.901Z"
+    },
+    {
+      "id": "d5899bdd-66b6-4b0d-86f0-496bee5d5cb3",
+      "organization_id": "ac123org-ac1-anthropic",
+      "actor_principal_id": "ac123user",
+      "resource_type": "execution_sandbox",
+      "operation": "sandbox_execute",
+      "decision": "allowed",
+      "run_id": null,
+      "metadata": {
+        "cwd": "/workspace",
+        "seq": 1,
+        "wallMs": 536,
+        "outcome": "executed",
+        "surface": "chat",
+        "exitCode": 0,
+        "commandId": "abbeff6d-2d2b-437d-a727-b950f252f9a0",
+        "egressMode": "default_internet",
+        "imageDigest": "cinatra-sandbox-l0@sha256:7bc8833e6ff18efd93427498a9a1796c22afef86d75fab67585f96b41a31b1c3",
+        "termination": "exited",
+        "workspaceKb": 72,
+        "egressTotalBytes": 0
+      },
+      "created_at": "2026-08-01T19:43:41.939Z"
+    },
+    {
+      "id": "49363482-08ce-4645-a384-927d40481a09",
+      "organization_id": "ac123org-ac1-anthropic",
+      "actor_principal_id": "ac123user",
+      "resource_type": "execution_sandbox",
+      "operation": "sandbox_execute",
+      "decision": "allowed",
+      "run_id": null,
+      "metadata": {
+        "cwd": "/workspace",
+        "seq": 2,
+        "wallMs": 1818,
+        "outcome": "executed",
+        "surface": "chat",
+        "exitCode": 0,
+        "commandId": "f915d539-df31-47d9-90de-b2a11be80161",
+        "egressMode": "default_internet",
+        "imageDigest": "cinatra-sandbox-l0@sha256:7bc8833e6ff18efd93427498a9a1796c22afef86d75fab67585f96b41a31b1c3",
+        "termination": "exited",
+        "workspaceKb": 320,
+        "egressTotalBytes": 79354
+      },
+      "created_at": "2026-08-01T19:43:43.995Z"
+    },
+    {
+      "id": "2f2bb0ab-46a9-4e2f-8e5c-398e6c984cee",
+      "organization_id": "ac123org-ac1-anthropic",
+      "actor_principal_id": "ac123user",
+      "resource_type": "execution_sandbox",
+      "operation": "sandbox_execute",
+      "decision": "allowed",
+      "run_id": null,
+      "metadata": {
+        "cwd": "/workspace",
+        "seq": 3,
+        "wallMs": 367,
+        "outcome": "executed",
+        "surface": "chat",
+        "exitCode": 0,
+        "commandId": "72b893c4-f311-44fa-a2ff-ac1c65516d1e",
+        "egressMode": "default_internet",
+        "imageDigest": "cinatra-sandbox-l0@sha256:7bc8833e6ff18efd93427498a9a1796c22afef86d75fab67585f96b41a31b1c3",
+        "termination": "exited",
+        "workspaceKb": 320,
+        "egressTotalBytes": 79354
+      },
+      "created_at": "2026-08-01T19:43:44.628Z"
+    }
+  ],
+  "voucher": [
+    {
+      "resource_type": "execution_command_voucher",
+      "operation": "sandbox_authorize",
+      "decision": "allowed",
+      "created_at": "2026-08-01T19:43:40.316Z"
+    },
+    {
+      "resource_type": "execution_command_voucher",
+      "operation": "sandbox_authorize",
+      "decision": "allowed",
+      "created_at": "2026-08-01T19:43:40.904Z"
+    },
+    {
+      "resource_type": "execution_command_voucher",
+      "operation": "sandbox_authorize",
+      "decision": "allowed",
+      "created_at": "2026-08-01T19:43:41.941Z"
+    },
+    {
+      "resource_type": "execution_command_voucher",
+      "operation": "sandbox_authorize",
+      "decision": "allowed",
+      "created_at": "2026-08-01T19:43:43.999Z"
+    }
+  ]
+}

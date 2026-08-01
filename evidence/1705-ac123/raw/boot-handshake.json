@@ -1,0 +1,18 @@
+{
+  "runId": "ac123-2026-08-01T19-43-32-811Z",
+  "handshake": {
+    "completedAtMs": 1785613415611,
+    "imageDigest": "cinatra-sandbox-l0@sha256:7bc8833e6ff18efd93427498a9a1796c22afef86d75fab67585f96b41a31b1c3",
+    "wallMs": 468
+  },
+  "gateway": {
+    "containerName": "cinatra-exec-gateway",
+    "proxyPort": 3128,
+    "adminOrigin": "http://127.0.0.1:3129"
+  },
+  "models": {
+    "openaiShellCapable": "gpt-5.4",
+    "openaiShellIncompatible": "gpt-5-mini",
+    "anthropic": "claude-sonnet-5"
+  }
+}

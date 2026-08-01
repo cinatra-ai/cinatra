@@ -1,0 +1,19 @@
+{
+  "runId": "ac123-2026-08-01T19-43-32-811Z",
+  "arm": "ac1-openai-native",
+  "provider": "openai",
+  "requestedModel": "gpt-5.4",
+  "resolvedModel": "gpt-5.4-2026-03-05",
+  "surface": "chat",
+  "wireForm": "native type:\"shell\"",
+  "sandboxImage": "cinatra-sandbox-l0@sha256:7bc8833e6ff18efd93427498a9a1796c22afef86d75fab67585f96b41a31b1c3",
+  "capturedAt": "2026-08-01T19:44:01.178Z",
+  "sha256": {
+    "audit-rows.json": "aaf5c8bf0a3ca92fc972aaca4415032b60412d94d5ebae8dc2fc825211213eba",
+    "response.json": "f2e2691b3be4595e97df387ce15edec8dc758f1d5fb35e9bc91efce163ec50f1",
+    "wire-2026-08-01T19-43-48-430Z__ac123-ac1-openai-native-step-1__request.json": "83c29f61e26622a47d169186af59b0dbca3b1509b2a39f87667075cafabd9f2a",
+    "wire-2026-08-01T19-43-51-786Z__ac123-ac1-openai-native-step-1__response.json": "b247c6ccb36e165358206cd72b334e8a4cd423f16974ae7a812e905bbd0a69e2",
+    "wire-2026-08-01T19-43-55-783Z__ac123-ac1-openai-native-step-2__request.json": "b34c2daa5b2897b5859713367eace8882f2dde1854413793187731e8a88aaebf",
+    "wire-2026-08-01T19-43-58-656Z__ac123-ac1-openai-native-step-2__response.json": "52bdebc677c7711418bbb6fadc1d9faf67aef1a8b256dcee64da6de1fa3f306e"
+  }
+}

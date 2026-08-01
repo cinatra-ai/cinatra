@@ -1,0 +1,36 @@
+{
+  "sandbox": [
+    {
+      "id": "b82759cc-a933-4efb-8498-dbdddee6065e",
+      "organization_id": "ac123org-ac3-openai-skill-shell",
+      "actor_principal_id": "ac123user",
+      "resource_type": "execution_sandbox",
+      "operation": "sandbox_execute",
+      "decision": "allowed",
+      "run_id": null,
+      "metadata": {
+        "cwd": "/workspace",
+        "seq": 0,
+        "wallMs": 365,
+        "outcome": "executed",
+        "surface": "chat",
+        "exitCode": 0,
+        "commandId": "8ffe082a-86d7-4bbd-934b-6f95ce5a773d",
+        "egressMode": "default_internet",
+        "imageDigest": "cinatra-sandbox-l0@sha256:7bc8833e6ff18efd93427498a9a1796c22afef86d75fab67585f96b41a31b1c3",
+        "termination": "exited",
+        "workspaceKb": 28,
+        "egressTotalBytes": 0
+      },
+      "created_at": "2026-08-01T19:44:34.811Z"
+    }
+  ],
+  "voucher": [
+    {
+      "resource_type": "execution_command_voucher",
+      "operation": "sandbox_authorize",
+      "decision": "allowed",
+      "created_at": "2026-08-01T19:44:34.114Z"
+    }
+  ]
+}

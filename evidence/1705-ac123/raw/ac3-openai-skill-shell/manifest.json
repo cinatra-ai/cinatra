@@ -1,0 +1,19 @@
+{
+  "runId": "ac123-2026-08-01T19-43-32-811Z",
+  "arm": "ac3-openai-skill-shell",
+  "provider": "openai",
+  "requestedModel": "gpt-5.4",
+  "resolvedModel": "gpt-5.4-2026-03-05",
+  "surface": "chat",
+  "wireForm": "native type:\"shell\" with environment.skills",
+  "sandboxImage": "cinatra-sandbox-l0@sha256:7bc8833e6ff18efd93427498a9a1796c22afef86d75fab67585f96b41a31b1c3",
+  "capturedAt": "2026-08-01T19:44:38.217Z",
+  "sha256": {
+    "audit-rows.json": "bc3d448686ba0df628bc28998c4a146795bf2be2960f24f462ea4711a3c9494a",
+    "response.json": "fca67ea612e44778c0348c65f0de80d4d9be72c167ddefcde7c01aff8c52f16b",
+    "wire-2026-08-01T19-44-32-399Z__ac123-ac3-openai-skill-shell-step-1__request.json": "34fc05273a0647f7df803324e76bebcd5e1a715ef08a36801586cbff5da78d33",
+    "wire-2026-08-01T19-44-33-791Z__ac123-ac3-openai-skill-shell-step-1__response.json": "8f7be28cb65c8e12a505c5255353c91b635d59247323026ab8e154f28bc4e6ab",
+    "wire-2026-08-01T19-44-34-814Z__ac123-ac3-openai-skill-shell-step-2__request.json": "8543b72556fe1611fd9730f8fe36d43ac4c6a77bf75edaaf85ebcb9315568117",
+    "wire-2026-08-01T19-44-35-708Z__ac123-ac3-openai-skill-shell-step-2__response.json": "b89d502fe1731b790936c612c329de13bba5db3947443f089f6b9cd7936bd1c3"
+  }
+}

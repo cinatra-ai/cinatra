@@ -1,0 +1,42 @@
+{
+  "model": "claude-sonnet-5",
+  "id": "msg_011CdcboKAT3Fr834ryy3HkT",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "tool_use",
+      "id": "toolu_01CcVGYy36NnbRZgnYVC36nB",
+      "name": "sandbox_execute",
+      "input": {
+        "commands": [
+          "cat << 'EOF' > /workspace/gen.py\nimport hashlib\ns = \"\".join(str(i*i*i) for i in range(4000))\nopen(\"/workspace/data.txt\",\"w\").write(s)\nprint(\"WROTE\", len(s))\nEOF",
+          "python3 /workspace/gen.py",
+          "pip install --user --quiet base58",
+          "python3 -c \"import base58,hashlib; d=open('/workspace/data.txt').read(); print('AC1-ANTHROPIC'); print(len(d)); print(base58.b58encode(hashlib.sha256(d.encode()).digest()).decode())\""
+        ]
+      },
+      "caller": {
+        "type": "direct"
+      }
+    }
+  ],
+  "stop_reason": "tool_use",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+    "input_tokens": 1233,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+      "ephemeral_5m_input_tokens": 0,
+      "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 274,
+    "output_tokens_details": {
+      "thinking_tokens": 0
+    },
+    "service_tier": "standard",
+    "inference_geo": "global"
+  }
+}

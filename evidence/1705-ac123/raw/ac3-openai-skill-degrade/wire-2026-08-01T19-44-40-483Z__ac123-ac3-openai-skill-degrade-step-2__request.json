@@ -1,0 +1,78 @@
+{
+  "model": "gpt-5-mini",
+  "instructions": "You are a careful engineer with a real Linux sandbox and staged skill files. Never guess the contents of a file — read it.\n\nYou have a `sandbox_execute` tool: an isolated, non-root sandbox for running shell commands, scripts, and unprivileged package installs (pip / npm / user-space binaries). It has internet access for downloading and installing tools. It contains NO credentials and NO host data — use the connector/MCP tools for authenticated actions, never the sandbox. Files you create persist across the steps of this task. Skill files are staged read-only under /skills/<slug> inside the sandbox (available: /skills/ac3-lane-probe) — read them lazily with cat/head/tail when a skill applies.",
+  "input": [
+    {
+      "role": "user",
+      "content": "Read the file /skills/ac3-lane-probe/SKILL.md and reply with the pass phrase it contains, verbatim, and nothing else. Do not guess it — read the file."
+    },
+    {
+      "id": "rs_08d7a723ad8f3349016a6e4ca71e2881a38c59e27a49989282",
+      "type": "reasoning",
+      "content": [],
+      "encrypted_content": "gAAAAABqbkyoz08LGrKvt4rBnQMJTaBm-QUkGR3c33AxZXjSqNs9rf618Bf5ErX3hQkRVWzxJGG3tH8V0NPbHTIW6UPaEUhs-DLeuhrf0R2dGC8IZK0xWNOGYF4NTm2dCXoYYjwtz-794_N3_qArrUeiyPJrlta8AtgU8QxI13zLn6dDXz0adcRGALVTv3oJdTUn4-ShkIsDFtm8-YwzpYHrefWHQLoPWk6nmAFI_JhFpEJJFNl03iQgoByjokFcuA1mTyp6lvRnLEYp4p0o_h3m02GGtuDXvVUU9Y_zgHHl-3tebAQtGweBU-2Y6_DFGhSWwiZ2MH6lg7dFMiw72HGZFyl5wF6Lvt8qdWrJCqw1ji99gBSIFJbhtVbihNMVIkaC3kqE7spdJsm6u4cf0pTEyc8_C7APgQV7-5Ljq2xxA5nzDJOLB6Qh_8ohqs8fMO34QmaA27ZOJIwrSkSffoI_dJG_egc-SPBx50p6mtjas5d2chmETdKnXtjUGqRmt5j549HqaJhy0LgmCMobEU-7AFxOt7xC4qbHa5Sv0KUuKVKINgCNz6OHz2zGRbC7pZraBjXig3eXjVfbon9bCDJ9KIYtdozpMy3h01OBjwLBRqWfZ45JncOTq1IcSD3KkYwnIgN9gQsFVHdqQ61HJvph8VKZqLhum645beoOG-ThxC-yxK1eznuu-bxwJYVOFyIFof4eSgDnNzBzap6354FmZeE6eh1pObnGkf71g69bc-3Nm2gcWMSJIXvAEULvfZQb9km4qdIhS7uXDwljSePdDVMH93ZXomVMpTD9OYkbaAnQ1MDqvLFKqcUqKMHwuMYg8uNkR6MVLg9PeLGBJd6f9t6oVXNtPoFkVwoPsZEJTv7qreaJ_6NQ9kNejI4or9IFdgmbdQUgxu5-n7f-hSKdNa3JV635qwirafeoSlD832kyi8flM6LogUskRaQFKSqX-FKwrkjuEMymafySOBkLwbJN1kL7Fv5utNvQgqYWVJgw6040dd6BUQ2fKUnjd66f-kTM0XyxTX4M4794wldE79GmLvSrYYw0NXE-3IcgZHf8lV-wvNuEqHDI4A6Il4-sIHlShxXEFmBqdHCCYuTTl7iKNQz9WDjQryHj1eNUP72fHJhEYsQnR7BxsLGIEGCKDruFQYjgWDGr7O8hwhO5GIBaud6meQ==",
+      "summary": []
+    },
+    {
+      "id": "fc_08d7a723ad8f3349016a6e4ca7a14481a3adecbe90d80b8c29",
+      "type": "function_call",
+      "status": "completed",
+      "arguments": "{\"command\":\"cat /skills/ac3-lane-probe/SKILL.md\"}",
+      "call_id": "call_Ytw8yZI29Bdni9VH9RowXzaA",
+      "name": "skill_file_read"
+    },
+    {
+      "type": "function_call_output",
+      "call_id": "call_Ytw8yZI29Bdni9VH9RowXzaA",
+      "output": "---\nname: AC3 lane probe\ndescription: Lane probe skill carrying a pass phrase.\n---\n\n# AC3 lane probe\n\nThe lane pass phrase is AC3-SKILL-PASSPHRASE-7719.\n"
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "name": "skill_file_read",
+      "description": "Read a skill file (read-only; cat, head, or tail on files under /skills/<slug>). Read a skill's SKILL.md lazily when the skill applies to the task. Available skills: '/skills/ac3-lane-probe/SKILL.md' — Lane probe skill carrying a pass phrase..",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "A read-only command: cat, head, or tail on a /skills/<slug>/... file (e.g. `cat /skills/my-skill/SKILL.md`)."
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    },
+    {
+      "type": "function",
+      "name": "sandbox_execute",
+      "description": "Execute shell commands in an isolated, non-root sandbox: run scripts, and install unprivileged packages (pip / npm / user-space binaries) that persist across steps. Has internet access. Contains no credentials and no host data. Skill files are staged read-only under /skills/<slug>: '/skills/ac3-lane-probe/SKILL.md' — Lane probe skill carrying a pass phrase..",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "commands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Shell commands to execute in the sandbox, in order."
+          },
+          "timeout_ms": {
+            "type": "number",
+            "description": "Optional per-batch timeout in milliseconds."
+          }
+        },
+        "required": [
+          "commands"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    }
+  ],
+  "store": false
+}

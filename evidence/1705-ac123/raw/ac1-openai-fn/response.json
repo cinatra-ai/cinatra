@@ -1,0 +1,13 @@
+{
+  "text": "AC1-OPENAI-FN\n39977\nG9zD7uWZwXX43WybaJJihsGs3hjcBw9KRivX5m7bgUVV",
+  "status": "completed",
+  "incompleteReason": null,
+  "rawBody": "{\"text\":\"AC1-OPENAI-FN\\n39977\\nG9zD7uWZwXX43WybaJJihsGs3hjcBw9KRivX5m7bgUVV\"}",
+  "usage": {
+    "inputTokens": 1246,
+    "outputTokens": 45,
+    "cachedInputTokens": 0,
+    "reasoningOutputTokens": 0
+  },
+  "model": "gpt-5-mini-2025-08-07"
+}

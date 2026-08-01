@@ -1,0 +1,36 @@
+{
+  "model": "claude-sonnet-5",
+  "system": "You are a careful engineer with a real Linux sandbox. Always run code rather than predicting its output.\n\nYou have a `sandbox_execute` tool: an isolated, non-root sandbox for running shell commands, scripts, and unprivileged package installs (pip / npm / user-space binaries). It has internet access for downloading and installing tools. It contains NO credentials and NO host data — use the connector/MCP tools for authenticated actions, never the sandbox. Files you create persist across the steps of this task.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "You have a sandbox tool. Use it. Do not answer from reasoning: the values below\nare not derivable without running the code, and a guessed answer is a wrong answer.\n\nRun these FOUR commands, in this order, in the SAME sandbox session so the\nworkspace and the installed package persist between them.\n\nIMPORTANT: issue each of the four as its OWN separate command — a separate entry\nin the commands array. Do NOT join them with newlines or `&&` into a single\ncommand entry. You may still send them in one tool call.\n\n1) Write this exact program to /workspace/gen.py (use a heredoc so it is written verbatim):\n\nimport hashlib\ns = \"\".join(str(i*i*i) for i in range(4000))\nopen(\"/workspace/data.txt\",\"w\").write(s)\nprint(\"WROTE\", len(s))\n\n2) Run it:  python3 /workspace/gen.py\n\n3) Install a package that is NOT present in the base image:\n   pip install --user --quiet base58\n\n4) Finally run this command, which READS BACK the file step 2 wrote and USES the\n   package step 3 installed:\n\n   python3 -c \"import base58,hashlib; d=open('/workspace/data.txt').read(); print('AC2-CHAT'); print(len(d)); print(base58.b58encode(hashlib.sha256(d.encode()).digest()).decode())\"\n\nThen reply with the literal stdout of command 4 and nothing else — three lines:\nthe marker AC2-CHAT, the length, and the base58 string."
+    }
+  ],
+  "max_tokens": 4096,
+  "tools": [
+    {
+      "name": "sandbox_execute",
+      "description": "Execute shell commands in an isolated, non-root sandbox: run scripts, and install unprivileged packages (pip / npm / user-space binaries) that persist across steps. Has internet access. Contains no credentials and no host data.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "commands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Shell commands to execute in the sandbox, in order."
+          },
+          "timeout_ms": {
+            "type": "number",
+            "description": "Optional per-batch timeout in milliseconds."
+          }
+        },
+        "required": [
+          "commands"
+        ]
+      }
+    }
+  ]
+}

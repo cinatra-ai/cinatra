@@ -1,0 +1,19 @@
+{
+  "runId": "ac123-2026-08-01T19-43-32-811Z",
+  "arm": "ac2-chat",
+  "provider": "anthropic",
+  "requestedModel": "claude-sonnet-5",
+  "resolvedModel": "claude-sonnet-5",
+  "surface": "chat",
+  "wireForm": "sandbox_execute function tool",
+  "sandboxImage": "cinatra-sandbox-l0@sha256:7bc8833e6ff18efd93427498a9a1796c22afef86d75fab67585f96b41a31b1c3",
+  "capturedAt": "2026-08-01T19:44:32.302Z",
+  "sha256": {
+    "audit-rows.json": "4c6463fbfa5f5a664067298661376348b4794f18ebcc950e44c9ac7ca12ab8c0",
+    "response.json": "3dce3f772e437d70be5a407c345e5bcc15946cbd1700a0e4b58829c6d5b5abb9",
+    "wire-2026-08-01T19-44-17-605Z__ac123-ac2-chat-step-1__request.json": "51f52a619ea8f92b195686bc262e47aa10e3b8edec323730fef0db51cf08042d",
+    "wire-2026-08-01T19-44-21-970Z__ac123-ac2-chat-step-1__response.json": "5b1c1103da5eb17d413c13e98ae62e4d7f9d7a8ee40d0838784c0c5a980ba541",
+    "wire-2026-08-01T19-44-26-238Z__ac123-ac2-chat-step-2__request.json": "f8a172d71f669d1e999395840f15a2b4f0ee42ba880bfc971469f6a3fff18aee",
+    "wire-2026-08-01T19-44-29-784Z__ac123-ac2-chat-step-2__response.json": "0760ceadd2dd7a34e923946e2187f681e656366cefbd174d06f98dfaf6f9d940"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "text": "AC3-SKILL-PASSPHRASE-7719.",
+  "status": "completed",
+  "incompleteReason": null,
+  "rawBody": "{\"text\":\"AC3-SKILL-PASSPHRASE-7719.\"}",
+  "usage": {
+    "inputTokens": 577,
+    "outputTokens": 19,
+    "cachedInputTokens": 0,
+    "reasoningOutputTokens": 0
+  },
+  "model": "gpt-5-mini-2025-08-07"
+}

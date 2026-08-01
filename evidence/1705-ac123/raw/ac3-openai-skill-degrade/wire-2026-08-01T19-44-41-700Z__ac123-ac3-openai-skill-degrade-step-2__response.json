@@ -1,0 +1,142 @@
+{
+  "id": "resp_08d7a723ad8f3349016a6e4ca8a26481a3a6760a7279a3011d",
+  "object": "response",
+  "created_at": 1785613480,
+  "status": "completed",
+  "background": false,
+  "billing": {
+    "payer": "developer"
+  },
+  "completed_at": 1785613481,
+  "error": null,
+  "frequency_penalty": 0,
+  "incomplete_details": null,
+  "instructions": "You are a careful engineer with a real Linux sandbox and staged skill files. Never guess the contents of a file — read it.\n\nYou have a `sandbox_execute` tool: an isolated, non-root sandbox for running shell commands, scripts, and unprivileged package installs (pip / npm / user-space binaries). It has internet access for downloading and installing tools. It contains NO credentials and NO host data — use the connector/MCP tools for authenticated actions, never the sandbox. Files you create persist across the steps of this task. Skill files are staged read-only under /skills/<slug> inside the sandbox (available: /skills/ac3-lane-probe) — read them lazily with cat/head/tail when a skill applies.",
+  "max_output_tokens": null,
+  "max_tool_calls": null,
+  "model": "gpt-5-mini-2025-08-07",
+  "moderation": null,
+  "output": [
+    {
+      "id": "msg_08d7a723ad8f3349016a6e4ca9257881a3bde473c0b993e636",
+      "type": "message",
+      "status": "completed",
+      "content": [
+        {
+          "type": "output_text",
+          "annotations": [],
+          "logprobs": [],
+          "text": "AC3-SKILL-PASSPHRASE-7719."
+        }
+      ],
+      "role": "assistant"
+    }
+  ],
+  "parallel_tool_calls": true,
+  "presence_penalty": 0,
+  "previous_response_id": null,
+  "prompt_cache_key": null,
+  "prompt_cache_retention": "in_memory",
+  "reasoning": {
+    "context": "current_turn",
+    "effort": "medium",
+    "mode": "standard",
+    "summary": null
+  },
+  "safety_identifier": null,
+  "service_tier": "default",
+  "store": false,
+  "temperature": 1,
+  "text": {
+    "format": {
+      "type": "text"
+    },
+    "verbosity": "medium"
+  },
+  "tool_choice": "auto",
+  "tool_usage": {
+    "image_gen": {
+      "input_tokens": 0,
+      "input_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+      },
+      "output_tokens": 0,
+      "output_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+      },
+      "total_tokens": 0
+    },
+    "web_search": {
+      "num_requests": 0
+    }
+  },
+  "tools": [
+    {
+      "type": "function",
+      "description": "Read a skill file (read-only; cat, head, or tail on files under /skills/<slug>). Read a skill's SKILL.md lazily when the skill applies to the task. Available skills: '/skills/ac3-lane-probe/SKILL.md' — Lane probe skill carrying a pass phrase..",
+      "name": "skill_file_read",
+      "output_schema": null,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "A read-only command: cat, head, or tail on a /skills/<slug>/... file (e.g. `cat /skills/my-skill/SKILL.md`)."
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    },
+    {
+      "type": "function",
+      "description": "Execute shell commands in an isolated, non-root sandbox: run scripts, and install unprivileged packages (pip / npm / user-space binaries) that persist across steps. Has internet access. Contains no credentials and no host data. Skill files are staged read-only under /skills/<slug>: '/skills/ac3-lane-probe/SKILL.md' — Lane probe skill carrying a pass phrase..",
+      "name": "sandbox_execute",
+      "output_schema": null,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "commands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Shell commands to execute in the sandbox, in order."
+          },
+          "timeout_ms": {
+            "type": "number",
+            "description": "Optional per-batch timeout in milliseconds."
+          }
+        },
+        "required": [
+          "commands"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    }
+  ],
+  "top_logprobs": 0,
+  "top_p": 1,
+  "truncation": "disabled",
+  "usage": {
+    "input_tokens": 577,
+    "input_tokens_details": {
+      "cache_write_tokens": 0,
+      "cached_tokens": 0
+    },
+    "output_tokens": 19,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 596
+  },
+  "user": null,
+  "metadata": {},
+  "output_text": "AC3-SKILL-PASSPHRASE-7719."
+}

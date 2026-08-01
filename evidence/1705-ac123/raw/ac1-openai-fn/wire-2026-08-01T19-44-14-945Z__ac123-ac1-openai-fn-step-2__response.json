@@ -1,0 +1,122 @@
+{
+  "id": "resp_09823c5bf682e51a016a6e4c8d9110819e9ae4066860697113",
+  "object": "response",
+  "created_at": 1785613453,
+  "status": "completed",
+  "background": false,
+  "billing": {
+    "payer": "developer"
+  },
+  "completed_at": 1785613454,
+  "error": null,
+  "frequency_penalty": 0,
+  "incomplete_details": null,
+  "instructions": "You are a careful engineer with a real Linux sandbox. Always run code rather than predicting its output.\n\nYou have a `sandbox_execute` tool: an isolated, non-root sandbox for running shell commands, scripts, and unprivileged package installs (pip / npm / user-space binaries). It has internet access for downloading and installing tools. It contains NO credentials and NO host data — use the connector/MCP tools for authenticated actions, never the sandbox. Files you create persist across the steps of this task.",
+  "max_output_tokens": null,
+  "max_tool_calls": null,
+  "model": "gpt-5-mini-2025-08-07",
+  "moderation": null,
+  "output": [
+    {
+      "id": "msg_09823c5bf682e51a016a6e4c8dead8819ea5de44ce4a77bd04",
+      "type": "message",
+      "status": "completed",
+      "content": [
+        {
+          "type": "output_text",
+          "annotations": [],
+          "logprobs": [],
+          "text": "AC1-OPENAI-FN\n39977\nG9zD7uWZwXX43WybaJJihsGs3hjcBw9KRivX5m7bgUVV"
+        }
+      ],
+      "role": "assistant"
+    }
+  ],
+  "parallel_tool_calls": true,
+  "presence_penalty": 0,
+  "previous_response_id": null,
+  "prompt_cache_key": null,
+  "prompt_cache_retention": "in_memory",
+  "reasoning": {
+    "context": "current_turn",
+    "effort": "medium",
+    "mode": "standard",
+    "summary": null
+  },
+  "safety_identifier": null,
+  "service_tier": "default",
+  "store": false,
+  "temperature": 1,
+  "text": {
+    "format": {
+      "type": "text"
+    },
+    "verbosity": "medium"
+  },
+  "tool_choice": "auto",
+  "tool_usage": {
+    "image_gen": {
+      "input_tokens": 0,
+      "input_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+      },
+      "output_tokens": 0,
+      "output_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+      },
+      "total_tokens": 0
+    },
+    "web_search": {
+      "num_requests": 0
+    }
+  },
+  "tools": [
+    {
+      "type": "function",
+      "description": "Execute shell commands in an isolated, non-root sandbox: run scripts, and install unprivileged packages (pip / npm / user-space binaries) that persist across steps. Has internet access. Contains no credentials and no host data.",
+      "name": "sandbox_execute",
+      "output_schema": null,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "commands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Shell commands to execute in the sandbox, in order."
+          },
+          "timeout_ms": {
+            "type": "number",
+            "description": "Optional per-batch timeout in milliseconds."
+          }
+        },
+        "required": [
+          "commands"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    }
+  ],
+  "top_logprobs": 0,
+  "top_p": 1,
+  "truncation": "disabled",
+  "usage": {
+    "input_tokens": 1246,
+    "input_tokens_details": {
+      "cache_write_tokens": 0,
+      "cached_tokens": 0
+    },
+    "output_tokens": 45,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 1291
+  },
+  "user": null,
+  "metadata": {},
+  "output_text": "AC1-OPENAI-FN\n39977\nG9zD7uWZwXX43WybaJJihsGs3hjcBw9KRivX5m7bgUVV"
+}

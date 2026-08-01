@@ -1,0 +1,19 @@
+{
+  "runId": "ac123-2026-08-01T19-43-32-811Z",
+  "arm": "ac3-openai-skill-degrade",
+  "provider": "openai",
+  "requestedModel": "gpt-5-mini",
+  "resolvedModel": "gpt-5-mini-2025-08-07",
+  "surface": "chat",
+  "wireForm": "skill_file_read + sandbox_execute function tools (no native shell)",
+  "sandboxImage": "cinatra-sandbox-l0@sha256:7bc8833e6ff18efd93427498a9a1796c22afef86d75fab67585f96b41a31b1c3",
+  "capturedAt": "2026-08-01T19:44:44.207Z",
+  "sha256": {
+    "audit-rows.json": "db0a68665c3b12807bd0b3aa7b1c38cfa7ae969e705f653dbb6856ba4e479627",
+    "response.json": "7e8b4e4e90ca8323d65410ec4c3c7fdc276fcfc4059bf770b902b112ca87a8fc",
+    "wire-2026-08-01T19-44-38-219Z__ac123-ac3-openai-skill-degrade-step-1__request.json": "c648289b4d834c8325e6c29ec174b7751ae94202e18e744c78f8ff9dea4f3cd7",
+    "wire-2026-08-01T19-44-40-482Z__ac123-ac3-openai-skill-degrade-step-1__response.json": "76b31612a597a371094ba50248e0dffc641a3c34657330f09e2063f869ef7b99",
+    "wire-2026-08-01T19-44-40-483Z__ac123-ac3-openai-skill-degrade-step-2__request.json": "772a813db9e95ff16eab363d5d16a029add3b1b5a3e1d6431eed9a632a9da6a4",
+    "wire-2026-08-01T19-44-41-700Z__ac123-ac3-openai-skill-degrade-step-2__response.json": "8241ddea9900b083e001c7537caad684a1314913bc9a37dd0e64d86af4d975ba"
+  }
+}

@@ -1,0 +1,73 @@
+Codex convergence round — cinatra#1705 AC1/AC2/AC3 live-provider proof set.
+Read-only adversarial review of evidence/1705-ac123 as it stood BEFORE the
+corrections in WALK.md section 6. Absolute paths rewritten to <worktree>/.
+All six substantive findings were adopted; see WALK.md section 6.
+========================================================================
+
+Verdict: do not accept this package as closing all three ACs. The execution itself is credible, but AC1’s persisted-turn requirement and AC2’s real chat-surface requirement are not met.
+
+1. Unsupported or false WALK claims
+
+- “Provider and resolved model id are recorded in `response.json`” is false. The response files contain `model` but no `provider`; see [ac1-openai-native/response.json](<worktree>/evidence/1705-ac123/raw/ac1-openai-native/response.json:1) and [ac1-anthropic/response.json](<worktree>/evidence/1705-ac123/raw/ac1-anthropic/response.json:1). Provider identity is inferable from directories/wire format and stated in WALK, but not recorded where WALK claims it is.
+
+- “The raw persisted turn is retained, not a projection” is false. The driver serializes the in-memory normalized `generate()` return itself ([driver](<worktree>/evidence/1705-ac123/drivers/live-provider.walk.test.ts:265)). Both adapters manufacture `rawBody` as `JSON.stringify({text: finalText})`, explicitly a projection: [OpenAI adapter](<worktree>/extensions/cinatra-ai/openai-connector/src/adapter/openai-adapter.ts:679), [Anthropic adapter](<worktree>/extensions/cinatra-ai/anthropic-connector/src/adapter/anthropic-adapter.ts:892). The wire files are useful raw provider captures, but they are log captures, not a persisted Cinatra chat/agent turn. OpenAI also used `store:false` ([wire response](<worktree>/evidence/1705-ac123/raw/ac1-openai-native/wire-2026-08-01T19-24-20-560Z__ac123-ac1-openai-native-step-1__response.json:49)).
+
+- “No credential value appears anywhere in this directory” is false. The runner contains a PostgreSQL password and a default broker-signing secret: [run.sh](<worktree>/evidence/1705-ac123/drivers/run.sh:34) and [run.sh](<worktree>/evidence/1705-ac123/drivers/run.sh:41).
+
+- The passphrase does not “exist nowhere else.” It is literal test source at [driver](<worktree>/evidence/1705-ac123/drivers/live-provider.walk.test.ts:463) and in WALK itself at [WALK.md](<worktree>/evidence/1705-ac123/WALK.md:246). The wire call still proves the model read the file, but that prose claim is plainly wrong.
+
+- “All six arms in a single invocation” is plausible from timestamps, but not established: there is no test-run transcript, manifest, or hashes binding the artifacts to one invocation. The driver actively deletes prior captures before rewriting them ([driver](<worktree>/evidence/1705-ac123/drivers/live-provider.walk.test.ts:223)).
+
+2. Weak or tautological assertions
+
+Yes, substantially:
+
+- `assertAc1Legs` accepts only three rows, not the four requested commands; does not assert `seq=[0,1,2,3]`, `exitCode=0`, command-to-row correlation, or that the install row is the egressing row ([driver](<worktree>/evidence/1705-ac123/drivers/live-provider.walk.test.ts:290)). It merely requires some row with egress and a matching final answer.
+
+- It never establishes that `base58` was absent before installation. There is no negative import/package-inventory probe. The Dockerfile does not explicitly install it, but the retained raw evidence does not prove the actual image lacked it.
+
+- AC2’s `surface=chat` assertion is tautological. The driver mints the session with the caller-supplied `surface` ([driver](<worktree>/evidence/1705-ac123/drivers/live-provider.walk.test.ts:225)), passes `"chat"` itself ([driver](<worktree>/evidence/1705-ac123/drivers/live-provider.walk.test.ts:433)), then asserts the audit sink echoed `"chat"` ([driver](<worktree>/evidence/1705-ac123/drivers/live-provider.walk.test.ts:440)). It never invokes the chat surface or `runAssistantTurn`. WALK concedes this at [WALK.md](<worktree>/evidence/1705-ac123/WALK.md:212). Combining this arm with separate `evidence/2175-ac2` does not satisfy AC2’s requirement that one chat-surface turn do both.
+
+- AC3 native checks only that concatenated response files contain both strings `shell_call` and the path; it does not assert they occur in the same call object. It requires any sandbox row, not a matched row ([driver](<worktree>/evidence/1705-ac123/drivers/live-provider.walk.test.ts:606)). The raw artifact does happen to show the correct call ([wire response](<worktree>/evidence/1705-ac123/raw/ac3-openai-skill-shell/wire-2026-08-01T19-24-58-268Z__ac123-ac3-openai-skill-shell-step-1__response.json:19)).
+
+- AC3 degradation never asserts that the model called `skill_file_read`; it asserts only that the tool was advertised and that the final text contains the driver-authored passphrase ([driver](<worktree>/evidence/1705-ac123/drivers/live-provider.walk.test.ts:638)). Again, the raw response independently shows the actual call ([degrade response](<worktree>/evidence/1705-ac123/raw/ac3-openai-skill-degrade/wire-2026-08-01T19-25-04-061Z__ac123-ac3-openai-skill-degrade-step-1__response.json:27)).
+
+3. Deviations are not completely disclosed
+
+The “three deviations, all named” statement is inaccurate.
+
+- The harness replaces `server-only` and the entire auth module with test stubs ([walk.config.ts](<worktree>/evidence/1705-ac123/drivers/walk.config.ts:16), [walk.config.ts](<worktree>/evidence/1705-ac123/drivers/walk.config.ts:29)). Those are not among WALK’s three.
+
+- It runs with `CINATRA_REQUIRE_ACTOR_CONTEXT=false` and `NODE_ENV=test` ([run.sh](<worktree>/evidence/1705-ac123/drivers/run.sh:43)); production explicitly never permits that actor-context bypass ([LLM entry point](<worktree>/packages/llm/src/index.ts:446)). The flag is probably inert here because actor context is explicitly supplied, but it remains an undisclosed environmental deviation.
+
+- AC3 does not attach a catalog-resolved skill through production attachment composition. It constructs a `SkillSummary` manually, writes directly under `data/skills`, and passes the resulting tool directly to `generate()` ([driver](<worktree>/evidence/1705-ac123/drivers/live-provider.walk.test.ts:478), [driver](<worktree>/evidence/1705-ac123/drivers/live-provider.walk.test.ts:571)). The direct-`generate()` deviation gestures at this, but calling it a normally “attached” skill overstates what ran.
+
+- The skills stub is not equivalent to production containment. It performs only lexical containment ([stub](<worktree>/evidence/1705-ac123/drivers/skills-barrel-stub.ts:39)); production additionally applies realpath/symlink containment and accepts three configured roots ([skills-store.ts](<worktree>/packages/skills/src/skills-store.ts:1594)). WALK’s description of “the real function’s fail-closed shape” is incomplete.
+
+4. Per-command rows and cumulative egress
+
+The raw evidence substantively shows four executions per AC1/AC2 arm: four ordered provider commands and audit rows with unique `commandId`s and `seq=0..3`. For example, the native call has the four commands at [wire response](<worktree>/evidence/1705-ac123/raw/ac1-openai-native/wire-2026-08-01T19-24-20-560Z__ac123-ac1-openai-native-step-1__response.json:25), while its audit rows have sequences 0–3 at [audit rows](<worktree>/evidence/1705-ac123/raw/ac1-openai-native/audit-rows.json:13). Production executes the array sequentially ([executor.ts](<worktree>/packages/execution-plane/src/executor.ts:229)).
+
+But “matching” is only ordinal/inferred. Persisted rows omit command text and the captured query omits the audit `resource_id`/job ID; provider captures do not contain audit `commandId`s. There is no direct join from a particular wire command to a particular row. The driver also fails to assert the sequence/cardinality.
+
+The cumulative-egress reading is correct. The rows are `0, 0, 79354, 79354` ([audit rows](<worktree>/evidence/1705-ac123/raw/ac1-openai-native/audit-rows.json:23)); gateway statistics accumulate by job token and return a snapshot total ([egress-gateway.cjs](<worktree>/packages/execution-plane/runtime/egress-gateway.cjs:360)), which the worker fetches after each command ([worker.ts](<worktree>/packages/execution-plane/src/worker.ts:185)). The `79354` delta occurs on `seq=2`; `seq=3` adds zero. WALK is right on this point.
+
+5. AC3 zero-row explanation
+
+Yes, that explanation matches production code.
+
+For an incompatible model, translation emits `skill_file_read` instead of native shell ([openai-adapter.ts](<worktree>/extensions/cinatra-ai/openai-connector/src/adapter/openai-adapter.ts:229)). Calls are routed to `executeSkillFileReadCall`, which invokes the local skill shell tool directly, not `sandbox_execute` ([openai-adapter.ts](<worktree>/extensions/cinatra-ai/openai-connector/src/adapter/openai-adapter.ts:367)). `createLocalSkillShellTool.execute` reads locally ([skills.ts](<worktree>/packages/llm/src/tools/skills.ts:183)). Therefore zero sandbox/voucher rows ([raw audit](<worktree>/evidence/1705-ac123/raw/ac3-openai-skill-degrade/audit-rows.json:1)) is the expected production architecture—subject to the lane using its weaker reader stub.
+
+6. Public-repo leakage
+
+No real provider API-key value, authorization header, absolute host-user path, or non-loopback internal hostname was found.
+
+Items to address before publication:
+
+- Literal PostgreSQL password `<redacted lane db password>` and broker secret `<redacted lane broker secret>` in [run.sh](<worktree>/evidence/1705-ac123/drivers/run.sh:34). They appear disposable, but they are still published credentials/default signing material.
+- Secret/environment names including both provider-key variables and `EXECUTION_BROKER_SECRET`.
+- Tenant/principal identifiers `ac123org-*` and `ac123user` in every audit artifact, e.g. [AC2 audit](<worktree>/evidence/1705-ac123/raw/ac2-chat/audit-rows.json:5). They look synthetic, but should be confirmed or redacted.
+- Local topology: `cinatra-exec-gateway` and `http://127.0.0.1:3129` in [boot-handshake.json](<worktree>/evidence/1705-ac123/raw/boot-handshake.json:7).
+- Provider response IDs, call IDs, Anthropic thinking signatures, and OpenAI encrypted reasoning blobs are retained. They are not authentication secrets, but are unnecessary operational identifiers for public evidence.
+
+No files were changed.

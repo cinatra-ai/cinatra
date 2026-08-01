@@ -1,0 +1,143 @@
+{
+  "id": "resp_08d7a723ad8f3349016a6e4ca6690481a3abe08fe575034c93",
+  "object": "response",
+  "created_at": 1785613478,
+  "status": "completed",
+  "background": false,
+  "billing": {
+    "payer": "developer"
+  },
+  "completed_at": 1785613480,
+  "error": null,
+  "frequency_penalty": 0,
+  "incomplete_details": null,
+  "instructions": "You are a careful engineer with a real Linux sandbox and staged skill files. Never guess the contents of a file — read it.\n\nYou have a `sandbox_execute` tool: an isolated, non-root sandbox for running shell commands, scripts, and unprivileged package installs (pip / npm / user-space binaries). It has internet access for downloading and installing tools. It contains NO credentials and NO host data — use the connector/MCP tools for authenticated actions, never the sandbox. Files you create persist across the steps of this task. Skill files are staged read-only under /skills/<slug> inside the sandbox (available: /skills/ac3-lane-probe) — read them lazily with cat/head/tail when a skill applies.",
+  "max_output_tokens": null,
+  "max_tool_calls": null,
+  "model": "gpt-5-mini-2025-08-07",
+  "moderation": null,
+  "output": [
+    {
+      "id": "rs_08d7a723ad8f3349016a6e4ca71e2881a38c59e27a49989282",
+      "type": "reasoning",
+      "content": [],
+      "encrypted_content": "gAAAAABqbkyoz08LGrKvt4rBnQMJTaBm-QUkGR3c33AxZXjSqNs9rf618Bf5ErX3hQkRVWzxJGG3tH8V0NPbHTIW6UPaEUhs-DLeuhrf0R2dGC8IZK0xWNOGYF4NTm2dCXoYYjwtz-794_N3_qArrUeiyPJrlta8AtgU8QxI13zLn6dDXz0adcRGALVTv3oJdTUn4-ShkIsDFtm8-YwzpYHrefWHQLoPWk6nmAFI_JhFpEJJFNl03iQgoByjokFcuA1mTyp6lvRnLEYp4p0o_h3m02GGtuDXvVUU9Y_zgHHl-3tebAQtGweBU-2Y6_DFGhSWwiZ2MH6lg7dFMiw72HGZFyl5wF6Lvt8qdWrJCqw1ji99gBSIFJbhtVbihNMVIkaC3kqE7spdJsm6u4cf0pTEyc8_C7APgQV7-5Ljq2xxA5nzDJOLB6Qh_8ohqs8fMO34QmaA27ZOJIwrSkSffoI_dJG_egc-SPBx50p6mtjas5d2chmETdKnXtjUGqRmt5j549HqaJhy0LgmCMobEU-7AFxOt7xC4qbHa5Sv0KUuKVKINgCNz6OHz2zGRbC7pZraBjXig3eXjVfbon9bCDJ9KIYtdozpMy3h01OBjwLBRqWfZ45JncOTq1IcSD3KkYwnIgN9gQsFVHdqQ61HJvph8VKZqLhum645beoOG-ThxC-yxK1eznuu-bxwJYVOFyIFof4eSgDnNzBzap6354FmZeE6eh1pObnGkf71g69bc-3Nm2gcWMSJIXvAEULvfZQb9km4qdIhS7uXDwljSePdDVMH93ZXomVMpTD9OYkbaAnQ1MDqvLFKqcUqKMHwuMYg8uNkR6MVLg9PeLGBJd6f9t6oVXNtPoFkVwoPsZEJTv7qreaJ_6NQ9kNejI4or9IFdgmbdQUgxu5-n7f-hSKdNa3JV635qwirafeoSlD832kyi8flM6LogUskRaQFKSqX-FKwrkjuEMymafySOBkLwbJN1kL7Fv5utNvQgqYWVJgw6040dd6BUQ2fKUnjd66f-kTM0XyxTX4M4794wldE79GmLvSrYYw0NXE-3IcgZHf8lV-wvNuEqHDI4A6Il4-sIHlShxXEFmBqdHCCYuTTl7iKNQz9WDjQryHj1eNUP72fHJhEYsQnR7BxsLGIEGCKDruFQYjgWDGr7O8hwhO5GIBaud6meQ==",
+      "summary": []
+    },
+    {
+      "id": "fc_08d7a723ad8f3349016a6e4ca7a14481a3adecbe90d80b8c29",
+      "type": "function_call",
+      "status": "completed",
+      "arguments": "{\"command\":\"cat /skills/ac3-lane-probe/SKILL.md\"}",
+      "call_id": "call_Ytw8yZI29Bdni9VH9RowXzaA",
+      "name": "skill_file_read"
+    }
+  ],
+  "parallel_tool_calls": true,
+  "presence_penalty": 0,
+  "previous_response_id": null,
+  "prompt_cache_key": null,
+  "prompt_cache_retention": "in_memory",
+  "reasoning": {
+    "context": "current_turn",
+    "effort": "medium",
+    "mode": "standard",
+    "summary": null
+  },
+  "safety_identifier": null,
+  "service_tier": "default",
+  "store": false,
+  "temperature": 1,
+  "text": {
+    "format": {
+      "type": "text"
+    },
+    "verbosity": "medium"
+  },
+  "tool_choice": "auto",
+  "tool_usage": {
+    "image_gen": {
+      "input_tokens": 0,
+      "input_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+      },
+      "output_tokens": 0,
+      "output_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+      },
+      "total_tokens": 0
+    },
+    "web_search": {
+      "num_requests": 0
+    }
+  },
+  "tools": [
+    {
+      "type": "function",
+      "description": "Read a skill file (read-only; cat, head, or tail on files under /skills/<slug>). Read a skill's SKILL.md lazily when the skill applies to the task. Available skills: '/skills/ac3-lane-probe/SKILL.md' — Lane probe skill carrying a pass phrase..",
+      "name": "skill_file_read",
+      "output_schema": null,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "A read-only command: cat, head, or tail on a /skills/<slug>/... file (e.g. `cat /skills/my-skill/SKILL.md`)."
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    },
+    {
+      "type": "function",
+      "description": "Execute shell commands in an isolated, non-root sandbox: run scripts, and install unprivileged packages (pip / npm / user-space binaries) that persist across steps. Has internet access. Contains no credentials and no host data. Skill files are staged read-only under /skills/<slug>: '/skills/ac3-lane-probe/SKILL.md' — Lane probe skill carrying a pass phrase..",
+      "name": "sandbox_execute",
+      "output_schema": null,
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "commands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Shell commands to execute in the sandbox, in order."
+          },
+          "timeout_ms": {
+            "type": "number",
+            "description": "Optional per-batch timeout in milliseconds."
+          }
+        },
+        "required": [
+          "commands"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    }
+  ],
+  "top_logprobs": 0,
+  "top_p": 1,
+  "truncation": "disabled",
+  "usage": {
+    "input_tokens": 452,
+    "input_tokens_details": {
+      "cache_write_tokens": 0,
+      "cached_tokens": 0
+    },
+    "output_tokens": 71,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 523
+  },
+  "user": null,
+  "metadata": {},
+  "output_text": ""
+}

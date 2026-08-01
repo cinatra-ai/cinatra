@@ -1,0 +1,101 @@
+{
+  "id": "resp_0f1a93f5e8fda320016a6e4ca0a53c8191a1ebd0efdb724754",
+  "object": "response",
+  "created_at": 1785613472,
+  "status": "completed",
+  "background": false,
+  "billing": {
+    "payer": "developer"
+  },
+  "completed_at": 1785613473,
+  "error": null,
+  "frequency_penalty": 0,
+  "incomplete_details": null,
+  "instructions": "You are a careful engineer with a real Linux sandbox and staged skill files. Never guess the contents of a file — read it.\n\nYou have a `sandbox_execute` tool: an isolated, non-root sandbox for running shell commands, scripts, and unprivileged package installs (pip / npm / user-space binaries). It has internet access for downloading and installing tools. It contains NO credentials and NO host data — use the connector/MCP tools for authenticated actions, never the sandbox. Files you create persist across the steps of this task. Skill files are staged read-only under /skills/<slug> inside the sandbox (available: /skills/ac3-lane-probe) — read them lazily with cat/head/tail when a skill applies.",
+  "max_output_tokens": null,
+  "max_tool_calls": null,
+  "model": "gpt-5.4-2026-03-05",
+  "moderation": null,
+  "output": [
+    {
+      "id": "sh_0f1a93f5e8fda320016a6e4ca14b508191b2cfb911594a490f",
+      "type": "shell_call",
+      "status": "completed",
+      "action": {
+        "commands": [
+          "cat /skills/ac3-lane-probe/SKILL.md"
+        ],
+        "max_output_length": 12000,
+        "timeout_ms": 5000
+      },
+      "call_id": "call_pptpMLxb7vMoUKcTJ1SIPRnj",
+      "environment": null
+    }
+  ],
+  "parallel_tool_calls": true,
+  "presence_penalty": 0,
+  "previous_response_id": null,
+  "prompt_cache_key": null,
+  "prompt_cache_retention": "24h",
+  "reasoning": {
+    "context": "current_turn",
+    "effort": "none",
+    "mode": "standard",
+    "summary": null
+  },
+  "safety_identifier": null,
+  "service_tier": "default",
+  "store": false,
+  "temperature": 1,
+  "text": {
+    "format": {
+      "type": "text"
+    },
+    "verbosity": "medium"
+  },
+  "tool_choice": "auto",
+  "tool_usage": {
+    "image_gen": {
+      "input_tokens": 0,
+      "input_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+      },
+      "output_tokens": 0,
+      "output_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+      },
+      "total_tokens": 0
+    },
+    "web_search": {
+      "num_requests": 0
+    }
+  },
+  "tools": [
+    {
+      "type": "shell",
+      "environment": {
+        "type": "local"
+      }
+    }
+  ],
+  "top_logprobs": 0,
+  "top_p": 0.98,
+  "truncation": "disabled",
+  "usage": {
+    "input_tokens": 984,
+    "input_tokens_details": {
+      "cache_write_tokens": 0,
+      "cached_tokens": 0
+    },
+    "output_tokens": 42,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 1026
+  },
+  "user": null,
+  "metadata": {},
+  "output_text": ""
+}

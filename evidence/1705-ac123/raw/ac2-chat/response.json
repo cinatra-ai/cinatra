@@ -1,0 +1,15 @@
+{
+  "text": "AC2-CHAT\n39977\nG9zD7uWZwXX43WybaJJihsGs3hjcBw9KRivX5m7bgUVV",
+  "status": "completed",
+  "incompleteReason": null,
+  "rawBody": "{\"text\":\"AC2-CHAT\\n39977\\nG9zD7uWZwXX43WybaJJihsGs3hjcBw9KRivX5m7bgUVV\"}",
+  "usage": {
+    "inputTokens": 1754,
+    "outputTokens": 54,
+    "cachedInputTokens": 0,
+    "reasoningOutputTokens": 0,
+    "cacheReadInputTokens": 0,
+    "cacheCreationInputTokens": 0
+  },
+  "model": "claude-sonnet-5"
+}

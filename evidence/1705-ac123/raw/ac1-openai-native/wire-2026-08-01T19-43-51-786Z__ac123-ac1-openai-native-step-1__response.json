@@ -1,0 +1,104 @@
+{
+  "id": "resp_049a61eb49c2d631016a6e4c75360c819ebf6d0b6d8cafabbd",
+  "object": "response",
+  "created_at": 1785613429,
+  "status": "completed",
+  "background": false,
+  "billing": {
+    "payer": "developer"
+  },
+  "completed_at": 1785613431,
+  "error": null,
+  "frequency_penalty": 0,
+  "incomplete_details": null,
+  "instructions": "You are a careful engineer with a real Linux sandbox. Always run code rather than predicting its output.\n\nYou have a `sandbox_execute` tool: an isolated, non-root sandbox for running shell commands, scripts, and unprivileged package installs (pip / npm / user-space binaries). It has internet access for downloading and installing tools. It contains NO credentials and NO host data — use the connector/MCP tools for authenticated actions, never the sandbox. Files you create persist across the steps of this task.",
+  "max_output_tokens": null,
+  "max_tool_calls": null,
+  "model": "gpt-5.4-2026-03-05",
+  "moderation": null,
+  "output": [
+    {
+      "id": "sh_049a61eb49c2d631016a6e4c75f358819ea7a59f9722e98d8a",
+      "type": "shell_call",
+      "status": "completed",
+      "action": {
+        "commands": [
+          "cat > /workspace/gen.py <<'PY'\nimport hashlib\ns = \"\".join(str(i*i*i) for i in range(4000))\nopen(\"/workspace/data.txt\",\"w\").write(s)\nprint(\"WROTE\", len(s))\nPY",
+          "python3 /workspace/gen.py",
+          "pip install --user --quiet base58",
+          "python3 -c \"import base58,hashlib; d=open('/workspace/data.txt').read(); print('AC1-OPENAI-NATIVE'); print(len(d)); print(base58.b58encode(hashlib.sha256(d.encode()).digest()).decode())\""
+        ],
+        "max_output_length": 20000,
+        "timeout_ms": 120000
+      },
+      "call_id": "call_A4OOtqk7oYkDxYpgFYs8CelT",
+      "environment": null
+    }
+  ],
+  "parallel_tool_calls": true,
+  "presence_penalty": 0,
+  "previous_response_id": null,
+  "prompt_cache_key": null,
+  "prompt_cache_retention": "24h",
+  "reasoning": {
+    "context": "current_turn",
+    "effort": "none",
+    "mode": "standard",
+    "summary": null
+  },
+  "safety_identifier": null,
+  "service_tier": "default",
+  "store": false,
+  "temperature": 1,
+  "text": {
+    "format": {
+      "type": "text"
+    },
+    "verbosity": "medium"
+  },
+  "tool_choice": "auto",
+  "tool_usage": {
+    "image_gen": {
+      "input_tokens": 0,
+      "input_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+      },
+      "output_tokens": 0,
+      "output_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+      },
+      "total_tokens": 0
+    },
+    "web_search": {
+      "num_requests": 0
+    }
+  },
+  "tools": [
+    {
+      "type": "shell",
+      "environment": {
+        "type": "local"
+      }
+    }
+  ],
+  "top_logprobs": 0,
+  "top_p": 0.98,
+  "truncation": "disabled",
+  "usage": {
+    "input_tokens": 680,
+    "input_tokens_details": {
+      "cache_write_tokens": 0,
+      "cached_tokens": 0
+    },
+    "output_tokens": 161,
+    "output_tokens_details": {
+      "reasoning_tokens": 0
+    },
+    "total_tokens": 841
+  },
+  "user": null,
+  "metadata": {},
+  "output_text": ""
+}

@@ -1,0 +1,58 @@
+{
+  "model": "gpt-5-mini",
+  "instructions": "You are a careful engineer with a real Linux sandbox and staged skill files. Never guess the contents of a file — read it.\n\nYou have a `sandbox_execute` tool: an isolated, non-root sandbox for running shell commands, scripts, and unprivileged package installs (pip / npm / user-space binaries). It has internet access for downloading and installing tools. It contains NO credentials and NO host data — use the connector/MCP tools for authenticated actions, never the sandbox. Files you create persist across the steps of this task. Skill files are staged read-only under /skills/<slug> inside the sandbox (available: /skills/ac3-lane-probe) — read them lazily with cat/head/tail when a skill applies.",
+  "input": [
+    {
+      "role": "user",
+      "content": "Read the file /skills/ac3-lane-probe/SKILL.md and reply with the pass phrase it contains, verbatim, and nothing else. Do not guess it — read the file."
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "name": "skill_file_read",
+      "description": "Read a skill file (read-only; cat, head, or tail on files under /skills/<slug>). Read a skill's SKILL.md lazily when the skill applies to the task. Available skills: '/skills/ac3-lane-probe/SKILL.md' — Lane probe skill carrying a pass phrase..",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "A read-only command: cat, head, or tail on a /skills/<slug>/... file (e.g. `cat /skills/my-skill/SKILL.md`)."
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    },
+    {
+      "type": "function",
+      "name": "sandbox_execute",
+      "description": "Execute shell commands in an isolated, non-root sandbox: run scripts, and install unprivileged packages (pip / npm / user-space binaries) that persist across steps. Has internet access. Contains no credentials and no host data. Skill files are staged read-only under /skills/<slug>: '/skills/ac3-lane-probe/SKILL.md' — Lane probe skill carrying a pass phrase..",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "commands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Shell commands to execute in the sandbox, in order."
+          },
+          "timeout_ms": {
+            "type": "number",
+            "description": "Optional per-batch timeout in milliseconds."
+          }
+        },
+        "required": [
+          "commands"
+        ],
+        "additionalProperties": false
+      },
+      "strict": false
+    }
+  ],
+  "store": false
+}

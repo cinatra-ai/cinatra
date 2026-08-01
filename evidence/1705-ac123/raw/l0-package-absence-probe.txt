@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+ModuleNotFoundError: No module named 'base58'
+EXIT=1
+Package Version
+------- -------
+pip     25.0.1
