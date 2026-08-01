@@ -23,6 +23,11 @@ import { deleteConnectorConfigByPrefix } from "@/lib/database";
 // execution-plane graph). Reaching the environment-teardown participant here
 // keeps this module cheap on every hard-remove path (incl. UI Server Actions).
 import { getEnvironmentTeardownParticipant } from "@/lib/execution/register-execution-environment-service";
+// Same lightweight slot pattern for the RUN half of the plane's teardown
+// (cinatra#1705 AC9): cancel the package's queued sandbox work and collect its
+// retained run workspaces. Reached lazily; no execution-plane graph is pulled.
+import { getExecutionRunTeardownParticipant } from "@/lib/execution/register-execution-run-teardown";
+import type { ExtensionDataTeardownContext } from "@cinatra-ai/extensions";
 
 let wired = false;
 
@@ -36,7 +41,10 @@ export function wireExtensionDataTeardownHook(): void {
   // reference drop (both idempotent). Fires ONLY on HARD removal (the hook
   // contract guarantees this — never archive); best-effort (a throw is logged,
   // the committed removal never aborts).
-  setExtensionDataTeardownHook(async (packageName: string) => {
+  setExtensionDataTeardownHook(async (
+    packageName: string,
+    context?: ExtensionDataTeardownContext,
+  ) => {
     const isolate = (label: string, p: () => Promise<unknown> | unknown): Promise<void> =>
       Promise.resolve()
         .then(p)
@@ -68,6 +76,25 @@ export function wireExtensionDataTeardownHook(): void {
       isolate("env-layer-refs", async () => {
         const participant = getEnvironmentTeardownParticipant();
         if (participant) await participant(packageName);
+      }),
+      // AC9's two remaining hard-removal duties: CANCEL the package's queued
+      // sandbox jobs (and terminate its in-flight ones) and put its RETAINED run
+      // workspaces on immediate GC. The run ids come from the destructive step
+      // itself — by the time this hook fires, `agent_runs` is already deleted, so
+      // they cannot be resolved here. NO ids ⇒ nothing to do; that is never read
+      // as "there were none" (see ExtensionDataTeardownContext).
+      isolate("run-jobs", async () => {
+        const runIds = context?.runIds;
+        if (!runIds || runIds.length === 0) return;
+        const participant = getExecutionRunTeardownParticipant();
+        if (!participant) return;
+        await participant({
+          packageName,
+          runIds,
+          ...(context?.runIdsTruncated === undefined
+            ? {}
+            : { runIdsTruncated: context.runIdsTruncated }),
+        });
       }),
     ]);
   });

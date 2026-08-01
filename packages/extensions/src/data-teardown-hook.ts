@@ -26,10 +26,34 @@ import "server-only";
 // next teardown (idempotent) re-cleans, so a transient DB error must never
 // abort an already-committed uninstall.
 
+/**
+ * What the destructive step KNEW before it destroyed anything.
+ *
+ * The hook fires after the rows are gone, so anything a participant needs to
+ * identify the destroyed work has to travel with the call. Today that is the
+ * package's agent-run ids: the execution plane uses them to cancel queued
+ * sandbox work and collect retained run workspaces (cinatra#1705 AC9), and it
+ * has no other way to learn them — `agent_runs` is deleted by the very step
+ * that fires this hook.
+ *
+ * OPTIONAL BY CONTRACT. A caller that cannot capture the ids (a kind with no
+ * run rows, a read that failed) omits the context, and every participant must
+ * treat that as "nothing to do here", never as "there were none".
+ */
+export type ExtensionDataTeardownContext = {
+  /** Ids of the agent_runs the destructive step deleted. */
+  runIds?: readonly string[];
+  /** True when the id list was capped — there were MORE runs than are listed. */
+  runIdsTruncated?: boolean;
+};
+
 /** Performs the durable data cleanup for a hard-removed package. Returns
  *  anything (e.g. a count of reaped keys) — the result is logged, not depended
  *  on. May be sync or async; the firer awaits it. */
-export type ExtensionDataTeardownHook = (packageName: string) => unknown | Promise<unknown>;
+export type ExtensionDataTeardownHook = (
+  packageName: string,
+  context?: ExtensionDataTeardownContext,
+) => unknown | Promise<unknown>;
 
 const DATA_TEARDOWN_HOOK_SLOT = Symbol.for("cinatra.extensions.dataTeardownHook.v1");
 type HookHolder = { hook: ExtensionDataTeardownHook | null };
@@ -48,11 +72,14 @@ export function setExtensionDataTeardownHook(hook: ExtensionDataTeardownHook | n
  *  no host hook is wired (e.g. a worker that never loaded the host module).
  *  Best-effort: a throwing hook is logged and swallowed so a committed
  *  hard-removal is never aborted by a transient data-cleanup error. */
-export async function fireExtensionDataTeardown(packageName: string): Promise<void> {
+export async function fireExtensionDataTeardown(
+  packageName: string,
+  context?: ExtensionDataTeardownContext,
+): Promise<void> {
   const { hook } = hookHolder();
   if (!hook) return;
   try {
-    await hook(packageName);
+    await hook(packageName, context);
   } catch (err) {
     console.warn(
       '[cinatra:extensions] data teardown hook threw for "%s" ' +

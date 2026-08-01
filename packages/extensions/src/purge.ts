@@ -7,6 +7,8 @@ import {
   writeExtensionLifecycleAuditEntry,
 } from "./audit-log";
 import { quarantineExtensionBeforePurge } from "./quarantine";
+// TYPE-ONLY (erased at compile) — the hook module keeps its dynamic import.
+import type { ExtensionDataTeardownContext } from "./data-teardown-hook";
 
 // ---------------------------------------------------------------------------
 // extensions_purge performs full "gone everywhere" removal of an
@@ -113,6 +115,14 @@ export type PurgeDeps = {
   dbPurgeAtomic: (packageName: string) => Promise<{
     deleted: boolean;
     snapshot: unknown;
+    /**
+     * Ids of the agent_runs the purge deleted, read inside its own transaction
+     * (cinatra#1705 AC9). OPTIONAL so an implementation that cannot report them
+     * — and every existing test double — stays valid; absent means "not
+     * reported", never "there were none".
+     */
+    runIds?: readonly string[];
+    runIdsTruncated?: boolean;
   }>;
   /**
    * Cheap dir-presence check called BEFORE the strict disk delete so
@@ -661,10 +671,22 @@ export async function purgeExtension(
     //     truthful purge_rolled_back + throw. The DB row was NOT deleted
     //     (its tx failed) so no DB re-insert is ever required.
     let dbDeleted = false;
+    // Carried to the data-teardown hook below so the execution plane can cancel
+    // queued sandbox work and collect retained run workspaces for the runs this
+    // purge just destroyed — after the hook fires they cannot be looked up.
+    let teardownContext: ExtensionDataTeardownContext | undefined;
     if (removesDiskDb) {
       try {
         const r = await deps.dbPurgeAtomic(packageName);
         dbDeleted = r.deleted;
+        if (r.runIds && r.runIds.length > 0) {
+          teardownContext = {
+            runIds: r.runIds,
+            ...(r.runIdsTruncated === undefined
+              ? {}
+              : { runIdsTruncated: r.runIdsTruncated }),
+          };
+        }
       } catch (dbErr) {
         await rollbackDiskAndThrow(
           `DB delete failed (${
@@ -694,7 +716,7 @@ export async function purgeExtension(
       // connectors (their per-kind handler.uninstall throws — workspace-compiled).
       // Awaited (durable, cross-process), idempotent, best-effort.
       const { fireExtensionDataTeardown } = await import("./data-teardown-hook");
-      await fireExtensionDataTeardown(packageName);
+      await fireExtensionDataTeardown(packageName, teardownContext);
     }
 
     // 11. NO Verdaccio unpublish. Lifecycle primitives never delete

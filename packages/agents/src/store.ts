@@ -4046,6 +4046,17 @@ export async function readAgentTemplatesReferencingChildPackage(
 // documented as an admin-only escape-hatch limitation; concurrent traffic
 // against a force-delete target is unlikely in practice.
 // ---------------------------------------------------------------------------
+/**
+ * Bound on the run ids a destructive lifecycle step reports back for
+ * execution-plane teardown (epic #1705 AC9). The ids exist to cancel queued
+ * sandbox work and collect retained workspaces for runs that are being deleted;
+ * past this many runs the per-run teardown stops being the right instrument and
+ * the plane's own backstops carry it (every job of a deleted run fails its next
+ * command closed on the liveness probe, and the retention GC reaps the volume).
+ * Truncation is REPORTED, never silent.
+ */
+export const MAX_REPORTED_TEARDOWN_RUN_IDS = 5_000;
+
 export async function removeReferencingRunRows(
   templateId: string,
 ): Promise<{
@@ -4054,6 +4065,15 @@ export async function removeReferencingRunRows(
   agent_template_versions: number;
   agent_registry_entries: number;
   agent_forks: number;
+  /**
+   * The ids of the agent_runs this call DELETED, read inside the same
+   * transaction (epic #1705 AC9). The extension data-teardown hook fires AFTER
+   * these rows are gone, so a participant that needs to know which runs the
+   * package owned cannot look them up itself — it has to be told. Capped at
+   * `MAX_REPORTED_TEARDOWN_RUN_IDS`; `runIdsTruncated` says so.
+   */
+  runIds: string[];
+  runIdsTruncated: boolean;
 }> {
   // Order matters: child rows (agent_runs, agent_run_messages, etc.) are
   // already FK-cascaded from agent_runs in the schema. We delete the FK
@@ -4092,6 +4112,18 @@ export async function removeReferencingRunRows(
         err instanceof Error ? err.message : err,
       );
     }
+    // Read the ids BEFORE the delete, inside this same transaction — the
+    // execution-plane teardown participant cannot look them up afterwards
+    // (cinatra#1705 AC9). One id over the cap tells us truncation happened.
+    const doomedRuns = await tx
+      .select({ id: agentRuns.id })
+      .from(agentRuns)
+      .where(eq(agentRuns.templateId, templateId))
+      .limit(MAX_REPORTED_TEARDOWN_RUN_IDS + 1);
+    const runIdsTruncated = doomedRuns.length > MAX_REPORTED_TEARDOWN_RUN_IDS;
+    const runIds = doomedRuns
+      .slice(0, MAX_REPORTED_TEARDOWN_RUN_IDS)
+      .map((row) => row.id);
     const runsResult = await tx
       .delete(agentRuns)
       .where(eq(agentRuns.templateId, templateId));
@@ -4113,6 +4145,8 @@ export async function removeReferencingRunRows(
       agent_template_versions: templateVersionsResult.rowCount ?? 0,
       agent_registry_entries: registryEntriesResult.rowCount ?? 0,
       agent_forks: forksResult.rowCount ?? 0,
+      runIds,
+      runIdsTruncated,
     };
   });
 }
@@ -4147,6 +4181,14 @@ export async function purgeAgentTemplateAtomic(
     agent_registry_entries: number;
     agent_forks: number;
   };
+  /**
+   * The ids of the agent_runs this purge DELETED, read inside the same
+   * transaction — the execution-plane teardown participant runs after they are
+   * gone and cannot look them up (cinatra#1705 AC9). Capped at
+   * `MAX_REPORTED_TEARDOWN_RUN_IDS`; `runIdsTruncated` reports the cap.
+   */
+  runIds: string[];
+  runIdsTruncated: boolean;
 }> {
   const schemaName = process.env.SUPABASE_SCHEMA?.trim() || "cinatra";
   const q = (id: string) => id.replaceAll("'", "''");
@@ -4170,6 +4212,8 @@ export async function purgeAgentTemplateAtomic(
           agent_registry_entries: 0,
           agent_forks: 0,
         },
+        runIds: [],
+        runIdsTruncated: false,
       };
     }
     const snapshot = deserializeTemplate(row);
@@ -4199,6 +4243,17 @@ export async function purgeAgentTemplateAtomic(
 
     // The 5 RESTRICT-FK source tables (agent_runs cascade-deletes its own
     // children: run_messages, hitl_prompts, run_co_owners, ...).
+    // Same read-before-delete as removeReferencingRunRows: the run ids are the
+    // only handle the execution-plane teardown participant will have.
+    const doomedRuns = await tx
+      .select({ id: agentRuns.id })
+      .from(agentRuns)
+      .where(eq(agentRuns.templateId, templateId))
+      .limit(MAX_REPORTED_TEARDOWN_RUN_IDS + 1);
+    const runIdsTruncated = doomedRuns.length > MAX_REPORTED_TEARDOWN_RUN_IDS;
+    const runIds = doomedRuns
+      .slice(0, MAX_REPORTED_TEARDOWN_RUN_IDS)
+      .map((row) => row.id);
     const runsResult = await tx
       .delete(agentRuns)
       .where(eq(agentRuns.templateId, templateId));
@@ -4228,6 +4283,8 @@ export async function purgeAgentTemplateAtomic(
         agent_registry_entries: registryEntriesResult.rowCount ?? 0,
         agent_forks: forksResult.rowCount ?? 0,
       },
+      runIds,
+      runIdsTruncated,
     };
   });
   // Mirror deleteAgentTemplate's object-shadow

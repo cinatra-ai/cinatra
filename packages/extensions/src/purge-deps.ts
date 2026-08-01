@@ -109,7 +109,15 @@ export async function defaultPurgeDeps(): Promise<PurgeDeps> {
     withLifecycleLock: (_packageName, fn) => withGlobalExtensionLifecycleLock(fn),
     dbPurgeAtomic: async (packageName) => {
       const r = await purgeAgentTemplateAtomic(packageName);
-      return { deleted: r.deleted, snapshot: r.snapshot };
+      // `runIds` rides along for the execution-plane teardown participant
+      // (cinatra#1705 AC9) — read inside the purge's own transaction, because
+      // the data-teardown hook fires after those rows are gone.
+      return {
+        deleted: r.deleted,
+        snapshot: r.snapshot,
+        runIds: r.runIds,
+        runIdsTruncated: r.runIdsTruncated,
+      };
     },
     extensionDirPresent: (packageName) => extensionDirPresent(packageName),
     strictDiskPurge: (packageName, options) =>

@@ -23,7 +23,15 @@ vi.mock("@cinatra-ai/agents", () => ({
   // forceDelete deps (additive — unused by the pre-existing tests). A vi.fn
   // pass-through so cinatra#1837 R4a lock-wrapping can be asserted.
   withInstallLock: vi.fn((_name: string, fn: () => unknown) => fn()),
-  removeReferencingRunRows: vi.fn(async () => {}),
+  removeReferencingRunRows: vi.fn(async () => ({
+    agent_runs: 0,
+    agent_versions: 0,
+    agent_template_versions: 0,
+    agent_registry_entries: 0,
+    agent_forks: 0,
+    runIds: [] as string[],
+    runIdsTruncated: false,
+  })),
 }));
 
 // forceDelete writes an audit row + computes dangling refs before destruction.

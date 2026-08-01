@@ -74,12 +74,24 @@ export function executionBrokerPhases(
           clearExecutionExecutorFactory,
           registerExecutionExecutorFactory,
         } = await import("@/lib/execution/execution-executor-slot");
+        // The hard-removal RUN teardown participant (epic #1705 AC9). Registered
+        // beside the executor factory for the same reason and on the same
+        // condition: only a broker that has PROVED it works may be wired to
+        // anything. Cleared on every path that clears the factory, so a re-boot
+        // into `disabled` / a failed handshake cannot leave a participant
+        // pointing at a broker (or a closed remote client) behind.
+        const { clearExecutionRunTeardown, registerExecutionRunTeardown } =
+          await import("@/lib/execution/register-execution-run-teardown");
+        const { createExecutionRunTeardownParticipant } = await import(
+          "@/lib/execution/execution-run-teardown"
+        );
         const settings = readExecutionPlaneSettings();
 
         if (settings.mode === "disabled") {
           // An earlier boot in this process may have registered a factory; a
           // `disabled` re-boot must not leave it reachable (Codex finding 4).
           clearExecutionExecutorFactory();
+          clearExecutionRunTeardown();
           registerExecutionBrokerStatus({
             rolloutEnabled: true,
             mode: settings.mode,
@@ -105,6 +117,7 @@ export function executionBrokerPhases(
             // "missing EXECUTION_BROKER_CLIENT_CERT_FILE" can act; one reading
             // "remote is unavailable" cannot.
             clearExecutionExecutorFactory();
+          clearExecutionRunTeardown();
             registerExecutionBrokerStatus({
               rolloutEnabled: true,
               mode: settings.mode,
@@ -133,6 +146,11 @@ export function executionBrokerPhases(
           // completion on a remote container through the per-command voucher
           // boundary.
           registerExecutionExecutorFactory(() => remote.executor);
+          registerExecutionRunTeardown(
+            createExecutionRunTeardownParticipant({
+              terminateJobsForRun: remote.terminateJobsForRun,
+            }),
+          );
           registerExecutionBrokerStatus({
             rolloutEnabled: true,
             mode: settings.mode,
@@ -162,6 +180,7 @@ export function executionBrokerPhases(
           // reporting a not-ready state and every declared-environment run keeps
           // refusing — the merged fail-closed posture, untouched.
           clearExecutionExecutorFactory();
+          clearExecutionRunTeardown();
           registerExecutionBrokerStatus({
             rolloutEnabled: true,
             mode: settings.mode,
@@ -180,12 +199,17 @@ export function executionBrokerPhases(
           };
         }
 
-        const { executor, handshake, gateway, probeLiveness } = constructed.value;
+        const { broker, executor, handshake, gateway, probeLiveness } = constructed.value;
         // AC3: the factory is registered ONLY past a completed handshake, so
         // `ready` is reachable only for a plane that has actually run a command
         // on a live worker. One memoized executor instance (its carrier→job map
         // is the L2 workspace-persistence contract), shared by every surface.
         registerExecutionExecutorFactory(() => executor);
+        registerExecutionRunTeardown(
+          createExecutionRunTeardownParticipant({
+            terminateJobsForRun: (runId, opts) => broker.terminateJobsForRun(runId, opts),
+          }),
+        );
         registerExecutionBrokerStatus({
           rolloutEnabled: true,
           mode: settings.mode,
