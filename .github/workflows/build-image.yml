@@ -1834,6 +1834,43 @@ jobs:
           EXTENSION_SUITE_JOBS: '4'
         run: node scripts/ci/extension-suite-gate.mjs
 
+      # ── The two remaining LLM provider connectors (cinatra#1705 AC4) ──────
+      #
+      # anthropic-connector and gemini-connector are dev-lock members, so the
+      # block above left them to slice 2 of cinatra#2288 (which names
+      # "anthropic 101" among the ~25 unwired suites). They are pulled forward
+      # here because the acceptance audit on cinatra#1705 rates AC4 — the
+      # singular-native-shell battery — the epic's only MISSING row, and its
+      # proof lane is to reinstate that battery CONNECTOR-SIDE, one file per
+      # connector. openai-connector already has a runner (the step above); these
+      # two did not, so two thirds of the reinstated battery would have been
+      # written and then never executed by any CI — the same vacuity the #2288
+      # header describes, arriving through a different door.
+      #
+      # These are the last two of the three provider adapters, so once the
+      # battery-bearing pins land every provider request-translation surface is
+      # gated. Both are green at their CURRENTLY pinned shas (measured on the
+      # pinned tree: anthropic 110 tests, gemini 66, ~1s of vitest each), so this
+      # wiring is not carrying a red baseline forward. It NARROWS #2288 slice 2
+      # by two packages rather than pre-empting it — the other ~23 dev-lock
+      # suites are untouched, and that issue's discovery loop (AC1) should
+      # REPLACE these explicit steps, not duplicate them, when it lands.
+      #
+      # Whole-dir, from the package dir, so each package resolves its own test
+      # configuration — gemini-connector ships a `vitest.config.ts` (package-local
+      # `@/` + `server-only` aliases); anthropic-connector ships none and runs on
+      # vitest's defaults, which already discover `src/__tests__/**`. Identical
+      # shape and rationale to every step above, and load-bearing here: a
+      # file-pinned invocation would silently drop the reinstated
+      # `sandbox-provider-translation.test.ts` until someone edited this file
+      # again. Whole-dir means the battery becomes enforced the moment the lock
+      # pin moves to the commit that carries it — no further change here.
+      - name: Anthropic connector tests
+        run: cd extensions/cinatra-ai/anthropic-connector && pnpm exec vitest run --no-coverage
+
+      - name: Gemini connector tests
+        run: cd extensions/cinatra-ai/gemini-connector && pnpm exec vitest run --no-coverage
+
       # Admin-namespace route reference gate. Hardens the admin route rename.
       # Permanent 308 redirects preserve external bookmarks via next.config.ts;
       # this gate prevents new in-tree references from silently routing
