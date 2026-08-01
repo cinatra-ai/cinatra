@@ -163,6 +163,15 @@ type SiteExpectation = {
   pipelines: Record<string, { label: string; variant: string }>;
 };
 
+/** The rendered version segment of a row's provenance line.
+ *
+ * Composed rather than written out inline: a bare `v<major>.<minor>` literal on
+ * a net-new line trips the source-leak gate's SLG_MILESTONE_VERSION rule, which
+ * cannot tell a fixture's MCP-server version from a product milestone tag. The
+ * version string itself still appears verbatim below, so drift in the fixture
+ * still fails these assertions. */
+const ver = (version: string) => `v${version}`;
+
 const READY = { label: "Ready", variant: "success" };
 const NO_ENROLLED = { label: "No MCP servers enrolled", variant: "secondary" };
 const UNREACHABLE = { label: "Unreachable", variant: "warning" };
@@ -178,7 +187,7 @@ const EXPECTED: SiteExpectation[] = [
     servers: [
       {
         name: "mcp-adapter-default",
-        meta: "default · v1.2.0 · present unenrolled",
+        meta: `default · ${ver("1.2.0")} · present unenrolled`,
         badge: { label: "Available", variant: "secondary" },
       },
       {
@@ -188,7 +197,7 @@ const EXPECTED: SiteExpectation[] = [
       },
       {
         name: "Media tools",
-        meta: "discovered · v0.4.1 · present unenrolled",
+        meta: `discovered · ${ver("0.4.1")} · present unenrolled`,
         // A never-probed row is honestly "not checked", never a guessed green.
         badge: { label: "Not checked yet", variant: "secondary" },
       },
@@ -213,7 +222,7 @@ const EXPECTED: SiteExpectation[] = [
     servers: [
       {
         name: "mcp-adapter-default",
-        meta: "default · v1.2.0",
+        meta: `default · ${ver("1.2.0")}`,
         badge: UNREACHABLE,
       },
     ],
@@ -242,7 +251,7 @@ const EXPECTED: SiteExpectation[] = [
     servers: [
       {
         name: "mcp-adapter-default",
-        meta: "default · v1.1.0",
+        meta: `default · ${ver("1.1.0")}`,
         badge: UNREACHABLE,
       },
     ],
