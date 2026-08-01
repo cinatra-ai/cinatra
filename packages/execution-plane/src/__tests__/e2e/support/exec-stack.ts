@@ -187,6 +187,21 @@ export type ExecStackOptions = {
   deploymentMaxBytesPerJob?: number;
   /** Host-exclusivity renewal cadence (ms). */
   leaseRenewMs: number;
+  /**
+   * Where the broker's DURABLE AUDIT SPOOL lives.
+   *
+   * `"compose-default"` (the default, and what every pre-existing arm gets)
+   * leaves `CINATRA_EXEC_AUDIT_SPOOL_DIR` unset, so the compose file's own
+   * default host path is used — unchanged behaviour.
+   *
+   * `"per-run"` points it at a fresh directory inside this run's temp
+   * `workDir`, which `down()` removes. A battery that ASSERTS on spool
+   * contents needs that isolation: the shared default path outlives a
+   * `compose down -v` (it is a bind mount, not a compose volume), so a second
+   * battery on the same host would otherwise read the first one's unacked
+   * records and count them as its own.
+   */
+  auditSpool?: "compose-default" | "per-run";
 };
 
 export type ExecStack = {
@@ -387,6 +402,10 @@ export async function bringUpExecStack(options: ExecStackOptions): Promise<ExecS
     envLines({ EGRESS_CONTROL_SECRET: gatewayControlSecret }),
   );
 
+  const auditSpoolDir =
+    options.auditSpool === "per-run" ? path.join(workDir, "audit-spool") : null;
+  if (auditSpoolDir) mkdirSync(auditSpoolDir, { recursive: true });
+
   const leasePath = path.join(leaseDir, "host-exclusivity.lease");
   const writeLease = (lease: Partial<ParsedLease> & { tenant?: string }): void => {
     const at = lease.acquired_at ?? nowEpochS();
@@ -413,6 +432,7 @@ export async function bringUpExecStack(options: ExecStackOptions): Promise<ExecS
     CINATRA_EXEC_EGRESS_MODE: options.egressMode,
     CINATRA_EXEC_EGRESS_ALLOWLIST: options.egressAllowlist.join(","),
     CINATRA_EXEC_LEASE_RENEW_MS: String(options.leaseRenewMs),
+    ...(auditSpoolDir ? { CINATRA_EXEC_AUDIT_SPOOL_DIR: auditSpoolDir } : {}),
   };
 
   const stack: ExecStack = {
