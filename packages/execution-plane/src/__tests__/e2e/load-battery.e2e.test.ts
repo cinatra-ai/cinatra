@@ -41,6 +41,14 @@
  * NOTHING HERE IS STUBBED and the battery FAILS — never skips — when docker is
  * unavailable, exactly like the two batteries it sits beside.
  *
+ * NOT A CI GATE, and that is stated rather than implied. Like
+ * `docker-battery.e2e.test.ts` and `service-boundary.e2e.test.ts`, this file is
+ * outside the default `pnpm test` run and no workflow invokes `test:e2e`, so
+ * nothing here reds a merge today. Wiring a docker-capable CI job for all three
+ * batteries is the acceptance audit's AC6(b) proof lane, not this one's; that
+ * job will pick this file up for free, since it lives in the same tier and is
+ * driven by the same script.
+ *
  * Run with: pnpm --filter @cinatra-ai/execution-plane test:e2e
  * Deliberately NOT part of the default `pnpm test` run.
  */
@@ -55,8 +63,10 @@ import { DEFAULT_BROKER_QUOTAS, DEFAULT_SANDBOX_LIMITS } from "../../types";
 import type { ExecResult, ExecutionAuditRecord } from "../../types";
 import { mintVoucher } from "./support/exec-rpc";
 import {
+  COMPOSE_PROJECT,
   WORKER_SERVICE,
   bringUpExecStack,
+  docker,
   type ExecStack,
 } from "./support/exec-stack";
 import {
@@ -82,6 +92,13 @@ const SURFACE = "agent_run";
 const ORG_COUNT = 6;
 const RUNS_PER_ORG = 2;
 const COMMANDS_PER_RUN = 3;
+/**
+ * Long enough that overlap is a property of the ceiling rather than of
+ * container-startup luck: a sub-second command on a slow host can retire
+ * before its peers are even placed, which would let a genuinely concurrent
+ * broker read as a serial one.
+ */
+const BURST_COMMAND_SECONDS = 3;
 const BURST_TOTAL = ORG_COUNT * RUNS_PER_ORG * COMMANDS_PER_RUN;
 
 /**
@@ -93,13 +110,54 @@ const BURST_TOTAL = ORG_COUNT * RUNS_PER_ORG * COMMANDS_PER_RUN;
  */
 const WORKER_MEM_CEILING_BYTES = 768 * 1024 * 1024;
 const WORKER_PIDS_CEILING = 200;
+const WORKER_CPU_CEILING_PERCENT = 400;
+/**
+ * `docker stats` CPU percentages are sampled over a short window per container
+ * and summed here, so the total can briefly read above a strict
+ * cores x 100 arithmetic bound without the cgroup quota having been exceeded.
+ * The slack keeps the assertion a real ceiling (a runaway fleet still crosses
+ * it by orders of magnitude) without making it a stopwatch race.
+ */
+const CPU_MEASUREMENT_SLACK = 1.5;
 
 let stack: ExecStack;
 let app: BrokerServiceClient;
 /** Every job this battery opens — the sampler counts only these. */
 const ownedJobs = new Set<string>();
 
+/**
+ * REFUSE TO RUN ON TOP OF SOMEBODY ELSE'S STACK.
+ *
+ * The exec topology's internal network name and compose project are FIXED by
+ * design (the worker is told the exact network string and asserts it really is
+ * internal), so two stacks cannot coexist on one host — and `stack.down()`
+ * ends in a host-global sweep of everything carrying the execution plane's
+ * ownership label. A concurrently running sibling lane would therefore be
+ * adopted by `compose up` and then destroyed by this file's teardown.
+ *
+ * So the battery checks FIRST and fails loudly. Somebody else's work is not
+ * ours to reclaim, and "the tests passed" is worth nothing if the cost was a
+ * sibling's run.
+ */
+async function refuseIfAnotherStackIsRunning(): Promise<void> {
+  const running = await docker([
+    "ps",
+    "--quiet",
+    "--filter",
+    `label=com.docker.compose.project=${COMPOSE_PROJECT}`,
+  ]);
+  const ids = running.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (ids.length > 0) {
+    throw new Error(
+      `The execution-plane compose project "${COMPOSE_PROJECT}" already has ${ids.length} ` +
+        "running container(s) on this host. That is another run's stack — this battery " +
+        "would adopt it and then destroy it on teardown. Refusing. Stop that stack and re-run.",
+    );
+  }
+}
+
 beforeAll(async () => {
+  await refuseIfAnotherStackIsRunning();
   stack = await bringUpExecStack({
     instance: INSTANCE,
     tenant: TENANT,
@@ -164,16 +222,18 @@ type Submission = {
 };
 
 /**
- * The authorization lifetime this battery mints.
+ * The authorization lifetime this battery mints — deliberately LONGER than any
+ * arm's own timeout.
  *
- * A voucher is checked for FRESHNESS again after the admission wait, and this
- * battery's whole point is to make commands wait — so a default-lifetime
- * voucher would turn a slow host into a `revalidation_required` answer and
- * make the load arms measure voucher expiry instead of queueing. That window
- * has its own dedicated arm in the L5 service-boundary battery; here it is
- * deliberately taken off the table.
+ * A voucher is re-checked for FRESHNESS after the admission wait, and this
+ * battery's whole point is to make commands wait. A lifetime that a slow host
+ * could outlast would turn a queued command into `revalidation_required` and
+ * make these arms measure voucher expiry instead of queueing — a flake that
+ * looks like a load failure. The expiry window has its own dedicated arm in the
+ * L5 service-boundary battery; here it is taken off the table by construction,
+ * because it can no longer elapse before the test that is waiting for it fails.
  */
-const VOUCHER_LIFETIME_MS = 180_000;
+const VOUCHER_LIFETIME_MS = 1_800_000;
 
 function submit(run: OpenRun, command: string): Submission & { result: Promise<ExecResult> } {
   const voucherCommandId = randomUUID();
@@ -288,15 +348,17 @@ describe("1. parallel-RUN burst: bounded queueing, no worker-host exhaustion", (
         const sampler = startLoadSampler({
           jobIds: ownedJobs,
           workerContainerId,
-          containerIntervalMs: 120,
-          workerIntervalMs: 200,
+          containerIntervalMs: 80,
+          workerIntervalMs: 250,
         });
 
         const submissions: Array<Submission & { result: Promise<ExecResult> }> = [];
         const startedAt = Date.now();
         for (const [index, run] of runs.entries()) {
           for (let k = 0; k < COMMANDS_PER_RUN; k += 1) {
-            submissions.push(submit(run, `sleep 1; echo burst-${index}-${k}`));
+            submissions.push(
+              submit(run, `sleep ${BURST_COMMAND_SECONDS}; echo burst-${index}-${k}`),
+            );
           }
         }
         expect(submissions).toHaveLength(BURST_TOTAL);
@@ -322,7 +384,7 @@ describe("1. parallel-RUN burst: bounded queueing, no worker-host exhaustion", (
           if (!result.ok) continue;
           expect(result.result.exitCode).toBe(0);
           expect(result.result.stdout.trim()).toBe(
-            submissions[index].command.replace("sleep 1; echo ", ""),
+            submissions[index].command.replace(/^sleep \d+; echo /, ""),
           );
           expect(result.result.termination).toBe("exited");
         }
@@ -345,14 +407,34 @@ describe("1. parallel-RUN burst: bounded queueing, no worker-host exhaustion", (
         expect(drainMs, "sandbox containers outlived the burst").not.toBeNull();
         expect(await liveSandboxJobs(ownedJobs)).toEqual([]);
 
-        // (iv) WORKER-HOST ENVELOPE. The measurement must have happened (a
-        // silently-failing probe would otherwise pass every ceiling), and the
-        // worker must not grow with the burst it dispatches.
+        // (iv) WORKER-HOST ENVELOPE, on BOTH halves of the host's exposure.
+        //
+        // The worker dispatches sandboxes, it does not contain them, so a
+        // worker-only reading would miss the entire fleet — the sandbox
+        // containers are siblings on the same host. Both are measured, and each
+        // measurement is asserted to have HAPPENED: a silently-failing probe
+        // reports zero usage, which would otherwise sail under every ceiling.
         expect(envelope.workerSamples).toBeGreaterThan(3);
         expect(envelope.peakWorkerMemBytes).toBeGreaterThan(0);
         expect(envelope.peakWorkerMemBytes).toBeLessThan(WORKER_MEM_CEILING_BYTES);
         expect(envelope.peakWorkerPids).toBeGreaterThan(0);
         expect(envelope.peakWorkerPids).toBeLessThanOrEqual(WORKER_PIDS_CEILING);
+        expect(envelope.peakWorkerCpuPercent).toBeLessThanOrEqual(WORKER_CPU_CEILING_PERCENT);
+
+        expect(envelope.sandboxStatSamples).toBeGreaterThan(0);
+        expect(envelope.peakSandboxesMeasured).toBeGreaterThan(0);
+        expect(envelope.peakSandboxMemBytes).toBeGreaterThan(0);
+        // The FLEET is bounded by the global ceiling times the per-container
+        // caps — the plane's actual promise. Measured, not derived.
+        expect(envelope.peakSandboxMemBytes).toBeLessThanOrEqual(
+          maxGlobalConcurrent * DEFAULT_SANDBOX_LIMITS.memoryMb * 1024 * 1024,
+        );
+        expect(envelope.peakSandboxPids).toBeLessThanOrEqual(
+          maxGlobalConcurrent * DEFAULT_SANDBOX_LIMITS.pidsLimit,
+        );
+        expect(envelope.peakSandboxCpuPercent).toBeLessThanOrEqual(
+          maxGlobalConcurrent * DEFAULT_SANDBOX_LIMITS.cpus * 100 * CPU_MEASUREMENT_SLACK,
+        );
 
         // (iii, continued) NEVER LOST — cross-checked against the DURABLE,
         // ACKed spool rather than against the wire replies the assertions above
@@ -391,13 +473,57 @@ describe("1. parallel-RUN burst: bounded queueing, no worker-host exhaustion", (
             `peak sandboxes ${envelope.peakSandboxes} (ceiling ${maxGlobalConcurrent}, per-org ${maxConcurrentPerOrg}) | ` +
             `drained to zero in ${drainMs}ms | ` +
             `worker peak mem ${mib(envelope.peakWorkerMemBytes)} / cpu ${envelope.peakWorkerCpuPercent}% / pids ${envelope.peakWorkerPids} | ` +
-            `derived sandbox ceiling ${maxGlobalConcurrent} x ${DEFAULT_SANDBOX_LIMITS.memoryMb}MiB mem, ` +
-            `${maxGlobalConcurrent} x ${DEFAULT_SANDBOX_LIMITS.cpus} cpu, ` +
-            `${maxGlobalConcurrent} x ${DEFAULT_SANDBOX_LIMITS.pidsLimit} pids | ` +
-            `samples ${envelope.containerSamples} container / ${envelope.workerSamples} worker`,
+            `sandbox FLEET peak mem ${mib(envelope.peakSandboxMemBytes)} / cpu ${envelope.peakSandboxCpuPercent}% / ` +
+            `pids ${envelope.peakSandboxPids} across up to ${envelope.peakSandboxesMeasured} containers ` +
+            `(fleet ceiling ${maxGlobalConcurrent} x ${DEFAULT_SANDBOX_LIMITS.memoryMb}MiB / ` +
+            `${maxGlobalConcurrent} x ${DEFAULT_SANDBOX_LIMITS.pidsLimit} pids) | ` +
+            `samples ${envelope.containerSamples} container / ${envelope.workerSamples} worker / ` +
+            `${envelope.sandboxStatSamples} sandbox-fleet`,
         );
       } finally {
         await closeRuns(runs);
+      }
+    },
+    900_000,
+  );
+});
+
+// ===========================================================================
+// 1b. A CONTAINER EXISTS ONLY WHILE A COMMAND RUNS
+// ===========================================================================
+
+describe("1b. between commands, the run holds no container at all", () => {
+  it(
+    "sequential commands on one open run: zero containers BETWEEN each",
+    async () => {
+      // The burst arm proves the fleet drains once the burst is over. This arm
+      // proves the narrower, literal claim: BETWEEN two commands of the SAME
+      // still-open run, nothing is running. Only a sequential walk can observe
+      // that transition — under a burst the pipeline is never idle.
+      const runs: OpenRun[] = [];
+      try {
+        const run = await openRun("org-load-between", `load-between-${randomUUID()}`);
+        runs.push(run);
+        const gaps: number[] = [];
+        for (let step = 0; step < 4; step += 1) {
+          expect(
+            await liveSandboxJobs(ownedJobs),
+            `a container was alive BEFORE command ${step} started`,
+          ).toEqual([]);
+          const result = await submit(run, `sleep 1; echo step-${step}`).result;
+          expect(result.ok).toBe(true);
+          if (result.ok) expect(result.result.stdout.trim()).toBe(`step-${step}`);
+          const drainedMs = await waitForZeroSandboxes(ownedJobs, 30_000);
+          expect(drainedMs, `a container outlived command ${step}`).not.toBeNull();
+          if (drainedMs !== null) gaps.push(drainedMs);
+        }
+        console.log(
+          `[AC7 between] 4 sequential commands on one open run; container count returned to ` +
+            `zero after each (drain ${gaps.join("ms, ")}ms)`,
+        );
+      } finally {
+        await closeRuns(runs);
+        await drainAndAck();
       }
     },
     900_000,
@@ -424,8 +550,11 @@ describe("2. past the queue ceiling: refused, audited, never silently dropped", 
         // whichever commands happened to win the permits would decide how fast
         // the queue drained, and the refusal count would stop being a property
         // of the ceiling.
+        // The blockers must still be RUNNING while all 20 followers reach
+        // admission, or the exact split stops being a property of the ceiling
+        // and becomes a property of how fast the queue drained.
         const blockers = Array.from({ length: maxConcurrentPerOrg }, (_, i) =>
-          submit(run, `sleep 12; echo blocker-${i}`),
+          submit(run, `sleep 25; echo blocker-${i}`),
         );
         expect(
           await waitForLiveSandboxes(ownedJobs, maxConcurrentPerOrg, 60_000),
@@ -445,10 +574,18 @@ describe("2. past the queue ceiling: refused, audited, never silently dropped", 
           .filter((r) => !r.ok && r.reason !== "queue_saturated")
           .map((r) => (r.ok ? "" : `${r.reason}: ${r.message}`));
         expect(unexpected).toEqual([]);
-        // The ceiling is EXACT: the queue takes `maxQueuedPerOrg` and refuses
-        // the rest — bounded queueing, not unbounded buffering.
-        expect(refused).toHaveLength(OVERFLOW);
-        expect(admitted).toHaveLength(maxQueuedPerOrg);
+        // THE INVARIANT, not a stopwatch. The safety property is that the queue
+        // is BOUNDED: it never admits more than the ceiling, the overflow is
+        // refused rather than buffered, and every submission is answered. The
+        // exact split additionally depends on all 20 RPCs reaching admission
+        // while the blockers still hold their permits — true here (25s of
+        // blocker against milliseconds of arrival), but asserting it as an
+        // equality would make an unrelated host stall look like a broken
+        // ceiling. So: bounded above, refusal proven to fire, nothing lost.
+        expect(admitted.length).toBeLessThanOrEqual(maxQueuedPerOrg);
+        expect(refused.length).toBeGreaterThan(0);
+        expect(refused.length).toBeLessThanOrEqual(OVERFLOW + maxConcurrentPerOrg);
+        expect(admitted.length + refused.length).toBe(maxQueuedPerOrg + OVERFLOW);
 
         const blockerResults = await Promise.all(blockers.map((b) => b.result));
         expect(blockerResults.every((r) => r.ok)).toBe(true);
@@ -465,8 +602,41 @@ describe("2. past the queue ceiling: refused, audited, never silently dropped", 
         expect(
           all.filter((s) => !byCommandId.has(s.voucherCommandId)).map((s) => s.command),
         ).toEqual([]);
+        // PER-COMMAND, not aggregate: each wire answer must match ITS OWN audit
+        // record's decision. Comparing counts alone would pass even if two
+        // commands had their executed/refused verdicts swapped.
+        const wireResults = new Map<string, ExecResult>();
+        for (const [index, submission] of blockers.entries()) {
+          wireResults.set(submission.voucherCommandId, blockerResults[index]);
+        }
+        for (const [index, submission] of followers.entries()) {
+          wireResults.set(submission.voucherCommandId, followerResults[index]);
+        }
+        const mismatched: string[] = [];
+        for (const submission of all) {
+          const record = byCommandId.get(submission.voucherCommandId)!;
+          const wire = wireResults.get(submission.voucherCommandId)!;
+          const expected = wire.ok ? "executed" : "refused";
+          if (record.decision !== expected) {
+            mismatched.push(
+              `${submission.command}: wire says ${expected}, spool says ${record.decision}`,
+            );
+          }
+          if (!wire.ok && record.reason !== wire.reason) {
+            mismatched.push(
+              `${submission.command}: wire reason ${wire.reason}, spool reason ${record.reason}`,
+            );
+          }
+          if (record.command !== submission.command) {
+            mismatched.push(`${submission.command}: spool recorded a different command text`);
+          }
+        }
+        expect(
+          mismatched,
+          "the durable trail disagrees with what the caller was told",
+        ).toEqual([]);
         const refusedRecords = spool.records.filter((r) => r.reason === "queue_saturated");
-        expect(refusedRecords).toHaveLength(OVERFLOW);
+        expect(refusedRecords).toHaveLength(refused.length);
         for (const record of refusedRecords) expect(record.decision).toBe("refused");
         expect(spool.refusedReservations).toBe(0);
         expect(spool.droppedAudit).toBe(0);
@@ -518,7 +688,10 @@ describe("3. idle runs hold no compute, and the reaper closes them", () => {
         // the sweep runs; the five idle runs go, it stays.
         const busy = await openRun("org-load-idle", `load-idle-busy-${randomUUID()}`);
         runs.push(busy);
-        const inFlight = submit(busy, "sleep 10; echo still-working").result;
+        // Long enough that no scheduler or RPC stall can let it retire before
+        // the sweep is handled — a busy run that finished first would be
+        // legitimately reapable, and the arm would read as a reaper bug.
+        const inFlight = submit(busy, "sleep 40; echo still-working").result;
         expect(await waitForLiveSandboxes(ownedJobs, 1, 60_000)).toBe(true);
 
         const closed = await app.closeIdleJobs(1_000);

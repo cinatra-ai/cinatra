@@ -29,18 +29,29 @@ export const sleep = (ms: number): Promise<void> =>
  * `executingCount` lives in the broker process and would be the implementation
  * reporting on itself, while a container either exists on the host or does not.
  */
-export async function liveSandboxJobs(jobIds: ReadonlySet<string>): Promise<string[]> {
+export async function liveSandboxes(
+  jobIds: ReadonlySet<string>,
+): Promise<Array<{ id: string; jobId: string }>> {
   const listed = await docker([
     "ps",
     "--filter",
     `label=${SANDBOX_CONTAINER_LABEL}=sandbox`,
     "--format",
-    `{{.Label "${SANDBOX_CONTAINER_JOB_LABEL}"}}`,
+    `{{.ID}}\t{{.Label "${SANDBOX_CONTAINER_JOB_LABEL}"}}`,
   ]);
   return listed.stdout
     .split("\n")
     .map((line) => line.trim())
-    .filter((jobId) => jobId.length > 0 && jobIds.has(jobId));
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      const [id, jobId] = line.split("\t");
+      return { id: (id ?? "").trim(), jobId: (jobId ?? "").trim() };
+    })
+    .filter((row) => row.id.length > 0 && jobIds.has(row.jobId));
+}
+
+export async function liveSandboxJobs(jobIds: ReadonlySet<string>): Promise<string[]> {
+  return (await liveSandboxes(jobIds)).map((row) => row.jobId);
 }
 
 /** Bytes from one `docker stats` size field ("12.34MiB", "1.5GiB", "900B"). */
@@ -61,26 +72,46 @@ export function parseStatsBytes(text: string): number {
   return unit === undefined ? Number.NaN : Number(match[1]) * unit;
 }
 
-export type WorkerReading = { memBytes: number; cpuPercent: number; pids: number };
+export type Reading = { memBytes: number; cpuPercent: number; pids: number };
 
-/** One `docker stats --no-stream` reading for the worker container. */
-export async function readWorkerStats(containerId: string): Promise<WorkerReading | null> {
+/**
+ * `docker stats --no-stream` for a set of containers, summed.
+ *
+ * Sandbox containers are ephemeral by design, so a container named here can be
+ * gone before `docker stats` reaches it. That is not an error condition — the
+ * unreadable rows are simply dropped and the caller learns how many were read,
+ * so a systematically failing probe is still visible as a zero sample count
+ * rather than as a comfortable-looking zero usage.
+ */
+export async function readStats(containerIds: readonly string[]): Promise<{
+  total: Reading;
+  read: number;
+} | null> {
+  if (containerIds.length === 0) return null;
   const out = await docker(
-    ["stats", "--no-stream", "--format", "{{.MemUsage}}|{{.CPUPerc}}|{{.PIDs}}", containerId],
+    [
+      "stats",
+      "--no-stream",
+      "--format",
+      "{{.MemUsage}}|{{.CPUPerc}}|{{.PIDs}}",
+      ...containerIds,
+    ],
     { timeoutMs: 60_000 },
   );
-  const line = out.stdout.trim().split("\n")[0]?.trim();
-  if (!line) return null;
-  const [mem, cpu, pids] = line.split("|");
-  const memBytes = parseStatsBytes((mem ?? "").split("/")[0] ?? "");
-  const cpuPercent = Number((cpu ?? "").replace("%", "").trim());
-  const pidCount = Number((pids ?? "").trim());
-  if (!Number.isFinite(memBytes) || !Number.isFinite(pidCount)) return null;
-  return {
-    memBytes,
-    cpuPercent: Number.isFinite(cpuPercent) ? cpuPercent : 0,
-    pids: pidCount,
-  };
+  const total: Reading = { memBytes: 0, cpuPercent: 0, pids: 0 };
+  let read = 0;
+  for (const line of out.stdout.split("\n").map((l) => l.trim()).filter(Boolean)) {
+    const [mem, cpu, pids] = line.split("|");
+    const memBytes = parseStatsBytes((mem ?? "").split("/")[0] ?? "");
+    const cpuPercent = Number((cpu ?? "").replace("%", "").trim());
+    const pidCount = Number((pids ?? "").trim());
+    if (!Number.isFinite(memBytes) || !Number.isFinite(pidCount)) continue;
+    total.memBytes += memBytes;
+    total.pids += pidCount;
+    total.cpuPercent += Number.isFinite(cpuPercent) ? cpuPercent : 0;
+    read += 1;
+  }
+  return read === 0 ? null : { total, read };
 }
 
 export type LoadEnvelope = {
@@ -95,6 +126,18 @@ export type LoadEnvelope = {
   peakWorkerMemBytes: number;
   peakWorkerCpuPercent: number;
   peakWorkerPids: number;
+  /**
+   * `docker stats` readings taken against THIS battery's live sandbox
+   * containers, summed per reading. This is the host exposure the sandboxes
+   * themselves account for — the worker dispatches them, it does not contain
+   * them, so a worker-only reading would miss the entire fleet.
+   */
+  sandboxStatSamples: number;
+  peakSandboxMemBytes: number;
+  peakSandboxCpuPercent: number;
+  peakSandboxPids: number;
+  /** Most sandbox containers a single `docker stats` reading covered. */
+  peakSandboxesMeasured: number;
 };
 
 export type LoadSampler = {
@@ -125,13 +168,18 @@ export function startLoadSampler(opts: {
     peakWorkerMemBytes: 0,
     peakWorkerCpuPercent: 0,
     peakWorkerPids: 0,
+    sandboxStatSamples: 0,
+    peakSandboxMemBytes: 0,
+    peakSandboxCpuPercent: 0,
+    peakSandboxPids: 0,
+    peakSandboxesMeasured: 0,
   };
   let running = true;
 
   const containerLoop = (async () => {
     while (running) {
       try {
-        const live = await liveSandboxJobs(opts.jobIds);
+        const live = await liveSandboxes(opts.jobIds);
         envelope.containerSamples += 1;
         if (live.length > envelope.peakSandboxes) envelope.peakSandboxes = live.length;
         if (live.length === 0) envelope.zeroSamples += 1;
@@ -143,18 +191,41 @@ export function startLoadSampler(opts: {
     }
   })();
 
-  const workerLoop = (async () => {
+  const statsLoop = (async () => {
     while (running) {
       try {
-        const reading = await readWorkerStats(opts.workerContainerId);
-        if (reading) {
+        const worker = await readStats([opts.workerContainerId]);
+        if (worker) {
           envelope.workerSamples += 1;
-          envelope.peakWorkerMemBytes = Math.max(envelope.peakWorkerMemBytes, reading.memBytes);
+          envelope.peakWorkerMemBytes = Math.max(
+            envelope.peakWorkerMemBytes,
+            worker.total.memBytes,
+          );
           envelope.peakWorkerCpuPercent = Math.max(
             envelope.peakWorkerCpuPercent,
-            reading.cpuPercent,
+            worker.total.cpuPercent,
           );
-          envelope.peakWorkerPids = Math.max(envelope.peakWorkerPids, reading.pids);
+          envelope.peakWorkerPids = Math.max(envelope.peakWorkerPids, worker.total.pids);
+        }
+        const live = await liveSandboxes(opts.jobIds);
+        if (live.length > 0) {
+          const sandboxes = await readStats(live.map((row) => row.id));
+          if (sandboxes) {
+            envelope.sandboxStatSamples += 1;
+            envelope.peakSandboxMemBytes = Math.max(
+              envelope.peakSandboxMemBytes,
+              sandboxes.total.memBytes,
+            );
+            envelope.peakSandboxCpuPercent = Math.max(
+              envelope.peakSandboxCpuPercent,
+              sandboxes.total.cpuPercent,
+            );
+            envelope.peakSandboxPids = Math.max(envelope.peakSandboxPids, sandboxes.total.pids);
+            envelope.peakSandboxesMeasured = Math.max(
+              envelope.peakSandboxesMeasured,
+              sandboxes.read,
+            );
+          }
         }
       } catch {
         // Same rationale as above.
@@ -167,7 +238,7 @@ export function startLoadSampler(opts: {
     envelope,
     stop: async () => {
       running = false;
-      await Promise.all([containerLoop, workerLoop]);
+      await Promise.all([containerLoop, statsLoop]);
       return envelope;
     },
   };
