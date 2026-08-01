@@ -243,28 +243,30 @@ def _filter_inputs_to_flow_schema(
     return {k: v for k, v in start_inputs.items() if k in declared_keys}
 
 
-def _pop_run_token_from_message(
+def _pop_run_token_from_text_part(
     message: Optional[Dict[str, Any]],
 ) -> Tuple[str, Optional[Dict[str, Any]]]:
-    """Pop the reserved run-token key out of the initial A2A message.
+    """Pop the reserved run-token key out of an INITIAL A2A message's text part.
 
-    #1193 run-token spine (W2). The dispatcher embeds the RAW per-run token in
-    the first text part's JSON object under ``CINATRA_RUN_TOKEN_MESSAGE_KEY``.
-    That token is a BEARER credential — it must NEVER survive into WayFlow's
-    conversation, because ``_patched_run_task`` later converts + appends +
-    persists this same message and the history can be replayed to the LLM.
-    Merely filtering it out of the Flow ``start_conversation`` inputs (which the
-    schema filter already does) does NOT scrub the appended message.
+    #1193 run-token spine. A DISPATCH embeds the RAW per-run token in the first
+    text part's JSON object under ``CINATRA_RUN_TOKEN_MESSAGE_KEY``. That token
+    is a BEARER credential — it must NEVER survive into WayFlow's conversation,
+    because ``_patched_run_task`` later converts + appends + persists this same
+    message and the history can be replayed to the LLM. Merely filtering it out
+    of the Flow ``start_conversation`` inputs (which the schema filter already
+    does) does NOT scrub the appended message.
 
     Returns ``(raw_token, scrubbed_message)``: the popped token (``""`` when
-    absent) and a SHALLOW-COPIED message whose first text part re-serialises the
-    JSON object WITHOUT the reserved key — every other key
-    (``cinatra_run_id`` / ``cinatra_run_binding`` / author inputs) is preserved.
+    absent or non-string) and a SHALLOW-COPIED message whose first text part
+    re-serialises the JSON object WITHOUT the reserved key — every other key
+    (``cinatra_run_id`` / author inputs) is preserved.
 
     Fails SAFE and never raises: any shape it does not recognise (no message, no
     text part, non-JSON, non-object, key absent) returns ``("", message)``
     unchanged so the token stays inert (the schema filter still drops it from
-    Flow inputs). The caller's message dict is never mutated in place.
+    Flow inputs). A RESUME message's plain text is exactly such a shape, so it is
+    returned untouched and NEVER reserialised. The caller's message dict is never
+    mutated in place.
     """
     if not isinstance(message, dict):
         return "", message
@@ -290,6 +292,109 @@ def _pop_run_token_from_message(
     new_message = dict(message)
     new_message["parts"] = [new_p0, *parts[1:]]
     return (token if isinstance(token, str) else ""), new_message
+
+
+def _pop_run_token_from_metadata(
+    message: Optional[Dict[str, Any]],
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """Pop the reserved run-token key out of an A2A message's ``metadata``.
+
+    #1193 RESUME carrier. A resumed task's message text is the operator's answer,
+    delivered VERBATIM to the gate's ``InputMessageNode`` (and, on the
+    artifact-review path, a typed decision envelope that is contractually
+    byte-stable). It therefore cannot carry the credential. The resume senders put
+    the RAW token in ``message["metadata"]`` under the SAME reserved key, so this
+    loader has ONE grammar to pop and scrub.
+
+    Metadata is also the structurally safer carrier: wayflowcore's
+    ``_convert_a2a_messages_to_wayflow_messages`` reads only ``parts``, ``role``
+    and ``message_id``, so metadata can never reach the prompt or the persisted
+    conversation. The scrub below closes the REMAINING exposure — the A2A task
+    history — in concert with the ``submit_task`` patch.
+
+    Returns ``(raw_token, scrubbed_message)``. Fails SAFE exactly like the
+    text-part pop: an unrecognised shape returns ``("", message)`` unchanged. A
+    present-but-non-string value yields ``""`` but is STILL scrubbed, so a
+    malformed carrier can never be left behind in the message.
+    """
+    if not isinstance(message, dict):
+        return "", message
+    metadata = message.get("metadata")
+    if not isinstance(metadata, dict) or CINATRA_RUN_TOKEN_MESSAGE_KEY not in metadata:
+        return "", message
+    new_metadata = dict(metadata)
+    token = new_metadata.pop(CINATRA_RUN_TOKEN_MESSAGE_KEY)
+    new_message = dict(message)
+    new_message["metadata"] = new_metadata
+    return (token if isinstance(token, str) else ""), new_message
+
+
+def _extract_and_scrub_run_token(
+    message: Optional[Dict[str, Any]],
+) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """Extract the per-run token from EITHER carrier and scrub BOTH.
+
+    Carrier precedence: the resume carrier (``metadata``) wins over the dispatch
+    carrier (the first text part's JSON). In practice a message carries exactly
+    one — an initial dispatch uses the text part, a resume uses metadata — but
+    both are scrubbed unconditionally so a malformed or duplicated carrier can
+    never leave credential material in the message.
+
+    DISAGREEMENT FAILS CLOSED: if both carriers yield a non-empty token and the
+    two differ, NEITHER is returned. Two different credentials on one message is
+    never a legitimate shape, and picking one would let a caller who can write the
+    weaker carrier choose which run the task authenticates as.
+    """
+    metadata_token, message = _pop_run_token_from_metadata(message)
+    text_token, message = _pop_run_token_from_text_part(message)
+    if metadata_token and text_token and metadata_token != text_token:
+        print(
+            "[agent_loader] WARNING: A2A message carried TWO DIFFERENT run-token "
+            "carriers (metadata and text part); refusing both and continuing with "
+            "no run token (fail closed)."
+        )
+        return "", message
+    return (metadata_token or text_token), message
+
+
+def _scrub_run_token_from_message_for_storage(
+    message: Any,
+) -> Any:
+    """Return a COPY of an A2A message with every run-token carrier removed.
+
+    #1193 token hygiene. ``A2AStorage.submit_task`` json.dumps the inbound
+    message into the task-history column BEFORE the worker ever runs, and
+    ``update_task`` RELOADS that row — so scrubbing only inside
+    ``_patched_run_task`` (which is what the original W2 pop did) left the RAW
+    credential durably persisted in task history, and echoed it back in the
+    JSON-RPC response. This helper is what the ``submit_task`` patch persists
+    instead. It fixes the pre-existing dispatch-path leak as well as the new
+    resume carrier.
+
+    Structure-copies everything it hands to storage — the message dict, the
+    ``metadata`` dict, the ``parts`` list and its first element — so the caller's
+    object (which the broker forwards to the worker as ``params["message"]`` and
+    which MUST still carry the raw token) can never be written through. The
+    ``parts`` copy matters even when only the METADATA carrier was scrubbed: the
+    two objects would otherwise share one list, and ``submit_task``'s callers
+    hold the persisted task, so any future in-place edit on either side would
+    silently cross over.
+
+    Fails SAFE: any unrecognised shape, or a message with no carrier at all, is
+    returned unchanged (identity-equal), so the patch can cheaply detect "nothing
+    to protect" and delegate straight to the original.
+    """
+    if not isinstance(message, dict):
+        return message
+    _, scrubbed = _extract_and_scrub_run_token(message)
+    if scrubbed is message:
+        return message  # no carrier present — nothing was copied or removed
+    parts = scrubbed.get("parts")
+    if isinstance(parts, list) and parts is message.get("parts"):
+        # Only the metadata carrier was scrubbed, so the text-part pop returned
+        # the SAME list. Detach it so storage and the broker share nothing.
+        scrubbed["parts"] = list(parts)
+    return scrubbed
 
 
 # Surface EndNode declared outputs as a structured A2A DataPart so the Cinatra
@@ -585,18 +690,21 @@ def _patch_api_call_step_bridge_token() -> None:
                 or "/auditor/apply" in _ctx_url
             ):
                 request["headers"]["X-Cinatra-A2A-Context-Id"] = _ctx_id
-            # #1193 run-token spine (W2 + W3): attach the RAW per-run token on
-            # the host-anchored first-party callbacks so the server resolves
-            # "which run is calling" from the ONE dispatch-minted credential
-            # (verifyRunToken → unique-index row) rather than a body-selected id.
-            # W2 landed the context callbacks (resolve/finalize); W3 adds the
-            # llm-bridge call so its run selection — previously the dispatcher-
-            # signed `cinatra_run_binding` plus the a2a context-id — resolves
-            # token-first off the one verifier, with those legacy channels kept
-            # as measured fallbacks server-side (the token being absent leaves
-            # them unchanged). Read from a per-task ContextVar the OAS author
-            # cannot write, and only ever sent to the internal host (the
-            # _is_internal gate above).
+            # #1193 run-token spine: attach the RAW per-run token on the
+            # host-anchored first-party callbacks so the server resolves "which
+            # run is calling" from the ONE minted credential (verifyRunToken →
+            # unique-index row) rather than a body-selected id. This is now the
+            # ONLY accepted run identity on these three surfaces — the a2a
+            # context-id serving channel, the dev-loopback body id and the
+            # dispatcher-signed `cinatra_run_binding` are all retired, and the
+            # server fails CLOSED when the token is absent or unresolvable.
+            #
+            # The ContextVar is populated per TASK from either carrier (initial
+            # message text part, or resume metadata), so a RESUMED leg attaches
+            # its own credential — which is what makes /api/context-finalize
+            # work, since the context subflow always interrupts at its HITL gate
+            # before reaching it. Read from a ContextVar the OAS author cannot
+            # write, and only ever sent to the internal host (_is_internal above).
             _run_tok = _WAYFLOW_RUN_TOKEN.get()
             if _run_tok and (
                 "context-resolve" in _ctx_url
@@ -705,6 +813,78 @@ def _patch_api_call_step_bridge_token() -> None:
     print(
         "[agent_loader] ApiCallStep._execute_request patched "
         "(X-Cinatra-Bridge-Token injection enabled)"
+    )
+
+
+def _patch_a2a_storage_scrub_run_token() -> None:
+    """Keep the RAW per-run token out of the PERSISTED A2A task history.
+
+    #1193 token hygiene. ``A2AStorage.submit_task`` builds the task with
+    ``history=[message]`` and ``json.dumps``-es it into the datastore's
+    extra-metadata column — BEFORE the broker ever dispatches to
+    ``_patched_run_task``. The in-worker pop therefore came too late: the raw
+    credential was already durably persisted, ``update_task`` reloads that row
+    and rewrites it forward on every state change, and the submitted task is also
+    the JSON-RPC response body, so the token was echoed back to the caller.
+
+    This patch persists a SCRUBBED COPY while leaving the CALLER's message object
+    — which ``send_message`` forwards to the broker as ``params["message"]``, and
+    which must still carry the raw token for the ContextVar — untouched.
+    ``submit_task`` stamps the authoritative ``task_id`` / ``context_id`` onto the
+    dict it is handed, so those two routing fields are copied back onto the
+    caller's object AFTER a successful submit. Only those two are copied back:
+    copying the scrubbed metadata back would defeat the whole patch.
+
+    Fails CLOSED: if the upstream class or method cannot be resolved this RAISES
+    and the container does not start. Every other loader patch degrades to a
+    warning because losing it costs a convenience; losing THIS one silently
+    reintroduces durable credential persistence, which no operator would notice
+    from a log line. A startup failure is the correct, visible outcome.
+    """
+    try:
+        from wayflowcore.agentserver.a2a._storage import (  # type: ignore[import-not-found]
+            A2AStorage,
+        )
+    except Exception as exc:  # pragma: no cover - import shape guard
+        raise RuntimeError(
+            "[agent_loader] FATAL: _patch_a2a_storage_scrub_run_token cannot import "
+            f"wayflowcore.agentserver.a2a._storage.A2AStorage ({exc}). Without this "
+            "patch the RAW per-run token is PERSISTED in A2A task history and echoed "
+            "in the JSON-RPC response. Refusing to start — fix the patch binding."
+        ) from exc
+
+    if not hasattr(A2AStorage, "submit_task"):
+        raise RuntimeError(
+            "[agent_loader] FATAL: _patch_a2a_storage_scrub_run_token found no "
+            "A2AStorage.submit_task; upstream renamed it. Without this patch the RAW "
+            "per-run token is PERSISTED in A2A task history. Refusing to start."
+        )
+
+    if getattr(A2AStorage.submit_task, "__cinatra_patched__", False):
+        return  # idempotent
+
+    _orig = A2AStorage.submit_task
+
+    async def _patched(self: Any, context_id: str, message: Any) -> Any:
+        scrubbed = _scrub_run_token_from_message_for_storage(message)
+        if scrubbed is message:
+            # No carrier present (or an unrecognised shape) — nothing to protect.
+            return await _orig(self, context_id, message)
+        task = await _orig(self, context_id, scrubbed)
+        # submit_task stamps these onto the dict it received; the caller's object
+        # is the one the broker forwards, so it needs the same routing identity.
+        if isinstance(message, dict) and isinstance(scrubbed, dict):
+            for _routing_key in ("task_id", "context_id"):
+                if _routing_key in scrubbed:
+                    message[_routing_key] = scrubbed[_routing_key]
+        return task
+
+    _patched.__cinatra_patched__ = True  # type: ignore[attr-defined]
+    _patched.__wrapped__ = _orig  # type: ignore[attr-defined]
+    A2AStorage.submit_task = _patched  # type: ignore[method-assign]
+    print(
+        "[agent_loader] A2AStorage.submit_task patched "
+        "(run token scrubbed from persisted task history)"
     )
 
 
@@ -898,14 +1078,21 @@ def _patch_wayflow_flow_skip_pre_execute() -> None:
 
             await self.storage.update_task(task_id=task["id"], state="working")
 
-            # #1193 run-token spine (W2): pop the RAW per-run token out of the
-            # initial A2A message BEFORE it is parsed for start-inputs OR
-            # converted + appended to the conversation (both below), so the
-            # bearer credential never enters WayFlow prompt/history/persistence.
-            # Reassign params["message"] to the scrubbed copy and hold the raw
-            # token in a per-task ContextVar the patched ApiCallStep reads to
-            # attach X-Cinatra-Run-Token on host-anchored context callbacks.
-            _run_token, _scrubbed_message = _pop_run_token_from_message(
+            # #1193 run-token spine: pop the RAW per-run token out of the A2A
+            # message BEFORE it is parsed for start-inputs OR converted +
+            # appended to the conversation (both below), so the bearer credential
+            # never enters WayFlow prompt/history/persistence. Reassign
+            # params["message"] to the scrubbed copy and hold the raw token in a
+            # per-task ContextVar the patched ApiCallStep reads to attach
+            # X-Cinatra-Run-Token on host-anchored callbacks.
+            #
+            # BOTH carriers are handled here, which is what makes a RESUMED task
+            # carry run identity: an initial dispatch embeds the token in the
+            # first text part's JSON, a resume puts it in message metadata (the
+            # resume text is the operator's answer and must stay verbatim). This
+            # runs on EVERY task, so each resumed leg re-populates the ContextVar
+            # with that leg's own credential.
+            _run_token, _scrubbed_message = _extract_and_scrub_run_token(
                 params.get("message")
             )
             if _scrubbed_message is not None:
@@ -1541,6 +1728,17 @@ _LIVE_CLASS_BINDINGS: Tuple[Tuple[str, str, Optional[str]], ...] = (
     ("wayflowcore.steps", "AgentExecutionStep", None),
     ("wayflowcore.a2a.a2aagent", "A2AAgent", "start_conversation"),
     ("wayflowcore.agentserver", "A2AServer", "serve_agent"),
+    # #1193 token hygiene. `A2AStorage.submit_task` persists the inbound A2A
+    # message into task history BEFORE the worker's pop runs, so an unpatched
+    # submit_task durably stores the RAW per-run credential and echoes it in the
+    # JSON-RPC response. The patch is startup-FATAL (see
+    # `_patch_a2a_storage_scrub_run_token`); this binding makes an upstream
+    # rename surface here too, rather than only as a patch-install failure.
+    (
+        "wayflowcore.agentserver.a2a._storage",
+        "A2AStorage",
+        "submit_task",
+    ),
     (
         "pyagentspec.serialization.pydanticdeserializationplugin",
         "PydanticComponentDeserializationPlugin",
@@ -3583,6 +3781,7 @@ def build_parent_app(agents_dir: Path) -> Starlette:
     # Apply ALL global class-level patches once at module load.
     _patch_api_call_step_bridge_token()        # bridge token on ApiCallStep
     _patch_a2a_agent_bridge_token()            # bridge token on A2AAgent HTTP
+    _patch_a2a_storage_scrub_run_token()       # run token out of task history
     _patch_a2a_agent_no_shared_conversation()  # skip init messages
     _patch_serve_agent_flow_validation()       # ApiNode-only flow bypass
     _patch_wayflow_flow_skip_pre_execute()     # WayflowFlow pre-execute skip

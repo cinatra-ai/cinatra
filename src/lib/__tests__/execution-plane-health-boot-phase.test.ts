@@ -17,6 +17,7 @@ import {
   executionPlaneHealthPhases,
   executionPlaneRequired,
   isExecutionBrokerLiveProbeEnabled,
+  probeExecutionBrokerLive,
 } from "@/lib/boot/phases/execution-plane-health";
 
 const READY = { EXECUTION_BROKER_URL: "https://broker.internal:4000", EXECUTION_BROKER_SECRET: "s3cr3t" };
@@ -98,9 +99,13 @@ describe("executionPlaneHealthPhases — run outcomes", () => {
 
 vi.mock("@/lib/execution/execution-broker-remote-config", () => ({
   resolveRemoteBrokerConfig: () => remoteConfig,
-  checkRemoteComposite: async () => {
+  // PER-REPLICA (cinatra#2266 G3): the gate is applied to each client, so the
+  // double has to be able to answer differently for each — otherwise a probe
+  // that dialled only the first replica would be indistinguishable from one
+  // that dialled them all.
+  checkRemoteComposite: async (client: { baseUrl?: string }) => {
     if (compositeHangs) return new Promise(() => {});
-    return compositeResult;
+    return compositeByUrl.get(client?.baseUrl ?? "") ?? compositeResult;
   },
   describeComposite: () => "worker ok; gateway ok; lease not-applicable",
   sanitizeOperatorDetail: (text: string): string =>
@@ -109,8 +114,11 @@ vi.mock("@/lib/execution/execution-broker-remote-config", () => ({
 
 vi.mock("@cinatra-ai/execution-plane", () => ({
   BrokerServiceClient: class {
-    constructor() {
+    readonly baseUrl: string;
+    constructor(config: { baseUrl?: string }) {
+      this.baseUrl = config?.baseUrl ?? "";
       clientsConstructed += 1;
+      constructedUrls.push(this.baseUrl);
     }
     close(): void {
       clientsClosed += 1;
@@ -118,23 +126,34 @@ vi.mock("@cinatra-ai/execution-plane", () => ({
   },
 }));
 
-let remoteConfig: { ok: boolean; reason?: string; value?: unknown } = { ok: true, value: {} };
+const REPLICA_A = "https://broker-a.invalid";
+const REPLICA_B = "https://broker-b.invalid";
+
+let remoteConfig: { ok: boolean; reason?: string; value?: unknown } = {
+  ok: true,
+  value: { baseUrls: [REPLICA_A] },
+};
 let compositeResult: { ok: boolean; reason?: string; composite?: unknown } = {
   ok: true,
   composite: {},
 };
+/** Per-replica overrides; anything absent falls back to `compositeResult`. */
+let compositeByUrl = new Map<string, { ok: boolean; reason?: string; composite?: unknown }>();
 let clientsConstructed = 0;
 let clientsClosed = 0;
+let constructedUrls: string[] = [];
 let compositeHangs = false;
 
 const LIVE = { ...READY, EXECUTION_BROKER_LIVE_PROBE: "on" };
 
 describe("the LIVE probe flag", () => {
   beforeEach(() => {
-    remoteConfig = { ok: true, value: {} };
+    remoteConfig = { ok: true, value: { baseUrls: [REPLICA_A] } };
     compositeResult = { ok: true, composite: {} };
+    compositeByUrl = new Map();
     clientsConstructed = 0;
     clientsClosed = 0;
+    constructedUrls = [];
     compositeHangs = false;
   });
 
@@ -243,6 +262,90 @@ describe("the LIVE probe flag", () => {
     expect(r.status).toBe("failed");
     expect(r.reason).toMatch(/did not answer within \d+ ms/);
   }, 20_000);
+
+  // -------------------------------------------------------------------------
+  // THE FLEET (cinatra#2266 G3, Codex convergence, adopted).
+  //
+  // This probe dialled the FIRST declared origin and reported the whole plane
+  // healthy on its answer alone. The cost is the one `broker-fleet.ts` names in
+  // its own header: a replica the app cannot reach is a replica whose audit
+  // spool nobody is draining, and an undrained spool fills and goes fail-closed
+  // — so an operator would read a green boot phase right up until commands
+  // started being refused.
+  // -------------------------------------------------------------------------
+
+  it("FLEET: probes EVERY replica, not just the first", async () => {
+    remoteConfig = { ok: true, value: { baseUrls: [REPLICA_A, REPLICA_B] } };
+    const [p] = executionPlaneHealthPhases(LIVE);
+    const r = await runBootPhase(p, { record: () => {}, ...logDeps() });
+    expect(r.status).toBe("ok");
+    // Asserted on the ORIGINS dialled, not merely on a count: two clients built
+    // against the same URL would satisfy a count and prove nothing.
+    expect(constructedUrls).toEqual([REPLICA_A, REPLICA_B]);
+    // Every keep-alive agent released, not just the last one.
+    expect(clientsClosed).toBe(2);
+  });
+
+  it("FLEET: the success DETAIL says the verdict stands for every replica", async () => {
+    remoteConfig = { ok: true, value: { baseUrls: [REPLICA_A, REPLICA_B] } };
+    // Read off the probe itself: the boot phase records a reason only on
+    // failure, so this is the surface that carries the successful verdict.
+    const probe = await probeExecutionBrokerLive(LIVE);
+    expect(probe.ok).toBe(true);
+    if (!probe.ok) throw new Error("unreachable");
+    expect(probe.detail).toContain("2 replicas ready");
+
+    // And a ONE-replica deployment keeps its original single-composite line.
+    remoteConfig = { ok: true, value: { baseUrls: [REPLICA_A] } };
+    const single = await probeExecutionBrokerLive(LIVE);
+    expect(single.ok).toBe(true);
+    if (!single.ok) throw new Error("unreachable");
+    expect(single.detail).not.toContain("replicas ready");
+  });
+
+  it("FLEET: an unhealthy SECOND replica fails the phase and names it", async () => {
+    remoteConfig = { ok: true, value: { baseUrls: [REPLICA_A, REPLICA_B] } };
+    // A is fine; only B is broken — the exact case the single-endpoint probe
+    // reported as healthy.
+    compositeByUrl.set(REPLICA_B, {
+      ok: false,
+      reason: "the broker did not answer a health call: ECONNREFUSED",
+    });
+    const [p] = executionPlaneHealthPhases(LIVE);
+    const r = await runBootPhase(p, { record: () => {}, ...logDeps() });
+    expect(r.status).toBe("failed");
+    expect(r.reason).toContain(REPLICA_B);
+    expect(r.reason).toContain("ECONNREFUSED");
+    // The failure does not leak the other replica's socket.
+    expect(clientsClosed).toBe(2);
+  });
+
+  it("FLEET: a THROWING probe still names the replica and closes every client", async () => {
+    // `Promise.all` decided the verdict by which failure landed FIRST IN TIME
+    // and tore the clients down while siblings were still in flight. Settling
+    // every probe keeps the verdict a function of DECLARATION order, which is
+    // the only order an operator can act on.
+    remoteConfig = { ok: true, value: { baseUrls: [REPLICA_A, REPLICA_B] } };
+    compositeByUrl.set(REPLICA_A, { ok: false, reason: "A is merely unready" });
+    const probe = await probeExecutionBrokerLive(LIVE);
+    expect(probe.ok).toBe(false);
+    if (probe.ok) throw new Error("unreachable");
+    // A is declared first, so A is the replica reported — even though B
+    // answered fine.
+    expect(probe.reason).toContain(REPLICA_A);
+    expect(clientsClosed).toBe(2);
+  });
+
+  it("FLEET: a SINGLE-replica deployment's message is unchanged — no origin prefix", async () => {
+    compositeResult = { ok: false, reason: "the broker did not answer a health call: ECONNREFUSED" };
+    const [p] = executionPlaneHealthPhases(LIVE);
+    const r = await runBootPhase(p, { record: () => {}, ...logDeps() });
+    expect(r.status).toBe("failed");
+    expect(r.reason).toContain("ECONNREFUSED");
+    // The one-replica deployment has exactly one place to look, so its reason
+    // keeps the shape every existing reader already understands.
+    expect(r.reason).not.toContain(REPLICA_A);
+  });
 
   it("REDACTS a userinfo component out of a reason before it reaches boot state", async () => {
     compositeResult = {

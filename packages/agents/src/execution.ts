@@ -397,7 +397,6 @@ import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLate
 // host-side caller injects the live `email-send` providers so sender-alias
 // enums resolve registration-driven.
 import { resolveEmailSendProviders } from "@/lib/email-send-providers";
-import { issueAgentRunBinding } from "@/lib/agent-run-binding";
 import { mintRunToken } from "@/lib/agent-run-token";
 import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
 
@@ -2232,38 +2231,24 @@ async function runAgentBuilderExecutionJobInner(
       // DataFlowEdge to each leaf ApiNode. Run identity is owned by the
       // dispatcher; the WayFlow flow inherits it.
       //
-      // Also mint a DISPATCHER-SIGNED run binding
-      // (`cinatra_run_binding`) over the run's authoritative
-      // {runId, orgId, runBy}, keyed by BETTER_AUTH_SECRET (a key OAS never
-      // sees). The LLM bridge REFUSES to mint an MCP OBO token from
-      // `cinatra_run_id` alone (forgeable via DataFlowEdge); it requires
-      // this binding (or an auth-injected context-id). Only emitted when the
-      // run carries both org + owner identity; otherwise the bridge degrades
-      // to the anonymous machine-token path (never an elevation).
-      const runBinding =
-        run.orgId && run.runBy
-          ? issueAgentRunBinding({
-              runId: run.id,
-              orgId: run.orgId,
-              runBy: run.runBy,
-            })
-          : undefined;
-      // #1193 run-token spine: mint a random per-run credential and persist
-      // ONLY its hash BEFORE the blocking sendTask (the same race-free ordering
-      // the context-id pre-bind below uses), then carry the RAW token in the
-      // initial message under a reserved key. A later wave teaches the loader to
-      // pop the key before schema-filtering and attach the token to first-party
-      // callbacks (host-anchored to CINATRA_BASE_URL); until then the
-      // container's _filter_inputs_to_flow_schema drops the undeclared key, so
-      // it never reaches WayFlow. The builder spreads author inputs FIRST, then
-      // overwrites the dispatch-owned identity keys, so inputs can neither
-      // smuggle nor override them.
+      // #1193 run-token spine: mint a random per-run credential and record ONLY
+      // its hash BEFORE the blocking sendTask (the same race-free ordering the
+      // context-id pre-bind below uses), then carry the RAW token in the initial
+      // message under a reserved key. The loader pops + scrubs that key and
+      // attaches the token to first-party callbacks host-anchored to
+      // CINATRA_BASE_URL; it is now the ONLY accepted run identity on those
+      // surfaces. The builder spreads author inputs FIRST, then overwrites the
+      // dispatch-owned identity keys, so inputs can neither smuggle nor override
+      // them. Resumed legs mint their own credential — see
+      // wayflow-run-token-carrier.ts.
+      //
+      // The dispatcher-signed `cinatra_run_binding` that used to ride here is
+      // RETIRED with the legacy llm-bridge selection precedence it fed.
       const runToken = mintRunToken();
       await setAgentRunTokenHash(runId, runToken.tokenHash);
       const initialMessagePayload = buildWayflowInitialMessagePayload({
         inputParams: run.inputParams,
         runId: run.id,
-        runBinding,
         runToken: runToken.token,
       });
       // #813: bind a fasta2a contextId to the run BEFORE the blocking sendTask.

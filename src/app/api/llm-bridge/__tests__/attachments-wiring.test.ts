@@ -2,7 +2,8 @@
  * Bridge end-to-end attachment wiring.
  *
  * Request-bound resolver invariant: ports are built ONLY from a run resolved
- * via the auth-injected x-cinatra-a2a-context-id header. A caller-supplied
+ * via the dispatch-minted X-Cinatra-Run-Token header (#1193 — the
+ * x-cinatra-a2a-context-id serving channel is retired). A caller-supplied
  * body.agent_run_id CANNOT select the resolver namespace. If both context
  * and body resolve, they MUST match.
  *
@@ -19,6 +20,8 @@ const {
   resolveConfiguredLlmRuntimeMock,
   getLlmMcpCredentialsMock,
   readAgentRunByContextIdMock,
+  readAgentRunByTokenHashMock,
+  readAgentRunByIdMock,
   consoleWarnSpy,
 } = vi.hoisted(() => ({
   runResolvedSkillAwareDeterministicLlmTaskMock: vi.fn(
@@ -38,6 +41,8 @@ const {
     (): { clientId: string; clientSecret: string } | null => null,
   ),
   readAgentRunByContextIdMock: vi.fn(),
+  readAgentRunByTokenHashMock: vi.fn(),
+  readAgentRunByIdMock: vi.fn(),
   consoleWarnSpy: vi.spyOn(console, "warn").mockImplementation(() => {}),
 }));
 
@@ -84,6 +89,8 @@ vi.mock("@cinatra-ai/agents", async () => {
   const { z } = await import("zod");
   return {
     readAgentRunByContextId: readAgentRunByContextIdMock,
+    readAgentRunByTokenHash: readAgentRunByTokenHashMock,
+    readAgentRunById: readAgentRunByIdMock,
     // Capability-matrix helpers consumed by _llm-dispatch.ts (engineering#417).
     // Pure mirrors of llm-provider-policy.ts so the dispatch capability gate +
     // actionable 503 message resolve without the heavy real barrel.
@@ -147,6 +154,7 @@ vi.mock("@cinatra-ai/agents", async () => {
 let POST: (req: Request) => Promise<Response>;
 const BRIDGE_TOKEN = "test-token-32chars-XYZXYZXYZXYZ";
 const CONTEXT_ID = "ctx-abc";
+const RUN_TOKEN = "raw-run-token-attachments";
 const ATT1 = {
   artifactId: "a1",
   representationRevisionId: "v1",
@@ -198,7 +206,7 @@ beforeEach(async () => {
 
 describe("Bridge attachment wiring (request-bound ports)", () => {
   it("LEGACY: no attachments → orchestrate call OMITS both keys (byte-identical)", async () => {
-    const res = await POST(makeReq({ user: "hello", agent_run_id: "r1" }));
+    const res = await POST(makeReq({ user: "hello" }));
     expect(res.status).toBe(200);
     const arg = dispatchArg();
     expect("attachments" in arg).toBe(false);
@@ -206,27 +214,36 @@ describe("Bridge attachment wiring (request-bound ports)", () => {
     expect(readAgentRunByContextIdMock).not.toHaveBeenCalled();
   });
 
-  it("REQUEST-BOUND: attachments + auth-injected x-cinatra-a2a-context-id → ports scoped to run.orgId", async () => {
-    readAgentRunByContextIdMock.mockResolvedValue({
+  it("REQUEST-BOUND: attachments + the dispatch-minted run token → ports scoped to run.orgId", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue({
       id: "r1",
       orgId: "org-tenant-A",
+      runBy: null,
+    });
+    readAgentRunByIdMock.mockResolvedValue({
+      id: "r1",
+      orgId: "org-tenant-A",
+      runBy: null,
     });
     const res = await POST(
       makeReq(
         { user: "see attached", attachments: [ATT1] },
-        { "x-cinatra-a2a-context-id": CONTEXT_ID },
+        { "x-cinatra-run-token": RUN_TOKEN },
       ),
     );
     expect(res.status).toBe(200);
     const arg = dispatchArg();
     expect(arg.attachments).toEqual([ATT1]);
     expect(arg.attachmentResolverPorts).toBeDefined();
-    expect(readAgentRunByContextIdMock).toHaveBeenCalledWith(CONTEXT_ID);
+    // Selected by the SERVER-DERIVED id the token resolved, never a body id.
+    expect(readAgentRunByIdMock).toHaveBeenCalledWith("r1");
   });
 
-  it("FORGED agent_run_id ALONE (no context header) → ports OMITTED", async () => {
-    // Caller-supplied agent_run_id MUST NOT be sufficient to select a
-    // tenant orgId for the resolver — that's the exfiltration vector.
+  it("FORGED agent_run_id ALONE (no token) → REFUSED (#1193)", async () => {
+    // Caller-supplied agent_run_id MUST NOT be sufficient to select a tenant
+    // orgId for the resolver — that's the exfiltration vector. It never was;
+    // #1193 additionally refuses the request instead of serving it with the
+    // claim silently dropped.
     const res = await POST(
       makeReq({
         user: "see attached",
@@ -234,18 +251,23 @@ describe("Bridge attachment wiring (request-bound ports)", () => {
         attachments: [ATT1],
       }),
     );
-    expect(res.status).toBe(200);
-    const arg = dispatchArg();
-    // attachments still pass — Decision A degrades them to manifest in
-    // the orchestration entry-resolver.
-    expect(arg.attachments).toEqual([ATT1]);
-    expect("attachmentResolverPorts" in arg).toBe(false);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ code: "run_token_absent" }),
+    );
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
   });
 
-  it("MISMATCH between body.agent_run_id and context-id-resolved run → ports OMITTED", async () => {
-    readAgentRunByContextIdMock.mockResolvedValue({
-      id: "ctx-r1",
+  it("MISMATCH between body.agent_run_id and the TOKEN-resolved run → REFUSED", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue({
+      id: "tok-r1",
       orgId: "org-tenant-A",
+      runBy: null,
+    });
+    readAgentRunByIdMock.mockResolvedValue({
+      id: "tok-r1",
+      orgId: "org-tenant-A",
+      runBy: null,
     });
     const res = await POST(
       makeReq(
@@ -254,20 +276,22 @@ describe("Bridge attachment wiring (request-bound ports)", () => {
           agent_run_id: "body-r2", // mismatch
           attachments: [ATT1],
         },
-        { "x-cinatra-a2a-context-id": CONTEXT_ID },
+        { "x-cinatra-run-token": RUN_TOKEN },
       ),
     );
-    expect(res.status).toBe(200);
-    const arg = dispatchArg();
-    expect(arg.attachments).toEqual([ATT1]);
-    expect("attachmentResolverPorts" in arg).toBe(false);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ code: "run_mismatch" }),
+    );
   });
 
   it("user_envelope=true: body.user JSON {text,attachments} parsed; merged with body.attachments", async () => {
-    readAgentRunByContextIdMock.mockResolvedValue({
+    readAgentRunByTokenHashMock.mockResolvedValue({
       id: "r1",
       orgId: "org-X",
+      runBy: null,
     });
+    readAgentRunByIdMock.mockResolvedValue({ id: "r1", orgId: "org-X", runBy: null });
     const res = await POST(
       makeReq(
         {
@@ -275,7 +299,7 @@ describe("Bridge attachment wiring (request-bound ports)", () => {
           user_envelope: true,
           attachments: [ATT2],
         },
-        { "x-cinatra-a2a-context-id": CONTEXT_ID },
+        { "x-cinatra-run-token": RUN_TOKEN },
       ),
     );
     expect(res.status).toBe(200);
@@ -287,7 +311,7 @@ describe("Bridge attachment wiring (request-bound ports)", () => {
 
   it("user_envelope flag ABSENT: a JSON-shaped user is preserved VERBATIM", async () => {
     const raw = JSON.stringify({ text: "hi" });
-    const res = await POST(makeReq({ user: raw, agent_run_id: "r1" }));
+    const res = await POST(makeReq({ user: raw }));
     expect(res.status).toBe(200);
     const arg = dispatchArg();
     expect(arg.user).toBe(raw);
@@ -304,12 +328,12 @@ describe("Bridge attachment wiring (request-bound ports)", () => {
     expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
   });
 
-  it("readAgentRunByContextId returns null → ports OMITTED (no cross-tenant default)", async () => {
-    readAgentRunByContextIdMock.mockResolvedValue(null);
+  it("an unresolvable run token → ports OMITTED (no cross-tenant default)", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(null);
     const res = await POST(
       makeReq(
         { user: "x", attachments: [ATT1] },
-        { "x-cinatra-a2a-context-id": CONTEXT_ID },
+        { "x-cinatra-run-token": RUN_TOKEN },
       ),
     );
     expect(res.status).toBe(200);

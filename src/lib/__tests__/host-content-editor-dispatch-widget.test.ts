@@ -31,6 +31,17 @@ const readLatestAgentVersionIdForTemplate = vi.fn<(id: string) => Promise<unknow
 const transitionRunStatus = vi.fn<(...a: unknown[]) => Promise<void>>(async () => {});
 vi.mock("@cinatra-ai/agents", () => ({
   createAgentRun: (input: { id: string }, authority?: unknown) => createAgentRun(input, authority),
+  // #1193: the carrier run now also mints + persists a per-run token and embeds
+  // the RAW value in the initial message. Mirror the real builder's
+  // spread-then-overwrite so the identity keys stay dispatch-owned.
+  buildInitialMessagePayloadWithRunToken: async (
+    inputParams: Record<string, unknown> | null | undefined,
+    runId: string,
+  ) => ({
+    ...(inputParams ?? {}),
+    cinatra_run_id: runId,
+    __cinatra_run_token__: `raw-token-for-${runId}`,
+  }),
   readAgentTemplateByPackageName: (pkg: string) => readAgentTemplateByPackageName(pkg),
   readLatestAgentVersionIdForTemplate: (id: string) => readLatestAgentVersionIdForTemplate(id),
   transitionRunStatus: (...a: unknown[]) => transitionRunStatus(...a),

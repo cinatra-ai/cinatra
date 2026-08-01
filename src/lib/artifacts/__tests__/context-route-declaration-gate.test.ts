@@ -27,6 +27,8 @@ vi.mock("@cinatra-ai/agents", () => ({
 }));
 vi.mock("@cinatra-ai/agents/agent-runtime-mount", () => ({
   resolveAgentRuntimeMountDir: () => MOUNT_ROOT,
+  // cinatra#2297 — dev-gated second read root; inert (gate closed) here.
+  resolveDevExtensionSourceRoot: () => join(MOUNT_ROOT, "__no_dev_source__"),
 }));
 vi.mock("@/lib/wayflow-bridge-auth", () => ({
   isAuthorizedBridgeRequest: () => true,
@@ -180,9 +182,14 @@ describe("declaration re-anchor is gated on the run-token path (route level)", (
     expect(res.trustedSlotPackageName).toBe(CHILD_PKG);
   });
 
-  it("the SAME call served via the legacy context-id header fails closed", async () => {
+  it("the SAME call with NO run token fails closed even earlier (#1193 retirement)", async () => {
+    // Pre-#1193 this reached the attestation and failed there with
+    // `attestation_node_unrecognized`, because the legacy context-id channel
+    // still SELECTED the run (and the declaration re-anchor was gated off that
+    // weaker path). The channel is retired, so the request is now refused at run
+    // resolution — strictly earlier, and for the more fundamental reason.
     await deriveContextRouteContext(
-      req(attestedHeaders()), // no run token ⇒ servedBy = context_id
+      req(attestedHeaders()), // no run token
       composedBody(),
       "resolve",
     ).then(
@@ -193,7 +200,7 @@ describe("declaration re-anchor is gated on the run-token path (route level)", (
         expect(e).toBeInstanceOf(ContextRouteError);
         const err = e as InstanceType<typeof ContextRouteError>;
         expect(err.status).toBe(403);
-        expect(err.code).toBe("attestation_node_unrecognized");
+        expect(err.code).toBe("run_token_absent");
       },
     );
   });

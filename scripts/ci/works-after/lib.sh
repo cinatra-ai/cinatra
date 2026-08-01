@@ -33,6 +33,26 @@ wa_group_end()   { echo "::endgroup::"; }
 # CI installs node via actions/setup-node; locally the orchestrator sources nvm.
 wa_node() { node "$@"; }
 
+# wa_matrix_pin <serviceId> [--coupled <imageRepo>] [--tag] — the DIGEST-BOUND
+# image the upgrade matrix (config/upgrade/upgrade-matrix.json) records for a
+# service, read at RUNTIME through the shared fail-closed consumption contract
+# (scripts/upgrade/resolve-transition.mjs --pin).
+#
+# WHY: an arm's candidate default must be the pin the repo actually ships. A
+# hand-copied digest literal here was a THIRD carrier of a value docker-compose.yml
+# and the matrix already carry — Renovate pairs those two in one PR (cinatra#1863)
+# but knows nothing about a fixture literal, so every digest wave was born red on
+# the drift guard (cinatra#2194) until a human hand-synced this file (cinatra#2304).
+# Deriving deletes the carrier: there is one source of truth, and the compose↔matrix
+# equality is gated by scripts/check-upgrade-matrix.mjs check #4.
+#
+# Fail-closed: unknown service, a missing/ambiguous coupled image, a pin that is
+# not digest-bound, or matrix revision skew all exit non-zero, and the arm's
+# `set -e` turns that into a refusal rather than a silently floating image.
+wa_matrix_pin() {
+  node "${REPO_ROOT}/scripts/upgrade/resolve-transition.mjs" --pin "$@"
+}
+
 # wa_wait_tcp <container> <port> <retries> <sleep_s> — wait until a TCP port
 # inside <container> accepts connections (probed from the host via docker exec
 # using the container's own runtime where possible). Generic readiness gate.

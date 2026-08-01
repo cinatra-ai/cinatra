@@ -2141,6 +2141,14 @@ async function handleAgentBuilderRunResume(
       }).catch((e) => {
         console.warn(`[handleAgentBuilderRunResume] writeHitlPrompt failed run=${run.id}`, e);
       });
+      // #1193 resume carrier: mint this leg's per-run credential and persist its
+      // hash BEFORE the blocking sendTask, then carry the RAW token in the A2A
+      // message METADATA. Kept in lockstep with the UI resume path
+      // (review-task-actions.ts) — both drive the same HITL gate, so both must
+      // carry run identity into the resumed leg. Metadata (not text) because
+      // `resumeText` reaches the gate's InputMessageNode VERBATIM.
+      const { mintResumeRunTokenMetadata } = await import("../wayflow-run-token-carrier");
+      const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
       // Send into the existing context so fasta2a routes to the paused conversation.
       const task = await client.sendTask({
         message: {
@@ -2149,6 +2157,7 @@ async function handleAgentBuilderRunResume(
           messageId: randomUUID(),
           contextId: run.a2aContextId,
           parts: [{ kind: "text", text: resumeText }],
+          metadata: resumeMetadata,
         },
         configuration: { acceptedOutputModes: ["text"] },
       });

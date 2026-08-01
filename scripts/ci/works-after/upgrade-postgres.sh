@@ -57,10 +57,12 @@ source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 # HOLD (docker-compose.yml pins this exact digest), so Case B proves the 15 -> 17
 # exception onto the bytes the hold actually ships. Sources are bare majors (no
 # canonical field digest — cinatra#1417).
+# The TARGET defaults are DERIVED from the matrix at runtime (wa_matrix_pin —
+# never a copied digest literal, cinatra#2304).
 PG_CASEA_FROM_TAG="${PG_CASEA_FROM_TAG:-17-alpine}"
-PG_CASEA_TO_TAG="${PG_CASEA_TO_TAG:-18-alpine@sha256:9a8afca54e7861fd90fab5fdf4c42477a6b1cb7d293595148e674e0a3181de15}"
+PG_CASEA_TO_TAG="${PG_CASEA_TO_TAG:-$(wa_matrix_pin platform-postgres --tag)}"
 PG_CASEB_FROM_TAG="${PG_CASEB_FROM_TAG:-15-alpine}"
-PG_CASEB_TO_TAG="${PG_CASEB_TO_TAG:-17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193}"
+PG_CASEB_TO_TAG="${PG_CASEB_TO_TAG:-$(wa_matrix_pin nango-postgres --tag)}"
 
 RUN_ID="wa-upgpg-$$"
 SEED="${RUN_ID}-seed"

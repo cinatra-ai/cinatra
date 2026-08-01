@@ -39,6 +39,7 @@ import * as https from "node:https";
 import type { ResolvedEnvironmentMount } from "../environment/mount";
 import type {
   ExecResult,
+  ExecutionAuditAdmission,
   ExecutionAuditRecord,
   ExecutionAuditReserver,
   ExecutionAuditSink,
@@ -111,6 +112,8 @@ export type ExecAuditRelay = {
   auditSink: ExecutionAuditSink;
   /** Pass to `ExecutionBrokerOptions.auditReserver` (cinatra#2266 G1). */
   auditReserver: ExecutionAuditReserver;
+  /** Pass to `ExecutionBrokerOptions.auditAdmission` (cinatra#2266 G5). */
+  auditAdmission: ExecutionAuditAdmission;
   /** Pass to `ExecutionBrokerOptions.stdioSink`. */
   stdioSink: ExecutionStdioSink;
   /** READ the un-acknowledged prefix. Non-destructive: repeat it and the head
@@ -165,6 +168,12 @@ export function createAuditRelay(opts: {
         commit: (record: ExecutionAuditRecord) => reservation.commit(record),
       };
     },
+    auditAdmission: () => {
+      const verdict = spool.admission();
+      return verdict.admitted
+        ? { admitted: true as const }
+        : { admitted: false as const, message: verdict.message };
+    },
     stdioSink: (entry: ExecutionStdioEntry): void => {
       stdio.push(entry);
       while (stdio.length > maxStdio) {
@@ -186,6 +195,7 @@ export function createAuditRelay(opts: {
         durable: spool.durable,
         refusedReservations: stats.refusedReservations,
         recoveredUnknown: stats.recoveredUnknown,
+        saturation: stats.saturation,
         // Audit records are never dropped for capacity any more; the field
         // stays on the wire (and stays 0) so a reader that checks it keeps
         // working and a future producer of a real gap has somewhere to say so.
@@ -394,6 +404,7 @@ export function createBrokerDispatch(
             durable: false,
             refusedReservations: 0,
             recoveredUnknown: 0,
+            saturation: { state: "open", episodes: 0 },
             droppedAudit: 0,
             droppedStdio: 0,
             relayed: false,
@@ -453,6 +464,10 @@ export function createBrokerDispatch(
           executingCount: config.broker.executingCount,
           atMs: now(),
           ...(composite ? { composite } : {}),
+          // G3: the per-VOLUME spool identity, so a fleet router can tell one
+          // replica from another behind one logical mTLS identity without
+          // draining anything.
+          ...(config.relay ? { spoolId: config.relay.spool.spoolId } : {}),
         };
         // 200 EVEN WHEN THE COMPOSITE IS NOT OK. The broker answered, and that
         // answer carries the diagnosis; collapsing it into a transport-level

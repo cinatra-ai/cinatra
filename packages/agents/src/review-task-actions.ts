@@ -546,6 +546,14 @@ export async function approveReviewTaskInternal(
     // state-machine handler. Discarding the Task and unconditionally
     // transitioning pending_approval -> running would drop multi-gate flows
     // after the first HITL gate.
+    // #1193 resume carrier: mint this leg's per-run credential and persist its
+    // hash BEFORE the blocking sendTask, then carry the RAW token in the A2A
+    // message METADATA. This is the HITL-gate resume, so it is the leg in which
+    // /api/context-finalize executes — without the carrier the interactive
+    // context selection has no run identity at all. Metadata (not text) because
+    // `resumeText` is passed to the gate's InputMessageNode VERBATIM.
+    const { mintResumeRunTokenMetadata } = await import("./wayflow-run-token-carrier");
+    const resumeMetadata = await mintResumeRunTokenMetadata(run.id);
     const task = await client.sendTask({
       message: {
         role: "user",
@@ -553,6 +561,7 @@ export async function approveReviewTaskInternal(
         messageId: randomUUID(),
         contextId: run.a2aContextId,
         parts: [{ kind: "text", text: resumeText }],
+        metadata: resumeMetadata,
       },
       configuration: { acceptedOutputModes: ["text"] },
     });

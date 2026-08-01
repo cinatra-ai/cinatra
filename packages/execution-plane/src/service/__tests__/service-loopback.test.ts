@@ -26,6 +26,7 @@ import type {
   SandboxWorker,
 } from "../../types";
 import { BrokerServiceClient, createRemoteSandboxExecutor } from "../broker-client";
+import { BrokerFleetClient, FleetRoutingError } from "../broker-fleet";
 import {
   createBrokerService,
   createAuditRelay,
@@ -681,6 +682,10 @@ describe("broker service — audit relay", () => {
       durable: false,
       refusedReservations: 0,
       recoveredUnknown: 0,
+      // No relay ⇒ no spool ⇒ nothing can be saturated. Stated positively
+      // rather than omitted, so "this broker does not spool" and "this broker's
+      // spool is fine" are not the same wire answer (cinatra#2266 G5).
+      saturation: { state: "open", episodes: 0 },
       droppedAudit: 0,
       droppedStdio: 0,
       relayed: false,
@@ -1104,5 +1109,166 @@ describe("worker service — the broker cannot tell the difference", () => {
       body: envelopeBody("removeSkills", { volumeName: "v" }, EXEC_PROTOCOL_VERSION),
     });
     expect(answer.status).toBe(401);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FLEET-SAFE DELIVERY over the REAL wire (cinatra#2266 G3, slice 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * TWO REAL BROKER SERVERS, two real spools, one fleet router — the end-to-end
+ * half of G3. `broker-fleet.test.ts` proves the router refuses correctly at
+ * every seam; these arms prove the property the refusals exist for, across a
+ * real mTLS handshake to two independent processes-worth of state.
+ *
+ * The replicas deliberately share ONE logical mTLS identity (both present the
+ * same `broker-server` leaf, minted for the same instance), because that is the
+ * deployment shape G3 is written against: the certificate cannot tell replica A
+ * from replica B, so nothing at the transport layer can keep a read and its
+ * acknowledgement together. Only the routing can.
+ */
+describe("broker fleet — two replicas, one identity, two volumes", () => {
+  const fleetRecord = (jobId: string, seq = 0): ExecutionAuditRecord => ({
+    jobId,
+    orgId: "org-1",
+    userId: "user-1",
+    surface: "agent_run",
+    command: "printf hi",
+    cwd: "/workspace",
+    seq,
+    decision: "executed",
+    effectivePolicy: { egressMode: "none", limits: SPEC.limits },
+    atMs: 1234,
+  });
+
+  type Replica = {
+    endpoint: string;
+    broker: FakeBroker;
+    relay: ReturnType<typeof createAuditRelay>;
+    client: BrokerServiceClient;
+  };
+
+  async function startReplica(jobId: string): Promise<Replica> {
+    const relay = createAuditRelay({ spool: createMemoryAuditSpool() });
+    const broker = fakeBroker({ openResult: { ok: true, jobId } });
+    const { port } = await startBroker(broker, { relay });
+    const client = brokerClient(port);
+    return { endpoint: `https://127.0.0.1:${port}`, broker, relay, client };
+  }
+
+  function fleetOf(replicas: Replica[], onGap?: (m: string) => void): BrokerFleetClient {
+    return new BrokerFleetClient({
+      replicas: replicas.map((r) => ({ endpoint: r.endpoint, client: r.client })),
+      ...(onGap ? { onGap } : {}),
+    });
+  }
+
+  it("mints delivery keys that CANNOT collide across replicas, at identical positions", async () => {
+    const a = await startReplica("job-a");
+    const b = await startReplica("job-b");
+    // The SAME position in each spool — record number one on both volumes.
+    await a.relay.auditSink(fleetRecord("job-a"));
+    await b.relay.auditSink(fleetRecord("job-b"));
+
+    const batchA = await a.client.drainAudit();
+    const batchB = await b.client.drainAudit();
+    expect(batchA.spoolId).not.toBe(batchB.spoolId);
+    const keyA = batchA.audit[0]?.deliveryKey;
+    const keyB = batchB.audit[0]?.deliveryKey;
+    expect(keyA).toBe(`${batchA.spoolId}:1`);
+    expect(keyB).toBe(`${batchB.spoolId}:1`);
+    // The property the kernel's unique index depends on: two replicas' record
+    // number one are two rows, not one collapsed into the other.
+    expect(keyA).not.toBe(keyB);
+  });
+
+  it("routes every command for a job to the replica that OPENED it", async () => {
+    const a = await startReplica("job-a");
+    const b = await startReplica("job-b");
+    const fleet = fleetOf([a, b]);
+
+    expect(await fleet.openJob("carrier-1")).toEqual({ ok: true, jobId: "job-a" });
+    expect(await fleet.openJob("carrier-2")).toEqual({ ok: true, jobId: "job-b" });
+    for (let i = 0; i < 3; i += 1) {
+      await fleet.exec("job-a", `a-${i}`, TEST_VOUCHER);
+      await fleet.exec("job-b", `b-${i}`, TEST_VOUCHER);
+    }
+    // Over the REAL wire, to two real servers: no command crossed.
+    expect(a.broker.execCalls.map((c) => c.command)).toEqual(["a-0", "a-1", "a-2"]);
+    expect(b.broker.execCalls.map((c) => c.command)).toEqual(["b-0", "b-1", "b-2"]);
+    // ...and an unpinned job is refused rather than sent to either.
+    expect(await fleet.exec("job-ghost", "echo", TEST_VOUCHER)).toMatchObject({
+      ok: false,
+      reason: "unknown_job",
+    });
+    expect(a.broker.execCalls).toHaveLength(3);
+    expect(b.broker.execCalls).toHaveLength(3);
+  });
+
+  it("MISDELIVERY IS IMPOSSIBLE: a cross-replica ACK never leaves the app, and is refused if forced", async () => {
+    const a = await startReplica("job-a");
+    const b = await startReplica("job-b");
+    await a.relay.auditSink(fleetRecord("job-a"));
+    await b.relay.auditSink(fleetRecord("job-b"));
+    const fleet = fleetOf([a, b]);
+    const [targetA, targetB] = fleet.drainTargets();
+
+    const batchA = await targetA!.drainAudit();
+    const batchB = await targetB!.drainAudit();
+    expect(batchA.audit).toHaveLength(1);
+    expect(batchB.audit).toHaveLength(1);
+
+    // FIRST LINE: the router refuses without a round trip.
+    await expect(
+      targetB!.ackAudit({ spoolId: batchA.spoolId, head: batchA.head }),
+    ).rejects.toBeInstanceOf(FleetRoutingError);
+
+    // SECOND LINE: force the same misroute past the router, straight at the
+    // wire. The BROKER refuses it, and removes nothing.
+    await expect(
+      b.client.ackAudit({ spoolId: batchA.spoolId, head: batchA.head }),
+    ).rejects.toThrow(/ackAudit/);
+    expect((await b.client.drainAudit()).audit).toHaveLength(1);
+    expect((await a.client.drainAudit()).audit).toHaveLength(1);
+
+    // The CORRECTLY routed acknowledgements each commit exactly their own spool.
+    await targetA!.ackAudit({ spoolId: batchA.spoolId, head: batchA.head });
+    expect((await a.client.drainAudit()).audit).toHaveLength(0);
+    expect((await b.client.drainAudit()).audit).toHaveLength(1);
+    await targetB!.ackAudit({ spoolId: batchB.spoolId, head: batchB.head });
+    expect((await b.client.drainAudit()).audit).toHaveLength(0);
+  });
+
+  it("learns each replica's spool identity from health, over the wire, without draining", async () => {
+    const a = await startReplica("job-a");
+    const b = await startReplica("job-b");
+    await a.relay.auditSink(fleetRecord("job-a"));
+    const fleet = fleetOf([a, b]);
+
+    const entries = await fleet.health();
+    expect(entries.every((e) => e.ok)).toBe(true);
+    const observedA = fleet.observedSpoolId(a.endpoint);
+    const observedB = fleet.observedSpoolId(b.endpoint);
+    expect(observedA).toBe(a.relay.spool.spoolId);
+    expect(observedB).toBe(b.relay.spool.spoolId);
+    expect(observedA).not.toBe(observedB);
+    // Nothing was drained to learn it — the record is still there.
+    expect((await a.client.drainAudit()).audit).toHaveLength(1);
+    // And the identity learned from health already guards the ACK.
+    await expect(
+      fleet.drainTargets()[1]!.ackAudit({ spoolId: observedA!, head: 1 }),
+    ).rejects.toBeInstanceOf(FleetRoutingError);
+  });
+
+  it("tears a run down on EVERY replica, not only the pinned one", async () => {
+    const a = await startReplica("job-a");
+    const b = await startReplica("job-b");
+    const fleet = fleetOf([a, b]);
+    await fleet.openJob("carrier-1");
+    // The run's other job lives on B, which no pin for this run names.
+    expect(await fleet.terminateJobsForRun("run-1", { removeWorkspace: true })).toBe(4);
+    expect(a.broker.terminated).toEqual(["run-1"]);
+    expect(b.broker.terminated).toEqual(["run-1"]);
   });
 });

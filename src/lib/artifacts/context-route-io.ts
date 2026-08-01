@@ -1,7 +1,7 @@
 import "server-only";
 
 import { readFile } from "node:fs/promises";
-import { resolveInstalledOasPathForRead } from "@cinatra-ai/agents/installed-oas-path";
+import { probeInstalledOasPathForRead } from "@cinatra-ai/agents/installed-oas-path";
 import {
   readAgentRunById,
   readAgentRunByContextId,
@@ -41,8 +41,10 @@ import {
 } from "./context-attestation";
 import {
   recordContextRouteResolutionPath,
+  recordContextTrustRootOasMiss,
   type ContextRouteServedBy,
 } from "./context-route-observability";
+import { resolveExtensionDataRoot } from "@/lib/extension-data-root";
 
 // ---------------------------------------------------------------------------
 // Heavy IO for the context routes: auth + run + actor derivation (reuses the
@@ -55,17 +57,45 @@ async function readInstalledOas(
   packageName: string,
 ): Promise<Record<string, unknown> | null> {
   // cinatra#1196 — multi-vendor trust root: resolve the installed OAS via the
-  // SHARED runtime-mount resolver (scope-derived
-  // `<mount>/<vendor>/<slug>/cinatra/oas.json`), not the historical
-  // first-party-only regex + literal "cinatra-ai" path segment. An operator/
-  // third-party-vendor agent resolves identically to a first-party one; an
-  // unscoped/malformed name or an uninstalled package still yields null
-  // (→ oas_missing at the front door, unchanged #1197 rejection surface).
-  const oasPath = resolveInstalledOasPathForRead(packageName);
-  if (!oasPath) return null;
+  // SHARED resolver (scope-derived `<root>/<vendor>/<slug>/cinatra/oas.json`),
+  // not the historical first-party-only regex + literal "cinatra-ai" path
+  // segment. An operator/third-party-vendor agent resolves identically to a
+  // first-party one; an unscoped/malformed name or an uninstalled package
+  // still yields null (→ oas_missing at the front door, unchanged #1197
+  // rejection surface).
+  //
+  // cinatra#2297 — the PROBE form of that resolver. In production it is the
+  // same single deploy-owned runtime mount, resolved by the same guard and the
+  // same naming rule; in DEV ONLY it also probes the git-native dev source
+  // tree, the tree a stock `setup:dev` actually ingests and the dev wayflow
+  // container bind-mounts. Every miss now says WHICH roots were probed.
+  //
+  // `resolveExtensionDataRoot()` is called ONLY on the two miss branches, never
+  // on the hit path: with no `CINATRA_EXTENSION_DATA_ROOT` set it falls through
+  // to a SYNCHRONOUS Postgres metadata read, so it is paid on the rejection
+  // path (already the slow, logged path) and nowhere else.
+  const probe = probeInstalledOasPathForRead(packageName);
+  if (!probe.path) {
+    recordContextTrustRootOasMiss({
+      packageName,
+      reason: "not_found",
+      extensionDataRoot: resolveExtensionDataRoot(),
+      roots: probe.roots,
+    });
+    return null;
+  }
   try {
-    return JSON.parse(await readFile(oasPath, "utf8")) as Record<string, unknown>;
+    return JSON.parse(await readFile(probe.path, "utf8")) as Record<string, unknown>;
   } catch {
+    // Resolved but unreadable/unparseable — a distinct, equally opaque failure
+    // (the front door still answers oas_missing). Name the file.
+    recordContextTrustRootOasMiss({
+      packageName,
+      reason: "unreadable",
+      extensionDataRoot: resolveExtensionDataRoot(),
+      roots: probe.roots,
+      resolvedPath: probe.path,
+    });
     return null;
   }
 }
@@ -213,33 +243,49 @@ export async function deriveContextRouteContext(
       throw new ContextRouteError(403, "forbidden", "bridge auth failed");
     }
   }
-  // 2. Resolve the parent run. Precedence (fail-closed; a body id can never
-  //    SELECT the run, only be cross-checked):
-  //      (a) #1193 run-token spine (W2): the dispatch-minted per-run token in
-  //          the x-cinatra-run-token header is the STRONGEST binding — a single
-  //          unique-index probe (verifyRunToken, no body fallback, no
-  //          newest-wins). Present-but-unresolvable ⇒ 403 with NO fallback to
-  //          the context-id header or the body.
-  //      (b) legacy: the auth-injected x-cinatra-a2a-context-id header (the
-  //          TRUSTED binding pre-token).
-  //      (c) legacy dev-loopback: the body parentRunId (only when neither
-  //          header is present).
-  //    (b)/(c) remain until the WayFlow image that attaches the token has rolled
-  //    everywhere; the which-path log below feeds the W3 legacy-removal gate.
+  // 2. Resolve the parent run. The dispatch-minted per-run token in the
+  //    x-cinatra-run-token header is the ONLY accepted run identity (#1193
+  //    legacy retirement): a single unique-index probe (verifyRunToken), no
+  //    newest-wins tie-break, no fallback. A body id can never SELECT the run —
+  //    only be cross-checked.
+  //
+  //    RETIRED HERE: the legacy `context_id` serving channel (the auth-injected
+  //    x-cinatra-a2a-context-id header) and the legacy dev-loopback `body`
+  //    channel. Both could promote a run from a signal weaker than the one
+  //    credential, so both are gone; an absent or unresolvable token now fails
+  //    CLOSED with a distinct stable code.
+  //
+  //    The context-id HEADER is still read and still required — it is the
+  //    attestation context for the #907 per-node composed-child binding in step
+  //    3, and a token-selected run cross-checks it. Retiring the channel means it
+  //    no longer SELECTS a run, not that it left the wire.
+  //
+  //    Every first-party task carries a token: the worker dispatch and the host
+  //    content-editor dispatch mint one into the initial message, and each
+  //    RESUMED leg mints its own into the A2A message metadata (see
+  //    packages/agents/src/wayflow-run-token-carrier.ts). The resumed leg is the
+  //    one that matters most here — the compiled context subflow interrupts at
+  //    the HITL gate, so /api/context-finalize ALWAYS runs in a resumed task.
   const a2aContextId = req.headers.get("x-cinatra-a2a-context-id");
   const runTokenHeader = req.headers.get(RUN_TOKEN_HEADER);
   let run: AgentRunRecord | null = null;
-  let servedBy: ContextRouteServedBy;
-  if (runTokenHeader !== null) {
-    // (a) Token present ⇒ it is the trust root. verifyRunToken hashes it and
-    // resolves the run by the unique index. Absent/empty or unresolvable both
-    // fail CLOSED here — NEVER fall back to the context-id header or the body.
+  const servedBy: ContextRouteServedBy = "run_token";
+  {
+    // The token is the trust root. verifyRunToken hashes it and resolves the run
+    // by the unique index. ABSENT and UNRESOLVABLE both fail CLOSED, with
+    // DISTINCT codes so an operator can tell "the loader never attached a
+    // credential" (a wiring/rollout fault) from "a credential was presented and
+    // did not resolve" (tampering, or a run whose credentials were pruned).
     const verified = await verifyRunToken(runTokenHeader, readAgentRunByTokenHash);
     if (!verified.ok) {
       throw new ContextRouteError(
         403,
-        "run_token_unresolvable",
-        "x-cinatra-run-token did not resolve to a run",
+        verified.reason === "absent"
+          ? "run_token_absent"
+          : "run_token_unresolvable",
+        verified.reason === "absent"
+          ? "x-cinatra-run-token is required — run identity rides the run token only"
+          : "x-cinatra-run-token did not resolve to a run",
       );
     }
     // Re-read the FULL record by the SERVER-derived id (never a body id) for the
@@ -280,32 +326,6 @@ export async function deriveContextRouteContext(
         `body parentRunId '${body.parentRunId}' does not match the run-token run`,
       );
     }
-    servedBy = "run_token";
-  } else if (a2aContextId) {
-    // (b) Header present ⇒ it is the TRUSTED binding. Fail CLOSED on an
-    // unresolvable context-id (never fall back to the body id) and reject a
-    // body parentRunId that disagrees.
-    run = await readAgentRunByContextId(a2aContextId);
-    if (!run) {
-      throw new ContextRouteError(
-        403,
-        "context_unresolved",
-        "x-cinatra-a2a-context-id did not resolve to a run",
-      );
-    }
-    if (body.parentRunId && body.parentRunId !== run.id) {
-      throw new ContextRouteError(
-        403,
-        "run_mismatch",
-        `body parentRunId '${body.parentRunId}' does not match the authenticated run`,
-      );
-    }
-    servedBy = "context_id";
-  } else {
-    // (c) No token and no context-id header ⇒ body fallback (dev loopback /
-    // first-call case, matching /api/llm-bridge's own fallback behavior).
-    run = await readAgentRunById(body.parentRunId);
-    servedBy = "body";
   }
   if (!run) {
     throw new ContextRouteError(

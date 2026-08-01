@@ -228,6 +228,29 @@ export type ExecutionStdioEntry = {
   stderr: string;
 };
 
+/**
+ * One saturation EPISODE as it crosses the wire (cinatra#2266 G5). Mirrors
+ * `AuditSpoolEpisode` structurally rather than importing it, so the wire
+ * vocabulary keeps its own definition of every shape it carries — the doctrine
+ * this module opens with.
+ */
+export type AuditSpoolEpisodePayload = {
+  id: string;
+  openedAtMs: number;
+  /** Admission attempts refused while the episode was open, and NOT recorded. */
+  refused: number;
+  closedAtMs?: number;
+};
+
+export type AuditSpoolSaturationPayload = {
+  state: "open" | "saturated";
+  /** Episodes this spool has opened, ever. */
+  episodes: number;
+  episode?: AuditSpoolEpisodePayload;
+  /** The most recently closed episode — the RECOVERY, stated not inferred. */
+  lastEpisode?: AuditSpoolEpisodePayload;
+};
+
 export type DrainAuditResultPayload = {
   audit: ExecutionAuditRecord[];
   stdio: ExecutionStdioEntry[];
@@ -269,6 +292,21 @@ export type DrainAuditResultPayload = {
    * means a crash happened and the trail says so.
    */
   recoveredUnknown: number;
+  /**
+   * THE SATURATION STATE MACHINE (cinatra#2266 G5/AC7). `saturated` means the
+   * broker is refusing NEW commands because its audit spool cannot accept
+   * another record — fail-closed, nothing runs unaccounted for — and that those
+   * refusals cost exactly ONE `audit_spool_full` record (the one that opened
+   * `episode`) rather than one per attempt. `episode.refused` is the running
+   * count of attempts refused with no record at all.
+   *
+   * ADDITIVE AND OPTIONAL, so the wire version does NOT move — the same rule
+   * `HealthResultPayload.composite` already rides: an older app simply does not
+   * read the field, and reading it as absent is honest ("this broker does not
+   * report saturation"), never as an all-clear. A version bump here would force
+   * a lockstep redeploy for a field that changes no existing shape.
+   */
+  saturation?: AuditSpoolSaturationPayload;
   /** Records dropped since the last drain because the ring buffer was full.
    *  AUDIT records can no longer be dropped — the spool refuses ADMISSION
    *  instead — so this counts stdio-style loss only and stays 0 for audit. */
@@ -333,6 +371,23 @@ export type HealthResultPayload = {
    * module header's rule and `WORKER_OPS`).
    */
   composite?: ExecCompositeHealth;
+  /**
+   * THE REPLICA'S SPOOL IDENTITY (cinatra#2266 G3). The persisted, per-VOLUME
+   * id of the audit spool this broker owns — the same string that rides every
+   * drain response and is required on every ACK.
+   *
+   * It is on `health` so a fleet router can learn which replica it is talking
+   * to WITHOUT draining: replicas can share one logical mTLS instance identity
+   * while owning different volumes, so the certificate cannot tell them apart
+   * and the spool id is the only thing that can. A router that pins a job to
+   * "the endpoint that answered" and never checks would not notice a replica
+   * being replaced under a stable address.
+   *
+   * ADDITIVE and optional — same rule as `composite`, no version bump. Absent ⇒
+   * the broker holds no spool (an in-process placement) or predates this field,
+   * and a router treats that as "cannot verify", never as "verified".
+   */
+  spoolId?: string;
 };
 
 export type BrokerRequest =

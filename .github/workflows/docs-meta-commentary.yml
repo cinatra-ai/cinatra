@@ -1,0 +1,52 @@
+name: docs-meta-commentary
+
+# Runs the reusable meta-commentary gate (cinatra-ai/ci) against this repo's
+# published surfaces — the top-level README.md and CHANGELOG.md: fails a PR when
+# a published, user-facing page carries meta/implementation commentary about how
+# the docs THEMSELVES are produced (generation mechanics, "forthcoming"/
+# placeholder transition notes, editorial TODOs), narrates work in flight, or
+# names the internal work item / acceptance criterion / decision a capability
+# came from. Wires cinatra-ai/docs#119 into this repo, closing the last gap left
+# by the cinatra-ai/docs#156 rollout (cinatra-ai/docs#160 Gap 4).
+#
+# Both files are clean today, so this is PREVENTIVE, not remedial.
+#
+# SCOPE — EXACTLY TWO FILES, AND DELIBERATELY SO.
+# `paths` lists `README.md` and `CHANGELOG.md` and nothing else. This repo's
+# `docs/` tree is IMPLEMENTATION-FACING by design: it documents internals for
+# the implementers (human and automated) who build Cinatra, is enforced as such
+# by this repo's own docs-tree guard, and is recorded as
+# `exempt-engineering-internal` on every path in the ci inventory. It is not a
+# published user-facing surface and this policy does not apply to it.
+#
+# That exemption comes from PATH SELECTION and nothing else. The gate engine has
+# no semantic notion of an "internal" tree and must never acquire one — a tree it
+# is not handed is never selected and therefore never read. So: do NOT add a
+# `docs` entry, and do NOT widen an entry to a directory that contains it. If a
+# genuinely published surface is ever added to this repo, add its literal path
+# here AND record it in cinatra-ai/ci `config/meta-commentary-inventory.json`.
+#
+# NO `paths:` TRIGGER FILTER, on purpose: the gate must run on every PR that
+# could touch a published surface, and a trigger-level filter is exactly how a
+# docs-only PR would come to skip it silently. Narrowing happens only through the
+# scanner's explicit configured path list below.
+#
+# Both the workflow ref (`@<sha>`) and the `ref` input are pinned to the SAME
+# cinatra-ai/ci commit SHA, so the gate engine is not pulled from mutable main.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  meta-commentary-gate:
+    uses: cinatra-ai/ci/.github/workflows/meta-commentary-gate.yml@1a34bf98a2e3c7cdeb08ed662670da628e06fd1f # v0.1.3-next.1a34bf9
+    with:
+      paths: |
+        README.md
+        CHANGELOG.md
+      ref: 1a34bf98a2e3c7cdeb08ed662670da628e06fd1f

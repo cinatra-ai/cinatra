@@ -61,6 +61,7 @@
     "./run-stepper-steps": "./src/run-stepper-steps.ts",
     "./hitl-conversation-panel": "./src/hitl-conversation-panel.tsx",
   "./owner-containment-port": "./src/owner-containment-port.ts",
+  "./cms-repaired-capture-port": "./src/cms-repaired-capture-port.ts",
   "./lease-expiry-finalizer": "./src/lease-expiry-finalizer.ts"
   },
   "scripts": {

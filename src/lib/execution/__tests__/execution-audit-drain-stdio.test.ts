@@ -19,15 +19,19 @@ vi.mock("@cinatra-ai/agents", () => ({
 import {
   AUDIT_DRAIN_MAX_RECORDS,
   AUDIT_DRAIN_MAX_STDIO_ENTRIES,
+  MAX_REPORTED_EPISODES,
   drainAuditPasses,
   type AuditDrainSource,
 } from "@/lib/execution/execution-broker-remote-construct";
 import {
+  AUDIT_SPOOL_EPISODE_RESERVE_BYTES,
+  AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES,
   createAuditRelay,
   createMemoryAuditSpool,
   DEFAULT_SANDBOX_LIMITS,
   type AckAuditPayload,
   type DrainAuditPayload,
+  type DrainAuditResultPayload,
   type ExecAuditRelay,
   type ExecutionAuditRecord,
 } from "@cinatra-ai/execution-plane";
@@ -235,5 +239,174 @@ describe("drainAuditPasses — read, write, then acknowledge", () => {
     await drainAuditPasses(source, writer, { onGap: (m) => gaps.push(m) });
     expect(gaps.filter((g) => g.includes("outcome_unknown"))).toHaveLength(1);
     expect(gaps.filter((g) => g.includes("pre-dispatch reservation"))).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SATURATION EPISODE ON THE WIRE (cinatra#2266 G5/AC7, slice 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * A saturated spool refuses commands and writes NO record for the refusals —
+ * that is the mechanism, not an omission. So the count of what was refused
+ * reaches an operator through the drain response and nowhere else, and this is
+ * the loop that has to surface it. The RECOVERY has the opposite hazard:
+ * `lastEpisode` is durable state that rides every response from then on, so a
+ * loop reporting it unconditionally would print a recovery line every fifteen
+ * seconds for the life of the broker.
+ */
+describe("drainAuditPasses — the saturation episode", () => {
+  const writer = async (r: ExecutionAuditRecord) => ({
+    state: "inserted" as const,
+    id: `row-${r.deliveryKey}`,
+  });
+
+  function saturationSource(
+    saturation: DrainAuditResultPayload["saturation"],
+  ): AuditDrainSource {
+    return {
+      drainAudit: async () => ({
+        audit: [],
+        stdio: [],
+        head: 0,
+        spoolId: "spool-1",
+        remaining: 0,
+        durable: true,
+        refusedReservations: 0,
+        recoveredUnknown: 0,
+        droppedAudit: 0,
+        droppedStdio: 0,
+        relayed: true,
+        ...(saturation ? { saturation } : {}),
+      }),
+      ackAudit: async () => {
+        throw new Error("must not acknowledge an empty batch");
+      },
+    };
+  }
+
+  it("reports an OPEN episode, with the count of refusals that produced no record", async () => {
+    const gaps: string[] = [];
+    await drainAuditPasses(
+      saturationSource({
+        state: "saturated",
+        episodes: 1,
+        episode: { id: "spool-1:episode:1", openedAtMs: 1_700_000_000_000, refused: 4_321 },
+      }),
+      writer,
+      { onGap: (m) => gaps.push(m) },
+    );
+    const reported = gaps.filter((g) => g.includes("SATURATED"));
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toContain("spool-1:episode:1");
+    expect(reported[0]).toContain("4321");
+    // The posture is stated, not implied: nothing ran unaccounted for.
+    expect(reported[0]).toContain("Nothing ran unaccounted for");
+  });
+
+  it("reports a RECOVERY exactly ONCE per episode, however many drains follow", async () => {
+    const gaps: string[] = [];
+    const reportedEpisodes = new Set<string>();
+    const source = saturationSource({
+      state: "open",
+      episodes: 1,
+      lastEpisode: {
+        id: "spool-1:episode:1",
+        openedAtMs: 1_700_000_000_000,
+        refused: 12,
+        closedAtMs: 1_700_000_060_000,
+      },
+    });
+    for (let i = 0; i < 5; i += 1) {
+      await drainAuditPasses(source, writer, { onGap: (m) => gaps.push(m), reportedEpisodes });
+    }
+    const recovered = gaps.filter((g) => g.includes("RECOVERED"));
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toContain("spool-1:episode:1");
+    expect(recovered[0]).toContain("12");
+  });
+
+  it("reports a SECOND episode's recovery — the memo suppresses repeats, not new episodes", async () => {
+    const gaps: string[] = [];
+    const reportedEpisodes = new Set<string>();
+    for (const id of ["spool-1:episode:1", "spool-1:episode:2"]) {
+      await drainAuditPasses(
+        saturationSource({
+          state: "open",
+          episodes: 2,
+          lastEpisode: { id, openedAtMs: 1, refused: 1, closedAtMs: 2 },
+        }),
+        writer,
+        { onGap: (m) => gaps.push(m), reportedEpisodes },
+      );
+    }
+    expect(gaps.filter((g) => g.includes("RECOVERED"))).toHaveLength(2);
+  });
+
+  it("says nothing when the broker reports no saturation at all", async () => {
+    const gaps: string[] = [];
+    await drainAuditPasses(saturationSource(undefined), writer, { onGap: (m) => gaps.push(m) });
+    expect(gaps.filter((g) => g.includes("SATURATED") || g.includes("RECOVERED"))).toHaveLength(0);
+  });
+
+  it("does not report a recovery for an episode that is still OPEN", async () => {
+    // `lastEpisode` without a `closedAtMs` is not a recovery. Reporting it as
+    // one would announce that the plane came back while it is still refusing.
+    const gaps: string[] = [];
+    await drainAuditPasses(
+      saturationSource({
+        state: "open",
+        episodes: 1,
+        lastEpisode: { id: "spool-1:episode:1", openedAtMs: 1, refused: 3 },
+      }),
+      writer,
+      { onGap: (m) => gaps.push(m) },
+    );
+    expect(gaps.filter((g) => g.includes("RECOVERED"))).toHaveLength(0);
+  });
+
+  it("bounds the reported-episode memo so a long-lived loop cannot grow it forever", async () => {
+    const reportedEpisodes = new Set<string>();
+    for (let i = 0; i < MAX_REPORTED_EPISODES + 25; i += 1) {
+      await drainAuditPasses(
+        saturationSource({
+          state: "open",
+          episodes: i + 1,
+          lastEpisode: { id: `spool-1:episode:${i}`, openedAtMs: 1, refused: 1, closedAtMs: 2 },
+        }),
+        writer,
+        { onGap: () => {}, reportedEpisodes },
+      );
+    }
+    expect(reportedEpisodes.size).toBeLessThanOrEqual(MAX_REPORTED_EPISODES);
+  });
+
+  it("surfaces the episode the REAL relay reports for a REAL saturated spool", async () => {
+    // Not a hand-built payload: a real file-less spool driven past its bound,
+    // read through the real relay, reported by the real loop.
+    const gaps: string[] = [];
+    // A bound with room for a couple of reservations and no more, derived from
+    // the spool module's own constants rather than from a literal.
+    const relay = createAuditRelay({
+      spool: createMemoryAuditSpool({
+        maxBytes: AUDIT_SPOOL_EPISODE_RESERVE_BYTES + 3 * AUDIT_SPOOL_TERMINAL_HEADROOM_BYTES,
+      }),
+    });
+    let admitted = 0;
+    for (let i = 0; i < 500; i += 1) {
+      try {
+        await relay.auditReserver(record(`job-${i}`, i));
+        admitted += 1;
+      } catch {
+        break;
+      }
+    }
+    expect(admitted).toBeGreaterThanOrEqual(1);
+    expect(relay.auditAdmission().admitted).toBe(false);
+
+    await drainAuditPasses(sourceOver(relay), writer, { onGap: (m) => gaps.push(m) });
+    const reported = gaps.filter((g) => g.includes("SATURATED"));
+    expect(reported).toHaveLength(1);
+    expect(reported[0]).toContain(relay.spool.spoolId);
   });
 });
