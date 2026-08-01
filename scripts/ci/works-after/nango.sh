@@ -3,7 +3,7 @@ set -euo pipefail
 # works-after :: Nango arm (cinatra#352).
 #
 # Brings up a candidate nango-server (full NANGO_SERVER_IMAGE override — the
-# design's R2 robustness kernel; default = the origin/main digest pin) with its
+# design's R2 robustness kernel; default = the matrix pin, derived at runtime) with its
 # nango-db (postgres, the repo-pinned 17-alpine hold) + a redis, all on an ISOLATED docker network,
 # then runs the connection-store round-trip (rt/nango-roundtrip.ts): create a
 # synthetic `unauthenticated` integration → import a synthetic connection →
@@ -28,7 +28,7 @@ set -euo pipefail
 # so it is not duplicated here. NANGO_DB_TAG lets the lane pin the nango-db
 # major when proving nango-server↔db compatibility.
 #
-# Env: NANGO_SERVER_IMAGE (default = the origin/main digest pin),
+# Env: NANGO_SERVER_IMAGE (default DERIVED from the upgrade matrix at runtime),
 #      NANGO_DB_TAG (default 17-alpine — the compose nango-db validated hold;
 #      CI derives the compose tag, digest stripped), REDIS_TAG (default 8-alpine).
 
@@ -36,7 +36,10 @@ WORKS_AFTER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/ci/works-after/lib.sh
 source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 
-NANGO_SERVER_IMAGE="${NANGO_SERVER_IMAGE:-nangohq/nango-server:hosted@sha256:1b3be71c869cd480c24b2426bbc597e0447808db878896ccaa279f98c295431e}"
+# DERIVED (never a copied literal): the nango-server pin the upgrade matrix
+# couples to nango-postgres — the same digest docker-compose.yml runs, kept equal
+# by the pin-drift check. See wa_matrix_pin in lib.sh (cinatra#2304).
+NANGO_SERVER_IMAGE="${NANGO_SERVER_IMAGE:-$(wa_matrix_pin nango-postgres --coupled nangohq/nango-server)}"
 NANGO_DB_TAG="${NANGO_DB_TAG:-17-alpine}"
 REDIS_TAG="${REDIS_TAG:-8-alpine}"
 RUN_ID="wa-nango-$$"

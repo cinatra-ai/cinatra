@@ -45,11 +45,13 @@ WORKS_AFTER_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${WORKS_AFTER_LIB_DIR}/lib.sh"
 
 # Digest-bound defaults (multi-arch index digests): FROM = the pre-#1339
-# 7-alpine pin (docker-compose.yml documents it as the rollback ref), TO = the
-# current 8-alpine compose pin. An override may be a bare tag (an
+# 7-alpine pin (docker-compose.yml documents it as the rollback ref; the matrix
+# does not carry a retired source, so it stays an explicit literal), TO = the
+# platform-redis matrix pin, DERIVED at runtime (wa_matrix_pin — never a copied
+# digest literal, cinatra#2304). An override may be a bare tag (an
 # intentionally unpinned manual run).
 REDIS_FROM_TAG="${REDIS_FROM_TAG:-7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99}"
-REDIS_TO_TAG="${REDIS_TO_TAG:-8-alpine@sha256:9d317178eceac8454a2284a9e6df2466b93c745529947f0cd42a0fa9609d7005}"
+REDIS_TO_TAG="${REDIS_TO_TAG:-$(wa_matrix_pin platform-redis --tag)}"
 # The MATRIX versions = each tag's major (strip any digest pin first).
 FROM_BARE="${REDIS_FROM_TAG%%@*}"
 TO_BARE="${REDIS_TO_TAG%%@*}"
