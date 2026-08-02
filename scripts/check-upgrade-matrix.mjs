@@ -147,8 +147,38 @@ export function collectProblems({ composeText, matrix, schema }) {
   for (const v of topVolumes) if (!matrixVolumes.has(v)) fail(`completeness: compose volume '${v}' has no matrix service (unclassified state)`);
   for (const v of matrixVolumes) if (!topVolumes.has(v)) fail(`completeness: matrix volume '${v}' is not a top-level compose volume (stale)`);
   const volumeless = matrix.services.filter((s) => !s.volume).map((s) => s.id);
-  const allowedVolumeless = new Set(["graphiti", "twenty-redis"]);
+  // Exactly one volume-less entry, as the header contract states: the DERIVED
+  // graphiti family (its graph lives in Neo4j, so it owns no state of its own).
+  // twenty-redis was allowed here while its compose service declared no volume at
+  // all — the very state that made the fail-closed recreate preflight unable to
+  // identify its data volume and block a fresh isolated install (cinatra#2329).
+  // It now owns `cinatra-twenty-redis`, so the allowance is withdrawn.
+  const allowedVolumeless = new Set(["graphiti"]);
   for (const id of volumeless) if (!allowedVolumeless.has(id)) fail(`completeness: matrix service '${id}' owns no volume and is not an allowed volume-less family`);
+  // 2b. mount completeness — the classified volume must actually be MOUNTED by
+  // its compose service. The two name-set checks above compare the top-level
+  // `volumes:` block against the matrix and never look at the service body, so
+  // deleting a service's `volumes:` mount while leaving the top-level
+  // declaration + matrix entry in place passed all of them clean. That is
+  // precisely the cinatra#2329 shape: the service falls back to the image's
+  // anonymous VOLUME, the resolved compose config carries no named data-volume
+  // mount, and the recreate preflight fails closed on it. Checking the mount is
+  // what makes a regression to an unnamed volume actually red this gate.
+  // (Scope: mount EXISTENCE only. The mount TARGET — /data etc. — is what the
+  // preflight actually filters on, so a volume mounted at the WRONG path would
+  // still pass this check; the matrix carries no per-service data-mount path to
+  // compare against, and adding one is a schema change beyond this fix.)
+  for (const s of matrix.services) {
+    if (!s.volume || !s.composeService) continue;
+    const svc = compose[s.composeService];
+    if (!svc) continue; // existence is reported by check 3 below
+    if (!svc.volumes.has(s.volume))
+      fail(
+        `completeness: matrix service '${s.id}' claims volume '${s.volume}' but compose service ` +
+          `'${s.composeService}' does not mount it (an unmounted named volume leaves the service on an ` +
+          `anonymous mount, which the recreate preflight cannot identify — cinatra#2329)`,
+      );
+  }
 
   // 3. compose-service existence + 4. pin drift
   const composeImages = Object.values(compose).map((s) => s.image).filter(Boolean);

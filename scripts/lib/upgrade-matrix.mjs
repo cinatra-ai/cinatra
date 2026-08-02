@@ -18,7 +18,10 @@ export const MATRIX_PATH = join(HERE, "..", "..", "config", "upgrade", "upgrade-
 // consumer in another repo (cinatra-cli) vendors/reads the matrix and pins its
 // own copy of these two constants; assertMatrixRevision below is how both sides
 // stay fail-closed on skew.
-export const MATRIX_REVISION = 3;
+// rev 4 (cinatra#2329): twenty-redis reclassified from volume-less to owning the
+// named volume `cinatra-twenty-redis`. The schema requires a bump on ANY content
+// change, and `volume` is consumer-visible.
+export const MATRIX_REVISION = 4;
 export const MATRIX_SCHEMA_MAJOR = 1;
 
 /** Load and JSON-parse the matrix (no schema validation — that is the check script's job). */

@@ -1,7 +1,7 @@
 {
   "$schema": "./upgrade-matrix.schema.json",
   "schemaVersion": "1.0.0",
-  "revision": 3,
+  "revision": 4,
   "baselineRelease": "0.1.9",
   "generatedNote": "Supported source->target upgrade matrix for every stateful service in docker-compose.yml. Hand-authored source of truth; completeness + pin-drift + schema conformance are gated by scripts/check-upgrade-matrix.mjs (and the vitest suite scripts/ci/__tests__/upgrade-matrix.test.mjs). Human-readable inventory + rationale: docs/internals/architecture/stateful-service-inventory.md. Slice 1 of the upgrade-paths epic (cinatra#1420 / cinatra#1419). This slice defines the DATA; the CLI preflight + `db upgrade-major` (cinatra-cli#128/#129) and the works-after upgrade-from arm (cinatra#1421/#1422) are the consumers.",
   "stateClasses": [
@@ -253,7 +253,7 @@
     {
       "id": "twenty-redis",
       "composeService": "twenty-redis",
-      "volume": null,
+      "volume": "cinatra-twenty-redis",
       "family": "redis",
       "profile": "twenty",
       "stateClass": "cache",
@@ -261,7 +261,7 @@
       "appManagedSchema": false,
       "upstreamDictated": true,
       "baselinePin": { "image": "redis:7", "major": "7", "digest": null },
-      "notes": "Twenty's Redis (profile twenty). No named volume (ephemeral cache/queue). Upstream-dictated major; discard-recreate on any bump.",
+      "notes": "Twenty's Redis (profile twenty). Persists to a named volume mounted at /data, mirroring its peer plane-redis: the state is still cache/queue (discard-recreate on any bump), but the volume must be NAMED so the fail-closed recreate preflight can identify it — an anonymous mount made the preflight fail closed and blocked a fresh isolated install (cinatra#2329). Upstream-dictated major.",
       "transitions": [
         { "from": "7", "to": "7", "supported": true, "mechanism": "discard-recreate", "skippedMajor": "n-a", "downgrade": false, "notes": "Upstream-dictated hold. Ephemeral cache -> a bump just recreates." }
       ]
