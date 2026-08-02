@@ -452,9 +452,28 @@ const OP_LABEL: Record<MarketplaceFailureOperation, { verb: string; gerund: stri
  * message tells the user what to do next and never asserts a specific cause it
  * cannot be sure of.
  *
- * Restore is a DB-only re-activation (it never touches the marketplace), so its
- * marketplace-shaped categories collapse to the same simple "try again / contact
- * your administrator" guidance.
+ * RETRY IS ITSELF A CLAIM (cinatra#2333). `unrecoverable` is a MIXED bucket fed
+ * by three different things: coarse codes the contract mirror maps there (a bad
+ * package name, an invalid grant, a broker invariant); codes the #1539 COPY
+ * overrides re-bucket there for PRESENTATION only (which assert nothing about
+ * retryability); and the FAIL-SAFE default for anything `classifyMarketplaceFailure`
+ * cannot read at all (a bare 401/403/404, an unrecognized contract code, an
+ * unexpected throw). "Please try again" is wrong for the first group, and
+ * "trying again won't help" would be unsupported for the other two — so this
+ * copy makes NO retry claim in either direction and simply escalates to the
+ * administrator. That same string is what every surface passes as
+ * `defaultFailureMessage`, i.e. the last-resort copy for a failure carrying no
+ * category at all, where promising a retry is least defensible of all.
+ *
+ * Restore collapses its marketplace-shaped categories (missing-creds /
+ * denied-entitlement / unavailable-version) onto that generic message: a restore
+ * is a MULTI-STAGE re-activation (kind resolve → DB re-activation → runtime
+ * activate) and a returned category cannot be attributed to a stage, so naming a
+ * marketplace cause would assert something the app cannot place. NOTE this is
+ * NOT because a restore never reaches the marketplace — it can: kind resolution
+ * runs through `resolveExtensionTypeId`, and a hot-loadable kind's activate hook
+ * installs from the registry (cinatra#2333 corrected the earlier "DB-only, never
+ * round-trips" rationale).
  */
 export function marketplaceFailureCopy(
   category: MarketplaceFailureCategory,
@@ -464,16 +483,18 @@ export function marketplaceFailureCopy(
   const name = displayName;
   const { verb, gerund } = OP_LABEL[operation];
 
-  // Restore is a DB-only re-activation that NEVER round-trips the marketplace, so
-  // the marketplace-shaped categories (missing-creds / denied-entitlement /
-  // unavailable-version) cannot truthfully describe a restore failure. Collapse
-  // them to generic, non-cause-asserting restore guidance so we never tell the
-  // user (e.g.) "this version is no longer available" for a local re-activation.
+  // A restore's returned category cannot be attributed to one of its stages (see
+  // the header), so the marketplace-shaped categories (missing-creds /
+  // denied-entitlement / unavailable-version) cannot truthfully describe WHICH
+  // part of a restore failed. Collapse them to generic, non-cause-asserting
+  // guidance so we never tell the user (e.g.) "this version is no longer
+  // available" for a re-activation of an already-installed version.
   if (operation === "restore") {
     if (category === "retryable") {
       return `Couldn't restore ${name} right now. Please try again in a moment.`;
     }
-    return `Couldn't restore ${name}. Please try again, and contact your administrator if it keeps happening.`;
+    // #2333: no retry claim in either direction — escalate, full stop.
+    return `Couldn't restore ${name}. Contact your administrator for help.`;
   }
 
   switch (category) {
@@ -494,7 +515,9 @@ export function marketplaceFailureCopy(
       return `${name} can't be ${gerund} right now — this version isn't available to install. Please check back later, or contact your administrator.`;
     case "unrecoverable":
     default:
-      return `Couldn't ${verb} ${name}. Please try again, and contact your administrator if it keeps happening.`;
+      // #2333: the mixed bucket + the last-resort default (see the header) — it
+      // must neither promise a retry helps nor claim it cannot. Escalate only.
+      return `Couldn't ${verb} ${name}. Contact your administrator for help.`;
   }
 }
 

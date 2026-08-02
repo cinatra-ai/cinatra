@@ -111,14 +111,15 @@ describe("marketplaceFailureCopy — no operator jargon, actionable, names the e
   });
 
   it("restore collapses marketplace-shaped categories to generic, non-cause-asserting copy", () => {
-    // Restore never round-trips the marketplace, so it must not assert a
-    // marketplace cause. denied-entitlement / unavailable-version / missing-creds
-    // all collapse to the generic "try again / contact admin" guidance.
+    // A restore's returned category cannot be attributed to one of its stages
+    // (kind resolve → DB re-activation → runtime activate), so it must not assert
+    // a marketplace cause. denied-entitlement / unavailable-version /
+    // missing-creds all collapse to the generic administrator-escalation copy.
+    // #2333: that copy no longer leads with "please try again" (see the
+    // "no retry claim" suite below).
     for (const category of ["missing-creds", "denied-entitlement", "unavailable-version", "unrecoverable"] as const) {
       const msg = marketplaceFailureCopy(category, "restore", "Acme Widget");
-      expect(msg).toBe(
-        "Couldn't restore Acme Widget. Please try again, and contact your administrator if it keeps happening.",
-      );
+      expect(msg).toBe("Couldn't restore Acme Widget. Contact your administrator for help.");
     }
     // retryable keeps the softer "in a moment" phrasing.
     expect(marketplaceFailureCopy("retryable", "restore", "Acme Widget")).toBe(
@@ -133,6 +134,132 @@ describe("marketplaceFailureCopy — no operator jargon, actionable, names the e
       expect(map[category]).toBe(marketplaceFailureCopy(category, "install", "Acme Widget"));
     }
   });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2333 — the `unrecoverable` bucket makes NO retry claim in either
+// direction.
+//
+// `unrecoverable` is fed by three different things: coarse codes the contract
+// mirror maps there; codes the #1539 COPY overrides re-bucket there for
+// presentation only; and the FAIL-SAFE default for anything the classifier
+// cannot read (a bare 401/403/404, an unknown code, an unexpected throw — the
+// last of which arrives with no category at all, via `defaultFailureMessage`).
+// "Please try again" is wrong for the first group; "trying again won't help"
+// would be unsupported for the other two. So the copy escalates and asserts
+// nothing about retryability.
+// ---------------------------------------------------------------------------
+describe("#2333 — unrecoverable copy escalates without any retry claim", () => {
+  const NAME = "Acme Widget";
+
+  // The EXACT strings, pinned per operation. A change here is a deliberate copy
+  // decision, never a side effect.
+  const PINNED_UNRECOVERABLE: Record<MarketplaceFailureOperation, string> = {
+    install: "Couldn't install Acme Widget. Contact your administrator for help.",
+    update: "Couldn't update Acme Widget. Contact your administrator for help.",
+    restore: "Couldn't restore Acme Widget. Contact your administrator for help.",
+  };
+
+  for (const op of OPERATIONS) {
+    it(`[${op}] is the pinned escalation string`, () => {
+      expect(marketplaceFailureCopy("unrecoverable", op, NAME)).toBe(PINNED_UNRECOVERABLE[op]);
+    });
+  }
+
+  // Phrases that PROMISE a retry helps (the pre-#2333 defect) and phrases that
+  // CLAIM a retry cannot help (the over-correction). Neither is supportable for
+  // a bucket that also absorbs failures whose cause the app admits it cannot
+  // determine.
+  const RETRY_PROMISE = /try again|check back|in a moment|keeps happening/i;
+  const RETRY_DENIAL = /won't (fix|help|work)|will not (fix|help|work)|no point|permanent|cannot be (fixed|resolved)/i;
+
+  for (const op of OPERATIONS) {
+    it(`[${op}] makes no retry claim in either direction`, () => {
+      const msg = marketplaceFailureCopy("unrecoverable", op, NAME);
+      expect(msg, `"${msg}" must not promise a retry helps`).not.toMatch(RETRY_PROMISE);
+      expect(msg, `"${msg}" must not claim a retry cannot help`).not.toMatch(RETRY_DENIAL);
+      // Still actionable + named (the standing invariants).
+      expect(msg.toLowerCase()).toContain("contact your administrator");
+      expect(msg).toContain(NAME);
+    });
+  }
+
+  it("every non-retryable restore category collapses onto the same escalation string", () => {
+    for (const category of MARKETPLACE_FAILURE_CATEGORIES) {
+      if (category === "retryable") continue;
+      expect(marketplaceFailureCopy(category, "restore", NAME)).toBe(
+        PINNED_UNRECOVERABLE.restore,
+      );
+    }
+  });
+
+  it("appends the diagnostic reference to the NEW string (#1539 suffix still works)", () => {
+    for (const op of OPERATIONS) {
+      expect(appendDiagnosticReference(marketplaceFailureCopy("unrecoverable", op, NAME), "REF-1A2B3C4D")).toBe(
+        `${PINNED_UNRECOVERABLE[op]} (Ref: REF-1A2B3C4D)`,
+      );
+    }
+  });
+
+  // The value every surface passes as `defaultFailureMessage` — the last-resort
+  // copy rendered when the action THROWS and no category exists at all
+  // (marketplace-install-form.tsx, extension-install-scope-dialog.tsx,
+  // update-plan-flow.tsx). It is this same string, so the no-retry-claim
+  // guarantee covers the no-category paths too.
+  it("is the value the surfaces use as defaultFailureMessage", () => {
+    for (const op of OPERATIONS) {
+      expect(marketplaceFailureCopy("unrecoverable", op, NAME)).toBe(PINNED_UNRECOVERABLE[op]);
+      // And the per-category map's own `unrecoverable` entry agrees with it, so
+      // `failureCopyByCategory[cat] ?? defaultFailureMessage` cannot diverge.
+      expect(buildMarketplaceFailureCopy(op, NAME).unrecoverable).toBe(PINNED_UNRECOVERABLE[op]);
+    }
+  });
+});
+
+// Full operation × category table. Every cell OTHER than the ones #2333 changes
+// must be byte-identical to its pre-#2333 wording, so a later copy edit cannot
+// silently widen the blast radius of this change.
+describe("#2333 — the complete operation × category copy table is pinned", () => {
+  const TABLE: Record<MarketplaceFailureOperation, Record<MarketplaceFailureCategory, string>> = {
+    install: {
+      retryable: "Couldn't install Acme Widget right now. Please try again in a moment.",
+      "missing-creds":
+        "Couldn't install Acme Widget — your workspace isn't connected to the marketplace. Ask your administrator to reconnect it, then try again.",
+      "denied-entitlement":
+        "Acme Widget isn't available to install on your workspace. If you need it, contact your administrator.",
+      "unavailable-version":
+        "Acme Widget can't be installed right now — this version isn't available to install. Please check back later, or contact your administrator.",
+      // CHANGED by #2333.
+      unrecoverable: "Couldn't install Acme Widget. Contact your administrator for help.",
+    },
+    update: {
+      retryable: "Couldn't update Acme Widget right now. Please try again in a moment.",
+      "missing-creds":
+        "Couldn't update Acme Widget — your workspace isn't connected to the marketplace. Ask your administrator to reconnect it, then try again.",
+      "denied-entitlement":
+        "Acme Widget can't be updated on your workspace. If you need this update, contact your administrator.",
+      "unavailable-version":
+        "Acme Widget can't be updated right now — this version isn't available to install. Please check back later, or contact your administrator.",
+      // CHANGED by #2333.
+      unrecoverable: "Couldn't update Acme Widget. Contact your administrator for help.",
+    },
+    restore: {
+      retryable: "Couldn't restore Acme Widget right now. Please try again in a moment.",
+      // CHANGED by #2333 (the collapsed non-retryable branch).
+      "missing-creds": "Couldn't restore Acme Widget. Contact your administrator for help.",
+      "denied-entitlement": "Couldn't restore Acme Widget. Contact your administrator for help.",
+      "unavailable-version": "Couldn't restore Acme Widget. Contact your administrator for help.",
+      unrecoverable: "Couldn't restore Acme Widget. Contact your administrator for help.",
+    },
+  };
+
+  for (const op of OPERATIONS) {
+    for (const category of MARKETPLACE_FAILURE_CATEGORIES) {
+      it(`[${op}/${category}] matches the pinned table`, () => {
+        expect(marketplaceFailureCopy(category, op, "Acme Widget")).toBe(TABLE[op][category]);
+      });
+    }
+  }
 });
 
 describe("classifyMarketplaceFailure — mirrors the marketplace#152 taxonomy categories", () => {

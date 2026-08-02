@@ -17,6 +17,10 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import { isRedirectError } from "../screens/is-redirect-error";
+import {
+  buildMarketplaceFailureCopy,
+  marketplaceFailureCopy,
+} from "../screens/marketplace-failure-copy";
 
 const SCREENS = path.resolve(__dirname, "..", "screens");
 const read = (rel: string) => readFileSync(path.join(SCREENS, rel), "utf8");
@@ -108,6 +112,71 @@ describe("graceful submit contract — failure toasts, success re-throws (no pag
       handleSubmit(redirecting, onFailure, COPY, "Could not install Foo."),
     ).rejects.toMatchObject({ digest: expect.stringContaining("NEXT_REDIRECT") });
     expect(onFailure).not.toHaveBeenCalled();
+  });
+});
+
+// cinatra#2333 — the NO-CATEGORY paths. `defaultFailureMessage` is what renders
+// when the action THROWS (no category exists) and when a returned category is
+// not in the map. Both resolve to the `unrecoverable` copy, so they must carry
+// the same no-retry-claim guarantee as the classified path — proven here with
+// the REAL copy functions rather than a stand-in literal.
+describe("#2333 — the no-category fallbacks render the real escalation copy", () => {
+  const NAME = "Acme Widget";
+  const REAL_COPY = buildMarketplaceFailureCopy("install", NAME);
+  const REAL_DEFAULT = marketplaceFailureCopy("unrecoverable", "install", NAME);
+
+  async function handleSubmit(
+    action: () => Promise<{ ok: false; category: string } | void>,
+    onFailure: (msg: string) => void,
+  ): Promise<void> {
+    try {
+      const result = await action();
+      if (result && result.ok === false) {
+        onFailure(
+          (REAL_COPY as Record<string, string>)[result.category] ?? REAL_DEFAULT,
+        );
+      }
+    } catch (error) {
+      if (isRedirectError(error)) throw error;
+      onFailure(REAL_DEFAULT);
+    }
+  }
+
+  it("an unexpected THROW (no category at all) renders the escalation copy, not retry advice", async () => {
+    const onFailure = vi.fn();
+    await expect(
+      handleSubmit(async () => {
+        throw new Error("401 Unauthorized - Unable to authenticate, need: Basic, Bearer");
+      }, onFailure),
+    ).resolves.toBeUndefined();
+    expect(onFailure).toHaveBeenCalledExactlyOnceWith(
+      "Couldn't install Acme Widget. Contact your administrator for help.",
+    );
+  });
+
+  it("a returned category MISSING from the map falls back to the same escalation copy", async () => {
+    const onFailure = vi.fn();
+    await expect(
+      handleSubmit(async () => ({ ok: false as const, category: "a-category-we-do-not-map" }), onFailure),
+    ).resolves.toBeUndefined();
+    expect(onFailure).toHaveBeenCalledExactlyOnceWith(
+      "Couldn't install Acme Widget. Contact your administrator for help.",
+    );
+  });
+
+  // The mirrors above reproduce handleSubmit's expression; these pin that each
+  // consumer's THROWN-failure branch really does render the `defaultFailureMessage`
+  // it was handed, and never a string of its own. Same source-contract pattern as
+  // the wrapper assertions below (this package's vitest env is "node", so RTL
+  // rendering is unavailable here — see vitest.config.ts).
+  it("every consumer's thrown-failure branch renders the handed-down default", () => {
+    expect(read("marketplace-install-form.tsx")).toContain("toast.error(defaultFailureMessage)");
+    expect(read("extension-install-scope-dialog.tsx")).toContain(
+      "setErrorMessage(defaultFailureMessage)",
+    );
+    const updatePlan = read("update-plan-flow.tsx");
+    expect(updatePlan).toContain("toast.error(defaultFailureMessage)");
+    expect(updatePlan).toContain("setFailureCopy(defaultFailureMessage)");
   });
 });
 
