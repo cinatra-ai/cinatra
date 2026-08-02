@@ -43,9 +43,55 @@
  * transient read error): liveness protects one run, host exclusivity is a
  * tenancy boundary, and a host we cannot prove is ours must not be running our
  * containers next to somebody else's.
+ *
+ * A RENEWAL REPUBLISHES A DOCUMENT; IT DOES NOT RE-PROVISION THE LEASE
+ * (cinatra#2325). The publish above is a RENAME, so it necessarily mints a NEW
+ * inode — and a new inode carries the OWNERSHIP of whoever created it, not of
+ * whoever provisioned the lease. That difference is invisible when both sides
+ * are the same principal and load-bearing when they are not: this broker ships
+ * as a ROOT container with the lease directory bind-mounted from the host, so
+ * an ownership-blind renewal silently converts a `0600` lease owned by the
+ * provisioning user into a `0600` lease owned by root. The provisioning side
+ * then cannot READ the document to check the tenant and cannot rewrite it —
+ * i.e. the renewal quietly disables REVOKE, which is the one operation the
+ * whole lease exists to enable. So the replacement's OWNER and GROUP are
+ * carried over from the file being replaced, the mode is re-asserted at the
+ * canonical `0600`, and the handoff is VERIFIED by a re-stat before the rename:
+ * a successful `chown()` is not proof the ownership changed (CIFS without unix
+ * extensions, and some FUSE/virtiofs configurations, accept the call and keep
+ * reporting the mount's own fixed ownership). A handoff that cannot be proven
+ * publishes NOTHING — the existing lease is left exactly as it was and stays
+ * valid for the rest of its TTL, after which the normal fail-closed path takes
+ * over. A renewal that did not happen is recoverable; a lease the provisioning
+ * side can no longer revoke is not.
+ *
+ * UPGRADE NOTE, because this fix is not retroactive: a lease a PREVIOUS
+ * ownership-blind broker already took from its provisioning user stays that
+ * way — the renewal preserves the CURRENT owner, and the current owner is now
+ * root. A host that ran an older broker needs a one-time `chown` of the lease
+ * file back to the provisioning principal before the upgraded broker starts.
+ *
+ * DEPLOYMENT PRECONDITION, stated because the mutex depends on it: the lease
+ * lives in its OWN directory and that DIRECTORY is owned by the provisioning
+ * principal. The `mkdir` mutex below is taken by whichever side renews first,
+ * so a root broker leaves a root-owned `.host-exclusivity.lock.d` behind;
+ * removing a directory entry needs write+execute on the PARENT, which the
+ * provisioning user has on a directory it owns, so its stale-lock reclaim keeps
+ * working. Put the lease in a directory owned by somebody else AND set the
+ * sticky bit and that stops being true.
  */
 
-import { mkdir, readFile, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  chown,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  rmdir,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 
@@ -150,6 +196,23 @@ export type LeaseRenewalResult =
 export const TEMP_NAME_ATTEMPTS = 5;
 export const LOCK_RELEASE_ATTEMPTS = 3;
 
+/**
+ * The lease document's canonical permission bits — the provisioning script's
+ * own `chmod 600`, and a value this module ASSERTS rather than merely requests.
+ * `writeFile`'s `mode` option is filtered by the process umask, so an exclusive
+ * create guarantees AT MOST `0600`; a broker started under `umask 0200` would
+ * otherwise publish a `0400` lease that its own provisioning user can no longer
+ * rewrite (Codex round 0, finding 6, ADOPTED).
+ */
+export const LEASE_FILE_MODE = 0o600;
+
+/**
+ * The filesystem identity a renewal has to reproduce on the replacement inode.
+ * Deliberately not a whole `Stats`: these three fields are the entire contract
+ * between the publishing side and the provisioning side.
+ */
+export type LeaseFileIdentity = { uid: number; gid: number; mode: number };
+
 /** Injection seams so the matrix runs hermetically (and on a real temp dir). */
 export type LeaseIo = {
   readFile: (filePath: string) => Promise<string>;
@@ -159,6 +222,15 @@ export type LeaseIo = {
   mkdir: (dirPath: string) => Promise<void>;
   rmdir: (dirPath: string) => Promise<void>;
   removeFile: (filePath: string) => Promise<void>;
+  /**
+   * `stat` reduced to the publish contract. `null` means ENOENT and NOTHING
+   * else: a permission, mapping or I/O error MUST throw, because an unreadable
+   * lease that reported itself as an absent one would let the ownership handoff
+   * below be skipped on exactly the filesystems it exists to defend against.
+   */
+  identityOf: (filePath: string) => Promise<LeaseFileIdentity | null>;
+  chown: (filePath: string, uid: number, gid: number) => Promise<void>;
+  chmod: (filePath: string, mode: number) => Promise<void>;
   dirModifiedAtMs: (dirPath: string) => Promise<number | null>;
   sleep: (ms: number) => Promise<void>;
 };
@@ -167,9 +239,10 @@ export const nodeLeaseIo: LeaseIo = {
   readFile: (filePath) => readFile(filePath, "utf8"),
   // `wx` + 0o600 reproduces `mktemp` + `chmod 600`: O_EXCL means an existing
   // path — including a symlink somebody planted — is an EEXIST error rather
-  // than a target we follow and truncate.
+  // than a target we follow and truncate. The mode is re-asserted with an
+  // explicit `chmod` at publish time, because this one is umask-filtered.
   writeFileExclusive: (filePath, data) =>
-    writeFile(filePath, data, { mode: 0o600, flag: "wx" }),
+    writeFile(filePath, data, { mode: LEASE_FILE_MODE, flag: "wx" }),
   rename: (from, to) => rename(from, to),
   mkdir: (dirPath) => mkdir(dirPath),
   // `rmdir`, NOT `rm`: the lock is a DIRECTORY, and `fs.rm` without
@@ -179,6 +252,17 @@ export const nodeLeaseIo: LeaseIo = {
   // lock is only ever an empty marker.
   rmdir: (dirPath) => rmdir(dirPath),
   removeFile: (filePath) => rm(filePath, { force: true }),
+  identityOf: async (filePath) => {
+    try {
+      const stats = await stat(filePath);
+      return { uid: stats.uid, gid: stats.gid, mode: stats.mode & 0o7777 };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return null;
+      throw err;
+    }
+  },
+  chown: (filePath, uid, gid) => chown(filePath, uid, gid),
+  chmod: (filePath, mode) => chmod(filePath, mode),
   dirModifiedAtMs: async (dirPath) => {
     try {
       return (await stat(dirPath)).mtimeMs;
@@ -444,7 +528,29 @@ export class HostExclusivityLeaseGuard {
    * `acquired_at + ttl` and nothing else), i.e. another tenant could reclaim
    * the host under live workers while our renewals "succeeded".
    */
+  /**
+   * TOTAL BY CONSTRUCTION. Every I/O seam below is injectable, and a renewal
+   * that THREW instead of returning would bypass the caller's reporting: the
+   * timer's own handler would swallow it and the lease would lapse under a live
+   * broker with nothing in the log to say why (Codex round 0, finding 7,
+   * ADOPTED). The lock helpers absorb their own injected failures; this is the
+   * backstop for everything else, and it reports the same way a refusal does.
+   */
   async renew(): Promise<LeaseRenewalResult> {
+    try {
+      return await this.renewUnderLock();
+    } catch (err) {
+      return {
+        ok: false,
+        reason: "write_failed",
+        message:
+          `The host-exclusivity renewal failed unexpectedly (${describe(err)}); ` +
+          "the lease was left exactly as it was.",
+      };
+    }
+  }
+
+  private async renewUnderLock(): Promise<LeaseRenewalResult> {
     const held = await this.acquireLock();
     if (!held) {
       return {
@@ -500,6 +606,24 @@ export class HostExclusivityLeaseGuard {
               "Could not create a temp file to publish the renewed host-exclusivity lease.",
           };
         }
+        // The renewal republishes a document; it does not re-provision the
+        // lease. Carry the replaced inode's OWNERSHIP onto the replacement
+        // BEFORE the rename — never after — so the lease path is never once
+        // observed carrying an owner the provisioning side cannot use, and so
+        // every failure leaves the existing lease untouched.
+        const handoff = await this.carryLeaseIdentityOnto(tempPath);
+        if (handoff !== null) {
+          await this.io.removeFile(tempPath).catch(() => {});
+          return {
+            ok: false,
+            reason: "write_failed",
+            message:
+              `Refusing to publish the renewed host-exclusivity lease: ${handoff}. ` +
+              "The existing lease is untouched (fail-closed — a renewal that did " +
+              "not happen is recoverable; a lease the provisioning side can no " +
+              "longer revoke is not).",
+          };
+        }
         await this.io.rename(tempPath, this.leasePath);
       } catch (err) {
         if (tempPath !== null) await this.io.removeFile(tempPath).catch(() => {});
@@ -514,6 +638,63 @@ export class HostExclusivityLeaseGuard {
     } finally {
       await this.releaseLock();
     }
+  }
+
+  /**
+   * Reproduce the lease's filesystem identity on the temp file that is about to
+   * replace it. Returns `null` on success, or the reason the handoff could not
+   * be PROVEN — never a partial result.
+   *
+   * The re-stat after the `chown` is a security check, not defensive polish
+   * (Codex round 0, MUST-FIX): `chown()` returning success is not evidence the
+   * ownership changed. CIFS mounted without unix extensions reports the
+   * ownership its mount options fix, and some FUSE/virtiofs layers accept the
+   * call and keep reporting their own mapping. Trusting the return value there
+   * would publish exactly the root-owned lease this exists to prevent, while
+   * reporting a healthy renewal.
+   */
+  private async carryLeaseIdentityOnto(tempPath: string): Promise<string | null> {
+    // Assert the canonical mode; the exclusive create only bounded it.
+    await this.io.chmod(tempPath, LEASE_FILE_MODE);
+
+    const wanted = await this.io.identityOf(this.leasePath);
+    if (wanted === null) {
+      return "the lease vanished between the verified read and the publish";
+    }
+    const minted = await this.io.identityOf(tempPath);
+    if (minted === null) {
+      return "the renewal's own temp file vanished before it could be published";
+    }
+    // Only when it actually differs. On a runtime that maps a bind mount to the
+    // container's own identity — Docker Desktop's file sharing is the one this
+    // broker meets daily — the two already agree and no `chown` is attempted at
+    // all, so an unsupported `chown` cannot fail a renewal that never needed one.
+    if (minted.uid !== wanted.uid || minted.gid !== wanted.gid) {
+      await this.io.chown(tempPath, wanted.uid, wanted.gid);
+    }
+
+    const published = await this.io.identityOf(tempPath);
+    if (published === null) {
+      return "the renewal's own temp file vanished during the ownership handoff";
+    }
+    if (published.uid !== wanted.uid || published.gid !== wanted.gid) {
+      return (
+        `the replacement could not be given the lease's ownership ` +
+        `(${wanted.uid}:${wanted.gid}) — the filesystem still reports ` +
+        `${published.uid}:${published.gid} after the handoff`
+      );
+    }
+    // EXACTLY the canonical mode, set-user-ID / set-group-ID / sticky bits
+    // included — `identityOf` keeps all of `0o7777` precisely so this comparison
+    // can be exact. Masking to `0o777` here would accept `04600` and friends
+    // (Codex round 1, finding 5, ADOPTED).
+    if (published.mode !== LEASE_FILE_MODE) {
+      return (
+        `the replacement's mode is ${published.mode.toString(8)}, not the ` +
+        `canonical ${LEASE_FILE_MODE.toString(8)}`
+      );
+    }
+    return null;
   }
 
   /**
@@ -535,7 +716,13 @@ export class HostExclusivityLeaseGuard {
         return;
       } catch (err) {
         if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return;
-        if (attempt + 1 < LOCK_RELEASE_ATTEMPTS) await this.io.sleep(LOCK_SPIN_DELAY_MS);
+        // The sleep is injectable, so it can reject. A release that threw HERE
+        // would run in the `finally` of a renewal whose rename already landed
+        // and would convert a genuinely-renewed lease into a reported failure —
+        // the outcome the rebuttal below deliberately rejects.
+        if (attempt + 1 < LOCK_RELEASE_ATTEMPTS) {
+          await this.io.sleep(LOCK_SPIN_DELAY_MS).catch(() => {});
+        }
       }
     }
   }
@@ -587,12 +774,17 @@ export class HostExclusivityLeaseGuard {
         await this.io.mkdir(this.lockDir);
         return true;
       } catch {
-        const modifiedAtMs = await this.io.dirModifiedAtMs(this.lockDir);
+        // Every probe here is best-effort: failing to MEASURE a lock's age is
+        // not a reason to abandon the spin, and an injected probe that rejects
+        // must degrade to `lock_unavailable` rather than escape as a throw.
+        const modifiedAtMs = await this.io
+          .dirModifiedAtMs(this.lockDir)
+          .catch(() => null);
         if (modifiedAtMs !== null && lockIsStale(this.now() - modifiedAtMs)) {
           await this.io.rmdir(this.lockDir).catch(() => {});
         }
       }
-      await this.io.sleep(LOCK_SPIN_DELAY_MS);
+      await this.io.sleep(LOCK_SPIN_DELAY_MS).catch(() => {});
     }
     return false;
   }
@@ -627,12 +819,30 @@ export function startHostExclusivityRenewal(
   intervalMs: number,
   onResult?: (result: LeaseRenewalResult) => void,
 ): () => void {
+  /** A reporter that throws must not take the renewal timer down with it. */
+  const report = (result: LeaseRenewalResult): void => {
+    try {
+      onResult?.(result);
+    } catch {
+      /* the caller's logging is the caller's problem; the timer survives it */
+    }
+  };
   const handle = setInterval(() => {
     void guard
       .renew()
-      .then((result) => onResult?.(result))
-      .catch(() => {
-        /* a renewal failure is reported through onResult, never thrown here */
+      .then(report)
+      .catch((err: unknown) => {
+        // `renew()` is total, so reaching here means a guard implementation
+        // this module does not own rejected. It is still REPORTED rather than
+        // swallowed: a silently-dropped renewal failure is how a lease lapses
+        // under a live broker with nothing in the log to explain the drain
+        // (Codex round 0, finding 7, ADOPTED — the previous handler discarded
+        // it while its own comment claimed otherwise).
+        report({
+          ok: false,
+          reason: "write_failed",
+          message: `The host-exclusivity renewal rejected: ${describe(err)}.`,
+        });
       });
   }, intervalMs);
   handle.unref?.();

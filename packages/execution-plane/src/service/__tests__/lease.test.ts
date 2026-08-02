@@ -9,18 +9,33 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 import {
   HOST_EXCLUSIVITY_LOCK_DIR_NAME,
   HostExclusivityLeaseGuard,
+  LEASE_FILE_MODE,
   evaluateHostExclusivityLease,
   hostExclusivityPlacementGuard,
   lockIsStale,
+  nodeLeaseIo,
   parseHostExclusivityLease,
   serializeHostExclusivityLease,
+  startHostExclusivityRenewal,
+  type LeaseIo,
+  type LeaseRenewalResult,
 } from "../lease";
 
 let dir: string;
@@ -371,6 +386,263 @@ describe("renew() — under the writer's own mutex", () => {
     expect(result).toMatchObject({ ok: false, reason: "other_tenant" });
     const parsed = parseHostExclusivityLease(await readFile(leasePath, "utf8"));
     expect(parsed.ok && parsed.lease.tenant).toBe("rival");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Ownership handoff (cinatra#2325)
+// ---------------------------------------------------------------------------
+
+/**
+ * THE ROOT-BROKER CASE, which no in-process test can produce for real: the
+ * shipped broker runs as ROOT in a container and renews a lease that lives on a
+ * bind-mounted host directory, so its temp file is minted as root while the
+ * lease it replaces belongs to the provisioning user. The rename then hands the
+ * lease to root and the provisioning side loses REVOKE.
+ *
+ * This process cannot become root, so the two identities are injected. What is
+ * NOT faked is the choreography under test — the real temp file, the real
+ * rename, the real refusal ordering.
+ */
+function ownershipIo(over: {
+  /** Identity the LEASE reports (the provisioning side's). */
+  lease: { uid: number; gid: number };
+  /** Identity a freshly minted TEMP file reports (the broker's). */
+  minted: { uid: number; gid: number };
+  /** What the filesystem reports AFTER a chown — the point of the re-stat. */
+  afterChown?: { uid: number; gid: number };
+  chownError?: NodeJS.ErrnoException;
+  modeAfterChown?: number;
+  calls: { chown: Array<{ path: string; uid: number; gid: number }> };
+}): Partial<LeaseIo> {
+  let chowned = false;
+  return {
+    identityOf: async (filePath) => {
+      const real = await nodeLeaseIo.identityOf(filePath);
+      if (real === null) return null;
+      const mode = chowned && over.modeAfterChown !== undefined ? over.modeAfterChown : real.mode;
+      if (filePath === leasePath) return { ...over.lease, mode };
+      const owner = chowned ? (over.afterChown ?? over.minted) : over.minted;
+      return { ...owner, mode };
+    },
+    chown: async (filePath, uid, gid) => {
+      over.calls.chown.push({ path: filePath, uid, gid });
+      if (over.chownError) throw over.chownError;
+      chowned = true;
+    },
+  };
+}
+
+describe("renew() — the ownership handoff (cinatra#2325)", () => {
+  it("gives the replacement the ownership of the lease it replaces", async () => {
+    await publishLease({ tenant: "acme", acquiredAtEpochS: 1000, ttlSeconds: 3600 });
+    const calls = { chown: [] as Array<{ path: string; uid: number; gid: number }> };
+    const guard = new HostExclusivityLeaseGuard({
+      tenant: "acme",
+      leasePath,
+      cacheTtlMs: 0,
+      nowMs: () => 1_100_000,
+      io: {
+        ...nodeLeaseIo,
+        ...ownershipIo({
+          lease: { uid: 1000, gid: 1000 },
+          minted: { uid: 0, gid: 0 },
+          afterChown: { uid: 1000, gid: 1000 },
+          calls,
+        }),
+      },
+    });
+    expect((await guard.renew()).ok).toBe(true);
+    // The chown targeted the TEMP file, never the lease path: the handoff is
+    // part of the atomic publish, so the lease is never once observed carrying
+    // an owner the provisioning side cannot use.
+    expect(calls.chown).toHaveLength(1);
+    expect(calls.chown[0]).toMatchObject({ uid: 1000, gid: 1000 });
+    expect(calls.chown[0]?.path).not.toBe(leasePath);
+    // ...and the document really was republished.
+    const parsed = parseHostExclusivityLease(await readFile(leasePath, "utf8"));
+    expect(parsed.ok && parsed.lease.acquiredAtEpochS).toBe(1100);
+  });
+
+  it("does not chown at all when the identities already agree", async () => {
+    // Docker Desktop's file sharing maps a bind mount to the container's own
+    // identity, so the broker sees its own uid on the provisioning side's file.
+    // An unsupported chown must not be able to fail a renewal that never needed
+    // one — which is why the call is conditional rather than unconditional.
+    await publishLease({ tenant: "acme", acquiredAtEpochS: 1000, ttlSeconds: 3600 });
+    const calls = { chown: [] as Array<{ path: string; uid: number; gid: number }> };
+    const guard = new HostExclusivityLeaseGuard({
+      tenant: "acme",
+      leasePath,
+      cacheTtlMs: 0,
+      nowMs: () => 1_100_000,
+      io: {
+        ...nodeLeaseIo,
+        ...ownershipIo({
+          lease: { uid: 0, gid: 0 },
+          minted: { uid: 0, gid: 0 },
+          chownError: Object.assign(new Error("EOPNOTSUPP"), { code: "EOPNOTSUPP" }),
+          calls,
+        }),
+      },
+    });
+    expect((await guard.renew()).ok).toBe(true);
+    expect(calls.chown).toHaveLength(0);
+  });
+
+  it("REFUSES when chown reports success but the ownership did not move", async () => {
+    // The adversarial case, and the reason the handoff is verified by a re-stat
+    // rather than by chown's return value: CIFS without unix extensions, and
+    // some FUSE/virtiofs layers, accept the call and keep reporting their own
+    // mapping. Trusting the return value publishes the root-owned lease while
+    // reporting a healthy renewal.
+    await publishLease({ tenant: "acme", acquiredAtEpochS: 1000, ttlSeconds: 3600 });
+    const before = await readFile(leasePath, "utf8");
+    const calls = { chown: [] as Array<{ path: string; uid: number; gid: number }> };
+    const guard = new HostExclusivityLeaseGuard({
+      tenant: "acme",
+      leasePath,
+      cacheTtlMs: 0,
+      nowMs: () => 1_100_000,
+      io: {
+        ...nodeLeaseIo,
+        ...ownershipIo({
+          lease: { uid: 1000, gid: 1000 },
+          minted: { uid: 0, gid: 0 },
+          afterChown: { uid: 0, gid: 0 }, // the call "succeeded" and changed nothing
+          calls,
+        }),
+      },
+    });
+    const result = await guard.renew();
+    expect(result).toMatchObject({ ok: false, reason: "write_failed" });
+    expect(calls.chown).toHaveLength(1);
+    // NOTHING was published — the existing lease is byte-identical.
+    expect(await readFile(leasePath, "utf8")).toBe(before);
+    // ...and no temp file was left behind in the lease directory.
+    expect((await readdir(dir)).filter((n) => n.startsWith(".lease."))).toEqual([]);
+  });
+
+  it("REFUSES, typed and not thrown, when chown itself fails", async () => {
+    await publishLease({ tenant: "acme", acquiredAtEpochS: 1000, ttlSeconds: 3600 });
+    const before = await readFile(leasePath, "utf8");
+    const calls = { chown: [] as Array<{ path: string; uid: number; gid: number }> };
+    const guard = new HostExclusivityLeaseGuard({
+      tenant: "acme",
+      leasePath,
+      cacheTtlMs: 0,
+      nowMs: () => 1_100_000,
+      io: {
+        ...nodeLeaseIo,
+        ...ownershipIo({
+          lease: { uid: 1000, gid: 1000 },
+          minted: { uid: 0, gid: 0 },
+          chownError: Object.assign(new Error("operation not permitted"), { code: "EPERM" }),
+          calls,
+        }),
+      },
+    });
+    const result = await guard.renew();
+    expect(result).toMatchObject({ ok: false, reason: "write_failed" });
+    expect(await readFile(leasePath, "utf8")).toBe(before);
+    expect((await readdir(dir)).filter((n) => n.startsWith(".lease."))).toEqual([]);
+    // The mutex is released even on this path.
+    expect((await readdir(dir)).includes(HOST_EXCLUSIVITY_LOCK_DIR_NAME)).toBe(false);
+  });
+
+  it("REFUSES when the replacement's mode is not the canonical 0600", async () => {
+    // A broker started under a restrictive umask would publish a lease its own
+    // provisioning user cannot rewrite. The mode is asserted, not requested.
+    await publishLease({ tenant: "acme", acquiredAtEpochS: 1000, ttlSeconds: 3600 });
+    const before = await readFile(leasePath, "utf8");
+    const calls = { chown: [] as Array<{ path: string; uid: number; gid: number }> };
+    const guard = new HostExclusivityLeaseGuard({
+      tenant: "acme",
+      leasePath,
+      cacheTtlMs: 0,
+      nowMs: () => 1_100_000,
+      io: {
+        ...nodeLeaseIo,
+        ...ownershipIo({
+          lease: { uid: 1000, gid: 1000 },
+          minted: { uid: 0, gid: 0 },
+          afterChown: { uid: 1000, gid: 1000 },
+          modeAfterChown: 0o400,
+          calls,
+        }),
+      },
+    });
+    expect(await guard.renew()).toMatchObject({ ok: false, reason: "write_failed" });
+    expect(await readFile(leasePath, "utf8")).toBe(before);
+  });
+
+  it("publishes the canonical 0600 against the real filesystem", async () => {
+    await publishLease({ tenant: "acme", acquiredAtEpochS: 1000, ttlSeconds: 3600 });
+    // The lease starts WIDER than canonical, exactly as a hand-provisioned file
+    // might; the renewal narrows it and never widens it.
+    await chmod(leasePath, 0o644);
+    expect((await guardFor("acme", { nowMs: () => 1_100_000 }).renew()).ok).toBe(true);
+    expect((await stat(leasePath)).mode & 0o777).toBe(LEASE_FILE_MODE);
+    // Same-process renewal ⇒ same uid; the assertion that matters on a real
+    // cross-identity host is the E2E battery's, which runs a ROOT container.
+    expect((await stat(leasePath)).uid).toBe(process.getuid?.());
+  });
+
+  it("renew() is TOTAL: an injected I/O rejection becomes a typed refusal", async () => {
+    // A renewal that threw would bypass the caller's reporting entirely.
+    await publishLease({ tenant: "acme", acquiredAtEpochS: 1000, ttlSeconds: 3600 });
+    const guard = new HostExclusivityLeaseGuard({
+      tenant: "acme",
+      leasePath,
+      cacheTtlMs: 0,
+      nowMs: () => 1_100_000,
+      io: {
+        ...nodeLeaseIo,
+        identityOf: async () => {
+          throw Object.assign(new Error("stat is not supported here"), { code: "EIO" });
+        },
+      },
+    });
+    await expect(guard.renew()).resolves.toMatchObject({
+      ok: false,
+      reason: "write_failed",
+    });
+  });
+
+  it("the renewal timer REPORTS a rejection instead of swallowing it", async () => {
+    const seen: LeaseRenewalResult[] = [];
+    const stop = startHostExclusivityRenewal(
+      { renew: async () => Promise.reject(new Error("the guard blew up")) },
+      5,
+      (result) => seen.push(result),
+    );
+    // Give the interval a few chances to fire.
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    stop();
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0]).toMatchObject({ ok: false, reason: "write_failed" });
+    expect(seen[0]?.ok === false && seen[0].message).toContain("the guard blew up");
+  });
+
+  it("a reporter that throws does not take the renewal timer with it", async () => {
+    let calls = 0;
+    const stop = startHostExclusivityRenewal(
+      {
+        renew: async () => ({
+          ok: false as const,
+          reason: "absent" as const,
+          message: "no lease",
+        }),
+      },
+      5,
+      () => {
+        calls += 1;
+        throw new Error("the logger is broken");
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    stop();
+    expect(calls).toBeGreaterThan(1);
   });
 });
 

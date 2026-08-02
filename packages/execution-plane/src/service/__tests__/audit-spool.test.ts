@@ -9,7 +9,9 @@
  * INJECTED into the filesystem the spool actually uses.
  */
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
@@ -218,6 +220,22 @@ describe("audit spool — the byte bound (asserted on the FILE)", () => {
   });
 });
 
+/**
+ * Plant a lock document in the spool's own canonical form.
+ *
+ * `incarnation` defaults to a FRESH uuid, i.e. "some process run that is not
+ * this one" — which is what every arm here means by a planted holder.
+ */
+function writeLock(
+  dir: string,
+  holder: { pid: number; host: string; nonce: string; incarnation?: string },
+): void {
+  writeFileSync(
+    path.join(dir, "audit-spool.lock"),
+    `${JSON.stringify({ incarnation: randomUUID(), ...holder })}\n`,
+  );
+}
+
 describe("audit spool — single writer", () => {
   it("refuses a second LIVE writer against the same volume", () => {
     const dir = tempDir();
@@ -232,9 +250,84 @@ describe("audit spool — single writer", () => {
     await s.close();
     open.length = 0;
     // Simulate a lock left behind by a killed process: a pid that cannot exist.
-    writeFileSync(path.join(dir, "audit-spool.lock"), "999999999\n");
+    writeLock(dir, { pid: 999_999_999, host: os.hostname(), nonce: randomUUID() });
     const reopened = spool(dir);
     expect(reopened.read().entries.map((r) => r.jobId)).toEqual(["job-a"]);
+  });
+
+  // -------------------------------------------------------------------------
+  // cinatra#2325 — the container-restart case, which the pid-only lock got
+  // ALWAYS wrong rather than merely sometimes.
+  // -------------------------------------------------------------------------
+
+  it("takes over a lock left by a PREVIOUS INCARNATION OF ITSELF (the container restart)", async () => {
+    // THE PRODUCTION OUTAGE. The broker is PID 1 in its container, so a broker
+    // restarted after a SIGKILL reads the dead holder's `1` and probes
+    // `process.kill(1, 0)` — which succeeds, because it is probing ITSELF —
+    // and refuses to start, forever, under `restart: unless-stopped`.
+    //
+    // Here the same shape is reproduced with THIS process's own pid, which is
+    // just as certainly alive and just as certainly not the holder.
+    const dir = tempDir();
+    const s = spool(dir);
+    await s.append(record("job-a", 0));
+    await s.close();
+    open.length = 0;
+    writeLock(dir, { pid: process.pid, host: os.hostname(), nonce: randomUUID() });
+    const reopened = spool(dir);
+    expect(reopened.read().entries.map((r) => r.jobId)).toEqual(["job-a"]);
+  });
+
+  it("REFUSES a lock held by our pid on a DIFFERENT host (a pid means nothing there)", () => {
+    const dir = tempDir();
+    spool(dir).close();
+    open.length = 0;
+    writeLock(dir, { pid: process.pid, host: "some-other-container", nonce: randomUUID() });
+    expect(() => openAuditSpool({ dir })).toThrow(AuditSpoolLockedError);
+  });
+
+  it("REFUSES a LEGACY pid-only lock instead of guessing at it", () => {
+    // A lock a pre-#2325 broker left behind carries no host and no nonce, so
+    // none of the reasoning above applies to it. Fail closed and say so.
+    const dir = tempDir();
+    spool(dir).close();
+    open.length = 0;
+    writeFileSync(path.join(dir, "audit-spool.lock"), `${process.pid}\n`);
+    expect(() => openAuditSpool({ dir })).toThrow(AuditSpoolLockedError);
+  });
+
+  it("REFUSES a half-written lock rather than treating it as absent", () => {
+    const dir = tempDir();
+    spool(dir).close();
+    open.length = 0;
+    writeFileSync(path.join(dir, "audit-spool.lock"), "");
+    expect(() => openAuditSpool({ dir })).toThrow(AuditSpoolLockedError);
+  });
+
+  it("REFUSES a second LIVE spool in THIS process, despite sharing its pid", async () => {
+    // The regression the per-acquisition nonce introduced and this arm pins:
+    // once the nonce stopped being process-global, a second in-process
+    // acquisition matched the "same host + our own pid" rule and STOLE a live
+    // lock. `incarnation` is what separates "which acquisition" from "which
+    // process run" (Codex round 1, finding 4).
+    const dir = tempDir();
+    spool(dir);
+    expect(() => openAuditSpool({ dir })).toThrow(AuditSpoolLockedError);
+  });
+
+  it("release removes only a lock this writer still owns", async () => {
+    const dir = tempDir();
+    const s = spool(dir);
+    await s.close();
+    open.length = 0;
+    // A LATER writer legitimately holds the lock now.
+    const successor = { pid: 999_999_999, host: os.hostname(), nonce: randomUUID() };
+    writeLock(dir, successor);
+    // Closing the FIRST spool again must not delete the successor's lock.
+    await s.close();
+    expect(JSON.parse(readFileSync(path.join(dir, "audit-spool.lock"), "utf8")).nonce).toBe(
+      successor.nonce,
+    );
   });
 });
 
