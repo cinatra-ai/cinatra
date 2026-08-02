@@ -696,6 +696,8 @@ services:
     profiles: ["twenty"]
     ports: ["6479:6379"]
     command: ["--maxmemory-policy", "noeviction"]
+    volumes:
+      - cinatra-twenty-redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -1099,6 +1101,7 @@ volumes:
   cinatra-drupal:
   cinatra-neo4j-data:
   cinatra-twenty-db:
+  cinatra-twenty-redis:
   cinatra-twenty-server:
   cinatra-plane-pgdata:
   cinatra-plane-redisdata:

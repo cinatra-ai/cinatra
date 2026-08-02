@@ -155,6 +155,26 @@ describe("injected regressions (proves the gate is not a no-op)", () => {
     expect(errors.join("\n")).toMatch(/completeness: matrix volume 'ghost-volume' is not a top-level compose volume/);
   });
 
+  // cinatra#2329: the two checks above compare NAME SETS (top-level volumes vs
+  // matrix volumes) and never look at the service body — so dropping a service's
+  // `volumes:` mount while leaving the top-level declaration and matrix entry in
+  // place passed the gate clean. That is the exact shape that let `twenty-redis`
+  // run on the image's anonymous volume, which the fail-closed recreate preflight
+  // cannot identify, blocking a fresh isolated install.
+  it("a matrix-classified volume that its compose service does NOT mount FAILS (cinatra#2329)", () => {
+    const unmounted = composeText.replace("    volumes:\n      - cinatra-twenty-redis:/data\n", "");
+    expect(unmounted).not.toBe(composeText); // the hunk really was removed
+    const { errors } = collectProblems({ composeText: unmounted, matrix, schema });
+    expect(errors.join("\n")).toMatch(
+      /matrix service 'twenty-redis' claims volume 'cinatra-twenty-redis' but compose service 'twenty-redis' does not mount it/,
+    );
+  });
+
+  it("every matrix-classified volume IS mounted by its compose service today (no pre-existing offenders)", () => {
+    const { errors } = collectProblems({ composeText, matrix, schema });
+    expect(errors.filter((e) => /does not mount it/.test(e))).toEqual([]);
+  });
+
   it("a schema violation FAILS (unknown family)", () => {
     const m = clone(matrix);
     m.services[0].family = "mongodb";

@@ -42,7 +42,7 @@ platform secrets in the platform DB).
 | `cinatra-drupal` | `drupal` (drupal) | locally built (`docker/drupal`) | object-store (site files tree) | app-managed boot migration |
 | `cinatra-twenty-db` | `twenty-db` (twenty) | `postgres:16` | canonical-data | logical dump→fresh-volume→restore |
 | `cinatra-twenty-server` | `twenty-server` + `twenty-worker` (twenty) | `twentycrm/twenty:v2.7.3` | object-store (.local-storage uploads) | app-managed boot migration |
-| — (no volume) | `twenty-redis` (twenty) | `redis:7` | cache (ephemeral) | discard-recreate |
+| `cinatra-twenty-redis` | `twenty-redis` (twenty) | `redis:7` | cache | discard-recreate |
 | `cinatra-plane-pgdata` | `plane-db` (plane) | `postgres:15.7-alpine` | canonical-data | logical dump→fresh-volume→restore |
 | `cinatra-plane-redisdata` | `plane-redis` (plane) | `valkey/valkey:7.2.11-alpine` | cache | discard-recreate |
 | `cinatra-plane-rabbitmq` | `plane-mq` (plane) | `rabbitmq:3.13.6-management-alpine` | queue (drainable) | discard-recreate |
@@ -115,3 +115,10 @@ operator-chosen overrides.
    gate): fresh-init **and** upgrade-from-existing-data (cinatra#1422's arm).
 3. New stateful service ⇒ new inventory row + matrix entry (the gate fails the suite on
    an unclassified named volume) with explicit transitions, or it cannot land.
+4. Every stateful service mounts a **named** data volume — including a `cache`-class one
+   whose contents are disposable. The name is not about durability: the fail-closed
+   recreate preflight identifies each service's data volume from the resolved compose
+   config, so an anonymous mount reads as "data volume could not be identified" and
+   BLOCKS the bring-up (cinatra#2329 — `twenty-redis` blocked a fresh isolated install
+   from a profile the install never even activates). `graphiti` is the sole volume-less
+   entry, and only because it is derived state that lives entirely in Neo4j.
