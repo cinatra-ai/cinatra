@@ -22,7 +22,15 @@ vi.mock("@cinatra-ai/agents", () => ({
   countRunsForTemplate: vi.fn(),
   readAgentTemplatesDependingOn: vi.fn(),
   withInstallLock: vi.fn((_name: string, fn: () => unknown) => fn()),
-  removeReferencingRunRows: vi.fn(async () => {}),
+  removeReferencingRunRows: vi.fn(async () => ({
+    agent_runs: 0,
+    agent_versions: 0,
+    agent_template_versions: 0,
+    agent_registry_entries: 0,
+    agent_forks: 0,
+    runIds: [] as string[],
+    runIdsTruncated: false,
+  })),
 }));
 vi.mock("../audit-log", () => ({
   computeDanglingReferences: vi.fn(async () => ({})),

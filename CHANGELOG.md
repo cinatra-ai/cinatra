@@ -130,9 +130,9 @@ A coordinated security-hardening release, a cleaner and more consistent UI built
 
 Carried forward to a future release:
 
-- CLI backup restore is not yet end-to-end: restoring a CLI-created backup can fail while restoring the connector database. Tracked in [cinatra-cli#68](https://github.com/cinatra-ai/cinatra-cli/issues/68).
-- The **source-checkout** production install path (`MODE=prod make setup` from a cloned tree) can abort during extension re-verification. The published **container image** install path is unaffected. Tracked in [cinatra-cli#74](https://github.com/cinatra-ai/cinatra-cli/issues/74).
-- On a fresh local development setup, `make setup` can exit non-zero when the pre-wizard doctor check for the LLM-MCP connection runs before that connection is configurable. Tracked in [cinatra#674](https://github.com/cinatra-ai/cinatra/issues/674).
+- CLI backup restore is not yet end-to-end: restoring a CLI-created backup can fail while restoring the connector database.
+- The **source-checkout** production install path (`MODE=prod make setup` from a cloned tree) can abort during extension re-verification. The published **container image** install path is unaffected.
+- On a fresh local development setup, `make setup` can exit non-zero when the pre-wizard doctor check for the LLM-MCP connection runs before that connection is configurable.
 
 ## [0.1.3] - 2026-06-25
 

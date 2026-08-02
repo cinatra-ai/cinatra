@@ -21,6 +21,9 @@ import type {
 // ---------------------------------------------------------------------------
 export type { DanglingReferences } from "./audit-log";
 import type { DanglingReferences } from "./audit-log";
+// TYPE-ONLY (erased at compile): the hook module itself stays behind the same
+// dynamic import it always had, so nothing about the load graph changes.
+import type { ExtensionDataTeardownContext } from "./data-teardown-hook";
 import type { InstalledExtension } from "./canonical-types";
 import { isNonFinalizedLiveRowAware } from "./non-finalized-row";
 
@@ -1748,6 +1751,11 @@ class ExtensionRegistryImpl {
     // Durable teardown of this package's org-scoped settings/secrets rows. Fires
     // ONLY in this HARD-DELETE branch — NOT the archive branch above, which
     // preserves run history and is restorable. Awaited + idempotent + best-effort.
+    //
+    // NO teardown context is passed, deliberately: this branch is reached only
+    // when the extension was never USED (the predicate above routes anything
+    // with run history to archive), so there are no run rows and therefore no
+    // sandbox jobs or workspaces bound to them — see the FK note above.
     const { fireExtensionDataTeardown } = await import("./data-teardown-hook");
     await fireExtensionDataTeardown(ref.packageName);
   }
@@ -1953,8 +1961,19 @@ class ExtensionRegistryImpl {
       // Pre-clean the FK source rows so the RESTRICT FKs do not block
       // deleteAgentTemplate() inside handler.uninstall. Skip when no template
       // row exists (snapshot === null) — there is nothing to dereference.
+      // The deleted run ids travel to the data-teardown hook below: the
+      // execution plane needs them to cancel queued sandbox work and collect
+      // retained run workspaces, and by the time that hook fires these rows no
+      // longer exist to be looked up (cinatra#1705 AC9).
+      let teardownContext: ExtensionDataTeardownContext | undefined;
       if (snapshot) {
-        await removeReferencingRunRows(snapshot.id);
+        const removed = await removeReferencingRunRows(snapshot.id);
+        if (removed.runIds.length > 0) {
+          teardownContext = {
+            runIds: removed.runIds,
+            runIdsTruncated: removed.runIdsTruncated,
+          };
+        }
       }
       // cinatra#1837 R2: FAIL-CLOSED ALL-SCOPES artifact claim retirement BEFORE
       // the package-global backing destruction (see the hard-delete branch) —
@@ -1973,7 +1992,7 @@ class ExtensionRegistryImpl {
       fireExtensionCapabilityTeardown(ref.packageName);
       // Durable teardown of org-scoped settings/secrets rows.
       const { fireExtensionDataTeardown } = await import("./data-teardown-hook");
-      await fireExtensionDataTeardown(ref.packageName);
+      await fireExtensionDataTeardown(ref.packageName, teardownContext);
       return { danglingReferences };
     });
   }
@@ -2050,7 +2069,10 @@ export {
   setExtensionDataTeardownHook,
   fireExtensionDataTeardown,
 } from "./data-teardown-hook";
-export type { ExtensionDataTeardownHook } from "./data-teardown-hook";
+export type {
+  ExtensionDataTeardownContext,
+  ExtensionDataTeardownHook,
+} from "./data-teardown-hook";
 // Org-scoped dashboard archive/restore seam (cinatra#1628, S11a). Host-injected;
 // the dispatcher fires it after a ROW-SCOPED archive/restore transition commits,
 // re-homing the dashboard-archival step W5/#1035 dropped — with exact

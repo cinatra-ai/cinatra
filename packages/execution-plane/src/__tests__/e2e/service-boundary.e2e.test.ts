@@ -35,6 +35,7 @@ import {
 
 import { commandDigest } from "../../authz/voucher";
 import { BrokerServiceClient } from "../../service/broker-client";
+import { EXEC_PROTOCOL_VERSION } from "../../service/protocol";
 import { containerNamePrefixFor } from "../../l0-profile";
 import type { ExecResult, ExecutionAuditRecord } from "../../types";
 import {
@@ -67,6 +68,19 @@ const SURFACE = "agent_run";
 const DEPLOYMENT_MAX_ALLOWLIST = ["pypi.org", "files.pythonhosted.org"];
 const DEPLOYMENT_MAX_BYTES = 256 * 1024;
 
+/**
+ * A version this build is guaranteed NOT to speak, derived from the one it does.
+ *
+ * The arms below used to hardcode the numbers, and cinatra#2298 bumped
+ * `EXEC_PROTOCOL_VERSION` 1 → 2 underneath them: the positive arms went on
+ * asserting `1` and the "mismatch" arm went on presenting `2`, i.e. the exact
+ * version the service now speaks — so it asserted a 400 against a request that
+ * is CORRECT. Both went red the first time the battery ever ran on CI
+ * (cinatra#2325). Deriving from the constant is what makes the next bump a
+ * non-event here instead of a stale red.
+ */
+const WRONG_PROTOCOL_VERSION = EXEC_PROTOCOL_VERSION + 1;
+
 let stack: ExecStack;
 let app: BrokerServiceClient;
 
@@ -84,6 +98,25 @@ beforeAll(async () => {
     deploymentMaxBytesPerJob: DEPLOYMENT_MAX_BYTES,
     // Short enough that a renewal is observable inside one test.
     leaseRenewMs: 3_000,
+    // A PER-RUN spool directory, for two independent reasons (cinatra#2325).
+    //
+    // It is what makes this battery RUNNABLE on the developer path at all.
+    // cinatra#2298 gave the broker a durable audit spool on a bind mount whose
+    // compose default is the host path `/opt/cinatra-exec/audit-spool`. Docker
+    // Desktop for macOS does not share `/opt`, so the daemon refuses the mount
+    // and the stack never starts — "mounts denied: The path
+    // /opt/cinatra-exec/audit-spool is not shared from the host". The battery
+    // has been unrunnable there since that slice landed; it went unnoticed
+    // because the tier had no CI runner until cinatra#2323 and the batteries
+    // were only ever "green by hand".
+    //
+    // And it is what this battery's own assertions require. Section 6 counts
+    // spooled records exactly — every refusal present once, `droppedAudit` zero
+    // — while the compose-default path is a bind mount that OUTLIVES
+    // `compose down -v`. A second battery on the same host would otherwise
+    // inherit the first one's unacked records and count them as its own.
+    // `load-battery` already runs per-run for exactly that reason.
+    auditSpool: "per-run",
   });
   const leaf = stack.leaf("app-client");
   app = new BrokerServiceClient({
@@ -214,7 +247,7 @@ function expectHandshakeRefusal(result: RawRpcResult): void {
 describe("1. transport: mutual TLS on both hops, fail-closed on every negative", () => {
   it("app-client -> broker: a correctly-issued leaf completes a real handshake", async () => {
     const health = await app.health();
-    expect(health.protocolVersion).toBe(1);
+    expect(health.protocolVersion).toBe(EXEC_PROTOCOL_VERSION);
     expect(health.atMs).toBeGreaterThan(0);
   });
 
@@ -315,12 +348,13 @@ describe("1. transport: mutual TLS on both hops, fail-closed on every negative",
   });
 
   it("protocol-version mismatch in the BODY: 400, refused not coerced", async () => {
+    // BODY wrong, HEADER right — so only `checkProtocolVersion` can refuse this.
     const leaf = stack.leaf("app-client");
     const result = await brokerRaw({
       cert: leaf.certPem,
       key: leaf.keyPem,
-      protocolVersion: 2,
-      protocolHeader: "2",
+      protocolVersion: WRONG_PROTOCOL_VERSION,
+      protocolHeader: String(EXEC_PROTOCOL_VERSION),
     });
     expect(result.kind).toBe("answered");
     if (result.kind !== "answered") return;
@@ -329,12 +363,17 @@ describe("1. transport: mutual TLS on both hops, fail-closed on every negative",
   });
 
   it("protocol-version mismatch in the HEADER alone: still refused", async () => {
+    // BODY right, HEADER wrong — the pair of the arm above, and the ONLY shape
+    // that exercises `checkProtocolHeader` on its own. Before cinatra#2325 this
+    // arm sent body=1 + header="2" against a service speaking 2, so the BODY
+    // check fired first and the redundant transport echo was never tested at
+    // all: it passed for the wrong reason.
     const leaf = stack.leaf("app-client");
     const result = await brokerRaw({
       cert: leaf.certPem,
       key: leaf.keyPem,
-      protocolVersion: 1,
-      protocolHeader: "2",
+      protocolVersion: EXEC_PROTOCOL_VERSION,
+      protocolHeader: String(WRONG_PROTOCOL_VERSION),
     });
     expect(refusalCode(result)).toBe("protocol_version_mismatch");
   });
@@ -543,6 +582,53 @@ describe("3. host-exclusivity lease: a real file, read by path on every placemen
     expect((await execCommand(jobId, "echo still-leased")).ok).toBe(true);
     await app.closeJob(jobId, { removeWorkspace: true });
   }, 180_000);
+
+  it("a renewal REPUBLISHES the lease without taking it from the provisioning side", async () => {
+    // cinatra#2325, and the arm that could only ever have been written after a
+    // Linux CI host ran this battery. The broker renews from inside a ROOT
+    // container, over a bind mount, by RENAMING a file it created — so without
+    // an explicit ownership handoff the renewal silently converts a 0600 lease
+    // owned by the provisioning user into a 0600 lease owned by root. Docker
+    // Desktop's file sharing maps container-root writes back to the host user
+    // and hides it completely; a native Linux daemon does not.
+    //
+    // What that costs is not cosmetic: the provisioning side can then neither
+    // READ the document to check the tenant nor rewrite it, i.e. the renewal
+    // disables REVOKE — the one operation the whole lease exists to enable.
+    const started = Math.floor(Date.now() / 1000) - 300;
+    stack.writeLease({ acquired_at: started, ttl_seconds: 3600, renewed_at: started });
+    const before = stack.leaseIdentity();
+    expect(before).not.toBeNull();
+
+    // Wait for a renewal the BROKER performed — `acquired_at` moving forward is
+    // the only evidence that the container, not this process, wrote the file.
+    let renewedAt = 0;
+    for (let attempt = 0; attempt < 60 && renewedAt <= started; attempt += 1) {
+      await sleep(500);
+      renewedAt = stack.readLease()?.acquired_at ?? 0;
+    }
+    expect(
+      renewedAt,
+      "the broker never renewed the lease, so this arm proved nothing",
+    ).toBeGreaterThan(started);
+
+    // SAME OWNER, SAME GROUP as the document it replaced — across an inode
+    // replacement performed by a root container.
+    const after = stack.leaseIdentity();
+    expect(after).not.toBeNull();
+    expect(after?.uid).toBe(before?.uid);
+    expect(after?.gid).toBe(before?.gid);
+    // ...at the writer's canonical mode, never widened.
+    expect(after?.mode).toBe(0o600);
+
+    // And the operational consequence, asserted directly rather than inferred:
+    // the provisioning side can still REPLACE the document IN PLACE. An
+    // atomic-mv publish would succeed on directory permission alone, so it is
+    // an in-place write — the operation that genuinely requires ownership —
+    // that proves revoke survived.
+    expect(() => stack.writeLease({ ttl_seconds: 3600 })).not.toThrow();
+    expect(stack.readLease()?.tenant).toBe(TENANT);
+  }, 120_000);
 
   it("a mid-job reclaim DRAINS: the in-flight container is gone and the command is not clean", async () => {
     restoreHealthyLease();
@@ -1216,7 +1302,7 @@ describe("7. isolation: the topology's own invariants, checked on the running st
     ]);
     expect(published.stdout).toContain("4100");
     expect(published.stdout).toContain("127.0.0.1");
-    expect((await app.health()).protocolVersion).toBe(1);
+    expect((await app.health()).protocolVersion).toBe(EXEC_PROTOCOL_VERSION);
 
     // HALF TWO — the leg is scoped to the broker and carries both hardening
     // options. Only the broker is ever attached, so the app-facing bridge cannot

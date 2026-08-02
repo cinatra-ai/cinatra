@@ -99,6 +99,21 @@ services:
       # Its OWN directory, not the exec root: renewal has to write here, and the
       # exec root also holds every service's scoped env file. Provision the host
       # with a matching lease path so both sides agree on where it lives.
+      #
+      # OWN THIS DIRECTORY WITH THE PROVISIONING PRINCIPAL (cinatra#2325). This
+      # broker runs as ROOT and renews the lease by RENAMING a file it created,
+      # so the replacement inode is root's unless something carries the previous
+      # owner across. `lease.ts` does exactly that and refuses to publish when it
+      # cannot prove the handoff — but the MUTEX has no such handoff: whichever
+      # side renews first leaves `.host-exclusivity.lock.d` owned by itself.
+      # Removing a directory entry needs write+execute on the PARENT, which the
+      # provisioning user has on a directory it owns, so its stale-lock reclaim
+      # keeps working. Host this directory somewhere the provisioning user does
+      # NOT own and set the sticky bit and that stops being true.
+      #
+      # UPGRADING FROM A PRE-#2325 BROKER: the renewal preserves the CURRENT
+      # owner, and an older broker may already have taken the lease. `chown` the
+      # lease file back to the provisioning principal once before starting.
       - ${CINATRA_EXEC_LEASE_DIR:-/opt/cinatra-exec/lease}:/opt/cinatra-exec/lease:rw
       # THE AUDIT SPOOL'S VOLUME (cinatra#2266 slice 2). Read-WRITE, its own
       # directory, and NOT shared with another broker: the spool is a
