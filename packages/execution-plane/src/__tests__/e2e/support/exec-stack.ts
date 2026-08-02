@@ -39,6 +39,7 @@ import {
   mkdirSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
   readFileSync,
 } from "node:fs";
@@ -223,8 +224,22 @@ export type ExecStack = {
   tlsDir: string;
   workDir: string;
   leaf(role: ExecRole, overrides?: LeafOverrides): ExecCertificate;
+  /**
+   * Write the lease IN PLACE — a truncating `writeFileSync`, deliberately NOT
+   * the temp-file-plus-rename publish `publishLeaseAtomically` does.
+   *
+   * That choice is a canary, and removing it would remove the only thing that
+   * caught cinatra#2325. A rename-publish needs permission on the DIRECTORY
+   * only, so it succeeds against a lease file this process can neither read nor
+   * write; an in-place write is the operation that actually requires the
+   * provisioning side to still OWN the document. If a broker renewal ever again
+   * takes the lease away from the host identity that provisioned it, this is
+   * where the battery finds out.
+   */
   writeLease(lease: Partial<ParsedLease> & { tenant?: string }): void;
   readLease(): ParsedLease | null;
+  /** The lease document's on-disk identity, as the HOST sees it. */
+  leaseIdentity(): { uid: number; gid: number; mode: number } | null;
   removeLease(): void;
   /** Publish a lease the ops way: exclusive temp file in-dir, then atomic mv. */
   publishLeaseAtomically(lease: Partial<ParsedLease> & { tenant?: string }): void;
@@ -455,6 +470,14 @@ export async function bringUpExecStack(options: ExecStackOptions): Promise<ExecS
     readLease: () => {
       try {
         return JSON.parse(readFileSync(leasePath, "utf8")) as ParsedLease;
+      } catch {
+        return null;
+      }
+    },
+    leaseIdentity: () => {
+      try {
+        const stats = statSync(leasePath);
+        return { uid: stats.uid, gid: stats.gid, mode: stats.mode & 0o777 };
       } catch {
         return null;
       }
