@@ -151,11 +151,13 @@ export async function ExtensionsMarketplaceScreen({
 
     const ctaControl =
       cta.state === "restore" ? (
-        // Restore re-activates an already-installed (archived) template — DB-only.
-        // A failure (DB/auth/state race) is surfaced as a toast, not a page crash (#356).
-        // The category→copy map keeps the toast actionable + non-technical (#685);
-        // restore rarely yields a marketplace category, so it usually lands on
-        // the non-technical "unrecoverable"/default "try again" copy.
+        // Restore re-activates an already-installed (archived) template. A failure
+        // — a DB/auth/state race, or one of the stages that DO reach the registry
+        // (kind resolve, runtime activate) — is surfaced as a toast, not a page
+        // crash (#356). The category→copy map keeps the toast actionable +
+        // non-technical (#685); the restore copy collapses the marketplace-shaped
+        // categories to one administrator-escalation message and makes no retry
+        // claim in either direction (#2333).
         <MarketplaceInstallForm
           action={restoreAction}
           failureCopyByCategory={buildMarketplaceFailureCopy("restore", card.displayName)}

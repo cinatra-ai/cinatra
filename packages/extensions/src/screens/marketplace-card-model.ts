@@ -600,9 +600,14 @@ export type MarketplaceCardCta =
 /**
  * Resolve the six-state CTA for a card (design spec §IV: Install now /
  * Installed / Update now / Restore / Installing… / Incompatible).
- * - archived → Restore (DB-only reactivation of the already-installed
- *   version; no new package is fetched/activated, so neither registry state
- *   nor the CATALOG version's ABI compat gates it).
+ * - archived → Restore (reactivation of the ALREADY-INSTALLED version; no NEW
+ *   version is installed, so neither registry state nor the CATALOG version's
+ *   ABI compat gates it). NOTE the reactivation itself is not purely a DB
+ *   write — a connector restore re-activates its EXISTING finalized digest
+ *   through the activate hook, which goes through the install pipeline
+ *   (cinatra#2333 corrected the earlier "no new package is fetched/activated"
+ *   wording). What holds for the CTA is the narrower claim above: no new
+ *   version, therefore no catalog-version gate.
  * - not installed + a DECLARED ABI this host does not satisfy → Incompatible
  *   (the activation gate would refuse the install, so the CTA must never be
  *   softer than that gate: a greyed-out, unactionable Install). The verdict

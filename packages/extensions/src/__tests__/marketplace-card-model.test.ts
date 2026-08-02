@@ -447,8 +447,11 @@ describe("resolveMarketplaceCardCta (six-state, cinatra#988)", () => {
     });
   });
 
-  it("incompatible never gates actionless/DB-only states — restore + installed keep their state", () => {
-    // Restore reactivates the already-installed version (no catalog fetch);
+  it("incompatible never gates actionless/no-new-version states — restore + installed keep their state", () => {
+    // Restore reactivates the ALREADY-INSTALLED version, so the CATALOG version's
+    // ABI verdict is irrelevant to it (#2333: the reactivation is not purely a DB
+    // write — a connector restore re-activates its existing finalized digest —
+    // but no NEW version is installed, which is what the gate turns on).
     // Installed has no action to gate.
     expect(resolveMarketplaceCardCta(card, { version: "1.0.0", isArchived: true }, true, "incompatible")).toEqual({
       state: "restore",

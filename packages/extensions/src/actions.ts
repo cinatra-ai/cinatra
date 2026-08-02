@@ -460,9 +460,15 @@ export async function restoreExtensionPackage(
     );
     return { success: true };
   } catch (err) {
-    // Restore is DB-only (no marketplace round-trip) so this almost always
-    // classifies as `unrecoverable`; route it through the same channel anyway so
-    // the client form has one uniform failure path (cinatra#685).
+    // A restore is a MULTI-STAGE re-activation, not a DB-only write: the
+    // `resolveExtensionTypeId` call above consults the gatekept authorize
+    // response or reads a packument, and a hot-loadable kind's activate hook
+    // installs from the registry — so this CAN carry a marketplace contract code
+    // and is not always the fail-safe `unrecoverable` (cinatra#2333 corrected the
+    // earlier "DB-only, no round-trip" claim). Route it through the same channel
+    // either way so the client form has one uniform failure path (cinatra#685);
+    // the copy still collapses the marketplace-shaped categories because the
+    // category cannot be attributed to a stage.
     const failureCategory = classifyMarketplaceFailure(err);
     return {
       success: false,
