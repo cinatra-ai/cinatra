@@ -535,13 +535,32 @@ async function fsyncDir(dir: string): Promise<void> {
 }
 
 /**
- * THIS process's writer identity. Minted once, never reused, and the only thing
- * that distinguishes a lock this process holds from a lock a PREVIOUS
- * incarnation of it left behind.
+ * A writer identity, minted PER ACQUISITION rather than per process.
+ *
+ * Per-acquisition is the load-bearing part (Codex round 1, finding 3, ADOPTED).
+ * A process-global nonce cannot tell one acquisition from the next, so a
+ * release closure held from an EARLIER acquisition would still recognise a
+ * LATER acquisition's lock as "ours" and delete it — dropping a live writer's
+ * mutual exclusion and letting the next claimant append alongside it. A fresh
+ * nonce per acquisition also still satisfies the previous-incarnation rule
+ * below: an incarnation that died holding the lock necessarily minted a
+ * different one.
  */
-const WRITER_NONCE = randomUUID();
+const mintWriterNonce = (): string => randomUUID();
 
-type LockHolder = { pid: number; host: string; nonce: string };
+/**
+ * THIS process incarnation, minted once at module load.
+ *
+ * The per-acquisition nonce above cannot answer "is the holder a LIVE
+ * acquisition of my own process?", and that question has to be answered
+ * separately or the previous-incarnation rule below eats a live in-process
+ * holder (Codex round 1, finding 4 — a real regression the unit matrix caught
+ * the moment the nonce stopped being process-global). Two identities, two
+ * jobs: `nonce` says WHICH acquisition, `incarnation` says WHICH PROCESS RUN.
+ */
+const WRITER_INCARNATION = randomUUID();
+
+type LockHolder = { pid: number; host: string; nonce: string; incarnation: string };
 
 /**
  * Parse a lock document. `null` means "this lock cannot be reasoned about", and
@@ -562,11 +581,12 @@ function parseLockHolder(raw: string): LockHolder | null {
     return null;
   }
   if (doc === null || typeof doc !== "object" || Array.isArray(doc)) return null;
-  const { pid, host, nonce } = doc as Record<string, unknown>;
+  const { pid, host, nonce, incarnation } = doc as Record<string, unknown>;
   if (!Number.isInteger(pid) || (pid as number) <= 0) return null;
   if (typeof host !== "string" || host.length === 0) return null;
   if (typeof nonce !== "string" || nonce.length === 0) return null;
-  return { pid: pid as number, host, nonce };
+  if (typeof incarnation !== "string" || incarnation.length === 0) return null;
+  return { pid: pid as number, host, nonce, incarnation };
 }
 
 /**
@@ -600,15 +620,29 @@ function parseLockHolder(raw: string): LockHolder | null {
  * sharing BOTH a hostname and this directory would break the middle rule. The
  * compose file gives the spool its own per-broker volume and sets no hostname,
  * and the deployment note there says why.
+ *
+ * WHAT THIS STILL DOES NOT BUY, recorded rather than implied. The steal is a
+ * RENAME, and a rename is not conditional on the inode it moves — so two
+ * starters that both judged the same dead holder can still interleave in ways
+ * no amount of re-reading fully closes. Every branch below is written to
+ * NARROW that window (fail closed on anything unreadable or unexpected,
+ * confirm every claim by nonce afterwards, restore rather than drop a lock that
+ * turned out not to be the one judged), and none of them closes it. Closing it
+ * needs a real fencing primitive — an advisory `flock`, which Node does not
+ * expose and which this single-file bundle cannot take a native dependency for.
+ * The residual predates cinatra#2325 and is not made worse by it; what #2325
+ * fixes is the case that was not a race at all, but a deterministic misreading
+ * of a dead holder as a live one.
  */
 function takeLock(dir: string): () => void {
   const lockPath = path.join(dir, LOCK_FILE);
   const host = os.hostname();
+  const nonce = mintWriterNonce();
   const claim = (): boolean => {
     try {
       fs.writeFileSync(
         lockPath,
-        `${JSON.stringify({ pid: process.pid, host, nonce: WRITER_NONCE })}\n`,
+        `${JSON.stringify({ pid: process.pid, host, nonce, incarnation: WRITER_INCARNATION })}\n`,
         { flag: "wx" },
       );
       return true;
@@ -631,13 +665,21 @@ function takeLock(dir: string): () => void {
     let raw: string;
     try {
       raw = fs.readFileSync(lockPath, "utf8");
-    } catch {
+    } catch (err) {
+      // Name what actually happened. ENOENT is a racer having taken the lock;
+      // anything else is a lock this process cannot VERIFY, which is a
+      // different (and equally fail-closed) situation (Codex round 1, finding
+      // 6, ADOPTED — it used to report both as "disappeared").
+      const code = (err as NodeJS.ErrnoException).code;
       throw new AuditSpoolLockedError(
-        "The audit spool lock disappeared immediately after this writer claimed it; " +
-          "refusing rather than racing a second writer onto the same log.",
+        code === "ENOENT"
+          ? "The audit spool lock disappeared immediately after this writer claimed it; " +
+            "refusing rather than racing a second writer onto the same log."
+          : `The audit spool lock could not be read back after this writer claimed it (${code}); ` +
+            "refusing rather than writing against a lock it cannot verify.",
       );
     }
-    if (parseLockHolder(raw)?.nonce !== WRITER_NONCE) {
+    if (parseLockHolder(raw)?.nonce !== nonce) {
       throw new AuditSpoolLockedError(
         "The audit spool lock was taken by another starter immediately after this writer " +
           "claimed it; refusing rather than racing a second writer onto the same log.",
@@ -660,7 +702,10 @@ function takeLock(dir: string): () => void {
           "running against it.",
       );
     }
-    if (holder.nonce === WRITER_NONCE) {
+    if (holder.incarnation === WRITER_INCARNATION) {
+      // A LIVE acquisition of this very process run — a second spool opened over
+      // one directory. Refuse before the previous-incarnation rule below can
+      // mistake our own pid for a dead holder's.
       throw new AuditSpoolLockedError(
         "The audit spool at this volume is already held by THIS process; a second spool " +
           "over one directory is refused (the spool is single-writer by construction).",
@@ -672,7 +717,7 @@ function takeLock(dir: string): () => void {
       // is not a number this side can probe, so it is treated as live.
       alive = true;
     } else if (holder.pid === process.pid) {
-      // Our own pid, someone else's nonce: a previous incarnation of this
+      // Our own pid, a DIFFERENT incarnation: a previous incarnation of this
       // process. It cannot be alive — we are that pid. THE CONTAINER-RESTART
       // CASE, and the whole reason this function was rewritten.
       alive = false;
@@ -717,24 +762,40 @@ function takeLock(dir: string): () => void {
       throw err;
     }
     // The rename is not conditional on the inode, so it may have moved a lock
-    // that is NEWER than the dead one we read. Put anything that is not the
-    // document we judged straight back and refuse.
-    let stolenRaw = "";
+    // that is NEWER than the dead one we judged. Discard ONLY the exact
+    // document we judged; put anything else back and refuse.
+    //
+    // "Anything else" includes a lock we cannot READ (Codex round 1, finding 1,
+    // ADOPTED). Treating an unreadable stolen file as absent — and then
+    // deleting it and claiming — is how a transient EIO turns into a second
+    // writer on a live log, and it contradicts this module's own rule that a
+    // lock it cannot reason about is never stolen.
+    let stolenHolder: LockHolder | null = null;
     try {
-      stolenRaw = fs.readFileSync(stolen, "utf8");
+      stolenHolder = parseLockHolder(fs.readFileSync(stolen, "utf8"));
     } catch {
-      /* already gone — nothing to restore, and the claim below decides */
+      stolenHolder = null;
     }
-    const stolenHolder = parseLockHolder(stolenRaw);
-    if (stolenHolder !== null && stolenHolder.nonce !== holder.nonce) {
+    // ONE rule, and it is positive: discard the stolen file only when it is
+    // provably the exact document this starter judged dead. Unreadable,
+    // unparseable, and "somebody else's lock" are then all the same answer —
+    // put it back and refuse — instead of three branches with three chances to
+    // get the fail-closed direction wrong.
+    if (stolenHolder === null || stolenHolder.nonce !== holder.nonce) {
+      // Restoring is racy in its own right — the path is briefly empty, so a
+      // third starter can claim it in between — but the alternative is worse by
+      // a wide margin: dropping the file would leave a LIVE writer with no lock
+      // at all, and then every future starter becomes a second writer. Narrow,
+      // do not widen. (The residual is inherent to a rename-based steal without
+      // a fencing primitive and predates this change; see the header.)
       try {
         fs.renameSync(stolen, lockPath);
       } catch {
-        fs.rmSync(stolen, { force: true });
+        /* the path is occupied again — leave the copy rather than delete a lock */
       }
       throw new AuditSpoolLockedError(
-        "The audit spool's lock was replaced by another starter between this one's read and " +
-          "its steal; refusing rather than racing a second writer onto the same log.",
+        "The audit spool's lock was replaced or became unreadable between this starter's " +
+          "read and its steal; refusing rather than racing a second writer onto the same log.",
       );
     }
     fs.rmSync(stolen, { force: true });
@@ -748,11 +809,16 @@ function takeLock(dir: string): () => void {
   // RELEASE ONLY WHAT IS STILL OURS. An unconditional unlink would delete a
   // lock a LATER writer legitimately holds — turning this process's shutdown
   // into the removal of somebody else's mutual exclusion.
+  let released = false;
   return () => {
+    // AT MOST ONCE. A release closure that ran twice would, on its second run,
+    // be reasoning about a lock some LATER acquisition legitimately holds.
+    if (released) return;
+    released = true;
     try {
-      if (parseLockHolder(fs.readFileSync(lockPath, "utf8"))?.nonce !== WRITER_NONCE) return;
+      if (parseLockHolder(fs.readFileSync(lockPath, "utf8"))?.nonce !== nonce) return;
     } catch {
-      return; // already gone
+      return; // already gone, or unreadable — either way not ours to remove
     }
     fs.rmSync(lockPath, { force: true });
   };

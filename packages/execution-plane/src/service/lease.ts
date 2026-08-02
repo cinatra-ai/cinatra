@@ -684,9 +684,13 @@ export class HostExclusivityLeaseGuard {
         `${published.uid}:${published.gid} after the handoff`
       );
     }
-    if ((published.mode & 0o777) !== LEASE_FILE_MODE) {
+    // EXACTLY the canonical mode, set-user-ID / set-group-ID / sticky bits
+    // included — `identityOf` keeps all of `0o7777` precisely so this comparison
+    // can be exact. Masking to `0o777` here would accept `04600` and friends
+    // (Codex round 1, finding 5, ADOPTED).
+    if (published.mode !== LEASE_FILE_MODE) {
       return (
-        `the replacement's mode is ${(published.mode & 0o777).toString(8)}, not the ` +
+        `the replacement's mode is ${published.mode.toString(8)}, not the ` +
         `canonical ${LEASE_FILE_MODE.toString(8)}`
       );
     }
