@@ -220,9 +220,20 @@ describe("audit spool — the byte bound (asserted on the FILE)", () => {
   });
 });
 
-/** Plant a lock document in the spool's own canonical form. */
-function writeLock(dir: string, holder: { pid: number; host: string; nonce: string }): void {
-  writeFileSync(path.join(dir, "audit-spool.lock"), `${JSON.stringify(holder)}\n`);
+/**
+ * Plant a lock document in the spool's own canonical form.
+ *
+ * `incarnation` defaults to a FRESH uuid, i.e. "some process run that is not
+ * this one" — which is what every arm here means by a planted holder.
+ */
+function writeLock(
+  dir: string,
+  holder: { pid: number; host: string; nonce: string; incarnation?: string },
+): void {
+  writeFileSync(
+    path.join(dir, "audit-spool.lock"),
+    `${JSON.stringify({ incarnation: randomUUID(), ...holder })}\n`,
+  );
 }
 
 describe("audit spool — single writer", () => {
@@ -290,6 +301,17 @@ describe("audit spool — single writer", () => {
     spool(dir).close();
     open.length = 0;
     writeFileSync(path.join(dir, "audit-spool.lock"), "");
+    expect(() => openAuditSpool({ dir })).toThrow(AuditSpoolLockedError);
+  });
+
+  it("REFUSES a second LIVE spool in THIS process, despite sharing its pid", async () => {
+    // The regression the per-acquisition nonce introduced and this arm pins:
+    // once the nonce stopped being process-global, a second in-process
+    // acquisition matched the "same host + our own pid" rule and STOLE a live
+    // lock. `incarnation` is what separates "which acquisition" from "which
+    // process run" (Codex round 1, finding 4).
+    const dir = tempDir();
+    spool(dir);
     expect(() => openAuditSpool({ dir })).toThrow(AuditSpoolLockedError);
   });
 
