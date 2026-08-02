@@ -98,6 +98,25 @@ beforeAll(async () => {
     deploymentMaxBytesPerJob: DEPLOYMENT_MAX_BYTES,
     // Short enough that a renewal is observable inside one test.
     leaseRenewMs: 3_000,
+    // A PER-RUN spool directory, for two independent reasons (cinatra#2325).
+    //
+    // It is what makes this battery RUNNABLE on the developer path at all.
+    // cinatra#2298 gave the broker a durable audit spool on a bind mount whose
+    // compose default is the host path `/opt/cinatra-exec/audit-spool`. Docker
+    // Desktop for macOS does not share `/opt`, so the daemon refuses the mount
+    // and the stack never starts — "mounts denied: The path
+    // /opt/cinatra-exec/audit-spool is not shared from the host". The battery
+    // has been unrunnable there since that slice landed; it went unnoticed
+    // because the tier had no CI runner until cinatra#2323 and the batteries
+    // were only ever "green by hand".
+    //
+    // And it is what this battery's own assertions require. Section 6 counts
+    // spooled records exactly — every refusal present once, `droppedAudit` zero
+    // — while the compose-default path is a bind mount that OUTLIVES
+    // `compose down -v`. A second battery on the same host would otherwise
+    // inherit the first one's unacked records and count them as its own.
+    // `load-battery` already runs per-run for exactly that reason.
+    auditSpool: "per-run",
   });
   const leaf = stack.leaf("app-client");
   app = new BrokerServiceClient({
