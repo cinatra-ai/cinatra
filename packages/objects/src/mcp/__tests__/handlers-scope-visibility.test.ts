@@ -36,10 +36,6 @@ vi.mock("@/lib/objects-store", () => ({
   softDeleteObject: vi.fn(),
 }));
 
-vi.mock("@/lib/database", () => ({
-  readObjectsClassificationModelFromDatabase: vi.fn(() => "openai:gpt-4o-mini"),
-}));
-
 // The AsyncLocalStorage frame drives the probe projectId + store project_id.
 const frameStore: { projectContext?: { projectId: string | null } } = {};
 vi.mock("@cinatra-ai/mcp-server", () => ({

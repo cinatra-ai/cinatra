@@ -12,8 +12,6 @@ type DefaultProvidersCardProps = {
   openaiConnected: boolean;
   anthropicConnected: boolean;
   geminiConnected: boolean;
-  classificationModel: string;
-  availableModels: string[];
   /**
    * Agent-creation per-purpose override. These props drive the "Agent creation
    * (preview)" section — a genuine per-purpose Anthropic selection that is
@@ -24,9 +22,8 @@ type DefaultProvidersCardProps = {
   anthropicModels: string[];
   /**
    * OpenAI model option set for the agent-creation section. MUST match the
-   * server action's `AGENT_CREATION_OPENAI_MODELS` allow-list (gpt-5 family) —
-   * the classification `availableModels` (gpt-4*) is a DIFFERENT purpose and
-   * would be silently rejected by the action.
+   * server action's `AGENT_CREATION_OPENAI_MODELS` allow-list (gpt-5 family);
+   * anything outside it is silently rejected by the action.
    */
   agentCreationOpenaiModels: string[];
   agentCreationProvider: string | null;
@@ -49,8 +46,6 @@ export function DefaultProvidersCard({
   openaiConnected,
   anthropicConnected,
   geminiConnected,
-  classificationModel,
-  availableModels,
   anthropicModels,
   agentCreationOpenaiModels,
   agentCreationProvider,
@@ -70,7 +65,6 @@ export function DefaultProvidersCard({
 
   const [llmValue, setLlmValue] = useState(llmLocked ? llmLockedValue : defaultLlmProvider);
   const [imageValue, setImageValue] = useState(imageLocked ? imageLockedValue : defaultImageProvider);
-  const [classifModel, setClassifModel] = useState(classificationModel);
 
   // Agent-creation per-purpose override.
   // Initialize coherently — a stored model is only adopted when it belongs to
@@ -90,13 +84,18 @@ export function DefaultProvidersCard({
 
   const [pending, startTransition] = useTransition();
 
-  const bothLocked = false; // classification model is always editable
+  // Nothing on this card is editable when BOTH provider selects are locked and
+  // the agent-creation row is hidden (its readiness pin is inert). The
+  // "Objects classification" model row that used to keep the card permanently
+  // editable is gone (cinatra#2335): the classifier now rides the resolved
+  // provider runtime's configured default model, so there is no per-purpose
+  // override to edit here.
+  const bothLocked = llmLocked && imageLocked && !agentCreationPinActive;
 
   function handleSave() {
     const formData = new FormData();
     formData.set("defaultProvider", llmValue);
     formData.set("imageProvider", imageValue);
-    formData.set("classificationModel", classifModel);
     // Per-purpose agent-creation override. Only submit these fields when the
     // readiness pin is active — the row is hidden while it is inert, and the
     // server action ignores them anyway, but not sending them keeps the hidden
@@ -158,24 +157,7 @@ export function DefaultProvidersCard({
         )}
       </div>
 
-      <Separator className="my-4" />
-
-      {/* Row 3: Objects classification model */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <p className="text-sm font-medium text-foreground">Objects classification</p>
-        <Select value={classifModel} onValueChange={setClassifModel}>
-          <SelectTrigger className="w-48">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {availableModels.map((m) => (
-              <SelectItem key={m} value={m}>{m}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {/* Row 4: Agent creation (preview) — HIDDEN while the readiness pin is
+      {/* Row 3: Agent creation (preview) — HIDDEN while the readiness pin is
           inert. `isAgentCreationPinActive()` is hardcoded false today, so this
           per-purpose Anthropic selection (wired to `agent_creation_*` settings
           that NO live LLM call consumes) is not rendered at all: operators must
@@ -240,7 +222,8 @@ export function DefaultProvidersCard({
           `@cinatra-ai/host:anthropic-skill-config` write capability. Core no
           longer renders a duplicate control here. */}
 
-      {/* Single save button — hidden when both selects are locked */}
+      {/* Single save button — hidden when nothing on the card is editable
+          (both provider selects locked AND the agent-creation row hidden) */}
       {!bothLocked && (
         <div className="flex justify-end mt-4">
           <Button type="button" variant="outline" onClick={handleSave} disabled={pending}>

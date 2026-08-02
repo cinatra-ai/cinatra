@@ -22,10 +22,6 @@ vi.mock("@/lib/objects-store", () => ({
   softDeleteObject: vi.fn(),
 }));
 
-vi.mock("@/lib/database", () => ({
-  readObjectsClassificationModelFromDatabase: vi.fn(() => "openai:gpt-4o-mini"),
-}));
-
 // AC1 test double: the REAL `../classifier` module is loaded (NOT mocked); the
 // LLM runtime resolver underneath it is the double. If the static fast-path
 // ever falls through to a classifier LLM call, the resolver both records the

@@ -55,11 +55,17 @@ const CLASSIFIER_OUTPUT_JSON_SCHEMA: Record<string, unknown> = {
  * skip the LLM call entirely and return high-confidence (1.0). This avoids
  * the actorContext ALS requirement that blocks objects_save calls made from
  * within MCP tool handlers (which run outside the llm ALS frame).
+ *
+ * MODEL: none is passed. The per-purpose `objects_classification_model`
+ * override was retired (cinatra#2335) — the resolved runtime's adapter applies
+ * its own `input.model ?? configuredModel` fallback, so the call always lands
+ * on a model the resolved provider actually serves (an OpenAI id forwarded to
+ * an Anthropic-default instance was a per-call provider failure), and it stays
+ * correct across provider switches and ordered failover.
  */
 export async function classifyObject(
   rawData: unknown,
   typeHint?: string,
-  options?: { model?: string },
 ): Promise<ClassifierOutput> {
   // ---------------------------------------------------------------------------
   // Fast-path: typeHint exactly matches a registered static type.
@@ -114,7 +120,6 @@ export async function classifyObject(
     runtime,
     system,
     user,
-    model: options?.model,
     outputSchema: CLASSIFIER_OUTPUT_JSON_SCHEMA,
     maxSteps: 1,
     maxOutputTokens: 4096,
