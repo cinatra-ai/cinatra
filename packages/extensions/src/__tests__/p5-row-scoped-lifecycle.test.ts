@@ -124,6 +124,15 @@ vi.mock("@cinatra-ai/agents", () => ({
   readAgentTemplatesDependingOn: vi.fn(async () => []),
   removeReferencingRunRows: vi.fn(async (id: string) => {
     preCleanedTemplateIds.push(id);
+    return {
+      agent_runs: 0,
+      agent_versions: 0,
+      agent_template_versions: 0,
+      agent_registry_entries: 0,
+      agent_forks: 0,
+      runIds: [] as string[],
+      runIdsTruncated: false,
+    };
   }),
   withInstallLock: (_name: string, fn: () => unknown) => fn(),
 }));

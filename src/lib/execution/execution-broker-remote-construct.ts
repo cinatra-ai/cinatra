@@ -327,6 +327,17 @@ export type ConstructedRemoteExecutionBroker = {
   handshake: ExecutionBrokerHandshake;
   composite: ExecutionBrokerComposite;
   probeLiveness: () => Promise<ExecutionBrokerLiveness>;
+  /**
+   * The hard-removal teardown seam (epic #1705 AC9), forwarded to the remote
+   * broker over the existing wire op. Exposed as a bound FUNCTION rather than
+   * the client itself so the boot phase can wire the teardown participant
+   * without handing anything a raw client — the participant needs exactly this
+   * one operation and must not be able to reach openJob/exec/close.
+   */
+  terminateJobsForRun: (
+    runId: string,
+    opts?: { removeWorkspace?: boolean },
+  ) => Promise<number>;
   stop: () => Promise<void>;
 };
 
@@ -651,6 +662,7 @@ async function composeAgainst(
       executor,
       handshake: handshake.value,
       composite: composite.composite,
+      terminateJobsForRun: (runId, opts) => client.terminateJobsForRun(runId, opts),
       /**
        * The live re-probe. It asks the broker for a FRESH composite rather than
        * running another container: the admin surface loads on every navigation,

@@ -28,8 +28,10 @@ import { startLocalGateway, type LocalGateway } from "../../local-gateway";
 import { DEFAULT_SANDBOX_NETWORK } from "../../egress";
 import { runDocker } from "../../docker-cli";
 import { workspaceVolumeName } from "../../workspace";
+import { SANDBOX_CONTAINER_JOB_LABEL } from "../../l0-profile";
 import { skillsVolumeName } from "../../staging";
 import {
+  type BrokerQuotas,
   type EgressGatewayEndpoint,
   type EgressPolicy,
   type ExecutionAuditRecord,
@@ -80,6 +82,8 @@ function makeLiveBroker(opts: {
   policy: EgressPolicy;
   gatewayEndpoint?: EgressGatewayEndpoint;
   limits?: Partial<SandboxResourceLimits>;
+  /** Needed by the AC9 arm: a per-org ceiling of 1 makes queueing observable. */
+  quotas?: Partial<BrokerQuotas>;
 }): LiveBroker {
   const audits: ExecutionAuditRecord[] = [];
   let liveness: "alive" | "archived" | "gone" = "alive";
@@ -94,6 +98,7 @@ function makeLiveBroker(opts: {
     gateway: opts.gatewayEndpoint,
     sandboxNetwork: DEFAULT_SANDBOX_NETWORK,
     limits: opts.limits,
+    ...(opts.quotas ? { quotas: opts.quotas } : {}),
   });
   // The tier under test now rides the signed voucher (see the fixture).
   rememberBrokerPolicy(broker, opts.policy);
@@ -505,4 +510,89 @@ describe("session liveness against real containers (S1 AC6)", () => {
       reason: "job_terminated",
     });
   });
+});
+
+/**
+ * AC9 hard-removal battery — REAL containers, REAL volumes (epic #1705).
+ *
+ * The acceptance audit's proof lane for AC9 asks for both missing duties to be
+ * "assert[ed] ... against the real broker (dispatch counts and `docker ps`), not
+ * against reference counts". That is what these two arms do:
+ *
+ *  - the queued command is proven cancelled by the CONTAINER LEDGER — `docker
+ *    ps -a` filtered on its own job label is EMPTY, so it demonstrably never
+ *    dispatched — and by settling long before the holding command's `sleep`
+ *    could have released its permit;
+ *  - the retained workspace is proven collected by `docker volume ls`: present
+ *    after the job is closed (the retention-GC case), absent after teardown.
+ */
+describe("AC9 — hard removal cancels queued work and collects retained workspaces", () => {
+  /** Containers docker knows about for a job — the real dispatch ledger. */
+  async function containersForJob(jobId: string): Promise<string[]> {
+    const listed = await runDocker([
+      "ps",
+      "--all",
+      "--filter",
+      `label=${SANDBOX_CONTAINER_JOB_LABEL}=${jobId}`,
+      "--format",
+      "{{.Names}}",
+    ]);
+    return listed.stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+  }
+
+  async function volumeExists(name: string): Promise<boolean> {
+    const listed = await runDocker(["volume", "ls", "-q", "--filter", `name=^${name}$`]);
+    return listed.stdout.split("\n").map((l) => l.trim()).filter(Boolean).length > 0;
+  }
+
+  it("cancels a QUEUED command — no container is ever created for it", async () => {
+    const runKey = `${RUN_PREFIX}-ac9-cancel`;
+    const { broker } = makeLiveBroker({
+      policy: { mode: "none" },
+      // One command at a time for this org ⇒ the second one demonstrably queues.
+      quotas: { maxConcurrentPerOrg: 1, maxGlobalConcurrent: 4, maxQueuedPerOrg: 8 },
+    });
+    const holderJob = await openOrThrow(broker, runKey);
+    const queuedJob = await openOrThrow(broker, runKey);
+
+    // A REAL container that occupies the org's only permit for 25 seconds.
+    const holding = execVouched(broker, holderJob, "sleep 25");
+    // Wait for the holder's container to actually exist before queueing behind it.
+    const deadline = Date.now() + 30_000;
+    while ((await containersForJob(holderJob)).length === 0) {
+      if (Date.now() > deadline) throw new Error("the holding container never started");
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    const queued = execVouched(broker, queuedJob, "echo must-never-run");
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(await containersForJob(queuedJob)).toEqual([]);
+
+    // Hard removal. The holder is NOT interrupted, so the only way the queued
+    // command can settle inside this window is by being cancelled.
+    const startedAt = Date.now();
+    expect(await broker.terminateJobsForRun(runKey)).toBe(2);
+    expect(await queued).toMatchObject({ ok: false, reason: "job_terminated" });
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+    // The dispatch ledger is the proof: docker never saw a container for it.
+    expect(await containersForJob(queuedJob)).toEqual([]);
+
+    await holding;
+  }, 120_000);
+
+  it("collects a RETAINED run workspace on hard removal (docker volume ls)", async () => {
+    const runKey = `${RUN_PREFIX}-ac9-gc`;
+    const { broker } = makeLiveBroker({ policy: { mode: "none" } });
+    const jobId = await openOrThrow(broker, runKey);
+    expect((await execVouched(broker, jobId, "echo persisted > note.txt")).ok).toBe(true);
+    // Close WITHOUT removing the workspace — the retained state the AC names
+    // (`closeJob` / `closeIdleJobs` leave the run-keyed volume to retention GC).
+    await broker.closeJob(jobId);
+    const volume = workspaceVolumeName(runKey);
+    expect(await volumeExists(volume)).toBe(true);
+
+    // No job is open any more, so nothing is terminated — and the volume still
+    // has to go.
+    expect(await broker.terminateJobsForRun(runKey, { removeWorkspace: true })).toBe(0);
+    expect(await volumeExists(volume)).toBe(false);
+  }, 120_000);
 });

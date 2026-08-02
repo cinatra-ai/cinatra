@@ -36,6 +36,8 @@ import {
 } from "../purge";
 import { quarantineExtensionBeforePurge } from "../quarantine";
 import { setExtensionCapabilityTeardownHook } from "../capability-teardown-hook";
+import { setExtensionDataTeardownHook } from "../data-teardown-hook";
+import type { ExtensionDataTeardownContext } from "../data-teardown-hook";
 
 const actor: Actor = { actorType: "human", source: "route" };
 
@@ -342,6 +344,68 @@ describe("purgeExtension saga — ordering + rollback + NO registry unpublish", 
     );
     expect(deps.unpublishAllVersions).not.toHaveBeenCalled();
     expect(calls).not.toContain("verdaccio");
+  });
+
+  // cinatra#1705 AC9 — the purge saga's half of the same forwarding contract the
+  // registry test pins for force_delete. The run rows are deleted inside
+  // `dbPurgeAtomic`, so the ids can only reach the execution-plane teardown
+  // participant by riding the hook call; a purge that stops carrying them is a
+  // silent AC9 regression.
+  it("FORWARDS the purged run ids to the data-teardown hook", async () => {
+    const contexts: Array<ExtensionDataTeardownContext | undefined> = [];
+    setExtensionDataTeardownHook((_pkg, context) => {
+      contexts.push(context);
+    });
+    try {
+      const deps = makeDeps({
+        dbPurgeAtomic: async () => {
+          calls.push("db");
+          return {
+            deleted: true,
+            snapshot: { id: "tmpl-1" },
+            runIds: ["run-p1", "run-p2"],
+            runIdsTruncated: false,
+          };
+        },
+      });
+      await purgeExtension(
+        {
+          packageName: "@cinatra-ai/foo-agent",
+          expectedDigest: await digestFor("@cinatra-ai/foo-agent", deps),
+          actor,
+        },
+        deps,
+      );
+      expect(contexts).toEqual([
+        { runIds: ["run-p1", "run-p2"], runIdsTruncated: false },
+      ]);
+    } finally {
+      setExtensionDataTeardownHook(null);
+    }
+  });
+
+  // A deps implementation that reports nothing (the documented optional shape)
+  // must produce an ABSENT context, never an empty one a participant could read
+  // as "there were no runs".
+  it("carries NO context when the DB delete reports no run ids", async () => {
+    const contexts: Array<ExtensionDataTeardownContext | undefined> = [];
+    setExtensionDataTeardownHook((_pkg, context) => {
+      contexts.push(context);
+    });
+    try {
+      const deps = makeDeps();
+      await purgeExtension(
+        {
+          packageName: "@cinatra-ai/foo-agent",
+          expectedDigest: await digestFor("@cinatra-ai/foo-agent", deps),
+          actor,
+        },
+        deps,
+      );
+      expect(contexts).toEqual([undefined]);
+    } finally {
+      setExtensionDataTeardownHook(null);
+    }
   });
 
   it("DB-delete failure → restore dir + audit purge_rolled_back + throw; Verdaccio untouched", async () => {

@@ -7,6 +7,7 @@ import {
   PlatformArtifactLifecycleOrgInstallsError,
 } from "../index";
 import { setExtensionDataTeardownHook } from "../data-teardown-hook";
+import type { ExtensionDataTeardownContext } from "../data-teardown-hook";
 import { setExtensionArtifactClaimArchivalHook } from "../artifact-claim-lifecycle-hook";
 import { setExtensionArtifactClaimReactivationHook } from "../artifact-claim-lifecycle-hook";
 import { setExtensionArtifactClaimArchivalAllScopesHook } from "../artifact-claim-lifecycle-hook";
@@ -23,7 +24,15 @@ vi.mock("@cinatra-ai/agents", () => ({
   // forceDelete deps (additive — unused by the pre-existing tests). A vi.fn
   // pass-through so cinatra#1837 R4a lock-wrapping can be asserted.
   withInstallLock: vi.fn((_name: string, fn: () => unknown) => fn()),
-  removeReferencingRunRows: vi.fn(async () => {}),
+  removeReferencingRunRows: vi.fn(async () => ({
+    agent_runs: 0,
+    agent_versions: 0,
+    agent_template_versions: 0,
+    agent_registry_entries: 0,
+    agent_forks: 0,
+    runIds: [] as string[],
+    runIdsTruncated: false,
+  })),
 }));
 
 // forceDelete writes an audit row + computes dangling refs before destruction.
@@ -394,10 +403,13 @@ describe("ExtensionRegistry", () => {
   // extensions are restorable and keep their org-scoped config).
   describe("durable data-teardown firing", () => {
     let fired: string[];
+    let firedContexts: Array<ExtensionDataTeardownContext | undefined>;
     beforeEach(() => {
       fired = [];
-      setExtensionDataTeardownHook((pkg) => {
+      firedContexts = [];
+      setExtensionDataTeardownHook((pkg, context) => {
         fired.push(pkg);
+        firedContexts.push(context);
       });
     });
     afterEach(() => setExtensionDataTeardownHook(null));
@@ -430,6 +442,42 @@ describe("ExtensionRegistry", () => {
       await extensionRegistry.forceDelete("agent", ref, makeActor());
       expect(handler.uninstall).toHaveBeenCalled();
       expect(fired).toEqual([ref.packageName]);
+    });
+
+    // cinatra#1705 AC9. The execution plane cancels the package's queued sandbox
+    // work and collects its retained run workspaces by RUN ID — and those rows
+    // are deleted by the very step that fires this hook, so the ids can only
+    // reach a participant by being FORWARDED from the pre-clean that deleted
+    // them. This asserts the forwarding, which is the fragile half: a
+    // force_delete that stops carrying them is a silent regression of AC9.
+    it("forceDelete FORWARDS the deleted run ids to the data-teardown hook", async () => {
+      const handler = makeHandler("agent");
+      extensionRegistry.register(handler);
+      const agents = await import("@cinatra-ai/agents");
+      vi.mocked(agents.removeReferencingRunRows).mockResolvedValueOnce({
+        agent_runs: 2,
+        agent_versions: 0,
+        agent_template_versions: 0,
+        agent_registry_entries: 0,
+        agent_forks: 0,
+        runIds: ["run-a", "run-b"],
+        runIdsTruncated: true,
+      });
+      await extensionRegistry.forceDelete("agent", makeRef(), makeActor());
+      expect(firedContexts).toEqual([
+        { runIds: ["run-a", "run-b"], runIdsTruncated: true },
+      ]);
+    });
+
+    // The counterpart: the never-used hard-delete branch has NO run rows, so it
+    // deliberately carries no context. Absent must stay absent — a participant
+    // reads it as "not reported", never as "there were none".
+    it("uninstall HARD-DELETE branch carries NO run-id context (it has no runs)", async () => {
+      const handler = makeHandler("agent");
+      extensionRegistry.register(handler);
+      mockNeverUsedNoDepScenario();
+      await extensionRegistry.uninstall("agent", makeRef(), makeActor());
+      expect(firedContexts).toEqual([undefined]);
     });
   });
 

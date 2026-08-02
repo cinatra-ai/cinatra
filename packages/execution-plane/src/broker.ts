@@ -232,6 +232,14 @@ const MAX_TRACKED_COMMAND_IDS = 20_000;
 const COMMAND_ID_RETENTION_MS = 15 * 60 * 1000;
 
 /**
+ * Bound on the run→workspace-name map that lets hard-removal teardown collect a
+ * RETAINED L2 workspace (one whose jobs are all closed). One short string pair
+ * per run this process has opened a job for; the eviction posture is documented
+ * on `rememberRunWorkspace`.
+ */
+const MAX_TRACKED_RUN_WORKSPACES = 10_000;
+
+/**
  * Per-destination egress entries one audit record carries (cinatra#2266 slice
  * 2). The gateway attributes one entry per host a command contacted, which is
  * unbounded in the command's own control — and since the durable spool reserves
@@ -311,6 +319,14 @@ type BrokerJob = {
   inFlightCommands: number;
   terminated: boolean;
   terminationReason?: string;
+  /**
+   * Subscribers to wake when this job is terminated (epic #1705 AC9). Today the
+   * only subscribers are commands parked in the admission queue: terminating a
+   * job must CANCEL them, not leave them holding a queue slot until an
+   * unrelated command frees a permit. Cleared by `terminate`; late subscribers
+   * are served synchronously off `job.terminated` (see `cancellationFor`).
+   */
+  cancelListeners: Set<() => void>;
   /**
    * Set when the injected liveness probe THREW rather than answering. The
    * recorded posture keeps the command running (see `probeLiveness`), but the
@@ -457,10 +473,40 @@ function describeThrownValue(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/** A FIFO counting semaphore with a bounded wait queue. */
+/**
+ * A cancellation source a queued admission wait can subscribe to.
+ *
+ * STICKY BY CONTRACT (Codex design round, finding 1): `onCancel` must invoke
+ * the callback IMMEDIATELY when cancellation has already happened. A waiter
+ * that subscribes after the fact would otherwise never learn about it — the
+ * concrete leak being the command that wins the ORG permit, unsubscribes, and
+ * only then queues on the GLOBAL semaphore: it would hold that org permit for
+ * the rest of the wait even though its job is already dead.
+ */
+type CancellationSource = {
+  /** Subscribe; returns an unsubscribe. Fires SYNCHRONOUSLY if already cancelled. */
+  onCancel(callback: () => void): () => void;
+};
+
+/**
+ * A FIFO counting semaphore with a bounded wait queue and CANCELLABLE waits.
+ *
+ * Cancellation exists because AC9 (epic #1705) requires hard removal to CANCEL
+ * queued-not-started work, not merely to let it discover later that it is dead:
+ * `terminate` is a synchronous flag flip, so before this a parked command sat
+ * on `waitAcquire()` until some unrelated in-flight command finished, and only
+ * then refused. It never dispatched — but it held a queue slot for the whole
+ * time, which on a saturated org is indistinguishable from an outage.
+ *
+ * A cancelled waiter is SPLICED OUT of the queue and never acquires, so no
+ * permit is taken and none can leak; `release()` walks past any waiter that
+ * settled between being shifted and being invoked, so a permit is never dropped
+ * on the floor (which would starve the FIFO permanently).
+ */
 class BoundedSemaphore {
   private inFlight = 0;
-  private readonly waiters: Array<() => void> = [];
+  /** Each waiter returns true when it TOOK the permit it was handed. */
+  private readonly waiters: Array<() => boolean> = [];
   constructor(
     private readonly maxConcurrent: number,
     private readonly maxQueued: number,
@@ -475,20 +521,50 @@ class BoundedSemaphore {
     return "queued";
   }
 
-  /** Call only after tryAcquire() returned "queued". Resolves FIFO. */
-  waitAcquire(): Promise<void> {
+  /**
+   * Call only after tryAcquire() returned "queued". Resolves FIFO with
+   * `"acquired"` (the permit is HELD by the caller, who must release it) or
+   * `"cancelled"` (no permit was taken — the caller must not release).
+   */
+  waitAcquire(cancel?: CancellationSource): Promise<"acquired" | "cancelled"> {
     return new Promise((resolve) => {
-      this.waiters.push(() => {
+      let settled = false;
+      // A holder rather than a bare `let`: `waiter` closes over the
+      // unsubscribe BEFORE it can exist (subscription has to happen after the
+      // push — see below), and a mutable box makes that ordering explicit.
+      const subscription: { off?: () => void } = {};
+      const waiter = (): boolean => {
+        // Already cancelled ⇒ decline the permit so `release` hands it to the
+        // next real waiter instead of losing it.
+        if (settled) return false;
+        settled = true;
+        subscription.off?.();
         this.inFlight += 1;
-        resolve();
+        resolve("acquired");
+        return true;
+      };
+      this.waiters.push(waiter);
+      // Subscribe AFTER the push so an already-cancelled source (the sticky
+      // contract above) removes the waiter it can actually find.
+      subscription.off = cancel?.onCancel(() => {
+        if (settled) return;
+        settled = true;
+        const index = this.waiters.indexOf(waiter);
+        if (index >= 0) this.waiters.splice(index, 1);
+        resolve("cancelled");
       });
     });
   }
 
   release(): void {
     this.inFlight -= 1;
-    const next = this.waiters.shift();
-    if (next) next();
+    // Hand the permit to the first waiter that still wants it. A waiter that
+    // cancelled after being shifted (JS is single-threaded, so only via the
+    // synchronous `settled` flag) declines, and the loop continues.
+    while (this.waiters.length > 0) {
+      const next = this.waiters.shift();
+      if (next && next()) return;
+    }
   }
 
   get executing(): number {
@@ -524,6 +600,14 @@ export class ExecutionBroker {
    * while a command is in this method, and the semaphores cap that population.
    */
   private readonly inFlightCommandIds = new Set<string>();
+  /**
+   * runId → the L2 workspace volume name the ops seam RETURNED for it. Survives
+   * `closeJob` / `closeIdleJobs` on purpose: those leave the run-keyed volume in
+   * place for the retention GC, and this is the only handle by which
+   * hard-removal teardown can reach that RETAINED workspace (epic #1705 AC9).
+   * Bounded by `MAX_TRACKED_RUN_WORKSPACES`; dropped when the run is torn down.
+   */
+  private readonly runWorkspaces = new Map<string, string>();
   private readonly opts: ExecutionBrokerOptions;
   /**
    * The typed host-operation seams. Resolved ONCE in the constructor over
@@ -696,8 +780,16 @@ export class ExecutionBroker {
         lastActivityMs: this.opts.nowMs?.() ?? Date.now(),
         inFlightCommands: 0,
         terminated: false,
+        cancelListeners: new Set(),
       };
       this.jobs.set(jobId, job);
+      // Remember the REAL volume name the ops layer returned for this run
+      // (never a name this broker re-derives — the seam may be remote and its
+      // naming is its own; Codex design round, finding 3). This is what lets
+      // hard-removal teardown collect a RETAINED workspace: one whose jobs have
+      // all been closed or idle-reaped, both of which deliberately leave the L2
+      // volume in place for the retention GC.
+      if (session.runId) this.rememberRunWorkspace(session.runId, workspaceVolume);
       return { ok: true, jobId };
     } finally {
       // Release the reservation: the job is now counted in openJobCountForOrg
@@ -897,7 +989,21 @@ export class ExecutionBroker {
           "The org's execution queue is full; retry later (bounded queueing).",
           clampedPolicy, detail);
       }
-      if (orgAdmission === "queued") await orgSem.waitAcquire();
+      // The admission wait is the ONE unbounded pause in this pipeline, so it is
+      // where hard-removal cancellation has to land (epic #1705 AC9): a job
+      // terminated while its command is parked wakes it IMMEDIATELY, releases
+      // whatever it held, and refuses — the command never dispatches and never
+      // keeps a queue slot warm on a saturated org. `cancellationFor` is sticky,
+      // so a job terminated between the two waits cancels the second one too.
+      const cancellation = this.cancellationFor(job);
+      if (orgAdmission === "queued") {
+        // Nothing acquired on the cancelled path, so nothing to release here.
+        if ((await orgSem.waitAcquire(cancellation)) === "cancelled") {
+          return await this.refuse(job, seq, command, "job_terminated",
+            `The job was terminated (${job.terminationReason ?? "unspecified"}) while the command was queued; the command is cancelled and never runs.`,
+            clampedPolicy, detail);
+        }
+      }
       const globalAdmission = this.globalSemaphore.tryAcquire();
       if (globalAdmission === "saturated") {
         orgSem.release();
@@ -905,7 +1011,16 @@ export class ExecutionBroker {
           "The global execution queue is full; retry later (bounded queueing).",
           clampedPolicy, detail);
       }
-      if (globalAdmission === "queued") await this.globalSemaphore.waitAcquire();
+      if (globalAdmission === "queued") {
+        if ((await this.globalSemaphore.waitAcquire(cancellation)) === "cancelled") {
+          // The ORG permit IS held here (won above) and `permitsHeld` is still
+          // false, so the `finally` will not release it — release it explicitly.
+          orgSem.release();
+          return await this.refuse(job, seq, command, "job_terminated",
+            `The job was terminated (${job.terminationReason ?? "unspecified"}) while the command was queued; the command is cancelled and never runs.`,
+            clampedPolicy, detail);
+        }
+      }
       permitsHeld = true;
 
       // The signed, deployment-clamped policy IS the dispatch policy. The
@@ -1175,23 +1290,96 @@ export class ExecutionBroker {
     }
   }
 
-  /** Terminate every open job bound to a run (the hard-removal teardown hook). */
+  /**
+   * The HARD-REMOVAL teardown seam (epic #1705 AC9). Called by the app's
+   * extension data-teardown participant for every run of a package that was
+   * force-deleted or purged. Returns the number of jobs terminated by THIS
+   * call. Idempotent: a re-fire terminates nothing new and re-attempts the
+   * volume removals, which is exactly the retry a best-effort teardown wants.
+   *
+   * Three duties, in the AC's own words:
+   *
+   *  - "cancels queued jobs" — `terminate` fires the job's cancel listeners, so
+   *    a command parked in the admission queue wakes IMMEDIATELY, releases
+   *    whatever it held and refuses `job_terminated`. It never dispatches, and
+   *    it stops occupying a queue slot.
+   *  - "fails the next in-flight command closed" — the pre-existing termination
+   *    flag, unchanged. A container already mid-run is NOT killed here (that is
+   *    the placement-drain path's job, and killing a tenant's running command on
+   *    a lifecycle event is not this seam's contract).
+   *  - "GCs retained workspaces" — with `removeWorkspace`, the run's L2 volume
+   *    goes NOW rather than waiting out the retention window, including the
+   *    RETAINED case where no job is open any more (`closeJob` /
+   *    `closeIdleJobs` deliberately leave the run-keyed volume behind).
+   *
+   * WHY REMOVING A RETAINED WORKSPACE IS SOUND HERE, precisely (Codex design
+   * round, finding 2 — the general "no local job ⇒ unused" inference is NOT
+   * sound, so the argument is scoped to this caller): hard removal has already
+   * deleted the run row, so (a) `openJob` for this run is refused at its
+   * liveness gate BEFORE it provisions any volume, and (b) every job still open
+   * on any broker fails its next command closed on the same probe — no new
+   * writer can appear. The only remaining holder is a container already running,
+   * and docker refuses to remove a volume that is attached; that failure is
+   * tolerated and the retention GC retries. The name removed is the one the
+   * volume-ops seam RETURNED at open, never a name re-derived here.
+   *
+   * LIMITATION, on record: `runWorkspaces` is process-local, so a workspace
+   * retained by a PREVIOUS process lifetime is not reachable by name here and
+   * stays with the retention GC. Making that durable needs shared state this
+   * slice deliberately does not add.
+   */
   async terminateJobsForRun(
     runId: string,
     opts?: { removeWorkspace?: boolean },
   ): Promise<number> {
+    // PHASE 1 — TERMINATE EVERYTHING FIRST, synchronously, with no await in the
+    // loop (Codex review, finding 2). Cancelling the run's work is the duty that
+    // must not be delayed or skipped: an awaited volume removal in this loop
+    // would let one slow (or rejecting) docker call postpone — or, on a
+    // rejection, entirely skip — the cancellation of every later job of the same
+    // run. Cleanup is phase 2, and it cannot hold cancellation hostage.
     let terminated = 0;
+    const workspaces = new Set<string>();
+    const skillsVolumes: string[] = [];
     for (const job of this.jobs.values()) {
-      if (job.session.runId !== runId || job.terminated) continue;
-      this.terminate(job, "run_removed");
-      if (opts?.removeWorkspace) {
-        await this.volumeOps.removeWorkspace(job.workspaceVolume);
+      if (job.session.runId !== runId) continue;
+      // A job terminated by an EARLIER fire (or by a purged-liveness refusal)
+      // is not re-terminated or re-counted, but its volumes are still swept:
+      // the previous fire's removal may have failed while a container held it.
+      if (!job.terminated) {
+        this.terminate(job, "run_removed");
+        terminated += 1;
       }
-      // The skills volume is strictly per-job (never shared): remove eagerly.
-      if (job.skillsVolume) {
-        await this.volumeOps.removeSkills(job.skillsVolume);
+      // Deduped by NAME: every job of a run shares one run-keyed workspace.
+      if (opts?.removeWorkspace) workspaces.add(job.workspaceVolume);
+      // The skills volume is strictly per-job (never shared).
+      if (job.skillsVolume) skillsVolumes.push(job.skillsVolume);
+    }
+    // The RETAINED workspace: a run whose jobs are all closed still has its
+    // volume, because `closeJob` / `closeIdleJobs` leave it to the retention GC.
+    const retained = opts?.removeWorkspace
+      ? this.runWorkspaces.get(runId)
+      : undefined;
+    if (retained !== undefined) workspaces.add(retained);
+
+    // PHASE 2 — best-effort cleanup, each attempt ISOLATED so one failure never
+    // strands the rest. A failed removal is not lost work: the mapping is only
+    // forgotten on success, so the next fire retries it, and the retention GC is
+    // the backstop under that.
+    for (const volumeName of workspaces) {
+      try {
+        await this.volumeOps.removeWorkspace(volumeName);
+        if (retained === volumeName) this.runWorkspaces.delete(runId);
+      } catch {
+        // Tolerated: docker refuses a volume an attached container still holds.
       }
-      terminated += 1;
+    }
+    for (const volumeName of skillsVolumes) {
+      try {
+        await this.volumeOps.removeSkills(volumeName);
+      } catch {
+        // Same posture — per-volume containment, retried on the next fire.
+      }
     }
     return terminated;
   }
@@ -1205,6 +1393,13 @@ export class ExecutionBroker {
     this.terminate(job, "closed");
     if (opts?.removeWorkspace) {
       await this.volumeOps.removeWorkspace(job.workspaceVolume);
+      // FORGET the run→workspace mapping when the volume it names is gone
+      // (Codex review, finding 1). A name left behind after its volume was
+      // removed is a name a later `ensureWorkspace` could legitimately hand to
+      // a DIFFERENT run — and hard-removal teardown would then delete that
+      // run's workspace. Conditioned on the name still matching, so a mapping
+      // already re-pointed by a newer open is never dropped.
+      this.forgetRunWorkspace(job.session.runId, job.workspaceVolume);
     }
     // The skills volume is strictly per-job (never shared): remove eagerly.
     if (job.skillsVolume) {
@@ -1279,9 +1474,75 @@ export class ExecutionBroker {
     return sem;
   }
 
+  /**
+   * A STICKY cancellation source for a job (Codex design round, finding 1).
+   *
+   * "Sticky" is the whole point: `terminate` clears the listener set, so a
+   * subscriber that arrives afterwards would otherwise wait forever. Subscribing
+   * to an ALREADY-terminated job therefore fires synchronously — which is
+   * exactly the case a command hits when it wins the org permit, unsubscribes,
+   * and only then queues on the global semaphore.
+   */
+  private cancellationFor(job: BrokerJob): CancellationSource {
+    return {
+      onCancel: (callback: () => void): (() => void) => {
+        if (job.terminated) {
+          callback();
+          return () => {};
+        }
+        job.cancelListeners.add(callback);
+        return () => job.cancelListeners.delete(callback);
+      },
+    };
+  }
+
+  /**
+   * Record the REAL L2 volume name the ops seam returned for a run, so
+   * hard-removal teardown can collect a RETAINED workspace by name instead of
+   * re-deriving one (the seam may be remote and owns its own naming).
+   *
+   * Bounded like the other per-command bookkeeping: at the cap the OLDEST entry
+   * is evicted rather than refusing an open — losing a name only costs the
+   * retention GC one more sweep, whereas refusing would turn a bookkeeping bound
+   * into an execution outage.
+   */
+  private rememberRunWorkspace(runId: string, volumeName: string): void {
+    if (
+      !this.runWorkspaces.has(runId) &&
+      this.runWorkspaces.size >= MAX_TRACKED_RUN_WORKSPACES
+    ) {
+      const oldest = this.runWorkspaces.keys().next().value as string | undefined;
+      if (oldest !== undefined) this.runWorkspaces.delete(oldest);
+    }
+    this.runWorkspaces.set(runId, volumeName);
+  }
+
+  /** Drop a run→workspace mapping IFF it still names the volume just removed. */
+  private forgetRunWorkspace(runId: string | undefined, volumeName: string): void {
+    if (!runId) return;
+    if (this.runWorkspaces.get(runId) === volumeName) {
+      this.runWorkspaces.delete(runId);
+    }
+  }
+
   private terminate(job: BrokerJob, reason: string): void {
     job.terminated = true;
     job.terminationReason = reason;
+    // Wake anything parked on this job's behalf, SYNCHRONOUSLY and before any
+    // await, so a concurrent `exec` can never slip past the flag. The set is
+    // drained first so a listener that re-enters cannot be run twice, and a
+    // throwing listener cannot stop the others (termination is a decision that
+    // has already been made — it must not be undone by a notification bug).
+    if (job.cancelListeners.size === 0) return;
+    const listeners = [...job.cancelListeners];
+    job.cancelListeners.clear();
+    for (const listener of listeners) {
+      try {
+        listener();
+      } catch {
+        // Notification is best-effort; the termination stands either way.
+      }
+    }
   }
 
   /**

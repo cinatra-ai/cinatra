@@ -633,6 +633,33 @@ jobs:
         if: ${{ hashFiles('src/lib/__tests__/integration/org-write-archive-race.integration.test.ts') == '' }}
         run: echo "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts not present yet (cinatra#2207 not merged) — reporting this CI-wiring step as a deliberate green no-op stub until it lands; see cinatra#1943."
 
+      # cinatra#1705 AC9. The strongest evidence for the lifecycle AC — that a
+      # REQUIRED-pin run mounts its own snapshot's recipe rather than live drift,
+      # refuses on a purged snapshot, refuses a cross-template snapshot and stays
+      # L0 when the snapshot declares nothing — lives in this real-store suite,
+      # and the acceptance audit found it ran in NO CI-invoked pattern: it is an
+      # `*.integration.test.ts`, config-excluded from the default vitest run, and
+      # no workflow named it. So the pinned-snapshot contract could regress
+      # without reddening a single check. This step closes that, using the same
+      # CINATRA_DB_INTEGRATION_TESTS=1 + job-level SUPABASE_DB_URL pattern as
+      # every other step in this job. Own vitest invocation (own process) so its
+      # pool lifecycle never touches the steps above.
+      - name: Provision a store schema for the run-seam suite (cinatra#1705 AC9)
+        # Its OWN schema, provisioned with the canonical bootstrap DDL. The
+        # suite drives the REAL @cinatra-ai/agents version store, so unlike
+        # every step above it needs the cinatra store baseline and not just the
+        # Better Auth `public` tables — and a dedicated schema keeps its writes
+        # away from the suites that share this job's database.
+        env:
+          SUPABASE_SCHEMA: cinatra_exec_run_seam
+        run: node --import tsx scripts/ci/apply-store-schema.mjs
+
+      - name: Execution run-seam declared-environment integration tests (cinatra#1705 AC9)
+        env:
+          CINATRA_DB_INTEGRATION_TESTS: '1'
+          SUPABASE_SCHEMA: cinatra_exec_run_seam
+        run: pnpm exec vitest run src/lib/execution/__tests__/run-seam-declared-environment.integration.test.ts
+
   # packages/agents INTEGRATION tier (cinatra#2226). Replaces the dead step that
   # used to live at the end of the `test` job:
   #
