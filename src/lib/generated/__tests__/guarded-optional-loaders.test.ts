@@ -50,7 +50,7 @@ const MAPS: Record<string, Record<string, { resolution: string; load: unknown }>
 };
 
 const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required" | "guardedOptional" }> = [
-  { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/anthropic-connector", resolution: "guardedOptional" },
+  { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/anthropic-connector", resolution: "required" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/apify-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/apollo-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/blog-connector", resolution: "guardedOptional" },
@@ -76,7 +76,7 @@ const EXPECTED: ReadonlyArray<{ map: string; key: string; resolution: "required"
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/wordpress-mcp-connector", resolution: "guardedOptional" },
   { map: "GENERATED_EXTENSION_SERVER_ENTRIES", key: "@cinatra-ai/youtube-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_ENTRY_MODULES", key: "a2a-server-connector", resolution: "guardedOptional" },
-  { map: "GENERATED_CONNECTOR_ENTRY_MODULES", key: "anthropic-connector", resolution: "guardedOptional" },
+  { map: "GENERATED_CONNECTOR_ENTRY_MODULES", key: "anthropic-connector", resolution: "required" },
   { map: "GENERATED_CONNECTOR_ENTRY_MODULES", key: "apify-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_ENTRY_MODULES", key: "apollo-connector", resolution: "guardedOptional" },
   { map: "GENERATED_CONNECTOR_ENTRY_MODULES", key: "blog-connector", resolution: "guardedOptional" },
