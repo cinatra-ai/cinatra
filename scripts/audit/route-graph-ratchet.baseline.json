@@ -1,42 +1,42 @@
 {
-  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
+  "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1666,
-    "/api/mcp": 1662,
-    "/chat": 1740,
-    "/api/a2a": 1667,
-    "/api/llm-bridge": 1677
+    "/sign-in": 1667,
+    "/api/mcp": 1663,
+    "/chat": 1741,
+    "/api/a2a": 1668,
+    "/api/llm-bridge": 1678
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1660,
-      "to": 1666,
-      "reason": "cinatra#2347 S2 (PR #2358): the DIRECTLY ASSIGNED skill tier has to run inside getAssignedSkillIdsForAgent \u2014 the one resolver every locked route reaches \u2014 because that is what makes an admin's assignment reach the actor-less worker and unattributable dispatches at all. Reaching it costs SIX first-party modules on every locked route: the tier itself, the S1 agent_assigned_skills store, the epic's shared assignability predicate, the shared canonical agent-package resolver, the S1 single I/O seam, and the package-eligibility leaf that seam reads. None is avoidable by narrowing: the predicate and the resolver are the epic's SINGLE definitions (S1, S2 and S3 consume the same ones by design, so re-deriving them to save a module would be the defect the shared helpers exist to prevent), and folding the tier back into agents-store.ts would save exactly one module while costing the fail-closed arms their test seam. Accepted as a one-time step, not a trend: S3-S5 consume these same modules and add none. SUPERSEDES the #1705 AC9 record carried at 1659 -> 1660 (PR #2321: the hard-removal teardown's run-id capture inside the deleting transaction); that growth is still in this ceiling, it is simply no longer the most recent raise.",
-      "pr": 2358
+      "from": 1666,
+      "to": 1667,
+      "reason": "cinatra#2359 (PR #2377): the post-login redirect-target fix adds ONE new pure module, src/lib/auth-redirect-target.ts (the single open-redirect validator + ?next= builder shared by the app-wide auth gate, the proxy, and the sign-in page), reached via the PRE-EXISTING edge into src/lib/auth-session.ts (already in every locked route's graph) — folding the validator directly into auth-session.ts to avoid the new module was considered and rejected: doing so for the proxy consumer (src/lib/auth-route-guard.ts) would require it to import auth-session.ts, which transitively pulls in src/lib/auth.ts's eager better-auth/DB-pool bootstrap — a real behavioral regression to the guard's documented cookie-only, no-DB-round-trip design — and duplicating the validator instead would violate the single-copy requirement. One shared module, one extra edge, +1 on every locked route.",
+      "pr": 2377
     },
     "/api/mcp": {
-      "from": 1656,
-      "to": 1662,
-      "reason": "cinatra#2347 S2 (PR #2358): the DIRECTLY ASSIGNED skill tier has to run inside getAssignedSkillIdsForAgent \u2014 the one resolver every locked route reaches \u2014 because that is what makes an admin's assignment reach the actor-less worker and unattributable dispatches at all. Reaching it costs SIX first-party modules on every locked route: the tier itself, the S1 agent_assigned_skills store, the epic's shared assignability predicate, the shared canonical agent-package resolver, the S1 single I/O seam, and the package-eligibility leaf that seam reads. None is avoidable by narrowing: the predicate and the resolver are the epic's SINGLE definitions (S1, S2 and S3 consume the same ones by design, so re-deriving them to save a module would be the defect the shared helpers exist to prevent), and folding the tier back into agents-store.ts would save exactly one module while costing the fail-closed arms their test seam. Accepted as a one-time step, not a trend: S3-S5 consume these same modules and add none.",
-      "pr": 2358
+      "from": 1662,
+      "to": 1663,
+      "reason": "cinatra#2359 (PR #2377): same shared open-redirect validator module (src/lib/auth-redirect-target.ts) reached via the pre-existing auth-session.ts edge — see the /sign-in record for the full rationale (folding into auth-session.ts was rejected because it would force the proxy to import the heavy DB-bootstrapping auth.ts graph; a second copy was rejected as duplication).",
+      "pr": 2377
     },
     "/chat": {
-      "from": 1734,
-      "to": 1740,
-      "reason": "cinatra#2347 S2 (PR #2358): the DIRECTLY ASSIGNED skill tier has to run inside getAssignedSkillIdsForAgent \u2014 the one resolver every locked route reaches \u2014 because that is what makes an admin's assignment reach the actor-less worker and unattributable dispatches at all. Reaching it costs SIX first-party modules on every locked route: the tier itself, the S1 agent_assigned_skills store, the epic's shared assignability predicate, the shared canonical agent-package resolver, the S1 single I/O seam, and the package-eligibility leaf that seam reads. None is avoidable by narrowing: the predicate and the resolver are the epic's SINGLE definitions (S1, S2 and S3 consume the same ones by design, so re-deriving them to save a module would be the defect the shared helpers exist to prevent), and folding the tier back into agents-store.ts would save exactly one module while costing the fail-closed arms their test seam. Accepted as a one-time step, not a trend: S3-S5 consume these same modules and add none.",
-      "pr": 2358
+      "from": 1740,
+      "to": 1741,
+      "reason": "cinatra#2359 (PR #2377): same shared open-redirect validator module (src/lib/auth-redirect-target.ts) reached via the pre-existing auth-session.ts edge — see the /sign-in record for the full rationale (folding into auth-session.ts was rejected because it would force the proxy to import the heavy DB-bootstrapping auth.ts graph; a second copy was rejected as duplication).",
+      "pr": 2377
     },
     "/api/a2a": {
-      "from": 1661,
-      "to": 1667,
-      "reason": "cinatra#2347 S2 (PR #2358): the DIRECTLY ASSIGNED skill tier has to run inside getAssignedSkillIdsForAgent \u2014 the one resolver every locked route reaches \u2014 because that is what makes an admin's assignment reach the actor-less worker and unattributable dispatches at all. Reaching it costs SIX first-party modules on every locked route: the tier itself, the S1 agent_assigned_skills store, the epic's shared assignability predicate, the shared canonical agent-package resolver, the S1 single I/O seam, and the package-eligibility leaf that seam reads. None is avoidable by narrowing: the predicate and the resolver are the epic's SINGLE definitions (S1, S2 and S3 consume the same ones by design, so re-deriving them to save a module would be the defect the shared helpers exist to prevent), and folding the tier back into agents-store.ts would save exactly one module while costing the fail-closed arms their test seam. Accepted as a one-time step, not a trend: S3-S5 consume these same modules and add none.",
-      "pr": 2358
+      "from": 1667,
+      "to": 1668,
+      "reason": "cinatra#2359 (PR #2377): same shared open-redirect validator module (src/lib/auth-redirect-target.ts) reached via the pre-existing auth-session.ts edge — see the /sign-in record for the full rationale (folding into auth-session.ts was rejected because it would force the proxy to import the heavy DB-bootstrapping auth.ts graph; a second copy was rejected as duplication).",
+      "pr": 2377
     },
     "/api/llm-bridge": {
-      "from": 1671,
-      "to": 1677,
-      "reason": "cinatra#2347 S2 (PR #2358): the DIRECTLY ASSIGNED skill tier has to run inside getAssignedSkillIdsForAgent \u2014 the one resolver every locked route reaches \u2014 because that is what makes an admin's assignment reach the actor-less worker and unattributable dispatches at all. Reaching it costs SIX first-party modules on every locked route: the tier itself, the S1 agent_assigned_skills store, the epic's shared assignability predicate, the shared canonical agent-package resolver, the S1 single I/O seam, and the package-eligibility leaf that seam reads. None is avoidable by narrowing: the predicate and the resolver are the epic's SINGLE definitions (S1, S2 and S3 consume the same ones by design, so re-deriving them to save a module would be the defect the shared helpers exist to prevent), and folding the tier back into agents-store.ts would save exactly one module while costing the fail-closed arms their test seam. Accepted as a one-time step, not a trend: S3-S5 consume these same modules and add none.",
-      "pr": 2358
+      "from": 1677,
+      "to": 1678,
+      "reason": "cinatra#2359 (PR #2377): same shared open-redirect validator module (src/lib/auth-redirect-target.ts) reached via the pre-existing auth-session.ts edge — see the /sign-in record for the full rationale (folding into auth-session.ts was rejected because it would force the proxy to import the heavy DB-bootstrapping auth.ts graph; a second copy was rejected as duplication).",
+      "pr": 2377
     }
   }
 }

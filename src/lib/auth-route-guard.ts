@@ -8,6 +8,7 @@ import {
 } from "@/lib/generated/widget-stream-public-paths";
 import { isRuntimeApprovedWidgetStreamPublicPath } from "@/lib/widget-stream-runtime-slug-snapshot";
 import { frameAncestorsDirectiveFor } from "@/lib/embed/frame-ancestors.server";
+import { CURRENT_PATH_HEADER, buildSignInPath } from "@/lib/auth-redirect-target";
 
 const PUBLIC_PATH_PREFIXES = [
   "/permissions",
@@ -294,11 +295,32 @@ export async function guardAppRoute(request: NextRequest) {
   // and server components via better-auth. Middleware only gates unauthenticated
   // users (no cookie) from reaching protected routes at all.
   const sessionCookie = getSessionCookie(request);
+  // `?? ""` guards test doubles that stub only `nextUrl.pathname` (a real
+  // NextRequest's `nextUrl.search` is always a string, "" when absent).
+  const currentPath = `${pathname}${request.nextUrl.search ?? ""}`;
   if (!sessionCookie) {
-    return NextResponse.redirect(new URL("/sign-in", request.url));
+    // cinatra#2359 — capture the destination the caller was actually headed
+    // to so a post-auth redirect can return them there instead of always
+    // landing on the default page. `buildSignInPath` validates `currentPath`
+    // as a same-origin relative path before ever echoing it back (it always
+    // is here — derived straight from `request.nextUrl` — but the shared
+    // validator is applied uniformly regardless of call site).
+    return NextResponse.redirect(new URL(buildSignInPath(currentPath), request.url));
   }
 
-  return NextResponse.next();
+  // A session cookie is present, but better-auth's own session lookup (DB- or
+  // cache-backed) hasn't run yet — that happens in the Server Component /
+  // Route Handler via `getAuthSession()`. If that lookup finds the session
+  // expired or otherwise invalid, `requireAuthSession()` (and the ad hoc
+  // gates that mirror it) need the SAME "where was the caller headed" signal
+  // this proxy has and they don't: a Server Component has no direct access to
+  // the incoming request's URL. Forward it via a request header (the
+  // documented Next.js pattern for surfacing the current path to Server
+  // Components) so the belt-and-suspenders redirect also preserves the
+  // target.
+  const forwardedHeaders = new Headers(request.headers);
+  forwardedHeaders.set(CURRENT_PATH_HEADER, currentPath);
+  return NextResponse.next({ request: { headers: forwardedHeaders } });
 }
 
 export const authRouteGuardConfig = {

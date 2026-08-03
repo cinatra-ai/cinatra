@@ -33,7 +33,7 @@ import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 
-import { getAuthSession } from "@/lib/auth-session";
+import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
 
 import { buildSecurityContextFromSession } from "../auth/security-context";
 import { EntityDashboardsShell } from "../components/entity-dashboards-shell";
@@ -56,7 +56,7 @@ export async function PersonalDashboardPage() {
   const session = await getAuthSession();
   const ctx = buildSecurityContextFromSession(session);
   if (!ctx) {
-    redirect("/sign-in");
+    redirect(await signInRedirectTarget());
   }
 
   const ref = buildPersonalEntityRef(ctx.organizationId, ctx.userId);

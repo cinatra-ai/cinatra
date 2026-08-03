@@ -5,6 +5,7 @@ import { and, eq } from "drizzle-orm";
 import { auth, ensureGoogleAvatarSync, ensureInitialAdminBootstrap, ensureDefaultOrganizationMembership, ensureAssistantBootstrap } from "@/lib/auth";
 import { betterAuthDb, betterAuthMembers } from "@/lib/better-auth-db";
 import { notifPerf, notifPerfNote, notifPerfNow } from "@cinatra-ai/notifications/perf-log";
+import { CURRENT_PATH_HEADER, buildSignInPath } from "@/lib/auth-redirect-target";
 
 // Run once per server process to seed any missing built-in assistant users
 // (currently just @cinatra). Idempotent
@@ -135,11 +136,36 @@ export async function getAuthSession() {
   return snapshot;
 }
 
+/**
+ * Resolves the `/sign-in` redirect target, preserving the current request's
+ * path as `?next=` (cinatra#2359) so a successful login returns the caller to
+ * where they were headed. Reads the path forwarded by `guardAppRoute`
+ * (src/lib/auth-route-guard.ts) via `CURRENT_PATH_HEADER`; falls back to a
+ * bare `/sign-in` outside a request scope or when the header was never set
+ * (e.g. a request that predates this change reaching a stale edge cache).
+ *
+ * Shared by every gated surface — the app-wide `requireAuthSession()` below
+ * and the ad hoc `getAuthSession()` + bare-redirect call sites (the artifacts
+ * page, the agent-review page, the extension action guard, the dashboard
+ * screens) — so a caller need only replace `redirect("/sign-in")` with
+ * `redirect(await signInRedirectTarget())`.
+ *
+ * Deliberately returns a STRING rather than performing the redirect itself:
+ * `redirect()` is typed `never`, and TypeScript only narrows a preceding
+ * `if (!x)` check away when `redirect(...)` is called DIRECTLY at the call
+ * site — narrowing does not propagate through an intermediate async wrapper
+ * that calls `redirect()` on the caller's behalf.
+ */
+export async function signInRedirectTarget(): Promise<string> {
+  const requestHeaders = await headers();
+  return buildSignInPath(requestHeaders.get(CURRENT_PATH_HEADER));
+}
+
 export async function requireAuthSession() {
   const session = await getAuthSession();
 
   if (!session) {
-    redirect("/sign-in");
+    redirect(await signInRedirectTarget());
   }
 
   return session;
