@@ -9,6 +9,9 @@ import {
   replaceAgentCatalogInDatabase,
   replaceAgentSkillExclusionsInDatabase,
 } from "@/lib/database";
+// The DIRECTLY ASSIGNED skill tier (cinatra#2347, epic #2345) — read +
+// resolution-time revalidation behind one non-rejecting seam.
+import { resolveAssignedSkillTierIds } from "@/lib/agent-assigned-skills-injection";
 
 // Actor filter shape used by the read-path union below.
 // Includes `platformRole` so the visibility predicate
@@ -1087,8 +1090,19 @@ export async function getAssignedSkillIdsForAgent(
     // Even on the degraded (catalog-read-failure) path the lifecycle gate still
     // applies — it reads the lifecycle_state column independently of the failed
     // catalog read, so a draft/archived skill is never delivered here either.
+    //
+    // The DIRECTLY ASSIGNED tier (cinatra#2347, epic #2345) is loaded here too.
+    // Before, this return emitted only globals + custom assignments, so an
+    // admin's explicit assignment silently vanished for the whole duration of a
+    // catalog blip — the one tier a human configured by hand. The tier resolves
+    // the agent itself (no population survived the failed Promise.all above) and
+    // is fail-closed end to end: a read error, a revalidation throw or an
+    // unresolvable reference yields the EMPTY set and the run still proceeds.
+    const degradedAssignedIds = await resolveAssignedSkillTierIds(agentId, null);
     return filterToRuntimeDeliverableSkillIds(
-      Array.from(new Set([...systemGlobalIds, ...customAssignmentIds])),
+      Array.from(
+        new Set([...degradedAssignedIds, ...systemGlobalIds, ...customAssignmentIds]),
+      ),
     );
   }
 
@@ -1101,6 +1115,21 @@ export async function getAssignedSkillIdsForAgent(
     (a) => a.id === agentId || a.identifier === agentId || a.packageId === agentId,
   );
   const canonicalPackageId = agentRecord?.packageId ?? agentId;
+
+  // The directly ASSIGNED tier (cinatra#2347, epic #2345) — an admin's explicit
+  // "this agent uses THIS skill" pins, read from the actor-INDEPENDENT
+  // `agent_assigned_skills` store so an actor-less worker run and an
+  // unattributable bridge dispatch resolve exactly what the settings page wrote.
+  // Started here so it overlaps the `skill_matches` read (the two are
+  // independent); it is contractually non-rejecting, so the await below cannot
+  // introduce a new failure mode into this resolver.
+  //
+  // The agent population loaded above is handed over, so the canonical-package
+  // resolution costs no extra read. The resolution uses the epic's SHARED
+  // canonical resolver rather than `canonicalPackageId` — that local fallback is
+  // `agentId` itself when nothing matched, which would key an assignment read on
+  // a slug the store never writes.
+  const assignedTierPromise = resolveAssignedSkillTierIds(agentId, agents);
 
   try {
     matchRows = await skillMatchesStore.readSkillMatchesByAgent(canonicalPackageId);
@@ -1205,16 +1234,36 @@ export async function getAssignedSkillIdsForAgent(
     a < b ? -1 : a > b ? 1 : 0,
   );
 
-  // Deduplicated union — agent self-matches first (most specific), then
-  // skill_matches results (recommender score DESC), then system globals, then
-  // custom assignments. Every tier is now deterministically ordered
-  // (catalog tiers by skill id; recommender by score DESC, skill_id ASC;
-  // custom assignments by skill_id ASC). The seen-set preserves the earlier
-  // position when a skill appears in multiple sources.
+  // The revalidated assigned tier, in stored `position` order. Awaited here so
+  // the read overlapped everything above it.
+  const assignedSkillIds = await assignedTierPromise;
+
+  // Deduplicated union — agent self-matches first (most specific), then the
+  // DIRECTLY ASSIGNED skills, then skill_matches results (recommender score
+  // DESC), then system globals, then custom assignments. Every tier is
+  // deterministically ordered (catalog tiers by skill id; assigned by stored
+  // `position` ASC; recommender by score DESC, skill_id ASC; custom assignments
+  // by skill_id ASC). The seen-set preserves the earlier position when a skill
+  // appears in multiple sources.
+  //
+  // WHY ASSIGNED SITS BEFORE `matchedSkillIds` (cinatra#2347 scope item 4). The
+  // whole union leaves here as ONE list that the injection contract enters at
+  // `recommendation` rank — assigned and automatically matched skills are the
+  // SAME rank, by requirement, and no contract changes. What decides who
+  // survives the 8-cap WITHIN that rank is first-seen order, so placing the
+  // human-configured tier ahead of the recommender's output is exactly the
+  // epic's "assigned skills survive ahead of automatic matches under cap
+  // pressure". Declared dependencies and the personal delta still outrank both
+  // (they are separate ranks, resolved through different ports), so this
+  // position cannot let an assignment displace either.
+  //
+  // A skill that is BOTH assigned and auto-matched is delivered once, in the
+  // ASSIGNED slot, by the same first-seen dedup — no special case.
   const seen = new Set<string>();
   const result: string[] = [];
   for (const id of [
     ...directAgentMatches,
+    ...assignedSkillIds,
     ...matchedSkillIds,
     ...systemSkillIds,
     ...sortedSystemGlobalIds,
