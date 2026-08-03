@@ -33,6 +33,7 @@ export {
   markAllNotificationsReadForUser,
   markNotificationsReadThroughForUser,
   markNotificationReadForUser,
+  markNotificationUnreadForUser,
   markNotificationsReadByHrefPrefixForUser,
   deleteNotificationsByDedupeKeyForUser,
 } from "./service";

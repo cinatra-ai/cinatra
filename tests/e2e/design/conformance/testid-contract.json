@@ -159,6 +159,98 @@
         }
       ]
     },
+    "connector-setup": {
+      "manifest": "app-connectors",
+      "selector": "[data-conformance-id=\"connector-setup\"][data-state] — the §II two-column setup body. Fields bind by their CONFIG KEY (input[name=\"<key>\"], e.g. config.apiKey → name=\"apiKey\"); connect/disconnect: [data-testid=\"connector-connect\"] / [data-testid=\"connector-disconnect\"] (+ [data-testid=\"connector-disconnect-confirm\"] in the confirm dialog); the form's live connected state: [data-testid=\"schema-config-form\"][data-connected]; right-column card: [data-testid=\"connector-status-probe-card\"] over [data-slot=\"connection-status-badge\"][data-status]; non-ready variants: [data-slot=\"connector-setup-loading\"] / [data-slot=\"connector-setup-error\"].",
+      "requires": [
+        {
+          "file": "packages/sdk-ui/src/connector-setup-columns.tsx",
+          "literals": [
+            "data-conformance-id={conformanceId}",
+            "data-state={state}",
+            "data-slot=\"connector-setup-loading\"",
+            "data-slot=\"connector-setup-error\""
+          ]
+        },
+        {
+          "file": "src/components/extensions/schema-config-connector-form.tsx",
+          "literals": [
+            "data-testid=\"schema-config-form\"",
+            "data-connected={connected ? \"\" : undefined}",
+            "data-testid=\"connector-connect\"",
+            "data-testid=\"connector-disconnect\"",
+            "data-testid=\"connector-disconnect-confirm\"",
+            "conformanceId={conformanceId}"
+          ]
+        },
+        {
+          "file": "src/components/extensions/connector-status-probe-card.tsx",
+          "literals": ["data-testid=\"connector-status-probe-card\""]
+        },
+        {
+          "file": "packages/sdk-ui/src/connection-status-badge.tsx",
+          "literals": ["data-slot=\"connection-status-badge\"", "data-status={status}"]
+        }
+      ]
+    },
+    "connector-config-tab": {
+      "manifest": "app-connectors",
+      "selector": "[data-conformance-id=\"connector-config-tab\"][data-state] — a custom config tab's Narrow-width (576px) panel. Fields bind by their CONFIG KEY (input[name=\"<key>\"]); non-ready variants: [data-slot=\"connector-config-tab-loading\"] / [data-slot=\"connector-config-tab-error\"].",
+      "requires": [
+        {
+          "file": "src/components/extensions/schema-config-connector-form.tsx",
+          "literals": [
+            "data-conformance-id=\"connector-config-tab\"",
+            "data-state={conformanceState}",
+            "data-slot=\"connector-config-tab-loading\"",
+            "data-slot=\"connector-config-tab-error\""
+          ]
+        }
+      ]
+    },
+    "connector-multi-setup": {
+      "manifest": "app-connectors",
+      "selector": "[data-conformance-id=\"connector-multi-setup\"][data-state] — the Setup tab of a many-connections connector (same two-column body as connector-setup). Roll-up card: [data-slot=\"connection-status-card\"][data-variant=\"multi\"]; the control opening the Connections tab: [data-testid=\"connector-view-connections\"].",
+      "requires": [
+        {
+          "file": "packages/sdk-ui/src/connector-setup-columns.tsx",
+          "literals": ["data-conformance-id={conformanceId}", "data-state={state}"]
+        },
+        {
+          "file": "packages/sdk-ui/src/connection-status-card.tsx",
+          "literals": ["data-slot=\"connection-status-card\"", "data-variant=\"multi\""]
+        },
+        {
+          "file": "src/components/extensions/schema-config-connector-form.tsx",
+          "literals": [
+            "data-testid=\"schema-config-form\"",
+            "data-connected={connected ? \"\" : undefined}",
+            "data-testid=\"connector-connect\"",
+            "conformanceId={conformanceId}",
+            "state={conformanceState}"
+          ]
+        }
+      ]
+    },
+    "connector-connections": {
+      "manifest": "app-connectors",
+      "selector": "[data-conformance-id=\"connector-connections\"][data-state] — the Connections tab; one stacked card per connection ([data-slot=\"connection-row\"][data-status]) each carrying [data-slot=\"connection-status-badge\"][data-status].",
+      "requires": [
+        {
+          "file": "packages/sdk-ui/src/connections-list.tsx",
+          "literals": [
+            "data-conformance-id=\"connector-connections\"",
+            "data-state={state}",
+            "data-slot=\"connection-row\"",
+            "data-status={status}"
+          ]
+        },
+        {
+          "file": "packages/sdk-ui/src/connection-status-badge.tsx",
+          "literals": ["data-slot=\"connection-status-badge\"", "data-status={status}"]
+        }
+      ]
+    },
     "scheduling-step": {
       "manifest": "app",
       "selector": "harness [data-surface-id=\"scheduling-step\"][data-variant=\"populated\"] (schedule affordance → data-outcome=\"armed\"; error: [data-slot=\"alert\"]; loading: [data-testid=\"scheduling-step-loading\"]).",

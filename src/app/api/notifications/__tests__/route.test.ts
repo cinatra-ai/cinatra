@@ -11,12 +11,14 @@ const listNotificationsMock = vi.fn();
 const markAllMock = vi.fn();
 const markThroughMock = vi.fn();
 const markReadMock = vi.fn();
+const markUnreadMock = vi.fn();
 const markByHrefMock = vi.fn();
 vi.mock("@/lib/notifications", () => ({
   listNotifications: () => listNotificationsMock(),
   markAllNotificationsRead: () => markAllMock(),
   markNotificationsReadThrough: (id: string) => markThroughMock(id),
   markNotificationRead: (id: string) => markReadMock(id),
+  markNotificationUnread: (id: string) => markUnreadMock(id),
   markNotificationsReadByHrefPrefix: (h: string) => markByHrefMock(h),
 }));
 
@@ -28,6 +30,7 @@ beforeEach(() => {
   markAllMock.mockReset();
   markThroughMock.mockReset();
   markReadMock.mockReset();
+  markUnreadMock.mockReset();
   markByHrefMock.mockReset();
 });
 
@@ -169,5 +172,121 @@ describe("PATCH /api/notifications", () => {
     getAuthSessionMock.mockResolvedValue({ user: { id: "u-1" } });
     const res = await PATCH(buildRequest({}));
     expect(res.status).toBe(400);
+  });
+});
+
+// The discriminated mark-unread shape (cinatra#2379). Presence of `unread`
+// routes to a dedicated strict branch, validated separately from the legacy
+// {beforeId, all, id, href} priority chain above — which stays untouched for
+// bodies that don't mention `unread` (see the {beforeId, all} precedence test
+// above, still green).
+describe("PATCH /api/notifications — discriminated mark-unread shape", () => {
+  function buildRequest(body: unknown): Request {
+    return new Request("http://test/api/notifications", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it("returns 401 when no session, regardless of an unread payload", async () => {
+    getAuthSessionMock.mockResolvedValue(null);
+    const res = await PATCH(buildRequest({ id: "n-1", unread: true }));
+    expect(res.status).toBe(401);
+    expect(markUnreadMock).not.toHaveBeenCalled();
+  });
+
+  it("ACCEPTED: {id, unread:true} delegates to markNotificationUnread", async () => {
+    getAuthSessionMock.mockResolvedValue({ user: { id: "u-1" } });
+    const res = await PATCH(buildRequest({ id: "n-7", unread: true }));
+    expect(res.status).toBe(200);
+    expect(markUnreadMock).toHaveBeenCalledWith("n-7");
+    expect(markReadMock).not.toHaveBeenCalled();
+  });
+
+  it("ACCEPTED (unchanged): bare {id} still delegates to markNotificationRead, not unread", async () => {
+    getAuthSessionMock.mockResolvedValue({ user: { id: "u-1" } });
+    const res = await PATCH(buildRequest({ id: "n-7" }));
+    expect(res.status).toBe(200);
+    expect(markReadMock).toHaveBeenCalledWith("n-7");
+    expect(markUnreadMock).not.toHaveBeenCalled();
+  });
+
+  it("REJECTED: {id, unread:false} — must use bare {id} to mark read", async () => {
+    getAuthSessionMock.mockResolvedValue({ user: { id: "u-1" } });
+    const res = await PATCH(buildRequest({ id: "n-7", unread: false }));
+    expect(res.status).toBe(400);
+    expect(markUnreadMock).not.toHaveBeenCalled();
+    expect(markReadMock).not.toHaveBeenCalled();
+  });
+
+  it("REJECTED: multi-selector mix {id, unread:true, all:true}", async () => {
+    getAuthSessionMock.mockResolvedValue({ user: { id: "u-1" } });
+    const res = await PATCH(
+      buildRequest({ id: "n-7", unread: true, all: true }),
+    );
+    expect(res.status).toBe(400);
+    expect(markUnreadMock).not.toHaveBeenCalled();
+    expect(markAllMock).not.toHaveBeenCalled();
+  });
+
+  it("REJECTED: multi-selector mix {id, unread:true, beforeId}", async () => {
+    getAuthSessionMock.mockResolvedValue({ user: { id: "u-1" } });
+    const res = await PATCH(
+      buildRequest({ id: "n-7", unread: true, beforeId: "n-boundary" }),
+    );
+    expect(res.status).toBe(400);
+    expect(markUnreadMock).not.toHaveBeenCalled();
+    expect(markThroughMock).not.toHaveBeenCalled();
+  });
+
+  it("REJECTED: multi-selector mix {id, unread:true, href}", async () => {
+    getAuthSessionMock.mockResolvedValue({ user: { id: "u-1" } });
+    const res = await PATCH(
+      buildRequest({ id: "n-7", unread: true, href: "/jobs" }),
+    );
+    expect(res.status).toBe(400);
+    expect(markUnreadMock).not.toHaveBeenCalled();
+    expect(markByHrefMock).not.toHaveBeenCalled();
+  });
+
+  it("REJECTED: unknown field alongside unread ({id, unread:true, foo:1})", async () => {
+    getAuthSessionMock.mockResolvedValue({ user: { id: "u-1" } });
+    const res = await PATCH(
+      buildRequest({ id: "n-7", unread: true, foo: 1 }),
+    );
+    expect(res.status).toBe(400);
+    expect(markUnreadMock).not.toHaveBeenCalled();
+  });
+
+  it("REJECTED: {unread:true} without an id", async () => {
+    getAuthSessionMock.mockResolvedValue({ user: { id: "u-1" } });
+    const res = await PATCH(buildRequest({ unread: true }));
+    expect(res.status).toBe(400);
+    expect(markUnreadMock).not.toHaveBeenCalled();
+  });
+
+  it("REJECTED: {id: '', unread:true} — empty id never delegates", async () => {
+    getAuthSessionMock.mockResolvedValue({ user: { id: "u-1" } });
+    const res = await PATCH(buildRequest({ id: "", unread: true }));
+    expect(res.status).toBe(400);
+    expect(markUnreadMock).not.toHaveBeenCalled();
+  });
+
+  it("unread -> read -> unread round-trips at the route layer (same id)", async () => {
+    getAuthSessionMock.mockResolvedValue({ user: { id: "u-1" } });
+    const res1 = await PATCH(buildRequest({ id: "n-rt", unread: true }));
+    expect(res1.status).toBe(200);
+    expect(markUnreadMock).toHaveBeenLastCalledWith("n-rt");
+
+    const res2 = await PATCH(buildRequest({ id: "n-rt" }));
+    expect(res2.status).toBe(200);
+    expect(markReadMock).toHaveBeenLastCalledWith("n-rt");
+
+    const res3 = await PATCH(buildRequest({ id: "n-rt", unread: true }));
+    expect(res3.status).toBe(200);
+    expect(markUnreadMock).toHaveBeenLastCalledWith("n-rt");
+    expect(markUnreadMock).toHaveBeenCalledTimes(2);
+    expect(markReadMock).toHaveBeenCalledTimes(1);
   });
 });

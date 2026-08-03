@@ -501,6 +501,34 @@ export function markNotificationReadForUser(args: {
   });
 }
 
+/**
+ * Mark a single notification UNREAD again (`SET read_at = NULL`) — the first
+ * non-monotonic read-state write. Every other mutation in this section only
+ * ever moves `read_at` forward (`COALESCE(read_at, now())`); this one moves it
+ * back. Scoped to the caller's `userId` AND the exact notification `id`, so a
+ * caller can never flip another user's row back to unread. No schema/migration
+ * change: `read_at` is already nullable.
+ */
+export function markNotificationUnreadForUser(args: {
+  userId: string;
+  notificationId: string;
+}): void {
+  if (!args.userId || !args.notificationId) return;
+  const host = getNotificationsHostAdapters();
+  host.ensurePostgresSchema();
+  host.runPostgresQueriesSync({
+    connectionString: host.getPostgresConnectionString(),
+    queries: [
+      {
+        text: `UPDATE ${schemaQualified("notifications")}
+          SET read_at = NULL
+          WHERE user_id = $1 AND id = $2`,
+        values: [args.userId, args.notificationId],
+      },
+    ],
+  });
+}
+
 export function markNotificationsReadByHrefPrefixForUser(args: {
   userId: string;
   hrefPrefix: string;

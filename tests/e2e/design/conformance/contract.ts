@@ -40,6 +40,22 @@ import {
   SEEDED_INSTALLED_LOCKED_COUNT,
   SEEDED_MODAL_FIXTURE,
 } from "../../../../src/app/design-fixtures/conformance/seed-data";
+import {
+  CONNECTOR_CONFIG_TAB,
+  CONNECTOR_CONFIG_TAB_ERROR_LABEL,
+  CONNECTOR_CONFIG_TAB_LOADING_LABEL,
+  CONNECTOR_CONNECTION_CONNECTED_COUNT,
+  CONNECTOR_CONNECTION_DISCONNECTED_COUNT,
+  CONNECTOR_CONNECTION_ROWS,
+  CONNECTOR_CONNECTION_ROW_COUNT,
+  CONNECTOR_CONNECTIONS_EMPTY_LABEL,
+  CONNECTOR_CONNECTIONS_LOADING_LABEL,
+  CONNECTOR_MULTI_SETUP_CONFIG,
+  CONNECTOR_SETUP_CONFIG,
+  CONNECTOR_SETUP_ERROR_LABEL,
+  CONNECTOR_SETUP_INSTALL_ID,
+  CONNECTOR_SETUP_LOADING_LABEL,
+} from "../../../../src/app/design-fixtures/conformance/connector-setup-seed";
 
 export const HARNESS_PATH = "/design-fixtures/conformance";
 
@@ -1222,8 +1238,769 @@ const NOTIFICATIONS_DEGRADED_DRIVER: SurfaceDriver = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// §II connector-SETUP drivers (cinatra#2354) — the four surfaces the pinned
+// app-connectors manifest gained relative to its two-surface predecessor:
+// connector-setup, connector-config-tab, connector-multi-setup,
+// connector-connections. Mounted on the base conformance harness by
+// src/app/design-fixtures/conformance/connector-setup-fixture.tsx and
+// connector-multi-connection-fixture.tsx.
+//
+// Each driver asserts against the conformance id the PRODUCT component emits
+// (sdk-ui ConnectorSetupColumns / ConnectionsList, and the schema-config
+// form's custom-tab panel) — the harness `data-surface-id` wrapper only
+// selects WHICH mount/variant, so a driver can never pass against harness-only
+// chrome. Field keys ARE the manifest sources (`config.apiKey` → key
+// `apiKey`), and every seeded value is an anti-lookalike token, so a
+// wrong-source read reds.
+// ---------------------------------------------------------------------------
+
+/** The single-connection setup mount, by variant. */
+const setupTabbed = (variant: string) =>
+  `[data-surface-id="connector-setup-tabbed"][data-variant="${variant}"]`;
+/** The tabbed multi-connection setup mount, by variant. */
+const multiMount = (variant: string) =>
+  `[data-surface-id="connector-multi"][data-variant="${variant}"]`;
+/** A standalone Connections-list mount, by variant. */
+const connectionsMount = (variant: string) =>
+  `[data-surface-id="connector-connections"][data-variant="${variant}"]`;
+
+const SCHEMA_FORM = '[data-testid="schema-config-form"]';
+
+/**
+ * Fulfil the host action endpoint (`/api/extensions/{installId}/actions/{id}`)
+ * at the NETWORK boundary.
+ *
+ * That endpoint requires an authenticated session and a canonical
+ * installed_extension row — neither of which the standalone conformance boot
+ * has by construction (the same reason the approvals / scheduling /
+ * notifications surfaces are modelled rather than driven through their real
+ * screens). Substituting it here, in the suite, rather than behind an
+ * injection prop keeps the components under test BYTE-IDENTICAL to production:
+ * the real `invokeAction` fetch runs, the real result parsing runs, and every
+ * state transition it feeds — the connected flip that releases the gated
+ * Disconnect, the probe's badge transition, the cinatra#1109 banner-variant
+ * toast — is the real machinery. Only the round-trip is replaced.
+ *
+ * Per-action payloads: the config tab's save returns the `{ banner }` result
+ * its schema declares, so `save-config -> saved` resolves the DECLARED
+ * variant's message and cannot pass on a generic confirmation.
+ */
+type ActionCall = { actionId: string; body: Record<string, unknown> };
+
+/** The fixture connectors' WRITE action ids (everything else is a read). */
+const WRITE_ACTION_IDS = new Set([
+  "saveConnection",
+  "clearConnection",
+  "createServer",
+  CONNECTOR_CONFIG_TAB.saveActionId,
+]);
+
+/** Action ids the fixture connectors declare — anything else is a driver bug. */
+const KNOWN_ACTION_IDS = new Set([
+  ...WRITE_ACTION_IDS,
+  "connectionStatus",
+  "helpContentReady",
+]);
+
+type ActionLog = {
+  /** Dispatches the stub accepted, in order. */
+  accepted: ActionCall[];
+  /** Dispatches the stub REFUSED (wrong method / install / unknown action). */
+  rejected: string[];
+};
+
+async function stubConnectorActionEndpoint(page: Page): Promise<ActionLog> {
+  const calls: ActionCall[] = [];
+  const rejected: string[] = [];
+  await page.route("**/api/extensions/*/actions/*", async (route) => {
+    const request = route.request();
+    const { pathname } = new URL(request.url());
+    const parts = pathname.split("/");
+    const actionId = decodeURIComponent(parts.pop() ?? "");
+    const installId = decodeURIComponent(parts[parts.length - 2] ?? "");
+    // FAIL CLOSED on anything the fixtures do not declare: a wrong method,
+    // a stray install id, or an unknown action must surface as a 400 the
+    // driver's outcome assertion then fails on — never a blanket success that
+    // could green-light a misrouted dispatch.
+    if (
+      request.method() !== "POST" ||
+      installId !== CONNECTOR_SETUP_INSTALL_ID ||
+      !KNOWN_ACTION_IDS.has(actionId)
+    ) {
+      rejected.push(`${request.method()} ${pathname}`);
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: `unexpected action dispatch: ${request.method()} ${pathname}`,
+        }),
+      });
+      return;
+    }
+    let body: Record<string, unknown> = {};
+    try {
+      body = JSON.parse(request.postData() ?? "{}") as Record<string, unknown>;
+    } catch {
+      body = {};
+    }
+    calls.push({ actionId, body });
+    const result =
+      actionId === CONNECTOR_CONFIG_TAB.saveActionId ? { banner: "saved" } : {};
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ result }),
+    });
+  });
+  return { accepted: calls, rejected };
+}
+
+/**
+ * Assert the dispatch log for `actionId` and return the payload it carried.
+ *
+ * LAST rather than only: a hydration-sensitive click is retried (clickUntil),
+ * and a pre-hydration click that WAS delivered would make an "exactly one"
+ * assertion flaky. So the retries are tolerated but NOT ignored:
+ *   - the stub must have refused NOTHING (an unexpected method/install/action
+ *     anywhere in this test is a red, not a silently dropped request),
+ *   - the WRITE actions dispatched must be EXACTLY the one under assertion
+ *     (asserting `connect` cannot pass while a stray `disconnect` also fired;
+ *     a read-only action must have triggered no write at all), and
+ *   - every retry of this action must have submitted the IDENTICAL payload, so
+ *     an earlier malformed dispatch cannot hide behind a later good one.
+ *
+ * Reads (the status probe, the Help advisories' readiness probes) are mount-
+ * time and incidental, so they are not constrained here.
+ */
+function assertDispatch(log: ActionLog, actionId: string): Record<string, unknown> {
+  expect(
+    log.rejected,
+    `the action endpoint refused unexpected dispatch(es): ${log.rejected.join(", ")}`,
+  ).toEqual([]);
+  const writes = [
+    ...new Set(log.accepted.map((c) => c.actionId).filter((id) => WRITE_ACTION_IDS.has(id))),
+  ].sort();
+  expect(
+    writes,
+    `unexpected write dispatch alongside "${actionId}"`,
+  ).toEqual(WRITE_ACTION_IDS.has(actionId) ? [actionId] : []);
+  const matching = log.accepted.filter((c) => c.actionId === actionId);
+  expect(
+    matching.length,
+    `expected at least one "${actionId}" dispatch, saw none (dispatched: ${
+      log.accepted.map((c) => c.actionId).join(", ") || "nothing"
+    })`,
+  ).toBeGreaterThan(0);
+  const latest = matching[matching.length - 1]!.body;
+  for (const call of matching) {
+    expect(
+      call.body,
+      `retried "${actionId}" dispatches submitted DIFFERENT payloads`,
+    ).toEqual(latest);
+  }
+  return latest;
+}
+
+/**
+ * Activate the custom config tab of a setup mount. The form force-mounts every
+ * panel (so inactive-tab inputs stay collectable) and hides the inactive ones,
+ * so the panel is in the DOM but not visible until its trigger is pressed.
+ */
+async function openConfigTab(page: Page, variant: string): Promise<Locator> {
+  const mount = page.locator(setupTabbed(variant));
+  const panel = mount.locator('[data-conformance-id="connector-config-tab"]');
+  await clickUntil(
+    mount.getByRole("tab", { name: CONNECTOR_CONFIG_TAB.tabLabel, exact: true }),
+    async () => {
+      await expect(panel).toBeVisible({ timeout: 5_000 });
+    },
+  );
+  return panel;
+}
+
+/** Assert a text input carries its seeded config value (and nothing else's). */
+function boundInput(
+  source: string,
+  key: string,
+  value: string,
+): { source: string; assert: (page: Page, root: Locator) => Promise<void> } {
+  return {
+    source,
+    assert: async (_page, root) => {
+      await expect(root.locator(`input[name="${key}"]`)).toHaveValue(value);
+    },
+  };
+}
+
+/**
+ * A `secret` binding. The vocabulary makes secrets WRITE-ONLY — "the stored
+ * value is never echoed back" — so the provable binding is the control's
+ * identity plus that write-only contract: the input exists under the manifest's
+ * own config key, is masked, and carries NO value (a renderer that echoed the
+ * stored secret back into the DOM would be both a binding drift and a leak).
+ */
+function boundSecret(
+  source: string,
+  key: string,
+): { source: string; assert: (page: Page, root: Locator) => Promise<void> } {
+  return {
+    source,
+    assert: async (_page, root) => {
+      const input = root.locator(`input[name="${key}"]`);
+      await expect(input).toHaveAttribute("type", "password");
+      await expect(input).toHaveValue("");
+    },
+  };
+}
+
+/**
+ * A `select` binding: the hidden input the form submits carries the HYDRATED
+ * config value and the trigger renders that option's label. Both seeded values
+ * are the SECOND option, so a driver reading the first-option fallback (or the
+ * schema default) instead of the config value reds.
+ */
+function boundSelect(
+  source: string,
+  key: string,
+  value: string,
+  optionLabel: string,
+): { source: string; assert: (page: Page, root: Locator) => Promise<void> } {
+  return {
+    source,
+    assert: async (_page, root) => {
+      await expect(root.locator(`input[name="${key}"]`)).toHaveValue(value);
+      await expect(root.locator(`[role="combobox"]#${key}`)).toContainText(optionLabel);
+    },
+  };
+}
+
+const CONNECTOR_SETUP_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) =>
+    page.locator(`${setupTabbed("populated")} [data-conformance-id="connector-setup"]`),
+  present: async (_page, root) => {
+    // The §II two-column body: the configuration fields and the 236px status
+    // card are BOTH inside the one annotated surface. (The form's FieldSet is
+    // this surface's ANCESTOR — the tablist is page-header chrome hoisted
+    // above the two-column grid — so the fields column is asserted by its
+    // inputs, never by the form wrapper.)
+    await expect(root).toHaveAttribute("data-state", "ready");
+    await expect(
+      root.locator(`input[name="${CONNECTOR_SETUP_CONFIG.apiKey.key}"]`),
+    ).toBeVisible();
+    await expect(root.locator('[data-testid="connector-connect"]')).toBeVisible();
+    await expect(root.locator('[data-testid="connector-status-probe-card"]')).toBeVisible();
+  },
+  fields: {
+    "api-key": boundSecret("config.apiKey", CONNECTOR_SETUP_CONFIG.apiKey.key),
+    "project-id": boundInput(
+      "config.projectId",
+      CONNECTOR_SETUP_CONFIG.projectId.key,
+      CONNECTOR_SETUP_CONFIG.projectId.value,
+    ),
+    "organization-id": boundInput(
+      "config.organizationId",
+      CONNECTOR_SETUP_CONFIG.organizationId.key,
+      CONNECTOR_SETUP_CONFIG.organizationId.value,
+    ),
+    "service-tier": boundSelect(
+      "config.serviceTier",
+      CONNECTOR_SETUP_CONFIG.serviceTier.key,
+      CONNECTOR_SETUP_CONFIG.serviceTier.value,
+      CONNECTOR_SETUP_CONFIG.serviceTier.optionLabel,
+    ),
+    "default-model": boundSelect(
+      "config.defaultModel",
+      CONNECTOR_SETUP_CONFIG.defaultModel.key,
+      CONNECTOR_SETUP_CONFIG.defaultModel.value,
+      CONNECTOR_SETUP_CONFIG.defaultModel.optionLabel,
+    ),
+  },
+  actions: {
+    // connect -> connected THROUGH the real machinery: the connector is seeded
+    // NOT connected, so the transition is genuine — the form's live connected
+    // state flips and the §II item-8 gate on Disconnect is released.
+    connect: {
+      outcome: "connected",
+      run: async (page, root) => {
+        const log = await stubConnectorActionEndpoint(page);
+        // The form wrapper carrying the live connected state is the SURFACE's
+        // ancestor (the tablist sits above the two-column grid), so it is
+        // located on the mount, not under the surface root.
+        const form = page.locator(setupTabbed("populated")).locator(SCHEMA_FORM);
+        await expect(form).not.toHaveAttribute("data-connected", "");
+        await expect(root.locator('[data-testid="connector-disconnect"]')).toBeDisabled();
+        await clickUntil(root.locator('[data-testid="connector-connect"]'), async () => {
+          await expect(form).toHaveAttribute("data-connected", "", { timeout: 5_000 });
+        });
+        await expect(root.locator('[data-testid="connector-disconnect"]')).toBeEnabled();
+        // The connect DISPATCH carried THIS connector's own configuration —
+        // the real collectFormInputs scan, scoped to this form.
+        const body = assertDispatch(log, "saveConnection");
+        expect(body[CONNECTOR_SETUP_CONFIG.projectId.key]).toBe(
+          CONNECTOR_SETUP_CONFIG.projectId.value,
+        );
+        expect(body[CONNECTOR_SETUP_CONFIG.serviceTier.key]).toBe(
+          CONNECTOR_SETUP_CONFIG.serviceTier.value,
+        );
+        // …and NOT the multi-connection connector's fields (a document-wide
+        // input scan would leak the OTHER form's values in here).
+        expect(body).not.toHaveProperty(CONNECTOR_MULTI_SETUP_CONFIG.baseUrl.key);
+      },
+    },
+    // disconnect -> confirming: the specified outcome is the CONFIRMATION
+    // ceremony, not the removal — Disconnect never writes unconfirmed. The
+    // real gate is honoured first (Disconnect is inert until the connector is
+    // genuinely connected), so this cannot pass against a dead affordance.
+    disconnect: {
+      outcome: "confirming",
+      run: async (page, root) => {
+        const log = await stubConnectorActionEndpoint(page);
+        const disconnect = root.locator('[data-testid="connector-disconnect"]');
+        await expect(disconnect).toBeDisabled();
+        await clickUntil(root.locator('[data-testid="connector-connect"]'), async () => {
+          await expect(disconnect).toBeEnabled({ timeout: 5_000 });
+        });
+        await clickUntil(disconnect, async () => {
+          await expect(page.getByRole("alertdialog")).toBeVisible({ timeout: 5_000 });
+        });
+        const dialog = page.getByRole("alertdialog");
+        await expect(dialog).toContainText("Disconnect connector?");
+        await expect(dialog.getByRole("button", { name: "Cancel" })).toBeVisible();
+        await expect(
+          dialog.locator('[data-testid="connector-disconnect-confirm"]'),
+        ).toBeVisible();
+        // "confirming" means NOTHING was written yet: the disconnect action id
+        // must NOT have been dispatched by merely opening the confirmation
+        // (only the connect that released the gate may appear in the log).
+        expect(log.rejected).toEqual([]);
+        expect(log.accepted.map((c) => c.actionId)).not.toContain("clearConnection");
+      },
+    },
+    // check-connection -> checked: the right-column card runs the connector's
+    // OWN declared status-probe action id and resolves the badge to the probe
+    // result. Seeded disconnected, so a resolved "connected" badge proves the
+    // probe actually ran (never a no-op re-assertion).
+    "check-connection": {
+      outcome: "checked",
+      run: async (page, root) => {
+        const log = await stubConnectorActionEndpoint(page);
+        const badge = root.locator('[data-slot="connection-status-badge"]');
+        await expect(badge).toHaveAttribute("data-status", "disconnected");
+        await clickUntil(root.getByRole("button", { name: "Check", exact: true }), async () => {
+          await expect(badge).toHaveAttribute("data-status", "connected", { timeout: 10_000 });
+        });
+        // The card probed the connector's OWN declared status-probe action id
+        // ("connectionStatus"); the host never invents a probe id, so a card
+        // that resolved its badge WITHOUT dispatching that id is a red.
+        // assertDispatch additionally pins that Check is a READ — it asserts
+        // NO write action fired for a read-only action id.
+        assertDispatch(log, "connectionStatus");
+      },
+    },
+  },
+  states: {
+    // The surface stays MOUNTED in both non-ready variants (it keeps its
+    // conformance id) and swaps its body for the state's own treatment — a
+    // variant is a state OF the surface, never its absence.
+    loading: async (page) => {
+      const root = page.locator(
+        `${setupTabbed("loading")} [data-conformance-id="connector-setup"][data-state="loading"]`,
+      );
+      const line = root.locator('[data-slot="connector-setup-loading"]');
+      await expect(line).toBeVisible();
+      await expect(line).toHaveAttribute("aria-busy", "true");
+      await expect(line).toContainText(CONNECTOR_SETUP_LOADING_LABEL);
+      // The two-column body is genuinely REPLACED, not merely relabelled.
+      await expect(
+        root.locator(`input[name="${CONNECTOR_SETUP_CONFIG.apiKey.key}"]`),
+      ).toHaveCount(0);
+      await expect(root.locator('[data-testid="connector-connect"]')).toHaveCount(0);
+    },
+    error: async (page) => {
+      const root = page.locator(
+        `${setupTabbed("error")} [data-conformance-id="connector-setup"][data-state="error"]`,
+      );
+      const line = root.locator('[data-slot="connector-setup-error"]');
+      await expect(line).toBeVisible();
+      await expect(line).toHaveAttribute("role", "alert");
+      await expect(line).toContainText(CONNECTOR_SETUP_ERROR_LABEL);
+      await expect(
+        root.locator(`input[name="${CONNECTOR_SETUP_CONFIG.apiKey.key}"]`),
+      ).toHaveCount(0);
+      await expect(root.locator('[data-testid="connector-connect"]')).toHaveCount(0);
+    },
+  },
+};
+
+const CONNECTOR_CONFIG_TAB_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) =>
+    page.locator(`${setupTabbed("populated")} [data-conformance-id="connector-config-tab"]`),
+  present: async (page) => {
+    const panel = await openConfigTab(page, "populated");
+    // §II: a custom tab's content narrows to the Narrow width (576px) —
+    // asserted structurally by the panel being the annotated surface itself.
+    await expect(panel).toHaveAttribute("data-state", "ready");
+  },
+  fields: {
+    // The tab's inputs are force-mounted with the panel, so a binding is
+    // readable without activating the tab; each is still asserted on the
+    // ACTIVE panel so a driver cannot pass against a panel the user can
+    // never reach.
+    "sandbox-enabled": {
+      source: "config.shell.enabled",
+      assert: async (page) => {
+        const panel = await openConfigTab(page, "populated");
+        await expect(
+          panel.locator(`input[name="${CONNECTOR_CONFIG_TAB.fields.shellEnabled.key}"]`),
+        ).toHaveValue(CONNECTOR_CONFIG_TAB.fields.shellEnabled.value);
+        await expect(
+          panel.getByRole("switch", { name: CONNECTOR_CONFIG_TAB.fields.shellEnabled.label }),
+        ).toBeChecked();
+      },
+    },
+    "container-image": {
+      source: "config.shell.containerImage",
+      assert: async (page) => {
+        const panel = await openConfigTab(page, "populated");
+        await expect(
+          panel.locator(`input[name="${CONNECTOR_CONFIG_TAB.fields.shellContainerImage.key}"]`),
+        ).toHaveValue(CONNECTOR_CONFIG_TAB.fields.shellContainerImage.value);
+      },
+    },
+    "max-execution-seconds": {
+      source: "config.shell.maxSeconds",
+      assert: async (page) => {
+        const panel = await openConfigTab(page, "populated");
+        await expect(
+          panel.locator(`input[name="${CONNECTOR_CONFIG_TAB.fields.shellMaxSeconds.key}"]`),
+        ).toHaveValue(CONNECTOR_CONFIG_TAB.fields.shellMaxSeconds.value);
+      },
+    },
+    // The two list bindings serialize to ONE hidden JSON input each — assert
+    // the serialized payload AND the visible entry row, so neither half can
+    // drift alone.
+    "readable-roots": {
+      source: "config.shell.readRoots",
+      assert: async (page) => {
+        const panel = await openConfigTab(page, "populated");
+        await expect(
+          panel.locator(`input[name="${CONNECTOR_CONFIG_TAB.fields.shellReadRoots.key}"]`),
+        ).toHaveValue(JSON.stringify([CONNECTOR_CONFIG_TAB.fields.shellReadRoots.value]));
+        await expect(panel.getByRole("textbox", { name: "root 1" })).toHaveValue(
+          CONNECTOR_CONFIG_TAB.fields.shellReadRoots.value,
+        );
+      },
+    },
+    "allowed-command-prefixes": {
+      source: "config.shell.allowedPrefixes",
+      assert: async (page) => {
+        const panel = await openConfigTab(page, "populated");
+        await expect(
+          panel.locator(`input[name="${CONNECTOR_CONFIG_TAB.fields.shellAllowedPrefixes.key}"]`),
+        ).toHaveValue(JSON.stringify([CONNECTOR_CONFIG_TAB.fields.shellAllowedPrefixes.value]));
+        await expect(panel.getByRole("textbox", { name: "prefix 1" })).toHaveValue(
+          CONNECTOR_CONFIG_TAB.fields.shellAllowedPrefixes.value,
+        );
+      },
+    },
+  },
+  actions: {
+    // save-config -> saved: §II — "a custom tab ends in its own Save". The
+    // outcome is resolved by the REAL result-driven banner machinery: the save
+    // returns `{ banner: "saved" }` and the form surfaces the SCHEMA-DECLARED
+    // variant's message, so a generic confirmation would not satisfy it.
+    "save-config": {
+      outcome: "saved",
+      run: async (page) => {
+        const log = await stubConnectorActionEndpoint(page);
+        const panel = await openConfigTab(page, "populated");
+        await clickUntil(
+          panel.getByRole("button", { name: CONNECTOR_CONFIG_TAB.saveLabel, exact: true }),
+          async () => {
+            await expect(page.getByText("Shell settings saved.")).toBeVisible({
+              timeout: 5_000,
+            });
+          },
+        );
+        // The save DISPATCH carried the tab's OWN settings — the custom tab's
+        // panel is force-mounted precisely so its inputs stay collectable, and
+        // this pins that (a regression that dropped inactive-tab inputs would
+        // still toast "saved" but submit nothing).
+        const body = assertDispatch(log, CONNECTOR_CONFIG_TAB.saveActionId);
+        expect(body[CONNECTOR_CONFIG_TAB.fields.shellContainerImage.key]).toBe(
+          CONNECTOR_CONFIG_TAB.fields.shellContainerImage.value,
+        );
+        expect(body[CONNECTOR_CONFIG_TAB.fields.shellEnabled.key]).toBe(
+          CONNECTOR_CONFIG_TAB.fields.shellEnabled.value,
+        );
+      },
+    },
+  },
+  states: {
+    loading: async (page) => {
+      const panel = await openConfigTab(page, "loading");
+      await expect(panel).toHaveAttribute("data-state", "loading");
+      const line = panel.locator('[data-slot="connector-config-tab-loading"]');
+      await expect(line).toBeVisible();
+      await expect(line).toHaveAttribute("aria-busy", "true");
+      await expect(line).toContainText(CONNECTOR_CONFIG_TAB_LOADING_LABEL);
+      await expect(
+        panel.locator(`input[name="${CONNECTOR_CONFIG_TAB.fields.shellContainerImage.key}"]`),
+      ).toHaveCount(0);
+    },
+    error: async (page) => {
+      const panel = await openConfigTab(page, "error");
+      await expect(panel).toHaveAttribute("data-state", "error");
+      const line = panel.locator('[data-slot="connector-config-tab-error"]');
+      await expect(line).toBeVisible();
+      await expect(line).toHaveAttribute("role", "alert");
+      await expect(line).toContainText(CONNECTOR_CONFIG_TAB_ERROR_LABEL);
+      await expect(
+        panel.locator(`input[name="${CONNECTOR_CONFIG_TAB.fields.shellContainerImage.key}"]`),
+      ).toHaveCount(0);
+    },
+  },
+};
+
+const CONNECTOR_MULTI_SETUP_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) =>
+    page.locator(`${multiMount("populated")} [data-conformance-id="connector-multi-setup"]`),
+  present: async (_page, root) => {
+    await expect(root).toHaveAttribute("data-state", "ready");
+    await expect(
+      root.locator(`input[name="${CONNECTOR_MULTI_SETUP_CONFIG.baseUrl.key}"]`),
+    ).toBeVisible();
+    // The multi roll-up card, NOT the single-connection card: a count badge per
+    // status in play and no Check control (§II "Multiple connections").
+    const card = root.locator('[data-slot="connection-status-card"][data-variant="multi"]');
+    await expect(card).toBeVisible();
+    await expect(card.locator('[data-slot="connection-status-badge"]')).toHaveCount(2);
+    await expect(card.getByRole("button", { name: "Check", exact: true })).toHaveCount(0);
+  },
+  fields: {
+    "server-base-url": boundInput(
+      "config.baseUrl",
+      CONNECTOR_MULTI_SETUP_CONFIG.baseUrl.key,
+      CONNECTOR_MULTI_SETUP_CONFIG.baseUrl.value,
+    ),
+    "bearer-token": boundSecret(
+      "config.bearerToken",
+      CONNECTOR_MULTI_SETUP_CONFIG.bearerToken.key,
+    ),
+  },
+  actions: {
+    // connect -> connected. This surface declares Connect ONLY (a single
+    // connection is disconnected from its own row in the Connections tab), so
+    // the transition is witnessed on the form's live connected state rather
+    // than on a released Disconnect gate.
+    connect: {
+      outcome: "connected",
+      run: async (page, root) => {
+        const log = await stubConnectorActionEndpoint(page);
+        const form = page.locator(multiMount("populated")).locator(SCHEMA_FORM);
+        await expect(form).not.toHaveAttribute("data-connected", "");
+        // No Disconnect on the multi Setup tab (spec §II).
+        await expect(root.locator('[data-testid="connector-disconnect"]')).toHaveCount(0);
+        await clickUntil(root.locator('[data-testid="connector-connect"]'), async () => {
+          await expect(form).toHaveAttribute("data-connected", "", { timeout: 5_000 });
+        });
+        // The dispatch carried THIS connector's own server config — and NOT
+        // the single-connection connector's fields, even though that form is
+        // mounted FIRST on the same page. This is the assertion that pins
+        // collectFormInputs' per-form scoping.
+        const body = assertDispatch(log, "createServer");
+        expect(body[CONNECTOR_MULTI_SETUP_CONFIG.baseUrl.key]).toBe(
+          CONNECTOR_MULTI_SETUP_CONFIG.baseUrl.value,
+        );
+        expect(body).not.toHaveProperty(CONNECTOR_SETUP_CONFIG.projectId.key);
+        expect(body).not.toHaveProperty(CONNECTOR_SETUP_CONFIG.serviceTier.key);
+      },
+    },
+    // view-connections -> connections: the roll-up card's "All connections"
+    // control opens the Connections TAB. The tab's content is unmounted until
+    // it is selected, so the connections surface APPEARING is the outcome.
+    //
+    // COVERAGE HONESTY: the control itself is harness-owned — the roll-up card
+    // takes the affordance as a slot ("a link-style button", its own contract)
+    // and no core screen supplies one yet. What is PINNED here is the product
+    // half: that the card renders the affordance in its action slot, and that
+    // selecting the tab genuinely MOUNTS the connections surface (which is
+    // absent from the DOM beforehand) and marks the tab selected.
+    "view-connections": {
+      outcome: "connections",
+      run: async (page) => {
+        const mount = page.locator(multiMount("populated"));
+        const connections = mount.locator('[data-conformance-id="connector-connections"]');
+        const tab = mount.getByRole("tab", { name: "Connections", exact: true });
+        // The affordance is inside the roll-up card's action slot, not loose
+        // chrome — a card that stopped rendering its action is a red.
+        await expect(
+          mount.locator(
+            '[data-slot="connection-status-card"][data-variant="multi"] [data-testid="connector-view-connections"]',
+          ),
+        ).toBeVisible();
+        await expect(connections).toHaveCount(0);
+        await expect(tab).toHaveAttribute("aria-selected", "false");
+        await clickUntil(
+          mount.locator('[data-testid="connector-view-connections"]'),
+          async () => {
+            await expect(connections).toBeVisible({ timeout: 5_000 });
+          },
+        );
+        await expect(tab).toHaveAttribute("aria-selected", "true");
+        await expect(connections.locator('[data-slot="connection-row"]')).toHaveCount(
+          CONNECTOR_CONNECTION_ROW_COUNT,
+        );
+      },
+    },
+  },
+  states: {
+    loading: async (page) => {
+      const root = page.locator(
+        `${multiMount("loading")} [data-conformance-id="connector-multi-setup"][data-state="loading"]`,
+      );
+      const line = root.locator('[data-slot="connector-setup-loading"]');
+      await expect(line).toBeVisible();
+      await expect(line).toContainText(CONNECTOR_SETUP_LOADING_LABEL);
+      await expect(
+        root.locator(`input[name="${CONNECTOR_MULTI_SETUP_CONFIG.baseUrl.key}"]`),
+      ).toHaveCount(0);
+    },
+    error: async (page) => {
+      const root = page.locator(
+        `${multiMount("error")} [data-conformance-id="connector-multi-setup"][data-state="error"]`,
+      );
+      const line = root.locator('[data-slot="connector-setup-error"]');
+      await expect(line).toBeVisible();
+      await expect(line).toHaveAttribute("role", "alert");
+      await expect(line).toContainText(CONNECTOR_SETUP_ERROR_LABEL);
+      await expect(
+        root.locator(`input[name="${CONNECTOR_MULTI_SETUP_CONFIG.baseUrl.key}"]`),
+      ).toHaveCount(0);
+    },
+  },
+};
+
+const CONNECTION_ROW = '[data-slot="connection-row"]';
+const DISCONNECTED_ROW_SEED = CONNECTOR_CONNECTION_ROWS.find((r) => !r.connected)!;
+const CONNECTED_ROW_SEED = CONNECTOR_CONNECTION_ROWS.find((r) => r.connected)!;
+
+/** Locate one seeded connection row by its (unique) display name. */
+function connectionRow(root: Locator, name: string): Locator {
+  return root.locator(CONNECTION_ROW).filter({ hasText: name });
+}
+
+const CONNECTOR_CONNECTIONS_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) =>
+    page.locator(
+      `${connectionsMount("populated")} [data-conformance-id="connector-connections"]`,
+    ),
+  present: async (_page, root) => {
+    // EXACT cardinality, and the connected/disconnected split is asserted
+    // against DISTINCT counts (2 vs 1) so counting the wrong subset reds.
+    await expect(root.locator(CONNECTION_ROW)).toHaveCount(CONNECTOR_CONNECTION_ROW_COUNT);
+    await expect(root.locator(`${CONNECTION_ROW}[data-status="connected"]`)).toHaveCount(
+      CONNECTOR_CONNECTION_CONNECTED_COUNT,
+    );
+    await expect(root.locator(`${CONNECTION_ROW}[data-status="disconnected"]`)).toHaveCount(
+      CONNECTOR_CONNECTION_DISCONNECTED_COUNT,
+    );
+  },
+  fields: {},
+  // COVERAGE HONESTY (both actions): `ConnectionsList` is presentational by its
+  // own contract — "the status→action mapping + the connection-level confirm
+  // dialog live in the consumer" — and no CORE screen is that consumer yet (the
+  // multi-connection connector self-chromes its setup page). So the harness
+  // plays the consumer, exactly as the approvals / scheduling / notifications
+  // fixtures do. What these drivers therefore PIN is the product half: the row
+  // primitive's status→presentation derivation (its data-status, its badge
+  // status AND that badge's own canonical label), the list's cardinality, and
+  // the confirm ceremony's shape. They do NOT claim to pin a consumer's wiring
+  // that does not exist yet — when a core consumer lands, these drivers should
+  // be re-pointed at it.
+  actions: {
+    // disconnect -> confirming: a CONNECTED row's destructive action opens the
+    // confirmation; the row is not disconnected by the click itself.
+    disconnect: {
+      outcome: "confirming",
+      run: async (page, root) => {
+        const row = connectionRow(root, CONNECTED_ROW_SEED.name);
+        await expect(row).toHaveAttribute("data-status", "connected");
+        await clickUntil(row.locator('[data-testid="connection-row-disconnect"]'), async () => {
+          await expect(page.getByRole("alertdialog")).toBeVisible({ timeout: 5_000 });
+        });
+        const dialog = page.getByRole("alertdialog");
+        await expect(dialog).toContainText("Disconnect connection?");
+        // A destructive confirmation always offers a way OUT (never a
+        // one-button trap).
+        await expect(dialog.getByRole("button", { name: "Cancel" })).toBeVisible();
+        // Still connected: "confirming" is the outcome, not the removal.
+        await expect(row).toHaveAttribute("data-status", "connected");
+        await expect(
+          row.locator('[data-slot="connection-status-badge"][data-status="connected"]'),
+        ).toContainText("Connected");
+      },
+    },
+    // connect -> connected: the DISCONNECTED row's primary action reconnects
+    // THAT row — the real ConnectionRow re-derives its badge (status AND the
+    // badge's canonical label) from the new status, and no sibling row moves.
+    connect: {
+      outcome: "connected",
+      run: async (_page, root) => {
+        const row = connectionRow(root, DISCONNECTED_ROW_SEED.name);
+        await expect(row).toHaveAttribute("data-status", "disconnected");
+        await expect(row.locator('[data-slot="connection-status-badge"]')).toContainText(
+          "Disconnected",
+        );
+        await clickUntil(row.locator('[data-testid="connection-row-connect"]'), async () => {
+          await expect(row).toHaveAttribute("data-status", "connected", { timeout: 5_000 });
+        });
+        const badge = row.locator('[data-slot="connection-status-badge"][data-status="connected"]');
+        await expect(badge).toBeVisible();
+        // The badge's label is the component's own canonical map, not text the
+        // harness passed in — a status→label drift is a red.
+        await expect(badge).toHaveText("Connected");
+        // Exactly ONE row moved; every sibling kept its seeded status.
+        await expect(root.locator(`${CONNECTION_ROW}[data-status="connected"]`)).toHaveCount(
+          CONNECTOR_CONNECTION_CONNECTED_COUNT + 1,
+        );
+        await expect(root.locator(`${CONNECTION_ROW}[data-status="disconnected"]`)).toHaveCount(
+          CONNECTOR_CONNECTION_DISCONNECTED_COUNT - 1,
+        );
+      },
+    },
+  },
+  states: {
+    // No saved connections yet — the list's own empty treatment, never a bare
+    // (silently blank) column.
+    empty: async (page) => {
+      const root = page.locator(
+        `${connectionsMount("empty")} [data-conformance-id="connector-connections"][data-state="empty"]`,
+      );
+      await expect(root).toContainText(CONNECTOR_CONNECTIONS_EMPTY_LABEL);
+      await expect(root.locator(CONNECTION_ROW)).toHaveCount(0);
+    },
+    loading: async (page) => {
+      const root = page.locator(
+        `${connectionsMount("loading")} [data-conformance-id="connector-connections"][data-state="loading"]`,
+      );
+      await expect(root).toContainText(CONNECTOR_CONNECTIONS_LOADING_LABEL);
+      await expect(root.locator(CONNECTION_ROW)).toHaveCount(0);
+    },
+  },
+};
+
 /** Covered manifest surfaces → drivers. Everything else: allowlist or RED. */
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
+  "connector-setup": CONNECTOR_SETUP_DRIVER,
+  "connector-config-tab": CONNECTOR_CONFIG_TAB_DRIVER,
+  "connector-multi-setup": CONNECTOR_MULTI_SETUP_DRIVER,
+  "connector-connections": CONNECTOR_CONNECTIONS_DRIVER,
   "notifications-list": NOTIFICATIONS_LIST_DRIVER,
   "notifications-filters": NOTIFICATIONS_FILTERS_DRIVER,
   "notification-row": NOTIFICATION_ROW_DRIVER,

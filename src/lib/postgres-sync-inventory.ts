@@ -55,7 +55,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "packages/notifications/src/service.ts": {
     class: "sync-required",
     justification:
-      "Notification fan-out/dedup is driven through host-injected synchronous adapters; recipients are resolved at write time against authz scope tables. Kept sync-required until the notifications subsystem migrates as a unit.",
+      "Notification fan-out/dedup is driven through host-injected synchronous adapters; recipients are resolved at write time against authz scope tables. Kept sync-required until the notifications subsystem migrates as a unit. cinatra#2379 adds one call site — markNotificationUnreadForUser, the read-state unread mutation (SET read_at = NULL, viewer-scoped) — through the SAME host-injected synchronous adapter as every other read-state write in this file; same class, same migration path.",
   },
   "packages/notifications/src/recipient-policy.ts": {
     class: "sync-required",
