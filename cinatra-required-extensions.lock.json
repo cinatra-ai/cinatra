@@ -3,6 +3,13 @@
   "schemaVersion": 1,
   "packages": [
     {
+      "packageName": "@cinatra-ai/anthropic-connector",
+      "repo": "cinatra-ai/anthropic-connector",
+      "resolvedSha": "ecb86f7372a5209d900d8a1b86bec69875e41bb7",
+      "packageVersion": "0.1.5",
+      "treeSha256": "efce775f937bb78efc2b448fa8d7eb2983b1ad080a54aa96c5279bbe81f53766"
+    },
+    {
       "packageName": "@cinatra-ai/audio-artifact",
       "repo": "cinatra-ai/audio-artifact",
       "resolvedSha": "67733d7f73768395d5eb78fa11d530b55dd7262c",

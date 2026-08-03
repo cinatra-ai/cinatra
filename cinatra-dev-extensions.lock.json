@@ -8,11 +8,6 @@
       "resolvedSha": "d1e342c7bf1167c1a3e2eab371d48b2c445008a9"
     },
     {
-      "packageName": "@cinatra-ai/anthropic-connector",
-      "repo": "cinatra-ai/anthropic-connector",
-      "resolvedSha": "9855687dcda15a6053039f92c7c0afca57f574c1"
-    },
-    {
       "packageName": "@cinatra-ai/apify-connector",
       "repo": "cinatra-ai/apify-connector",
       "resolvedSha": "a56a47e0d4e84495e59b971bd5de704d74f6284f"
