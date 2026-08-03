@@ -61,6 +61,28 @@ function spool(dir: string, maxBytes?: number): AuditSpool {
   return s;
 }
 
+/**
+ * EVERY `close()` HERE IS AWAITED, AND THE AWAIT IS LOAD-BEARING (cinatra#2338).
+ *
+ * `close()` flushes the saturation counter before it releases the lock, and
+ * that flush is a durable write: it CREATES `audit-spool.episode.json.tmp` in
+ * the spool directory on the libuv threadpool, then fsyncs and renames it. So a
+ * close this file starts without awaiting is not merely untidy — it leaves a
+ * file CREATE queued against a directory the teardown below is about to delete
+ * with `rmSync(recursive)`, which is readdir → unlink each → rmdir. A create
+ * landing between that readdir and that rmdir makes the rmdir throw
+ * `ENOTEMPTY`, failing the run from the HOOK, reported against whatever arm
+ * happened to run last and with nothing wrong with its assertion. Whether the
+ * queued create drains in time is pure ambient luck (idle laptop: yes; loaded
+ * CI runner: sometimes not) — which is how three arms below intermittently
+ * reddened main as "REFUSES a LEGACY pid-only lock instead of guessing at it".
+ *
+ * The rule this file keeps: an arm owns its own asynchronous work. Either the
+ * spool is left in `open` for this hook to drain, or the arm awaits `close()`
+ * itself before dropping it. Never neither. The teardown is deliberately NOT
+ * made retry-tolerant: a retry would hide the next leak instead of failing on
+ * it.
+ */
 afterEach(async () => {
   for (const s of open.splice(0)) await s.close().catch(() => {});
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -278,30 +300,49 @@ describe("audit spool — single writer", () => {
     expect(reopened.read().entries.map((r) => r.jobId)).toEqual(["job-a"]);
   });
 
-  it("REFUSES a lock held by our pid on a DIFFERENT host (a pid means nothing there)", () => {
+  /**
+   * The refusal branches are pinned by MESSAGE as well as by class.
+   *
+   * `AuditSpoolLockedError` is what all of `takeLock`'s fail-closed exits
+   * throw, so the class alone cannot tell "a live writer somewhere else" from
+   * "a lock I cannot reason about" — an arm could start refusing for a reason
+   * that is not the one its name claims and still pass. These are substring
+   * assertions against the two distinct branch messages, not the full copy.
+   */
+  const REFUSAL_UNREADABLE = "The audit spool lock at this volume is unreadable";
+  /** A host that is provably not this one, rather than a literal hoping to be. */
+  const ELSEWHERE = `${os.hostname()}-not-this-host`;
+
+  it("REFUSES a lock held by our pid on a DIFFERENT host (a pid means nothing there)", async () => {
     const dir = tempDir();
-    spool(dir).close();
+    // Awaited, then dropped from `open` — see the teardown note (cinatra#2338).
+    await spool(dir).close();
     open.length = 0;
-    writeLock(dir, { pid: process.pid, host: "some-other-container", nonce: randomUUID() });
+    writeLock(dir, { pid: process.pid, host: ELSEWHERE, nonce: randomUUID() });
     expect(() => openAuditSpool({ dir })).toThrow(AuditSpoolLockedError);
+    expect(() => openAuditSpool({ dir })).toThrow(
+      `already held by a live writer (pid ${process.pid} on ${ELSEWHERE})`,
+    );
   });
 
-  it("REFUSES a LEGACY pid-only lock instead of guessing at it", () => {
+  it("REFUSES a LEGACY pid-only lock instead of guessing at it", async () => {
     // A lock a pre-#2325 broker left behind carries no host and no nonce, so
     // none of the reasoning above applies to it. Fail closed and say so.
     const dir = tempDir();
-    spool(dir).close();
+    await spool(dir).close();
     open.length = 0;
     writeFileSync(path.join(dir, "audit-spool.lock"), `${process.pid}\n`);
     expect(() => openAuditSpool({ dir })).toThrow(AuditSpoolLockedError);
+    expect(() => openAuditSpool({ dir })).toThrow(REFUSAL_UNREADABLE);
   });
 
-  it("REFUSES a half-written lock rather than treating it as absent", () => {
+  it("REFUSES a half-written lock rather than treating it as absent", async () => {
     const dir = tempDir();
-    spool(dir).close();
+    await spool(dir).close();
     open.length = 0;
     writeFileSync(path.join(dir, "audit-spool.lock"), "");
     expect(() => openAuditSpool({ dir })).toThrow(AuditSpoolLockedError);
+    expect(() => openAuditSpool({ dir })).toThrow(REFUSAL_UNREADABLE);
   });
 
   it("REFUSES a second LIVE spool in THIS process, despite sharing its pid", async () => {

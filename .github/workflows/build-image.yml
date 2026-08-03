@@ -1943,9 +1943,15 @@ jobs:
 
       # ── The two remaining LLM provider connectors (cinatra#1705 AC4) ──────
       #
-      # anthropic-connector and gemini-connector are dev-lock members, so the
-      # block above left them to slice 2 of cinatra#2288 (which names
-      # "anthropic 101" among the ~25 unwired suites). They are pulled forward
+      # Both were dev-lock members when this block was written, so it left them
+      # to slice 2 of cinatra#2288 (which names "anthropic 101" among the ~25
+      # unwired suites). anthropic-connector has since been PROMOTED to the
+      # required/system set (cinatra#2332 — the /setup/ai provider choice must be
+      # selectable on a production image), so it is pinned by
+      # cinatra-required-extensions.lock.json now; gemini-connector is still a
+      # dev-lock member. Either way clone-extensions materializes both from
+      # whichever lock owns them, so the two steps below are unchanged by that
+      # move. They are pulled forward
       # here because the acceptance audit on cinatra#1705 rates AC4 — the
       # singular-native-shell battery — the epic's only MISSING row, and its
       # proof lane is to reinstate that battery CONNECTOR-SIDE, one file per
@@ -1959,7 +1965,7 @@ jobs:
       # gated. Both are green at their CURRENTLY pinned shas (measured on the
       # pinned tree: anthropic 110 tests, gemini 66, ~1s of vitest each), so this
       # wiring is not carrying a red baseline forward. It NARROWS #2288 slice 2
-      # by two packages rather than pre-empting it — the other ~23 dev-lock
+      # by two packages rather than pre-empting it — the other ~23 unwired
       # suites are untouched, and that issue's discovery loop (AC1) should
       # REPLACE these explicit steps, not duplicate them, when it lands.
       #

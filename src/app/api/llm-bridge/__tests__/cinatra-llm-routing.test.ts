@@ -1,7 +1,7 @@
 /**
  * /api/llm-bridge cinatra_llm provider-aware dispatch.
  *
- * Covers 10 provider-routing scenarios:
+ * Covers 11 provider-routing scenarios:
  *
  *   1. BACK-COMPAT                         — byte-for-byte path.
  *   2. HONOR-PROVIDER                      — first choice path.
@@ -13,6 +13,7 @@
  *   8. POSITIVE-FUNCTION-TOOLS-DEFAULT     — capability-only routing, all three available.
  *   9. POSITIVE_NATIVE_MCP_DEFAULT        — capability-only routing, only OpenAI available.
  *  10. POSITIVE-MEDIA-INPUT-DEFAULT        — capability-only routing, only Gemini available.
+ *  11. NO_LLM_PROVIDER-503                 — the STORED default has no runtime.
  *
  * Mock topology mirrors the four existing llm-bridge tests:
  *   - @cinatra-ai/agents → real Zod schema, stub policy constants (heavy barrel
@@ -29,6 +30,7 @@ const {
   runResolvedSkillAwareDeterministicLlmTaskMock,
   resolveProviderAdapterMock,
   resolveConfiguredLlmRuntimeMock,
+  resolveImplicitGlobalProviderOrderMock,
   getLlmMcpCredentialsMock,
   consoleWarnSpy,
 } = vi.hoisted(() => ({
@@ -53,6 +55,15 @@ const {
     agentId: "test",
     deterministic: false,
   })),
+  // The STORED-default binding the route reports when no runtime resolves.
+  // Default mirrors an openai instance; scenario 11 restates it as anthropic.
+  resolveImplicitGlobalProviderOrderMock: vi.fn(
+    (): { providers: LlmProviderId[]; storedProvider: LlmProviderId; policy: "exact" | "ordered" } => ({
+      providers: ["openai"],
+      storedProvider: "openai",
+      policy: "exact",
+    }),
+  ),
   getLlmMcpCredentialsMock: vi.fn((): { clientId: string; clientSecret: string } | null => null),
   consoleWarnSpy: vi.spyOn(console, "warn").mockImplementation(() => {}),
 }));
@@ -63,6 +74,7 @@ vi.mock("@cinatra-ai/llm", () => ({
   runResolvedSkillAwareDeterministicLlmTask: runResolvedSkillAwareDeterministicLlmTaskMock,
   resolveProviderAdapter: resolveProviderAdapterMock,
   resolveConfiguredLlmRuntime: resolveConfiguredLlmRuntimeMock,
+  resolveImplicitGlobalProviderOrder: resolveImplicitGlobalProviderOrderMock,
   getLlmMcpCredentials: getLlmMcpCredentialsMock,
   createLocalSkillShellTool: vi.fn(() => null),
   // Real predicate shape: only base gpt-5 / gpt-5-mini lack hosted shell.
@@ -231,6 +243,11 @@ beforeEach(async () => {
     runtime: { provider: "openai" },
     agentId: "test",
     deterministic: false,
+  });
+  resolveImplicitGlobalProviderOrderMock.mockReturnValue({
+    providers: ["openai"],
+    storedProvider: "openai",
+    policy: "exact",
   });
   const mod = await import("../route");
   POST = mod.POST;
@@ -443,5 +460,47 @@ describe("/api/llm-bridge cinatra_llm routing", () => {
     expect(res.status).toBe(200);
     const call = firstDispatchCallArg();
     expect(call.preferredProvider).toBe("gemini");
+  });
+
+  // -------------------------------------------------------------------------
+  // 11. NO_LLM_PROVIDER-503 (cinatra#2332 AC5)
+  //     Promoting @cinatra-ai/anthropic-connector into the required/system set
+  //     makes Anthropic SELECTABLE at /setup/ai on a production image, so an
+  //     instance can commit "anthropic" as its stored default and then run with
+  //     NO Anthropic credentials (keys come from Nango/DB, never env, and the
+  //     connector's register() is I/O-free). That must stay a REQUEST-time 503
+  //     that names the provider — never a boot failure and never a silent hop
+  //     to whatever else happens to be configured (the exact-binding contract,
+  //     cinatra#2093 S6). Distinct from case 4/5's `capability_unsatisfiable`,
+  //     which is the capability-routing path.
+  // -------------------------------------------------------------------------
+  it("NO_LLM_PROVIDER-503: stored default anthropic with no runtime → 503 naming anthropic", async () => {
+    resolveConfiguredLlmRuntimeMock.mockResolvedValue(null as never);
+    resolveImplicitGlobalProviderOrderMock.mockReturnValue({
+      providers: ["anthropic"],
+      storedProvider: "anthropic",
+      policy: "exact",
+    });
+    // A perfectly usable OpenAI is left available — exact binding must NOT
+    // take it.
+    resolveProviderAdapterMock.mockImplementation(
+      resolveProviderAdapterImpl({ openai: true, anthropic: false, gemini: false }),
+    );
+
+    const res = await POST(makeReq({ user: "hello" }));
+
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as {
+      error: string;
+      code: string;
+      provider: string;
+      failoverPolicy: string;
+    };
+    expect(body.code).toBe("NO_LLM_PROVIDER");
+    expect(body.provider).toBe("anthropic");
+    expect(body.failoverPolicy).toBe("exact");
+    expect(body.error).toContain("anthropic");
+    // No dispatch happened — the turn never reached a provider.
+    expect(runResolvedSkillAwareDeterministicLlmTaskMock).not.toHaveBeenCalled();
   });
 });
