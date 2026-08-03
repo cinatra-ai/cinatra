@@ -232,6 +232,65 @@ export async function assignAgentSkill(input: {
         detail: `An agent can have at most ${AGENT_ASSIGNED_SKILLS_CAP} assigned skills.`,
       };
     }
+
+    // (4) POST-COMMIT COMPENSATION, still under the lifecycle lock.
+    //
+    // The lifecycle lock is a PROCESS-LOCAL queue (it is what every install /
+    // uninstall / purge path in the platform serializes on), so it orders this
+    // assign against uninstalls IN THIS PROCESS but not against one running in
+    // a sibling worker. In that narrow multi-process window an uninstall's
+    // teardown can complete between the revalidation above and the commit,
+    // leaving a row the teardown already swept past. Re-checking here and
+    // deleting the row turns "present forever" into "present for the length of
+    // one transaction", and the row was never deliverable in the meantime:
+    // S2's resolution-time revalidation drops a non-assignable assigned skill
+    // from the injected set. Widening the serialization itself to a
+    // cross-process lock would change every lifecycle path, not this one.
+    if (result.outcome === "assigned") {
+      // A THROWN re-check is treated as a regression (fail-closed) — the row
+      // was committed, so "we could not confirm" must not read as "confirmed".
+      let regression: string | null = null;
+      try {
+        const after = await resolveSkillAssignability([skillId]);
+        const verdictAfter = after.get(skillId);
+        if (verdictAfter?.assignable !== true) {
+          regression = verdictAfter?.reason ?? "unknown-skill";
+        }
+      } catch (err) {
+        regression = "revalidation-failed";
+        console.warn(
+          `[skills/agent-assigned-skills] post-commit revalidation threw for ${skillId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+      if (regression) {
+        // Deleting the (agent, skill) pair is correct even if a concurrent
+        // admin re-created it in the gap: the skill is no longer assignable, so
+        // NO row for it should survive — the pair, not this particular row, is
+        // what the compensation is about.
+        try {
+          await deleteAssignedSkill({ agentPackageName: resolved.packageName, skillId });
+        } catch (err) {
+          // The refusal is still the truthful answer to the caller. The row
+          // that could not be swept is inert in the meantime — S2's
+          // resolution-time revalidation refuses to deliver a non-assignable
+          // assigned skill — and the next remove or uninstall teardown clears
+          // it. Logged loudly so it is not silent.
+          console.error(
+            `[skills/agent-assigned-skills] compensation delete FAILED — ${resolved.packageName} ` +
+              `still carries an unassignable assignment for ${skillId}; it will not be delivered, ` +
+              `remove it from the agent's settings:`,
+            err instanceof Error ? err.message : err,
+          );
+          return {
+            ok: false as const,
+            reason: "not-assignable" as const,
+            detail: "compensation-failed",
+          };
+        }
+        return { ok: false as const, reason: "not-assignable" as const, detail: regression };
+      }
+    }
     return {
       ok: true as const,
       agentPackageName: resolved.packageName,

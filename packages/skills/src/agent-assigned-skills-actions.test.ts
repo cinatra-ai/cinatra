@@ -527,6 +527,60 @@ describe("assign-vs-uninstall race — the lifecycle lock is the ordering", () =
     expect(insertSpy).not.toHaveBeenCalled();
   });
 
+  it("COMPENSATES a row whose skill became unassignable between revalidation and commit", async () => {
+    // Codex round-1 finding: the lifecycle lock is PROCESS-LOCAL, so a sibling
+    // worker's uninstall can complete inside the assign's transaction window.
+    // The post-commit re-check under the still-held lock deletes the row it
+    // just wrote, instead of leaving one the teardown already swept past.
+    let inserts = 0;
+    const deps = await import("@/lib/agent-assigned-skills-store");
+    const spy = vi.spyOn(deps, "insertAssignedSkill").mockImplementation(async (input) => {
+      inserts += 1;
+      const r: Row = {
+        agentPackageName: input.agentPackageName,
+        skillId: input.skillId,
+        position: 1,
+        createdBy: input.createdBy,
+        createdAt: "2026-08-03T00:00:00.000Z",
+      };
+      rows.push(r);
+      // The sibling process's teardown lands right here.
+      installStatus = {};
+      scanned = [];
+      return { outcome: "assigned", row: r };
+    });
+
+    const out = await assignAgentSkill({ agentRef: "web-scrape-agent", skillId: SKILL_ID });
+    expect(inserts).toBe(1);
+    expect(out).toMatchObject({ ok: false, reason: "not-assignable" });
+    // The row it wrote is GONE — never left behind for the runtime to read.
+    expect(rows).toHaveLength(0);
+    spy.mockRestore();
+  });
+
+  it("a THROWN post-commit re-check is treated as a regression (fail-closed)", async () => {
+    const storeDeps = await import("@/lib/agent-assigned-skills-store");
+    const spy = vi.spyOn(storeDeps, "insertAssignedSkill").mockImplementation(async (input) => {
+      const r: Row = {
+        agentPackageName: input.agentPackageName,
+        skillId: input.skillId,
+        position: 1,
+        createdBy: input.createdBy,
+        createdAt: "2026-08-03T00:00:00.000Z",
+      };
+      rows.push(r);
+      // The re-check's catalog read now blows up.
+      catalogSkills = null as never;
+      return { outcome: "assigned", row: r };
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const out = await assignAgentSkill({ agentRef: "web-scrape-agent", skillId: SKILL_ID });
+    expect(out).toMatchObject({ ok: false, reason: "not-assignable" });
+    expect(rows).toHaveLength(0);
+    spy.mockRestore();
+    warn.mockRestore();
+  });
+
   it("an assign that WINS the lock completes BEFORE the uninstall's teardown runs", async () => {
     const order: string[] = [];
     // The assign acquires first; the uninstall queues behind it.

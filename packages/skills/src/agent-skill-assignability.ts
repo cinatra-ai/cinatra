@@ -140,13 +140,38 @@ export type AssignabilityFacts = {
   role: SkillRole | null;
 };
 
-/** True iff the catalog row is globally visible (conjunct 2). */
+/**
+ * True iff the catalog row is globally visible (conjunct 2).
+ *
+ * TWO sources, both consulted, because the legacy `(level, scope)` tuple is
+ * documented as "a label/index hint … never an enforcement source": it is
+ * PROJECTED from `accessPolicy.runListVisibility` at write time, so a policy
+ * write that outran its projection would leave a scoped skill wearing a
+ * `workspace` label. When a canonical `accessPolicy` is present it therefore
+ * DECIDES — the read grant must include `workspace`, i.e. every workspace user
+ * can resolve the skill. Only when no policy is stored does the projected tuple
+ * stand in for it.
+ *
+ * Fail-closed in both directions: an owner/team:/project:/org:/admin-only read
+ * grant is owner scoping and is refused, and so is a personal, agent-scoped or
+ * user-authored row regardless of policy.
+ */
 export function isGloballyVisibleCatalogRow(skill: PersistedSkill): boolean {
   if (skill.isCustomSkill === true) return false;
   if (skill.isCustom === true) return false;
   if (typeof skill.ownerUserId === "string" && skill.ownerUserId.trim() !== "") return false;
   if (typeof skill.agentId === "string" && skill.agentId.trim() !== "") return false;
   if (typeof skill.scope === "string" && skill.scope.trim() !== "") return false;
+  // PRESENCE, not truthiness: a stored-but-malformed policy (`false`, `0`, `""`
+  // — only reachable from corrupt data) must not read as "no policy" and fall
+  // through to the weaker projected label. Anything present that is not a
+  // readable policy object is refused.
+  const policy = skill.accessPolicy;
+  if (policy !== undefined && policy !== null) {
+    if (typeof policy !== "object") return false;
+    const grants = (policy as { runListVisibility?: unknown }).runListVisibility;
+    return Array.isArray(grants) && grants.includes("workspace");
+  }
   if (!skill.level) return false;
   return GLOBALLY_VISIBLE_LEVELS.has(skill.level);
 }
@@ -344,8 +369,22 @@ export async function resolveSkillAssignability(
   // drift (slugified legacy rows), exactly like the delivery-scan lifecycle
   // gate does.
   const ownerPackages = [...new Set(wanted.map((id) => ownership.get(id)).filter(Boolean) as string[])];
+  // Every package name the scan knows. A drift candidate that IS another
+  // scanned package's canonical name belongs to THAT package, not to this one:
+  // `slugify` is lossy, so `@a/b-c` and a package literally named `a-b-c` share
+  // a candidate key, and the unrelated package's row must never vouch for this
+  // one. Dropping such keys leaves only genuinely ambiguous-to-nobody aliases.
+  const scannedPackageNames = new Set(descriptors.map((d) => d.pkgName));
   const candidatesByPackage = new Map(
-    ownerPackages.map((p) => [p, resolveSkillOwnerPackageCandidates({ packageName: p })] as const),
+    ownerPackages.map(
+      (p) =>
+        [
+          p,
+          resolveSkillOwnerPackageCandidates({ packageName: p }).filter(
+            (c) => c === p || !scannedPackageNames.has(c),
+          ),
+        ] as const,
+    ),
   );
   let statusMap: Map<string, "active" | "archived"> | null = null;
   const allCandidates = [...new Set([...candidatesByPackage.values()].flat())];
@@ -370,9 +409,19 @@ export async function resolveSkillAssignability(
       if (statusMap === null) {
         installStatus = "unreadable";
       } else {
-        const statuses = (candidatesByPackage.get(ownerPackageName) ?? [])
-          .map((c) => statusMap!.get(c))
-          .filter((s): s is "active" | "archived" => s !== undefined);
+        // EXACT npm-form key FIRST. The candidate union exists only to absorb
+        // legacy slug-form rows, and `slugify` is lossy: `@a/b-c` and a package
+        // literally named `a-b-c` share a candidate key, so an unrelated
+        // package's ACTIVE row must never be able to vouch for this one. Only
+        // when the canonical name has no row at all do the drift candidates
+        // stand in.
+        const exact = statusMap.get(ownerPackageName);
+        const statuses =
+          exact !== undefined
+            ? [exact]
+            : (candidatesByPackage.get(ownerPackageName) ?? [])
+                .map((c) => statusMap!.get(c))
+                .filter((s): s is "active" | "archived" => s !== undefined);
         installStatus = statuses.includes("active")
           ? "active"
           : statuses.includes("archived")

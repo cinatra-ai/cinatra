@@ -99,6 +99,70 @@ describe("evaluateAssignability — the three conjuncts, fail-closed", () => {
     expect(isGloballyVisibleCatalogRow(skill({ level: "system" }))).toBe(true);
   });
 
+  it("a stored accessPolicy DECIDES over the projected level label", () => {
+    // Codex round-1 finding: `(level, scope)` is documented as a label/index
+    // hint projected from `accessPolicy.runListVisibility` — never an
+    // enforcement source. A policy write that outran its projection would leave
+    // a scoped skill wearing a `workspace` label, so the policy wins.
+    const scopedPolicy = {
+      runListVisibility: ["team:team_7"],
+      runDataVisibility: ["team:team_7"],
+      runExecuteVisibility: ["team:team_7"],
+      allowRunSharing: false,
+    } as unknown as PersistedSkill["accessPolicy"];
+    expect(
+      isGloballyVisibleCatalogRow(skill({ level: "workspace", accessPolicy: scopedPolicy })),
+    ).toBe(false);
+    expect(
+      evaluateAssignability(
+        facts({ skill: skill({ level: "workspace", accessPolicy: scopedPolicy }) }),
+      ),
+    ).toMatchObject({ assignable: false, reason: "not-globally-visible" });
+  });
+
+  it("a workspace read grant in the policy IS globally visible", () => {
+    const openPolicy = {
+      runListVisibility: ["workspace"],
+      runDataVisibility: ["owner"],
+      runExecuteVisibility: ["owner"],
+      allowRunSharing: false,
+    } as unknown as PersistedSkill["accessPolicy"];
+    expect(
+      isGloballyVisibleCatalogRow(skill({ level: "workspace", accessPolicy: openPolicy })),
+    ).toBe(true);
+  });
+
+  it("an admin-only / owner-only read grant is refused, whatever the label says", () => {
+    for (const grant of [["admin"], ["owner"], ["org"], ["project:p1"]]) {
+      const policy = {
+        runListVisibility: grant,
+        runDataVisibility: grant,
+        runExecuteVisibility: grant,
+        allowRunSharing: false,
+      } as unknown as PersistedSkill["accessPolicy"];
+      expect(
+        isGloballyVisibleCatalogRow(skill({ level: "system", accessPolicy: policy })),
+        grant.join(","),
+      ).toBe(false);
+    }
+  });
+
+  it("a PRESENT-but-malformed accessPolicy is refused, never treated as absent", () => {
+    // Codex round-2 edge: a truthiness check would let `false` / `0` / `""`
+    // fall through to the weaker projected label.
+    for (const broken of [false, 0, "", "workspace", [], { runListVisibility: "workspace" }]) {
+      expect(
+        isGloballyVisibleCatalogRow(
+          skill({ level: "workspace", accessPolicy: broken as never }),
+        ),
+        JSON.stringify(broken),
+      ).toBe(false);
+    }
+    // `undefined` and `null` genuinely mean "no policy stored".
+    expect(isGloballyVisibleCatalogRow(skill({ level: "workspace", accessPolicy: null }))).toBe(true);
+    expect(isGloballyVisibleCatalogRow(skill({ level: "workspace" }))).toBe(true);
+  });
+
   it("refuses a skill NO on-disk extension owns", () => {
     expect(evaluateAssignability(facts({ ownerPackageName: null }))).toMatchObject({
       assignable: false,
@@ -367,6 +431,55 @@ describe("resolveSkillAssignability — composed, fail-closed", () => {
     const out = await resolveSkillAssignability(
       ["@cinatra-ai/list-curation-skill:list-curation"],
       { ...deps, readInstallStatus: async () => new Map() },
+    );
+    expect(out.get("@cinatra-ai/list-curation-skill:list-curation")).toMatchObject({
+      assignable: false,
+      reason: "not-installed",
+    });
+  });
+
+  it("an unrelated package's ACTIVE slug-form row cannot vouch for this one", async () => {
+    // Codex round-1 finding: `slugify` is lossy, so the drift candidates can
+    // collide with a genuinely different package. The EXACT npm-form key wins
+    // whenever it has a row — here it is archived, and the colliding slug row's
+    // `active` must not override it.
+    const out = await resolveSkillAssignability(
+      ["@cinatra-ai/list-curation-skill:list-curation"],
+      {
+        ...deps,
+        readInstallStatus: async () =>
+          new Map([
+            ["@cinatra-ai/list-curation-skill", "archived" as const],
+            ["cinatra-ai-list-curation-skill", "active" as const],
+          ]),
+      },
+    );
+    expect(out.get("@cinatra-ai/list-curation-skill:list-curation")).toMatchObject({
+      assignable: false,
+      reason: "archived",
+    });
+  });
+
+  it("a drift key that IS another scanned package's canonical name cannot vouch", async () => {
+    // Codex round-2 edge: `slugify("@cinatra-ai/list-curation-skill")` collides
+    // with a package literally NAMED that slug. When the owner has no exact row
+    // and the colliding package is itself installed and active, the collision
+    // must not read as "the owner is installed".
+    const out = await resolveSkillAssignability(
+      ["@cinatra-ai/list-curation-skill:list-curation"],
+      {
+        ...deps,
+        scanExtensions: async () => [
+          descriptor({}),
+          descriptor({
+            pkgName: "cinatra-ai-list-curation-skill",
+            pkgDirName: "impostor",
+            slugs: [],
+          }),
+        ],
+        readInstallStatus: async () =>
+          new Map([["cinatra-ai-list-curation-skill", "active" as const]]),
+      },
     );
     expect(out.get("@cinatra-ai/list-curation-skill:list-curation")).toMatchObject({
       assignable: false,

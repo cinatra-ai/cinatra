@@ -83,35 +83,40 @@ export function resolveCanonicalAgentPackageFrom(
   const needle = (rawId ?? "").trim();
   if (!needle) return { ok: false, reason: "empty" };
 
-  const byPackageId = new Map<string, AgentIdentityCandidate>();
-  for (const c of candidates) {
-    const pkg = (c.packageId ?? "").trim();
-    if (!pkg) continue;
-    if (!byPackageId.has(pkg)) byPackageId.set(pkg, c);
-  }
+  const live = candidates.filter((c) => (c.packageId ?? "").trim().length > 0);
+
+  /** Distinct packages among a match set. A multi-template package contributes
+   *  one candidate per template, so collapsing by packageId AFTER matching (not
+   *  before) keeps every alias matchable while still reading as ONE package. */
+  const distinct = (matched: readonly AgentIdentityCandidate[]) => [
+    ...new Set(matched.map((c) => c.packageId.trim())),
+  ].sort();
 
   // 1. Exact match on any canonical identity field.
-  const exact = [...byPackageId.values()].filter(
-    (c) =>
-      c.packageId === needle ||
-      c.id === needle ||
-      c.identifier === needle ||
-      c.packageSlug === needle,
+  const exact = distinct(
+    live.filter(
+      (c) =>
+        c.packageId.trim() === needle ||
+        c.id === needle ||
+        c.identifier === needle ||
+        c.packageSlug === needle,
+    ),
   );
-  if (exact.length === 1) return { ok: true, packageName: exact[0]!.packageId, via: "exact" };
-  if (exact.length > 1) {
-    return { ok: false, reason: "ambiguous", matches: exact.map((c) => c.packageId).sort() };
-  }
+  if (exact.length === 1) return { ok: true, packageName: exact[0]!, via: "exact" };
+  if (exact.length > 1) return { ok: false, reason: "ambiguous", matches: exact };
 
-  // 2. Unique npm-suffix fallback.
-  const needleSuffix = npmSuffix(needle);
-  const bySuffix = [...byPackageId.values()].filter((c) => npmSuffix(c.packageId) === needleSuffix);
-  if (bySuffix.length === 1) {
-    return { ok: true, packageName: bySuffix[0]!.packageId, via: "npm-suffix" };
-  }
-  // 3. Ambiguity is refused, never guessed.
-  if (bySuffix.length > 1) {
-    return { ok: false, reason: "ambiguous", matches: bySuffix.map((c) => c.packageId).sort() };
+  // 2. Unique npm-suffix fallback — ONLY for a BARE identifier.
+  //
+  // A needle that already carries a `/` is a fully-qualified package name, and
+  // its vendor scope is part of what the caller asked for. Falling back to the
+  // suffix there would silently resolve `@vendor-a/x` (not installed) onto
+  // `@vendor-b/x` (installed) — an admin's assignment landing on a DIFFERENT
+  // vendor's agent. A qualified name that does not match exactly is UNKNOWN.
+  if (!needle.includes("/")) {
+    const bySuffix = distinct(live.filter((c) => npmSuffix(c.packageId) === needle));
+    if (bySuffix.length === 1) return { ok: true, packageName: bySuffix[0]!, via: "npm-suffix" };
+    // 3. Ambiguity is refused, never guessed.
+    if (bySuffix.length > 1) return { ok: false, reason: "ambiguous", matches: bySuffix };
   }
   // 4. Nothing matched.
   return { ok: false, reason: "unknown" };

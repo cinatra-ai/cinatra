@@ -37,6 +37,50 @@ describe("resolveCanonicalAgentPackageFrom — identifier shapes", () => {
     });
   });
 
+  it("REFUSES a fully-qualified name that is not installed, even when a SUFFIX twin is", () => {
+    // Codex round-1 finding: falling back to the suffix for a scoped needle
+    // would silently land an admin's assignment on a DIFFERENT vendor's agent.
+    // A qualified name that does not match exactly is UNKNOWN, never a guess.
+    const out = resolveCanonicalAgentPackageFrom("@vendor-a/web-scrape-agent", population);
+    expect(out).toEqual({ ok: false, reason: "unknown" });
+  });
+
+  it("REFUSES an unscoped-but-qualified needle whose suffix twin is installed", () => {
+    expect(resolveCanonicalAgentPackageFrom("vendor-a/web-scrape-agent", population)).toEqual({
+      ok: false,
+      reason: "unknown",
+    });
+  });
+
+  it("keeps EVERY alias matchable across candidates of the same package", () => {
+    // Codex round-1 finding: deduping candidates BEFORE matching discarded a
+    // second template row's aliases, so a needle naming one of them missed.
+    const multiAlias = [
+      { packageId: "@cinatra-ai/multi-agent", id: "tmpl-a", identifier: "alias-a" },
+      { packageId: "@cinatra-ai/multi-agent", id: "tmpl-b", identifier: "alias-b" },
+    ];
+    for (const needle of ["tmpl-a", "alias-a", "tmpl-b", "alias-b"]) {
+      expect(resolveCanonicalAgentPackageFrom(needle, multiAlias), needle).toEqual({
+        ok: true,
+        packageName: "@cinatra-ai/multi-agent",
+        via: "exact",
+      });
+    }
+  });
+
+  it("detects ambiguity carried by a LATER candidate of a different package", () => {
+    const shadowed = [
+      { packageId: "@vendor-a/x-agent", id: "first", identifier: "shared" },
+      { packageId: "@vendor-a/x-agent", id: "second", identifier: "other" },
+      { packageId: "@vendor-b/y-agent", id: "third", identifier: "shared" },
+    ];
+    expect(resolveCanonicalAgentPackageFrom("shared", shadowed)).toEqual({
+      ok: false,
+      reason: "ambiguous",
+      matches: ["@vendor-a/x-agent", "@vendor-b/y-agent"],
+    });
+  });
+
   it("resolves a RAW BRIDGE SLUG through the npm-suffix fallback", () => {
     // `getAssignedSkillIdsForAgent` receives this shape; it must land on the
     // same rows the settings page wrote under the scoped name.
