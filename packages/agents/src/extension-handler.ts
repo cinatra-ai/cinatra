@@ -20,6 +20,8 @@ import {
   // Agent install/update/uninstall hooks keep skill matches in sync.
   enqueueInlineForAgent,
   cleanupForAgent,
+  // cinatra#2350 (S5, epic #2345): agent_assigned_skills lifecycle teardown.
+  deleteAssignedSkillsForAgentPackage,
 } from "@cinatra-ai/skills";
 import {
   FIRST_PARTY_PACKAGE_SCOPE,
@@ -362,6 +364,21 @@ export function createAgentExtensionHandler(): ExtensionTypeHandler {
       // a no-op if it ever holds the lock externally.
       const { withInstallLock } = await import("./materialize-agent-package");
       await withInstallLock(ref.packageName, async () => {
+        // cinatra#2350 (S5, epic #2345): delete `agent_assigned_skills` rows
+        // for this agent package FIRST — before the provider-only early
+        // return below, and not wrapped in a try/catch that swallows the
+        // failure. The assignment table is keyed by canonical agent package
+        // name and is actor-independent (S1): it covers provider-declared,
+        // template-free agents too (the canonical resolver unions DB
+        // templates with on-disk provider-declared agents), so an agent with
+        // no `agent_templates` row can still carry assignments — gating this
+        // delete on `existing` would leave those rows stranded forever. Runs
+        // under this SAME `withInstallLock` the S1 assign flow acquires
+        // (over the owning SKILL package, not this agent package — but the
+        // ordering guarantee is symmetric: see
+        // `agent-assigned-skills-teardown.ts`).
+        await deleteAssignedSkillsForAgentPackage(ref.packageName);
+
         const existing = await readAgentTemplateByPackageName(ref.packageName);
         if (!existing) return;
 

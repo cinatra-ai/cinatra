@@ -28,6 +28,10 @@ vi.mock("@cinatra-ai/skills", () => ({
   upsertSkill: vi.fn(),
   deleteAgentSkillsForSlugs: vi.fn(),
   parseFrontmatter: vi.fn(),
+  // cinatra#2350 (S5, epic #2345): agent_assigned_skills lifecycle teardown —
+  // called unconditionally, NOT wrapped in a try/catch, at the top of
+  // uninstall().
+  deleteAssignedSkillsForAgentPackage: vi.fn(async () => ({ deletedCount: 0 })),
 }));
 
 vi.mock("@cinatra-ai/registries", () => {

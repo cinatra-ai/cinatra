@@ -125,6 +125,19 @@ vi.mock("./github", () => ({
   ensureConfiguredRepositorySynced: vi.fn(async () => undefined),
 }));
 
+// cinatra#2350 (S5): `uninstallSkillPackage` now sweeps `agent_assigned_skills`
+// rows FIRST via `sweepAssignedSkillsForSkillPackageId`, which — unmocked —
+// drives a REAL filesystem extension scan (and, transitively, a REAL
+// `@cinatra-ai/agents` module graph via `resolveExtensionRoots`'s dynamic
+// `agent-runtime-mount` import). Irrelevant to this containment suite's
+// symlink-escape assertions; stub it to a no-op so those stay isolated to the
+// disk-removal paths under test. Covered directly by
+// agent-assigned-skills-teardown.test.ts and skills-store-assigned-skills-
+// teardown.test.ts.
+vi.mock("./agent-assigned-skills-teardown", () => ({
+  sweepAssignedSkillsForSkillPackageId: vi.fn(async () => ({ deletedCount: 0 })),
+}));
+
 import {
   deleteAgentSkillsForSlugs,
   uninstallSkillPackage,

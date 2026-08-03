@@ -10,6 +10,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   AGENT_ASSIGNED_SKILLS_CAP,
   deleteAssignedSkill,
+  deleteAssignedSkillsForAgentPackage,
+  deleteAssignedSkillsForSkillIds,
   insertAssignedSkill,
   readAssignedSkillsForAgentPackage,
   type AssignedSkillsQuery,
@@ -249,6 +251,76 @@ describe("deleteAssignedSkill", () => {
     await deleteAssignedSkill({ agentPackageName: "@a/b", skillId: "@x/y:z" }, { query });
     expect(calls[0]!.text).toContain("WHERE agent_package_name = $1 AND skill_id = $2");
     expect(calls[0]!.values).toEqual(["@a/b", "@x/y:z"]);
+  });
+});
+
+describe("deleteAssignedSkillsForSkillIds (cinatra#2350 S5 — skill-side teardown)", () => {
+  it("deletes by skill_id ACROSS every agent, reporting the true count", async () => {
+    const calls: Call[] = [];
+    const query: AssignedSkillsQuery = async (text, values) => {
+      calls.push({ text, values: values ? [...values] : [] });
+      return [{ skill_id: "@x/y:a" }, { skill_id: "@x/y:b" }] as never;
+    };
+    await expect(
+      deleteAssignedSkillsForSkillIds(["@x/y:a", "@x/y:b"], { query }),
+    ).resolves.toEqual({ deletedCount: 2 });
+    expect(calls[0]!.text).toContain("WHERE skill_id = ANY($1::text[])");
+    expect(calls[0]!.values).toEqual([["@x/y:a", "@x/y:b"]]);
+  });
+
+  it("dedupes the id list before querying", async () => {
+    const calls: Call[] = [];
+    const query: AssignedSkillsQuery = async (text, values) => {
+      calls.push({ text, values: values ? [...values] : [] });
+      return [];
+    };
+    await deleteAssignedSkillsForSkillIds(["@x/y:a", "@x/y:a"], { query });
+    expect(calls[0]!.values).toEqual([["@x/y:a"]]);
+  });
+
+  it("is idempotent: deleting an empty/absent set reports 0 WITHOUT touching the DB", async () => {
+    const query = vi.fn(async () => []) as unknown as AssignedSkillsQuery;
+    await expect(deleteAssignedSkillsForSkillIds([], { query })).resolves.toEqual({
+      deletedCount: 0,
+    });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("filters out empty-string ids before querying", async () => {
+    const query = vi.fn(async () => []) as unknown as AssignedSkillsQuery;
+    await deleteAssignedSkillsForSkillIds(["", "@x/y:a"], { query });
+    expect(query).toHaveBeenCalledWith(expect.any(String), [["@x/y:a"]]);
+  });
+});
+
+describe("deleteAssignedSkillsForAgentPackage (cinatra#2350 S5 — agent-side teardown)", () => {
+  it("deletes EVERY row for one agent package in one statement, reporting the true count", async () => {
+    const calls: Call[] = [];
+    const query: AssignedSkillsQuery = async (text, values) => {
+      calls.push({ text, values: values ? [...values] : [] });
+      return [{ skill_id: "@x/y:a" }, { skill_id: "@x/y:b" }, { skill_id: "@x/y:c" }] as never;
+    };
+    await expect(
+      deleteAssignedSkillsForAgentPackage("@cinatra-ai/web-scrape-agent", { query }),
+    ).resolves.toEqual({ deletedCount: 3 });
+    expect(calls[0]!.text).toContain("WHERE agent_package_name = $1");
+    expect(calls[0]!.text).not.toContain("skill_id = $2");
+    expect(calls[0]!.values).toEqual(["@cinatra-ai/web-scrape-agent"]);
+  });
+
+  it("is idempotent: an agent with no assignments reports 0, never throws", async () => {
+    const query: AssignedSkillsQuery = async () => [];
+    await expect(
+      deleteAssignedSkillsForAgentPackage("@cinatra-ai/no-assignments", { query }),
+    ).resolves.toEqual({ deletedCount: 0 });
+  });
+
+  it("refuses an empty agent package name WITHOUT touching the DB — never a whole-table wipe", async () => {
+    const query = vi.fn(async () => []) as unknown as AssignedSkillsQuery;
+    await expect(deleteAssignedSkillsForAgentPackage("", { query })).resolves.toEqual({
+      deletedCount: 0,
+    });
+    expect(query).not.toHaveBeenCalled();
   });
 });
 

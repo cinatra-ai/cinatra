@@ -5,6 +5,12 @@ import path from "path";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase, readSkillCatalogFromDatabase, replaceSkillCatalogInDatabase, getPostgresConnectionString, postgresSchema } from "@/lib/database";
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getExtensionStoreSkillRootPath } from "./extension-store-root";
+// cinatra#2350 (S5, epic #2345): agent_assigned_skills lifecycle teardown.
+// Safe to import statically here — this module reaches `./extension-skill-
+// resolver` and `@/lib/agent-assigned-skills-store` only through dynamic
+// imports, so it never closes the skills-store <-> extension-skill-resolver
+// load-time cycle.
+import { sweepAssignedSkillsForSkillPackageId } from "./agent-assigned-skills-teardown";
 // installedSkillPackages + canonical access-policy helpers (W4, #1073) live in ./skill-packages (already graph-reachable): 0 route-graph delta, size-ratchet headroom.
 import { assertPersonalSkillOwnership, installedSkillPackages, normalizeStoredAccessPolicy, projectSelectionToLevelScope, readSkillsCatalogSnapshot, resolveUpsertAccessConfig, visibilityToLevelScope } from "./skill-packages";
 export { resolveEffectiveSkillAccessPolicy } from "./skill-packages";
@@ -2191,6 +2197,24 @@ export async function deleteAgentSkillsForSlugs(
 }
 
 export async function uninstallSkillPackage(packageId: string) {
+  // cinatra#2350 (S5, epic #2345): sweep `agent_assigned_skills` rows for the
+  // EXACT derived catalog ids this package owns — via the same
+  // `deriveSkillRegistration` derivation the S1 predicate's
+  // `buildSkillIdOwnership` uses, so the virtual `@cinatra-ai/chat` namespace
+  // (the five chat successor packages) is swept correctly — BEFORE the
+  // missing-native-package early return below, not merely before the catalog
+  // rewrite further down. A virtual-namespace registration may have NO native
+  // `skillPackages` catalog row at all, so gating this sweep on
+  // `existingPackage` would silently skip exactly the packages the virtual
+  // namespace exists for. Runs under the SAME per-extension lifecycle lock
+  // the S1 assign flow acquires: `extensionRegistry.uninstall` already holds
+  // `withInstallLock(ref.packageName)` around this whole call chain before
+  // `handler.uninstall` (this function's caller) ever runs — see
+  // `agent-assigned-skills-teardown.ts` for the full ordering note. Not
+  // wrapped in a try/catch that swallows the failure — same "fatal, must roll
+  // back" posture as the co-owner cleanup below (the precedent).
+  await sweepAssignedSkillsForSkillPackageId(packageId);
+
   const existingCatalog = await readSkillsCatalog();
   const existingPackage = existingCatalog.skillPackages.find((p) => p.id === packageId);
   if (!existingPackage) return false;

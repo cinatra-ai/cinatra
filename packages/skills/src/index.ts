@@ -25,6 +25,11 @@ export * from "./skill-paths";
 export * from "./skill-scanner";
 export * from "./relocate-worker";
 export * from "./recover-pending-moves";
+// Direct agent<->skill assignment lifecycle teardown (cinatra#2350 S5, epic
+// #2345) — consumed by @cinatra-ai/agents' extension-handler.ts through this
+// barrel, matching how its sibling skill-lifecycle hooks (cleanupForAgent,
+// deleteAgentSkillsForSlugs) are already imported.
+export * from "./agent-assigned-skills-teardown";
 // In-process deterministic skills client used to resolve per-agent methodology
 // via the catalog.
 export { createDeterministicSkillsClient } from "./mcp/client/deterministic-client";

@@ -266,3 +266,56 @@ export async function deleteAssignedSkill(
   );
   return { deleted: rows.length > 0 };
 }
+
+// ---------------------------------------------------------------------------
+// LIFECYCLE TEARDOWN bulk deletes (cinatra#2350 S5, epic #2345).
+//
+// The two directions an assignment row can be orphaned from: the SKILL it
+// names, or the AGENT it is assigned to. Both a skill-package uninstall and an
+// agent-package uninstall must sweep every row they own — not just the one
+// (agent, skill) pair a UI remove targets — so a completed uninstall leaves
+// ZERO rows, per the epic's "rows are configuration, not an audit log"
+// decision (S1). Idempotent: deleting rows that are already gone reports 0,
+// never throws.
+// ---------------------------------------------------------------------------
+
+/**
+ * Delete every assignment row whose `skill_id` is in the given set, across
+ * EVERY agent. Driven by the exact derived catalog ids a skill package owns
+ * (`packages/skills/src/agent-assigned-skills-teardown.ts`), including the
+ * virtual `@cinatra-ai/chat` namespace ids the five chat-successor packages
+ * register under.
+ */
+export async function deleteAssignedSkillsForSkillIds(
+  skillIds: readonly string[],
+  deps?: AssignedSkillsStoreDeps,
+): Promise<{ deletedCount: number }> {
+  const ids = [...new Set(skillIds.filter((id) => typeof id === "string" && id.length > 0))];
+  if (ids.length === 0) return { deletedCount: 0 };
+  const { query, table } = resolveDeps(deps);
+  const rows = await query<{ skill_id: string }>(
+    `DELETE FROM ${table} WHERE skill_id = ANY($1::text[]) RETURNING skill_id`,
+    [ids],
+  );
+  return { deletedCount: rows.length };
+}
+
+/**
+ * Delete every assignment row for ONE agent package — every skill it carries,
+ * in one statement. The assignment table is actor-independent and covers
+ * template-free, provider-declared agents too (S1's canonical resolver unions
+ * DB templates with on-disk provider-declared agents), so this must never be
+ * gated on an `agent_templates` row existing.
+ */
+export async function deleteAssignedSkillsForAgentPackage(
+  agentPackageName: string,
+  deps?: AssignedSkillsStoreDeps,
+): Promise<{ deletedCount: number }> {
+  if (!agentPackageName) return { deletedCount: 0 };
+  const { query, table } = resolveDeps(deps);
+  const rows = await query<{ skill_id: string }>(
+    `DELETE FROM ${table} WHERE agent_package_name = $1 RETURNING skill_id`,
+    [agentPackageName],
+  );
+  return { deletedCount: rows.length };
+}

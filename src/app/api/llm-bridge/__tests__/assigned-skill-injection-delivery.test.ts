@@ -486,6 +486,73 @@ describe("an assigned skill REACHES THE MODEL on all three run shapes (AC 1)", (
   });
 });
 
+/**
+ * cinatra#2350 (S5, epic #2345) — the ISSUE'S OWN cross-path E2E shape:
+ * "assign via the UI → [each path] deliver the skill … uninstall the skill →
+ * next run of each path delivers without it." Each test below is a single
+ * BEFORE/AFTER transition (not two independent snapshots), on the SAME real
+ * pipeline the "AC 1" describe block above proves delivery through.
+ *
+ * The uninstall's actual DELETE mechanics (`deleteAssignedSkillsForSkillIds` /
+ * `deleteAssignedSkillsForAgentPackage` genuinely emptying the real table)
+ * are proven against REAL Postgres in
+ * `agent-assigned-skills-teardown.integration.test.ts` — this suite proves
+ * the OTHER half: once the row is gone, every one of the three delivery
+ * paths stops delivering it, through the exact same production code AC 1
+ * proves delivers it.
+ */
+describe("uninstall TRANSITION reaches all three delivery paths (cinatra#2350 S5)", () => {
+  it("ATTRIBUTED run: delivers before the sweep, does not after", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN);
+    resolveAssignedSkillsActorForRunMock.mockResolvedValue(SCOPED_ACTOR);
+
+    await POST(
+      makeRequest({ user: "hi", agent_id: AGENT_SLUG }, { "x-cinatra-run-token": RUN_TOKEN }),
+    );
+    expect(deliveredCatalogIds()).toContain(ASSIGNED);
+
+    // The S5 sweep runs (proven at the real-Postgres layer separately) — the
+    // next read of the table comes back empty.
+    assignmentRows = [];
+    runResolvedSkillAwareDeterministicLlmTaskMock.mockClear();
+
+    await POST(
+      makeRequest({ user: "hi", agent_id: AGENT_SLUG }, { "x-cinatra-run-token": RUN_TOKEN }),
+    );
+    expect(deliveredCatalogIds()).not.toContain(ASSIGNED);
+  });
+
+  it("ACTOR-LESS WORKER run: delivers before the sweep, does not after", async () => {
+    readAgentRunByTokenHashMock.mockResolvedValue(WORKER_PROBE);
+    readAgentRunByIdMock.mockResolvedValue(WORKER_RUN);
+
+    await POST(
+      makeRequest({ user: "hi", agent_id: AGENT_SLUG }, { "x-cinatra-run-token": RUN_TOKEN }),
+    );
+    expect(deliveredCatalogIds()).toContain(ASSIGNED);
+
+    assignmentRows = [];
+    runResolvedSkillAwareDeterministicLlmTaskMock.mockClear();
+
+    await POST(
+      makeRequest({ user: "hi", agent_id: AGENT_SLUG }, { "x-cinatra-run-token": RUN_TOKEN }),
+    );
+    expect(deliveredCatalogIds()).not.toContain(ASSIGNED);
+  });
+
+  it("UNATTRIBUTABLE dispatch: delivers before the sweep, does not after", async () => {
+    await POST(makeRequest({ user: "hi", agent_id: AGENT_SLUG }));
+    expect(deliveredCatalogIds()).toContain(ASSIGNED);
+
+    assignmentRows = [];
+    runResolvedSkillAwareDeterministicLlmTaskMock.mockClear();
+
+    await POST(makeRequest({ user: "hi", agent_id: AGENT_SLUG }));
+    expect(deliveredCatalogIds()).not.toContain(ASSIGNED);
+  });
+});
+
 describe("cap pressure at the REAL bridge — the union order survives to the model (AC 2)", () => {
   it("assigned skills keep their slots; automatic matches are the ones truncated", async () => {
     // End-to-end cap pressure, with NOTHING about the ordering reconstructed by
