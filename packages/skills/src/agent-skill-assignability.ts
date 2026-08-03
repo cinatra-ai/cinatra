@@ -70,6 +70,24 @@ import {
   scanExtensionsSource,
 } from "./agent-skill-assignment-sources";
 
+/**
+ * The PURE catalog SNAPSHOT read (cinatra#2348 S3), re-exported here ON PURPOSE
+ * — this is the ONE public way an out-of-package consumer fills the `readCatalog`
+ * seam below with the non-syncing read.
+ *
+ * `readCatalog` defaults to `readCatalogSource`, i.e.
+ * `syncInstalledSkillsToDatabase()`: a full catalog rebuild (GitHub sync, disk
+ * scan, DB write, prefill enqueue). That default is right for a rare
+ * configuration WRITE, and wrong for anything that runs per request or per run
+ * dispatch — the S3 picker population and the S2 resolution-time revalidation
+ * both inject the snapshot instead. The seam module itself stays
+ * package-INTERNAL (its consumers inside this slice import it by relative path
+ * so one `vi.mock` doubles every real-world read), so the predicate's own
+ * public subpath carries the read its seam expects rather than re-implementing
+ * it at each caller.
+ */
+export { readCatalogSnapshotSource } from "./agent-skill-assignment-sources";
+
 /** The skill-role vocabulary (#2089). `injectable` is the assignable one. */
 export const SKILL_ROLES = ["injectable", "matcher", "internal"] as const;
 export type SkillRole = (typeof SKILL_ROLES)[number];
