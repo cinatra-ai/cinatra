@@ -77,6 +77,26 @@
         }
       ]
     },
+    "installed-extensions-status-views": {
+      "manifest": "app-extensions",
+      "selector": "harness [data-surface-id=\"installed-extensions-status-views\"] — wraps the SAME installed-extensions-filter combobox + installed-extensions-list pairing; asserts the §III.3 four-view (All/Active/Locked/Archived) status-filter contract those two surfaces already implement (default Active landing, option order, the dedicated Locked view, the All union), cinatra#1571.",
+      "requires": [
+        {
+          "file": "src/components/extensions/installed-tab-model.ts",
+          "literals": [
+            "{ value: \"all\", label: \"All\" }",
+            "{ value: \"active\", label: \"Active\" }",
+            "{ value: \"locked\", label: \"Locked\" }",
+            "{ value: \"archived\", label: \"Archived\" }",
+            "DEFAULT_INSTALLED_TAB: InstalledTabValue = \"active\""
+          ]
+        },
+        {
+          "file": "packages/extensions/src/screens/installed-empty-states.tsx",
+          "literals": ["export function LockedEmptyState", "export function AllEmptyState"]
+        }
+      ]
+    },
     "install-config-needs-callout": {
       "manifest": "app-extensions",
       "selector": "[data-slot=\"install-config-needs-callout\"] (the §VI needs-review strip on the InstalledExtensionCard); name field + configure affordance: the connector link [data-field=\"manifest.displayName\"] deep-linked to /connectors/<vendor>/<slug>/setup; empty variant: the strip is absent from the active card",

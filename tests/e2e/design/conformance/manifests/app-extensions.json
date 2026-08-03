@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-extensions.html",
-  "contentHash": "sha256:ed9fa793e07556007645e614e68657997ce513a27636532fa7797f05d28eb15d",
+  "contentHash": "sha256:1faf0a7399723c2906bbc3082cf56612ce0daabb8cac424fdb8cc52dd48bf877",
   "surfaces": [
     {
       "id": "extension-listing-grid",
@@ -146,6 +146,12 @@
         "error",
         "loading"
       ]
+    },
+    {
+      "id": "installed-extensions-status-views",
+      "fields": [],
+      "actions": [],
+      "states": []
     },
     {
       "id": "install-config-needs-callout",
