@@ -20,6 +20,7 @@ import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema";
 import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSchemaQueries, skillUploadConsentSchemaQueries } from "@/lib/skill-lifecycle-schema";
 import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
+import { agentAssignedSkillsSchemaQueries } from "@/lib/agent-assigned-skills-schema";
 import {
   artifactClaimSchemaQueries,
   objectContentSnapshotSchemaQueries,
@@ -2564,6 +2565,13 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
     {
       text: `CREATE INDEX IF NOT EXISTS custom_skill_assignments_agent_idx ON "${schemaName.replaceAll('"', '""')}"."custom_skill_assignments" (agent_id)`,
     },
+    // agent_assigned_skills (cinatra#2346 S1): the ACTOR-INDEPENDENT direct
+    // assignment store, deliberately beside — not inside —
+    // custom_skill_assignments above, whose read is actor-gated and therefore
+    // invisible to actor-less worker runs. Fresh-install half; the
+    // operator-upgrade twin is migrations/core/core__0089. Both halves are
+    // idempotent and pinned against each other by a DDL-parity suite.
+    ...agentAssignedSkillsSchemaQueries(schemaName),
     // Derived-store ownership columns.
     // org_id already exists on objects + graphiti_projection_outbox; add the
     // remaining tuple (owner_type, owner_id, visibility) as nullable for
