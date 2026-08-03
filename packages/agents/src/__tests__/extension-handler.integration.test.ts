@@ -29,6 +29,13 @@ vi.mock("@cinatra-ai/skills", () => ({
   deleteAgentSkillsForSlugs: vi.fn(),
   parseFrontmatter: vi.fn(),
 }));
+// cinatra#2350 (S5, epic #2345): agent_assigned_skills lifecycle teardown is
+// reached via a DYNAMIC import of `@/lib/agent-assigned-skills-store`
+// directly (never through the `@cinatra-ai/skills` barrel), called
+// unconditionally, NOT wrapped in a try/catch, at the top of uninstall().
+vi.mock("@/lib/agent-assigned-skills-store", () => ({
+  deleteAssignedSkillsForAgentPackage: vi.fn(async () => ({ deletedCount: 0 })),
+}));
 
 vi.mock("@cinatra-ai/registries", () => {
   class PluginDependencyCycleError extends Error {

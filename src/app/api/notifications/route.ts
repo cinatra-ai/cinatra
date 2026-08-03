@@ -6,6 +6,7 @@ import {
   markAllNotificationsRead,
   markNotificationsReadThrough,
   markNotificationRead,
+  markNotificationUnread,
   markNotificationsReadByHrefPrefix,
 } from "@/lib/notifications";
 
@@ -44,8 +45,49 @@ export async function PATCH(request: Request) {
   const userIdOrResponse = await requireUserId();
   if (typeof userIdOrResponse !== "string") return userIdOrResponse;
   const body = (await request.json().catch(() => null)) as
-    | { id?: string; href?: string; all?: boolean; beforeId?: string }
+    | {
+        id?: string;
+        href?: string;
+        all?: boolean;
+        beforeId?: string;
+        unread?: boolean;
+      }
     | null;
+
+  // Mark-UNREAD discriminated shape (cinatra#2379): the presence of an
+  // `unread` field routes to this strict branch INSTEAD OF the legacy
+  // priority chain below, and is validated exactly — only `{ id, unread:
+  // true }` is accepted. `unread: false` is rejected (use the bare `{ id }`
+  // shape below to mark read instead), a multi-selector mix alongside
+  // `unread` (e.g. `{ id, unread: true, all: true }`) is rejected, and any
+  // other unknown field alongside `unread` is rejected too. These rejection
+  // rules apply ONLY to bodies that mention `unread` — the legacy chain's
+  // lenient, priority-ordered handling of {beforeId, all, id, href} (e.g.
+  // `beforeId` silently taking precedence over a co-present `all`) is left
+  // completely unchanged for bodies that don't.
+  if (body && Object.prototype.hasOwnProperty.call(body, "unread")) {
+    const allowedKeys = new Set(["id", "unread"]);
+    const hasOnlyAllowedKeys = Object.keys(body).every((key) =>
+      allowedKeys.has(key),
+    );
+    if (
+      body.unread !== true ||
+      !hasOnlyAllowedKeys ||
+      typeof body.id !== "string" ||
+      body.id === ""
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Mark-unread requires exactly { id, unread: true } and no other fields.",
+        },
+        { status: 400 },
+      );
+    }
+    await markNotificationUnread(body.id);
+    return NextResponse.json({ ok: true });
+  }
+
   // Scoped mark-all-read watermark (the /notifications v2 feed): mark read only
   // the caller's unread rows THROUGH the newest-LOADED notification, identified
   // by `beforeId`. The server resolves that row's full-precision (created_at, id)

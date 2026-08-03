@@ -11,6 +11,10 @@ import { buildConfigurationNeedsNotificationInput } from "@/lib/agent-configurat
 import { ConformanceCardFixtures } from "./card-fixtures";
 import { NotificationConfigNeedsFixture } from "./notification-config-needs-fixture";
 import { ConnectorSetupConformanceFixture } from "./connector-setup-fixture";
+import {
+  ConnectorConnectionsFixture,
+  ConnectorMultiConnectionFixture,
+} from "./connector-multi-connection-fixture";
 import { InstallConfigNeedsConformanceFixture } from "./install-config-needs-fixture";
 import { ApprovalsSchedulingConformanceFixtures } from "./approvals-scheduling-fixtures";
 import { NotificationsConformanceFixtures } from "./notifications-conformance-fixtures";
@@ -140,11 +144,32 @@ export default function ConformanceHarnessPage() {
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
             <CardTitle>
-              Connector setup — tabbed schema-config (surface: connector-setup-tabbed)
+              Connector setup — tabbed schema-config (surfaces: connector-setup,
+              connector-config-tab)
             </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex flex-col gap-8">
             <ConnectorSetupConformanceFixture />
+            {/* The two non-ready variants both surfaces declare. */}
+            <ConnectorSetupConformanceFixture variant="loading" />
+            <ConnectorSetupConformanceFixture variant="error" />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>
+              Connector setup — multi-connection (surfaces: connector-multi-setup,
+              connector-connections)
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-8">
+            <ConnectorMultiConnectionFixture variant="populated" />
+            <ConnectorMultiConnectionFixture variant="loading" />
+            <ConnectorMultiConnectionFixture variant="error" />
+            <ConnectorConnectionsFixture variant="populated" />
+            <ConnectorConnectionsFixture variant="empty" />
+            <ConnectorConnectionsFixture variant="loading" />
           </CardContent>
         </Card>
 

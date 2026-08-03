@@ -72,6 +72,17 @@ on:
       - "src/components/extensions/extensions-tab-select.tsx"
       - "packages/connectors/src/**"
       - "packages/connectors/package.json"
+      # §II connector-setup surfaces (cinatra#2354): the schema-config host
+      # renderer + the right-column status card, and the sdk-ui components that
+      # OWN the connector-setup / connector-multi-setup / connector-connections
+      # conformance ids and their state variants. A rename here breaks the
+      # functional-acceptance contract by design, so the gate must see it.
+      - "src/components/extensions/schema-config-connector-form.tsx"
+      - "src/components/extensions/connector-status-probe-card.tsx"
+      - "packages/sdk-ui/src/connector-setup-columns.tsx"
+      - "packages/sdk-ui/src/connections-list.tsx"
+      - "packages/sdk-ui/src/connection-status-card.tsx"
+      - "packages/sdk-ui/src/connection-status-badge.tsx"
       - "scripts/design/**"
       - "tests/e2e/config/design.config.ts"
       - "tests/e2e/config/base.ts"
