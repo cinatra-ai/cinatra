@@ -246,6 +246,43 @@ function readDeclaredDependencies(raw: unknown): DeclaredExtensionDependency[] {
   return out;
 }
 
+/** A non-empty, trimmed string, or `undefined`. Never an empty label. */
+function nonEmptyString(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * The self-declared vendor identity NAME from `cinatra.vendor` (cinatra#2348).
+ * The generated static manifest models it as `{ key, name }`; a manifest that
+ * spells it as a bare string is accepted as the name so the scan does not
+ * silently drop a byline the publish gate would have accepted.
+ */
+function readDeclaredVendorName(raw: unknown): string | undefined {
+  if (typeof raw === "string") return nonEmptyString(raw);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  return nonEmptyString((raw as { name?: unknown }).name);
+}
+
+/**
+ * The npm `author` NAME (cinatra#2348). npm allows both the "people" object
+ * (`{ name, email, url }`) and the shorthand string `"Name <mail> (url)"`; the
+ * registry packument normalizes to the string form, so the shorthand is
+ * trimmed back to its leading name segment here rather than rendering an
+ * email address in a vendor byline.
+ */
+function readNpmAuthorName(raw: unknown): string | undefined {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return nonEmptyString((raw as { name?: unknown }).name);
+  }
+  const shorthand = nonEmptyString(raw);
+  if (shorthand === undefined) return undefined;
+  // Cut at the first `<` (email) or `(` (url) — npm's documented shorthand.
+  const cut = shorthand.search(/[<(]/);
+  return nonEmptyString(cut >= 0 ? shorthand.slice(0, cut) : shorthand);
+}
+
 export type SkillExtensionDescriptor = {
   /** Absolute path to the extension package dir. */
   pkgDir: string;
@@ -266,6 +303,40 @@ export type SkillExtensionDescriptor = {
    * the plain injectable default, the same meaning an unroled edge carries.
    */
   skillRole?: string;
+  /**
+   * `cinatra.displayName` — the extension's SELF-DECLARED human title
+   * (cinatra#2348 S3). RETAINED for the same reason `skillRole` is: the
+   * assignable-skills picker labels each result with the OWNING EXTENSION's
+   * name, and the scan is the only source that covers BOTH extension roots.
+   * The generated static manifest carries the same field, but only for
+   * image-bundled packages — a marketplace-installed skill extension appears
+   * only in the install-dir root this scan also walks, so reading the static
+   * manifest instead would leave every installed skill labelled with its raw
+   * npm name.
+   *
+   * This is the RAW declaration, not a resolved title: the standard
+   * display-name resolver (`resolveInstalledDisplayName`) owns the precedence
+   * chain and the package-name last resort, and it is applied by the consumer
+   * that renders. `undefined` when the manifest declares none.
+   */
+  displayName?: string;
+  /**
+   * `cinatra.vendor.name` — the extension's self-declared vendor identity name
+   * (cinatra#2348 S3), i.e. the FIRST tier of the standard vendor resolver
+   * (`resolveInstalledVendorName`). Retained raw for the same reason as
+   * `displayName`; the resolver, not this field, decides what renders.
+   * `undefined` when the manifest declares no vendor.
+   */
+  vendorName?: string;
+  /**
+   * The npm `author` name (cinatra#2348 S3) — the SECOND tier of the standard
+   * vendor resolver, which reads it off the registry packument. The packument
+   * `author` is derived from this very field, so reading it from the scanned
+   * `package.json` gives the same value without a registry round-trip.
+   * Accepts npm's two spellings (`"Name <mail>"` and `{ name }`); `undefined`
+   * when absent or malformed.
+   */
+  author?: string;
   /**
    * The package's DECLARED `cinatra.dependencies` edges, structurally filtered
    * to the well-formed entries (cinatra#2090 S3). Carried on the descriptor so
@@ -357,9 +428,12 @@ export async function scanSkillExtensions(): Promise<SkillExtensionDescriptor[]>
         if (!existsSync(pkgJsonPath)) continue;
         let pkgJson: {
           name?: string;
+          author?: unknown;
           cinatra?: {
             kind?: string;
             skillRole?: unknown;
+            displayName?: unknown;
+            vendor?: unknown;
             capabilities?: unknown;
             dependencies?: unknown;
           };
@@ -401,6 +475,9 @@ export async function scanSkillExtensions(): Promise<SkillExtensionDescriptor[]>
             typeof pkgJson?.cinatra?.skillRole === "string" && pkgJson.cinatra.skillRole
               ? pkgJson.cinatra.skillRole
               : undefined,
+          displayName: nonEmptyString(pkgJson?.cinatra?.displayName),
+          vendorName: readDeclaredVendorName(pkgJson?.cinatra?.vendor),
+          author: readNpmAuthorName(pkgJson?.author),
           dependencies: readDeclaredDependencies(pkgJson?.cinatra?.dependencies),
           capabilities,
           slugs,
