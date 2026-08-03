@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions \u2014 a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1660,
-    "/api/mcp": 1656,
-    "/chat": 1734,
-    "/api/a2a": 1661,
-    "/api/llm-bridge": 1671
+    "/sign-in": 1666,
+    "/api/mcp": 1662,
+    "/chat": 1740,
+    "/api/a2a": 1667,
+    "/api/llm-bridge": 1677
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1659,
-      "to": 1660,
-      "reason": "cinatra#1705 AC9 (PR #2321): the hard-removal teardown must know WHICH runs a force_delete/purge destroyed \u2014 the execution plane cancels their queued sandbox jobs and collects their retained L2 workspaces by run id, and the data-teardown hook fires AFTER agent_runs is deleted, so the ids can only be captured inside the deleting transaction. That capture lives in removeReferencingRunRows, whose file (packages/agents/src/store.ts) sat exactly at its file-size-ratchet ceiling with zero headroom, so the two no-new-rot ratchets were in direct tension; the file-size gate's own prescription (extract via a thin facade + vertical slices) is exactly +1 first-party module: the vertical slice packages/agents/src/store-force-delete-runs.ts (reaches only ./db and ./schema; no cycle; no barrel widened). Re-anchored during merge-conflict resolution on top of the #2319 wmc-pin absorbs at the same routes (retire-on-re-raise): from = main's committed ceiling including that raise, to = +1 on top.",
-      "pr": 2321
+      "from": 1660,
+      "to": 1666,
+      "reason": "cinatra#2347 S2 (PR #2358): the DIRECTLY ASSIGNED skill tier has to run inside getAssignedSkillIdsForAgent \u2014 the one resolver every locked route reaches \u2014 because that is what makes an admin's assignment reach the actor-less worker and unattributable dispatches at all. Reaching it costs SIX first-party modules on every locked route: the tier itself, the S1 agent_assigned_skills store, the epic's shared assignability predicate, the shared canonical agent-package resolver, the S1 single I/O seam, and the package-eligibility leaf that seam reads. None is avoidable by narrowing: the predicate and the resolver are the epic's SINGLE definitions (S1, S2 and S3 consume the same ones by design, so re-deriving them to save a module would be the defect the shared helpers exist to prevent), and folding the tier back into agents-store.ts would save exactly one module while costing the fail-closed arms their test seam. Accepted as a one-time step, not a trend: S3-S5 consume these same modules and add none. SUPERSEDES the #1705 AC9 record carried at 1659 -> 1660 (PR #2321: the hard-removal teardown's run-id capture inside the deleting transaction); that growth is still in this ceiling, it is simply no longer the most recent raise.",
+      "pr": 2358
     },
     "/api/mcp": {
-      "from": 1655,
-      "to": 1656,
-      "reason": "cinatra#1705 AC9 (PR #2321): the hard-removal teardown must know WHICH runs a force_delete/purge destroyed \u2014 the execution plane cancels their queued sandbox jobs and collects their retained L2 workspaces by run id, and the data-teardown hook fires AFTER agent_runs is deleted, so the ids can only be captured inside the deleting transaction. That capture lives in removeReferencingRunRows, whose file (packages/agents/src/store.ts) sat exactly at its file-size-ratchet ceiling with zero headroom, so the two no-new-rot ratchets were in direct tension; the file-size gate's own prescription (extract via a thin facade + vertical slices) is exactly +1 first-party module: the vertical slice packages/agents/src/store-force-delete-runs.ts (reaches only ./db and ./schema; no cycle; no barrel widened). Re-anchored during merge-conflict resolution on top of the #2319 wmc-pin absorbs at the same routes (retire-on-re-raise): from = main's committed ceiling including that raise, to = +1 on top.",
-      "pr": 2321
+      "from": 1656,
+      "to": 1662,
+      "reason": "cinatra#2347 S2 (PR #2358): the DIRECTLY ASSIGNED skill tier has to run inside getAssignedSkillIdsForAgent \u2014 the one resolver every locked route reaches \u2014 because that is what makes an admin's assignment reach the actor-less worker and unattributable dispatches at all. Reaching it costs SIX first-party modules on every locked route: the tier itself, the S1 agent_assigned_skills store, the epic's shared assignability predicate, the shared canonical agent-package resolver, the S1 single I/O seam, and the package-eligibility leaf that seam reads. None is avoidable by narrowing: the predicate and the resolver are the epic's SINGLE definitions (S1, S2 and S3 consume the same ones by design, so re-deriving them to save a module would be the defect the shared helpers exist to prevent), and folding the tier back into agents-store.ts would save exactly one module while costing the fail-closed arms their test seam. Accepted as a one-time step, not a trend: S3-S5 consume these same modules and add none.",
+      "pr": 2358
     },
     "/chat": {
-      "from": 1733,
-      "to": 1734,
-      "reason": "cinatra#1705 AC9 (PR #2321): the hard-removal teardown must know WHICH runs a force_delete/purge destroyed \u2014 the execution plane cancels their queued sandbox jobs and collects their retained L2 workspaces by run id, and the data-teardown hook fires AFTER agent_runs is deleted, so the ids can only be captured inside the deleting transaction. That capture lives in removeReferencingRunRows, whose file (packages/agents/src/store.ts) sat exactly at its file-size-ratchet ceiling with zero headroom, so the two no-new-rot ratchets were in direct tension; the file-size gate's own prescription (extract via a thin facade + vertical slices) is exactly +1 first-party module: the vertical slice packages/agents/src/store-force-delete-runs.ts (reaches only ./db and ./schema; no cycle; no barrel widened). Re-anchored during merge-conflict resolution on top of the #2319 wmc-pin absorbs at the same routes (retire-on-re-raise): from = main's committed ceiling including that raise, to = +1 on top.",
-      "pr": 2321
+      "from": 1734,
+      "to": 1740,
+      "reason": "cinatra#2347 S2 (PR #2358): the DIRECTLY ASSIGNED skill tier has to run inside getAssignedSkillIdsForAgent \u2014 the one resolver every locked route reaches \u2014 because that is what makes an admin's assignment reach the actor-less worker and unattributable dispatches at all. Reaching it costs SIX first-party modules on every locked route: the tier itself, the S1 agent_assigned_skills store, the epic's shared assignability predicate, the shared canonical agent-package resolver, the S1 single I/O seam, and the package-eligibility leaf that seam reads. None is avoidable by narrowing: the predicate and the resolver are the epic's SINGLE definitions (S1, S2 and S3 consume the same ones by design, so re-deriving them to save a module would be the defect the shared helpers exist to prevent), and folding the tier back into agents-store.ts would save exactly one module while costing the fail-closed arms their test seam. Accepted as a one-time step, not a trend: S3-S5 consume these same modules and add none.",
+      "pr": 2358
     },
     "/api/a2a": {
-      "from": 1660,
-      "to": 1661,
-      "reason": "cinatra#1705 AC9 (PR #2321): the hard-removal teardown must know WHICH runs a force_delete/purge destroyed \u2014 the execution plane cancels their queued sandbox jobs and collects their retained L2 workspaces by run id, and the data-teardown hook fires AFTER agent_runs is deleted, so the ids can only be captured inside the deleting transaction. That capture lives in removeReferencingRunRows, whose file (packages/agents/src/store.ts) sat exactly at its file-size-ratchet ceiling with zero headroom, so the two no-new-rot ratchets were in direct tension; the file-size gate's own prescription (extract via a thin facade + vertical slices) is exactly +1 first-party module: the vertical slice packages/agents/src/store-force-delete-runs.ts (reaches only ./db and ./schema; no cycle; no barrel widened). Re-anchored during merge-conflict resolution on top of the #2319 wmc-pin absorbs at the same routes (retire-on-re-raise): from = main's committed ceiling including that raise, to = +1 on top.",
-      "pr": 2321
+      "from": 1661,
+      "to": 1667,
+      "reason": "cinatra#2347 S2 (PR #2358): the DIRECTLY ASSIGNED skill tier has to run inside getAssignedSkillIdsForAgent \u2014 the one resolver every locked route reaches \u2014 because that is what makes an admin's assignment reach the actor-less worker and unattributable dispatches at all. Reaching it costs SIX first-party modules on every locked route: the tier itself, the S1 agent_assigned_skills store, the epic's shared assignability predicate, the shared canonical agent-package resolver, the S1 single I/O seam, and the package-eligibility leaf that seam reads. None is avoidable by narrowing: the predicate and the resolver are the epic's SINGLE definitions (S1, S2 and S3 consume the same ones by design, so re-deriving them to save a module would be the defect the shared helpers exist to prevent), and folding the tier back into agents-store.ts would save exactly one module while costing the fail-closed arms their test seam. Accepted as a one-time step, not a trend: S3-S5 consume these same modules and add none.",
+      "pr": 2358
     },
     "/api/llm-bridge": {
-      "from": 1670,
-      "to": 1671,
-      "reason": "cinatra#1705 AC9 (PR #2321): the hard-removal teardown must know WHICH runs a force_delete/purge destroyed \u2014 the execution plane cancels their queued sandbox jobs and collects their retained L2 workspaces by run id, and the data-teardown hook fires AFTER agent_runs is deleted, so the ids can only be captured inside the deleting transaction. That capture lives in removeReferencingRunRows, whose file (packages/agents/src/store.ts) sat exactly at its file-size-ratchet ceiling with zero headroom, so the two no-new-rot ratchets were in direct tension; the file-size gate's own prescription (extract via a thin facade + vertical slices) is exactly +1 first-party module: the vertical slice packages/agents/src/store-force-delete-runs.ts (reaches only ./db and ./schema; no cycle; no barrel widened). Re-anchored during merge-conflict resolution on top of the #2319 wmc-pin absorbs at the same routes (retire-on-re-raise): from = main's committed ceiling including that raise, to = +1 on top.",
-      "pr": 2321
+      "from": 1671,
+      "to": 1677,
+      "reason": "cinatra#2347 S2 (PR #2358): the DIRECTLY ASSIGNED skill tier has to run inside getAssignedSkillIdsForAgent \u2014 the one resolver every locked route reaches \u2014 because that is what makes an admin's assignment reach the actor-less worker and unattributable dispatches at all. Reaching it costs SIX first-party modules on every locked route: the tier itself, the S1 agent_assigned_skills store, the epic's shared assignability predicate, the shared canonical agent-package resolver, the S1 single I/O seam, and the package-eligibility leaf that seam reads. None is avoidable by narrowing: the predicate and the resolver are the epic's SINGLE definitions (S1, S2 and S3 consume the same ones by design, so re-deriving them to save a module would be the defect the shared helpers exist to prevent), and folding the tier back into agents-store.ts would save exactly one module while costing the fail-closed arms their test seam. Accepted as a one-time step, not a trend: S3-S5 consume these same modules and add none.",
+      "pr": 2358
     }
   }
 }
