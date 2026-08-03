@@ -26,6 +26,12 @@ vi.mock("@cinatra-ai/skills", () => ({
   parseFrontmatter: vi.fn(),
   enqueueInlineForAgent: vi.fn(),
   cleanupForAgent: mocks.cleanupForAgent,
+}));
+// cinatra#2350 (S5, epic #2345): agent_assigned_skills lifecycle teardown is
+// reached via a DYNAMIC import of `@/lib/agent-assigned-skills-store`
+// directly (never through the `@cinatra-ai/skills` barrel — see the note
+// above that import in extension-handler.ts).
+vi.mock("@/lib/agent-assigned-skills-store", () => ({
   deleteAssignedSkillsForAgentPackage: mocks.deleteAssignedSkillsForAgentPackage,
 }));
 vi.mock("@cinatra-ai/agents", () => ({

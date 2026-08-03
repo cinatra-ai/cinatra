@@ -282,9 +282,9 @@ export async function deleteAssignedSkill(
 /**
  * Delete every assignment row whose `skill_id` is in the given set, across
  * EVERY agent. Driven by the exact derived catalog ids a skill package owns
- * (`packages/skills/src/agent-assigned-skills-teardown.ts`), including the
- * virtual `@cinatra-ai/chat` namespace ids the five chat-successor packages
- * register under.
+ * (`sweepAssignedSkillsForSkillPackageId` below), including the virtual
+ * `@cinatra-ai/chat` namespace ids the five chat-successor packages register
+ * under.
  */
 export async function deleteAssignedSkillsForSkillIds(
   skillIds: readonly string[],
@@ -318,4 +318,131 @@ export async function deleteAssignedSkillsForAgentPackage(
     [agentPackageName],
   );
   return { deletedCount: rows.length };
+}
+
+// ---------------------------------------------------------------------------
+// SKILL-SIDE derivation (cinatra#2350 S5). Lives HERE — not in a dedicated
+// `packages/skills/**` module — for a ratchet reason, not a layering one:
+// `packages/skills/src/skills-store.ts`'s `uninstallSkillPackage` is
+// reachable from all five locked routes (route-graph-ratchet), and this
+// file is ALREADY one of the modules absorbed into their baselines (the S2
+// PR, cinatra#2347, explicitly lists "the S1 assignment store" among the six
+// first-party modules its `getAssignedSkillIdsForAgent` tier added and had
+// annotated-absorbed). Landing the derivation logic in a brand-new file —
+// even one reached only via `await import(...)` — still adds a node to the
+// route-graph ratchet's count (verified locally: its analyzer's `import(...)`
+// regex counts dynamic edges identically to static ones). Extending an
+// ALREADY-counted file adds none. A prior attempt folded this logic into
+// `packages/skills/src/skills-store.ts` instead, which pushed that file over
+// its OWN tracked file-size-ratchet ceiling — landing it in this file (not
+// size-tracked; see `scripts/audit/file-size-ratchet.baseline.json`) avoids
+// both.
+//
+// `scanSkillExtensions` / `deriveSkillRegistration` are reached via a
+// DYNAMIC import of the `@cinatra-ai/skills` package barrel — the reverse
+// direction of every other cross-boundary read in this file (host importing
+// a package it already depends on, same as `src/lib/agents-store.ts` does
+// throughout) — because this host-app store needs the SAME derivation the S1
+// predicate's `buildSkillIdOwnership` uses, and duplicating it here would
+// let the two drift.
+// ---------------------------------------------------------------------------
+
+/** Narrowed shape of `@cinatra-ai/skills`'s `SkillExtensionDescriptor` — this
+ *  file avoids a package-level TYPE import to keep its dependency surface a
+ *  pure runtime seam (mirrors `AssignedSkillsQuery` above). */
+type SkillExtensionDescriptorShape = {
+  pkgName: string;
+  pkgDirName: string;
+  kind: string;
+  slugs: string[];
+};
+
+export type SkillPackageTeardownDeps = {
+  /** Default = the real filesystem scan (`@cinatra-ai/skills`). */
+  scanExtensions?: () => Promise<SkillExtensionDescriptorShape[]>;
+  /** Default = the real derivation (`@cinatra-ai/skills`). */
+  deriveSkillRegistration?: (
+    pkgName: string,
+    pkgDirName: string,
+    slug: string,
+  ) => { packageName: string; skillId: string };
+  /** Default = `deleteAssignedSkillsForSkillIds` above. */
+  deleteBySkillIds?: (skillIds: string[]) => Promise<{ deletedCount: number }>;
+};
+
+async function defaultTeardownScanExtensions(): Promise<SkillExtensionDescriptorShape[]> {
+  const { scanSkillExtensions } = await import("@cinatra-ai/skills");
+  return scanSkillExtensions() as unknown as Promise<SkillExtensionDescriptorShape[]>;
+}
+
+async function defaultTeardownDeriveSkillRegistration(
+  pkgName: string,
+  pkgDirName: string,
+  slug: string,
+): Promise<{ packageName: string; skillId: string }> {
+  const { deriveSkillRegistration } = await import("@cinatra-ai/skills");
+  return deriveSkillRegistration(pkgName, pkgDirName, slug);
+}
+
+/**
+ * Derive the EXACT catalog ids a REAL npm skill package owns, via the SAME
+ * derivation `buildSkillIdOwnership` (S1's shared predicate,
+ * `@cinatra-ai/skills/agent-skill-assignability`) uses. A per-slug throw
+ * (reserved chat-namespace impersonation, `deriveSkillRegistration`'s guard)
+ * degrades only that slug — mirrors `buildSkillIdOwnership`'s fail-soft
+ * posture — never the sweep as a whole.
+ *
+ * Returns `[]` when the scan carries no `kind:"skill"` descriptor for this
+ * package name — including simply "this package owns no skills", which is a
+ * normal outcome, not a failure.
+ */
+export async function deriveOwnedAssignedSkillIds(
+  realPackageName: string,
+  deps: SkillPackageTeardownDeps = {},
+): Promise<string[]> {
+  if (!realPackageName) return [];
+  const scanExtensions = deps.scanExtensions ?? defaultTeardownScanExtensions;
+  const derive = deps.deriveSkillRegistration ?? defaultTeardownDeriveSkillRegistration;
+  const descriptors = await scanExtensions();
+  const owned = descriptors.find((d) => d.kind === "skill" && d.pkgName === realPackageName);
+  if (!owned) return [];
+  const ids: string[] = [];
+  for (const slug of owned.slugs) {
+    try {
+      const reg = await derive(owned.pkgName, owned.pkgDirName, slug);
+      ids.push(reg.skillId);
+    } catch {
+      // A package impersonating the reserved `@cinatra-ai/chat` namespace
+      // degrades only THIS slug — never aborts the sweep for the rest of the
+      // package's legitimate skills.
+    }
+  }
+  return ids;
+}
+
+/**
+ * Sweep `agent_assigned_skills` rows for a skill package being uninstalled —
+ * called by `packages/skills/src/skills-store.ts:uninstallSkillPackage` (via
+ * a dynamic import of THIS module) BEFORE its missing-native-package early
+ * return. `packageId` is the catalog packageId (`verdaccio:<name>` /
+ * `github:<name>`, per `skill-package-source.ts`); the real npm package name
+ * is recovered from it, not looked up in the native `skillPackages` catalog
+ * — a virtual-namespace registration (one of the five chat successor
+ * packages) may have no row there at all.
+ *
+ * DELIBERATELY NOT wrapped in a try/catch that swallows the failure: the
+ * co-owner cleanup in `uninstallSkillPackage` (cinatra#2346/#300) is the
+ * precedent — if this sweep fails, the whole uninstall must roll back rather
+ * than silently leave an orphan assignment that could re-apply on a later
+ * reinstall of the same package.
+ */
+export async function sweepAssignedSkillsForSkillPackageId(
+  packageId: string,
+  deps: SkillPackageTeardownDeps = {},
+): Promise<{ deletedCount: number }> {
+  const realPackageName = packageId.replace(/^verdaccio:/, "").replace(/^github:/, "");
+  const ids = await deriveOwnedAssignedSkillIds(realPackageName, deps);
+  if (ids.length === 0) return { deletedCount: 0 };
+  const deleteBySkillIds = deps.deleteBySkillIds ?? ((skillIds: string[]) => deleteAssignedSkillsForSkillIds(skillIds));
+  return deleteBySkillIds(ids);
 }

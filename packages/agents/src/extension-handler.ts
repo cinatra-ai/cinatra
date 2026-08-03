@@ -20,9 +20,15 @@ import {
   // Agent install/update/uninstall hooks keep skill matches in sync.
   enqueueInlineForAgent,
   cleanupForAgent,
-  // cinatra#2350 (S5, epic #2345): agent_assigned_skills lifecycle teardown.
-  deleteAssignedSkillsForAgentPackage,
 } from "@cinatra-ai/skills";
+// cinatra#2350 (S5, epic #2345): agent_assigned_skills lifecycle teardown is
+// reached via the DYNAMIC import at its call site below, directly against
+// `@/lib/agent-assigned-skills-store` (the S1 store; `packages/agents`
+// already imports `@/lib/**` elsewhere, e.g. `a2a-actions.ts`) — never a
+// top-level static one. `@/lib/agent-assigned-skills-store.ts` is already
+// one of the modules absorbed into the route-graph-ratchet baselines for the
+// five locked routes this handler is itself reachable from (the S2 PR,
+// cinatra#2347), so this edge costs nothing there.
 import {
   FIRST_PARTY_PACKAGE_SCOPE,
   InstanceNamespaceNotConfiguredError,
@@ -375,8 +381,13 @@ export function createAgentExtensionHandler(): ExtensionTypeHandler {
         // delete on `existing` would leave those rows stranded forever. Runs
         // under this SAME `withInstallLock` the S1 assign flow acquires
         // (over the owning SKILL package, not this agent package — but the
-        // ordering guarantee is symmetric: see
-        // `agent-assigned-skills-teardown.ts`).
+        // ordering guarantee is symmetric). DYNAMIC import, directly against
+        // the S1 store — see the note above the `@cinatra-ai/skills` import
+        // block for why this stays a graph-free edge for the route-graph
+        // ratchet.
+        const { deleteAssignedSkillsForAgentPackage } = await import(
+          "@/lib/agent-assigned-skills-store"
+        );
         await deleteAssignedSkillsForAgentPackage(ref.packageName);
 
         const existing = await readAgentTemplateByPackageName(ref.packageName);
