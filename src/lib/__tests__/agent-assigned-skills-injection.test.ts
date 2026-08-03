@@ -219,6 +219,20 @@ describe("agent resolution consumes the SHARED S1 resolver", () => {
     expect(out.skillIds).toEqual([SKILL_A]);
   });
 
+  it("a MALFORMED population fails closed instead of propagating out of the resolver", async () => {
+    // The caller (`getAssignedSkillIdsForAgent`) was total on this input before
+    // the tier existed; a null candidate row must not turn it into a rejecting
+    // function. Guards the "never rejects" contract on the PURE arm too.
+    const read = vi.fn(async () => [{ skillId: SKILL_A }]);
+    const out = await resolveAssignedSkillTier(
+      "web-scrape-agent",
+      [null as unknown as (typeof POPULATION)[number]],
+      { readAssignments: read, resolveAssignability: realRevalidation },
+    );
+    expect(out).toMatchObject({ skillIds: [], degraded: "agent-unresolved" });
+    expect(read).not.toHaveBeenCalled();
+  });
+
   it("a THROWING I/O resolver fails closed instead of propagating", async () => {
     const out = await resolveAssignedSkillTier("web-scrape-agent", null, {
       resolveAgentPackage: async () => {

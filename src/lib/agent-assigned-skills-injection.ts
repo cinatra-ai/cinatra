@@ -142,20 +142,24 @@ export async function resolveAssignedSkillTier(
   if (rawId === "") return degraded("agent-unresolved", null);
 
   // ---- (1) canonical agent package -------------------------------------
+  //
+  // Guarded on BOTH arms, including the pure one. `resolveCanonicalAgentPackageFrom`
+  // reads fields off every candidate, so a malformed population entry would throw
+  // — and this function's caller is a resolver that USED to be total on that
+  // input. "Never rejects" has to hold literally, not just for well-formed data,
+  // or the whole fail-closed posture depends on the caller's data hygiene.
   let resolution: AgentPackageResolution;
-  if (population) {
-    resolution = resolveCanonicalAgentPackageFrom(rawId, population);
-  } else {
-    try {
-      resolution = await (deps.resolveAgentPackage ?? resolveCanonicalAgentPackage)(rawId);
-    } catch (err) {
-      console.warn(
-        "[agent-assigned-skills] agent resolution threw — no assigned skills delivered (fail-closed). agent / cause:",
-        forLog(rawId),
-        err instanceof Error ? err.message : err,
-      );
-      return degraded("agent-unresolved", null);
-    }
+  try {
+    resolution = population
+      ? resolveCanonicalAgentPackageFrom(rawId, population)
+      : await (deps.resolveAgentPackage ?? resolveCanonicalAgentPackage)(rawId);
+  } catch (err) {
+    console.warn(
+      "[agent-assigned-skills] agent resolution threw — no assigned skills delivered (fail-closed). agent / cause:",
+      forLog(rawId),
+      err instanceof Error ? err.message : err,
+    );
+    return degraded("agent-unresolved", null);
   }
   if (!resolution.ok) {
     // An UNKNOWN reference is the overwhelmingly common case (an agent with no
