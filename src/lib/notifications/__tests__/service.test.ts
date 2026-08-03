@@ -16,6 +16,7 @@ import {
   markAllNotificationsReadForUser,
   markNotificationsReadThroughForUser,
   markNotificationReadForUser,
+  markNotificationUnreadForUser,
   markNotificationsReadByHrefPrefixForUser,
   setNotificationsHostAdapters,
 } from "@cinatra-ai/notifications/server";
@@ -436,6 +437,54 @@ describe("markNotificationReadForUser", () => {
   it("no-ops when notificationId is empty", () => {
     markNotificationReadForUser({ userId: "u-9", notificationId: "" });
     expect(runQueriesMock).not.toHaveBeenCalled();
+  });
+});
+
+// The first non-monotonic read-state write (cinatra#2379): every mutation
+// above only ever moves `read_at` forward via COALESCE(read_at, now()); this
+// one sets it back to NULL unconditionally, scoped to the caller's own row.
+describe("markNotificationUnreadForUser", () => {
+  it("UPDATE sets read_at = NULL, scoped to the caller's userId AND notification id", () => {
+    markNotificationUnreadForUser({ userId: "u-9", notificationId: "n-2" });
+    expect(runQueriesMock).toHaveBeenCalledTimes(1);
+    expect(lastSql()).toContain("UPDATE");
+    expect(lastSql()).toContain("SET read_at = NULL");
+    expect(lastSql()).toContain("WHERE user_id = $1 AND id = $2");
+    expect(lastValues()).toEqual(["u-9", "n-2"]);
+  });
+
+  it("is unconditional — unlike the read-state writes, it does NOT COALESCE", () => {
+    markNotificationUnreadForUser({ userId: "u-9", notificationId: "n-2" });
+    expect(lastSql()).not.toContain("COALESCE");
+  });
+
+  it("no-ops when userId is empty", () => {
+    markNotificationUnreadForUser({ userId: "", notificationId: "n-2" });
+    expect(runQueriesMock).not.toHaveBeenCalled();
+  });
+
+  it("no-ops when notificationId is empty", () => {
+    markNotificationUnreadForUser({ userId: "u-9", notificationId: "" });
+    expect(runQueriesMock).not.toHaveBeenCalled();
+  });
+
+  it("is scoped to the CALLING viewer's userId — it can never target another user's row even if a foreign notificationId is supplied", () => {
+    markNotificationUnreadForUser({ userId: "u-9", notificationId: "n-owned-by-someone-else" });
+    expect(lastValues()).toEqual(["u-9", "n-owned-by-someone-else"]);
+    // The WHERE clause always AND-scopes on user_id = $1 (the caller), so a
+    // notification id belonging to a different user simply matches zero rows
+    // instead of ever being reachable cross-user.
+    expect(lastSql()).toContain("WHERE user_id = $1 AND id = $2");
+  });
+
+  it("unread -> read -> unread round-trips at the service layer (same id, same viewer)", () => {
+    markNotificationReadForUser({ userId: "u-9", notificationId: "n-rt" });
+    expect(lastSql()).toContain("SET read_at = COALESCE(read_at, now())");
+    markNotificationUnreadForUser({ userId: "u-9", notificationId: "n-rt" });
+    expect(lastSql()).toContain("SET read_at = NULL");
+    markNotificationReadForUser({ userId: "u-9", notificationId: "n-rt" });
+    expect(lastSql()).toContain("SET read_at = COALESCE(read_at, now())");
+    expect(runQueriesMock).toHaveBeenCalledTimes(3);
   });
 });
 
