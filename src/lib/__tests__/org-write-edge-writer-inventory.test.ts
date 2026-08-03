@@ -276,13 +276,25 @@ describe("newly registered stores — writer-set lockstep", () => {
     expect(registryWriters("src/lib/assistant-thread-store.ts")).toEqual(detected);
   });
 
-  it("assistant-thread-dormant-content-purge: the migration purge is its module's only DML export and stays registered", () => {
+  it("assistant-thread-dormant-content-purge: the migration purge is its module's only RAW-DML-LITERAL export and stays registered", () => {
     const detected = exportedSegments("src/lib/assistant-thread-dormant-content-purge.ts")
       .filter((s) => RAW_VERBS.test(s.body))
       .map((s) => s.name)
       .sort();
     expect(detected).toEqual(["purgeBackfilledDormantContentTurns"]);
-    expect(registryWriters("src/lib/assistant-thread-dormant-content-purge.ts")).toEqual(detected);
+    // cinatra#2365: restoreDurableContentFromChatThreads is a SECOND genuine
+    // writer this module gained — the purge's repair companion — but it
+    // delegates its actual mutation to buildAssistantThreadMirrorQueries (a
+    // pure builder in project-inheritance.ts) + the generic executor, so its
+    // OWN body carries no raw-DML-verb literal and the scan above (by design)
+    // never detects it. It is still registered BY NAME below, same as
+    // database.ts's delegate writers (see the "chat-thread facade" pin
+    // further down) — a raw-verb scan is a detection heuristic, not the sole
+    // gate for what must be registered.
+    expect(registryWriters("src/lib/assistant-thread-dormant-content-purge.ts")).toEqual([
+      ...detected,
+      "restoreDurableContentFromChatThreads",
+    ].sort());
   });
 
   it("database.ts chat-thread facade: the three executors stay registered (the module is too broad for set-equality; one-way pin)", () => {

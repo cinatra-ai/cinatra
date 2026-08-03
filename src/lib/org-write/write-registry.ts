@@ -1192,6 +1192,29 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
         "cross-org migration/cleanup purge on the boot path (no per-org principal) — needs the cleanup-class ruling with the other maintenance sweeps",
     },
   },
+  {
+    // Companion REPAIR for the purge above (cinatra#2365): re-hydrates
+    // assistant_turns.content from the surviving legacy chat_threads.payload
+    // for threads the purge (or an earlier backfill gap) left content-less.
+    // Delegates its actual mutation to the SAME pure mirror-projection
+    // builder (buildAssistantThreadMirrorQueries) the legacy write path uses
+    // — no new raw-DML-verb literal in this module — but is registered here
+    // by name, same as database.ts's delegate writers, since it is a genuine
+    // writer at runtime. Dry-run by default; same cross-org, no-principal
+    // shape as the purge it repairs after.
+    module: "src/lib/assistant-thread-dormant-content-purge.ts",
+    exportName: "restoreDurableContentFromChatThreads",
+    capability: "content.write",
+    orgIdExtractor: "none (cross-org migration repair; dry-run default, sourced from chat_threads.payload)",
+    storageReferences: ["assistant_threads", "assistant_turns", "assistant_thread_pause_state", "chat_threads"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "cross-org migration/cleanup repair on the boot path (no per-org principal) — needs the same cleanup-class ruling as the purge it accompanies",
+    },
+  },
 
   // — kernel-owned tables (S2's own entry points) —
   {

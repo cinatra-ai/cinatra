@@ -8,13 +8,81 @@
 // durable `legacy:` content a PRE-guard boot backfill may ALREADY have copied in
 // a deployed database — it is wired to the cutover-marker timestamp as a
 // Migrate+Verify production step, independent of the (now-gone) backfill pass.
+//
+// cinatra#2365 (the drop-history invariant purging EVERY pre-existing thread on
+// a first upgrade): on a database upgrading across the cutover for the first
+// time, EVERY pre-existing thread's `updated_at` necessarily predates the
+// cutover marker's own activation instant — the marker is stamped `now()` by
+// the cutover migration (core__0066), not a genuinely historical dormancy
+// boundary. Passing that same marker value as `beforeUpdatedAt` (the naive,
+// documented-above production recipe) therefore classifies the caller's ENTIRE
+// account history as "dormant" and nulls it in one pass, even though none of it
+// has had a chance to be touched since the upgrade. Two changes close this:
+//   1. A destructive purge now refuses a `beforeUpdatedAt` that is not
+//      STRICTLY EARLIER than the recorded `assistant_cutover_marker.cutover_at`
+//      (see `assertCutoffPredatesCutoverMarker` below) — the exact "cutover
+//      marker == migration timestamp" footgun fails closed instead of wiping
+//      every thread.
+//   2. `restoreDurableContentFromChatThreads` — a companion REPAIR pass that
+//      re-hydrates `assistant_turns.content` from the surviving legacy
+//      `chat_threads.payload` for any thread whose structured content is
+//      missing, restoring an already-affected instance's `/chat` list without
+//      requiring the (still-intact) legacy row to be read anywhere else.
 
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
+import { buildAssistantThreadMirrorQueries } from "@/lib/project-inheritance";
+import { safeParseJson } from "@/lib/database-metadata";
 
 function schemaIdent(): string {
   return postgresSchema.replaceAll('"', '""');
+}
+
+/** Read the cutover marker's own recorded activation instant, or `null` when
+ *  the marker row does not (yet) exist — i.e. the drop-history cutover has not
+ *  happened on this database at all. Read-only (no raw DML verb), so it never
+ *  touches the module's pinned raw-DML-site count. */
+function readCutoverMarkerActivatedAt(): string | null {
+  const schema = schemaIdent();
+  const [res] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT cutover_at FROM "${schema}"."assistant_cutover_marker" LIMIT 1`,
+        values: [],
+      },
+    ],
+  });
+  const row = res?.rows?.[0] as Record<string, unknown> | undefined;
+  if (!row) return null;
+  const v = row.cutover_at;
+  if (v instanceof Date) return v.toISOString();
+  if (typeof v === "string") return v;
+  return null;
+}
+
+/**
+ * Fail closed on the cinatra#2365 first-upgrade footgun: a destructive purge's
+ * `beforeUpdatedAt` cutoff must be STRICTLY EARLIER than the cutover marker's
+ * own `cutover_at` (when the marker exists). Equal-or-later means the caller
+ * is (naively or not) using the marker's own just-stamped activation instant —
+ * or something even later — as the dormancy cutoff, which classifies every
+ * pre-existing thread as dormant on a first upgrade. A marker-less database
+ * (cutover not yet activated) has no boundary to compare against and is left
+ * to the existing unbounded-cutoff guard.
+ */
+function assertCutoffPredatesCutoverMarker(before: string): void {
+  const markerAt = readCutoverMarkerActivatedAt();
+  if (markerAt === null) return;
+  const cutoffMs = Date.parse(before);
+  const markerMs = Date.parse(markerAt);
+  if (!Number.isFinite(cutoffMs) || !Number.isFinite(markerMs)) return;
+  if (cutoffMs >= markerMs) {
+    throw new Error(
+      `purgeBackfilledDormantContentTurns: beforeUpdatedAt (${before}) is not strictly earlier than the cutover marker's own cutover_at (${markerAt}) — refusing a first-upgrade purge that would classify every pre-existing thread as dormant (cinatra#2365). Pass a cutoff that genuinely predates the cutover.`,
+    );
+  }
 }
 
 export type DormantContentPurgeResult = {
@@ -71,6 +139,15 @@ export function purgeBackfilledDormantContentTurns(options?: {
   ensurePostgresSchema();
   const schema = schemaIdent();
 
+  // cinatra#2365: a destructive purge additionally refuses a cutoff that is
+  // not strictly before the cutover marker's own activation instant — see
+  // assertCutoffPredatesCutoverMarker's header. Checked AFTER ensurePostgresSchema
+  // (it reads the marker table) but BEFORE the audit/purge queries, so a
+  // first-upgrade misuse never touches assistant_turns at all.
+  if (!dryRun && before !== null) {
+    assertCutoffPredatesCutoverMarker(before);
+  }
+
   // Scope predicate: legacy-mirror content turns, optionally restricted to
   // threads dormant since the cutoff. Parameter $1 is the cutoff (or NULL → no
   // time restriction). The join keys the cutoff on the OWNING thread's
@@ -117,4 +194,110 @@ export function purgeBackfilledDormantContentTurns(options?: {
     (purgeRes as { rowCount?: number } | undefined)?.rowCount ?? auditedContentTurns,
   );
   return { auditedContentTurns, purged, dryRun: false };
+}
+
+// ---------------------------------------------------------------------------
+// REPAIR (cinatra#2365): re-hydrate a thread's structured-store content from
+// the surviving legacy `chat_threads.payload`, for threads whose durable
+// `legacy:` mirror turns carry NO content at all — whether because this purge
+// (or an earlier PRE-guard backfill gap) nulled/never-populated it. The legacy
+// row is never dropped by this cutover (that is PR3), so its `payload` remains
+// a faithful backup as long as it exists; this is the "Recovery note" one-off
+// backfill the issue describes made into a real, idempotent, re-runnable op.
+// ---------------------------------------------------------------------------
+
+/**
+ * Find thread ids whose structured mirror carries NO durable `/chat` content
+ * (no `legacy:`-namespaced, run_id-NULL turn with non-NULL content) but which
+ * DO have a surviving `chat_threads` row with a non-null payload to restore
+ * from. Read-only (no raw DML verb) — safe to call at any time, including
+ * dry-run reporting.
+ */
+export function findLegacyThreadIdsMissingDurableContent(): string[] {
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  const [res] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT at.id
+               FROM "${schema}"."assistant_threads" at
+               JOIN "${schema}"."chat_threads" ct ON ct.id = at.id
+               WHERE ct.payload IS NOT NULL
+                 AND NOT EXISTS (
+                   SELECT 1 FROM "${schema}"."assistant_turns" t
+                   WHERE t.thread_id = at.id
+                     AND t.content IS NOT NULL
+                     AND t.run_id IS NULL
+                     AND t.id LIKE 'legacy:%'
+                 )`,
+        values: [],
+      },
+    ],
+  });
+  return (res?.rows ?? []).map((r) => String((r as Record<string, unknown>).id));
+}
+
+export type RestoreDurableContentResult = {
+  /** Threads found with missing structured content AND a surviving legacy backup. */
+  auditedThreads: number;
+  /** Threads whose structured content was actually re-hydrated (0 on a dry run). */
+  restored: number;
+  dryRun: boolean;
+};
+
+/**
+ * Restore durable `/chat` content for threads whose structured mirror lost it
+ * (cinatra#2365) by re-running the SAME self-backfilling mirror projection
+ * (`buildAssistantThreadMirrorQueries`) that every legacy chat-thread write
+ * already composes — sourced from the surviving `chat_threads.payload` instead
+ * of a live request body. Idempotent: `ON CONFLICT (id) DO UPDATE` on the mirror
+ * turns means re-running this against an already-restored thread is a no-op.
+ *
+ * DEFAULT dryRun=true (matches purgeBackfilledDormantContentTurns's contract):
+ * the caller must opt in to writing. A malformed/unparseable payload is
+ * skipped defensively (chat_threads.payload is arbitrary historical JSON) —
+ * never lets one bad row abort the whole repair pass.
+ */
+export function restoreDurableContentFromChatThreads(options?: {
+  dryRun?: boolean;
+}): RestoreDurableContentResult {
+  const dryRun = options?.dryRun ?? true;
+  const threadIds = findLegacyThreadIdsMissingDurableContent();
+  if (dryRun || threadIds.length === 0) {
+    return { auditedThreads: threadIds.length, restored: 0, dryRun };
+  }
+
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  let restored = 0;
+  for (const threadId of threadIds) {
+    const [payloadRes] = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      queries: [
+        {
+          text: `SELECT payload FROM "${schema}"."chat_threads" WHERE id = $1 LIMIT 1`,
+          values: [threadId],
+        },
+      ],
+    });
+    const rawPayload = (payloadRes?.rows?.[0] as Record<string, unknown> | undefined)?.payload;
+    if (typeof rawPayload !== "string") continue; // no surviving legacy row — nothing to restore from
+    const parsed = safeParseJson<Record<string, unknown> | null>(rawPayload, null);
+    if (parsed === null || typeof parsed !== "object") continue; // defensive: corrupt legacy payload
+
+    const thread = { ...parsed, id: threadId };
+    const queries = buildAssistantThreadMirrorQueries({
+      schemaName: postgresSchema,
+      thread,
+      explicitMirrorOrgId: null, // org_id is SET-ONCE on the mirror — never clobbers an established anchor
+    });
+    runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      transaction: true,
+      queries,
+    });
+    restored += 1;
+  }
+  return { auditedThreads: threadIds.length, restored, dryRun: false };
 }
