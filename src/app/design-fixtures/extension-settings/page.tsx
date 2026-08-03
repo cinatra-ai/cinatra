@@ -405,6 +405,39 @@ export default async function ExtensionSettingsFixturePage({
         />
       </Case>
 
+      {/* Case J — an AGENT-kind page the loader ruled INELIGIBLE (an assistant).
+          This is the exact DOM an assistant's settings page renders: agent
+          kind, and NO Skills section at all — no heading, no empty frame, no
+          placeholder. The eligibility decision itself is authoritative and
+          server-side; this case pins what its `null` looks like. */}
+      <Case
+        id="assistant-no-skills"
+        label="Assistant (agent kind, ineligible) · NO Skills section at all"
+      >
+        <ExtensionSettingsView
+          kind="agent"
+          packageName="@acme/workspace-assistant"
+          displayName="Workspace Assistant"
+          vendor="Acme Corp"
+          updateRow={{
+            enabled: false,
+            description: "Currently on version 1.4.0 — up to date.",
+            disabledReason: "Already up to date",
+          }}
+          archiveDisabled={null}
+          activateDisabled="Already active"
+          reinstallDisabled={null}
+          forceDeleteDisabled={null}
+          isPublic={false}
+          isRegisteredVendor={false}
+          canPublish={false}
+          permissions={
+            <DeferredPermissions note="Manage who can access this agent from the Agents page." />
+          }
+          actions={ACTIONS}
+        />
+      </Case>
+
       {/* Case G — agent with NOTHING chosen: the field, the count hint and no
           list at all. Zero is a correct, warning-free state (§V Skills). */}
       <Case id="agent-skills-empty" label="Agent · Skills · nothing chosen (zero is fine)">

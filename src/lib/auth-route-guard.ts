@@ -125,6 +125,15 @@ const PUBLIC_EXACT_PATHS = [
 // production-standalone design-visual-verify harness. Without this exemption
 // guardAppRoute 307s the unauthenticated harness to /sign-in before the fixture
 // renders, so the gate's own specs time out locating the fixture testids.
+// "/design-fixtures/extension-settings" (cinatra#2349): the §V extension
+// settings fixture — the REAL ExtensionSettingsView mounted against seeded
+// props, including the per-agent Skills section's real client editor over
+// driven server actions. Same static, dataless, seeded-render contract as its
+// siblings (no DB, no user data; the driven actions read nothing and write
+// nothing). The route predates this entry and was therefore only reachable on
+// a dev server; adding it here is what lets the §V surface — and the Skills
+// section's in-flight / refusal / degraded states — be driven on the
+// production-standalone harness the rest of the family already uses.
 const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures",
   "/design-fixtures/marketplace-detail-modal",
@@ -133,6 +142,7 @@ const DEV_ONLY_PUBLIC_EXACT_PATHS = [
   "/design-fixtures/conformance/seed",
   "/design-fixtures/agents-card",
   "/design-fixtures/header-rule",
+  "/design-fixtures/extension-settings",
 ];
 function isDevOnlyPublicPath(pathname: string) {
   if (!DEV_ONLY_PUBLIC_EXACT_PATHS.includes(pathname)) return false;

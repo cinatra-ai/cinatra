@@ -446,6 +446,11 @@ describe("auth-route-guard DEV_ONLY_PUBLIC_EXACT_PATHS — design-fixture harnes
     expect(isNext(res)).toBe(true);
   });
 
+  it("/design-fixtures/extension-settings is public in non-production (§V settings + Skills harness, cinatra#2349)", async () => {
+    const res = await guardAppRoute(fakeRequest("/design-fixtures/extension-settings"));
+    expect(isNext(res)).toBe(true);
+  });
+
   it("CONTROL: an arbitrary /design-fixtures/* sibling is NOT public (exact-path list, no prefix wildcard)", async () => {
     const res = await guardAppRoute(fakeRequest("/design-fixtures/anything-else"));
     expect(res.status).toBe(307);
