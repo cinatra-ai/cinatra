@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-connectors.html",
-  "contentHash": "sha256:ed8480def054c75b92a3f79b35727061e7fb8aa2dae5391b4312a672075ad70d",
+  "contentHash": "sha256:f34487c6395d53d1782cab5533bd33dbb70348ce810523ec38c27e5dc31ae9fd",
   "surfaces": [
     {
       "id": "connector-connection-filter",
@@ -25,6 +25,129 @@
       "actions": [],
       "states": [
         "empty",
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "connector-setup",
+      "fields": [
+        {
+          "field": "api-key",
+          "source": "config.apiKey"
+        },
+        {
+          "field": "project-id",
+          "source": "config.projectId"
+        },
+        {
+          "field": "organization-id",
+          "source": "config.organizationId"
+        },
+        {
+          "field": "service-tier",
+          "source": "config.serviceTier"
+        },
+        {
+          "field": "default-model",
+          "source": "config.defaultModel"
+        }
+      ],
+      "actions": [
+        {
+          "action": "connect",
+          "outcome": "connected"
+        },
+        {
+          "action": "disconnect",
+          "outcome": "confirming"
+        },
+        {
+          "action": "check-connection",
+          "outcome": "checked"
+        }
+      ],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "connector-multi-setup",
+      "fields": [
+        {
+          "field": "server-base-url",
+          "source": "config.baseUrl"
+        },
+        {
+          "field": "bearer-token",
+          "source": "config.bearerToken"
+        }
+      ],
+      "actions": [
+        {
+          "action": "connect",
+          "outcome": "connected"
+        },
+        {
+          "action": "view-connections",
+          "outcome": "connections"
+        }
+      ],
+      "states": [
+        "error",
+        "loading"
+      ]
+    },
+    {
+      "id": "connector-connections",
+      "fields": [],
+      "actions": [
+        {
+          "action": "disconnect",
+          "outcome": "confirming"
+        },
+        {
+          "action": "connect",
+          "outcome": "connected"
+        }
+      ],
+      "states": [
+        "empty",
+        "loading"
+      ]
+    },
+    {
+      "id": "connector-config-tab",
+      "fields": [
+        {
+          "field": "sandbox-enabled",
+          "source": "config.shell.enabled"
+        },
+        {
+          "field": "container-image",
+          "source": "config.shell.containerImage"
+        },
+        {
+          "field": "max-execution-seconds",
+          "source": "config.shell.maxSeconds"
+        },
+        {
+          "field": "readable-roots",
+          "source": "config.shell.readRoots"
+        },
+        {
+          "field": "allowed-command-prefixes",
+          "source": "config.shell.allowedPrefixes"
+        }
+      ],
+      "actions": [
+        {
+          "action": "save-config",
+          "outcome": "saved"
+        }
+      ],
+      "states": [
         "error",
         "loading"
       ]
