@@ -37,12 +37,15 @@ const {
   readAgentTemplateByIdMock,
   readRunSelectedSkillRevisionsMock,
   readAssignedSkillsForAgentPackageMock,
+  resolveDeclaredSkillEdgeForExtensionDirMock,
 } = vi.hoisted(() => ({
   runResolvedSkillAwareDeterministicLlmTaskMock: vi.fn(async () => ({
     text: "ok",
     artifacts: [],
   })),
-  getCustomSkillForCurrentUserAndAgentMock: vi.fn(async () => null),
+  getCustomSkillForCurrentUserAndAgentMock: vi.fn(
+    async (): Promise<{ id: string; content: string; revisionId: string } | null> => null,
+  ),
   resolveAssignedSkillsActorForRunMock: vi.fn(),
   resolveAgentRunMcpActorMock: vi.fn(async () => null),
   getLlmMcpCredentialsMock: vi.fn(() => ({ clientId: "c", clientSecret: "s" })),
@@ -55,6 +58,9 @@ const {
   readAgentTemplateByIdMock: vi.fn(async (): Promise<Record<string, unknown> | null> => null),
   readRunSelectedSkillRevisionsMock: vi.fn((): Array<Record<string, unknown>> => []),
   readAssignedSkillsForAgentPackageMock: vi.fn(),
+  resolveDeclaredSkillEdgeForExtensionDirMock: vi.fn(
+    async (): Promise<{ skillId: string; sourcePath: string } | null> => null,
+  ),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -65,6 +71,9 @@ const OWNER_PKG = "@cinatra-ai/list-curation-skill";
 const ASSIGNED = `${OWNER_PKG}:list-curation`;
 const OTHER_PKG = "@cinatra-ai/asset-blog";
 const AUTO_ONLY = `${OTHER_PKG}:generate-blog-ideas`;
+/** Extra assigned / automatically-matched skills for the cap-pressure arm. */
+const ASSIGNED_EXTRA = [`${OWNER_PKG}:extra-a`, `${OWNER_PKG}:extra-b`];
+const AUTO_EXTRA = Array.from({ length: 4 }, (_, i) => `${OTHER_PKG}:auto-${i + 1}`);
 
 // --- leaf reads behind the S1 seam ------------------------------------------
 let catalogSkills: Array<Record<string, unknown>> = [];
@@ -136,7 +145,7 @@ vi.mock("@cinatra-ai/skills", async () => {
   >("../../../../../packages/skills/src/skill-source");
   return {
     // Route-side.
-    resolveDeclaredSkillEdgeForExtensionDir: vi.fn(async () => null),
+    resolveDeclaredSkillEdgeForExtensionDir: resolveDeclaredSkillEdgeForExtensionDirMock,
     getCustomSkillForCurrentUserAndAgent: getCustomSkillForCurrentUserAndAgentMock,
     // Resolver-side.
     filterMatchRowsByVisibility: visibility.filterMatchRowsByVisibility,
@@ -241,7 +250,11 @@ vi.mock("@/lib/a2a-auth", () => ({
   })),
 }));
 
-import { injectedCatalogSkillIds, injectedSkillMembers } from "@cinatra-ai/skills/injection";
+import {
+  INJECTED_SKILL_CAP,
+  injectedCatalogSkillIds,
+  injectedSkillMembers,
+} from "@cinatra-ai/skills/injection";
 import {
   decideRecommendationContinuation,
   SELECTION_SOURCES,
@@ -271,6 +284,13 @@ const VERIFIED_RUN = {
   dependentInstallId: "inst-7",
 };
 const PROBE = { id: VERIFIED_RUN.id, orgId: VERIFIED_RUN.orgId, runBy: VERIFIED_RUN.runBy };
+/**
+ * A genuine WORKER-originated run: the platform, not a human, owns it, so the
+ * run row carries `runBy: null`. This is what production means by an actor-less
+ * worker run — NOT a human-owned run whose actor build happened to fail.
+ */
+const WORKER_RUN = { ...VERIFIED_RUN, runBy: null };
+const WORKER_PROBE = { id: WORKER_RUN.id, orgId: WORKER_RUN.orgId, runBy: null };
 const RUN_TOKEN = "raw-run-token-xyz";
 
 function skillRow(id: string, pkg: string, slug: string) {
@@ -317,6 +337,7 @@ beforeEach(async () => {
   readAgentRunTokenHashByIdMock.mockResolvedValue(null);
   readAgentTemplateByIdMock.mockResolvedValue(null);
   readRunSelectedSkillRevisionsMock.mockReturnValue([]);
+  resolveDeclaredSkillEdgeForExtensionDirMock.mockResolvedValue(null);
   readAssignedSkillsForAgentPackageMock.mockImplementation(async (pkg: string) =>
     assignmentRows.map((r, i) => ({
       agentPackageName: pkg,
@@ -332,11 +353,19 @@ beforeEach(async () => {
   ];
   catalogSkills = [
     skillRow(ASSIGNED, OWNER_PKG, "list-curation"),
+    ...ASSIGNED_EXTRA.map((id) => skillRow(id, OWNER_PKG, id.split(":")[1]!)),
     skillRow(AUTO_ONLY, OTHER_PKG, "generate-blog-ideas"),
+    ...AUTO_EXTRA.map((id) => skillRow(id, OTHER_PKG, id.split(":")[1]!)),
   ];
   scanned = [
-    descriptorRow(OWNER_PKG, "list-curation-skill", ["list-curation"]),
-    descriptorRow(OTHER_PKG, "asset-blog", ["generate-blog-ideas"]),
+    descriptorRow(OWNER_PKG, "list-curation-skill", [
+      "list-curation",
+      ...ASSIGNED_EXTRA.map((id) => id.split(":")[1]!),
+    ]),
+    descriptorRow(OTHER_PKG, "asset-blog", [
+      "generate-blog-ideas",
+      ...AUTO_EXTRA.map((id) => id.split(":")[1]!),
+    ]),
   ];
   installStatus = { [OWNER_PKG]: "active", [OTHER_PKG]: "active" };
   assignmentRows = [{ skillId: ASSIGNED }];
@@ -383,11 +412,31 @@ describe("an assigned skill REACHES THE MODEL on all three run shapes (AC 1)", (
     ).toBe("recommendation");
   });
 
-  it("ACTOR-LESS WORKER run — a vetted run whose actor build fails closed", async () => {
-    // A worker run has no present human, so the scope-aware actor resolves to
-    // `undefined` and the assignment resolves actor-LESS. Before the S1 table
-    // this shape could never see a configured assignment at all: the old
-    // `custom_skill_assignments` read is actor-gated.
+  it("ACTOR-LESS WORKER run — a vetted run the PLATFORM owns (`runBy: null`)", async () => {
+    // The real worker shape: no present human, so the run row carries no owner
+    // and the contract never even asks for a scope-aware actor. Nothing about
+    // the actor-lessness is manufactured by a mock here. Before the S1 table
+    // this shape could never see a configured assignment at all — the old
+    // `custom_skill_assignments` read is actor-gated and returns nothing
+    // without a principal.
+    readAgentRunByTokenHashMock.mockResolvedValue(WORKER_PROBE);
+    readAgentRunByIdMock.mockResolvedValue(WORKER_RUN);
+    // Left at its default (SCOPED_ACTOR would be a lie for a worker run); the
+    // assertion below is that it is never consulted.
+    resolveAssignedSkillsActorForRunMock.mockResolvedValue(SCOPED_ACTOR);
+
+    await POST(
+      makeRequest({ user: "hi", agent_id: AGENT_SLUG }, { "x-cinatra-run-token": RUN_TOKEN }),
+    );
+
+    expect(resolveAssignedSkillsActorForRunMock).not.toHaveBeenCalled();
+    expect(deliveredCatalogIds()).toContain(ASSIGNED);
+  });
+
+  it("ACTOR-LESS by FAIL-CLOSED actor build — a human-owned run whose actor cannot be built", async () => {
+    // The second actor-less shape (a nonmember owner, a membership-read
+    // failure): the route asks for the actor, gets `undefined`, and falls back
+    // to the actor-less resolution. Assignments must survive that too.
     readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN);
     resolveAssignedSkillsActorForRunMock.mockResolvedValue(undefined);
@@ -429,11 +478,87 @@ describe("an assigned skill REACHES THE MODEL on all three run shapes (AC 1)", (
   });
 });
 
+describe("cap pressure at the REAL bridge — the union order survives to the model (AC 2)", () => {
+  it("assigned skills keep their slots; automatic matches are the ones truncated", async () => {
+    // End-to-end cap pressure, with NOTHING about the ordering reconstructed by
+    // the test: the assignment rows, the `skill_matches` rows, the resolver's
+    // union, the bridge's ports and the contract's rank-and-cap are all real.
+    // Only the leaf reads and the LLM adapter are fake.
+    //
+    // Candidates: 1 personal delta + 1 declared dependency + 3 assigned + 5
+    // automatic matches = 10, against the cap of 8. Retention order therefore
+    // has to drop exactly two, and they must both be automatic matches.
+    const assigned = [ASSIGNED, ...ASSIGNED_EXTRA];
+    const auto = [AUTO_ONLY, ...AUTO_EXTRA];
+    assignmentRows = assigned.map((skillId) => ({ skillId }));
+    matchRows = auto.map((skillId) => ({ skillId, matched: true, status: "ok" }));
+    resolveDeclaredSkillEdgeForExtensionDirMock.mockResolvedValue({
+      skillId: "declared-dep-1",
+      sourcePath: "/nonexistent-install-dir/declared/SKILL.md",
+    });
+    getCustomSkillForCurrentUserAndAgentMock.mockResolvedValue({
+      id: "personal-delta-1",
+      content: "MY DELTA",
+      revisionId: "prev-1",
+    });
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN);
+    resolveAssignedSkillsActorForRunMock.mockResolvedValue(SCOPED_ACTOR);
+
+    await POST(
+      makeRequest({ user: "hi", agent_id: AGENT_SLUG }, { "x-cinatra-run-token": RUN_TOKEN }),
+    );
+
+    const members = injectedSkillMembers(deliveredSet());
+    expect(members).toHaveLength(INJECTED_SKILL_CAP);
+    // The delta and the declared dependency keep their slots (they OUTRANK the
+    // assignments) ...
+    expect(members.some((m) => m.rank === "personal_delta")).toBe(true);
+    expect(members.map((m) => m.skillId)).toContain("declared-dep-1");
+    // ... every ASSIGNED skill survives ...
+    for (const id of assigned) expect(members.map((m) => m.skillId), id).toContain(id);
+    // ... and the two dropped members are AUTOMATIC matches, nothing else.
+    const keptAuto = auto.filter((id) => members.some((m) => m.skillId === id));
+    expect(keptAuto).toHaveLength(auto.length - 2);
+  });
+
+  it("MUTATION GUARD — the same pressure with NO assignments keeps all five auto matches", async () => {
+    // Proves the truncation above is caused by the assigned tier competing for
+    // slots, not by an unrelated property of the fixture.
+    const auto = [AUTO_ONLY, ...AUTO_EXTRA];
+    assignmentRows = [];
+    matchRows = auto.map((skillId) => ({ skillId, matched: true, status: "ok" }));
+    resolveDeclaredSkillEdgeForExtensionDirMock.mockResolvedValue({
+      skillId: "declared-dep-1",
+      sourcePath: "/nonexistent-install-dir/declared/SKILL.md",
+    });
+    getCustomSkillForCurrentUserAndAgentMock.mockResolvedValue({
+      id: "personal-delta-1",
+      content: "MY DELTA",
+      revisionId: "prev-1",
+    });
+    readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
+    readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN);
+    resolveAssignedSkillsActorForRunMock.mockResolvedValue(SCOPED_ACTOR);
+
+    await POST(
+      makeRequest({ user: "hi", agent_id: AGENT_SLUG }, { "x-cinatra-run-token": RUN_TOKEN }),
+    );
+
+    const kept = injectedSkillMembers(deliveredSet()).map((m) => m.skillId);
+    for (const id of auto) expect(kept, id).toContain(id);
+  });
+});
+
 describe("selected-revision parity — ASSERTED, not changed (scope item 5)", () => {
   it("an EXPLICIT selected set bypasses the assignment exactly as it bypasses auto-matches", async () => {
     matchRows = [{ skillId: AUTO_ONLY, matched: true, status: "ok" }];
     readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN);
+    // A scope-aware actor, so the workspace-level automatic match WOULD be
+    // deliverable on the fallback path — otherwise "the auto-match is bypassed"
+    // would be true for the wrong reason.
+    resolveAssignedSkillsActorForRunMock.mockResolvedValue(SCOPED_ACTOR);
     readRunSelectedSkillRevisionsMock.mockReturnValue([
       {
         id: "sel-1",
@@ -479,8 +604,10 @@ describe("selected-revision parity — ASSERTED, not changed (scope item 5)", ()
     if (continuation.mode !== "auto_applied") {
       throw new Error(`expected an auto_applied continuation, got ${continuation.mode}`);
     }
+    matchRows = [{ skillId: AUTO_ONLY, matched: true, status: "ok" }];
     readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN);
+    resolveAssignedSkillsActorForRunMock.mockResolvedValue(SCOPED_ACTOR);
     readRunSelectedSkillRevisionsMock.mockReturnValue(
       continuation.selection.map((s, i) => ({
         id: `sel-${i}`,
@@ -496,16 +623,24 @@ describe("selected-revision parity — ASSERTED, not changed (scope item 5)", ()
       makeRequest({ user: "hi", agent_id: AGENT_SLUG }, { "x-cinatra-run-token": RUN_TOKEN }),
     );
 
-    expect(deliveredCatalogIds()).toEqual(["headless-picked-skill"]);
+    const ids = deliveredCatalogIds();
+    expect(ids).toEqual(["headless-picked-skill"]);
+    expect(ids).not.toContain(ASSIGNED);
+    expect(ids).not.toContain(AUTO_ONLY);
   });
 
-  it("with NO selected set the assignment is delivered (the fallback arm)", async () => {
+  it("BASELINE — with NO selected set the SAME fixture delivers both the assignment AND the auto-match", async () => {
+    // The mutation guard for the two bypass arms above: without a selected set
+    // both tiers are demonstrably deliverable in this exact fixture, so their
+    // absence there is the bypass and nothing else.
+    matchRows = [{ skillId: AUTO_ONLY, matched: true, status: "ok" }];
     readAgentRunByTokenHashMock.mockResolvedValue(PROBE);
     readAgentRunByIdMock.mockResolvedValue(VERIFIED_RUN);
+    resolveAssignedSkillsActorForRunMock.mockResolvedValue(SCOPED_ACTOR);
     readRunSelectedSkillRevisionsMock.mockReturnValue([]);
     await POST(
       makeRequest({ user: "hi", agent_id: AGENT_SLUG }, { "x-cinatra-run-token": RUN_TOKEN }),
     );
-    expect(deliveredCatalogIds()).toContain(ASSIGNED);
+    expect(deliveredCatalogIds()).toEqual([ASSIGNED, AUTO_ONLY]);
   });
 });

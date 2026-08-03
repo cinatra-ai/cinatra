@@ -15,11 +15,20 @@
  * places them EARLIER in the union, which the contract's first-seen ordering key
  * turns into earlier retention.
  *
- * `recommendations` here is exactly what `getAssignedSkillIdsForAgent` produces
- * — `[...assigned, ...autoMatched]`; that the union really is in that order is
- * pinned in `agents-store-assigned-skill-tier.test.ts`, and that the bridge
- * feeds it to this port unchanged in
- * `src/app/api/llm-bridge/__tests__/assigned-skill-injection-delivery.test.ts`.
+ * SCOPE NOTE — this suite drives the ranking with a HAND-BUILT recommendation
+ * list (`[...assigned, ...autoMatched]`), so on its own it proves the CONTRACT's
+ * behavior given that order, not that production produces it. The two halves
+ * that close the loop live elsewhere and are the load-bearing evidence:
+ *   - the resolver really emits assignments before automatic matches —
+ *     `agents-store-assigned-skill-tier.test.ts`;
+ *   - that order really survives the bridge into the capped set delivered to the
+ *     model, with real assignment rows, real `skill_matches` rows, a real
+ *     declared dependency and a real personal delta —
+ *     `src/app/api/llm-bridge/__tests__/assigned-skill-injection-delivery.test.ts`
+ *     ("cap pressure at the REAL bridge").
+ * What this suite adds on top is the boundaries that are impractical to stage
+ * through the bridge: a cap filled by EIGHT declared dependencies, and the
+ * delta-vs-assignment tie for the last slot.
  */
 import { describe, it, expect } from "vitest";
 
@@ -170,10 +179,14 @@ describe("declared dependencies and the personal delta still OUTRANK the assigne
   });
 });
 
-describe("assigned + automatically matched are the same member", () => {
-  it("a skill in BOTH tiers is delivered once, in the ASSIGNED slot", async () => {
-    // The union already collapsed the pair upstream; this pins that the contract
-    // does not resurrect a second copy at the later position either.
+describe("the contract does not resurrect a collapsed duplicate", () => {
+  it("a repeated id in the recommendation list stays ONE member, at its first position", async () => {
+    // NOT the AC-3 proof — that one lives in `agents-store-assigned-skill-tier`
+    // and runs the real resolver, because only there do "assigned" and
+    // "auto-matched" mean anything. This is the downstream half: even if a
+    // caller handed the contract a list with the id twice, the delivered set
+    // keeps one member at the EARLIER position, so the resolver's collapse
+    // cannot be undone below it.
     const set = await resolveInjectedSkillSet(INTENT, {
       ...ports({}),
       resolveRunRecommendedSkills: async () => [
