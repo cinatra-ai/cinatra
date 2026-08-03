@@ -257,6 +257,30 @@ export async function ExtensionSettingsScreen({
     <ExecutionSection packageName={packageName} displayName={row.displayName} />
   ) : null;
 
+  // §V Skills (agent-skills S4, cinatra#2349; epic #2345) — the skills this
+  // agent always uses. AGENT kind only, and the loader ELIMINATES assistants
+  // itself from authoritative declaration/registry data (never a name suffix):
+  // an assistant's injection branch ignores the channel these assignments
+  // feed, so the section would advertise something that could never be
+  // delivered. It returns null when the section does not apply, which renders
+  // nothing at all — no heading, no empty frame. Imported LAZILY so no
+  // non-agent settings page pulls the skills slice, and best-effort: a failure
+  // omits the section rather than blanking the whole settings page.
+  let skills: ReactNode = null;
+  if (extKind === "agent") {
+    try {
+      const { loadAgentSkillsSection } = await import(
+        "@/components/skills/agent-skills-config-section"
+      );
+      skills = await loadAgentSkillsSection({ packageName });
+    } catch (err) {
+      console.warn(
+        "[extension-settings] could not load the skills config section:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   return (
     <ExtensionSettingsView
       kind={extKind}
@@ -274,6 +298,7 @@ export async function ExtensionSettingsScreen({
       canPublish={canPublish}
       permissions={permissions}
       execution={execution}
+      skills={skills}
       actions={{
         archive: archiveAction,
         activate: activateAction,

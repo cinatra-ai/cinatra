@@ -108,6 +108,20 @@ export type EntitySearchComboboxProps<T extends EntitySearchItem> = {
   disabled?: boolean;
   /** HTML id for the anchoring Input (label association). */
   id?: string;
+  /**
+   * Clear the typed query when a row is picked (cinatra#2349).
+   *
+   * The component's close handler resets results / error / pagination but
+   * DELIBERATELY never touched `query` — for a one-shot picker that is right
+   * (reopening shows what you were looking for). A REPEAT picker is the other
+   * case: after adding one entity you are about to search for a different one,
+   * and the stale needle silently narrows the next list to nothing. Opt in
+   * here rather than remounting the component per pick, which would drop the
+   * anchoring Input out of the DOM and take focus with it.
+   *
+   * Default `false` — every existing consumer keeps its current behaviour.
+   */
+  clearQueryOnPick?: boolean;
 };
 
 // ---------------------------------------------------------------------------
@@ -222,6 +236,7 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
   pageSize = DEFAULT_PAGE_SIZE,
   disabled = false,
   id,
+  clearQueryOnPick = false,
 }: EntitySearchComboboxProps<T>) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -461,6 +476,12 @@ export function EntitySearchCombobox<T extends EntitySearchItem>({
                       // Escape / outside click / selection); focus stays on
                       // the input via handleOpenChange's focus restore.
                       handleOpenChange(false);
+                      // …and, for a repeat picker, the needle goes with it
+                      // (cinatra#2349). Ordered AFTER the close so the search
+                      // effect sees `open === false` on the same commit and
+                      // the emptied query fires no request against a closed
+                      // popover; the next open searches from empty.
+                      if (clearQueryOnPick) setQuery("");
                     }}
                     className="text-sm rounded-none px-3 py-2 bg-surface-strong hover:bg-surface-muted data-[selected=true]:bg-surface-muted"
                   >

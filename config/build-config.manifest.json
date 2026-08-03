@@ -308,6 +308,7 @@
     { "alias": "@cinatra-ai/extensions/purge-deps", "target": "./packages/extensions/src/purge-deps.ts" },
     { "alias": "@cinatra-ai/extensions/permissions-actions", "target": "./packages/extensions/src/permissions-actions.ts" },
     { "alias": "@cinatra-ai/extensions/assignable-skills-actions", "target": "./packages/extensions/src/assignable-skills-actions.ts" },
+    { "alias": "@cinatra-ai/extensions/assigned-skills-display", "target": "./packages/extensions/src/assigned-skills-display.ts" },
     { "alias": "@cinatra-ai/extensions/assignable-skills-search-model", "target": "./packages/extensions/src/assignable-skills-search-model.ts" },
     { "alias": "@cinatra-ai/extensions/connection-identity-store", "target": "./packages/extensions/src/connection-identity-store.ts" },
     { "alias": "@cinatra-ai/extensions/permissions-store", "target": "./packages/extensions/src/permissions-store.ts" },
