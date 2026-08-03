@@ -16,6 +16,7 @@
     "./swap-reconcile": "./src/swap-reconcile.ts",
     "./registry-immutability": "./src/registry-immutability.ts",
     "./required-in-prod": "./src/required-in-prod.ts",
+    "./extension-spec": "./src/extension-spec.mjs",
     "./static-bundle-anchor": "./src/static-bundle-anchor.ts",
     "./dependency-closure": "./src/dependency-closure.ts",
     "./removal-failure": "./src/removal-failure.ts",
