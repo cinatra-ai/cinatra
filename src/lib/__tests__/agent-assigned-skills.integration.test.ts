@@ -496,7 +496,7 @@ describe.skipIf(!RUN)("teardown — real Postgres", () => {
       deps,
     );
     expect(out.outcome).toBe("assigned");
-    expect(out.row.position).toBe(1);
+    expect(out.outcome === "assigned" && out.row.position).toBe(1);
   });
 
   it("a swept slot is REUSABLE — the cap counts live rows, not history", async () => {

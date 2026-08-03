@@ -24,7 +24,11 @@ const mocks = vi.hoisted(() => ({
   deleteAgentTemplate: vi.fn(async () => true),
   deleteAgentSkillsForSlugs: vi.fn(async () => undefined),
   cleanupForAgent: vi.fn(async () => undefined),
-  deleteAssignedSkillsForAgentPackage: vi.fn(async () => ({ removed: [] })),
+  deleteAssignedSkillsForAgentPackage: vi.fn(
+    async (_pkg: string): Promise<{ removed: Array<{ agentPackageName: string; skillId: string }> }> => ({
+      removed: [],
+    }),
+  ),
   /** Call order across the doubled leaves, so ORDERING is asserted, not assumed. */
   order: [] as string[],
 }));
@@ -143,44 +147,67 @@ describe("agent extension uninstall — direct skill-assignment teardown", () =>
     expect(mocks.rmDirForRolledBackInstall).not.toHaveBeenCalled();
   });
 
-  it("runs INSIDE the per-package lifecycle lock the assign flow serializes on", async () => {
-    // `withInstallLock` is re-entrant per async context. Holding it here for the
-    // SAME package makes the handler's own acquire a no-op — and the sweep runs
-    // inside our critical section, which is the property that makes
-    // "assign lands after the sweep" unreachable: S1's assign path takes the
-    // very same process-wide lifecycle queue.
-    let sweptWhileHeld = false;
-    await withInstallLock(AGENT_PKG, async () => {
-      await createAgentExtensionHandler().uninstall(ref, actor);
-      sweptWhileHeld = mocks.deleteAssignedSkillsForAgentPackage.mock.calls.length === 1;
+  it("waits for a COMPETING holder of its own package lock before sweeping", async () => {
+    // Proof that the handler takes the lock ITSELF (codex round 1): a separate
+    // async context holds the same key first, so a handler that never acquired
+    // it would sweep immediately. Deliberately NOT wrapped around the handler —
+    // an enclosing acquire would be re-entrant and prove nothing.
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
     });
-    expect(sweptWhileHeld).toBe(true);
+    const holder = withInstallLock(AGENT_PKG, () => held);
+    await Promise.resolve();
+
+    const uninstalling = createAgentExtensionHandler().uninstall(ref, actor);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mocks.deleteAssignedSkillsForAgentPackage).not.toHaveBeenCalled();
+
+    release();
+    await Promise.all([holder, uninstalling]);
+    expect(mocks.deleteAssignedSkillsForAgentPackage).toHaveBeenCalledWith(AGENT_PKG);
   });
 
-  it("an assign attempted CONCURRENTLY waits for the uninstall's lock and never lands after the sweep", async () => {
+  it("an assign attempted CONCURRENTLY never interleaves with the uninstall's critical section", async () => {
     // The real lock, two async contexts. The "assign" stands in for S1's
     // `assignAgentSkill`, which wraps its revalidate→insert section in
     // `withInstallLock`; the global extension-lifecycle queue inside
     // `withInstallLock` orders it against ANY package's uninstall.
+    //
+    // BOTH ends of the sweep are marked (codex round 1): asserting only that
+    // "sweep" precedes "assign" would still pass if the assign ran DURING the
+    // sweep's await, which is precisely the interleaving under test.
     const observed: string[] = [];
     mocks.deleteAssignedSkillsForAgentPackage.mockImplementation(async () => {
-      observed.push("sweep");
-      // Yield, so a racer that could interleave would.
+      observed.push("sweep:start");
       await new Promise((r) => setTimeout(r, 5));
+      observed.push("sweep:end");
       return { removed: [] };
     });
+    // …and the LAST destructive step of the handler, so the window under test is
+    // the whole uninstall rather than the sweep alone.
+    mocks.triggerReloadAfterRollback.mockImplementation(async () => {
+      observed.push("handler:end");
+      return undefined;
+    });
 
-    const uninstalling = withInstallLock(AGENT_PKG, () =>
-      createAgentExtensionHandler().uninstall(ref, actor),
-    );
+    const uninstalling = createAgentExtensionHandler().uninstall(ref, actor);
     const assigning = withInstallLock("@cinatra-ai/list-curation-skill", async () => {
       observed.push("assign");
     });
 
     await Promise.all([uninstalling, assigning]);
-    // The two critical sections never interleave: whichever ran first ran to
-    // completion. The failure this pins is an assign INSIDE the sweep's window.
-    expect(observed).toEqual(["sweep", "assign"]);
+    // The assertion is the WHOLE critical section, not just the sweep (codex
+    // round 2): every handler marker is contiguous, so the assign landed
+    // strictly before the handler started or strictly after it finished — never
+    // inside the window between "the sweep passed this agent" and "the template
+    // and disk are gone".
+    expect(observed).toContain("assign");
+    const handlerMarkers = observed.filter((e) => e !== "assign");
+    const firstHandler = observed.indexOf(handlerMarkers[0]!);
+    expect(observed.slice(firstHandler, firstHandler + handlerMarkers.length)).toEqual(
+      handlerMarkers,
+    );
   });
 });
 

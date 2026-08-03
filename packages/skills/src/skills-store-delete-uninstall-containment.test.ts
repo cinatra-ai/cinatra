@@ -87,11 +87,9 @@ vi.mock("./storage/git-commit", () => ({
 // for the ORDERING inside this very function); doubling it here keeps THIS suite
 // on its subject — filesystem containment — and DB-free.
 vi.mock("./agent-skill-assignability", () => ({
-  teardownAgentAssignmentsForSkillPackage: vi.fn(async () => ({
-    ownerPackageName: null,
-    skillIds: [],
-    removed: [],
-  })),
+  withSkillAssignmentTeardown: vi.fn(async (_packageId: string, uninstall: () => Promise<unknown>) =>
+    uninstall(),
+  ),
 }));
 
 // The package vitest config aliases bare `@cinatra-ai/extensions` to its

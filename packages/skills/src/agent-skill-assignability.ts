@@ -542,30 +542,29 @@ const RESERVED_VIRTUAL_PACKAGE = "@cinatra-ai/chat";
 /** The persisted-id prefixes `resolveSkillPackageSource` mints. */
 const PACKAGE_ID_PREFIXES = ["verdaccio:", "github:"] as const;
 
-/** npm-form normalization: the same `@`-prefixing `deriveSkillRegistration` does. */
-function normalizePackageName(name: string): string {
-  return name.startsWith("@") ? name : `@${name}`;
-}
-
 /**
- * The package NAMES a persisted `skill_packages` id can denote.
+ * The package NAME a persisted `skill_packages` id denotes.
  *
  * The id shape is locked by `resolveSkillPackageSource`
  * (`verdaccio:<name>` / `github:<owner>/<repo>`), so the name is recovered by
  * dropping the source prefix. A raw name with no prefix is accepted as-is —
  * `uninstallSkillPackage` is also reachable from callers that pass a catalog
  * package id verbatim.
+ *
+ * EXACT, never npm-normalized (codex round 1, adopted). An earlier draft also
+ * offered the `@`-prefixed twin, so `github:acme/skills` matched a scanned
+ * `@acme/skills` — two unrelated identities from two different registries, and
+ * the sweep would have deleted the npm package's assignments. GitHub-installed
+ * packs mint their catalog ids as `github:<owner>/<repo>:<slug>` and are not
+ * assignable through `buildSkillIdOwnership` at all, so the alias bought
+ * nothing and could only ever over-delete.
  */
-export function skillPackageNameCandidates(packageId: string): string[] {
+export function skillPackageName(packageId: string): string | null {
   const raw = String(packageId ?? "").trim();
-  if (!raw) return [];
+  if (!raw) return null;
   const prefix = PACKAGE_ID_PREFIXES.find((p) => raw.startsWith(p));
   const name = prefix ? raw.slice(prefix.length).trim() : raw;
-  if (!name) return [];
-  const candidates = [name];
-  const normalized = normalizePackageName(name);
-  if (normalized !== name) candidates.push(normalized);
-  return candidates;
+  return name || null;
 }
 
 export type OwnedSkillIds = {
@@ -576,42 +575,42 @@ export type OwnedSkillIds = {
 };
 
 /**
- * PURE: the exact derived catalog skill ids owned by the package the candidate
- * names denote, plus the real package name to lock on.
+ * PURE: the exact derived catalog skill ids owned by `packageName`, plus the
+ * real package name to lock on.
  *
- * Matching is on the SCANNED package name (raw, then npm-normalized on both
- * sides), never on the catalog row's `packageName` — that field carries the
- * virtual namespace for the chat successor packages and would either match
- * nothing or match four unrelated packages.
+ * Matching is EXACT on the SCANNED package name, never on the catalog row's
+ * `packageName` — that field carries the virtual namespace for the chat
+ * successor packages and would either match nothing or match four unrelated
+ * packages.
+ *
+ * OWNERSHIP IS ARBITRATED OVER THE WHOLE SCAN (codex round 1, adopted). The
+ * derivation runs against the matched descriptors, but every derived id is then
+ * re-checked against `buildSkillIdOwnership` over ALL descriptors and dropped
+ * unless that map awards it to this package. Two chat successor packages that
+ * ship the same slug derive the SAME virtual id; without this arbitration each
+ * one's uninstall would delete the other's assignment, and the map's own
+ * first-seen rule is what the predicate and the picker already treat as the
+ * authority.
  */
 export function deriveOwnedSkillIds(
-  candidateNames: readonly string[],
+  packageName: string | null,
   descriptors: readonly SkillExtensionDescriptor[],
 ): OwnedSkillIds {
-  if (candidateNames.length === 0) return { ownerPackageName: null, skillIds: [] };
-  const wanted = new Set<string>();
-  for (const name of candidateNames) {
-    if (name === RESERVED_VIRTUAL_PACKAGE) continue;
-    wanted.add(name);
-    wanted.add(normalizePackageName(name));
-  }
-  if (wanted.size === 0) return { ownerPackageName: null, skillIds: [] };
+  const empty = { ownerPackageName: null, skillIds: [] };
+  if (!packageName || packageName === RESERVED_VIRTUAL_PACKAGE) return empty;
 
-  const owned = descriptors.filter(
-    (d) =>
-      d.kind === "skill" &&
-      typeof d.pkgName === "string" &&
-      (wanted.has(d.pkgName) || wanted.has(normalizePackageName(d.pkgName))),
+  const owned = descriptors.filter((d) => d.kind === "skill" && d.pkgName === packageName);
+  if (owned.length === 0) return empty;
+
+  // `buildSkillIdOwnership` is S1's shared derivation (the same helper the
+  // predicate and the S3 picker use), so the ids the teardown sweeps are the ids
+  // the assign path could ever have written — by construction, not by a parallel
+  // implementation that could drift.
+  const authority = buildSkillIdOwnership(descriptors);
+  const skillIds = [...buildSkillIdOwnership(owned).keys()].filter(
+    (id) => authority.get(id) === packageName,
   );
-  if (owned.length === 0) return { ownerPackageName: null, skillIds: [] };
-
-  // `buildSkillIdOwnership` over the MATCHED descriptors only: it is S1's
-  // shared derivation (the same helper the predicate and the S3 picker use), so
-  // the ids the teardown sweeps are the ids the assign path could ever have
-  // written — by construction, not by a parallel implementation that could drift.
-  const ownership = buildSkillIdOwnership(owned);
-  const skillIds = [...ownership.keys()];
-  return { ownerPackageName: owned[0]?.pkgName ?? null, skillIds };
+  return { ownerPackageName: packageName, skillIds };
 }
 
 export type SkillPackageTeardownDeps = {
@@ -649,42 +648,65 @@ export type SkillPackageTeardownResult = {
 };
 
 /**
- * Delete every assignment naming a skill this package owns.
+ * Run `uninstall` with this package's assignment rows swept FIRST and the whole
+ * uninstall held inside the package's lifecycle lock.
  *
- * Called FIRST in `uninstallSkillPackage`, ahead of the missing-native-package
- * early return. Throws on a failed scan or a failed delete — see the fatality
- * note at the top of this module; nothing destructive has run at that point.
+ * THE LOCK SPANS THE SCAN, THE SWEEP AND THE WHOLE UNINSTALL (codex rounds 1+2,
+ * adopted). An earlier draft
+ * held it only across the DELETE, which left a real same-process gap for the
+ * direct caller that has no outer lock (the skills MCP uninstall handler): sweep
+ * → release → a concurrent assign takes the lock, revalidates against a package
+ * that is still on disk and still in the catalog, and commits → the uninstall
+ * then removes the package, leaving exactly the orphan the sweep exists to
+ * prevent. Holding the lock until the uninstall has finished makes that
+ * interleaving unreachable, and costs the registry path nothing — it already
+ * holds the same lock on the same key, and the lock is re-entrant.
+ *
+ * The sweep THROWS on a failed scan or a failed delete, before `uninstall` is
+ * called — see the fatality note at the top of this section.
+ *
+ * RESIDUAL, recorded rather than papered over: the lifecycle lock is
+ * process-local (it is what every install/uninstall/purge path in the platform
+ * serializes on), so a sibling worker's assign is ordered by neither this lock
+ * nor S1's. S1 documents the same residual and compensates with a post-commit
+ * revalidation under its own lock; widening the serialization to a cross-process
+ * lease would change every lifecycle path, not this one.
  */
-export async function teardownAgentAssignmentsForSkillPackage(
+export async function withSkillAssignmentTeardown<T>(
   packageId: string,
+  uninstall: () => Promise<T>,
   deps: SkillPackageTeardownDeps = {},
-): Promise<SkillPackageTeardownResult> {
-  const candidates = skillPackageNameCandidates(packageId);
-  if (candidates.length === 0) return { ownerPackageName: null, skillIds: [], removed: [] };
-
+): Promise<T> {
+  const packageName = skillPackageName(packageId);
   const scanExtensions = deps.scanExtensions ?? scanExtensionsSource;
   const deleteBySkillIds = deps.deleteBySkillIds ?? defaultDeleteBySkillIds;
   const withLifecycleLock = deps.withLifecycleLock ?? defaultWithLifecycleLock;
 
-  const descriptors = await scanExtensions();
-  const { ownerPackageName, skillIds } = deriveOwnedSkillIds(candidates, descriptors);
-  if (!ownerPackageName || skillIds.length === 0) {
-    return { ownerPackageName, skillIds, removed: [] };
-  }
+  // An id that denotes no package cannot be serialized on and owns nothing.
+  if (!packageName) return uninstall();
 
-  // The lock key is the REAL package name the scan reported — the same key
-  // `assignAgentSkill` derives from the predicate's `ownerPackageName`, so the
-  // two operations queue against each other rather than past each other.
-  return withLifecycleLock(ownerPackageName, async () => {
+  // THE LOCK IS TAKEN BEFORE THE SCAN (codex round 2, adopted). Deriving first
+  // and locking second left the derivation reading a snapshot that a concurrent
+  // update — holding the lifecycle lock — could invalidate before the sweep ran:
+  // the uninstall would then sweep a STALE id set and remove a package whose
+  // newly-restored slug already carried an assignment. The zero-id branch was
+  // worse still, running the whole destructive uninstall unlocked. Everything —
+  // scan, derivation, sweep, uninstall — is now one critical section on the
+  // package's own key, which is also the key `assignAgentSkill` derives from the
+  // predicate's `ownerPackageName` (exact matching makes the two identical).
+  return withLifecycleLock(packageName, async () => {
+    const { ownerPackageName, skillIds } = deriveOwnedSkillIds(packageName, await scanExtensions());
+    if (!ownerPackageName || skillIds.length === 0) return uninstall();
+
     const { removed } = await deleteBySkillIds(skillIds);
     if (removed.length > 0) {
       console.warn(
         "[skills/assignment-teardown] uninstall removed direct skill assignments — package / count / pairs:",
         forLog(ownerPackageName),
         removed.length,
-        removed.map((r) => `${forLog(r.agentPackageName)}→${forLog(r.skillId)}`).join(", "),
+        removed.map((r) => `${forLog(r.agentPackageName)}\u2192${forLog(r.skillId)}`).join(", "),
       );
     }
-    return { ownerPackageName, skillIds, removed };
+    return uninstall();
   });
 }

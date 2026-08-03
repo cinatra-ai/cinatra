@@ -80,7 +80,11 @@ vi.mock("@/lib/agent-assigned-skills-store", () => ({
 vi.mock("@cinatra-ai/agents", () => ({
   withInstallLock: vi.fn(async (packageName: string, fn: () => Promise<unknown>) => {
     lockKeys.push(packageName);
-    return fn();
+    try {
+      return await fn();
+    } finally {
+      lockKeys.push(`unlock:${packageName}`);
+    }
   }),
 }));
 
@@ -134,7 +138,9 @@ describe("uninstallSkillPackage — assignment teardown ordering (cinatra#2350)"
     // …and the sweep STILL ran, on the VIRTUAL derived id, under the owning
     // package's lifecycle lock.
     expect(deletedBatches).toEqual([["@cinatra-ai/chat:company-research"]]);
-    expect(lockKeys).toEqual([SUCCESSOR_PKG]);
+    // …and the lock spans the WHOLE uninstall, not just the delete: the release
+    // marker is the LAST thing that happens.
+    expect(lockKeys).toEqual([SUCCESSOR_PKG, `unlock:${SUCCESSOR_PKG}`]);
   });
 
   it("sweeps a NATIVE package's derived ids on a normal uninstall too", async () => {
@@ -165,7 +171,7 @@ describe("uninstallSkillPackage — assignment teardown ordering (cinatra#2350)"
       `${NATIVE_PKG}:list-curation`,
       `${NATIVE_PKG}:list-scoring`,
     ]);
-    expect(lockKeys).toEqual([NATIVE_PKG]);
+    expect(lockKeys).toEqual([NATIVE_PKG, `unlock:${NATIVE_PKG}`]);
   });
 
   it("ABORTS the uninstall when the sweep fails — nothing destructive has run yet", async () => {
@@ -214,7 +220,10 @@ describe("uninstallSkillPackage — assignment teardown ordering (cinatra#2350)"
     });
     await uninstallSkillPackage(`verdaccio:${NATIVE_PKG}`);
     expect(deletedBatches).toEqual([]);
-    expect(lockKeys).toEqual([]);
+    // The lock is still taken — scan and derivation live INSIDE it (codex round
+    // 2), so "owns nothing" is a conclusion reached under serialization rather
+    // than a reason to skip it.
+    expect(lockKeys).toEqual([NATIVE_PKG, `unlock:${NATIVE_PKG}`]);
   });
 });
 
