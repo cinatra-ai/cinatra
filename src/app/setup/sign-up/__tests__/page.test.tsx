@@ -180,4 +180,10 @@ describe("state 3: zero humans + sessionless — renders the bootstrap step", ()
     expect(html).not.toMatch(/evil\.com/);
     expect(html).toMatch(/data-redirect-to="\/setup"/);
   });
+
+  it("treats a next of exactly '/' the same as absent — defensive against any caller landing here with ?next=%2F (CI prod-boot-e2e follow-up, cinatra#2386)", async () => {
+    await mockState({ hasUsers: false, session: null });
+    const html = await renderPage("/");
+    expect(html).toMatch(/data-redirect-to="\/setup"/);
+  });
 });

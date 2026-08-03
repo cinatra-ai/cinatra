@@ -152,4 +152,9 @@ describe("PermissionsAuthPage — preserves next across the fresh-install sign-i
     await mockAuthState({ hasUsers: false, session: null });
     await expectAuthPageRedirect("sign-up", "/artifacts", "/setup/sign-up?next=%2Fartifacts");
   });
+
+  it("a next of exactly '/' (the guard's own stamp on a plain GET / visit) is dropped, landing on a bare /setup/sign-up, not a redundant ?next=%2F (CI prod-boot-e2e follow-up, cinatra#2386)", async () => {
+    await mockAuthState({ hasUsers: false, session: null });
+    await expectAuthPageRedirect("sign-in", "/", "/setup/sign-up");
+  });
 });

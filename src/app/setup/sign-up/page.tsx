@@ -85,7 +85,16 @@ export default async function SetupSignUpPage({ searchParams }: SetupSignUpPageP
   // it defaults to /setup, which resolves the first incomplete step under
   // the now-authenticated session — never an arbitrary off-wizard target,
   // since nothing else is reachable until setup completes anyway.
+  //
+  // A `next` of exactly "/" is treated the same as absent: the caller (the
+  // packages/permissions/src/pages.tsx sign-in -> sign-up hop) already drops
+  // it before it reaches here, but this stays defensive against any OTHER
+  // caller landing here with ?next=%2F — nothing exists at "/" for an admin
+  // who just created the very first account, so redirecting there is never
+  // more meaningful than going straight into the wizard, and it would only
+  // add an extra hop back through "/"'s own incomplete-setup redirect.
   const safeNext = sanitizeNextPath(sp.next);
+  const redirectTarget = safeNext && safeNext !== "/" ? safeNext : "/setup";
 
   return (
     <div className="grid gap-5">
@@ -98,7 +107,7 @@ export default async function SetupSignUpPage({ searchParams }: SetupSignUpPageP
       </div>
       <div className="mx-auto w-full max-w-md">
         <PasswordToggleA11y>
-          <SignUpForm localization={{ SIGN_UP_ACTION: "Continue" }} redirectTo={safeNext ?? "/setup"} />
+          <SignUpForm localization={{ SIGN_UP_ACTION: "Continue" }} redirectTo={redirectTarget} />
         </PasswordToggleA11y>
       </div>
     </div>

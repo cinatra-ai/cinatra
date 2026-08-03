@@ -57,8 +57,17 @@ export async function PermissionsAuthPage({
   // bootstrap redirect would drop it even though the sign-in <-> sign-up
   // client-side toggle preserves it. Once at least one user exists, /sign-up
   // resumes serving later accounts here, unchanged.
+  //
+  // A `next` of exactly "/" is dropped rather than carried: the route guard
+  // (auth-route-guard.ts) always stamps `?next=<currentPath>` on its /sign-in
+  // redirect, even for the plain, common case of a sessionless GET / — so
+  // "/" here carries no more caller intent than "no next at all" would, and
+  // /setup/sign-up's own redirectTo default already resolves the no-next
+  // case straight into the wizard (see src/app/setup/sign-up/page.tsx). This
+  // keeps the landing URL a clean, query-free /setup/sign-up for the common
+  // root-visit case instead of a redundant /setup/sign-up?next=%2F.
   if (!hasUsers && (path === "sign-in" || path === "sign-up")) {
-    redirect(buildSetupSignUpPath(rawNext));
+    redirect(buildSetupSignUpPath(rawNext === "/" ? undefined : rawNext));
   }
 
   const showBootstrapRegistration = !hasUsers && path !== "sign-out";
