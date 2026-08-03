@@ -157,3 +157,53 @@ describe("card → settings wiring", () => {
     expect(ROWS).toContain('settingsHrefFor("connector", packageName)');
   });
 });
+
+// ---------------------------------------------------------------------------
+// §V Skills (cinatra#2349 S4, epic #2345) — the per-agent skill choices.
+// ---------------------------------------------------------------------------
+
+describe("§V Skills — the slot, its placement, and who gets it", () => {
+  it("the view takes the section as an INJECTED node, so it holds no skills-plane dependency", () => {
+    expect(VIEW).toContain("skills?: ReactNode");
+    expect(VIEW).toContain("{skills}");
+    // No skills import reaches this presentational module.
+    expect(VIEW).not.toContain("@cinatra-ai/skills");
+    expect(VIEW).not.toContain("agent-skills-config");
+  });
+
+  it("renders NOTHING at all — heading included — when the section does not apply", () => {
+    // The heading lives INSIDE the conditional, so a non-agent page has no
+    // empty "Skills" frame (§V: absent entirely).
+    const block = VIEW.slice(VIEW.indexOf("{skills ?"), VIEW.indexOf("{/* Marketplace */}"));
+    expect(block).toContain('data-slot="settings-skills"');
+    expect(block).toContain(">Skills</h2>");
+    expect(block).toContain(": null}");
+  });
+
+  it("sits LAST in the per-agent configuration run — after Execution, before Marketplace", () => {
+    const permissions = VIEW.indexOf('data-slot="settings-permissions"');
+    const execution = VIEW.indexOf('data-slot="settings-execution"');
+    const skills = VIEW.indexOf('data-slot="settings-skills"');
+    const marketplace = VIEW.indexOf('data-slot="settings-marketplace"');
+    expect(permissions).toBeGreaterThan(-1);
+    expect(execution).toBeGreaterThan(permissions);
+    expect(skills).toBeGreaterThan(execution);
+    expect(marketplace).toBeGreaterThan(skills);
+  });
+
+  it("the screen loads it for AGENT kind only, lazily, and best-effort", () => {
+    expect(SCREEN).toContain('if (extKind === "agent")');
+    expect(SCREEN).toContain('await import(\n        "@/components/skills/agent-skills-config-section"\n      )');
+    expect(SCREEN).toContain("loadAgentSkillsSection({ packageName })");
+    // A load failure omits the section rather than blanking the page.
+    expect(SCREEN).toContain("could not load the skills config section");
+    expect(SCREEN).toContain("skills={skills}");
+  });
+
+  it("the screen NEVER decides assistant-ness itself by name or template shape", () => {
+    // The authoritative eligibility read lives in the loader; the screen must
+    // carry no suffix/template heuristic of its own.
+    expect(SCREEN).not.toMatch(/-assistant/);
+    expect(SCREEN).not.toContain("agent_kind");
+  });
+});

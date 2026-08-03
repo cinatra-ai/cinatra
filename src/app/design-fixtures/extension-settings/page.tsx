@@ -20,6 +20,11 @@ import {
   type ExtensionSettingsActions,
 } from "@cinatra-ai/extensions/screens/extension-settings-view";
 import { ExtensionAccessControl } from "@cinatra-ai/extensions/screens/extension-access-control";
+import {
+  AgentSkillsConfigClient,
+  type AgentSkillCandidate,
+  type AgentSkillRow,
+} from "@/components/skills/agent-skills-config-client";
 
 export const metadata: Metadata = {
   title: "Design Fixtures — Extension settings (§V) — Cinatra",
@@ -70,6 +75,154 @@ function DeferredPermissions({ note }: { note: string }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// §V Skills (cinatra#2349) — seeded variants.
+//
+// The section's SERVER half decides eligibility and hydrates from the store, so
+// the fixture mounts the REAL client editor against seeded rows and driven
+// actions. That is what makes the two states an admin cannot reach on demand —
+// a search that is slow or failing, and a save that refuses — deterministically
+// renderable, and it keeps the rest of the surface (rows, badges, the cap, the
+// count hint, the no-floor removal) rendering through exactly the code the real
+// route renders.
+//
+// `?drive=` selects the driver on the interactive case:
+//   (absent)      instant success on every action
+//   slow          searches hang, so the picker's in-flight row is visible
+//   search-error  searches refuse, so the picker's ERROR row is visible
+//   assign-error  the save refuses, so the row rolls back with the reason
+//   remove-error  the removal refuses, so the row stays with the reason
+// ---------------------------------------------------------------------------
+
+const SEED_CANDIDATES: AgentSkillCandidate[] = [
+  {
+    skillId: "@northstar/research-toolkit:company-research",
+    skillName: "Company Research",
+    displayName: "Research Toolkit",
+    vendorName: "Northstar",
+    status: "active",
+  },
+  {
+    skillId: "@northstar/research-toolkit:research-summarising",
+    skillName: "Research Summarising",
+    displayName: "Research Toolkit",
+    vendorName: "Northstar",
+    status: "locked",
+  },
+  {
+    skillId: "@cinatra-ai/blog-skills:blog-writing",
+    skillName: "Blog Writing",
+    displayName: "Blog Skills",
+    vendorName: "Cinatra",
+    status: "active",
+  },
+  {
+    skillId: "@acme/brand-kit:brand-voice",
+    skillName: "Brand Voice",
+    displayName: "Brand Kit",
+    vendorName: "Acme Corp",
+    status: "active",
+  },
+];
+
+const SEED_CHOSEN: AgentSkillRow[] = [
+  {
+    skillId: "@cinatra-ai/blog-skills:blog-writing",
+    skillName: "Blog Writing",
+    displayName: "Blog Skills",
+    vendorName: "Cinatra",
+    status: "ok",
+  },
+];
+
+const SEED_AT_CAP: AgentSkillRow[] = [
+  SEED_CHOSEN[0]!,
+  {
+    skillId: "@northstar/research-toolkit:company-research",
+    skillName: "Company Research",
+    displayName: "Research Toolkit",
+    vendorName: "Northstar",
+    status: "ok",
+  },
+  {
+    skillId: "@acme/brand-kit:brand-voice",
+    skillName: "Brand Voice",
+    displayName: "Brand Kit",
+    vendorName: "Acme Corp",
+    status: "ok",
+  },
+];
+
+const SEED_DEGRADED: AgentSkillRow[] = [
+  SEED_CHOSEN[0]!,
+  {
+    skillId: "@northstar/research-toolkit:company-research",
+    skillName: "Company Research",
+    displayName: "Research Toolkit",
+    vendorName: "Northstar",
+    status: "archived",
+  },
+  {
+    skillId: "@acme/brand-kit:brand-voice",
+    skillName: "Brand Voice",
+    displayName: "Brand Kit",
+    vendorName: "Acme Corp",
+    status: "role-changed",
+  },
+];
+
+type SkillsDriver = "ok" | "slow" | "search-error" | "assign-error" | "remove-error";
+
+function SeededSkills({
+  rows,
+  drive = "ok",
+}: {
+  rows: AgentSkillRow[];
+  drive?: SkillsDriver;
+}) {
+  // Server actions bound per variant. The narrowing is done here the way the
+  // real action does it server-side — substring over the skill name and the
+  // providing extension's title — so the fixture proves the SAME narrowing
+  // behaviour the picker relies on rather than a client-side filter.
+  async function search(query: string, page: { offset: number; limit: number }) {
+    "use server";
+    if (drive === "search-error") return { ok: false as const, reason: "eligibility-unreadable" };
+    if (drive === "slow") await new Promise((resolve) => setTimeout(resolve, 30_000));
+    const needle = query.trim().toLowerCase();
+    const matched = SEED_CANDIDATES.filter(
+      (c) =>
+        needle.length === 0 ||
+        c.skillName.toLowerCase().includes(needle) ||
+        c.displayName.toLowerCase().includes(needle),
+    );
+    const window = matched.slice(page.offset, page.offset + page.limit + 1);
+    return {
+      ok: true as const,
+      results: window.slice(0, page.limit),
+      hasMore: window.length > page.limit,
+    };
+  }
+  async function assign() {
+    "use server";
+    if (drive === "assign-error") return { ok: false as const, reason: "not-assignable" };
+    return { ok: true as const };
+  }
+  async function remove() {
+    "use server";
+    if (drive === "remove-error") return { ok: false as const, reason: "forbidden" };
+    return { ok: true as const };
+  }
+  return (
+    <AgentSkillsConfigClient
+      cap={3}
+      initialRows={rows}
+      search={search}
+      assign={assign}
+      remove={remove}
+    />
+  );
+}
+
 function Case({ id, label, children }: { id: string; label: string; children: React.ReactNode }) {
   return (
     <section data-fixture-case={id} className="border-b border-line">
@@ -81,7 +234,19 @@ function Case({ id, label, children }: { id: string; label: string; children: Re
   );
 }
 
-export default function ExtensionSettingsFixturePage() {
+export default async function ExtensionSettingsFixturePage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = (await searchParams) ?? {};
+  const raw = Array.isArray(params.drive) ? params.drive[0] : params.drive;
+  const drive: SkillsDriver = (
+    ["ok", "slow", "search-error", "assign-error", "remove-error"] as const
+  ).includes(raw as SkillsDriver)
+    ? (raw as SkillsDriver)
+    : "ok";
+
   return (
     <div className="min-h-screen bg-paper">
       {/* Case A — active connector: editable Permissions, not a registered
@@ -132,6 +297,7 @@ export default function ExtensionSettingsFixturePage() {
           permissions={
             <DeferredPermissions note="Manage who can access this agent from the Agents page." />
           }
+          skills={<SeededSkills rows={SEED_CHOSEN} drive={drive} />}
           actions={ACTIONS}
         />
       </Case>
@@ -235,6 +401,127 @@ export default function ExtensionSettingsFixturePage() {
           isRegisteredVendor={false}
           canPublish={false}
           permissions={<EditablePermissions />}
+          actions={ACTIONS}
+        />
+      </Case>
+
+      {/* Case J — an AGENT-kind page the loader ruled INELIGIBLE (an assistant).
+          This is the exact DOM an assistant's settings page renders: agent
+          kind, and NO Skills section at all — no heading, no empty frame, no
+          placeholder. The eligibility decision itself is authoritative and
+          server-side; this case pins what its `null` looks like. */}
+      <Case
+        id="assistant-no-skills"
+        label="Assistant (agent kind, ineligible) · NO Skills section at all"
+      >
+        <ExtensionSettingsView
+          kind="agent"
+          packageName="@acme/workspace-assistant"
+          displayName="Workspace Assistant"
+          vendor="Acme Corp"
+          updateRow={{
+            enabled: false,
+            description: "Currently on version 1.4.0 — up to date.",
+            disabledReason: "Already up to date",
+          }}
+          archiveDisabled={null}
+          activateDisabled="Already active"
+          reinstallDisabled={null}
+          forceDeleteDisabled={null}
+          isPublic={false}
+          isRegisteredVendor={false}
+          canPublish={false}
+          permissions={
+            <DeferredPermissions note="Manage who can access this agent from the Agents page." />
+          }
+          actions={ACTIONS}
+        />
+      </Case>
+
+      {/* Case G — agent with NOTHING chosen: the field, the count hint and no
+          list at all. Zero is a correct, warning-free state (§V Skills). */}
+      <Case id="agent-skills-empty" label="Agent · Skills · nothing chosen (zero is fine)">
+        <ExtensionSettingsView
+          kind="agent"
+          packageName="@acme/outreach-agent"
+          displayName="Outreach Agent"
+          vendor="Acme Corp"
+          updateRow={{
+            enabled: false,
+            description: "Currently on version 0.3.0 — up to date.",
+            disabledReason: "Already up to date",
+          }}
+          archiveDisabled={null}
+          activateDisabled="Already active"
+          reinstallDisabled={null}
+          forceDeleteDisabled={null}
+          isPublic={false}
+          isRegisteredVendor={false}
+          canPublish={false}
+          permissions={
+            <DeferredPermissions note="Manage who can access this agent from the Agents page." />
+          }
+          skills={<SeededSkills rows={[]} drive={drive} />}
+          actions={ACTIONS}
+        />
+      </Case>
+
+      {/* Case H — agent AT the cap: the chooser greys out and stops accepting
+          input, the hint says what to do about it, every row still removable. */}
+      <Case id="agent-skills-at-cap" label="Agent · Skills · three chosen (chooser closed off)">
+        <ExtensionSettingsView
+          kind="agent"
+          packageName="@acme/pipeline-agent"
+          displayName="Pipeline Agent"
+          vendor="Acme Corp"
+          updateRow={{
+            enabled: false,
+            description: "Currently on version 1.0.0 — up to date.",
+            disabledReason: "Already up to date",
+          }}
+          archiveDisabled={null}
+          activateDisabled="Already active"
+          reinstallDisabled={null}
+          forceDeleteDisabled={null}
+          isPublic={false}
+          isRegisteredVendor={false}
+          canPublish={false}
+          permissions={
+            <DeferredPermissions note="Manage who can access this agent from the Agents page." />
+          }
+          skills={<SeededSkills rows={SEED_AT_CAP} drive={drive} />}
+          actions={ACTIONS}
+        />
+      </Case>
+
+      {/* Case I — chosen skills that have since degraded: archived and
+          role-changed rows stay VISIBLE, wear a warning-toned badge naming the
+          state, and keep a fully live remove control. */}
+      <Case
+        id="agent-skills-degraded"
+        label="Agent · Skills · chosen skills that have since degraded"
+      >
+        <ExtensionSettingsView
+          kind="agent"
+          packageName="@acme/briefing-agent"
+          displayName="Briefing Agent"
+          vendor="Acme Corp"
+          updateRow={{
+            enabled: false,
+            description: "Currently on version 0.2.0 — up to date.",
+            disabledReason: "Already up to date",
+          }}
+          archiveDisabled={null}
+          activateDisabled="Already active"
+          reinstallDisabled={null}
+          forceDeleteDisabled={null}
+          isPublic={false}
+          isRegisteredVendor={false}
+          canPublish={false}
+          permissions={
+            <DeferredPermissions note="Manage who can access this agent from the Agents page." />
+          }
+          skills={<SeededSkills rows={SEED_DEGRADED} drive={drive} />}
           actions={ACTIONS}
         />
       </Case>

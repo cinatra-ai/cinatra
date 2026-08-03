@@ -320,6 +320,7 @@
       "@cinatra-ai/extensions/purge-deps": ["./packages/extensions/src/purge-deps.ts"],
       "@cinatra-ai/extensions/permissions-actions": ["./packages/extensions/src/permissions-actions.ts"],
       "@cinatra-ai/extensions/assignable-skills-actions": ["./packages/extensions/src/assignable-skills-actions.ts"],
+      "@cinatra-ai/extensions/assigned-skills-display": ["./packages/extensions/src/assigned-skills-display.ts"],
       "@cinatra-ai/extensions/assignable-skills-search-model": ["./packages/extensions/src/assignable-skills-search-model.ts"],
       "@cinatra-ai/extensions/connection-identity-store": ["./packages/extensions/src/connection-identity-store.ts"],
       "@cinatra-ai/extensions/permissions-store": ["./packages/extensions/src/permissions-store.ts"],

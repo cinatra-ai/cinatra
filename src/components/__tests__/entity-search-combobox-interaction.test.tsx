@@ -22,7 +22,7 @@
 
 import "./access-picker-jsdom-shims";
 import { afterEach, describe, it, expect, vi } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import {
   EntitySearchCombobox,
   type EntitySearchResult,
@@ -249,5 +249,52 @@ describe("EntitySearchCombobox stale pagination guard (finding 2)", () => {
     });
     expect(screen.queryByText("Stale Straggler")).toBeNull();
     expect(input.getAttribute("aria-expanded")).toBe("false");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// clearQueryOnPick (cinatra#2349) — the REPEAT-picker adaptation.
+//
+// The close handler resets results/error/pagination but deliberately never
+// touched `query`. For a one-shot picker that is right. For a picker you use
+// again immediately (choose three skills in a row), the stale needle silently
+// narrows the next list to nothing — so the reset is opt-in, and DEFAULT-OFF so
+// every existing consumer is unchanged.
+// ---------------------------------------------------------------------------
+
+describe("EntitySearchCombobox — clearQueryOnPick", () => {
+  it("KEEPS the typed query after a pick by default (unchanged behaviour)", async () => {
+    const onSearch = vi.fn(async () => ({ results: USERS }));
+    render(<EntitySearchCombobox onSearch={onSearch} onPick={vi.fn()} />);
+    const input = screen.getByRole("combobox") as HTMLInputElement;
+
+    fireEvent.click(input);
+    fireEvent.change(input, { target: { value: "ada" } });
+    await screen.findByText("Ada Lovelace");
+    fireEvent.click(screen.getByText("Ada Lovelace"));
+
+    await act(async () => {});
+    expect(input.value).toBe("ada");
+  });
+
+  it("CLEARS the typed query after a pick when opted in, and searches from empty next", async () => {
+    const onSearch = vi.fn(async (query: string) => ({ results: USERS, query }));
+    const onPick = vi.fn();
+    render(<EntitySearchCombobox onSearch={onSearch} onPick={onPick} clearQueryOnPick />);
+    const input = screen.getByRole("combobox") as HTMLInputElement;
+
+    fireEvent.click(input);
+    fireEvent.change(input, { target: { value: "ada" } });
+    await screen.findByText("Ada Lovelace");
+    fireEvent.click(screen.getByText("Ada Lovelace"));
+
+    // The pick still reached the host, and the list still closed.
+    expect(onPick).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(input.value).toBe(""));
+    expect(input.getAttribute("aria-expanded")).toBe("false");
+
+    // Reopening searches with the EMPTY needle.
+    fireEvent.click(input);
+    await waitFor(() => expect(onSearch.mock.lastCall?.[0]).toBe(""));
   });
 });

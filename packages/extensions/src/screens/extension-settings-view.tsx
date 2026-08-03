@@ -81,6 +81,15 @@ export type ExtensionSettingsViewProps = {
    * no execution-plane dependency; absent for every non-agent kind.
    */
   execution?: ReactNode;
+  /**
+   * The per-agent SKILLS config section (agent-skills S4, cinatra#2349; epic
+   * #2345) — the chooser for the skills this agent always uses, plus the
+   * chosen rows. Injected as a node for the same reason `execution` is: this
+   * presentational view takes no skills-plane dependency. Absent for every
+   * non-agent kind AND for assistant-kind agents (the caller decides, from
+   * authoritative declaration/registry data — never a name suffix).
+   */
+  skills?: ReactNode;
   actions: ExtensionSettingsActions;
 };
 
@@ -100,6 +109,7 @@ export function ExtensionSettingsView({
   canPublish,
   permissions,
   execution,
+  skills,
   actions,
 }: ExtensionSettingsViewProps) {
   const { bg } = ACCENT_PALETTE[deriveExtensionAccent(packageName)];
@@ -158,6 +168,18 @@ export function ExtensionSettingsView({
           <section data-slot="settings-execution" className="border-b border-line py-5.5">
             <h2 className="mb-3.5 text-lg font-bold text-foreground">Execution</h2>
             {execution}
+          </section>
+        ) : null}
+
+        {/* Skills — the per-agent skill choices (agent kind only, assistants
+            excluded). LAST of the per-agent configuration group, directly
+            above Marketplace: Permissions / Execution / Skills all answer
+            "how does this agent behave here", and the lifecycle actions stay
+            below them (design §V). */}
+        {skills ? (
+          <section data-slot="settings-skills" className="border-b border-line py-5.5">
+            <h2 className="mb-3.5 text-lg font-bold text-foreground">Skills</h2>
+            {skills}
           </section>
         ) : null}
 
