@@ -11,6 +11,7 @@
     "./agent-assigned-skills-actions": "./src/agent-assigned-skills-actions.ts",
     "./agent-package-resolver": "./src/agent-package-resolver.ts",
     "./agent-skill-assignability": "./src/agent-skill-assignability.ts",
+    "./assignable-skill-search": "./src/assignable-skill-search.ts",
     "./cli": "./src/cli.mjs",
     "./extension-handler": "./src/extension-handler.ts",
     "./injection": "./src/injection/index.ts",

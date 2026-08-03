@@ -31,6 +31,23 @@ export async function readCatalogSource(): Promise<{ skills: PersistedSkill[] }>
   return (await readSkillsCatalog()) as { skills: PersistedSkill[] };
 }
 
+/**
+ * The PURE catalog SNAPSHOT (cinatra#2348 S3) — the persisted rows, normalized,
+ * with NO scan / write / network / enqueue side effect.
+ *
+ * The picker population reads THIS, never `readCatalogSource` above: that one
+ * resolves to `syncInstalledSkillsToDatabase()`, so a typeahead keystroke would
+ * otherwise fire a full catalog rebuild per request. The DB state the snapshot
+ * returns is kept current by the explicit `rebuildSkillsCatalog()` calls at
+ * lifecycle points and by the catalog writers themselves (cinatra#1364), which
+ * is exactly the contract a read-only search wants.
+ */
+export async function readCatalogSnapshotSource(): Promise<{ skills: PersistedSkill[] }> {
+  const { readSkillsCatalogSnapshot } = await import("./skill-packages");
+  const snapshot = await readSkillsCatalogSnapshot();
+  return { skills: snapshot.skills };
+}
+
 /** The on-disk extension SCAN (the authority for skill-id ownership + roles). */
 export async function scanExtensionsSource(): Promise<SkillExtensionDescriptor[]> {
   const { scanSkillExtensions } = await import("./extension-skill-resolver");
