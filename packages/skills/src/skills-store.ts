@@ -2191,117 +2191,117 @@ export async function deleteAgentSkillsForSlugs(
 }
 
 export async function uninstallSkillPackage(packageId: string) {
-  // cinatra#2350 (S5): sweep agent_assigned_skills BEFORE the missing-native-
-  // package return below; fatal on failure. Rationale: @/lib/agent-assigned-skills-store.ts ("SKILL-SIDE derivation").
-  const { sweepAssignedSkillsForSkillPackageId } = await import("@/lib/agent-assigned-skills-store");
-  await sweepAssignedSkillsForSkillPackageId(packageId);
-  const existingCatalog = await readSkillsCatalog();
-  const existingPackage = existingCatalog.skillPackages.find((p) => p.id === packageId);
-  if (!existingPackage) return false;
+  // cinatra#2350 (S5): sweep direct skill assignments FIRST — ahead of the missing-native-package early return — and hold this WHOLE uninstall inside the assign path's per-extension lifecycle lock.
+  const { withSkillAssignmentTeardown } = await import("./agent-skill-assignability");
+  return withSkillAssignmentTeardown(packageId, async () => {
+    const existingCatalog = await readSkillsCatalog();
+    const existingPackage = existingCatalog.skillPackages.find((p) => p.id === packageId);
+    if (!existingPackage) return false;
 
-  // Enumerate agent directory slugs under
-  // <repositoryPath>/agents/ BEFORE removing the directory. Reading these
-  // first preserves the slug list for the post-rm catalog cleanup.
-  // Order matters: read slugs → rm dir → delete catalog rows → delete
-  // agent-skill catalog rows by slug.
-  let agentSlugsForCleanup: string[] = [];
-  // Confine the STORED `repositoryPath` (lexical + realpath, #300) BEFORE the
-  // readdir walks it. A payload-injected/stale stored path — or one whose real
-  // path escapes the installed-packages root via a symlinked ancestor — must
-  // not have `readdirSync` enumerate an arbitrary outside directory. The
-  // installed-packages root is the same root the disk-removal `rm` confines to
-  // below, so the read and the delete share one containment contract.
-  const installedPackagesRoot = path.resolve(getInstalledPackagesDir());
-  const resolvedRepositoryPath = existingPackage.repositoryPath
-    ? path.resolve(existingPackage.repositoryPath)
-    : null;
-  const repositoryPathConfined =
-    resolvedRepositoryPath !== null &&
-    resolvedRepositoryPath.startsWith(installedPackagesRoot + path.sep) &&
-    isRealpathContained(resolvedRepositoryPath, installedPackagesRoot);
-  if (repositoryPathConfined && resolvedRepositoryPath) {
-    const agentsDirPath = path.join(resolvedRepositoryPath, "agents");
-    // Leaf confinement: `agents/` lexically lives in the confined repo dir, but
-    // could itself be a symlink to an outside directory that `readdirSync`
-    // would enumerate. Skip when the real `agents/` escapes the real repo dir.
-    if (existsSync(agentsDirPath) && isFileLeafContainedInDir(resolvedRepositoryPath, agentsDirPath)) {
-      try {
-        agentSlugsForCleanup = readdirSync(agentsDirPath, { withFileTypes: true })
-          .filter((entry) => entry.isDirectory())
-          .map((entry) => entry.name);
-      } catch {
-        // best-effort
+    // Enumerate agent directory slugs under
+    // <repositoryPath>/agents/ BEFORE removing the directory. Reading these
+    // first preserves the slug list for the post-rm catalog cleanup.
+    // Order matters: read slugs → rm dir → delete catalog rows → delete
+    // agent-skill catalog rows by slug.
+    let agentSlugsForCleanup: string[] = [];
+    // Confine the STORED `repositoryPath` (lexical + realpath, #300) BEFORE the
+    // readdir walks it. A payload-injected/stale stored path — or one whose real
+    // path escapes the installed-packages root via a symlinked ancestor — must
+    // not have `readdirSync` enumerate an arbitrary outside directory. The
+    // installed-packages root is the same root the disk-removal `rm` confines to
+    // below, so the read and the delete share one containment contract.
+    const installedPackagesRoot = path.resolve(getInstalledPackagesDir());
+    const resolvedRepositoryPath = existingPackage.repositoryPath
+      ? path.resolve(existingPackage.repositoryPath)
+      : null;
+    const repositoryPathConfined =
+      resolvedRepositoryPath !== null &&
+      resolvedRepositoryPath.startsWith(installedPackagesRoot + path.sep) &&
+      isRealpathContained(resolvedRepositoryPath, installedPackagesRoot);
+    if (repositoryPathConfined && resolvedRepositoryPath) {
+      const agentsDirPath = path.join(resolvedRepositoryPath, "agents");
+      // Leaf confinement: `agents/` lexically lives in the confined repo dir, but
+      // could itself be a symlink to an outside directory that `readdirSync`
+      // would enumerate. Skip when the real `agents/` escapes the real repo dir.
+      if (existsSync(agentsDirPath) && isFileLeafContainedInDir(resolvedRepositoryPath, agentsDirPath)) {
+        try {
+          agentSlugsForCleanup = readdirSync(agentsDirPath, { withFileTypes: true })
+            .filter((entry) => entry.isDirectory())
+            .map((entry) => entry.name);
+        } catch {
+          // best-effort
+        }
       }
     }
-  }
 
-  // Order DB work BEFORE disk removal.
-  //
-  // If disk removal runs before `replaceSkillCatalogInDatabase()` and the DB
-  // work rolls back on a RESTRICT FK, the operator is left with the package
-  // missing from disk but still present in the catalog (plus orphan co-owner
-  // rows).
-  //
-  // Fix: (1) explicitly delete BOTH package-level and skill-level co-owners
-  // (uninstall semantics — by user intent, all sharing for this package
-  // goes away), (2) run the catalog rewrite which now succeeds, (3) THEN
-  // remove the disk directory only after both DB ops committed.
-  //
-  // Also clear the per-skill co-owners. The
-  // skill_co_owners.skill_id → skills(id) RESTRICT FK will otherwise block
-  // the skill row deletes inside `replaceSkillCatalogInDatabase`.
-  //
-  // Also clear the polymorphic `extension_co_owners` +
-  // `extension_access_policy` rows for this skill_package. The generic
-  // permissions backend dual-writes to both the kind-specific tables AND the
-  // polymorphic tables, so an uninstall must clean both sides — otherwise
-  // orphan polymorphic rows remain and could re-apply if the same package_id
-  // is later reinstalled.
-  await removeAllSkillPackageCoOwners(packageId);
-  await removeAllSkillCoOwnersForPackage(packageId);
-  // Polymorphic cleanup for BOTH the skill_package row AND every child
-  // skill row. With no FK on resource_id, any cleanup failure silently leaves
-  // orphan rows that re-apply grants on later reinstall. Per-skill cleanup
-  // runs BEFORE the catalog rewrite and package-level cleanup AFTER, paired
-  // with the catalog row going away. Both are fatal — if they fail, the whole
-  // uninstall must roll back rather than silently produce an inconsistent
-  // permissions footprint.
-  await removeAllPolymorphicSkillPermissionsForPackage(packageId);
-  const { deleteExtensionPermissions } = await import("@cinatra-ai/extensions/permissions-store");
-  await deleteExtensionPermissions("skill_package", packageId);
+    // Order DB work BEFORE disk removal.
+    //
+    // If disk removal runs before `replaceSkillCatalogInDatabase()` and the DB
+    // work rolls back on a RESTRICT FK, the operator is left with the package
+    // missing from disk but still present in the catalog (plus orphan co-owner
+    // rows).
+    //
+    // Fix: (1) explicitly delete BOTH package-level and skill-level co-owners
+    // (uninstall semantics — by user intent, all sharing for this package
+    // goes away), (2) run the catalog rewrite which now succeeds, (3) THEN
+    // remove the disk directory only after both DB ops committed.
+    //
+    // Also clear the per-skill co-owners. The
+    // skill_co_owners.skill_id → skills(id) RESTRICT FK will otherwise block
+    // the skill row deletes inside `replaceSkillCatalogInDatabase`.
+    //
+    // Also clear the polymorphic `extension_co_owners` +
+    // `extension_access_policy` rows for this skill_package. The generic
+    // permissions backend dual-writes to both the kind-specific tables AND the
+    // polymorphic tables, so an uninstall must clean both sides — otherwise
+    // orphan polymorphic rows remain and could re-apply if the same package_id
+    // is later reinstalled.
+    await removeAllSkillPackageCoOwners(packageId);
+    await removeAllSkillCoOwnersForPackage(packageId);
+    // Polymorphic cleanup for BOTH the skill_package row AND every child
+    // skill row. With no FK on resource_id, any cleanup failure silently leaves
+    // orphan rows that re-apply grants on later reinstall. Per-skill cleanup
+    // runs BEFORE the catalog rewrite and package-level cleanup AFTER, paired
+    // with the catalog row going away. Both are fatal — if they fail, the whole
+    // uninstall must roll back rather than silently produce an inconsistent
+    // permissions footprint.
+    await removeAllPolymorphicSkillPermissionsForPackage(packageId);
+    const { deleteExtensionPermissions } = await import("@cinatra-ai/extensions/permissions-store");
+    await deleteExtensionPermissions("skill_package", packageId);
 
-  replaceSkillCatalogInDatabase({
-    skillPackages: existingCatalog.skillPackages.filter((p) => p.id !== packageId),
-    skills: existingCatalog.skills.filter((s) => s.packageId !== packageId),
-  });
+    replaceSkillCatalogInDatabase({
+      skillPackages: existingCatalog.skillPackages.filter((p) => p.id !== packageId),
+      skills: existingCatalog.skills.filter((s) => s.packageId !== packageId),
+    });
 
-  // Remove from disk if it lives in the skills data directory. Reuse the
-  // single lexical+realpath containment computed for the agents read above
-  // (#300): `repositoryPathConfined` already requires the stored path to be
-  // STRICTLY inside the installed-packages root (root-equality excluded by
-  // `startsWith(root + sep)`) AND realpath-confined, so a symlinked-ancestor
-  // escape can never reach this `rm`.
-  if (repositoryPathConfined && resolvedRepositoryPath) {
-    await rm(resolvedRepositoryPath, { recursive: true, force: true });
-  }
-
-  // Now remove any level:"agent" rows that were registered for the agent
-  // dirs we just deleted (the register-on-install path pairs with this).
-  if (agentSlugsForCleanup.length > 0) {
-    try {
-      await deleteAgentSkillsForSlugs(agentSlugsForCleanup);
-    } catch (err) {
-      console.warn(
-        `[skills-store] deleteAgentSkillsForSlugs failed for ${packageId}:`,
-        err instanceof Error ? err.message : err,
-      );
+    // Remove from disk if it lives in the skills data directory. Reuse the
+    // single lexical+realpath containment computed for the agents read above
+    // (#300): `repositoryPathConfined` already requires the stored path to be
+    // STRICTLY inside the installed-packages root (root-equality excluded by
+    // `startsWith(root + sep)`) AND realpath-confined, so a symlinked-ancestor
+    // escape can never reach this `rm`.
+    if (repositoryPathConfined && resolvedRepositoryPath) {
+      await rm(resolvedRepositoryPath, { recursive: true, force: true });
     }
-  }
 
-  commitSkillChange(`skill: uninstall package '${packageId}'`).catch(() => undefined);
+    // Now remove any level:"agent" rows that were registered for the agent
+    // dirs we just deleted (the register-on-install path pairs with this).
+    if (agentSlugsForCleanup.length > 0) {
+      try {
+        await deleteAgentSkillsForSlugs(agentSlugsForCleanup);
+      } catch (err) {
+        console.warn(
+          `[skills-store] deleteAgentSkillsForSlugs failed for ${packageId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
 
-  try { revalidatePath("/skills"); } catch { /* best-effort: non-RSC contexts (boot/instrumentation) lack the static-generation store */ }
-  return true;
+    commitSkillChange(`skill: uninstall package '${packageId}'`).catch(() => undefined);
+
+    try { revalidatePath("/skills"); } catch { /* best-effort: non-RSC contexts (boot/instrumentation) lack the static-generation store */ }
+    return true;
+  });
 }
 
 // ---------------------------------------------------------------------------
