@@ -43,6 +43,7 @@ import {
   markAllNotificationsReadForUser,
   markNotificationsReadThroughForUser,
   markNotificationReadForUser,
+  markNotificationUnreadForUser,
   markNotificationsReadByHrefPrefixForUser,
 } from "@cinatra-ai/notifications/server";
 import type { NotificationsKeysetBefore } from "@cinatra-ai/notifications/server";
@@ -226,6 +227,19 @@ export async function markNotificationRead(notificationId: string): Promise<void
   const userId = await resolveCurrentUserId();
   if (!userId || !notificationId) return;
   markNotificationReadForUser({ userId, notificationId });
+}
+
+/**
+ * Flip a single notification back to unread (`read_at = NULL`), scoped to the
+ * caller's own row. The counterpart to {@link markNotificationRead} — the
+ * first non-monotonic read-state write in this facade.
+ */
+export async function markNotificationUnread(
+  notificationId: string,
+): Promise<void> {
+  const userId = await resolveCurrentUserId();
+  if (!userId || !notificationId) return;
+  markNotificationUnreadForUser({ userId, notificationId });
 }
 
 export async function markNotificationsReadByHrefPrefix(
