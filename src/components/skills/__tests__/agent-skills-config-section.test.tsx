@@ -160,6 +160,12 @@ describe("the section node", () => {
 
     expect(cap).toBe(3);
     expect(searchAssignableSkillExtensions).not.toHaveBeenCalled();
+    // The label lookup is keyed by (id, OWNER) — never by the id alone, so a
+    // colliding id from another package can't dress this row (codex round B).
+    expect(resolveAssignedSkillDisplay).toHaveBeenCalledWith([
+      { skillId: "s-blog-writing", ownerPackageName: "@cinatra-ai/blog-skills" },
+      { skillId: "s-archived", ownerPackageName: "@northstar/research-toolkit" },
+    ]);
     expect(initialRows).toEqual([
       {
         skillId: "s-blog-writing",

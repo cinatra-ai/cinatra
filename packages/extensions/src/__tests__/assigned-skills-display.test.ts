@@ -12,6 +12,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { resolveAssignedSkillDisplay } from "../assigned-skills-display";
 
+/** The (id, owner) ref the caller passes — owner defaults to the fixture package. */
+const ref = (skillId: string, ownerPackageName: string | null = "@northstar/research-toolkit") => ({
+  skillId,
+  ownerPackageName,
+});
+
 type Candidate = {
   skillId: string;
   skillName: string;
@@ -40,7 +46,7 @@ const listing = (rows: Candidate[]) => vi.fn(async () => rows);
 
 describe("resolveAssignedSkillDisplay", () => {
   it("labels a requested skill with the extension's declared title and vendor", async () => {
-    const map = await resolveAssignedSkillDisplay(["s-a"], {
+    const map = await resolveAssignedSkillDisplay([ref("s-a")], {
       listCandidates: listing([candidate({ skillId: "s-a" })]) as never,
     });
     expect(map.get("s-a")).toEqual({
@@ -51,7 +57,7 @@ describe("resolveAssignedSkillDisplay", () => {
   });
 
   it("falls back to the npm `author` for the vendor, and to the PACKAGE NAME for the title", async () => {
-    const map = await resolveAssignedSkillDisplay(["s-a", "s-b"], {
+    const map = await resolveAssignedSkillDisplay([ref("s-a"), ref("s-b", "@acme/brand-kit")], {
       listCandidates: listing([
         candidate({ skillId: "s-a", extensionVendorName: null, extensionAuthor: "Northstar Ltd" }),
         candidate({
@@ -72,7 +78,7 @@ describe("resolveAssignedSkillDisplay", () => {
   });
 
   it("treats a blank declaration as absent, never as an empty label", async () => {
-    const map = await resolveAssignedSkillDisplay(["s-a"], {
+    const map = await resolveAssignedSkillDisplay([ref("s-a", "@acme/kit")], {
       listCandidates: listing([
         candidate({
           skillId: "s-a",
@@ -91,7 +97,7 @@ describe("resolveAssignedSkillDisplay", () => {
   });
 
   it("returns entries ONLY for the ids asked for", async () => {
-    const map = await resolveAssignedSkillDisplay(["s-a"], {
+    const map = await resolveAssignedSkillDisplay([ref("s-a")], {
       listCandidates: listing([
         candidate({ skillId: "s-a" }),
         candidate({ skillId: "s-other" }),
@@ -101,7 +107,7 @@ describe("resolveAssignedSkillDisplay", () => {
   });
 
   it("omits a DEGRADED row — it is not in the assignable population, and is not invented", async () => {
-    const map = await resolveAssignedSkillDisplay(["s-archived"], {
+    const map = await resolveAssignedSkillDisplay([ref("s-archived")], {
       listCandidates: listing([candidate({ skillId: "s-still-live" })]) as never,
     });
     expect(map.has("s-archived")).toBe(false);
@@ -109,7 +115,7 @@ describe("resolveAssignedSkillDisplay", () => {
 
   it("returns an EMPTY map (never a partial one) when the population read fails", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const map = await resolveAssignedSkillDisplay(["s-a"], {
+    const map = await resolveAssignedSkillDisplay([ref("s-a")], {
       listCandidates: vi.fn(async () => {
         throw new Error("scan failed");
       }) as never,
@@ -119,17 +125,60 @@ describe("resolveAssignedSkillDisplay", () => {
     warn.mockRestore();
   });
 
-  it("reads NOTHING for an empty or blank id set", async () => {
+  it("reads NOTHING for an empty ref set, a blank id, or an UNKNOWN owner", async () => {
     const listCandidates = listing([candidate({ skillId: "s-a" })]);
-    expect((await resolveAssignedSkillDisplay([], { listCandidates: listCandidates as never })).size).toBe(0);
-    expect((await resolveAssignedSkillDisplay(["", "  "], { listCandidates: listCandidates as never })).size).toBe(0);
-    // "  " is a non-empty string, so it survives the filter and one read is
-    // issued for it — but no entry is invented for it.
-    expect(listCandidates.mock.calls.length).toBeLessThanOrEqual(1);
+    const deps = { listCandidates: listCandidates as never };
+    expect((await resolveAssignedSkillDisplay([], deps)).size).toBe(0);
+    expect((await resolveAssignedSkillDisplay([ref("")], deps)).size).toBe(0);
+    // An assignment whose owning package is unknown has nothing to match
+    // against safely — it gets no label rather than a guessed one.
+    expect((await resolveAssignedSkillDisplay([ref("s-a", null)], deps)).size).toBe(0);
+    expect(listCandidates).not.toHaveBeenCalled();
   });
 
-  it("keeps the FIRST candidate when a duplicate id somehow appears", async () => {
-    const map = await resolveAssignedSkillDisplay(["s-a"], {
+  it("REGRESSION (codex round B): a COLLIDING id owned by a different package is NOT labelled", async () => {
+    // Package A and package B surface the same catalog id; the assignment
+    // belongs to B, and A is listed first. Keying on the id alone would dress
+    // B's row in A's title and vendor.
+    const map = await resolveAssignedSkillDisplay([ref("s-shared", "@b/second")], {
+      listCandidates: listing([
+        candidate({
+          skillId: "s-shared",
+          ownerPackageName: "@a/first",
+          extensionDisplayName: "First Kit",
+          extensionVendorName: "First Vendor",
+        }),
+      ]) as never,
+    });
+    expect(map.has("s-shared")).toBe(false);
+  });
+
+  it("still labels the RIGHT package when a colliding id is present", async () => {
+    const map = await resolveAssignedSkillDisplay([ref("s-shared", "@b/second")], {
+      listCandidates: listing([
+        candidate({
+          skillId: "s-shared",
+          ownerPackageName: "@a/first",
+          extensionDisplayName: "First Kit",
+          extensionVendorName: "First Vendor",
+        }),
+        candidate({
+          skillId: "s-shared",
+          ownerPackageName: "@b/second",
+          extensionDisplayName: "Second Kit",
+          extensionVendorName: "Second Vendor",
+        }),
+      ]) as never,
+    });
+    expect(map.get("s-shared")).toEqual({
+      skillId: "s-shared",
+      displayName: "Second Kit",
+      vendorName: "Second Vendor",
+    });
+  });
+
+  it("keeps the FIRST candidate when the SAME package lists an id twice", async () => {
+    const map = await resolveAssignedSkillDisplay([ref("s-a")], {
       listCandidates: listing([
         candidate({ skillId: "s-a", extensionDisplayName: "First" }),
         candidate({ skillId: "s-a", extensionDisplayName: "Second" }),

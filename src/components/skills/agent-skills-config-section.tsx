@@ -87,7 +87,12 @@ export async function loadAgentSkillsSection({
     return null;
   }
 
-  const labels = await resolveAssignedSkillDisplay(listed.skills.map((s) => s.skillId));
+  // Keyed by (skill id, owning package) — the owner comes from the assignment
+  // read, so a label can only ever come from the package the assignment
+  // actually names.
+  const labels = await resolveAssignedSkillDisplay(
+    listed.skills.map((s) => ({ skillId: s.skillId, ownerPackageName: s.ownerPackageName })),
+  );
   const initialRows: AgentSkillRow[] = listed.skills.map((s) => {
     const label = labels.get(s.skillId);
     return {

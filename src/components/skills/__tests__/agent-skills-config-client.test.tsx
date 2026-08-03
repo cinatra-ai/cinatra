@@ -285,6 +285,66 @@ describe("choosing a skill", () => {
     expect(screen.getByText(/^0 of 3 skills chosen/)).toBeTruthy();
   });
 
+  it("REGRESSION (codex round A): two concurrent refusals BOTH stay explained", async () => {
+    // One error slot means the second refusal overwrites the first, and the
+    // first row vanishes with no explanation at all.
+    const assign = vi.fn(async (skillId: string) => ({
+      ok: false as const,
+      reason: skillId === "s-blog-writing" ? "not-assignable" : "cap-exceeded",
+    }));
+    render(
+      <AgentSkillsConfigClient
+        cap={3}
+        initialRows={[]}
+        search={narrowingSearch()}
+        assign={assign}
+        remove={okWrite()}
+      />,
+    );
+
+    const input = screen.getByRole("combobox");
+    fireEvent.click(input);
+    fireEvent.click(await screen.findByText("Blog Writing"));
+    fireEvent.click(input);
+    fireEvent.click(await screen.findByText("Company Research"));
+
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      const text = screen.getByRole("alert").textContent ?? "";
+      expect(text).toContain("Couldn't add Blog Writing");
+      expect(text).toContain("Couldn't add Company Research");
+    });
+    expect(document.querySelectorAll('[data-slot="agent-skills-row"]').length).toBe(0);
+  });
+
+  it("a skill's message clears when ITS OWN next change starts, not when a sibling's does", async () => {
+    const assign = vi.fn(async () => ({ ok: false as const, reason: "not-assignable" }));
+    render(
+      <AgentSkillsConfigClient
+        cap={3}
+        initialRows={[]}
+        search={narrowingSearch()}
+        assign={assign}
+        remove={okWrite()}
+      />,
+    );
+    const input = screen.getByRole("combobox");
+    fireEvent.click(input);
+    fireEvent.click(await screen.findByText("Blog Writing"));
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain("Couldn't add Blog Writing"),
+    );
+
+    // Re-picking the SAME skill clears its own stale message before retrying.
+    fireEvent.click(input);
+    fireEvent.click(await screen.findByText("Blog Writing"));
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      const paragraphs = screen.getByRole("alert").querySelectorAll("p");
+      expect(paragraphs.length).toBe(1);
+    });
+  });
+
   it("surfaces the picker's ERROR row when the SEARCH refuses (never an empty list)", async () => {
     const search = vi.fn(async () => ({ ok: false as const, reason: "eligibility-unreadable" }));
     render(

@@ -170,11 +170,20 @@ export function AgentSkillsConfigClient({
 }: AgentSkillsConfigClientProps) {
   const [rows, setRows] = useState<AgentSkillRow[]>(initialRows);
   const [savingIds, setSavingIds] = useState<readonly string[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  // Failures are held PER SKILL, not as one slot (codex round A finding 1): two
+  // changes can be in flight at once, and a single slot means the second
+  // refusal silently overwrites the first — leaving a row that vanished with no
+  // explanation at all. A message is owned by its own skill: starting a change
+  // clears that skill's message, and nothing else's.
+  const [failures, setFailures] = useState<readonly { skillId: string; message: string }[]>([]);
   const [, startTransition] = useTransition();
 
   const atCap = rows.length >= cap;
   const busy = (id: string) => savingIds.includes(id);
+  const clearFailure = (skillId: string) =>
+    setFailures((prev) => prev.filter((f) => f.skillId !== skillId));
+  const recordFailure = (skillId: string, message: string) =>
+    setFailures((prev) => [...prev.filter((f) => f.skillId !== skillId), { skillId, message }]);
 
   const handlePick = (item: SkillPickerItem) => {
     const { candidate } = item;
@@ -191,7 +200,7 @@ export function AgentSkillsConfigClient({
     };
     setRows((prev) => [...prev, optimistic]);
     setSavingIds((prev) => [...prev, candidate.skillId]);
-    setError(null);
+    clearFailure(candidate.skillId);
 
     startTransition(async () => {
       let result: AgentSkillsWriteResponse;
@@ -204,7 +213,8 @@ export function AgentSkillsConfigClient({
       if (!result.ok) {
         // Roll the list back to exactly what it was, and say so.
         setRows((prev) => prev.filter((r) => r.skillId !== candidate.skillId));
-        setError(
+        recordFailure(
+          candidate.skillId,
           `Couldn't add ${candidate.skillName} — ${agentSkillRefusalText(result.reason)}. Nothing was changed.`,
         );
       }
@@ -214,7 +224,7 @@ export function AgentSkillsConfigClient({
   const handleRemove = (row: AgentSkillRow) => {
     if (busy(row.skillId)) return;
     setSavingIds((prev) => [...prev, row.skillId]);
-    setError(null);
+    clearFailure(row.skillId);
 
     startTransition(async () => {
       let result: AgentSkillsWriteResponse;
@@ -227,7 +237,8 @@ export function AgentSkillsConfigClient({
       if (result.ok) {
         setRows((prev) => prev.filter((r) => r.skillId !== row.skillId));
       } else {
-        setError(
+        recordFailure(
+          row.skillId,
           `Couldn't remove ${row.skillName} — ${agentSkillRefusalText(result.reason)}. Nothing was changed.`,
         );
       }
@@ -352,14 +363,16 @@ export function AgentSkillsConfigClient({
         </ul>
       ) : null}
 
-      {error ? (
-        <p
+      {failures.length > 0 ? (
+        <div
           data-slot="agent-skills-error"
           role="alert"
-          className="mt-1 rounded-control border border-destructive/35 bg-destructive/6 px-2.75 py-2 text-xs text-destructive"
+          className="mt-1 flex flex-col gap-1 rounded-control border border-destructive/35 bg-destructive/6 px-2.75 py-2 text-xs text-destructive"
         >
-          {error}
-        </p>
+          {failures.map((failure) => (
+            <p key={failure.skillId}>{failure.message}</p>
+          ))}
+        </div>
       ) : null}
     </div>
   );
