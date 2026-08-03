@@ -6,6 +6,8 @@
 // response, and a needle compiled into a pattern lets `%` or `.*` widen the
 // match. Each is pinned here, with no I/O in sight.
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 import {
   ASSIGNABLE_SKILL_MAX_PAGE_SIZE,
@@ -162,6 +164,44 @@ describe("compareAssignableSkillRows — a STABLE total order", () => {
     const a = row({ displayName: "apple pack", skillId: "id-a" });
     const b = row({ displayName: "Banana Pack", skillId: "id-b" });
     expect(compareAssignableSkillRows(a, b)).toBeLessThan(0);
+  });
+
+  it("orders and folds LOCALE-INDEPENDENTLY, against a Turkish-i population", () => {
+    // `toLocaleLowerCase()` and `localeCompare()` fold/collate per HOST locale
+    // (Turkish `I` → `ı` is the classic divergence). Two app servers ordering
+    // one population differently is exactly how offset paging starts dropping
+    // and repeating rows, so both the fold and the comparison must be
+    // code-unit based. Asserting the exact expected order pins the behaviour:
+    // under a Turkish fold "Istanbul" would lowercase to "ıstanbul" and sort
+    // AFTER "İzmir" (which folds to "i̇zmir"), inverting these two rows.
+    const population = [
+      row({ displayName: "İzmir Pack", skillId: "id-j" }),
+      row({ displayName: "Istanbul Pack", skillId: "id-i" }),
+      row({ displayName: "Ankara Pack", skillId: "id-a" }),
+    ];
+    expect([...population].sort(compareAssignableSkillRows).map((r) => r.skillId)).toEqual([
+      "id-a",
+      "id-i",
+      "id-j",
+    ]);
+    expect(normalizeAssignableSkillQuery("ISTANBUL")).toBe("istanbul");
+  });
+
+  it("uses NEITHER localeCompare NOR toLocaleLowerCase anywhere in the model", () => {
+    // A source-level guard, because a locale divergence only REPRODUCES on a
+    // host running that locale: the behavioural test above passes on an
+    // en-US CI box whichever fold the code uses, so the defect would be
+    // invisible in CI and visible only in one deployment. Reading the module
+    // source covers the private helpers too.
+    const source = readFileSync(
+      path.join(__dirname, "..", "assignable-skills-search-model.ts"),
+      "utf8",
+    );
+    // Strip the prose so a comment ABOUT the hazard cannot trip the guard.
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+    expect(code).not.toContain("localeCompare");
+    expect(code).not.toContain("toLocaleLowerCase");
+    expect(code).toContain("toLowerCase");
   });
 });
 

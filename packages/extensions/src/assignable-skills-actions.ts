@@ -45,6 +45,7 @@ import {
 } from "./assignable-skills-sources";
 import { resolveInstalledDisplayName } from "./screens/installed-display-name";
 import { resolveInstalledVendorName } from "./screens/installed-vendor";
+import { pickLifecycleBadgeStatus } from "./lifecycle-ui";
 import type { InstalledExtension } from "./canonical-types";
 
 /**
@@ -116,16 +117,19 @@ export async function searchAssignableSkillExtensions(
   const assigned = new Set(assignedIds);
   const offered = candidates.filter((c) => !assigned.has(c.skillId));
 
-  // Lifecycle LABEL only (`locked` vs `active`); liveness was already decided
-  // by the predicate. A package whose rows this read cannot see — a legacy
-  // slug-form `package_name`, say — keeps the `active` default rather than
-  // being dropped: the predicate, which absorbs that identity drift, already
-  // proved it live, and a label read must never overrule the predicate.
-  const ownerPackages = [...new Set(offered.map((c) => c.ownerPackageName))];
-  let installRows = new Map<string, InstalledExtension[]>();
+  // The canonical rows behind each offered skill, read under the SAME candidate
+  // key union the assignability predicate used — `installed_extension`
+  // `package_name` is not always the npm form, and an exact-only lookup would
+  // read a legacy slug-keyed install as "no rows at all" and badge a locked
+  // system extension as plainly active.
+  const candidateKeys = [...new Set(offered.flatMap((c) => c.ownerPackageCandidates))];
+  let installRows: Map<string, InstalledExtension[]> | null = null;
   try {
-    installRows = await readInstallRowsSource(ownerPackages);
+    installRows = candidateKeys.length > 0 ? await readInstallRowsSource(candidateKeys) : new Map();
   } catch (err) {
+    // A LABEL outage is not a liveness verdict. The predicate already ruled
+    // every offered skill live; degrade to the fail-live `active` badge rather
+    // than emptying the picker.
     console.warn(
       "[extensions/assignable-skills] install-row label read failed — listing every " +
         "assignable skill as active:",
@@ -133,47 +137,54 @@ export async function searchAssignableSkillExtensions(
     );
   }
 
-  const rows: AssignableSkillRow[] = offered.map((c) => ({
-    skillId: c.skillId,
-    skillName: c.skillName,
-    skillDescription: c.skillDescription,
-    packageName: c.ownerPackageName,
-    // The STANDARD display-name resolver, with the tiers this surface has:
-    // the extension's self-declared title, then the raw package name. The
-    // per-kind native descriptor name is deliberately not fed in — for a skill
-    // package that is the SKILL's name, which this row already carries in its
-    // own field, and using it as the extension title would label every row of a
-    // multi-skill package differently.
-    displayName: resolveInstalledDisplayName({
-      nativeName: null,
-      registryTitle: null,
-      manifestDisplayName: c.extensionDisplayName,
+  const rows: AssignableSkillRow[] = [];
+  for (const c of offered) {
+    // EXACT name first; the drift aliases only stand in when it has no rows —
+    // `slugify` is lossy, so an unrelated package's rows must never be able to
+    // outvote the canonical ones.
+    const badge =
+      installRows === null
+        ? "active"
+        : pickLifecycleBadgeStatus(
+            installRows.get(c.ownerPackageName) ??
+              c.ownerPackageCandidates.flatMap((k) => installRows!.get(k) ?? []),
+          );
+    // ARCHIVED here means the extension was archived between the population
+    // read and this one. Drop the row rather than relabel it: the picker must
+    // never offer a skill whose extension is no longer live, and the write path
+    // would refuse it anyway.
+    if (badge === "archived") continue;
+    rows.push({
+      skillId: c.skillId,
+      skillName: c.skillName,
+      skillDescription: c.skillDescription,
       packageName: c.ownerPackageName,
-    }),
-    // The STANDARD vendor resolver: declared vendor identity, else npm author,
-    // else no byline. The raw npm scope segment is never a vendor name.
-    vendorName: resolveInstalledVendorName({
-      manifestVendorName: c.extensionVendorName,
-      author: c.extensionAuthor,
-    }),
-    status: installStatusFor(installRows.get(c.ownerPackageName)),
-  }));
+      // The STANDARD display-name resolver, with the tiers this surface has:
+      // the extension's self-declared title, then the raw package name. The
+      // per-kind native descriptor name is deliberately not fed in — for a
+      // skill package that is the SKILL's name, which this row already carries
+      // in its own field, and using it as the extension title would label every
+      // row of a multi-skill package differently.
+      displayName: resolveInstalledDisplayName({
+        nativeName: null,
+        registryTitle: null,
+        manifestDisplayName: c.extensionDisplayName,
+        packageName: c.ownerPackageName,
+      }),
+      // The STANDARD vendor resolver: declared vendor identity, else npm
+      // author, else no byline. The raw npm scope segment is never a vendor.
+      vendorName: resolveInstalledVendorName({
+        manifestVendorName: c.extensionVendorName,
+        author: c.extensionAuthor,
+      }),
+      // `locked` | `active` — `pickLifecycleBadgeStatus` is the platform's
+      // ONE badge rule (any locked row wins), so a package never wears two
+      // different badges on the Installed card and in this picker.
+      status: badge satisfies AssignableSkillInstallStatus,
+    });
+  }
 
   // (4) NARROW → ORDER → PAGE, server-side.
   const { results, hasMore } = selectAssignableSkillPage(rows, query, page);
   return { ok: true, agentPackageName: resolved.packageName, results, hasMore };
-}
-
-/**
- * `locked` iff the package has a live install row and every live row is locked
- * — the same rule the Installed card applies (`installed-rows.ts`), so one
- * package never wears two different badges on two surfaces.
- */
-function installStatusFor(
-  rows: ReadonlyArray<{ status: string }> | undefined,
-): AssignableSkillInstallStatus {
-  if (!rows || rows.length === 0) return "active";
-  const live = rows.filter((r) => r.status === "active" || r.status === "locked");
-  if (live.length === 0) return "active";
-  return live.every((r) => r.status === "locked") ? "locked" : "active";
 }

@@ -50,6 +50,7 @@ type Candidate = {
   skillName: string;
   skillDescription: string;
   ownerPackageName: string;
+  ownerPackageCandidates: string[];
   extensionDisplayName: string | null;
   extensionVendorName: string | null;
   extensionAuthor: string | null;
@@ -57,11 +58,13 @@ type Candidate = {
 };
 
 function candidate(overrides: Partial<Candidate> = {}): Candidate {
+  const ownerPackageName = overrides.ownerPackageName ?? "@acme/widget-skills";
   return {
     skillId: "@acme/widget-skills:do-thing",
     skillName: "Do Thing",
     skillDescription: "Does the thing.",
-    ownerPackageName: "@acme/widget-skills",
+    ownerPackageName,
+    ownerPackageCandidates: [ownerPackageName],
     extensionDisplayName: "Widget Skills",
     extensionVendorName: "Acme Corporation",
     extensionAuthor: "Acme Publishing",
@@ -211,15 +214,63 @@ describe("searchAssignableSkillExtensions — result rows", () => {
     expect(out.ok && out.results[0]!.status).toBe("locked");
   });
 
-  it("labels a package with BOTH an active and a locked row `active`", async () => {
+  it("labels a package with BOTH an active and a locked row `locked` (any locked wins)", async () => {
+    // The platform's ONE badge rule (`pickLifecycleBadgeStatus`): a locked row
+    // wins over an active one, so the picker and the Installed card can never
+    // show the same package with two different badges.
     readInstallRowsMock.mockResolvedValue(
-      new Map([["@acme/widget-skills", [{ status: "locked" }, { status: "active" }]]]),
+      new Map([["@acme/widget-skills", [{ status: "active" }, { status: "locked" }]]]),
+    );
+    const out = await searchAssignableSkillExtensions("web-scrape-agent", "");
+    expect(out.ok && out.results[0]!.status).toBe("locked");
+  });
+
+  it("labels `locked` when the row is stored under a legacy SLUG key", async () => {
+    // `installed_extension.package_name` is not always the npm form. Reading
+    // only the exact name would see "no rows" and fail-live to `active`,
+    // silently un-badging every legacy-keyed system extension.
+    listCandidatesMock.mockResolvedValue([
+      candidate({ ownerPackageCandidates: ["@acme/widget-skills", "acme-widget-skills"] }),
+    ]);
+    readInstallRowsMock.mockResolvedValue(
+      new Map([["acme-widget-skills", [{ status: "locked" }]]]),
+    );
+    const out = await searchAssignableSkillExtensions("web-scrape-agent", "");
+    expect(readInstallRowsMock).toHaveBeenCalledWith([
+      "@acme/widget-skills",
+      "acme-widget-skills",
+    ]);
+    expect(out.ok && out.results[0]!.status).toBe("locked");
+  });
+
+  it("lets the EXACT name outvote a drift alias when it has rows of its own", async () => {
+    // `slugify` is lossy, so a drift key can collide with an unrelated package.
+    // When the canonical name has rows, the aliases must not be consulted.
+    listCandidatesMock.mockResolvedValue([
+      candidate({ ownerPackageCandidates: ["@acme/widget-skills", "acme-widget-skills"] }),
+    ]);
+    readInstallRowsMock.mockResolvedValue(
+      new Map([
+        ["@acme/widget-skills", [{ status: "active" }]],
+        ["acme-widget-skills", [{ status: "locked" }]],
+      ]),
     );
     const out = await searchAssignableSkillExtensions("web-scrape-agent", "");
     expect(out.ok && out.results[0]!.status).toBe("active");
   });
 
-  it("ignores ARCHIVED rows when labelling (the predicate already ruled on liveness)", async () => {
+  it("DROPS a skill whose extension turned out to be archived (a TOCTOU guard)", async () => {
+    // The population read said live; by the time the rows are read the
+    // extension is archived. Relabelling would offer a skill the write path
+    // refuses, so the row is dropped instead.
+    readInstallRowsMock.mockResolvedValue(
+      new Map([["@acme/widget-skills", [{ status: "archived" }]]]),
+    );
+    const out = await searchAssignableSkillExtensions("web-scrape-agent", "");
+    expect(out).toMatchObject({ ok: true, results: [], hasMore: false });
+  });
+
+  it("keeps a package whose LIVE row survives alongside an archived one", async () => {
     readInstallRowsMock.mockResolvedValue(
       new Map([["@acme/widget-skills", [{ status: "archived" }, { status: "locked" }]]]),
     );

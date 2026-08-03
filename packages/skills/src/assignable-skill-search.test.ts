@@ -83,12 +83,44 @@ describe("listAssignableSkillCandidates — the population", () => {
         skillName: "Do Thing",
         skillDescription: "Does the thing.",
         ownerPackageName: "@acme/widget-skills",
+        ownerPackageCandidates: ["@acme/widget-skills", "acme-widget-skills"],
         extensionDisplayName: "Widget Skills",
         extensionVendorName: "Acme Corporation",
         extensionAuthor: "Acme Publishing",
         role: "injectable",
       },
     ]);
+  });
+
+  it("puts the CANONICAL name first in the candidate keys", async () => {
+    // A consumer reading canonical install rows for the badge applies
+    // exact-first; the ordering is part of the contract, not incidental.
+    const [row] = await listAssignableSkillCandidates({
+      readCatalogSnapshot: async () => ({ skills: [skill()] }),
+      scanExtensions: async () => [descriptor()],
+      readInstallStatus: statuses(),
+    });
+    expect(row!.ownerPackageCandidates[0]).toBe("@acme/widget-skills");
+  });
+
+  it("DROPS a drift key that is another scanned package's canonical name", async () => {
+    // `slugify` is lossy: `@acme/widget-skills` and a package literally named
+    // `acme-widget-skills` share a candidate key. The unrelated package's
+    // install rows must never be able to vouch for this one, so the collided
+    // key is dropped — the same rule the shared predicate applies.
+    const [row] = await listAssignableSkillCandidates({
+      readCatalogSnapshot: async () => ({ skills: [skill()] }),
+      scanExtensions: async () => [
+        descriptor(),
+        descriptor({
+          pkgName: "acme-widget-skills",
+          pkgDirName: "acme-widget-skills",
+          slugs: [],
+        }),
+      ],
+      readInstallStatus: statuses(),
+    });
+    expect(row!.ownerPackageCandidates).toEqual(["@acme/widget-skills"]);
   });
 
   it("carries NULL (not undefined) for metadata the manifest never declared", async () => {

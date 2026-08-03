@@ -58,6 +58,7 @@ import {
   scanExtensionsSource,
 } from "./agent-skill-assignment-sources";
 import type { SkillExtensionDescriptor } from "./extension-skill-resolver";
+import { resolveSkillOwnerPackageCandidates } from "./manifest-identity";
 import type { PersistedSkill } from "./skills-store";
 
 /**
@@ -87,6 +88,22 @@ export type AssignableSkillCandidate = {
    * labels and the write path locks.
    */
   ownerPackageName: string;
+  /**
+   * Every `installed_extension.package_name` key the owning package could be
+   * stored under, `ownerPackageName` FIRST.
+   *
+   * `installed_extension.package_name` is not always the npm form — slugified
+   * legacy rows exist — so a caller that wants the package's canonical rows
+   * (to read the `locked` vs `active` badge, say) has to look under the same
+   * candidate union the assignability predicate uses, or a drifted row reads
+   * as "no row at all". Two rules ride along, both inherited from the
+   * predicate: a drift key that IS another scanned package's canonical name is
+   * DROPPED (`slugify` is lossy, so `@a/b-c` and a package literally named
+   * `a-b-c` collide, and the unrelated package's rows must never vouch for
+   * this one), and the EXACT name wins when it has rows of its own — the
+   * drift keys only stand in when it has none.
+   */
+  ownerPackageCandidates: string[];
   /** `cinatra.displayName` as declared, or `null`. */
   extensionDisplayName: string | null;
   /** `cinatra.vendor.name` as declared, or `null`. */
@@ -167,6 +184,18 @@ export async function listAssignableSkillCandidates(
     if (!descriptorByPackage.has(ext.pkgName)) descriptorByPackage.set(ext.pkgName, ext);
   }
 
+  // Same candidate-key derivation and same lossy-slug filter the predicate
+  // applies, so a caller reading canonical rows for the badge looks under
+  // exactly the keys the liveness verdict was computed from.
+  const scannedPackageNames = new Set(descriptors.map((d) => d.pkgName));
+  const candidatesFor = (pkg: string): string[] => {
+    const candidates = resolveSkillOwnerPackageCandidates({ packageName: pkg }).filter(
+      (c) => c === pkg || !scannedPackageNames.has(c),
+    );
+    // `ownerPackageName` FIRST, so an exact-first consumer needs no re-sort.
+    return [pkg, ...candidates.filter((c) => c !== pkg)];
+  };
+
   const out: AssignableSkillCandidate[] = [];
   for (const [skillId, verdict] of verdicts) {
     if (!verdict.assignable) continue;
@@ -179,6 +208,7 @@ export async function listAssignableSkillCandidates(
       skillName: verdict.skill.name,
       skillDescription: verdict.skill.description,
       ownerPackageName: verdict.ownerPackageName,
+      ownerPackageCandidates: candidatesFor(verdict.ownerPackageName),
       extensionDisplayName: orNull(ext?.displayName),
       extensionVendorName: orNull(ext?.vendorName),
       extensionAuthor: orNull(ext?.author),

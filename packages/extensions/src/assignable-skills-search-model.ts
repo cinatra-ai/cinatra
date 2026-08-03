@@ -83,7 +83,10 @@ export function normalizeAssignableSkillPage(page?: {
 export function normalizeAssignableSkillQuery(query: string | null | undefined): string | null {
   if (typeof query !== "string") return null;
   const trimmed = query.trim();
-  return trimmed.length > 0 ? trimmed.toLocaleLowerCase() : null;
+  // `toLowerCase`, NEVER `toLocaleLowerCase`: the locale-aware form folds
+  // differently per host locale (Turkish `I` → `ı` is the classic case), so the
+  // same needle and the same row could match on one server and not on another.
+  return trimmed.length > 0 ? trimmed.toLowerCase() : null;
 }
 
 /**
@@ -104,7 +107,7 @@ export function assignableSkillRowMatches(
   const needle = normalizeAssignableSkillQuery(query);
   if (needle === null) return true;
   const haystacks = [row.displayName, row.skillName, row.packageName, row.vendorName ?? ""];
-  return haystacks.some((h) => h.toLocaleLowerCase().includes(needle));
+  return haystacks.some((h) => h.toLowerCase().includes(needle));
 }
 
 /**
@@ -112,19 +115,26 @@ export function assignableSkillRowMatches(
  *
  * Paging over an unstable order silently drops and duplicates rows across
  * pages, so the tiebreak runs all the way down to the id (which is unique).
- * `localeCompare` is deliberately NOT used — a locale-dependent collation would
- * make the page boundaries depend on the server's locale.
+ *
+ * Neither `localeCompare` nor `toLocaleLowerCase` is used: BOTH depend on the
+ * host's locale, so two servers behind one load balancer (or one server after a
+ * locale change) could order the same population differently — and successive
+ * offset pages ordered differently is exactly how a picker starts dropping and
+ * repeating rows. Plain `toLowerCase` + code-unit comparison is total,
+ * deterministic and identical everywhere.
  */
 export function compareAssignableSkillRows(a: AssignableSkillRow, b: AssignableSkillRow): number {
-  const byExtension = a.displayName.toLocaleLowerCase() < b.displayName.toLocaleLowerCase() ? -1
-    : a.displayName.toLocaleLowerCase() > b.displayName.toLocaleLowerCase() ? 1
-    : 0;
+  const byExtension = compareLower(a.displayName, b.displayName);
   if (byExtension !== 0) return byExtension;
-  const bySkill = a.skillName.toLocaleLowerCase() < b.skillName.toLocaleLowerCase() ? -1
-    : a.skillName.toLocaleLowerCase() > b.skillName.toLocaleLowerCase() ? 1
-    : 0;
+  const bySkill = compareLower(a.skillName, b.skillName);
   if (bySkill !== 0) return bySkill;
   return a.skillId < b.skillId ? -1 : a.skillId > b.skillId ? 1 : 0;
+}
+
+function compareLower(a: string, b: string): number {
+  const left = a.toLowerCase();
+  const right = b.toLowerCase();
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 /**
