@@ -263,3 +263,102 @@ describe("schema handling", () => {
     expect(calls[0]!.text).toContain('"we""ird"."agent_assigned_skills"');
   });
 });
+
+// ---------------------------------------------------------------------------
+// LIFECYCLE TEARDOWN primitives (cinatra#2350 S5).
+// ---------------------------------------------------------------------------
+
+import {
+  deleteAssignedSkillsForAgentPackage,
+  deleteAssignedSkillsForSkillIds,
+} from "@/lib/agent-assigned-skills-store";
+
+describe("deleteAssignedSkillsForSkillIds — the SKILL-side sweep", () => {
+  it("deletes by the exact id SET across every agent, and reports the removed pairs", async () => {
+    const calls: Call[] = [];
+    const query: AssignedSkillsQuery = async (text, values) => {
+      calls.push({ text, values: values ? [...values] : [] });
+      return [
+        { agent_package_name: "@cinatra-ai/web-scrape-agent", skill_id: "@x/y:a" },
+        { agent_package_name: "@cinatra-ai/blog-pipeline-agent", skill_id: "@x/y:b" },
+      ] as never;
+    };
+    const out = await deleteAssignedSkillsForSkillIds(["@x/y:a", "@x/y:b"], { query });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.text).toContain("DELETE FROM");
+    // ANY over a text[] — one statement, not one per id, so the sweep is atomic
+    // with respect to a concurrent reader.
+    expect(calls[0]!.text).toContain("skill_id = ANY($1::text[])");
+    expect(calls[0]!.text).toContain("RETURNING agent_package_name, skill_id");
+    expect(calls[0]!.values).toEqual([["@x/y:a", "@x/y:b"]]);
+    expect(out.removed).toEqual([
+      { agentPackageName: "@cinatra-ai/web-scrape-agent", skillId: "@x/y:a" },
+      { agentPackageName: "@cinatra-ai/blog-pipeline-agent", skillId: "@x/y:b" },
+    ]);
+  });
+
+  it("DEDUPES and drops empty ids before issuing the statement", async () => {
+    const calls: Call[] = [];
+    const query: AssignedSkillsQuery = async (text, values) => {
+      calls.push({ text, values: values ? [...values] : [] });
+      return [] as never;
+    };
+    await deleteAssignedSkillsForSkillIds(["@x/y:a", "@x/y:a", "", "@x/y:b"], { query });
+    expect(calls[0]!.values).toEqual([["@x/y:a", "@x/y:b"]]);
+  });
+
+  it("issues NO statement for an empty id list", async () => {
+    const query = vi.fn(async () => [] as never);
+    const out = await deleteAssignedSkillsForSkillIds([], { query });
+    expect(query).not.toHaveBeenCalled();
+    expect(out).toEqual({ removed: [] });
+  });
+
+  it("is idempotent — a second sweep removes nothing and says so", async () => {
+    let first = true;
+    const query: AssignedSkillsQuery = async () => {
+      if (first) {
+        first = false;
+        return [{ agent_package_name: "@a/b", skill_id: "@x/y:a" }] as never;
+      }
+      return [] as never;
+    };
+    expect((await deleteAssignedSkillsForSkillIds(["@x/y:a"], { query })).removed).toHaveLength(1);
+    expect((await deleteAssignedSkillsForSkillIds(["@x/y:a"], { query })).removed).toEqual([]);
+  });
+});
+
+describe("deleteAssignedSkillsForAgentPackage — the AGENT-side sweep", () => {
+  it("deletes every row for the agent package and reports the removed pairs", async () => {
+    const calls: Call[] = [];
+    const query: AssignedSkillsQuery = async (text, values) => {
+      calls.push({ text, values: values ? [...values] : [] });
+      return [{ skill_id: "@x/y:a" }, { skill_id: "@x/y:b" }] as never;
+    };
+    const out = await deleteAssignedSkillsForAgentPackage("@cinatra-ai/web-scrape-agent", { query });
+
+    expect(calls[0]!.text).toContain("WHERE agent_package_name = $1 RETURNING skill_id");
+    expect(calls[0]!.values).toEqual(["@cinatra-ai/web-scrape-agent"]);
+    expect(out.removed).toEqual([
+      { agentPackageName: "@cinatra-ai/web-scrape-agent", skillId: "@x/y:a" },
+      { agentPackageName: "@cinatra-ai/web-scrape-agent", skillId: "@x/y:b" },
+    ]);
+  });
+
+  it("issues NO statement for an empty package name", async () => {
+    const query = vi.fn(async () => [] as never);
+    expect(await deleteAssignedSkillsForAgentPackage("", { query })).toEqual({ removed: [] });
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("uses the injected schema, quoted", async () => {
+    const calls: Call[] = [];
+    const query: AssignedSkillsQuery = async (text) => {
+      calls.push({ text, values: [] });
+      return [] as never;
+    };
+    await deleteAssignedSkillsForAgentPackage("@a/b", { query, schema: 'we"ird' });
+    expect(calls[0]!.text).toContain('"we""ird"."agent_assigned_skills"');
+  });
+});

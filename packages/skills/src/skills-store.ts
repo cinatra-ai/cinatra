@@ -2191,6 +2191,10 @@ export async function deleteAgentSkillsForSlugs(
 }
 
 export async function uninstallSkillPackage(packageId: string) {
+  // cinatra#2350 (S5): sweep direct skill assignments FIRST — ahead of the
+  // missing-native-package early return, under the assign path's lifecycle lock.
+  const teardown = await import("./agent-skill-assignability");
+  await teardown.teardownAgentAssignmentsForSkillPackage(packageId);
   const existingCatalog = await readSkillsCatalog();
   const existingPackage = existingCatalog.skillPackages.find((p) => p.id === packageId);
   if (!existingPackage) return false;

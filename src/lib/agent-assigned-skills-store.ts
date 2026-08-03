@@ -266,3 +266,66 @@ export async function deleteAssignedSkill(
   );
   return { deleted: rows.length > 0 };
 }
+
+// ---------------------------------------------------------------------------
+// LIFECYCLE TEARDOWN primitives (cinatra#2350 S5, epic #2345).
+//
+// Uninstalling either side of an assignment deletes the row. `created_by` /
+// `created_at` are CONFIGURATION metadata on a live row, not a post-uninstall
+// audit trail (the S1 decision, recorded in `skill-lifecycle-schema.ts`), so a
+// completed uninstall leaves nothing behind. Retaining the row would be an
+// ORPHAN-REAPPLY hazard, not an audit record: reinstalling the same package
+// re-derives the same catalog skill ids, the S2 resolution-time revalidation
+// would start passing again, and delivery would silently resume from a
+// configuration nobody re-made. Both writers therefore report WHAT they removed
+// so the caller can log it, and both are idempotent — a second teardown of the
+// same package removes nothing and says so.
+// ---------------------------------------------------------------------------
+
+/** ONE removed pair, reported back so a teardown can log what it swept. */
+export type RemovedAssignedSkill = { agentPackageName: string; skillId: string };
+
+/**
+ * SKILL-side teardown: delete every assignment naming any of these catalog
+ * skill ids, across ALL agents.
+ *
+ * The ids must be the EXACT derived catalog ids of the package being
+ * uninstalled (`deriveSkillRegistration`, virtual chat namespace included) —
+ * this store deliberately knows nothing about derivation, only about rows.
+ */
+export async function deleteAssignedSkillsForSkillIds(
+  skillIds: readonly string[],
+  deps?: AssignedSkillsStoreDeps,
+): Promise<{ removed: RemovedAssignedSkill[] }> {
+  const { query, table } = resolveDeps(deps);
+  const ids = [...new Set(skillIds.filter((id) => typeof id === "string" && id.length > 0))];
+  if (ids.length === 0) return { removed: [] };
+  const rows = await query<{ agent_package_name: string; skill_id: string }>(
+    `DELETE FROM ${table} WHERE skill_id = ANY($1::text[])
+     RETURNING agent_package_name, skill_id`,
+    [ids],
+  );
+  return {
+    removed: rows.map((r) => ({ agentPackageName: r.agent_package_name, skillId: r.skill_id })),
+  };
+}
+
+/**
+ * AGENT-side teardown: delete every assignment this agent package carries.
+ *
+ * Keyed on the canonical agent package name — the same key the assign path
+ * writes (`agent_templates.package_name`, which is what `ref.packageName` is at
+ * the uninstall call site).
+ */
+export async function deleteAssignedSkillsForAgentPackage(
+  agentPackageName: string,
+  deps?: AssignedSkillsStoreDeps,
+): Promise<{ removed: RemovedAssignedSkill[] }> {
+  const { query, table } = resolveDeps(deps);
+  if (!agentPackageName) return { removed: [] };
+  const rows = await query<{ skill_id: string }>(
+    `DELETE FROM ${table} WHERE agent_package_name = $1 RETURNING skill_id`,
+    [agentPackageName],
+  );
+  return { removed: rows.map((r) => ({ agentPackageName, skillId: r.skill_id })) };
+}

@@ -362,6 +362,21 @@ export function createAgentExtensionHandler(): ExtensionTypeHandler {
       // a no-op if it ever holds the lock externally.
       const { withInstallLock } = await import("./materialize-agent-package");
       await withInstallLock(ref.packageName, async () => {
+        // cinatra#2350 (S5): direct skill assignments are keyed on the AGENT
+        // package name and are actor-independent, so they outlive the template
+        // row — a PROVIDER-DECLARED agent has no `agent_templates` row at all
+        // and would hit the early return below with its assignments intact.
+        // Ordered FIRST, therefore, ahead of that return and ahead of every
+        // destructive step; and inside this lock, which is the SAME per-package
+        // lifecycle serialization S1's assign path acquires (both go through the
+        // global extension-lifecycle queue), so an assign can never land after
+        // the sweep. Fatal by design: a surviving row REAPPLIES on reinstall,
+        // silently re-delivering a configuration nobody re-made.
+        const { deleteAssignedSkillsForAgentPackage } = await import(
+          "@/lib/agent-assigned-skills-store"
+        );
+        await deleteAssignedSkillsForAgentPackage(ref.packageName);
+
         const existing = await readAgentTemplateByPackageName(ref.packageName);
         if (!existing) return;
 

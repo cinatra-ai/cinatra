@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   deleteAgentTemplate: vi.fn(),
   deleteAgentSkillsForSlugs: vi.fn(),
   cleanupForAgent: vi.fn(),
+  deleteAssignedSkillsForAgentPackage: vi.fn(async () => ({ removed: [] })),
 }));
 
 vi.mock("../extension-handler-rollback", () => ({
@@ -42,6 +43,11 @@ vi.mock("@cinatra-ai/registries", () => {
 vi.mock("@/lib/verdaccio-config", () => ({
   loadVerdaccioConfigForServer: vi.fn(),
 }));
+// cinatra#2350 (S5): uninstall now sweeps the agent's direct skill assignments
+// before anything else. Double the store so this suite stays DB-free.
+vi.mock("@/lib/agent-assigned-skills-store", () => ({
+  deleteAssignedSkillsForAgentPackage: mocks.deleteAssignedSkillsForAgentPackage,
+}));
 
 import { createAgentExtensionHandler } from "../extension-handler";
 
@@ -65,6 +71,8 @@ describe("agent extension handler — uninstall reload + disk cleanup", () => {
     mocks.deleteAgentTemplate.mockReset();
     mocks.deleteAgentSkillsForSlugs.mockReset();
     mocks.cleanupForAgent.mockReset();
+    mocks.deleteAssignedSkillsForAgentPackage.mockReset();
+    mocks.deleteAssignedSkillsForAgentPackage.mockResolvedValue({ removed: [] });
   });
 
   it("uninstall calls rmDirForRolledBackInstall + triggerReloadAfterRollback after DB delete", async () => {
