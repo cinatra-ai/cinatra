@@ -19,10 +19,6 @@ vi.mock("@/lib/objects-store", () => ({
   softDeleteObject: vi.fn(),
 }));
 
-vi.mock("@/lib/database", () => ({
-  readObjectsClassificationModelFromDatabase: vi.fn(() => "openai:gpt-4o-mini"),
-}));
-
 // The classifier resolves a NAMESPACED extension type owned by @x/target.
 vi.mock("../classifier", () => ({
   classifyObject: vi.fn(async () => ({

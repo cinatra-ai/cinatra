@@ -61,8 +61,6 @@ function renderCard(overrides: { anthropicConnected: boolean }): HTMLElement {
         openaiConnected
         anthropicConnected={overrides.anthropicConnected}
         geminiConnected={false}
-        classificationModel="gpt-4o-mini"
-        availableModels={["gpt-4o-mini", "gpt-4o"]}
         anthropicModels={["claude-opus-4-8", "claude-sonnet-4-5"]}
         agentCreationOpenaiModels={["gpt-5.5", "gpt-5"]}
         agentCreationProvider={null}

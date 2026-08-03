@@ -14,9 +14,6 @@
 // writer → objects_save → objects-store graph:
 //   - getPostgresConnectionString / postgresSchema — REAL (env-driven);
 //   - ensurePostgresSchema — no-op (the test pre-creates + clones the schema);
-//   - readObjectsClassificationModelFromDatabase — a static default (the
-//     classifier fast-path never reaches the model anyway once the sent-email
-//     type is registered);
 //   - readConnectorConfigFromDatabase — fallback passthrough (the dev-override
 //     reader in register-email-providers; dev mode stays off);
 //   - the metadata / CAS helpers other transitively-loaded modules import.
@@ -28,10 +25,6 @@ export {
 export function ensurePostgresSchema(): void {
   // The integration test provisions + clones the lane schema itself; schema
   // provisioning here would be redundant (and could run host migrations).
-}
-
-export function readObjectsClassificationModelFromDatabase(): string {
-  return "gpt-4o-mini";
 }
 
 export function readConnectorConfigFromDatabase<T>(_key: string, fallback: T): T {

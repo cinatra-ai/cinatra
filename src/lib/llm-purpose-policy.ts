@@ -120,9 +120,18 @@ export const LLM_PURPOSE_INVENTORY: readonly LlmPurposeEntry[] = Object.freeze([
   {
     purpose: "object-classification",
     file: "packages/objects/src/classifier/index.ts",
-    what: "Classifies ingested objects into object types.",
+    what:
+      "LLM-types agent-emitted structured data into registered object types " +
+      "(objects_save, the objects_classify dry-run, and the unbound run-output " +
+      "multi-produces tiebreak).",
     policy: "exact-default",
-    rationale: "Provider-neutral classification; no capability dependency.",
+    rationale:
+      "Provider-neutral classification; no capability dependency. It uses the " +
+      "resolved runtime's configured default model and passes NO per-purpose " +
+      "override: the `objects_classification_model` admin setting (a bare " +
+      "OpenAI model string, default `gpt-4o-mini`) was retired in cinatra#2335 " +
+      "because forwarding it verbatim to a non-OpenAI adapter was a per-call " +
+      "provider failure on an Anthropic-default instance.",
   },
   {
     purpose: "skill-prefill-generation",

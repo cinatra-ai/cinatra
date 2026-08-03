@@ -28,10 +28,6 @@ vi.mock("@/lib/objects-dual-write", () => ({
   shadowUpsertObject: vi.fn(),
 }));
 
-vi.mock("@/lib/database", () => ({
-  readObjectsClassificationModelFromDatabase: vi.fn(() => "openai:gpt-4o-mini"),
-}));
-
 vi.mock("../classifier", () => ({
   classifyObject: vi.fn(),
 }));

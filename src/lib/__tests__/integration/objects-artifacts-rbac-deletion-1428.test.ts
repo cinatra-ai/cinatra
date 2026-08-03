@@ -26,7 +26,6 @@ vi.mock("@/lib/database", () => ({
   readChatThreadForClassifier: () => null,
   readMetadataValueFromDatabase: (_key: string, fallback: unknown) => fallback,
   writeMetadataValueToDatabase: () => {},
-  readObjectsClassificationModelFromDatabase: () => "openai:gpt-4o-mini",
   ensurePostgresSchema: () => {},
   getPostgresConnectionString: () => process.env.SUPABASE_DB_URL ?? "",
   get postgresSchema() {

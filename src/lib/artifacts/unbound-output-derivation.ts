@@ -381,17 +381,13 @@ const defaultClassify: UnboundDerivationClassify = async ({
   contentIsJson,
   candidateTypeIds,
 }) => {
-  const [{ classifyObject }, dbMod] = await Promise.all([
-    import("@cinatra-ai/objects"),
-    import("@/lib/database"),
-  ]);
+  const { classifyObject } = await import("@cinatra-ai/objects");
   let rawData: unknown;
   try {
     rawData = contentIsJson ? JSON.parse(content) : { content };
   } catch {
     rawData = { content };
   }
-  const model = dbMod.readObjectsClassificationModelFromDatabase();
   // classifyObject THROWS on an infra failure (no LLM runtime configured, an
   // LLM/transport error, a missing actor frame). Codex round-1: do NOT swallow
   // those to `null` — a TRANSIENT failure must never become a PERMANENT no_match.
@@ -400,7 +396,7 @@ const defaultClassify: UnboundDerivationClassify = async ({
   // classification that is a new type or lands OFF the declared-produces
   // candidate set — fail-closed: never guess a non-declared type (produces-only,
   // #1788).
-  const out = await classifyObject(rawData, undefined, { model });
+  const out = await classifyObject(rawData, undefined);
   if (!out || out.isNewType) return null;
   if (!candidateTypeIds.includes(out.type)) return null;
   return { objectTypeId: out.type, confidence: out.confidence };

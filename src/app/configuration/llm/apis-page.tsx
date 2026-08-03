@@ -11,7 +11,7 @@ import { Main } from "@/components/layout/main";
 import { saveOpenAIConnectionAction } from "@/app/campaigns/actions";
 import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy";
 import { Label } from "@/components/ui/label";
-import { readDefaultLlmProviderFromDatabase, readDefaultImageProviderFromDatabase, readObjectsClassificationModelFromDatabase, readAgentCreationLlmProviderFromDatabase, readAgentCreationModelFromDatabase, isAgentCreationPinActive } from "@/lib/database";
+import { readDefaultLlmProviderFromDatabase, readDefaultImageProviderFromDatabase, readAgentCreationLlmProviderFromDatabase, readAgentCreationModelFromDatabase, isAgentCreationPinActive } from "@/lib/database";
 import { isAppDevelopmentMode } from "@/lib/runtime-mode";
 import {
   OPENAI_PARTIAL_SAVE_NOTICE_CODE,
@@ -359,12 +359,10 @@ export default async function APIsPage({ searchParams }: APIsPageProps) {
                   openaiConnected={openaiConnected}
                   anthropicConnected={anthropicConnected}
                   geminiConnected={geminiConnected}
-                  classificationModel={readObjectsClassificationModelFromDatabase()}
-                  availableModels={["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-4.1", "gpt-4.1-nano"]}
                   anthropicModels={anthropicModels}
                   // MUST mirror AGENT_CREATION_OPENAI_MODELS in src/app/campaigns/actions.ts
-                  // (gpt-5 family). The classification availableModels (gpt-4*) is a
-                  // separate purpose the agent-creation action would reject.
+                  // (gpt-5 family); anything outside that allow-list is rejected
+                  // by the agent-creation action.
                   agentCreationOpenaiModels={["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5", "gpt-5-mini"]}
                   agentCreationProvider={readAgentCreationLlmProviderFromDatabase()}
                   agentCreationModel={readAgentCreationModelFromDatabase()}

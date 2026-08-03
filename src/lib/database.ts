@@ -1050,13 +1050,13 @@ export function writeDefaultImageProviderToDatabase(provider: string) {
   writeConnectorConfigToDatabase("image_generation_provider", provider);
 }
 
-export function readObjectsClassificationModelFromDatabase(): string {
-  return readConnectorConfigFromDatabase<string>("objects_classification_model", "gpt-4o-mini");
-}
-
-export function writeObjectsClassificationModelToDatabase(model: string) {
-  writeConnectorConfigToDatabase("objects_classification_model", model);
-}
+// The `objects_classification_model` per-purpose override (and its hardcoded
+// "gpt-4o-mini" fallback) is RETIRED (cinatra#2335). The object classifier now
+// rides the resolved provider runtime's configured default model, which is what
+// makes structured-data typing correct on an Anthropic-default instance. Any
+// `connector_config:objects_classification_model` metadata row an older install
+// persisted is left INERT — a single k/v row with zero remaining readers; there
+// is deliberately NO cleanup migration.
 
 export function readChatThreadsFromDatabase(): Array<Record<string, unknown>> {
   return readJsonRows("chat_threads")

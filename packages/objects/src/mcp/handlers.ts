@@ -68,7 +68,6 @@ import {
   listObjectsByFilter,
   softDeleteObject,
 } from "@/lib/objects-store";
-import { readObjectsClassificationModelFromDatabase } from "@/lib/database";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import * as schemas from "./schemas";
 // Every objects_* handler routes its CRUD decision through
@@ -957,10 +956,9 @@ export function createObjectsPrimitiveHandlers() {
       // below REFUSES the write (owner ruling 2026-07-18; epic cinatra#1785): there is no
       // longer any lossless generic fallback (#1787 reversed) — an
       // unclassifiable save is rejected, never persisted under a catch-all.
-      const classificationModel = readObjectsClassificationModelFromDatabase();
       let classification: ClassifierOutput | null = null;
       try {
-        classification = await classifyObject(rawData, input.typeHint, { model: classificationModel });
+        classification = await classifyObject(rawData, input.typeHint);
       } catch (err) {
         // Memory-concept saves MUST fail closed with their own envelope error
         // (cinatra#1376). A memory-declared save never actually reaches here —
@@ -1615,8 +1613,7 @@ export function createObjectsPrimitiveHandlers() {
         }
       }
 
-      const classificationModel = readObjectsClassificationModelFromDatabase();
-      const classification = await classifyObject(rawData, input.typeHint, { model: classificationModel });
+      const classification = await classifyObject(rawData, input.typeHint);
       return classification; // dry-run — NO Graphiti write
     },
 

@@ -55,7 +55,6 @@ import {
 import { requireWordPressInstanceAdmin } from "@/lib/connector-client-providers";
 import {
   writeDefaultImageProviderToDatabase,
-  writeObjectsClassificationModelToDatabase,
   writeAgentCreationLlmProviderToDatabase,
   writeAgentCreationModelToDatabase,
   isAgentCreationPinActive,
@@ -237,7 +236,6 @@ export async function setDefaultProvidersAction(formData: FormData) {
     (formData.get("defaultProvider") as string | null)?.trim() ||
     (formData.get("llmProvider") as string | null)?.trim();
   const imageProvider = (formData.get("imageProvider") as string | null)?.trim();
-  const classificationModel = (formData.get("classificationModel") as string | null)?.trim();
   const anthropicDefaultModel = (formData.get("anthropicDefaultModel") as string | null)?.trim();
   const agentCreationProvider = (formData.get("agentCreationLlmProvider") as string | null)?.trim();
   const agentCreationModel = (formData.get("agentCreationModel") as string | null)?.trim();
@@ -256,9 +254,6 @@ export async function setDefaultProvidersAction(formData: FormData) {
   }
   if (imageProvider) {
     writeDefaultImageProviderToDatabase(imageProvider);
-  }
-  if (classificationModel) {
-    writeObjectsClassificationModelToDatabase(classificationModel);
   }
   // Connector-default Claude model: distinct scope from the agent-creation
   // per-purpose model below. Validated against the connector's surface
