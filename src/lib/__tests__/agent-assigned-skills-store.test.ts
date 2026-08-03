@@ -12,6 +12,7 @@ import {
   deleteAssignedSkill,
   insertAssignedSkill,
   readAssignedSkillsForAgentPackage,
+  type AssignedSkillsQuery,
 } from "@/lib/agent-assigned-skills-store";
 
 type Call = { text: string; values: unknown[] };
@@ -24,17 +25,17 @@ function makeQuery(answers: {
   winner?: unknown[];
 }) {
   const calls: Call[] = [];
-  const query = async (text: string, values?: readonly unknown[]) => {
+  const query: AssignedSkillsQuery = async (text, values) => {
     calls.push({ text, values: values ? [...values] : [] });
-    if (text.includes("pg_advisory_xact_lock")) return [{ pg_advisory_xact_lock: "" }];
-    if (text.includes("count(*)")) return [{ n: answers.count ?? 0 }];
-    if (text.startsWith("INSERT")) return answers.inserted ?? [];
-    if (text.startsWith("DELETE")) return answers.inserted ?? [];
+    if (text.includes("pg_advisory_xact_lock")) return [{ pg_advisory_xact_lock: "" }] as never;
+    if (text.includes("count(*)")) return [{ n: answers.count ?? 0 }] as never;
+    if (text.startsWith("INSERT")) return (answers.inserted ?? []) as never;
+    if (text.startsWith("DELETE")) return (answers.inserted ?? []) as never;
     // The two SELECTs (pre-insert existing / post-conflict winner) are the same
     // statement; the first answers `existing`, a later one answers `winner`.
     const selectsSoFar = calls.filter((c) => c.text.trim().startsWith("SELECT agent_package_name")).length;
-    if (selectsSoFar === 1) return answers.existing ?? [];
-    return answers.winner ?? answers.existing ?? [];
+    if (selectsSoFar === 1) return (answers.existing ?? []) as never;
+    return (answers.winner ?? answers.existing ?? []) as never;
   };
   return { query, calls };
 }
@@ -189,9 +190,9 @@ describe("insertAssignedSkill — position + arbiter", () => {
 describe("readAssignedSkillsForAgentPackage", () => {
   it("orders by position and is ACTOR-INDEPENDENT (no owner predicate in the SQL)", async () => {
     const calls: Call[] = [];
-    const query = async (text: string, values?: readonly unknown[]) => {
+    const query: AssignedSkillsQuery = async (text, values) => {
       calls.push({ text, values: values ? [...values] : [] });
-      return [row({ position: 1 }), row({ skill_id: "@x/y:w", position: 2 })];
+      return [row({ position: 1 }), row({ skill_id: "@x/y:w", position: 2 })] as never;
     };
     const out = await readAssignedSkillsForAgentPackage("@cinatra-ai/web-scrape-agent", { query });
     expect(out.map((r) => r.position)).toEqual([1, 2]);
@@ -203,7 +204,8 @@ describe("readAssignedSkillsForAgentPackage", () => {
   });
 
   it("normalizes the row shape (numeric position, ISO timestamp)", async () => {
-    const query = async () => [row({ position: "7", created_at: new Date("2026-08-03T10:00:00.000Z") })];
+    const query: AssignedSkillsQuery = async () =>
+      [row({ position: "7", created_at: new Date("2026-08-03T10:00:00.000Z") })] as never;
     const [out] = await readAssignedSkillsForAgentPackage("@a/b", { query });
     expect(out).toEqual({
       agentPackageName: "@cinatra-ai/web-scrape-agent",
@@ -225,14 +227,14 @@ describe("readAssignedSkillsForAgentPackage", () => {
 
 describe("deleteAssignedSkill", () => {
   it("reports deleted:true when a row went away", async () => {
-    const query = async () => [{ skill_id: "@x/y:z" }];
+    const query: AssignedSkillsQuery = async () => [{ skill_id: "@x/y:z" }] as never;
     await expect(
       deleteAssignedSkill({ agentPackageName: "@a/b", skillId: "@x/y:z" }, { query }),
     ).resolves.toEqual({ deleted: true });
   });
 
   it("is idempotent: deleting what is gone reports deleted:false, never throws", async () => {
-    const query = async () => [];
+    const query: AssignedSkillsQuery = async () => [];
     await expect(
       deleteAssignedSkill({ agentPackageName: "@a/b", skillId: "@x/y:z" }, { query }),
     ).resolves.toEqual({ deleted: false });
@@ -240,9 +242,9 @@ describe("deleteAssignedSkill", () => {
 
   it("scopes the DELETE to the (agent, skill) pair — never a whole-agent wipe", async () => {
     const calls: Call[] = [];
-    const query = async (text: string, values?: readonly unknown[]) => {
+    const query: AssignedSkillsQuery = async (text, values) => {
       calls.push({ text, values: values ? [...values] : [] });
-      return [{ skill_id: "@x/y:z" }];
+      return [{ skill_id: "@x/y:z" }] as never;
     };
     await deleteAssignedSkill({ agentPackageName: "@a/b", skillId: "@x/y:z" }, { query });
     expect(calls[0]!.text).toContain("WHERE agent_package_name = $1 AND skill_id = $2");
@@ -253,7 +255,7 @@ describe("deleteAssignedSkill", () => {
 describe("schema handling", () => {
   it("uses the injected schema, quoted", async () => {
     const calls: Call[] = [];
-    const query = async (text: string) => {
+    const query: AssignedSkillsQuery = async (text) => {
       calls.push({ text, values: [] });
       return [];
     };
