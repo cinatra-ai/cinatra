@@ -40,6 +40,10 @@ export interface ConnectorSetupColumnsProps
   conformanceId?: ConnectorSetupConformanceId;
   /** Current surface state; drives `data-state` for functional-acceptance. */
   state?: ConnectorSetupState;
+  /** Copy shown while the setup surface is still resolving. */
+  loadingLabel?: string;
+  /** Copy shown when the setup surface could not be resolved. */
+  errorLabel?: string;
 }
 
 export function ConnectorSetupColumns({
@@ -47,9 +51,45 @@ export function ConnectorSetupColumns({
   aside,
   conformanceId = "connector-setup",
   state = "ready",
+  loadingLabel = "Loading connector setup…",
+  errorLabel = "This connector's setup could not be loaded.",
   className,
   ...props
 }: ConnectorSetupColumnsProps) {
+  // The two non-ready variants the spec declares on this surface
+  // (`data-state="loading error"`). They replace the two-column body IN PLACE —
+  // the surface itself stays mounted and keeps its conformance id + state, so
+  // the variant is a state OF the surface, never its absence. Same shape and
+  // token vocabulary as ConnectionsList's empty/loading treatments.
+  if (state === "loading" || state === "error") {
+    return (
+      <div
+        data-conformance-id={conformanceId}
+        data-state={state}
+        className={cn("mt-0", className)}
+        {...props}
+      >
+        {state === "loading" ? (
+          <p
+            data-slot="connector-setup-loading"
+            aria-busy="true"
+            className="text-sm text-muted-foreground"
+          >
+            {loadingLabel}
+          </p>
+        ) : (
+          <p
+            data-slot="connector-setup-error"
+            role="alert"
+            className="text-sm text-destructive"
+          >
+            {errorLabel}
+          </p>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div
       data-conformance-id={conformanceId}

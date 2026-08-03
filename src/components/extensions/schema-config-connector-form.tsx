@@ -15,7 +15,7 @@
 // are filtered against the HOST-evaluated `isAdmin` prop (the host re-rejects an
 // admin-only value at the write handler — defense in depth).
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckIcon, CopyIcon, PlugZap, PlusIcon, RefreshCwIcon, Trash2Icon, Unplug } from "lucide-react";
 import { toast } from "@/lib/cinatra-toast";
 import {
@@ -38,7 +38,11 @@ import {
   FieldSet,
 } from "@/components/ui/field";
 import { Card, CardContent } from "@/components/ui/card";
-import { ConnectorSetupColumns } from "@cinatra-ai/sdk-ui/connector-setup-columns";
+import {
+  ConnectorSetupColumns,
+  type ConnectorSetupConformanceId,
+  type ConnectorSetupState,
+} from "@cinatra-ai/sdk-ui/connector-setup-columns";
 import { Input } from "@/components/ui/input";
 import {
   InputGroup,
@@ -130,6 +134,21 @@ export type SchemaConfigConnectorFormProps = {
    * fieldset, and `collectFormInputs()` scans every named descendant control.
    */
   setupFooter?: React.ReactNode;
+  /**
+   * Which §II setup surface this form IS: `connector-setup` (the single-
+   * connection page) or `connector-multi-setup` (the Setup tab of a
+   * many-connections connector, whose right column rolls the connections up
+   * instead of showing one status). Forwarded to `ConnectorSetupColumns`,
+   * which owns the conformance id — the two shapes share one layout.
+   */
+  conformanceId?: ConnectorSetupConformanceId;
+  /**
+   * Current state of the setup surface AND of any custom config tab
+   * (`ready` | `loading` | `error`) — the state variants the spec declares on
+   * `connector-setup` / `connector-multi-setup` / `connector-config-tab`. The
+   * reserved Setup and Help tabs are unaffected.
+   */
+  conformanceState?: ConnectorSetupState;
 };
 
 type ActionResult = { ok: boolean; result?: unknown; error?: string };
@@ -204,6 +223,8 @@ export function SchemaConfigConnectorForm({
   initialConnected = false,
   aside,
   setupFooter,
+  conformanceId = "connector-setup",
+  conformanceState = "ready",
 }: SchemaConfigConnectorFormProps) {
   // Kinds the host suppresses from the form column (Model-A lifts `status-probe`
   // into the right-column status card). A Set for O(1) membership; empty/absent
@@ -301,7 +322,12 @@ export function SchemaConfigConnectorForm({
   const setupBody = (
     <>
       {aside ? (
-        <ConnectorSetupColumns fields={renderGroup(surface.fields)} aside={aside} />
+        <ConnectorSetupColumns
+          conformanceId={conformanceId}
+          state={conformanceState}
+          fields={renderGroup(surface.fields)}
+          aside={aside}
+        />
       ) : (
         renderGroup(surface.fields)
       )}
@@ -314,7 +340,16 @@ export function SchemaConfigConnectorForm({
   // connector blurb" — so `surface.title` / `surface.description` are
   // deliberately NOT rendered here (they would duplicate the page header).
   return (
-    <FieldSet data-testid="schema-config-form" data-package={packageName}>
+    // `data-connected` reflects the form's LIVE connection state — the same
+    // `connected` that gates Disconnect. It is the surface's observable
+    // "connect -> connected" outcome on a connector that declares NO
+    // Disconnect (the multi-connection Setup tab: Connect only), where the
+    // gated Disconnect cannot witness the transition.
+    <FieldSet
+      data-testid="schema-config-form"
+      data-package={packageName}
+      data-connected={connected ? "" : undefined}
+    >
       {hasTabs ? (
         // Tabbed setup surface (design spec: app-connectors §II). The base fields
         // are the reserved "Setup" tab; each declared tab follows, and the parser
@@ -358,15 +393,43 @@ export function SchemaConfigConnectorForm({
                 </div>
               </TabsContent>
             ) : (
-              // Custom config tab (§II): content narrows to the Narrow width
-              // (max-w-xl · 576px), flush-left beneath the Wide tablist.
+              // Custom config tab (§II, surface `connector-config-tab`):
+              // content narrows to the Narrow width (max-w-xl · 576px),
+              // flush-left beneath the Wide tablist. The panel carries the
+              // conformance id + the surface's current state; the two
+              // non-ready variants replace the field group IN PLACE so the
+              // surface stays mounted (same treatment as ConnectorSetupColumns).
               <TabsContent
                 key={tab.id}
                 value={tab.id}
                 forceMount
                 className="data-[state=inactive]:hidden"
               >
-                <div className="max-w-xl">{renderGroup(tab.fields)}</div>
+                <div
+                  data-conformance-id="connector-config-tab"
+                  data-state={conformanceState}
+                  className="max-w-xl"
+                >
+                  {conformanceState === "loading" ? (
+                    <p
+                      data-slot="connector-config-tab-loading"
+                      aria-busy="true"
+                      className="text-sm text-muted-foreground"
+                    >
+                      Loading settings…
+                    </p>
+                  ) : conformanceState === "error" ? (
+                    <p
+                      data-slot="connector-config-tab-error"
+                      role="alert"
+                      className="text-sm text-destructive"
+                    >
+                      These settings could not be loaded.
+                    </p>
+                  ) : (
+                    renderGroup(tab.fields)
+                  )}
+                </div>
               </TabsContent>
             ),
           )}
@@ -529,10 +592,12 @@ function NamedActionRow({
   onActionResult: (result: ActionResult) => void;
 }) {
   const [pending, setPending] = useState(false);
-  const run = useCallback(async () => {
+  const run = useCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
     if (field.confirm && !window.confirm(field.confirm)) return;
+    // Scope the input scan to THIS button's own form (see collectFormInputs).
+    const origin = e.currentTarget;
     setPending(true);
-    const r = await invokeAction(installId, field.actionId, collectFormInputs());
+    const r = await invokeAction(installId, field.actionId, collectFormInputs(origin));
     setPending(false);
     // The outcome (Done. / error / schema-declared banner variant) TOASTs via
     // onActionResult — no in-form "Done."/error text.
@@ -615,9 +680,11 @@ function ConnectButton({
   onActionResult: (result: ActionResult) => void;
 }) {
   const [pending, setPending] = useState(false);
-  const run = useCallback(async () => {
+  const run = useCallback(async (e: React.MouseEvent<HTMLButtonElement>) => {
+    // Scope the input scan to THIS button's own form (see collectFormInputs).
+    const origin = e.currentTarget;
     setPending(true);
-    const r = await invokeAction(installId, field.actionId, collectFormInputs());
+    const r = await invokeAction(installId, field.actionId, collectFormInputs(origin));
     setPending(false);
     if (r.ok) onConnected();
     onActionResult(r);
@@ -651,9 +718,13 @@ function DisconnectButton({
 }) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState(false);
+  // The confirm button lives in a PORTAL (outside the form), so it cannot
+  // resolve its own form via closest(). Anchor the input scan to the TRIGGER,
+  // which is inside this form. (See collectFormInputs.)
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const confirm = useCallback(async () => {
     setPending(true);
-    const r = await invokeAction(installId, field.actionId, collectFormInputs());
+    const r = await invokeAction(installId, field.actionId, collectFormInputs(triggerRef.current));
     setPending(false);
     setOpen(false);
     if (r.ok) onDisconnected();
@@ -666,6 +737,7 @@ function DisconnectButton({
           focus on <body>. `disabled` gates opening until connected. */}
       <AlertDialogTrigger asChild>
         <Button
+          ref={triggerRef}
           type="button"
           variant="destructive"
           data-testid="connector-disconnect"
@@ -710,10 +782,27 @@ function DisconnectButton({
  * DOM (the renderer is uncontrolled for these fields). Never includes a field
  * whose name contains "[" (repeatable-list rows are out of scope for a flat
  * create action).
+ *
+ * `origin` is the element that triggered the action (the action's own button).
+ * The collection is scoped to THAT button's own form via `closest()` — a
+ * document-wide `querySelector` would silently pick the FIRST schema-config
+ * form on the page, so on any page rendering more than one connector form an
+ * action would submit a DIFFERENT connector's field values.
+ *
+ * FAIL CLOSED whenever an origin is PASSED but resolves to no form — including
+ * a `null` origin (a ref that never attached): submitting SOME OTHER
+ * connector's configuration is strictly worse than submitting nothing, so
+ * those cases yield {} rather than falling back. The distinction is
+ * `undefined` (no origin argument at all) vs `null`/a detached element, so the
+ * document-wide lookup survives ONLY for a caller that opts out entirely
+ * (today's behavior on a single-form page).
  */
-function collectFormInputs(): Record<string, string> {
+function collectFormInputs(origin?: Element | null): Record<string, string> {
   if (typeof document === "undefined") return {};
-  const form = document.querySelector<HTMLElement>('[data-testid="schema-config-form"]');
+  const form =
+    origin === undefined
+      ? document.querySelector<HTMLElement>('[data-testid="schema-config-form"]')
+      : (origin?.closest<HTMLElement>('[data-testid="schema-config-form"]') ?? null);
   if (!form) return {};
   const out: Record<string, string> = {};
   form
