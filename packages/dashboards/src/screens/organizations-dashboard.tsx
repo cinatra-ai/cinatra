@@ -12,7 +12,7 @@ import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 
-import { getAuthSession } from "@/lib/auth-session";
+import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
 import { userCanCreateOrganizations } from "@/lib/authz/organization-create-gate";
 import {
   betterAuthDb,
@@ -146,7 +146,7 @@ export async function OrganizationsDashboardPage() {
   // `!session` is implied by `!ctx` at runtime; spelled out so TypeScript
   // narrows `session` for the create-gate call below.
   if (!session || !ctx) {
-    redirect("/sign-in");
+    redirect(await signInRedirectTarget());
   }
   const dashboardId = buildOrganizationsDashboardId(
     ctx.organizationId,

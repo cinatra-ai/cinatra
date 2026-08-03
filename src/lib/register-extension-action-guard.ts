@@ -14,14 +14,17 @@ import "server-only";
 
 import { redirect } from "next/navigation";
 import { setExtensionActionGuard } from "@cinatra-ai/sdk-extensions";
-import { getActorContext } from "@/lib/auth-session";
+import { getActorContext, signInRedirectTarget } from "@/lib/auth-session";
 import { enforceConnectorActionPolicy } from "@/lib/connector-policy";
 
 setExtensionActionGuard(async (packageId, mode) => {
   const actor = await getActorContext();
   if (!actor) {
-    // No authenticated session — same destination as the old requireAuthSession().
-    redirect("/sign-in");
+    // No authenticated session — same destination as the old requireAuthSession(),
+    // now preserving the page the action was invoked from (cinatra#2359): a
+    // Server Action POSTs to its originating page's URL, so the proxy-forwarded
+    // CURRENT_PATH_HEADER still carries that page's path.
+    redirect(await signInRedirectTarget());
   }
   const decision = enforceConnectorActionPolicy(packageId, actor, mode);
   if (!decision.allowed) {

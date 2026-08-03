@@ -23,7 +23,7 @@ import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 
-import { getAuthSession } from "@/lib/auth-session";
+import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
 
 import {
   buildSecurityContextFromSession,
@@ -69,7 +69,7 @@ export async function ProjectsDashboardPage() {
   const session = await getAuthSession();
   const ctx = buildSecurityContextFromSession(session);
   if (!ctx) {
-    redirect("/sign-in");
+    redirect(await signInRedirectTarget());
   }
   const dashboardId = buildProjectsDashboardId(ctx.organizationId, ctx.userId);
   const initialConfig = await loadProjectsConfig(

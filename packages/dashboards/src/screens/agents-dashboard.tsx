@@ -35,7 +35,7 @@ import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { AgentsTabNav } from "@/components/agents-tab-nav";
 
-import { getAuthSession } from "@/lib/auth-session";
+import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
 
 import { buildSecurityContextFromSession } from "../auth/security-context";
 import { and } from "drizzle-orm";
@@ -95,7 +95,7 @@ export async function AgentsDashboardPage() {
   const session = await getAuthSession();
   const ctx = buildSecurityContextFromSession(session);
   if (!ctx) {
-    redirect("/sign-in");
+    redirect(await signInRedirectTarget());
   }
   const dashboardId = buildAgentsDashboardId(ctx.organizationId, ctx.userId);
   const initialConfig = await loadAgentsConfig(

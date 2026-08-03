@@ -4,6 +4,7 @@ import { AuthView, SignUpForm } from "@/components/auth-view-client";
 import { hasAnyBetterAuthUsers } from "@/lib/auth";
 import { isRegistrationClosed } from "@/lib/authz/instance-mode";
 import { getAuthSession } from "@/lib/auth-session";
+import { resolvePostAuthDestination, buildSignUpPath, sanitizeNextPath } from "@/lib/auth-redirect-target";
 import { Main } from "@/components/layout/main";
 import { BrandMark } from "@/components/brand-mark";
 import { PasswordToggleA11y, ForgotPasswordBelowField } from "@/components/password-toggle-a11y";
@@ -15,11 +16,19 @@ export function generatePermissionsAuthStaticParams() {
 
 export async function PermissionsAuthPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ path: string }>;
+  // cinatra#2359 — `next` carries the destination the caller was headed to
+  // before being bounced here. `guardAppRoute` / `requireAuthSession` (and the
+  // ad hoc gates that mirror it) are the only writers of this param; it is
+  // re-validated here regardless (never trust a query param, even one this
+  // app minted, without checking it at the point of use).
+  searchParams?: Promise<{ next?: string }>;
 }) {
-  const [{ path }, session, hasUsers, registrationClosed] = await Promise.all([
+  const [{ path }, sp, session, hasUsers, registrationClosed] = await Promise.all([
     params,
+    searchParams ?? Promise.resolve<{ next?: string }>({}),
     getAuthSession(),
     hasAnyBetterAuthUsers(),
     // DISPLAY-side read only (the real gate is the auth.ts hook — D1/D2).
@@ -28,17 +37,25 @@ export async function PermissionsAuthPage({
     isRegistrationClosed().catch(() => false),
   ]);
 
+  // SECURITY: only a same-origin relative path is ever honored — see
+  // isSafeNextPath's doc comment for the exact open-redirect vectors it
+  // rejects (protocol-relative //, absolute/scheme URLs, backslash tricks).
+  const rawNext = sp.next;
+  const safeNext = sanitizeNextPath(rawNext);
+
   if (session && path !== "sign-out") {
-    redirect("/");
+    redirect(resolvePostAuthDestination(safeNext));
   }
 
   // Fresh install (no Better Auth users yet): make /sign-up the canonical URL
   // for the bootstrap state. The middleware route guard (cookie-only, DB-free)
   // still sends sessionless visitors to /sign-in first; this server redirect
   // performs the second hop so the browser lands on /sign-up instead of
-  // rendering the sign-up form under the /sign-in URL.
+  // rendering the sign-up form under the /sign-in URL. Carry `next` across
+  // the hop (cinatra#2359) — otherwise this bootstrap redirect would drop it
+  // even though the sign-in <-> sign-up client-side toggle preserves it.
   if (!hasUsers && path === "sign-in") {
-    redirect("/sign-up");
+    redirect(buildSignUpPath(rawNext));
   }
 
   const showBootstrapRegistration = !hasUsers && path !== "sign-out";
@@ -70,7 +87,7 @@ export async function PermissionsAuthPage({
             {/* cinatra#484: keep the better-auth-ui password show/hide toggle out
                 of the Tab flow and give it an accessible name. */}
             <PasswordToggleA11y>
-              <SignUpForm localization={{}} />
+              <SignUpForm localization={{}} redirectTo={safeNext} />
             </PasswordToggleA11y>
           </div>
         ) : showRegistrationClosedNotice ? (
@@ -85,7 +102,7 @@ export async function PermissionsAuthPage({
             {/* cinatra#883: keep the "Forgot your password?" link directly
                 below the password field here too. */}
             <ForgotPasswordBelowField>
-              <AuthView path="sign-in" classNames={{ form: { forgotPasswordLink: FORGOT_PASSWORD_LINK_CLASS } }} />
+              <AuthView path="sign-in" redirectTo={safeNext} classNames={{ form: { forgotPasswordLink: FORGOT_PASSWORD_LINK_CLASS } }} />
             </ForgotPasswordBelowField>
           </div>
         ) : (
@@ -95,7 +112,7 @@ export async function PermissionsAuthPage({
           // not a position override).
           <ForgotPasswordBelowField>
             <PasswordToggleA11y>
-              <AuthView path={path} classNames={{ form: { forgotPasswordLink: FORGOT_PASSWORD_LINK_CLASS } }} />
+              <AuthView path={path} redirectTo={safeNext} classNames={{ form: { forgotPasswordLink: FORGOT_PASSWORD_LINK_CLASS } }} />
             </PasswordToggleA11y>
           </ForgotPasswordBelowField>
         )}

@@ -28,7 +28,7 @@ import { PageHeader } from "@/components/page-header";
 import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 import { Button } from "@/components/ui/button";
 import { LifecycleBadge } from "@/components/lifecycle-badge";
-import { getAuthSession } from "@/lib/auth-session";
+import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
 import { CrumbContributions } from "@/components/crumb-contributions";
 import {
   betterAuthDb,
@@ -65,7 +65,7 @@ export async function OrganizationSettingsPage({
   const session = await getAuthSession();
   const ctx = buildSecurityContextFromSession(session);
   if (!ctx) {
-    redirect("/sign-in");
+    redirect(await signInRedirectTarget());
   }
   const userId = ctx.userId;
 

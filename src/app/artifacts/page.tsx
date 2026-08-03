@@ -27,7 +27,7 @@ import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 
-import { getAuthSession, requireActorContext } from "@/lib/auth-session";
+import { getAuthSession, requireActorContext, signInRedirectTarget } from "@/lib/auth-session";
 import { LibraryMode } from "@/components/artifacts/library-mode";
 
 export const metadata: Metadata = { title: "Artifacts" };
@@ -42,9 +42,9 @@ type PageProps = {
 
 export default async function ArtifactsPage({ searchParams }: PageProps) {
   const session = await getAuthSession();
-  if (!session) redirect("/sign-in");
+  if (!session) redirect(await signInRedirectTarget());
   const orgId = session.session?.activeOrganizationId ?? null;
-  if (!orgId) redirect("/sign-in");
+  if (!orgId) redirect(await signInRedirectTarget());
 
   const sp = (await searchParams) ?? {};
   const actor = await requireActorContext();

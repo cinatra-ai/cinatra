@@ -43,7 +43,7 @@ import { readVerificationRecordForGate } from "@cinatra-ai/agents/lifecycle-veri
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
-import { getAuthSession } from "@/lib/auth-session";
+import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
 
 import {
   loadPinnedCapturePair,
@@ -116,9 +116,9 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   const isVerificationView = sp.view === "verification";
 
   const session = await getAuthSession();
-  if (!session) redirect("/sign-in");
+  if (!session) redirect(await signInRedirectTarget());
   const actorCtx = await resolveReviewActorContext();
-  if (!actorCtx) redirect("/sign-in");
+  if (!actorCtx) redirect(await signInRedirectTarget());
 
   // S4 (cinatra#2042): the run rail's "Core analysis" entry deep-links here with
   // `?view=verification` — the before/after field diff of a repaired revision. It
