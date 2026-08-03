@@ -1203,9 +1203,13 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     // threads in /chat") — the org-scoped /chat panel requires org_id =
     // activeOrganizationId, and legacy (pre-organization) threads carry
     // org_id NULL. This export now ALSO adopts an owner-having, org-null
-    // legacy thread into that owner's org — a direct raw UPDATE, but ONLY
-    // when public.member membership is unambiguous (exactly one org); a
-    // zero- or multi-org owner is left unadopted and counted, never guessed.
+    // legacy thread into that owner's org — a direct raw UPDATE, but ONLY via
+    // TEMPORAL CONTAINMENT (follow-up 2, live re-verified: a flat "exactly
+    // one org" rule wrongly refused a real multi-org owner): the eligible
+    // set per thread is the owner's memberships whose effective creation
+    // (member.createdAt, falling back to organization.createdAt) predates
+    // that thread's own created_at; exactly one eligible membership adopts,
+    // zero or multiple is left unadopted and counted, never guessed.
     // Registered here by name, same as database.ts's delegate writers, since
     // it is a genuine writer at runtime regardless of how much of its
     // mutation is a raw-verb literal in this module vs. a delegated builder.
@@ -1214,13 +1218,14 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     module: "src/lib/assistant-thread-dormant-content-purge.ts",
     exportName: "restoreDurableContentFromChatThreads",
     capability: "content.write",
-    orgIdExtractor: "none (cross-org migration repair; dry-run default, sourced from chat_threads.payload + public.member)",
+    orgIdExtractor: "none (cross-org migration repair; dry-run default, sourced from chat_threads.payload + public.member/organization)",
     storageReferences: [
       "assistant_threads",
       "assistant_turns",
       "assistant_thread_pause_state",
       "chat_threads",
       "member",
+      "organization",
     ],
     cascadeOwnership: "inert-history",
     importBanned: false,

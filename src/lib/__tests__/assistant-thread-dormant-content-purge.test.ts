@@ -15,15 +15,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // / `findLegacyThreadIdsMissingDurableContent`) re-hydrates already-affected
 // threads' durable content from the surviving legacy `chat_threads.payload`.
 //
-// cinatra#2365 follow-up (live-verified): content repair alone does not
+// cinatra#2365 follow-up 1 (live-verified): content repair alone does not
 // satisfy AC1 ("an owner still sees their pre-existing threads in /chat") —
 // the org-scoped /chat panel (fetchChatThreads) requires `org_id =
 // activeOrganizationId`, and legacy threads that predate organizations carry
 // `org_id IS NULL`. `restoreDurableContentFromChatThreads` now ALSO adopts an
-// owner-having, org-null legacy thread into that owner's org, but ONLY when
-// membership is unambiguous (exactly one org) — see
-// `findLegacyThreadIdsMissingOrgAdoption` and the "org adoption" describe
-// block below.
+// owner-having, org-null legacy thread into that owner's org.
+//
+// cinatra#2365 follow-up 2 (live re-verified): a flat "exactly one org" rule
+// is too narrow — the reporting instance's owner genuinely belongs to TWO
+// orgs, so it refused every adoption there (skippedAmbiguous, AC1 still
+// unmet). TEMPORAL CONTAINMENT disambiguates: only a membership whose
+// effective creation predates the THREAD's own creation is eligible: an org
+// (or the owner's membership in it) that did not exist yet when the thread
+// was created cannot be its home. See `findLegacyThreadIdsMissingOrgAdoption`
+// / `ownerOrganizationMemberships` and the "org adoption" describe block.
 // ---------------------------------------------------------------------------
 
 const runPostgresQueriesSync = vi.fn();
@@ -175,17 +181,27 @@ describe("findLegacyThreadIdsMissingDurableContent (cinatra#2365 repair discover
 });
 
 describe("findLegacyThreadIdsMissingOrgAdoption (cinatra#2365 org-adoption discovery)", () => {
-  it("returns {threadId, ownerUserId} pairs for owner-having, org-null legacy threads, and issues no write", () => {
+  it("returns {threadId, ownerUserId, threadCreatedAt} for owner-having, org-null legacy threads, and issues no write", () => {
     runPostgresQueriesSync.mockReturnValueOnce([
-      { rows: [{ id: "thread-a", owner_user_id: "user-1" }] },
+      { rows: [{ id: "thread-a", owner_user_id: "user-1", created_at: "2026-06-25T00:00:00Z" }] },
     ]);
     const candidates = findLegacyThreadIdsMissingOrgAdoption();
-    expect(candidates).toEqual([{ threadId: "thread-a", ownerUserId: "user-1" }]);
+    expect(candidates).toEqual([
+      { threadId: "thread-a", ownerUserId: "user-1", threadCreatedAt: "2026-06-25T00:00:00Z" },
+    ]);
     expect(runPostgresQueriesSync).toHaveBeenCalledTimes(1);
     const call = runPostgresQueriesSync.mock.calls[0][0] as { queries: Array<{ text: string }> };
     expect(call.queries[0].text).toMatch(/owner_user_id IS NOT NULL/i);
     expect(call.queries[0].text).toMatch(/org_id IS NULL/i);
     expect(call.queries[0].text).toMatch(/origin = 'legacy-chat'/i);
+    expect(call.queries[0].text).toMatch(/created_at/i);
+  });
+
+  it("drops a candidate with no parseable created_at (fail-closed — the temporal anchor is required)", () => {
+    runPostgresQueriesSync.mockReturnValueOnce([
+      { rows: [{ id: "thread-a", owner_user_id: "user-1", created_at: null }] },
+    ]);
+    expect(findLegacyThreadIdsMissingOrgAdoption()).toEqual([]);
   });
 });
 
@@ -260,14 +276,16 @@ describe("restoreDurableContentFromChatThreads (cinatra#2365 repair)", () => {
     expect(runPostgresQueriesSync).toHaveBeenCalledTimes(3);
   });
 
-  describe("cinatra#2365 follow-up — org adoption (AC1: the owner still sees pre-existing threads in /chat)", () => {
-    it("adopts an org-null owned legacy thread when its owner belongs to exactly ONE organization", () => {
+  describe("cinatra#2365 follow-up — org adoption via TEMPORAL CONTAINMENT (AC1: the owner still sees pre-existing threads in /chat)", () => {
+    it("adopts an org-null owned legacy thread when exactly ONE membership predates the thread's own creation", () => {
       runPostgresQueriesSync
         .mockReturnValueOnce([{ rows: [] }]) // content-missing discovery (none)
         .mockReturnValueOnce([
-          { rows: [{ id: "thread-a", owner_user_id: "user-1" }] },
+          { rows: [{ id: "thread-a", owner_user_id: "user-1", created_at: "2026-06-25T00:00:00Z" }] },
         ]) // org-adoption discovery
-        .mockReturnValueOnce([{ rows: [{ organizationId: "org-1" }] }]) // owner's org membership: exactly one
+        .mockReturnValueOnce([
+          { rows: [{ organization_id: "org-1", member_created_at: "2026-01-01T00:00:00Z", org_created_at: "2026-01-01T00:00:00Z" }] },
+        ]) // owner's org membership: exactly one, predating the thread
         .mockReturnValueOnce([{ rowCount: 1 }]); // the org_id UPDATE
 
       const r = restoreDurableContentFromChatThreads({ dryRun: false });
@@ -281,19 +299,51 @@ describe("restoreDurableContentFromChatThreads (cinatra#2365 repair)", () => {
       expect(updateCall.queries[0].values).toEqual(["thread-a", "org-1"]);
     });
 
-    it("multi-org ambiguous case: an owner belonging to MULTIPLE organizations is left unadopted, never guessed", () => {
+    it("temporal disambiguation: a two-org owner where only ONE org predates the thread adopts into THAT org (the reported instance's exact shape)", () => {
       runPostgresQueriesSync
         .mockReturnValueOnce([{ rows: [] }]) // content-missing discovery (none)
         .mockReturnValueOnce([
-          { rows: [{ id: "thread-a", owner_user_id: "user-1" }] },
-        ]) // org-adoption discovery
+          // Mirrors the reporting instance: a thread created 2026-06-25, before
+          // Cinatra-Demo (2026-07-13) existed but after Default (2026-06-22).
+          { rows: [{ id: "thread-a", owner_user_id: "user-1", created_at: "2026-06-25T00:00:00Z" }] },
+        ])
         .mockReturnValueOnce([
-          { rows: [{ organizationId: "org-1" }, { organizationId: "org-2" }] },
-        ]); // owner's org membership: two — ambiguous
+          {
+            rows: [
+              { organization_id: "org-default", member_created_at: "2026-06-22T00:00:00Z", org_created_at: "2026-06-22T00:00:00Z" },
+              { organization_id: "org-cinatra-demo", member_created_at: "2026-07-13T00:00:00Z", org_created_at: "2026-07-13T00:00:00Z" },
+            ],
+          },
+        ]) // owner belongs to TWO orgs — only org-default predates the thread
+        .mockReturnValueOnce([{ rowCount: 1 }]); // the org_id UPDATE
+
+      const r = restoreDurableContentFromChatThreads({ dryRun: false });
+      expect(r).toEqual({ auditedThreads: 0, restored: 0, adopted: 1, skippedAmbiguous: 0, dryRun: false });
+
+      const updateCall = runPostgresQueriesSync.mock.calls[3][0] as {
+        queries: Array<{ text: string; values: unknown[] }>;
+      };
+      expect(updateCall.queries[0].values).toEqual(["thread-a", "org-default"]);
+    });
+
+    it("multi-org ambiguous case: TWO orgs BOTH predating the thread is still ambiguous — left unadopted, never guessed", () => {
+      runPostgresQueriesSync
+        .mockReturnValueOnce([{ rows: [] }]) // content-missing discovery (none)
+        .mockReturnValueOnce([
+          { rows: [{ id: "thread-a", owner_user_id: "user-1", created_at: "2026-08-01T00:00:00Z" }] },
+        ]) // org-adoption discovery — a thread created AFTER both orgs existed
+        .mockReturnValueOnce([
+          {
+            rows: [
+              { organization_id: "org-1", member_created_at: "2026-01-01T00:00:00Z", org_created_at: "2026-01-01T00:00:00Z" },
+              { organization_id: "org-2", member_created_at: "2026-02-01T00:00:00Z", org_created_at: "2026-02-01T00:00:00Z" },
+            ],
+          },
+        ]); // both memberships predate the thread — temporal filter does not disambiguate
 
       const r = restoreDurableContentFromChatThreads({ dryRun: false });
       expect(r).toEqual({ auditedThreads: 0, restored: 0, adopted: 0, skippedAmbiguous: 1, dryRun: false });
-      // No UPDATE was ever issued for the ambiguous owner.
+      // No UPDATE was ever issued for the still-ambiguous owner.
       expect(runPostgresQueriesSync).toHaveBeenCalledTimes(3);
       for (const call of runPostgresQueriesSync.mock.calls) {
         const { queries } = call[0] as { queries: Array<{ text: string }> };
@@ -301,23 +351,56 @@ describe("restoreDurableContentFromChatThreads (cinatra#2365 repair)", () => {
       }
     });
 
+    it("zero temporally-eligible orgs: every membership postdates the thread — left unadopted", () => {
+      runPostgresQueriesSync
+        .mockReturnValueOnce([{ rows: [] }])
+        .mockReturnValueOnce([
+          { rows: [{ id: "thread-a", owner_user_id: "user-1", created_at: "2026-01-01T00:00:00Z" }] },
+        ]) // a thread created BEFORE the owner's only org existed
+        .mockReturnValueOnce([
+          { rows: [{ organization_id: "org-1", member_created_at: "2026-06-01T00:00:00Z", org_created_at: "2026-06-01T00:00:00Z" }] },
+        ]);
+
+      const r = restoreDurableContentFromChatThreads({ dryRun: false });
+      expect(r).toEqual({ auditedThreads: 0, restored: 0, adopted: 0, skippedAmbiguous: 1, dryRun: false });
+    });
+
     it("zero-org ambiguous case: an owner belonging to NO organization is left unadopted", () => {
       runPostgresQueriesSync
         .mockReturnValueOnce([{ rows: [] }])
-        .mockReturnValueOnce([{ rows: [{ id: "thread-a", owner_user_id: "user-1" }] }])
+        .mockReturnValueOnce([
+          { rows: [{ id: "thread-a", owner_user_id: "user-1", created_at: "2026-06-25T00:00:00Z" }] },
+        ])
         .mockReturnValueOnce([{ rows: [] }]); // owner's org membership: none
 
       const r = restoreDurableContentFromChatThreads({ dryRun: false });
       expect(r).toEqual({ auditedThreads: 0, restored: 0, adopted: 0, skippedAmbiguous: 1, dryRun: false });
     });
 
+    it("falls back to organization.createdAt when member.createdAt is absent (legacy membership row)", () => {
+      runPostgresQueriesSync
+        .mockReturnValueOnce([{ rows: [] }])
+        .mockReturnValueOnce([
+          { rows: [{ id: "thread-a", owner_user_id: "user-1", created_at: "2026-06-25T00:00:00Z" }] },
+        ])
+        .mockReturnValueOnce([
+          { rows: [{ organization_id: "org-1", member_created_at: null, org_created_at: "2026-01-01T00:00:00Z" }] },
+        ]) // member_created_at missing — falls back to org_created_at, which predates the thread
+        .mockReturnValueOnce([{ rowCount: 1 }]);
+
+      const r = restoreDurableContentFromChatThreads({ dryRun: false });
+      expect(r).toEqual({ auditedThreads: 0, restored: 0, adopted: 1, skippedAmbiguous: 0, dryRun: false });
+    });
+
     it("dry run classifies adoption candidates (skippedAmbiguous is real) but writes nothing (adopted stays 0)", () => {
       runPostgresQueriesSync
         .mockReturnValueOnce([{ rows: [] }]) // content-missing discovery
         .mockReturnValueOnce([
-          { rows: [{ id: "thread-a", owner_user_id: "user-1" }] },
+          { rows: [{ id: "thread-a", owner_user_id: "user-1", created_at: "2026-06-25T00:00:00Z" }] },
         ]) // org-adoption discovery
-        .mockReturnValueOnce([{ rows: [{ organizationId: "org-1" }] }]); // unambiguous — but dry run
+        .mockReturnValueOnce([
+          { rows: [{ organization_id: "org-1", member_created_at: "2026-01-01T00:00:00Z", org_created_at: "2026-01-01T00:00:00Z" }] },
+        ]); // unambiguous — but dry run
 
       const r = restoreDurableContentFromChatThreads({ dryRun: true });
       expect(r).toEqual({ auditedThreads: 0, restored: 0, adopted: 0, skippedAmbiguous: 0, dryRun: true });
@@ -332,12 +415,14 @@ describe("restoreDurableContentFromChatThreads (cinatra#2365 repair)", () => {
         .mockReturnValueOnce([
           {
             rows: [
-              { id: "thread-a", owner_user_id: "user-1" },
-              { id: "thread-b", owner_user_id: "user-1" },
+              { id: "thread-a", owner_user_id: "user-1", created_at: "2026-06-25T00:00:00Z" },
+              { id: "thread-b", owner_user_id: "user-1", created_at: "2026-06-26T00:00:00Z" },
             ],
           },
         ]) // org-adoption discovery — same owner twice
-        .mockReturnValueOnce([{ rows: [{ organizationId: "org-1" }] }]) // ONE membership lookup for user-1
+        .mockReturnValueOnce([
+          { rows: [{ organization_id: "org-1", member_created_at: "2026-01-01T00:00:00Z", org_created_at: "2026-01-01T00:00:00Z" }] },
+        ]) // ONE membership lookup for user-1, reused for both threads
         .mockReturnValueOnce([{ rowCount: 1 }]) // adopt thread-a
         .mockReturnValueOnce([{ rowCount: 1 }]); // adopt thread-b
 

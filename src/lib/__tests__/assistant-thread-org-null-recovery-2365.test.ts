@@ -17,6 +17,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // exercising the actual production code paths (not a query-shape mock) via a
 // small hand-rolled relational fake for the specific query shapes these two
 // modules issue.
+//
+// FOLLOW-UP 2 (live re-verified): the reporting instance's owner actually
+// belongs to TWO organizations (Default, created 2026-06-22; Cinatra-Demo,
+// created 2026-07-13) — a flat "exactly one org" rule refuses every one of
+// that owner's threads. The scenario below now models BOTH orgs and relies
+// on TEMPORAL CONTAINMENT (only a membership that predates the thread's own
+// creation is eligible) to disambiguate, exactly as the real data does.
 // ---------------------------------------------------------------------------
 
 type FakeThread = {
@@ -49,17 +56,20 @@ type FakeTurn = {
 };
 
 type FakeChatThreadRow = { id: string; payload: string };
-type FakeMemberRow = { organizationId: string; userId: string };
+/** `memberCreatedAt: null` exercises the organization.createdAt fallback. */
+type FakeMemberRow = { organizationId: string; userId: string; memberCreatedAt: string | null };
+type FakeOrganizationRow = { id: string; createdAt: string };
 
 type FakeDb = {
   assistantThreads: FakeThread[];
   assistantTurns: FakeTurn[];
   chatThreads: FakeChatThreadRow[];
   member: FakeMemberRow[];
+  organization: FakeOrganizationRow[];
 };
 
 function makeFakeDb(): FakeDb {
-  return { assistantThreads: [], assistantTurns: [], chatThreads: [], member: [] };
+  return { assistantThreads: [], assistantTurns: [], chatThreads: [], member: [], organization: [] };
 }
 
 function hasDurableContent(db: FakeDb, threadId: string): boolean {
@@ -194,15 +204,24 @@ function runFakeQuery(
   if (t.includes("owner_user_id IS NOT NULL")) {
     const rows = db.assistantThreads
       .filter((th) => th.owner_user_id !== null && th.org_id === null && th.origin === "legacy-chat")
-      .map((th) => ({ id: th.id, owner_user_id: th.owner_user_id }));
+      .map((th) => ({ id: th.id, owner_user_id: th.owner_user_id, created_at: th.created_at }));
     return { rows };
   }
 
-  // owner org membership (public.member)
+  // owner org membership JOIN organization (public.member / public.organization)
   if (t.includes('public."member"')) {
     const userId = v[0] as string;
-    const orgIds = [...new Set(db.member.filter((m) => m.userId === userId).map((m) => m.organizationId))];
-    return { rows: orgIds.map((organizationId) => ({ organizationId })) };
+    const rows = db.member
+      .filter((m) => m.userId === userId)
+      .map((m) => {
+        const org = db.organization.find((o) => o.id === m.organizationId);
+        return {
+          organization_id: m.organizationId,
+          member_created_at: m.memberCreatedAt,
+          org_created_at: org?.createdAt ?? null,
+        };
+      });
+    return { rows };
   }
 
   // org-adoption UPDATE
@@ -335,30 +354,40 @@ function seedLegacyThread(args: {
 }
 
 describe("cinatra#2365 AC4 — the reported instance shape, end to end", () => {
-  it("6 owned legacy threads (5 org-null, content already purged) all reappear in the org-scoped /chat list after repair", () => {
+  it("6 owned legacy threads (5 org-null, content already purged, owner belongs to TWO orgs) all reappear in the org-scoped /chat list after repair via temporal containment", () => {
     const ownerUserId = "admin-user";
-    const orgId = "org-default";
-    // Mirrors the issue's reproduction table: 6 threads, only 1 already
-    // org-anchored (the "org-matched" thread), all with content already
-    // missing (the pre-fix purged state), owner = the admin user.
+    const defaultOrgId = "org-default";
+    const demoOrgId = "org-cinatra-demo";
+    // The REAL reported instance shape (live re-verified): the owner belongs
+    // to TWO organizations — Default (created 2026-06-22) and Cinatra-Demo
+    // (created 2026-07-13) — so a flat "exactly one org" rule refuses every
+    // thread. All 6 threads were created 2026-06-25/26 — after Default
+    // existed but BEFORE Cinatra-Demo did — so temporal containment leaves
+    // exactly Default eligible for every one of them.
+    db.organization.push(
+      { id: defaultOrgId, createdAt: "2026-06-22T00:00:00Z" },
+      { id: demoOrgId, createdAt: "2026-07-13T00:00:00Z" },
+    );
+    db.member.push(
+      { organizationId: defaultOrgId, userId: ownerUserId, memberCreatedAt: "2026-06-22T00:00:00Z" },
+      { organizationId: demoOrgId, userId: ownerUserId, memberCreatedAt: "2026-07-13T00:00:00Z" },
+    );
+
     const ids = ["cc44c035", "8d9c763d", "dbbca750", "905d38e5", "73dd22cd", "446c1562"];
     ids.forEach((id, i) => {
       seedLegacyThread({
         id,
         ownerUserId,
-        orgId: i === 0 ? orgId : null, // only the first is already org-anchored
+        orgId: i === 0 ? defaultOrgId : null, // only the first is already org-anchored (to Default)
         hasContent: false, // content already purged, matching the reported state
-        createdAt: `2026-07-0${i + 1}T00:00:00Z`,
+        createdAt: `2026-06-2${5 + (i % 2)}T00:00:00Z`, // 2026-06-25 / 2026-06-26, matching the report
       });
     });
-    // The owner belongs to exactly ONE organization — unambiguous adoption target.
-    db.member.push({ organizationId: orgId, userId: ownerUserId });
 
     // BEFORE repair: the org-scoped list (fetchChatThreads' real path) sees
-    // only the one already-anchored, already-content-having thread — i.e.
-    // none, since even that one has no durable content yet either. Confirms
-    // the reported "vanished" state.
-    const before = listAssistantThreadSummariesForOwnerInOrg(orgId, ownerUserId);
+    // none — even the already-anchored thread has no durable content yet.
+    // Confirms the reported "vanished" state.
+    const before = listAssistantThreadSummariesForOwnerInOrg(defaultOrgId, ownerUserId);
     expect(before).toEqual([]);
 
     const result = restoreDurableContentFromChatThreads({ dryRun: false });
@@ -370,15 +399,28 @@ describe("cinatra#2365 AC4 — the reported instance shape, end to end", () => {
       dryRun: false,
     });
 
-    // AFTER repair: the REAL org-scoped list path now returns all 6 —
-    // content restored AND the 5 previously org-null threads adopted.
-    const after = listAssistantThreadSummariesForOwnerInOrg(orgId, ownerUserId);
+    // AFTER repair: the REAL org-scoped list path now returns all 6 under
+    // Default — content restored AND the 5 previously org-null threads
+    // adopted into the ONE org that already existed when they were created.
+    const after = listAssistantThreadSummariesForOwnerInOrg(defaultOrgId, ownerUserId);
     expect(after.map((t) => t.id).sort()).toEqual([...ids].sort());
+    // None leaked into Cinatra-Demo's list — it didn't exist yet at the time.
+    expect(listAssistantThreadSummariesForOwnerInOrg(demoOrgId, ownerUserId)).toEqual([]);
   });
 
-  it("multi-org ambiguous case: the owner's org-null thread stays unadopted and invisible to EITHER org's list", () => {
+  it("multi-org ambiguous case: TWO orgs BOTH predating the thread stays unadopted and invisible to EITHER org's list", () => {
     const ownerUserId = "multi-org-user";
     const threadId = "ambiguous-thread";
+    // Both orgs existed well before the thread was created — temporal
+    // containment does NOT disambiguate this case; it is genuinely ambiguous.
+    db.organization.push(
+      { id: "org-a", createdAt: "2026-01-01T00:00:00Z" },
+      { id: "org-b", createdAt: "2026-02-01T00:00:00Z" },
+    );
+    db.member.push(
+      { organizationId: "org-a", userId: ownerUserId, memberCreatedAt: "2026-01-01T00:00:00Z" },
+      { organizationId: "org-b", userId: ownerUserId, memberCreatedAt: "2026-02-01T00:00:00Z" },
+    );
     seedLegacyThread({
       id: threadId,
       ownerUserId,
@@ -386,11 +428,6 @@ describe("cinatra#2365 AC4 — the reported instance shape, end to end", () => {
       hasContent: true, // content already present — isolates the org-adoption axis
       createdAt: "2026-07-01T00:00:00Z",
     });
-    // The owner belongs to TWO organizations — no unambiguous adoption target.
-    db.member.push(
-      { organizationId: "org-a", userId: ownerUserId },
-      { organizationId: "org-b", userId: ownerUserId },
-    );
 
     const result = restoreDurableContentFromChatThreads({ dryRun: false });
     expect(result).toEqual({
@@ -404,5 +441,39 @@ describe("cinatra#2365 AC4 — the reported instance shape, end to end", () => {
     // Still invisible to BOTH orgs' /chat panels — never guessed.
     expect(listAssistantThreadSummariesForOwnerInOrg("org-a", ownerUserId)).toEqual([]);
     expect(listAssistantThreadSummariesForOwnerInOrg("org-b", ownerUserId)).toEqual([]);
+  });
+
+  it("temporal disambiguation: a two-org owner where only ONE org predates the thread adopts into THAT org", () => {
+    const ownerUserId = "single-eligible-user";
+    const threadId = "pre-second-org-thread";
+    const earlyOrgId = "org-early";
+    const lateOrgId = "org-late";
+    db.organization.push(
+      { id: earlyOrgId, createdAt: "2026-01-01T00:00:00Z" },
+      { id: lateOrgId, createdAt: "2026-08-01T00:00:00Z" }, // created AFTER the thread
+    );
+    db.member.push(
+      { organizationId: earlyOrgId, userId: ownerUserId, memberCreatedAt: "2026-01-01T00:00:00Z" },
+      { organizationId: lateOrgId, userId: ownerUserId, memberCreatedAt: "2026-08-01T00:00:00Z" },
+    );
+    seedLegacyThread({
+      id: threadId,
+      ownerUserId,
+      orgId: null,
+      hasContent: true,
+      createdAt: "2026-07-01T00:00:00Z", // before lateOrgId existed
+    });
+
+    const result = restoreDurableContentFromChatThreads({ dryRun: false });
+    expect(result).toEqual({
+      auditedThreads: 0,
+      restored: 0,
+      adopted: 1,
+      skippedAmbiguous: 0,
+      dryRun: false,
+    });
+
+    expect(listAssistantThreadSummariesForOwnerInOrg(earlyOrgId, ownerUserId).map((t) => t.id)).toEqual([threadId]);
+    expect(listAssistantThreadSummariesForOwnerInOrg(lateOrgId, ownerUserId)).toEqual([]);
   });
 });

@@ -39,9 +39,23 @@
 // which bypasses the org scope for a platform admin, already surfaced them —
 // that path was never the bug). `restoreDurableContentFromChatThreads` now
 // ALSO adopts an owner-having, org-null legacy thread into that owner's
-// organization, but ONLY when the owner's `public.member` membership is
-// UNAMBIGUOUS (exactly one org) — a zero- or multi-org owner is left
-// unadopted rather than guessed at, and counted in the result.
+// organization.
+//
+// FOLLOW-UP 2 (live re-verified): an "exactly one org" rule is too narrow —
+// the reporting instance's owner genuinely belongs to TWO organizations
+// (Default, created 2026-06-22; Cinatra-Demo, created 2026-07-13), so a flat
+// membership-count rule refuses every one of that owner's threads
+// (skippedAmbiguous, AC1 still unmet on the very instance the issue reports).
+// TEMPORAL CONTAINMENT breaks the tie deterministically: an org (or an
+// owner's membership in it) that did not exist yet when a thread was CREATED
+// cannot be that thread's home. All 5 org-null threads on the reporting
+// instance were created 2026-06-25/26 — before Cinatra-Demo existed — so only
+// Default is eligible; the 6th, same-era thread is already anchored to
+// Default, consistent. Adoption is therefore keyed per-THREAD: the eligible
+// set is the owner's memberships whose effective creation predates that
+// thread's `created_at`, and adoption proceeds only when exactly ONE
+// membership is eligible — zero or multiple is still left unadopted
+// (never guessed) and counted in the result.
 
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
@@ -256,7 +270,17 @@ export function findLegacyThreadIdsMissingDurableContent(): string[] {
 export type OrgAdoptionCandidate = {
   threadId: string;
   ownerUserId: string;
+  /** The thread's own creation instant — the temporal-containment anchor
+   *  (cinatra#2365 follow-up 2): only a membership that already existed by
+   *  this instant can be the thread's home. */
+  threadCreatedAt: string;
 };
+
+function toTimestampStringOrNull(v: unknown): string | null {
+  if (v instanceof Date) return v.toISOString();
+  if (typeof v === "string" && v.length > 0) return v;
+  return null;
+}
 
 /**
  * Find legacy-origin threads that HAVE an owner but no org anchor
@@ -274,7 +298,7 @@ export function findLegacyThreadIdsMissingOrgAdoption(): OrgAdoptionCandidate[] 
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT id, owner_user_id
+        text: `SELECT id, owner_user_id, created_at
                FROM "${schema}"."assistant_threads"
                WHERE owner_user_id IS NOT NULL
                  AND org_id IS NULL
@@ -283,38 +307,71 @@ export function findLegacyThreadIdsMissingOrgAdoption(): OrgAdoptionCandidate[] 
       },
     ],
   });
-  return (res?.rows ?? []).map((r) => {
-    const row = r as Record<string, unknown>;
-    return { threadId: String(row.id), ownerUserId: String(row.owner_user_id) };
-  });
+  return (res?.rows ?? [])
+    .map((r) => {
+      const row = r as Record<string, unknown>;
+      return {
+        threadId: String(row.id),
+        ownerUserId: String(row.owner_user_id),
+        threadCreatedAt: toTimestampStringOrNull(row.created_at),
+      };
+    })
+    .filter((c): c is OrgAdoptionCandidate => c.threadCreatedAt !== null);
 }
 
-/** The distinct organizations `ownerUserId` belongs to, via Better Auth's
- *  `public.member` (fixed schema — organization membership is never
- *  per-app-schema). Read-only. */
-function ownerOrganizationIds(ownerUserId: string): string[] {
+/** One of `ownerUserId`'s organization memberships, via Better Auth's
+ *  `public.member` JOINed to `public.organization` (fixed schema —
+ *  organization membership is never per-app-schema). `effectiveCreatedAt` is
+ *  `member."createdAt"` when present; a legacy membership row missing (or
+ *  otherwise unreliable/absent) `createdAt` falls back to the organization's
+ *  own `createdAt` — the org obviously cannot have been joined before it
+ *  existed, so that fallback is still a sound (if coarser) lower bound.
+ *  Read-only. */
+type OwnerOrgMembership = { organizationId: string; effectiveCreatedAt: string | null };
+
+function ownerOrganizationMemberships(ownerUserId: string): OwnerOrgMembership[] {
   const [res] = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
     queries: [
       {
-        text: `SELECT DISTINCT "organizationId" FROM public."member" WHERE "userId" = $1`,
+        text: `SELECT m."organizationId" AS organization_id,
+                      m."createdAt" AS member_created_at,
+                      o."createdAt" AS org_created_at
+               FROM public."member" m
+               JOIN public."organization" o ON o.id = m."organizationId"
+               WHERE m."userId" = $1`,
         values: [ownerUserId],
       },
     ],
   });
-  return (res?.rows ?? []).map((r) => String((r as Record<string, unknown>).organizationId));
+  return (res?.rows ?? []).map((r) => {
+    const row = r as Record<string, unknown>;
+    const memberCreatedAt = toTimestampStringOrNull(row.member_created_at);
+    const orgCreatedAt = toTimestampStringOrNull(row.org_created_at);
+    return {
+      organizationId: String(row.organization_id),
+      effectiveCreatedAt: memberCreatedAt ?? orgCreatedAt,
+    };
+  });
 }
 
 /**
- * Adopt org-null owned legacy threads into their owner's organization,
- * UNAMBIGUOUSLY ONLY: an owner belonging to exactly one organization gets
- * their org-null threads adopted into it; an owner belonging to zero or
- * multiple organizations is left unadopted (never guessed) and counted as
- * `skippedAmbiguous`. `dryRun` classifies (read-only) without writing —
- * `adopted` stays 0, `skippedAmbiguous` still reports the real classification
- * since it requires no mutation to compute. Per-owner membership is cached
- * across candidates sharing the same owner (a single owner's whole legacy
- * history is the common case) to avoid redundant lookups.
+ * Adopt org-null owned legacy threads into their owner's organization, via
+ * TEMPORAL CONTAINMENT (cinatra#2365 follow-up 2 — see the module header):
+ * per thread, the eligible memberships are those whose `effectiveCreatedAt`
+ * is at or before the thread's OWN `created_at` — an org (or an owner's
+ * membership in it) that did not exist yet when the thread was created cannot
+ * be that thread's home. Exactly ONE eligible membership adopts; zero (owner
+ * not yet a member anywhere at that time) or multiple (still ambiguous even
+ * after the temporal filter) is left unadopted — never guessed — and counted
+ * as `skippedAmbiguous`.
+ *
+ * `dryRun` classifies (read-only) without writing — `adopted` stays 0,
+ * `skippedAmbiguous` still reports the real classification since it requires
+ * no mutation to compute. Per-owner membership is cached across candidates
+ * sharing the same owner (a single owner's whole legacy history is the
+ * common case) to avoid redundant lookups — the temporal filter is then
+ * re-applied per thread against that cached membership list.
  */
 function adoptOrgNullOwnedLegacyThreads(dryRun: boolean): {
   adopted: number;
@@ -324,18 +381,35 @@ function adoptOrgNullOwnedLegacyThreads(dryRun: boolean): {
   if (candidates.length === 0) return { adopted: 0, skippedAmbiguous: 0 };
 
   const schema = schemaIdent();
-  const orgIdsByOwner = new Map<string, string[]>();
+  const membershipsByOwner = new Map<string, OwnerOrgMembership[]>();
   let adopted = 0;
   let skippedAmbiguous = 0;
-  for (const { threadId, ownerUserId } of candidates) {
-    let orgIds = orgIdsByOwner.get(ownerUserId);
-    if (orgIds === undefined) {
-      orgIds = ownerOrganizationIds(ownerUserId);
-      orgIdsByOwner.set(ownerUserId, orgIds);
+  for (const { threadId, ownerUserId, threadCreatedAt } of candidates) {
+    let memberships = membershipsByOwner.get(ownerUserId);
+    if (memberships === undefined) {
+      memberships = ownerOrganizationMemberships(ownerUserId);
+      membershipsByOwner.set(ownerUserId, memberships);
     }
-    if (orgIds.length !== 1) {
-      // Zero orgs (not yet a member anywhere) or multiple orgs (which one?)
-      // — no unambiguous adoption target. Never guess.
+
+    const threadMs = Date.parse(threadCreatedAt);
+    const eligibleOrgIds = Number.isFinite(threadMs)
+      ? [
+          ...new Set(
+            memberships
+              .filter((m) => {
+                if (m.effectiveCreatedAt === null) return false; // no reliable timestamp — never guess
+                const ms = Date.parse(m.effectiveCreatedAt);
+                return Number.isFinite(ms) && ms <= threadMs;
+              })
+              .map((m) => m.organizationId),
+          ),
+        ]
+      : []; // an unparseable thread creation time can't anchor the filter — fail closed
+
+    if (eligibleOrgIds.length !== 1) {
+      // Zero temporally-eligible orgs, or still multiple after the filter
+      // (containment alone didn't disambiguate) — no unambiguous adoption
+      // target. Never guess.
       skippedAmbiguous += 1;
       continue;
     }
@@ -349,7 +423,7 @@ function adoptOrgNullOwnedLegacyThreads(dryRun: boolean): {
           // org_id is SET-ONCE elsewhere in this codebase (never reassigned
           // once non-null) — the `org_id IS NULL` guard mirrors that here.
           text: `UPDATE "${schema}"."assistant_threads" SET org_id = $2 WHERE id = $1 AND org_id IS NULL`,
-          values: [threadId, orgIds[0]],
+          values: [threadId, eligibleOrgIds[0]],
         },
       ],
     });
