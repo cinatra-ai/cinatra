@@ -256,6 +256,17 @@ export type SkillExtensionDescriptor = {
   /** `cinatra.kind`. */
   kind: string;
   /**
+   * `cinatra.skillRole` — the manifest-declared role of a `kind:"skill"`
+   * package (`injectable` | `matcher` | `internal`, the #2089 taxonomy).
+   * RETAINED here (rather than dropped on the floor with the rest of the
+   * manifest) because the shared assignability predicate in
+   * `agent-skill-assignability.ts` needs the package's own declaration to take
+   * precedence over the role INFERRED from its consumers' dependency edges.
+   * `undefined` when the manifest declares none — which the predicate reads as
+   * the plain injectable default, the same meaning an unroled edge carries.
+   */
+  skillRole?: string;
+  /**
    * The package's DECLARED `cinatra.dependencies` edges, structurally filtered
    * to the well-formed entries (cinatra#2090 S3). Carried on the descriptor so
    * the dependency→injection projection below can read a consumer's declared
@@ -346,7 +357,12 @@ export async function scanSkillExtensions(): Promise<SkillExtensionDescriptor[]>
         if (!existsSync(pkgJsonPath)) continue;
         let pkgJson: {
           name?: string;
-          cinatra?: { kind?: string; capabilities?: unknown; dependencies?: unknown };
+          cinatra?: {
+            kind?: string;
+            skillRole?: unknown;
+            capabilities?: unknown;
+            dependencies?: unknown;
+          };
         };
         try {
           pkgJson = JSON.parse(await readFile(pkgJsonPath, "utf8"));
@@ -381,6 +397,10 @@ export async function scanSkillExtensions(): Promise<SkillExtensionDescriptor[]>
           pkgName: pkgJson.name ?? pkg.name,
           pkgDirName: pkg.name,
           kind,
+          skillRole:
+            typeof pkgJson?.cinatra?.skillRole === "string" && pkgJson.cinatra.skillRole
+              ? pkgJson.cinatra.skillRole
+              : undefined,
           dependencies: readDeclaredDependencies(pkgJson?.cinatra?.dependencies),
           capabilities,
           slugs,

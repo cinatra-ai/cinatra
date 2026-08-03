@@ -18,7 +18,7 @@ import { assistantThreadSchemaQueries, assistantHandleSchemaQueries, assistantTu
 import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema";
-import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSchemaQueries, skillUploadConsentSchemaQueries } from "@/lib/skill-lifecycle-schema";
+import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSchemaQueries, skillUploadConsentSchemaQueries, agentAssignedSkillsSchemaQueries } from "@/lib/skill-lifecycle-schema";
 import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
 import {
   artifactClaimSchemaQueries,
@@ -2564,6 +2564,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
     {
       text: `CREATE INDEX IF NOT EXISTS custom_skill_assignments_agent_idx ON "${schemaName.replaceAll('"', '""')}"."custom_skill_assignments" (agent_id)`,
     },
+    ...agentAssignedSkillsSchemaQueries(schemaName), // agent_assigned_skills (cinatra#2346 S1): the ACTOR-INDEPENDENT direct-assignment store — BESIDE custom_skill_assignments above (whose read is actor-gated, so it never reaches an actor-less worker run), never inside it. Fresh-install half; operator-upgrade twin = migrations/core/core__0089; both idempotent, pinned against each other by a DDL-parity suite.
     // Derived-store ownership columns.
     // org_id already exists on objects + graphiti_projection_outbox; add the
     // remaining tuple (owner_type, owner_id, visibility) as nullable for

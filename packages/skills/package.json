@@ -8,6 +8,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./actions": "./src/actions.ts",
+    "./agent-assigned-skills-actions": "./src/agent-assigned-skills-actions.ts",
+    "./agent-package-resolver": "./src/agent-package-resolver.ts",
+    "./agent-skill-assignability": "./src/agent-skill-assignability.ts",
     "./cli": "./src/cli.mjs",
     "./extension-handler": "./src/extension-handler.ts",
     "./injection": "./src/injection/index.ts",
