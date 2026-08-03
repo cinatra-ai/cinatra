@@ -2191,6 +2191,10 @@ export async function deleteAgentSkillsForSlugs(
 }
 
 export async function uninstallSkillPackage(packageId: string) {
+  // cinatra#2350 (S5): sweep agent_assigned_skills BEFORE the missing-native-
+  // package return below; fatal on failure. Rationale: @/lib/agent-assigned-skills-store.ts ("SKILL-SIDE derivation").
+  const { sweepAssignedSkillsForSkillPackageId } = await import("@/lib/agent-assigned-skills-store");
+  await sweepAssignedSkillsForSkillPackageId(packageId);
   const existingCatalog = await readSkillsCatalog();
   const existingPackage = existingCatalog.skillPackages.find((p) => p.id === packageId);
   if (!existingPackage) return false;
