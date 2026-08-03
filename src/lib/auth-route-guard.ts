@@ -72,6 +72,7 @@ const PUBLIC_EXACT_PATHS = [
   "/api/openai/connection-status",
   "/api/app/setup-status",
   "/api/app/route-guard-status",
+  "/setup/sign-up", // cinatra#2386 — the first-account bootstrap step now lives INSIDE the setup wizard. A sessionless visitor must render the create-first-account form here (like /sign-up did before), not be 307'd to /sign-in. Exact path only — every other /setup/* route stays session-protected; the page itself re-checks hasAnyBetterAuthUsers()/the session before rendering (never trusts reachability alone), and its layout renders STATIC sign-up progress for the sessionless branch (no readiness-reader call, no setup-status disclosure to an unauthenticated visitor).
 ];
 
 // Internal design-system verification route. Static React server component;
