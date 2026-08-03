@@ -82,7 +82,15 @@ let installStatus: Record<string, "active" | "archived"> = {};
 let agentPopulation: Array<Record<string, unknown>> = [];
 
 vi.mock("../../../../../packages/skills/src/agent-skill-assignment-sources", () => ({
-  readCatalogSource: async () => ({ skills: catalogSkills }),
+  // Revalidation reads the PURE SNAPSHOT; the SYNCING read throws, so a
+  // dispatch that reached it would fail the delivery assertions loudly rather
+  // than rebuild the whole catalog per run.
+  readCatalogSource: async () => {
+    throw new Error(
+      "readCatalogSource (syncInstalledSkillsToDatabase) must never be reached from a run dispatch",
+    );
+  },
+  readCatalogSnapshotSource: async () => ({ skills: catalogSkills }),
   scanExtensionsSource: async () => scanned,
   readInstallStatusSource: async (names: string[]) =>
     new Map(names.filter((n) => n in installStatus).map((n) => [n, installStatus[n]!])),

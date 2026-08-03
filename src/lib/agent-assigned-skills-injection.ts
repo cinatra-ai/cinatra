@@ -32,7 +32,9 @@ import "server-only";
 //
 // The predicate is CONSUMED, never re-derived: `resolveSkillAssignability` from
 // the public `@cinatra-ai/skills/agent-skill-assignability` subpath is the single
-// definition S1, S2 and S3 all share.
+// definition S1, S2 and S3 all share. Its DECISION is inherited whole; only its
+// catalog READ is injected — the PURE snapshot, never the syncing rebuild, because
+// this tier runs per run dispatch (see `revalidateAgainstCatalogSnapshot`).
 //
 // FAIL-CLOSED, NEVER FATAL (issue scope item 2). Every arm that cannot prove a
 // skill is still assignable yields the EMPTY set and lets the run proceed: an
@@ -44,6 +46,7 @@ import "server-only";
 
 import { readAssignedSkillsForAgentPackage } from "@/lib/agent-assigned-skills-store";
 import {
+  readCatalogSnapshotSource,
   resolveSkillAssignability,
   type AssignabilityRefusal,
   type SkillAssignability,
@@ -89,7 +92,12 @@ export type AssignedSkillTierDeps = {
   readAssignments?: (
     agentPackageName: string,
   ) => Promise<ReadonlyArray<{ skillId: string }>>;
-  /** The shared S1 predicate. Default = the real one. NEVER re-implemented. */
+  /**
+   * The shared S1 predicate. NEVER re-implemented. Default = the real one,
+   * reading the catalog through the PURE snapshot source (see
+   * {@link revalidateAgainstCatalogSnapshot} — the default must never inherit
+   * the predicate's syncing catalog read on a per-dispatch path).
+   */
   resolveAssignability?: (
     skillIds: readonly string[],
   ) => Promise<Map<string, SkillAssignability>>;
@@ -119,6 +127,39 @@ function degraded(
   agentPackageName: string | null,
 ): AssignedSkillTierOutcome {
   return { skillIds: [], agentPackageName, withheld: [], degraded: reason };
+}
+
+/**
+ * The tier's DEFAULT revalidation: the SHARED S1 predicate, reading the catalog
+ * through the PURE SNAPSHOT source.
+ *
+ * WHY THE READ IS INJECTED (coordinator-ordered pre-merge fix). The predicate's
+ * `readCatalog` seam defaults to `readCatalogSource` →
+ * `readSkillsCatalog()` → `syncInstalledSkillsToDatabase()`: a full catalog
+ * rebuild — GitHub sync, disk scan, DB write, prefill enqueue. That default is
+ * sized for the assignment WRITE path, which runs when an admin saves a pin.
+ * This tier runs on EVERY run dispatch for every agent that has at least one
+ * assignment, so inheriting it would make "an admin pinned a skill to this
+ * agent" mean "every dispatch of this agent rebuilds the catalog" — the same
+ * hazard class S3 documents for a per-keystroke picker search (cinatra#2352).
+ * The zero-row short-circuit above already spares agents with no assignments;
+ * this spares the agents the feature is actually for.
+ *
+ * `readSkillsCatalogSnapshot` reads the persisted rows and does nothing else,
+ * and its freshness contract is exactly the one a read-only revalidation wants:
+ * the catalog writers bump it transactionally and the lifecycle points call
+ * `rebuildSkillsCatalog()` explicitly (cinatra#1364). A revalidation that
+ * needed a rebuild to be correct would be asserting that the catalog is stale
+ * at rest — which is the rebuild's problem, not this tier's.
+ *
+ * NOTHING ELSE MOVES: the other two leaf reads keep the predicate's defaults,
+ * the conjuncts are untouched, and the predicate stays fail-closed end to end —
+ * a snapshot read that THROWS still refuses every id rather than approving one.
+ */
+function revalidateAgainstCatalogSnapshot(
+  skillIds: readonly string[],
+): Promise<Map<string, SkillAssignability>> {
+  return resolveSkillAssignability(skillIds, { readCatalog: readCatalogSnapshotSource });
 }
 
 /**
@@ -208,7 +249,7 @@ export async function resolveAssignedSkillTier(
   // ---- (3) resolution-time REVALIDATION --------------------------------
   let verdicts: Map<string, SkillAssignability>;
   try {
-    verdicts = await (deps.resolveAssignability ?? resolveSkillAssignability)(orderedIds);
+    verdicts = await (deps.resolveAssignability ?? revalidateAgainstCatalogSnapshot)(orderedIds);
   } catch (err) {
     // The predicate is itself fail-closed, so a throw here means the seam broke
     // rather than a conjunct refusing. Either way: withhold everything, proceed.

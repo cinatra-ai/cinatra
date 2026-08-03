@@ -46,7 +46,17 @@ let agentPopulation: Array<Record<string, unknown>> = [];
 // ONE seam for every real-world read the assignment slice performs — doubling it
 // leaves the predicate, the canonical resolver and the tier REAL.
 vi.mock("../../../packages/skills/src/agent-skill-assignment-sources", () => ({
-  readCatalogSource: async () => ({ skills: catalogSkills }),
+  // The tier's revalidation reads the PURE SNAPSHOT (never the syncing read) —
+  // so the syncing one THROWS here. If a future edit re-points the tier's
+  // default at `readCatalogSource`, the predicate fails closed and every
+  // assigned-delivery assertion below goes red instead of silently costing a
+  // full catalog rebuild per run dispatch.
+  readCatalogSource: async () => {
+    throw new Error(
+      "readCatalogSource (syncInstalledSkillsToDatabase) must never be reached from a run dispatch",
+    );
+  },
+  readCatalogSnapshotSource: async () => ({ skills: catalogSkills }),
   scanExtensionsSource: async () => scanned,
   readInstallStatusSource: async (names: string[]) =>
     new Map(names.filter((n) => n in installStatus).map((n) => [n, installStatus[n]!])),

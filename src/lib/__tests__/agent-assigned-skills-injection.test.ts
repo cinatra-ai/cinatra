@@ -17,10 +17,14 @@
  * to the model on the three run shapes is pinned in
  * `agent-assigned-skill-delivery-paths.test.ts`.
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 import { aggregateEffectiveStatusByPackageName } from "../../../packages/extensions/src/canonical-store";
 import {
+  readCatalogSnapshotSource,
   resolveSkillAssignability,
   type SkillAssignability,
 } from "@cinatra-ai/skills/agent-skill-assignability";
@@ -471,5 +475,69 @@ describe("fail-closed arms — the run always proceeds (issue AC 5)", () => {
     expect(String(call?.[0])).not.toContain("%s");
     expect(String(call?.[0])).not.toContain("FORGED");
     expect(JSON.stringify(call?.[2])).not.toContain("\\n");
+  });
+});
+
+describe("the DEFAULT revalidation reads the PURE catalog snapshot", () => {
+  // A COST contract no behavioral assertion in this file can see: every test
+  // above injects `resolveAssignability`, so the tier's DEFAULT wiring is
+  // exercised only in production. Left to the predicate's own default, the
+  // catalog read is `readCatalogSource` → `readSkillsCatalog()` →
+  // `syncInstalledSkillsToDatabase()` — a full rebuild (GitHub sync, disk scan,
+  // DB write, prefill enqueue) per RUN DISPATCH for every agent that has an
+  // assignment. Same hazard class S3 pins for the per-keystroke picker search
+  // (cinatra#2352), so this mirrors that guard: the pin is on the SOURCE, which
+  // is what a future edit would quietly change.
+  //
+  // Comments are stripped first — they NAME the syncing read on purpose (that
+  // is where the hazard is explained), and the pin is about the code. The line
+  // comment strip removes only from `//` to end of line, never the whole line:
+  // dropping the line would false-fail the moment someone annotated a guarded
+  // call in place (codex round, cinatra#2358).
+  const tierCode = readFileSync(
+    fileURLToPath(new URL("../agent-assigned-skills-injection.ts", import.meta.url)),
+    "utf8",
+  )
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/[^\n]*$/gm, "");
+
+  it("injects the SNAPSHOT source into the predicate's catalog seam", () => {
+    expect(tierCode).toMatch(/readCatalog:\s*readCatalogSnapshotSource/);
+  });
+
+  it("BINDS that snapshot revalidation as the fallback for the deps seam", () => {
+    // Pinning the helper alone is not enough: a re-point that leaves the helper
+    // defined but calls the bare predicate would keep every assertion above
+    // green while restoring the per-dispatch rebuild.
+    expect(tierCode).toMatch(
+      /deps\.resolveAssignability\s*\?\?\s*revalidateAgainstCatalogSnapshot/,
+    );
+    expect(tierCode).not.toMatch(/deps\.resolveAssignability\s*\?\?\s*resolveSkillAssignability/);
+  });
+
+  it("never names the SYNCING catalog read in code", () => {
+    expect(tierCode).not.toMatch(/\breadCatalogSource\b/);
+    expect(tierCode).not.toMatch(/\breadSkillsCatalog\b/);
+  });
+
+  it("the injected source is itself the pure snapshot, not the rebuild engine", () => {
+    // Inherited from S3's seam guard: `readCatalogSnapshotSource` must keep
+    // resolving to `readSkillsCatalogSnapshot` (no scan/write/enqueue).
+    const snapshotSource = String(readCatalogSnapshotSource);
+    expect(snapshotSource).toContain("readSkillsCatalogSnapshot");
+    expect(snapshotSource).not.toContain("readSkillsCatalog(");
+  });
+
+  it("keeps the deps seam as the ONLY override — an injected predicate still wins", async () => {
+    // The pin above must not have turned the default into a hard-wired call:
+    // `deps.resolveAssignability` is what every suite (and every future caller
+    // with its own consistent view) injects.
+    const injected = vi.fn(realRevalidation);
+    const out = await resolveAssignedSkillTier(AGENT_PKG, POPULATION, {
+      readAssignments: async () => [{ skillId: SKILL_A }],
+      resolveAssignability: injected,
+    });
+    expect(injected).toHaveBeenCalledTimes(1);
+    expect(out.skillIds).toEqual([SKILL_A]);
   });
 });
