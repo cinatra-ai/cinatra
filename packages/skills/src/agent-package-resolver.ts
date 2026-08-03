@@ -214,8 +214,13 @@ export async function assertAgentWriteTarget(
       isAssistantPackage(packageName),
     ]);
   } catch (err) {
+    // The package name is passed as an ARGUMENT, never spliced into the message:
+    // a caller-influenced value must not be able to shape the log format.
     console.warn(
-      `[skills/agent-package-resolver] write-target eligibility read failed for ${packageName} — refusing:`,
+      "[skills/agent-package-resolver] write-target eligibility read failed — refusing. package / cause:",
+      String(packageName ?? "")
+        .replace(/[\u0000-\u001f\u007f]/g, " ")
+        .slice(0, 200),
       err instanceof Error ? err.message : err,
     );
     return { ok: false, reason: "eligibility-unreadable" };

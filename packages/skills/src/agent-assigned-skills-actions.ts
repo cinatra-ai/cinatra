@@ -106,6 +106,21 @@ function refusalForResolution(
   return resolution.reason === "ambiguous" ? "ambiguous-agent" : "unknown-agent";
 }
 
+/**
+ * Render an identifier for a LOG LINE safely.
+ *
+ * A skill id and an agent reference both originate off the wire. Interpolating
+ * one into the message string would make the log format itself caller-
+ * controlled: a value carrying `%s` or a newline could forge a second log
+ * record. The value is therefore length-bounded, stripped of control characters
+ * and passed as a console ARGUMENT, never spliced into the format string.
+ */
+function forLog(value: unknown): string {
+  return String(value ?? "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .slice(0, 200);
+}
+
 /** Admin re-assertion. Dynamic import so unit tests can `vi.doMock` the
  *  auth-session module without dragging in the full app-server module graph. */
 async function requireAdmin(): Promise<{ userId: string }> {
@@ -259,7 +274,8 @@ export async function assignAgentSkill(input: {
       } catch (err) {
         regression = "revalidation-failed";
         console.warn(
-          `[skills/agent-assigned-skills] post-commit revalidation threw for ${skillId}:`,
+          "[skills/agent-assigned-skills] post-commit revalidation threw for skill:",
+          forLog(skillId),
           err instanceof Error ? err.message : err,
         );
       }
@@ -277,9 +293,11 @@ export async function assignAgentSkill(input: {
           // assigned skill — and the next remove or uninstall teardown clears
           // it. Logged loudly so it is not silent.
           console.error(
-            `[skills/agent-assigned-skills] compensation delete FAILED — ${resolved.packageName} ` +
-              `still carries an unassignable assignment for ${skillId}; it will not be delivered, ` +
-              `remove it from the agent's settings:`,
+            "[skills/agent-assigned-skills] compensation delete FAILED — this agent still carries " +
+              "an unassignable assignment; it will NOT be delivered, remove it from the agent's " +
+              "settings. agent / skill / cause:",
+            forLog(resolved.packageName),
+            forLog(skillId),
             err instanceof Error ? err.message : err,
           );
           return {
