@@ -18,8 +18,8 @@ import { assistantThreadSchemaQueries, assistantHandleSchemaQueries, assistantTu
 import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema";
-import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSchemaQueries, skillUploadConsentSchemaQueries } from "@/lib/skill-lifecycle-schema";
-import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema"; import { agentAssignedSkillsSchemaQueries } from "@/lib/agent-assigned-skills-schema"; // cinatra#2346 S1 actor-independent direct skill assignment
+import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSchemaQueries, skillUploadConsentSchemaQueries, agentAssignedSkillsSchemaQueries } from "@/lib/skill-lifecycle-schema";
+import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
 import {
   artifactClaimSchemaQueries,
   objectContentSnapshotSchemaQueries,

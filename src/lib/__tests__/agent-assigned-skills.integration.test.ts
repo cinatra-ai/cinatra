@@ -26,7 +26,7 @@ import {
   AGENT_ASSIGNED_SKILLS_POSITION_INDEX,
   AGENT_ASSIGNED_SKILLS_TABLE,
   agentAssignedSkillsSchemaQueries,
-} from "@/lib/agent-assigned-skills-schema";
+} from "@/lib/skill-lifecycle-schema";
 import { agentAssignedSkillsDdlSql } from "../../../migrations/core/core__0089_agent-assigned-skills.mjs";
 import {
   AGENT_ASSIGNED_SKILLS_CAP,

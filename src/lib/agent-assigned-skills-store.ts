@@ -33,7 +33,7 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { getPooledDb } from "@/lib/db/pooled";
-import { AGENT_ASSIGNED_SKILLS_TABLE } from "@/lib/agent-assigned-skills-schema";
+import { AGENT_ASSIGNED_SKILLS_TABLE } from "@/lib/skill-lifecycle-schema";
 
 const schemaName = process.env.SUPABASE_SCHEMA?.trim() || "cinatra";
 

@@ -9,7 +9,7 @@
 //
 // The BEHAVIORAL two-arm proof (fresh bootstrap vs migration, against a real
 // Postgres) lives in
-// `src/lib/__tests__/integration/agent-assigned-skills.integration.test.ts`;
+// `src/lib/__tests__/agent-assigned-skills.integration.test.ts`;
 // this suite pins the SHAPE so a drift is caught without a database.
 import { describe, expect, it } from "vitest";
 
@@ -18,7 +18,7 @@ import {
   AGENT_ASSIGNED_SKILLS_SKILL_INDEX,
   AGENT_ASSIGNED_SKILLS_TABLE,
   agentAssignedSkillsSchemaQueries,
-} from "@/lib/agent-assigned-skills-schema";
+} from "@/lib/skill-lifecycle-schema";
 import { agentAssignedSkillsDdlSql } from "../../../migrations/core/core__0089_agent-assigned-skills.mjs";
 
 const bootstrap = agentAssignedSkillsSchemaQueries("cinatra")
