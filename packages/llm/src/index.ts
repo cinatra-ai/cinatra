@@ -295,6 +295,15 @@ export type {
 // Provider-neutral structured-JSON extraction (relocated from the openai
 // connector — cinatra#151 Stage 2; identical signature and behavior).
 export { parseStructuredJson } from "./structured-json";
+// Per-provider structured-output schema policy (cinatra#2339) — the request-side
+// half of the same leaf. Exported so the contract tests, and any future caller
+// that must reason about what a provider will accept, read the SAME facts the
+// dispatch seam applies.
+export {
+  ANTHROPIC_SUPPORTED_STRING_FORMATS,
+  ANTHROPIC_UNSUPPORTED_SCHEMA_KEYWORDS,
+  sanitizeOutputSchemaForProvider,
+} from "./structured-json";
 // Core-owned INLINE skill delivery (cinatra#2091 S4). Exported so the assistant
 // runtime — which assembles its own request rather than going through the
 // deterministic entry points — can short-circuit an inline-mechanism provider
@@ -398,6 +407,7 @@ import {
   resolveStreamMessageAttachments,
 } from "./attachments/entry-resolve";
 import type { AttachmentResolverPorts } from "./attachments/resolve-attachments";
+import { sanitizeOutputSchemaForProvider } from "./structured-json";
 import {
   resolveProviderAdapter,
   resolveFirstAvailableAdapter,
@@ -1018,7 +1028,13 @@ async function runDeterministicLlmTaskImpl(input: DeterministicLlmExecutionInput
     tools: exec.tools,
     maxSteps: exec.maxSteps,
     maxTokens: input.maxOutputTokens,
-    outputSchema: input.outputSchema,
+    // cinatra#2339: per-provider constraint sanitization at the core→adapter
+    // seam. Identity pass-through for every provider without a policy, so the
+    // OpenAI/Gemini request bytes are unchanged by construction. Keyed off the
+    // RESOLVED `adapter.provider` rather than the requested `input.provider` —
+    // `resolveProviderAdapter` does not assert the two agree, so the adapter
+    // about to be called is the only authority on what it will accept.
+    outputSchema: sanitizeOutputSchemaForProvider(adapter.provider, input.outputSchema),
     signal: input.signal,
     logLabel: input.logLabel,
     reasoningEffort: input.reasoningEffort,
@@ -1227,7 +1243,8 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
       ? (exec.maxSteps ?? input.maxSteps ?? 6)
       : (input.maxSteps ?? (allTools.length > 0 ? 6 : 1)),
     maxTokens: input.maxOutputTokens,
-    outputSchema: input.outputSchema,
+    // cinatra#2339 — see runDeterministicLlmTaskImpl.
+    outputSchema: sanitizeOutputSchemaForProvider(adapter.provider, input.outputSchema),
     signal: input.signal,
     logLabel: input.logLabel,
     reasoningEffort: input.reasoningEffort,
@@ -1401,6 +1418,13 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
       : resolvedAtt.system,
     tools: exec.tools,
     maxSteps: exec.maxSteps,
+    // cinatra#2339 — see runDeterministicLlmTaskImpl. This entry point may
+    // resolve the adapter from the implicit-global default, so `input.provider`
+    // can be absent entirely; `adapter.provider` is always right.
+    outputSchema: sanitizeOutputSchemaForProvider(
+      adapter.provider,
+      adapterInput.outputSchema,
+    ),
     ...(resolvedAtt.resolvedAttachments
       ? { resolvedAttachments: resolvedAtt.resolvedAttachments }
       : {}),
@@ -1613,7 +1637,16 @@ export async function generateWithFileInput(
     );
   }
   const { provider: _provider, ...adapterInput } = input;
-  const response = await adapter.generateWithFileInput(adapterInput);
+  const response = await adapter.generateWithFileInput({
+    ...adapterInput,
+    // cinatra#2339 — the fourth and last schema-capable adapter method
+    // (`StreamInput` carries no `outputSchema`). Keyed off the RESOLVED
+    // provider because `input.provider` is optional on this entry point.
+    outputSchema: sanitizeOutputSchemaForProvider(
+      adapter.provider,
+      adapterInput.outputSchema,
+    ),
+  });
   if (response.usage) {
     emitLlmUsage({
       provider: adapter.provider,
