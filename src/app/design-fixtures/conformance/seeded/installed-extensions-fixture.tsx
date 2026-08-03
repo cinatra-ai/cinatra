@@ -164,37 +164,45 @@ export async function InstalledExtensionsFixture({
 
   return (
     <div className="flex flex-col gap-6">
-      <div data-surface-id="installed-extensions-filter">
-        <Toolbar aria-label="Extensions filters">
-          <ToolbarGroup>
-            {/* The REAL URL-driven status filter control; basePath keeps the
-                run namespace in the URL it pushes. */}
-            <ExtensionsTabSelect
-              value={tab}
-              basePath={`/design-fixtures/conformance/seeded?run=${runId}`}
-            />
-          </ToolbarGroup>
-        </Toolbar>
-      </div>
+      {/* Wraps the filter + its partitioned list: the real four-view
+          (All/Active/Locked/Archived) status-filter contract that the
+          design spec's §III.3 clauses (data-conformance-id
+          "installed-extensions-status-views") describe. Harness
+          instrumentation only — adds no rendering, mirrors the
+          data-surface-id convention documented in testid-contract.json. */}
+      <div className="flex flex-col gap-6" data-surface-id="installed-extensions-status-views">
+        <div data-surface-id="installed-extensions-filter">
+          <Toolbar aria-label="Extensions filters">
+            <ToolbarGroup>
+              {/* The REAL URL-driven status filter control; basePath keeps the
+                  run namespace in the URL it pushes. */}
+              <ExtensionsTabSelect
+                value={tab}
+                basePath={`/design-fixtures/conformance/seeded?run=${runId}`}
+              />
+            </ToolbarGroup>
+          </Toolbar>
+        </div>
 
-      <div data-surface-id="installed-extensions-list" data-variant="populated" data-tab={tab}>
-        {rows.length === 0 ? (
-          tab === "all" ? (
-            <AllEmptyState />
-          ) : tab === "locked" ? (
-            <LockedEmptyState />
-          ) : tab === "archived" ? (
-            <ArchivedEmptyState />
+        <div data-surface-id="installed-extensions-list" data-variant="populated" data-tab={tab}>
+          {rows.length === 0 ? (
+            tab === "all" ? (
+              <AllEmptyState />
+            ) : tab === "locked" ? (
+              <LockedEmptyState />
+            ) : tab === "archived" ? (
+              <ArchivedEmptyState />
+            ) : (
+              <ActiveEmptyState />
+            )
           ) : (
-            <ActiveEmptyState />
-          )
-        ) : (
-          <div className="grid gap-3">
-            {/* isArchived is per-row (row.status) so the mixed All view greys
-                only its archived rows. */}
-            {rows.map((row) => renderCard(runId, row, row.status === "archived"))}
-          </div>
-        )}
+            <div className="grid gap-3">
+              {/* isArchived is per-row (row.status) so the mixed All view greys
+                  only its archived rows. */}
+              {rows.map((row) => renderCard(runId, row, row.status === "archived"))}
+            </div>
+          )}
+        </div>
       </div>
 
       <div data-surface-id="installed-extensions-list" data-variant="empty">

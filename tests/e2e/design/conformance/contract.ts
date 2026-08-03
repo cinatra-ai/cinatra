@@ -35,7 +35,9 @@ import {
   SEEDED_CONNECTOR_ERROR_SLUG,
   SEEDED_GRID_CARD_COUNT,
   SEEDED_INSTALLED_ACTIVE_COUNT,
+  SEEDED_INSTALLED_ALL_COUNT,
   SEEDED_INSTALLED_ARCHIVED_COUNT,
+  SEEDED_INSTALLED_LOCKED_COUNT,
   SEEDED_MODAL_FIXTURE,
 } from "../../../../src/app/design-fixtures/conformance/seed-data";
 import {
@@ -431,6 +433,74 @@ const INSTALLED_EXTENSIONS_FILTER_DRIVER: SurfaceDriver = {
       },
     },
   },
+  states: {},
+};
+
+// installed-extensions-status-views (design#97 spec regen, cinatra#2361): the
+// §III.3 normative clauses added around the SAME real filter + list pairing
+// covered above — the four-view (All/Active/Locked/Archived) status-filter
+// contract cinatra#1571 already implements. The pinned manifest declares no
+// fields/actions/states for this surface (it annotates prose clauses, not a
+// data-bound widget), so "surface renders" is the ONLY generated assertion;
+// written here to actually exercise the real §III.3 contract — default
+// landing view, the four-option order, the dedicated Locked view, and the
+// All union — rather than a bare presence check.
+const INSTALLED_EXTENSIONS_STATUS_VIEWS_DRIVER: SurfaceDriver = {
+  path: SEEDED_HARNESS_PATH,
+  seeded: true,
+  root: (page) => page.locator('[data-surface-id="installed-extensions-status-views"]'),
+  present: async (page, root) => {
+    const trigger = root.getByRole("combobox", {
+      name: "Filter installed extensions by state",
+    });
+    await expect(trigger).toBeVisible();
+    const list = root.locator(
+      '[data-surface-id="installed-extensions-list"][data-variant="populated"]',
+    );
+
+    // §3.2 — no ?tab= query on load: the default landing view is Active.
+    await expect(page).not.toHaveURL(/tab=/);
+    await expect(list).toHaveAttribute("data-tab", "active");
+    await expect(list.locator(INSTALLED_LIST_SELECTOR)).toHaveCount(
+      SEEDED_INSTALLED_ACTIVE_COUNT,
+    );
+
+    // §3.1 — exactly four views, in this order: All, Active, Locked, Archived.
+    await clickUntil(trigger, async () => {
+      await expect(page.getByRole("option", { name: "All" })).toBeVisible({ timeout: 5_000 });
+    });
+    expect(await page.getByRole("option").allInnerTexts()).toEqual([
+      "All",
+      "Active",
+      "Locked",
+      "Archived",
+    ]);
+
+    // §3.3 / §3.5 — Locked is its own dedicated view: only the locked row(s),
+    // excluded from the default Active view proven above.
+    await page.getByRole("option", { name: "Locked" }).click();
+    await expect(page).toHaveURL(/tab=locked/);
+    await expect(list).toHaveAttribute("data-tab", "locked");
+    await expect(list.locator(INSTALLED_LIST_SELECTOR)).toHaveCount(
+      SEEDED_INSTALLED_LOCKED_COUNT,
+    );
+
+    // §3.3 / §3.4 — All is the union of Active + Locked + Archived; every row
+    // appears exactly once (the seeded partition invariant, mirrored in
+    // src/app/design-fixtures/conformance/__tests__/seed-partition.test.ts).
+    await clickUntil(trigger, async () => {
+      await expect(page.getByRole("option", { name: "All" })).toBeVisible({ timeout: 5_000 });
+    });
+    await page.getByRole("option", { name: "All" }).click();
+    await expect(page).toHaveURL(/tab=all/);
+    await expect(list).toHaveAttribute("data-tab", "all");
+    await expect(list.locator(INSTALLED_LIST_SELECTOR)).toHaveCount(SEEDED_INSTALLED_ALL_COUNT);
+    expect(
+      SEEDED_INSTALLED_ACTIVE_COUNT + SEEDED_INSTALLED_LOCKED_COUNT + SEEDED_INSTALLED_ARCHIVED_COUNT,
+    ).toBe(SEEDED_INSTALLED_ALL_COUNT);
+  },
+  fields: {},
+  actions: {},
   states: {},
 };
 
@@ -1945,6 +2015,7 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "extension-listing-grid": EXTENSION_LISTING_GRID_DRIVER,
   "installed-extensions-list": INSTALLED_EXTENSIONS_LIST_DRIVER,
   "installed-extensions-filter": INSTALLED_EXTENSIONS_FILTER_DRIVER,
+  "installed-extensions-status-views": INSTALLED_EXTENSIONS_STATUS_VIEWS_DRIVER,
   "install-config-needs-callout": INSTALL_CONFIG_NEEDS_CALLOUT_DRIVER,
   "connector-grid": CONNECTOR_GRID_DRIVER,
   "connector-connection-filter": CONNECTOR_CONNECTION_FILTER_DRIVER,

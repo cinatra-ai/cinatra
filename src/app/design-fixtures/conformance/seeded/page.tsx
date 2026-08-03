@@ -39,11 +39,15 @@ export const dynamic = "force-dynamic";
  *     server-composed real listing-card nodes (populated / empty variants;
  *     ?variant=loading additionally streams the REAL Suspense fallback over a
  *     delayed card source).
- *   - installed-extensions-list / installed-extensions-filter: rendered from
- *     the REAL canonical installed_extension store (rows provisioned by
- *     ../seed/route.ts through the real lifecycle primitive), URL-filtered by
- *     the REAL ExtensionsTabSelect control — a live-DB data path, per the
- *     cinatra#986 mandate (never weakened to static fixtures).
+ *   - installed-extensions-list / installed-extensions-filter /
+ *     installed-extensions-status-views: rendered from the REAL canonical
+ *     installed_extension store (rows provisioned by ../seed/route.ts
+ *     through the real lifecycle primitive), URL-filtered by the REAL
+ *     ExtensionsTabSelect control — a live-DB data path, per the cinatra#986
+ *     mandate (never weakened to static fixtures). status-views is the same
+ *     filter + list pairing, just the wrapping surface the design spec's
+ *     §III.3 four-view (All/Active/Locked/Archived) clauses describe
+ *     (cinatra#1571).
  *   - connector-grid / connector-connection-filter: the REAL ConnectorsClient
  *     over cards resolved through the REAL resolveReadinessFailSoft
  *     containment (one seeded probe THROWS — the error-state card).
@@ -111,7 +115,8 @@ export default async function SeededConformanceHarnessPage({
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
             <CardTitle>
-              Installed extensions (surfaces: installed-extensions-list, installed-extensions-filter)
+              Installed extensions (surfaces: installed-extensions-list, installed-extensions-filter,
+              installed-extensions-status-views)
             </CardTitle>
           </CardHeader>
           <CardContent>
