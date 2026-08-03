@@ -1196,17 +1196,32 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     // Companion REPAIR for the purge above (cinatra#2365): re-hydrates
     // assistant_turns.content from the surviving legacy chat_threads.payload
     // for threads the purge (or an earlier backfill gap) left content-less.
-    // Delegates its actual mutation to the SAME pure mirror-projection
-    // builder (buildAssistantThreadMirrorQueries) the legacy write path uses
-    // — no new raw-DML-verb literal in this module — but is registered here
-    // by name, same as database.ts's delegate writers, since it is a genuine
-    // writer at runtime. Dry-run by default; same cross-org, no-principal
-    // shape as the purge it repairs after.
+    // Delegates its actual content-restore mutation to the SAME pure mirror-
+    // projection builder (buildAssistantThreadMirrorQueries) the legacy write
+    // path uses. cinatra#2365 follow-up (live-verified): content restore
+    // alone did not satisfy AC1 ("an owner still sees their pre-existing
+    // threads in /chat") — the org-scoped /chat panel requires org_id =
+    // activeOrganizationId, and legacy (pre-organization) threads carry
+    // org_id NULL. This export now ALSO adopts an owner-having, org-null
+    // legacy thread into that owner's org — a direct raw UPDATE, but ONLY
+    // when public.member membership is unambiguous (exactly one org); a
+    // zero- or multi-org owner is left unadopted and counted, never guessed.
+    // Registered here by name, same as database.ts's delegate writers, since
+    // it is a genuine writer at runtime regardless of how much of its
+    // mutation is a raw-verb literal in this module vs. a delegated builder.
+    // Dry-run by default; same cross-org, no-principal shape as the purge it
+    // repairs after.
     module: "src/lib/assistant-thread-dormant-content-purge.ts",
     exportName: "restoreDurableContentFromChatThreads",
     capability: "content.write",
-    orgIdExtractor: "none (cross-org migration repair; dry-run default, sourced from chat_threads.payload)",
-    storageReferences: ["assistant_threads", "assistant_turns", "assistant_thread_pause_state", "chat_threads"],
+    orgIdExtractor: "none (cross-org migration repair; dry-run default, sourced from chat_threads.payload + public.member)",
+    storageReferences: [
+      "assistant_threads",
+      "assistant_turns",
+      "assistant_thread_pause_state",
+      "chat_threads",
+      "member",
+    ],
     cascadeOwnership: "inert-history",
     importBanned: false,
     importBanExemption: {

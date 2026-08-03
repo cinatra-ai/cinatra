@@ -28,6 +28,20 @@
 //      `chat_threads.payload` for any thread whose structured content is
 //      missing, restoring an already-affected instance's `/chat` list without
 //      requiring the (still-intact) legacy row to be read anywhere else.
+//
+// FOLLOW-UP (live-verified on a real dev-instance DB copy): content repair
+// alone was NOT sufficient — the flat `/chat` panel (`fetchChatThreads`,
+// packages/chat/src/actions.ts) is additionally ORG-SCOPED per the #134
+// audience contract (`listAssistantThreadSummariesForOwnerInOrg` requires
+// `org_id = activeOrganizationId`). Legacy threads that predate organizations
+// carry `org_id IS NULL`, so even with content restored they stay invisible to
+// the owner-scoped panel (though the admin `/api/assistants/threads` path,
+// which bypasses the org scope for a platform admin, already surfaced them —
+// that path was never the bug). `restoreDurableContentFromChatThreads` now
+// ALSO adopts an owner-having, org-null legacy thread into that owner's
+// organization, but ONLY when the owner's `public.member` membership is
+// UNAMBIGUOUS (exactly one org) — a zero- or multi-org owner is left
+// unadopted rather than guessed at, and counted in the result.
 
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
@@ -238,11 +252,121 @@ export function findLegacyThreadIdsMissingDurableContent(): string[] {
   return (res?.rows ?? []).map((r) => String((r as Record<string, unknown>).id));
 }
 
+/** An owner-having, org-null legacy thread — an org-adoption candidate. */
+export type OrgAdoptionCandidate = {
+  threadId: string;
+  ownerUserId: string;
+};
+
+/**
+ * Find legacy-origin threads that HAVE an owner but no org anchor
+ * (`org_id IS NULL`) — the set the #134 org-scoped `/chat` panel
+ * (`fetchChatThreads` -> `listAssistantThreadSummariesForOwnerInOrg`) can
+ * never surface no matter how much durable content they carry, because that
+ * path requires `org_id = activeOrganizationId`. Scoped to `origin =
+ * 'legacy-chat'` so a deliberately org-less assistant-native thread (if one
+ * ever exists) is never touched. Read-only (no raw DML verb).
+ */
+export function findLegacyThreadIdsMissingOrgAdoption(): OrgAdoptionCandidate[] {
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  const [res] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT id, owner_user_id
+               FROM "${schema}"."assistant_threads"
+               WHERE owner_user_id IS NOT NULL
+                 AND org_id IS NULL
+                 AND origin = 'legacy-chat'`,
+        values: [],
+      },
+    ],
+  });
+  return (res?.rows ?? []).map((r) => {
+    const row = r as Record<string, unknown>;
+    return { threadId: String(row.id), ownerUserId: String(row.owner_user_id) };
+  });
+}
+
+/** The distinct organizations `ownerUserId` belongs to, via Better Auth's
+ *  `public.member` (fixed schema — organization membership is never
+ *  per-app-schema). Read-only. */
+function ownerOrganizationIds(ownerUserId: string): string[] {
+  const [res] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT DISTINCT "organizationId" FROM public."member" WHERE "userId" = $1`,
+        values: [ownerUserId],
+      },
+    ],
+  });
+  return (res?.rows ?? []).map((r) => String((r as Record<string, unknown>).organizationId));
+}
+
+/**
+ * Adopt org-null owned legacy threads into their owner's organization,
+ * UNAMBIGUOUSLY ONLY: an owner belonging to exactly one organization gets
+ * their org-null threads adopted into it; an owner belonging to zero or
+ * multiple organizations is left unadopted (never guessed) and counted as
+ * `skippedAmbiguous`. `dryRun` classifies (read-only) without writing —
+ * `adopted` stays 0, `skippedAmbiguous` still reports the real classification
+ * since it requires no mutation to compute. Per-owner membership is cached
+ * across candidates sharing the same owner (a single owner's whole legacy
+ * history is the common case) to avoid redundant lookups.
+ */
+function adoptOrgNullOwnedLegacyThreads(dryRun: boolean): {
+  adopted: number;
+  skippedAmbiguous: number;
+} {
+  const candidates = findLegacyThreadIdsMissingOrgAdoption();
+  if (candidates.length === 0) return { adopted: 0, skippedAmbiguous: 0 };
+
+  const schema = schemaIdent();
+  const orgIdsByOwner = new Map<string, string[]>();
+  let adopted = 0;
+  let skippedAmbiguous = 0;
+  for (const { threadId, ownerUserId } of candidates) {
+    let orgIds = orgIdsByOwner.get(ownerUserId);
+    if (orgIds === undefined) {
+      orgIds = ownerOrganizationIds(ownerUserId);
+      orgIdsByOwner.set(ownerUserId, orgIds);
+    }
+    if (orgIds.length !== 1) {
+      // Zero orgs (not yet a member anywhere) or multiple orgs (which one?)
+      // — no unambiguous adoption target. Never guess.
+      skippedAmbiguous += 1;
+      continue;
+    }
+    if (dryRun) continue; // would-adopt; nothing written in a dry run
+
+    runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      transaction: true,
+      queries: [
+        {
+          // org_id is SET-ONCE elsewhere in this codebase (never reassigned
+          // once non-null) — the `org_id IS NULL` guard mirrors that here.
+          text: `UPDATE "${schema}"."assistant_threads" SET org_id = $2 WHERE id = $1 AND org_id IS NULL`,
+          values: [threadId, orgIds[0]],
+        },
+      ],
+    });
+    adopted += 1;
+  }
+  return { adopted, skippedAmbiguous };
+}
+
 export type RestoreDurableContentResult = {
   /** Threads found with missing structured content AND a surviving legacy backup. */
   auditedThreads: number;
   /** Threads whose structured content was actually re-hydrated (0 on a dry run). */
   restored: number;
+  /** Org-null owned legacy threads adopted into their owner's sole org (0 on a dry run). */
+  adopted: number;
+  /** Org-null owned legacy threads left unadopted: their owner belongs to zero or multiple orgs. */
+  skippedAmbiguous: number;
   dryRun: boolean;
 };
 
@@ -258,14 +382,24 @@ export type RestoreDurableContentResult = {
  * the caller must opt in to writing. A malformed/unparseable payload is
  * skipped defensively (chat_threads.payload is arbitrary historical JSON) —
  * never lets one bad row abort the whole repair pass.
+ *
+ * ALSO runs the org-adoption step (`adoptOrgNullOwnedLegacyThreads` — see the
+ * module header's FOLLOW-UP note): content restoration alone does not make a
+ * pre-organization legacy thread visible in the org-scoped `/chat` panel, so
+ * this is required for AC1 ("an owner still sees their pre-existing threads
+ * in /chat"). Runs independently of content restoration (an org-null thread
+ * that never lost its content still needs adopting) and, like content
+ * restoration, only classifies (never writes) in a dry run.
  */
 export function restoreDurableContentFromChatThreads(options?: {
   dryRun?: boolean;
 }): RestoreDurableContentResult {
   const dryRun = options?.dryRun ?? true;
   const threadIds = findLegacyThreadIdsMissingDurableContent();
+  const { adopted, skippedAmbiguous } = adoptOrgNullOwnedLegacyThreads(dryRun);
+
   if (dryRun || threadIds.length === 0) {
-    return { auditedThreads: threadIds.length, restored: 0, dryRun };
+    return { auditedThreads: threadIds.length, restored: 0, adopted, skippedAmbiguous, dryRun };
   }
 
   ensurePostgresSchema();
@@ -299,5 +433,5 @@ export function restoreDurableContentFromChatThreads(options?: {
     });
     restored += 1;
   }
-  return { auditedThreads: threadIds.length, restored, dryRun: false };
+  return { auditedThreads: threadIds.length, restored, adopted, skippedAmbiguous, dryRun: false };
 }

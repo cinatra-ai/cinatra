@@ -14,6 +14,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // thread as dormant. The companion repair (`restoreDurableContentFromChatThreads`
 // / `findLegacyThreadIdsMissingDurableContent`) re-hydrates already-affected
 // threads' durable content from the surviving legacy `chat_threads.payload`.
+//
+// cinatra#2365 follow-up (live-verified): content repair alone does not
+// satisfy AC1 ("an owner still sees their pre-existing threads in /chat") —
+// the org-scoped /chat panel (fetchChatThreads) requires `org_id =
+// activeOrganizationId`, and legacy threads that predate organizations carry
+// `org_id IS NULL`. `restoreDurableContentFromChatThreads` now ALSO adopts an
+// owner-having, org-null legacy thread into that owner's org, but ONLY when
+// membership is unambiguous (exactly one org) — see
+// `findLegacyThreadIdsMissingOrgAdoption` and the "org adoption" describe
+// block below.
 // ---------------------------------------------------------------------------
 
 const runPostgresQueriesSync = vi.fn();
@@ -32,12 +42,23 @@ vi.mock("@/lib/postgres-schema-init", () => ({
 import {
   purgeBackfilledDormantContentTurns,
   findLegacyThreadIdsMissingDurableContent,
+  findLegacyThreadIdsMissingOrgAdoption,
   restoreDurableContentFromChatThreads,
 } from "../assistant-thread-dormant-content-purge";
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
+
+/** No content-missing candidates and no org-adoption candidates — the two
+ *  discovery SELECTs `restoreDurableContentFromChatThreads` always issues
+ *  first, both returning empty. Chainable before further mockReturnValueOnce
+ *  calls for a test that only cares about ONE of the two concerns. */
+function mockNoDiscoveryCandidates(): void {
+  runPostgresQueriesSync
+    .mockReturnValueOnce([{ rows: [] }]) // findLegacyThreadIdsMissingDurableContent
+    .mockReturnValueOnce([{ rows: [] }]); // findLegacyThreadIdsMissingOrgAdoption
+}
 
 describe("purgeBackfilledDormantContentTurns (drop-history purge, codex convergence)", () => {
   it("a DESTRUCTIVE purge (dryRun:false) without a cutoff is REFUSED (no unbounded wipe)", () => {
@@ -153,19 +174,36 @@ describe("findLegacyThreadIdsMissingDurableContent (cinatra#2365 repair discover
   });
 });
 
-describe("restoreDurableContentFromChatThreads (cinatra#2365 repair)", () => {
-  it("dry-run only audits — no payload read, no mirror write", () => {
-    runPostgresQueriesSync.mockReturnValueOnce([{ rows: [{ id: "thread-a" }] }]); // discovery SELECT
-    const r = restoreDurableContentFromChatThreads({ dryRun: true });
-    expect(r).toEqual({ auditedThreads: 1, restored: 0, dryRun: true });
+describe("findLegacyThreadIdsMissingOrgAdoption (cinatra#2365 org-adoption discovery)", () => {
+  it("returns {threadId, ownerUserId} pairs for owner-having, org-null legacy threads, and issues no write", () => {
+    runPostgresQueriesSync.mockReturnValueOnce([
+      { rows: [{ id: "thread-a", owner_user_id: "user-1" }] },
+    ]);
+    const candidates = findLegacyThreadIdsMissingOrgAdoption();
+    expect(candidates).toEqual([{ threadId: "thread-a", ownerUserId: "user-1" }]);
     expect(runPostgresQueriesSync).toHaveBeenCalledTimes(1);
+    const call = runPostgresQueriesSync.mock.calls[0][0] as { queries: Array<{ text: string }> };
+    expect(call.queries[0].text).toMatch(/owner_user_id IS NOT NULL/i);
+    expect(call.queries[0].text).toMatch(/org_id IS NULL/i);
+    expect(call.queries[0].text).toMatch(/origin = 'legacy-chat'/i);
+  });
+});
+
+describe("restoreDurableContentFromChatThreads (cinatra#2365 repair)", () => {
+  it("dry-run only audits — no payload read, no mirror write, no org UPDATE", () => {
+    runPostgresQueriesSync
+      .mockReturnValueOnce([{ rows: [{ id: "thread-a" }] }]) // content-missing discovery
+      .mockReturnValueOnce([{ rows: [] }]); // org-adoption discovery (none)
+    const r = restoreDurableContentFromChatThreads({ dryRun: true });
+    expect(r).toEqual({ auditedThreads: 1, restored: 0, adopted: 0, skippedAmbiguous: 0, dryRun: true });
+    expect(runPostgresQueriesSync).toHaveBeenCalledTimes(2);
   });
 
-  it("nothing to repair: an empty candidate set is a no-op", () => {
-    runPostgresQueriesSync.mockReturnValueOnce([{ rows: [] }]);
+  it("nothing to repair or adopt: an empty candidate set on both axes is a no-op", () => {
+    mockNoDiscoveryCandidates();
     const r = restoreDurableContentFromChatThreads({ dryRun: false });
-    expect(r).toEqual({ auditedThreads: 0, restored: 0, dryRun: false });
-    expect(runPostgresQueriesSync).toHaveBeenCalledTimes(1);
+    expect(r).toEqual({ auditedThreads: 0, restored: 0, adopted: 0, skippedAmbiguous: 0, dryRun: false });
+    expect(runPostgresQueriesSync).toHaveBeenCalledTimes(2);
   });
 
   it("restores durable content from the surviving chat_threads.payload for a content-less thread", () => {
@@ -180,17 +218,18 @@ describe("restoreDurableContentFromChatThreads (cinatra#2365 repair)", () => {
       updatedAt: "2026-07-01T00:05:00Z",
     });
     runPostgresQueriesSync
-      .mockReturnValueOnce([{ rows: [{ id: "thread-a" }] }]) // discovery SELECT
+      .mockReturnValueOnce([{ rows: [{ id: "thread-a" }] }]) // content-missing discovery
+      .mockReturnValueOnce([{ rows: [] }]) // org-adoption discovery (none)
       .mockReturnValueOnce([{ rows: [{ payload }] }]) // chat_threads payload read
       .mockReturnValueOnce([{ rowCount: 1 }]); // the mirror-projection write transaction
 
     const r = restoreDurableContentFromChatThreads({ dryRun: false });
-    expect(r).toEqual({ auditedThreads: 1, restored: 1, dryRun: false });
-    expect(runPostgresQueriesSync).toHaveBeenCalledTimes(3);
+    expect(r).toEqual({ auditedThreads: 1, restored: 1, adopted: 0, skippedAmbiguous: 0, dryRun: false });
+    expect(runPostgresQueriesSync).toHaveBeenCalledTimes(4);
 
-    // The 3rd call is the mirror-projection transaction: it must carry an
+    // The 4th call is the mirror-projection transaction: it must carry an
     // assistant_turns upsert with the restored message content.
-    const writeCall = runPostgresQueriesSync.mock.calls[2][0] as {
+    const writeCall = runPostgresQueriesSync.mock.calls[3][0] as {
       transaction?: boolean;
       queries: Array<{ text: string; values: unknown[] }>;
     };
@@ -203,19 +242,109 @@ describe("restoreDurableContentFromChatThreads (cinatra#2365 repair)", () => {
 
   it("skips a candidate with no surviving chat_threads row (nothing to restore from)", () => {
     runPostgresQueriesSync
-      .mockReturnValueOnce([{ rows: [{ id: "thread-gone" }] }]) // discovery
+      .mockReturnValueOnce([{ rows: [{ id: "thread-gone" }] }]) // content-missing discovery
+      .mockReturnValueOnce([{ rows: [] }]) // org-adoption discovery (none)
       .mockReturnValueOnce([{ rows: [] }]); // no chat_threads row
     const r = restoreDurableContentFromChatThreads({ dryRun: false });
-    expect(r).toEqual({ auditedThreads: 1, restored: 0, dryRun: false });
-    expect(runPostgresQueriesSync).toHaveBeenCalledTimes(2); // discovery + the failed payload read only
+    expect(r).toEqual({ auditedThreads: 1, restored: 0, adopted: 0, skippedAmbiguous: 0, dryRun: false });
+    expect(runPostgresQueriesSync).toHaveBeenCalledTimes(3);
   });
 
   it("skips a candidate whose legacy payload is corrupt JSON (defensive, never aborts the pass)", () => {
     runPostgresQueriesSync
       .mockReturnValueOnce([{ rows: [{ id: "thread-corrupt" }] }])
+      .mockReturnValueOnce([{ rows: [] }])
       .mockReturnValueOnce([{ rows: [{ payload: "{not json" }] }]);
     const r = restoreDurableContentFromChatThreads({ dryRun: false });
-    expect(r).toEqual({ auditedThreads: 1, restored: 0, dryRun: false });
-    expect(runPostgresQueriesSync).toHaveBeenCalledTimes(2);
+    expect(r).toEqual({ auditedThreads: 1, restored: 0, adopted: 0, skippedAmbiguous: 0, dryRun: false });
+    expect(runPostgresQueriesSync).toHaveBeenCalledTimes(3);
+  });
+
+  describe("cinatra#2365 follow-up — org adoption (AC1: the owner still sees pre-existing threads in /chat)", () => {
+    it("adopts an org-null owned legacy thread when its owner belongs to exactly ONE organization", () => {
+      runPostgresQueriesSync
+        .mockReturnValueOnce([{ rows: [] }]) // content-missing discovery (none)
+        .mockReturnValueOnce([
+          { rows: [{ id: "thread-a", owner_user_id: "user-1" }] },
+        ]) // org-adoption discovery
+        .mockReturnValueOnce([{ rows: [{ organizationId: "org-1" }] }]) // owner's org membership: exactly one
+        .mockReturnValueOnce([{ rowCount: 1 }]); // the org_id UPDATE
+
+      const r = restoreDurableContentFromChatThreads({ dryRun: false });
+      expect(r).toEqual({ auditedThreads: 0, restored: 0, adopted: 1, skippedAmbiguous: 0, dryRun: false });
+      expect(runPostgresQueriesSync).toHaveBeenCalledTimes(4);
+
+      const updateCall = runPostgresQueriesSync.mock.calls[3][0] as {
+        queries: Array<{ text: string; values: unknown[] }>;
+      };
+      expect(updateCall.queries[0].text).toMatch(/UPDATE [\s\S]*assistant_threads[\s\S]*SET org_id/i);
+      expect(updateCall.queries[0].values).toEqual(["thread-a", "org-1"]);
+    });
+
+    it("multi-org ambiguous case: an owner belonging to MULTIPLE organizations is left unadopted, never guessed", () => {
+      runPostgresQueriesSync
+        .mockReturnValueOnce([{ rows: [] }]) // content-missing discovery (none)
+        .mockReturnValueOnce([
+          { rows: [{ id: "thread-a", owner_user_id: "user-1" }] },
+        ]) // org-adoption discovery
+        .mockReturnValueOnce([
+          { rows: [{ organizationId: "org-1" }, { organizationId: "org-2" }] },
+        ]); // owner's org membership: two — ambiguous
+
+      const r = restoreDurableContentFromChatThreads({ dryRun: false });
+      expect(r).toEqual({ auditedThreads: 0, restored: 0, adopted: 0, skippedAmbiguous: 1, dryRun: false });
+      // No UPDATE was ever issued for the ambiguous owner.
+      expect(runPostgresQueriesSync).toHaveBeenCalledTimes(3);
+      for (const call of runPostgresQueriesSync.mock.calls) {
+        const { queries } = call[0] as { queries: Array<{ text: string }> };
+        for (const q of queries) expect(q.text).not.toMatch(/UPDATE/i);
+      }
+    });
+
+    it("zero-org ambiguous case: an owner belonging to NO organization is left unadopted", () => {
+      runPostgresQueriesSync
+        .mockReturnValueOnce([{ rows: [] }])
+        .mockReturnValueOnce([{ rows: [{ id: "thread-a", owner_user_id: "user-1" }] }])
+        .mockReturnValueOnce([{ rows: [] }]); // owner's org membership: none
+
+      const r = restoreDurableContentFromChatThreads({ dryRun: false });
+      expect(r).toEqual({ auditedThreads: 0, restored: 0, adopted: 0, skippedAmbiguous: 1, dryRun: false });
+    });
+
+    it("dry run classifies adoption candidates (skippedAmbiguous is real) but writes nothing (adopted stays 0)", () => {
+      runPostgresQueriesSync
+        .mockReturnValueOnce([{ rows: [] }]) // content-missing discovery
+        .mockReturnValueOnce([
+          { rows: [{ id: "thread-a", owner_user_id: "user-1" }] },
+        ]) // org-adoption discovery
+        .mockReturnValueOnce([{ rows: [{ organizationId: "org-1" }] }]); // unambiguous — but dry run
+
+      const r = restoreDurableContentFromChatThreads({ dryRun: true });
+      expect(r).toEqual({ auditedThreads: 0, restored: 0, adopted: 0, skippedAmbiguous: 0, dryRun: true });
+      // Discovery + the membership lookup ran (classification is read-only and
+      // safe in a dry run); no UPDATE was issued.
+      expect(runPostgresQueriesSync).toHaveBeenCalledTimes(3);
+    });
+
+    it("caches org membership per owner: two threads owned by the SAME user issue only one membership lookup", () => {
+      runPostgresQueriesSync
+        .mockReturnValueOnce([{ rows: [] }]) // content-missing discovery
+        .mockReturnValueOnce([
+          {
+            rows: [
+              { id: "thread-a", owner_user_id: "user-1" },
+              { id: "thread-b", owner_user_id: "user-1" },
+            ],
+          },
+        ]) // org-adoption discovery — same owner twice
+        .mockReturnValueOnce([{ rows: [{ organizationId: "org-1" }] }]) // ONE membership lookup for user-1
+        .mockReturnValueOnce([{ rowCount: 1 }]) // adopt thread-a
+        .mockReturnValueOnce([{ rowCount: 1 }]); // adopt thread-b
+
+      const r = restoreDurableContentFromChatThreads({ dryRun: false });
+      expect(r).toEqual({ auditedThreads: 0, restored: 0, adopted: 2, skippedAmbiguous: 0, dryRun: false });
+      // discovery(2) + ONE membership lookup + two UPDATEs = 5, not 6.
+      expect(runPostgresQueriesSync).toHaveBeenCalledTimes(5);
+    });
   });
 });

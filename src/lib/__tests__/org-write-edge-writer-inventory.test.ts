@@ -209,7 +209,11 @@ describe("newly registered stores — writer-set lockstep", () => {
       "src/lib/connect-sites-store.ts": 6,
       "src/lib/widget-user-auth.ts": 10,
       "src/lib/assistant-thread-store.ts": 8,
-      "src/lib/assistant-thread-dormant-content-purge.ts": 1,
+      // cinatra#2365 follow-up: the org-adoption UPDATE (in the private helper
+      // adoptOrgNullOwnedLegacyThreads) is a second raw-DML site alongside the
+      // purge's own UPDATE — both invisible to the per-export segmenter below
+      // (private helpers are excluded from that scan by design).
+      "src/lib/assistant-thread-dormant-content-purge.ts": 2,
     });
   });
 
