@@ -99,6 +99,81 @@ function GlyphFrame({
   );
 }
 
+/**
+ * The card version of the row shell (§II) — used by the fixtures below that
+ * exercise the whole-card `activate` action + the per-card `toggle-read`
+ * action. Mirrors notifications-feed.tsx's `NotificationCard`: a stretched
+ * sibling overlay for whole-card activation (a link when `href` is set, a
+ * button otherwise) plus a trailing toggle button, both real interactive
+ * elements so the functional-acceptance drivers can click them.
+ */
+function NotificationCardRow({
+  title,
+  meta,
+  titleField = false,
+  unread,
+  href,
+  onToggle,
+}: {
+  title: string;
+  meta: string;
+  titleField?: boolean;
+  unread: boolean;
+  href?: string;
+  onToggle: () => void;
+}) {
+  return (
+    <li data-conformance-id="notification-row" className="relative flex items-center gap-3.5 rounded-[11px] border border-line bg-surface-strong p-3.5">
+      {href ? (
+        <Button asChild variant="ghost" className="absolute inset-0 z-0 h-auto w-full justify-start rounded-[inherit] border-0 bg-transparent p-0 shadow-none hover:bg-transparent">
+          <Link
+            href={href}
+            data-action="activate -> navigated"
+            aria-label={`Open: ${title}`}
+          />
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={onToggle}
+          data-action="activate -> toggled"
+          aria-label={`${title} — mark as ${unread ? "read" : "unread"}`}
+          className="absolute inset-0 z-0 h-auto w-full cursor-pointer justify-start rounded-[inherit] border-0 bg-transparent p-0 shadow-none hover:bg-transparent"
+        />
+      )}
+      <GlyphFrame tone="info">
+        <MessageSquare className="size-[17px]" />
+      </GlyphFrame>
+      <div className="relative z-10 min-w-0 flex-1">
+        <span
+          {...(titleField ? { "data-field": "item.title" } : {})}
+          className="font-sans text-sm font-semibold text-foreground"
+        >
+          {title}
+        </span>
+        <p className="mt-1 text-xs text-muted-foreground">{meta}</p>
+      </div>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        onClick={onToggle}
+        data-action="toggle-read -> toggled"
+        aria-label={unread ? "Mark as read" : "Mark as unread"}
+        title={unread ? "Unread — mark as read" : "Read — mark as unread"}
+        className="relative z-10 size-[26px] rounded-md text-primary"
+      >
+        {unread ? (
+          <span aria-hidden className="block size-2 rounded-full bg-primary" />
+        ) : (
+          <span aria-hidden className="block size-2 rounded-full border border-primary" />
+        )}
+      </Button>
+    </li>
+  );
+}
+
 function NotificationRow({
   title,
   meta,
@@ -173,6 +248,7 @@ function ApprovalRow({
   onDecide,
   isLast = false,
   sourceId,
+  href,
 }: {
   title: string;
   meta: string;
@@ -181,15 +257,23 @@ function ApprovalRow({
   onDecide?: () => void;
   isLast?: boolean;
   sourceId?: string;
+  /** When set, renders the §II "approval + href" species' stretched sibling
+   *  link (`activate -> navigated`, no read semantics) beneath the content. */
+  href?: string;
 }) {
   return (
     <li
       {...(sourceId ? { "data-source-id": sourceId } : {})}
       className={cn(
-        "flex items-start gap-3.5 px-3.5 py-3",
+        "relative flex items-start gap-3.5 px-3.5 py-3",
         isLast ? "" : "border-b border-line",
       )}
     >
+      {href ? (
+        <Button asChild variant="ghost" className="absolute inset-0 z-0 h-auto w-full justify-start border-0 bg-transparent p-0 shadow-none hover:bg-transparent">
+          <Link href={href} data-action="activate -> navigated" aria-label={`Open: ${title}`} />
+        </Button>
+      ) : null}
       <GlyphFrame tone={actionable ? "warning" : "muted"}>
         {actionable ? (
           <CircleCheck className="size-[17px]" />
@@ -197,7 +281,7 @@ function ApprovalRow({
           <Clock className="size-[17px]" />
         )}
       </GlyphFrame>
-      <div className="min-w-0 flex-1">
+      <div className="relative z-10 min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-sans text-sm font-semibold text-foreground">
             {title}
@@ -206,7 +290,7 @@ function ApprovalRow({
         </div>
         <p className="mt-1 text-xs text-muted-foreground">{meta}</p>
       </div>
-      <div className="flex-none">
+      <div className="relative z-10 flex-none">
         {decided ? (
           <span className="font-mono text-badge-xs text-muted-foreground">
             decided
@@ -312,31 +396,86 @@ const LIST_ITEM = {
   title: "Prospect list finished — 240 rows",
 } as const;
 
+// The href-navigation species — a resolvable href, proven by the resolved
+// `href` attribute (same pattern as notifications-bell's `open -> navigated`)
+// rather than actually firing the navigation in-test.
+const NAV_ITEM_HREF = "/data/prospect-lists/240-rows";
+
 function NotificationsListFixture() {
-  const [decided, setDecided] = useState(false);
+  const [outcome, setOutcome] = useState<"idle" | "decided" | "toggled" | "paged">("idle");
+  const [unread, setUnread] = useState(true);
+  const [page, setPage] = useState(1);
 
   return (
     <SurfaceSection title="Unified list (surface: notifications-list)">
       <div
         data-surface-id="notifications-list"
         data-variant="populated"
-        data-outcome={decided ? "decided" : "idle"}
+        data-outcome={outcome}
       >
-        <ListShell>
+        <ul className="grid gap-2" data-conformance-id="notifications-list">
           <ApprovalRow
             title="Approve access scope for Outreach agent"
             meta="Agent approval · requested by a teammate · 4 minutes ago"
             actionable
-            decided={decided}
-            onDecide={() => setDecided(true)}
+            decided={outcome === "decided"}
+            onDecide={() => setOutcome("decided")}
           />
-          <NotificationRow
+          {/* activate -> navigated: a notification WITH an href renders the
+              stretched sibling LINK; the outcome is the resolved navigation
+              target (never actually fired in-test). */}
+          <NotificationCardRow
             title={LIST_ITEM.title}
             meta="Prospect Lists · 22 minutes ago"
             titleField
-            isLast
+            unread
+            href={NAV_ITEM_HREF}
+            onToggle={() => {}}
           />
-        </ListShell>
+          {/* toggle-read -> toggled / activate -> toggled: an href-less
+              notification's trailing toggle AND its stretched button both
+              flip the same read-state. */}
+          <NotificationCardRow
+            title="Weekly digest ready"
+            meta="Reports · yesterday · no href"
+            unread={unread}
+            onToggle={() => {
+              setUnread((u) => !u);
+              setOutcome("toggled");
+            }}
+          />
+        </ul>
+        {/* page-prev -> paged / page-next -> paged: known-total numbered
+            pagination (§VII) over the filtered, post-collapse rows. */}
+        <div className="mt-3 flex items-center justify-center gap-2 font-mono text-xs text-muted-foreground">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-action="page-prev -> paged"
+            disabled={page <= 1}
+            onClick={() => {
+              setPage((p) => Math.max(1, p - 1));
+              setOutcome("paged");
+            }}
+          >
+            Prev
+          </Button>
+          <span data-slot="page-indicator">Page {page} of 2</span>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-action="page-next -> paged"
+            disabled={page >= 2}
+            onClick={() => {
+              setPage((p) => Math.min(2, p + 1));
+              setOutcome("paged");
+            }}
+          >
+            Next
+          </Button>
+        </div>
       </div>
 
       <div data-surface-id="notifications-list" data-variant="empty">
@@ -452,12 +591,37 @@ function NotificationsFiltersFixture() {
 // notification-row — state loading (plus a resting row so the surface renders).
 // ---------------------------------------------------------------------------
 function NotificationRowFixture() {
+  const [outcome, setOutcome] = useState<"idle" | "toggled">("idle");
+  const [unread, setUnread] = useState(true);
   return (
     <SurfaceSection title="Notification row (surface: notification-row)">
-      <div data-surface-id="notification-row" data-variant="populated">
-        <ListShell>
-          <NotificationRow title="Import finished" meta="Data · 5 min ago" isLast />
-        </ListShell>
+      <div
+        data-surface-id="notification-row"
+        data-variant="populated"
+        data-outcome={outcome}
+      >
+        <ul className="grid gap-2">
+          {/* activate -> navigated: the href species' stretched link, proven
+              by the resolved navigation target (never fired in-test). */}
+          <NotificationCardRow
+            title="Import finished"
+            meta="Data · 5 min ago"
+            unread
+            href="/data/imports/finished"
+            onToggle={() => {}}
+          />
+          {/* toggle-read -> toggled / activate -> toggled: the href-less
+              species' trailing toggle AND stretched button. */}
+          <NotificationCardRow
+            title="Weekly digest ready"
+            meta="Reports · yesterday · no href"
+            unread={unread}
+            onToggle={() => {
+              setUnread((u) => !u);
+              setOutcome("toggled");
+            }}
+          />
+        </ul>
       </div>
       <div data-surface-id="notification-row" data-variant="loading">
         <ListShell>
@@ -482,16 +646,21 @@ function ApprovalRowFixture() {
         data-variant="populated"
         data-outcome={decided ? "decided" : "idle"}
       >
-        <ListShell>
+        <ul className="grid gap-2">
+          {/* activate -> navigated: an approval WITH an href renders the
+              stretched sibling link (navigate only, no read semantics —
+              approvals never carry read-state), proven by the resolved
+              navigation target (never fired in-test). */}
           <ApprovalRow
             title="Approve connector install"
             meta="Marketplace · 12 min ago"
             actionable
             decided={decided}
             onDecide={() => setDecided(true)}
+            href="/marketplace/connectors/install/482"
             isLast
           />
-        </ListShell>
+        </ul>
       </div>
       <div data-surface-id="approval-row" data-variant="loading">
         <ListShell>

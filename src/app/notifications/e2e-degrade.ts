@@ -20,10 +20,11 @@ import "server-only";
 //
 // It reuses E5's public `deps.sources` injection seam — the data layer's own
 // merge/degrade logic is untouched. Only the INITIAL page render honors the
-// param; the `loadMoreUnifiedFeed` retry action does NOT (it re-resolves the
-// REAL sources), so clicking Retry re-requests the same (first-page) cursor and
-// REPLACES the partial tail with a healthy, non-degraded page — exactly the
-// §VI degrade → retry → recover round-trip, proven on the production build.
+// param; `feed-actions.ts`'s `fetchFeedWindow` retry action does NOT (it
+// re-resolves the REAL sources), so clicking Retry re-walks the union feed with
+// healthy sources and REPLACES the degraded window with a healthy one —
+// exactly the §VI degrade → retry → recover round-trip, proven on the
+// production build.
 // ---------------------------------------------------------------------------
 
 import type {

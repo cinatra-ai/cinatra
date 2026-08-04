@@ -93,29 +93,34 @@ test.describe("§II — one row shell, two species; eligibility, not raw pending
   }) => {
     await gotoFeed(page);
 
-    // The unread error notification renders its read-dot.
+    // The unread error notification renders the read/unread toggle in its
+    // "mark as read" (i.e. currently unread) state (§II "one glyph, two
+    // states").
     const errRow = page
       .locator('[data-conformance-id="notification-row"]')
       .filter({ hasText: "Blog Post Idea Generation failed" });
-    await expect(errRow.getByLabel("Unread")).toBeVisible();
+    await expect(errRow.getByRole("button", { name: "Mark as read" })).toBeVisible();
 
-    // Neither approval row renders a read-dot (read-state is notifications-only).
+    // Neither approval row renders a read/unread toggle (read-state is
+    // notifications-only) — approvals never carry a "Mark as read" control.
     await expect(
-      page.locator('[data-conformance-id="approval-row"]').getByLabel("Unread"),
+      page.locator('[data-conformance-id="approval-row"]').getByRole("button", { name: "Mark as read" }),
     ).toHaveCount(0);
   });
 });
 
-test.describe("§III — four filter chips filter the ONE list in place", () => {
-  test("§III · All is the default chip and shows every row", async ({ page }) => {
+test.describe("§III — the toolbar toggle group filters the ONE list in place", () => {
+  test("§III · All is the default segment and shows every row", async ({ page }) => {
     await gotoFeed(page);
     const filters = page.locator('[data-conformance-id="notifications-filters"]');
 
-    const all = filters.getByRole("button", { name: "All", exact: true });
-    await expect(all).toHaveAttribute("aria-pressed", "true");
+    const all = filters.getByRole("radio", { name: "All", exact: true });
+    await expect(all).toHaveAttribute("aria-checked", "true");
 
-    // The four chips are BUTTONS with aria-pressed — never a Radix tablist.
-    await expect(filters.getByRole("button")).toHaveCount(4);
+    // The four segments are a Radix single-select toggle GROUP (role
+    // "radiogroup" / "radio", matching the shipped /connectors toolbar toggle)
+    // — never a Radix tablist.
+    await expect(filters.getByRole("radio")).toHaveCount(4);
     await expect(page.locator('[role="tablist"]')).toHaveCount(0);
 
     await expect(page.locator('[data-conformance-id="notification-row"]')).toHaveCount(6);
@@ -127,11 +132,11 @@ test.describe("§III — four filter chips filter the ONE list in place", () => 
   }) => {
     await gotoFeed(page);
     const filters = page.locator('[data-conformance-id="notifications-filters"]');
-    const needs = filters.getByRole("button", { name: /^Needs action/ });
+    const needs = filters.getByRole("radio", { name: /^Needs action/ });
 
     await expect(needs).toContainText("1"); // count badge
     await needs.click();
-    await expect(needs).toHaveAttribute("aria-pressed", "true");
+    await expect(needs).toHaveAttribute("aria-checked", "true");
 
     // Exactly the one actionable approval; the non-actionable mine row and every
     // notification (even the actionable E9 one) are filtered OUT.
@@ -145,7 +150,7 @@ test.describe("§III — four filter chips filter the ONE list in place", () => 
   test("§III · Unread = unread NOTIFICATIONS only (count 4, no approvals)", async ({ page }) => {
     await gotoFeed(page);
     const filters = page.locator('[data-conformance-id="notifications-filters"]');
-    const unread = filters.getByRole("button", { name: /^Unread/ });
+    const unread = filters.getByRole("radio", { name: /^Unread/ });
 
     await expect(unread).toContainText("4");
     await unread.click();
@@ -157,7 +162,7 @@ test.describe("§III — four filter chips filter the ONE list in place", () => 
   test("§III · In progress = the running background row (count 1)", async ({ page }) => {
     await gotoFeed(page);
     const filters = page.locator('[data-conformance-id="notifications-filters"]');
-    const inProgress = filters.getByRole("button", { name: /^In progress/ });
+    const inProgress = filters.getByRole("radio", { name: /^In progress/ });
 
     await expect(inProgress).toContainText("1");
     await inProgress.click();
@@ -181,14 +186,15 @@ test.describe("§V — the E9 run-awaiting-human row is a notification, not an a
       .filter({ hasText: "awaiting your approval" });
     await expect(e9Row).toHaveCount(1);
 
-    // Its title is an "open -> navigated" deep-link to the run's approval surface.
-    const link = e9Row.locator('[data-action="open -> navigated"]');
+    // The whole card is the "activate -> navigated" stretched-overlay deep-link
+    // to the run's approval surface (§II whole-card activation, by species).
+    const link = e9Row.locator('[data-action="activate -> navigated"]');
     await expect(link).toBeVisible();
     await expect(link).toHaveAttribute("href", /\/agents\/acme\/sales\/RUN-E9-UAT$/);
 
     // It counts under Unread (a notification), never Needs-action (approval-only).
     const filters = page.locator('[data-conformance-id="notifications-filters"]');
-    await filters.getByRole("button", { name: /^Needs action/ }).click();
+    await filters.getByRole("radio", { name: /^Needs action/ }).click();
     await expect(e9Row).toHaveCount(0);
   });
 });

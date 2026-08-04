@@ -113,7 +113,20 @@ export type SurfaceDriver = {
    * against a stale driver (mirrors the action-outcome check).
    */
   fields: Record<string, { source: string; assert: (page: Page, root: Locator) => Promise<void> }>;
-  actions: Record<string, { outcome: string; run: (page: Page, root: Locator) => Promise<void> }>;
+  /**
+   * Keyed by action NAME. A manifest may annotate the SAME action name twice
+   * with DIFFERENT outcomes when it is genuinely polymorphic by species — the
+   * notifications spec's whole-card "activate" is `-> navigated` on a
+   * notification/approval WITH an href and `-> toggled` on an href-less
+   * notification (app-notifications.json, cinatra#2380). An array of driver
+   * entries covers that case (the suite matches by `.outcome`); the common
+   * single-outcome case stays a bare object for every other driver.
+   */
+  actions: Record<
+    string,
+    | { outcome: string; run: (page: Page, root: Locator) => Promise<void> }
+    | Array<{ outcome: string; run: (page: Page, root: Locator) => Promise<void> }>
+  >;
   states: Record<string, StateAssert>;
   /** Requires the seeded fixture kit (ensureSeeded runs before its tests). */
   seeded?: boolean;
@@ -1328,6 +1341,66 @@ const NOTIFICATIONS_LIST_DRIVER: SurfaceDriver = {
         );
       },
     },
+    // "activate" is polymorphic by species (§II): -> navigated on a
+    // notification/approval WITH an href (the stretched sibling LINK — proven
+    // by the resolved navigation target, never fired in-test), -> toggled on
+    // an href-less notification (the stretched sibling BUTTON, which flips
+    // read-state exactly like the trailing toggle).
+    activate: [
+      {
+        outcome: "navigated",
+        run: async (_page, root) => {
+          await expect(
+            root.locator('[data-action="activate -> navigated"]').first(),
+          ).toHaveAttribute("href", "/data/prospect-lists/240-rows");
+        },
+      },
+      {
+        outcome: "toggled",
+        run: async (_page, root) => {
+          await clickUntil(
+            root.locator('[data-action="activate -> toggled"]'),
+            async () => {
+              await expect(root).toHaveAttribute("data-outcome", "toggled", { timeout: 2_000 });
+            },
+          );
+        },
+      },
+    ],
+    // toggle-read -> toggled: the per-card trailing toggle button (§II "one
+    // glyph, two states").
+    "toggle-read": {
+      outcome: "toggled",
+      run: async (_page, root) => {
+        await clickUntil(
+          root.locator('[data-action="toggle-read -> toggled"]').last(),
+          async () => {
+            await expect(root).toHaveAttribute("data-outcome", "toggled", { timeout: 2_000 });
+          },
+        );
+      },
+    },
+    // page-prev -> paged / page-next -> paged: known-total numbered
+    // pagination (§VII) — the pager next/prev controls page the FILTERED,
+    // post-collapse rendered rows.
+    "page-prev": {
+      outcome: "paged",
+      run: async (_page, root) => {
+        // Advance to page 2 first so "Previous" is enabled.
+        await root.locator('[data-action="page-next -> paged"]').click();
+        await clickUntil(root.locator('[data-action="page-prev -> paged"]'), async () => {
+          await expect(root).toHaveAttribute("data-outcome", "paged", { timeout: 2_000 });
+        });
+      },
+    },
+    "page-next": {
+      outcome: "paged",
+      run: async (_page, root) => {
+        await clickUntil(root.locator('[data-action="page-next -> paged"]'), async () => {
+          await expect(root).toHaveAttribute("data-outcome", "paged", { timeout: 2_000 });
+        });
+      },
+    },
   },
   states: {
     // The one universal empty state — exactly "No notifications" (§V).
@@ -1390,11 +1463,46 @@ const NOTIFICATION_ROW_DRIVER: SurfaceDriver = {
   root: harnessRoot("notification-row"),
   present: async (_page, root) => {
     await expect(root.getByText("Import finished")).toBeVisible();
-    // A notification row carries the read-dot (§II) — approvals never do.
-    await expect(root.getByLabel("Unread")).toBeVisible();
+    // The read/unread toggle (§II "one glyph, two states") — approvals never
+    // carry one.
+    await expect(root.getByRole("button", { name: "Mark as read" }).first()).toBeVisible();
   },
   fields: {},
-  actions: {},
+  actions: {
+    // "activate" is polymorphic by species (§II) — see NOTIFICATIONS_LIST_DRIVER.
+    activate: [
+      {
+        outcome: "navigated",
+        run: async (_page, root) => {
+          await expect(
+            root.locator('[data-action="activate -> navigated"]').first(),
+          ).toHaveAttribute("href", "/data/imports/finished");
+        },
+      },
+      {
+        outcome: "toggled",
+        run: async (_page, root) => {
+          await clickUntil(
+            root.locator('[data-action="activate -> toggled"]'),
+            async () => {
+              await expect(root).toHaveAttribute("data-outcome", "toggled", { timeout: 2_000 });
+            },
+          );
+        },
+      },
+    ],
+    "toggle-read": {
+      outcome: "toggled",
+      run: async (_page, root) => {
+        await clickUntil(
+          root.locator('[data-action="toggle-read -> toggled"]').last(),
+          async () => {
+            await expect(root).toHaveAttribute("data-outcome", "toggled", { timeout: 2_000 });
+          },
+        );
+      },
+    },
+  },
   states: {
     loading: async (page) => {
       await expect(
@@ -1425,6 +1533,17 @@ const APPROVAL_ROW_DRIVER: SurfaceDriver = {
             await expect(root).toHaveAttribute("data-outcome", "decided", { timeout: 2_000 });
           },
         );
+      },
+    },
+    // activate -> navigated: an approval WITH an href renders the stretched
+    // sibling link — navigate only, no read semantics (approvals never carry
+    // read-state).
+    activate: {
+      outcome: "navigated",
+      run: async (_page, root) => {
+        await expect(
+          root.locator('[data-action="activate -> navigated"]').first(),
+        ).toHaveAttribute("href", "/marketplace/connectors/install/482");
       },
     },
   },

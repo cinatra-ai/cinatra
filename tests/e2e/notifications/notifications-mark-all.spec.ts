@@ -27,7 +27,7 @@ test.describe("mark-all-read boundary semantics (watermark, not blanket)", () =>
   }) => {
     await gotoFeed(page);
     const filters = page.locator('[data-conformance-id="notifications-filters"]');
-    const unreadChip = filters.getByRole("button", { name: /^Unread/ });
+    const unreadChip = filters.getByRole("radio", { name: /^Unread/ });
     await expect(unreadChip).toContainText("4");
 
     const markAll = page.getByRole("button", { name: "Mark all read" });
@@ -53,7 +53,7 @@ test.describe("mark-all-read boundary semantics (watermark, not blanket)", () =>
     await gotoFeed(page);
     await expect(page.getByRole("button", { name: "Mark all read" })).toBeDisabled();
     await expect(
-      page.locator('[data-conformance-id="notifications-filters"]').getByRole("button", {
+      page.locator('[data-conformance-id="notifications-filters"]').getByRole("radio", {
         name: /^Unread/,
       }),
     ).not.toContainText("4");

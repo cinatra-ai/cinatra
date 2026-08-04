@@ -52,9 +52,9 @@ test.describe("§II — inline decide round-trip (reject → row disappears)", (
     await expect(
       page.locator('[data-conformance-id="approval-row"]').filter({ hasText: INBOX_APPROVAL }),
     ).toHaveCount(0);
-    // The Needs-action chip has nothing left to act on.
+    // The Needs-action segment has nothing left to act on.
     await expect(
-      page.locator('[data-conformance-id="notifications-filters"]').getByRole("button", {
+      page.locator('[data-conformance-id="notifications-filters"]').getByRole("radio", {
         name: /^Needs action/,
       }),
     ).not.toContainText("1");

@@ -196,15 +196,23 @@ for (const pm of manifests) {
               allowedAspects.has(`action:${action.action}`),
               `shrink-only allowlist (aspect action:${action.action}): ${allowEntry?.reason}`,
             );
-            const actionDriver = driver.actions[action.action];
-            if (!actionDriver) {
+            const actionEntry = driver.actions[action.action];
+            if (!actionEntry) {
               throw new Error(
                 `Manifest action "${action.action}" on surface "${surface.id}" has no action driver in contract.ts — an annotated action with no assertion counts as UNCOVERED (cinatra#986)`,
               );
             }
-            if (actionDriver.outcome !== action.outcome) {
+            // An action name is usually one outcome, but a genuinely
+            // polymorphic action (the notifications spec's whole-card
+            // "activate": -> navigated with an href, -> toggled without) is
+            // declared as an ARRAY of driver entries, matched by outcome.
+            const candidates = Array.isArray(actionEntry) ? actionEntry : [actionEntry];
+            const actionDriver = candidates.find((d) => d.outcome === action.outcome);
+            if (!actionDriver) {
               throw new Error(
-                `Driver for "${surface.id}.${action.action}" asserts outcome "${actionDriver.outcome}" but the pinned manifest specifies "${action.outcome}" — reconcile contract.ts with the manifest`,
+                `Driver for "${surface.id}.${action.action}" declares outcome(s) [${candidates
+                  .map((d) => d.outcome)
+                  .join(", ")}] but the pinned manifest specifies "${action.outcome}" — reconcile contract.ts with the manifest`,
               );
             }
             await actionDriver.run(page, driver.root(page));

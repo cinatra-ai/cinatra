@@ -4,9 +4,10 @@
 // Pure, framework-free mapping from E5's `UnifiedFeedItem` (server data layer,
 // `src/app/configuration/approvals/unified-feed.ts`) to a SERIALIZABLE row
 // view-model the client feed renders. Kept `server-only`-free so BOTH the
-// server page (initial paint) and the `loadMoreUnifiedFeed` server action reuse
-// one mapper, and so the client can import the TYPES (erased at build) and the
-// pure filter/derivation helpers.
+// server page (initial paint) and `feed-window.ts`'s bounded union-feed walk
+// (cinatra#2380, S2 — the `loadFeedWindow`/`fetchFeedWindow` known-total
+// pagination path) reuse one mapper, and so the client can import the TYPES
+// (erased at build) and the pure filter/derivation/pagination helpers.
 //
 // Why a view-model rather than the raw row: `ApprovalRow.raw` is adapter-private
 // (and possibly non-serializable), so we PICK only the public, serializable
@@ -47,8 +48,15 @@ const HOST_PORT_GRANTS_SOURCE_ID = "extension-host-port-grants";
 const MARKETPLACE_SUBMISSION_MODERATION_SOURCE_ID = "marketplace-submission-moderation";
 const MARKETPLACE_VENDOR_APP_MODERATION_SOURCE_ID = "marketplace-vendor-app-moderation";
 
-/** Page window for both the initial server load and each `loadMore` page. */
-export const FEED_PAGE_SIZE = 30;
+/**
+ * Rendered rows per page (design@0.1.2 §VII "Pagination — 25 per page"),
+ * counted over the FILTERED, POST-COLLAPSE rendered rows — never over raw
+ * fetched rows. Down from the v1 "Load more" page size of 30. The server-side
+ * fetch batch size used to WALK the underlying keyset union until a page's
+ * worth of filtered rows is available is a separate, larger constant (see
+ * {@link ./feed-window.ts}'s `FEED_FETCH_BATCH_SIZE`) — never conflate the two.
+ */
+export const FEED_PAGE_SIZE = 25;
 
 /**
  * The inline decide affordance an ACTIONABLE approval row renders in its
@@ -290,3 +298,67 @@ export function keysForChip(d: FeedDerivation, chip: FilterChip): Set<string> {
 export function notificationIsUnread(n: AppNotification): boolean {
   return !n.readAt && !isRunningProgressNotification(n);
 }
+
+// ---------------------------------------------------------------------------
+// §VII Pagination — known-total, 25/page over the filtered, post-collapse rows.
+// ---------------------------------------------------------------------------
+
+/** One numbered page of the feed for a given filter tab. `page` is 1-indexed
+ *  and CLAMPED to `[1, pageCount]` (a stale/out-of-range request — e.g. a tab
+ *  switch that shrinks the row count — never yields an empty page 7 of 3). */
+export interface FeedWindowVM {
+  pageItems: FeedRowVM[];
+  page: number;
+  pageCount: number;
+  /** Rows in `chip`'s filtered, post-collapse set — the pager's "N" (§VII: a
+   *  known total, like every other list — never the unknown-total variant). */
+  total: number;
+  needsActionCount: number;
+  unreadCount: number;
+  inProgressCount: number;
+  /** True when the WHOLE feed (every chip, unfiltered) is empty — the §V
+   *  universal "No notifications" state. A chip that merely matches zero rows
+   *  while the feed itself is non-empty is a different, non-universal empty
+   *  ("nothing needs action right now"). */
+  feedIsEmpty: boolean;
+}
+
+/**
+ * Slice ONE fully-walked, ordered VM list (every row the union feed holds, or
+ * as many as the server's bounded walk could gather — see `feed-window.ts`)
+ * into the requested page for `chip`. Pure — the walk/backfill (fetching
+ * enough keyset segments to cover the request) is the server's job; this
+ * function only counts and slices what it is handed, so it is exercised
+ * directly by unit tests without a DB.
+ */
+export function paginateFeed(
+  vms: FeedRowVM[],
+  chip: FilterChip,
+  page: number,
+  pageSize: number = FEED_PAGE_SIZE,
+): FeedWindowVM {
+  const derivation = deriveFeed(vms, CURRENT_PATHNAME_UNUSED);
+  const visibleKeys = keysForChip(derivation, chip);
+  const visible = vms.filter((v) => visibleKeys.has(v.key));
+  const total = visible.length;
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  const safePage = Math.min(Math.max(1, page), pageCount);
+  const start = (safePage - 1) * pageSize;
+  const pageItems = visible.slice(start, start + pageSize);
+  return {
+    pageItems,
+    page: safePage,
+    pageCount,
+    total,
+    needsActionCount: derivation.needsActionCount,
+    unreadCount: derivation.unreadCount,
+    inProgressCount: derivation.inProgressCount,
+    feedIsEmpty: derivation.allKeys.size === 0,
+  };
+}
+
+// `deriveFeed`'s `pathname` param only affects the flyout's mark-read-on-
+// navigate Unread derivation for the CURRENT route; the feed page always
+// derives against itself, so this is a fixed constant rather than a param
+// threaded through every caller of `paginateFeed`.
+const CURRENT_PATHNAME_UNUSED = "/notifications";

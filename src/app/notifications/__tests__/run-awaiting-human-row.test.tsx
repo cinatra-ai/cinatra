@@ -25,16 +25,28 @@ import {
   getRunAwaitingHumanMetadata,
 } from "@cinatra-ai/notifications/flyout-state";
 
-const { loadMore } = vi.hoisted(() => ({
-  loadMore: vi.fn(async () => ({ items: [], nextCursor: null, degraded: false })),
+const { fetchFeedWindow } = vi.hoisted(() => ({
+  fetchFeedWindow: vi.fn(async () => ({
+    pageItems: [],
+    page: 1,
+    pageCount: 1,
+    total: 0,
+    needsActionCount: 0,
+    unreadCount: 0,
+    inProgressCount: 0,
+    feedIsEmpty: true,
+    degraded: false,
+    capped: false,
+    newestNotification: null,
+  })),
 }));
-vi.mock("../feed-actions", () => ({ loadMoreUnifiedFeed: loadMore }));
+vi.mock("../feed-actions", () => ({ fetchFeedWindow }));
 vi.mock("../approval-inline-actions", () => ({
   ApprovalInlineActions: () => null,
 }));
 
 import type { FeedRowVM } from "../feed-view-model";
-import { buildFeedRowVMs, deriveFeed } from "../feed-view-model";
+import { buildFeedRowVMs, deriveFeed, paginateFeed } from "../feed-view-model";
 import { NotificationsFeed } from "../notifications-feed";
 
 function runAwaitingHumanNotification(): AppNotification {
@@ -86,21 +98,26 @@ describe("run_awaiting_human — browser-safe feed classification helpers", () =
 });
 
 describe("run_awaiting_human — renders as an actionable row in the unified feed", () => {
-  it("renders a notification row whose title Link deep-links to the run's approval", () => {
+  it("renders a notification card whose stretched-overlay link deep-links to the run's approval", () => {
+    const vms = [runAwaitingHumanVM()];
     const html = renderToString(
       React.createElement(NotificationsFeed, {
-        initialItems: [runAwaitingHumanVM()],
-        initialNextCursor: null,
-        initialDegraded: false,
+        initialWindow: {
+          ...paginateFeed(vms, "all", 1, 25),
+          degraded: false,
+          capped: false,
+          newestNotification: { id: "n-1", createdAt: "2026-07-15T05:12:13.000Z" },
+        },
       }),
     );
 
     // Renders through the notification row-shell.
     expect(html).toContain('data-conformance-id="notification-row"');
     expect(html).toContain("is awaiting your approval");
-    // The inline action: the title is an "open -> navigated" Link to the run.
+    // Whole-card activation: an href notification's stretched sibling link is
+    // an "activate -> navigated" Link to the run (§II).
     expect(html).toContain('href="/agents/acme/sales/R1"');
-    expect(html).toContain('data-action="open -&gt; navigated"');
+    expect(html).toContain('data-action="activate -&gt; navigated"');
   });
 });
 

@@ -29,12 +29,13 @@ test.describe("§V — one universal empty state", () => {
     await expect(page.locator('[data-conformance-id="approval-row"]')).toHaveCount(0);
     await expect(page.locator('[data-conformance-id="notifications-degraded"]')).toHaveCount(0);
 
-    // The chip rail still renders (All is the default), it just filters nothing.
+    // The toolbar toggle group still renders (All is the default), it just
+    // filters nothing.
     await expect(
-      page.locator('[data-conformance-id="notifications-filters"]').getByRole("button", {
+      page.locator('[data-conformance-id="notifications-filters"]').getByRole("radio", {
         name: "All",
         exact: true,
       }),
-    ).toHaveAttribute("aria-pressed", "true");
+    ).toHaveAttribute("aria-checked", "true");
   });
 });

@@ -11,6 +11,7 @@ import {
   isApprovalActionable,
   keysForChip,
   notificationIsUnread,
+  paginateFeed,
   type FeedRowVM,
 } from "../feed-view-model";
 
@@ -231,5 +232,86 @@ describe("notificationIsUnread", () => {
     expect(notificationIsUnread(notif({ readAt: undefined }))).toBe(true);
     expect(notificationIsUnread(notif({ readAt: "2026-05-15T06:30:00Z" }))).toBe(false);
     expect(notificationIsUnread(running("r", "j", "2026-05-15T05:00:00Z"))).toBe(false);
+  });
+});
+
+// --- paginateFeed — §VII known-total pagination -----------------------------
+
+/** `n` notifications, newest first, 1 minute apart, ids `p-0`(newest)…`p-{n-1}`. */
+function manyNotifs(n: number): FeedRowVM[] {
+  const base = Date.parse("2026-05-15T12:00:00.000Z");
+  const items: UnifiedFeedItem[] = [];
+  for (let i = 0; i < n; i++) {
+    items.push(
+      notifItem(notif({ id: `p-${i}`, createdAt: new Date(base - i * 60_000).toISOString() })),
+    );
+  }
+  return buildFeedRowVMs(items);
+}
+
+describe("paginateFeed — §VII known-total, 25/page over the filtered rows", () => {
+  it("slices page 1 of a small feed into one page, total = row count", () => {
+    const vms = manyNotifs(5);
+    const w = paginateFeed(vms, "all", 1, 25);
+    expect(w.total).toBe(5);
+    expect(w.pageCount).toBe(1);
+    expect(w.page).toBe(1);
+    expect(w.pageItems).toHaveLength(5);
+    // Newest first — the page starts with the most recent row.
+    expect(w.pageItems[0]!.key).toBe("notification:p-0");
+  });
+
+  it("splits a 26-row feed into exactly two pages at 25/page (the pager threshold)", () => {
+    const vms = manyNotifs(26);
+    const p1 = paginateFeed(vms, "all", 1, 25);
+    expect(p1.total).toBe(26);
+    expect(p1.pageCount).toBe(2);
+    expect(p1.pageItems).toHaveLength(25);
+
+    const p2 = paginateFeed(vms, "all", 2, 25);
+    expect(p2.pageItems).toHaveLength(1);
+    expect(p2.pageItems[0]!.key).toBe("notification:p-25");
+  });
+
+  it("a 25-row feed shows exactly one page (never a trailing empty page)", () => {
+    const w = paginateFeed(manyNotifs(25), "all", 1, 25);
+    expect(w.pageCount).toBe(1);
+    expect(w.pageItems).toHaveLength(25);
+  });
+
+  it("clamps an out-of-range page to the last page", () => {
+    const w = paginateFeed(manyNotifs(26), "all", 99, 25);
+    expect(w.page).toBe(2);
+    expect(w.pageItems).toHaveLength(1);
+  });
+
+  it("clamps page 0 / negative pages up to page 1", () => {
+    const w = paginateFeed(manyNotifs(5), "all", 0, 25);
+    expect(w.page).toBe(1);
+  });
+
+  it("an empty feed is one page of zero rows, never zero pages", () => {
+    const w = paginateFeed([], "all", 1, 25);
+    expect(w.total).toBe(0);
+    expect(w.pageCount).toBe(1);
+    expect(w.pageItems).toHaveLength(0);
+    expect(w.feedIsEmpty).toBe(true);
+  });
+
+  it("paginates the FILTERED, POST-COLLAPSE rows — a chip narrows total/pageCount independently of 'all'", () => {
+    const vms: FeedRowVM[] = buildFeedRowVMs([
+      apprItem(row({ sourceId: "agent-creation-requests", id: "a-eligible" }), "inbox"),
+      notifItem(notif({ id: "n-unread", createdAt: "2026-05-15T07:00:00Z" })),
+      notifItem(notif({ id: "n-read", readAt: "2026-05-15T06:30:00Z", createdAt: "2026-05-15T06:00:00Z" })),
+    ]);
+    const all = paginateFeed(vms, "all", 1, 25);
+    expect(all.total).toBe(3);
+    const unread = paginateFeed(vms, "unread", 1, 25);
+    expect(unread.total).toBe(1);
+    expect(unread.pageItems).toHaveLength(1);
+    // feedIsEmpty reflects the WHOLE feed, not the narrower chip's total.
+    expect(unread.feedIsEmpty).toBe(false);
+    // Global chip counts are unaffected by which chip is active.
+    expect(unread.needsActionCount).toBe(1);
   });
 });

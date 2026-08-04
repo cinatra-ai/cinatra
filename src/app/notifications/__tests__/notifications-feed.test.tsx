@@ -7,20 +7,29 @@ import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Isolate the client body from its heavy graph: the pagination server action
-// (drags the `server-only` E5 layer) and the per-source decide components (drag
-// the agents/marketplace runtimes) are mocked. The real `feed-view-model` (pure)
-// is used so the filter derivation under test is genuine. `vi.hoisted` gives the
-// mock factory a reference that survives the hoist above the imports.
-const { loadMore } = vi.hoisted(() => ({
-  loadMore: vi.fn(
-    async (): Promise<{
-      items: import("../feed-view-model").FeedRowVM[];
-      nextCursor: string | null;
-      degraded: boolean;
-    }> => ({ items: [], nextCursor: null, degraded: false }),
+// (drags the `server-only` union-feed walk) and the per-source decide
+// components (drag the agents/marketplace runtimes) are mocked. The real
+// `feed-view-model` (pure) is used so `paginateFeed`/`deriveFeed` under test
+// are genuine. `vi.hoisted` gives the mock factory a reference that survives
+// the hoist above the imports.
+const { fetchFeedWindow } = vi.hoisted(() => ({
+  fetchFeedWindow: vi.fn(
+    async (): Promise<import("../feed-window").FeedWindowResult> => ({
+      pageItems: [],
+      page: 1,
+      pageCount: 1,
+      total: 0,
+      needsActionCount: 0,
+      unreadCount: 0,
+      inProgressCount: 0,
+      feedIsEmpty: true,
+      degraded: false,
+      capped: false,
+      newestNotification: null,
+    }),
   ),
 }));
-vi.mock("../feed-actions", () => ({ loadMoreUnifiedFeed: loadMore }));
+vi.mock("../feed-actions", () => ({ fetchFeedWindow }));
 vi.mock("../approval-inline-actions", () => ({
   ApprovalInlineActions: ({ onDecided }: { onDecided: () => void }) =>
     React.createElement(
@@ -31,6 +40,8 @@ vi.mock("../approval-inline-actions", () => ({
 }));
 
 import type { FeedRowVM } from "../feed-view-model";
+import { paginateFeed } from "../feed-view-model";
+import type { FeedWindowResult } from "../feed-window";
 import { NotificationsFeed } from "../notifications-feed";
 
 function notifVM(over: {
@@ -40,6 +51,7 @@ function notifVM(over: {
   kind?: "success" | "error" | "warning" | "info";
   createdAt?: string;
   readAt?: string;
+  href?: string;
 }): FeedRowVM {
   return {
     key: `notification:${over.id}`,
@@ -52,6 +64,7 @@ function notifVM(over: {
       kind: over.kind ?? "success",
       createdAt: over.createdAt ?? "2026-05-15T05:12:13.000Z",
       readAt: over.readAt,
+      href: over.href,
     },
   };
 }
@@ -80,12 +93,30 @@ function approvalVM(over: {
   };
 }
 
-function feed(items: FeedRowVM[], opts?: { nextCursor?: string | null; degraded?: boolean }) {
-  return React.createElement(NotificationsFeed, {
-    initialItems: items,
-    initialNextCursor: opts?.nextCursor ?? null,
-    initialDegraded: opts?.degraded ?? false,
-  });
+/** Build a `FeedWindowResult` the same way the server would (§VII): paginate
+ *  the "all"-derivation, then hand-attach the newest-notification boundary. */
+function buildWindow(
+  vms: FeedRowVM[],
+  opts?: { chip?: import("../feed-view-model").FilterChip; page?: number; degraded?: boolean },
+): FeedWindowResult {
+  const window = paginateFeed(vms, opts?.chip ?? "all", opts?.page ?? 1, 25);
+  const newestVm = vms.find((v) => v.kind === "notification");
+  return {
+    ...window,
+    degraded: opts?.degraded ?? false,
+    capped: false,
+    newestNotification:
+      newestVm && newestVm.kind === "notification"
+        ? { id: newestVm.notification.id, createdAt: newestVm.createdAt }
+        : null,
+  };
+}
+
+function feed(
+  vms: FeedRowVM[],
+  opts?: { chip?: import("../feed-view-model").FilterChip; page?: number; degraded?: boolean },
+) {
+  return React.createElement(NotificationsFeed, { initialWindow: buildWindow(vms, opts) });
 }
 
 async function mount(element: React.ReactElement): Promise<HTMLElement> {
@@ -111,6 +142,19 @@ function buttonByText(root: ParentNode, text: string): HTMLButtonElement | undef
   ) as HTMLButtonElement | undefined;
 }
 
+/** The toggle-group filter segments render as `role="radio"` (Radix single-
+ *  select ToggleGroup, matching the shipped /connectors toolbar toggle —
+ *  never a Radix tablist). */
+function radioByText(root: ParentNode, text: string): HTMLElement | undefined {
+  return [...root.querySelectorAll('[role="radio"]')].find((b) =>
+    (b.textContent ?? "").includes(text),
+  ) as HTMLElement | undefined;
+}
+
+function elementByAriaLabel(root: ParentNode, label: string): HTMLElement | undefined {
+  return root.querySelector(`[aria-label="${label}"]`) as HTMLElement | undefined;
+}
+
 /** The JSON bodies of every PATCH the stubbed global `fetch` received. */
 function patchBodies(): unknown[] {
   const fetchMock = globalThis.fetch as unknown as {
@@ -122,7 +166,7 @@ function patchBodies(): unknown[] {
 }
 
 beforeEach(() => {
-  loadMore.mockClear();
+  fetchFeedWindow.mockClear();
   vi.stubGlobal(
     "fetch",
     vi.fn(() => Promise.resolve({ ok: true, json: async () => ({}) })),
@@ -160,15 +204,24 @@ describe("NotificationsFeed — server render", () => {
     expect(html).toContain('data-conformance-id="notifications-degraded"');
   });
 
-  it("renders the four filter chips with All pressed by default", () => {
+  it("renders the toolbar toggle group with All selected by default — never a tablist", () => {
     const html = renderToString(
       feed([approvalVM({ id: "a1", actionable: true }), notifVM({ id: "n1", kind: "info", readAt: undefined })]),
     );
     for (const label of ["All", "Needs action", "Unread", "In progress"]) {
       expect(html).toContain(label);
     }
-    // "All" chip carries aria-pressed="true".
-    expect(html).toMatch(/aria-pressed="true"[^>]*>\s*All/);
+    expect(html).toContain('role="radiogroup"');
+    expect(html).not.toContain('role="tablist"');
+    // "All" segment is aria-checked (Radix single-select semantics).
+    expect(html).toMatch(/aria-checked="true"[^>]*>\s*All/);
+  });
+
+  it("renders spaced cards with a stretched-overlay activation, not a hairline-divided row list", () => {
+    const html = renderToString(feed([notifVM({ id: "n1", href: "/x" })]));
+    expect(html).toContain('data-action="activate -&gt; navigated"');
+    // Never role="button" on the card itself (§II).
+    expect(html).not.toMatch(/data-conformance-id="notification-row"[^>]*role="button"/);
   });
 });
 
@@ -192,22 +245,23 @@ describe("NotificationsFeed — hydration", () => {
   });
 });
 
-describe("NotificationsFeed — §III filters narrow the one list in place", () => {
-  it("Needs action shows only viewer-actionable approvals", async () => {
-    const container = await mount(
-      feed([
-        approvalVM({ id: "a-eligible", actionable: true }),
-        approvalVM({ id: "a-mine", actionable: false }),
-        notifVM({ id: "n-unread", kind: "info" }),
-      ]),
-    );
+describe("NotificationsFeed — §III toolbar toggle narrows the one list, server-side", () => {
+  it("selecting Needs action fetches page 1 of the 'needs-action' window", async () => {
+    const vms = [
+      approvalVM({ id: "a-eligible", actionable: true }),
+      approvalVM({ id: "a-mine", actionable: false }),
+      notifVM({ id: "n-unread", kind: "info" }),
+    ];
+    const container = await mount(feed(vms));
     expect(container.querySelectorAll('[data-conformance-id="approval-row"]').length).toBe(2);
 
+    fetchFeedWindow.mockResolvedValueOnce(buildWindow(vms, { chip: "needs-action" }));
     await act(async () => {
-      click(buttonByText(container, "Needs action"));
+      click(radioByText(container, "Needs action"));
       await Promise.resolve();
     });
 
+    expect(fetchFeedWindow).toHaveBeenCalledWith("needs-action", 1);
     const approvals = container.querySelectorAll('[data-conformance-id="approval-row"]');
     const notifs = container.querySelectorAll('[data-conformance-id="notification-row"]');
     expect(approvals.length).toBe(1);
@@ -215,20 +269,15 @@ describe("NotificationsFeed — §III filters narrow the one list in place", () 
     expect(container.textContent).toContain("Approve access scope for Outreach agent");
   });
 
-  it("Unread shows only unread notifications; approvals are never in it", async () => {
-    const container = await mount(
-      feed([
-        approvalVM({ id: "a-eligible", actionable: true }),
-        notifVM({ id: "n-unread", kind: "info", readAt: undefined }),
-        notifVM({ id: "n-read", readAt: "2026-05-15T06:30:00Z" }),
-      ]),
-    );
+  it("switching tabs resets to page 1", async () => {
+    const vms = [notifVM({ id: "n1" })];
+    const container = await mount(feed(vms, { page: 1 }));
+    fetchFeedWindow.mockResolvedValueOnce(buildWindow(vms, { chip: "unread" }));
     await act(async () => {
-      click(buttonByText(container, "Unread"));
+      click(radioByText(container, "Unread"));
       await Promise.resolve();
     });
-    expect(container.querySelectorAll('[data-conformance-id="approval-row"]').length).toBe(0);
-    expect(container.querySelectorAll('[data-conformance-id="notification-row"]').length).toBe(1);
+    expect(fetchFeedWindow).toHaveBeenCalledWith("unread", 1);
   });
 });
 
@@ -250,129 +299,122 @@ describe("NotificationsFeed — decided row disappears (§II)", () => {
   });
 });
 
-describe("NotificationsFeed — degraded retry re-requests the SAME cursor", () => {
-  it("retry calls loadMore with the failing segment's cursor (null on the first page)", async () => {
+describe("NotificationsFeed — §VI degraded retry re-requests the same window", () => {
+  it("retry calls fetchFeedWindow with the current chip/page", async () => {
     const container = await mount(feed([notifVM({ id: "n1" })], { degraded: true }));
+    fetchFeedWindow.mockResolvedValueOnce(buildWindow([notifVM({ id: "n1" })]));
     await act(async () => {
       click(buttonByText(container, "Retry"));
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(loadMore).toHaveBeenCalledWith(null);
+    expect(fetchFeedWindow).toHaveBeenCalledWith("all", 1);
   });
 
-  it("a degraded retry does NOT resurrect a row decided during the retry", async () => {
-    const approval = approvalVM({ id: "a1", actionable: true });
-    // The retry re-fetches the SAME (still-pending server-side) approval.
-    loadMore.mockResolvedValueOnce({
-      items: [approval, notifVM({ id: "n1" })],
-      nextCursor: null,
-      degraded: false,
-    });
-    const container = await mount(feed([approval, notifVM({ id: "n1" })], { degraded: true }));
-    expect(container.querySelectorAll('[data-conformance-id="approval-row"]').length).toBe(1);
-
-    // Decide it (optimistic remove), THEN retry the degraded tail.
-    await act(async () => {
-      click(container.querySelector('[data-testid="decide-stub"]'));
-      await Promise.resolve();
-    });
-    expect(container.querySelectorAll('[data-conformance-id="approval-row"]').length).toBe(0);
-
-    await act(async () => {
-      click(buttonByText(container, "Retry"));
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    // The overlay keeps the decided row hidden even though the retry returned it.
-    expect(container.querySelectorAll('[data-conformance-id="approval-row"]').length).toBe(0);
-    expect(container.querySelectorAll('[data-conformance-id="notification-row"]').length).toBe(1);
-  });
-
-  it("a RESUBMITTED approval (same id, new version) reappears after a decision on the old version", async () => {
-    const v1 = approvalVM({ id: "a1", actionable: true, version: "v1" });
-    const v2 = approvalVM({ id: "a1", actionable: true, version: "v2" });
-    // The retry returns the SAME id but a NEW version (rejected → resubmitted).
-    loadMore.mockResolvedValueOnce({ items: [v2], nextCursor: null, degraded: false });
-    const container = await mount(feed([v1], { degraded: true }));
-
-    await act(async () => {
-      click(container.querySelector('[data-testid="decide-stub"]'));
-      await Promise.resolve();
-    });
-    expect(container.querySelectorAll('[data-conformance-id="approval-row"]').length).toBe(0);
-
-    await act(async () => {
-      click(buttonByText(container, "Retry"));
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    // The new incarnation (version v2) is a distinct decision and must show.
-    expect(container.querySelectorAll('[data-conformance-id="approval-row"]').length).toBe(1);
+  it("never renders the pager alongside the degraded line", async () => {
+    const container = await mount(feed([notifVM({ id: "n1" })], { degraded: true }));
+    expect(container.querySelector('[data-conformance-id="notifications-list-pager"]')).toBeNull();
   });
 });
 
-describe("NotificationsFeed — mark-all-read watermark (§ read-state)", () => {
-  it("keeps later-loaded older unread notifications read after mark-all", async () => {
-    // A later load-more page returns an OLDER, still-unread notification.
-    loadMore.mockResolvedValueOnce({
-      items: [notifVM({ id: "n-older", kind: "info", createdAt: "2026-05-15T04:00:00.000Z" })],
-      nextCursor: null,
-      degraded: false,
-    });
-    const container = await mount(
-      feed([notifVM({ id: "n1", kind: "info", createdAt: "2026-05-15T05:00:00.000Z" })], {
-        nextCursor: "cursor-2",
-      }),
+describe("NotificationsFeed — §VII known-total pagination", () => {
+  function manyNotifs(n: number): FeedRowVM[] {
+    const base = Date.parse("2026-05-15T12:00:00.000Z");
+    return Array.from({ length: n }, (_, i) =>
+      notifVM({ id: `p-${i}`, createdAt: new Date(base - i * 60_000).toISOString() }),
     );
-    // One unread notification → Unread chip shows count 1.
-    expect(buttonByText(container, "Unread")?.textContent).toContain("1");
+  }
 
-    await act(async () => {
-      click(buttonByText(container, "Mark all read"));
-      await Promise.resolve();
-    });
-
-    // The PATCH carries the newest-LOADED notification's `id` as the boundary —
-    // NOT a blanket `{ all: true }` — so the server resolves that row's full-
-    // precision (created_at, id) and marks read only rows through it, leaving a
-    // row created after the boundary (a concurrent insert) untouched (cinatra#1557).
-    // This is the client half of the server-scoped fix.
-    expect(patchBodies()).toContainEqual({ beforeId: "n1" });
-    expect(patchBodies()).not.toContainEqual({ all: true });
-
-    // Load the older page AFTER mark-all.
-    await act(async () => {
-      click(buttonByText(container, "Load more"));
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-
-    // The older unread row is covered by the watermark → Unread stays empty.
-    await act(async () => {
-      click(buttonByText(container, "Unread"));
-      await Promise.resolve();
-    });
-    expect(container.querySelectorAll('[data-conformance-id="notification-row"]').length).toBe(0);
+  it("renders no pager for a single page", async () => {
+    const container = await mount(feed(manyNotifs(5)));
+    expect(container.querySelector('[data-conformance-id="notifications-list-pager"]')).toBeNull();
   });
 
-  it("sends the newest-LOADED notification id as the boundary, never a blanket all:true, even with many rows", async () => {
+  it("renders 'Page 1 of 2 · 26 total' and pages forward on Next", async () => {
+    const vms = manyNotifs(26);
+    const container = await mount(feed(vms));
+    expect(container.textContent).toContain("Page 1 of 2");
+    expect(container.textContent).toContain("26 total");
+
+    fetchFeedWindow.mockResolvedValueOnce(buildWindow(vms, { page: 2 }));
+    await act(async () => {
+      click(elementByAriaLabel(container, "Go to next page"));
+      await Promise.resolve();
+    });
+    expect(fetchFeedWindow).toHaveBeenCalledWith("all", 2);
+  });
+});
+
+describe("NotificationsFeed — read/unread toggle (§II, tri-state overlay)", () => {
+  it("clicking the trailing toggle on an unread notification PATCHes {id} (mark read)", async () => {
+    const container = await mount(feed([notifVM({ id: "n1", readAt: undefined })]));
+    await act(async () => {
+      click(elementByAriaLabel(container, "Mark as read"));
+      await Promise.resolve();
+    });
+    expect(patchBodies()).toContainEqual({ id: "n1" });
+  });
+
+  it("clicking the trailing toggle on a read notification PATCHes {id, unread:true} (mark unread)", async () => {
     const container = await mount(
-      feed([
-        notifVM({ id: "n-new", kind: "info", createdAt: "2026-05-15T05:00:00.000Z" }),
-        notifVM({ id: "n-mid", kind: "info", createdAt: "2026-05-15T04:30:00.000Z" }),
-        notifVM({ id: "n-old", kind: "info", createdAt: "2026-05-15T04:00:00.000Z" }),
-      ]),
+      feed([notifVM({ id: "n1", readAt: "2026-05-15T06:00:00.000Z" })]),
     );
+    await act(async () => {
+      click(elementByAriaLabel(container, "Mark as unread"));
+      await Promise.resolve();
+    });
+    expect(patchBodies()).toContainEqual({ id: "n1", unread: true });
+  });
+
+  it("an href notification's whole-card click auto-marks read (keepalive)", async () => {
+    const container = await mount(feed([notifVM({ id: "n1", href: "/x", readAt: undefined })]));
+    await act(async () => {
+      click(container.querySelector('[data-action="activate -> navigated"]'));
+      await Promise.resolve();
+    });
+    expect(patchBodies()).toContainEqual({ id: "n1" });
+    const fetchMock = globalThis.fetch as unknown as {
+      mock: { calls: [string, RequestInit | undefined][] };
+    };
+    const [, init] = fetchMock.mock.calls.find(([, i]) => i?.method === "PATCH")!;
+    expect(init?.keepalive).toBe(true);
+  });
+});
+
+describe("NotificationsFeed — mark-all-read watermark (§ read-state, feed-wide boundary)", () => {
+  it("PATCHes {beforeId} using the feed-wide newest notification, not merely the current page", async () => {
+    const vms = [
+      notifVM({ id: "n-new", kind: "info", createdAt: "2026-05-15T05:00:00.000Z" }),
+      notifVM({ id: "n-mid", kind: "info", createdAt: "2026-05-15T04:30:00.000Z" }),
+      notifVM({ id: "n-old", kind: "info", createdAt: "2026-05-15T04:00:00.000Z" }),
+    ];
+    const container = await mount(feed(vms));
 
     await act(async () => {
       click(buttonByText(container, "Mark all read"));
       await Promise.resolve();
     });
 
-    // Exactly one PATCH, carrying the NEWEST row's id as the boundary.
     expect(patchBodies()).toEqual([{ beforeId: "n-new" }]);
+    expect(patchBodies()).not.toContainEqual({ all: true });
+  });
+
+  it("an explicit per-row 'mark unread' after mark-all-read is never resurrected as read", async () => {
+    const vms = [notifVM({ id: "n1", kind: "info", createdAt: "2026-05-15T05:00:00.000Z" })];
+    const container = await mount(feed(vms));
+
+    await act(async () => {
+      click(buttonByText(container, "Mark all read"));
+      await Promise.resolve();
+    });
+    // n1 is now overlaid read by the watermark.
+    expect(elementByAriaLabel(container, "Mark as unread")).toBeTruthy();
+
+    await act(async () => {
+      click(elementByAriaLabel(container, "Mark as unread"));
+      await Promise.resolve();
+    });
+    // The explicit unread override wins over the watermark.
+    expect(elementByAriaLabel(container, "Mark as read")).toBeTruthy();
   });
 });
