@@ -45,12 +45,13 @@ function ToggleGroup({
         // The size-dependent corner radius is resolved in JS, NOT as a
         // `data-[size=sm]:rounded-…` variant (cinatra#2407).
         //
-        // As a variant it was UNOVERRIDABLE by a consumer, in two compounding
-        // ways: `tailwind-merge` does not treat `data-[size=sm]:rounded-*` and
-        // a bare `rounded-*` as one conflict group (different modifier), so
-        // both survived the merge; and in the cascade the variant's
-        // `.…[data-size="sm"]` selector outranks a plain `.rounded-[7px]`
-        // utility. A consumer that asked for a 7px radius therefore rendered
+        // As a variant it could not be overridden by a plain `rounded-*`
+        // utility — the only form a consumer actually writes — in two
+        // compounding ways: `tailwind-merge` does not treat
+        // `data-[size=sm]:rounded-*` and a bare `rounded-*` as one conflict
+        // group (different modifier), so both survived the merge; and in the
+        // cascade the variant's `.…[data-size="sm"]` selector outranks a plain
+        // `.rounded-[7px]`. A consumer that asked for a 7px radius rendered
         // `min(var(--radius-md),10px)` — 6px in the app scope — while its own
         // source said 7px, so a source-level class assertion could not see it.
         //

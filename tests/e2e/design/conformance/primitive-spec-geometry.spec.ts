@@ -15,7 +15,10 @@
  * `data-[size=sm]:rounded-…` rule inside the primitive survived `tailwind-merge`
  * (different modifier ⇒ different conflict group) and then outranked the plain
  * utility in the cascade. Only a RENDERED measurement closes that gap, so every
- * assertion below reads the real browser's computed style / laid-out geometry.
+ * value this spec PINS is read from the real browser's computed style or its
+ * laid-out geometry. (The `data-size` / `data-variant` attribute assertions
+ * alongside them are not pins — they only prove the measurement is being taken
+ * on the code path the spec is talking about.)
  *
  * It runs in the `design-conformance-functional` project, which drives the
  * production-equivalent standalone boot, and it measures the REAL
@@ -97,6 +100,11 @@ test.describe("install CTA — height (cinatra#2407 item 2)", () => {
       .locator(`${mount("empty-all")} [data-conformance-id="connector-empty-panel"]`)
       .getByRole("link", { name: "Install more connectors" });
     await expect(panelCta).toBeVisible();
+    // Same guard as the closing CTA: without it, dropping BOTH `size="sm"` and
+    // `h-8` would fall back to the Button `default` size — also 32px tall — and
+    // this height pin would false-green while the label and padding moved.
+    await expect(panelCta).toHaveAttribute("data-size", "sm");
+    await expect(panelCta).toHaveAttribute("data-variant", "outline");
     expect(await renderedHeight(panelCta)).toBe(SPEC_INSTALL_CTA_HEIGHT_PX);
   });
 });

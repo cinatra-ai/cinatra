@@ -16,8 +16,6 @@
  */
 import { expect, test } from "@playwright/test";
 
-import { gotoFeed } from "./spec-utils";
-
 /** design specs/app-notifications.html §III — `.n-toggle-group`. */
 const SPEC_TOGGLE_RADIUS_PX = "7px";
 
@@ -25,10 +23,14 @@ test.describe("§III — toolbar filter geometry", () => {
   test("§III · the segmented filter renders the spec's 7px radius on all four corners", async ({
     page,
   }) => {
-    await gotoFeed(page);
+    // Deliberately NOT `gotoFeed` — this measures static geometry, which is
+    // final at first paint. The shared helper additionally waits for the
+    // toolbar to HYDRATE, a wait whose budget is the whole test timeout and
+    // which buys this assertion nothing.
+    await page.goto("/notifications", { waitUntil: "domcontentloaded" });
 
     const toggle = page.locator('[data-conformance-id="notifications-filters"]');
-    await expect(toggle).toBeVisible();
+    await expect(toggle).toBeVisible({ timeout: 30_000 });
     // The size whose primitive rule used to clobber the consumer override.
     await expect(toggle).toHaveAttribute("data-size", "sm");
 

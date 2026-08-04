@@ -122,10 +122,12 @@ function PairedConnectorLogo({ brand, icon }: { brand: string; icon: ReactNode }
 // "Install more connectors" — the spec's 32px height (cinatra#2407)
 // ---------------------------------------------------------------------------
 //
-// Spec §I draws this control identically wherever it lands: the OUTLINE variant
-// at the small size, **32px tall**, 24px of clearance, no leading glyph. It
-// renders either below the grid or inside the All+0 empty panel — never both on
-// one screen — so both placements carry this class and move together.
+// Spec §I draws this control at the same SIZE wherever it lands: the OUTLINE
+// variant at the small size, **32px tall**, no leading glyph. It renders either
+// below the grid or inside the All+0 empty panel — never both on one screen —
+// so both placements carry this class and their height moves together. Only
+// the height is shared: each placement keeps its own spacing (the closing CTA's
+// 24px of clearance is its own `mt-6`; the panel spaces its children itself).
 //
 // The 32px is an explicit `h-8` rather than a change to the shared Button `sm`
 // scale, whose height is 28px. The shared scale is NOT the place to fix this:
