@@ -147,6 +147,9 @@ function ConformanceCard({ fixture }: { fixture: ConformanceCardFixture }) {
       // update → installed-latest outcome is assertable.
       data-surface-id={fixture.surfaceId}
       data-installed-version={installed?.version ?? ""}
+      // `h-full` mirrors the live grid's item wrapper, so `auto-rows-fr` on the
+      // grid below actually reaches the card's own `h-full` root.
+      className="h-full"
     >
       <MarketplaceListingCard
         card={card}
@@ -156,8 +159,11 @@ function ConformanceCard({ fixture }: { fixture: ConformanceCardFixture }) {
         detailsControl={
           // The §V detail modal is a separate conformance surface
           // (extension-detail-modal — see allowlist.json); the harness renders
-          // the underlined trigger as an inert placeholder.
-          <Button type="button" variant="link" size="sm">
+          // the underlined trigger as an inert placeholder. It must carry the
+          // LIVE trigger's exact classes (marketplace-detail-modal.tsx §IV
+          // default) — the geometry suite measures this control, so a
+          // placeholder of a different width would prove the wrong layout.
+          <Button type="button" variant="link" size="sm" className="px-1 underline">
             More details
           </Button>
         }
@@ -168,7 +174,15 @@ function ConformanceCard({ fixture }: { fixture: ConformanceCardFixture }) {
 
 export function ConformanceCardFixtures() {
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+    // The grid mirrors the LIVE marketplace grid's column ramp exactly
+    // (extensions-marketplace-client.tsx: 1 / sm:2 / lg:3 / xl:4) instead of
+    // the wider 1/md:2/xl:3 it used to carry (cinatra#2363). The action-row
+    // geometry contract is a function of card WIDTH, and the old ramp handed
+    // every card ~a third of the body at xl — strictly roomier than anything
+    // the real screen produces, so the tight case the contract is about was
+    // never exercised here. Matching the real ramp makes this harness the
+    // narrowest-card surface, which is what the geometry suite measures.
+    <div className="grid auto-rows-fr grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {CONFORMANCE_CARD_FIXTURES.map((fixture) => (
         <ConformanceCard key={fixture.surfaceId} fixture={fixture} />
       ))}

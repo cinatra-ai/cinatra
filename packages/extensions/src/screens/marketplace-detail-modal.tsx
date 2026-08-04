@@ -337,7 +337,20 @@ export function MarketplaceDetailModal({
             // spec §IV "More details") — always underlined in the action
             // colour, not just on hover. Still a real button (modal trigger),
             // only the visual treatment is a link.
-            <Button size="sm" variant="link" className="underline">
+            //
+            // `px-1` restores the spec's own link-button inset (cinatra#2363):
+            // the spec styles `.btn.link` at `padding: 7px 4px` where every
+            // solid `.btn` gets `7px 14px` — a text link is not supposed to
+            // carry button-sized side padding — while the app's `size="sm"`
+            // hands every variant `px-2.5` (10px). The 12px that costs is not
+            // cosmetic here: it decides whether the §I action row's pair fits
+            // one line, which this control is half of. Measured at the live
+            // grid widths (row 170px md / 204.7px lg / 206px xl): with the
+            // spec's inset the widest pairing, "Installing…" + this control,
+            // needs 200.2px and fits at lg and xl; with `px-2.5` it needs
+            // 212.2px and wraps at BOTH — the one state the spec does sanction
+            // wrapping for at a narrow card, but not at the app's full widths.
+            <Button size="sm" variant="link" className="px-1 underline">
               More details
             </Button>
           )}

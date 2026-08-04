@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
-import { Check, CircleCheck, CircleHelp, Star, TriangleAlert } from "lucide-react";
+import { Check, CircleHelp, Star, TriangleAlert } from "lucide-react";
 
 import { ExtensionCardListingBanner } from "@/components/extension-card";
 import { MarketplaceCardIcon } from "@/components/extension-card-icon-image";
@@ -25,12 +25,15 @@ import { resolveCardPriceLabel } from "./marketplace-card-model";
 //   1. Banner: the 46×46 icon tile beside a name (line-clamp 2) + the "{Kind}
 //      by {Vendor}" byline directly beneath the name, ALL on the coloured
 //      ground — the byline recoloured white to match the name (0.5.0 moved it
-//      here off the body). The 13px kind emblem, kind label, vendor link and
-//      circled-check VERIFIED mark (only when the catalog carried a vendor) all
-//      read white. Commerce lives in the price row, not a banner badge.
+//      here off the body). The 13px kind emblem, kind label and vendor link all
+//      read white; no verification mark renders (removed in cinatra#2363 — see
+//      PublisherLine). Commerce lives in the price row, not a banner badge.
 //   2. Body top block (min-height 62px): the 3-line-clamped description only.
 //   3. Centred column: the price row ("Free" / "Free, Open Source" / price,
-//      Archivo 700 16px ink), the install CTA, the "More details" link.
+//      Archivo 700 16px ink) on its own line, then ONE action row carrying the
+//      install CTA and the "More details" link side by side, details right
+//      (design#105, cinatra#2363) — wrapping to a second line only when the
+//      pair genuinely does not fit the card body.
 //   4. Footer meta, two columns: LEFT stars + average + (count) with the
 //      install count beneath; RIGHT the compat verdict + "Updated N ago",
 //      right-aligned.
@@ -113,8 +116,8 @@ function RatingRow({
  * The "{Kind} by {Vendor}" publisher line (design spec 0.5.0 §I): rendered
  * INSIDE the coloured banner, directly beneath the name (0.5.0 relocated it
  * off the body block). Everything reads WHITE on the category ground — the
- * kind emblem, the kind label, the vendor and the circled-check VERIFIED mark
- * all inherit the banner's `currentColor` (the banner sets the white `fg`), so
+ * kind emblem, the kind label and the vendor all inherit the banner's
+ * `currentColor` (the banner sets the white `fg`), so
  * the byline recolours to match the name.
  *
  * The vendor label comes ONLY from `resolveVendorPresentation` (cinatra#1528) —
@@ -122,8 +125,13 @@ function RatingRow({
  * `known` vendor renders its display name (a link out to its scheme-guarded
  * marketplace store when a valid `storeUrl` is present, plain text otherwise);
  * a `missing` vendor renders the localized placeholder as PLAIN, unlinked text.
- * The VERIFIED mark shows ONLY when the vendor resolves `known` — a missing
- * display name reads as unavailable data, not as an unverified vendor.
+ *
+ * No verification mark renders here (cinatra#2363). The former circled check
+ * was gated on `vendor.kind === "known"` — i.e. "the catalog carried a vendor
+ * display name" — which is not a verification claim at all; the model carries
+ * no verified field, so its `title="Verified vendor"` asserted something the
+ * data never said. The real, ownership-derived trust mark lives on the
+ * marketplace DETAIL surface, not on a listing card.
  */
 function PublisherLine({ card }: { card: MarketplaceCardData }) {
   const vendor = resolveVendorPresentation(
@@ -132,11 +140,20 @@ function PublisherLine({ card }: { card: MarketplaceCardData }) {
   );
   const storeUrl = vendor.kind === "known" ? safeHttpUrl(vendor.storeUrl) : null;
   const vendorLabel = vendor.kind === "known" ? vendor.displayName : VENDOR_MISSING_LABEL;
+  // The full byline string, always-on as a native `title` on the ONE element
+  // that can clip it (the `text-ellipsis` span). Spec §I draws it exactly here
+  // — `title="Agent by Cinatra"` on the ellipsised span, not on the inner
+  // vendor node: when a long kind+vendor line clips, the inner vendor label can
+  // be scrolled entirely out of the box, leaving no hover target at all. Always
+  // present (never conditioned on measured overflow): overflow detection needs
+  // a client leaf, and an unconditional title keeps the untruncated text in the
+  // accessibility tree at every width.
+  const bylineTitle = `${card.kindLabel} ${VENDOR_BY_CONNECTIVE} ${vendorLabel}`;
   return (
     <div
       data-slot="extension-card-publisher"
       data-vendor-state={vendor.kind}
-      // On the coloured banner: `text-current` so kind/label/vendor/check all
+      // On the coloured banner: `text-current` so kind label and vendor alike
       // inherit the banner's white (or archived-muted) ground colour. `text-xs`
       // is the app's sanctioned byline size (named-token/standard-size gate).
       className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs leading-tight text-current"
@@ -144,7 +161,7 @@ function PublisherLine({ card }: { card: MarketplaceCardData }) {
       <span className="shrink-0 text-current" aria-hidden="true">
         {extensionKindEmblem(card.kindSlug, "size-[13px]")}
       </span>
-      <span className="overflow-hidden text-ellipsis">
+      <span className="overflow-hidden text-ellipsis" title={bylineTitle}>
         <span>{card.kindLabel}</span>
         {` ${VENDOR_BY_CONNECTIVE} `}
         {storeUrl ? (
@@ -163,20 +180,6 @@ function PublisherLine({ card }: { card: MarketplaceCardData }) {
           </span>
         )}
       </span>
-      {vendor.kind === "known" && (
-        // The circled-check VERIFIED mark — the spec drawing renders the check
-        // alone, with no visible "VERIFIED" copy; the accessible name + native
-        // tooltip carry the meaning. White on the banner ground (text-current).
-        // Shown ONLY for a resolved `known` vendor; a missing display name is
-        // unavailable data, never a (silently unverified) vendor identity.
-        <span
-          data-slot="extension-card-verified"
-          className="inline-flex shrink-0"
-          title="Verified vendor"
-        >
-          <CircleCheck aria-label="Verified vendor" className="size-3 text-current" />
-        </span>
-      )}
     </div>
   );
 }
@@ -299,8 +302,12 @@ export function MarketplaceListingCard({
             </p>
           )}
         </div>
-        {/* Centred price + CTA + details column (spec §IV L470–474). */}
-        <div className="mt-3 flex flex-col items-center gap-2">
+        {/* Price line + one-line action row (spec §I, design#105).
+            The column no longer sets `items-center`: the price row centres its
+            own text and the action row centres its own children, which is what
+            lets the row occupy the full body width and wrap INSIDE the card
+            instead of being sized to its content. */}
+        <div className="mt-3 flex flex-col gap-2">
           {price && (
             <div
               data-slot="extension-card-price"
@@ -309,14 +316,40 @@ export function MarketplaceListingCard({
               {price}
             </div>
           )}
-          {/* Conformance-contract CTA slot (cinatra#985): `display: contents`
-              so the wrapper adds ZERO layout impact while giving the
-              functional-acceptance suite a stable hook + the resolved
-              six-state identity. */}
-          <div data-testid="extension-card-cta" data-cta-state={ctaState} className="contents">
-            {ctaControl}
+          {/* ACTION ROW — the install control and "More details" side by side,
+              details on the RIGHT, for all six CTA states.
+
+              `flex-wrap` is the honest half of the contract, not a hedge: the
+              buttons are `shrink-0 whitespace-nowrap`, and with the sidebar
+              expanded the card body is far narrower at `md` than the widest
+              pending label ("Installing…" beside "More details"). A layout that
+              could never wrap would have to truncate a control label instead.
+              So: ONE line whenever the pair fits — every standard label at the
+              `lg`/`xl` widths the app's own grid produces — and a graceful
+              second line only on genuine overflow. `min-w-0` lets the row
+              shrink to the body width so the wrap happens at the card edge
+              rather than overflowing it.
+
+              The CTA slot keeps `display: contents` so it still adds ZERO
+              layout impact: the control itself is the flex item, and the
+              conformance hook (`data-testid` + the resolved six-state
+              identity, cinatra#985) rides on a wrapper that does not exist as
+              far as layout is concerned. That is exactly why the slot can be
+              nested in a flex row without a spurious box between the row and
+              its control. */}
+          <div
+            data-slot="extension-card-actions"
+            // `gap-2.5` is the spec's own 10px, not the surrounding column's
+            // 8px — the drawing sets the action row apart from the price stack
+            // deliberately, and at these card widths 2px is a real term in
+            // whether the pair fits.
+            className="flex min-w-0 flex-row flex-wrap items-center justify-center gap-2.5"
+          >
+            <div data-testid="extension-card-cta" data-cta-state={ctaState} className="contents">
+              {ctaControl}
+            </div>
+            {detailsControl}
           </div>
-          {detailsControl}
         </div>
         {/* Two-column footer meta (spec §IV L475–483): rating + installs LEFT,
             compat + freshness RIGHT (right-aligned). */}

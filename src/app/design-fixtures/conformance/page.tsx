@@ -119,14 +119,40 @@ export default function ConformanceHarnessPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-line bg-surface backdrop-blur-none">
-          <CardHeader>
-            <CardTitle>Extension listing cards (surfaces: extension-listing-card-*)</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ConformanceCardFixtures />
-          </CardContent>
-        </Card>
+        {/* Extension listing cards — the ONE section here deliberately NOT
+            wrapped in a Card (cinatra#2363).
+
+            Every other section is a titled Card, which is right for surfaces
+            whose contract is behavioural. This one's contract is partly
+            GEOMETRIC: the §I action row must fit CTA + "More details" on one
+            line at the card widths the app's own grid produces, and that is a
+            function of how wide each grid cell is. A Card costs ~17px per side
+            (CardContent's `px-4` plus the border), which at `sm:grid-cols-2`
+            takes ~17px off every card — enough to flip a state from one line to
+            wrapped. Measuring inside it would prove a layout narrower than the
+            app ever renders.
+
+            So this grid sits exactly where the live grid sits: directly inside
+            `PageContent`. The live chain for these cards is
+            /configuration/marketplace → ExtensionsMarketplaceScreen
+            (Main → PageContent → a Suspense boundary → the
+            ExtensionsMarketplaceClient grid, extensions-marketplace-screen.tsx
+            :315-348) — the Suspense boundary renders no box of its own, so
+            PageContent is the last element that constrains width, and mounting
+            here reproduces it at every breakpoint. The heading below replaces
+            the CardTitle. */}
+        <section
+          aria-labelledby="conformance-extension-listing-cards"
+          className="flex flex-col gap-4"
+        >
+          <h2
+            id="conformance-extension-listing-cards"
+            className="font-display text-lg font-semibold text-foreground"
+          >
+            Extension listing cards (surfaces: extension-listing-card-*)
+          </h2>
+          <ConformanceCardFixtures />
+        </section>
 
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>

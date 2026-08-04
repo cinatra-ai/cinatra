@@ -146,14 +146,19 @@ describe("MarketplaceListingCard — 0.5.0 §I byline in the banner (cinatra#124
     expect(body).toContain("line-clamp-3");
   });
 
-  it("shows the VERIFIED check only for a known vendor, and the vendor links out", () => {
+  // INVERTED for cinatra#2363 / epic #2360 (was: "shows the VERIFIED check only
+  // for a known vendor"). The mark is gone from every card: it was gated on
+  // `vendor.kind === "known"` — "the catalog carried a display name" — which is
+  // not a verification claim, and the model has no verified field to make one
+  // from. The vendor LINK-OUT half of the original assertion is untouched.
+  it("links a known vendor out to its store, and renders NO verification mark in either vendor state", () => {
     const withVendor = renderCard({
       vendor: { name: "Foundry", storeUrl: "https://marketplace.cinatra.ai/store/foundry" },
     });
-    expect(withVendor).toContain('data-slot="extension-card-verified"');
+    expect(withVendor).not.toContain('data-slot="extension-card-verified"');
     expect(withVendor).toContain('href="https://marketplace.cinatra.ai/store/foundry"');
     expect(withVendor).toContain('data-vendor-state="known"');
-    // A missing vendor (no block) renders the placeholder, NO verified mark.
+    // A missing vendor (no block) renders the placeholder, and likewise no mark.
     const noVendor = renderCard({ vendor: null });
     expect(noVendor).not.toContain('data-slot="extension-card-verified"');
     expect(noVendor).toContain('data-vendor-state="missing"');
@@ -205,7 +210,9 @@ describe("MarketplaceListingCard — §I vendor byline never substitutes a machi
     expect(vendorLabel(html)).toBe("Distinct Vendor Name");
     expect(vendorLabel(html)).not.toContain("machine-slug-sentinel");
     expect(html).toContain('data-vendor-state="known"');
-    expect(html).toContain('data-slot="extension-card-verified"');
+    // INVERTED for cinatra#2363: a resolved `known` vendor no longer draws a
+    // verification mark — resolving a display name never was a verification.
+    expect(html).not.toContain('data-slot="extension-card-verified"');
   });
 
   it("renders the missing-vendor placeholder — never the slug, never the package scope — when the name is blank", () => {

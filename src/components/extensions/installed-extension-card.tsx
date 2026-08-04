@@ -312,6 +312,18 @@ export function InstalledExtensionCard({
   const needsReview = (configurationNeeds?.length ?? 0) > 0;
   const greyed = archived || needsReview;
 
+  // Always-on native hover text for the §VI byline (design#105), carrying the
+  // full "{Kind} by {Vendor}" clause the `text-ellipsis` span can clip. Built
+  // from the SAME resolved parts the span renders, so the title is the visible
+  // text and never a second source of truth. The §VI source clause (#1572) is
+  // deliberately excluded: it is an independent byline element that already
+  // carries its own richer tooltip, and the innermost title wins on hover — so
+  // hovering the source still explains the source, and hovering anywhere else
+  // on the line yields the vendor clause.
+  const bylineTitle = `${kindLabel} ${VENDOR_BY_CONNECTIVE} ${
+    vendor?.kind === "known" ? vendor.displayName : VENDOR_MISSING_LABEL
+  }`;
+
   // The three §VI panels — LEFT mark, MIDDLE body, RIGHT actions — identical
   // for every state. Only their muted flag is driven by `greyed` (archived OR
   // needs-review); for an active/archived card `greyed === archived`, so these
@@ -341,7 +353,7 @@ export function InstalledExtensionCard({
                 {kindIcon}
               </span>
             )}
-            <span className="overflow-hidden text-ellipsis">
+            <span className="overflow-hidden text-ellipsis" title={bylineTitle}>
               <span data-slot="installed-extension-kind-label" className="font-medium">
                 {kindLabel}
               </span>

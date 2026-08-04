@@ -300,8 +300,9 @@ export function ExtensionCardListingBanner({
   /**
    * The `{Kind} by {Vendor}` byline (design spec 0.5.0 §I/§III/§IV): renders
    * directly BENEATH the name, inside the coloured banner. The caller supplies
-   * the slot content already shaped for its surface (§I carries the vendor link
-   * + verified check; §III/§IV a plain vendor span). Text colour INHERITS the
+   * the slot content already shaped for its surface (§I carries the vendor
+   * link; §III/§IV a plain vendor span — no surface carries a verification
+   * mark any more, cinatra#2363). Text colour INHERITS the
    * banner ground — `currentColor` (white `fg`) on an active card, muted-grey on
    * the `muted` (archived) variant — so the byline recolours to match the name
    * automatically; callers must not hard-code a text colour on the slot.
@@ -411,6 +412,15 @@ export function ExtensionCardListingBanner({
       >
         <div
           data-slot="extension-card-name"
+          // Always-on native hover text carrying the FULL name (design#105).
+          // The name is `line-clamp-2`, so a long one is visibly cut with no
+          // in-DOM signal of what was lost. `title` is unconditional rather
+          // than overflow-detected: measuring the clamp needs a client leaf and
+          // a resize observer per card, and an always-present title also keeps
+          // the untruncated string in the accessibility tree at every width.
+          // Both in-app card families render through this banner, so one
+          // attribute here covers the browse card and the installed card alike.
+          title={name}
           className={cn(
             // Name clamps at 2 lines (0.5.0 §I: was 3) — the byline now takes
             // the third line's room beneath it.
