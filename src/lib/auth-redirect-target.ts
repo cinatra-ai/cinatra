@@ -36,6 +36,12 @@
 
 const SIGN_IN_PATH = "/sign-in";
 const SIGN_UP_PATH = "/sign-up";
+// cinatra#2386 — the first-account bootstrap step. The zero-user /sign-in ->
+// /sign-up hop (below) now inverts to land here instead: while no Better Auth
+// user exists, the bootstrap form is only ever rendered inside the setup
+// wizard, never at the bare /sign-up URL (which continues to serve later
+// accounts, unchanged, once at least one user exists).
+const SETUP_SIGN_UP_PATH = "/setup/sign-up";
 const NEXT_PARAM = "next";
 
 /**
@@ -101,6 +107,16 @@ export function buildSignInPath(nextPath?: string | null): string {
 /** Builds `/sign-up`, or `/sign-up?next=<encoded path>` when `nextPath` is a safe relative path. */
 export function buildSignUpPath(nextPath?: string | null): string {
   return appendNextParam(SIGN_UP_PATH, nextPath);
+}
+
+/**
+ * Builds `/setup/sign-up`, or `/setup/sign-up?next=<encoded path>` when
+ * `nextPath` is a safe relative path (cinatra#2386). This is the bootstrap
+ * destination for the zero-user `/sign-in` (and direct `/sign-up`) hop —
+ * `buildSignUpPath` above stays reserved for the later-account URL itself.
+ */
+export function buildSetupSignUpPath(nextPath?: string | null): string {
+  return appendNextParam(SETUP_SIGN_UP_PATH, nextPath);
 }
 
 /** Resolves the post-auth destination: the sanitized `next` value, or `/` when absent/unsafe. */

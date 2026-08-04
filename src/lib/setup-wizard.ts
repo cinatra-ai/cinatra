@@ -21,6 +21,9 @@ import { getNangoStatus } from "@/lib/nango-system";
 // Instance identity presence determines whether the name step is ready.
 // The setup wizard uses /setup/key, /setup/name, and /setup/ai route segments.
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
+// cinatra#2386 — whether the sign-up step exists at all (it is present only
+// until the first Better Auth user is created).
+import { hasAnyBetterAuthUsers } from "@/lib/auth";
 
 export type SetupWizardStep = {
   id: string;
@@ -30,6 +33,7 @@ export type SetupWizardStep = {
 };
 
 export async function getSetupWizardSteps(): Promise<SetupWizardStep[]> {
+  const hasUsers = await hasAnyBetterAuthUsers();
   const identity = readInstanceIdentity();
   const nangoStatus = getNangoStatus();
   // Provider-AGNOSTIC readiness: valid receipt ⇒ the chosen provider (whichever
@@ -40,8 +44,22 @@ export async function getSetupWizardSteps(): Promise<SetupWizardStep[]> {
 
   const steps: SetupWizardStep[] = [];
 
-  // The key step is first. The env var must be set with at least 32 chars
-  // before any other setup can proceed. Absence blocks the wizard.
+  // cinatra#2386 — the sign-up step is FIRST, but only PRESENT while no
+  // Better Auth user exists yet. It never carries `ready: true`: its
+  // completion signal is its own DISAPPEARANCE once the first account is
+  // created (hasAnyBetterAuthUsers() flips true), not a checked pill.
+  if (!hasUsers) {
+    steps.push({
+      id: "sign-up",
+      title: "Sign up",
+      href: "/setup/sign-up",
+      ready: false,
+    });
+  }
+
+  // The key step follows sign-up (or is first, once sign-up has retired). The
+  // env var must be set with at least 32 chars before any other setup can
+  // proceed. Absence blocks the wizard.
   const encryptionKeyOk = (process.env.CINATRA_ENCRYPTION_KEY?.trim().length ?? 0) >= 32;
   steps.push({
     id: "key",
@@ -83,11 +101,19 @@ export function getFirstIncompleteStep(steps: SetupWizardStep[]): SetupWizardSte
 }
 
 // Setup is complete when:
+// 0. The first account exists (the sign-up step has retired — cinatra#2386)
 // 1. CINATRA_ENCRYPTION_KEY is set, which gates all setup
 // 2. Instance name (namespace) is configured, which gates registry access
 // 3. Nango is connected, which gates OAuth connections
 // 4. The AI step holds a VALID readiness receipt for the chosen LLM provider
 function isStepsComplete(steps: SetupWizardStep[]): boolean {
+  // Defensive: the sign-up step never carries ready:true (see
+  // getSetupWizardSteps), so its mere presence already means incomplete. In
+  // practice this never fires from an authenticated caller (a session implies
+  // a user exists, which is exactly when the step is absent), but the gate
+  // stays honest without relying on that invariant holding forever.
+  const signUpStep = steps.find((s) => s.id === "sign-up");
+  if (signUpStep && !signUpStep.ready) return false;
   // The key must be ready as a hard precondition.
   const keyStep = steps.find((s) => s.id === "key");
   if (keyStep && !keyStep.ready) return false;

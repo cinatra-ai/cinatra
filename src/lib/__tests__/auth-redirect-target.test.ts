@@ -15,6 +15,7 @@ import {
   sanitizeNextPath,
   buildSignInPath,
   buildSignUpPath,
+  buildSetupSignUpPath,
   resolvePostAuthDestination,
 } from "../auth-redirect-target";
 
@@ -102,6 +103,23 @@ describe("buildSignUpPath", () => {
 
   it("falls back to the bare path for a hostile target", () => {
     expect(buildSignUpPath("https://evil.com")).toBe("/sign-up");
+  });
+});
+
+describe("buildSetupSignUpPath (cinatra#2386)", () => {
+  it("appends the encoded next path when safe (preserves next across the inverted sign-in -> /setup/sign-up hop)", () => {
+    expect(buildSetupSignUpPath("/artifacts")).toBe("/setup/sign-up?next=%2Fartifacts");
+  });
+
+  it("falls back to the bare path when next is absent", () => {
+    expect(buildSetupSignUpPath(undefined)).toBe("/setup/sign-up");
+    expect(buildSetupSignUpPath(null)).toBe("/setup/sign-up");
+  });
+
+  it("falls back to the bare path — never echoes a hostile target — for every rejected vector", () => {
+    expect(buildSetupSignUpPath("//evil.com")).toBe("/setup/sign-up");
+    expect(buildSetupSignUpPath("https://evil.com")).toBe("/setup/sign-up");
+    expect(buildSetupSignUpPath("/\\evil.com")).toBe("/setup/sign-up");
   });
 });
 
