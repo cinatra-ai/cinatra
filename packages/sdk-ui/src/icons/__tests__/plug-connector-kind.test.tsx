@@ -38,9 +38,8 @@ describe("PlugConnectorKind glyph — module load + render", () => {
   });
 
   it("recentres/rescales the lower-plug-half drawing across the full 24-unit viewBox (not a literal crop)", () => {
-    // The spec's own transform (design commit c144f39, app-extensions.html
-    // §I byline SVG) — pinning the exact recentre/rescale, not just "some
-    // transform exists".
+    // The ratified card spec's own transform for this glyph — pinning the
+    // exact recentre/rescale, not just "some transform exists".
     expect(glyphSrc).toContain('transform="translate(-1.03,-11.33) scale(1.515)"');
   });
 

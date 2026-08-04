@@ -298,7 +298,7 @@ export function ExtensionCardListingBanner({
    */
   iconRender?: React.ReactNode;
   /**
-   * The `{Kind} by {Vendor}` byline (design spec 0.11.0 §I/§III/§IV): renders
+   * The `{Kind} by {Vendor}` byline (current ratified card spec §I/§III/§IV): renders
    * directly BENEATH the name, inside the coloured banner. The caller supplies
    * the slot content already shaped for its surface (§I carries the vendor
    * link; §III/§IV a plain vendor span). Text colour INHERITS the banner

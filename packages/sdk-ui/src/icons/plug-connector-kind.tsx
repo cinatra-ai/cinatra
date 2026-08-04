@@ -3,16 +3,15 @@ import type { SVGProps } from "react";
 /**
  * PlugConnectorKind — the "connector" kind emblem (cinatra#2364, epic #2360).
  *
- * The LOWER HALF of the joined-plug mark drawn once in the design system
- * (`app-connectors.html`, the full glyph #2356 defines as `PlugConnected`
- * in this SAME sdk-ui module) — recentred and rescaled across the full
- * 24-unit viewBox, NOT a literal crop, so it reads clean at the 13px byline
- * size (design PR #105, `app-extensions.html` v0.11.0 §I). Path data and the
- * `translate`/`scale` recentring are copied verbatim from the landed spec
- * drawing (design commit c144f39, `app-extensions.html` §I byline SVG).
- * Supersedes both the app's prior lucide `Plug` kind emblem and the spec's
- * earlier `Link` rendering — "what kind of extension is this" and "is it
- * connected" now read as one icon family.
+ * The LOWER HALF of the joined-plug mark used for the connected-status glyph
+ * elsewhere in the design system (the full glyph #2356 defines as
+ * `PlugConnected` in this SAME sdk-ui module) — recentred and rescaled
+ * across the full 24-unit viewBox, NOT a literal crop, so it reads clean at
+ * the 13px byline size. Path data and the `translate`/`scale` recentring are
+ * copied verbatim from the ratified card spec's own drawing. Supersedes both
+ * the app's prior lucide `Plug` kind emblem and an earlier spec rendering —
+ * "what kind of extension is this" and "is it connected" now read as one
+ * icon family.
  *
  * This file is the single owner of the joined-plug glyph family in sdk-ui —
  * #2356 (connectors S3) adds the full `PlugConnected` mark to this SAME

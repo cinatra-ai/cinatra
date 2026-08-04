@@ -21,7 +21,7 @@ import { resolveCardPriceLabel } from "./marketplace-card-model";
 // ---------------------------------------------------------------------------
 // MarketplaceListingCard — the §IV "Extensions" ListingCard (cinatra#988).
 //
-// The full card anatomy of the design spec 0.11.0 §I, in spec order:
+// The full card anatomy of the current ratified card spec §I, in spec order:
 //   1. Banner: the 46×46 icon tile beside a name (line-clamp 2) + the "{Kind}
 //      by {Vendor}" byline directly beneath the name, ALL on the coloured
 //      ground — the byline recoloured white to match the name (0.5.0 moved it
@@ -30,7 +30,7 @@ import { resolveCardPriceLabel } from "./marketplace-card-model";
 //   2. Body top block (min-height 62px): the 3-line-clamped description only.
 //   3. Centred column: the price row ("Free" / "Free, Open Source" / price,
 //      Archivo 700 16px ink), then the install CTA and the "More details"
-//      link SIDE BY SIDE on one row (0.11.0 §I, cinatra#2363), details to the
+//      link SIDE BY SIDE on one row (spec §I, cinatra#2363), details to the
 //      right of the CTA, wrapping only when the pair does not fit.
 //   4. Footer meta, two columns: LEFT stars + average + (count) with the
 //      install count beneath; RIGHT the compat verdict + "Updated N ago",
@@ -111,7 +111,7 @@ function RatingRow({
 }
 
 /**
- * The "{Kind} by {Vendor}" publisher line (design spec 0.11.0 §I): rendered
+ * The "{Kind} by {Vendor}" publisher line (current ratified card spec §I): rendered
  * INSIDE the coloured banner, directly beneath the name (0.5.0 relocated it
  * off the body block). Everything reads WHITE on the category ground — the
  * kind emblem, the kind label and the vendor all inherit the banner's
@@ -298,7 +298,7 @@ export function MarketplaceListingCard({
             </p>
           )}
         </div>
-        {/* Centred price + CTA/details column (spec 0.11.0 §I). The price
+        {/* Centred price + CTA/details column (current ratified card spec §I). The price
             keeps its own line; the CTA and "More details" render as a single
             row beneath it (cinatra#2363) — details to the RIGHT of the CTA,
             wrapping only when the pair does not fit the card body width. */}

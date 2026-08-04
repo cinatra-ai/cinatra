@@ -2,7 +2,7 @@
  * MarketplaceListingCard — one-line CTA + "More details" row geometry proof
  * (cinatra#2363, epic #2360).
  *
- * The design spec 0.11.0 §I moved the install CTA and "More details" from a
+ * The current ratified card spec §I moved the install CTA and "More details" from a
  * stacked column onto one row (details to the RIGHT of the CTA). Contract
  * (epic #2360, decided architecture): a guaranteed single line everywhere is
  * impossible with `shrink-0 whitespace-nowrap` buttons and long pending
