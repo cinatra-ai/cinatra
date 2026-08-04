@@ -34,7 +34,11 @@ import { test, expect, type Locator } from "@playwright/test";
 
 import { ensureSeeded, SEEDED_HARNESS_PATH } from "./contract";
 
-/** design@3d33cc800 specs/app-connectors.html v0.7.0 §I — the toolbar filter. */
+/**
+ * The pinned app-connectors spec §I — the toolbar's segmented filter. The exact
+ * pin is conformance-pins.json's `app-connectors` entry (unchanged by this
+ * spec); its `$specCommit` names the source these two values were read from.
+ */
 const SPEC_TOGGLE_RADIUS_PX = "7px";
 /** …and the closing CTA ("the outline variant at the small size, 32px tall"). */
 const SPEC_INSTALL_CTA_HEIGHT_PX = 32;
