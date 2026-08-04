@@ -538,31 +538,44 @@ const connectorFilterGroup = (root: Locator) =>
   root.locator('[aria-label="Filter by connection state"]');
 
 /**
- * The install CTA's navigation target, asserted the way the manifest states
- * the outcome (`install-more -> marketplace-connector-tab`): the control is a
- * real link to `/configuration/marketplace?tab=connector`, AND clicking it
- * actually issues that navigation.
+ * Does `url` name the marketplace's CONNECTOR TAB as the place this navigation
+ * is going?
  *
- * The navigation REQUEST is the assertion, not the destination render: the
- * conformance harness boots with `CINATRA_E2E_SETUP_BYPASS` and no session, and
- * `/configuration/marketplace` is `requireAdminSession`-gated, so what that URL
- * renders here says nothing about the CTA. What the CTA owes the spec is that
- * it leads to the marketplace's connector tab — which is exactly what the
- * navigation request proves.
+ * Two accepted shapes, because the harness is deliberately sessionless:
+ *   - the URL IS the destination (`/configuration/marketplace?tab=connector`),
+ *     which is what a reader with marketplace access gets; or
+ *   - it is the app-wide auth gate's redirect, which preserves the destination
+ *     VERBATIM in `?next=`. `/configuration/marketplace` is
+ *     `requireAdminSession`-gated and `CINATRA_E2E_SETUP_BYPASS` authorizes the
+ *     FIXTURE routes only, so this is the shape the harness actually produces.
+ *
+ * Both name the same destination, and a CTA pointing anywhere else satisfies
+ * neither — so this stays falsifiable while not asserting a session the harness
+ * does not have.
+ */
+function namesMarketplaceConnectorTab(url: URL): boolean {
+  if (url.pathname === "/configuration/marketplace") {
+    return url.searchParams.get("tab") === "connector";
+  }
+  return url.searchParams.get("next") === "/configuration/marketplace?tab=connector";
+}
+
+/**
+ * The install CTA's navigation, asserted the way the manifest states the
+ * outcome (`install-more -> marketplace-connector-tab`): the control is a real
+ * link to `/configuration/marketplace?tab=connector`, AND clicking it actually
+ * leaves the harness for that destination.
+ *
+ * NOT a `waitForRequest` on a navigation request: this is a Next `<Link>`, so
+ * the App Router navigates CLIENT-SIDE and no document navigation request is
+ * ever issued (an earlier version of this helper waited for one and timed out).
+ * The observable fact is the resulting URL.
  */
 async function assertInstallMoreNavigates(page: Page, cta: Locator): Promise<void> {
   await expect(cta).toHaveRole("link");
   await expect(cta).toHaveAttribute("href", "/configuration/marketplace?tab=connector");
-  const [request] = await Promise.all([
-    page.waitForRequest(
-      (r) =>
-        r.isNavigationRequest() &&
-        new URL(r.url()).pathname === "/configuration/marketplace",
-      { timeout: 15_000 },
-    ),
-    cta.click(),
-  ]);
-  expect(new URL(request.url()).searchParams.get("tab")).toBe("connector");
+  await cta.click();
+  await page.waitForURL((url) => namesMarketplaceConnectorTab(url), { timeout: 15_000 });
 }
 
 const CONNECTOR_GRID_DRIVER: SurfaceDriver = {
