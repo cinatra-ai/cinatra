@@ -552,3 +552,74 @@ describe("ContextSelectorRenderer — disabled state", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 });
+
+describe("ContextSelectorRenderer — humanized title (cinatra#2411)", () => {
+  // Regression coverage for the #815 humanization gap: the card title must
+  // route through humanizeFieldName like the sibling setup/HITL renderers
+  // (schema-field-renderer.tsx, grouped-setup-form-renderer.tsx), not print
+  // the raw camelCase slotId/fieldName verbatim.
+  it("humanizes a camelCase slotMeta.slotId in the main (populated) branch", () => {
+    render(
+      <ContextSelectorRenderer
+        fieldName="draftContext"
+        schema={{} as never}
+        value={{
+          candidates: [CANDIDATE_USER],
+          selectedRefs: [],
+          slotMeta: {
+            slotId: "draftContext",
+            resolutionMode: "accumulate",
+            selectionMode: "interactive",
+            acceptedArtifactExtensions: [
+              "@cinatra-ai/marketing-icp-artifact",
+            ],
+          },
+        }}
+        onChange={vi.fn()}
+        context={{ connectedApps: [] }}
+      />,
+    );
+    expect(screen.getByText("Draft Context")).toBeTruthy();
+    expect(screen.queryByText("draftContext")).toBeNull();
+  });
+
+  it("humanizes a camelCase slotMeta.slotId in the no-eligible-artifacts branch", () => {
+    render(
+      <ContextSelectorRenderer
+        fieldName="draftContext"
+        schema={{} as never}
+        value={{
+          candidates: [],
+          selectedRefs: [],
+          slotMeta: {
+            slotId: "draftContext",
+            resolutionMode: "accumulate",
+            selectionMode: "interactive",
+            acceptedArtifactExtensions: [
+              "@cinatra-ai/marketing-icp-artifact",
+            ],
+          },
+        }}
+        onChange={vi.fn()}
+        context={{ connectedApps: [] }}
+      />,
+    );
+    // Title humanizes...
+    expect(screen.getByText("Draft Context")).toBeTruthy();
+    // ...but the explanatory inline <code> copy legitimately keeps the raw id.
+    expect(screen.getByText("draftContext")).toBeTruthy();
+  });
+
+  it("falls back to the humanized fieldName when slotMeta is absent", () => {
+    render(
+      <ContextSelectorRenderer
+        fieldName="referenceContent"
+        schema={{} as never}
+        value={{ candidates: [], selectedRefs: [] } satisfies ContextSelectorValue}
+        onChange={vi.fn()}
+        context={{ connectedApps: [] }}
+      />,
+    );
+    expect(screen.getByText("Reference Content")).toBeTruthy();
+  });
+});
