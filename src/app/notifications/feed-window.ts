@@ -6,7 +6,7 @@ import "server-only";
 // The union feed (unified-feed.ts, E5) is a keyset stream with no cheap
 // server-side COUNT: approvals are read-time federated (small N, fully
 // fetched every call) and notifications are keyset-paged. §VII of the
-// ratified design (app-notifications.html v0.1.2) nonetheless requires a
+// ratified notifications design spec nonetheless requires a
 // KNOWN total — numbered pages + an "X of N" caption, like every other list
 // — so this module WALKS the union stream, accumulating raw pages via
 // repeated `loadUnifiedFeedPage` calls, until it has gathered the ENTIRE feed

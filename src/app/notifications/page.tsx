@@ -20,8 +20,7 @@ export const dynamic = "force-dynamic";
 // ---------------------------------------------------------------------------
 // /notifications v2 (cinatra#2380, S2) — the single chronological list
 // unifying notifications and pending approvals, per the ratified notifications
-// design spec (cinatra-ai/design specs/app-notifications.html v0.1.2 — the
-// pinned contract recorded on the PR).
+// design spec (the pinned contract recorded on the PR).
 //
 // Wide column (§I): `max-w-3xl` on BOTH the header and the content column, or
 // they misalign (connector-setup precedent) — the surface previously carried

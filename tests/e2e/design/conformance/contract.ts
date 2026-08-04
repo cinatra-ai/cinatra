@@ -1571,13 +1571,14 @@ const NOTIFICATIONS_FILTER_RAIL_DRIVER: SurfaceDriver = {
   actions: {},
   states: {
     // The real filter-rail skeleton (§III): the labelled group in its aria-busy
-    // loading state with four chip-shaped Skeleton placeholders.
+    // loading state with four chip-shaped toggle-group placeholders plus the
+    // trailing "Mark all read" placeholder — five Skeleton elements total.
     loading: async (_page, root) => {
       const rail = root.locator(
         '[data-conformance-id="notifications-filter-rail"][data-state="loading"]',
       );
       await expect(rail).toHaveAttribute("aria-busy", "true");
-      await expect(rail.locator('[data-slot="skeleton"]')).toHaveCount(4);
+      await expect(rail.locator('[data-slot="skeleton"]')).toHaveCount(5);
     },
   },
 };

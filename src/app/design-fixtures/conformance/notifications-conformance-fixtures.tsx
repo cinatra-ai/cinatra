@@ -35,6 +35,8 @@ import {
   CircleCheck,
   Clock,
   Info,
+  Mail,
+  MailOpen,
   MessageSquare,
   TriangleAlert,
 } from "lucide-react";
@@ -145,7 +147,7 @@ function NotificationCardRow({
       <GlyphFrame tone="info">
         <MessageSquare className="size-[17px]" />
       </GlyphFrame>
-      <div className="relative z-10 min-w-0 flex-1">
+      <div className="min-w-0 flex-1">
         <span
           {...(titleField ? { "data-field": "item.title" } : {})}
           className="font-sans text-sm font-semibold text-foreground"
@@ -165,9 +167,9 @@ function NotificationCardRow({
         className="relative z-10 size-[26px] rounded-md text-primary"
       >
         {unread ? (
-          <span aria-hidden className="block size-2 rounded-full bg-primary" />
+          <Mail width={13} height={13} aria-hidden />
         ) : (
-          <span aria-hidden className="block size-2 rounded-full border border-primary" />
+          <MailOpen width={13} height={13} aria-hidden />
         )}
       </Button>
     </li>
@@ -281,7 +283,7 @@ function ApprovalRow({
           <Clock className="size-[17px]" />
         )}
       </GlyphFrame>
-      <div className="relative z-10 min-w-0 flex-1">
+      <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-sans text-sm font-semibold text-foreground">
             {title}

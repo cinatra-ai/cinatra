@@ -4,8 +4,7 @@
 // /notifications v2 — the single chronological feed (cinatra#2380, S2).
 //
 // ONE interleaved, time-ordered list of notifications + pending approvals, per
-// the ratified notifications design spec (cinatra-ai/design specs/app-
-// notifications.html v0.1.2 — the coordinator's design#104 round-3 ruling
+// the ratified notifications design spec (the current toolbar shape
 // supersedes the earlier "tablist" shape named in some older issue text):
 //   §I   one list, newest first, no clusters / no section headers;
 //   §II  one uniform row shell, two species, rendered as SPACED CLICKABLE
@@ -48,6 +47,8 @@ import {
   CircleCheck,
   Clock,
   Info,
+  Mail,
+  MailOpen,
   MessageSquare,
   TriangleAlert,
 } from "lucide-react";
@@ -65,16 +66,6 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 import { Toolbar, ToolbarButton, ToolbarGroup, ToolbarSeparator } from "@/components/ui/toolbar";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import {
-  Pagination,
-  PaginationCaption,
-  PaginationContent,
-  PaginationEllipsis,
-  PaginationItem,
-  PaginationLink,
-  PaginationNext,
-  PaginationPrevious,
-} from "@/components/ui/pagination";
 import { cn } from "@/lib/utils";
 
 import { notificationIsUnread, type ApprovalRowVM, type FeedRowVM, type FilterChip } from "./feed-view-model";
@@ -517,66 +508,73 @@ function FeedPager({
   const atFirst = page <= 1;
   const atLast = page >= pageCount;
 
+  // Spec-exact pager (§VII): plain (non-anchor) buttons via the shadcn
+  // <Button> wrapper, the current page rendered as a non-interactive
+  // aria-current span (never a button), and an ellipsis rendered as a plain
+  // muted span — matching the shared Pagination component's own reference
+  // markup exactly, geometry included.
+  const pagerButtonBase =
+    "h-auto rounded-[5px] border border-line bg-surface-strong font-mono text-xs hover:bg-surface-strong disabled:pointer-events-none disabled:opacity-50";
+
   return (
     <div
       data-conformance-id="notifications-list-pager"
       className="mt-1 flex flex-col items-center gap-2"
     >
-      <Pagination className="w-auto">
-        <PaginationContent>
-          <PaginationItem>
-            <PaginationPrevious
-              href="#"
-              aria-disabled={atFirst || disabled}
-              tabIndex={atFirst ? -1 : undefined}
-              data-action="page-prev -> paged"
-              className={cn((atFirst || disabled) && "pointer-events-none opacity-50")}
-              onClick={(e) => {
-                e.preventDefault();
-                onPageChange(page - 1);
-              }}
-            />
-          </PaginationItem>
-          {slots.map((slot, i) =>
-            slot === "ellipsis" ? (
-              <PaginationItem key={`ellipsis-${i}`}>
-                <PaginationEllipsis />
-              </PaginationItem>
-            ) : (
-              <PaginationItem key={slot}>
-                <PaginationLink
-                  href="#"
-                  isActive={slot === page}
-                  aria-label={`Page ${slot}`}
-                  aria-current={slot === page ? "page" : undefined}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    onPageChange(slot);
-                  }}
-                >
-                  {slot}
-                </PaginationLink>
-              </PaginationItem>
-            ),
-          )}
-          <PaginationItem>
-            <PaginationNext
-              href="#"
-              aria-disabled={atLast || disabled}
-              tabIndex={atLast ? -1 : undefined}
-              data-action="page-next -> paged"
-              className={cn((atLast || disabled) && "pointer-events-none opacity-50")}
-              onClick={(e) => {
-                e.preventDefault();
-                onPageChange(page + 1);
-              }}
-            />
-          </PaginationItem>
-        </PaginationContent>
-      </Pagination>
-      <PaginationCaption>
+      <div className="flex items-center gap-1 font-mono text-xs">
+        <Button
+          type="button"
+          variant="ghost"
+          aria-label="Previous page"
+          data-action="page-prev -> paged"
+          disabled={atFirst || disabled}
+          onClick={() => onPageChange(page - 1)}
+          className={cn(pagerButtonBase, "px-2 py-[5px]")}
+        >
+          ‹
+        </Button>
+        {slots.map((slot, i) =>
+          slot === "ellipsis" ? (
+            <span key={`ellipsis-${i}`} aria-hidden className="px-1 text-muted-foreground">
+              …
+            </span>
+          ) : slot === page ? (
+            <span
+              key={slot}
+              aria-current="page"
+              className="rounded-[5px] border border-foreground bg-foreground px-2.5 py-[5px] text-background"
+            >
+              {slot}
+            </span>
+          ) : (
+            <Button
+              key={slot}
+              type="button"
+              variant="ghost"
+              aria-label={`Page ${slot}`}
+              disabled={disabled}
+              onClick={() => onPageChange(slot)}
+              className={cn(pagerButtonBase, "px-2.5 py-[5px]")}
+            >
+              {slot}
+            </Button>
+          ),
+        )}
+        <Button
+          type="button"
+          variant="ghost"
+          aria-label="Next page"
+          data-action="page-next -> paged"
+          disabled={atLast || disabled}
+          onClick={() => onPageChange(page + 1)}
+          className={cn(pagerButtonBase, "px-2 py-[5px]")}
+        >
+          ›
+        </Button>
+      </div>
+      <span className="font-mono text-xs text-muted-foreground">
         Page {page} of {pageCount} · {total} total
-      </PaginationCaption>
+      </span>
     </div>
   );
 }
@@ -653,21 +651,11 @@ function notificationTone(n: AppNotification): Tone {
   }
 }
 
-// The read/unread toggle icon — one drawing, two states: filled dot (unread,
-// the action marks read) or hollow ring (read, the action marks unread).
-function ReadDotIcon({ unread }: { unread: boolean }): React.ReactElement {
-  if (unread) {
-    return (
-      <svg viewBox="0 0 24 24" width="10" height="10" aria-hidden>
-        <circle cx="12" cy="12" r="6" fill="currentColor" />
-      </svg>
-    );
-  }
-  return (
-    <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2.4" aria-hidden>
-      <circle cx="12" cy="12" r="6" />
-    </svg>
-  );
+// The read/unread toggle icon — a closed envelope (unread, the action marks
+// read) or an opened envelope (read, the action marks unread).
+function ReadEnvelopeIcon({ unread }: { unread: boolean }): React.ReactElement {
+  const IconComponent = unread ? Mail : MailOpen;
+  return <IconComponent width={13} height={13} aria-hidden />;
 }
 
 const CARD_SHELL =
@@ -727,7 +715,10 @@ function NotificationCard({
         )}
       </GlyphFrame>
 
-      <div className="relative z-10 min-w-0 flex-1">
+      {/* No z-10 here: unlike the trailing toggle/decide slot, this block has
+          no independently-clickable content of its own, so it must stay
+          BELOW the stretched overlay (never occlude the whole-card click). */}
+      <div className="min-w-0 flex-1">
         <span data-field="item.title" className="font-sans text-sm font-semibold text-foreground">
           {notification.title}
         </span>
@@ -753,7 +744,7 @@ function NotificationCard({
         title={unread ? "Unread — mark as read" : "Read — mark as unread"}
         className="relative z-10 size-[26px] rounded-md text-primary hover:bg-primary/[0.08]"
       >
-        <ReadDotIcon unread={unread} />
+        <ReadEnvelopeIcon unread={unread} />
       </Button>
     </li>
   );
@@ -811,7 +802,11 @@ function ApprovalCard({
         )}
       </GlyphFrame>
 
-      <div className="relative z-10 min-w-0 flex-1">
+      {/* No z-10 here: unlike the trailing decide slot, this block has no
+          independently-clickable content of its own, so it must stay BELOW
+          the stretched overlay (never occlude the href species' whole-card
+          click). */}
+      <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-sans text-sm font-semibold text-foreground">
             {approval.title}

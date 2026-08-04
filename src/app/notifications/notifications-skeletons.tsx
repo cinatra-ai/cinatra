@@ -1,9 +1,8 @@
 // ---------------------------------------------------------------------------
 // /notifications v2 — loading skeletons (cinatra#2380, S2).
 //
-// The ratified notifications design spec (cinatra-ai/design specs/app-
-// notifications.html v0.1.2) declares a `loading` presentation for the
-// toolbar (§III) and for the card / list shell (§I/§II). These are the real,
+// The ratified notifications design spec declares a `loading` presentation
+// for the toolbar (§III) and for the card / list shell (§I/§II). These are the real,
 // shipped skeletons for that state — built from the design-system Skeleton
 // primitive (src/components/ui/skeleton.tsx) and the SAME tokens + geometry
 // the live feed uses (notifications-feed.tsx): the toolbar chrome, the 34px

@@ -99,7 +99,12 @@ test.describe("§II — one row shell, two species; eligibility, not raw pending
     const errRow = page
       .locator('[data-conformance-id="notification-row"]')
       .filter({ hasText: "Blog Post Idea Generation failed" });
-    await expect(errRow.getByRole("button", { name: "Mark as read" })).toBeVisible();
+    // Exact match: the row's stretched whole-card overlay button (§II) also
+    // carries "mark as read" inside its longer aria-label ("<title> — mark as
+    // read"), so a substring match would ambiguously resolve to both.
+    await expect(
+      errRow.getByRole("button", { name: "Mark as read", exact: true }),
+    ).toBeVisible();
 
     // Neither approval row renders a read/unread toggle (read-state is
     // notifications-only) — approvals never carry a "Mark as read" control.

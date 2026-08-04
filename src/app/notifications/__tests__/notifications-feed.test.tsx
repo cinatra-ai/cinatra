@@ -338,7 +338,7 @@ describe("NotificationsFeed — §VII known-total pagination", () => {
 
     fetchFeedWindow.mockResolvedValueOnce(buildWindow(vms, { page: 2 }));
     await act(async () => {
-      click(elementByAriaLabel(container, "Go to next page"));
+      click(elementByAriaLabel(container, "Next page"));
       await Promise.resolve();
     });
     expect(fetchFeedWindow).toHaveBeenCalledWith("all", 2);
