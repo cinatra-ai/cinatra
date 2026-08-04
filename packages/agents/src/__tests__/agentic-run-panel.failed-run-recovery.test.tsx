@@ -28,6 +28,7 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { Button } from "@/components/ui/button";
 
 // ---------------------------------------------------------------------------
 // Dependency mocks — mirrors the sibling agentic-run-panel.*.test.tsx files
@@ -92,12 +93,13 @@ vi.mock("../a2a-actions", () => ({
 // StartNewRunButton is a fully separate, already-self-contained component
 // (its own router + server-action wiring) — stub it to a distinct marker so
 // this suite asserts purely on "is it mounted", the exact concern cinatra#2412
-// raised ("a repo-wide grep finds zero call sites").
+// raised ("a repo-wide grep finds zero call sites"). Uses the shadcn <Button>
+// wrapper (not a raw <button>) per the design-system lint gate.
 vi.mock("../start-new-run-button", () => ({
   StartNewRunButton: ({ agentId }: { agentId: string }) => (
-    <button type="button" data-testid="start-new-run-stub">
+    <Button type="button" data-testid="start-new-run-stub">
       start new run for {agentId}
-    </button>
+    </Button>
   ),
 }));
 
