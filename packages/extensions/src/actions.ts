@@ -241,28 +241,34 @@ function rejectEmptyInstallVersion(
 // sees only the reason-derived, non-technical copy (which for `dependents` names
 // the blocking installed extensions); the FULL technical error stays here for
 // operators. Same CWE-134-safe constant-format-string discipline.
+/** The STABLE, duck-typed refusal code a thrown lifecycle error carries
+ *  (NO_ADDRESSABLE_ROW / AMBIGUOUS_LIFECYCLE_TARGET / NO_LIFECYCLE_WRITE_STANDING
+ *  / PLATFORM_ADMIN_REQUIRED, plus the removal guards' own codes), or undefined.
+ *  Duck-typed rather than `instanceof` — these errors cross a dynamic-import
+ *  boundary (cinatra#2416). */
+function stableErrorCode(err: unknown): string | undefined {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === "string" && code.length > 0 ? code : undefined;
+}
+
 function logRemovalFailureForOperator(
   operation: string,
   packageName: string,
   failure: RemovalActionResult,
   err: unknown,
+  errorCode?: string,
 ): void {
-  // cinatra#2416: also record the refusal's STABLE error code when the thrown
-  // error carries one (NO_ADDRESSABLE_ROW / AMBIGUOUS_LIFECYCLE_TARGET /
-  // NO_LIFECYCLE_WRITE_STANDING / PLATFORM_ADMIN_REQUIRED / …). The returned
-  // user-facing contract stays generic by design — this is the operator-side
-  // discriminant that makes an addressability refusal greppable, and the
-  // observable "expected error code" for a crafted direct submission.
-  const code =
-    typeof (err as { code?: unknown } | null)?.code === "string"
-      ? String((err as { code?: unknown }).code)
-      : "none";
+  // cinatra#2416: record the refusal's STABLE code alongside the coarse reason.
+  // The returned user-facing contract stays generic by design — this is the
+  // operator-side discriminant that makes an addressability refusal greppable,
+  // and the observable "expected error code" for a crafted direct submission
+  // that the UI now renders as unavailable.
   console.error(
     "[extension-removal] %s refused/failed for %s (reason=%s code=%s):",
     operation,
     packageName,
     failure.reason,
-    code,
+    errorCode ?? "none",
     err instanceof Error ? (err.stack ?? err.message) : String(err),
   );
 }
@@ -415,7 +421,16 @@ export async function uninstallExtensionPackage(
   packageName: string,
   packageVersion: string,
   actor: Actor,
-): Promise<{ success: boolean; error?: string; failure?: RemovalActionResult }> {
+): Promise<{
+  success: boolean;
+  error?: string;
+  /** cinatra#2416: the refusal's STABLE code, captured HERE — the only place
+   *  that still holds the thrown error OBJECT (the caller receives `error` as a
+   *  flattened string). Operator-side only; the user-facing `failure` contract
+   *  stays deliberately generic. */
+  errorCode?: string;
+  failure?: RemovalActionResult;
+}> {
   "use server";
   await requireAdminSession();
   try {
@@ -438,6 +453,7 @@ export async function uninstallExtensionPackage(
     return {
       success: false,
       error: err instanceof Error ? err.message : String(err),
+      errorCode: stableErrorCode(err),
       failure: classifyRemovalFailure(err),
     };
   }
@@ -451,7 +467,16 @@ export async function archiveExtensionPackage(
   packageName: string,
   packageVersion: string,
   actor: Actor,
-): Promise<{ success: boolean; error?: string; failure?: RemovalActionResult }> {
+): Promise<{
+  success: boolean;
+  error?: string;
+  /** cinatra#2416: the refusal's STABLE code, captured HERE — the only place
+   *  that still holds the thrown error OBJECT (the caller receives `error` as a
+   *  flattened string). Operator-side only; the user-facing `failure` contract
+   *  stays deliberately generic. */
+  errorCode?: string;
+  failure?: RemovalActionResult;
+}> {
   "use server";
   await requireAdminSession();
   try {
@@ -471,6 +496,7 @@ export async function archiveExtensionPackage(
     return {
       success: false,
       error: err instanceof Error ? err.message : String(err),
+      errorCode: stableErrorCode(err),
       failure: classifyRemovalFailure(err),
     };
   }
@@ -1127,7 +1153,13 @@ export async function archiveExtensionPackageFormAction(input: {
     // cinatra#1061: RETURN the classified refusal (see uninstall action note) so
     // the archive dependents/system message survives to the production client.
     const failure = result.failure ?? { ok: false as const, reason: "error" as const };
-    logRemovalFailureForOperator("archive", input.packageName, failure, result.error);
+    logRemovalFailureForOperator(
+      "archive",
+      input.packageName,
+      failure,
+      result.error,
+      result.errorCode,
+    );
     return failure;
   }
   // revalidatePath is unnecessary because redirect re-renders the destination.

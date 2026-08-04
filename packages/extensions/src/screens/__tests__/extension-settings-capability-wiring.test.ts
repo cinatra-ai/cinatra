@@ -165,5 +165,11 @@ describe("AC3 — the enforcement is untouched and its refusals carry stable cod
 
   it("a refused removal records the code operator-side", () => {
     expect(ACTIONS).toContain("reason=%s code=%s");
+    // The code must be captured where the thrown error OBJECT still exists —
+    // the caller only ever receives `error` flattened to a string, so reading
+    // `.code` at the log site would silently always be "none".
+    expect(ACTIONS).toContain("function stableErrorCode(");
+    expect(ACTIONS).toContain("errorCode: stableErrorCode(err),");
+    expect(ACTIONS).toContain("result.errorCode,");
   });
 });
