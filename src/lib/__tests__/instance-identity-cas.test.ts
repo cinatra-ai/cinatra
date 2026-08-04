@@ -362,6 +362,40 @@ describe("applyInstanceIdentityProvisioningWrite (store wrapper)", () => {
     ]);
   });
 
+  it("back-compat: archives the prior namespace from a legacy `vendorName`-only row instead of aborting", () => {
+    // Deployed legacy rows carry the namespace under `vendorName` (no
+    // `instanceNamespace` key). `readInstanceIdentity` resolves the namespace
+    // through its shim, so every action-level gate ahead of the CAS write
+    // passes on such a row — the append branch must apply the same fallback,
+    // or the write declines ("aborted") AFTER the registry user was already
+    // provisioned and the rename can never land.
+    const store = fakeStore({
+      vendorName: "legacy-ns",
+      tokenCiphertext: "old-ct",
+      tokenIv: "old-iv",
+      firstPublishedAt: "2026-05-01T00:00:00.000Z",
+    });
+    const outcome = applyInstanceIdentityProvisioningWrite(
+      WRITE,
+      { appendPreviousNamespace: true },
+      store.deps(),
+    );
+    expect(outcome).toBe("swapped");
+    const final = store.parsed() as {
+      instanceNamespace: string;
+      oldInstanceNamespaces: Array<{ name: string; lastTokenCiphertext: string; lastTokenIv: string }>;
+    };
+    expect(final.instanceNamespace).toBe("vendorb");
+    // The archived entry's name is exactly the legacy `vendorName` value.
+    expect(final.oldInstanceNamespaces).toEqual([
+      expect.objectContaining({
+        name: "legacy-ns",
+        lastTokenCiphertext: "old-ct",
+        lastTokenIv: "old-iv",
+      }),
+    ]);
+  });
+
   it("aborts (no write) when appendPreviousNamespace is set but the row has no usable prior namespace", () => {
     const store = fakeStore({ tokenCiphertext: "old-ct" });
     const before = store.raw;

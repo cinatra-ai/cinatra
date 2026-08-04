@@ -793,8 +793,12 @@ export function applyInstanceIdentityProvisioningWrite(
       firstPublishedAt: null,
     };
     if (opts.appendPreviousNamespace) {
-      const previousNamespace =
-        typeof parsed.instanceNamespace === "string" ? parsed.instanceNamespace : undefined;
+      // Back-compat: deployed legacy rows carry the namespace under
+      // `vendorName` — same shim `readInstanceIdentity` and
+      // `updateInstanceIdentityRegistries` apply. Without it a legacy row
+      // aborts the rename after the registry user was already provisioned.
+      const rawPrevious = parsed.instanceNamespace ?? parsed.vendorName;
+      const previousNamespace = typeof rawPrevious === "string" ? rawPrevious : undefined;
       if (!previousNamespace) return null; // no usable prior namespace to archive — decline to write
       const existingOld = Array.isArray(parsed.oldInstanceNamespaces)
         ? (parsed.oldInstanceNamespaces as unknown[])
