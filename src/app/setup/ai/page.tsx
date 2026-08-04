@@ -221,7 +221,7 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
           <p className="text-base font-semibold text-foreground">Finish AI setup</p>
           <p className="mt-0.5 text-sm text-muted-foreground">
             {selected === "anthropic"
-              ? "Cinatra will validate your key, ask your permission to upload your installed skills to your Anthropic workspace, upload them, and verify that Claude actually accepts them before saving this choice."
+              ? "Cinatra will validate your key, upload the installed skills you consented to share to your Anthropic workspace, and switch skill delivery to native MCP before saving this choice."
               : "Cinatra will validate your key and confirm the connection is ready before saving this choice."}
           </p>
 
@@ -244,7 +244,7 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
               <AlertTitle>AI setup complete</AlertTitle>
               <AlertDescription>
                 {readiness.receipt.provider === "anthropic"
-                  ? `Verified on ${new Date(readiness.receipt.completedAt).toLocaleString()}. ${readiness.receipt.syncedSkillCount ?? 0} skill(s) uploaded, and Claude accepted a container.skills request${readiness.receipt.probe?.disposable ? " (verified with a temporary probe skill, since no skills are installed yet)" : ""}.`
+                  ? `Verified on ${new Date(readiness.receipt.completedAt).toLocaleString()}. ${readiness.receipt.syncedSkillCount ?? 0} skill(s) uploaded${readiness.receipt.probe ? `, and Claude accepted a container.skills request${readiness.receipt.probe.disposable ? " (verified with a temporary probe skill, since no skills are installed yet)" : ""}` : ""}.`
                   : `Verified on ${new Date(readiness.receipt.completedAt).toLocaleString()}.`}
               </AlertDescription>
             </Alert>

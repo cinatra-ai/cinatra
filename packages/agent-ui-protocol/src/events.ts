@@ -42,6 +42,14 @@ export type RunErrorEvent = BaseAgUiEvent & {
   threadId: string;
   runId: string;
   message: string;
+  /**
+   * OPTIONAL stable machine-readable classification of the failure
+   * (cinatra#2390 S5 — classified runtime recovery): a domain error code such
+   * as `anthropic_skill_not_synced`, or the fallback `assistant_run_failed`.
+   * Absent on producers that predate the classification; consumers must treat
+   * absence as unclassified, never as success.
+   */
+  code?: string;
 };
 
 export type TextMessageStartEvent = BaseAgUiEvent & {

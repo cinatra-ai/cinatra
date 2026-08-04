@@ -39,6 +39,15 @@ export const SETUP_READINESS_FAILURE_CONFIG_KEY = "setup_readiness_last_failure"
  */
 export const SETUP_CREDENTIAL_SAVE_STEP_ID = "credential-save";
 
+/**
+ * The Anthropic setup card's consent checkbox field name — the LITERAL consent
+ * input the typed save action requires (S5, cinatra#2390: consent is explicit
+ * and actor-attributed, never implied by the presence of a key). Lives here
+ * rather than in `actions.ts` because a `"use server"` module may only export
+ * async server actions.
+ */
+export const ANTHROPIC_SETUP_CONSENT_FIELD = "consentToSkillsUpload";
+
 export type SetupReadinessFailureRecord = {
   step: string;
   message: string;

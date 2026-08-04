@@ -26,8 +26,16 @@ import { updateDefaultLlmProvider } from "@/lib/admin/default-llm-provider-mutat
 import { buildKnownWizardEligibleProviders } from "@cinatra-ai/sdk-extensions/llm-provider-contract";
 import type { LlmProvider } from "@cinatra-ai/agents/llm-provider-policy";
 import { writeConnectorConfigToDatabase } from "@/lib/database";
+import { grantSetupConsentWithWorkspaceOptInInDatabase } from "@/lib/anthropic-setup-consent-store";
 import { isNangoConfigured } from "@/lib/nango-system";
-import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
+// S5 (cinatra#2390): the typed setup error channel — the host-owned writer
+// that dispatches the connector's registered NON-REDIRECTING save action and
+// returns `{ok, code, sanitizedMessage}` for the client toast island. No
+// redirect, no error text in any URL.
+import {
+  saveSetupProviderConnection,
+  type SetupConnectionSaveResult,
+} from "@/lib/setup-provider-connection-writer";
 import {
   clearSetupReadinessReceipt,
   readAnthropicMcpMode,
@@ -50,7 +58,7 @@ import {
 } from "@/lib/setup-provider-commit";
 import { readLiveCredentialFingerprint } from "@/lib/llm-credential-fingerprint";
 import {
-  SETUP_CREDENTIAL_SAVE_STEP_ID,
+  ANTHROPIC_SETUP_CONSENT_FIELD,
   SETUP_PROVIDER_SELECTION_CONFIG_KEY,
   SETUP_READINESS_FAILURE_CONFIG_KEY,
   readSetupReadinessFailure,
@@ -111,93 +119,135 @@ export async function selectSetupProviderAction(formData: FormData) {
   redirect("/setup/ai?stay=1");
 }
 
-/**
- * Persist the Anthropic API key through the connector's OWN gated writer. The
- * host never touches the connector's CREDENTIAL shape directly —
- * `saveAPISettings` is the connector-owned write that also carries its own
- * gating.
- *
- * THE FAILURE IS PART OF THE CONTRACT, not an exception. That writer
- * hard-requires a configured connection service
- * (`if (!deps.nango.isConfigured()) throw`), and an unconfigured one is the
- * NORMAL pre-setup state — the wizard's own **Connections** step is still
- * incomplete at exactly this point. Letting the throw escape hands the operator
- * an unhandled server error on the happy path of a fresh install.
- *
- * PARITY WITH THE OPENAI ARM of this same step, read off its code rather than
- * assumed: `saveConnection` (openai-connector actions-core) treats an
- * unconfigured Nango as a TOLERATED condition (`if (apiKey &&
- * nango.isConfigured())` — it simply skips the pointer sync), and reports every
- * genuine failure by REDIRECTING with a flash, never by throwing out of the
- * action. Anthropic's writer cannot tolerate the condition (its credential
- * lives in Nango only, with no DB-fallback write), so the parity that is
- * actually available is the reporting semantics: every failure class becomes an
- * in-page actionable state plus the wizard's codes-only flash.
- *
- * NOTHING IS SWALLOWED. Every error the connector's writer REJECTS with is
- * recorded and rendered (a `redirect()` it throws is control flow and passes
- * through untouched); the unconfigured-connection-service class additionally
- * earns a fix-forward naming the step to complete first, decided from the LIVE
- * nango status rather than by matching the connector's error string. A failure
- * of the recording write itself is not caught — that is the wizard's existing
- * posture for a dead config store, and pretending to handle it here would just
- * hide it.
- */
-export async function saveAnthropicSetupKeyAction(formData: FormData) {
-  await requireAdminSession();
-  const apiKey = (formData.get("apiKey") as string | null)?.trim();
-  if (!apiKey) {
-    redirect("/setup/ai?stay=1&error=setup-provider-invalid");
-  }
-  const surface = getLlmProviderSurface("anthropic");
-  if (!surface?.saveAPISettings) {
-    redirect("/setup/ai?stay=1&error=setup-provider-invalid");
-  }
+// ---------------------------------------------------------------------------
+// S5 (cinatra#2390): the TYPED setup save actions.
+//
+// Both provider forms on the setup AI step post here through `useActionState`
+// (the <SetupProviderConnectionForm> island). The actions return
+// `{ok, code, sanitizedMessage}` — they NEVER redirect and NEVER put error
+// text in a URL or in durable state. The connector's registered
+// non-redirecting `saveConnection` UI action does the actual persistence,
+// reached through the installed-extension dispatch (the same authorization
+// pipeline as the generic action endpoint). The pre-S5 redirecting path
+// (`saveOpenAIConnectionAction` + error-in-URL) is retired ON THIS SURFACE;
+// the codes-only flash channel and every other consumer are untouched.
+// ---------------------------------------------------------------------------
 
-  let failure: { message: string; fixForward: string | null } | null = null;
+function formString(formData: FormData, key: string): string | null {
+  const value = formData.get(key);
+  return typeof value === "string" ? value : null;
+}
+
+/** Fail-closed read of the live connection-service status (an unresolvable
+ *  surface is the same operator situation as "not configured yet"). */
+function connectionServiceReady(): boolean {
   try {
-    await surface.saveAPISettings({ apiKey });
-  } catch (err) {
-    if (isNextRedirect(err)) throw err;
-    const message = sanitizeReadinessMessage(err instanceof Error ? err.message : String(err));
-    // Loud server-side too — but the SANITIZED message plus the error class,
-    // never the raw error. A provider writer is free to echo the credential
-    // back in its message or stack, and a server log is durable and often
-    // shipped off-box: sanitizing the operator-facing copy while logging the
-    // raw error would defeat the sanitizer entirely.
-    console.error(`[setup-ai] saving the Anthropic API key failed (${errorClass(err)}): ${message}`);
-    const connectionServiceReady = (() => {
-      try {
-        return isNangoConfigured();
-      } catch {
-        // The nango-system surface itself being unresolvable is the same
-        // operator situation as "not configured yet", and is the fail-closed
-        // reading either way.
-        return false;
-      }
-    })();
-    failure = {
-      message,
-      fixForward: connectionServiceReady
-        ? null
-        : "Finish the Connections step first — the Anthropic key is stored through the connection service, which is not configured yet. Complete Connections, then come back and save the key.",
+    return isNangoConfigured();
+  } catch {
+    return false;
+  }
+}
+
+const CONNECTIONS_STEP_FIX_FORWARD =
+  " Finish the Connections step first — the key is stored through the connection " +
+  "service, which is not configured yet. Complete Connections, then come back and " +
+  "save the key.";
+
+/**
+ * Typed OpenAI setup save. Collects the form's connection fields into the flat
+ * values map the connector's registered `saveConnection` action consumes (the
+ * same shape its schema-config admin surface submits).
+ */
+export async function saveSetupOpenAIConnectionAction(
+  _prevState: SetupConnectionSaveResult | null,
+  formData: FormData,
+): Promise<SetupConnectionSaveResult> {
+  await requireAdminSession();
+  const values: Record<string, string> = {};
+  for (const key of ["apiKey", "projectId", "organizationId", "serviceTier", "defaultModel"]) {
+    const value = formString(formData, key);
+    if (value !== null) values[key] = value;
+  }
+  return saveSetupProviderConnection("openai", values);
+}
+
+/**
+ * Typed, CONSENT-AWARE Anthropic setup save (S5's "Anthropic consent at
+ * save"). The card carries an explicit consent checkbox with the upload
+ * gate's advisory content; this action:
+ *
+ *   1. requires the LITERAL consent input — no checkbox, no save. The consent
+ *      is an operator act, never implied by the presence of a key;
+ *   2. saves the key through the connector's registered non-redirecting
+ *      save action (installed-extension dispatch, typed result);
+ *   3. lands the workspace upload opt-in AND the bulk consent-ledger grant in
+ *      ONE transaction, attributed to the acting admin. Scope = the installed
+ *      NON-PERSONAL package identities (the bulk selector excludes personal
+ *      skills by construction); idempotent per identity.
+ *
+ * A failure at (3) leaves the opt-in OFF (the transaction is all-or-nothing —
+ * no half-enabled opt-in), returns a typed failure the island toasts, and
+ * BLOCKS the S3 commit: the readiness saga's bulk-consent step now verifies
+ * the recorded consent instead of granting it, so Continue cannot commit a
+ * provider whose consent never landed.
+ */
+export async function saveSetupAnthropicConnectionAction(
+  _prevState: SetupConnectionSaveResult | null,
+  formData: FormData,
+): Promise<SetupConnectionSaveResult> {
+  const session = await requireAdminSession();
+  const apiKey = formString(formData, "apiKey")?.trim();
+  if (!apiKey) {
+    return {
+      ok: false,
+      code: "key-missing",
+      sanitizedMessage: "Enter an Anthropic API key to save.",
+    };
+  }
+  if (formString(formData, ANTHROPIC_SETUP_CONSENT_FIELD) !== "on") {
+    return {
+      ok: false,
+      code: "consent-required",
+      sanitizedMessage:
+        "Confirm the skills-upload consent to set up Anthropic: setup uploads your " +
+        "installed skills (full SKILL.md files plus their bundled files) to your " +
+        "Anthropic workspace, where Anthropic retains them.",
     };
   }
 
-  if (failure) {
-    writeConnectorConfigToDatabase(SETUP_READINESS_FAILURE_CONFIG_KEY, {
-      step: SETUP_CREDENTIAL_SAVE_STEP_ID,
-      message: failure.message,
-      fixForward: failure.fixForward,
-      at: new Date().toISOString(),
-    });
-    redirect("/setup/ai?stay=1&error=setup-provider-save-failed");
+  const saved = await saveSetupProviderConnection("anthropic", { apiKey });
+  if (!saved.ok) {
+    // The unconfigured-connection-service class keeps its fix-forward naming
+    // the step to complete first — decided from the LIVE nango status, never
+    // by matching the connector's error string.
+    return connectionServiceReady()
+      ? saved
+      : { ...saved, sanitizedMessage: saved.sanitizedMessage + CONNECTIONS_STEP_FIX_FORWARD };
+  }
+
+  try {
+    // ONE transaction: the workspace opt-in + the setup-bulk ledger grant
+    // (actor-attributed). A throw rolls back BOTH — no half-enabled opt-in.
+    grantSetupConsentWithWorkspaceOptInInDatabase(session.user?.id ?? null);
+  } catch (err) {
+    const message = sanitizeReadinessMessage(err instanceof Error ? err.message : String(err));
+    console.error(
+      `[setup-ai] recording the Anthropic skills-upload consent failed (${errorClass(err)}): ${message}`,
+    );
+    return {
+      ok: false,
+      code: "consent-write-failed",
+      sanitizedMessage:
+        "The Anthropic key was saved, but the skills-upload consent could not be " +
+        "recorded, so AI setup cannot complete on Anthropic yet. Save again to retry. " +
+        `(${message})`,
+    };
   }
 
   // A new credential invalidates any receipt earned under the old one; clear
-  // the stale failure record too so the step does not show a resolved error.
+  // a stale failure record too so the step does not show a resolved error.
   writeConnectorConfigToDatabase(SETUP_READINESS_FAILURE_CONFIG_KEY, null);
-  redirect("/setup/ai?stay=1");
+  return saved;
 }
 
 /**
@@ -299,6 +349,29 @@ export async function completeAiSetupAction(formData: FormData) {
   }
   if (snapshot.state.kind === "committed" && snapshot.state.commitment.provider !== provider) {
     redirect("/setup/ai?stay=1&error=setup-provider-locked");
+  }
+
+  // S5 (cinatra#2390): NATIVE MCP AT COMMIT. Committing Anthropic sets/
+  // migrates the connector's MCP mode to `native` through the existing
+  // preserving writer — eliminating the known foot-gun where a stored
+  // `function-tools` mode rejects every Anthropic container-skill delivery at
+  // run time while setup reads green. Done BEFORE the fingerprint sampling so
+  // the readiness fingerprint this run earns is computed under the mode the
+  // commit actually leaves behind. The receipt is cleared FIRST, fail-closed:
+  // the mode is a fingerprint input, so flipping it could otherwise resurrect
+  // a stale receipt earned under `native` before an operator flipped away.
+  if (provider === "anthropic" && readAnthropicMcpMode() !== "native") {
+    try {
+      clearSetupReadinessReceipt();
+      writeAnthropicMcpMode("native");
+    } catch (err) {
+      if (isNextRedirect(err)) throw err;
+      console.error(
+        `[setup-ai] migrating the Anthropic MCP mode to native at commit failed (${errorClass(err)}): ` +
+          sanitizeReadinessMessage(err instanceof Error ? err.message : String(err)),
+      );
+      redirect("/setup/ai?stay=1&error=setup-mcp-mode-switch-failed");
+    }
   }
 
   // The keyed digest of the credential this run is about to verify. A

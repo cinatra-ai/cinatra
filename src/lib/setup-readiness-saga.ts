@@ -17,24 +17,24 @@ import "server-only";
  * so readiness becomes a probe RESULT that is recorded, and that expires when
  * anything readiness-relevant changes underneath it.
  *
- * THE FIVE STEPS (the issue's saga, in order):
+ * THE STEPS (reshaped by cinatra#2390 S5 — the probe is demoted):
  *   1. credential-validation — key saved + a plain request validating it.
  *      BOTH paths.
- *   2. bulk-consent          — ANTHROPIC ONLY. The explicit act that makes the
- *                              already-installed injectable packages eligible
- *                              (S5's consent ledger; without it the derived
- *                              `allowAnthropicUpload` projection stays false for
- *                              everything installed before the opt-in and
- *                              nothing would ever upload).
- *   3. initial-sync + probe  — ANTHROPIC ONLY. A STRICT whole-catalog sync (S5's
- *                              `syncCatalogSkillsToAnthropicStrict`, which
+ *   2. bulk-consent          — ANTHROPIC ONLY. Now a VERIFICATION of the
+ *                              explicit consent the setup card recorded at
+ *                              save time (workspace opt-in + bulk ledger grant
+ *                              in one transaction, actor-attributed). A commit
+ *                              never manufactures consent; absence blocks it.
+ *   3. initial-sync          — ANTHROPIC ONLY. A STRICT whole-catalog sync
+ *                              (`syncCatalogSkillsToAnthropicStrict`, which
  *                              THROWS rather than letting an all-skipped run
- *                              masquerade as success), then `probeNativeSkills`
- *                              against an ACTUALLY-UPLOADED revision. When the
- *                              expected set is legitimately empty, a DISPOSABLE
- *                              probe skill is created → probed → deleted.
+ *                              masquerade as success).
  *   4. commit                — write `llm_default_provider` through the audited
- *                              chokepoint + persist the readiness receipt.
+ *                              chokepoint + persist the readiness receipt. The
+ *                              setup action sets the Anthropic MCP mode to
+ *                              `native` at commit, which retires the blocking
+ *                              `native-skills-probe` gate: the probe survives
+ *                              as an on-demand Administration diagnostic.
  *   5. compensation          — on failure: opt-in rollback, or setup-incomplete
  *                              with actionable errors. Never a half-committed
  *                              state that reads as ready.
@@ -575,7 +575,6 @@ export async function runSetupReadinessSaga(
 
   // The OpenAI path stops here and commits. NO upload, NO probe, and — the
   // property that has to hold — no Anthropic egress whatsoever.
-  let probeRecord: SetupReadinessProbeRecord | undefined;
   let syncedSkillCount: number | undefined;
 
   if (provider === "anthropic") {
@@ -602,86 +601,17 @@ export async function runSetupReadinessSaga(
     }
     syncedSkillCount = uploadedSkillIds.length;
 
-    // ---- Step 3b: probeNativeSkills (ANTHROPIC ONLY) ---------------------
-    // The probe MUST reference an ACTUALLY-UPLOADED revision — probing with a
-    // fabricated id would exercise the API's 404 path, not the
-    // `container.skills` acceptance path, and would "pass" in exactly the
-    // broken configuration this step exists to catch.
-    let disposable: DisposableProbeSkillRef | null = null;
-    try {
-      // A `container.skills` reference is {skill_id, version} — BOTH halves
-      // (codex round-1 finding #6). Passing only an id would let the probe
-      // resolve some other revision, so it would not prove the revision the
-      // sync just uploaded.
-      let probeTarget = uploadedSkillIds[0];
-      if (!probeTarget) {
-        // Legitimately empty expected set (a fresh install with no injectable
-        // skills yet). Create a throwaway, probe it, delete it.
-        disposable = await ports.createDisposableProbeSkill();
-        probeTarget = { skillId: disposable.skillId, version: disposable.version };
-      }
-
-      const result = await ports.probeNativeSkills(probeTarget);
-      probeRecord = {
-        accepted: result.accepted === true,
-        ...(result.mode ? { mode: result.mode } : {}),
-        skillId: probeTarget.skillId,
-        version: probeTarget.version,
-        disposable: disposable !== null,
-      };
-
-      if (!probeRecord.accepted) {
-        return await fail(
-          "native-skills-probe",
-          result.reason ??
-            "Anthropic rejected a container.skills request, so uploaded skills would not reach the model.",
-          // The fix-forward must name something the operator can DO from where
-          // they are standing. It used to say "in its settings" — accurate
-          // about the setting, unfollowable in practice: admin routes redirect
-          // back into the wizard while setup is incomplete, and no settings
-          // surface renders this field in the first place. It now names the
-          // in-step control (see writeAnthropicMcpMode above). It is also
-          // purely the REMEDY: the diagnosis is the `message` right above it,
-          // and the two render adjacently.
-          result.mode === "function-tools"
-            ? "Use “Switch to native MCP delivery” below to set the Anthropic connector's MCP mode to 'native', then run this step again."
-            : "Confirm the Anthropic workspace has custom skills enabled for this API key, then run this step again.",
-        );
-      }
-    } catch (err) {
-      // A THROWN probe is inconclusive, and inconclusive is treated as failed
-      // (fail-closed) — committing on "we could not tell" is precisely the
-      // cached-boolean behaviour S6 replaces.
-      return await fail(
-        "native-skills-probe",
-        `Could not verify that Anthropic accepts custom skills on this connection: ${errText(err)}`,
-      );
-    } finally {
-      // ALWAYS reclaim the throwaway, including on the failure path — a probe
-      // skill left behind is remote litter under the operator's API key.
-      //
-      // HONEST FAILURE NOTE (codex round-1 finding #3): a disposable probe skill
-      // has NO row in the anthropic_skill_sync map, so the stale-row GC sweep
-      // CANNOT discover it. An earlier version of this comment claimed it
-      // could — that was wrong, and quietly wrong in the direction of leaving
-      // remote litter under the operator's key with nobody looking for it.
-      // The reclaim is therefore best-effort AND loud: the probe's stable
-      // display title (deriveAnthropicDisplayTitle over a fixed catalog id)
-      // makes the create idempotent, so a later setup run reconciles onto the
-      // SAME remote skill and re-attempts the delete. Durable journaling +
-      // GC enrolment for probe skills is recorded as follow-up on the issue.
-      if (disposable) {
-        try {
-          await disposable.dispose();
-        } catch (err) {
-          console.error(
-            `[setup-readiness] the disposable probe skill ${disposable.skillId} could NOT be deleted and is NOT tracked by the stale-row GC. ` +
-              "Delete it manually in the Anthropic console, or re-run setup (the create is idempotent by display title and retries the delete). Cause:",
-            errText(err),
-          );
-        }
-      }
-    }
+    // ---- The native-skills probe is DEMOTED (cinatra#2390 S5) ------------
+    // The probe is NO LONGER A SETUP GATE. Committing Anthropic now sets the
+    // connector's MCP mode to `native` (the setup action does this through
+    // the preserving writer before this saga runs), which eliminates the
+    // `function-tools` rejection foot-gun the blocking probe existed to
+    // catch. The probe itself survives — run-on-demand, classified,
+    // NON-BLOCKING — as an Administration → LLM diagnostics action
+    // (`runAnthropicNativeSkillsProbeDiagnosticAction`). `uploadedSkillIds`
+    // still gates above through the STRICT sync: a sync that reconciled
+    // nothing (or refused skills) fails the saga before this point.
+    void uploadedSkillIds;
   }
 
   // ---- Step 4: commit ----------------------------------------------------
@@ -721,7 +651,9 @@ export async function runSetupReadinessSaga(
     provider,
     completedAt: ports.now().toISOString(),
     fingerprint: fingerprintAtCommit,
-    ...(probeRecord ? { probe: probeRecord } : {}),
+    // `probe` is no longer recorded here (cinatra#2390 S5): the native-skills
+    // probe is an on-demand Administration diagnostic, not a setup gate. The
+    // optional receipt field survives so pre-S5 receipts still parse.
     ...(syncedSkillCount !== undefined ? { syncedSkillCount } : {}),
   };
   try {

@@ -158,6 +158,38 @@ describe("createAgUiSinkAdapter — event mapping", () => {
     expect(adapter.outcome).toBe("error");
   });
 
+  it("S5 (cinatra#2390): a classification CODE on the error sink event rides the RUN_ERROR frame", async () => {
+    const { adapter, published } = collectingAdapter();
+    adapter.start();
+    adapter.send("error", { message: "skills not synced yet", code: "anthropic_skill_not_synced" });
+    await adapter.drain();
+    const err = published.find((e) => e.type === "RUN_ERROR") as {
+      message: string;
+      code?: string;
+    };
+    expect(err.message).toBe("skills not synced yet");
+    expect(err.code).toBe("anthropic_skill_not_synced");
+  });
+
+  it("S5 (cinatra#2390): ensureTerminal(message, code) carries the code; an absent code emits none", async () => {
+    const withCode = collectingAdapter();
+    withCode.adapter.start();
+    withCode.adapter.ensureTerminal("classified failure", "assistant_run_failed");
+    await withCode.adapter.drain();
+    const coded = withCode.published.find((e) => e.type === "RUN_ERROR") as { code?: string };
+    expect(coded.code).toBe("assistant_run_failed");
+
+    const withoutCode = collectingAdapter();
+    withoutCode.adapter.start();
+    withoutCode.adapter.send("error", { message: "plain" });
+    await withoutCode.adapter.drain();
+    const plain = withoutCode.published.find((e) => e.type === "RUN_ERROR") as Record<
+      string,
+      unknown
+    >;
+    expect("code" in plain).toBe(false);
+  });
+
   it("onPublishFailure fires ONCE on the first failure (the route's abort hook)", async () => {
     let calls = 0;
     const failures: unknown[] = [];

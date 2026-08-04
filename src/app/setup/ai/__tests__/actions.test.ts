@@ -38,6 +38,13 @@ vi.mock("next/navigation", () => ({
 }));
 
 const writeConnectorConfigToDatabase = vi.fn();
+// S5 (cinatra#2390): the ONE-transaction workspace-opt-in + bulk-consent
+// writer the typed Anthropic save action calls.
+const grantSetupConsentWithWorkspaceOptInInDatabase = vi.fn();
+vi.mock("@/lib/anthropic-setup-consent-store", () => ({
+  grantSetupConsentWithWorkspaceOptInInDatabase: (...args: unknown[]) =>
+    grantSetupConsentWithWorkspaceOptInInDatabase(...args),
+}));
 // `readiness-state.ts` is kept REAL (for its config keys, its step id, and its
 // failure reader), so this stands in for the durable store it reads through.
 const storedConfig = new Map<string, unknown>();
@@ -46,6 +53,17 @@ vi.mock("@/lib/database", () => ({
     writeConnectorConfigToDatabase(...args),
   readConnectorConfigFromDatabase: (key: string, fallback: unknown) =>
     storedConfig.has(key) ? storedConfig.get(key) : fallback,
+}));
+
+// S5 (cinatra#2390): the host-owned typed writer, stubbed at its seam — its
+// own dispatch/validation/sanitization contract is pinned by
+// setup-provider-connection-writer.test.ts.
+const saveSetupProviderConnection = vi.fn<
+  (provider: string, values: Record<string, string>) => Promise<unknown>
+>(async () => ({ ok: true, code: "saved", sanitizedMessage: null }));
+vi.mock("@/lib/setup-provider-connection-writer", () => ({
+  saveSetupProviderConnection: (provider: string, values: Record<string, string>) =>
+    saveSetupProviderConnection(provider, values),
 }));
 
 const isNangoConfigured = vi.fn(() => true);
@@ -123,14 +141,15 @@ vi.mock("@cinatra-ai/sdk-extensions/llm-provider-contract", () => ({
 }));
 
 import {
-  saveAnthropicSetupKeyAction,
+  saveSetupAnthropicConnectionAction,
+  saveSetupOpenAIConnectionAction,
   enableAnthropicNativeSkillDeliveryAction,
   selectSetupProviderAction,
   completeAiSetupAction,
 } from "@/app/setup/ai/actions";
 import { runSetupReadinessSaga } from "@/lib/setup-readiness-saga";
 import {
-  SETUP_CREDENTIAL_SAVE_STEP_ID,
+  ANTHROPIC_SETUP_CONSENT_FIELD,
   SETUP_READINESS_FAILURE_CONFIG_KEY,
 } from "@/app/setup/ai/readiness-state";
 
@@ -186,104 +205,136 @@ beforeEach(() => {
   });
 });
 
-describe("F1 — saveAnthropicSetupKeyAction: the writer's throw is an operator state, not a server error", () => {
-  it("an UNCONFIGURED connection service becomes an in-page record naming the step to complete first", async () => {
-    // The exact condition the connector's writer refuses on, and the normal
-    // pre-setup state of a fresh instance.
-    isNangoConfigured.mockReturnValue(false);
-    saveAPISettings.mockRejectedValue(
-      new Error("Configure the connection service first so Anthropic API requests can authenticate."),
-    );
+// ---------------------------------------------------------------------------
+// S5 (cinatra#2390) — the TYPED setup save actions: `{ok, code,
+// sanitizedMessage}` results, NEVER a redirect, NEVER error text in a URL or
+// in durable state.
+// ---------------------------------------------------------------------------
 
-    const url = await redirectOf(() => saveAnthropicSetupKeyAction(keyForm("sk-ant-live")));
+function consentedKeyForm(apiKey: string): FormData {
+  const form = keyForm(apiKey);
+  form.set(ANTHROPIC_SETUP_CONSENT_FIELD, "on");
+  return form;
+}
 
-    // Reported through the wizard's codes-only flash protocol, like the OpenAI
-    // arm — never as an unhandled throw out of the action.
-    expect(url).toBe("/setup/ai?stay=1&error=setup-provider-save-failed");
-
-    const record = lastFailureRecord() as {
-      step: string;
-      message: string;
-      fixForward: string | null;
-    };
-    expect(record.step).toBe(SETUP_CREDENTIAL_SAVE_STEP_ID);
-    expect(record.message).toContain("Configure the connection service first");
-    // ACTIONABLE: it names what to complete first, which is the whole point of
-    // the finding.
-    expect(record.fixForward).toContain("Connections");
+describe("S5 — saveSetupAnthropicConnectionAction: typed, consent-aware", () => {
+  it("REQUIRES the literal consent input — no checkbox, no save, typed refusal", async () => {
+    const result = await saveSetupAnthropicConnectionAction(null, keyForm("sk-ant-live"));
+    expect(result).toMatchObject({ ok: false, code: "consent-required" });
+    expect(saveSetupProviderConnection).not.toHaveBeenCalled();
+    expect(grantSetupConsentWithWorkspaceOptInInDatabase).not.toHaveBeenCalled();
   });
 
-  it("a DIFFERENT error class is still reported — never swallowed, and no remedy is invented", async () => {
-    isNangoConfigured.mockReturnValue(true);
-    saveAPISettings.mockRejectedValue(new Error("Anthropic rejected the key (401)."));
-
-    const url = await redirectOf(() => saveAnthropicSetupKeyAction(keyForm("sk-ant-bad")));
-    expect(url).toBe("/setup/ai?stay=1&error=setup-provider-save-failed");
-
-    const record = lastFailureRecord() as { message: string; fixForward: string | null };
-    expect(record.message).toContain("Anthropic rejected the key");
-    // The connection service IS configured here, so the "finish Connections"
-    // remedy would be a lie. No fix-forward is better than a wrong one.
-    expect(record.fixForward).toBeNull();
+  it("a blank key is a typed refusal before anything is touched", async () => {
+    const result = await saveSetupAnthropicConnectionAction(null, consentedKeyForm("   "));
+    expect(result).toMatchObject({ ok: false, code: "key-missing" });
+    expect(saveSetupProviderConnection).not.toHaveBeenCalled();
   });
 
-  it("the recorded message goes through the SANITIZER — a writer that echoes the key back never reaches durable state raw", async () => {
-    isNangoConfigured.mockReturnValue(true);
-    const raw = "upstream rejected authorization: sk-ant-SECRETVALUE01234567890";
-    saveAPISettings.mockRejectedValue(new Error(raw));
+  it("SUCCESS: saves through the typed writer, then lands the opt-in + bulk grant in ONE transactional call attributed to the acting admin", async () => {
+    const result = await saveSetupAnthropicConnectionAction(null, consentedKeyForm("sk-ant-live"));
 
-    await redirectOf(() => saveAnthropicSetupKeyAction(keyForm("sk-ant-live")));
-
-    expect(sanitizeReadinessMessage).toHaveBeenCalledWith(raw);
-    const record = lastFailureRecord() as { message: string };
-    expect(record.message.startsWith("[sanitized]")).toBe(true);
-  });
-
-  it("the SERVER LOG gets the SANITIZED text, never the raw Error (message + stack)", async () => {
-    // A server log is durable and often shipped off-box. Sanitizing the
-    // operator-facing copy while `console.error(..., err)`-ing the raw Error
-    // would defeat the sanitizer entirely — the message AND the stack ride
-    // along. Asserted structurally (no Error object is ever handed to the sink)
-    // because the redaction itself belongs to the real sanitizer, pinned in
-    // setup-readiness-saga.test.ts.
-    isNangoConfigured.mockReturnValue(true);
-    const rejection = new Error("upstream rejected authorization: sk-ant-SECRETVALUE01234567890");
-    saveAPISettings.mockRejectedValue(rejection);
-
-    await redirectOf(() => saveAnthropicSetupKeyAction(keyForm("sk-ant-live")));
-
-    expect(errorLogArgs.length).toBe(1);
-    for (const args of errorLogArgs) {
-      for (const arg of args) {
-        expect(arg).not.toBeInstanceOf(Error);
-        expect(typeof arg).toBe("string");
-      }
-      // What DOES go to the sink is the sanitizer's output.
-      expect(args.join(" ")).toContain("[sanitized]");
-    }
-  });
-
-  it("a redirect thrown by the connector's own writer is CONTROL FLOW, not a failure", async () => {
-    saveAPISettings.mockRejectedValue(new RedirectSignal("/configuration/llm?modal=anthropic"));
-
-    const url = await redirectOf(() => saveAnthropicSetupKeyAction(keyForm("sk-ant-live")));
-    expect(url).toBe("/configuration/llm?modal=anthropic");
-    // Nothing was recorded as a failure — the writer navigated on purpose.
-    expect(lastFailureRecord()).toBeUndefined();
-  });
-
-  it("SUCCESS still clears the stale failure record and forwards to the step", async () => {
-    const url = await redirectOf(() => saveAnthropicSetupKeyAction(keyForm("sk-ant-live")));
-
-    expect(saveAPISettings).toHaveBeenCalledWith({ apiKey: "sk-ant-live" });
-    expect(url).toBe("/setup/ai?stay=1");
+    expect(saveSetupProviderConnection).toHaveBeenCalledWith("anthropic", {
+      apiKey: "sk-ant-live",
+    });
+    // Actor attribution: the admin session's user id, never null-by-default.
+    expect(grantSetupConsentWithWorkspaceOptInInDatabase).toHaveBeenCalledWith("user_admin");
+    // The consent lands AFTER the key save succeeded, never before.
+    expect(
+      saveSetupProviderConnection.mock.invocationCallOrder[0],
+    ).toBeLessThan(grantSetupConsentWithWorkspaceOptInInDatabase.mock.invocationCallOrder[0]);
+    expect(result).toMatchObject({ ok: true, code: "saved" });
+    // A stale failure record is cleared — parity with the retired action.
     expect(lastFailureRecord()).toBeNull();
   });
 
-  it("a blank key is rejected before the connector is touched", async () => {
-    const url = await redirectOf(() => saveAnthropicSetupKeyAction(keyForm("   ")));
-    expect(url).toBe("/setup/ai?stay=1&error=setup-provider-invalid");
-    expect(saveAPISettings).not.toHaveBeenCalled();
+  it("a FAILED key save returns the writer's typed failure and NEVER touches consent or durable state", async () => {
+    saveSetupProviderConnection.mockResolvedValueOnce({
+      ok: false,
+      code: "save-failed",
+      sanitizedMessage: "[sanitized]Anthropic rejected the key (401).",
+    });
+
+    const result = await saveSetupAnthropicConnectionAction(null, consentedKeyForm("sk-ant-bad"));
+
+    expect(result).toMatchObject({ ok: false, code: "save-failed" });
+    expect(grantSetupConsentWithWorkspaceOptInInDatabase).not.toHaveBeenCalled();
+    // NOTHING durable: the sanitized message exists only in the typed result
+    // (the toast) — the pre-S5 durable failure record is retired for saves.
+    expect(lastFailureRecord()).toBeUndefined();
+  });
+
+  it("an UNCONFIGURED connection service keeps its fix-forward naming the Connections step (decided from the LIVE nango status)", async () => {
+    isNangoConfigured.mockReturnValue(false);
+    saveSetupProviderConnection.mockResolvedValueOnce({
+      ok: false,
+      code: "save-failed",
+      sanitizedMessage: "[sanitized]connection service unavailable",
+    });
+
+    const result = await saveSetupAnthropicConnectionAction(null, consentedKeyForm("sk-ant-live"));
+    expect(result.ok).toBe(false);
+    expect(result.sanitizedMessage).toContain("Connections");
+  });
+
+  it("a FAILED consent transaction is a typed failure — the opt-in is all-or-nothing, and the sanitized copy blocks nothing else", async () => {
+    grantSetupConsentWithWorkspaceOptInInDatabase.mockImplementationOnce(() => {
+      throw new Error("deadlock detected around authorization: sk-ant-SECRETVALUE01234567890");
+    });
+
+    const result = await saveSetupAnthropicConnectionAction(null, consentedKeyForm("sk-ant-live"));
+
+    expect(result).toMatchObject({ ok: false, code: "consent-write-failed" });
+    // The thrown message went through the sanitizer before joining the copy.
+    expect(result.sanitizedMessage).toContain("[sanitized]");
+    // The server log too: sanitized strings only, never the raw Error.
+    expect(errorLogArgs.length).toBe(1);
+    for (const arg of errorLogArgs[0]) {
+      expect(arg).not.toBeInstanceOf(Error);
+      expect(typeof arg).toBe("string");
+    }
+    // No success-path cleanup ran — the durable failure key was not touched.
+    expect(lastFailureRecord()).toBeUndefined();
+  });
+
+  it("NEVER redirects — the typed result is the only channel (no error text can reach a URL)", async () => {
+    for (const form of [
+      keyForm("sk-ant-live"), // consent missing
+      consentedKeyForm("   "), // key missing
+      consentedKeyForm("sk-ant-live"), // success
+    ]) {
+      // A redirect would THROW (RedirectSignal); a clean return proves none.
+      await expect(saveSetupAnthropicConnectionAction(null, form)).resolves.toBeTruthy();
+    }
+  });
+});
+
+describe("S5 — saveSetupOpenAIConnectionAction: typed, no redirect", () => {
+  it("collects the connection fields into the writer's flat values map", async () => {
+    const form = new FormData();
+    form.set("apiKey", "sk-live");
+    form.set("projectId", "proj_1");
+    form.set("organizationId", "org_1");
+
+    const result = await saveSetupOpenAIConnectionAction(null, form);
+
+    expect(saveSetupProviderConnection).toHaveBeenCalledWith("openai", {
+      apiKey: "sk-live",
+      projectId: "proj_1",
+      organizationId: "org_1",
+    });
+    expect(result).toMatchObject({ ok: true, code: "saved" });
+  });
+
+  it("returns the writer's typed failure verbatim — no redirect, no durable write", async () => {
+    saveSetupProviderConnection.mockResolvedValueOnce({
+      ok: false,
+      code: "save-rejected",
+      sanitizedMessage: "The connector did not accept the connection settings.",
+    });
+    const result = await saveSetupOpenAIConnectionAction(null, keyForm("sk-bad"));
+    expect(result).toMatchObject({ ok: false, code: "save-rejected" });
+    expect(writeConnectorConfigToDatabase).not.toHaveBeenCalled();
   });
 });
 
@@ -459,6 +510,78 @@ describe("S3 — completeAiSetupAction under the machine", () => {
     expect(url).toBe("/setup/ai?stay=1&error=setup-readiness-failed");
     expect(beginSetupProviderClaim).toHaveBeenCalledTimes(1);
     expect(releaseSetupProviderClaim).toHaveBeenCalledWith({ nonce: "nonce-1" });
+  });
+
+  it("S5: committing ANTHROPIC migrates the connector's MCP mode to native FIRST (receipt cleared before the flip)", async () => {
+    readAnthropicMcpMode.mockReturnValue("function-tools");
+    beginSetupProviderClaim.mockReturnValue({
+      ok: true,
+      claim: { nonce: "nonce-a", priorDefault: "openai" },
+    });
+    vi.mocked(runSetupReadinessSaga).mockResolvedValue({
+      ok: true,
+      receipt: {},
+      matcherConstraint: null,
+    } as never);
+
+    const url = await redirectOf(() => completeAiSetupAction(providerForm("anthropic")));
+    expect(url).toBe("/setup/ai?stay=1");
+
+    expect(writeAnthropicMcpMode).toHaveBeenCalledWith("native");
+    // Resurrection guard: the mode is a fingerprint input, so the receipt is
+    // cleared BEFORE the mode changes — same ordering as the F2 action.
+    expect(clearSetupReadinessReceipt.mock.invocationCallOrder[0]).toBeLessThan(
+      writeAnthropicMcpMode.mock.invocationCallOrder[0],
+    );
+    // And BEFORE the machine is entered, so the readiness fingerprint this run
+    // earns is computed under the mode the commit leaves behind.
+    expect(writeAnthropicMcpMode.mock.invocationCallOrder[0]).toBeLessThan(
+      beginSetupProviderClaim.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("S5: an ALREADY-NATIVE mode is left untouched (idempotent commit, no receipt churn)", async () => {
+    readAnthropicMcpMode.mockReturnValue("native");
+    beginSetupProviderClaim.mockReturnValue({
+      ok: true,
+      claim: { nonce: "nonce-b", priorDefault: "openai" },
+    });
+    vi.mocked(runSetupReadinessSaga).mockResolvedValue({
+      ok: true,
+      receipt: {},
+      matcherConstraint: null,
+    } as never);
+
+    await redirectOf(() => completeAiSetupAction(providerForm("anthropic")));
+    expect(writeAnthropicMcpMode).not.toHaveBeenCalled();
+    expect(clearSetupReadinessReceipt).not.toHaveBeenCalled();
+  });
+
+  it("S5: an OPENAI commit never touches the Anthropic MCP mode", async () => {
+    beginSetupProviderClaim.mockReturnValue({
+      ok: true,
+      claim: { nonce: "nonce-c", priorDefault: "openai" },
+    });
+    vi.mocked(runSetupReadinessSaga).mockResolvedValue({
+      ok: true,
+      receipt: {},
+      matcherConstraint: null,
+    } as never);
+
+    await redirectOf(() => completeAiSetupAction(providerForm("openai")));
+    expect(writeAnthropicMcpMode).not.toHaveBeenCalled();
+  });
+
+  it("S5: a FAILED mode migration is reported through the codes-only flash and stops before the machine", async () => {
+    readAnthropicMcpMode.mockReturnValue("function-tools");
+    writeAnthropicMcpMode.mockImplementationOnce(() => {
+      throw new Error("config store unavailable");
+    });
+
+    const url = await redirectOf(() => completeAiSetupAction(providerForm("anthropic")));
+    expect(url).toBe("/setup/ai?stay=1&error=setup-mcp-mode-switch-failed");
+    expect(beginSetupProviderClaim).not.toHaveBeenCalled();
+    expect(vi.mocked(runSetupReadinessSaga)).not.toHaveBeenCalled();
   });
 
   it("committed-same re-verify: NO claim is taken and success refreshes the stored fingerprint", async () => {

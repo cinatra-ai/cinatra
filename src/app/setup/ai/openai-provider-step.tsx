@@ -13,7 +13,11 @@ import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-import { saveOpenAIConnectionAction } from "@/app/campaigns/actions";
+// S5 (cinatra#2390): the setup surface posts through the TYPED save action
+// (useActionState island + toasts) — the redirecting `saveOpenAIConnectionAction`
+// path (error text in the URL) is retired on this surface.
+import { saveSetupOpenAIConnectionAction } from "@/app/setup/ai/actions";
+import { SetupProviderConnectionForm } from "@/app/setup/ai/provider-connection-form";
 import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy";
 import { readOpenAIConnection } from "@/lib/openai-connection-store";
 // Every OpenAI reader resolves through the `llm-provider-surface` capability
@@ -124,15 +128,18 @@ export async function SetupOpenAIProviderStep({ searchParams }: SetupOpenAIPageP
         </Alert>
       ) : null}
 
-      {/* A failed save surfaces via the shell-bypass setup layout's
-          <SearchParamToast> (codes-only wizard toast). `errorMessage` is still
-          read above to suppress the auto-forward; its inline <Alert> that
-          duplicated the wizard toast is retired. */}
+      {/* A failed save surfaces as a TOAST carrying the server-sanitized
+          message from the typed action result (S5, cinatra#2390) — never as
+          error text in the URL, and never through the codes-only flash. */}
 
       {/* Card 1: API key + project + organization */}
       <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
-        <form action={saveOpenAIConnectionAction} className="grid gap-4">
-          <Input type="hidden" name="redirectTo" value="/setup/ai?stay=1" />
+        <SetupProviderConnectionForm
+          action={saveSetupOpenAIConnectionAction}
+          successMessage="OpenAI connection saved."
+          className="grid gap-4"
+          testId="setup-openai-connection-form"
+        >
           <Field>
             <FieldLabel>API key</FieldLabel>
             <Input
@@ -155,7 +162,7 @@ export async function SetupOpenAIProviderStep({ searchParams }: SetupOpenAIPageP
           <div className="flex justify-end">
             <Button type="submit">{hasApiKey ? "Change" : "Save"}</Button>
           </div>
-        </form>
+        </SetupProviderConnectionForm>
       </section>
 
       {/* Card 2: Service tier + default model */}
@@ -166,8 +173,11 @@ export async function SetupOpenAIProviderStep({ searchParams }: SetupOpenAIPageP
             Save your API key above to unlock these settings.
           </p>
         ) : null}
-        <form action={saveOpenAIConnectionAction} className="mt-5">
-          <Input type="hidden" name="redirectTo" value="/setup/ai?stay=1" />
+        <SetupProviderConnectionForm
+          action={saveSetupOpenAIConnectionAction}
+          successMessage="OpenAI settings saved."
+          className="mt-5"
+        >
           <fieldset disabled={!hasApiKey} className="grid items-start gap-4 sm:grid-cols-2 disabled:opacity-50">
             <Field>
               <FieldLabel>Service tier</FieldLabel>
@@ -223,7 +233,7 @@ export async function SetupOpenAIProviderStep({ searchParams }: SetupOpenAIPageP
               <Button type="submit">Save</Button>
             </div>
           </fieldset>
-        </form>
+        </SetupProviderConnectionForm>
       </section>
 
     </div>
