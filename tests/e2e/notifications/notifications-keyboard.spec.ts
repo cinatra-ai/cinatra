@@ -46,13 +46,14 @@ test.describe("keyboard — the toolbar filter toggle group is one tab stop with
     const unread = segments.nth(2);
     const inProgress = segments.nth(3);
 
-    // Roving tabindex: only the checked segment ("All", selected on load) is
-    // a tab stop; every other segment is tabindex="-1" until focus visits it.
-    await expect(all).toHaveAttribute("tabindex", "0");
-    await expect(needsAction).toHaveAttribute("tabindex", "-1");
-
+    // Roving tabindex: before focus ever enters the group, Radix keeps every
+    // item at tabindex="-1" — the group root holds the initial tab stop and
+    // forwards entry focus to the selected segment. Only after entry does the
+    // visited segment become the single item-level tab stop.
     await all.focus();
     await expect(all).toBeFocused();
+    await expect(all).toHaveAttribute("tabindex", "0");
+    await expect(needsAction).toHaveAttribute("tabindex", "-1");
 
     await page.keyboard.press("ArrowRight");
     await expect(needsAction).toBeFocused();
