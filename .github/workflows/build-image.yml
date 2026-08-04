@@ -1715,13 +1715,40 @@ jobs:
       - name: File-size ratchet gate tests
         run: node --test scripts/audit/__tests__/file-size-ratchet.test.mjs
 
-      # Pinned-test existence gate. `vitest run a b c` treats positionals as
-      # FILTERS — a positional that matches zero files is SILENTLY ignored as
-      # long as the others match, so a renamed/lost test leaves its pin behind
-      # and CI stays green while advertising coverage it no longer has (this is
-      # exactly how `extension-install-e2e.test.ts` went missing yet green). This
-      # gate fails CI when a workflow pins a test file whose basename exists
-      # nowhere in the tree.
+      # Execution-plane compose SCOPING gate. Asserts the two structural claims
+      # the exec plane's containment argument rests on, against
+      # docker-compose.exec.yml: every exec service is configured from its own
+      # scoped env file (no app secret surface — a broker that can read the app
+      # DB URL makes a broker compromise a database compromise), and the docker
+      # socket (root on the host) is mounted on the worker and nowhere else.
+      # Dependency-free `node --test`, same convention as the ratchet gates
+      # above. Wired here because it previously ran in NO job: the suite is
+      # carved out of the root vitest include (node:test files report "No test
+      # suite found" under vitest) and no workflow pinned it, so the gate and
+      # its 18 fixtures executed nowhere. The ci-pinned-tests-exist gate below
+      # now fails closed on that combination.
+      - name: Execution-plane compose scoping gate
+        run: node scripts/audit/exec-compose-scoping-check.mjs
+
+      - name: Execution-plane compose scoping gate tests
+        run: node --test scripts/audit/__tests__/exec-compose-scoping-check.test.mjs
+
+      # Pinned-test existence gate, both directions.
+      #
+      # PIN → FILE: `vitest run a b c` treats positionals as FILTERS — a
+      # positional that matches zero files is SILENTLY ignored as long as the
+      # others match, so a renamed/lost test leaves its pin behind and CI stays
+      # green while advertising coverage it no longer has (this is exactly how
+      # `extension-install-e2e.test.ts` went missing yet green). This gate fails
+      # CI when a workflow pins a test file whose basename exists nowhere in the
+      # tree.
+      #
+      # AUDIT SUITE → RUNNER: the inverse. Every scripts/audit/__tests__ suite
+      # must be executed by something — the wholesale `pnpm test:root` include
+      # or an explicit workflow runner pin. A suite that is excluded from the
+      # root config AND pinned nowhere runs in no job at all, which is how the
+      # exec-compose scoping suite above sat dark. The gate also flags a
+      # literal-path exclusion in vitest.config.ts whose file no longer exists.
       - name: Pinned-test existence gate
         run: node scripts/audit/ci-pinned-tests-exist.mjs
 
