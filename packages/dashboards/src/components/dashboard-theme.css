@@ -253,6 +253,85 @@ body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="teams"]
   height: 1rem;
 }
 
+/* Edit-mode drag/resize affordances (cinatra#2408).
+ *
+ * react-grid-layout 2.2.3 (bundled by drizzle-cube 0.6.4's
+ * `drizzle-cube/dist/client/styles.css`) ships the resize handles, the
+ * drop placeholder, and the grid item itself with no cursor, tiny
+ * mid-edge resize targets, no text-selection guard, and a red
+ * square-cornered placeholder. All four are normal (non-inline-styled)
+ * declarations in that upstream stylesheet, imported UNLAYERED before
+ * this file, so a plain override here wins the cascade with no
+ * `!important` (unlayered beats any @layer, and this file loads after).
+ * Pinned against the installed bundle by
+ * dashboard-grid-affordances-contract.test.ts. */
+
+/* 1. Grab cursor on the drag handle. `.react-draggable-dragging` is the
+ * class react-grid-layout adds to the ACTIVE `[data-portlet-id]` item
+ * while a drag is in progress (the drag-handle's own `:active` covers
+ * the moment between mousedown and the drag actually starting). */
+.dashboard-grid-container [data-portlet-id] > .portlet-drag-handle {
+  cursor: grab;
+}
+
+.dashboard-grid-container [data-portlet-id] > .portlet-drag-handle:active,
+.dashboard-grid-container
+  [data-portlet-id].react-draggable-dragging
+  > .portlet-drag-handle {
+  cursor: grabbing;
+}
+
+/* 2. Resize hit-targets. Stock RGL centers each SIDE handle in a 20px
+ * square at the edge's MIDPOINT (`top:50%`/`left:50%` + a negative
+ * margin), so only a small central dot per side is reliably grabbable.
+ * Stretch the side handles to run the full edge instead; corner handles
+ * (se/sw/ne/nw) are untouched and stay on top of the overlap because
+ * drizzle-cube's `resizeHandles: ['s','w','e','n','se','sw','ne','nw']`
+ * renders them AFTER the sides, and later same-stacking-context DOM
+ * elements paint (and hit-test) above earlier ones. */
+.dashboard-grid-container [data-portlet-id] > .react-resizable-handle.react-resizable-handle-w,
+.dashboard-grid-container [data-portlet-id] > .react-resizable-handle.react-resizable-handle-e {
+  top: 0;
+  height: 100%;
+  margin-top: 0;
+}
+
+.dashboard-grid-container [data-portlet-id] > .react-resizable-handle.react-resizable-handle-n,
+.dashboard-grid-container [data-portlet-id] > .react-resizable-handle.react-resizable-handle-s {
+  left: 0;
+  width: 100%;
+  margin-left: 0;
+}
+
+/* 3. Text-selection + neighbour bleed during an active drag/resize. RGL
+ * only guards `user-select` on the placeholder and on item `<img>`s, not
+ * on the grid during a drag, so dragging a handle across a widget
+ * selected its text; and with no pointer-events guard, the pointer
+ * crossing a neighbouring portlet could still hover/click it. Both
+ * states (`.resizing` for resize, `.react-draggable-dragging` for drag)
+ * are applied by RGL to the ACTIVE item only, so `:has()` scopes both
+ * guards to "a drag/resize is in progress" without any JS. */
+.dashboard-grid-container:has([data-portlet-id].resizing),
+.dashboard-grid-container:has([data-portlet-id].react-draggable-dragging) {
+  user-select: none;
+}
+
+.dashboard-grid-container:has([data-portlet-id].resizing) [data-portlet-id]:not(.resizing),
+.dashboard-grid-container:has([data-portlet-id].react-draggable-dragging)
+  [data-portlet-id]:not(.react-draggable-dragging) {
+  pointer-events: none;
+}
+
+/* 4. Drop-target placeholder. RGL's stock `.react-grid-placeholder` is a
+ * flat `background: red` with no `border-radius`, so next to a real
+ * widget's rounded card (`border-radius: var(--radius-xl)` above) it
+ * reads as an error, not a "drops here" hint. Recolor to a neutral
+ * darker fill and match the widget radius. */
+.dashboard-grid-container .react-grid-item.react-grid-placeholder {
+  background: color-mix(in srgb, var(--line-strong) 40%, var(--surface-muted));
+  border-radius: var(--radius-xl, 0.75rem);
+}
+
 /* Query-error card containment (cinatra#1512).
  *
  * The portlet-level `overflow: hidden` above is the rounded-corner clip and
