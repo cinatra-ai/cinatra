@@ -21,8 +21,9 @@ export default function NotificationsLoading(): React.ReactElement {
         title="Notifications"
         description="Everything that needs your attention — updates and pending approvals, newest first."
         divider={false}
+        className="max-w-3xl"
       />
-      <PageContent className="flex flex-col gap-4 pb-8">
+      <PageContent className="flex max-w-3xl flex-col gap-4 pb-8">
         <NotificationsListSkeleton />
       </PageContent>
     </Main>

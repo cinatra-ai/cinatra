@@ -70,12 +70,13 @@ test.describe("notifications bell (badge + link, spec §IV)", () => {
     await bell.click();
     await page.waitForURL(/\/notifications$/, { timeout: 30_000, waitUntil: "commit" });
 
-    // The unified feed: page header + the §III filter CHIPS (buttons, never tabs).
+    // The unified feed: page header + the §III toolbar toggle group (never tabs).
     await expect(
       page.getByRole("heading", { name: "Notifications", level: 1 }),
     ).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole("button", { name: "All", exact: true })).toBeVisible();
-    // The retired flyout's Radix tablist is gone from every surface.
+    await expect(page.getByRole("radio", { name: "All", exact: true })).toBeVisible();
+    // The retired flyout's Radix tablist is gone from every surface; the
+    // toggle group is a Radix radiogroup, never a tablist.
     await expect(page.locator('[role="tablist"]')).toHaveCount(0);
   });
 });

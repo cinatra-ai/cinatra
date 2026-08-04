@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-notifications.html",
-  "contentHash": "sha256:962096a191d167fbed4e84b50d6fbe9421d5afe10bc0f9b2fae52d2c18ed48c5",
+  "contentHash": "sha256:e2ef9a2f2f8420eff3d8d8978cf6d5289efd8b6e00283dadd28e07e5b8a2bfc3",
   "surfaces": [
     {
       "id": "notifications-list",
@@ -15,6 +15,26 @@
         {
           "action": "decide-approval",
           "outcome": "decided"
+        },
+        {
+          "action": "activate",
+          "outcome": "navigated"
+        },
+        {
+          "action": "toggle-read",
+          "outcome": "toggled"
+        },
+        {
+          "action": "activate",
+          "outcome": "toggled"
+        },
+        {
+          "action": "page-prev",
+          "outcome": "paged"
+        },
+        {
+          "action": "page-next",
+          "outcome": "paged"
         }
       ],
       "states": [
@@ -37,7 +57,20 @@
     {
       "id": "notification-row",
       "fields": [],
-      "actions": [],
+      "actions": [
+        {
+          "action": "activate",
+          "outcome": "navigated"
+        },
+        {
+          "action": "toggle-read",
+          "outcome": "toggled"
+        },
+        {
+          "action": "activate",
+          "outcome": "toggled"
+        }
+      ],
       "states": [
         "loading"
       ]
@@ -46,6 +79,10 @@
       "id": "approval-row",
       "fields": [],
       "actions": [
+        {
+          "action": "activate",
+          "outcome": "navigated"
+        },
         {
           "action": "decide-approval",
           "outcome": "decided"

@@ -1,38 +1,51 @@
 "use server";
 
 // ---------------------------------------------------------------------------
-// /notifications v2 — pagination server action (cinatra#1557, E7).
+// /notifications v2 — pagination server action (cinatra#2380, S2).
 //
-// Loads one more page of the unified feed (E5) from an opaque cursor token, maps
-// it to the serializable view-model, and returns it to the client feed. The
-// keyset + degraded contract is E5's: a degraded page carries `degraded: true`
-// and NO next cursor, so the client re-requests the SAME cursor to REPLACE the
-// partial segment rather than paging forward past an incomplete approval half.
+// Resolves the viewer, then delegates the bounded union-feed walk + known-
+// total pagination to `feed-window.ts` (`loadFeedWindow`) — the S2 landing
+// replaces the v1 "Load more" keyset append with numbered, known-total pages
+// (§VII). The server page (`page.tsx`) calls `loadFeedWindow` directly for the
+// first paint (page 1, chip "all"); this action is the client's path for every
+// subsequent filter-tab or page change.
 // ---------------------------------------------------------------------------
 
 import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
-import {
-  loadUnifiedFeedPage,
-  decodeUnifiedFeedCursor,
-  encodeUnifiedFeedCursor,
-} from "@/app/configuration/approvals/unified-feed";
 import type { ApprovalViewer } from "@/app/configuration/approvals/sources/types";
 
-import { buildFeedRowVMs, FEED_PAGE_SIZE, type FeedPageVM } from "./feed-view-model";
+import { loadFeedWindow, type FeedWindowResult } from "./feed-window";
+import type { FilterChip } from "./feed-view-model";
+
+const EMPTY_WINDOW: FeedWindowResult = {
+  pageItems: [],
+  page: 1,
+  pageCount: 1,
+  total: 0,
+  needsActionCount: 0,
+  unreadCount: 0,
+  inProgressCount: 0,
+  feedIsEmpty: true,
+  degraded: false,
+  capped: false,
+  newestNotification: null,
+};
 
 /**
- * Fetch the next page after `cursorToken` (null → first page). Returns an empty,
- * non-degraded page for an unauthenticated caller (the page itself is behind the
- * sign-in gate; this defends a direct action invocation). When the viewer has no
- * active organization the approval half is skipped (notifications-only) via the
- * E5 `sources: []` injection seam — the same policy the server page uses.
+ * Fetch the numbered page `page` (1-indexed) of the unified feed narrowed to
+ * `chip`. Returns an empty, non-degraded window for an unauthenticated caller
+ * (the page itself is behind the sign-in gate; this defends a direct action
+ * invocation). An org-less session degrades to notifications-only (no
+ * approval sources) via the E5 `sources: []` injection seam — the same
+ * policy the server page uses.
  */
-export async function loadMoreUnifiedFeed(
-  cursorToken: string | null,
-): Promise<FeedPageVM> {
+export async function fetchFeedWindow(
+  chip: FilterChip,
+  page: number,
+): Promise<FeedWindowResult> {
   const session = await getAuthSession();
   const userId = session?.user?.id ?? null;
-  if (!userId) return { items: [], nextCursor: null, degraded: false };
+  if (!userId) return EMPTY_WINDOW;
 
   const orgId = session?.session?.activeOrganizationId ?? null;
   const viewer: ApprovalViewer = {
@@ -41,17 +54,12 @@ export async function loadMoreUnifiedFeed(
     isAdmin: isPlatformAdmin(session),
   };
 
-  const page = await loadUnifiedFeedPage(viewer, {
-    limit: FEED_PAGE_SIZE,
-    cursor: decodeUnifiedFeedCursor(cursorToken),
-    // No active org → notifications-only (no approval sources) so an org-less
-    // session still gets its per-user notifications rather than a doomed fetch.
+  return loadFeedWindow(viewer, {
+    chip,
+    page,
+    // No active org → notifications-only (no approval sources) so an
+    // org-less session still gets its per-user notifications rather than a
+    // doomed fetch.
     ...(orgId ? {} : { deps: { sources: [] } }),
   });
-
-  return {
-    items: buildFeedRowVMs(page.items),
-    nextCursor: page.nextCursor ? encodeUnifiedFeedCursor(page.nextCursor) : null,
-    degraded: page.degraded,
-  };
 }
