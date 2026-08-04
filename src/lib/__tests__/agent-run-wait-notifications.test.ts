@@ -9,12 +9,20 @@
 // (a write failure never throws).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { RUN_AWAITING_HUMAN_CATEGORY } from "@cinatra-ai/notifications/flyout-state";
+import { RUN_AWAITING_HUMAN_CATEGORY, RUN_FAILED_CATEGORY } from "@cinatra-ai/notifications/flyout-state";
 
 // --- mocks for the notifier's lazy dynamic imports -------------------------
 const readAgentRunById =
   vi.fn<
-    (id: string) => Promise<{ id: string; runBy: string | null; title: string | null; status: string } | null>
+    (
+      id: string,
+    ) => Promise<{
+      id: string;
+      runBy: string | null;
+      title: string | null;
+      status: string;
+      error?: string | null;
+    } | null>
   >();
 const createNotificationForRecipient = vi.fn(
   async (_recipient: { kind: string; userId: string }, _input: any): Promise<Array<{ id: string }>> => [
@@ -40,6 +48,8 @@ import {
   runAwaitingHumanDedupeKey,
   buildAutoGateOpenNotificationInput,
   autoGateOpenDedupeKey,
+  buildRunFailedNotificationInput,
+  runFailedDedupeKey,
   runWaitNotifier,
 } from "@/lib/agent-run-wait-notifications";
 
@@ -191,6 +201,98 @@ describe("runWaitNotifier.onLeaveHumanWait — clear-on-resolve", () => {
       runWaitNotifier.onLeaveHumanWait({ runId: "R1" }),
     ).resolves.toBeUndefined();
     expect(deleteNotificationsByDedupeKeyForUser).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2413 — run-failure notification (supersedes onLeaveHumanWait's bare
+// delete when the leave is a FAILURE, not a human decision). Pins the AC:
+// enter pending_approval (assert approval row — covered above), transition to
+// failed (assert the approval row is cleared AND a failure row is minted).
+// ---------------------------------------------------------------------------
+describe("buildRunFailedNotificationInput — pure shape", () => {
+  it("dedupeKey is stable per run and DISTINCT from the awaiting-human family", () => {
+    expect(runFailedDedupeKey("R1")).toBe("run-failed:R1");
+    expect(runFailedDedupeKey("R1")).not.toBe(runAwaitingHumanDedupeKey("R1"));
+  });
+
+  it("is a destructive 'error' kind tagged with the run_failed category + payload", () => {
+    const input = buildRunFailedNotificationInput({
+      runId: "R1",
+      runTitle: "Nightly sync",
+      href: "/agents/acme/sales/R1",
+      error: "WayFlow task failed",
+    });
+    expect(input.kind).toBe("error");
+    expect(input.href).toBe("/agents/acme/sales/R1");
+    expect(input.title).toBe('"Nightly sync" failed');
+    expect(input.body).toContain("WayFlow task failed");
+    expect(input.metadata).toMatchObject({
+      category: RUN_FAILED_CATEGORY,
+      runFailed: { runId: "R1" },
+    });
+  });
+
+  it("falls back to a generic subject + body with no title/error", () => {
+    const input = buildRunFailedNotificationInput({ runId: "R1" });
+    expect(input.title).toBe("A run failed");
+    expect(input.body).toBe("The run failed while awaiting your approval.");
+    expect(input.href).toBeUndefined();
+  });
+});
+
+describe("runWaitNotifier.onHumanWaitFailed — supersede-on-failure", () => {
+  it("clears the stale approval row AND mints a run-failure row to the initiator", async () => {
+    readAgentRunById.mockResolvedValue({
+      id: "R1",
+      runBy: "U1",
+      title: "Nightly sync",
+      status: "failed",
+      error: "WayFlow task failed",
+    });
+
+    await runWaitNotifier.onHumanWaitFailed!({ runId: "R1" });
+
+    // The approval row is superseded, not left dangling.
+    expect(deleteNotificationsByDedupeKeyForUser).toHaveBeenCalledWith({
+      userId: "U1",
+      dedupeKey: "run-awaiting-human:R1",
+    });
+    // A failure row replaces it — the feed is never silent.
+    expect(createNotificationForRecipient).toHaveBeenCalledTimes(1);
+    const [recipient, input] = createNotificationForRecipient.mock.calls[0]!;
+    expect(recipient).toEqual({ kind: "user", userId: "U1" });
+    expect(input.dedupeKey).toBe("run-failed:R1");
+    expect(input.kind).toBe("error");
+    expect(input.href).toBe("/agents/acme/sales/R1");
+    expect(input.metadata.category).toBe(RUN_FAILED_CATEGORY);
+    expect(input.metadata.runFailed).toEqual({ runId: "R1" });
+  });
+
+  it("skips both the clear and the mint when the run has no initiator", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: null, title: null, status: "failed" });
+
+    await runWaitNotifier.onHumanWaitFailed!({ runId: "R1" });
+
+    expect(deleteNotificationsByDedupeKeyForUser).not.toHaveBeenCalled();
+    expect(createNotificationForRecipient).not.toHaveBeenCalled();
+  });
+
+  it("never throws when the notification write fails (best-effort)", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: null, status: "failed" });
+    createNotificationForRecipient.mockRejectedValueOnce(new Error("db down"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(runWaitNotifier.onHumanWaitFailed!({ runId: "R1" })).resolves.toBeUndefined();
+  });
+
+  it("never throws when the run lookup fails (best-effort)", async () => {
+    readAgentRunById.mockRejectedValueOnce(new Error("db down"));
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(runWaitNotifier.onHumanWaitFailed!({ runId: "R1" })).resolves.toBeUndefined();
+    expect(deleteNotificationsByDedupeKeyForUser).not.toHaveBeenCalled();
+    expect(createNotificationForRecipient).not.toHaveBeenCalled();
   });
 });
 

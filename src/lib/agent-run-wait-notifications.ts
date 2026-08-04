@@ -51,7 +51,10 @@ import type {
   RunHumanWaitReason,
   RunWaitNotifier,
 } from "@cinatra-ai/agents";
-import { RUN_AWAITING_HUMAN_CATEGORY } from "@cinatra-ai/notifications/flyout-state";
+import {
+  RUN_AWAITING_HUMAN_CATEGORY,
+  RUN_FAILED_CATEGORY,
+} from "@cinatra-ai/notifications/flyout-state";
 import type { NotificationInput } from "@cinatra-ai/notifications/types";
 
 /**
@@ -156,6 +159,55 @@ export function buildRunAwaitingHumanNotificationInput(input: {
     metadata: {
       category: RUN_AWAITING_HUMAN_CATEGORY,
       runAwaitingHuman: { runId: input.runId, reason: input.reason },
+    },
+  };
+}
+
+/**
+ * cinatra#2413 — dedupeKey prefix for the run-failure notification that
+ * supersedes the (hard-deleted) run-awaiting-human row when a run fails OUT
+ * OF a human-wait state. A SEPARATE family from `RUN_AWAITING_HUMAN_DEDUPE_PREFIX`
+ * (not a subfamily): the awaiting-human row for this run is being deleted in
+ * the SAME dispatch, so the two keys must never collide or the delete could
+ * race the insert onto the same row identity.
+ */
+export const RUN_FAILED_DEDUPE_PREFIX = "run-failed:";
+
+/** Stable per-user idempotency key for one run's failure entry. */
+export function runFailedDedupeKey(runId: string): string {
+  return `${RUN_FAILED_DEDUPE_PREFIX}${runId}`;
+}
+
+/**
+ * PURE: build the notification input for a run that failed OUT OF a
+ * human-wait state (cinatra#2413). `error` kind (destructive, matches the
+ * feed's `notificationTone`) so it reads as distinct from the `warning`
+ * awaiting-human row it replaces. Deep-links to the run via the SAME `href`
+ * shape as the awaiting-human builder, so "Open" routes the viewer straight
+ * to the failed run instead of a bare feed. `metadata.runFailed.runId` lets
+ * the run panel's "Review approval" CTA correlate its deep-link to this row
+ * even after supersession (see `getNotificationRunReference`).
+ */
+export function buildRunFailedNotificationInput(input: {
+  runId: string;
+  runTitle?: string | null;
+  href?: string;
+  error?: string | null;
+}): NotificationInput {
+  const name = input.runTitle?.trim();
+  const subject = name ? `"${name}"` : "A run";
+  const detail = input.error?.trim();
+  return {
+    title: `${subject} failed`,
+    body: detail
+      ? `The run failed while awaiting your approval: ${detail}`
+      : "The run failed while awaiting your approval.",
+    kind: "error",
+    ...(input.href ? { href: input.href } : {}),
+    dedupeKey: runFailedDedupeKey(input.runId),
+    metadata: {
+      category: RUN_FAILED_CATEGORY,
+      runFailed: { runId: input.runId },
     },
   };
 }
@@ -315,6 +367,60 @@ export const runWaitNotifier: RunWaitNotifier = {
     } catch (err) {
       console.warn(
         "[run-awaiting-human] could not clear notification:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  },
+
+  // cinatra#2413 — the run left a human-wait state because it FAILED (never a
+  // human decision). Supersedes the plain delete-only `onLeaveHumanWait`
+  // above: still clears the now-stale run-awaiting-human row, but ALSO mints
+  // a durable run-failure notification in its place — so the feed is never
+  // silent about a run that died while a human was told to review it. Both
+  // writes are best-effort, mirroring every other emitter in this module; a
+  // notification failure can never fail the underlying status transition.
+  async onHumanWaitFailed({ runId }) {
+    try {
+      await import("@/lib/notifications-host");
+      // No actor argument -> the store's access-gate block is bypassed (this
+      // runs on the worker / status seam, which has no session). Reads
+      // `runBy` (the initiator) + `title` + `error` to address, name, and
+      // detail the notification.
+      const { readAgentRunById } = await import("@cinatra-ai/agents");
+      const run = await readAgentRunById(runId);
+      const userId = run?.runBy;
+      // No initiator (system-/trigger-launched run) -> no one to notify. The
+      // stale awaiting-human row (if any) was written to the SAME initiator
+      // check in onEnterHumanWait, so there is nothing to clear either.
+      if (!userId) return;
+      const {
+        resolveAgentRunHref,
+        createNotificationForRecipient,
+        deleteNotificationsByDedupeKeyForUser,
+      } = await import("@cinatra-ai/notifications/server");
+      // Clear the resolved (now-stale) awaiting-human row FIRST — same
+      // idempotent delete-by-key primitive as onLeaveHumanWait — so a reader
+      // can never observe both rows at once. Best-effort like the rest of
+      // this module: an insert-then-swallowed-delete-error still leaves the
+      // durable failure row behind (the awaiting-human row is a delete-only
+      // key that a future onEnterHumanWait call would collide on anyway).
+      deleteNotificationsByDedupeKeyForUser({
+        userId,
+        dedupeKey: runAwaitingHumanDedupeKey(runId),
+      });
+      const href = await resolveAgentRunHref({ runId });
+      await createNotificationForRecipient(
+        { kind: "user", userId },
+        buildRunFailedNotificationInput({
+          runId,
+          runTitle: run.title,
+          href,
+          error: run.error,
+        }),
+      );
+    } catch (err) {
+      console.warn(
+        "[run-awaiting-human] could not emit run-failure notification:",
         err instanceof Error ? err.message : err,
       );
     }

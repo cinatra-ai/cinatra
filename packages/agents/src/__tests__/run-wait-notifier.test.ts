@@ -77,13 +77,25 @@ describe("classifyRunWaitTransition — leave (wait resolved)", () => {
   it.each([
     ["pending_approval", "running"], // resume
     ["pending_approval", "completed"], // WayFlow resume terminal-success
-    ["pending_approval", "failed"], // reject
     ["pending_approval", "stopped"], // user stop
     ["pending_input", "queued"], // stop-run-hitl resume (installs deps, retries)
     ["pending_input", "stopped"], // user stop during the wait
-    ["pending_input", "failed"], // reject from setup path
   ] as const)("classifies %s→%s as leave (idempotent clear)", (from, to) => {
     expect(classifyRunWaitTransition(from, to, false)).toEqual({ kind: "leave" });
+  });
+});
+
+// cinatra#2413 — a `failed` destination out of a human-wait state is NOT a
+// plain resolved-leave: it must NOT be treated the same as a human decision
+// (reject/resume/stop). Split into its own `leave_failed` kind so the
+// dispatcher can hand off to the run-failure notification instead of a bare
+// delete (see `dispatchRunWaitTransition` below).
+describe("classifyRunWaitTransition — leave_failed (the run died mid-wait)", () => {
+  it.each([
+    ["pending_approval", "failed"], // WayFlow task failed while awaiting approval
+    ["pending_input", "failed"], // reject / failure from the stop-run-hitl setup path
+  ] as const)("classifies %s→failed as leave_failed (not a plain leave)", (from, to) => {
+    expect(classifyRunWaitTransition(from, to, false)).toEqual({ kind: "leave_failed" });
   });
 });
 
@@ -151,6 +163,42 @@ describe("dispatchRunWaitTransition — drives the wired notifier", () => {
     });
     expect(notifier.onLeaveHumanWait).toHaveBeenCalledWith({ runId: "R1" });
     expect(notifier.onEnterHumanWait).not.toHaveBeenCalled();
+  });
+
+  // cinatra#2413
+  it("calls onHumanWaitFailed (not onLeaveHumanWait) on a failed leave when wired", async () => {
+    const notifier: RunWaitNotifier = {
+      onEnterHumanWait: vi.fn(),
+      onLeaveHumanWait: vi.fn(),
+      onHumanWaitFailed: vi.fn(),
+    };
+    setRunWaitNotifier(notifier);
+    await dispatchRunWaitTransition({
+      runId: "R1",
+      from: "pending_approval",
+      to: "failed",
+      humanWaitGate: false,
+    });
+    expect(notifier.onHumanWaitFailed).toHaveBeenCalledWith({ runId: "R1" });
+    expect(notifier.onLeaveHumanWait).not.toHaveBeenCalled();
+    expect(notifier.onEnterHumanWait).not.toHaveBeenCalled();
+  });
+
+  // cinatra#2413 — structural back-compat: a notifier/double that hasn't
+  // wired the optional hook still gets SOME clear (never silently drops it).
+  it("falls back to onLeaveHumanWait on a failed leave when onHumanWaitFailed is not wired", async () => {
+    const notifier: RunWaitNotifier = {
+      onEnterHumanWait: vi.fn(),
+      onLeaveHumanWait: vi.fn(),
+    };
+    setRunWaitNotifier(notifier);
+    await dispatchRunWaitTransition({
+      runId: "R1",
+      from: "pending_input",
+      to: "failed",
+      humanWaitGate: false,
+    });
+    expect(notifier.onLeaveHumanWait).toHaveBeenCalledWith({ runId: "R1" });
   });
 
   it("is a no-op for an ordinary transition", async () => {

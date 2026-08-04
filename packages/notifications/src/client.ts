@@ -21,11 +21,16 @@ export {
   isRunAwaitingHumanNotification,
   getRunAwaitingHumanMetadata,
   RUN_AWAITING_HUMAN_CATEGORY,
+  isRunFailedNotification,
+  getRunFailedMetadata,
+  getNotificationRunReference,
+  RUN_FAILED_CATEGORY,
 } from "./flyout-state";
 export type {
   ConfigurationNeedsConnector,
   ConfigurationNeedsMetadata,
   RunAwaitingHumanMetadata,
+  RunFailedMetadata,
 } from "./flyout-state";
 
 export {

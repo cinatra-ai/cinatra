@@ -36,6 +36,7 @@
 
 import Link from "next/link";
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -54,7 +55,10 @@ import {
 } from "lucide-react";
 
 import type { AppNotification } from "@cinatra-ai/notifications/types";
-import { isRunningProgressNotification } from "@cinatra-ai/notifications/client";
+import {
+  isRunningProgressNotification,
+  getNotificationRunReference,
+} from "@cinatra-ai/notifications/client";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -117,8 +121,17 @@ function FeedTimestamp({ value }: { value: string }): React.ReactElement | null 
 // ---------------------------------------------------------------------------
 export function NotificationsFeed({
   initialWindow,
+  highlightRunId,
 }: {
   initialWindow: FeedWindowResult;
+  /** cinatra#2413 — deep-linked from the run panel's "Review approval" CTA
+   *  (`?run=<runId>`). When the CURRENT PAGE holds a notification row whose
+   *  run reference matches (run-awaiting-human OR run-failed — the failure
+   *  row supersedes the approval row on the same key), that row is scrolled
+   *  into view and briefly highlighted. No match (already resolved without a
+   *  failure, or simply not on page 1) degrades silently — an ordinary feed
+   *  render, never a dead link or an error. */
+  highlightRunId?: string;
 }): React.ReactElement {
   const [chip, setChip] = useState<FilterChip>("all");
   const [page, setPage] = useState(1);
@@ -311,6 +324,33 @@ export function NotificationsFeed({
     loadWindow(chip, page);
   }
 
+  // cinatra#2413 — resolve the deep-linked row (if any) among the CURRENTLY
+  // rendered page items. Recomputed whenever the page's items or the target
+  // runId change; a chip/page change that scrolls the target off-page simply
+  // stops matching (graceful degrade, not a lost ref).
+  const highlightedKey = useMemo(() => {
+    if (!highlightRunId) return null;
+    const hit = items.find(
+      (v) =>
+        v.kind === "notification" &&
+        getNotificationRunReference(v.notification) === highlightRunId,
+    );
+    return hit?.key ?? null;
+  }, [items, highlightRunId]);
+
+  const highlightedRowRef = useRef<HTMLLIElement | null>(null);
+  // Tracks the LAST key this effect already scrolled to, so a re-render for
+  // an unrelated reason (a mutation overlay, a poll) never re-triggers the
+  // scroll — only a genuine change of the highlighted target does. Read/set
+  // exclusively inside the effect (never during render) to satisfy the
+  // refs-during-render rule.
+  const scrolledToKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!highlightedKey || scrolledToKeyRef.current === highlightedKey) return;
+    highlightedRowRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    scrolledToKeyRef.current = highlightedKey;
+  }, [highlightedKey]);
+
   return (
     <div className="flex flex-col gap-4">
       {/* §III — toolbar: the toggle group leads; "Mark all read" anchors the
@@ -416,6 +456,8 @@ export function NotificationsFeed({
                   row.kind === "approval" ? row.approval.actionable : undefined,
                 )
               }
+              highlighted={row.key === highlightedKey}
+              highlightRef={row.key === highlightedKey ? highlightedRowRef : undefined}
             />
           ))}
         </ul>
@@ -588,11 +630,16 @@ function FeedCard({
   onOpen,
   onToggleRead,
   onDecided,
+  highlighted,
+  highlightRef,
 }: {
   row: FeedRowVM;
   onOpen: (notification: AppNotification) => void;
   onToggleRead: (notification: AppNotification) => void;
   onDecided: () => void;
+  /** cinatra#2413 — this row is the CTA deep-link target (see `NotificationsFeed`). */
+  highlighted?: boolean;
+  highlightRef?: React.RefObject<HTMLLIElement | null>;
 }): React.ReactElement {
   if (row.kind === "notification") {
     return (
@@ -601,6 +648,8 @@ function FeedCard({
         createdAt={row.createdAt}
         onOpen={onOpen}
         onToggleRead={onToggleRead}
+        highlighted={highlighted}
+        highlightRef={highlightRef}
       />
     );
   }
@@ -667,11 +716,16 @@ function NotificationCard({
   createdAt,
   onOpen,
   onToggleRead,
+  highlighted,
+  highlightRef,
 }: {
   notification: AppNotification;
   createdAt: string;
   onOpen: (notification: AppNotification) => void;
   onToggleRead: (notification: AppNotification) => void;
+  /** cinatra#2413 — this row is the CTA deep-link target. */
+  highlighted?: boolean;
+  highlightRef?: React.RefObject<HTMLLIElement | null>;
 }): React.ReactElement {
   const running = isRunningProgressNotification(notification);
   const unread = notificationIsUnread(notification);
@@ -679,7 +733,15 @@ function NotificationCard({
   const iconClass = "size-[17px]";
 
   return (
-    <li data-conformance-id="notification-row" className={CARD_SHELL}>
+    <li
+      ref={highlightRef}
+      data-conformance-id="notification-row"
+      data-highlighted={highlighted ? "true" : undefined}
+      className={cn(
+        CARD_SHELL,
+        highlighted && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+      )}
+    >
       {/* Whole-card activation, by species (§II). */}
       {notification.href ? (
         <Link
