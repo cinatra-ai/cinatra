@@ -266,17 +266,21 @@ body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="teams"]
  * Pinned against the installed bundle by
  * dashboard-grid-affordances-contract.test.ts. */
 
-/* 1. Grab cursor on the drag handle. `.react-draggable-dragging` is the
- * class react-grid-layout adds to the ACTIVE `[data-portlet-id]` item
- * while a drag is in progress (the drag-handle's own `:active` covers
- * the moment between mousedown and the drag actually starting). */
+/* 1. Grab cursor on the drag handle. `[data-portlet-id]` (DashboardPortletCard's
+ * own root, which carries `.portlet-drag-handle` inside it) is a CHILD of
+ * `.react-grid-item` — react-grid-layout wraps each child in its own item div
+ * rather than cloning props onto it. `.react-draggable-dragging` is the class
+ * react-grid-layout adds to that OUTER `.react-grid-item` wrapper while a drag
+ * is in progress (the drag-handle's own `:active` covers the moment between
+ * mousedown and the drag actually starting). */
 .dashboard-grid-container [data-portlet-id] > .portlet-drag-handle {
   cursor: grab;
 }
 
 .dashboard-grid-container [data-portlet-id] > .portlet-drag-handle:active,
 .dashboard-grid-container
-  [data-portlet-id].react-draggable-dragging
+  .react-grid-item.react-draggable-dragging
+  > [data-portlet-id]
   > .portlet-drag-handle {
   cursor: grabbing;
 }
@@ -284,23 +288,36 @@ body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="teams"]
 /* 2. Resize hit-targets. Stock RGL centers each SIDE handle in a 20px
  * square at the edge's MIDPOINT (`top:50%`/`left:50%` + a negative
  * margin), so only a small central dot per side is reliably grabbable.
- * Stretch the side handles to run the full edge instead; corner handles
- * (se/sw/ne/nw) are untouched and stay on top of the overlap because
- * drizzle-cube's `resizeHandles: ['s','w','e','n','se','sw','ne','nw']`
- * renders them AFTER the sides, and later same-stacking-context DOM
- * elements paint (and hit-test) above earlier ones. */
-.dashboard-grid-container [data-portlet-id] > .react-resizable-handle.react-resizable-handle-w,
-.dashboard-grid-container [data-portlet-id] > .react-resizable-handle.react-resizable-handle-e {
+ * The handles are direct children of `.react-grid-item` (SIBLINGS of
+ * `[data-portlet-id]`, not its descendants). Stretch the side handles to
+ * run the full edge instead; corner handles (se/sw/ne/nw) are untouched
+ * and stay on top of the overlap because drizzle-cube's
+ * `resizeHandles: ['s','w','e','n','se','sw','ne','nw']` renders them
+ * AFTER the sides, and later same-stacking-context DOM elements paint
+ * (and hit-test) above earlier ones.
+ *
+ * Stock RGL also rotates every side handle 135/225/315/45deg — one shared
+ * diagonal-corner icon asset reused for all 8 handles by rotating it into
+ * position. Stretching `height`/`width` on a STILL-ROTATED 20px box turns
+ * its axis-aligned hit area into an oversized, displaced diamond (verified
+ * live: a 20x380px `-e` handle rotated 315deg hit-tests nowhere near the
+ * actual right edge) — so `transform: none` must ride along with the
+ * geometry change, or the "grab anywhere along the edge" target is worse
+ * than the stock dot, not better. */
+.dashboard-grid-container .react-grid-item > .react-resizable-handle.react-resizable-handle-w,
+.dashboard-grid-container .react-grid-item > .react-resizable-handle.react-resizable-handle-e {
   top: 0;
   height: 100%;
   margin-top: 0;
+  transform: none;
 }
 
-.dashboard-grid-container [data-portlet-id] > .react-resizable-handle.react-resizable-handle-n,
-.dashboard-grid-container [data-portlet-id] > .react-resizable-handle.react-resizable-handle-s {
+.dashboard-grid-container .react-grid-item > .react-resizable-handle.react-resizable-handle-n,
+.dashboard-grid-container .react-grid-item > .react-resizable-handle.react-resizable-handle-s {
   left: 0;
   width: 100%;
   margin-left: 0;
+  transform: none;
 }
 
 /* 3. Text-selection + neighbour bleed during an active drag/resize. RGL
@@ -309,16 +326,19 @@ body:has([data-cinatra-dashboard-shell][data-cinatra-page-anchor="teams"]
  * selected its text; and with no pointer-events guard, the pointer
  * crossing a neighbouring portlet could still hover/click it. Both
  * states (`.resizing` for resize, `.react-draggable-dragging` for drag)
- * are applied by RGL to the ACTIVE item only, so `:has()` scopes both
- * guards to "a drag/resize is in progress" without any JS. */
-.dashboard-grid-container:has([data-portlet-id].resizing),
-.dashboard-grid-container:has([data-portlet-id].react-draggable-dragging) {
+ * are applied by RGL to the ACTIVE item's `.react-grid-item` wrapper only,
+ * so `:has()` scopes both guards to "a drag/resize is in progress" without
+ * any JS. Guarding `.react-grid-item` (not `[data-portlet-id]`) also covers
+ * every OTHER item's resize handles — a neighbour can't be grabbed mid-drag
+ * either. */
+.dashboard-grid-container:has(.react-grid-item.resizing),
+.dashboard-grid-container:has(.react-grid-item.react-draggable-dragging) {
   user-select: none;
 }
 
-.dashboard-grid-container:has([data-portlet-id].resizing) [data-portlet-id]:not(.resizing),
-.dashboard-grid-container:has([data-portlet-id].react-draggable-dragging)
-  [data-portlet-id]:not(.react-draggable-dragging) {
+.dashboard-grid-container:has(.react-grid-item.resizing) .react-grid-item:not(.resizing),
+.dashboard-grid-container:has(.react-grid-item.react-draggable-dragging)
+  .react-grid-item:not(.react-draggable-dragging) {
   pointer-events: none;
 }
 

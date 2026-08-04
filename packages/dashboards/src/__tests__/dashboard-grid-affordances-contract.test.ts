@@ -98,29 +98,51 @@ describe("dashboard-theme.css carries the #2408 affordance overrides", () => {
     expect(THEME_CSS).toMatch(
       /\.dashboard-grid-container \[data-portlet-id\] > \.portlet-drag-handle \{\s*cursor: grab;/,
     );
+    // `.react-draggable-dragging` lands on the OUTER `.react-grid-item`
+    // wrapper (a distinct ancestor element, NOT `[data-portlet-id]` itself —
+    // react-grid-layout wraps each child in its own item div rather than
+    // cloning props onto it), so the grabbing rule must select DOWN through
+    // `[data-portlet-id]` from that wrapper, not treat it as the dragging
+    // element.
     expect(THEME_CSS).toMatch(
-      /\.portlet-drag-handle:active,\s*\.dashboard-grid-container\s*\n?\s*\[data-portlet-id\]\.react-draggable-dragging\s*\n?\s*> \.portlet-drag-handle \{\s*cursor: grabbing;/,
+      /\.portlet-drag-handle:active,\s*\.dashboard-grid-container\s*\n?\s*\.react-grid-item\.react-draggable-dragging\s*\n?\s*> \[data-portlet-id\]\s*\n?\s*> \.portlet-drag-handle \{\s*cursor: grabbing;/,
     );
   });
 
-  it("side resize handles are stretched to the full edge (not the stock 20px midpoint)", () => {
+  it("side resize handles are stretched to the full edge (not the stock 20px midpoint), rotation reset", () => {
+    // The handles are direct children of `.react-grid-item` — SIBLINGS of
+    // `[data-portlet-id]`, not its descendants (confirmed against the live
+    // DOM: DashboardPortletCard's `data-portlet-id` root and the resize
+    // handles are both direct children of the same `.react-grid-item`).
     expect(THEME_CSS).toMatch(
-      /\.react-resizable-handle\.react-resizable-handle-w,\s*\n\.dashboard-grid-container \[data-portlet-id\] > \.react-resizable-handle\.react-resizable-handle-e \{\s*top: 0;\s*height: 100%;\s*margin-top: 0;/,
+      /\.react-resizable-handle\.react-resizable-handle-w,\s*\n\.dashboard-grid-container \.react-grid-item > \.react-resizable-handle\.react-resizable-handle-e \{\s*top: 0;\s*height: 100%;\s*margin-top: 0;\s*transform: none;/,
     );
     expect(THEME_CSS).toMatch(
-      /\.react-resizable-handle\.react-resizable-handle-n,\s*\n\.dashboard-grid-container \[data-portlet-id\] > \.react-resizable-handle\.react-resizable-handle-s \{\s*left: 0;\s*width: 100%;\s*margin-left: 0;/,
+      /\.react-resizable-handle\.react-resizable-handle-n,\s*\n\.dashboard-grid-container \.react-grid-item > \.react-resizable-handle\.react-resizable-handle-s \{\s*left: 0;\s*width: 100%;\s*margin-left: 0;\s*transform: none;/,
     );
   });
 
-  it("user-select and pointer-events guards scope to an active drag/resize via :has()", () => {
+  it("the stock RGL rotate() this override must cancel is still present on -e/-w/-n/-s (pinned)", () => {
+    // If a future react-grid-layout bump drops the shared-icon rotate()
+    // trick, this override's `transform: none` becomes a harmless no-op —
+    // but if it instead CHANGES the rotation mechanism, re-verify the fix.
+    expect(DC_STYLES).toMatch(
+      /\.react-grid-item>\.react-resizable-handle\.react-resizable-handle-e\{right:0;transform:rotate\(315deg\)\}/,
+    );
+    expect(DC_STYLES).toMatch(
+      /\.react-grid-item>\.react-resizable-handle\.react-resizable-handle-w\{left:0;transform:rotate\(135deg\)\}/,
+    );
+  });
+
+  it("user-select and pointer-events guards scope to an active drag/resize via :has() on .react-grid-item", () => {
     expect(THEME_CSS).toMatch(
-      /\.dashboard-grid-container:has\(\[data-portlet-id\]\.resizing\),\s*\n\.dashboard-grid-container:has\(\[data-portlet-id\]\.react-draggable-dragging\) \{\s*user-select: none;/,
+      /\.dashboard-grid-container:has\(\.react-grid-item\.resizing\),\s*\n\.dashboard-grid-container:has\(\.react-grid-item\.react-draggable-dragging\) \{\s*user-select: none;/,
     );
     expect(THEME_CSS).toContain(
-      ".dashboard-grid-container:has([data-portlet-id].resizing) [data-portlet-id]:not(.resizing),",
+      ".dashboard-grid-container:has(.react-grid-item.resizing) .react-grid-item:not(.resizing),",
     );
     expect(THEME_CSS).toMatch(
-      /\[data-portlet-id\]:not\(\.react-draggable-dragging\) \{\s*pointer-events: none;/,
+      /\.react-grid-item:not\(\.react-draggable-dragging\) \{\s*pointer-events: none;/,
     );
   });
 
