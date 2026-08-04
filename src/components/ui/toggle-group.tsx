@@ -41,7 +41,25 @@ function ToggleGroup({
       data-orientation={orientation}
       style={{ "--gap": spacing } as React.CSSProperties}
       className={cn(
-        "group/toggle-group flex w-fit flex-row items-center gap-[--spacing(var(--gap))] rounded-lg data-[size=sm]:rounded-[min(var(--radius-md),10px)] data-vertical:flex-col data-vertical:items-stretch",
+        "group/toggle-group flex w-fit flex-row items-center gap-[--spacing(var(--gap))] data-vertical:flex-col data-vertical:items-stretch",
+        // The size-dependent corner radius is resolved in JS, NOT as a
+        // `data-[size=sm]:rounded-…` variant (cinatra#2407).
+        //
+        // As a variant it could not be overridden by a plain `rounded-*`
+        // utility — the only form a consumer actually writes — in two
+        // compounding ways: `tailwind-merge` does not treat
+        // `data-[size=sm]:rounded-*` and a bare `rounded-*` as one conflict
+        // group (different modifier), so both survived the merge; and in the
+        // cascade the variant's `.…[data-size="sm"]` selector outranks a plain
+        // `.rounded-[7px]`. A consumer that asked for a 7px radius rendered
+        // `min(var(--radius-md),10px)` — 6px in the app scope — while its own
+        // source said 7px, so a source-level class assertion could not see it.
+        //
+        // Emitting the same value as a PLAIN utility puts it in the consumer's
+        // conflict group: `cn()` drops it whenever `className` carries its own
+        // `rounded-*`, and keeps it verbatim when it does not. Nothing that
+        // does not override the radius changes.
+        size === "sm" ? "rounded-[min(var(--radius-md),10px)]" : "rounded-lg",
         className
       )}
       {...props}
