@@ -29,6 +29,7 @@ import {
   purposesWithPolicy,
   describeMatcherProviderConstraint,
   pinnedProviderForPurpose,
+  findPurpose,
 } from "@/lib/llm-purpose-policy";
 
 const REPO_ROOT = path.resolve(__dirname, "../../..");
@@ -213,24 +214,17 @@ describe("LLM purpose-policy inventory — the gate (cinatra#2093 AC3)", () => {
   });
 });
 
-describe("the matcher constraint is surfaced honestly (cinatra#2093 AC3)", () => {
-  it("skill auto-matching is pinned to OpenAI", () => {
-    expect(pinnedProviderForPurpose("skill-llm-matching")).toBe("openai");
+describe("the matcher constraint copy (reduced; setup-flow S6)", () => {
+  it("skill auto-matching is no longer pinned — it runs on the stored default", () => {
+    expect(pinnedProviderForPurpose("skill-llm-matching")).toBeNull();
+    expect(findPurpose("skill-llm-matching")?.policy).toBe("exact-default");
+    expect(findPurpose("skill-matching-pair-evaluation")?.policy).toBe("exact-default");
   });
 
-  it("says nothing when the stored provider already satisfies the pin", () => {
-    expect(describeMatcherProviderConstraint("openai")).toBeNull();
-  });
-
-  it("states the constraint plainly on a non-OpenAI default, without overstating the impact", () => {
-    const msg = describeMatcherProviderConstraint("anthropic");
-    expect(msg).toContain("Skill auto-matching requires OpenAI");
-    // Honesty: it must say what still WORKS, not just what does not.
-    expect(msg).toContain("runs on Anthropic");
-    expect(msg).toContain("manually");
-  });
-
-  it("covers a Gemini default too", () => {
-    expect(describeMatcherProviderConstraint("gemini")).toContain("Skill auto-matching requires OpenAI");
+  it("the remaining note is a capability-mode statement, naming no provider", () => {
+    const msg = describeMatcherProviderConstraint();
+    expect(msg).toContain("batch-capable provider adapter");
+    expect(msg).toContain("synchronous");
+    expect(msg).not.toContain("OpenAI");
   });
 });

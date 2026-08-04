@@ -13,6 +13,13 @@
  */
 
 import { z } from "zod";
+// The shared fence/prose-tolerant structured-JSON extraction (provider-neutral
+// leaf; subpath import so vi.mock factories of the "@cinatra-ai/llm" barrel
+// are unaffected). Tries the raw text, a ```json fenced block, any fenced
+// block, then the outermost {...} slice. The zod schema below stays
+// AUTHORITATIVE — tolerance applies only to the transport wrapping, never to
+// the decision shape.
+import { parseStructuredJson } from "@cinatra-ai/llm/structured-json";
 import { SKILL_MATCH_RAW_RESPONSE_REDACT_BYTES } from "./constants";
 import type { ParseResult } from "./types";
 
@@ -45,10 +52,11 @@ export function redactRawResponse(raw: string): string {
 }
 
 export function parseLlmResponse(raw: string): ParseResult {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
+  // Fence/prose-tolerant extraction (models without a native structured-output
+  // slot legitimately wrap the JSON in a markdown fence or a sentence of
+  // prose). Null ⇒ no JSON object anywhere in the text.
+  const parsed: unknown = parseStructuredJson<unknown>(raw);
+  if (parsed === null) {
     return {
       ok: false,
       errorCode: "llm_schema_violation",

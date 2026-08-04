@@ -23,6 +23,7 @@ vi.mock("../skill-matches-store", () => ({
 import * as store from "../skill-matches-store";
 import { evaluatePair } from "../evaluate-pair";
 import type { AgentForMatching, SkillForMatching } from "../types";
+import { TEST_RUN_CONTEXT } from "./__fixtures__/run-context";
 
 const NOW = new Date("2026-05-11T12:00:00Z");
 const JOB_STARTED = new Date("2026-05-11T12:00:00Z");
@@ -64,7 +65,7 @@ describe("evaluate-pair retry", () => {
     const result = await evaluatePair(
       { agent, skill },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { now: () => NOW, jobStartedAt: JOB_STARTED, generate: generate as any },
+      { now: () => NOW, jobStartedAt: JOB_STARTED, runContext: TEST_RUN_CONTEXT, generate: generate as any },
     );
 
     // Two `generate` calls: first attempt + one retry.
@@ -89,7 +90,7 @@ describe("evaluate-pair retry", () => {
     const result = await evaluatePair(
       { agent, skill },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { now: () => NOW, jobStartedAt: JOB_STARTED, generate: generate as any },
+      { now: () => NOW, jobStartedAt: JOB_STARTED, runContext: TEST_RUN_CONTEXT, generate: generate as any },
     );
 
     expect(generate).toHaveBeenCalledTimes(2);
@@ -113,7 +114,7 @@ describe("evaluate-pair retry", () => {
     const result = await evaluatePair(
       { agent, skill },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { now: () => NOW, jobStartedAt: JOB_STARTED, generate: generate as any },
+      { now: () => NOW, jobStartedAt: JOB_STARTED, runContext: TEST_RUN_CONTEXT, generate: generate as any },
     );
 
     // Only ONE generate call — retry path not entered.

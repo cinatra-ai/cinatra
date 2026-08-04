@@ -18,6 +18,10 @@ export * from "./upsert";
 export * from "./rule-short-circuit";
 export * from "./match-when-parser";
 export * from "./evaluate-pair";
+// Frozen run-context minting (setup-flow S6): `{provider, model,
+// evaluatorVersion}` minted once at run creation and threaded through every
+// stage of a matching run.
+export * from "./run-context";
 // Shared adapters used by jobs.ts and handlers.ts to ensure the inline, batch,
 // and admin re-evaluate paths all compute the same SkillForMatching shape
 // (same matchWhenRaw, same skillInputHash).
@@ -54,12 +58,17 @@ export {
   cleanupForAgent,
 } from "./event-hooks";
 
-// BullMQ job handlers dispatched from src/lib/background-jobs.ts.
+// BullMQ job handlers dispatched from src/lib/background-jobs.ts, plus the
+// admin cancel entry point (both run paths) and the injectable seam types.
 export {
   handleInlineForSkill,
   handleInlineForAgent,
   handleBatchSubmit,
   handleBatchPoll,
+  cancelBatchRun,
+  type CancelBatchRunResult,
+  type SkillMatchJobDeps,
+  type BatchOrchestrationSeams,
 } from "./jobs";
 
 // Production drift sampler. Job handler dispatched from

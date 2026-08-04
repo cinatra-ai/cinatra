@@ -28,6 +28,45 @@
 export type MatchSource = "rule" | "llm" | "manual";
 export type MatchStatus = "ok" | "error" | "skipped";
 
+/**
+ * The IMMUTABLE per-run evaluation context (setup-flow S6).
+ *
+ * Minted exactly once at run creation — from the committed default provider at
+ * that instant — and THREADED through every stage of that run (submit, poll,
+ * download, cancel, inline continuations, drift sampling, maintenance). No
+ * stage re-resolves the live default mid-run: an admin default change mid-run
+ * must not alter any in-flight stage.
+ *
+ * Pure data (leaf-safe, JSON-serializable) so it can ride BullMQ payloads and
+ * the batch-run record verbatim.
+ */
+export type SkillMatchRunContext = {
+  /** Provider id ("openai" | "anthropic" | …) resolved at run creation. */
+  provider: string;
+  /** The model the resolved adapter would actually use, frozen at run creation. */
+  model: string;
+  /** The evaluator version this run was created under. */
+  evaluatorVersion: string;
+};
+
+/**
+ * One durable per-request submission-manifest entry (setup-flow S6).
+ *
+ * Written at SUBMIT time, keyed by the batch `customId`, and linked to the
+ * frozen run context on the batch-run record. Polling maps provider results
+ * through this manifest — never by reconstructing custom-ids from the live
+ * catalog — and DISCARDS any result whose current input hash differs from the
+ * submit-time hash recorded here (an agent/skill edited mid-batch must never
+ * receive a stale answer marked current).
+ */
+export type SkillMatchSubmissionManifestEntry = {
+  customId: string;
+  agentId: string;
+  skillId: string;
+  agentInputHash: string;
+  skillInputHash: string;
+};
+
 export type SkillMatchRow = {
   /** Canonical packageId — e.g. "@cinatra/email-agent" — used as the FK to agents. */
   agentId: string;
@@ -38,6 +77,13 @@ export type SkillMatchRow = {
   score: number | null;
   rationale: string | null;
   evaluatorVersion: string;
+  /**
+   * Provider/model provenance (setup-flow S6). Set from the frozen run context
+   * for source="llm" rows; null for rule/manual rows (no LLM involved) and for
+   * rows persisted before provenance existed.
+   */
+  provider: string | null;
+  model: string | null;
   agentInputHash: string;
   skillInputHash: string;
   status: MatchStatus;

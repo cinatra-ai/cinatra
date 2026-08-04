@@ -22,6 +22,7 @@ import {
   skillMatchScheduleSetSchema,
   skillMatchBatchRunNowSchema,
   skillMatchEvaluatePairSchema,
+  skillMatchBatchCancelSchema,
 } from "./handlers";
 
 const TOOL_META: Record<string, { description: string; inputSchema: z.ZodTypeAny }> = {
@@ -105,6 +106,10 @@ const TOOL_META: Record<string, { description: string; inputSchema: z.ZodTypeAny
   "skills_match_evaluate_pair": {
     description: "Synchronously re-evaluate a single (agent, skill) pair via the LLM matcher (admin only).",
     inputSchema: skillMatchEvaluatePairSchema,
+  },
+  "skills_match_batch_cancel": {
+    description: "Cancel an in-flight skill-match run — a provider batch or a synchronous fan-out run (admin only).",
+    inputSchema: skillMatchBatchCancelSchema,
   },
   "skills_recommend_for_task": {
     description: "Request-aware skill recommendation: rank an agent's skills by how well they fit THIS task (prompt / declared produced types / target artifact kind). Returns ranked skill ids + names + deterministic scores + the run-intent features each was scored on — the same core scoring the run-start recommendation uses.",

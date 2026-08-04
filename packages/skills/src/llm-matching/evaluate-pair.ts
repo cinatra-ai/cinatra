@@ -20,11 +20,11 @@
 
 import { createHash } from "node:crypto";
 import { generate as defaultGenerate } from "@cinatra-ai/llm";
+import type { LlmProvider } from "@cinatra-ai/llm";
+import type { ActorContext } from "@/lib/authz/actor-context";
 import {
-  SKILL_MATCH_MODEL,
   SKILL_MATCH_MAX_OUTPUT_TOKENS_PER_PAIR,
   SKILL_MATCH_RETRY_ON_SCHEMA_VIOLATION,
-  LLM_MATCHER_VERSION,
 } from "./constants";
 import { buildPromptForPair } from "./prompt-builder";
 import { computeInputHashes } from "./hashes";
@@ -40,6 +40,7 @@ import type {
   AgentForMatching,
   SkillForMatching,
   SkillMatchRow,
+  SkillMatchRunContext,
 } from "./types";
 
 export type EvaluatePairInput = {
@@ -48,14 +49,36 @@ export type EvaluatePairInput = {
 };
 
 export type EvaluatePairDeps = UpsertDeps & {
+  /**
+   * The FROZEN run context (setup-flow S6) — `{provider, model,
+   * evaluatorVersion}` minted at run creation by the dispatching path and
+   * threaded here verbatim. REQUIRED: this function never resolves the live
+   * default itself (a mid-run admin default change must not alter an in-flight
+   * run).
+   *
+   * `null` means the dispatching path found NO configured LLM runtime. The
+   * evaluation is then a CLEAN SKIP (`{skipped: true, reason:
+   * "no_llm_runtime"}`): last-good rows are retained and nothing throws. The
+   * rule short-circuit still runs — deterministic rule rows need no LLM.
+   */
+  runContext: SkillMatchRunContext | null;
+  /**
+   * The actor on whose behalf this evaluation runs (setup-flow S6). Forwarded
+   * to the orchestration `generate()` call: production LLM entry points fail
+   * closed without an actor frame, so every dispatcher (admin re-evaluation,
+   * inline fan-outs + continuations, drift sampling, maintenance) must supply
+   * an explicit actor source. Optional only for callers already inside an ALS
+   * actor frame.
+   */
+  actorContext?: ActorContext;
   /** Test override for the LLM gateway. */
   generate?: typeof defaultGenerate;
   /**
    * Cancellation signal forwarded to the orchestration `generate()` call and
    * checked before/after the LLM round-trip. When BullMQ cancels a job
    * mid-flight (admin stops a stuck batch, queue is drained for shutdown), the
-   * in-flight OpenAI call can otherwise keep going and eventually land a row in
-   * the DB. Passing a `signal` lets the caller short-circuit before the LLM
+   * in-flight provider call can otherwise keep going and eventually land a row
+   * in the DB. Passing a `signal` lets the caller short-circuit before the LLM
    * call and on parse completion.
    */
   signal?: AbortSignal;
@@ -108,11 +131,19 @@ export async function evaluatePair(
   // (cancelled queue, admin-stop, shutdown).
   throwIfAborted(deps.signal);
 
-  // Rule short-circuit before any LLM call.
+  // Rule short-circuit before any LLM call (works without a runtime).
   const ruleRow = evaluateRuleShortCircuit(agent, skill);
   if (ruleRow !== null) {
     const result = await upsertMatchRow(ruleRow, deps);
     return { ...result, row: ruleRow };
+  }
+
+  // No configured LLM runtime ⇒ clean skip. Last-good rows are retained; the
+  // dispatching job aggregates a skipped-pair count and logs it (failure
+  // taxonomy: absence of a runtime is a state, not an error).
+  const runContext = deps.runContext;
+  if (runContext === null || runContext === undefined) {
+    return { skipped: true, reason: "no_llm_runtime" };
   }
 
   // Malformed match_when: keep raw text and pass it to the LLM as the hint
@@ -135,8 +166,13 @@ export async function evaluatePair(
   // `[after-retry]` so the retry frequency is observable in DB scans without
   // adding a new column.
   let response = await generate({
-    provider: "openai",
-    model: SKILL_MATCH_MODEL,
+    // The FROZEN run context's provider/model — never the live default and
+    // never a hardcoded pin (setup-flow S6).
+    provider: runContext.provider as LlmProvider,
+    model: runContext.model,
+    // Explicit actor source: production deterministic LLM calls fail closed
+    // without an actor frame.
+    actorContext: deps.actorContext,
     // Both `system` and `prompt` derive from prompt.md via
     // buildPromptForPair() — there are zero inline classifier-prose literals
     // in any *.ts file in this directory. The split point is the first H1 in
@@ -177,8 +213,9 @@ export async function evaluatePair(
   ) {
     retryAttempted = true;
     response = await generate({
-      provider: "openai",
-      model: SKILL_MATCH_MODEL,
+      provider: runContext.provider as LlmProvider,
+      model: runContext.model,
+      actorContext: deps.actorContext,
       system,
       prompt: user,
       outputSchema: STRUCTURED_OUTPUT_SCHEMA as unknown as Record<string, unknown>,
@@ -229,7 +266,7 @@ export async function evaluatePair(
             overlapRatio: grounding.overlapRatio,
             rationaleTokenCount: grounding.rationaleTokenCount,
             sharedTokens: grounding.sharedTokens,
-            evaluatorVersion: LLM_MATCHER_VERSION,
+            evaluatorVersion: runContext.evaluatorVersion,
           }),
         );
         finalRationale = UNGROUNDED_RATIONALE_FALLBACK;
@@ -242,7 +279,9 @@ export async function evaluatePair(
       matched: parsedDecision.value.matched,
       score: parsedDecision.value.score,
       rationale: finalRationale,
-      evaluatorVersion: LLM_MATCHER_VERSION,
+      evaluatorVersion: runContext.evaluatorVersion,
+      provider: runContext.provider,
+      model: runContext.model,
       agentInputHash,
       skillInputHash,
       status: "ok",
@@ -265,7 +304,9 @@ export async function evaluatePair(
       matched: false,
       score: 0,
       rationale: null,
-      evaluatorVersion: LLM_MATCHER_VERSION,
+      evaluatorVersion: runContext.evaluatorVersion,
+      provider: runContext.provider,
+      model: runContext.model,
       agentInputHash,
       skillInputHash,
       status: "error",

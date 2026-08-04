@@ -40,6 +40,12 @@ export default defineConfig({
             // imports from being rewritten to `<stub>.ts/actor-context` if a
             // future skills test ever pulls a module that uses the leaf subpath.
             { find: "@cinatra-ai/llm/actor-context", replacement: llmStub },
+            // Pure text-parsing leaf (no provider state) — real source, so the
+            // matcher's fence-tolerant parser behaves identically under test.
+            {
+              find: "@cinatra-ai/llm/structured-json",
+              replacement: path.join(__dirname, "../llm/src/structured-json.ts"),
+            },
             { find: "@cinatra-ai/llm", replacement: llmStub },
           ]
         : []),

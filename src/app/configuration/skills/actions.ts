@@ -158,6 +158,17 @@ export async function runBatchNowAction() {
   return callSkillsHandler("skills_match_batch_run_now", { dryRun: false });
 }
 
+export async function cancelBatchRunAction(formData: FormData): Promise<void> {
+  await requireAdminSession();
+  const batchId = String(formData.get("batchId") ?? "").trim();
+  if (!batchId) {
+    throw new Error("batchId is required");
+  }
+  // Void return: consumed as a <form action> from the status panel; the panel's
+  // 30s poll surfaces the resulting status transition.
+  await callSkillsHandler("skills_match_batch_cancel", { batchId });
+}
+
 export async function evaluatePairAction(formData: FormData) {
   await requireAdminSession();
   const agentId = String(formData.get("agentId") ?? "").trim();

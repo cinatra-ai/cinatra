@@ -27,6 +27,9 @@ export async function GET() {
           lastPolledAt: latest.lastPolledAt ? latest.lastPolledAt.toISOString() : null,
           errorMessage: latest.errorMessage,
           evaluatorVersion: latest.evaluatorVersion,
+          provider: latest.provider,
+          model: latest.model,
+          processedPairCount: latest.processedPairCount,
         }
       : null,
   });

@@ -24,6 +24,7 @@ vi.mock("../skill-matches-store", () => ({
 
 import { evaluateRuleShortCircuit } from "../rule-short-circuit";
 import { evaluatePair } from "../evaluate-pair";
+import { TEST_RUN_CONTEXT } from "./__fixtures__/run-context";
 
 const baseAgent: AgentForMatching = {
   packageId: "@cinatra/email-agent",
@@ -56,7 +57,7 @@ describe("rule-short-circuit", () => {
 
     await evaluatePair(
       { agent: baseAgent, skill },
-      { now: () => NOW, jobStartedAt: NOW },
+      { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT },
     );
     expect(orchestrateGenerateMock).not.toHaveBeenCalled();
   });
@@ -82,7 +83,7 @@ describe("rule-short-circuit", () => {
     });
     await evaluatePair(
       { agent: baseAgent, skill },
-      { now: () => NOW, jobStartedAt: NOW },
+      { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT },
     );
     expect(orchestrateGenerateMock).toHaveBeenCalledTimes(1);
   });
@@ -95,7 +96,7 @@ describe("rule-short-circuit", () => {
 
     await evaluatePair(
       { agent: baseAgent, skill },
-      { now: () => NOW, jobStartedAt: NOW },
+      { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT },
     );
     expect(orchestrateGenerateMock).not.toHaveBeenCalled();
   });

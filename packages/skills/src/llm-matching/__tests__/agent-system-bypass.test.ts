@@ -47,6 +47,7 @@ vi.mock("../skill-matches-store", () => ({
 }));
 
 import { evaluatePair } from "../evaluate-pair";
+import { TEST_RUN_CONTEXT } from "./__fixtures__/run-context";
 
 const NOW = new Date("2026-05-11T11:00:00Z");
 
@@ -103,7 +104,7 @@ describe("agent + system bypass", () => {
 
     // Drive the would-be evaluation flow: only iterate the included skills.
     for (const skill of pairSet) {
-      await evaluatePair({ agent: baseAgent, skill }, { now: () => NOW, jobStartedAt: NOW });
+      await evaluatePair({ agent: baseAgent, skill }, { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT });
     }
     expect(orchestrateGenerateMock).not.toHaveBeenCalled();
   });
@@ -113,7 +114,7 @@ describe("agent + system bypass", () => {
     expect(pairSet).toEqual([]);
 
     for (const skill of pairSet) {
-      await evaluatePair({ agent: baseAgent, skill }, { now: () => NOW, jobStartedAt: NOW });
+      await evaluatePair({ agent: baseAgent, skill }, { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT });
     }
     expect(orchestrateGenerateMock).not.toHaveBeenCalled();
   });
@@ -127,7 +128,7 @@ describe("agent + system bypass", () => {
     expect(pairSet).toEqual([skillsByLevel.thirdParty]);
 
     for (const skill of pairSet) {
-      await evaluatePair({ agent: baseAgent, skill }, { now: () => NOW, jobStartedAt: NOW });
+      await evaluatePair({ agent: baseAgent, skill }, { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT });
     }
     expect(orchestrateGenerateMock).toHaveBeenCalledTimes(1);
   });

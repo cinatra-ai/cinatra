@@ -30,6 +30,8 @@ function rowFromDb(raw: RawRow): SkillMatchRow {
     score,
     rationale: raw.rationale === null || raw.rationale === undefined ? null : String(raw.rationale),
     evaluatorVersion: String(raw.evaluator_version),
+    provider: raw.provider === null || raw.provider === undefined ? null : String(raw.provider),
+    model: raw.model === null || raw.model === undefined ? null : String(raw.model),
     agentInputHash: String(raw.agent_input_hash),
     skillInputHash: String(raw.skill_input_hash),
     status: String(raw.status) as MatchStatus,
@@ -59,16 +61,18 @@ export async function upsertSkillMatch(row: SkillMatchRow): Promise<void> {
         text: `
           INSERT INTO ${schema}."skill_matches" (
             agent_id, skill_id, source, matched, score, rationale,
-            evaluator_version, agent_input_hash, skill_input_hash,
+            evaluator_version, provider, model, agent_input_hash, skill_input_hash,
             status, error_code, error_message,
             evaluated_at, job_started_at
-          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
           ON CONFLICT (agent_id, skill_id) DO UPDATE SET
             source = EXCLUDED.source,
             matched = EXCLUDED.matched,
             score = EXCLUDED.score,
             rationale = EXCLUDED.rationale,
             evaluator_version = EXCLUDED.evaluator_version,
+            provider = EXCLUDED.provider,
+            model = EXCLUDED.model,
             agent_input_hash = EXCLUDED.agent_input_hash,
             skill_input_hash = EXCLUDED.skill_input_hash,
             status = EXCLUDED.status,
@@ -85,6 +89,8 @@ export async function upsertSkillMatch(row: SkillMatchRow): Promise<void> {
           row.score,
           row.rationale,
           row.evaluatorVersion,
+          row.provider,
+          row.model,
           row.agentInputHash,
           row.skillInputHash,
           row.status,

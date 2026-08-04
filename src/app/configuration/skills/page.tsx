@@ -443,6 +443,9 @@ async function MatchesTabContent({ searchParams }: { searchParams: Record<string
         lastPolledAt: latestBatch.lastPolledAt ? latestBatch.lastPolledAt.toISOString() : null,
         errorMessage: latestBatch.errorMessage,
         evaluatorVersion: latestBatch.evaluatorVersion,
+        provider: latestBatch.provider,
+        model: latestBatch.model,
+        processedPairCount: latestBatch.processedPairCount,
       }
     : null;
 

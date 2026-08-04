@@ -44,6 +44,7 @@ import { parseLlmResponse } from "../response-parser";
 import { upsertMatchRow } from "../upsert";
 import { computeInputHashes } from "../hashes";
 import { LLM_MATCHER_VERSION } from "../constants";
+import { TEST_RUN_CONTEXT } from "./__fixtures__/run-context";
 
 const NOW = new Date("2026-05-11T10:00:00Z");
 
@@ -83,7 +84,7 @@ describe("evaluator-core integration", () => {
 
     const result = await evaluatePair(
       { agent: baseAgent, skill: baseSkill },
-      { now: () => NOW, jobStartedAt: NOW },
+      { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT },
     );
 
     expect(result.skipped).toBe(false);
@@ -115,7 +116,7 @@ describe("evaluator-core integration", () => {
 
     const result = await evaluatePair(
       { agent: baseAgent, skill: baseSkill },
-      { now: () => NOW, jobStartedAt: NOW },
+      { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT },
     );
 
     expect(result.skipped).toBe(false);
@@ -135,6 +136,39 @@ describe("evaluator-core integration", () => {
     }
   });
 
+  it("the generate call carries the FROZEN provider/model + the explicit actor (setup-flow S6)", async () => {
+    orchestrateGenerateMock.mockResolvedValue({
+      text: JSON.stringify({ matched: true, score: 0.5, rationale: "ok" }),
+    });
+    const actorContext = {
+      principalType: "System",
+      principalId: "skill-matcher:test",
+      authSource: "worker",
+      policyVersion: "v2",
+    } as never;
+
+    await evaluatePair(
+      { agent: baseAgent, skill: baseSkill },
+      { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT, actorContext },
+    );
+
+    expect(orchestrateGenerateMock).toHaveBeenCalledTimes(1);
+    const input = orchestrateGenerateMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(input.provider).toBe(TEST_RUN_CONTEXT.provider);
+    expect(input.model).toBe(TEST_RUN_CONTEXT.model);
+    expect(input.actorContext).toBe(actorContext);
+  });
+
+  it("a null run context is a clean skip: no LLM call, no row write, reason=no_llm_runtime", async () => {
+    const result = await evaluatePair(
+      { agent: baseAgent, skill: baseSkill },
+      { now: () => NOW, jobStartedAt: NOW, runContext: null },
+    );
+    expect(result).toEqual({ skipped: true, reason: "no_llm_runtime" });
+    expect(orchestrateGenerateMock).not.toHaveBeenCalled();
+    expect(store.upsertSkillMatch).not.toHaveBeenCalled();
+  });
+
   it("identical model output produces identical row payload via either path", async () => {
     const modelOutputText = JSON.stringify({
       matched: true,
@@ -146,7 +180,7 @@ describe("evaluator-core integration", () => {
     orchestrateGenerateMock.mockResolvedValue({ text: modelOutputText });
     await evaluatePair(
       { agent: baseAgent, skill: baseSkill },
-      { now: () => NOW, jobStartedAt: NOW },
+      { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT },
     );
     expect(store.upsertSkillMatch).toHaveBeenCalledTimes(1);
     const inlineRow = vi.mocked(store.upsertSkillMatch).mock.calls[0][0];
@@ -169,6 +203,8 @@ describe("evaluator-core integration", () => {
       score: parsed.value.score,
       rationale: parsed.value.rationale,
       evaluatorVersion: LLM_MATCHER_VERSION,
+      provider: TEST_RUN_CONTEXT.provider,
+      model: TEST_RUN_CONTEXT.model,
       agentInputHash,
       skillInputHash,
       status: "ok",

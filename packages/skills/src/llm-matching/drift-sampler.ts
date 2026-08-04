@@ -35,9 +35,11 @@ import "server-only";
  * enable toggle.
  */
 
+import type { ActorContext } from "@/lib/authz/actor-context";
 import { evaluatePair } from "./evaluate-pair";
 import { adaptAgentForMatching, adaptSkillForMatching } from "./adapters";
 import { computeInputHashes } from "./hashes";
+import { mintSkillMatchRunContext, type MintRunContext } from "./run-context";
 import {
   SKILL_MATCH_DRIFT_SAMPLE_SIZE,
   SKILL_MATCH_DRIFT_SCORE_DELTA_THRESHOLD,
@@ -89,6 +91,17 @@ export type DriftSampleResult = {
 
 export type DriftSampleDeps = {
   catalog: CatalogProvider;
+  /**
+   * Explicit actor source (setup-flow S6) threaded into `evaluatePair` —
+   * production deterministic LLM calls fail closed without an actor frame.
+   */
+  actorContext?: ActorContext;
+  /**
+   * Run-context mint seam. Minted ONCE per sampler run (the sampler run IS the
+   * run boundary) and threaded to every re-evaluation; a mid-run default
+   * change does not alter the sample. Defaults to the real resolver.
+   */
+  mintRunContext?: MintRunContext;
   /** Test override for the sample reader. Defaults to the production store. */
   readRandomLlmOkMatches?: (sampleSize: number) => Promise<SkillMatchRow[]>;
   /** Test override for evaluatePair (mocks the LLM round-trip). */
@@ -192,6 +205,17 @@ export async function handleDriftSample(deps: DriftSampleDeps): Promise<DriftSam
   const sampleSize = deps.sampleSize ?? SKILL_MATCH_DRIFT_SAMPLE_SIZE;
   const now = deps.now ?? (() => new Date());
 
+  // ONE frozen run context for the whole sampler run (setup-flow S6). A null
+  // mint means no configured runtime: the sampler run is a clean no-op (no
+  // thrash on error rows, last-good rows retained).
+  const runContext = await (deps.mintRunContext ?? mintSkillMatchRunContext)();
+  if (runContext === null) {
+    console.info(
+      JSON.stringify({ event: "skill_match_drift_sample_skipped_no_runtime" }),
+    );
+    return { sampledCount: 0, evaluatedCount: 0, diffs: [], driftCount: 0 };
+  }
+
   const sample = await readRandomLlmOkMatches(sampleSize);
   const sampledCount = sample.length;
 
@@ -213,14 +237,18 @@ export async function handleDriftSample(deps: DriftSampleDeps): Promise<DriftSam
     try {
       result = await evaluate(
         { agent: pair.agent, skill: pair.skill },
-        { now, jobStartedAt },
+        { now, jobStartedAt, runContext, actorContext: deps.actorContext },
       );
     } catch (err) {
+      // AbortError escapes immediately (cancellation is not drift); any other
+      // invocation/resolution throw RETHROWS so BullMQ applies the sampler's
+      // bounded retry topology (the next scheduled tick is the retry).
+      if (err instanceof Error && err.name === "AbortError") throw err;
       console.warn(
         `[skill-match] drift-sampler evaluation failed for ${pair.agent.packageId} × ${pair.skill.skillId}:`,
         err,
       );
-      continue;
+      throw err;
     }
 
     const currentRow = result.row;
@@ -362,6 +390,10 @@ export type StaleSweepResult = {
 
 export type SweepDeps = {
   catalog: CatalogProvider;
+  /** Explicit actor source threaded into `evaluatePair` (see DriftSampleDeps). */
+  actorContext?: ActorContext;
+  /** Run-context mint seam — minted ONCE per sweep (see DriftSampleDeps). */
+  mintRunContext?: MintRunContext;
   /** Test override for the full-row reader. Defaults to the production store. */
   readAllRows?: () => Promise<SkillMatchRow[]>;
   /** Test override for evaluatePair (mocks the LLM round-trip). */
@@ -399,6 +431,11 @@ export async function sweepStaleMatches(deps: SweepDeps): Promise<StaleSweepResu
 
   // One anchor for every guarded upsert this run (see "single upsert anchor").
   const sweepStartedAt = now();
+
+  // ONE frozen run context for the whole sweep (setup-flow S6). Null ⇒ no
+  // runtime: re-evaluations become clean skips (counted, never errors) while
+  // the deterministic bookkeeping (manual flags, absence counting) still runs.
+  const runContext = await (deps.mintRunContext ?? mintSkillMatchRunContext)();
 
   // Fail closed: a read error here must throw, never resolve to [] (an empty
   // view would report nothing stale AND, in the GC, delete the whole catalog).
@@ -474,7 +511,12 @@ export async function sweepStaleMatches(deps: SweepDeps): Promise<StaleSweepResu
     try {
       const res = await evaluate(
         { agent: adaptedAgent, skill: adaptedSkill },
-        { now, jobStartedAt: sweepStartedAt },
+        {
+          now,
+          jobStartedAt: sweepStartedAt,
+          runContext,
+          actorContext: deps.actorContext,
+        },
       );
       if (!res.skipped) result.reevaluated += 1;
     } catch (err) {

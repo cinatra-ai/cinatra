@@ -48,6 +48,8 @@ const baseRow: Omit<SkillMatchRow, "evaluatedAt" | "jobStartedAt"> = {
   score: 0.7,
   rationale: "ok",
   evaluatorVersion: "llm-matcher-v1",
+  provider: null,
+  model: null,
   agentInputHash: "a".repeat(64),
   skillInputHash: "b".repeat(64),
   status: "ok",

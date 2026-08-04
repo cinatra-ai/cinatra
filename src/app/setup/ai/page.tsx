@@ -35,7 +35,6 @@ import { readSetupReadinessState, readAnthropicMcpMode } from "@/lib/setup-readi
 // read-only state for every admin but the claimant (identifier-free view).
 import { deriveSetupAiStepState } from "@/lib/setup-provider-commit";
 import { getAuthSession } from "@/lib/auth-session";
-import { describeMatcherProviderConstraint } from "@/lib/llm-purpose-policy";
 import {
   SETUP_CREDENTIAL_SAVE_STEP_ID,
   readSetupProviderSelection,
@@ -276,16 +275,6 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
                   </form>
                 ) : null}
               </AlertDescription>
-            </Alert>
-          ) : null}
-
-          {/* Honest constraint surfacing: skill auto-matching is pinned to
-              OpenAI by a hard Batch-API dependency. Say so BEFORE the owner
-              commits, not after they wonder why matching never runs. */}
-          {describeMatcherProviderConstraint(selected) ? (
-            <Alert className="mt-4" data-testid="setup-matcher-constraint">
-              <AlertTitle>One feature needs OpenAI</AlertTitle>
-              <AlertDescription>{describeMatcherProviderConstraint(selected)}</AlertDescription>
             </Alert>
           ) : null}
 

@@ -165,6 +165,22 @@ export const LLM_PURPOSE_INVENTORY: readonly LlmPurposeEntry[] = Object.freeze([
       "INVENTORY FINDING: no hard capability pin. The lanes are prompt+JSON review over agent source using the reviewer agents' own system prompts; nothing in them requires a provider-specific API. Assigned exact-default per the issue's 'unless the inventory proves a hard capability pin' clause.",
   },
   {
+    purpose: "skill-llm-matching",
+    file: "packages/skills/src/llm-matching/run-context.ts",
+    what: "Skill auto-matching — capability-routed full-catalog runs (provider batch or synchronous fan-out; consumed by jobs.ts).",
+    policy: "exact-default",
+    rationale:
+      "Setup-flow S6: the pipeline is provider-neutral. mintSkillMatchRunContext (the SOLE resolution site for the whole matcher) freezes one {provider, model, evaluatorVersion} context from the stored default at run creation; batch-capable adapters take the batch path, batch-less adapters run a chunked synchronous fan-out. The former hard OpenAI Batch-API pin is gone.",
+  },
+  {
+    purpose: "skill-matching-pair-evaluation",
+    file: "packages/skills/src/llm-matching/run-context.ts",
+    what: "Single-pair evaluation + the drift sampler canary for the matcher (consumed by evaluate-pair.ts).",
+    policy: "exact-default",
+    rationale:
+      "Setup-flow S6: every evaluation runs on the frozen per-run context minted (in run-context.ts) from the stored default — evaluate-pair.ts itself never resolves a provider — so the sampler canaries exactly the provider/model the pipeline it calibrates runs on: same context object, same run.",
+  },
+  {
     purpose: "author-agent-run",
     file: "packages/agents/src/run-author-agent.ts",
     what: "The built-in author agent's generation turns.",
@@ -180,24 +196,6 @@ export const LLM_PURPOSE_INVENTORY: readonly LlmPurposeEntry[] = Object.freeze([
     policy: "explicit-pin",
     rationale:
       "The agent author declared the provider as part of the agent's contract. Honoured verbatim; the resolver's exact-binding rules apply to the implicit path only.",
-  },
-  {
-    purpose: "skill-llm-matching",
-    file: "packages/skills/src/llm-matching/jobs.ts",
-    what: "Skill auto-matching — assembles a JSONL batch and submits it to the OpenAI Batch API.",
-    policy: "explicit-pin",
-    pinnedProvider: "openai",
-    rationale:
-      "HARD API dependency, not a preference: the whole pipeline is built on the OpenAI Batch API (batch submit/retrieve/cancel, custom_id addressing, the batch-runs store's status enum). No provider-neutral non-batch matcher mode exists yet — that is the net-new work item this issue records. Until it lands, setup SURFACES the constraint honestly rather than pretending matching works (see describeMatcherProviderConstraint).",
-  },
-  {
-    purpose: "skill-matching-pair-evaluation",
-    file: "packages/skills/src/llm-matching/evaluate-pair.ts",
-    what: "Single-pair evaluation + the drift sampler canary for the matcher.",
-    policy: "explicit-pin",
-    pinnedProvider: "openai",
-    rationale:
-      "Must run on the SAME provider/model snapshot as the batch pipeline it calibrates and canaries — a drift sampler pointed at a different provider measures nothing.",
   },
   {
     purpose: "chat-hitl-prompt-drive",
@@ -259,34 +257,21 @@ export function pinnedProviderForPurpose(purpose: string): LlmProvider | null {
   return entry?.policy === "explicit-pin" ? (entry.pinnedProvider ?? null) : null;
 }
 
-/** Display label for a provider id in operator-facing copy. */
-function providerLabel(provider: string): string {
-  if (provider === "openai") return "OpenAI";
-  if (provider === "anthropic") return "Anthropic";
-  if (provider === "gemini") return "Gemini";
-  return provider;
-}
-
 /**
- * The SKILL AUTO-MATCHING constraint, stated honestly for a given stored
- * provider choice (S6 AC: "the matcher constraint is surfaced when applicable").
- *
- * Skill auto-matching is pinned to OpenAI by a hard Batch-API dependency. On an
- * install whose stored default is NOT OpenAI, matching does not silently run on
- * the stored provider and it does not silently do nothing — setup says so. When
- * the net-new provider-neutral non-batch matcher mode lands, this function is
- * the single place the message retires.
- *
- * Returns `null` when there is nothing to say (the stored provider satisfies
- * the pin).
+ * REDUCED (setup-flow S6, deliberately not deleted): matching itself runs on
+ * every provider — batch-capable adapters take the provider batch path,
+ * batch-less adapters run the chunked synchronous fan-out — so there is no
+ * per-provider matching constraint left to surface at setup time (the former
+ * "requires OpenAI" copy and its readiness-saga twin are retired). What
+ * remains true is a MODE note: exact-default can select a provider whose
+ * adapter implements no batch surface, and only batch-capable adapters use
+ * provider batch pricing/SLAs. The matching admin surface derives the actual
+ * mode per run from the adapter capability probe; this static sentence exists
+ * for surfaces that cannot probe.
  */
-export function describeMatcherProviderConstraint(storedProvider: string): string | null {
-  const required = pinnedProviderForPurpose("skill-llm-matching");
-  if (!required || storedProvider === required) return null;
+export function describeMatcherProviderConstraint(): string {
   return (
-    `Skill auto-matching requires ${providerLabel(required)}. ` +
-    `This instance's default LLM provider is ${providerLabel(storedProvider)}, so automatic skill matching ` +
-    `stays off until an ${providerLabel(required)} connection is configured. Everything else — the assistant, ` +
-    `agents, skill generation — runs on ${providerLabel(storedProvider)}. Skills can still be attached to agents manually.`
+    "Batch-mode matching requires a batch-capable provider adapter; " +
+    "providers without one run matching as a synchronous background fan-out."
   );
 }

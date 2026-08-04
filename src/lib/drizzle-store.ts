@@ -36,6 +36,7 @@ import {
   skillPackageCoOwnerConstraintQueries,
   skillCoOwnerConstraintQueries,
 } from "@/lib/co-owner-constraint-schema";
+import { skillMatchRunContextDdl } from "@/lib/skill-match-run-ddl";
 
 type QueryInput = {
   text: string;
@@ -2974,12 +2975,10 @@ END $$` },
 
     // -----------------------------------------------------------------
     // LLM-based skill matching tables
-    // -----------------------------------------------------------------
     // 1. skill_matches: per-(agent, skill) evaluator state.
     //    source CHECK ('rule' | 'llm' | 'manual'); status CHECK ('ok' | 'error' | 'skipped');
-    //    score numeric(4,3) NULL with CHECK constraint range [0.000,1.000] AND CHECK that NULL iff source='manual'.
-    //    error_message capped 4 KiB at write time (enforced in app code, not DB).
-    //    job_started_at drives the stale-write guard.
+    //    score numeric(4,3) NULL with range CHECK [0.000,1.000], NULL iff source='manual';
+    //    error_message capped 4 KiB app-side; job_started_at drives the stale-write guard.
     {
       text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."skill_matches" (
         agent_id text NOT NULL,
@@ -3009,14 +3008,16 @@ END $$` },
       text: `CREATE INDEX IF NOT EXISTS skill_matches_evaluated_at_idx ON "${schemaName.replaceAll('"', '""')}"."skill_matches" (evaluated_at)`,
     },
 
-    // 2. skill_match_batch_runs: one row per OpenAI batch.
+    // 2. skill_match_batch_runs: one row per matching run (provider batch OR
+    //    'sync-'-prefixed synchronous fan-out). The setup-flow S6 columns +
+    //    in-flight index replacement live in skill-match-run-ddl.ts (spread below).
     {
       text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."skill_match_batch_runs" (
         batch_id text PRIMARY KEY,
         submitted_by text NOT NULL,
         submitted_at timestamptz NOT NULL,
         pair_count integer NOT NULL,
-        input_file_id text NOT NULL,
+        input_file_id text,
         output_file_id text,
         error_file_id text,
         status text NOT NULL,
@@ -3029,9 +3030,8 @@ END $$` },
     {
       text: `CREATE INDEX IF NOT EXISTS skill_match_batch_runs_submitted_at_idx ON "${schemaName.replaceAll('"', '""')}"."skill_match_batch_runs" (submitted_at DESC)`,
     },
-    {
-      text: `CREATE INDEX IF NOT EXISTS skill_match_batch_runs_status_idx ON "${schemaName.replaceAll('"', '""')}"."skill_match_batch_runs" (status) WHERE status IN ('validating', 'in_progress', 'finalizing')`,
-    },
+    // Provider-neutral run model DDL (setup-flow S6) — extracted vertical slice.
+    ...skillMatchRunContextDdl(schemaName),
 
     // 3. skill_match_schedule: single-row cron config.
     //    Singleton row keyed id='default'. Boot hook reads + registers BullMQ

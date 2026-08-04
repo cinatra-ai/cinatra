@@ -19,6 +19,7 @@ import * as store from "../skill-matches-store";
 import { evaluatePair } from "../evaluate-pair";
 import { UNGROUNDED_RATIONALE_FALLBACK } from "../rationale-grounding";
 import type { AgentForMatching, SkillForMatching } from "../types";
+import { TEST_RUN_CONTEXT } from "./__fixtures__/run-context";
 
 const NOW = new Date("2026-05-11T12:00:00Z");
 
@@ -66,7 +67,7 @@ describe("evaluate-pair grounding guard", () => {
     const result = await evaluatePair(
       { agent, skill: groundableSkill },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { now: () => NOW, jobStartedAt: NOW, generate: generate as any },
+      { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT, generate: generate as any },
     );
 
     expect(result.row?.matched).toBe(true);
@@ -94,7 +95,7 @@ describe("evaluate-pair grounding guard", () => {
     const result = await evaluatePair(
       { agent, skill: groundableSkill },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { now: () => NOW, jobStartedAt: NOW, generate: generate as any },
+      { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT, generate: generate as any },
     );
 
     // Decision preserved — only the rationale is downgraded.
@@ -152,7 +153,7 @@ describe("evaluate-pair grounding guard", () => {
     const result = await evaluatePair(
       { agent, skill: groundableSkill },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { now: () => NOW, jobStartedAt: NOW, generate: generate as any },
+      { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT, generate: generate as any },
     );
 
     expect(result.row?.matched).toBe(false);
@@ -180,7 +181,7 @@ describe("evaluate-pair grounding guard", () => {
     await evaluatePair(
       { agent, skill: groundableSkill },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      { now: () => NOW, jobStartedAt: NOW, generate: generate as any },
+      { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT, generate: generate as any },
     );
 
     const event = warnSpy.mock.calls

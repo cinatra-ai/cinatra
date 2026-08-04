@@ -1,23 +1,18 @@
 /**
- * Invariant tests for the OpenAI Batch API status sets. The two subsets MUST
- * be disjoint (no status is both in-flight and terminal) AND their union MUST
- * equal the documented OpenAI Batch enum so a future status drift on either
- * side is caught at unit-test time, not via a frozen status panel in
- * production.
+ * Invariant tests for the PERSISTED batch-run status sets. The two subsets
+ * MUST be disjoint (no status is both in-flight and terminal) AND their union
+ * MUST equal the persisted vocabulary so a future status drift on either side
+ * is caught at unit-test time, not via a frozen status panel in production.
  *
- * Reference: OpenAI Batch API docs (status field). Snapshot of the documented
- * statuses as of 2026-05-11:
- *   - validating  (in-flight)
- *   - in_progress (in-flight)
- *   - finalizing  (in-flight)
- *   - completed   (terminal)
- *   - cancelled   (terminal)
- *   - failed      (terminal)
- *   - expired     (terminal)
+ * Since setup-flow S6 the persisted vocabulary is provider-neutral: the
+ * legacy OpenAI literals stay so pre-S6 rows keep classifying, `cancelling`
+ * joined the in-flight set (cancellation initiated, processing not ended),
+ * and neutral batch-v2 states map onto these literals via
+ * `mapBatchV2StatusToPersisted`.
  *
- * If OpenAI introduces a new status (e.g. `awaiting_quota`), the constants
- * module MUST be updated AND this test must be updated with the new
- * EXPECTED_OPENAI_STATUSES entry — failing this test is the signal to do so.
+ * If a new state is introduced, the constants module MUST be updated AND this
+ * test must be updated with the new EXPECTED_PERSISTED_STATUSES entry —
+ * failing this test is the signal to do so.
  */
 
 import { describe, it, expect } from "vitest";
@@ -25,12 +20,14 @@ import {
   BATCH_STATUS_IN_FLIGHT,
   BATCH_STATUS_TERMINAL,
   BATCH_STATUS_ALL,
+  mapBatchV2StatusToPersisted,
 } from "../constants";
 
-const EXPECTED_OPENAI_STATUSES = [
+const EXPECTED_PERSISTED_STATUSES = [
   "validating",
   "in_progress",
   "finalizing",
+  "cancelling",
   "completed",
   "cancelled",
   "failed",
@@ -69,9 +66,9 @@ describe("OpenAI Batch API status sets", () => {
 
   it("BATCH_STATUS_ALL covers exactly the documented OpenAI Batch enum", () => {
     // If this fails, OpenAI either added or removed a status. Update the
-    // EXPECTED_OPENAI_STATUSES array AND the matching subset in constants.ts.
-    expect(BATCH_STATUS_ALL.size).toBe(EXPECTED_OPENAI_STATUSES.length);
-    for (const status of EXPECTED_OPENAI_STATUSES) {
+    // EXPECTED_PERSISTED_STATUSES array AND the matching subset in constants.ts.
+    expect(BATCH_STATUS_ALL.size).toBe(EXPECTED_PERSISTED_STATUSES.length);
+    for (const status of EXPECTED_PERSISTED_STATUSES) {
       expect(
         BATCH_STATUS_ALL.has(status),
         `Documented OpenAI status "${status}" is missing from BATCH_STATUS_ALL`,
@@ -80,7 +77,7 @@ describe("OpenAI Batch API status sets", () => {
   });
 
   it("each documented status is classified as in-flight OR terminal", () => {
-    for (const status of EXPECTED_OPENAI_STATUSES) {
+    for (const status of EXPECTED_PERSISTED_STATUSES) {
       const inFlight = BATCH_STATUS_IN_FLIGHT.has(status);
       const terminal = BATCH_STATUS_TERMINAL.has(status);
       expect(
@@ -100,5 +97,24 @@ describe("OpenAI Batch API status sets", () => {
     expect(constants.BATCH_STATUS_IN_FLIGHT).toBe(BATCH_STATUS_IN_FLIGHT);
     expect(constants.BATCH_STATUS_TERMINAL).toBe(BATCH_STATUS_TERMINAL);
     expect(constants.BATCH_STATUS_ALL).toBe(BATCH_STATUS_ALL);
+  });
+});
+
+describe("mapBatchV2StatusToPersisted", () => {
+  it("maps the four neutral batch-v2 states onto persisted literals", () => {
+    expect(mapBatchV2StatusToPersisted("in_progress")).toBe("in_progress");
+    expect(mapBatchV2StatusToPersisted("canceling")).toBe("cancelling");
+    expect(mapBatchV2StatusToPersisted("ended")).toBe("completed");
+    expect(mapBatchV2StatusToPersisted("failed")).toBe("failed");
+  });
+
+  it("every mapped value is a member of the persisted vocabulary", () => {
+    for (const v2 of ["in_progress", "canceling", "ended", "failed"]) {
+      expect(BATCH_STATUS_ALL.has(mapBatchV2StatusToPersisted(v2))).toBe(true);
+    }
+  });
+
+  it("passes unknown states through verbatim (defensive keep-polling stance)", () => {
+    expect(mapBatchV2StatusToPersisted("awaiting_quota")).toBe("awaiting_quota");
   });
 });

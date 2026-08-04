@@ -60,6 +60,12 @@ import {
   // persistence so a bad row can't
   // survive to boot-time scheduler re-registration.
   isValidCronExpression,
+  // Frozen run-context minting + cancel entry point (setup-flow S6).
+  mintSkillMatchRunContext,
+  cancelBatchRun,
+  probeSkillMatchBatchMode,
+  SKILL_MATCH_PRICED_MODEL,
+  SKILL_MATCH_PRICED_PROVIDER,
 } from "../llm-matching";
 import { enqueueBackgroundJob, BACKGROUND_JOB_NAMES } from "@/lib/background-jobs";
 import { readAgentsForSkillMatching } from "@/lib/agents-store";
@@ -301,6 +307,10 @@ export const skillMatchBatchRunNowSchema = z.object({
 export const skillMatchEvaluatePairSchema = z.object({
   agentId: z.string().min(1),
   skillId: z.string().min(1),
+});
+
+export const skillMatchBatchCancelSchema = z.object({
+  batchId: z.string().min(1),
 });
 
 // ---------------------------------------------------------------------------
@@ -1144,9 +1154,39 @@ export function createSkillsPrimitiveHandlers() {
       const ruleShortCircuited = allPairs.length - llmPairs.length;
 
       if (input.dryRun) {
+        // Cost display honesty (setup-flow S6): the run executes on the FROZEN
+        // run context minted at submit time, so the estimate must describe
+        // THAT provider/model — and admit when it cannot price it. The
+        // cl100k+snapshot estimator prices exactly one model (the OpenAI batch
+        // snapshot); every other resolvable context gets `estimatedUsd: null`
+        // with an explicit unavailability note — never $0 and never a
+        // cl100k-priced substitution.
+        const runContext = await mintSkillMatchRunContext();
+        const priced =
+          runContext !== null &&
+          runContext.provider === SKILL_MATCH_PRICED_PROVIDER &&
+          runContext.model === SKILL_MATCH_PRICED_MODEL;
+        const mode =
+          runContext === null
+            ? null
+            : await probeSkillMatchBatchMode(runContext.provider);
+        const estimate = priced ? estimateBatchCost(llmPairs) : null;
         return {
           dryRun: true,
-          ...estimateBatchCost(llmPairs),
+          provider: runContext?.provider ?? null,
+          model: runContext?.model ?? null,
+          /** "batch" | "synchronous" | null (null ⇒ no runtime configured). */
+          mode,
+          pairCount: llmPairs.length,
+          estimatedInputTokens: estimate?.estimatedInputTokens ?? null,
+          estimatedOutputTokens: estimate?.estimatedOutputTokens ?? null,
+          estimatedUsd: estimate?.estimatedUsd ?? null,
+          pricingVersion: estimate?.pricingVersion ?? null,
+          costUnavailableReason: priced
+            ? null
+            : runContext === null
+              ? "No LLM provider is configured."
+              : "Cost estimate unavailable for this model/provider.",
           // Expose the breakdown so the admin UI can surface "N pairs go
           // through LLM, M pairs short-circuit by rule (free)".
           ruleShortCircuited,
@@ -1210,13 +1250,63 @@ export function createSkillsPrimitiveHandlers() {
         });
       }
 
+      // Admin re-evaluation is its own single-pair RUN: mint the frozen
+      // context here (setup-flow S6) and thread the ADMIN's actor into the
+      // evaluator — production deterministic LLM calls fail closed without an
+      // actor frame, and this handler previously dropped its actor before
+      // `evaluatePair`.
+      const runContext = await mintSkillMatchRunContext();
+      const actorCtx = await actorContextFromMcpRequest(
+        request.actor as PrimitiveActorContext,
+      );
+
       const result = await evaluatePair(
         {
           agent: adaptAgentForMatching(agent),
           skill: adaptSkillForMatching(skill),
         },
-        { now: () => new Date(), jobStartedAt },
+        {
+          now: () => new Date(),
+          jobStartedAt,
+          runContext,
+          actorContext: actorCtx,
+        },
       );
+      if (result.skipped && result.reason === "no_llm_runtime") {
+        throw new PrimitiveInvocationError({
+          code: "no_llm_runtime",
+          message:
+            "No LLM provider is configured; the pair was not re-evaluated. Configure a provider in Administration first.",
+          retryable: false,
+        });
+      }
+      return result;
+    },
+
+    "skills_match_batch_cancel": async (request: PrimitiveInvocationRequest<unknown>) => {
+      await requireAdminActor(request.actor as PrimitiveActorContext);
+      const input = skillMatchBatchCancelSchema.parse(request.input);
+      // Cancel an in-flight run (both paths; setup-flow S6). Synchronous runs
+      // flip to `cancelling` and finalize at the next chunk boundary; provider
+      // batches cancel through the FROZEN run context's provider.
+      const result = await cancelBatchRun(input.batchId);
+      if (!result.ok) {
+        throw new PrimitiveInvocationError({
+          code:
+            result.reason === "not_found"
+              ? "batch_not_found"
+              : result.reason === "already_terminal"
+                ? "batch_already_terminal"
+                : "batch_cancel_unsupported",
+          message:
+            result.reason === "not_found"
+              ? `No batch run ${input.batchId} exists.`
+              : result.reason === "already_terminal"
+                ? `Batch run ${input.batchId} already finished.`
+                : "This provider's batch surface does not support cancellation.",
+          retryable: false,
+        });
+      }
       return result;
     },
   } as const;
