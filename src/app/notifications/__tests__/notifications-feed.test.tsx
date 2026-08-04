@@ -81,6 +81,8 @@ function approvalVM(over: {
   actionable: boolean;
   createdAt?: string;
   version?: string;
+  /** Omit for the href-less species (§II — no stretched overlay at all). */
+  href?: string;
 }): FeedRowVM {
   return {
     key: `approval:agent-creation-requests:${over.id}`,
@@ -91,6 +93,7 @@ function approvalVM(over: {
       rowId: over.id,
       title: over.title ?? "Approve access scope for Outreach agent",
       status: "pending",
+      href: over.href,
       version: over.version,
       direction: over.actionable ? "inbox" : "mine",
       actionable: over.actionable,
@@ -392,6 +395,97 @@ describe("NotificationsFeed — read/unread toggle (§II, tri-state overlay)", (
     };
     const [, init] = fetchMock.mock.calls.find(([, i]) => i?.method === "PATCH")!;
     expect(init?.keepalive).toBe(true);
+  });
+});
+
+describe("NotificationsFeed — per-ID mutation race (S3 hardening)", () => {
+  it("serializes rapid double-toggle on the SAME id — the second PATCH is not issued until the first settles", async () => {
+    const container = await mount(feed([notifVM({ id: "n1", readAt: undefined })]));
+
+    // Replace the stubbed fetch with one whose FIRST call is held open until
+    // released explicitly, so a naive (unserialized) implementation would
+    // fire both PATCHes concurrently.
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        const body = JSON.parse(init!.body as string);
+        calls.push(JSON.stringify(body));
+        if (calls.length === 1) await firstGate;
+        return { ok: true, json: async () => ({}) };
+      }),
+    );
+
+    const toggle = elementByAriaLabel(container, "Mark as read")!;
+    // Two rapid clicks BEFORE the first fetch resolves: unread -> read -> unread.
+    await act(async () => {
+      click(toggle);
+      await Promise.resolve();
+    });
+    // A synchronous second click, still before the first PATCH has settled.
+    const secondToggle = elementByAriaLabel(container, "Mark as unread")!;
+    await act(async () => {
+      click(secondToggle);
+      await Promise.resolve();
+    });
+
+    // The SECOND mutation must not have been issued yet — it is queued behind
+    // the still-in-flight first one (serializeMutation chains on the prior
+    // promise, never fires concurrently).
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBe(JSON.stringify({ id: "n1" }));
+
+    // Release the first PATCH; the second is issued only now, in order.
+    releaseFirst!();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toBe(JSON.stringify({ id: "n1", unread: true }));
+  });
+});
+
+describe("NotificationsFeed — nested controls never activate the card (S3 hardening)", () => {
+  it("clicking the trailing toggle on an href-carrying card issues exactly one PATCH (never doubles via the underlying stretched link)", async () => {
+    const container = await mount(feed([notifVM({ id: "n1", href: "/x", readAt: undefined })]));
+    await act(async () => {
+      click(elementByAriaLabel(container, "Mark as read"));
+      await Promise.resolve();
+    });
+    expect(patchBodies()).toEqual([{ id: "n1" }]);
+  });
+
+  it("clicking an actionable approval's inline Decide control does not also fire the card's href activation", async () => {
+    const container = await mount(
+      feed([approvalVM({ id: "a1", actionable: true, href: undefined })]),
+    );
+    await act(async () => {
+      click(container.querySelector('[data-testid="decide-stub"]'));
+      await Promise.resolve();
+    });
+    expect(container.querySelectorAll('[data-conformance-id="approval-row"]').length).toBe(0);
+    // No PATCH was ever issued — decide is not a read/unread mutation and the
+    // stretched overlay (absent here — no href) never fired.
+    expect(patchBodies()).toEqual([]);
+  });
+});
+
+describe("NotificationsFeed — href-less approval species exemption (§II, S3 hardening)", () => {
+  it("renders NO stretched overlay for an href-less approval — the card itself is not activatable", async () => {
+    const container = await mount(
+      feed([approvalVM({ id: "a1", actionable: false, href: undefined })]),
+    );
+    const row = container.querySelector('[data-conformance-id="approval-row"]')!;
+    expect(row.querySelector('a[data-action="activate -> navigated"]')).toBeNull();
+    expect(row.querySelector("a")).toBeNull();
+    // Read-state never applies to approvals — no toggle either.
+    expect(row.querySelector('[data-action="toggle-read -> toggled"]')).toBeNull();
   });
 });
 

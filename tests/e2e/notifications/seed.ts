@@ -290,6 +290,75 @@ export async function seedApprovalFixtures(opts: {
   }
 }
 
+/** Nested under `NOTIF_PREFIX` on purpose: `cleanupNotificationFixtures`'s
+ *  broader `notif-uat-%` delete (and `seedNotificationFixtures`' own reseed
+ *  delete) already sweep any leftover pagination-threshold row as a safety
+ *  net, even if a test's own `clearPaginationThresholdFixtures` call is
+ *  skipped by an early failure. */
+const PAGINATION_PREFIX = `${NOTIF_PREFIX}pgthresh-`;
+
+/**
+ * Seed an ISOLATED `count`-row dataset (cinatra#2381, S3) — every row unread,
+ * a distinct `source_job_id` per row (never collapses), strictly descending
+ * `created_at` so page order is deterministic. Used ONLY by the pagination-
+ * threshold e2e spec, which clears every other `notif-uat-*` / `acr-uat-*`
+ * row first (via `cleanupNotificationFixtures` / `cleanupApprovalFixtures`)
+ * so the pager's "X of N" total is exactly `count`, not `count` plus whatever
+ * the canonical 6+2 fixture happens to contribute that day.
+ */
+export async function seedPaginationThresholdFixtures(
+  opts: SeedOptions,
+  count: number,
+): Promise<{ userId: string }> {
+  const pool = new Pool({ connectionString: opts.databaseUrl });
+  const schema = `"${opts.schema.replaceAll('"', '""')}"`;
+  try {
+    const userId = await userIdByEmail(pool, opts.email);
+    await pool.query(
+      `DELETE FROM ${schema}.notifications WHERE user_id = $1 AND id LIKE $2`,
+      [userId, `${PAGINATION_PREFIX}%`],
+    );
+    for (let i = 0; i < count; i++) {
+      const id = `${PAGINATION_PREFIX}${i}`;
+      const jobId = `job-pgthresh-${i}`;
+      await pool.query(
+        `INSERT INTO ${schema}.notifications
+          (id, user_id, recipient_kind, recipient_id, topic, kind, title, body, href, metadata, source_job_id, source_job_name, created_at, read_at)
+          VALUES ($1, $2, 'user', $2, 'user:' || $2, 'success', $3, $4, NULL, NULL, $5, $6, now() - ($7 || ' seconds')::interval, NULL)
+          ON CONFLICT (user_id, source_job_id, kind)
+            WHERE source_job_id IS NOT NULL AND user_id IS NOT NULL
+            DO NOTHING`,
+        [
+          id,
+          userId,
+          `Pagination threshold fixture #${i}`,
+          "S3 hardening — isolated pager-threshold dataset row.",
+          jobId,
+          `pgthresh-${i}`,
+          String(i), // strictly descending created_at: row 0 is newest
+        ],
+      );
+    }
+    return { userId };
+  } finally {
+    await pool.end();
+  }
+}
+
+export async function clearPaginationThresholdFixtures(opts: SeedOptions): Promise<void> {
+  const pool = new Pool({ connectionString: opts.databaseUrl });
+  const schema = `"${opts.schema.replaceAll('"', '""')}"`;
+  try {
+    const userId = await userIdByEmail(pool, opts.email);
+    await pool.query(
+      `DELETE FROM ${schema}.notifications WHERE user_id = $1 AND id LIKE $2`,
+      [userId, `${PAGINATION_PREFIX}%`],
+    );
+  } finally {
+    await pool.end();
+  }
+}
+
 export async function cleanupNotificationFixtures(opts: SeedOptions): Promise<void> {
   const pool = new Pool({ connectionString: opts.databaseUrl });
   const schema = `"${opts.schema.replaceAll('"', '""')}"`;
