@@ -31,8 +31,8 @@ describe("getNamespaceMutabilityCopy", () => {
     expect(managed).not.toBe(ordinary);
   });
 
-  // cinatra#2418 review: the marketplace-managed branch must not contradict
-  // itself by also advertising the ordinary-install "dedicated rename flow"
+  // The marketplace-managed branch must not contradict itself by also
+  // advertising the ordinary-install "dedicated rename flow"
   // — provisionAndPersist's MARKETPLACE_INSTANCE_TOKEN block refuses EVERY
   // namespace change on a marketplace-managed instance, so there is no local
   // rename flow to point operators at.

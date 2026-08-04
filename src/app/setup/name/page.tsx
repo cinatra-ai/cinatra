@@ -90,9 +90,9 @@ export default async function SetupNamePage({ searchParams }: SetupNamePageProps
       initialDisplayName={identity?.instanceDisplayName ?? devDefaults?.instanceDisplayName ?? ""}
       // A saved identity's namespace is a real decision (persisted, possibly
       // hand-edited) — start detached so re-visiting this step never silently
-      // overwrites it. A dev-mode default (cinatra#2418 review) is a
-      // machine-generated suggestion nobody has chosen yet — start it linked
-      // so editing the display name still re-derives the namespace below.
+      // overwrites it. A dev-mode default is a machine-generated suggestion
+      // nobody has chosen yet — start it linked so editing the display name
+      // still re-derives the namespace below.
       initiallyDetached={Boolean(identity?.instanceNamespace)}
       approvedExactNames={getApprovedInstanceNamespaces()}
     >

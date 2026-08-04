@@ -36,7 +36,7 @@ export function getNamespaceMutabilityCopy(isMarketplaceManaged: boolean): strin
     // provisionAndPersist's unconditional MARKETPLACE_INSTANCE_TOKEN block) —
     // do NOT append `frozenPart` here, which advertises "a dedicated rename
     // flow still exists". That would contradict the sentence right before it
-    // in the same paragraph (cinatra#2418 review).
+    // in the same paragraph.
     return (
       editablePart +
       lockedWhilePendingPart +

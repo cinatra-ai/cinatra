@@ -32,10 +32,9 @@ const MIN_LEN = 2;
 // punctuation-collapse step as a stray hyphen. `\p{M}` is the Unicode
 // General_Category "Mark" (Mn + Mc + Me), which also covers marks outside the
 // common block (e.g. Combining Diacritical Marks Extended, U+1AB0-U+1AFF) that
-// a fixed U+0300-U+036F range would miss (cinatra#2418 review). Requires the
-// `u` flag; supported by every deployment target this module ships to
-// (Node.js and evergreen browsers have supported Unicode property escapes
-// since ES2018).
+// a fixed U+0300-U+036F range would miss. Requires the `u` flag; supported by
+// every deployment target this module ships to (Node.js and evergreen
+// browsers have supported Unicode property escapes since ES2018).
 function stripCombiningMarks(input: string): string {
   return input.replace(/\p{M}/gu, "");
 }

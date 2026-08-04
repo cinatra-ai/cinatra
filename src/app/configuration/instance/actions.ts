@@ -468,14 +468,14 @@ async function provisionAndPersist(
   const tokenEnc = encryptSecret(token, "vendor.token");
   const passwordEnc = encryptSecret(password, "vendor.password");
 
-  // Commit atomically via row-level CAS with bounded retry (cinatra#2418
-  // review, round 2) — NOT a single synchronous re-read-then-write. A plain
-  // re-read only serialises against an in-process writer with no intervening
-  // `await` of its own (editVendorAction's frozen display-name-only save);
-  // it does NOT protect against a SECOND CONCURRENT provisionAndPersist call
-  // (two renames, or a rename racing a pre-publish edit, each awaiting their
-  // OWN registry round-trip above) — the last plain write would silently win
-  // and discard the other's namespace change, and the archived
+  // Commit atomically via row-level CAS with bounded retry — NOT a single
+  // synchronous re-read-then-write. A plain re-read only serialises against
+  // an in-process writer with no intervening `await` of its own
+  // (editVendorAction's frozen display-name-only save); it does NOT protect
+  // against a SECOND CONCURRENT provisionAndPersist call (two renames, or a
+  // rename racing a pre-publish edit, each awaiting their OWN registry
+  // round-trip above) — the last plain write would silently win and discard
+  // the other's namespace change, and the archived
   // oldInstanceNamespaces[] entry would misrecord a stale pre-await
   // namespace/token instead of what was actually live at write time.
   // applyInstanceIdentityProvisioningWrite re-reads the row fresh on EVERY

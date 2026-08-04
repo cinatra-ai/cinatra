@@ -736,7 +736,7 @@ export type InstanceIdentityProvisioningWrite = {
  * with bounded retry, mirroring {@link updateInstanceIdentityRegistries}.
  *
  * Closes a lost-update class {@link updateInstanceIdentityRegistries}'s doc
- * comment explicitly scoped OUT as a follow-up (cinatra#2418 review, round 2):
+ * comment explicitly scoped OUT as a follow-up:
  * `provisionAndPersist` used to build its write payload from a single
  * synchronous re-read with no CAS, which only serialises against an
  * IN-PROCESS writer with no intervening `await` of its own (e.g.

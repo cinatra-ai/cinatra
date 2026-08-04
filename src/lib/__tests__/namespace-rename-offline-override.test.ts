@@ -24,8 +24,8 @@ import { MarketplaceMcpError } from "@cinatra-ai/marketplace-mcp-client";
 vi.mock("@/lib/instance-identity-store", () => {
   const readInstanceIdentity = vi.fn();
   const writeInstanceIdentity = vi.fn();
-  // cinatra#2418 review round 2: provisionAndPersist's final write now flows
-  // through a row-level-CAS wrapper (`applyInstanceIdentityProvisioningWrite`)
+  // provisionAndPersist's final write flows through a row-level-CAS wrapper
+  // (`applyInstanceIdentityProvisioningWrite`)
   // instead of a plain writeInstanceIdentity call. This suite asserts on the
   // FINAL persisted identity shape via writeInstanceIdentity, not the CAS
   // mechanism itself, so this mock shims the wrapper to delegate to that same

@@ -10,8 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/instance-identity-store", () => {
   const readInstanceIdentity = vi.fn();
   const writeInstanceIdentity = vi.fn();
-  // cinatra#2418 review round 2: provisionAndPersist's final write now flows
-  // through a row-level-CAS wrapper (`applyInstanceIdentityProvisioningWrite`)
+  // provisionAndPersist's final write flows through a row-level-CAS wrapper
+  // (`applyInstanceIdentityProvisioningWrite`)
   // instead of a plain writeInstanceIdentity call. The action/handler
   // behavioral contract is unchanged — each path still ends in ONE
   // merged-identity persist — so this mock shims that wrapper to delegate to

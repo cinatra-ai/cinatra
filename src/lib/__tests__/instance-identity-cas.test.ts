@@ -238,7 +238,7 @@ describe("updateInstanceIdentityRegistries (store wrapper — production logic)"
   });
 });
 
-describe("applyInstanceIdentityProvisioningWrite (store wrapper — cinatra#2418 review, round 2)", () => {
+describe("applyInstanceIdentityProvisioningWrite (store wrapper)", () => {
   const WRITE = {
     instanceNamespace: "vendorb",
     tokenCiphertext: "new-ct",

@@ -1,12 +1,11 @@
-// Wiring test for provisionAndPersist's CAS-based commit (cinatra#2418
-// review, round 2): renameInstanceNamespaceAction's final identity write now
-// routes through applyInstanceIdentityProvisioningWrite — row-level CAS with
-// bounded retry — instead of a single synchronous re-read-then-write. That
-// switch was made because a plain re-read only serialises against an
-// in-process writer with no intervening `await` of its own (e.g.
-// editVendorAction's frozen display-name-only save); it does NOT protect
-// against a SECOND CONCURRENT provisionAndPersist call, where the last plain
-// write would silently discard the other's namespace change.
+// Wiring test for provisionAndPersist's CAS-based commit:
+// renameInstanceNamespaceAction's final identity write routes through
+// applyInstanceIdentityProvisioningWrite — row-level CAS with bounded retry —
+// instead of a single synchronous re-read-then-write. A plain re-read only
+// serialises against an in-process writer with no intervening `await` of its
+// own (e.g. editVendorAction's frozen display-name-only save); it does NOT
+// protect against a SECOND CONCURRENT provisionAndPersist call, where the
+// last plain write would silently discard the other's namespace change.
 //
 // The actual concurrency properties (a concurrent display-name save is
 // preserved; a concurrent second rename's archived oldInstanceNamespaces
@@ -123,7 +122,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("renameInstanceNamespaceAction — CAS-commit wiring (cinatra#2418 review, round 2)", () => {
+describe("renameInstanceNamespaceAction — CAS-commit wiring", () => {
   it("redirects success and appends the previous namespace when the CAS swap lands", async () => {
     vi.mocked(applyInstanceIdentityProvisioningWrite).mockReturnValue("swapped");
 

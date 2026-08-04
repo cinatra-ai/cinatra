@@ -73,11 +73,11 @@ export function NamespaceValidationProvider({
   // InstanceDisplayNameInput (e.g. the administration edit form, which keeps
   // its own plain, unlinked display-name field) can omit it.
   initialDisplayName?: string;
-  // Explicit initial-detachment override (cinatra#2418 review). Defaults to
-  // the old "any non-empty initialValue starts detached" heuristic for
-  // backward compatibility with callers that don't pass this (e.g. the
-  // administration edit form). /setup/name passes this explicitly so it can
-  // distinguish a genuinely-decided starting value (a saved identity) from a
+  // Explicit initial-detachment override. Defaults to the "any non-empty
+  // initialValue starts detached" heuristic for backward compatibility with
+  // callers that don't pass this (e.g. the administration edit form).
+  // /setup/name passes this explicitly so it can distinguish a
+  // genuinely-decided starting value (a saved identity) from a
   // machine-generated dev-mode suggestion nobody has actually chosen yet —
   // see the callers below for why the blanket heuristic conflated the two.
   initiallyDetached?: boolean;

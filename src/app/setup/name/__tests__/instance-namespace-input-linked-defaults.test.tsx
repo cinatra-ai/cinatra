@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
-// Regression test for the `initiallyDetached` fix (cinatra#2418 review): a
-// non-empty `initialValue` used to unconditionally start the namespace field
+// Regression test for the `initiallyDetached` prop: a non-empty
+// `initialValue` used to unconditionally start the namespace field
 // "detached" from the display-name field, which conflated two very different
 // cases —
 //
@@ -53,7 +53,7 @@ function displayNameInput(): HTMLInputElement {
   return screen.getByPlaceholderText("e.g. ACME Group") as HTMLInputElement;
 }
 
-describe("NamespaceValidationProvider — initiallyDetached (cinatra#2418 review)", () => {
+describe("NamespaceValidationProvider — initiallyDetached", () => {
   it("a dev-mode default (initiallyDetached=false) keeps deriving the namespace from display-name edits", () => {
     renderIslands({
       initialValue: "old-mac-main-260804-120000",
