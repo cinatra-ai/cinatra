@@ -25,11 +25,26 @@ describe("PlugConnectorKind glyph — module load + render", () => {
     expect(html).toContain('viewBox="0 0 24 24"');
   });
 
-  it("forwards className and a caller strokeWidth override (lucide-compatible call sites)", async () => {
+  it.each(["size-[13px]", "size-[34px]"])(
+    "forwards the %s className to the rendered <svg> (both required render sizes)",
+    async (sizeClass) => {
+      const { PlugConnectorKind } = await import("../plug-connector-kind");
+      const html = renderToStaticMarkup(<PlugConnectorKind className={sizeClass} />);
+      expect(html).toContain(`class="${sizeClass}"`);
+    },
+  );
+
+  it("forwards a caller strokeWidth override to BOTH the root <svg> and the nested drawing group (lucide-compatible call sites)", async () => {
     const { PlugConnectorKind } = await import("../plug-connector-kind");
     const html = renderToStaticMarkup(<PlugConnectorKind className="size-[13px]" strokeWidth={2.2} />);
     expect(html).toContain('class="size-[13px]"');
-    expect(html).toContain('stroke-width="2.2"');
+    // The paths inherit stroke-width from the nested <g>, not the root <svg> —
+    // a caller override that only reached the root would change the markup
+    // but have zero visual effect on the drawn glyph. Both must carry it.
+    const svgStrokeWidth = html.match(/^<svg[^>]*stroke-width="([^"]+)"/);
+    const groupStrokeWidth = html.match(/<g[^>]*stroke-width="([^"]+)"/);
+    expect(svgStrokeWidth?.[1]).toBe("2.2");
+    expect(groupStrokeWidth?.[1]).toBe("2.2");
   });
 
   it("inherits currentColor (never a hard-coded stroke colour)", () => {

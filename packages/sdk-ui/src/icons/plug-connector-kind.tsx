@@ -22,13 +22,17 @@ import type { SVGProps } from "react";
  * caller-supplied `strokeWidth` override), and inherits `currentColor` like
  * every other kind emblem.
  */
-export function PlugConnectorKind({ className, ...props }: SVGProps<SVGSVGElement>) {
+export function PlugConnectorKind({
+  className,
+  strokeWidth,
+  ...props
+}: SVGProps<SVGSVGElement>) {
   return (
     <svg
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth={1.85}
+      strokeWidth={strokeWidth ?? 1.85}
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
@@ -36,8 +40,15 @@ export function PlugConnectorKind({ className, ...props }: SVGProps<SVGSVGElemen
       {...props}
     >
       {/* Recentre + rescale the full joined-plug drawing's lower half across
-          the 24-unit viewBox (verbatim from the spec's own transform). */}
-      <g transform="translate(-1.03,-11.33) scale(1.515)" strokeWidth={1.32}>
+          the 24-unit viewBox (verbatim from the spec's own transform). The
+          group's strokeWidth derives from the caller value (1.32 default
+          calibration) — the paths inherit from THIS <g>, not the root <svg>,
+          so a caller override must be forwarded here too or it has zero
+          visual effect on the drawn glyph (only the root attribute changes). */}
+      <g
+        transform="translate(-1.03,-11.33) scale(1.515)"
+        strokeWidth={strokeWidth ?? 1.32}
+      >
         <path d="m2 22 6-6" />
         <path d="M9.3 17.3a2.4 2.4 0 0 0 3.4 0L15 15l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z" />
         <path d="M10.5 10.5 13 8" />
