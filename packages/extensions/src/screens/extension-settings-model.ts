@@ -8,8 +8,11 @@
 // ---------------------------------------------------------------------------
 
 import type { ExtensionKind, InstalledExtension } from "../canonical-types";
-import { disabledActionReason } from "../lifecycle-ui";
+import { lifecycleInvariantReason } from "../lifecycle-ui";
 import type { InstalledUpdateChipState } from "./installed-update-chip";
+// TYPE-only (erased at compile time) — `lifecycle-target-resolver` is
+// `server-only` and must never be pulled into a client graph by this module.
+import type { LifecycleCapabilityMap } from "../lifecycle-target-resolver";
 
 /** The kinds whose access policy is keyed by the canonical install row — the
  * identity install (setExtensionInstallAccess) and enforcement both use. Agent
@@ -127,34 +130,99 @@ export type SettingsAffordances = {
   activateDisabled: string | null;
   reinstallDisabled: string | null;
   forceDeleteDisabled: string | null;
+  /**
+   * cinatra#2416: the subset of the four reasons above that a SERVER-DERIVED
+   * capability denial produced. The view renders these as visible muted copy
+   * beside the greyed button (§V's own disabled-with-reason rendering) — a
+   * scope refusal an administrator cannot otherwise deduce from the page.
+   */
+  capabilityReasons: Partial<
+    Record<"archive" | "activate" | "reinstall" | "forceDelete", string>
+  >;
 };
 
 /**
- * Resolve the disabled-in-place reasons for the lifecycle affordances. Honors
- * the #1036 disabledActionReason mechanism first (locked / system extensions),
- * then falls back to the status so the complementary Archive/Activate pair
- * still resolves when there is no canonical row (a grandfathered install), and
- * so version-requiring actions (Archive / Force-delete) are disabled when the
- * installed version is unknown. Update is never disabled here — it stays
- * available for locked / system extensions.
+ * Resolve the disabled-in-place reasons for the lifecycle affordances.
+ *
+ * Precedence (cinatra#2416, codex-converged):
+ *   1. the #1036 `disabledActionReason` invariant (locked / system) — the
+ *      strongest, package-level rule;
+ *   2. the SERVER-DERIVED per-affordance capability (`capabilities`) — the
+ *      addressability / standing verdict from the SAME resolver the dispatcher
+ *      enforces with. It outranks the status reasons because a row the actor
+ *      cannot address at all is not usefully described as "Already active": the
+ *      status would be describing a row the action will never target;
+ *   3. the status / version fallbacks — the complementary Archive/Activate pair
+ *      (which still resolves when there is no canonical row, a grandfathered
+ *      install) and the version-requiring actions.
+ * Update is never disabled here — it stays available for locked / system
+ * extensions.
+ *
+ * `capabilities` is REQUIRED. An optional capability field would leave the
+ * pre-#2416 enabled-by-default behavior reachable by a production caller, which
+ * is precisely the defect: every caller must supply a server-derived verdict.
+ *
+ * `canonical` should be the row the dispatcher will TARGET (the resolver's
+ * resolved row) when one resolved — not the collapsed card row, which for a
+ * package installed at BOTH platform and org scope can carry a different
+ * status than the row the action acts on.
  */
 export function resolveSettingsAffordances(input: {
   canonical: InstalledExtension | null;
   isArchived: boolean;
   versionKnown: boolean;
+  capabilities: LifecycleCapabilityMap;
 }): SettingsAffordances {
-  const { canonical, isArchived, versionKnown } = input;
+  const { canonical, isArchived, versionKnown, capabilities } = input;
+  // Tier 1 — the #1036 locked / system INVARIANT only. Deliberately NOT the
+  // whole `disabledActionReason`: its status half ("Already archived" /
+  // "Already active") is a weak, descriptive reason that must rank BELOW the
+  // capability, or an unaddressable row would read "Already active" — a
+  // statement about a row the action will never target.
+  const invariant = (
+    action: "archive" | "activate" | "uninstall" | "force_delete",
+  ): string | null => (canonical ? lifecycleInvariantReason(canonical, action) : null);
+  // Tier 2 — the SERVER-DERIVED capability.
+  const capabilityReason = (
+    op: "archive" | "activate" | "uninstall" | "force_delete",
+  ): string | null => (capabilities[op].allowed ? null : capabilities[op].reason);
+  // Tier 3 — the status / version fallbacks (below).
+
   const archiveDisabled =
-    (canonical ? disabledActionReason(canonical, "archive") : null) ??
+    invariant("archive") ??
+    capabilityReason("archive") ??
     (isArchived ? "Already archived" : !versionKnown ? "Installed version unknown" : null);
   const activateDisabled =
-    (canonical ? disabledActionReason(canonical, "activate") : null) ??
+    invariant("activate") ??
+    capabilityReason("activate") ??
     (!isArchived ? "Already active" : null);
   const forceDeleteDisabled =
-    (canonical ? disabledActionReason(canonical, "force_delete") : null) ??
+    invariant("force_delete") ??
+    capabilityReason("force_delete") ??
     (!versionKnown ? "Installed version unknown" : null);
-  const reinstallDisabled = canonical
-    ? disabledActionReason(canonical, "uninstall")
-    : null;
-  return { archiveDisabled, activateDisabled, reinstallDisabled, forceDeleteDisabled };
+  const reinstallDisabled = invariant("uninstall") ?? capabilityReason("uninstall");
+
+  // Which of the four are showing a CAPABILITY reason (i.e. the #1036 rule did
+  // not already claim them). Keyed by AFFORDANCE name, not op name.
+  const capabilityReasons: SettingsAffordances["capabilityReasons"] = {};
+  if (archiveDisabled && archiveDisabled === capabilityReason("archive")) {
+    capabilityReasons.archive = archiveDisabled;
+  }
+  if (activateDisabled && activateDisabled === capabilityReason("activate")) {
+    capabilityReasons.activate = activateDisabled;
+  }
+  if (reinstallDisabled && reinstallDisabled === capabilityReason("uninstall")) {
+    capabilityReasons.reinstall = reinstallDisabled;
+  }
+  if (forceDeleteDisabled && forceDeleteDisabled === capabilityReason("force_delete")) {
+    capabilityReasons.forceDelete = forceDeleteDisabled;
+  }
+
+  return {
+    archiveDisabled,
+    activateDisabled,
+    reinstallDisabled,
+    forceDeleteDisabled,
+    capabilityReasons,
+  };
 }

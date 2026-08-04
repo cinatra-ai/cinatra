@@ -438,6 +438,48 @@ export default async function ExtensionSettingsFixturePage({
         />
       </Case>
 
+      {/* Case K (cinatra#2416) — a PLATFORM-ANCHORED extension viewed by an
+          ORG-ACTIVE session. The row-scoped affordances (Archive / Activate /
+          Reinstall latest) are greyed with the SERVER-DERIVED scope reason
+          rendered visibly beside them; Force-delete stays LIVE because its
+          dispatcher gate is platform standing only and takes no row resolver,
+          so a platform admin with an active org legitimately force-deletes a
+          platform row. This is the exact DOM the real route renders for that
+          session — the reasons are the resolver's own copy. */}
+      <Case
+        id="platform-row-org-session"
+        label="Connector · platform-anchored row · org-active session (row-scoped actions greyed with the scope reason)"
+      >
+        <ExtensionSettingsView
+          kind="connector"
+          packageName="@cinatra-ai/platform-anchored-connector"
+          displayName="Platform Connector"
+          vendor="Cinatra"
+          updateRow={{
+            enabled: false,
+            description: "Currently on version 0.9.1 — up to date.",
+            disabledReason: "Already up to date",
+          }}
+          archiveDisabled="Installed for the whole platform — an organization-scoped session can't act on it."
+          activateDisabled="Installed for the whole platform — an organization-scoped session can't act on it."
+          reinstallDisabled="Installed for the whole platform — an organization-scoped session can't act on it."
+          forceDeleteDisabled={null}
+          lifecycleCapabilityReasons={{
+            archive:
+              "Installed for the whole platform — an organization-scoped session can't act on it.",
+            activate:
+              "Installed for the whole platform — an organization-scoped session can't act on it.",
+            reinstall:
+              "Installed for the whole platform — an organization-scoped session can't act on it.",
+          }}
+          isPublic={false}
+          isRegisteredVendor={false}
+          canPublish={false}
+          permissions={<EditablePermissions />}
+          actions={ACTIONS}
+        />
+      </Case>
+
       {/* Case G — agent with NOTHING chosen: the field, the count hint and no
           list at all. Zero is a correct, warning-free state (§V Skills). */}
       <Case id="agent-skills-empty" label="Agent · Skills · nothing chosen (zero is fine)">

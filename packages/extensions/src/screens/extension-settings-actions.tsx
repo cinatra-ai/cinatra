@@ -54,6 +54,10 @@ export function DisabledActionButton({
       disabled
       aria-disabled="true"
       title={reason}
+      // cinatra#2416: stable, non-visual hooks so a browser walk can assert the
+      // rendered reason is the SERVER's verdict rather than reading a tooltip.
+      data-slot="disabled-action"
+      data-disabled-reason={reason}
       className="flex-none"
     >
       {icon}

@@ -57,11 +57,28 @@ export type ExtensionSettingsViewProps = {
    * card carries at most the Update-available chip.
    */
   updateRow: SettingsUpdateRow;
-  /** Disabled-action reasons (null ⇒ enabled) — the #1036 lifecycle-ui mechanism. */
+  /** Disabled-action reasons (null ⇒ enabled) — the #1036 lifecycle-ui mechanism
+   *  and, since cinatra#2416, the server-derived lifecycle capability. */
   archiveDisabled: string | null;
   activateDisabled: string | null;
   reinstallDisabled: string | null;
   forceDeleteDisabled: string | null;
+  /**
+   * cinatra#2416: the subset of the four reasons above that a SERVER-DERIVED
+   * capability denial produced (addressability / standing — the verdict of the
+   * very resolver that enforces the op). Rendered as visible muted copy beside
+   * the greyed button, the way §V already renders a disabled action's reason
+   * (the Marketplace "…isn't available for this extension yet." line and the
+   * Update row's spelled-out description): a scope refusal is not deducible
+   * from the page otherwise, unlike "Already archived".
+   *
+   * Presentation-optional (an unseeded fixture simply renders no line); the
+   * REAL loader always supplies it, and the enabled state itself always comes
+   * from the server verdict via the four reasons above.
+   */
+  lifecycleCapabilityReasons?: Partial<
+    Record<"archive" | "activate" | "reinstall" | "forceDelete", string>
+  >;
   /**
    * cinatra#1061 req 4: package names of ACTIVE dependents that require this
    * extension — the same predicate the archive/uninstall closure gate refuses
@@ -103,6 +120,7 @@ export function ExtensionSettingsView({
   activateDisabled,
   reinstallDisabled,
   forceDeleteDisabled,
+  lifecycleCapabilityReasons,
   archiveDependents,
   isPublic,
   isRegisteredVendor,
@@ -272,7 +290,12 @@ export function ExtensionSettingsView({
             description="Deactivate the extension. It moves to the Archived tab and can be restored."
             action={
               archiveDisabled ? (
-                <DisabledActionButton label="Archive" variant="outline" reason={archiveDisabled} />
+                <DisabledLifecycleAction
+                  label="Archive"
+                  variant="outline"
+                  reason={archiveDisabled}
+                  capabilityReason={lifecycleCapabilityReasons?.archive}
+                />
               ) : (
                 <ArchiveActionForm
                   action={actions.archive}
@@ -291,7 +314,12 @@ export function ExtensionSettingsView({
             muted={Boolean(activateDisabled)}
             action={
               activateDisabled ? (
-                <DisabledActionButton label="Activate" variant="outline" reason={activateDisabled} />
+                <DisabledLifecycleAction
+                  label="Activate"
+                  variant="outline"
+                  reason={activateDisabled}
+                  capabilityReason={lifecycleCapabilityReasons?.activate}
+                />
               ) : (
                 <form action={actions.activate}>
                   <Button type="submit" variant="outline" className="flex-none">
@@ -324,10 +352,11 @@ export function ExtensionSettingsView({
             }
             action={
               reinstallDisabled ? (
-                <DisabledActionButton
+                <DisabledLifecycleAction
                   label="Reinstall latest"
                   variant="destructive"
                   reason={reinstallDisabled}
+                  capabilityReason={lifecycleCapabilityReasons?.reinstall}
                 />
               ) : (
                 <ConfirmActionButton
@@ -349,10 +378,11 @@ export function ExtensionSettingsView({
             last
             action={
               forceDeleteDisabled ? (
-                <DisabledActionButton
+                <DisabledLifecycleAction
                   label="Force-delete…"
                   variant="destructive"
                   reason={forceDeleteDisabled}
+                  capabilityReason={lifecycleCapabilityReasons?.forceDelete}
                 />
               ) : (
                 <ForceDeleteDialog
@@ -366,6 +396,42 @@ export function ExtensionSettingsView({
         </div>
       </div>
     </main>
+  );
+}
+
+/**
+ * A greyed lifecycle affordance (cinatra#2416). The button keeps §V's existing
+ * disabled treatment — `disabled` + `aria-disabled` + the reason as its tooltip
+ * (`DisabledActionButton`, the same treatment the access picker uses for its
+ * standing-refused rows). When the refusal came from the SERVER-DERIVED
+ * capability, the reason ALSO renders as a visible muted line beside it, the way
+ * §V already spells out a disabled action's reason — a scope refusal is not
+ * deducible from anything else on the page.
+ */
+function DisabledLifecycleAction({
+  label,
+  variant,
+  reason,
+  capabilityReason,
+}: {
+  label: string;
+  variant: "outline" | "destructive";
+  reason: string;
+  capabilityReason?: string;
+}) {
+  if (!capabilityReason) {
+    return <DisabledActionButton label={label} variant={variant} reason={reason} />;
+  }
+  return (
+    <div className="flex flex-none flex-col items-end gap-1.5">
+      <DisabledActionButton label={label} variant={variant} reason={reason} />
+      <p
+        data-slot="lifecycle-capability-reason"
+        className="max-w-xs text-right text-xs text-muted-foreground"
+      >
+        {capabilityReason}
+      </p>
+    </div>
   );
 }
 

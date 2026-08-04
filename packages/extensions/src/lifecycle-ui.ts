@@ -150,23 +150,32 @@ export function pickLifecycleBadgeStatus(
 
 export type LifecycleAction = "archive" | "activate" | "uninstall" | "force_delete" | "purge";
 
+export type DisabledActionReasonOpts = {
+  /**
+   * The row belongs to the host-declared system-extension set
+   * (`SYSTEM_EXTENSIONS`). When known, the copy is the exact, authoritative
+   * "can be updated but not deleted" message; otherwise a locked row gets a
+   * correct-but-generic refusal (this pure module cannot itself read the
+   * server-only inventory to decide).
+   */
+  isSystem?: boolean;
+};
+
 /**
- * Reason a lifecycle action is disabled for an extension, or null if the
- * action is permitted.
+ * The INVARIANT half of {@link disabledActionReason}: the #1036 locked / system
+ * rule, which no session, scope or standing can satisfy — this extension simply
+ * cannot be removed from the live runtime.
+ *
+ * Split out for cinatra#2416 so a caller can express PRECEDENCE between this
+ * package-level invariant and the weaker, session-dependent reasons: the
+ * settings page ranks locked/system ABOVE the addressability capability, and the
+ * capability above the status pair. Callers that want the whole verdict keep
+ * calling `disabledActionReason`, whose behaviour is unchanged.
  */
-export function disabledActionReason(
+export function lifecycleInvariantReason(
   ext: InstalledExtension,
   action: LifecycleAction,
-  opts?: {
-    /**
-     * The row belongs to the host-declared system-extension set
-     * (`SYSTEM_EXTENSIONS`). When known, the copy is the exact, authoritative
-     * "can be updated but not deleted" message; otherwise a locked row gets a
-     * correct-but-generic refusal (this pure module cannot itself read the
-     * server-only inventory to decide).
-     */
-    isSystem?: boolean;
-  },
+  opts?: DisabledActionReasonOpts,
 ): string | null {
   const destructive: LifecycleAction[] = ["archive", "uninstall", "force_delete", "purge"];
   if (ext.status === "locked" && destructive.includes(action)) {
@@ -186,6 +195,17 @@ export function disabledActionReason(
       ? `Cannot ${verb} — locked (required-in-prod); update is permitted.`
       : `Cannot ${verb} — locked; update is permitted.`;
   }
+  return null;
+}
+
+/**
+ * The STATUS half: the complementary Archive/Activate pair — a weak, purely
+ * descriptive reason about the row's current lifecycle state.
+ */
+export function lifecycleStatusReason(
+  ext: InstalledExtension,
+  action: LifecycleAction,
+): string | null {
   if (ext.status === "archived" && action === "archive") {
     return "Already archived";
   }
@@ -193,6 +213,18 @@ export function disabledActionReason(
     return "Already active";
   }
   return null;
+}
+
+/**
+ * Reason a lifecycle action is disabled for an extension, or null if the
+ * action is permitted. The invariant rule outranks the status rule.
+ */
+export function disabledActionReason(
+  ext: InstalledExtension,
+  action: LifecycleAction,
+  opts?: DisabledActionReasonOpts,
+): string | null {
+  return lifecycleInvariantReason(ext, action, opts) ?? lifecycleStatusReason(ext, action);
 }
 
 // ── Filter / search ────────────────────────────────────────────────────────
