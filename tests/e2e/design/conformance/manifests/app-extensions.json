@@ -116,12 +116,7 @@
           "source": "manifest.displayName"
         }
       ],
-      "actions": [
-        {
-          "action": "install",
-          "outcome": "installed"
-        }
-      ],
+      "actions": [],
       "states": [
         "kind:agent"
       ]

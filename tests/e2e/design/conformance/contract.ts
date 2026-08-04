@@ -984,29 +984,9 @@ const EXTENSION_DETAIL_MODAL_DRIVER: SurfaceDriver = {
       },
     },
   },
-  actions: {
-    // install → installed THROUGH the real machinery: the footer CTA is the
-    // REAL pending-aware install form; the harness action mutates the
-    // installed-state input and the REAL resolveMarketplaceCardCta re-derives
-    // the footer to the §V "Installed" settled state.
-    install: {
-      outcome: "installed",
-      run: async (page, root) => {
-        const dialog = await openDetailModal(page, root);
-        const installButton = dialog.getByRole("button", { name: "Install now" });
-        await clickUntil(installButton, async () => {
-          await expect(dialog.getByRole("button", { name: "Installed" })).toBeVisible({
-            timeout: 5_000,
-          });
-        });
-        await expect(dialog.getByRole("button", { name: "Installed" })).toBeDisabled();
-        await expect(root).toHaveAttribute(
-          "data-installed-version",
-          SEEDED_MODAL_FIXTURE.packageVersion,
-        );
-      },
-    },
-  },
+  // cinatra#2406 (owner ruling): the modal renders no footer, so there is no
+  // more install action to drive from here — the modal is details-only.
+  actions: {},
   states: {
     "kind:agent": async (page, root) => {
       const dialog = await openDetailModal(page, root);

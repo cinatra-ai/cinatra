@@ -115,7 +115,7 @@
     },
     "extension-detail-modal": {
       "manifest": "app-extensions",
-      "selector": "role=dialog; name: [data-slot=\"marketplace-modal-name\"]; kind byline: [data-slot=\"marketplace-modal-kind\"]; footer CTA: the real MarketplaceInstallForm submit",
+      "selector": "role=dialog; name: [data-slot=\"marketplace-modal-name\"]; kind byline: [data-slot=\"marketplace-modal-kind\"]; details-only (cinatra#2406 removed the modal footer)",
       "requires": [
         {
           "file": "packages/extensions/src/screens/marketplace-detail-modal.tsx",

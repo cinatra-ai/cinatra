@@ -31,10 +31,6 @@ import {
 // its order + the URL-value canonicalizer, shared with the ExtensionsTabSelect
 // control so the pushed URL and the partition rendered here never disagree.
 import { resolveInstalledTab } from "@/components/extensions/installed-tab-model";
-// §II modal-footer update flow (cinatra#1041 outcome 2): the dry-run planner
-// action + the batch-routed apply, bound per row for the update-available state.
-import { updateExtensionPackageFormAction } from "../actions";
-import { planExtensionUpdateFormAction } from "./update-plan-action";
 import { Button } from "@/components/ui/button";
 import {
   Toolbar,
@@ -105,8 +101,9 @@ export async function RegistryCatalogScreen({
   // across views (AC5).
   const tab = resolveInstalledTab(resolvedSearchParams?.tab);
   // §V settings-row deep link (cinatra#1041): `?update=<packageName>` opens the
-  // matching row's detail modal directly (its footer carries the update flow
-  // when one is available — otherwise the modal opens details-only, graceful).
+  // matching row's detail modal directly. cinatra#2406 (owner ruling) removed
+  // the modal footer, so this deep link now always lands on the same
+  // details-only modal every other trigger opens.
   const openUpdateFor =
     typeof resolvedSearchParams?.update === "string" ? resolvedSearchParams.update : null;
   const queryValue = resolvedSearchParams?.q;
@@ -249,12 +246,11 @@ export async function RegistryCatalogScreen({
   // L902). Rendered for EVERY row — scoped, unscoped, and installed-but-
   // unlisted packages alike: the modal fetches the public listing on open and
   // renders its own graceful "Extension unavailable" notfound state for the
-  // class that used to 404 on the full-page route. For an installed extension
-  // the modal is DETAILS-ONLY (owner ruling, 2026-07-05): no footer CTA and no
-  // manage actions — this page passes only the card shell + the §VI link
-  // trigger, so the modal renders no footer bar at all. The modal component
-  // itself belongs to the §V lane (PR #995 / #989); this page only consumes
-  // its public entry points.
+  // class that used to 404 on the full-page route. The modal is DETAILS-ONLY
+  // for every row (cinatra#2406 owner ruling removed its footer entirely): no
+  // CTA and no manage actions anywhere — this page passes only the card shell
+  // + the §VI link trigger. The modal component itself belongs to the §V lane
+  // (PR #995 / #989); this page only consumes its public entry points.
   // ---------------------------------------------------------------------------
   const renderDetailModal = (row: InstalledCardRow, isArchived: boolean) => {
     // Reuses the browse-card wire shape; storefront-owned fields (rating,
@@ -292,15 +288,6 @@ export async function RegistryCatalogScreen({
       vendor: null,
       sdkAbiRange: null,
     };
-    // §II modal-footer update flow (cinatra#1041 outcome 2): ONLY the
-    // update-available state wires a footer — "Update now" dry-runs the
-    // resolver, the admin confirms the rendered plan, and the apply rides the
-    // planner/batch path (progress on this page's InstallBatchPanel). Every
-    // other state keeps the details-only modal (no footer bar) — the update
-    // runs ONLY from this footer; the card's actions stay exactly Settings +
-    // More details.
-    const { state, latestVersion } = updateInfoFor(row);
-    const updatable = !isArchived && state === "update-available" && latestVersion != null;
     return (
       <MarketplaceDetailModal
         card={modalCard}
@@ -312,21 +299,9 @@ export async function RegistryCatalogScreen({
           href: modalCard.detailHref,
         }}
         // §V settings-row deep link: `?update=<pkg>` opens this row's modal on
-        // mount (details-only when no update is available — graceful).
+        // mount (details-only — cinatra#2406 removed the footer that used to
+        // carry the update flow from here).
         defaultOpen={openUpdateFor === row.packageName}
-        {...(updatable
-          ? {
-              cta: { state: "update" as const, disabled: false },
-              updateAction: updateExtensionPackageFormAction.bind(null, {
-                packageName: row.packageName,
-                packageVersion: latestVersion,
-              }),
-              planUpdateAction: planExtensionUpdateFormAction.bind(null, {
-                packageName: row.packageName,
-                targetVersion: latestVersion,
-              }),
-            }
-          : {})}
       />
     );
   };

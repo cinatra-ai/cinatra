@@ -56,9 +56,8 @@ export const dynamic = "force-dynamic";
  *     empty-state matrix — All+0 with and without marketplace access,
  *     Connected+0, Disconnected+0 — because both panels key off the
  *     SERVER-resolved card set and no client interaction can produce them.
- *   - extension-detail-modal: the REAL MarketplaceDetailModal whose footer CTA
- *     re-derives through the REAL resolveMarketplaceCardCta after the harness
- *     install action mutates the installed-state input (cinatra#985 pattern).
+ *   - extension-detail-modal: the REAL MarketplaceDetailModal, details-only
+ *     (cinatra#2406 owner ruling removed its footer everywhere in the app).
  *
  * Query params: ?run=<runId> selects the seeded namespace (defaults to
  * "local"); ?tab=all|active|locked|archived drives the REAL installed-extensions

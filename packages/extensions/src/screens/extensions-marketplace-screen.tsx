@@ -16,8 +16,6 @@ import {
   updateExtensionPackageFormAction,
   restoreExtensionPackageFormAction,
 } from "../actions";
-// §II modal-footer dry-run (cinatra#1041) — screens-only server action.
-import { planExtensionUpdateFormAction } from "./update-plan-action";
 import {
   ExtensionsMarketplaceClient,
   MarketplaceGridLoadingFallback,
@@ -181,13 +179,6 @@ export async function ExtensionsMarketplaceScreen({
     const restoreAction = restoreExtensionPackageFormAction.bind(null, {
       packageName: card.packageName,
     });
-    // §II modal-footer dry-run (cinatra#1041): the footer's "Update now" plans
-    // first (against THIS card's catalog version) and the admin confirms the
-    // rendered Update plan before `updateAction` applies through the batch.
-    const planUpdateAction = planExtensionUpdateFormAction.bind(null, {
-      packageName: card.packageName,
-      targetVersion: card.packageVersion,
-    });
 
     const ctaControl =
       cta.state === "restore" ? (
@@ -294,39 +285,10 @@ export async function ExtensionsMarketplaceScreen({
           // More details opens the in-app extension-detail modal (embedding
           // the marketplace listing detail) instead of navigating to the
           // full-page route; the trigger renders as the centred underlined
-          // link button of spec §IV. The modal footer carries the same
-          // six-state install CTA.
-          <MarketplaceDetailModal
-            card={card}
-            cta={cta}
-            installAction={installAction}
-            updateAction={updateAction}
-            restoreAction={restoreAction}
-            planUpdateAction={planUpdateAction}
-            // cinatra#1541: the modal footer's "Install now" for a connector /
-            // artifact / workflow opens the SAME pre-install access-scope dialog
-            // the card opens (cinatra#805), layered above the modal — plumbed
-            // from the SAME server-computed, already-authorized picker context
-            // (no broader lookup; AC2/AC3). Passed only for the access-target
-            // kinds, mirroring the card's own isInstallAccessTargetKind branch.
-            installScope={
-              isInstallAccessTargetKind(card.kindSlug)
-                ? {
-                    installTargets,
-                    ownerEntityNames,
-                    activeOrgId,
-                    defaultValue: installScopeDefaultValue,
-                    failureCopyByCategory: buildMarketplaceFailureCopy("install", card.displayName),
-                    defaultFailureMessage: marketplaceFailureCopy(
-                      "unrecoverable",
-                      "install",
-                      card.displayName,
-                    ),
-                    installAction: installExtensionPackageFormAction,
-                  }
-                : undefined
-            }
-          />
+          // link button of spec §IV. cinatra#2406 (owner ruling): the modal
+          // renders no footer — details-only. Install/update/restore stay on
+          // the card's own `ctaControl` above.
+          <MarketplaceDetailModal card={card} />
         }
       />
     );
