@@ -21,8 +21,9 @@ export type ExtensionEmblemKind =
  * storefront's kind emblem (the white pill on the coloured ground).
  *
  * The "connector" arm renders the lower-half-plug mark (`PlugConnectorKind`,
- * cinatra#2364, epic #2360) instead of the generic lucide `Plug` — so "what
- * kind of extension is this" and "is it connected" read as one icon family.
+ * cinatra#2364, epic #2360) instead of the generic lucide `Plug` — so the
+ * kind emblem and the sibling status glyph read as one visual family without
+ * sharing a component: this file's vocabulary stays kinds, never states.
  * Every other kind arm is byte-unchanged.
  */
 export function extensionKindEmblem(
