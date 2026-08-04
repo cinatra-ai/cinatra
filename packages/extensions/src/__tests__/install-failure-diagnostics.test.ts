@@ -62,6 +62,14 @@ const SESSION = {
 vi.mock("@/lib/auth-session", () => ({
   requireAdminSession: vi.fn(async () => SESSION),
   buildCanDoOptsFromSession: vi.fn(async () => ({ orgRole: "org_owner" })),
+  // cinatra#2400: the form actions derive `actor.platformRole` from the session
+  // through this canonical predicate (comma-separated Better Auth role string).
+  isPlatformAdmin: (s: { user?: { role?: string | null } | null } | null | undefined) =>
+    String(s?.user?.role ?? "")
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .includes("admin"),
 }));
 
 // The real install path — configured per-test to throw a shaped failure.

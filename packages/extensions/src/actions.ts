@@ -10,7 +10,7 @@ void _getAgentPackage;
 import { extensionRegistry } from "./index";
 import type { Actor } from "@cinatra-ai/extension-types";
 import type { DanglingReferences } from "./audit-log";
-import { requireAdminSession } from "@/lib/auth-session";
+import { isPlatformAdmin, requireAdminSession } from "@/lib/auth-session";
 import {
   assertCanRemoveExtension,
   isSystemExtension,
@@ -76,19 +76,114 @@ function logMarketplaceFailureForOperator(
   );
 }
 
+// ---------------------------------------------------------------------------
+// Session-derived actor construction for this module's form actions
+// (cinatra#2400). No wrapper hand-rolls an Actor literal any more: the audit
+// envelope is built in ONE place, and the LIFECYCLE family layers the caller's
+// real standing on top of it — also in one place.
+//
+// Before #2400 every wrapper hand-rolled `{actorType, userId, source, orgId}` —
+// an audit envelope with NO standing — so:
+//   * force-delete, whose dispatcher gate reads ONLY `platformRole`, refused
+//     every real platform admin's submission while the button rendered enabled
+//     ("force_delete is platform-admin-only … — refusing");
+//   * the archive/restore/reinstall family was rejected even earlier, at
+//     `resolveLifecycleTargetRow → assertActorWriteStandingOverRow`, which needs
+//     `orgRole` (or platform standing) over the resolved row — so those actions
+//     could not act at all (no branch was taken, no archive fallback occurred).
+// The programmatic primitives (the MCP lifecycle handlers) dispatch with a
+// fully-roled actor resolved from their transport, so only the UI paths were
+// broken; `buildLifecycleActorFromSession` closes that divergence.
+//
+// BOTH role fields are derived from the TRUSTED SERVER SESSION:
+//   * `platformRole` ← `isPlatformAdmin(session)`, the canonical predicate over
+//     Better Auth's comma-separated role string ("user,admin");
+//   * `orgRole`      ← `buildCanDoOptsFromSession(session)`, a membership-table
+//     read for the session's ACTIVE org.
+// A form action's `input` is client-controlled and NEVER contributes a role —
+// a crafted request cannot supply, spoof or widen either field.
+// ---------------------------------------------------------------------------
+
+type FormActionSession = Awaited<ReturnType<typeof requireAdminSession>>;
+
+/**
+ * The AUDIT ENVELOPE: who is acting, from where, in which org. Standing-free by
+ * construction and shared by every form action in this module.
+ */
+function buildActorEnvelope(session: FormActionSession): Actor {
+  const orgId = session.session?.activeOrganizationId ?? null;
+  return {
+    actorType: "human",
+    userId: session.user.id,
+    source: "ui",
+    // Forward the active org so extension lifecycle has organization context
+    // from the UI server-action path.
+    ...(orgId ? { orgId } : {}),
+  };
+}
+
+/**
+ * THE shared lifecycle actor builder — the envelope PLUS the caller's real
+ * standing (`platformRole` + `orgRole`), used by every lifecycle form action
+ * (archive / restore / reinstall / force-delete).
+ *
+ * DELIBERATELY NOT used by the install/update wrappers. Their actor is handed to
+ * the dependency BATCH (`installExtensionWithDependencies`), whose abort path
+ * compensates member installs through `uninstallMember` →
+ * `extensionRegistry.uninstall(…, actor)`. Platform standing there would route a
+ * freshly-installed, never-used dependency into the PACKAGE-GLOBAL hard-delete
+ * branch — tearing down every OTHER org's row for that dependency during a
+ * single org's failed install. Install/update therefore keep the standing-free
+ * envelope, exactly as before; their access-target rollback attaches org-scoped
+ * standing at rollback time (see buildInstallRollbackActor) and never platform
+ * standing.
+ *
+ * TOTAL by contract — must NEVER throw. Callers invoke it before (and outside)
+ * their own error handling, and the org-role resolution is a DB read. On a
+ * resolution failure the actor degrades to platform standing + audit identity
+ * only: a platform admin is unaffected, and an org admin is then refused by the
+ * P5 standing gate (fail-closed) instead of the action dying with a
+ * production-masked server-action error.
+ */
+async function buildLifecycleActorFromSession(
+  session: FormActionSession,
+  operation: string,
+  packageName: string,
+): Promise<Actor> {
+  const actor: Actor = {
+    ...buildActorEnvelope(session),
+    // Platform standing from the session's own role string — the ONLY field
+    // `isPlatformAdminActor` (lifecycle-target-resolver) reads.
+    ...(isPlatformAdmin(session) ? { platformRole: "platform_admin" as const } : {}),
+  };
+  try {
+    const { buildCanDoOptsFromSession } = await import("@/lib/auth-session");
+    const { orgRole } = await buildCanDoOptsFromSession(session);
+    return orgRole ? { ...actor, orgRole } : actor;
+  } catch (roleErr) {
+    logMarketplaceFailureForOperator(
+      `${operation}-actor`,
+      packageName,
+      "unrecoverable",
+      roleErr,
+    );
+    return actor;
+  }
+}
+
 /**
  * Build the actor for a COMPENSATING uninstall (an install-rollback), with the
  * membership standing the rollback actually needs.
  *
- * The primary install/uninstall UI actor is a minimal AUDIT envelope carrying no
- * membership roles, but the P5 row-scoped lifecycle standing gate
- * (resolveLifecycleTargetRow → assertActorWriteStandingOverRow) requires the
- * actor to hold destructive-write standing over the org-anchored row before it
- * will remove it. So a role-less actor's rollback is deterministically REFUSED,
- * which — for a fail-closed install-rollback — would leave the fresh install at
- * the broader default. We therefore attach the caller's REAL org role (resolved
- * from the trusted session, never client input) so the compensating uninstall
- * takes the ORG-SCOPED soft/archive path over THIS org's own row.
+ * The install actor is the standing-free envelope (see above), but the P5
+ * row-scoped lifecycle standing gate (resolveLifecycleTargetRow →
+ * assertActorWriteStandingOverRow) requires the actor to hold destructive-write
+ * standing over the org-anchored row before it will remove it. So a role-less
+ * actor's rollback is deterministically REFUSED, which — for a fail-closed
+ * install-rollback — would leave the fresh install at the broader default. We
+ * therefore attach the caller's REAL org role (resolved from the trusted
+ * session, never client input) so the compensating uninstall takes the
+ * ORG-SCOPED soft/archive path over THIS org's own row.
  *
  * We deliberately do NOT attach platformRole: platform standing routes uninstall
  * to the PACKAGE-GLOBAL hard-delete branch, which tears down EVERY org's row for
@@ -97,7 +192,7 @@ function logMarketplaceFailureForOperator(
  * then honestly reports the partial state rather than over-reaching.
  */
 async function buildInstallRollbackActor(
-  session: Awaited<ReturnType<typeof requireAdminSession>>,
+  session: FormActionSession,
   baseActor: Actor,
   packageName: string,
 ): Promise<Actor> {
@@ -620,14 +715,9 @@ export async function installExtensionPackageFormAction(input: {
 }): Promise<MarketplaceInstallActionResult | void> {
   "use server";
   const session = await requireAdminSession();
-  const actor: Actor = {
-    actorType: "human",
-    userId: session.user.id,
-    source: "ui",
-    // Forward the active org so extension lifecycle has organization context
-    // from the UI server-action path.
-    ...(session.session?.activeOrganizationId ? { orgId: session.session.activeOrganizationId } : {}),
-  };
+  // Standing-free envelope by design — this actor is threaded into the
+  // dependency batch, whose abort path compensates member installs with it.
+  const actor = buildActorEnvelope(session);
 
   // -------------------------------------------------------------------------
   // Pre-install access-target validation + authorization (cinatra#805).
@@ -797,7 +887,8 @@ export async function installExtensionPackageFormAction(input: {
           // selection can never silently fail open to workspace access. (Root
           // package only — auto-installed dependencies are shared and stay.) The
           // rollback actor carries org-scoped standing so the P5 lifecycle gate
-          // permits removing the org's own row (a role-less actor is refused).
+          // permits removing the org's own row (a role-less actor is refused),
+          // and never platform standing (which would go package-global).
           const rollbackActor = await buildInstallRollbackActor(
             session,
             actor,
@@ -990,7 +1081,8 @@ export async function installExtensionPackageFormAction(input: {
         // silently fail open to workspace access. (Root package only —
         // auto-installed dependencies are shared and stay.) The rollback actor
         // carries org-scoped standing so the P5 lifecycle gate permits removing
-        // the org's own row (a role-less actor is refused → would leak the row).
+        // the org's own row (a role-less actor is refused → would leak the row),
+        // and never platform standing (which would go package-global).
         const rollbackActor = await buildInstallRollbackActor(
           session,
           actor,
@@ -1039,14 +1131,9 @@ export async function updateExtensionPackageFormAction(input: {
 }): Promise<MarketplaceInstallActionResult | void> {
   "use server";
   const session = await requireAdminSession();
-  const actor: Actor = {
-    actorType: "human",
-    userId: session.user.id,
-    source: "ui",
-    // Forward the active org so extension lifecycle has organization context
-    // from the UI server-action path.
-    ...(session.session?.activeOrganizationId ? { orgId: session.session.activeOrganizationId } : {}),
-  };
+  // Standing-free envelope by design — see installExtensionPackageFormAction
+  // (the #1039 update path routes through the same dependency batch).
+  const actor = buildActorEnvelope(session);
   const result = await updateExtensionPackage(input.packageName, input.packageVersion, actor);
   if (!result.success) {
     // cinatra#685: return the classified category (see install action note).
@@ -1058,36 +1145,22 @@ export async function updateExtensionPackageFormAction(input: {
   redirect("/configuration/extensions");
 }
 
-export async function uninstallExtensionPackageFormAction(input: {
-  packageName: string;
-  packageVersion: string;
-}): Promise<RemovalActionResult | void> {
-  "use server";
-  const session = await requireAdminSession();
-  const actor: Actor = {
-    actorType: "human",
-    userId: session.user.id,
-    source: "ui",
-    // Forward the active org so extension lifecycle has organization context
-    // from the UI server-action path.
-    ...(session.session?.activeOrganizationId ? { orgId: session.session.activeOrganizationId } : {}),
-  };
-  const result = await uninstallExtensionPackage(input.packageName, input.packageVersion, actor);
-  if (!result.success) {
-    // cinatra#1061: RETURN the classified refusal instead of throwing. A thrown
-    // server-action error is masked by Next.js in production (digest only) so
-    // the dependents/system message never reaches the user; a returned value is
-    // delivered intact and the client renders the reason-mapped copy. Raw detail
-    // stays operator-side (logs).
-    const failure = result.failure ?? { ok: false as const, reason: "error" as const };
-    logRemovalFailureForOperator("uninstall", input.packageName, failure, result.error);
-    return failure;
-  }
-  redirect("/configuration/extensions");
-}
-
 // ---------------------------------------------------------------------------
 // Form-action wrappers for archive/restore/reinstall/forceDelete.
+//
+// NOTE (cinatra#2400): there is deliberately NO `uninstallExtensionPackageForm-
+// Action`. It existed as an exported wrapper that no surface ever called — a
+// dead export that shipped the same role-less-actor defect as the rest of the
+// family, so it would have refused if a future caller had wired it. The settings
+// page's removal affordances are the §V Danger-zone Archive + Force delete, and
+// the UI's uninstall-bearing path is §V Maintenance · Reinstall latest
+// (`reinstallLatestFormAction` → `extensionRegistry.uninstall` → install). The
+// dead export was REMOVED rather than wired: adding an Uninstall affordance
+// would be a new, unspecified UI control. The core dispatcher
+// `uninstallExtensionPackage(packageName, version, actor)` above is UNCHANGED
+// and still referenced — it is what the install-access rollbacks compensate
+// through. (The MCP surface does not go through it; `mcp/handlers.ts`
+// dispatches `extensionRegistry.uninstall` directly.)
 // ---------------------------------------------------------------------------
 
 export async function archiveExtensionPackageFormAction(input: {
@@ -1103,14 +1176,11 @@ export async function archiveExtensionPackageFormAction(input: {
     throw new Error("archiveExtensionPackageFormAction requires a non-empty packageVersion");
   }
   const session = await requireAdminSession();
-  const actor: Actor = {
-    actorType: "human",
-    userId: session.user.id,
-    source: "ui",
-    // Forward the active org so extension lifecycle has organization context
-    // from the UI server-action path.
-    ...(session.session?.activeOrganizationId ? { orgId: session.session.activeOrganizationId } : {}),
-  };
+  const actor = await buildLifecycleActorFromSession(
+    session,
+    "archive",
+    input.packageName,
+  );
   const result = await archiveExtensionPackage(
     input.packageName,
     input.packageVersion,
@@ -1132,14 +1202,11 @@ export async function restoreExtensionPackageFormAction(input: {
 }): Promise<MarketplaceInstallActionResult | void> {
   "use server";
   const session = await requireAdminSession();
-  const actor: Actor = {
-    actorType: "human",
-    userId: session.user.id,
-    source: "ui",
-    // Forward the active org so extension lifecycle has organization context
-    // from the UI server-action path.
-    ...(session.session?.activeOrganizationId ? { orgId: session.session.activeOrganizationId } : {}),
-  };
+  const actor = await buildLifecycleActorFromSession(
+    session,
+    "restore",
+    input.packageName,
+  );
   const result = await restoreExtensionPackage(input.packageName, actor);
   if (!result.success) {
     // cinatra#685: return the classified category (see install action note).
@@ -1156,14 +1223,11 @@ export async function reinstallLatestFormAction(input: {
 }): Promise<void> {
   "use server";
   const session = await requireAdminSession();
-  const actor: Actor = {
-    actorType: "human",
-    userId: session.user.id,
-    source: "ui",
-    // Forward the active org so extension lifecycle has organization context
-    // from the UI server-action path.
-    ...(session.session?.activeOrganizationId ? { orgId: session.session.activeOrganizationId } : {}),
-  };
+  const actor = await buildLifecycleActorFromSession(
+    session,
+    "reinstall",
+    input.packageName,
+  );
   const result = await reinstallLatestExtensionPackage(input.packageName, actor);
   if (!result.success) {
     throw new Error(result.error ?? "Reinstall failed");
@@ -1175,10 +1239,10 @@ export async function reinstallLatestFormAction(input: {
 export async function forceDeleteExtensionPackageFormAction(input: {
   packageName: string;
   // Tighten the contract to mirror the MCP schema (mcp/schemas.ts requires
-  // packageVersion.min(1), reason, and confirmDestructive: literal(true)).
-  // Today no UI surface invokes this action; a lax form-action contract would
-  // let a future caller land a button without thinking through the
-  // destructive-acknowledgment guard. Make the safety guard mandatory at the
+  // packageVersion.min(1), reason, and confirmDestructive: literal(true)). The
+  // §V Danger-zone Force-delete dialog is the UI caller; a lax form-action
+  // contract would let a future caller land a button without thinking through
+  // the destructive-acknowledgment guard. Make the safety guard mandatory at the
   // form-action boundary too.
   packageVersion: string;
   reason: string;
@@ -1201,14 +1265,11 @@ export async function forceDeleteExtensionPackageFormAction(input: {
     );
   }
   const session = await requireAdminSession();
-  const actor: Actor = {
-    actorType: "human",
-    userId: session.user.id,
-    source: "ui",
-    // Forward the active org so extension lifecycle has organization context
-    // from the UI server-action path.
-    ...(session.session?.activeOrganizationId ? { orgId: session.session.activeOrganizationId } : {}),
-  };
+  const actor = await buildLifecycleActorFromSession(
+    session,
+    "force-delete",
+    input.packageName,
+  );
   const result = await forceDeleteExtensionPackage(
     input.packageName,
     input.packageVersion,

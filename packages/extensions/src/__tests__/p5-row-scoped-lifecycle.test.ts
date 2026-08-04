@@ -479,3 +479,132 @@ describe("F9 capability-teardown granularity (#1277)", () => {
     expect(dataTeardownFired).toEqual([PKG]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#2400 — REGISTRY LAYER: the actor shapes the UI now builds.
+//
+// The action layer (lifecycle-form-action-actor.test.ts) pins WHICH actor a
+// form action hands to this dispatcher; this block pins what the REAL
+// dispatcher then DOES with those exact shapes — the org-admin archive vs
+// platform-admin delete semantics, plus a regression pin on the role-less
+// envelope the UI used to send.
+//
+// The shapes, verbatim from the shared builder:
+//   platform admin, active org  → {…, orgId, platformRole:'platform_admin', orgRole}
+//   org admin,      active org  → {…, orgId, orgRole:'org_admin'}            (no platformRole)
+//   the #2400 DEFECT            → {…, orgId}                                  (neither)
+// ---------------------------------------------------------------------------
+describe("cinatra#2400 UI-built actors reach the designed lifecycle branches", () => {
+  // A platform admin signed in WITH an active org — the ordinary settings-page
+  // shape (the session always carries the active org; platform standing is what
+  // the old builder dropped).
+  const uiPlatformAdmin: Actor = {
+    actorType: "human",
+    userId: "u-admin",
+    source: "ui",
+    orgId: "org-x",
+    platformRole: "platform_admin",
+    orgRole: "org_owner",
+  };
+  const uiOrgAdmin: Actor = {
+    actorType: "human",
+    userId: "u-org",
+    source: "ui",
+    orgId: "org-x",
+    orgRole: "org_admin",
+  };
+  /** The pre-#2400 envelope: identity + org context, NO standing. */
+  const roleLessUiActor: Actor = {
+    actorType: "human",
+    userId: "u-admin",
+    source: "ui",
+    orgId: "org-x",
+  };
+
+  it("platform-admin force_delete SUCCEEDS (the live UI refusal is gone)", async () => {
+    await expect(
+      extensionRegistry.forceDelete("agent", ref(), uiPlatformAdmin, "cleanup"),
+    ).resolves.toEqual({ danglingReferences: expect.anything() });
+    expect(handler.uninstall).toHaveBeenCalledTimes(1);
+    expect(forceDeleteAudits).toEqual([
+      expect.objectContaining({ operation: "force_delete" }),
+    ]);
+  });
+
+  it("org-admin force_delete stays REFUSED — platform-admin-only, zero row changes", async () => {
+    await expect(
+      extensionRegistry.forceDelete("agent", ref(), uiOrgAdmin, "cleanup"),
+    ).rejects.toBeInstanceOf(PlatformAdminRequiredError);
+    expect(handler.uninstall).not.toHaveBeenCalled();
+    expect(transitions).toEqual([]);
+  });
+
+  it("the ROLE-LESS pre-#2400 actor is refused on force_delete (the reported live failure)", async () => {
+    await expect(
+      extensionRegistry.forceDelete("agent", ref(), roleLessUiActor, "cleanup"),
+    ).rejects.toBeInstanceOf(PlatformAdminRequiredError);
+  });
+
+  it("the ROLE-LESS pre-#2400 actor cannot even resolve a target for archive/uninstall/restore", async () => {
+    // Not an archive fallback — a standing refusal over the resolved row, before
+    // any branch is taken. (The row IS addressable: org-equality picks iext-x.)
+    for (const op of ["archive", "uninstall", "restore"] as const) {
+      await expect(
+        extensionRegistry[op]("agent", ref(), roleLessUiActor),
+      ).rejects.toBeInstanceOf(LifecycleStandingError);
+    }
+    expect(transitions).toEqual([]);
+    expect(handler.archive).not.toHaveBeenCalled();
+    expect(handler.uninstall).not.toHaveBeenCalled();
+  });
+
+  it("platform-admin uninstall of an UNUSED, unblocked extension reaches handler.uninstall (hard delete)", async () => {
+    // Only the actor's own org row exists; unused (no template ⇒ no runs) and no
+    // dependents ⇒ the predicate routes to the package-global hard-delete branch.
+    SEEDED = [row("iext-x", "org-x")];
+    await extensionRegistry.uninstall("agent", ref(), uiPlatformAdmin);
+    expect(handler.uninstall).toHaveBeenCalledTimes(1);
+    expect(handler.archive).not.toHaveBeenCalled();
+    // The removal-time cleanup the browser proof observes (the extension's own
+    // teardown, e.g. a skill package's direct-assignment teardown, runs inside
+    // handler.uninstall; the durable org-scoped teardown fires right after).
+    expect(dataTeardownFired).toEqual([PKG]);
+  });
+
+  it("platform-admin uninstall of a USED extension takes the designed ARCHIVE path instead", async () => {
+    SEEDED = [row("iext-x", "org-x")];
+    vi.mocked(readAgentTemplateByPackageName).mockResolvedValueOnce({
+      id: "tpl-1",
+    } as unknown as Awaited<ReturnType<typeof readAgentTemplateByPackageName>>);
+    const { countRunsForTemplate } = await import("@cinatra-ai/agents");
+    vi.mocked(countRunsForTemplate).mockResolvedValueOnce(3);
+    await extensionRegistry.uninstall("agent", ref(), uiPlatformAdmin);
+    expect(handler.archive).toHaveBeenCalledTimes(1);
+    expect(handler.uninstall).not.toHaveBeenCalled();
+    expect(transitions).toEqual([
+      expect.objectContaining({ id: "iext-x", op: "archive" }),
+    ]);
+    // An archive is restorable: no durable data teardown.
+    expect(dataTeardownFired).toEqual([]);
+  });
+
+  it("org-admin uninstall NEVER hard-deletes — it archives THEIR org's row only", async () => {
+    await extensionRegistry.uninstall("agent", ref(), uiOrgAdmin);
+    expect(handler.archive).toHaveBeenCalledTimes(1);
+    expect(handler.uninstall).not.toHaveBeenCalled();
+    expect(transitions).toEqual([
+      expect.objectContaining({ id: "iext-x", op: "archive" }),
+    ]);
+    expect(dataTeardownFired).toEqual([]);
+  });
+
+  it("a platform admin acting from an org context addresses THEIR org's row, not the platform row", async () => {
+    // Org-equality resolution is unchanged by #2400: platform standing widens
+    // WRITE STANDING, never the row selection. The settings page acts on the row
+    // its own session scope resolves.
+    await extensionRegistry.archive("agent", ref(), uiPlatformAdmin);
+    expect(transitions).toEqual([
+      expect.objectContaining({ id: "iext-x", op: "archive" }),
+    ]);
+  });
+});

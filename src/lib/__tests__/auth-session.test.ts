@@ -120,3 +120,76 @@ describe("buildCanDoOptsFromSession", () => {
     expect(opts).toEqual({});
   });
 });
+
+// ---------------------------------------------------------------------------
+// isPlatformAdmin — the CANONICAL platform-standing predicate (cinatra#2400).
+//
+// Better Auth's admin plugin stores roles as a COMMA-SEPARATED string, so a
+// promoted user's role is "user,admin", not "admin". Every naive
+// `role === "admin"` comparison misses them. The extension lifecycle form
+// actions now derive `actor.platformRole` from this predicate — it is the only
+// thing standing between a real platform admin and the P5 platform-admin gate
+// (isPlatformAdminActor), so its exact handling is pinned here rather than left
+// implicit.
+// ---------------------------------------------------------------------------
+describe("isPlatformAdmin (canonical platform-standing predicate)", () => {
+  it("accepts the COMMA-SEPARATED Better Auth role string 'user,admin'", async () => {
+    const { isPlatformAdmin } = await import("@/lib/auth-session");
+    expect(isPlatformAdmin({ user: { role: "user,admin" } })).toBe(true);
+  });
+
+  it("accepts a comma-separated string with surrounding whitespace (' user , admin ')", async () => {
+    const { isPlatformAdmin } = await import("@/lib/auth-session");
+    expect(isPlatformAdmin({ user: { role: " user , admin " } })).toBe(true);
+  });
+
+  it("accepts the bare 'admin' role", async () => {
+    const { isPlatformAdmin } = await import("@/lib/auth-session");
+    expect(isPlatformAdmin({ user: { role: "admin" } })).toBe(true);
+  });
+
+  it("accepts 'admin' in any position of the list", async () => {
+    const { isPlatformAdmin } = await import("@/lib/auth-session");
+    expect(isPlatformAdmin({ user: { role: "admin,user" } })).toBe(true);
+    expect(isPlatformAdmin({ user: { role: "user,editor,admin" } })).toBe(true);
+  });
+
+  it("rejects a plain member, an EMPTY role, null/undefined role and a null session", async () => {
+    const { isPlatformAdmin } = await import("@/lib/auth-session");
+    expect(isPlatformAdmin({ user: { role: "user" } })).toBe(false);
+    expect(isPlatformAdmin({ user: { role: "" } })).toBe(false);
+    expect(isPlatformAdmin({ user: { role: null } })).toBe(false);
+    expect(isPlatformAdmin({ user: {} })).toBe(false);
+    expect(isPlatformAdmin({ user: null })).toBe(false);
+    expect(isPlatformAdmin(null)).toBe(false);
+    expect(isPlatformAdmin(undefined)).toBe(false);
+  });
+
+  it("does NOT match a role that merely CONTAINS 'admin' as a substring", async () => {
+    const { isPlatformAdmin } = await import("@/lib/auth-session");
+    // Whole-token matching only — "administrator" / "org_admin" / "non-admin"
+    // are different roles and must never confer platform standing.
+    expect(isPlatformAdmin({ user: { role: "administrator" } })).toBe(false);
+    expect(isPlatformAdmin({ user: { role: "user,org_admin" } })).toBe(false);
+    expect(isPlatformAdmin({ user: { role: "non-admin" } })).toBe(false);
+  });
+
+  it("agrees with requireAdminSession's own comma-split admission rule", async () => {
+    // requireAdminSession admits exactly the sessions whose split role list
+    // includes "admin"; isPlatformAdmin is documented as reusing that pattern.
+    // A divergence here is the failure mode #2400 was born from: the page
+    // renders (admission passed) but the action refuses (standing missing).
+    const { isPlatformAdmin } = await import("@/lib/auth-session");
+    const admittedByRequireAdminSession = (role: string) =>
+      String(role ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean)
+        .includes("admin");
+    for (const role of ["user,admin", "admin", " user , admin ", "user", "", "administrator", "admin,user"]) {
+      expect(isPlatformAdmin({ user: { role } })).toBe(
+        admittedByRequireAdminSession(role),
+      );
+    }
+  });
+});
