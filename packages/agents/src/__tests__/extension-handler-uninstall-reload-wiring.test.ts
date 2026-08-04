@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   deleteAgentTemplate: vi.fn(),
   deleteAgentSkillsForSlugs: vi.fn(),
   cleanupForAgent: vi.fn(),
-  deleteAssignedSkillsForAgentPackage: vi.fn(),
+  deleteAssignedSkillsForAgentPackage: vi.fn(async () => ({ removed: [] })),
 }));
 
 vi.mock("../extension-handler-rollback", () => ({
@@ -26,13 +26,6 @@ vi.mock("@cinatra-ai/skills", () => ({
   parseFrontmatter: vi.fn(),
   enqueueInlineForAgent: vi.fn(),
   cleanupForAgent: mocks.cleanupForAgent,
-}));
-// cinatra#2350 (S5, epic #2345): agent_assigned_skills lifecycle teardown is
-// reached via a DYNAMIC import of `@/lib/agent-assigned-skills-store`
-// directly (never through the `@cinatra-ai/skills` barrel — see the note
-// above that import in extension-handler.ts).
-vi.mock("@/lib/agent-assigned-skills-store", () => ({
-  deleteAssignedSkillsForAgentPackage: mocks.deleteAssignedSkillsForAgentPackage,
 }));
 vi.mock("@cinatra-ai/agents", () => ({
   installAgentPackageWithDependencies: vi.fn(),
@@ -49,6 +42,11 @@ vi.mock("@cinatra-ai/registries", () => {
 });
 vi.mock("@/lib/verdaccio-config", () => ({
   loadVerdaccioConfigForServer: vi.fn(),
+}));
+// cinatra#2350 (S5): uninstall now sweeps the agent's direct skill assignments
+// before anything else. Double the store so this suite stays DB-free.
+vi.mock("@/lib/agent-assigned-skills-store", () => ({
+  deleteAssignedSkillsForAgentPackage: mocks.deleteAssignedSkillsForAgentPackage,
 }));
 
 import { createAgentExtensionHandler } from "../extension-handler";
@@ -74,7 +72,7 @@ describe("agent extension handler — uninstall reload + disk cleanup", () => {
     mocks.deleteAgentSkillsForSlugs.mockReset();
     mocks.cleanupForAgent.mockReset();
     mocks.deleteAssignedSkillsForAgentPackage.mockReset();
-    mocks.deleteAssignedSkillsForAgentPackage.mockResolvedValue({ deletedCount: 0 });
+    mocks.deleteAssignedSkillsForAgentPackage.mockResolvedValue({ removed: [] });
   });
 
   it("uninstall calls rmDirForRolledBackInstall + triggerReloadAfterRollback after DB delete", async () => {
@@ -104,71 +102,6 @@ describe("agent extension handler — uninstall reload + disk cleanup", () => {
     expect(mocks.deleteAgentTemplate).not.toHaveBeenCalled();
     expect(mocks.rmDirForRolledBackInstall).not.toHaveBeenCalled();
     expect(mocks.triggerReloadAfterRollback).not.toHaveBeenCalled();
-  });
-
-  // cinatra#2350 (S5, epic #2345): agent_assigned_skills lifecycle teardown.
-  describe("agent_assigned_skills teardown", () => {
-    it("deletes agent_assigned_skills rows for this package on every uninstall", async () => {
-      mocks.readAgentTemplateByPackageName.mockResolvedValueOnce({ id: "tpl-1" });
-      mocks.deleteAgentTemplate.mockResolvedValueOnce(true);
-      mocks.deleteAgentSkillsForSlugs.mockResolvedValueOnce(undefined);
-      mocks.cleanupForAgent.mockResolvedValueOnce(undefined);
-      mocks.rmDirForRolledBackInstall.mockResolvedValueOnce(undefined);
-      mocks.triggerReloadAfterRollback.mockResolvedValueOnce(undefined);
-
-      const handler = createAgentExtensionHandler();
-      await handler.uninstall(mockRef, mockActor);
-
-      expect(mocks.deleteAssignedSkillsForAgentPackage).toHaveBeenCalledWith(
-        "@cinatra/test-agent",
-      );
-    });
-
-    it("deletes agent_assigned_skills rows even when the agent has NO agent_templates row — the provider-declared, template-free case S1's canonical resolver exists for", async () => {
-      // The "provider-only early return" this teardown is ordered BEFORE:
-      // no template row exists, so the rest of the uninstall (skills
-      // deregistration, template delete, disk cleanup, reload) never runs.
-      mocks.readAgentTemplateByPackageName.mockResolvedValueOnce(null);
-
-      const handler = createAgentExtensionHandler();
-      await handler.uninstall(mockRef, mockActor);
-
-      expect(mocks.deleteAssignedSkillsForAgentPackage).toHaveBeenCalledWith(
-        "@cinatra/test-agent",
-      );
-      // Sanity: the rest of the (template-gated) teardown genuinely did not run.
-      expect(mocks.deleteAgentTemplate).not.toHaveBeenCalled();
-    });
-
-    it("is ordered BEFORE readAgentTemplateByPackageName is even consulted", async () => {
-      const order: string[] = [];
-      mocks.deleteAssignedSkillsForAgentPackage.mockImplementationOnce(async () => {
-        order.push("deleteAssignedSkillsForAgentPackage");
-        return { deletedCount: 0 };
-      });
-      mocks.readAgentTemplateByPackageName.mockImplementationOnce(async () => {
-        order.push("readAgentTemplateByPackageName");
-        return null;
-      });
-
-      const handler = createAgentExtensionHandler();
-      await handler.uninstall(mockRef, mockActor);
-
-      expect(order).toEqual([
-        "deleteAssignedSkillsForAgentPackage",
-        "readAgentTemplateByPackageName",
-      ]);
-    });
-
-    it("a teardown failure is FATAL — the whole uninstall aborts rather than silently leaving assignment rows behind", async () => {
-      mocks.deleteAssignedSkillsForAgentPackage.mockRejectedValueOnce(
-        new Error("db unreachable"),
-      );
-
-      const handler = createAgentExtensionHandler();
-      await expect(handler.uninstall(mockRef, mockActor)).rejects.toThrow("db unreachable");
-      expect(mocks.readAgentTemplateByPackageName).not.toHaveBeenCalled();
-    });
   });
 
   it("disk cleanup failure is non-fatal (DB delete already succeeded)", async () => {

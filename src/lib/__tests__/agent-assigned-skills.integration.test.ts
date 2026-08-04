@@ -31,6 +31,8 @@ import { agentAssignedSkillsDdlSql } from "../../../migrations/core/core__0089_a
 import {
   AGENT_ASSIGNED_SKILLS_CAP,
   deleteAssignedSkill,
+  deleteAssignedSkillsForAgentPackage,
+  deleteAssignedSkillsForSkillIds,
   insertAssignedSkill,
   readAssignedSkillsForAgentPackage,
   type AssignedSkillsQuery,
@@ -418,5 +420,105 @@ describe.skipIf(!RUN)("removal down to zero, against real SQL", () => {
     // Ordering is what matters, not density: insertion order is preserved.
     expect(rows.map((r) => r.skillId)).toEqual(["@p/s:1", "@p/s:3", "@p/s:new"]);
     expect(rows).toHaveLength(AGENT_ASSIGNED_SKILLS_CAP);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LIFECYCLE TEARDOWN against real SQL (cinatra#2350 S5).
+//
+// The two sweeps are single statements over real indexes, and their acceptance
+// criterion is "leaves ZERO rows" — which only a real database can answer. Both
+// arms also prove REINSTALL-NO-RESURRECTION at the storage layer: after the
+// sweep, the same key re-reads empty, and an assign is the only thing that can
+// ever put a row back.
+// ---------------------------------------------------------------------------
+
+describe.skipIf(!RUN)("teardown — real Postgres", () => {
+  const A1 = "@cinatra-ai/web-scrape-agent";
+  const A2 = "@cinatra-ai/blog-pipeline-agent";
+  const OWNED = ["@cinatra-ai/chat:company-research", "@cinatra-ai/chat:extra"];
+  const FOREIGN = "@other/pkg:untouched";
+
+  async function reseed(deps: AssignedSkillsStoreDeps) {
+    await pool.query(
+      `DELETE FROM "${FRESH_SCHEMA}"."${AGENT_ASSIGNED_SKILLS_TABLE}"`,
+    );
+    for (const agent of [A1, A2]) {
+      for (const skillId of [...OWNED, FOREIGN]) {
+        await insertAssignedSkill({ agentPackageName: agent, skillId, createdBy: "admin" }, deps);
+      }
+    }
+  }
+
+  it("SKILL-side: deletes every row naming the package's ids, across ALL agents, and leaves foreign rows alone", async () => {
+    const deps = depsFor(FRESH_SCHEMA);
+    await reseed(deps);
+
+    const { removed } = await deleteAssignedSkillsForSkillIds(OWNED, deps);
+    expect(removed).toHaveLength(4); // 2 agents x 2 owned ids
+    expect(new Set(removed.map((r) => r.agentPackageName))).toEqual(new Set([A1, A2]));
+
+    for (const agent of [A1, A2]) {
+      const rows = await readAssignedSkillsForAgentPackage(agent, deps);
+      expect(rows.map((r) => r.skillId)).toEqual([FOREIGN]);
+    }
+  });
+
+  it("SKILL-side: a SECOND sweep is a no-op — no resurrection, no error", async () => {
+    const deps = depsFor(FRESH_SCHEMA);
+    await deleteAssignedSkillsForSkillIds(OWNED, deps);
+    const again = await deleteAssignedSkillsForSkillIds(OWNED, deps);
+    expect(again.removed).toEqual([]);
+  });
+
+  it("AGENT-side: deletes every row for the agent package and leaves the other agent's alone", async () => {
+    const deps = depsFor(FRESH_SCHEMA);
+    await reseed(deps);
+
+    const { removed } = await deleteAssignedSkillsForAgentPackage(A1, deps);
+    expect(removed).toHaveLength(3);
+    expect(await readAssignedSkillsForAgentPackage(A1, deps)).toEqual([]);
+    expect(await readAssignedSkillsForAgentPackage(A2, deps)).toHaveLength(3);
+  });
+
+  it("AGENT-side: REINSTALL-NO-RESURRECTION — the sweep survives a re-assign cycle", async () => {
+    const deps = depsFor(FRESH_SCHEMA);
+    await reseed(deps);
+    await deleteAssignedSkillsForAgentPackage(A1, deps);
+    expect(await readAssignedSkillsForAgentPackage(A1, deps)).toEqual([]);
+
+    // "Reinstall" = the same package name comes back. Nothing on the install
+    // path writes rows, so the table stays empty for this agent until an admin
+    // assigns again — and when they do, positions start fresh from 1.
+    expect(await readAssignedSkillsForAgentPackage(A1, deps)).toEqual([]);
+    const out = await insertAssignedSkill(
+      { agentPackageName: A1, skillId: OWNED[0]!, createdBy: "admin" },
+      deps,
+    );
+    expect(out.outcome).toBe("assigned");
+    expect(out.outcome === "assigned" && out.row.position).toBe(1);
+  });
+
+  it("a swept slot is REUSABLE — the cap counts live rows, not history", async () => {
+    const deps = depsFor(FRESH_SCHEMA);
+    await pool.query(
+      `DELETE FROM "${FRESH_SCHEMA}"."${AGENT_ASSIGNED_SKILLS_TABLE}" WHERE agent_package_name = $1`,
+      [A1],
+    );
+    for (let i = 1; i <= AGENT_ASSIGNED_SKILLS_CAP; i++) {
+      await insertAssignedSkill({ agentPackageName: A1, skillId: `@p/s:${i}`, createdBy: "a" }, deps);
+    }
+    await deleteAssignedSkillsForSkillIds(["@p/s:1", "@p/s:2", "@p/s:3"], deps);
+    expect(await readAssignedSkillsForAgentPackage(A1, deps)).toEqual([]);
+    for (let i = 1; i <= AGENT_ASSIGNED_SKILLS_CAP; i++) {
+      const out = await insertAssignedSkill(
+        { agentPackageName: A1, skillId: `@p/again:${i}`, createdBy: "a" },
+        deps,
+      );
+      expect(out.outcome).toBe("assigned");
+    }
+    expect(await readAssignedSkillsForAgentPackage(A1, deps)).toHaveLength(
+      AGENT_ASSIGNED_SKILLS_CAP,
+    );
   });
 });

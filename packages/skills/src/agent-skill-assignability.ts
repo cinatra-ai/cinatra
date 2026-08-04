@@ -478,3 +478,235 @@ export async function resolveOneSkillAssignability(
     }
   );
 }
+
+// ---------------------------------------------------------------------------
+// SKILL-SIDE lifecycle teardown for direct skill assignment
+// (cinatra#2350 S5, epic #2345).
+//
+// Uninstalling a skill extension deletes every `agent_assigned_skills` row that
+// names one of ITS catalog skills. Three properties make this correct rather
+// than merely plausible, and each one is the reason for a specific choice
+// below:
+//
+//   1. EXACT DERIVED IDS, VIRTUAL NAMESPACE INCLUDED. The ids come from
+//      `deriveSkillRegistration` (through S1's `buildSkillIdOwnership`), never
+//      from `<pkg>:<slug>` string-building and never from the catalog row's own
+//      `packageName`. The five chat successor packages register their skills
+//      under the VIRTUAL `@cinatra-ai/chat:` namespace, so their assignment
+//      rows carry ids that name a package which does not exist — a naive
+//      derivation would sweep nothing and leave every one of those assignments
+//      behind. Conversely the virtual name is never used as a MATCH key: one
+//      successor package's uninstall must not sweep its four siblings' ids.
+//
+//   2. ORDERED BEFORE THE UNINSTALL PATH'S EARLY RETURNS. `uninstallSkillPackage`
+//      returns `false` when no NATIVE catalog package row matches the persisted
+//      package id — precisely the shape a virtual-namespace registration can
+//      have. Running the teardown after that return would skip the packages that
+//      need it most, so it runs FIRST, before any early return and before the
+//      catalog rewrite and the disk removal. That ordering is also what makes
+//      the on-disk scan the authority here: the package's files are still
+//      present when the teardown reads them.
+//
+//   3. UNDER THE SAME PER-EXTENSION LIFECYCLE LOCK THE ASSIGN FLOW TAKES.
+//      S1's `assignAgentSkill` runs its revalidate→insert section inside
+//      `withInstallLock(<owning skill package>)`. The teardown takes the same
+//      lock on the same key, so "assign lands after cleanup swept" is not a race
+//      that can be lost — it cannot occur. The lock is re-entrant, so the
+//      dispatcher path (which already holds it for the package being
+//      uninstalled) pays nothing, while a direct caller (the MCP uninstall
+//      handler) acquires it here.
+//
+// WHY A FAILURE IS FATAL. A surviving row is not an audit record, it is an
+// orphan that REAPPLIES: reinstalling the package re-derives the same ids, S2's
+// resolution-time revalidation starts passing again, and the skill is delivered
+// again from a configuration nobody re-made. The sibling co-owner and
+// polymorphic-permission cleanups in the same uninstall path are fatal for
+// exactly that reason, and this one is ordered ahead of all of them — so a
+// failure aborts the uninstall before anything destructive has happened.
+//
+// WHY IT LIVES IN THIS MODULE rather than a teardown module of its own. It
+// consumes `buildSkillIdOwnership` above — the epic's single derivation of
+// "which catalog skill ids does this package own" — and the same
+// `scanExtensionsSource` seam, so co-location is what keeps the sweep keyed on
+// exactly the ids the assign path could ever have written. It also costs the
+// route graph nothing: this module is already reachable from all five locked
+// routes, and both writes below are reached through dynamic imports of modules
+// that are already on those graphs, so no `absorbs` raise is needed for what is
+// otherwise one leaf function. The two halves stay separable: nothing above
+// this banner imports anything below it.
+// ---------------------------------------------------------------------------
+
+/** The reserved VIRTUAL namespace. Never a real package, never a match key. */
+const RESERVED_VIRTUAL_PACKAGE = "@cinatra-ai/chat";
+
+/** The persisted-id prefixes `resolveSkillPackageSource` mints. */
+const PACKAGE_ID_PREFIXES = ["verdaccio:", "github:"] as const;
+
+/**
+ * The package NAME a persisted `skill_packages` id denotes.
+ *
+ * The id shape is locked by `resolveSkillPackageSource`
+ * (`verdaccio:<name>` / `github:<owner>/<repo>`), so the name is recovered by
+ * dropping the source prefix. A raw name with no prefix is accepted as-is —
+ * `uninstallSkillPackage` is also reachable from callers that pass a catalog
+ * package id verbatim.
+ *
+ * EXACT, never npm-normalized (codex round 1, adopted). An earlier draft also
+ * offered the `@`-prefixed twin, so `github:acme/skills` matched a scanned
+ * `@acme/skills` — two unrelated identities from two different registries, and
+ * the sweep would have deleted the npm package's assignments. GitHub-installed
+ * packs mint their catalog ids as `github:<owner>/<repo>:<slug>` and are not
+ * assignable through `buildSkillIdOwnership` at all, so the alias bought
+ * nothing and could only ever over-delete.
+ */
+export function skillPackageName(packageId: string): string | null {
+  const raw = String(packageId ?? "").trim();
+  if (!raw) return null;
+  const prefix = PACKAGE_ID_PREFIXES.find((p) => raw.startsWith(p));
+  const name = prefix ? raw.slice(prefix.length).trim() : raw;
+  return name || null;
+}
+
+export type OwnedSkillIds = {
+  /** The REAL owning package name (the lifecycle-lock key), when scanned. */
+  ownerPackageName: string | null;
+  /** The exact derived catalog skill ids that package owns. */
+  skillIds: string[];
+};
+
+/**
+ * PURE: the exact derived catalog skill ids owned by `packageName`, plus the
+ * real package name to lock on.
+ *
+ * Matching is EXACT on the SCANNED package name, never on the catalog row's
+ * `packageName` — that field carries the virtual namespace for the chat
+ * successor packages and would either match nothing or match four unrelated
+ * packages.
+ *
+ * OWNERSHIP IS ARBITRATED OVER THE WHOLE SCAN (codex round 1, adopted). The
+ * derivation runs against the matched descriptors, but every derived id is then
+ * re-checked against `buildSkillIdOwnership` over ALL descriptors and dropped
+ * unless that map awards it to this package. Two chat successor packages that
+ * ship the same slug derive the SAME virtual id; without this arbitration each
+ * one's uninstall would delete the other's assignment, and the map's own
+ * first-seen rule is what the predicate and the picker already treat as the
+ * authority.
+ */
+export function deriveOwnedSkillIds(
+  packageName: string | null,
+  descriptors: readonly SkillExtensionDescriptor[],
+): OwnedSkillIds {
+  const empty = { ownerPackageName: null, skillIds: [] };
+  if (!packageName || packageName === RESERVED_VIRTUAL_PACKAGE) return empty;
+
+  const owned = descriptors.filter((d) => d.kind === "skill" && d.pkgName === packageName);
+  if (owned.length === 0) return empty;
+
+  // `buildSkillIdOwnership` is S1's shared derivation (the same helper the
+  // predicate and the S3 picker use), so the ids the teardown sweeps are the ids
+  // the assign path could ever have written — by construction, not by a parallel
+  // implementation that could drift.
+  const authority = buildSkillIdOwnership(descriptors);
+  const skillIds = [...buildSkillIdOwnership(owned).keys()].filter(
+    (id) => authority.get(id) === packageName,
+  );
+  return { ownerPackageName: packageName, skillIds };
+}
+
+export type SkillPackageTeardownDeps = {
+  /** The on-disk extension scan. Default = the slice's real I/O seam. */
+  scanExtensions?: () => Promise<SkillExtensionDescriptor[]>;
+  /** Row delete by catalog skill id. Default = the canonical store. */
+  deleteBySkillIds?: (
+    skillIds: string[],
+  ) => Promise<{ removed: Array<{ agentPackageName: string; skillId: string }> }>;
+  /** The per-extension lifecycle lock. Default = the real `withInstallLock`. */
+  withLifecycleLock?: <T>(packageName: string, fn: () => Promise<T>) => Promise<T>;
+};
+
+async function defaultDeleteBySkillIds(skillIds: string[]) {
+  const { deleteAssignedSkillsForSkillIds } = await import("@/lib/agent-assigned-skills-store");
+  return deleteAssignedSkillsForSkillIds(skillIds);
+}
+
+async function defaultWithLifecycleLock<T>(packageName: string, fn: () => Promise<T>): Promise<T> {
+  const { withInstallLock } = await import("@cinatra-ai/agents");
+  return withInstallLock(packageName, fn);
+}
+
+/** Length-bound + strip control characters; logged as an ARGUMENT (S1's `forLog`). */
+function forLog(value: unknown): string {
+  return String(value ?? "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .slice(0, 200);
+}
+
+export type SkillPackageTeardownResult = {
+  ownerPackageName: string | null;
+  skillIds: string[];
+  removed: Array<{ agentPackageName: string; skillId: string }>;
+};
+
+/**
+ * Run `uninstall` with this package's assignment rows swept FIRST and the whole
+ * uninstall held inside the package's lifecycle lock.
+ *
+ * THE LOCK SPANS THE SCAN, THE SWEEP AND THE WHOLE UNINSTALL (codex rounds 1+2,
+ * adopted). An earlier draft
+ * held it only across the DELETE, which left a real same-process gap for the
+ * direct caller that has no outer lock (the skills MCP uninstall handler): sweep
+ * → release → a concurrent assign takes the lock, revalidates against a package
+ * that is still on disk and still in the catalog, and commits → the uninstall
+ * then removes the package, leaving exactly the orphan the sweep exists to
+ * prevent. Holding the lock until the uninstall has finished makes that
+ * interleaving unreachable, and costs the registry path nothing — it already
+ * holds the same lock on the same key, and the lock is re-entrant.
+ *
+ * The sweep THROWS on a failed scan or a failed delete, before `uninstall` is
+ * called — see the fatality note at the top of this section.
+ *
+ * RESIDUAL, recorded rather than papered over: the lifecycle lock is
+ * process-local (it is what every install/uninstall/purge path in the platform
+ * serializes on), so a sibling worker's assign is ordered by neither this lock
+ * nor S1's. S1 documents the same residual and compensates with a post-commit
+ * revalidation under its own lock; widening the serialization to a cross-process
+ * lease would change every lifecycle path, not this one.
+ */
+export async function withSkillAssignmentTeardown<T>(
+  packageId: string,
+  uninstall: () => Promise<T>,
+  deps: SkillPackageTeardownDeps = {},
+): Promise<T> {
+  const packageName = skillPackageName(packageId);
+  const scanExtensions = deps.scanExtensions ?? scanExtensionsSource;
+  const deleteBySkillIds = deps.deleteBySkillIds ?? defaultDeleteBySkillIds;
+  const withLifecycleLock = deps.withLifecycleLock ?? defaultWithLifecycleLock;
+
+  // An id that denotes no package cannot be serialized on and owns nothing.
+  if (!packageName) return uninstall();
+
+  // THE LOCK IS TAKEN BEFORE THE SCAN (codex round 2, adopted). Deriving first
+  // and locking second left the derivation reading a snapshot that a concurrent
+  // update — holding the lifecycle lock — could invalidate before the sweep ran:
+  // the uninstall would then sweep a STALE id set and remove a package whose
+  // newly-restored slug already carried an assignment. The zero-id branch was
+  // worse still, running the whole destructive uninstall unlocked. Everything —
+  // scan, derivation, sweep, uninstall — is now one critical section on the
+  // package's own key, which is also the key `assignAgentSkill` derives from the
+  // predicate's `ownerPackageName` (exact matching makes the two identical).
+  return withLifecycleLock(packageName, async () => {
+    const { ownerPackageName, skillIds } = deriveOwnedSkillIds(packageName, await scanExtensions());
+    if (!ownerPackageName || skillIds.length === 0) return uninstall();
+
+    const { removed } = await deleteBySkillIds(skillIds);
+    if (removed.length > 0) {
+      console.warn(
+        "[skills/assignment-teardown] uninstall removed direct skill assignments — package / count / pairs:",
+        forLog(ownerPackageName),
+        removed.length,
+        removed.map((r) => `${forLog(r.agentPackageName)}\u2192${forLog(r.skillId)}`).join(", "),
+      );
+    }
+    return uninstall();
+  });
+}

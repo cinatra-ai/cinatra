@@ -21,14 +21,6 @@ import {
   enqueueInlineForAgent,
   cleanupForAgent,
 } from "@cinatra-ai/skills";
-// cinatra#2350 (S5, epic #2345): agent_assigned_skills lifecycle teardown is
-// reached via the DYNAMIC import at its call site below, directly against
-// `@/lib/agent-assigned-skills-store` (the S1 store; `packages/agents`
-// already imports `@/lib/**` elsewhere, e.g. `a2a-actions.ts`) — never a
-// top-level static one. `@/lib/agent-assigned-skills-store.ts` is already
-// one of the modules absorbed into the route-graph-ratchet baselines for the
-// five locked routes this handler is itself reachable from (the S2 PR,
-// cinatra#2347), so this edge costs nothing there.
 import {
   FIRST_PARTY_PACKAGE_SCOPE,
   InstanceNamespaceNotConfiguredError,
@@ -370,21 +362,16 @@ export function createAgentExtensionHandler(): ExtensionTypeHandler {
       // a no-op if it ever holds the lock externally.
       const { withInstallLock } = await import("./materialize-agent-package");
       await withInstallLock(ref.packageName, async () => {
-        // cinatra#2350 (S5, epic #2345): delete `agent_assigned_skills` rows
-        // for this agent package FIRST — before the provider-only early
-        // return below, and not wrapped in a try/catch that swallows the
-        // failure. The assignment table is keyed by canonical agent package
-        // name and is actor-independent (S1): it covers provider-declared,
-        // template-free agents too (the canonical resolver unions DB
-        // templates with on-disk provider-declared agents), so an agent with
-        // no `agent_templates` row can still carry assignments — gating this
-        // delete on `existing` would leave those rows stranded forever. Runs
-        // under this SAME `withInstallLock` the S1 assign flow acquires
-        // (over the owning SKILL package, not this agent package — but the
-        // ordering guarantee is symmetric). DYNAMIC import, directly against
-        // the S1 store — see the note above the `@cinatra-ai/skills` import
-        // block for why this stays a graph-free edge for the route-graph
-        // ratchet.
+        // cinatra#2350 (S5): direct skill assignments are keyed on the AGENT
+        // package name and are actor-independent, so they outlive the template
+        // row — a PROVIDER-DECLARED agent has no `agent_templates` row at all
+        // and would hit the early return below with its assignments intact.
+        // Ordered FIRST, therefore, ahead of that return and ahead of every
+        // destructive step; and inside this lock, which is the SAME per-package
+        // lifecycle serialization S1's assign path acquires (both go through the
+        // global extension-lifecycle queue), so an assign can never land after
+        // the sweep. Fatal by design: a surviving row REAPPLIES on reinstall,
+        // silently re-delivering a configuration nobody re-made.
         const { deleteAssignedSkillsForAgentPackage } = await import(
           "@/lib/agent-assigned-skills-store"
         );
