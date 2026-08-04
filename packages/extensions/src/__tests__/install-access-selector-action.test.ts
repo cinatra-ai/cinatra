@@ -102,6 +102,15 @@ const buildCanDoOptsMock = vi.fn(async () => ({ orgRole: "org_owner" }) as {
 vi.mock("@/lib/auth-session", () => ({
   requireAdminSession: (...a: unknown[]) => requireAdminSessionMock(...(a as [])),
   buildCanDoOptsFromSession: (...a: unknown[]) => buildCanDoOptsMock(...(a as [])),
+  // cinatra#2400: the shared lifecycle-actor builder resolves platform standing
+  // through this canonical predicate. The rollback actor then DROPS it (asserted
+  // in 1602a) so a platform admin's compensation stays single-org.
+  isPlatformAdmin: (s: { user?: { role?: string | null } | null } | null | undefined) =>
+    String(s?.user?.role ?? "")
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .includes("admin"),
 }));
 
 // Dependency-batch installer (the real install path).
