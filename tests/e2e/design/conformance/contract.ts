@@ -29,6 +29,7 @@ import {
 } from "../../../../src/app/design-fixtures/conformance/fixture-data";
 import {
   conformanceRunId,
+  SEEDED_CONNECTOR_ALL_COUNT,
   SEEDED_CONNECTOR_CARDS,
   SEEDED_CONNECTOR_CONNECTED_COUNT,
   SEEDED_CONNECTOR_DISCONNECTED_COUNT,
@@ -504,23 +505,95 @@ const INSTALLED_EXTENSIONS_STATUS_VIEWS_DRIVER: SurfaceDriver = {
   states: {},
 };
 
+// ---------------------------------------------------------------------------
+// §I connectors-grid family (cinatra#986; RE-SPECIFIED by cinatra#2355 for
+// design@3d33cc800 specs/app-connectors.html v0.7.0).
+//
+// The seeded harness mounts the REAL ConnectorsClient five times, keyed by
+// `data-variant` on the `[data-surface-id="connector-grid"]` wrapper
+// (src/app/design-fixtures/conformance/seeded/connector-grid-fixture.tsx):
+// `populated` and the four empty-state-matrix cells. Every root below is
+// variant-scoped — an unscoped `[data-surface-id="connector-grid"]` would now
+// resolve to five elements.
+// ---------------------------------------------------------------------------
+
 const CONNECTOR_CARD_SELECTOR = '[data-testid="connector-card"]';
+/**
+ * The grid's LIST CONTAINER. The All+0 panel REPLACES it (a ternary in
+ * ConnectorsClient), so "the panel replaced the grid" is assertable only
+ * against the container itself — a zero-card count would also pass against a
+ * panel rendered above a still-present empty list.
+ */
+const CONNECTOR_LIST_SELECTOR = '[data-testid="connectors-grid-list"]';
 const CONNECTOR_NAME_SEED = SEEDED_CONNECTOR_CARDS.find(
   (c) => c.connected && !c.probeThrows,
 )!;
 
+/** A variant mount of the REAL ConnectorsClient on the seeded harness. */
+const connectorGrid = (variant: string) =>
+  `[data-surface-id="connector-grid"][data-variant="${variant}"]`;
+
+/** The toolbar toggle group, scoped to ONE mount. */
+const connectorFilterGroup = (root: Locator) =>
+  root.locator('[aria-label="Filter by connection state"]');
+
+/**
+ * The install CTA's navigation target, asserted the way the manifest states
+ * the outcome (`install-more -> marketplace-connector-tab`): the control is a
+ * real link to `/configuration/marketplace?tab=connector`, AND clicking it
+ * actually issues that navigation.
+ *
+ * The navigation REQUEST is the assertion, not the destination render: the
+ * conformance harness boots with `CINATRA_E2E_SETUP_BYPASS` and no session, and
+ * `/configuration/marketplace` is `requireAdminSession`-gated, so what that URL
+ * renders here says nothing about the CTA. What the CTA owes the spec is that
+ * it leads to the marketplace's connector tab — which is exactly what the
+ * navigation request proves.
+ */
+async function assertInstallMoreNavigates(page: Page, cta: Locator): Promise<void> {
+  await expect(cta).toHaveRole("link");
+  await expect(cta).toHaveAttribute("href", "/configuration/marketplace?tab=connector");
+  const [request] = await Promise.all([
+    page.waitForRequest(
+      (r) =>
+        r.isNavigationRequest() &&
+        new URL(r.url()).pathname === "/configuration/marketplace",
+      { timeout: 15_000 },
+    ),
+    cta.click(),
+  ]);
+  expect(new URL(request.url()).searchParams.get("tab")).toBe("connector");
+}
+
 const CONNECTOR_GRID_DRIVER: SurfaceDriver = {
   path: SEEDED_HARNESS_PATH,
-  root: (page) => page.locator('[data-surface-id="connector-grid"]'),
+  root: (page) => page.locator(connectorGrid("populated")),
   present: async (_page, root) => {
-    // EXACT cardinality: the default (Connected) filter shows one card per
-    // seeded connected connector — the disconnected set (5) must not leak in.
+    // EXACT cardinality (RE-SPECIFIED by cinatra#2355): the DEFAULT filter is
+    // now "All" (#2357 supersedes #1092's Connected default), so the landing
+    // view shows EVERY seeded card — 8, the union of the 3 connected and the
+    // 5 disconnected. Those three counts are pairwise-distinct and asserted as
+    // a clean partition in
+    // src/app/design-fixtures/conformance/__tests__/seed-partition.test.ts, so
+    // a grid that silently kept the old default (3) or dropped the fail-soft
+    // card (7) is red here.
     await expect(root.locator(CONNECTOR_CARD_SELECTOR)).toHaveCount(
-      SEEDED_CONNECTOR_CONNECTED_COUNT,
+      SEEDED_CONNECTOR_ALL_COUNT,
     );
+    // …and the All view is genuinely BOTH buckets, not 8 of one kind.
     await expect(root.locator(`${CONNECTOR_CARD_SELECTOR}[data-connected]`)).toHaveCount(
       SEEDED_CONNECTOR_CONNECTED_COUNT,
     );
+    await expect(
+      root.locator(`${CONNECTOR_CARD_SELECTOR}:not([data-connected])`),
+    ).toHaveCount(SEEDED_CONNECTOR_DISCONNECTED_COUNT);
+    // The All segment is the one selected on arrival (spec §I: "All first and
+    // selected on arrival"). `data-state` is the attribute Radix sets and the
+    // attribute the product's own selected-segment classes key off, so it is
+    // the same fact the styling depends on.
+    await expect(
+      connectorFilterGroup(root).getByRole("radio", { name: "All", exact: true }),
+    ).toHaveAttribute("data-state", "on");
   },
   fields: {
     // name = connector.displayName — the manifest displayName, NEVER the slug
@@ -539,6 +612,121 @@ const CONNECTOR_GRID_DRIVER: SurfaceDriver = {
   },
   actions: {},
   states: {
+    // EMPTY (cinatra#2355 — the `state:empty` allowlist exemption is REMOVED
+    // in the same change; the ratchet only shrinks). Until v0.7.0 /connectors
+    // had no designed empty presentation at all, which is exactly what the
+    // exemption recorded. It does now, and the spec makes it a MATRIX, so the
+    // state variant is asserted across all three segments on their own mounts:
+    //
+    //   All + 0          → the "No connectors to show" panel replaces the grid
+    //                      and carries the SINGLE install CTA (the standalone
+    //                      bottom button is suppressed — one screen never
+    //                      shows the same CTA twice).
+    //   All + 0, no access → the SAME panel, its copy ending on "ask an
+    //                      administrator" and rendering NO button at all —
+    //                      and no "+ Connector" in the toolbar either.
+    //   Connected + 0    → the #1092 panel stands (scope-neutral title), and
+    //                      because its action is a different one the bottom
+    //                      CTA is NOT suppressed.
+    //   Disconnected + 0 → no panel at all: a bare list, the CTA remaining.
+    empty: async (page) => {
+      // --- All + 0, marketplace within reach -------------------------------
+      const allEmpty = page.locator(connectorGrid("empty-all"));
+      const panel = allEmpty.locator('[data-conformance-id="connector-empty-panel"]');
+      await expect(panel).toBeVisible();
+      await expect(panel).toHaveAttribute("data-state", "empty");
+      await expect(panel).toContainText("No connectors to show");
+      // Scope-neutral copy: it never asserts that nothing is INSTALLED — it
+      // names all three causes, because cards are actor- AND scope-filtered.
+      await expect(panel).toContainText("outside the scope you have selected");
+      await expect(panel).toContainText("outside what you are allowed to see");
+      // The panel REPLACED the grid — the list container is gone, not merely
+      // empty (a panel rendered above an empty <ul> would satisfy a card count
+      // of zero but is not what the spec says: "the grid is replaced by a soft
+      // panel").
+      await expect(allEmpty.locator(CONNECTOR_LIST_SELECTOR)).toHaveCount(0);
+      await expect(allEmpty.locator(CONNECTOR_CARD_SELECTOR)).toHaveCount(0);
+      // Exactly ONE install CTA on this mount: the panel's own button. The
+      // standalone bottom CTA (which carries the conformance id) is suppressed.
+      // Counted by TEXT, not by role, so a regression that re-rendered the
+      // suppressed CTA as a <button> is still caught.
+      await expect(allEmpty.getByText("Install more connectors")).toHaveCount(1);
+      await expect(
+        allEmpty.locator('[data-conformance-id="connector-install-cta"]'),
+      ).toHaveCount(0);
+
+      // --- All + 0, NO marketplace access ----------------------------------
+      const noAccess = page.locator(connectorGrid("empty-all-no-access"));
+      const noAccessPanel = noAccess.locator(
+        '[data-conformance-id="connector-empty-panel"]',
+      );
+      await expect(noAccessPanel).toBeVisible();
+      await expect(noAccessPanel).toContainText("No connectors to show");
+      await expect(noAccessPanel).toContainText("ask an administrator for access");
+      // No button in the panel, and none in the toolbar either — the pair
+      // gating of spec §I ("A control that leads nowhere is never shown.").
+      //
+      // Asserted ROLE-AGNOSTICALLY: the claim is that no control leading to
+      // the marketplace is rendered, so a regression that re-added either
+      // affordance as a <button> (or any other element) must be red too. The
+      // strongest form is the DESTINATION — nothing on this mount points at
+      // the marketplace at all — backed by the two labels.
+      await expect(
+        noAccess.locator('[href="/configuration/marketplace?tab=connector"]'),
+      ).toHaveCount(0);
+      await expect(noAccess.getByText("Install more connectors")).toHaveCount(0);
+      await expect(noAccess.getByText("Connector", { exact: true })).toHaveCount(0);
+
+      // --- Connected + 0 ---------------------------------------------------
+      const connectedEmpty = page.locator(connectorGrid("empty-connected"));
+      const connectedToggle = connectorFilterGroup(connectedEmpty).getByRole("radio", {
+        name: "Connected",
+        exact: true,
+      });
+      const connectedPanel = connectedEmpty.locator(
+        '[data-testid="connectors-connected-empty-panel"]',
+      );
+      await clickUntil(connectedToggle, async () => {
+        await expect(connectedPanel).toBeVisible({ timeout: 5_000 });
+      });
+      // The v0.7.0 copy: scope-neutral, so NOT the pre-#2353 "No connected
+      // services yet".
+      await expect(connectedPanel).toContainText("No connected services in this view");
+      await expect(connectedPanel).not.toContainText("No connected services yet");
+      await expect(
+        connectedPanel.getByRole("button", { name: "Connect a service" }),
+      ).toBeVisible();
+      // NOT suppressed here — the panel's action is a different one.
+      await expect(
+        connectedEmpty.locator('[data-conformance-id="connector-install-cta"]'),
+      ).toBeVisible();
+
+      // --- Disconnected + 0 ------------------------------------------------
+      const disconnectedEmpty = page.locator(connectorGrid("empty-disconnected"));
+      const disconnectedToggle = connectorFilterGroup(disconnectedEmpty).getByRole(
+        "radio",
+        { name: "Disconnected", exact: true },
+      );
+      await clickUntil(disconnectedToggle, async () => {
+        await expect(
+          disconnectedEmpty.locator(CONNECTOR_CARD_SELECTOR),
+        ).toHaveCount(0, { timeout: 5_000 });
+      });
+      // No panel of either kind — the grid area is simply bare…
+      await expect(
+        disconnectedEmpty.locator('[data-conformance-id="connector-empty-panel"]'),
+      ).toHaveCount(0);
+      await expect(
+        disconnectedEmpty.locator('[data-testid="connectors-connected-empty-panel"]'),
+      ).toHaveCount(0);
+      // …the LIST is still there (bare, not replaced — this is what separates
+      // "no panel" from "the All+0 treatment")…
+      await expect(disconnectedEmpty.locator(CONNECTOR_LIST_SELECTOR)).toHaveCount(1);
+      // …and the CTA remains.
+      await expect(
+        disconnectedEmpty.locator('[data-conformance-id="connector-install-cta"]'),
+      ).toBeVisible();
+    },
     // The surface's documented error treatment (cinatra#110): the seeded
     // card whose readiness probe THREW was contained by the REAL
     // resolveReadinessFailSoft into the disconnected presentation.
@@ -560,51 +748,173 @@ const CONNECTOR_GRID_DRIVER: SurfaceDriver = {
 
 const CONNECTOR_CONNECTION_FILTER_DRIVER: SurfaceDriver = {
   path: SEEDED_HARNESS_PATH,
-  root: (page) => page.locator('[data-surface-id="connector-grid"]'),
+  root: (page) => page.locator(connectorGrid("populated")),
   present: async (_page, root) => {
     // Attribute selector, not getByRole("group"): the Radix ToggleGroup root
     // carries the aria-label but no group role in the rendered tree.
-    const toggleGroup = root.locator('[aria-label="Filter by connection state"]');
+    const toggleGroup = connectorFilterGroup(root);
     await expect(toggleGroup).toBeVisible();
-    // exact: true — accessible-name matching is case-insensitive substring by
-    // default and "Connected" would also match "Disconnected".
-    await expect(toggleGroup.getByRole("radio", { name: "Connected", exact: true })).toBeVisible();
-    await expect(
-      toggleGroup.getByRole("radio", { name: "Disconnected", exact: true }),
-    ).toBeVisible();
+    // The inventory is THREE segments since cinatra#2355/#2357 (spec §I:
+    // "All · Connected · Disconnected, in that order, with All selected on
+    // arrival").
+    //
+    // exact: true throughout — accessible-name matching is case-insensitive
+    // SUBSTRING by default, so "Connected" would also match "Disconnected",
+    // and "All" would match the scope combobox's "Workspace: All". The
+    // toggle-group scope handles the second hazard, `exact` the first; both
+    // are kept deliberately.
+    const segments = ["All", "Connected", "Disconnected"] as const;
+    for (const name of segments) {
+      await expect(toggleGroup.getByRole("radio", { name, exact: true })).toBeVisible();
+    }
+    // …and NOTHING else: a fourth segment would be an unspecified affordance.
+    await expect(toggleGroup.getByRole("radio")).toHaveCount(segments.length);
+    // ORDER is part of the spec ("in that order"), and it is the reading of
+    // the group as one sentence — everything, the connected part of it, the
+    // disconnected part of it.
+    await expect(toggleGroup.getByRole("radio")).toHaveText([
+      /^All$/,
+      /^Connected$/,
+      /^Disconnected$/,
+    ]);
   },
   fields: {},
   actions: {
     // The REAL connection-state ToggleGroup: each selection narrows the grid
-    // to EXACTLY the matching seeded set (3 connected vs 5 disconnected —
-    // distinct counts, so a non-filtering or wrong-way binding is red).
+    // to EXACTLY the matching seeded set. RE-SPECIFIED by cinatra#2355 as the
+    // full THREE-state ROUND-TRIP — 8 (All, the landing view) ⇄ 3 (Connected)
+    // ⇄ 5 (Disconnected) ⇄ 8 again. The three counts are pairwise-distinct
+    // (seed-partition.test.ts), so a non-filtering binding, a wrong-way
+    // binding, or an "all" arm that silently fell through to a status arm all
+    // land on a mismatching count. Returning to All at the end proves the
+    // pass-all predicate restores the union rather than remembering a subset.
     "filter-connection": {
       outcome: "filtered",
       run: async (_page, root) => {
-        const disconnectedToggle = root.getByRole("radio", { name: "Disconnected", exact: true });
-        await clickUntil(disconnectedToggle, async () => {
-          await expect(root.locator(CONNECTOR_CARD_SELECTOR)).toHaveCount(
-            SEEDED_CONNECTOR_DISCONNECTED_COUNT,
-            { timeout: 5_000 },
-          );
-        });
-        await expect(
-          root.locator(`${CONNECTOR_CARD_SELECTOR}[data-connected]`),
-        ).toHaveCount(0);
-        const connectedToggle = root.getByRole("radio", { name: "Connected", exact: true });
-        await clickUntil(connectedToggle, async () => {
-          await expect(root.locator(CONNECTOR_CARD_SELECTOR)).toHaveCount(
-            SEEDED_CONNECTOR_CONNECTED_COUNT,
-            { timeout: 5_000 },
-          );
+        const cards = root.locator(CONNECTOR_CARD_SELECTOR);
+        const segment = (name: string) =>
+          connectorFilterGroup(root).getByRole("radio", { name, exact: true });
+
+        // The landing view is All — the round-trip's start and end point.
+        await expect(cards).toHaveCount(SEEDED_CONNECTOR_ALL_COUNT);
+
+        await clickUntil(segment("Connected"), async () => {
+          await expect(cards).toHaveCount(SEEDED_CONNECTOR_CONNECTED_COUNT, {
+            timeout: 5_000,
+          });
         });
         await expect(
           root.locator(`${CONNECTOR_CARD_SELECTOR}[data-connected]`),
         ).toHaveCount(SEEDED_CONNECTOR_CONNECTED_COUNT);
+
+        await clickUntil(segment("Disconnected"), async () => {
+          await expect(cards).toHaveCount(SEEDED_CONNECTOR_DISCONNECTED_COUNT, {
+            timeout: 5_000,
+          });
+        });
+        await expect(
+          root.locator(`${CONNECTOR_CARD_SELECTOR}[data-connected]`),
+        ).toHaveCount(0);
+
+        await clickUntil(segment("All"), async () => {
+          await expect(cards).toHaveCount(SEEDED_CONNECTOR_ALL_COUNT, {
+            timeout: 5_000,
+          });
+        });
+        // Back to the union, both buckets present.
+        await expect(
+          root.locator(`${CONNECTOR_CARD_SELECTOR}[data-connected]`),
+        ).toHaveCount(SEEDED_CONNECTOR_CONNECTED_COUNT);
+        await expect(
+          root.locator(`${CONNECTOR_CARD_SELECTOR}:not([data-connected])`),
+        ).toHaveCount(SEEDED_CONNECTOR_DISCONNECTED_COUNT);
       },
     },
   },
   states: {},
+};
+
+// ---------------------------------------------------------------------------
+// connector-install-cta (NEW in the v0.7.0 manifest; cinatra#2355 adopts it).
+// The page's closing "Install more connectors" button — the outline variant at
+// the small size, centred below the grid, no leading glyph. Its ONE annotated
+// aspect is the action.
+// ---------------------------------------------------------------------------
+
+const CONNECTOR_INSTALL_CTA_DRIVER: SurfaceDriver = {
+  path: SEEDED_HARNESS_PATH,
+  root: (page) =>
+    page.locator(`${connectorGrid("populated")} [data-conformance-id="connector-install-cta"]`),
+  present: async (_page, root) => {
+    await expect(root).toBeVisible();
+    await expect(root).toHaveText("Install more connectors");
+    // The spec's variant/size ("the outline variant at the small size"),
+    // asserted through the design-system Button's own data hooks rather than
+    // by class-string matching.
+    await expect(root).toHaveAttribute("data-variant", "outline");
+    await expect(root).toHaveAttribute("data-size", "sm");
+    // No leading glyph — "the plug family belongs to status".
+    await expect(root.locator("svg")).toHaveCount(0);
+  },
+  fields: {},
+  actions: {
+    "install-more": {
+      outcome: "marketplace-connector-tab",
+      run: async (page, root) => {
+        await assertInstallMoreNavigates(page, root);
+      },
+    },
+  },
+  states: {},
+};
+
+// ---------------------------------------------------------------------------
+// connector-empty-panel (NEW in the v0.7.0 manifest; cinatra#2355 adopts it).
+// The All+0 panel that REPLACES the grid, carrying the single install CTA.
+// Rooted on the empty-all mount — the panel does not exist on the populated
+// one, by construction.
+// ---------------------------------------------------------------------------
+
+const CONNECTOR_EMPTY_PANEL_DRIVER: SurfaceDriver = {
+  path: SEEDED_HARNESS_PATH,
+  root: (page) =>
+    page.locator(`${connectorGrid("empty-all")} [data-conformance-id="connector-empty-panel"]`),
+  present: async (_page, root) => {
+    await expect(root).toBeVisible();
+    await expect(root).toHaveAttribute("data-state", "empty");
+    await expect(root).toContainText("No connectors to show");
+  },
+  fields: {},
+  actions: {
+    // The panel's own button — the SINGLE CTA in this state. The standalone
+    // bottom CTA is suppressed beneath it (asserted in connector-grid's
+    // `empty` state driver), so this is not a duplicate of
+    // connector-install-cta's action but the other half of the same rule.
+    "install-more": {
+      outcome: "marketplace-connector-tab",
+      run: async (page, root) => {
+        await assertInstallMoreNavigates(
+          page,
+          root.getByRole("link", { name: "Install more connectors" }),
+        );
+      },
+    },
+  },
+  states: {
+    // The panel IS the empty state — it exists only when the All view has zero
+    // cards. Its own presence is therefore the assertion, plus the fact that
+    // it REPLACED the grid rather than sitting beside it.
+    empty: async (page, root) => {
+      await expect(root).toBeVisible();
+      await expect(root).toHaveAttribute("data-state", "empty");
+      // REPLACED, not emptied: the list container is absent (see
+      // CONNECTOR_LIST_SELECTOR — a card count of zero would also pass against
+      // a panel rendered above a still-present empty grid).
+      const mount = page.locator(connectorGrid("empty-all"));
+      await expect(mount.locator(CONNECTOR_LIST_SELECTOR)).toHaveCount(0);
+      await expect(mount.locator(CONNECTOR_CARD_SELECTOR)).toHaveCount(0);
+    },
+  },
 };
 
 async function openDetailModal(page: Page, root: Locator): Promise<Locator> {
@@ -1537,6 +1847,13 @@ const CONNECTOR_SETUP_DRIVER: SurfaceDriver = {
         await expect(root.locator('[data-testid="connector-disconnect"]')).toBeEnabled();
         // The connect DISPATCH carried THIS connector's own configuration —
         // the real collectFormInputs scan, scoped to this form.
+        //
+        // assertDispatch is EXACTLY-ONCE-SET, not exactly-once (see its doc):
+        // it tolerates clickUntil retries but requires the set of WRITE actions
+        // dispatched anywhere in this test to be exactly {saveConnection}, and
+        // every retry to have carried an identical payload. So a stray
+        // clearConnection alongside this connect is red, and an earlier
+        // malformed payload cannot hide behind a later good one.
         const body = assertDispatch(log, "saveConnection");
         expect(body[CONNECTOR_SETUP_CONFIG.projectId.key]).toBe(
           CONNECTOR_SETUP_CONFIG.projectId.value,
@@ -1576,6 +1893,70 @@ const CONNECTOR_SETUP_DRIVER: SurfaceDriver = {
         // (only the connect that released the gate may appear in the log).
         expect(log.rejected).toEqual([]);
         expect(log.accepted.map((c) => c.actionId)).not.toContain("clearConnection");
+
+        // …and then the ceremony's terminal step, with its PAYLOAD asserted
+        // (cinatra#2355, closing the #2382 review note). The confirm button
+        // lives in a PORTAL, outside the <form>, so it cannot resolve its own
+        // form by `closest()`. It anchors the input scan to the TRIGGER
+        // instead — and since cinatra#2357 made the scan's `origin` parameter
+        // REQUIRED, that anchoring is the only path there is; the
+        // document-wide fallback that would have masked a broken anchor is
+        // gone. This assertion is what proves the anchor actually works: a
+        // regression that lost the trigger ref would either dispatch an empty
+        // body or leak the OTHER form's fields, and both are red here.
+        //
+        // assertDispatch cannot be used for this one: its exactly-once-SET rule
+        // demands the dispatched write actions be exactly {clearConnection},
+        // and this driver legitimately dispatched `saveConnection` first to
+        // release the §II item-8 gate. So the SAME three guarantees are
+        // asserted by hand below against the two-element write set this
+        // driver does expect — nothing refused, the write set exactly
+        // {saveConnection, clearConnection}, and identical payloads across
+        // retries.
+        await clickUntil(
+          dialog.locator('[data-testid="connector-disconnect-confirm"]'),
+          async () => {
+            await expect(
+              page.locator(setupTabbed("populated")).locator(SCHEMA_FORM),
+            ).not.toHaveAttribute("data-connected", "", { timeout: 5_000 });
+          },
+        );
+        expect(log.rejected).toEqual([]);
+        // The COMPLETE write set — the guarantee assertDispatch would have
+        // given. Without this a stray createServer or saveShellConfig fired by
+        // the confirm would go unnoticed.
+        expect(
+          [
+            ...new Set(
+              log.accepted
+                .map((c) => c.actionId)
+                .filter((id) => WRITE_ACTION_IDS.has(id)),
+            ),
+          ].sort(),
+          "unexpected write dispatch alongside the disconnect ceremony",
+        ).toEqual(["clearConnection", "saveConnection"]);
+        const clears = log.accepted.filter((c) => c.actionId === "clearConnection");
+        expect(
+          clears.length,
+          "the confirm dispatched no clearConnection at all",
+        ).toBeGreaterThan(0);
+        // Every retry carried the SAME body (the exactly-once-set guarantee,
+        // applied to this action by hand).
+        for (const call of clears) {
+          expect(call.body).toEqual(clears[0].body);
+        }
+        const clearBody = clears[0].body;
+        // The scan reached THIS form through the trigger anchor…
+        expect(clearBody[CONNECTOR_SETUP_CONFIG.projectId.key]).toBe(
+          CONNECTOR_SETUP_CONFIG.projectId.value,
+        );
+        expect(clearBody[CONNECTOR_SETUP_CONFIG.serviceTier.key]).toBe(
+          CONNECTOR_SETUP_CONFIG.serviceTier.value,
+        );
+        // …and no further: the OTHER connector's form is a different <form> on
+        // the same document, so a scan that lost its anchor and went
+        // document-wide would leak those fields in here.
+        expect(clearBody).not.toHaveProperty(CONNECTOR_MULTI_SETUP_CONFIG.baseUrl.key);
       },
     },
     // check-connection -> checked: the right-column card runs the connector's
@@ -1594,8 +1975,11 @@ const CONNECTOR_SETUP_DRIVER: SurfaceDriver = {
         // The card probed the connector's OWN declared status-probe action id
         // ("connectionStatus"); the host never invents a probe id, so a card
         // that resolved its badge WITHOUT dispatching that id is a red.
-        // assertDispatch additionally pins that Check is a READ — it asserts
-        // NO write action fired for a read-only action id.
+        // assertDispatch additionally pins that Check is a READ. Its rule is
+        // exactly-once-SET, not exactly-once: for a read-only action id it
+        // requires the set of WRITE actions dispatched anywhere in this test to
+        // be EMPTY, while tolerating the clickUntil retries of the probe itself
+        // (each of which must have carried an identical payload).
         assertDispatch(log, "connectionStatus");
       },
     },
@@ -1640,9 +2024,22 @@ const CONNECTOR_CONFIG_TAB_DRIVER: SurfaceDriver = {
     page.locator(`${setupTabbed("populated")} [data-conformance-id="connector-config-tab"]`),
   present: async (page) => {
     const panel = await openConfigTab(page, "populated");
-    // §II: a custom tab's content narrows to the Narrow width (576px) —
-    // asserted structurally by the panel being the annotated surface itself.
     await expect(panel).toHaveAttribute("data-state", "ready");
+    // §II: "a custom tab's content narrows to the Narrow width (max-w-xl ·
+    // 576px, §VII)".
+    //
+    // cinatra#2355 (closing the #2382 review note): this used to say the claim
+    // was "asserted structurally by the panel being the annotated surface
+    // itself" while the only assertion was `data-state="ready"` — i.e. it was
+    // not asserted at all. It is now, on BOTH sides of the same decision: the
+    // token the component carries, and the width the browser actually laid
+    // out. The viewport here is 1280px wide, so an unbounded panel would
+    // measure far past 576 and a token-only check would miss a container that
+    // overrode it.
+    await expect(panel).toHaveClass(/\bmax-w-xl\b/);
+    const box = await panel.boundingBox();
+    expect(box, "the config-tab panel has no layout box").not.toBeNull();
+    expect(box!.width).toBeLessThanOrEqual(576);
   },
   fields: {
     // The tab's inputs are force-mounted with the panel, so a binding is
@@ -1729,6 +2126,11 @@ const CONNECTOR_CONFIG_TAB_DRIVER: SurfaceDriver = {
         // panel is force-mounted precisely so its inputs stay collectable, and
         // this pins that (a regression that dropped inactive-tab inputs would
         // still toast "saved" but submit nothing).
+        //
+        // assertDispatch is exactly-once-SET: the WRITE actions dispatched
+        // anywhere in this test must be exactly {saveShellConfig} — so a save
+        // that also fired the Setup tab's saveConnection is red — and every
+        // clickUntil retry must have carried an identical payload.
         const body = assertDispatch(log, CONNECTOR_CONFIG_TAB.saveActionId);
         expect(body[CONNECTOR_CONFIG_TAB.fields.shellContainerImage.key]).toBe(
           CONNECTOR_CONFIG_TAB.fields.shellContainerImage.value,
@@ -1812,6 +2214,11 @@ const CONNECTOR_MULTI_SETUP_DRIVER: SurfaceDriver = {
         // the single-connection connector's fields, even though that form is
         // mounted FIRST on the same page. This is the assertion that pins
         // collectFormInputs' per-form scoping.
+        //
+        // assertDispatch is exactly-once-SET: the WRITE actions dispatched
+        // anywhere in this test must be exactly {createServer} — so a click
+        // that also reached the OTHER form's saveConnection is red — and every
+        // clickUntil retry must have carried an identical payload.
         const body = assertDispatch(log, "createServer");
         expect(body[CONNECTOR_MULTI_SETUP_CONFIG.baseUrl.key]).toBe(
           CONNECTOR_MULTI_SETUP_CONFIG.baseUrl.value,
@@ -2019,6 +2426,8 @@ export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
   "install-config-needs-callout": INSTALL_CONFIG_NEEDS_CALLOUT_DRIVER,
   "connector-grid": CONNECTOR_GRID_DRIVER,
   "connector-connection-filter": CONNECTOR_CONNECTION_FILTER_DRIVER,
+  "connector-install-cta": CONNECTOR_INSTALL_CTA_DRIVER,
+  "connector-empty-panel": CONNECTOR_EMPTY_PANEL_DRIVER,
   "extension-detail-modal": EXTENSION_DETAIL_MODAL_DRIVER,
   "approvals-inbox": APPROVALS_INBOX_DRIVER,
   "approvals-your-requests": APPROVALS_YOUR_REQUESTS_DRIVER,

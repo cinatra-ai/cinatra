@@ -3,7 +3,30 @@
  *
  * Like the other component tests in this repo, this is a source-file assertion
  * suite (@testing-library/react isn't available; the root vitest env is "node").
- * It locks the design-system decisions for the connectors grid:
+ * It locks the design-system decisions for the connectors grid.
+ *
+ * SPEC PIN. Every §I claim below is held against
+ * `design/specs/app-connectors.html` v0.7.0 at design@3d33cc800 — the exact
+ * spec bytes this repo adopted in cinatra#2355 (epic #2353). The adoption is
+ * mechanical, never transcribed: the conformance artifact under
+ * `tests/e2e/design/conformance/manifests/app-connectors.json` is the
+ * generator's VERBATIM output for that commit (sha256 b0aada80a8…,
+ * contentHash sha256:9f28d508…), both hashes pinned in
+ * `tests/e2e/design/conformance-pins.json`, and the live render is checked
+ * against the spec by the design-conformance functional-acceptance suite. What
+ * THIS file adds is the source-level half — the decisions a rendered check
+ * cannot see (which module a glyph comes from, which predicate a filter uses,
+ * what a class name means) — so a regression names itself at the line that
+ * caused it rather than as a failed pixel somewhere downstream.
+ *
+ * A lock re-specified by an epic keeps its ORIGINAL issue number as its
+ * heading and records the supersession underneath; the history of a decision
+ * is part of the decision. The locks the v0.7.0 adoption re-specified are
+ * #605/#683 (the connected glyph), #1092 (its DEFAULT half only) and the
+ * empty-state block; #1014's selected-primary prohibition was deliberately NOT
+ * re-specified — see #2357 below.
+ *
+ *   Locked decisions, in the order they were made:
  *
  *   #604  the Connected/Disconnected toggle uses the design-system toggle-group
  *         spec — single outer hairline border + hairline dividers, no gaps,
@@ -74,6 +97,19 @@
  *           · The `.faded-bottom` overlay is CONTAINED to the list (the <ul>
  *             becomes the positioned block) and the CTA sits outside it, so
  *             the fade can never wash over the button.
+ *   #2355 (epic #2353) adopts that spec version into the checking machinery
+ *         and owns the rationale of every lock the epic re-specified. Nothing
+ *         in this file asserts the artifact — that is the conformance suite's
+ *         job (see SPEC PIN above) — but the two must agree, so where a lock
+ *         below duplicates a manifest fact it says which side owns it:
+ *           · #1092's block records the supersession of its DEFAULT and stops
+ *             asserting the old one; the positive default lives in #2357.
+ *           · The Connected+0 panel's COPY moved to the #2357 matrix block;
+ *             #1092 keeps only the panel's existence and wiring.
+ *           · #1014's selected-primary prohibition was examined and left
+ *             UNCHANGED — the navy All segment satisfies it (see that lock).
+ *           · The four connector-setup surfaces the artifact carries are §II
+ *             and belong to sdk-ui's own suites, not this file.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -247,25 +283,61 @@ describe("ConnectorsClient design-system contract", () => {
     });
   });
 
-  describe("cinatra#1092 drops filter persistence (its DEFAULT is superseded by #2357)", () => {
-    it("no longer defaults filterType to \"connected\" — #2357 lands on \"all\"", () => {
-      // The retained half of #1092 is NON-persistence, asserted below. The
-      // default half was explicitly superseded by epic #2353 / #2357; the new
-      // default is locked in the #2357 block.
+  // -------------------------------------------------------------------------
+  // cinatra#1092 — the connection filter is EPHEMERAL, and the Connected view
+  // answers for itself when it has nothing to show.
+  //
+  // RE-SPECIFIED IN PART by epic cinatra#2353 (issue #2357, adopted here by
+  // #2355 at design@3d33cc800 specs/app-connectors.html v0.7.0). #1092 made two
+  // decisions and this epic touches exactly one of them:
+  //
+  //   SUPERSEDED — the DEFAULT. "Every visit starts on Connected" is now
+  //     "every visit starts on All", an explicit owner-directed supersession
+  //     (the spec: "All first and selected on arrival"). This block therefore
+  //     asserts the old default is GONE; the positive lock on the new one
+  //     lives in the #2357 block, so exactly one place states what the default
+  //     is.
+  //   RETAINED, verbatim — NON-PERSISTENCE. The filter is plain component
+  //     state: never written to the URL, never to storage, so a returning
+  //     reader always lands on the default rather than on a stale selection.
+  //     A three-state filter does not weaken that reasoning, so nothing here
+  //     changes.
+  //   EVOLVED — the Connected+0 panel. #1092's panel stands, and its ACTION is
+  //     untouched ("Connect a service" → the Disconnected list). What v0.7.0
+  //     re-specified is its COPY: the old title asserted the reader had
+  //     connected nothing, which stopped being true once zero visible cards
+  //     became reachable through scope and visibility filtering as well. The
+  //     copy lock lives with the rest of the matrix in the #2357 block; what
+  //     this block keeps is the panel's EXISTENCE and its wiring, which are
+  //     #1092's decisions and are still in force.
+  // -------------------------------------------------------------------------
+  describe("cinatra#1092 filter is ephemeral; Connected+0 answers for itself (DEFAULT half superseded by epic #2353)", () => {
+    it("no longer defaults filterType to \"connected\" — epic #2353 lands on \"all\"", () => {
+      // Negative by design: this block's job is to record that the #1092
+      // default is gone. Asserting the NEW default here too would put the same
+      // decision in two places, and the next supersession would have to find
+      // both.
       expect(SRC).not.toMatch(/useState<FilterType>\("connected"\)/);
     });
 
     it("no longer persists the connection filter to localStorage", () => {
+      // The RETAINED half of #1092, untouched by the epic.
       expect(SRC).not.toContain("window.localStorage");
       expect(SRC).not.toContain('"cinatra:connectors:filter"');
       expect(SRC).not.toContain("FILTER_STORAGE_KEY");
     });
 
-    it("stays on Connected with a \"Connect a service\" empty-state CTA when nothing is connected", () => {
+    it("keeps the Connected+0 panel and its \"Connect a service\" action (copy re-specified by epic #2353)", () => {
+      // The panel's EXISTENCE and its wiring are #1092's decisions and survive
+      // the epic intact: it keys off the SERVER-resolved cards (never the
+      // search-narrowed list — see the #2357 matrix block), and its action
+      // switches the filter to the Disconnected list rather than silently
+      // falling back to it. Only the panel's title and body text were
+      // re-specified; those are asserted in the #2357 block, so this lock does
+      // not restate copy it no longer owns.
       expect(SRC).toMatch(/showConnectedEmptyState/);
       expect(SRC).toMatch(/const hasConnectedConnectors = cards\.some/);
       expect(SRC).toContain("Connect a service");
-      // The CTA switches to the Available/Disconnected list, no silent fallback.
       expect(SRC).toMatch(/onClick=\{\(\) => setFilterType\("available"\)\}/);
     });
   });
@@ -347,6 +419,16 @@ describe("ConnectorsClient design-system contract", () => {
     });
 
     it("uses the SOLID status colour + white text/icon on the selected segment, not primary/indigo", () => {
+      // DELIBERATELY NOT RE-SPECIFIED by epic cinatra#2353 (#2355 scope 3
+      // scoped this lock "re-specified only if the spec's All-segment styling
+      // requires it"). It does not: the prohibition below is file-WIDE, and
+      // the v0.7.0 All segment answers it by taking the page's own `--ink`
+      // navy (`bg-foreground`) rather than the indigo `--primary` — the spec
+      // is explicit that the primary "stays reserved for the action of record
+      // on a page and a filter segment is never that". So the third segment
+      // SATISFIES this lock as written instead of relaxing it, which is why
+      // the assertions are untouched. The narrower per-segment form is
+      // asserted again in the #2357 block so a local regression names itself.
       expect(SRC).toContain("data-[state=on]:bg-success");
       expect(SRC).toContain("data-[state=on]:text-success-foreground");
       expect(SRC).toContain("data-[state=on]:bg-destructive");

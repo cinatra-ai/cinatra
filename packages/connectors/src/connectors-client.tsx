@@ -429,6 +429,13 @@ export function ConnectorsClient({
       // reads the utility out of globals.css and fails if the gutter and the
       // band's height ever diverge.
       <ul
+        // Conformance stable-id contract (cinatra#2355, testid-contract.json):
+        // the LIST CONTAINER itself is identified, not just its cards. The
+        // All+0 panel REPLACES this element rather than emptying it, and
+        // "replaced" is only assertable if the container can be named — a
+        // count of zero cards would pass against a panel rendered ABOVE a
+        // still-present empty grid.
+        data-testid="connectors-grid-list"
         className={cn(
           "no-scrollbar grid gap-4 overflow-auto pt-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5",
           filteredConnectors.length > 0 && "faded-bottom relative pb-4 md:pb-32",

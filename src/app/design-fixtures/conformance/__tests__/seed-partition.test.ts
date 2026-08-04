@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  SEEDED_CONNECTOR_ALL_COUNT,
+  SEEDED_CONNECTOR_CARDS,
   SEEDED_CONNECTOR_CONNECTED_COUNT,
   SEEDED_CONNECTOR_DISCONNECTED_COUNT,
   SEEDED_GRID_CARD_COUNT,
@@ -67,7 +69,52 @@ describe("seeded installed-extension status partition (cinatra#1571)", () => {
       SEEDED_INSTALLED_ALL_COUNT, // 7
       SEEDED_CONNECTOR_CONNECTED_COUNT, // 3
       SEEDED_CONNECTOR_DISCONNECTED_COUNT, // 5
+      // cinatra#2355 (epic #2353): the All segment is the new DEFAULT view, so
+      // 8 joins the cross-wireable set. It must stay distinct from every count
+      // above or a driver asserting the All cardinality could pass while
+      // counting the wrong collection.
+      SEEDED_CONNECTOR_ALL_COUNT, // 8
     ];
     expect(new Set(counts).size).toBe(counts.length);
+  });
+});
+
+// The connector partition contract (cinatra#2355, epic cinatra#2353): with the
+// three-state filter the seeded connector kit must back all THREE views — All /
+// Connected / Disconnected — as a clean partition, so the round-trip the
+// functional-acceptance driver asserts (8 ⇄ 3 ⇄ 5) can only pass on a grid that
+// really re-filters. The live render of each view is proven on the seeded
+// harness.
+describe("seeded connector connection-state partition (cinatra#2355)", () => {
+  it("has the expected per-state counts (8 all, 3 connected, 5 disconnected)", () => {
+    expect(SEEDED_CONNECTOR_ALL_COUNT).toBe(8);
+    expect(SEEDED_CONNECTOR_CONNECTED_COUNT).toBe(3);
+    expect(SEEDED_CONNECTOR_DISCONNECTED_COUNT).toBe(5);
+  });
+
+  it("is a clean partition: connected + disconnected === all (no card dropped or double-counted)", () => {
+    expect(SEEDED_CONNECTOR_CONNECTED_COUNT + SEEDED_CONNECTOR_DISCONNECTED_COUNT).toBe(
+      SEEDED_CONNECTOR_ALL_COUNT,
+    );
+  });
+
+  it("keeps the three connector counts pairwise-distinct on their own", () => {
+    // A driver that clicked the wrong segment, or a pass-all predicate that
+    // silently fell through to a status arm, cannot land on a matching count.
+    const counts = [
+      SEEDED_CONNECTOR_ALL_COUNT,
+      SEEDED_CONNECTOR_CONNECTED_COUNT,
+      SEEDED_CONNECTOR_DISCONNECTED_COUNT,
+    ];
+    expect(new Set(counts).size).toBe(counts.length);
+  });
+
+  it("counts the forced-error card in the DISCONNECTED bucket (fail-soft containment)", () => {
+    // cinatra#110: the throwing probe degrades that ONE card to "not
+    // connected". It is therefore part of the 5, and part of the 8 — the All
+    // view must not hide a card whose probe failed.
+    const errored = SEEDED_CONNECTOR_CARDS.filter((c) => c.probeThrows);
+    expect(errored).toHaveLength(1);
+    expect(errored[0].connected).toBe(false);
   });
 });

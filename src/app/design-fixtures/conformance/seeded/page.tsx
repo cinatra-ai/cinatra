@@ -48,9 +48,14 @@ export const dynamic = "force-dynamic";
  *     filter + list pairing, just the wrapping surface the design spec's
  *     §III.3 four-view (All/Active/Locked/Archived) clauses describe
  *     (cinatra#1571).
- *   - connector-grid / connector-connection-filter: the REAL ConnectorsClient
- *     over cards resolved through the REAL resolveReadinessFailSoft
- *     containment (one seeded probe THROWS — the error-state card).
+ *   - connector-grid / connector-connection-filter / connector-install-cta /
+ *     connector-empty-panel: the REAL ConnectorsClient over cards resolved
+ *     through the REAL resolveReadinessFailSoft containment (one seeded probe
+ *     THROWS — the error-state card). cinatra#2355 adds four further mounts
+ *     (`data-variant` on the connector-grid wrapper) for the v0.7.0
+ *     empty-state matrix — All+0 with and without marketplace access,
+ *     Connected+0, Disconnected+0 — because both panels key off the
+ *     SERVER-resolved card set and no client interaction can produce them.
  *   - extension-detail-modal: the REAL MarketplaceDetailModal whose footer CTA
  *     re-derives through the REAL resolveMarketplaceCardCta after the harness
  *     install action mutates the installed-state input (cinatra#985 pattern).
@@ -127,7 +132,8 @@ export default async function SeededConformanceHarnessPage({
         <Card className="border-line bg-surface backdrop-blur-none">
           <CardHeader>
             <CardTitle>
-              Connectors (surfaces: connector-grid, connector-connection-filter)
+              Connectors (surfaces: connector-grid, connector-connection-filter,
+              connector-install-cta, connector-empty-panel)
             </CardTitle>
           </CardHeader>
           <CardContent>

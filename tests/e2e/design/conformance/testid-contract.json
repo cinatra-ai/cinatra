@@ -133,11 +133,12 @@
     },
     "connector-grid": {
       "manifest": "app-connectors",
-      "selector": "[data-testid=\"connector-card\"][data-connector-slug] (connected state: [data-connected]; name: [data-slot=\"connector-card-name\"]; badge: [data-testid=\"connector-badge\"])",
+      "selector": "[data-testid=\"connectors-grid-list\"] holding [data-testid=\"connector-card\"][data-connector-slug] (connected state: [data-connected]; name: [data-slot=\"connector-card-name\"]; badge: [data-testid=\"connector-badge\"]). The list CONTAINER is part of the contract since cinatra#2355: the All+0 panel REPLACES it, and \"replaced\" is only assertable if the container can be named.",
       "requires": [
         {
           "file": "packages/connectors/src/connectors-client.tsx",
           "literals": [
+            "data-testid=\"connectors-grid-list\"",
             "data-testid=\"connector-card\"",
             "data-connector-slug={connector.slug}",
             "data-slot=\"connector-card-name\""
@@ -151,11 +152,43 @@
     },
     "connector-connection-filter": {
       "manifest": "app-connectors",
-      "selector": "toggle group [aria-label=\"Filter by connection state\"]",
+      "selector": "toggle group [aria-label=\"Filter by connection state\"] — THREE segments since cinatra#2355/#2357 (values all | connected | available, labels All · Connected · Disconnected, All first and selected on arrival). Segments are located by accessible name with exact matching, so the visible labels are part of the contract.",
       "requires": [
         {
           "file": "packages/connectors/src/connectors-client.tsx",
-          "literals": ["aria-label=\"Filter by connection state\""]
+          "literals": [
+            "aria-label=\"Filter by connection state\"",
+            "value=\"all\"",
+            "value=\"connected\"",
+            "value=\"available\""
+          ]
+        }
+      ]
+    },
+    "connector-install-cta": {
+      "manifest": "app-connectors",
+      "selector": "[data-conformance-id=\"connector-install-cta\"] — the page's closing \"Install more connectors\" button (design-system Button, data-variant=\"outline\" data-size=\"sm\", rendered `asChild` over a next/link anchor so the conformance id lands on the link itself). Also carries [data-testid=\"connectors-install-cta\"].",
+      "requires": [
+        {
+          "file": "packages/connectors/src/connectors-client.tsx",
+          "literals": [
+            "data-conformance-id=\"connector-install-cta\"",
+            "data-testid=\"connectors-install-cta\""
+          ]
+        }
+      ]
+    },
+    "connector-empty-panel": {
+      "manifest": "app-connectors",
+      "selector": "[data-conformance-id=\"connector-empty-panel\"][data-state=\"empty\"] — the All+0 panel that REPLACES the grid, carrying the single install CTA (its own button carries the action but no conformance id, exactly as the spec's own markup does). Also carries [data-testid=\"connectors-empty-panel\"]; the sibling Connected+0 panel is [data-testid=\"connectors-connected-empty-panel\"].",
+      "requires": [
+        {
+          "file": "packages/connectors/src/connectors-client.tsx",
+          "literals": [
+            "data-conformance-id=\"connector-empty-panel\"",
+            "data-testid=\"connectors-empty-panel\"",
+            "data-testid=\"connectors-connected-empty-panel\""
+          ]
         }
       ]
     },
