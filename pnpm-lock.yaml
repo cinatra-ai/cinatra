@@ -1985,6 +1985,9 @@ importers:
       '@cinatra-ai/extensions':
         specifier: workspace:*
         version: link:../extensions
+      '@cinatra-ai/sdk-ui':
+        specifier: workspace:*
+        version: link:../sdk-ui
 
   packages/connectors-catalog:
     devDependencies:

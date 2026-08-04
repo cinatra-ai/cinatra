@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1668,
-    "/api/mcp": 1664,
-    "/chat": 1742,
-    "/api/a2a": 1669,
-    "/api/llm-bridge": 1679
+    "/sign-in": 1669,
+    "/api/mcp": 1665,
+    "/chat": 1743,
+    "/api/a2a": 1670,
+    "/api/llm-bridge": 1680
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1667,
-      "to": 1668,
-      "reason": "cinatra#2396 (PR #2401): the versioned additive batch-v2 contract adds ONE new pure module, packages/llm/src/batch-v2.ts — the single provider-neutral normalization layer (request validation + per-provider sanitization, the v1-canonical Chat-Completions body builder, status/state/outcome normalization, and the stable batch error-code mapping) — reached through the PRE-EXISTING @cinatra-ai/llm barrel edge (packages/llm/src/index.ts) that every locked route already carries. Keeping the new leaf OFF the locked routes was weighed and found to cost something real in every form: the v2-preferring wrappers in index.ts CALL these helpers at runtime, so no type-only (erased) edge is available; dropping the edge while keeping the ratified root surface AND the isolated leaf would require a second @cinatra-ai/llm/batch-v2 entrypoint — an unratified split of the batch surface (the v1 dispatch stays on the barrel) pushing every consumer of the #2396 contract onto a second import path; folding the 460 lines into an already-counted module (the 2074-line index.ts barrel) would hold the count flat but give up the isolated leaf seam — packages/llm/src/batch-v2.test.ts would have to drive the helpers through the barrel — and would swell an unrelated module, which is exactly the re-derivation/inlining the S2 precedent rejects; and a lazy dynamic import was rejected outright as trading static analyzability for a green check. One shared single-definition module, one extra edge, +1 on every locked route. Supersedes this route's #2377 record (1666 -> 1667, the shared open-redirect validator on the pre-existing auth-session edge), which this raise retires.",
-      "pr": 2401
-    },
-    "/api/mcp": {
-      "from": 1663,
-      "to": 1664,
-      "reason": "cinatra#2396 (PR #2401): the same single new provider-neutral normalization module (packages/llm/src/batch-v2.ts) reached via the pre-existing @cinatra-ai/llm barrel edge — see the /sign-in record for the full rationale (a second package entrypoint would split the ratified batch surface, folding it into the index.ts barrel would give up the isolated batch-v2.test.ts leaf seam, and a lazy dynamic import was rejected outright). Supersedes this route's #2377 record (1662 -> 1663, the shared open-redirect validator on the pre-existing auth-session edge), which this raise retires.",
-      "pr": 2401
-    },
-    "/chat": {
-      "from": 1741,
-      "to": 1742,
-      "reason": "cinatra#2396 (PR #2401): the same single new provider-neutral normalization module (packages/llm/src/batch-v2.ts) reached via the pre-existing @cinatra-ai/llm barrel edge — see the /sign-in record for the full rationale (a second package entrypoint would split the ratified batch surface, folding it into the index.ts barrel would give up the isolated batch-v2.test.ts leaf seam, and a lazy dynamic import was rejected outright). Supersedes this route's #2377 record (1740 -> 1741, the shared open-redirect validator on the pre-existing auth-session edge), which this raise retires.",
-      "pr": 2401
-    },
-    "/api/a2a": {
       "from": 1668,
       "to": 1669,
-      "reason": "cinatra#2396 (PR #2401): the same single new provider-neutral normalization module (packages/llm/src/batch-v2.ts) reached via the pre-existing @cinatra-ai/llm barrel edge — see the /sign-in record for the full rationale (a second package entrypoint would split the ratified batch surface, folding it into the index.ts barrel would give up the isolated batch-v2.test.ts leaf seam, and a lazy dynamic import was rejected outright). Supersedes this route's #2377 record (1667 -> 1668, the shared open-redirect validator on the pre-existing auth-session edge), which this raise retires.",
-      "pr": 2401
+      "reason": "cinatra#2356 (epic #2353, PR #2405): the 0.7.0 connectors spec re-specifies the CONNECTED status mark as a joined plug — literally the two halves of the Disconnected `Unplug` glyph with the gap closed — and lucide draws no such icon (`PlugZap` is a half plug plus a lightning bolt; `Plug` is a different drawing). It is therefore ONE net-new first-party leaf module, packages/sdk-ui/src/icons.tsx, reached through the PRE-EXISTING @cinatra-ai/sdk-ui edge every locked route already carries. Keeping it off the locked routes was weighed and costs something real in every form: the spec requires the SAME drawing at four render sites spanning two packages plus the host app, so a per-package copy would violate the single-definition requirement the epic decided on (and would let the four sites drift apart, which is the exact defect the swap exists to fix); folding the glyph into an already-counted sdk-ui module would hold the count flat but give up the isolated leaf seam — the glyph's own render suite (icons.test.tsx) would have to drive it through an unrelated component — and would put an icon registry inside a component file; and a lazy dynamic import was rejected outright as trading static analyzability for a green check. The module is deliberately kept OFF the sdk-ui root and /marketplace barrels (the ./tabs precedent, locked in the suite), so the growth is one leaf, not a barrel. One shared single-definition module, one extra edge, +1 on every locked route. Supersedes this route's #2401 record (1667 -> 1668, the provider-neutral batch-v2 normalization module on the pre-existing @cinatra-ai/llm barrel edge), which this raise retires.",
+      "pr": 2405
+    },
+    "/api/mcp": {
+      "from": 1664,
+      "to": 1665,
+      "reason": "cinatra#2356 (epic #2353, PR #2405): the same single net-new first-party glyph module (packages/sdk-ui/src/icons.tsx) reached via the pre-existing @cinatra-ai/sdk-ui edge — see the /sign-in record for the full rationale (a per-package copy would break the single-definition requirement the four render sites depend on, folding it into an existing sdk-ui module would give up the isolated icons.test.tsx leaf seam, and a lazy dynamic import was rejected outright). Supersedes this route's #2401 record (1663 -> 1664, the provider-neutral batch-v2 normalization module on the pre-existing @cinatra-ai/llm barrel edge), which this raise retires.",
+      "pr": 2405
+    },
+    "/chat": {
+      "from": 1742,
+      "to": 1743,
+      "reason": "cinatra#2356 (epic #2353, PR #2405): the same single net-new first-party glyph module (packages/sdk-ui/src/icons.tsx) reached via the pre-existing @cinatra-ai/sdk-ui edge — see the /sign-in record for the full rationale (a per-package copy would break the single-definition requirement the four render sites depend on, folding it into an existing sdk-ui module would give up the isolated icons.test.tsx leaf seam, and a lazy dynamic import was rejected outright). Supersedes this route's #2401 record (1741 -> 1742, the provider-neutral batch-v2 normalization module on the pre-existing @cinatra-ai/llm barrel edge), which this raise retires.",
+      "pr": 2405
+    },
+    "/api/a2a": {
+      "from": 1669,
+      "to": 1670,
+      "reason": "cinatra#2356 (epic #2353, PR #2405): the same single net-new first-party glyph module (packages/sdk-ui/src/icons.tsx) reached via the pre-existing @cinatra-ai/sdk-ui edge — see the /sign-in record for the full rationale (a per-package copy would break the single-definition requirement the four render sites depend on, folding it into an existing sdk-ui module would give up the isolated icons.test.tsx leaf seam, and a lazy dynamic import was rejected outright). Supersedes this route's #2401 record (1668 -> 1669, the provider-neutral batch-v2 normalization module on the pre-existing @cinatra-ai/llm barrel edge), which this raise retires.",
+      "pr": 2405
     },
     "/api/llm-bridge": {
-      "from": 1678,
-      "to": 1679,
-      "reason": "cinatra#2396 (PR #2401): the same single new provider-neutral normalization module (packages/llm/src/batch-v2.ts) reached via the pre-existing @cinatra-ai/llm barrel edge — see the /sign-in record for the full rationale (a second package entrypoint would split the ratified batch surface, folding it into the index.ts barrel would give up the isolated batch-v2.test.ts leaf seam, and a lazy dynamic import was rejected outright). Supersedes this route's #2377 record (1677 -> 1678, the shared open-redirect validator on the pre-existing auth-session edge), which this raise retires.",
-      "pr": 2401
+      "from": 1679,
+      "to": 1680,
+      "reason": "cinatra#2356 (epic #2353, PR #2405): the same single net-new first-party glyph module (packages/sdk-ui/src/icons.tsx) reached via the pre-existing @cinatra-ai/sdk-ui edge — see the /sign-in record for the full rationale (a per-package copy would break the single-definition requirement the four render sites depend on, folding it into an existing sdk-ui module would give up the isolated icons.test.tsx leaf seam, and a lazy dynamic import was rejected outright). Supersedes this route's #2401 record (1678 -> 1679, the provider-neutral batch-v2 normalization module on the pre-existing @cinatra-ai/llm barrel edge), which this raise retires.",
+      "pr": 2405
     }
   }
 }

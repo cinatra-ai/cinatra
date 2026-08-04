@@ -17,6 +17,12 @@ import { cn } from "./lib/utils";
 // status→action mapping + the connection-level confirm dialog live in the
 // consumer). The list emits the conformance id + the current data-state so the
 // design functional-acceptance suite can drive its empty / loading variants.
+//
+// Both the badge and the action are OPTIONAL, and for the same reason
+// (cinatra#2357): a consumer that lists connection IDENTITIES rather than live
+// connections — the host's connection-sharing section — can name each row and
+// nothing more. Both affordances are CLAIMS, so a surface that cannot back one
+// omits it instead of borrowing it.
 // ---------------------------------------------------------------------------
 
 export interface ConnectionRowProps
@@ -25,8 +31,16 @@ export interface ConnectionRowProps
   name: string;
   /** Secondary mono line beneath the name (e.g. the server URL). */
   url?: string;
-  /** Solid status badge for this connection. */
-  status: ConnectionStatus;
+  /**
+   * Solid status badge for this connection. OPTIONAL: a consumer that holds no
+   * per-connection signal renders the row WITHOUT a badge rather than
+   * borrowing one. Passing `"connected"` paints a green joined-plug chip and
+   * `data-status="connected"` — a claim about the connection answering right
+   * now — so a surface that only knows the identity is stored must omit it. A
+   * label alone is not enough to soften that: the colour and the glyph are the
+   * claim as much as the word is.
+   */
+  status?: ConnectionStatus;
   /**
    * The per-row action, following the status: a destructive Disconnect on a
    * connected row, a primary Connect on a disconnected one.
@@ -63,7 +77,7 @@ export function ConnectionRow({
         ) : null}
       </div>
       <div className="flex flex-none items-center gap-3">
-        <ConnectionStatusBadge status={status} />
+        {status ? <ConnectionStatusBadge status={status} /> : null}
         {action}
       </div>
     </div>

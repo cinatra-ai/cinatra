@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
   "spec": "specs/app-connectors.html",
-  "contentHash": "sha256:f34487c6395d53d1782cab5533bd33dbb70348ce810523ec38c27e5dc31ae9fd",
+  "contentHash": "sha256:9f28d508390afd63dc51c69bc80192e9a33d739726c93bb3ceaeff60b9cf93af",
   "surfaces": [
     {
       "id": "connector-connection-filter",
@@ -27,6 +27,30 @@
         "empty",
         "error",
         "loading"
+      ]
+    },
+    {
+      "id": "connector-install-cta",
+      "fields": [],
+      "actions": [
+        {
+          "action": "install-more",
+          "outcome": "marketplace-connector-tab"
+        }
+      ],
+      "states": []
+    },
+    {
+      "id": "connector-empty-panel",
+      "fields": [],
+      "actions": [
+        {
+          "action": "install-more",
+          "outcome": "marketplace-connector-tab"
+        }
+      ],
+      "states": [
+        "empty"
       ]
     },
     {

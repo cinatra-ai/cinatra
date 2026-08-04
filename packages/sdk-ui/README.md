@@ -96,6 +96,18 @@ import { ConnectionsList, ConnectionRow } from "@cinatra-ai/sdk-ui/connections-l
 
 The interactive controls (Check, All connections, Connect/Disconnect, the disconnect confirm dialog) are passed in as slots, so the primitives stay server-safe and the consuming connector owns the probe, navigation, and connection-level confirm copy.
 
+### First-party glyphs: `@cinatra-ai/sdk-ui/icons`
+
+Design-spec marks the lucide set does not carry, built with lucide's own public `createLucideIcon` factory so each one is a drop-in for a lucide icon (same `LucideProps`, same 24x24 `stroke="currentColor"` chrome, same automatic `aria-hidden`). Exported from its own `@cinatra-ai/sdk-ui/icons` subpath — never from the root or `/marketplace` barrels.
+
+```tsx
+import { PlugConnected } from "@cinatra-ai/sdk-ui/icons";
+```
+
+- **`PlugConnected`** — the joined plug (`design/specs/app-connectors.html` 0.7.0): the two halves of lucide's `Unplug` with the gap closed and the loose prong strokes dropped. The Connected counterpart of `Unplug` everywhere connection status is shown — the `/connectors` toggle segment and card badge, the setup page's `ConnectionStatusBadge`, and the setup form's Connect action.
+
+The module is a registry, not a single-glyph file: each glyph exports its `IconNode` path set alongside the component, so a new first-party mark is one node + one `createLucideIcon` line.
+
 ## TypeScript exports
 
 ```ts

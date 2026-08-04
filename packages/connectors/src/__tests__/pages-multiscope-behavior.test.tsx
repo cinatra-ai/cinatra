@@ -31,6 +31,12 @@ vi.mock("@/lib/auth-session", () => ({
     session: { activeOrganizationId: ORG },
   })),
   getActorContext: vi.fn(async () => ({ userId: ACTOR, organizationId: ORG })),
+  // cinatra#2357: the page reads the SAME platform-admin fact
+  // `/configuration/marketplace`'s own gate reads, to decide whether either
+  // install affordance renders. This suite asserts SCOPE filtering only, so the
+  // seeded actor is a plain member — the stricter of the two, and the one that
+  // proves the scope filter does not depend on the new flag.
+  isPlatformAdmin: vi.fn(() => false),
 }));
 vi.mock("@/lib/better-auth-db", () => ({
   // ConnectorsPage is a UI scope picker (cinatra#1942 archive V1, Decision 4)

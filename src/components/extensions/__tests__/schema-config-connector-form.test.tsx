@@ -490,3 +490,156 @@ describe("SchemaConfigConnectorForm — canonical Connect/Disconnect pair (#1101
     expect(plain).toBeTruthy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#2357 — the three #2382-review closures this component owns.
+//
+//   1. state forwarding is UNIFIED: it used to be `aside`-gated, so a
+//      probe-less connector handed `conformanceState="loading"` rendered its
+//      fields as if nothing were pending, while the custom config-tab panel
+//      honoured the same prop unconditionally.
+//   2. `setupFooter` no longer stays live under the loading / error
+//      treatments, which replace the setup body it belongs to.
+//   3. `collectFormInputs`' `origin` is REQUIRED — the document-wide fallback
+//      (reachable only through an `undefined` argument no caller ever passed)
+//      is gone, so the cross-form leak it re-enabled cannot come back.
+// ---------------------------------------------------------------------------
+
+describe("SchemaConfigConnectorForm — §II state treatments (cinatra#2357)", () => {
+  const STATE_SURFACE = {
+    fields: [
+      { kind: "text", key: "apiKey", label: "API key" },
+      { kind: "named-action", label: "Connect", actionId: "saveConnection", role: "connect" },
+    ],
+  };
+
+  it("honours a non-ready state WITHOUT an aside — the probe-less shape too", async () => {
+    const surface = surfaceOf(STATE_SURFACE);
+    await renderForm({
+      installId: "i1",
+      packageName: "@x/y",
+      surface,
+      conformanceState: "loading",
+      setupFooter: <p data-testid="host-footer">sharing</p>,
+    });
+    const root = container.querySelector(
+      '[data-conformance-id="connector-setup"][data-state="loading"]',
+    );
+    // Pre-fix this surface did not render at all without an aside.
+    expect(root).toBeTruthy();
+    expect(root!.querySelector('[data-slot="connector-setup-loading"]')).toBeTruthy();
+    // The body is genuinely REPLACED, not merely annotated.
+    expect(container.querySelector('input[name="apiKey"]')).toBeNull();
+    expect(container.querySelector('[data-testid="connector-connect"]')).toBeNull();
+  });
+
+  it("honours the error state WITHOUT an aside", async () => {
+    const surface = surfaceOf(STATE_SURFACE);
+    await renderForm({
+      installId: "i1",
+      packageName: "@x/y",
+      surface,
+      conformanceState: "error",
+    });
+    const root = container.querySelector(
+      '[data-conformance-id="connector-setup"][data-state="error"]',
+    );
+    expect(root).toBeTruthy();
+    expect(root!.querySelector('[data-slot="connector-setup-error"]')).toBeTruthy();
+    expect(container.querySelector('input[name="apiKey"]')).toBeNull();
+  });
+
+  it("keeps the single-column shape when READY and asideless (no empty right column)", async () => {
+    const surface = surfaceOf(STATE_SURFACE);
+    await renderForm({ installId: "i1", packageName: "@x/y", surface });
+    // No two-column grid is mounted at all — the surface id belongs to
+    // ConnectorSetupColumns, which only the aside/non-ready shapes render.
+    expect(container.querySelector('[data-conformance-id="connector-setup"]')).toBeNull();
+    expect(container.querySelector('input[name="apiKey"]')).toBeTruthy();
+  });
+
+  it("suppresses setupFooter under loading and error, and renders it when ready", async () => {
+    const surface = surfaceOf(STATE_SURFACE);
+    const footer = <p data-testid="host-footer">sharing</p>;
+    for (const state of ["loading", "error"] as const) {
+      await renderForm({
+        installId: "i1",
+        packageName: "@x/y",
+        surface,
+        conformanceState: state,
+        setupFooter: footer,
+      });
+      expect(container.querySelector('[data-testid="host-footer"]')).toBeNull();
+    }
+    await renderForm({
+      installId: "i1",
+      packageName: "@x/y",
+      surface,
+      conformanceState: "ready",
+      setupFooter: footer,
+    });
+    expect(container.querySelector('[data-testid="host-footer"]')).toBeTruthy();
+  });
+});
+
+describe("SchemaConfigConnectorForm — action input scoping (cinatra#2357 / #2382)", () => {
+  // NOTE on what each half proves. The BEHAVIOURAL test below guards the
+  // `closest()` scoping that #2382 introduced — it was already green before
+  // this stage, because every caller already passed an origin. What #2357
+  // changed is the TYPE: the optional parameter and its document-wide branch
+  // are gone, so no future call site can opt back into the leak. Only a source
+  // assertion can fail on that, and it lives beside the other source contracts
+  // in src/components/__tests__/schema-config-connector-form.test.tsx.
+  it("submits ONLY the triggering form's own fields when two forms share a page", async () => {
+    const bodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        bodies.push(String(init?.body ?? ""));
+        return new Response(JSON.stringify({ result: {} }), { status: 200 });
+      }) as unknown as typeof fetch,
+    );
+
+    const first = surfaceOf({
+      fields: [
+        { kind: "text", key: "firstOnlyKey", label: "First" },
+        { kind: "named-action", label: "Save first", actionId: "saveFirst" },
+      ],
+    });
+    const second = surfaceOf({
+      fields: [
+        { kind: "text", key: "secondOnlyKey", label: "Second" },
+        { kind: "named-action", label: "Save second", actionId: "saveSecond" },
+      ],
+    });
+    await act(async () => {
+      root.render(
+        <>
+          <SchemaConfigConnectorForm installId="i1" packageName="@x/first" surface={first} />
+          <SchemaConfigConnectorForm installId="i2" packageName="@x/second" surface={second} />
+        </>,
+      );
+    });
+    // Seed a distinguishable value in EACH form.
+    const inputs = container.querySelectorAll<HTMLInputElement>("input[name]");
+    for (const input of inputs) input.value = `v-${input.name}`;
+
+    const trigger = [...container.querySelectorAll("button")].find(
+      (b) => b.textContent?.trim() === "Save second",
+    );
+    expect(trigger).toBeTruthy();
+    await act(async () => {
+      trigger!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(bodies).toHaveLength(1);
+    const payload = JSON.parse(bodies[0]) as Record<string, string>;
+    // The SECOND form's own field, and none of the first form's — the
+    // document-wide scan this replaced would have submitted `firstOnlyKey`
+    // because that form is mounted first.
+    expect(payload).toEqual({ secondOnlyKey: "v-secondOnlyKey" });
+    expect(Object.keys(payload)).not.toContain("firstOnlyKey");
+  });
+});

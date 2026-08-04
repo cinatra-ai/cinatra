@@ -62,7 +62,6 @@ import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { ConnectorSetupPage } from "@cinatra-ai/sdk-ui/connector-setup-page";
 import { ConnectorSetupColumns } from "@cinatra-ai/sdk-ui/connector-setup-columns";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ConnectionSharingSection } from "@/components/extensions/connection-sharing-section";
 
 /**
@@ -395,6 +394,15 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
   if (render.kind === "invalid-schema-config") {
     // Fail-closed: a connector that declares schema-config with a malformed
     // configSchema renders an error, NEVER the bundled-react importer.
+    //
+    // cinatra#2357: this branch now renders the SPEC's own error treatment for
+    // the `connector-setup` surface (design/specs/app-connectors.html §II
+    // declares `data-state="loading error"` on it). The treatment landed with
+    // #2354 but stayed LATENT — no production caller selected it, so the one
+    // state the spec declares for a setup page that cannot be shown was drawn
+    // by a bespoke Alert instead. Routing through ConnectorSetupColumns keeps
+    // the surface MOUNTED with its conformance id and swaps the body for the
+    // declared error state, which is what a variant of a surface means here.
     return (
       <Main className="min-h-screen">
         <PageHeader
@@ -402,14 +410,13 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
           description="Connector setup"
         />
         <PageContent className="flex flex-col gap-6 pb-8">
-          <Alert variant="destructive">
-            <AlertTitle>This connector&apos;s setup schema is invalid</AlertTitle>
-            <AlertDescription>
-              {displayName} declares a schema-driven setup surface, but its
-              configuration schema could not be validated. The connector must be
-              fixed and republished before it can be configured.
-            </AlertDescription>
-          </Alert>
+          <ConnectorSetupColumns
+            conformanceId="connector-setup"
+            state="error"
+            fields={null}
+            aside={null}
+            errorLabel={`This connector's setup schema is invalid. ${displayName} declares a schema-driven setup surface, but its configuration schema could not be validated. The connector must be fixed and republished before it can be configured.`}
+          />
           {sharingSection}
         </PageContent>
       </Main>
@@ -422,6 +429,9 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
   // surface the "requires rebuild" state rather than crash.
   if (!catalogEntry) {
     const rebuild = requiresRebuildState(packageId);
+    // Same §II error treatment as the invalid-schema branch above
+    // (cinatra#2357): the setup surface genuinely could not be loaded, which is
+    // the state the spec declares — not a page of its own.
     return (
       <Main className="min-h-screen">
         <PageHeader
@@ -429,10 +439,13 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
           description="Connector setup"
         />
         <PageContent className="flex flex-col gap-6 pb-8">
-          <Alert>
-            <AlertTitle>This connector requires a rebuild</AlertTitle>
-            <AlertDescription>{rebuild.message}</AlertDescription>
-          </Alert>
+          <ConnectorSetupColumns
+            conformanceId="connector-setup"
+            state="error"
+            fields={null}
+            aside={null}
+            errorLabel={`This connector requires a rebuild. ${rebuild.message}`}
+          />
           {sharingSection}
         </PageContent>
       </Main>
@@ -465,7 +478,8 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
   } catch {
     // No loadable React module means the connector's bundled-react setup page is
     // not in this base image — surface the "requires rebuild" state rather than
-    // throwing an opaque placeholder error.
+    // throwing an opaque placeholder error. Same §II error treatment as the two
+    // branches above (cinatra#2357).
     const rebuild = requiresRebuildState(packageId);
     return (
       <Main className="min-h-screen">
@@ -474,10 +488,13 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
           description="Connector setup"
         />
         <PageContent className="flex flex-col gap-6 pb-8">
-          <Alert>
-            <AlertTitle>This connector requires a rebuild</AlertTitle>
-            <AlertDescription>{rebuild.message}</AlertDescription>
-          </Alert>
+          <ConnectorSetupColumns
+            conformanceId="connector-setup"
+            state="error"
+            fields={null}
+            aside={null}
+            errorLabel={`This connector requires a rebuild. ${rebuild.message}`}
+          />
           {sharingSection}
         </PageContent>
       </Main>

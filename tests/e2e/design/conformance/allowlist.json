@@ -16,8 +16,8 @@
     {
       "manifest": "app-connectors",
       "surface": "connector-grid",
-      "aspects": ["state:empty", "state:loading"],
-      "reason": "/connectors renders a bare grid when zero cards match (ConnectorsClient has no designed empty state) and is server-rendered without a streaming fallback — cover when those presentations exist. The name binding, exact cardinality, the connection filter, and the fail-soft error card (cinatra#110 containment) are covered on the seeded harness (cinatra#986)."
+      "aspects": ["state:loading"],
+      "reason": "/connectors is server-rendered with no streaming fallback, so no distinct loading presentation exists — cover when one does. `state:empty` was REMOVED by cinatra#2355 (epic #2353): the 0.7.0 spec gives the surface a real empty-state MATRIX (All+0 panel with the single install CTA, the same panel buttonless without marketplace access, the Connected+0 panel, and a bare Disconnected+0 list), all four now asserted by the connector-grid `empty` state driver on their own seeded mounts. The name binding, exact cardinality (8 under the new All default), the three-state filter round-trip, and the fail-soft error card (cinatra#110 containment) are covered on the seeded harness (cinatra#986)."
     }
   ]
 }

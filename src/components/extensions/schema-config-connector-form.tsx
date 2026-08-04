@@ -16,7 +16,10 @@
 // admin-only value at the write handler — defense in depth).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckIcon, CopyIcon, PlugZap, PlusIcon, RefreshCwIcon, Trash2Icon, Unplug } from "lucide-react";
+import { CheckIcon, CopyIcon, PlusIcon, RefreshCwIcon, Trash2Icon, Unplug } from "lucide-react";
+// The Connect action's glyph is the first-party joined plug (cinatra#2356) —
+// the SAME mark the status badge and the §I card grid draw for Connected.
+import { PlugConnected } from "@cinatra-ai/sdk-ui/icons";
 import { toast } from "@/lib/cinatra-toast";
 import {
   AlertDialog,
@@ -132,6 +135,9 @@ export type SchemaConfigConnectorFormProps = {
    * Help tab; on a flat surface it renders after the fields. Like `aside` it
    * MUST stay input-free (no named form controls): it renders inside the form
    * fieldset, and `collectFormInputs()` scans every named descendant control.
+   *
+   * Rendered ONLY in the `ready` state: the loading / error treatments replace
+   * the setup body, and this footer is part of that body.
    */
   setupFooter?: React.ReactNode;
   /**
@@ -319,9 +325,19 @@ export function SchemaConfigConnectorForm({
   // single-column probe-less shape. `setupFooter` (e.g. connection sharing)
   // belongs to the SETUP surface only, so it rides inside this body — never
   // beneath a custom or Help tab.
+  //
+  // STATE FORWARDING IS UNCONDITIONAL (#2382 review note 1). It used to be
+  // aside-GATED — a probe-less connector could be handed
+  // `conformanceState="loading"` and render its fields as if nothing were
+  // pending, while the custom config-tab panel below honoured the same prop
+  // either way. The two now agree: a non-ready state ALWAYS routes through
+  // ConnectorSetupColumns, which keeps the surface mounted with its
+  // conformance id and swaps the body for the state's own treatment. The
+  // aside only decides the READY shape (two columns vs one).
+  const showSetupColumns = Boolean(aside) || conformanceState !== "ready";
   const setupBody = (
     <>
-      {aside ? (
+      {showSetupColumns ? (
         <ConnectorSetupColumns
           conformanceId={conformanceId}
           state={conformanceState}
@@ -331,7 +347,16 @@ export function SchemaConfigConnectorForm({
       ) : (
         renderGroup(surface.fields)
       )}
-      {setupFooter}
+      {/* setupFooter is SUPPRESSED while the surface is loading or errored
+          (#2382 review note 2). It used to stay live under both treatments,
+          which read as a contradiction: the host content it carries (the
+          connection-sharing section) describes connections of a setup surface
+          that has explicitly not resolved. §II's loading/error treatments
+          REPLACE the body, and this footer is part of that body. A route that
+          wants its own composition on an error page renders it itself, outside
+          the form — which is exactly what the connector dispatch route does on
+          its invalid-schema / rebuild branches. */}
+      {conformanceState === "ready" ? setupFooter : null}
     </>
   );
 
@@ -624,9 +649,10 @@ function NamedActionRow({
  * SIDE BY SIDE, never stacked: Connect (indigo primary, plug leadingIcon) on the
  * left, Disconnect (destructive red, unplug leadingIcon) on the right. Disconnect
  * is disabled until the connector is connected, and its confirmation is a neutral
- * AlertDialog (never a bare prompt). The icons are the SAME PlugZap / Unplug the
- * status badge + §I card grid use, so the whole surface speaks one status
- * language (item 33).
+ * AlertDialog (never a bare prompt). The icons are the SAME PlugConnected /
+ * Unplug the status badge + §I card grid use (cinatra#2356 — the joined plug
+ * replaces `PlugZap` on the Connect action; Disconnect and its confirm keep
+ * `Unplug`), so the whole surface speaks one status language (item 33).
  */
 function ConnectionActionsRow({
   actions,
@@ -667,7 +693,7 @@ function ConnectionActionsRow({
   );
 }
 
-/** Connect (role:"connect") — indigo primary + plug. Saves the form inputs. */
+/** Connect (role:"connect") — indigo primary + the joined plug. Saves the form inputs. */
 function ConnectButton({
   field,
   installId,
@@ -691,7 +717,7 @@ function ConnectButton({
   }, [installId, field.actionId, onConnected, onActionResult]);
   return (
     <Button type="button" data-testid="connector-connect" onClick={run} disabled={pending}>
-      <PlugZap />
+      <PlugConnected />
       {field.label}
     </Button>
   );
@@ -783,26 +809,28 @@ function DisconnectButton({
  * whose name contains "[" (repeatable-list rows are out of scope for a flat
  * create action).
  *
- * `origin` is the element that triggered the action (the action's own button).
- * The collection is scoped to THAT button's own form via `closest()` — a
- * document-wide `querySelector` would silently pick the FIRST schema-config
- * form on the page, so on any page rendering more than one connector form an
- * action would submit a DIFFERENT connector's field values.
+ * `origin` is the element that triggered the action (the action's own button)
+ * and is REQUIRED (#2382 review note 3). The collection is scoped to THAT
+ * button's own form via `closest()` — a document-wide `querySelector` would
+ * silently pick the FIRST schema-config form on the page, so on any page
+ * rendering more than one connector form an action would submit a DIFFERENT
+ * connector's field values.
  *
- * FAIL CLOSED whenever an origin is PASSED but resolves to no form — including
- * a `null` origin (a ref that never attached): submitting SOME OTHER
- * connector's configuration is strictly worse than submitting nothing, so
- * those cases yield {} rather than falling back. The distinction is
- * `undefined` (no origin argument at all) vs `null`/a detached element, so the
- * document-wide lookup survives ONLY for a caller that opts out entirely
- * (today's behavior on a single-form page).
+ * The parameter was optional, with the document-wide scan surviving as the
+ * `undefined` branch "for a caller that opts out entirely". No caller ever
+ * did: all three pass an origin. Keeping an unreachable path whose ONLY
+ * behaviour is the cross-form leak this function exists to prevent was an
+ * invitation for a future call site to reintroduce it, so the branch is gone
+ * and the type no longer admits it.
+ *
+ * FAIL CLOSED whenever the origin resolves to no form — including a `null`
+ * origin (a ref that never attached, which is why the parameter stays
+ * nullable): submitting SOME OTHER connector's configuration is strictly worse
+ * than submitting nothing, so those cases yield {}.
  */
-function collectFormInputs(origin?: Element | null): Record<string, string> {
+function collectFormInputs(origin: Element | null): Record<string, string> {
   if (typeof document === "undefined") return {};
-  const form =
-    origin === undefined
-      ? document.querySelector<HTMLElement>('[data-testid="schema-config-form"]')
-      : (origin?.closest<HTMLElement>('[data-testid="schema-config-form"]') ?? null);
+  const form = origin?.closest<HTMLElement>('[data-testid="schema-config-form"]') ?? null;
   if (!form) return {};
   const out: Record<string, string> = {};
   form

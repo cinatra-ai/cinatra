@@ -51,11 +51,21 @@ describe("ConnectionStatusBadge — solid green/red language + Checking transien
       /"connected"\s*\|\s*"disconnected"\s*\|\s*"checking"/,
     );
   });
-  it("connected is a SOLID green chip with a plug — byte-parity with ConnectorBadge", () => {
+  it("connected is a SOLID green chip with the JOINED plug — byte-parity with ConnectorBadge (cinatra#2356)", () => {
+    // RE-SPECIFIED by cinatra#2356 (epic #2353; design/specs/app-connectors.html
+    // 0.7.0, pinned at design@3d33cc800): the connected glyph is the
+    // first-party `PlugConnected` mark (the two halves of `Unplug` with the gap
+    // closed), not lucide's `PlugZap`. The parity claim this test carries is the
+    // point of the swap: this badge and the @cinatra-ai/connectors
+    // `ConnectorBadge` must draw the SAME glyph, which is only structurally
+    // guaranteed because both import the ONE definition from ./icons.
     expect(badgeSrc).toContain("bg-success text-success-foreground");
-    expect(badgeSrc).toContain("PlugZap");
+    expect(badgeSrc).toMatch(/import \{ PlugConnected \} from "\.\/icons"/);
+    expect(badgeSrc).toContain("<PlugConnected ");
+    expect(badgeSrc).not.toContain("PlugZap");
   });
   it("disconnected is a SOLID red chip with an unplug — byte-parity with ConnectorBadge", () => {
+    // Untouched by #2356 — `Unplug` is the mark the connected glyph derives from.
     expect(badgeSrc).toContain("bg-destructive text-destructive-foreground");
     expect(badgeSrc).toContain("Unplug");
   });

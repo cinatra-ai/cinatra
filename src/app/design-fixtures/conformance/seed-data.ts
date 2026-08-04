@@ -282,6 +282,15 @@ export const SEEDED_CONNECTOR_CONNECTED_COUNT = SEEDED_CONNECTOR_CARDS.filter(
 export const SEEDED_CONNECTOR_DISCONNECTED_COUNT = SEEDED_CONNECTOR_CARDS.filter(
   (c) => !c.connected,
 ).length; // 5
+/**
+ * The ALL-segment cardinality (cinatra#2355, epic #2353): with "All" the new
+ * landing filter (#2357), the default view shows EVERY seeded card, so the
+ * grid's `present` cardinality is this number rather than the connected 3.
+ * It is the union of the two status buckets — asserted as a clean partition,
+ * and kept pairwise-distinct from every other seeded count, in
+ * ../__tests__/seed-partition.test.ts.
+ */
+export const SEEDED_CONNECTOR_ALL_COUNT = SEEDED_CONNECTOR_CARDS.length; // 8
 /** Slug of the forced-probe-failure card (connector-grid `error` variant). */
 export const SEEDED_CONNECTOR_ERROR_SLUG = "fixture-broken-probe";
 
