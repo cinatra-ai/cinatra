@@ -3,11 +3,18 @@
 //
 // Three actions land here:
 //
-//   1. editVendorAction (pre-publish):
-//      - Replaces credentials WITHOUT appending to oldInstanceNamespaces[].
-//      - Allowed only when firstPublishedAt === null.
-//      - Provisions a new Verdaccio user under the new vendor name; encrypts
-//        the new token + password; persists; redirects.
+//   1. editVendorAction:
+//      - Pre-publish (firstPublishedAt === null): replaces credentials WITHOUT
+//        appending to oldInstanceNamespaces[]. Provisions a new Verdaccio user
+//        under the new vendor name; encrypts the new token + password;
+//        persists; redirects.
+//      - Post-publish (firstPublishedAt !== null): the namespace is frozen.
+//        Display-name-only edits still save. A namespace change reaching this
+//        action anyway (the UI's namespace field is disabled/unsubmitted, but
+//        this action is the validated entry point regardless of caller) is
+//        EXPLICITLY refused with the `frozen-namespace-use-rename` code
+//        (cinatra#2387) — never silently dropped. renameInstanceNamespaceAction
+//        below is the only path forward for a frozen namespace.
 //
 //   2. renameInstanceNamespaceAction (post-freeze):
 //      - Same provisioning flow, but ALSO appends the previous identity
@@ -51,11 +58,17 @@ import { validateInstanceNamespace } from "@/lib/instance-namespace";
 import {
   readInstanceIdentity,
   writeInstanceIdentity,
+  applyInstanceIdentityProvisioningWrite,
   type InstanceIdentity,
 } from "@/lib/instance-identity-store";
 // Cache invalidation lives in a separate module so vi.mock can spy on it
 // reliably.
 import { invalidateInstanceIdentityCache } from "@/lib/instance-identity-cache";
+import {
+  readPendingProvisionedCredentials,
+  writePendingProvisionedCredentials,
+  clearPendingProvisionedCredentials,
+} from "@/lib/instance-identity-pending-provision";
 import { encryptSecret } from "@/lib/instance-secrets";
 import {
   getEffectiveViewerScope,
@@ -397,8 +410,8 @@ async function provisionAndPersist(
   // before persisting anything.
   const envToken = process.env.CINATRA_AGENT_REGISTRY_TOKEN?.trim();
 
-  let token: string;
-  let password: string;
+  let tokenEnc: { ciphertext: string; iv: string };
+  let passwordEnc: { ciphertext: string; iv: string };
 
   if (envToken) {
     // Mode (a) — pre-provisioned token.
@@ -412,88 +425,132 @@ async function provisionAndPersist(
     if (process.env.CINATRA_AGENT_REGISTRY_SCOPE?.trim() !== expectedScope) {
       redirectWithError("registry-scope-mismatch");
     }
-    token = envToken;
     // No in-app password in the pre-provisioned flow — the operator holds the
     // htpasswd credential out-of-band. Persist a random placeholder so the
     // row's encrypted shape is intact; publish/install authenticate with the
     // token, never this password.
-    password =
+    const placeholderPassword =
       process.env.CINATRA_AGENT_REGISTRY_PASSWORD?.trim() ||
       randomBytes(32).toString("base64url");
+    // Encrypt BEFORE writing so a failed encrypt never leaves partial state.
+    // Per-field AAD binding prevents a metadata-row swap of
+    // tokenCiphertext+tokenIv with passwordCiphertext+passwordIv from yielding
+    // a successful decryption of the wrong field.
+    // No credential stash in mode (a): the token comes from env, so a retry
+    // after a write conflict re-reads it — nothing mint-once about it.
+    tokenEnc = encryptSecret(envToken, "vendor.token");
+    passwordEnc = encryptSecret(placeholderPassword, "vendor.password");
   } else {
-    // Mode (b) — self-register on a registry that allows it. Generate a
-    // 32-byte base64url password (43 chars on the wire), then provision the
-    // npm user under the new name.
-    password = randomBytes(32).toString("base64url");
-    try {
-      const result = await createNpmUser({
+    // Mode (b) — self-register on a registry that allows it.
+    //
+    // Minted-credentials-as-recoverable-state: `createNpmUser` mints the npm
+    // user BEFORE the identity-row CAS write below. If that write does not
+    // land, the request used to discard the minted token — and the operator's
+    // retry called `createNpmUser` again for the SAME namespace, which
+    // Verdaccio 409s (VerdaccioUserAlreadyRegisteredError), misreported as
+    // "namespace-taken": a transient write conflict became a permanent dead
+    // end. So: reuse a stashed mint for this namespace when one exists (skip
+    // the duplicate adduser); otherwise mint, encrypt, and stash the
+    // ciphertexts before attempting the write. The stash is cleared once the
+    // write lands.
+    const pending = readPendingProvisionedCredentials(newName);
+    if (pending) {
+      // Stashed ciphertexts were produced under the same per-field AADs the
+      // identity row uses ("vendor.token" / "vendor.password") — reuse them
+      // directly; no decrypt round-trip, no plaintext in scope.
+      tokenEnc = { ciphertext: pending.tokenCiphertext, iv: pending.tokenIv };
+      passwordEnc = {
+        ciphertext: pending.passwordCiphertext,
+        iv: pending.passwordIv,
+      };
+    } else {
+      // Generate a 32-byte base64url password (43 chars on the wire), then
+      // provision the npm user under the new name.
+      const password = randomBytes(32).toString("base64url");
+      let token: string;
+      try {
+        const result = await createNpmUser({
+          instanceNamespace: newName,
+          password,
+          email,
+          registryUrl: REGISTRY_URL,
+        });
+        token = result.token;
+      } catch (e) {
+        if (e instanceof VerdaccioUserAlreadyRegisteredError) {
+          redirectWithError("namespace-taken");
+        }
+        if (e instanceof VerdaccioRegistrationDisabledError) {
+          redirectWithError("registry-registration-disabled");
+        }
+        if (e instanceof VerdaccioUnexpectedResponseError) {
+          redirectWithError("registry-unexpected-response");
+        }
+        // Emit a generic redirect message and log the full error server-side.
+        // Reflecting the inner Error.message into ?error= leaks network
+        // diagnostics (DNS errors with the configured registry host,
+        // EHOSTUNREACH targets, etc.) into URL query params.
+        console.error("[provisionAndPersist] unexpected registry error:", e);
+        redirectWithError("registry-provision-failed");
+        throw e; // unreachable; satisfies TS narrowing
+      }
+      // Encrypt BEFORE writing so a failed encrypt never leaves partial state.
+      // Per-field AAD binding prevents a metadata-row swap of
+      // tokenCiphertext+tokenIv with passwordCiphertext+passwordIv from
+      // yielding a successful decryption of the wrong field.
+      tokenEnc = encryptSecret(token, "vendor.token");
+      passwordEnc = encryptSecret(password, "vendor.password");
+      // Stash the encrypted mint BEFORE the CAS attempt so a non-landed write
+      // leaves the credentials recoverable for the operator's retry.
+      writePendingProvisionedCredentials({
         instanceNamespace: newName,
-        password,
-        email,
-        registryUrl: REGISTRY_URL,
+        tokenCiphertext: tokenEnc.ciphertext,
+        tokenIv: tokenEnc.iv,
+        tokenAlgo: "aes-256-gcm",
+        passwordCiphertext: passwordEnc.ciphertext,
+        passwordIv: passwordEnc.iv,
+        mintedAt: new Date().toISOString(),
       });
-      token = result.token;
-    } catch (e) {
-      if (e instanceof VerdaccioUserAlreadyRegisteredError) {
-        redirectWithError("namespace-taken");
-      }
-      if (e instanceof VerdaccioRegistrationDisabledError) {
-        redirectWithError("registry-registration-disabled");
-      }
-      if (e instanceof VerdaccioUnexpectedResponseError) {
-        redirectWithError("registry-unexpected-response");
-      }
-      // Emit a generic redirect message and log the full error server-side.
-      // Reflecting the inner Error.message into ?error= leaks network
-      // diagnostics (DNS errors with the configured registry host,
-      // EHOSTUNREACH targets, etc.) into URL query params.
-      console.error("[provisionAndPersist] unexpected registry error:", e);
-      redirectWithError("registry-provision-failed");
-      throw e; // unreachable; satisfies TS narrowing
     }
   }
 
-  // Encrypt BEFORE writing so a failed encrypt never leaves partial state.
-  // Per-field AAD binding prevents a metadata-row swap of
-  // tokenCiphertext+tokenIv with passwordCiphertext+passwordIv from yielding a
-  // successful decryption of the wrong field.
-  const tokenEnc = encryptSecret(token, "vendor.token");
-  const passwordEnc = encryptSecret(password, "vendor.password");
-
-  // Build the next identity. createdAt is preserved. firstPublishedAt
-  // is reset to null — under a new scope nothing is published yet.
-  const next: InstanceIdentity = {
-    ...current,
-    instanceNamespace: newName,
-    tokenCiphertext: tokenEnc.ciphertext,
-    tokenIv: tokenEnc.iv,
-    tokenAlgo: "aes-256-gcm",
-    passwordCiphertext: passwordEnc.ciphertext,
-    passwordIv: passwordEnc.iv,
-    firstPublishedAt: null,
-  };
-
-  if (opts.append) {
-    // Append the previous identity to oldInstanceNamespaces[]. Old packages
-    // remain on the registry under the orphaned scope; extension-template DB
-    // rows are not rewritten.
-    next.oldInstanceNamespaces = [
-      ...(current.oldInstanceNamespaces ?? []),
-      {
-        name: current.instanceNamespace,
-        frozenAt: new Date().toISOString(),
-        lastTokenCiphertext: current.tokenCiphertext ?? "",
-        lastTokenIv: current.tokenIv ?? "",
-      },
-    ];
+  // Commit atomically via row-level CAS with bounded retry — NOT a single
+  // synchronous re-read-then-write. A plain re-read only serialises against
+  // an in-process writer with no intervening `await` of its own
+  // (editVendorAction's frozen display-name-only save); it does NOT protect
+  // against a SECOND CONCURRENT provisionAndPersist call (two renames, or a
+  // rename racing a pre-publish edit, each awaiting their OWN registry
+  // round-trip above) — the last plain write would silently win and discard
+  // the other's namespace change, and the archived
+  // oldInstanceNamespaces[] entry would misrecord a stale pre-await
+  // namespace/token instead of what was actually live at write time.
+  // applyInstanceIdentityProvisioningWrite re-reads the row fresh on EVERY
+  // attempt and re-derives the archived entry from that same fresh row, so a
+  // CAS conflict re-applies this change onto the current truth instead of
+  // silently losing it. See its doc comment in instance-identity-store.ts.
+  const outcome = applyInstanceIdentityProvisioningWrite(
+    {
+      instanceNamespace: newName,
+      tokenCiphertext: tokenEnc.ciphertext,
+      tokenIv: tokenEnc.iv,
+      tokenAlgo: "aes-256-gcm",
+      passwordCiphertext: passwordEnc.ciphertext,
+      passwordIv: passwordEnc.iv,
+    },
+    { appendPreviousNamespace: opts.append },
+  );
+  if (outcome !== "swapped") {
+    console.error(
+      `[provisionAndPersist] identity-write CAS did not land (outcome: ${outcome}) — ` +
+        "registry provisioning already completed under the new namespace; the " +
+        "minted credentials are stashed for reuse, so the operator's retry " +
+        "skips the duplicate registry call.",
+    );
+    redirectWithError("identity-write-conflict");
   }
-
-  // provisionAndPersist is the canonical rename path (called by both
-  // editVendorAction pre-freeze and renameInstanceNamespaceAction post-freeze).
-  // Pass `allowNamespaceRename: true` so the post-freeze invariant in
-  // writeInstanceIdentity accepts the namespace change.
-  writeInstanceIdentity(next, { allowNamespaceRename: true });
-  invalidateInstanceIdentityCache();
+  // The identity write landed — the stashed mint (if any) is committed to the
+  // row; clear the slot so a later provisioning attempt starts fresh.
+  clearPendingProvisionedCredentials();
   revalidatePath("/setup");
   revalidatePath("/configuration/environment");
 }
@@ -535,6 +592,18 @@ export async function editVendorAction(formData: FormData): Promise<void> {
   const updatedCurrent: InstanceIdentity = { ...current, instanceDisplayName };
 
   if (current.firstPublishedAt !== null) {
+    // Frozen namespace (cinatra#2387). This form's namespace field is
+    // read-only in the UI (the disabled-input value is never submitted), so
+    // in normal use `newName` already equals `current.instanceNamespace`
+    // here. But this action is the validated entry point regardless of what
+    // called it — a stale cached form, a scripted POST, or a future UI
+    // regression could still submit a real change. Refuse it EXPLICITLY
+    // rather than silently keeping only the display-name edit: the operator
+    // gets a clear "use Rename" message instead of a namespace change that
+    // silently vanished.
+    if (newName !== current.instanceNamespace) {
+      redirectWithError("frozen-namespace-use-rename");
+    }
     writeInstanceIdentity(updatedCurrent);
     invalidateInstanceIdentityCache();
     revalidatePath("/configuration/environment");

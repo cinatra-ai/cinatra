@@ -28,6 +28,8 @@ export const INSTANCE_ERROR_MESSAGES = {
   "namespace-taken": "That vendor name is already taken.",
   "namespace-unchanged": "New vendor name must differ from the current one.",
   "use-edit-not-rename": "Use Edit instead of Rename for unpublished identities.",
+  "frozen-namespace-use-rename":
+    "This instance's namespace is fixed since its first published extension. Use \"Rename vendor\" to change it — editing the display name here is still allowed.",
   "attachment-malformed":
     "Could not verify vendor-application status (the marketplace attachment is present but malformed). Repair it from Configuration → Environment → Registries before renaming the instance namespace.",
   "marketplace-unreachable-rename":
@@ -47,6 +49,8 @@ export const INSTANCE_ERROR_MESSAGES = {
   "registry-unexpected-response":
     "Registry returned an unexpected response. Operator: see server logs.",
   "registry-provision-failed": "Could not provision registry user. Operator: see server logs.",
+  "identity-write-conflict":
+    "This instance's identity changed while your request was in progress. Registry provisioning already completed under the new namespace — please retry the save to record it (Operator: see server logs for the registry token that was provisioned).",
 } as const;
 
 export type InstanceErrorCode = keyof typeof INSTANCE_ERROR_MESSAGES;

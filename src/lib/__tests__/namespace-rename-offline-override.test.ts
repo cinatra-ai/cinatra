@@ -21,12 +21,76 @@ import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamable
 import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { MarketplaceMcpError } from "@cinatra-ai/marketplace-mcp-client";
 
-vi.mock("@/lib/instance-identity-store", () => ({
-  readInstanceIdentity: vi.fn(),
-  writeInstanceIdentity: vi.fn(),
-}));
+vi.mock("@/lib/instance-identity-store", () => {
+  const readInstanceIdentity = vi.fn();
+  const writeInstanceIdentity = vi.fn();
+  // provisionAndPersist's final write flows through a row-level-CAS wrapper
+  // (`applyInstanceIdentityProvisioningWrite`)
+  // instead of a plain writeInstanceIdentity call. This suite asserts on the
+  // FINAL persisted identity shape via writeInstanceIdentity, not the CAS
+  // mechanism itself, so this mock shims the wrapper to delegate to that same
+  // sink (re-read the current identity, apply the caller's write fields,
+  // append oldInstanceNamespaces when requested, persist) — mirrors the
+  // convention already used for `updateInstanceIdentityRegistries` in the
+  // sibling network/poll-job test suites (cinatra#850) and for
+  // `applyInstanceIdentityProvisioningWrite` itself in
+  // `rename-instance-namespace-action.test.ts`. The real CAS engine is
+  // unit-tested directly in `src/lib/__tests__/instance-identity-cas.test.ts`.
+  const applyInstanceIdentityProvisioningWrite = vi.fn(
+    (
+      write: {
+        instanceNamespace: string;
+        tokenCiphertext: string;
+        tokenIv: string;
+        tokenAlgo: "aes-256-gcm";
+        passwordCiphertext: string;
+        passwordIv: string;
+      },
+      opts: { appendPreviousNamespace: boolean },
+    ) => {
+      const latest = readInstanceIdentity() as
+        | (typeof write & {
+            oldInstanceNamespaces?: unknown[];
+            [key: string]: unknown;
+          })
+        | null
+        | undefined;
+      const merged: Record<string, unknown> = {
+        ...latest,
+        ...write,
+        firstPublishedAt: null,
+      };
+      if (opts.appendPreviousNamespace && latest) {
+        merged.oldInstanceNamespaces = [
+          ...(latest.oldInstanceNamespaces ?? []),
+          {
+            name: latest.instanceNamespace,
+            frozenAt: new Date().toISOString(),
+            lastTokenCiphertext: latest.tokenCiphertext ?? "",
+            lastTokenIv: latest.tokenIv ?? "",
+          },
+        ];
+      }
+      writeInstanceIdentity(merged, { allowNamespaceRename: true });
+      return "swapped";
+    },
+  );
+  return {
+    readInstanceIdentity,
+    writeInstanceIdentity,
+    applyInstanceIdentityProvisioningWrite,
+  };
+});
 vi.mock("@/lib/instance-identity-cache", () => ({
   invalidateInstanceIdentityCache: vi.fn(),
+}));
+// Pending-provision stash (minted-credential reuse across a write conflict) —
+// empty here so every run takes the fresh-mint path; the reuse behaviour has
+// its own suite (rename-pending-provision-reuse.test.ts).
+vi.mock("@/lib/instance-identity-pending-provision", () => ({
+  readPendingProvisionedCredentials: vi.fn(() => null),
+  writePendingProvisionedCredentials: vi.fn(),
+  clearPendingProvisionedCredentials: vi.fn(),
 }));
 vi.mock("@/lib/auth-session", () => ({
   requireAdminSession: vi.fn(async () => ({

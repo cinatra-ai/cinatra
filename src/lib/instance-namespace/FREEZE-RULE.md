@@ -20,15 +20,15 @@ All consumers MUST import from `@/lib/instance-namespace` (the barrel). The sing
 | `src/app/setup/name/instance-namespace-input.tsx` | Wizard client island — live validation as the user types |
 | `src/app/setup/name/actions.ts` (`saveInstanceIdentityAction`) | Server-side gate during initial setup |
 | `src/app/configuration/instance/rename-confirmation.tsx` (`RenameConfirmation`) | Administration rename modal — live validation in the post-freeze rename dialog |
-| `src/app/configuration/instance/actions.ts` (`editVendorAction`) | Server-side gate for pre-publish credential edits |
+| `src/app/configuration/instance/actions.ts` (`editVendorAction`) | Server-side gate for pre-publish credential edits AND post-freeze display-name-only edits (explicitly refuses a namespace change once frozen, rather than silently dropping it) |
 | `src/app/configuration/instance/actions.ts` (`renameInstanceNamespaceAction`) | Server-side gate for post-freeze renames |
 
 ## The Freeze Rule
 
 Once an instance has published its first extension under its current namespace, `firstPublishedAt` is set to a non-null timestamp and the namespace is **frozen**:
 
-- `editVendorAction` rejects with "Cannot edit — vendor name is frozen. Use Rename instead." when `firstPublishedAt !== null`.
-- `renameInstanceNamespaceAction` is the only path forward, and it appends the previous identity to `oldInstanceNamespaces[]`.
+- `editVendorAction` still saves a display-name-only edit when `firstPublishedAt !== null` — the namespace field is read-only in the UI, so in normal use the submitted namespace already equals the current one. Only when the submitted canonical namespace actually DIFFERS from the current one does it redirect with `frozen-namespace-use-rename` ("This instance's namespace is fixed since its first published extension. Use \"Rename vendor\" to change it — editing the display name here is still allowed.") instead of silently dropping the namespace change.
+- `renameInstanceNamespaceAction` is the only path forward for an actual namespace change once frozen, and it appends the previous identity to `oldInstanceNamespaces[]`.
 
 The validator does NOT know about the freeze rule — that lives in the actions. **Both freeze-state guards still call the validator first**, so a frozen namespace cannot be renamed *to* a reserved value either.
 
@@ -36,7 +36,7 @@ The validator does NOT know about the freeze rule — that lives in the actions.
 
 The current policy intentionally excludes:
 
-- **No new rename UI.** `RenameConfirmation` is the existing rename UI; the validator must remain wired into that flow. If a new rename surface is added, it MUST call `validateInstanceNamespace`.
+- **No new rename UI.** `RenameConfirmation` is the existing rename UI, mounted on `/configuration/environment`'s frozen-instance card (cinatra#2387); the validator must remain wired into that flow. If a new rename surface is added, it MUST call `validateInstanceNamespace`.
 - **No fetch-at-startup for the reserved list.** `reserved-patterns.ts` is the canonical source, consumed directly by the validator; there is no runtime fetch. To change the list, edit that file (see "Updating the Reserved List" below).
 - **No display-name validation.** This handles namespace only. `instanceDisplayName` keeps its existing Zod schema in `saveInstanceIdentityAction`.
 - **No registry uniqueness check during typing.** Registry provisioning happens at submit; uniqueness is enforced by Verdaccio's `createNpmUser` returning `VerdaccioUserAlreadyRegisteredError`.

@@ -13,6 +13,7 @@ export {
 } from "./validator";
 export { RESERVED_SUBSTRINGS } from "./reserved-patterns";
 export { composeNamespaceErrorMessage } from "./compose-error-message";
+export { deriveInstanceNamespace } from "./derive";
 export type {
   NamespaceValidationError,
   NamespaceValidationResult,
