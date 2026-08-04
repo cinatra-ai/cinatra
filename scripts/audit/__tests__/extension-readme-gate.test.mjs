@@ -6,8 +6,8 @@
 // Nothing else.
 
 import { describe, expect, it, beforeEach } from "vitest";
-import { spawnSync, execSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { spawnSync, execSync, execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -402,5 +402,176 @@ describe("checkNoNewDebt", () => {
         (f) => f.kind === "error" && /new debt marker/.test(f.message) && /new-agent/.test(f.message),
       ),
     ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Base-ref resolution (cinatra#2212)
+//
+// The gate's base used to be the live `origin/<base>` ref, materialized by a
+// `git fetch --no-tags --depth=1`. On the complete clone actions/checkout
+// produces at fetch-depth: 0, that fetch does NOT move the ref when the live
+// tip is already present — it only writes .git/shallow at that tip, severing
+// its ancestry. A run whose merge commit was recorded BEFORE main moved on then
+// has no reachable common ancestor and `git diff origin/<base>...HEAD` dies
+// with `fatal: origin/<base>...HEAD: no merge base`.
+//
+// These build the CI shape at the git level (bare origin + a recorded
+// refs/pull/N/merge + main advancing afterwards + a fetch-depth:0 workspace)
+// and drive the REAL checkNoNewDebt(), so they prove both the failure mode and
+// that the pinned-merge-base base is immune to it — and that a FRESH run's
+// debt calculation is byte-identical under either base.
+
+const gitIn = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+
+function writeIn(cwd, rel, body) {
+  mkdirSync(join(cwd, rel, ".."), { recursive: true });
+  writeFileSync(join(cwd, rel), body);
+}
+
+function commitIn(cwd, msg) {
+  gitIn(cwd, "add", "-A");
+  gitIn(cwd, "-c", "user.email=a@b.c", "-c", "user.name=test", "commit", "-q", "-m", msg);
+  return gitIn(cwd, "rev-parse", "HEAD");
+}
+
+// Returns { ws, baseSha, mergeSha, liveTip } where `ws` is a workspace cloned
+// exactly the way actions/checkout@fetch-depth:0 clones a pull_request run:
+// every branch + the event's pinned merge commit, checked out detached.
+//   advanceMain: main gains commits AFTER the merge commit is recorded (the
+//                stale-snapshot / merge-train condition).
+//   prAddsMarker: the PR adds one extensions/cinatra-ai/<slug>/.readme-pending.
+function buildPullRequestWorkspace({ advanceMain, prAddsMarker }) {
+  const root = mkdtempSync(join(tmpdir(), "readme-gate-basefetch-"));
+  const origin = join(root, "origin.git");
+  const up = join(root, "upstream");
+  gitIn(root, "init", "-q", "--bare", "-b", "main", origin);
+  mkdirSync(up);
+  gitIn(up, "init", "-q", "-b", "main");
+  gitIn(up, "remote", "add", "origin", origin);
+
+  // Base: the gate script must exist in the base tree or checkNoNewDebt takes
+  // its bootstrap-mode early return and never reaches the diff.
+  writeIn(up, "scripts/audit/extension-readme-gate.mjs", "// gate\n");
+  writeIn(up, "extensions/cinatra-ai/base-agent/package.json", "{}\n");
+  const baseSha = commitIn(up, "base"); // == github.event.pull_request.base.sha
+  gitIn(up, "push", "-q", "origin", "main");
+
+  // PR head, then the merge commit GitHub records as github.sha for the event.
+  gitIn(up, "checkout", "-q", "-b", "pr-head");
+  writeIn(up, "extensions/cinatra-ai/new-agent/package.json", "{}\n");
+  if (prAddsMarker) writeIn(up, "extensions/cinatra-ai/new-agent/.readme-pending", "");
+  const headSha = commitIn(up, "pr");
+  gitIn(up, "checkout", "-q", "-b", "merge-ref", baseSha);
+  gitIn(up, "-c", "user.email=a@b.c", "-c", "user.name=test", "merge", "-q", "--no-ff", "-m", "merge pr", headSha);
+  const mergeSha = gitIn(up, "rev-parse", "HEAD");
+  gitIn(up, "push", "-q", "origin", "merge-ref:refs/pull/1/merge");
+
+  // The merge train rolls on while this run sits queued.
+  let liveTip = baseSha;
+  if (advanceMain) {
+    gitIn(up, "checkout", "-q", "main");
+    writeIn(up, "docs/other.md", "someone else's merge\n");
+    liveTip = commitIn(up, "unrelated main commit");
+    gitIn(up, "push", "-q", "origin", "main");
+  }
+
+  const ws = join(root, "workspace");
+  mkdirSync(ws);
+  gitIn(ws, "init", "-q");
+  // file:// (not a plain path) so --depth behaves like it does over the wire.
+  gitIn(ws, "remote", "add", "origin", `file://${origin}`);
+  gitIn(ws, "fetch", "--no-tags", "--prune", "-q", "origin",
+    "+refs/heads/*:refs/remotes/origin/*", `+${mergeSha}:refs/remotes/pull/1/merge`);
+  gitIn(ws, "checkout", "-q", "--detach", mergeSha);
+  return { ws, baseSha, mergeSha, liveTip };
+}
+
+const markerPathsOf = (findings) =>
+  findings
+    .filter((f) => f.kind === "error")
+    .map((f) => f.message.replace(/^\[no-new-debt] new debt marker added vs \S+: /, ""))
+    .sort();
+
+describe("checkNoNewDebt — base resolution on a stale PR snapshot (cinatra#2212)", () => {
+  it("depth-1 base fetch grafts a shallow island → 'no merge base'; the pinned merge base is immune", () => {
+    const { ws, baseSha, liveTip } = buildPullRequestWorkspace({ advanceMain: true, prAddsMarker: true });
+
+    // Connected clone, before the workflow's base fetch: the check works.
+    expect(markerPathsOf(checkNoNewDebt(ws, "origin/main"))).toEqual([
+      "extensions/cinatra-ai/new-agent/.readme-pending",
+    ]);
+
+    // The old workflow step, verbatim. It exits 0 and does not move the ref…
+    const fetchOut = execFileSync(
+      "git",
+      ["fetch", "--no-tags", "--depth=1", "origin", "main:refs/remotes/origin/main"],
+      { cwd: ws, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
+    expect(fetchOut).toBe("");
+    expect(gitIn(ws, "rev-parse", "origin/main")).toBe(liveTip);
+    // …it only grafts the live tip as parentless.
+    expect(gitIn(ws, "rev-parse", "--is-shallow-repository")).toBe("true");
+    expect(readFileSync(join(ws, ".git", "shallow"), "utf8").trim()).toBe(liveTip);
+
+    // The reported red: a diff failure dressed up as a gate finding.
+    const broken = checkNoNewDebt(ws, "origin/main");
+    expect(broken).toHaveLength(1);
+    expect(broken[0].kind).toBe("error");
+    expect(broken[0].message).toMatch(/\[no-new-debt] git diff failed/);
+    expect(broken[0].message).toMatch(/no merge base/);
+
+    // The fix: this run's own merge base, pinned as a SHA. Still correct even
+    // with the graft in place, because the graft is at the LIVE tip, not here.
+    const mergeBase = gitIn(ws, "merge-base", baseSha, "HEAD");
+    expect(mergeBase).toBe(baseSha);
+    expect(markerPathsOf(checkNoNewDebt(ws, mergeBase))).toEqual([
+      "extensions/cinatra-ai/new-agent/.readme-pending",
+    ]);
+  });
+
+  it("fresh run (main unmoved): live base ref and pinned merge base flag the SAME debt", () => {
+    const { ws, baseSha } = buildPullRequestWorkspace({ advanceMain: false, prAddsMarker: true });
+    const mergeBase = gitIn(ws, "merge-base", baseSha, "HEAD");
+    expect(mergeBase).toBe(gitIn(ws, "rev-parse", "origin/main"));
+    const viaRef = markerPathsOf(checkNoNewDebt(ws, "origin/main"));
+    expect(viaRef).toEqual(["extensions/cinatra-ai/new-agent/.readme-pending"]);
+    expect(markerPathsOf(checkNoNewDebt(ws, mergeBase))).toEqual(viaRef);
+  });
+
+  it("fresh run, no new marker: both bases agree the PR is clean", () => {
+    const { ws, baseSha } = buildPullRequestWorkspace({ advanceMain: false, prAddsMarker: false });
+    const mergeBase = gitIn(ws, "merge-base", baseSha, "HEAD");
+    expect(checkNoNewDebt(ws, "origin/main")).toEqual([]);
+    expect(checkNoNewDebt(ws, mergeBase)).toEqual([]);
+  });
+
+  it("stale snapshot, no new marker: the pinned merge base still reports clean (the old base could not)", () => {
+    const { ws, baseSha } = buildPullRequestWorkspace({ advanceMain: true, prAddsMarker: false });
+    execFileSync("git", ["fetch", "--no-tags", "--depth=1", "origin", "main:refs/remotes/origin/main"], {
+      cwd: ws,
+      stdio: "ignore",
+    });
+    expect(checkNoNewDebt(ws, "origin/main")[0].message).toMatch(/no merge base/);
+    expect(checkNoNewDebt(ws, gitIn(ws, "merge-base", baseSha, "HEAD"))).toEqual([]);
+  });
+});
+
+describe("extension-readme-gate.yml — base resolution stays graft-free", () => {
+  const WORKFLOW = resolve(REPO_ROOT, ".github/workflows/extension-readme-gate.yml");
+
+  it("never shallow-fetches the base (a --depth fetch re-introduces cinatra#2212)", () => {
+    expect(existsSync(WORKFLOW)).toBe(true);
+    const yml = readFileSync(WORKFLOW, "utf8");
+    // No `git fetch … --depth …` anywhere (prose mentioning --depth is fine).
+    expect(yml).not.toMatch(/^\s*git fetch[^\n]*--depth/m);
+    expect(yml).toMatch(/fetch-depth: 0/);
+  });
+
+  it("passes the run's own recorded base commit to the gate", () => {
+    const yml = readFileSync(WORKFLOW, "utf8");
+    expect(yml).toMatch(/BASE_SHA: \$\{\{ github\.event\.pull_request\.base\.sha \}\}/);
+    expect(yml).toMatch(/git merge-base "\$\{BASE_SHA\}" HEAD/);
+    expect(yml).toMatch(/CINATRA_README_GATE_BASE_REF: \$\{\{ steps\.merge-base\.outputs\.sha \}\}/);
   });
 });
