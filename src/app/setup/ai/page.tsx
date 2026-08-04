@@ -30,6 +30,11 @@ import { buildKnownWizardEligibleProviders } from "@cinatra-ai/sdk-extensions/ll
 import { getSetupWizardSteps, getFirstIncompleteStep } from "@/lib/setup-wizard";
 import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 import { readSetupReadinessState, readAnthropicMcpMode } from "@/lib/setup-readiness-saga";
+// S3 (cinatra#2388): rendering derives from the provider-commit machine —
+// committed = the provider LOCK; a pending claim renders the generic
+// read-only state for every admin but the claimant (identifier-free view).
+import { deriveSetupAiStepState } from "@/lib/setup-provider-commit";
+import { getAuthSession } from "@/lib/auth-session";
 import { describeMatcherProviderConstraint } from "@/lib/llm-purpose-policy";
 import {
   SETUP_CREDENTIAL_SAVE_STEP_ID,
@@ -73,7 +78,41 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
   const stay = pickSearchParam(resolvedSearchParams.stay) === "1";
 
   const eligible = buildKnownWizardEligibleProviders();
-  const selected = readSetupProviderSelection();
+  // S3 (cinatra#2388): the machine's state drives this page. This read also
+  // performs the lazy receipt→commitment migration on configured instances.
+  const aiState = await deriveSetupAiStepState();
+  const commitState = aiState.commitState;
+
+  // A PENDING CLAIM held by another admin (or an unauthenticated re-render):
+  // a generic read-only state. No nonce, no actor, no provider — nothing that
+  // identifies the claimant or their run.
+  if (commitState.kind === "claim-pending") {
+    const session = await getAuthSession().catch(() => null);
+    const viewerId = session?.user?.id ?? null;
+    const ownClaim = viewerId !== null && commitState.claim.actorId === viewerId;
+    if (!ownClaim) {
+      return (
+        <div className="flex flex-col gap-6">
+          <div>
+            <p className="text-base font-semibold text-foreground">Choose your AI provider</p>
+          </div>
+          <Alert data-testid="setup-ai-in-progress">
+            <AlertTitle>AI setup in progress</AlertTitle>
+            <AlertDescription>
+              Another administrator is completing this step right now. This page is
+              read-only until that run finishes.
+            </AlertDescription>
+          </Alert>
+        </div>
+      );
+    }
+  }
+
+  const committedProvider =
+    commitState.kind === "committed" ? commitState.commitment.provider : null;
+  // The committed provider IS the selection: the choice is locked, so the
+  // stored pick can never render a different provider's form.
+  const selected = committedProvider ?? readSetupProviderSelection();
   const readiness = readSetupReadinessState();
   const failure = readSetupReadinessFailure();
   // A CREDENTIAL-SAVE failure is rendered by the provider's own form section
@@ -102,7 +141,7 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
   // notification text from the URL.
   const steps = await getSetupWizardSteps();
   const nextStep = getFirstIncompleteStep(steps);
-  if (readiness.ready && !failure && !stay) {
+  if (aiState.ready && !failure && !stay) {
     if (!nextStep || nextStep.id !== "ai") {
       redirect(nextStep?.href ?? "/setup/complete");
     }
@@ -127,13 +166,17 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
             const copy = PROVIDER_COPY[provider] ?? { label: provider, blurb: "" };
             const installed = getLlmProviderSurface(provider) !== null;
             const isSelected = selected === provider;
+            // S3 (cinatra#2388): a commitment LOCKS the choice — the other
+            // card is de-emphasized and refuses selection; Administration is
+            // the change path.
+            const lockedOut = committedProvider !== null && provider !== committedProvider;
             return (
               <form action={selectSetupProviderAction} key={provider}>
                 <Input type="hidden" name="provider" value={provider} />
                 <Button
                   type="submit"
                   variant="outline"
-                  disabled={!installed}
+                  disabled={!installed || lockedOut}
                   aria-pressed={isSelected}
                   data-testid={`setup-provider-${provider}`}
                   className={[
@@ -146,9 +189,11 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
                     {isSelected ? <Check className="size-4 text-primary" aria-hidden /> : null}
                   </span>
                   <span className="block text-xs font-normal text-muted-foreground">
-                    {installed
-                      ? copy.blurb
-                      : `The ${copy.label} connector is not installed or active on this instance.`}
+                    {!installed
+                      ? `The ${copy.label} connector is not installed or active on this instance.`
+                      : lockedOut
+                        ? "The provider choice is committed. It can be changed in Administration."
+                        : copy.blurb}
                   </span>
                 </Button>
               </form>
@@ -181,7 +226,20 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
               : "Cinatra will validate your key and confirm the connection is ready before saving this choice."}
           </p>
 
-          {readiness.ready && readiness.receipt ? (
+          {committedProvider !== null && !aiState.credentialFresh ? (
+            <Alert variant="destructive" className="mt-4" data-testid="setup-credential-reopened">
+              <TriangleAlert className="size-4" aria-hidden />
+              <AlertTitle>The saved credentials changed</AlertTitle>
+              <AlertDescription>
+                The {PROVIDER_COPY[committedProvider]?.label ?? committedProvider} key this
+                instance was set up with was removed, rotated, or can no longer be read.
+                The provider choice stays committed — re-enter the key above and verify
+                again to continue.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
+          {aiState.ready && readiness.receipt ? (
             <Alert className="mt-4">
               <Check className="size-4" aria-hidden />
               <AlertTitle>AI setup complete</AlertTitle>
@@ -234,13 +292,13 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
           <form action={completeAiSetupAction} className="mt-5 flex justify-end">
             <Input type="hidden" name="provider" value={selected} />
             <Button type="submit" data-testid="setup-run-readiness">
-              {readiness.ready ? "Re-verify" : "Verify and save"}
+              {aiState.ready ? "Re-verify" : "Verify and save"}
             </Button>
           </form>
         </section>
       ) : null}
 
-      {readiness.ready ? (
+      {aiState.ready ? (
         <div className="flex justify-end">
           <Button asChild>
             <Link href={continueHref}>

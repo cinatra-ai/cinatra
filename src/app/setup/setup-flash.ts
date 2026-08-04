@@ -43,6 +43,13 @@ export const SETUP_ERROR_MESSAGES = {
     "Could not switch the Anthropic connector to native MCP delivery. The step shows the current state — try again, or see server logs.",
   "setup-readiness-failed":
     "AI setup could not be verified. The step shows what failed and how to fix it.",
+  // S3 (cinatra#2388) — the provider-commit state machine's refusals. Codes
+  // only, per this module's protocol; neither carries any identifier of the
+  // claimant (the read-only step chrome is the full disclosure).
+  "setup-provider-claim-pending":
+    "Another AI-setup run is currently completing. Wait for it to finish, then try again.",
+  "setup-provider-locked":
+    "The AI provider is committed for this instance. Change it in Administration → LLM.",
   "operator-email-missing": "Could not determine operator email. Please sign in again.",
   "identity-exists":
     "Instance namespace is already configured. Use Administration → Instance to edit or rename.",

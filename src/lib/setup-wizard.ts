@@ -16,7 +16,12 @@
 // hidden — the route-graph analyzer follows `import()` too, so a lazy import
 // would move the runtime cost without changing the measured graph, and
 // pretending otherwise would be the dishonest fix.
-import { readSetupReadinessState } from "@/lib/setup-readiness-saga";
+//
+// S3 (cinatra#2388, epic #2385): the AI step's readiness now derives from the
+// provider-commit state machine — commitment (the LOCK) + a fresh keyed
+// credential fingerprint + the provider-specific readiness evidence — and the
+// derivation is FRESH on every read (the positive completion cache is gone).
+import { deriveSetupAiStepState } from "@/lib/setup-provider-commit";
 import { getNangoStatus } from "@/lib/nango-system";
 // Instance identity presence determines whether the name step is ready.
 // The setup wizard uses /setup/key, /setup/name, and /setup/ai route segments.
@@ -36,11 +41,14 @@ export async function getSetupWizardSteps(): Promise<SetupWizardStep[]> {
   const hasUsers = await hasAnyBetterAuthUsers();
   const identity = readInstanceIdentity();
   const nangoStatus = getNangoStatus();
-  // Provider-AGNOSTIC readiness: valid receipt ⇒ the chosen provider (whichever
-  // it is) was actually proven to work, including the Anthropic upload+probe
-  // arms. No receipt, a receipt for a provider that is no longer the stored
-  // default, or a receipt whose configuration fingerprint drifted ⇒ not ready.
-  const aiReady = readSetupReadinessState().ready;
+  // S3 (cinatra#2388): the AI step is ready iff the COMMIT machine says so —
+  // a committed provider (the lock), a LIVE keyed credential fingerprint that
+  // still matches the commitment (credential loss/rotation reopens the key
+  // flow without unlocking the choice), and the provider-specific readiness
+  // evidence (the receipt re-derivation). This read also drives the lazy
+  // receipt→commitment migration for instances that completed setup under the
+  // receipt model.
+  const aiReady = (await deriveSetupAiStepState()).ready;
 
   const steps: SetupWizardStep[] = [];
 
@@ -126,20 +134,16 @@ function isStepsComplete(steps: SetupWizardStep[]): boolean {
   return true;
 }
 
-// Stored on globalThis so Turbopack HMR module re-evaluation (triggered on every
-// new route compilation in dev mode) does not reset the cache. A module-level
-// `let` would reset to null on every HMR cycle, causing a Nango HTTP call and
-// a readCampaignStore() Worker thread on each proxy request after compilation.
-// Setup state only changes when the user connects an API key, so 60 s staleness
-// is acceptable and globalThis keeps the value warm across HMR reloads.
-//
-// The cache key suffix intentionally invalidates older setup-completion cache
-// entries whose step definitions no longer match the current wizard.
-declare global {
-  // eslint-disable-next-line no-var
-  var __cinatraSetupCompleteCacheV6: { result: boolean; expiresAt: number } | null | undefined;
-}
-
+// S3 (cinatra#2388): the positive-only completion cache
+// (`__cinatraSetupCompleteCacheV6`, its key constant, and
+// `invalidateSetupWizardCache`) is RETIRED. It assumed completion is monotonic
+// — "once setup is complete it stays complete" — which the commit machine
+// makes false by design: a credential deletion/rotation flips the AI step back
+// to incomplete via the fingerprint mismatch, and a 60 s stale `true` window
+// would keep serving app routes on an instance whose provider can no longer
+// authenticate. Completion is re-derived freshly on every read; the derivation
+// is cheap (metadata reads + one connector credential read), and there is no
+// stale-true window after invalidation because there is nothing to invalidate.
 export async function isSetupWizardComplete(): Promise<boolean> {
   // Browser-e2e affordance: a freshly-provisioned instance has no
   // instance-identity / Nango / OpenAI rows, so the app shell redirects every
@@ -151,40 +155,6 @@ export async function isSetupWizardComplete(): Promise<boolean> {
   if (process.env.CINATRA_E2E_SETUP_BYPASS === "true") {
     return true;
   }
-  const now = Date.now();
-  const cached = globalThis.__cinatraSetupCompleteCacheV6;
-  if (cached && cached.expiresAt > now) {
-    return cached.result;
-  }
-  // Cache miss - re-evaluate. Log this so we can detect unexpected re-evaluations
-  // caused by Turbopack HMR resetting the module-level _setupCompleteCache variable.
-  console.log("[setup-wizard] isSetupWizardComplete: cache miss, re-evaluating steps");
   const steps = await getSetupWizardSteps();
-  const result = isStepsComplete(steps);
-  console.log(
-    "[setup-wizard] isSetupWizardComplete: result =",
-    result,
-    "| steps =",
-    steps.map((s) => `${s.id}:${s.ready}`).join(", "),
-  );
-  // Only cache a COMPLETE (true) result. An INCOMPLETE (false) result must be
-  // re-evaluated on every call: otherwise the app-shell redirect gate
-  // (layout.tsx -> app-shell `requiresSetupRedirect`) can serve a 60s-stale
-  // `false` right after the user finishes the last step (e.g. the AI/OpenAI
-  // step, whose save path does not invalidate this cache) while `/setup`
-  // re-evaluates the steps FRESH, finds them complete, and redirects back to
-  // `/` -> `/chat` -> (stale false) `/setup` -> ... an infinite redirect loop
-  // until the TTL expires. A stale `true` is safe (once setup is complete it
-  // stays complete), and re-evaluating an incomplete setup is cheap (identity +
-  // secret-key presence + OpenAI state reads, no live network call). This is
-  // also robust to multi-worker dev where globalThis invalidation is unreliable.
-  if (result) {
-    globalThis.__cinatraSetupCompleteCacheV6 = { result, expiresAt: now + 60_000 };
-  }
-  return result;
-}
-
-/** Call this after saving API connection administration so the next navigation reflects the new state. */
-export function invalidateSetupWizardCache(): void {
-  globalThis.__cinatraSetupCompleteCacheV6 = null;
+  return isStepsComplete(steps);
 }
