@@ -8,6 +8,9 @@ import {
   sweepStaleInstallBatches,
   gcOrphanedSideBySideCapsules,
   resolveRowScopedCompensationTarget,
+  buildBatchCompensationActor,
+  diffCreatedRowIds,
+  decideMemberCompensation,
   BatchMemberInstallError,
   type InstallBatchSagaDeps,
 } from "@/lib/extension-install-batch";
@@ -84,6 +87,10 @@ function makeHarness(opts: {
   /** cinatra#1927: make the protection reader THROW (present-but-unreadable
    *  declaration) so the fail-closed skip can be asserted. */
   protectionReadFails?: boolean;
+  /** cinatra#2415: the org scope the batch runs at (seeds pre-existing rows there). */
+  batchOrgId?: string | null;
+  /** cinatra#2415: rows the batch must never address (other orgs / other packages). */
+  unrelatedRows?: { packageName: string; orgId: string | null }[];
 }) {
   const events: string[] = [];
   const sbsTeardownCapsules: Array<{ packageName: string; capsule: unknown }> = [];
@@ -91,6 +98,39 @@ function makeHarness(opts: {
   const updateExpectedVersions: Array<{ packageName: string; expected: string | undefined }> = [];
   const rowScopedUninstalls: string[] = [];
   const ledgerRows = new Map<string, InstallBatch>();
+  // cinatra#2415: an in-memory CANONICAL-ROW STORE so the saga's durable
+  // provenance capture (the before/after set difference around each member
+  // install) is exercised for real rather than stubbed away. `installMember` /
+  // `installMemberSideBySide` create a row; `updateMemberPackage` does not (an
+  // in-place update mutates the existing row); the row-scoped inverse deletes
+  // exactly the ids the ledger recorded. Tests assert on it directly.
+  const canonicalRows = new Map<string, string[]>();
+  let rowSeq = 0;
+  const scopeKey = (pkg: string, scope: string | null): string =>
+    `${pkg}::${scope ?? "(platform)"}`;
+  const createRow = (pkg: string, scope: string | null): string => {
+    const id = `iext_${pkg.replace(/[^a-z0-9]/gi, "")}_${++rowSeq}`;
+    const key = scopeKey(pkg, scope);
+    canonicalRows.set(key, [...(canonicalRows.get(key) ?? []), id]);
+    return id;
+  };
+  /** The canonical store guarantees <=1 DEFAULT row per (package, org): a
+   *  package-scoped install of a package that already has a row at the scope
+   *  re-materializes that row rather than creating a second one. */
+  const createRowIfAbsent = (pkg: string, scope: string | null): string | null => {
+    const existing = canonicalRows.get(scopeKey(pkg, scope)) ?? [];
+    return existing.length > 0 ? null : createRow(pkg, scope);
+  };
+  const allRowIds = (): string[] => [...canonicalRows.values()].flat();
+  // Pre-existing rows (installed BEFORE this batch) — never compensable.
+  const preExistingRowIds: string[] = [];
+  for (const pkg of opts.preInstalled ?? []) {
+    preExistingRowIds.push(createRow(pkg, opts.batchOrgId ?? null));
+  }
+  // Rows belonging to OTHER orgs / other packages the batch must never address.
+  for (const seed of opts.unrelatedRows ?? []) {
+    preExistingRowIds.push(createRow(seed.packageName, seed.orgId));
+  }
   const authorizeSpy = vi.fn(
     opts.authorize ?? (async () => resolution()),
   );
@@ -159,6 +199,7 @@ function makeHarness(opts: {
           },
         );
       }
+      createRowIfAbsent(m.packageName, opts.batchOrgId ?? null);
       events.push(`install:${m.packageName}`);
     }),
     updateMemberPackage: vi.fn(async (m, _actor, expectedInstalledVersion) => {
@@ -174,9 +215,6 @@ function makeHarness(opts: {
       }
       events.push(`update:${m.packageName}`);
     }),
-    uninstallMember: vi.fn(async (m) => {
-      events.push(`uninstall:${m.packageName}`);
-    }),
     // cinatra#1927: the declaration-driven protection verdict the saga consults
     // before EITHER compensation inverse.
     isMemberProtected: vi.fn(async (packageName: string) => {
@@ -188,11 +226,31 @@ function makeHarness(opts: {
       }
       return (opts.protectedPackages ?? []).includes(packageName);
     }),
-    // #1042 slice-2: row-scoped compensation inverse.
+    // cinatra#2415: the ROW-SCOPED, provenance-targeted compensation inverse —
+    // the ONLY inverse. It deletes EXACTLY the ledger-recorded ids from the
+    // in-memory canonical store, so a test can assert "the created row ids are
+    // gone and the unrelated ones remain".
     uninstallMemberRowScoped: vi.fn(async (m) => {
       rowScopedUninstalls.push(m.packageName);
+      const targets = m.createdRowIds ?? [];
+      if (m.createdRowIds == null && m.preRowIds == null) {
+        throw new Error("no durable batch provenance — refusing (test harness)");
+      }
+      const key = scopeKey(m.packageName, m.scopeOrgId ?? null);
+      canonicalRows.set(
+        key,
+        (canonicalRows.get(key) ?? []).filter((id) => !targets.includes(id)),
+      );
       events.push(`uninstall-row-scoped:${m.packageName}`);
     }),
+    // cinatra#2415: the provenance reads + the atomicity seam.
+    listScopedRowIds: vi.fn(async (packageName: string, scope: string | null) => [
+      ...(canonicalRows.get(scopeKey(packageName, scope)) ?? []),
+    ]),
+    withPackageInstallLock: async (packageName, fn) => {
+      events.push(`pkg-lock:${packageName}`);
+      return fn();
+    },
     // cinatra#1040 S3: version-scoped side-by-side install + teardown seams.
     installMemberSideBySide: vi.fn(async (m) => {
       const fail =
@@ -206,6 +264,7 @@ function makeHarness(opts: {
       // cinatra#1040 S6: the real installer captures the ownership DECLARATION
       // CAPSULE via the injected sink BEFORE it mutates the grant. Simulate it.
       await m.persistCapsule?.({ v: 1, declaredTokenKeys: [`${m.packageName}__k`] });
+      createRow(m.packageName, m.scopeOrgId ?? null);
       events.push(`side-by-side:${m.packageName}@${m.version}@scope=${m.scopeOrgId ?? "(platform)"}`);
     }),
     uninstallSideBySideMember: vi.fn(async (m) => {
@@ -264,6 +323,13 @@ function makeHarness(opts: {
     sbsTeardownCapsules,
     updateExpectedVersions,
     rowScopedUninstalls,
+    // cinatra#2415 row-store probes.
+    canonicalRows,
+    allRowIds,
+    preExistingRowIds,
+    rowIdsFor: (pkg: string, scope: string | null = opts.batchOrgId ?? null) => [
+      ...(canonicalRows.get(scopeKey(pkg, scope)) ?? []),
+    ],
   };
 }
 
@@ -355,9 +421,9 @@ describe("installExtensionWithDependencies — #1039 Option B committed dedupe-u
     ).rejects.toThrow();
     // The committed upgrade ran and was NEVER compensated (pre-existing member).
     expect(h.events).toContain("update:@cinatra-ai/shared");
-    expect(h.events).not.toContain("uninstall:@cinatra-ai/shared");
+    expect(h.rowScopedUninstalls).not.toContain("@cinatra-ai/shared");
     // The fresh member IS rolled back.
-    expect(h.events).toContain("uninstall:@cinatra-ai/dep-a");
+    expect(h.rowScopedUninstalls).toContain("@cinatra-ai/dep-a");
   });
 
   it("the boot sweeper leaves a committed update member untouched (preState.present)", async () => {
@@ -386,6 +452,8 @@ describe("installExtensionWithDependencies — #1039 Option B committed dedupe-u
           status: "installed",
           action: "install",
           preState: { present: false },
+          preRowIds: [],
+          createdRowIds: ["iext_dep_a"],
         },
       ],
       createdAt: "now",
@@ -397,7 +465,7 @@ describe("installExtensionWithDependencies — #1039 Option B committed dedupe-u
         listStale: async () => [stale],
         setPhase: async (_id, _p) => stale,
         updateMember: async (_id, _pkg, _patch) => stale,
-        uninstallMember: async (m) => {
+        uninstallMemberRowScoped: async (m) => {
           swept.push(m.packageName);
         },
       },
@@ -484,6 +552,8 @@ describe("installExtensionWithDependencies — #1039 Option B update-time (rootA
           status: "installed",
           action: "install",
           preState: { present: false },
+          preRowIds: [],
+          createdRowIds: ["iext_new_dep"],
         },
         {
           packageName: ROOT,
@@ -503,7 +573,7 @@ describe("installExtensionWithDependencies — #1039 Option B update-time (rootA
         listStale: async () => [stale],
         setPhase: async (_id, _p) => stale,
         updateMember: async (_id, _pkg, _patch) => stale,
-        uninstallMember: async (m) => {
+        uninstallMemberRowScoped: async (m) => {
           swept.push(m.packageName);
         },
       },
@@ -618,10 +688,10 @@ describe("installExtensionWithDependencies — member failure ⇒ abort + invers
       installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
     ).rejects.toBeInstanceOf(BatchMemberInstallError);
     // dep-a and dep-b installed, then dep-c failed → compensate b, then a (inverse).
-    expect(h.events.filter((e) => e.startsWith("uninstall:"))).toEqual([
-      "uninstall:@cinatra-ai/dep-b",
-      "uninstall:@cinatra-ai/dep-a",
-    ]);
+    expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-b", "@cinatra-ai/dep-a"]);
+    // POSITIVE assertion (cinatra#2415 AC3): the created rows are actually gone.
+    expect(h.rowIdsFor("@cinatra-ai/dep-a")).toEqual([]);
+    expect(h.rowIdsFor("@cinatra-ai/dep-b")).toEqual([]);
     // The root never installed.
     expect(h.events).not.toContain(`install:${ROOT}`);
     const batch = [...h.ledgerRows.values()][0]!;
@@ -641,8 +711,9 @@ describe("installExtensionWithDependencies — member failure ⇒ abort + invers
     await expect(
       installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
     ).rejects.toBeInstanceOf(BatchMemberInstallError);
-    expect(h.events).toContain("uninstall:@cinatra-ai/dep-b");
-    expect(h.events).not.toContain("uninstall:@cinatra-ai/dep-a");
+    expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-b"]);
+    // The pre-existing dep-a row is byte-unchanged.
+    expect(h.rowIdsFor("@cinatra-ai/dep-a")).toEqual([h.preExistingRowIds[0]]);
   });
 
   it("a failed compensation marks the member compensation-failed, the batch failed, and the error says ROLLBACK INCOMPLETE", async () => {
@@ -650,7 +721,7 @@ describe("installExtensionWithDependencies — member failure ⇒ abort + invers
       plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
       installFail: ROOT,
     });
-    (h.deps.uninstallMember as ReturnType<typeof vi.fn>).mockRejectedValue(
+    (h.deps.uninstallMemberRowScoped as ReturnType<typeof vi.fn>).mockRejectedValue(
       new Error("uninstall refused"),
     );
     try {
@@ -669,56 +740,206 @@ describe("installExtensionWithDependencies — member failure ⇒ abort + invers
   });
 });
 
-describe("installExtensionWithDependencies — #1042 slice-2 row-scoped compensation", () => {
-  it("with rowScopedCompensation:true, freshly-installed members compensate via the ROW-SCOPED inverse (never the package-global uninstall), inverse order", async () => {
+// ===========================================================================
+// cinatra#2415 — THE COMPENSATION INVARIANT
+//
+//   compensation deletes ONLY canonical rows THIS batch created (durable
+//   per-member provenance), all pre-existing rows survive, and the ROW-SCOPED
+//   inverse is the ONLY inverse (the package-global dispatcher route — whose
+//   platform branch is the #2410 cross-org breach — is unreachable).
+// ===========================================================================
+describe("installExtensionWithDependencies — cinatra#2415 compensation invariant", () => {
+  it("compensation ALWAYS takes the ROW-SCOPED inverse, for a plain manual caller with NO flag", async () => {
     const h = makeHarness({
       plan: [member("@cinatra-ai/dep-a"), member("@cinatra-ai/dep-b"), member(ROOT)],
       installFail: ROOT,
     });
     await expect(
-      installExtensionWithDependencies(
-        { packageName: ROOT, version: "1.0.0", actor, rowScopedCompensation: true },
-        h.deps,
-      ),
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
     ).rejects.toBeInstanceOf(BatchMemberInstallError);
-    // Row-scoped, inverse order — and NEVER the package-global uninstall.
+    // Row-scoped, inverse order. There is no package-global route to take: the
+    // saga's deps no longer carry a package-scoped `uninstallMember` at all.
     expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-b", "@cinatra-ai/dep-a"]);
-    expect(h.events.filter((e) => e.startsWith("uninstall:"))).toEqual([]);
-    expect(h.deps.uninstallMember).not.toHaveBeenCalled();
     expect(h.deps.uninstallMemberRowScoped).toHaveBeenCalledTimes(2);
+    expect("uninstallMember" in h.deps).toBe(false);
     const batch = [...h.ledgerRows.values()][0]!;
     expect(batch.members.find((m) => m.packageName === "@cinatra-ai/dep-a")!.status).toBe(
       "compensated",
     );
   });
 
-  it("WITHOUT the flag (default), compensation stays package-scoped (uninstallMember) — byte-unchanged", async () => {
+  it("the deprecated rowScopedCompensation flag is a NO-OP — flagged and unflagged behave identically", async () => {
+    const run = async (flag: boolean) => {
+      const h = makeHarness({
+        plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
+        installFail: ROOT,
+      });
+      await expect(
+        installExtensionWithDependencies(
+          { packageName: ROOT, version: "1.0.0", actor, rowScopedCompensation: flag },
+          h.deps,
+        ),
+      ).rejects.toBeInstanceOf(BatchMemberInstallError);
+      return h.rowScopedUninstalls;
+    };
+    expect(await run(true)).toEqual(["@cinatra-ai/dep-a"]);
+    expect(await run(false)).toEqual(["@cinatra-ai/dep-a"]);
+  });
+
+  it("the inverse is handed the LEDGER's durable provenance (createdRowIds) and the BATCH scope — never the actor's org", async () => {
+    const ORG = "org-acme";
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
+      installFail: ROOT,
+      batchOrgId: ORG,
+    });
+    // The caller's actor carries a DIFFERENT (stale) active org AND platform
+    // standing — neither may influence what compensation addresses.
+    const staleActor: Actor = {
+      actorType: "human",
+      source: "ui",
+      userId: "u1",
+      orgId: ORG,
+      platformRole: "platform_admin",
+      orgRole: "org_admin",
+    };
+    const createdA = h.rowIdsFor("@cinatra-ai/dep-a", ORG); // (empty before the run)
+    expect(createdA).toEqual([]);
+    await expect(
+      installExtensionWithDependencies(
+        { packageName: ROOT, version: "1.0.0", actor: staleActor },
+        h.deps,
+      ),
+    ).rejects.toBeInstanceOf(BatchMemberInstallError);
+    const call = (h.deps.uninstallMemberRowScoped as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const [passedMember, passedActor] = call as [
+      { scopeOrgId: string | null; createdRowIds?: string[] | null },
+      Actor,
+    ];
+    expect(passedMember.scopeOrgId).toBe(ORG);
+    expect(passedMember.createdRowIds).toHaveLength(1);
+    // The compensation ACTOR: platform standing STRIPPED, no role synthesized,
+    // scope pinned to the batch's own (cinatra#2415 / the #2410 boundary made
+    // structural).
+    expect(passedActor).toEqual({
+      actorType: "human",
+      source: "ui",
+      userId: "u1",
+      orgId: ORG,
+    });
+    expect(passedActor.platformRole).toBeUndefined();
+    expect(passedActor.orgRole).toBeUndefined();
+  });
+
+  it("PRE-EXISTING rows survive: same package/org (pre-state) AND another org's rows are never addressed", async () => {
+    const ORG = "org-acme";
+    const OTHER = "org-other";
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member("@cinatra-ai/dep-b"), member(ROOT)],
+      installFail: ROOT,
+      batchOrgId: ORG,
+      preInstalled: ["@cinatra-ai/dep-a"],
+      // Another org holds a row for the SAME package the batch installs fresh.
+      unrelatedRows: [{ packageName: "@cinatra-ai/dep-b", orgId: OTHER }],
+    });
+    const survivors = [...h.preExistingRowIds];
+    await expect(
+      installExtensionWithDependencies(
+        { packageName: ROOT, version: "1.0.0", actor: { ...actor, orgId: ORG } },
+        h.deps,
+      ),
+    ).rejects.toBeInstanceOf(BatchMemberInstallError);
+    // Only the freshly-installed dep-b (at the BATCH's org) is torn down.
+    expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-b"]);
+    expect(h.rowIdsFor("@cinatra-ai/dep-b", ORG)).toEqual([]);
+    // Every pre-existing row — same org and the OTHER org — still resolves.
+    for (const id of survivors) expect(h.allRowIds()).toContain(id);
+    expect(h.rowIdsFor("@cinatra-ai/dep-b", OTHER)).toHaveLength(1);
+  });
+
+  it("a member that durably created NOTHING is skipped (provably nothing-created ≠ a version guess)", async () => {
     const h = makeHarness({
       plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
       installFail: ROOT,
     });
+    // Model an install that mutates no canonical row (e.g. it re-activated an
+    // existing row): drop the row-creating side effect for dep-a only.
+    (h.deps.installMember as ReturnType<typeof vi.fn>).mockImplementation(
+      async (m: { packageName: string }) => {
+        if (m.packageName === ROOT) throw new Error("root refused");
+      },
+    );
     await expect(
       installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
     ).rejects.toBeInstanceOf(BatchMemberInstallError);
-    expect(h.events).toContain("uninstall:@cinatra-ai/dep-a");
     expect(h.rowScopedUninstalls).toEqual([]);
-    expect(h.deps.uninstallMemberRowScoped).not.toHaveBeenCalled();
+    const batch = [...h.ledgerRows.values()][0]!;
+    expect(batch.members.find((m) => m.packageName === "@cinatra-ai/dep-a")!.createdRowIds).toEqual(
+      [],
+    );
   });
 
-  it("a PRE-EXISTING member is never row-scoped-compensated either (pre-state discriminator still holds)", async () => {
+  it("a FAILED provenance capture never silently drops a member — it is REFUSED loudly (ROLLBACK INCOMPLETE)", async () => {
     const h = makeHarness({
-      plan: [member("@cinatra-ai/dep-a"), member("@cinatra-ai/dep-b"), member(ROOT)],
+      plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
       installFail: ROOT,
-      preInstalled: ["@cinatra-ai/dep-a"],
     });
+    // The post-install capture read blows up for dep-a. `null` must NOT be read
+    // as "created nothing": without creation provenance the member has no
+    // delete authorization and its compensation must be refused, not skipped.
+    let seen = 0;
+    (h.deps.listScopedRowIds as ReturnType<typeof vi.fn>).mockImplementation(
+      async (pkg: string) => {
+        if (pkg === "@cinatra-ai/dep-a" && seen++ === 1) {
+          throw new Error("canonical read failed");
+        }
+        return [];
+      },
+    );
+    try {
+      await installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps);
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(BatchMemberInstallError);
+      expect((e as BatchMemberInstallError).compensationFailures).toEqual([
+        "@cinatra-ai/dep-a",
+      ]);
+      expect((e as Error).message).toContain("ROLLBACK INCOMPLETE");
+    }
+    expect(h.rowScopedUninstalls).toEqual([]);
+  });
+
+  it("the FAILING member's own durably-created row is compensated too (zero rows created by the batch survive)", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
+    });
+    // The dispatcher contract where this bites: the row is FINALIZED and the
+    // install THEN throws (the "did not hot-activate" refusal deliberately
+    // leaves the committed install intact), so a durable row exists behind a
+    // failure. Model exactly that: create the row, then throw for the root.
+    (h.deps.installMember as ReturnType<typeof vi.fn>).mockImplementation(
+      async (m: { packageName: string }) => {
+        const key = `${m.packageName}::(platform)`;
+        h.canonicalRows.set(key, [
+          ...(h.canonicalRows.get(key) ?? []),
+          `iext_${m.packageName}_x`,
+        ]);
+        if (m.packageName === ROOT) {
+          throw new Error("finalized the row, then failed to hot-activate");
+        }
+      },
+    );
     await expect(
-      installExtensionWithDependencies(
-        { packageName: ROOT, version: "1.0.0", actor, rowScopedCompensation: true },
-        h.deps,
-      ),
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
     ).rejects.toBeInstanceOf(BatchMemberInstallError);
-    // Only the freshly-installed dep-b is torn down; the pre-existing dep-a is left.
-    expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-b"]);
+    // BOTH the successfully-installed dep AND the failed root's own row are gone.
+    expect(h.rowScopedUninstalls).toEqual([ROOT, "@cinatra-ai/dep-a"]);
+    expect(h.rowIdsFor(ROOT, null)).toEqual([]);
+    expect(h.rowIdsFor("@cinatra-ai/dep-a", null)).toEqual([]);
+    const batch = [...h.ledgerRows.values()][0]!;
+    // The failed member keeps its `failed` status — it is the failure, not a
+    // rolled-back success — and its teardown is recorded in `detail`.
+    expect(batch.members.find((m) => m.packageName === ROOT)!.status).toBe("failed");
   });
 });
 
@@ -1191,7 +1412,7 @@ describe("installExtensionWithDependencies — REQUIRES_REBUILD is a REFUSAL (no
     // it DID install and never reports success.
     const batch = [...h.ledgerRows.values()][0]!;
     expect(batch.phase).toBe("compensated");
-    expect(h.events.filter((e) => e.startsWith("uninstall:"))).toEqual(["uninstall:@cinatra-ai/dep-a"]);
+    expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-a"]);
   });
 });
 
@@ -1226,9 +1447,7 @@ describe("installExtensionWithDependencies — AGENT_PACKAGE_CONTRACT_VIOLATION 
     // ROOT never installed.
     const batch = [...h.ledgerRows.values()][0]!;
     expect(batch.phase).toBe("compensated");
-    expect(h.events.filter((e) => e.startsWith("uninstall:"))).toEqual([
-      "uninstall:@cinatra-ai/dep-a",
-    ]);
+    expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-a"]);
     expect(h.events).not.toContain(`install:${ROOT}`);
   });
 });
@@ -1246,7 +1465,7 @@ describe("installExtensionWithDependencies — ledger failures route into the SA
       installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
     ).rejects.toBeInstanceOf(BatchMemberInstallError);
     expect(h.events).toContain("install:@cinatra-ai/dep-a");
-    expect(h.events).toContain("uninstall:@cinatra-ai/dep-a");
+    expect(h.rowScopedUninstalls).toContain("@cinatra-ai/dep-a");
     expect(h.events).not.toContain(`install:${ROOT}`);
   });
 });
@@ -1304,9 +1523,9 @@ describe("sweepStaleInstallBatches — boot recovery (compensate-never-resume)",
     const uninstalled: string[] = [];
     const phases: string[] = [];
     const batch = staleBatch([
-      { packageName: "@cinatra-ai/dep-a", version: "1.0.0", typeId: "connector", status: "installed", preState: { present: false } },
-      { packageName: "@cinatra-ai/dep-b", version: "1.0.0", typeId: "connector", status: "installing", preState: { present: false } },
-      { packageName: "@cinatra-ai/pre", version: "1.0.0", typeId: "connector", status: "installed", preState: { present: true, version: "0.9.0" } },
+      { packageName: "@cinatra-ai/dep-a", version: "1.0.0", typeId: "connector", status: "installed", preState: { present: false }, preRowIds: [], createdRowIds: ["iext_a"] },
+      { packageName: "@cinatra-ai/dep-b", version: "1.0.0", typeId: "connector", status: "installing", preState: { present: false }, preRowIds: [], createdRowIds: ["iext_b"] },
+      { packageName: "@cinatra-ai/pre", version: "1.0.0", typeId: "connector", status: "installed", preState: { present: true, version: "0.9.0" }, preRowIds: ["iext_pre"], createdRowIds: [] },
       { packageName: ROOT, version: "1.0.0", typeId: "connector", status: "planned", preState: { present: false } },
     ]);
     const res = await sweepStaleInstallBatches(
@@ -1318,21 +1537,121 @@ describe("sweepStaleInstallBatches — boot recovery (compensate-never-resume)",
           return batch;
         },
         updateMember: async (_id, _pkg, _patch) => batch,
-        uninstallMember: async (m) => {
+        uninstallMemberRowScoped: async (m) => {
           uninstalled.push(m.packageName);
         },
       },
     );
     expect(res.swept).toBe(1);
-    // Inverse ledger order; `planned` (never began) and pre-existing skipped.
+    // Inverse ledger order. `planned` (never began) is out of the status filter,
+    // and `pre` is skipped because its DURABLE provenance proves it created
+    // nothing (`createdRowIds: []`) — not because of a version guess.
     expect(uninstalled).toEqual(["@cinatra-ai/dep-b", "@cinatra-ai/dep-a"]);
     expect(phases).toEqual(["compensated"]);
+  });
+
+  it("cinatra#2415: boot recovery uses the SAME row-scoped inverse, gets the LEDGER's provenance + batch scope, and a role-less actor", async () => {
+    const calls: { member: unknown; actor: Actor }[] = [];
+    const batch: InstallBatch = {
+      batchId: "stale-org",
+      rootPackage: ROOT,
+      orgId: "org-acme",
+      phase: "installing",
+      members: [
+        { packageName: "@cinatra-ai/dep-a", version: "1.0.0", typeId: "connector", status: "installed", preState: { present: false }, preRowIds: ["iext_old"], createdRowIds: ["iext_new"] },
+      ],
+      createdAt: "then",
+      updatedAt: "then",
+    };
+    await sweepStaleInstallBatches(
+      { olderThanMs: 1000 },
+      {
+        listStale: async () => [batch],
+        setPhase: async () => batch,
+        updateMember: async () => batch,
+        uninstallMemberRowScoped: async (member, sweepActor) => {
+          calls.push({ member, actor: sweepActor });
+        },
+      },
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.member).toMatchObject({
+      packageName: "@cinatra-ai/dep-a",
+      scopeOrgId: "org-acme",
+      createdRowIds: ["iext_new"],
+    });
+    // No standing is ever attached, and the scope is the BATCH's own.
+    expect(calls[0]!.actor).toEqual({
+      actorType: "system",
+      source: "worker",
+      orgId: "org-acme",
+    });
+  });
+
+  it("cinatra#2415: the CRASH WINDOW (preRowIds only, no createdRowIds) is REFUSED — the lock is gone, so the diff is not causal proof", async () => {
+    const uninstalled: string[] = [];
+    const phases: string[] = [];
+    const details: string[] = [];
+    const batch = staleBatch([
+      // The pre-mutation snapshot landed; the process died before the capture.
+      { packageName: "@cinatra-ai/crashed", version: "1.0.0", typeId: "connector", status: "installing", preState: { present: false }, preRowIds: ["iext_before"] },
+    ]);
+    await sweepStaleInstallBatches(
+      { olderThanMs: 1000 },
+      {
+        listStale: async () => [batch],
+        setPhase: async (_id, phase) => {
+          phases.push(phase);
+          return batch;
+        },
+        updateMember: async (_id, _pkg, patch) => {
+          if (patch.detail) details.push(patch.detail);
+          return batch;
+        },
+        uninstallMemberRowScoped: async (m) => {
+          uninstalled.push(m.packageName);
+        },
+      },
+    );
+    expect(uninstalled).toEqual([]);
+    expect(phases).toEqual(["failed"]);
+    expect(details.join(" ")).toContain("no durable batch provenance");
+  });
+
+  it("cinatra#2415: a member with NO durable provenance is REFUSED, never deleted on a guess (pre-#2415 ledger row)", async () => {
+    const uninstalled: string[] = [];
+    const phases: string[] = [];
+    const details: string[] = [];
+    const batch = staleBatch([
+      // A legacy row: `preState.present:false` but neither provenance field.
+      { packageName: "@cinatra-ai/legacy", version: "1.0.0", typeId: "connector", status: "installed", preState: { present: false } },
+    ]);
+    await sweepStaleInstallBatches(
+      { olderThanMs: 1000 },
+      {
+        listStale: async () => [batch],
+        setPhase: async (_id, phase) => {
+          phases.push(phase);
+          return batch;
+        },
+        updateMember: async (_id, _pkg, patch) => {
+          if (patch.detail) details.push(patch.detail);
+          return batch;
+        },
+        uninstallMemberRowScoped: async (m) => {
+          uninstalled.push(m.packageName);
+        },
+      },
+    );
+    expect(uninstalled).toEqual([]); // never touched
+    expect(phases).toEqual(["failed"]); // operator attention
+    expect(details.join(" ")).toContain("no durable batch provenance");
   });
 
   it("a failed sweep-compensation marks the batch failed (operator attention), not compensated", async () => {
     const phases: string[] = [];
     const batch = staleBatch([
-      { packageName: "@cinatra-ai/dep-a", version: "1.0.0", typeId: "connector", status: "installed", preState: { present: false } },
+      { packageName: "@cinatra-ai/dep-a", version: "1.0.0", typeId: "connector", status: "installed", preState: { present: false }, createdRowIds: ["iext_a"] },
     ]);
     await sweepStaleInstallBatches(
       { olderThanMs: 1000 },
@@ -1343,7 +1662,7 @@ describe("sweepStaleInstallBatches — boot recovery (compensate-never-resume)",
           return batch;
         },
         updateMember: async () => batch,
-        uninstallMember: async () => {
+        uninstallMemberRowScoped: async () => {
           throw new Error("uninstall refused");
         },
       },
@@ -1402,7 +1721,7 @@ describe("installExtensionWithDependencies — #1040 S3 side-by-side members", (
     expect(h.events).toContain(`uninstall-side-by-side:${SHARED}@2.0.0@scope=(platform)`);
     // The package-scoped uninstall is NEVER used for the side-by-side member
     // (it would tear down the DEFAULT install).
-    expect(h.events).not.toContain(`uninstall:${SHARED}`);
+    expect(h.rowScopedUninstalls).not.toContain(SHARED);
     const batch = [...h.ledgerRows.values()][0]!;
     expect(batch.members.find((m) => m.packageName === SHARED)!.status).toBe("compensated");
   });
@@ -1448,7 +1767,7 @@ describe("installExtensionWithDependencies — #1040 S3 side-by-side members", (
       installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
     ).rejects.toThrow(BatchMemberInstallError);
     // Update member: committed (pre-existing) — never compensated.
-    expect(h.events).not.toContain(`uninstall:${OTHER}`);
+    expect(h.rowScopedUninstalls).not.toContain(OTHER);
     expect(h.events.filter((e) => e.startsWith("uninstall-side-by-side:"))).toEqual([
       `uninstall-side-by-side:${SHARED}@2.0.0@scope=(platform)`,
     ]);
@@ -1499,7 +1818,7 @@ describe("sweepStaleInstallBatches — #1040 S3 side-by-side members", () => {
         listStale: async () => [batch],
         setPhase: async (_id, _phase) => batch,
         updateMember: async () => batch,
-        uninstallMember: async (m) => {
+        uninstallMemberRowScoped: async (m) => {
           packageUninstalls.push(m.packageName);
         },
         uninstallSideBySideMember: async (m) => {
@@ -1535,7 +1854,7 @@ describe("sweepStaleInstallBatches — #1040 S3 side-by-side members", () => {
         listStale: async () => [batch],
         setPhase: async (_id, _phase) => batch,
         updateMember: async () => batch,
-        uninstallMember: async (m) => {
+        uninstallMemberRowScoped: async (m) => {
           packageUninstalls.push(m.packageName);
         },
         uninstallSideBySideMember: async (m) => {
@@ -1615,7 +1934,7 @@ describe("sweepStaleInstallBatches — #1040 S6 passes the durable capsule to bo
         listStale: async () => [batch],
         setPhase: async (_id, _p) => batch,
         updateMember: async () => batch,
-        uninstallMember: async () => {},
+        uninstallMemberRowScoped: async () => {},
         uninstallSideBySideMember: async (m) => {
           received.push({ pkg: m.packageName, capsule: m.capsule ?? null });
         },
@@ -1760,7 +2079,7 @@ describe("gcOrphanedSideBySideCapsules — orphan GC of spent capsules on termin
 describe("installExtensionWithDependencies — protected members are never compensated (#1927)", () => {
   const PROTECTED_DEP = "@cinatra-ai/protected-dep";
 
-  it("SKIPS the dispatcher-route teardown of a protected member when a later member fails", async () => {
+  it("SKIPS the teardown of a protected member when a later member fails", async () => {
     const h = makeHarness({
       plan: [member(PROTECTED_DEP), member("@cinatra-ai/dep-b"), member(ROOT)],
       installFail: ROOT,
@@ -1771,15 +2090,17 @@ describe("installExtensionWithDependencies — protected members are never compe
     ).rejects.toBeInstanceOf(BatchMemberInstallError);
 
     // The ordinary member IS compensated; the protected one is left installed.
-    expect(h.events).toContain("uninstall:@cinatra-ai/dep-b");
-    expect(h.events).not.toContain(`uninstall:${PROTECTED_DEP}`);
-    expect(h.deps.uninstallMember).not.toHaveBeenCalledWith(
+    expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-b"]);
+    expect(h.deps.uninstallMemberRowScoped).not.toHaveBeenCalledWith(
       expect.objectContaining({ packageName: PROTECTED_DEP }),
       expect.anything(),
     );
+    // cinatra#1927 + #2415: the protected member's row is deliberately LEFT —
+    // the one stated exception to "zero rows created by this batch".
+    expect(h.rowIdsFor(PROTECTED_DEP)).toHaveLength(1);
   });
 
-  it("SKIPS the ROW-SCOPED teardown too — the route that bypasses the dispatcher", async () => {
+  it("SKIPS the teardown with the deprecated flag set too (it is a no-op)", async () => {
     const h = makeHarness({
       plan: [member(PROTECTED_DEP), member("@cinatra-ai/dep-b"), member(ROOT)],
       installFail: ROOT,
@@ -1824,7 +2145,7 @@ describe("installExtensionWithDependencies — protected members are never compe
       installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
     ).rejects.toBeInstanceOf(BatchMemberInstallError);
     expect(h.events).toContain("protection-unreadable:@cinatra-ai/dep-a");
-    expect(h.events).not.toContain("uninstall:@cinatra-ai/dep-a");
+    expect(h.rowScopedUninstalls).not.toContain("@cinatra-ai/dep-a");
   });
 
   it("an UNPROTECTED batch compensates exactly as before (no behavior change)", async () => {
@@ -1836,10 +2157,7 @@ describe("installExtensionWithDependencies — protected members are never compe
       installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
     ).rejects.toBeInstanceOf(BatchMemberInstallError);
     // Inverse install order, every fresh member torn down.
-    expect(h.events.filter((e) => e.startsWith("uninstall:"))).toEqual([
-      "uninstall:@cinatra-ai/dep-b",
-      "uninstall:@cinatra-ai/dep-a",
-    ]);
+    expect(h.rowScopedUninstalls).toEqual(["@cinatra-ai/dep-b", "@cinatra-ai/dep-a"]);
   });
 
   it("BOOT RECOVERY skips a protected member too", async () => {
@@ -1857,6 +2175,8 @@ describe("installExtensionWithDependencies — protected members are never compe
           status: "installed",
           action: "install",
           preState: { present: false },
+          preRowIds: [],
+          createdRowIds: ["iext_protected"],
         },
         {
           packageName: "@cinatra-ai/dep-b",
@@ -1865,6 +2185,8 @@ describe("installExtensionWithDependencies — protected members are never compe
           status: "installed",
           action: "install",
           preState: { present: false },
+          preRowIds: [],
+          createdRowIds: ["iext_dep_b"],
         },
       ],
       createdAt: "now",
@@ -1876,11 +2198,175 @@ describe("installExtensionWithDependencies — protected members are never compe
       setPhase: async () => staleBatch,
       updateMember: async () => staleBatch,
       isMemberProtected: async (pkg: string) => pkg === PROTECTED_DEP,
-      uninstallMember: async (m) => {
+      uninstallMemberRowScoped: async (m) => {
         swept.push(m.packageName);
       },
     });
     expect(res.swept).toBe(1);
     expect(swept).toEqual(["@cinatra-ai/dep-b"]);
+  });
+});
+
+// ===========================================================================
+// cinatra#2415 — the PURE primitives the invariant rests on.
+// ===========================================================================
+describe("buildBatchCompensationActor (cinatra#2415)", () => {
+  it("STRIPS platform standing — the #2410 cross-org boundary made structural", () => {
+    const platformAdmin: Actor = {
+      actorType: "human",
+      source: "mcp",
+      userId: "u1",
+      orgId: "org-a",
+      platformRole: "platform_admin",
+      orgRole: "org_admin",
+    };
+    const built = buildBatchCompensationActor(platformAdmin, "org-a");
+    expect(built.platformRole).toBeUndefined();
+    expect(built.orgRole).toBeUndefined();
+    expect(built).toEqual({ actorType: "human", source: "mcp", userId: "u1", orgId: "org-a" });
+  });
+
+  it("NEVER synthesizes a role — a role-less envelope, not a fabricated org_admin", () => {
+    const built = buildBatchCompensationActor(
+      { actorType: "human", source: "ui", userId: "u1", orgId: "org-a" },
+      "org-a",
+    );
+    expect("orgRole" in built).toBe(false);
+    expect("platformRole" in built).toBe(false);
+  });
+
+  it("PINS orgId to the BATCH scope — a caller's stale/other active org cannot widen it", () => {
+    const built = buildBatchCompensationActor(
+      { actorType: "human", source: "ui", userId: "u1", orgId: "org-STALE" },
+      "org-batch",
+    );
+    expect(built.orgId).toBe("org-batch");
+  });
+
+  it("a PLATFORM-scoped batch carries no orgId at all", () => {
+    const built = buildBatchCompensationActor(
+      { actorType: "human", source: "ui", userId: "u1", orgId: "org-a" },
+      null,
+    );
+    expect("orgId" in built).toBe(false);
+  });
+
+  it("PRESERVES the audit identity (and restriction-only fields)", () => {
+    const built = buildBatchCompensationActor(
+      {
+        actorType: "system",
+        source: "worker",
+        userId: "u1",
+        requestId: "r1",
+        oboCeiling: [{ tier: "organization", id: "org-a" }],
+      },
+      null,
+    );
+    expect(built).toMatchObject({
+      actorType: "system",
+      source: "worker",
+      userId: "u1",
+      requestId: "r1",
+      oboCeiling: [{ tier: "organization", id: "org-a" }],
+    });
+  });
+});
+
+describe("diffCreatedRowIds (cinatra#2415)", () => {
+  it("returns the ids present AFTER and absent BEFORE", () => {
+    expect(diffCreatedRowIds(["a", "b"], ["a", "b", "c"])).toEqual(["c"]);
+  });
+  it("is empty when the install created nothing", () => {
+    expect(diffCreatedRowIds(["a"], ["a"])).toEqual([]);
+  });
+  it("ignores rows that DISAPPEARED (a delete is not a creation)", () => {
+    expect(diffCreatedRowIds(["a", "b"], ["b"])).toEqual([]);
+  });
+  it("never returns a pre-existing id, even one that was archived and re-activated", () => {
+    // The row id is stable across an archive/restore, so it stays in `before`.
+    expect(diffCreatedRowIds(["pre-existing"], ["pre-existing", "fresh"])).toEqual(["fresh"]);
+  });
+});
+
+describe("decideMemberCompensation (cinatra#2415)", () => {
+  const led = (over: Partial<InstallBatchMember> = {}) =>
+    ({ preState: { present: false }, ...over }) as InstallBatchMember;
+
+  it("a committed dedupe-upward ('update') member is NEVER rolled back", () => {
+    expect(decideMemberCompensation("update", led({ createdRowIds: ["x"] }))).toEqual({
+      kind: "skip",
+      reason: "committed-update",
+    });
+  });
+
+  it("a side-by-side member takes its VERSION-scoped inverse", () => {
+    expect(decideMemberCompensation("install-side-by-side", led())).toEqual({
+      kind: "side-by-side",
+    });
+  });
+
+  it("createdRowIds:[] is PROVEN 'created nothing' — a skip, not a version guess", () => {
+    expect(decideMemberCompensation("install", led({ createdRowIds: [] }))).toEqual({
+      kind: "skip",
+      reason: "nothing-created",
+    });
+  });
+
+  it("recorded createdRowIds ⇒ the ROW-SCOPED inverse", () => {
+    expect(decideMemberCompensation("install", led({ createdRowIds: ["r1"] }))).toEqual({
+      kind: "row-scoped",
+    });
+  });
+
+  it("preRowIds ALONE is evidence, NOT a delete authorization — the crash window REFUSES", () => {
+    // Once a crash releases the per-package install lock, an unrelated operation
+    // can create a row at the same scope before boot recovery runs, so a
+    // recomputed `current \ preRowIds` difference would misattribute it.
+    expect(decideMemberCompensation("install", led({ preRowIds: ["r0"] }))).toEqual({
+      kind: "refuse",
+      reason: "no-durable-provenance",
+    });
+  });
+
+  it("a side-by-side member that PROVABLY created nothing is skipped too (never a blind version teardown)", () => {
+    expect(
+      decideMemberCompensation("install-side-by-side", led({ createdRowIds: [] })),
+    ).toEqual({ kind: "skip", reason: "nothing-created" });
+    // With rows created (or no capture at all) it keeps its version-scoped inverse.
+    expect(
+      decideMemberCompensation("install-side-by-side", led({ createdRowIds: ["v2"] })),
+    ).toEqual({ kind: "side-by-side" });
+    expect(decideMemberCompensation("install-side-by-side", led())).toEqual({
+      kind: "side-by-side",
+    });
+  });
+
+  it("PROVENANCE OUTRANKS preState.present — the org-vs-platform fallback hole is closed", () => {
+    // `readLiveRowVersion` falls back org→platform, so an ORG batch that freshly
+    // created an ORG row while a PLATFORM row existed used to record
+    // preState.present=true and skip its own row. The recorded provenance wins.
+    expect(
+      decideMemberCompensation(
+        "install",
+        led({ preState: { present: true, version: "0.9.0" }, createdRowIds: ["org-row"] }),
+      ),
+    ).toEqual({ kind: "row-scoped" });
+  });
+
+  it("no provenance + pre-existing ⇒ the legacy discriminator still skips", () => {
+    expect(
+      decideMemberCompensation("install", led({ preState: { present: true } })),
+    ).toEqual({ kind: "skip", reason: "pre-existing" });
+  });
+
+  it("no provenance at all ⇒ REFUSE (never delete a row we cannot prove we created)", () => {
+    expect(decideMemberCompensation("install", led())).toEqual({
+      kind: "refuse",
+      reason: "no-durable-provenance",
+    });
+    expect(decideMemberCompensation(undefined, undefined)).toEqual({
+      kind: "refuse",
+      reason: "no-durable-provenance",
+    });
   });
 });

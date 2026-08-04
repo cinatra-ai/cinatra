@@ -168,6 +168,42 @@ export type InstallBatchMember = {
    * existing JSONB `members` column — NO schema change.
    */
   grantCapsule?: SideBySideGrantCapsule | null;
+  /**
+   * cinatra#2415 — DURABLE BATCH PROVENANCE, half 1 of 2.
+   *
+   * The canonical `installed_extension` row ids that existed for this member's
+   * `(packageName, member scope)` — EVERY status, not just live — captured
+   * IMMEDIATELY BEFORE the member's install and persisted BEFORE the mutation,
+   * inside the SAME per-package install lock the install itself takes.
+   *
+   * This is the pre-mutation evidence that makes "the row this batch created"
+   * a PROVEN fact rather than a `(scope, version)` guess: the created row is
+   * the one present AFTER the install and absent from this set. Persisting it
+   * before the mutation is what makes CRASH recovery sound — the boot sweeper
+   * can recompute the difference under the lock even though the process died
+   * before `createdRowIds` was written.
+   *
+   * Absent on legacy rows (batches begun before cinatra#2415). A member with
+   * NEITHER `preRowIds` NOR `createdRowIds` has no durable provenance at all
+   * and its compensation FAILS CLOSED — it is never deleted on a guess.
+   */
+  preRowIds?: string[] | null;
+  /**
+   * cinatra#2415 — DURABLE BATCH PROVENANCE, half 2 of 2.
+   *
+   * The set difference `after \ preRowIds`, computed and persisted inside the
+   * same locked section right after the member's install returns (or throws —
+   * an install that finalized a row and then failed still recorded what it
+   * created). These row ids provably DID NOT EXIST before this member's
+   * install and DO exist after it, so compensation may delete exactly them and
+   * nothing else.
+   *
+   * `[]` is a MEANINGFUL value: the member durably created no new row at its
+   * scope (e.g. an in-place `update` member), so compensation is a no-op — NOT
+   * a licence to fall back to a version guess. Absent = not yet captured
+   * (crash window) → the inverse recomputes the difference from `preRowIds`.
+   */
+  createdRowIds?: string[] | null;
 };
 
 export type InstallBatch = {
@@ -297,7 +333,12 @@ export async function setInstallBatchPhase(
 export async function updateInstallBatchMember(
   batchId: string,
   packageName: string,
-  patch: Partial<Pick<InstallBatchMember, "status" | "installOpId" | "detail" | "grantCapsule">>,
+  patch: Partial<
+    Pick<
+      InstallBatchMember,
+      "status" | "installOpId" | "detail" | "grantCapsule" | "preRowIds" | "createdRowIds"
+    >
+  >,
   deps?: InstallBatchOpsDeps,
 ): Promise<InstallBatch> {
   const { query, schema } = await resolveDeps(deps);

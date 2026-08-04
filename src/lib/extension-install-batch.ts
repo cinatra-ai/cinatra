@@ -21,9 +21,12 @@ import "server-only";
 //      included). The root installs LAST. Ledger states advance per member.
 //   4. MEMBER FAILURE (anywhere — incl. the built-artifacts serverEntry gate
 //      or a migration preflight inside the member's own pipeline): abort the
-//      queue, COMPENSATE newly-installed members ONLY (pre-existing members
-//      untouched) in INVERSE install order, ledger → compensated, original
-//      error rethrown.
+//      queue, COMPENSATE the rows THIS batch provably created (pre-existing
+//      rows — same org and every other org — untouched) in INVERSE install
+//      order, ledger → compensated, original error rethrown. Targets come from
+//      the ledger's durable per-member provenance and the teardown is always
+//      the ROW-SCOPED inverse — see THE COMPENSATION INVARIANT below
+//      (cinatra#2415).
 //   5. GRANT TTL (P2-5): before each member the root grant's expiry is
 //      checked; near-expiry triggers the injectable REFRESH seam (closure
 //      must be unchanged). Refresh unavailable/failed → abort + compensate —
@@ -183,8 +186,6 @@ export type InstallBatchSagaDeps = {
      */
     expectedInstalledVersion?: string,
   ) => Promise<void>;
-  /** Uninstall ONE package through the real dispatcher (compensation inverse). */
-  uninstallMember: (member: { typeId: string; packageName: string; version: string }, actor: Actor) => Promise<void>;
   /**
    * DECLARATION-DRIVEN PROTECTION (cinatra#1927) — does this member's own
    * `cinatra/config.json` declare `protected: true`? Consulted BEFORE every
@@ -207,19 +208,47 @@ export type InstallBatchSagaDeps = {
    */
   isMemberProtected: (packageName: string) => Promise<boolean>;
   /**
-   * #1042 slice-2 ROW-SCOPED compensation inverse. Removes ONLY the freshly-
-   * installed (package, actor-scope) canonical row — never the package-global
-   * hard-delete branch of `extensionRegistry.uninstall` (which would tear down
-   * same-package OTHER-org rows). Used in place of `uninstallMember` for
-   * newly-installed non-side-by-side members when the caller opts in with
-   * `rowScopedCompensation:true` (the auto-update loop), so an org-multi-tenant
-   * instance's rows are provably untouched and the loop can lift its org-rows
-   * fence. Absent flag (all manual callers) → today's `uninstallMember`.
+   * ROW-SCOPED compensation inverse — the ONLY inverse the abort path uses for
+   * a non-side-by-side member (cinatra#2415; introduced as the opt-in #1042
+   * slice-2 path). Removes ONLY the canonical rows this batch PROVABLY created
+   * at the member's own scope — never the package-global hard-delete branch of
+   * `extensionRegistry.uninstall` (which would tear down same-package OTHER-org
+   * rows, the boundary PR #2410 pinned).
+   *
+   * TARGETING IS LEDGER-DERIVED, NOT ACTOR-DERIVED (cinatra#2415): `scopeOrgId`
+   * is the batch's own planned scope read from the ledger and `createdRowIds`
+   * is the member's durable creation provenance. `actor` contributes the AUDIT
+   * envelope only. Fail-closed when `createdRowIds` is absent.
    */
   uninstallMemberRowScoped: (
-    member: { typeId: string; packageName: string; version: string },
+    member: {
+      typeId: string;
+      packageName: string;
+      version: string;
+      /** The batch/member scope the row was created at (ledger, never the actor). */
+      scopeOrgId: string | null;
+      /** cinatra#2415: the rows this member provably created (`[]` = none). */
+      createdRowIds?: string[] | null;
+    },
     actor: Actor,
   ) => Promise<void>;
+  /**
+   * cinatra#2415: the canonical row ids for `(packageName, scope)` across EVERY
+   * status — the pre/post reads whose set difference is the batch's durable
+   * creation provenance. Read at the exact scope (no org→platform fallback:
+   * `readLiveRowVersion`'s fallback is what let an org batch mistake a platform
+   * row for its own pre-state and skip compensating the org row it created).
+   */
+  listScopedRowIds: (packageName: string, scope: string | null) => Promise<string[]>;
+  /**
+   * cinatra#2415: run `fn` holding the PER-PACKAGE install lock (the same
+   * re-entrant `withInstallLock` the dispatcher's own install/uninstall take, so
+   * this adds no new serialization — it EXTENDS the already-held section). The
+   * provenance capture must be atomic with the mutation it describes: reading
+   * `before` outside the lock would let an unrelated concurrent insert be
+   * mis-attributed to this batch.
+   */
+  withPackageInstallLock: <T>(packageName: string, fn: () => Promise<T>) => Promise<T>;
   /**
    * Install ONE shared dependency SIDE BY SIDE as a non-default version row
    * (cinatra#1040 S3 `action:"install-side-by-side"` member) — the storage-
@@ -287,11 +316,164 @@ export type InstallBatchSagaDeps = {
   ledger: {
     begin: (input: { batchId: string; rootPackage: string; orgId: string | null; members: InstallBatchMember[] }) => Promise<InstallBatch>;
     setPhase: (batchId: string, phase: InstallBatch["phase"]) => Promise<InstallBatch>;
-    updateMember: (batchId: string, packageName: string, patch: Partial<Pick<InstallBatchMember, "status" | "installOpId" | "detail" | "grantCapsule">>) => Promise<InstallBatch>;
+    updateMember: (
+      batchId: string,
+      packageName: string,
+      patch: Partial<
+        Pick<
+          InstallBatchMember,
+          "status" | "installOpId" | "detail" | "grantCapsule" | "preRowIds" | "createdRowIds"
+        >
+      >,
+    ) => Promise<InstallBatch>;
     listActive: () => Promise<InstallBatch[]>;
   };
   now: () => number;
 };
+
+// ---------------------------------------------------------------------------
+// cinatra#2415 — THE COMPENSATION INVARIANT
+//
+//   Compensation deletes ONLY canonical `installed_extension` rows THIS batch
+//   created — identified by DURABLE PER-MEMBER PROVENANCE on the ledger, not by
+//   a (package, scope, version) guess — and it deletes ALL of them, EXCEPT the
+//   two pre-existing, deliberate contracts that refuse a teardown:
+//     * a DECLARATION-PROTECTED extension (cinatra#1927) is skipped and
+//       recorded as such ("this extension is never uninstalled" is its declared
+//       contract);
+//     * a LOCKED row (`deleteScopedCanonicalRow` refuses it) is recorded
+//       compensation-failed / ROLLBACK INCOMPLETE.
+//   Rows that PRE-EXISTED the batch — in the same org and in every other org —
+//   are never addressed at all: they are not in the provenance set, so no code
+//   path can reach them.
+//
+// WHY AN ACTOR ALONE CANNOT DO THIS. The abort path used to hand the install's
+// STANDING-FREE audit envelope to `extensionRegistry.uninstall`, whose
+// `resolveLifecycleTargetRow → assertActorWriteStandingOverRow` refuses a
+// role-less actor outright — so every manual/UI compensation was refused and
+// the batch's rows were left behind (the #2415 defect). Neither dispatcher
+// branch can satisfy the invariant either:
+//   * a role-bearing NON-platform actor takes the ARCHIVE branch — the row
+//     SURVIVES (archived), so "zero rows created by this batch" fails;
+//   * a PLATFORM-standing actor takes the PACKAGE-GLOBAL hard-delete branch,
+//     which tears down every OTHER org's row for the package — the boundary
+//     PR #2410 pinned with a test.
+// So compensation ALWAYS takes the ROW-SCOPED inverse
+// (`uninstallMemberRowScoped` → `deleteScopedCanonicalRow`), which deletes one
+// canonical row BY ID and can never fan out. The #2410 boundary is now
+// STRUCTURAL rather than conventional: the compensation actor is built by
+// `buildBatchCompensationActor`, which STRIPS platform standing instead of
+// attaching it (closing it even for the fully-roled MCP install actor).
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the actor a batch's COMPENSATION runs under (cinatra#2415).
+ *
+ * DERIVED FOR THE PURPOSE, in the `buildInstallRollbackActor` spirit (org-only,
+ * never platform) but taken further: NO standing at all is attached.
+ *
+ *  - `platformRole` is STRIPPED. Attaching it is the #2410 cross-org breach;
+ *    stripping it also closes the live hazard on the MCP install path, whose
+ *    transport actor may legitimately carry platform standing that would have
+ *    been threaded into the abort path.
+ *  - `orgRole` is STRIPPED, and deliberately NOT synthesized. `Actor.orgRole` is
+ *    a TRUSTED, verified membership hint; "this batch was authorized to install"
+ *    is not proof of a membership role, and the row-scoped inverse consults no
+ *    roles — a synthetic `org_admin` would be decorative authority and
+ *    confused-deputy bait for any future consumer of this actor.
+ *  - `orgId` is stripped and re-pinned to the BATCH's own planned scope, so a
+ *    caller's stale/different active org can never widen what is addressed.
+ *  - the audit identity (`actorType` / `userId` / `source`, plus restrictions
+ *    such as `oboCeiling`) is PRESERVED, so the trail still names who triggered
+ *    the failed install.
+ *
+ * Authorization is intentionally replaced by ledger-derived, row-scoped
+ * targeting: the rows to delete come from the batch's own durable provenance
+ * (`preRowIds` / `createdRowIds`), never from this actor. Pure + exported for
+ * direct testing.
+ */
+export function buildBatchCompensationActor(
+  installActor: Actor,
+  batchScopeOrgId: string | null,
+): Actor {
+  const identity: Actor = { ...installActor };
+  delete identity.platformRole;
+  delete identity.orgRole;
+  delete identity.orgId;
+  return batchScopeOrgId != null ? { ...identity, orgId: batchScopeOrgId } : identity;
+}
+
+/**
+ * cinatra#2415: the rows a member's install CREATED = the ids present after it
+ * and absent before it. Order-preserving on `after`, de-duplicated. Pure +
+ * exported (the saga computes it at capture time; the inverse recomputes it
+ * from `createdRowIds`).
+ */
+export function diffCreatedRowIds(
+  before: readonly string[],
+  after: readonly string[],
+): string[] {
+  const had = new Set(before);
+  const out: string[] = [];
+  for (const id of after) {
+    if (!had.has(id) && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+
+/** What compensation must do with ONE member — pure, from the ledger entry alone. */
+export type MemberCompensationDecision =
+  | { kind: "skip"; reason: "committed-update" | "nothing-created" | "pre-existing" }
+  | { kind: "side-by-side" }
+  | { kind: "row-scoped" }
+  | { kind: "refuse"; reason: "no-durable-provenance" };
+
+/**
+ * cinatra#2415: decide a member's compensation from its DURABLE ledger entry.
+ * Pure + exported so the rule is unit-testable independently of the saga.
+ *
+ * Precedence (provenance OUTRANKS the legacy pre-state heuristic):
+ *   1. an `action:"update"` member is a COMMITTED dedupe-upward (#1039 Option B)
+ *      — never rolled back;
+ *   2. an `install-side-by-side` member takes its VERSION-scoped inverse
+ *      (cinatra#1040 S3), which can never touch the default install;
+ *   3. `createdRowIds: []` — PROVEN to have created nothing at its scope → skip,
+ *      on EITHER inverse (a side-by-side member that created no version row must
+ *      not fire the version-scoped teardown against a row it did not create);
+ *   4. an `install-side-by-side` member with any other provenance state takes
+ *      its VERSION-scoped inverse (cinatra#1040 S3), which can never touch the
+ *      default install;
+ *   5. `createdRowIds: [...]` → the ROW-SCOPED inverse, deleting exactly those;
+ *   6. no `createdRowIds` AND `preState.present` → the legacy pre-#2415
+ *      discriminator: treat as pre-existing and skip (never remove a
+ *      pre-existing install);
+ *   7. no `createdRowIds` and NOT pre-existing → REFUSE. A row we cannot prove
+ *      this batch created is never deleted — not on a `(scope, version)` guess
+ *      and not on a crash-time `current \ preRowIds` difference (the install
+ *      lock is gone by then, so an unrelated concurrent install would be
+ *      misattributed). The member is recorded compensation-failed (ROLLBACK
+ *      INCOMPLETE) for manual review; `preRowIds` remains on the ledger as the
+ *      operator's reconciliation evidence.
+ */
+export function decideMemberCompensation(
+  action: "install" | "update" | "install-side-by-side" | undefined,
+  ledgerMember:
+    | Pick<InstallBatchMember, "preState" | "preRowIds" | "createdRowIds">
+    | undefined,
+): MemberCompensationDecision {
+  if (action === "update") return { kind: "skip", reason: "committed-update" };
+  const created = ledgerMember?.createdRowIds ?? null;
+  // A member whose provenance PROVES it created nothing is skipped on EITHER
+  // inverse — including side-by-side, whose version-scoped teardown would
+  // otherwise fire against a row the batch did not create.
+  if (created !== null && created.length === 0) {
+    return { kind: "skip", reason: "nothing-created" };
+  }
+  if (action === "install-side-by-side") return { kind: "side-by-side" };
+  if (created !== null) return { kind: "row-scoped" };
+  if (ledgerMember?.preState.present) return { kind: "skip", reason: "pre-existing" };
+  return { kind: "refuse", reason: "no-durable-provenance" };
+}
 
 /**
  * #1042 slice-2: resolve the SINGLE freshly-installed (package, scope, version)
@@ -302,6 +484,13 @@ export type InstallBatchSagaDeps = {
  * (the caller refuses rather than delete the wrong row); zero → `rowId:null`
  * (idempotent — already gone / the install never took). Pure + exported for
  * direct testing. `source.version` is the canonical verdaccio version.
+ *
+ * cinatra#2415 NOTE: this is NO LONGER the compensation's target resolver — a
+ * (scope, version) match does not PROVE the row was created by the batch (an
+ * archived pre-existing row that a concurrent restore re-activates matches it).
+ * The durable `preRowIds` / `createdRowIds` provenance replaced it. Kept as the
+ * pure, tested predicate it always was, and still used as the SECONDARY guard
+ * inside the inverse's revalidation.
  */
 export function resolveRowScopedCompensationTarget(
   rows: {
@@ -321,6 +510,114 @@ export function resolveRowScopedCompensationTarget(
   );
   if (matching.length === 1) return { rowId: matching[0]!.id, ambiguous: false, count: 1 };
   return { rowId: null, ambiguous: matching.length > 1, count: matching.length };
+}
+
+/** The member shape the row-scoped compensation inverse addresses (cinatra#2415). */
+export type RowScopedCompensationMember = {
+  typeId: string;
+  packageName: string;
+  version: string;
+  /** The scope the row was created at — from the LEDGER, never the actor. */
+  scopeOrgId: string | null;
+  createdRowIds?: string[] | null;
+};
+
+/**
+ * THE compensation inverse (cinatra#2415) — shared by the live saga's abort path
+ * and by boot recovery so both enforce the SAME invariant with the SAME code.
+ *
+ * Deletes EXACTLY the canonical rows the ledger PROVES this batch created at the
+ * member's own scope. Never the package-global hard-delete branch of
+ * `extensionRegistry.uninstall` (the #2410 cross-org boundary), never an
+ * arbitrary live row, and never a row whose creation this batch cannot prove.
+ * Other-scope rows for the same package are unreachable by construction — they
+ * are not in the provenance set and are never read for targeting.
+ *
+ * The whole resolve → revalidate → delete → journal sequence runs inside the
+ * per-package install lock (the SAME re-entrant `withInstallLock` the
+ * dispatcher's own uninstall takes), so no concurrent install can bind a
+ * dependent or recreate a row between the revalidation and the delete.
+ *
+ * `actor` is the AUDIT envelope only — targeting is ledger-derived.
+ */
+async function defaultUninstallMemberRowScoped(
+  member: RowScopedCompensationMember,
+  actor: Actor,
+): Promise<void> {
+  void actor; // audit envelope only — see the doc above
+  const scope = member.scopeOrgId ?? null;
+  const { withInstallLock } = await import("@cinatra-ai/agents");
+  await withInstallLock(member.packageName, async () => {
+    const { readInstalledExtensionById } = await import(
+      "@cinatra-ai/extensions/canonical-store"
+    );
+    if (member.createdRowIds == null) {
+      // FAIL CLOSED. `createdRowIds` is the ONLY delete authorization. The
+      // pre-mutation `preRowIds` snapshot is EVIDENCE, not a licence: once a
+      // crash releases the install lock, an unrelated operation can create a
+      // row at the same scope before boot recovery runs, so a recomputed
+      // `current \ preRowIds` difference would misattribute that row to this
+      // batch. Refusing leaves the row and records ROLLBACK INCOMPLETE — the
+      // safe direction (an operator has `preRowIds` on the ledger to reconcile
+      // from). Reachable for a pre-cinatra#2415 ledger row, for a crash inside
+      // the capture window, and when the capture read itself failed.
+      throw new Error(
+        `[extension-install-batch] row-scoped compensation of ${member.packageName}@${member.version} ` +
+          `has NO durable creation provenance (no createdRowIds on the ledger) — refusing to delete ` +
+          `a row this batch cannot prove it created (compensation left incomplete for manual review).`,
+      );
+    }
+    const targets: string[] = member.createdRowIds;
+    if (targets.length === 0) return; // provably created nothing — idempotent no-op
+    if (targets.length > 1) {
+      console.warn(
+        "[extension-install-batch] member %s created %d canonical rows at scope %s — " +
+          "compensating ALL of them (each is provably batch-created)",
+        member.packageName,
+        targets.length,
+        scope ?? "(platform)",
+      );
+    }
+    const { deleteScopedCanonicalRow } = await import(
+      "@cinatra-ai/extensions/lifecycle-primitive"
+    );
+    let deleted = 0;
+    for (const rowId of targets) {
+      const row = await readInstalledExtensionById(rowId);
+      if (!row) continue; // already gone — idempotent
+      // REVALIDATE the durable provenance against the live row before the
+      // destructive act: a recorded id must still BE this package at this scope.
+      // A mismatch means the ledger and the store disagree — refuse.
+      if (row.packageName !== member.packageName || (row.organizationId ?? null) !== scope) {
+        throw new Error(
+          `[extension-install-batch] row-scoped compensation of ${member.packageName}@${member.version} ` +
+            `refused — recorded row ${rowId} is now package "${row.packageName}" at scope ` +
+            `${row.organizationId ?? "(platform)"} (expected ${member.packageName} at ` +
+            `${scope ?? "(platform)"}); the ledger provenance and the canonical store disagree.`,
+        );
+      }
+      await deleteScopedCanonicalRow(rowId);
+      deleted += 1;
+    }
+    if (deleted === 0) return;
+    // Best-effort terminalize the member's install-op journal so it can never be
+    // mistaken for a live anchor.
+    try {
+      const { readInstallOp, advanceInstallOpPhase } = await import(
+        "@/lib/extension-install-ops"
+      );
+      const op = await readInstallOp(member.packageName, scope);
+      if (op && op.phase !== "rolled_back") {
+        await advanceInstallOpPhase({ installOpId: op.installOpId, phase: "rolled_back" });
+      }
+    } catch (err) {
+      console.warn(
+        "[extension-install-batch] terminalizing the install-op journal for %s (row-scoped compensation) failed:",
+        member.packageName,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  });
 }
 
 export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSagaDeps> {
@@ -468,14 +765,6 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
         ...(expectedInstalledVersion !== undefined ? [{ expectedInstalledVersion }] : []),
       );
     },
-    uninstallMember: async (member, actor) => {
-      const { extensionRegistry } = await import("@cinatra-ai/extensions");
-      await extensionRegistry.uninstall(
-        member.typeId,
-        { registryUrl: "", packageName: member.packageName, version: member.version },
-        actor,
-      );
-    },
     isMemberProtected: async (packageName) => {
       const { resolveDeclaredProtection } = await import(
         "@cinatra-ai/extensions/protected-extension"
@@ -495,60 +784,20 @@ export async function makeDefaultInstallBatchSagaDeps(): Promise<InstallBatchSag
         return true;
       }
     },
-    uninstallMemberRowScoped: async (member, actor) => {
-      // #1042 slice-2: ROW-SCOPED compensation. PRECISELY resolve the single
-      // freshly-installed (package, actor-scope, version) canonical row this
-      // batch added and delete EXACTLY that row via the scoped lifecycle
-      // primitive — never the package-global hard-delete, and never an
-      // arbitrary live row. FAIL-CLOSED on ambiguity (>1 live rows carrying the
-      // version at the scope): we refuse rather than delete the wrong row (the
-      // throw marks the member compensation-failed / ROLLBACK INCOMPLETE, which
-      // is the safe direction). Other-scope rows for the same package are
-      // provably untouched. Best-effort terminalize the row's install-op journal
-      // so it can never be mistaken for a live anchor.
-      const scope = actor.orgId ?? null;
+    listScopedRowIds: async (packageName, scope) => {
       const { readInstalledExtensionsByPackageName } = await import(
         "@cinatra-ai/extensions/canonical-store"
       );
-      const rows = await readInstalledExtensionsByPackageName(member.packageName);
-      const target = resolveRowScopedCompensationTarget(
-        rows.map((r) => ({
-          id: r.id,
-          organizationId: r.organizationId,
-          status: r.status,
-          source: r.source as { version?: string } | null,
-        })),
-        scope,
-        member.version,
-      );
-      if (target.ambiguous) {
-        throw new Error(
-          `[extension-install-batch] row-scoped compensation of ${member.packageName}@${member.version} ` +
-            `is ambiguous (${target.count} live rows at the scope carry that version) — refusing to ` +
-            `delete an arbitrary row (compensation left incomplete for manual review).`,
-        );
-      }
-      if (target.rowId === null) return; // already gone / never took — idempotent
-      const { deleteScopedCanonicalRow } = await import(
-        "@cinatra-ai/extensions/lifecycle-primitive"
-      );
-      await deleteScopedCanonicalRow(target.rowId);
-      try {
-        const { readInstallOp, advanceInstallOpPhase } = await import(
-          "@/lib/extension-install-ops"
-        );
-        const op = await readInstallOp(member.packageName, scope);
-        if (op && op.phase !== "rolled_back") {
-          await advanceInstallOpPhase({ installOpId: op.installOpId, phase: "rolled_back" });
-        }
-      } catch (err) {
-        console.warn(
-          "[extension-install-batch] terminalizing the install-op journal for %s (row-scoped compensation) failed:",
-          member.packageName,
-          err instanceof Error ? err.message : err,
-        );
-      }
+      const rows = await readInstalledExtensionsByPackageName(packageName);
+      // EXACT scope, EVERY status: an archived row is still a row this batch
+      // must not be able to claim it created.
+      return rows.filter((r) => (r.organizationId ?? null) === scope).map((r) => r.id);
     },
+    withPackageInstallLock: async (packageName, fn) => {
+      const { withInstallLock } = await import("@cinatra-ai/agents");
+      return withInstallLock(packageName, fn);
+    },
+    uninstallMemberRowScoped: defaultUninstallMemberRowScoped,
     installMemberSideBySide: async (member, actor) => {
       const { installExtensionVersionSideBySide } = await import(
         "@/lib/extension-side-by-side-install"
@@ -643,13 +892,12 @@ export async function installExtensionWithDependencies(
      */
     expectedRootInstalledVersion?: string;
     /**
-     * #1042 slice-2 (auto-update loop only): when true, freshly-installed
-     * NON-side-by-side members compensate via the ROW-SCOPED inverse
-     * (`uninstallMemberRowScoped`) instead of the package-global
-     * `extensionRegistry.uninstall`. This makes the batch's mid-batch
-     * compensation provably touch only the actor-scope row, so the loop can run
-     * on org-multi-tenant instances (lifting its org-rows fence). Absent (every
-     * manual caller) = today's package-scoped compensation, byte-unchanged.
+     * @deprecated cinatra#2415 — NO-OP, kept only for source compatibility with
+     * the auto-update loop's existing call site. Row-scoped compensation is no
+     * longer opt-in: it is the ONLY compensation inverse, for every caller
+     * (#1042 slice-2 generalized). Passing `true` changes nothing; omitting it
+     * no longer selects the package-global `extensionRegistry.uninstall` — that
+     * route is unreachable from compensation by construction.
      */
     rowScopedCompensation?: boolean;
   },
@@ -884,8 +1132,85 @@ export async function installExtensionWithDependencies(
       action: "install" | "update" | "install-side-by-side";
       sideBySideScopeOrgId?: string | null;
     }[] = [];
+    // cinatra#2415: the member whose install THREW but which durably CREATED a
+    // canonical row before failing (e.g. the dispatcher finalized the row and
+    // then threw on the "did not hot-activate" check, which deliberately leaves
+    // the committed install intact). An aborting batch must leave ZERO rows it
+    // created, so this member's provably-created rows are torn down too — first,
+    // as the most recent mutation. Its ledger status stays `failed` (it is the
+    // failure, not a rolled-back success); the teardown is recorded in `detail`.
+    let failedMemberWithRows:
+      | {
+          packageName: string;
+          version: string;
+          typeId: string;
+          action: "install" | "update" | "install-side-by-side";
+          sideBySideScopeOrgId?: string | null;
+        }
+      | null = null;
     const sideBySideScopeOf = (m: { sideBySideScopeOrgId?: string | null }): string | null =>
       m.sideBySideScopeOrgId === undefined ? orgId : m.sideBySideScopeOrgId;
+    /** The scope a member's canonical row lives at (side-by-side resolves its own). */
+    const memberScopeOf = (m: {
+      action: "install" | "update" | "install-side-by-side";
+      sideBySideScopeOrgId?: string | null;
+    }): string | null => (m.action === "install-side-by-side" ? sideBySideScopeOf(m) : orgId);
+    /**
+     * cinatra#2415: persist the member's creation provenance (`after \ before`)
+     * to the ledger AND mirror it into the in-memory batch member (the
+     * `persistCapsule` pattern) so same-process compensation reads it without a
+     * re-fetch. Called INSIDE the per-package lock, on BOTH the success and the
+     * failure exit of the member's install.
+     */
+    const captureCreatedRows = async (
+      member: {
+        packageName: string;
+        action: "install" | "update" | "install-side-by-side";
+        sideBySideScopeOrgId?: string | null;
+      },
+      before: string[],
+      failed: boolean,
+    ): Promise<string[] | null> => {
+      let createdRowIds: string[];
+      try {
+        const after = await deps.listScopedRowIds(member.packageName, memberScopeOf(member));
+        createdRowIds = diffCreatedRowIds(before, after);
+      } catch (readErr) {
+        // The capture READ failed, so we do not know what this member created.
+        // `null` is NOT "created nothing": the member is left WITHOUT creation
+        // provenance, which the compensation rule turns into a loud REFUSE
+        // (ROLLBACK INCOMPLETE) rather than a silent skip.
+        console.error(
+          "[extension-install-batch] creation-provenance capture for %s FAILED — the member has no " +
+            "delete authorization and its compensation will be refused for manual review:",
+          member.packageName,
+          readErr instanceof Error ? readErr.message : readErr,
+        );
+        await deps.ledger
+          .updateMember(batch.batchId, member.packageName, {
+            detail:
+              "creation-provenance capture failed — compensation cannot prove what this member " +
+              "created (cinatra#2415); reconcile from preRowIds",
+          })
+          .catch(() => undefined);
+        return null;
+      }
+      const lm = batch.members.find((x) => x.packageName === member.packageName);
+      if (lm) lm.createdRowIds = createdRowIds;
+      await deps.ledger
+        .updateMember(batch.batchId, member.packageName, {
+          createdRowIds,
+          ...(failed && createdRowIds.length > 0
+            ? {
+                detail:
+                  `install FAILED after durably creating ${createdRowIds.length} canonical row(s) ` +
+                  `— compensated by this batch (cinatra#2415)`,
+              }
+            : {}),
+        })
+        .catch(() => undefined);
+      return createdRowIds;
+    };
     for (const member of toInstall) {
       try {
         // P2-5 GRANT TTL: refresh near expiry; refusal/unavailability aborts.
@@ -932,78 +1257,117 @@ export async function installExtensionWithDependencies(
           }
         }
 
-        await deps.ledger.updateMember(batch.batchId, member.packageName, { status: "installing" });
-        // #157: the agent handler dispatched here installs ROOT-ONLY under the
-        // saga-owned-fan-out context — the saga (this loop) owns the dependency
-        // fan-out, so no second registries dep-resolver runs per member.
-        //
-        // #1039 Option B: an `action:"update"` member is a CLEAN dedupe-upward of
-        // an already-installed shared dependency — routed through the durable
-        // UPDATE pipeline (in-place re-materialize at the new pin), not a fresh
-        // install. It is a COMMITTED upgrade: because it is a pre-existing member
-        // (`preState.present`), the newly-installed-only compensation loop below
-        // and the boot sweeper both skip it, so a later member's failure leaves
-        // it at the new (provably non-breaking) version.
-        // cinatra#1040 S3: an `install-side-by-side` member routes through the
-        // version-scoped storage installer — NEVER the package-scoped install
-        // (which would resolve/short-circuit against the DEFAULT row) and never
-        // an upgraded/derived action: only the PLANNER emits this action, on
-        // the non-gatekept path exclusively.
-        await deps.withSagaOwnedFanout(input.packageName, () =>
-          member.action === "update"
-            ? // #1042 slice-1: forward the CAS precondition ONLY for the ROOT
-              // update member — a non-root dedupe-upward member is an internal
-              // committed upgrade with no caller-supplied expectation.
-              deps.updateMemberPackage(
-                member,
-                input.actor,
-                member.packageName === input.packageName
-                  ? input.expectedRootInstalledVersion
-                  : undefined,
-              )
-            : member.action === "install-side-by-side"
-              ? deps.installMemberSideBySide(
-                  {
-                    ...member,
-                    scopeOrgId: sideBySideScopeOf(member),
-                    // cinatra#1040 S6: the durable capsule sink for THIS member.
-                    // Persist to the ledger (DB — for cross-process boot
-                    // recovery) AND mirror into the in-memory batch member (so
-                    // same-process compensation below reads it without a
-                    // re-fetch). Called UNDER the side-by-side install's
-                    // per-package lock, BEFORE any ownership-grant mutation.
-                    persistCapsule: async (capsule) => {
-                      await deps.ledger.updateMember(batch.batchId, member.packageName, {
-                        grantCapsule: capsule,
-                      });
-                      const lm = batch.members.find(
-                        (x) => x.packageName === member.packageName,
-                      );
-                      if (lm) lm.grantCapsule = capsule;
-                    },
-                  },
+        // cinatra#2415 — DURABLE BATCH PROVENANCE, captured atomically with the
+        // mutation it describes. The pre-read, the pre-write, the install and
+        // the post-read all happen inside ONE hold of the per-package install
+        // lock — the SAME re-entrant `withInstallLock` the dispatcher's own
+        // install takes internally, so this adds no new serialization; it just
+        // extends the already-held section to cover the reads. Reading `before`
+        // outside the lock would let an unrelated concurrent insert be
+        // mis-attributed to this batch.
+        await deps.withPackageInstallLock(member.packageName, async () => {
+          const memberScope = memberScopeOf(member);
+          const preRowIds = await deps.listScopedRowIds(member.packageName, memberScope);
+          {
+            const lm = batch.members.find((x) => x.packageName === member.packageName);
+            if (lm) lm.preRowIds = preRowIds;
+          }
+          // The pre-mutation evidence is persisted BEFORE the mutation: a crash
+          // between here and the post-capture still leaves the boot sweeper able
+          // to recompute the difference under the lock.
+          await deps.ledger.updateMember(batch.batchId, member.packageName, {
+            status: "installing",
+            preRowIds,
+          });
+          // #157: the agent handler dispatched here installs ROOT-ONLY under the
+          // saga-owned-fan-out context — the saga (this loop) owns the dependency
+          // fan-out, so no second registries dep-resolver runs per member.
+          //
+          // #1039 Option B: an `action:"update"` member is a CLEAN dedupe-upward of
+          // an already-installed shared dependency — routed through the durable
+          // UPDATE pipeline (in-place re-materialize at the new pin), not a fresh
+          // install. It is a COMMITTED upgrade: because it is a pre-existing member
+          // (`preState.present`), the newly-installed-only compensation loop below
+          // and the boot sweeper both skip it, so a later member's failure leaves
+          // it at the new (provably non-breaking) version.
+          // cinatra#1040 S3: an `install-side-by-side` member routes through the
+          // version-scoped storage installer — NEVER the package-scoped install
+          // (which would resolve/short-circuit against the DEFAULT row) and never
+          // an upgraded/derived action: only the PLANNER emits this action, on
+          // the non-gatekept path exclusively.
+          try {
+            await deps.withSagaOwnedFanout(input.packageName, () =>
+              member.action === "update"
+                ? // #1042 slice-1: forward the CAS precondition ONLY for the ROOT
+                // update member — a non-root dedupe-upward member is an internal
+                // committed upgrade with no caller-supplied expectation.
+                deps.updateMemberPackage(
+                  member,
                   input.actor,
+                  member.packageName === input.packageName
+                    ? input.expectedRootInstalledVersion
+                    : undefined,
                 )
-              : deps.installMember(member, input.actor),
-        );
-        // Track the durable install/update IMMEDIATELY — before the ledger write —
-        // so a ledger failure right after a successful member op still routes it
-        // correctly (an install compensates; a committed update is skipped by the
-        // pre-existing-member guard in compensation).
-        installedThisBatch.push(member);
-        const op =
-          member.action === "install-side-by-side"
-            ? await deps
-                .readInstallOpForVersion(
-                  member.packageName,
-                  sideBySideScopeOf(member),
-                  member.version,
-                )
-                .catch(() => null)
-            : await deps.readInstallOp(member.packageName, orgId).catch(() => null);
-        await deps.ledger.updateMember(batch.batchId, member.packageName, {
-          status: "installed",
-          ...(op ? { installOpId: op.installOpId } : {}),
+              : member.action === "install-side-by-side"
+                ? deps.installMemberSideBySide(
+                    {
+                      ...member,
+                      scopeOrgId: sideBySideScopeOf(member),
+                      // cinatra#1040 S6: the durable capsule sink for THIS member.
+                      // Persist to the ledger (DB — for cross-process boot
+                      // recovery) AND mirror into the in-memory batch member (so
+                      // same-process compensation below reads it without a
+                      // re-fetch). Called UNDER the side-by-side install's
+                      // per-package lock, BEFORE any ownership-grant mutation.
+                      persistCapsule: async (capsule) => {
+                        await deps.ledger.updateMember(batch.batchId, member.packageName, {
+                          grantCapsule: capsule,
+                        });
+                        const lm = batch.members.find(
+                          (x) => x.packageName === member.packageName,
+                        );
+                        if (lm) lm.grantCapsule = capsule;
+                      },
+                    },
+                    input.actor,
+                  )
+                : deps.installMember(member, input.actor),
+            );
+          } catch (installErr) {
+            // The install THREW. Capture the provenance anyway (still inside the
+            // lock): a dispatcher that finalized a row and then threw leaves a
+            // durable row this batch created, and the invariant says it must not
+            // survive the abort. Recorded, then compensated with the rest.
+            //
+            // `null` = the capture itself failed. That is NOT "created nothing":
+            // the member is queued anyway so the compensation rule REFUSES it
+            // loudly (ROLLBACK INCOMPLETE) instead of dropping it silently.
+            const createdOnFailure = await captureCreatedRows(member, preRowIds, true);
+            if (createdOnFailure === null || createdOnFailure.length > 0) {
+              failedMemberWithRows = member;
+            }
+            throw installErr;
+          }
+          // Track the durable install/update IMMEDIATELY — before the ledger write —
+          // so a ledger failure right after a successful member op still routes it
+          // correctly (an install compensates; a committed update is skipped by the
+          // pre-existing-member guard in compensation).
+          installedThisBatch.push(member);
+          await captureCreatedRows(member, preRowIds, false);
+          const op =
+            member.action === "install-side-by-side"
+              ? await deps
+                  .readInstallOpForVersion(
+                    member.packageName,
+                    sideBySideScopeOf(member),
+                    member.version,
+                  )
+                  .catch(() => null)
+              : await deps.readInstallOp(member.packageName, orgId).catch(() => null);
+          await deps.ledger.updateMember(batch.batchId, member.packageName, {
+            status: "installed",
+            ...(op ? { installOpId: op.installOpId } : {}),
+          });
         });
       } catch (err) {
         await abortAndCompensate(member.packageName, err);
@@ -1088,14 +1452,42 @@ export async function installExtensionWithDependencies(
 
       const compensated: string[] = [];
       const failures: string[] = [];
-      // NEWLY-INSTALLED members only (pre-state absent), INVERSE install order.
-      // A SIDE-BY-SIDE member (cinatra#1040 S3) is newly installed even though
-      // its package-scoped preState.present is TRUE (the default row exists) —
-      // it compensates through the VERSION-SCOPED teardown, which can never
-      // touch the default install.
-      for (const m of [...installedThisBatch].reverse()) {
+      // cinatra#2415: the compensation actor — platform standing STRIPPED (never
+      // attached), no role synthesized, scope pinned to the batch's own. See
+      // `buildBatchCompensationActor`. Row targeting is ledger-derived; this
+      // actor is the AUDIT envelope.
+      const compensationActor = buildBatchCompensationActor(input.actor, orgId);
+      // Members THIS batch mutated, INVERSE order — the failed member (when it
+      // durably created a row before throwing) is the most recent, so it comes
+      // first. Which of them is actually torn down is decided per member by
+      // `decideMemberCompensation` from the DURABLE ledger provenance.
+      const compensationQueue = [
+        ...installedThisBatch,
+        ...(failedMemberWithRows ? [failedMemberWithRows] : []),
+      ].reverse();
+      for (const m of compensationQueue) {
+        const isFailedMember = m === failedMemberWithRows;
         const ledgerMember = batch!.members.find((x) => x.packageName === m.packageName);
-        if (m.action !== "install-side-by-side" && ledgerMember?.preState.present) continue; // never remove a pre-existing install
+        const decision = decideMemberCompensation(m.action, ledgerMember);
+        if (decision.kind === "skip") continue; // committed update / nothing created / pre-existing
+        if (decision.kind === "refuse") {
+          // No durable provenance ⇒ we cannot prove this batch created the row.
+          // Refuse rather than delete on a guess (only reachable for a ledger
+          // row written before cinatra#2415).
+          failures.push(m.packageName);
+          await deps.ledger
+            .updateMember(batch!.batchId, m.packageName, {
+              status: "compensation-failed",
+              detail:
+                "compensation refused — no durable batch provenance (pre-cinatra#2415 ledger row)",
+            })
+            .catch(() => undefined);
+          console.error(
+            `[extension-install-batch] compensation of ${m.packageName} REFUSED (batch ${batch!.batchId}): ` +
+              `no durable provenance proves this batch created the row — left for manual review.`,
+          );
+          continue;
+        }
         // DECLARATION-DRIVEN PROTECTION (cinatra#1927) — never tear down an
         // extension whose own declaration marks it protected, on EITHER
         // compensation inverse (the dispatcher route would refuse anyway; the
@@ -1115,7 +1507,7 @@ export async function installExtensionWithDependencies(
           continue;
         }
         try {
-          if (m.action === "install-side-by-side") {
+          if (decision.kind === "side-by-side") {
             await deps.uninstallSideBySideMember(
               {
                 ...m,
@@ -1125,18 +1517,34 @@ export async function installExtensionWithDependencies(
                 // ownership-grant reconcile on this compensation teardown.
                 capsule: ledgerMember?.grantCapsule ?? null,
               },
-              input.actor,
+              compensationActor,
             );
-          } else if (input.rowScopedCompensation) {
-            // #1042 slice-2: ROW-SCOPED inverse — tear down ONLY the freshly-
-            // installed actor-scope row, never the package-global hard-delete
-            // that would clobber same-package OTHER-org rows. Opt-in (the
-            // auto-update loop); manual callers keep `uninstallMember` below.
-            await deps.uninstallMemberRowScoped(m, input.actor);
           } else {
-            await deps.uninstallMember(m, input.actor);
+            // cinatra#2415: the ROW-SCOPED inverse is the ONLY inverse — it
+            // deletes exactly the rows the ledger proves this batch created and
+            // can never fan out to another scope. `uninstallMember` (the
+            // package-scoped dispatcher) is deliberately NOT reachable from
+            // compensation: its non-platform branch archives (the row survives)
+            // and its platform branch is package-global (the #2410 boundary).
+            await deps.uninstallMemberRowScoped(
+              {
+                typeId: m.typeId,
+                packageName: m.packageName,
+                version: m.version,
+                scopeOrgId: memberScopeOf(m),
+                createdRowIds: ledgerMember?.createdRowIds ?? null,
+              },
+              compensationActor,
+            );
           }
-          await deps.ledger.updateMember(batch!.batchId, m.packageName, { status: "compensated" });
+          await deps.ledger.updateMember(
+            batch!.batchId,
+            m.packageName,
+            // The FAILED member keeps its `failed` status — it is the failure,
+            // not a rolled-back success. Its teardown is recorded in `detail`
+            // (written at capture time), so the ledger stays honest.
+            isFailedMember ? {} : { status: "compensated" },
+          );
           compensated.push(m.packageName);
         } catch (err) {
           failures.push(m.packageName);
@@ -1229,9 +1637,15 @@ export async function installExtensionWithDependencies(
 /**
  * Compensate STALE active batches from the ledger (compensate-never-resume:
  * there is no root grant at boot, and P2-5 forbids continuing without one).
- * Members this batch newly installed (pre-state absent) whose install reached
- * `installed`/`installing` are uninstalled in inverse order; pre-existing
- * members are untouched. Idempotent + best-effort per member.
+ *
+ * cinatra#2415: boot recovery enforces the SAME invariant as the live abort
+ * path, with the SAME code. It reads the SAME durable per-member provenance
+ * (`createdRowIds`) and routes every non-side-by-side member through the
+ * ROW-SCOPED inverse — so
+ * a process crash can no longer violate the invariant the live path enforces.
+ * Its actor is built by the same `buildBatchCompensationActor` (no standing,
+ * scope pinned to the batch's own). Idempotent + best-effort per member; a
+ * member without durable provenance is REFUSED, never deleted on a guess.
  */
 export async function sweepStaleInstallBatches(
   opts?: { olderThanMs?: number },
@@ -1243,7 +1657,11 @@ export async function sweepStaleInstallBatches(
       packageName: string,
       patch: Partial<Pick<InstallBatchMember, "status" | "installOpId" | "detail">>,
     ) => Promise<InstallBatch>;
-    uninstallMember?: (member: { typeId: string; packageName: string; version: string }) => Promise<void>;
+    /** cinatra#2415: the SAME row-scoped, provenance-targeted inverse the saga uses. */
+    uninstallMemberRowScoped?: (
+      member: RowScopedCompensationMember,
+      actor: Actor,
+    ) => Promise<void>;
     /** cinatra#1927 — same declaration-driven protection check the live saga
      *  applies, so BOOT RECOVERY cannot tear down a protected extension either. */
     isMemberProtected?: (packageName: string) => Promise<boolean>;
@@ -1273,7 +1691,10 @@ export async function sweepStaleInstallBatches(
       pkg: string,
       patch: Partial<Pick<InstallBatchMember, "status" | "installOpId" | "detail">>,
     ) => batchOps.updateInstallBatchMember(id, pkg, patch, batchOpsDeps));
-  const sweeperActor: Actor = { actorType: "system", source: "worker" };
+  // cinatra#2415: the boot-recovery audit identity. Per batch it is narrowed to
+  // that batch's own scope by `buildBatchCompensationActor` (no standing is ever
+  // attached — targeting is ledger-derived).
+  const sweeperIdentity: Actor = { actorType: "system", source: "worker" };
   const isMemberProtected =
     depsOverride?.isMemberProtected ??
     (async (packageName: string) => {
@@ -1286,16 +1707,8 @@ export async function sweepStaleInstallBatches(
         return true; // fail-closed: unreadable declaration ⇒ never swept away
       }
     });
-  const uninstallMember =
-    depsOverride?.uninstallMember ??
-    (async (member: { typeId: string; packageName: string; version: string }) => {
-      const { extensionRegistry } = await import("@cinatra-ai/extensions");
-      await extensionRegistry.uninstall(
-        member.typeId,
-        { registryUrl: "", packageName: member.packageName, version: member.version },
-        sweeperActor,
-      );
-    });
+  const uninstallMemberRowScoped =
+    depsOverride?.uninstallMemberRowScoped ?? defaultUninstallMemberRowScoped;
   const uninstallSideBySideMember =
     depsOverride?.uninstallSideBySideMember ??
     (async (member: {
@@ -1322,19 +1735,36 @@ export async function sweepStaleInstallBatches(
   let swept = 0;
   for (const batch of stale) {
     // Inverse install order = reverse ledger order (the ledger is topo-ordered).
-    // A side-by-side member (cinatra#1040 S3) is a stale NEWLY-CREATED version
-    // row even though its package-scoped preState.present is TRUE — it sweeps
-    // through the VERSION-SCOPED teardown (never the package uninstall, which
-    // would remove the default install).
+    // Which members are torn down is decided by the SAME pure rule the live
+    // abort path uses (cinatra#2415): the durable per-member provenance
+    // OUTRANKS the legacy `preState.present` heuristic, so an org batch that
+    // created an org row while a platform row existed is no longer skipped.
+    const compensationActor = buildBatchCompensationActor(
+      sweeperIdentity,
+      batch.orgId ?? null,
+    );
     const candidates = [...batch.members]
       .reverse()
-      .filter(
-        (m) =>
-          (m.status === "installed" || m.status === "installing") &&
-          (!m.preState.present || m.action === "install-side-by-side"),
-      );
+      .filter((m) => m.status === "installed" || m.status === "installing");
     let failures = 0;
     for (const m of candidates) {
+      const decision = decideMemberCompensation(m.action, m);
+      if (decision.kind === "skip") continue;
+      if (decision.kind === "refuse") {
+        // No durable provenance (a ledger row written before cinatra#2415):
+        // refuse rather than delete a row this batch cannot prove it created.
+        failures += 1;
+        await updateMember(batch.batchId, m.packageName, {
+          status: "compensation-failed",
+          detail:
+            "boot-sweep compensation refused — no durable batch provenance (pre-cinatra#2415 ledger row)",
+        }).catch(() => undefined);
+        console.error(
+          `[extension-install-batch] boot sweep: compensation of ${m.packageName} REFUSED (batch ${batch.batchId}): ` +
+            `no durable provenance proves this batch created the row — left for manual review.`,
+        );
+        continue;
+      }
       // cinatra#1927: a protected extension is never torn down, not even by
       // boot recovery — recorded as a skip, exactly like the live saga.
       if (await isMemberProtected(m.packageName)) {
@@ -1344,7 +1774,7 @@ export async function sweepStaleInstallBatches(
         continue;
       }
       try {
-        if (m.action === "install-side-by-side") {
+        if (decision.kind === "side-by-side") {
           await uninstallSideBySideMember({
             typeId: m.typeId,
             packageName: m.packageName,
@@ -1358,7 +1788,18 @@ export async function sweepStaleInstallBatches(
             capsule: m.grantCapsule ?? null,
           });
         } else {
-          await uninstallMember({ typeId: m.typeId, packageName: m.packageName, version: m.version });
+          // cinatra#2415: the SAME provenance-targeted row-scoped inverse the
+          // live abort path uses — never the package-global dispatcher.
+          await uninstallMemberRowScoped(
+            {
+              typeId: m.typeId,
+              packageName: m.packageName,
+              version: m.version,
+              scopeOrgId: batch.orgId ?? null,
+              createdRowIds: m.createdRowIds ?? null,
+            },
+            compensationActor,
+          );
         }
         await updateMember(batch.batchId, m.packageName, { status: "compensated" });
       } catch (err) {
