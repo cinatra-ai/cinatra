@@ -8,6 +8,10 @@ import {
   DefaultLlmProviderAuthzError,
   DefaultLlmProviderAuditError,
 } from "@/lib/admin/default-llm-provider-mutation";
+import {
+  SetupProviderCommitConflictError,
+  transitionDefaultProviderViaAdministration,
+} from "@/lib/setup-provider-commit";
 import { buildKnownDefaultCapableProviders } from "@cinatra-ai/sdk-extensions/llm-provider-contract";
 import type { LlmProvider } from "@cinatra-ai/agents/llm-provider-policy";
 
@@ -59,16 +63,33 @@ export async function PUT(request: Request) {
       );
     }
 
-    // Shared chokepoint: platform-admin authority + strict-before-mutation
-    // audit + write. The same helper backs the LLM-settings server actions so
-    // every write path is gated and audited identically.
-    await updateDefaultLlmProvider({
-      actor,
+    // S3 (cinatra#2388): the write routes through the provider-commit
+    // machine's Administration transition (absent → create; pending setup
+    // claim → classified 409; committed-same → idempotent no-op;
+    // committed-different → fenced move), which itself performs every default
+    // write through the shared audited chokepoint (platform-admin authority +
+    // strict-before-mutation audit) backing the LLM-settings server actions —
+    // every write path stays gated and audited identically.
+    await transitionDefaultProviderViaAdministration({
       provider: parsed.data.provider as LlmProvider,
-      requestId: request.headers.get("x-request-id") ?? undefined,
+      actorId: actor.principalId ?? null,
+      writeAuditedDefault: (provider) =>
+        updateDefaultLlmProvider({
+          actor,
+          provider,
+          requestId: request.headers.get("x-request-id") ?? undefined,
+        }),
     });
     return NextResponse.json({ provider: parsed.data.provider });
   } catch (error) {
+    if (error instanceof SetupProviderCommitConflictError) {
+      // CLASSIFIED conflict — a pending setup claim (or a concurrent
+      // transition) refuses the change as a 409, never an unclassified 500.
+      return NextResponse.json(
+        { error: error.message, conflict: error.conflict },
+        { status: 409 },
+      );
+    }
     if (error instanceof DefaultLlmProviderAuthzError) {
       return NextResponse.json({ error: error.message }, { status: 403 });
     }

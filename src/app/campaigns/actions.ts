@@ -23,6 +23,12 @@ import {
 } from "@/lib/llm-provider-surfaces";
 import { requireAuthSession, requireAdminSession, isPlatformAdmin, resolveOrgRoleForSession, getActorContext } from "@/lib/auth-session";
 import { updateDefaultLlmProvider } from "@/lib/admin/default-llm-provider-mutation";
+// S3 (cinatra#2388): every global default-provider writer routes through the
+// provider-commit machine's Administration transition.
+import {
+  SetupProviderCommitConflictError,
+  transitionDefaultProviderViaAdministration,
+} from "@/lib/setup-provider-commit";
 import { buildKnownDefaultCapableProviders } from "@cinatra-ai/sdk-extensions/llm-provider-contract";
 import type { LlmProvider } from "@cinatra-ai/agents/llm-provider-policy";
 import {
@@ -68,25 +74,22 @@ import { updateOpenAIPromptCaching } from "@/lib/openai-connection-store";
 // not allowed in "use server" files (Turbopack constraint) so we use async
 // wrapper functions either way; the wrappers below are the stable action
 // references client forms bind.
-// Setup-wizard cache invalidation stays host-side; the connector's Nango action
-// is reached through the `@/lib/nango` shim (it re-exports the
-// connector index), so core never names the extension directly.
-import { invalidateSetupWizardCache } from "@/lib/setup-wizard";
+// The connector's Nango action is reached through the `@/lib/nango` shim (it
+// re-exports the connector index), so core never names the extension directly.
+// The setup-wizard completion-cache invalidation that used to live here is
+// gone: S3 (cinatra#2388) removed the cache — completion is re-derived freshly
+// on every read.
 
 export async function saveOpenAIConnectionAction(formData: FormData) {
-  // Mirror saveNangoConnectionAction: invalidate the host-owned setup-wizard
-  // cache before forwarding so the post-redirect onboarding re-read reflects the
-  // freshly-saved OpenAI connection (the IoC-clean connector action never touches
-  // `@/lib`). Belt-and-suspenders with isSetupWizardComplete() no longer caching
-  // INCOMPLETE results — together they close the /setup redirect loop.
-  invalidateSetupWizardCache();
+  // The post-redirect onboarding re-read reflects the freshly-saved OpenAI
+  // connection without any invalidation: setup completion is re-derived
+  // freshly on every read (S3 cinatra#2388 removed the completion cache).
   const save = requireLlmProviderSurface("openai").actions?.saveConnection;
   if (!save) throw new Error("The OpenAI connector exposes no save-connection action.");
   await save(formData);
 }
 
 export async function clearOpenAIConnectionAction() {
-  invalidateSetupWizardCache();
   const clear = requireLlmProviderSurface("openai").actions?.clearConnection;
   if (!clear) throw new Error("The OpenAI connector exposes no clear-connection action.");
   await clear();
@@ -124,10 +127,6 @@ export async function saveOpenAIPromptCachingAction(formData: FormData) {
 // ---------------------------------------------------------------------------
 
 export async function saveNangoConnectionAction(formData: FormData) {
-  // Host-owned setup-wizard cache invalidation stays here: the connector action
-  // is IoC-clean (no `@/lib` edge), and clearing before the save means the
-  // post-redirect onboarding re-read reflects the freshly-saved Nango config.
-  invalidateSetupWizardCache();
   return _saveNangoConnectionAction(formData);
 }
 
@@ -187,21 +186,38 @@ export async function setAnthropicMcpModeAction(_formData: FormData) {
 // ---------------------------------------------------------------------------
 
 export async function setDefaultLlmProviderAction(formData: FormData) {
-  // Global default LLM provider is platform-level. Route through the shared
-  // chokepoint: platform-admin authority + strict-before-mutation audit + the
-  // authoritative fail-closed sink. (Previously this action wrote with no
-  // authority check and no audit — the operator-mutation chokepoint closes that gap.)
+  // Global default LLM provider is platform-level. S3 (cinatra#2388): this is
+  // the EXPLICIT Administration provider change — it routes through the
+  // provider-commit state machine's Administration transition, which drives
+  // the four-state matrix (absent → create the commitment; pending setup
+  // claim → typed classified conflict; committed-same → idempotent no-op;
+  // committed-different → fence + audited write + record move) and still
+  // performs every default write through the shared audited chokepoint
+  // (platform-admin authority + strict-before-mutation audit + the
+  // authoritative fail-closed sink).
   //
   // S6 (cinatra#2093): the accepted set is DERIVED from the ABI v2
   // `defaultCapable` flag instead of the hardcoded ["openai","gemini"] literal
-  // that barred Anthropic. `writeDefaultLlmProviderToDatabase` remains the
-  // authoritative sink; this parse just fails the request early with a clear
-  // message rather than silently preserving the prior value.
+  // that barred Anthropic.
+  await requireAdminSession();
   const provider = z
     .enum(buildKnownDefaultCapableProviders() as [string, ...string[]])
     .parse(formData.get("provider")) as LlmProvider;
   const actor = await getActorContext();
-  await updateDefaultLlmProvider({ actor, provider });
+  try {
+    await transitionDefaultProviderViaAdministration({
+      provider,
+      actorId: actor?.principalId ?? null,
+      writeAuditedDefault: (p) => updateDefaultLlmProvider({ actor, provider: p }),
+    });
+  } catch (err) {
+    if (err instanceof SetupProviderCommitConflictError) {
+      // CLASSIFIED conflict, surfaced as a flash code — never an unclassified
+      // 500 error page.
+      redirect("/configuration/llm?error=provider-change-conflict");
+    }
+    throw err;
+  }
   redirect("/configuration/llm");
 }
 
@@ -227,31 +243,19 @@ export async function setDefaultProvidersAction(formData: FormData) {
   // skill-upload governance opt-in (a non-ZDR data residency decision). Require
   // an admin session before any write.
   await requireAdminSession();
-  // The DefaultProvidersCard posts `defaultProvider`, while other callers may
-  // still post `llmProvider`. Accept both keys and prefer the card's
-  // `defaultProvider`. `writeDefaultLlmProviderToDatabase` remains the
-  // authoritative fail-closed chokepoint for which providers may be the global
-  // default (derived from the ABI v2 `defaultCapable` flag since S6).
-  const llmProvider =
-    (formData.get("defaultProvider") as string | null)?.trim() ||
-    (formData.get("llmProvider") as string | null)?.trim();
+  // S3 (cinatra#2388): this combined save is SETTINGS-ONLY and BYPASSES the
+  // provider-commit machine — it no longer reads `defaultProvider` /
+  // `llmProvider` at all. The global default LLM provider is changed ONLY by
+  // the explicit split action (`setDefaultLlmProviderAction`), which routes
+  // through the machine's Administration transition. A crafted POST carrying a
+  // provider field here is deliberately ignored: every global default writer
+  // must route through the transition, and a combined save silently moving the
+  // committed provider is exactly the unfenced write S3 removes.
   const imageProvider = (formData.get("imageProvider") as string | null)?.trim();
   const anthropicDefaultModel = (formData.get("anthropicDefaultModel") as string | null)?.trim();
   const agentCreationProvider = (formData.get("agentCreationLlmProvider") as string | null)?.trim();
   const agentCreationModel = (formData.get("agentCreationModel") as string | null)?.trim();
 
-  if (llmProvider) {
-    // The sink refuses anything that is not `defaultCapable`; this explicit
-    // guard is kept for reader clarity and now DERIVES the same set (S6
-    // cinatra#2093 — it previously hardcoded {openai,gemini}, which silently
-    // dropped an Anthropic selection on the floor). The shared
-    // `updateDefaultLlmProvider` adds the strict-before-mutation audit and a
-    // defense-in-depth platform-admin re-check on top of `requireAdminSession`.
-    if ((buildKnownDefaultCapableProviders() as readonly string[]).includes(llmProvider)) {
-      const actor = await getActorContext();
-      await updateDefaultLlmProvider({ actor, provider: llmProvider as LlmProvider });
-    }
-  }
   if (imageProvider) {
     writeDefaultImageProviderToDatabase(imageProvider);
   }
