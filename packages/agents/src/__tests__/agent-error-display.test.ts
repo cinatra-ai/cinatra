@@ -5,6 +5,7 @@ import {
   LLM_PROVIDER_SETTINGS_HREF,
   isMcpUnreachableError,
   MCP_CONFIG_HREF,
+  isGenericWayflowFailure,
 } from "../agent-error-display";
 
 describe("linkifyErrorText (#498)", () => {
@@ -101,5 +102,31 @@ describe("isMcpUnreachableError (#500)", () => {
 
   it("exposes the in-app MCP config route", () => {
     expect(MCP_CONFIG_HREF).toBe("/configuration/mcp");
+  });
+});
+
+describe("isGenericWayflowFailure (cinatra#2412)", () => {
+  it("flags the exact WayFlow runtime fallback text", () => {
+    expect(isGenericWayflowFailure("WayFlow task failed")).toBe(true);
+  });
+
+  it("flags it with incidental surrounding whitespace", () => {
+    expect(isGenericWayflowFailure("  WayFlow task failed  \n")).toBe(true);
+  });
+
+  it("does NOT flag a specific/actionable error", () => {
+    expect(
+      isGenericWayflowFailure(
+        "401 Incorrect API key provided. You can find your API key at https://platform.openai.com/account/api-keys.",
+      ),
+    ).toBe(false);
+    expect(isGenericWayflowFailure("Tool 'github' failed: 401 Unauthorized")).toBe(false);
+  });
+
+  it("does NOT flag a message that merely contains the fallback text", () => {
+    // Exact-match only — the string is a fixed runtime constant, not free
+    // text, so a substring match would misfire on an unrelated message that
+    // happens to embed it (e.g. quoted in a wrapper/log line).
+    expect(isGenericWayflowFailure("Retry 2/3: WayFlow task failed")).toBe(false);
   });
 });

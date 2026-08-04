@@ -178,6 +178,7 @@ export function SetupCompletionWatcher({
       initialError={initialError}
       initialMessages={initialMessages}
       agUiEnabled={agUiEnabled}
+      agentId={agentId}
       agentPackageName={agentPackageName}
       traceId={traceId}
       taskId={taskId}
