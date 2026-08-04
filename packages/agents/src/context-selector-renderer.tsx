@@ -15,6 +15,7 @@ import { Separator } from "@/components/ui/separator";
 import type {
   FieldRendererProps,
 } from "./field-renderer-registry";
+import { humanizeFieldName } from "./humanize-field-name";
 
 // ---------------------------------------------------------------------------
 // ContextSelector HITL Renderer.
@@ -176,6 +177,18 @@ export function ContextSelectorRenderer({
     [v.candidates],
   );
 
+  // Human-facing card title: humanize the slotId/fieldName the same way
+  // #815 humanizes setup/HITL field labels (schema-field-renderer.tsx,
+  // grouped-setup-form-renderer.tsx). slotMeta carries no authored display
+  // label today, so the raw id/fieldName is the only source — mirror
+  // resolveFieldLabel's fallback shape rather than showing it verbatim.
+  // The inline <code> copy below intentionally stays raw (it's describing
+  // the literal slot id, not labeling the card).
+  const rawTitleSource = v.slotMeta?.slotId ?? fieldName;
+  const humanizedTitle = rawTitleSource
+    ? humanizeFieldName(rawTitleSource)
+    : "Context";
+
   const mode = v.slotMeta?.resolutionMode ?? "accumulate";
   const maxItems = v.slotMeta?.maxItems;
   const minItems = v.slotMeta?.minItems ?? 0;
@@ -246,7 +259,7 @@ export function ContextSelectorRenderer({
       <Card className="border-line bg-surface backdrop-blur-none">
         <CardHeader>
           <CardTitle className="text-base">
-            {v.slotMeta?.slotId ?? fieldName ?? "Context"}
+            {humanizedTitle}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -280,7 +293,7 @@ export function ContextSelectorRenderer({
     <Card className="border-line bg-surface backdrop-blur-none">
       <CardHeader className="flex flex-col gap-2">
         <CardTitle className="text-base">
-          {v.slotMeta?.slotId ?? fieldName ?? "Context"}
+          {humanizedTitle}
         </CardTitle>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <Badge variant="outline">
