@@ -1,42 +1,42 @@
 {
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
-    "/sign-in": 1667,
-    "/api/mcp": 1663,
-    "/chat": 1741,
-    "/api/a2a": 1668,
-    "/api/llm-bridge": 1678
+    "/sign-in": 1668,
+    "/api/mcp": 1664,
+    "/chat": 1742,
+    "/api/a2a": 1669,
+    "/api/llm-bridge": 1679
   },
   "absorbs": {
     "/sign-in": {
-      "from": 1666,
-      "to": 1667,
-      "reason": "cinatra#2359 (PR #2377): the post-login redirect-target fix adds ONE new pure module, src/lib/auth-redirect-target.ts (the single open-redirect validator + ?next= builder shared by the app-wide auth gate, the proxy, and the sign-in page), reached via the PRE-EXISTING edge into src/lib/auth-session.ts (already in every locked route's graph) — folding the validator directly into auth-session.ts to avoid the new module was considered and rejected: doing so for the proxy consumer (src/lib/auth-route-guard.ts) would require it to import auth-session.ts, which transitively pulls in src/lib/auth.ts's eager better-auth/DB-pool bootstrap — a real behavioral regression to the guard's documented cookie-only, no-DB-round-trip design — and duplicating the validator instead would violate the single-copy requirement. One shared module, one extra edge, +1 on every locked route.",
-      "pr": 2377
-    },
-    "/api/mcp": {
-      "from": 1662,
-      "to": 1663,
-      "reason": "cinatra#2359 (PR #2377): same shared open-redirect validator module (src/lib/auth-redirect-target.ts) reached via the pre-existing auth-session.ts edge — see the /sign-in record for the full rationale (folding into auth-session.ts was rejected because it would force the proxy to import the heavy DB-bootstrapping auth.ts graph; a second copy was rejected as duplication).",
-      "pr": 2377
-    },
-    "/chat": {
-      "from": 1740,
-      "to": 1741,
-      "reason": "cinatra#2359 (PR #2377): same shared open-redirect validator module (src/lib/auth-redirect-target.ts) reached via the pre-existing auth-session.ts edge — see the /sign-in record for the full rationale (folding into auth-session.ts was rejected because it would force the proxy to import the heavy DB-bootstrapping auth.ts graph; a second copy was rejected as duplication).",
-      "pr": 2377
-    },
-    "/api/a2a": {
       "from": 1667,
       "to": 1668,
-      "reason": "cinatra#2359 (PR #2377): same shared open-redirect validator module (src/lib/auth-redirect-target.ts) reached via the pre-existing auth-session.ts edge — see the /sign-in record for the full rationale (folding into auth-session.ts was rejected because it would force the proxy to import the heavy DB-bootstrapping auth.ts graph; a second copy was rejected as duplication).",
-      "pr": 2377
+      "reason": "cinatra#2396 (PR #2401): the versioned additive batch-v2 contract adds ONE new pure module, packages/llm/src/batch-v2.ts — the single provider-neutral normalization layer (request validation + per-provider sanitization, the v1-canonical Chat-Completions body builder, status/state/outcome normalization, and the stable batch error-code mapping) — reached through the PRE-EXISTING @cinatra-ai/llm barrel edge (packages/llm/src/index.ts) that every locked route already carries. Keeping the new leaf OFF the locked routes was weighed and found to cost something real in every form: the v2-preferring wrappers in index.ts CALL these helpers at runtime, so no type-only (erased) edge is available; dropping the edge while keeping the ratified root surface AND the isolated leaf would require a second @cinatra-ai/llm/batch-v2 entrypoint — an unratified split of the batch surface (the v1 dispatch stays on the barrel) pushing every consumer of the #2396 contract onto a second import path; folding the 460 lines into an already-counted module (the 2074-line index.ts barrel) would hold the count flat but give up the isolated leaf seam — packages/llm/src/batch-v2.test.ts would have to drive the helpers through the barrel — and would swell an unrelated module, which is exactly the re-derivation/inlining the S2 precedent rejects; and a lazy dynamic import was rejected outright as trading static analyzability for a green check. One shared single-definition module, one extra edge, +1 on every locked route. Supersedes this route's #2377 record (1666 -> 1667, the shared open-redirect validator on the pre-existing auth-session edge), which this raise retires.",
+      "pr": 2401
+    },
+    "/api/mcp": {
+      "from": 1663,
+      "to": 1664,
+      "reason": "cinatra#2396 (PR #2401): the same single new provider-neutral normalization module (packages/llm/src/batch-v2.ts) reached via the pre-existing @cinatra-ai/llm barrel edge — see the /sign-in record for the full rationale (a second package entrypoint would split the ratified batch surface, folding it into the index.ts barrel would give up the isolated batch-v2.test.ts leaf seam, and a lazy dynamic import was rejected outright). Supersedes this route's #2377 record (1662 -> 1663, the shared open-redirect validator on the pre-existing auth-session edge), which this raise retires.",
+      "pr": 2401
+    },
+    "/chat": {
+      "from": 1741,
+      "to": 1742,
+      "reason": "cinatra#2396 (PR #2401): the same single new provider-neutral normalization module (packages/llm/src/batch-v2.ts) reached via the pre-existing @cinatra-ai/llm barrel edge — see the /sign-in record for the full rationale (a second package entrypoint would split the ratified batch surface, folding it into the index.ts barrel would give up the isolated batch-v2.test.ts leaf seam, and a lazy dynamic import was rejected outright). Supersedes this route's #2377 record (1740 -> 1741, the shared open-redirect validator on the pre-existing auth-session edge), which this raise retires.",
+      "pr": 2401
+    },
+    "/api/a2a": {
+      "from": 1668,
+      "to": 1669,
+      "reason": "cinatra#2396 (PR #2401): the same single new provider-neutral normalization module (packages/llm/src/batch-v2.ts) reached via the pre-existing @cinatra-ai/llm barrel edge — see the /sign-in record for the full rationale (a second package entrypoint would split the ratified batch surface, folding it into the index.ts barrel would give up the isolated batch-v2.test.ts leaf seam, and a lazy dynamic import was rejected outright). Supersedes this route's #2377 record (1667 -> 1668, the shared open-redirect validator on the pre-existing auth-session edge), which this raise retires.",
+      "pr": 2401
     },
     "/api/llm-bridge": {
-      "from": 1677,
-      "to": 1678,
-      "reason": "cinatra#2359 (PR #2377): same shared open-redirect validator module (src/lib/auth-redirect-target.ts) reached via the pre-existing auth-session.ts edge — see the /sign-in record for the full rationale (folding into auth-session.ts was rejected because it would force the proxy to import the heavy DB-bootstrapping auth.ts graph; a second copy was rejected as duplication).",
-      "pr": 2377
+      "from": 1678,
+      "to": 1679,
+      "reason": "cinatra#2396 (PR #2401): the same single new provider-neutral normalization module (packages/llm/src/batch-v2.ts) reached via the pre-existing @cinatra-ai/llm barrel edge — see the /sign-in record for the full rationale (a second package entrypoint would split the ratified batch surface, folding it into the index.ts barrel would give up the isolated batch-v2.test.ts leaf seam, and a lazy dynamic import was rejected outright). Supersedes this route's #2377 record (1677 -> 1678, the shared open-redirect validator on the pre-existing auth-session edge), which this raise retires.",
+      "pr": 2401
     }
   }
 }
