@@ -54,6 +54,14 @@ export default async function NotificationsPage({
   // on CINATRA_E2E_SETUP_BYPASS (never set in prod) + `?e2e=degrade-approvals`.
   const sp = searchParams ? await searchParams : undefined;
   const degradeApprovals = isE2EDegradeApprovalsRequested(sp);
+  // cinatra#2413 — the run panel's "Review approval" CTA deep-links here with
+  // `?run=<runId>` instead of a bare link, so the feed can highlight the
+  // specific row (run-awaiting-human OR, once superseded, run-failed) instead
+  // of dropping the viewer on the generic list to hunt for it. Degrades
+  // silently when absent, unresolvable, or the row is already gone (no row
+  // matches -> no highlight, ordinary page).
+  const rawRun = sp?.run;
+  const highlightRunId = typeof rawRun === "string" && rawRun.trim() ? rawRun : undefined;
 
   const initialWindow = await loadFeedWindow(viewer, {
     chip: "all",
@@ -76,7 +84,7 @@ export default async function NotificationsPage({
         className="max-w-3xl"
       />
       <PageContent className="flex max-w-3xl flex-col gap-4 pb-8">
-        <NotificationsFeed initialWindow={initialWindow} />
+        <NotificationsFeed initialWindow={initialWindow} highlightRunId={highlightRunId} />
       </PageContent>
     </Main>
   );

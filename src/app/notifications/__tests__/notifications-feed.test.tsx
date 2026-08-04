@@ -43,6 +43,10 @@ import type { FeedRowVM } from "../feed-view-model";
 import { paginateFeed } from "../feed-view-model";
 import type { FeedWindowResult } from "../feed-window";
 import { NotificationsFeed } from "../notifications-feed";
+import {
+  RUN_AWAITING_HUMAN_CATEGORY,
+  RUN_FAILED_CATEGORY,
+} from "@cinatra-ai/notifications/flyout-state";
 
 function notifVM(over: {
   id: string;
@@ -52,6 +56,7 @@ function notifVM(over: {
   createdAt?: string;
   readAt?: string;
   href?: string;
+  metadata?: Record<string, unknown>;
 }): FeedRowVM {
   return {
     key: `notification:${over.id}`,
@@ -65,6 +70,7 @@ function notifVM(over: {
       createdAt: over.createdAt ?? "2026-05-15T05:12:13.000Z",
       readAt: over.readAt,
       href: over.href,
+      metadata: over.metadata,
     },
   };
 }
@@ -114,9 +120,17 @@ function buildWindow(
 
 function feed(
   vms: FeedRowVM[],
-  opts?: { chip?: import("../feed-view-model").FilterChip; page?: number; degraded?: boolean },
+  opts?: {
+    chip?: import("../feed-view-model").FilterChip;
+    page?: number;
+    degraded?: boolean;
+    highlightRunId?: string;
+  },
 ) {
-  return React.createElement(NotificationsFeed, { initialWindow: buildWindow(vms, opts) });
+  return React.createElement(NotificationsFeed, {
+    initialWindow: buildWindow(vms, opts),
+    highlightRunId: opts?.highlightRunId,
+  });
 }
 
 async function mount(element: React.ReactElement): Promise<HTMLElement> {
@@ -416,5 +430,74 @@ describe("NotificationsFeed — mark-all-read watermark (§ read-state, feed-wid
     });
     // The explicit unread override wins over the watermark.
     expect(elementByAriaLabel(container, "Mark as read")).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2413 — the run panel's "Review approval" CTA deep-links here with
+// `?run=<runId>`; the feed highlights the matching row (run-awaiting-human OR,
+// once superseded, run-failed) instead of dropping the viewer on a plain list.
+// ---------------------------------------------------------------------------
+describe("NotificationsFeed — CTA deep-link highlight (cinatra#2413)", () => {
+  function awaitingHumanVM(runId: string): FeedRowVM {
+    return notifVM({
+      id: `aw-${runId}`,
+      title: '"Nightly sync" is awaiting your approval',
+      kind: "warning",
+      href: `/agents/acme/sales/${runId}`,
+      metadata: {
+        category: RUN_AWAITING_HUMAN_CATEGORY,
+        runAwaitingHuman: { runId, reason: "pending_approval" },
+      },
+    });
+  }
+
+  function runFailedVM(runId: string): FeedRowVM {
+    return notifVM({
+      id: `rf-${runId}`,
+      title: '"Nightly sync" failed',
+      kind: "error",
+      href: `/agents/acme/sales/${runId}`,
+      metadata: { category: RUN_FAILED_CATEGORY, runFailed: { runId } },
+    });
+  }
+
+  it("highlights the run-awaiting-human row matching ?run=<runId>", async () => {
+    const vms = [awaitingHumanVM("R1"), notifVM({ id: "unrelated" })];
+    const container = await mount(feed(vms, { highlightRunId: "R1" }));
+
+    const rows = [...container.querySelectorAll('[data-conformance-id="notification-row"]')];
+    const highlighted = rows.filter((r) => r.getAttribute("data-highlighted") === "true");
+    expect(highlighted).toHaveLength(1);
+    expect(highlighted[0]?.textContent).toContain("is awaiting your approval");
+  });
+
+  it("highlights the run-failed row that superseded the (now-gone) approval row for the SAME runId", async () => {
+    // The approval row was hard-deleted and replaced — only the failure row
+    // is in the feed now, but it carries the same runId reference.
+    const vms = [runFailedVM("R1")];
+    const container = await mount(feed(vms, { highlightRunId: "R1" }));
+
+    const row = container.querySelector('[data-conformance-id="notification-row"]');
+    expect(row?.getAttribute("data-highlighted")).toBe("true");
+    expect(row?.textContent).toContain("failed");
+  });
+
+  it("degrades silently when no row matches (already resolved with no failure, or absent)", async () => {
+    const vms = [notifVM({ id: "unrelated" })];
+    const container = await mount(feed(vms, { highlightRunId: "R-gone" }));
+
+    const rows = [...container.querySelectorAll('[data-conformance-id="notification-row"]')];
+    expect(rows.every((r) => r.getAttribute("data-highlighted") !== "true")).toBe(true);
+    // An ordinary, un-degraded feed render — no crash, no dead end.
+    expect(rows).toHaveLength(1);
+  });
+
+  it("does not highlight anything when highlightRunId is absent (ordinary render)", async () => {
+    const vms = [awaitingHumanVM("R1")];
+    const container = await mount(feed(vms));
+
+    const row = container.querySelector('[data-conformance-id="notification-row"]');
+    expect(row?.getAttribute("data-highlighted")).toBeNull();
   });
 });

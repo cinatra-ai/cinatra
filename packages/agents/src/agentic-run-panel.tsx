@@ -1157,8 +1157,13 @@ export function AgenticRunPanel({
             <Button asChild variant="outline" size="sm">
               {/* Approvals moved into the unified /notifications feed in the E8
                   cutover (cinatra#1558); the run's pending approval surfaces
-                  there as a row. */}
-              <Link href="/notifications">
+                  there as a row. cinatra#2413 — deep-link with `?run=<runId>`
+                  instead of a bare link, so the feed highlights this run's
+                  row (or its run-failure supersession) rather than dropping
+                  the viewer on the generic list to hunt for it. Degrades
+                  gracefully: if the gate already resolved and left no row
+                  behind, the query param simply matches nothing. */}
+              <Link href={`/notifications?run=${encodeURIComponent(runId)}`}>
                 Review approval
               </Link>
             </Button>

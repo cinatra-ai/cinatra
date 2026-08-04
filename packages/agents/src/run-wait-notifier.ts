@@ -54,6 +54,20 @@ export interface RunWaitNotifier {
   /** A run left a human-wait state — hard-delete the notification (idempotent). */
   onLeaveHumanWait(input: { runId: string }): void | Promise<void>;
   /**
+   * cinatra#2413 — a run left a human-wait state BECAUSE IT FAILED (never a
+   * human decision: reject/resume/stop stay on `onLeaveHumanWait` above).
+   * Supersedes the bare delete: the implementation must still clear the
+   * stale approval row (it is no longer actionable — the gate is gone) AND
+   * mint a durable run-failure notification in its place, so the feed is
+   * never silent about a run that died while a human was told to review it.
+   * OPTIONAL for structural back-compat with existing notifier doubles; a
+   * host/double that does not implement it falls back to the plain
+   * `onLeaveHumanWait` delete (`dispatchRunWaitTransition` below) — the
+   * PRODUCTION host (`src/lib/agent-run-wait-notifications.ts`) always wires
+   * it, so the fallback is a test-double-only affordance, not a shipped gap.
+   */
+  onHumanWaitFailed?(input: { runId: string }): void | Promise<void>;
+  /**
    * cinatra#2066 C2 — a LIFECYCLE AUTO-GATE opened on a run. Distinct from
    * `onEnterHumanWait`: an auto-gate (the #2039 review-orchestration path) is
    * created via `emitArtifactReviewGate` + a continuation park and NEVER moves
@@ -113,10 +127,18 @@ export function getRunWaitNotifier(): RunWaitNotifier | null {
  *
  * ENTER wins over LEAVE for the same transition (they are mutually exclusive
  * under LEGAL_TRANSITIONS anyway; the ordering is a defensive belt).
+ *
+ * cinatra#2413 — LEAVE splits in two: a `failed` destination is a distinct
+ * `leave_failed` kind, checked BEFORE the generic `leave` (a run cannot land
+ * on both `pending_approval`/`pending_input` and `failed` at once, so this
+ * ordering is a defensive belt, same as ENTER-over-LEAVE above). Every other
+ * departure (resume/reject/stop/complete) stays plain `leave` — those ARE a
+ * human decision or an ordinary terminal landing, not a silent death mid-wait.
  */
 export type RunWaitClassification =
   | { kind: "enter"; reason: RunHumanWaitReason }
   | { kind: "leave" }
+  | { kind: "leave_failed" }
   | { kind: "none" };
 
 export function classifyRunWaitTransition(
@@ -131,7 +153,7 @@ export function classifyRunWaitTransition(
     return { kind: "enter", reason: "pending_input" };
   }
   if (from === "pending_approval" || from === "pending_input") {
-    return { kind: "leave" };
+    return to === "failed" ? { kind: "leave_failed" } : { kind: "leave" };
   }
   return { kind: "none" };
 }
@@ -163,6 +185,15 @@ export async function dispatchRunWaitTransition(args: {
         runId: args.runId,
         reason: classification.reason,
       });
+    } else if (classification.kind === "leave_failed") {
+      // Prefer the dedicated failure handoff; fall back to the plain delete
+      // for a notifier/double that hasn't wired the optional hook (see the
+      // interface doc above — production always wires it).
+      if (notifier.onHumanWaitFailed) {
+        await notifier.onHumanWaitFailed({ runId: args.runId });
+      } else {
+        await notifier.onLeaveHumanWait({ runId: args.runId });
+      }
     } else {
       await notifier.onLeaveHumanWait({ runId: args.runId });
     }

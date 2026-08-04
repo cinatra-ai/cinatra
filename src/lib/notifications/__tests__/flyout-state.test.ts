@@ -12,6 +12,11 @@ import {
   isConfigurationNeedsNotification,
   getConfigurationNeedsMetadata,
   AGENT_CONFIGURATION_NEEDS_CATEGORY,
+  isRunFailedNotification,
+  getRunFailedMetadata,
+  getNotificationRunReference,
+  RUN_FAILED_CATEGORY,
+  RUN_AWAITING_HUMAN_CATEGORY,
 } from "@cinatra-ai/notifications/client";
 
 // ---------------------------------------------------------------------------
@@ -539,5 +544,70 @@ describe("configuration-needs entry — metadata predicate + extractor", () => {
       ]),
     );
     expect(meta?.connectors[0]?.settingsHref).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2413 — run-failure notification: the metadata predicate + extractor
+// the failed-out-of-a-human-wait row renders from, plus the deep-link
+// correlation helper the "Review approval" CTA's ?run=<runId> resolves
+// against (spans BOTH the awaiting-human and run-failed categories, since the
+// failure row supersedes the approval row on the same runId).
+// ---------------------------------------------------------------------------
+describe("run-failed entry — metadata predicate + extractor", () => {
+  function runFailedRow(runId: string): AppNotification {
+    return notification("rf-1", {
+      kind: "error",
+      title: '"Nightly sync" failed',
+      metadata: { category: RUN_FAILED_CATEGORY, runFailed: { runId } },
+    });
+  }
+
+  it("isRunFailedNotification is true only for the run_failed category", () => {
+    expect(isRunFailedNotification(runFailedRow("R1"))).toBe(true);
+    expect(isRunFailedNotification(notification("plain"))).toBe(false);
+    expect(
+      isRunFailedNotification(
+        notification("aw", {
+          kind: "warning",
+          metadata: { category: RUN_AWAITING_HUMAN_CATEGORY, runAwaitingHuman: { runId: "R1", reason: "pending_approval" } },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("extracts the runId", () => {
+    expect(getRunFailedMetadata(runFailedRow("R1"))).toEqual({ runId: "R1" });
+  });
+
+  it("returns null for a non-run-failed row or a malformed payload", () => {
+    expect(getRunFailedMetadata(notification("plain"))).toBeNull();
+    const malformed = notification("bad", {
+      kind: "error",
+      metadata: { category: RUN_FAILED_CATEGORY, runFailed: { runId: 7 } },
+    });
+    expect(getRunFailedMetadata(malformed)).toBeNull();
+  });
+});
+
+describe("getNotificationRunReference — CTA deep-link correlation (cinatra#2413)", () => {
+  it("resolves the runId from a run-awaiting-human row", () => {
+    const n = notification("aw-1", {
+      kind: "warning",
+      metadata: { category: RUN_AWAITING_HUMAN_CATEGORY, runAwaitingHuman: { runId: "R1", reason: "pending_approval" } },
+    });
+    expect(getNotificationRunReference(n)).toBe("R1");
+  });
+
+  it("resolves the SAME runId from the run-failed row that supersedes it", () => {
+    const n = notification("rf-1", {
+      kind: "error",
+      metadata: { category: RUN_FAILED_CATEGORY, runFailed: { runId: "R1" } },
+    });
+    expect(getNotificationRunReference(n)).toBe("R1");
+  });
+
+  it("returns null for an unrelated notification", () => {
+    expect(getNotificationRunReference(notification("plain"))).toBeNull();
   });
 });

@@ -308,6 +308,71 @@ export function getRunAwaitingHumanMetadata(
   return { runId, reason };
 }
 
+// ---------------------------------------------------------------------------
+// Run FAILURE notification (cinatra#2413).
+//
+// A run that fails OUT OF a human-wait state (`pending_approval` /
+// `pending_input`) mints this in place of the hard-deleted run-awaiting-human
+// row — see `onHumanWaitFailed` on the `RunWaitNotifier` seam
+// (`packages/agents/src/run-wait-notifier.ts`) and its host implementation
+// (`src/lib/agent-run-wait-notifications.ts`). Scoped to the human-wait leave
+// (not every possible run failure — that is a larger, separate design
+// question flagged on the issue): the ONE case where a user was explicitly
+// told "Review approval" and the run then died with nothing left to review.
+//
+// Same shape/placement discipline as `RUN_AWAITING_HUMAN_*` above: the
+// category tag + payload live here (browser-safe, zero deps) so the host
+// writer and the feed/deep-link consumers share ONE definition.
+// ---------------------------------------------------------------------------
+
+/** `metadata.category` tag identifying a run-failure notification. */
+export const RUN_FAILED_CATEGORY = "run_failed" as const;
+
+/** The `metadata.runFailed` payload carried by the notification. */
+export type RunFailedMetadata = {
+  /** The run that failed (also the dedupeKey discriminator + deep-link key). */
+  runId: string;
+};
+
+/**
+ * True when the notification is a run-failure entry
+ * (`metadata.category === RUN_FAILED_CATEGORY`). Pure.
+ */
+export function isRunFailedNotification(n: AppNotification): boolean {
+  const md = n.metadata as { category?: unknown } | undefined;
+  return Boolean(md) && md?.category === RUN_FAILED_CATEGORY;
+}
+
+/**
+ * Extract + validate the `runFailed` payload, returning `null` for any
+ * non-matching or malformed row. Defensive — the feed renderer must never
+ * throw on a hand-crafted / legacy metadata blob. Pure.
+ */
+export function getRunFailedMetadata(n: AppNotification): RunFailedMetadata | null {
+  const md = n.metadata as
+    | { category?: unknown; runFailed?: unknown }
+    | undefined;
+  if (!md || md.category !== RUN_FAILED_CATEGORY) return null;
+  const rf = md.runFailed as { runId?: unknown } | undefined;
+  if (!rf || typeof rf !== "object") return null;
+  const runId = typeof rf.runId === "string" ? rf.runId : "";
+  if (!runId) return null;
+  return { runId };
+}
+
+/**
+ * cinatra#2413 — the run identity a notification deep-links to for the
+ * "Review approval" CTA correlation, spanning BOTH the run-awaiting-human and
+ * run-failed categories (the failure row supersedes the awaiting-human row on
+ * the SAME run, so a deep link keyed on `runId` keeps resolving to whichever
+ * of the two is currently present). `null` for any other notification.
+ */
+export function getNotificationRunReference(n: AppNotification): string | null {
+  return (
+    getRunAwaitingHumanMetadata(n)?.runId ?? getRunFailedMetadata(n)?.runId ?? null
+  );
+}
+
 /** One required connector the affected agent still needs configured. */
 export type ConfigurationNeedsConnector = {
   /** Human-readable manifest displayName — the primary rendered link label. */
