@@ -233,6 +233,21 @@ export function v1ResultToState(result: LlmBatchResult): LlmBatchV2State {
 // ---------------------------------------------------------------------------
 
 /**
+ * OWN-PROPERTY lookup on a string-keyed table.
+ *
+ * Both tables below are keyed by a PROVIDER-SUPPLIED string, so a plain
+ * `table[key]` (or `key in table`) would walk the prototype chain and resolve
+ * `"toString"`, `"constructor"`, `"valueOf"` … to inherited FUNCTIONS. A vendor
+ * error code named `toString` would then be "mapped" to a function value, which
+ * is truthy — so the row would be classified by a member of `Object.prototype`
+ * rather than falling through to the honest `unknown` / `errored` default.
+ */
+function lookup<T>(table: Record<string, T>, key: string | null | undefined): T | undefined {
+  if (typeof key !== "string") return undefined;
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
+}
+
+/**
  * v1 per-request error codes that are NOT errors in the neutral vocabulary —
  * they are the OTHER two terminal OUTCOMES.
  *
@@ -293,11 +308,7 @@ export function normalizeBatchErrorCode(input: {
     if (status === 529) return "overloaded";
     if (status >= 500) return "provider_error";
   }
-  const code = input.providerCode;
-  if (typeof code === "string" && code in ERROR_CODE_BY_PROVIDER_CODE) {
-    return ERROR_CODE_BY_PROVIDER_CODE[code];
-  }
-  return "unknown";
+  return lookup(ERROR_CODE_BY_PROVIDER_CODE, input.providerCode) ?? "unknown";
 }
 
 /** Build a normalized error from a provider code/status/message triple. */
@@ -352,7 +363,7 @@ function readChatCompletionStopReason(body: Record<string, unknown>): string | n
  */
 export function v1OutputLineToOutcome(line: LlmBatchOutputLine): LlmBatchV2Outcome {
   if (line.error) {
-    const lifecycleStatus = OUTCOME_STATUS_BY_V1_ERROR_CODE[line.error.code];
+    const lifecycleStatus = lookup(OUTCOME_STATUS_BY_V1_ERROR_CODE, line.error.code);
     if (lifecycleStatus) {
       return { customId: line.customId, status: lifecycleStatus };
     }

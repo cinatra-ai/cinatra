@@ -268,6 +268,25 @@ describe("normalizeBatchErrorCode — the STABLE vocabulary", () => {
     expect(normalizeBatchErrorCode({})).toBe("unknown");
   });
 
+  it("a provider code that collides with an Object.prototype member stays `unknown`", () => {
+    // The table is keyed by a PROVIDER-SUPPLIED string; a prototype-chain lookup
+    // would resolve these to inherited FUNCTIONS, which are truthy, and classify
+    // the row by a member of Object.prototype instead of falling through.
+    for (const providerCode of ["toString", "constructor", "valueOf", "__proto__"]) {
+      expect(normalizeBatchErrorCode({ providerCode })).toBe("unknown");
+    }
+  });
+
+  it("a lifecycle-table key collision with Object.prototype stays an ERROR row", () => {
+    expect(
+      v1OutputLineToOutcome({
+        customId: "row-proto",
+        response: null,
+        error: { code: "toString", message: "weird" },
+      }),
+    ).toMatchObject({ status: "errored", error: { code: "unknown", providerCode: "toString" } });
+  });
+
   it("toBatchV2Error carries provider detail SEPARATELY from the stable code", () => {
     expect(
       toBatchV2Error({ providerCode: "rate_limit_error", providerStatus: 429, message: "slow down" }),
