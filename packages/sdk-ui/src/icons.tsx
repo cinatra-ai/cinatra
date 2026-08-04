@@ -31,14 +31,14 @@ export type CinatraIconProps = LucideProps;
 /**
  * `PlugConnected` — the joined plug.
  *
- * design/specs/app-connectors.html v0.7.0 (pinned at design@3d33cc800) draws
+ * design/specs/app-connectors.html version 0.7.0 (pinned at design@3d33cc800) draws
  * the Connected state as literally the two halves of the Disconnected
  * (`Unplug`) glyph with the gap closed. lucide has no such icon: `PlugZap` is
  * a half plug plus a lightning bolt, and `Plug` is a different drawing
  * altogether, so neither pairs visually with `Unplug`.
  *
  * The geometry is the spec's path set, copied verbatim and in the spec's own
- * order. It is `Unplug` (lucide v1.20.0) with:
+ * order. It is `Unplug` (lucide 1.20.0) with:
  *   - the socket half translated +3,-3 and the plug half translated -3,+3, so
  *     the two bodies meet on the 9,9 → 15,15 diagonal instead of standing off
  *     it (`M6.3 20.3…L12 18l-6-6…` → `M9.3 17.3…L15 15l-6-6…`;

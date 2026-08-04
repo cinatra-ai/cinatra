@@ -8,7 +8,7 @@
  * prop forwarding that makes the component a drop-in at lucide call sites.
  *
  * The expected path set below is the spec's own, copied VERBATIM from
- * design/specs/app-connectors.html v0.7.0 (pinned at design@3d33cc800), where
+ * design/specs/app-connectors.html version 0.7.0 (pinned at design@3d33cc800), where
  * the joined plug is drawn 15 times (toggle segment, card badges, §II status
  * cards/rows, the Connect action) from ONE invariant four-path set. Keeping it
  * literal here is deliberate: this is the redraw-identity lock, so a "cleanup"
@@ -30,7 +30,7 @@ const pkg = JSON.parse(readFileSync(join(PKG_DIR, "package.json"), "utf8")) as {
   exports: Record<string, string>;
 };
 
-/** design@3d33cc800 · specs/app-connectors.html v0.7.0 — the joined plug. */
+/** design@3d33cc800 · specs/app-connectors.html version 0.7.0 — the joined plug. */
 const SPEC_PATHS = [
   "m16 8 6-6",
   "m2 22 6-6",

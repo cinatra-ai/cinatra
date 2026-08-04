@@ -53,7 +53,7 @@ describe("ConnectionStatusBadge — solid green/red language + Checking transien
   });
   it("connected is a SOLID green chip with the JOINED plug — byte-parity with ConnectorBadge (cinatra#2356)", () => {
     // RE-SPECIFIED by cinatra#2356 (epic #2353; design/specs/app-connectors.html
-    // v0.7.0, pinned at design@3d33cc800): the connected glyph is the
+    // 0.7.0, pinned at design@3d33cc800): the connected glyph is the
     // first-party `PlugConnected` mark (the two halves of `Unplug` with the gap
     // closed), not lucide's `PlugZap`. The parity claim this test carries is the
     // point of the swap: this badge and the @cinatra-ai/connectors

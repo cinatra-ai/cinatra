@@ -507,7 +507,7 @@ const INSTALLED_EXTENSIONS_STATUS_VIEWS_DRIVER: SurfaceDriver = {
 
 // ---------------------------------------------------------------------------
 // §I connectors-grid family (cinatra#986; RE-SPECIFIED by cinatra#2355 for
-// design@3d33cc800 specs/app-connectors.html v0.7.0).
+// design@3d33cc800 specs/app-connectors.html version 0.7.0).
 //
 // The seeded harness mounts the REAL ConnectorsClient five times, keyed by
 // `data-variant` on the `[data-surface-id="connector-grid"]` wrapper
@@ -626,7 +626,7 @@ const CONNECTOR_GRID_DRIVER: SurfaceDriver = {
   actions: {},
   states: {
     // EMPTY (cinatra#2355 — the `state:empty` allowlist exemption is REMOVED
-    // in the same change; the ratchet only shrinks). Until v0.7.0 /connectors
+    // in the same change; the ratchet only shrinks). Until 0.7.0 /connectors
     // had no designed empty presentation at all, which is exactly what the
     // exemption recorded. It does now, and the spec makes it a MATRIX, so the
     // state variant is asserted across all three segments on their own mounts:
@@ -702,7 +702,7 @@ const CONNECTOR_GRID_DRIVER: SurfaceDriver = {
       await clickUntil(connectedToggle, async () => {
         await expect(connectedPanel).toBeVisible({ timeout: 5_000 });
       });
-      // The v0.7.0 copy: scope-neutral, so NOT the pre-#2353 "No connected
+      // The 0.7.0 copy: scope-neutral, so NOT the pre-#2353 "No connected
       // services yet".
       await expect(connectedPanel).toContainText("No connected services in this view");
       await expect(connectedPanel).not.toContainText("No connected services yet");
@@ -848,7 +848,7 @@ const CONNECTOR_CONNECTION_FILTER_DRIVER: SurfaceDriver = {
 };
 
 // ---------------------------------------------------------------------------
-// connector-install-cta (NEW in the v0.7.0 manifest; cinatra#2355 adopts it).
+// connector-install-cta (NEW in the 0.7.0 manifest; cinatra#2355 adopts it).
 // The page's closing "Install more connectors" button — the outline variant at
 // the small size, centred below the grid, no leading glyph. Its ONE annotated
 // aspect is the action.
@@ -882,7 +882,7 @@ const CONNECTOR_INSTALL_CTA_DRIVER: SurfaceDriver = {
 };
 
 // ---------------------------------------------------------------------------
-// connector-empty-panel (NEW in the v0.7.0 manifest; cinatra#2355 adopts it).
+// connector-empty-panel (NEW in the 0.7.0 manifest; cinatra#2355 adopts it).
 // The All+0 panel that REPLACES the grid, carrying the single install CTA.
 // Rooted on the empty-all mount — the panel does not exist on the populated
 // one, by construction.

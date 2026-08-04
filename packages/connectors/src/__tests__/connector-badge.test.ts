@@ -34,7 +34,7 @@ describe("ConnectorBadge shared component", () => {
 
   it("uses the design-system Badge with the paired plug glyphs (cinatra#2356)", () => {
     // RE-SPECIFIED by cinatra#2356 (epic #2353; design/specs/app-connectors.html
-    // v0.7.0, pinned at design@3d33cc800): the connected mark is the first-party
+    // 0.7.0, pinned at design@3d33cc800): the connected mark is the first-party
     // `PlugConnected` glyph — the two halves of `Unplug` with the gap closed —
     // NOT lucide's `PlugZap` (a half plug + a lightning bolt that never paired
     // with the disconnected mark). lucide has no joined-plug icon, so the glyph

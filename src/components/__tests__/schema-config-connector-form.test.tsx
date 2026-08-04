@@ -62,7 +62,7 @@ describe("SchemaConfigConnectorForm composition (shadcn contract)", () => {
   });
 
   describe("cinatra#2356 — the connection actions speak the §II status-glyph language", () => {
-    // design/specs/app-connectors.html §II (v0.7.0, pinned at design@3d33cc800):
+    // design/specs/app-connectors.html §II (version 0.7.0, pinned at design@3d33cc800):
     // "an icon-led Connect (indigo primary, THE JOINED PLUG FROM THE CONNECTED
     // BADGE) and Disconnect (destructive, red-on-tint, THE UNPLUG FROM THE
     // DISCONNECTED BADGE) … its confirm the same unplug icon". So the Connect

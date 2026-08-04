@@ -52,7 +52,7 @@ export const dynamic = "force-dynamic";
  *     connector-empty-panel: the REAL ConnectorsClient over cards resolved
  *     through the REAL resolveReadinessFailSoft containment (one seeded probe
  *     THROWS — the error-state card). cinatra#2355 adds four further mounts
- *     (`data-variant` on the connector-grid wrapper) for the v0.7.0
+ *     (`data-variant` on the connector-grid wrapper) for the 0.7.0
  *     empty-state matrix — All+0 with and without marketplace access,
  *     Connected+0, Disconnected+0 — because both panels key off the
  *     SERVER-resolved card set and no client interaction can produce them.

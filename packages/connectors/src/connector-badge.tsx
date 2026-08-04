@@ -35,7 +35,7 @@ import { Badge } from "@/components/ui/badge";
 //                  destructive token.
 // (#1014 replaces the prior soft-tint treatment on THIS badge only.)
 //
-// cinatra#2356 (epic #2353, design/specs/app-connectors.html v0.7.0 pinned at
+// cinatra#2356 (epic #2353, design/specs/app-connectors.html version 0.7.0 pinned at
 // design@3d33cc800) replaces the connected glyph: `PlugZap` (a half plug + a
 // lightning bolt) never paired visually with `Unplug`, so the spec draws the
 // Connected mark as the two halves of `Unplug` with the gap closed. lucide has

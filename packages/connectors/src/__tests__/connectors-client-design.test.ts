@@ -6,7 +6,7 @@
  * It locks the design-system decisions for the connectors grid.
  *
  * SPEC PIN. Every §I claim below is held against
- * `design/specs/app-connectors.html` v0.7.0 at design@3d33cc800 — the exact
+ * `design/specs/app-connectors.html` 0.7.0 at design@3d33cc800 — the exact
  * spec bytes this repo adopted in cinatra#2355 (epic #2353). The adoption is
  * mechanical, never transcribed: the conformance artifact under
  * `tests/e2e/design/conformance/manifests/app-connectors.json` is the
@@ -21,7 +21,7 @@
  *
  * A lock re-specified by an epic keeps its ORIGINAL issue number as its
  * heading and records the supersession underneath; the history of a decision
- * is part of the decision. The locks the v0.7.0 adoption re-specified are
+ * is part of the decision. The locks the 0.7.0 adoption re-specified are
  * #605/#683 (the connected glyph), #1092 (its DEFAULT half only) and the
  * empty-state block; #1014's selected-primary prohibition was deliberately NOT
  * re-specified — see #2357 below.
@@ -52,7 +52,7 @@
  *         item carries its OWN semantic status colour at all times (soft tint
  *         idle, solid + white text/icon selected) instead of the previous grey
  *         idle / indigo-primary selected treatment.
- *   #2356 (epic #2353; design/specs/app-connectors.html v0.7.0, pinned at
+ *   #2356 (epic #2353; design/specs/app-connectors.html version 0.7.0, pinned at
  *         design@3d33cc800) the CONNECTED glyph is re-specified: lucide's
  *         `PlugZap` (a half plug + a lightning bolt) is replaced everywhere the
  *         connected state is drawn by the first-party `PlugConnected` mark —
@@ -288,7 +288,7 @@ describe("ConnectorsClient design-system contract", () => {
   // answers for itself when it has nothing to show.
   //
   // RE-SPECIFIED IN PART by epic cinatra#2353 (issue #2357, adopted here by
-  // #2355 at design@3d33cc800 specs/app-connectors.html v0.7.0). #1092 made two
+  // #2355 at design@3d33cc800 specs/app-connectors.html version 0.7.0). #1092 made two
   // decisions and this epic touches exactly one of them:
   //
   //   SUPERSEDED — the DEFAULT. "Every visit starts on Connected" is now
@@ -303,7 +303,7 @@ describe("ConnectorsClient design-system contract", () => {
   //     A three-state filter does not weaken that reasoning, so nothing here
   //     changes.
   //   EVOLVED — the Connected+0 panel. #1092's panel stands, and its ACTION is
-  //     untouched ("Connect a service" → the Disconnected list). What v0.7.0
+  //     untouched ("Connect a service" → the Disconnected list). What 0.7.0
   //     re-specified is its COPY: the old title asserted the reader had
   //     connected nothing, which stopped being true once zero visible cards
   //     became reachable through scope and visibility filtering as well. The
@@ -422,7 +422,7 @@ describe("ConnectorsClient design-system contract", () => {
       // DELIBERATELY NOT RE-SPECIFIED by epic cinatra#2353 (#2355 scope 3
       // scoped this lock "re-specified only if the spec's All-segment styling
       // requires it"). It does not: the prohibition below is file-WIDE, and
-      // the v0.7.0 All segment answers it by taking the page's own `--ink`
+      // the 0.7.0 All segment answers it by taking the page's own `--ink`
       // navy (`bg-foreground`) rather than the indigo `--primary` — the spec
       // is explicit that the primary "stays reserved for the action of record
       // on a page and a filter segment is never that". So the third segment

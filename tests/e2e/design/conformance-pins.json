@@ -27,7 +27,7 @@
       "id": "app-connectors",
       "file": "app-connectors.json",
       "source": "repo",
-      "$specCommit": "design@3d33cc800 — specs/app-connectors.html v0.7.0 (epic cinatra#2353, adopted by cinatra#2355). Regenerated with `node scripts/generate-conformance.mjs specs/app-connectors.html` at that commit; the output is byte-identical to the design repo's committed conformance/app-connectors.json, and the copy under manifests/ is those bytes verbatim.",
+      "$specCommit": "design@3d33cc800 — specs/app-connectors.html version 0.7.0 (epic cinatra#2353, adopted by cinatra#2355). Regenerated at that commit with `node scripts/generate-conformance.mjs specs/app-connectors.html`; the generator's output is byte-identical to the artifact committed alongside it in the design-system source of truth, and the copy under manifests/ is those bytes verbatim.",
       "manifestSha256": "b0aada80a8209f0a272142786a50c334e3e7b18b891859218ffa56522936a897",
       "specContentHash": "sha256:9f28d508390afd63dc51c69bc80192e9a33d739726c93bb3ceaeff60b9cf93af"
     },

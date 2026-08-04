@@ -104,7 +104,7 @@ Design-spec marks the lucide set does not carry, built with lucide's own public 
 import { PlugConnected } from "@cinatra-ai/sdk-ui/icons";
 ```
 
-- **`PlugConnected`** — the joined plug (`design/specs/app-connectors.html` v0.7.0): the two halves of lucide's `Unplug` with the gap closed and the loose prong strokes dropped. The Connected counterpart of `Unplug` everywhere connection status is shown — the `/connectors` toggle segment and card badge, the setup page's `ConnectionStatusBadge`, and the setup form's Connect action.
+- **`PlugConnected`** — the joined plug (`design/specs/app-connectors.html` 0.7.0): the two halves of lucide's `Unplug` with the gap closed and the loose prong strokes dropped. The Connected counterpart of `Unplug` everywhere connection status is shown — the `/connectors` toggle segment and card badge, the setup page's `ConnectionStatusBadge`, and the setup form's Connect action.
 
 The module is a registry, not a single-glyph file: each glyph exports its `IconNode` path set alongside the component, so a new first-party mark is one node + one `createLucideIcon` line.
 

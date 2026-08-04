@@ -1,7 +1,7 @@
 /**
  * Status-glyph scope — NEGATIVE locks for cinatra#2356 (epic #2353).
  *
- * design/specs/app-connectors.html v0.7.0 (pinned at design@3d33cc800) replaces
+ * design/specs/app-connectors.html version 0.7.0 (pinned at design@3d33cc800) replaces
  * the CONNECTED STATUS glyph with the first-party joined plug (`PlugConnected`,
  * defined once in `@cinatra-ai/sdk-ui/icons`). #2356 scope 3 draws the boundary
  * explicitly: the swap is a STATUS-glyph swap, and two plug-shaped marks in this

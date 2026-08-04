@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // connector-grid / connector-connection-filter / connector-install-cta /
 // connector-empty-panel conformance fixture (cinatra#986; extended by
-// cinatra#2355 for the v0.7.0 spec's empty-state matrix and install CTA).
+// cinatra#2355 for the 0.7.0 spec's empty-state matrix and install CTA).
 //
 // SERVER component mirroring the real /connectors composition: card data is
 // resolved server-side — readiness through the REAL resolveReadinessFailSoft
@@ -16,7 +16,7 @@
 // anti-lookalike seeds (displayName shares no token with the slug).
 //
 // EMPTY-STATE MATRIX (cinatra#2355, adopting design@3d33cc800
-// specs/app-connectors.html v0.7.0 §I). Both product panels key off the
+// specs/app-connectors.html version 0.7.0 §I). Both product panels key off the
 // SERVER-resolved `cards`, so each matrix cell needs its own mount with its
 // own card set — no client-side interaction can manufacture them:
 //
