@@ -76,3 +76,73 @@ export const PlugConnected = createLucideIcon(
   "plug-connected",
   PLUG_CONNECTED_ICON_NODE,
 );
+
+/**
+ * `PlugConnectorKind` — the lower half of the joined plug, as the extension
+ * KIND emblem for connectors.
+ *
+ * design/specs/app-extensions.html version 0.11.0 (pinned at design@c144f39a8)
+ * redraws the Connector byline glyph and the §II dependency-list connector
+ * instance as the lower half of `PlugConnected` above, so "what kind of
+ * extension is this" and "is it connected" read as one icon family. It
+ * supersedes both that spec's prior lucide `Link` rendering and the app's
+ * lucide `Plug`.
+ *
+ * NOT a literal crop. The spec draws the half inside a wrapper group —
+ * `<g transform="translate(-1.03,-11.33) scale(1.515)" stroke-width="1.32">` —
+ * which recentres and rescales it across the full 24-unit viewBox (the drawn
+ * geometry spans x 2→23.21, y 0.79→22) so it still reads at the 13px byline
+ * size. Its members are:
+ *   - the joined plug's cord run (`m2 22 6-6`) and lower/socket capsule
+ *     (`M9.3 17.3…Z`), carried over unchanged;
+ *   - two short prong strokes, which the joined mark itself deliberately drops
+ *     (nothing is pulled apart there, so there is no gap for them to sit in).
+ *     Cut down to the half alone the capsule read ambiguous rather than as a
+ *     plug, so the spec reinstates them from the same family's `Unplug` glyph
+ *     (`M7.5 13.5 10 11` / `M10.5 16.5 13 14`), shifted by the same +3,-3 that
+ *     separates the `Unplug` capsule from the joined one → `M10.5 10.5 13 8`
+ *     and `M13.5 13.5 16 11` in the joined mark's coordinate frame.
+ *
+ * lucide's `IconNode` is a FLAT child list (`[element, attrs][]` — no group
+ * element), so the wrapper transform is folded into the coordinates here
+ * instead: `x' = 1.515x - 1.03`, `y' = 1.515y - 11.33`, arc radii `× 1.515`.
+ * Every one of those products terminates within four decimals, so the fold is
+ * EXACT — the GEOMETRY is the spec's drawing, not an approximation of it. The
+ * paths stay in the spec's own order.
+ *
+ * The stroke then needs no prop, and this is where "exact" becomes "to within
+ * 2/10000 of a unit": the spec's `stroke-width="1.32"` inside a `scale(1.515)`
+ * group renders at `1.32 × 1.515 = 1.9998` user units, and lucide's own default
+ * is `2`. That is ~1.08px at the 13px byline, inside the ~1.85–2.2 band this
+ * spec's other 13px glyphs occupy. Rasterised at 1024², the two marks differ in
+ * 4 pixels of 1,048,576 with the strokes matched, 262 (all antialiasing at the
+ * stroke edge) as shipped.
+ *
+ * Both prong caps overrun the viewBox by 0.21 units — the outer one past the
+ * top (y −0.21), the inner one past the right (x 24.21) — so each is
+ * hairline-clipped. Inherited from the spec's own drawing at these
+ * coordinates, not introduced here, and below half a pixel at every size the
+ * emblem is rendered at.
+ *
+ * Distinct from `PlugConnected`: this is a KIND emblem (connector, alongside
+ * Bot / FileText / Package / Sparkles / Workflow), never a connection-state
+ * mark. `src/components/__tests__/status-glyph-scope.test.ts` locks that
+ * boundary in both directions.
+ */
+export const PLUG_CONNECTOR_KIND_ICON_NODE: IconNode = [
+  ["path", { d: "m2 22 9.09-9.09", key: "plug-connector-kind-cord" }],
+  [
+    "path",
+    {
+      d: "M13.0595 14.8795a3.636 3.636 0 0 0 5.151 0L21.695 11.395l-9.09-9.09-3.4845 3.4845a3.636 3.636 0 0 0 0 5.151Z",
+      key: "plug-connector-kind-capsule",
+    },
+  ],
+  ["path", { d: "M14.8775 4.5775 18.665 0.79", key: "plug-connector-kind-prong-outer" }],
+  ["path", { d: "M19.4225 9.1225 23.21 5.335", key: "plug-connector-kind-prong-inner" }],
+];
+
+export const PlugConnectorKind = createLucideIcon(
+  "plug-connector-kind",
+  PLUG_CONNECTOR_KIND_ICON_NODE,
+);

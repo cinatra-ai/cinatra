@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { Bot, FileText, Package, Plug, Sparkles, Workflow } from "lucide-react";
+import { Bot, FileText, Package, Sparkles, Workflow } from "lucide-react";
+import { PlugConnectorKind } from "@cinatra-ai/sdk-ui/icons";
 
 /**
  * Kind slugs that carry a dedicated emblem. "unknown" covers
@@ -26,7 +27,10 @@ export function extensionKindEmblem(
     case "skill":
       return <Sparkles className={className} />;
     case "connector":
-      return <Plug className={className} />;
+      // The first-party lower-half-plug mark (design/specs/app-extensions.html
+      // version 0.11.0) — a KIND emblem, not a connection-state one. See
+      // packages/sdk-ui/src/icons.tsx.
+      return <PlugConnectorKind className={className} />;
     case "artifact":
       return <FileText className={className} />;
     case "workflow":

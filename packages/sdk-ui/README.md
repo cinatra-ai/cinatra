@@ -105,6 +105,7 @@ import { PlugConnected } from "@cinatra-ai/sdk-ui/icons";
 ```
 
 - **`PlugConnected`** — the joined plug (`design/specs/app-connectors.html` 0.7.0): the two halves of lucide's `Unplug` with the gap closed and the loose prong strokes dropped. The Connected counterpart of `Unplug` everywhere connection status is shown — the `/connectors` toggle segment and card badge, the setup page's `ConnectionStatusBadge`, and the setup form's Connect action.
+- **`PlugConnectorKind`** — the lower half of that joined plug (`design/specs/app-extensions.html` 0.11.0), recentred and rescaled across the full 24-unit viewBox with two prong strokes reinstated from `Unplug`, so it reads at the 13px byline. The extension-KIND emblem for connectors (alongside lucide `Bot` / `FileText` / `Package` / `Sparkles` / `Workflow`) — never a connection-state mark, which is what `PlugConnected` is for.
 
 The module is a registry, not a single-glyph file: each glyph exports its `IconNode` path set alongside the component, so a new first-party mark is one node + one `createLucideIcon` line.
 
