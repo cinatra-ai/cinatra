@@ -119,6 +119,26 @@ function PairedConnectorLogo({ brand, icon }: { brand: string; icon: ReactNode }
 }
 
 // ---------------------------------------------------------------------------
+// "Install more connectors" — the spec's 32px height (cinatra#2407)
+// ---------------------------------------------------------------------------
+//
+// Spec §I draws this control identically wherever it lands: the OUTLINE variant
+// at the small size, **32px tall**, 24px of clearance, no leading glyph. It
+// renders either below the grid or inside the All+0 empty panel — never both on
+// one screen — so both placements carry this class and move together.
+//
+// The 32px is an explicit `h-8` rather than a change to the shared Button `sm`
+// scale, whose height is 28px. The shared scale is NOT the place to fix this:
+// `size="sm"` is used at ~245 call sites across the app, and raising it to 32px
+// would collapse `sm` into `default` and move every one of them off its own
+// spec'd height. Keeping `size="sm"` also keeps the label on the spec's small
+// type step (0.8rem, nearest the spec's 12.5px) and keeps the `data-size="sm"`
+// the design-conformance driver asserts. `cn()` merges through tailwind-merge,
+// so `h-8` REPLACES the variant's `h-7` deterministically at merge time rather
+// than depending on stylesheet order.
+const INSTALL_CTA_HEIGHT = "h-8";
+
+// ---------------------------------------------------------------------------
 // Main client component
 // ---------------------------------------------------------------------------
 //
@@ -375,7 +395,12 @@ export function ConnectorsClient({
             </p>
           )}
           {canReachMarketplace ? (
-            <Button asChild variant="outline" size="sm">
+            <Button
+              asChild
+              variant="outline"
+              size="sm"
+              className={INSTALL_CTA_HEIGHT}
+            >
               <Link href="/configuration/marketplace?tab=connector">
                 Install more connectors
               </Link>
@@ -505,6 +530,7 @@ export function ConnectorsClient({
             asChild
             variant="outline"
             size="sm"
+            className={INSTALL_CTA_HEIGHT}
             data-conformance-id="connector-install-cta"
             data-testid="connectors-install-cta"
           >
