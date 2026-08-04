@@ -718,6 +718,102 @@ export function updateInstanceIdentityRegistries(
   });
 }
 
+/** The write payload `applyInstanceIdentityProvisioningWrite` commits atomically. */
+export type InstanceIdentityProvisioningWrite = {
+  instanceNamespace: string;
+  tokenCiphertext: string;
+  tokenIv: string;
+  tokenAlgo: "aes-256-gcm";
+  passwordCiphertext: string;
+  passwordIv: string;
+};
+
+/**
+ * Atomically commit a namespace-changing provisioning write — the shared
+ * final step of `provisionAndPersist` (`src/app/configuration/instance/actions.ts`,
+ * called by both `editVendorAction`'s pre-publish path and
+ * `renameInstanceNamespaceAction`'s post-freeze path) — via row-level CAS
+ * with bounded retry, mirroring {@link updateInstanceIdentityRegistries}.
+ *
+ * Closes a lost-update class {@link updateInstanceIdentityRegistries}'s doc
+ * comment explicitly scoped OUT as a follow-up (cinatra#2418 review, round 2):
+ * `provisionAndPersist` used to build its write payload from a single
+ * synchronous re-read with no CAS, which only serialises against an
+ * IN-PROCESS writer with no intervening `await` of its own (e.g.
+ * `editVendorAction`'s frozen display-name-only save). It did NOT protect
+ * against a SECOND CONCURRENT `provisionAndPersist` call — two renames, or a
+ * rename racing a pre-publish edit, each awaiting their OWN registry
+ * round-trip — where the last plain `writeInstanceIdentity()` call would
+ * silently win, discarding the other's namespace change. Worse, the archived
+ * `oldInstanceNamespaces[]` entry was built from the CALLER's pre-await
+ * closure (`current.instanceNamespace` / `current.tokenCiphertext`), which
+ * could already be stale by the time the write actually landed, misrecording
+ * the rename history.
+ *
+ * Every field OTHER than the ones this write intentionally changes
+ * (`instanceNamespace`, the token/password ciphertext pairs,
+ * `firstPublishedAt`, and — when `appendPreviousNamespace` is set —
+ * `oldInstanceNamespaces`) is carried forward byte-for-byte from the
+ * freshly re-read row on EVERY attempt, so a concurrent write to any other
+ * field (a display-name save) is never clobbered — same contract as
+ * {@link updateInstanceIdentityRegistries}. When `appendPreviousNamespace` is
+ * set, the archived entry's `name` / `lastTokenCiphertext` / `lastTokenIv`
+ * are read from the SAME freshly-parsed row this attempt is swapping
+ * against — never a value captured before the caller's awaits — so the
+ * archive always reflects the namespace/token that was actually live
+ * immediately before this rename landed, even across a CAS retry.
+ *
+ * Bypassing `writeInstanceIdentity()`'s namespace-freeze guard is safe here
+ * for the same reason `provisionAndPersist` already passed
+ * `{ allowNamespaceRename: true }`: this function IS the canonical rename
+ * path, called only after the caller's own freeze/marketplace/reservation
+ * gates already ran.
+ *
+ * `deps` is injectable for unit tests; production callers omit it.
+ */
+export function applyInstanceIdentityProvisioningWrite(
+  write: InstanceIdentityProvisioningWrite,
+  opts: { appendPreviousNamespace: boolean },
+  deps?: Partial<InstanceIdentityCasDeps>,
+): InstanceIdentityCasOutcome {
+  const resolved: InstanceIdentityCasDeps = {
+    readRawSnapshot: deps?.readRawSnapshot ?? readRawInstanceIdentitySnapshot,
+    compareAndSwap: deps?.compareAndSwap ?? compareAndSwapInstanceIdentity,
+    onSwapped: deps?.onSwapped ?? invalidateInstanceIdentityCache,
+  };
+  return casUpdateInstanceIdentityRow(resolved, (parsed) => {
+    const merged: Record<string, unknown> = {
+      ...parsed,
+      instanceNamespace: write.instanceNamespace,
+      tokenCiphertext: write.tokenCiphertext,
+      tokenIv: write.tokenIv,
+      tokenAlgo: write.tokenAlgo,
+      passwordCiphertext: write.passwordCiphertext,
+      passwordIv: write.passwordIv,
+      firstPublishedAt: null,
+    };
+    if (opts.appendPreviousNamespace) {
+      const previousNamespace =
+        typeof parsed.instanceNamespace === "string" ? parsed.instanceNamespace : undefined;
+      if (!previousNamespace) return null; // no usable prior namespace to archive — decline to write
+      const existingOld = Array.isArray(parsed.oldInstanceNamespaces)
+        ? (parsed.oldInstanceNamespaces as unknown[])
+        : [];
+      merged.oldInstanceNamespaces = [
+        ...existingOld,
+        {
+          name: previousNamespace,
+          frozenAt: new Date().toISOString(),
+          lastTokenCiphertext:
+            typeof parsed.tokenCiphertext === "string" ? parsed.tokenCiphertext : "",
+          lastTokenIv: typeof parsed.tokenIv === "string" ? parsed.tokenIv : "",
+        },
+      ];
+    }
+    return merged;
+  });
+}
+
 /**
  * Freeze-on-publish primitive. Call this with the package name we just
  * successfully published. If the package lives under the current instance

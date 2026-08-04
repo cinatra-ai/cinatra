@@ -5,6 +5,7 @@ import {
 } from "@/lib/instance-identity-cas";
 import {
   updateInstanceIdentityRegistries,
+  applyInstanceIdentityProvisioningWrite,
   type InstanceRegistries,
 } from "@/lib/instance-identity-store";
 
@@ -234,5 +235,179 @@ describe("updateInstanceIdentityRegistries (store wrapper — production logic)"
     const final = store.parsed() as { vendorName: string; registries: { remote: { status: string } } };
     expect(final.vendorName).toBe("legacy-ns");
     expect(final.registries.remote.status).toBe("connected");
+  });
+});
+
+describe("applyInstanceIdentityProvisioningWrite (store wrapper — cinatra#2418 review, round 2)", () => {
+  const WRITE = {
+    instanceNamespace: "vendorb",
+    tokenCiphertext: "new-ct",
+    tokenIv: "new-iv",
+    tokenAlgo: "aes-256-gcm" as const,
+    passwordCiphertext: "new-pwct",
+    passwordIv: "new-pwiv",
+  };
+
+  it("LOST-UPDATE: a concurrent display-name save that lands mid-CAS is preserved alongside the rename", () => {
+    // Reproduces the exact race the review thread flagged: a frozen
+    // display-name-only save (editVendorAction) commits between our snapshot
+    // read and our swap attempt. The old single-read-then-write
+    // provisionAndPersist would have spread its PRE-await snapshot here and
+    // silently discarded this concurrent commit.
+    const store = fakeStore({
+      instanceNamespace: "vendora",
+      instanceId: "iid",
+      instanceDisplayName: "Vendor A",
+      tokenCiphertext: "old-ct",
+      tokenIv: "old-iv",
+      tokenAlgo: "aes-256-gcm",
+      passwordCiphertext: "old-pwct",
+      passwordIv: "old-pwiv",
+      firstPublishedAt: "2026-05-01T00:00:00.000Z",
+    });
+    let firstCas = true;
+    const deps = store.deps({
+      compareAndSwap: (next, expected) => {
+        if (firstCas) {
+          firstCas = false;
+          store.set(
+            JSON.stringify({ ...store.parsed(), instanceDisplayName: "Vendor A — Updated Concurrently" }),
+          );
+        }
+        if (store.raw === expected) {
+          store.set(JSON.stringify(next));
+          return true;
+        }
+        return false;
+      },
+    });
+
+    const outcome = applyInstanceIdentityProvisioningWrite(
+      WRITE,
+      { appendPreviousNamespace: true },
+      deps,
+    );
+
+    expect(outcome).toBe("swapped");
+    const final = store.parsed() as {
+      instanceNamespace: string;
+      instanceDisplayName: string;
+      instanceId: string;
+      firstPublishedAt: string | null;
+      oldInstanceNamespaces: Array<{ name: string; lastTokenCiphertext: string }>;
+    };
+    expect(final.instanceNamespace).toBe("vendorb"); // our rename landed
+    expect(final.instanceDisplayName).toBe("Vendor A — Updated Concurrently"); // concurrent write NOT lost
+    expect(final.instanceId).toBe("iid"); // durable field preserved verbatim
+    expect(final.firstPublishedAt).toBeNull();
+    expect(final.oldInstanceNamespaces).toEqual([
+      expect.objectContaining({ name: "vendora", lastTokenCiphertext: "old-ct" }),
+    ]);
+  });
+
+  it("LOST-RENAME: two concurrent provisioning writes — the retrying one archives the FRESH namespace/token, not its stale pre-await values", () => {
+    // Two renames race: this call's "pre-await" namespace/token (what a
+    // caller closure captured before its own registry round-trip) is
+    // "vendora"/"old-ct" — but by the time its CAS attempt actually runs,
+    // ANOTHER concurrent provisioning write has already landed, moving the
+    // row to "vendorx"/"mid-ct". The archived oldInstanceNamespaces entry
+    // must record "vendorx"/"mid-ct" (the value live immediately before THIS
+    // swap), never the caller's stale "vendora"/"old-ct" — otherwise the
+    // rename history silently skips a real transition.
+    const store = fakeStore({
+      instanceNamespace: "vendora",
+      tokenCiphertext: "old-ct",
+      tokenIv: "old-iv",
+      firstPublishedAt: "2026-05-01T00:00:00.000Z",
+    });
+    let firstCas = true;
+    const deps = store.deps({
+      compareAndSwap: (next, expected) => {
+        if (firstCas) {
+          firstCas = false;
+          // A concurrent provisioning write (another rename) commits first.
+          store.set(
+            JSON.stringify({
+              ...store.parsed(),
+              instanceNamespace: "vendorx",
+              tokenCiphertext: "mid-ct",
+              tokenIv: "mid-iv",
+            }),
+          );
+        }
+        if (store.raw === expected) {
+          store.set(JSON.stringify(next));
+          return true;
+        }
+        return false;
+      },
+    });
+
+    const outcome = applyInstanceIdentityProvisioningWrite(
+      WRITE,
+      { appendPreviousNamespace: true },
+      deps,
+    );
+
+    expect(outcome).toBe("swapped");
+    const final = store.parsed() as {
+      instanceNamespace: string;
+      oldInstanceNamespaces: Array<{ name: string; lastTokenCiphertext: string; lastTokenIv: string }>;
+    };
+    expect(final.instanceNamespace).toBe("vendorb"); // this write's own target still lands
+    // The archived entry reflects the FRESH row this attempt actually swapped
+    // against ("vendorx"/"mid-ct"), not the caller's stale pre-await values.
+    expect(final.oldInstanceNamespaces).toEqual([
+      expect.objectContaining({ name: "vendorx", lastTokenCiphertext: "mid-ct", lastTokenIv: "mid-iv" }),
+    ]);
+  });
+
+  it("aborts (no write) when appendPreviousNamespace is set but the row has no usable prior namespace", () => {
+    const store = fakeStore({ tokenCiphertext: "old-ct" });
+    const before = store.raw;
+    const outcome = applyInstanceIdentityProvisioningWrite(
+      WRITE,
+      { appendPreviousNamespace: true },
+      store.deps(),
+    );
+    expect(outcome).toBe("aborted");
+    expect(store.raw).toBe(before); // unchanged
+  });
+
+  it("does not append oldInstanceNamespaces when appendPreviousNamespace is false (pre-publish edit path)", () => {
+    const store = fakeStore({
+      instanceNamespace: "vendora",
+      tokenCiphertext: "old-ct",
+      firstPublishedAt: null,
+    });
+    const outcome = applyInstanceIdentityProvisioningWrite(
+      WRITE,
+      { appendPreviousNamespace: false },
+      store.deps(),
+    );
+    expect(outcome).toBe("swapped");
+    const final = store.parsed() as { instanceNamespace: string; oldInstanceNamespaces?: unknown };
+    expect(final.instanceNamespace).toBe("vendorb");
+    expect(final.oldInstanceNamespaces).toBeUndefined();
+  });
+
+  it("exhausts under sustained CAS contention rather than falling back to a clobbering write", () => {
+    const store = fakeStore({
+      instanceNamespace: "vendora",
+      tokenCiphertext: "old-ct",
+      firstPublishedAt: "2026-05-01T00:00:00.000Z",
+    });
+    const deps = store.deps({
+      compareAndSwap: () => false, // every attempt conflicts
+    });
+    const outcome = applyInstanceIdentityProvisioningWrite(
+      WRITE,
+      { appendPreviousNamespace: true },
+      deps,
+    );
+    expect(outcome).toBe("exhausted");
+    // Nothing was clobbered — the row is exactly what it started as.
+    const final = store.parsed() as { instanceNamespace: string };
+    expect(final.instanceNamespace).toBe("vendora");
   });
 });

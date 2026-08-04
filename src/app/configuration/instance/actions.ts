@@ -58,6 +58,7 @@ import { validateInstanceNamespace } from "@/lib/instance-namespace";
 import {
   readInstanceIdentity,
   writeInstanceIdentity,
+  applyInstanceIdentityProvisioningWrite,
   type InstanceIdentity,
 } from "@/lib/instance-identity-store";
 // Cache invalidation lives in a separate module so vi.mock can spy on it
@@ -467,65 +468,38 @@ async function provisionAndPersist(
   const tokenEnc = encryptSecret(token, "vendor.token");
   const passwordEnc = encryptSecret(password, "vendor.password");
 
-  // Re-read the identity row FRESH, synchronously, immediately before
-  // building the write payload below — NOT the `current` snapshot captured
-  // before the awaits above (assertNamespaceRenameAllowed's marketplace
-  // round-trip, and createNpmUser's registry round-trip in mode (b)).
-  //
-  // Without this, a same-submit display-name save (editVendorAction's frozen
-  // branch, a synchronous read-then-write with no intervening await) that
-  // lands WHILE this function is still awaiting registry work would be
-  // silently overwritten: `next` would spread the stale pre-await `current`,
-  // whose `instanceDisplayName` no longer matches what was just saved
-  // (cinatra#2418 review — lost display-name update during a rename).
-  //
-  // Nothing can interleave between this read and the `writeInstanceIdentity`
-  // call below — there is no `await` in between, and Node is single-threaded
-  // — so this read-then-write pair is atomic with respect to any OTHER
-  // request's synchronous read-then-write (editVendorAction's writes are
-  // themselves synchronous relative to their own read, so they can only ever
-  // land fully before or fully after this point, never straddle it).
-  const latest = readInstanceIdentity() ?? current;
-
-  // Build the next identity. createdAt is preserved. firstPublishedAt
-  // is reset to null — under a new scope nothing is published yet.
-  const next: InstanceIdentity = {
-    ...latest,
-    instanceNamespace: newName,
-    tokenCiphertext: tokenEnc.ciphertext,
-    tokenIv: tokenEnc.iv,
-    tokenAlgo: "aes-256-gcm",
-    passwordCiphertext: passwordEnc.ciphertext,
-    passwordIv: passwordEnc.iv,
-    firstPublishedAt: null,
-  };
-
-  if (opts.append) {
-    // Append the previous identity to oldInstanceNamespaces[]. Old packages
-    // remain on the registry under the orphaned scope; extension-template DB
-    // rows are not rewritten. The archived `name`/token snapshot intentionally
-    // uses the pre-await `current` (the namespace this rename was gated and
-    // provisioned against), not `latest` — a concurrent write in the window
-    // above only ever touches metadata fields like instanceDisplayName, never
-    // instanceNamespace (renames are the only namespace-mutating path and are
-    // themselves gated by assertNamespaceRenameAllowed).
-    next.oldInstanceNamespaces = [
-      ...(latest.oldInstanceNamespaces ?? current.oldInstanceNamespaces ?? []),
-      {
-        name: current.instanceNamespace,
-        frozenAt: new Date().toISOString(),
-        lastTokenCiphertext: current.tokenCiphertext ?? "",
-        lastTokenIv: current.tokenIv ?? "",
-      },
-    ];
+  // Commit atomically via row-level CAS with bounded retry (cinatra#2418
+  // review, round 2) — NOT a single synchronous re-read-then-write. A plain
+  // re-read only serialises against an in-process writer with no intervening
+  // `await` of its own (editVendorAction's frozen display-name-only save);
+  // it does NOT protect against a SECOND CONCURRENT provisionAndPersist call
+  // (two renames, or a rename racing a pre-publish edit, each awaiting their
+  // OWN registry round-trip above) — the last plain write would silently win
+  // and discard the other's namespace change, and the archived
+  // oldInstanceNamespaces[] entry would misrecord a stale pre-await
+  // namespace/token instead of what was actually live at write time.
+  // applyInstanceIdentityProvisioningWrite re-reads the row fresh on EVERY
+  // attempt and re-derives the archived entry from that same fresh row, so a
+  // CAS conflict re-applies this change onto the current truth instead of
+  // silently losing it. See its doc comment in instance-identity-store.ts.
+  const outcome = applyInstanceIdentityProvisioningWrite(
+    {
+      instanceNamespace: newName,
+      tokenCiphertext: tokenEnc.ciphertext,
+      tokenIv: tokenEnc.iv,
+      tokenAlgo: "aes-256-gcm",
+      passwordCiphertext: passwordEnc.ciphertext,
+      passwordIv: passwordEnc.iv,
+    },
+    { appendPreviousNamespace: opts.append },
+  );
+  if (outcome !== "swapped") {
+    console.error(
+      `[provisionAndPersist] identity-write CAS did not land (outcome: ${outcome}) — ` +
+        "registry provisioning already completed under the new namespace; the operator must retry the save.",
+    );
+    redirectWithError("identity-write-conflict");
   }
-
-  // provisionAndPersist is the canonical rename path (called by both
-  // editVendorAction pre-freeze and renameInstanceNamespaceAction post-freeze).
-  // Pass `allowNamespaceRename: true` so the post-freeze invariant in
-  // writeInstanceIdentity accepts the namespace change.
-  writeInstanceIdentity(next, { allowNamespaceRename: true });
-  invalidateInstanceIdentityCache();
   revalidatePath("/setup");
   revalidatePath("/configuration/environment");
 }
