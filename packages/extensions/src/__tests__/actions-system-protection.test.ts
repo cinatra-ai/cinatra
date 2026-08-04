@@ -109,9 +109,13 @@ describe("delete-intent actions refuse a system extension (front door)", () => {
     // now ALSO classifies the refusal into `failure` so the form action can
     // RETURN a structured value the production client renders (a system
     // extension → reason "system").
+    // cinatra#2416: plus `errorCode` — the guard's own STABLE code, captured
+    // where the thrown error object still exists. Operator-side only; the
+    // user-facing `failure` contract is unchanged.
     expect(res).toEqual({
       success: false,
       error: MSG,
+      errorCode: "SYSTEM_EXTENSION_PROTECTED",
       failure: { ok: false, reason: "system" },
     });
     expect(registry.uninstall).not.toHaveBeenCalled();
@@ -122,6 +126,7 @@ describe("delete-intent actions refuse a system extension (front door)", () => {
     expect(res).toEqual({
       success: false,
       error: MSG,
+      errorCode: "SYSTEM_EXTENSION_PROTECTED",
       failure: { ok: false, reason: "system" },
     });
     expect(registry.archive).not.toHaveBeenCalled();

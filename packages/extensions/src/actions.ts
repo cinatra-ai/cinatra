@@ -10,7 +10,16 @@ void _getAgentPackage;
 import { extensionRegistry } from "./index";
 import type { Actor } from "@cinatra-ai/extension-types";
 import type { DanglingReferences } from "./audit-log";
-import { isPlatformAdmin, requireAdminSession } from "@/lib/auth-session";
+import { requireAdminSession } from "@/lib/auth-session";
+// cinatra#2416: THE shared session-derived actor builders. The settings page
+// imports the SAME `buildLifecycleActorFromSession` to evaluate its
+// per-affordance capability, so the rendered enabled state and the enforced
+// refusal are computed from one actor built by one function.
+import {
+  buildActorEnvelope,
+  buildLifecycleActorFromSession,
+  type LifecycleActorSession,
+} from "./lifecycle-actor";
 import {
   assertCanRemoveExtension,
   isSystemExtension,
@@ -77,105 +86,22 @@ function logMarketplaceFailureForOperator(
 }
 
 // ---------------------------------------------------------------------------
-// Session-derived actor construction for this module's form actions
-// (cinatra#2400). No wrapper hand-rolls an Actor literal any more: the audit
-// envelope is built in ONE place, and the LIFECYCLE family layers the caller's
-// real standing on top of it — also in one place.
-//
-// Before #2400 every wrapper hand-rolled `{actorType, userId, source, orgId}` —
-// an audit envelope with NO standing — so:
-//   * force-delete, whose dispatcher gate reads ONLY `platformRole`, refused
-//     every real platform admin's submission while the button rendered enabled
-//     ("force_delete is platform-admin-only … — refusing");
-//   * the archive/restore/reinstall family was rejected even earlier, at
-//     `resolveLifecycleTargetRow → assertActorWriteStandingOverRow`, which needs
-//     `orgRole` (or platform standing) over the resolved row — so those actions
-//     could not act at all (no branch was taken, no archive fallback occurred).
-// The programmatic primitives (the MCP lifecycle handlers) dispatch with a
-// fully-roled actor resolved from their transport, so only the UI paths were
-// broken; `buildLifecycleActorFromSession` closes that divergence.
-//
-// BOTH role fields are derived from the TRUSTED SERVER SESSION:
-//   * `platformRole` ← `isPlatformAdmin(session)`, the canonical predicate over
-//     Better Auth's comma-separated role string ("user,admin");
-//   * `orgRole`      ← `buildCanDoOptsFromSession(session)`, a membership-table
-//     read for the session's ACTIVE org.
-// A form action's `input` is client-controlled and NEVER contributes a role —
-// a crafted request cannot supply, spoof or widen either field.
+// Session-derived actor construction (cinatra#2400) now lives in the shared
+// `./lifecycle-actor` module (cinatra#2416): the settings page that RENDERS
+// these affordances must build the caller's actor with the SAME code that the
+// submission is later enforced against, and a `"use server"` module cannot
+// export a builder (every export here becomes a callable Server Function). No
+// wrapper hand-rolls an Actor literal.
 // ---------------------------------------------------------------------------
 
-type FormActionSession = Awaited<ReturnType<typeof requireAdminSession>>;
-
-/**
- * The AUDIT ENVELOPE: who is acting, from where, in which org. Standing-free by
- * construction and shared by every form action in this module.
- */
-function buildActorEnvelope(session: FormActionSession): Actor {
-  const orgId = session.session?.activeOrganizationId ?? null;
-  return {
-    actorType: "human",
-    userId: session.user.id,
-    source: "ui",
-    // Forward the active org so extension lifecycle has organization context
-    // from the UI server-action path.
-    ...(orgId ? { orgId } : {}),
-  };
-}
-
-/**
- * THE shared lifecycle actor builder — the envelope PLUS the caller's real
- * standing (`platformRole` + `orgRole`), used by every lifecycle form action
- * (archive / restore / reinstall / force-delete).
- *
- * DELIBERATELY NOT used by the install/update wrappers. Their actor is handed to
- * the dependency BATCH (`installExtensionWithDependencies`), whose abort path
- * compensates member installs through `uninstallMember` →
- * `extensionRegistry.uninstall(…, actor)`. Platform standing there would route a
- * freshly-installed, never-used dependency into the PACKAGE-GLOBAL hard-delete
- * branch — tearing down every OTHER org's row for that dependency during a
- * single org's failed install. Install/update therefore keep the standing-free
- * envelope, exactly as before; their access-target rollback attaches org-scoped
- * standing at rollback time (see buildInstallRollbackActor) and never platform
- * standing.
- *
- * TOTAL by contract — must NEVER throw. Callers invoke it before (and outside)
- * their own error handling, and the org-role resolution is a DB read. On a
- * resolution failure the actor degrades to platform standing + audit identity
- * only: a platform admin is unaffected, and an org admin is then refused by the
- * P5 standing gate (fail-closed) instead of the action dying with a
- * production-masked server-action error.
- */
-async function buildLifecycleActorFromSession(
-  session: FormActionSession,
-  operation: string,
-  packageName: string,
-): Promise<Actor> {
-  const actor: Actor = {
-    ...buildActorEnvelope(session),
-    // Platform standing from the session's own role string — the ONLY field
-    // `isPlatformAdminActor` (lifecycle-target-resolver) reads.
-    ...(isPlatformAdmin(session) ? { platformRole: "platform_admin" as const } : {}),
-  };
-  try {
-    const { buildCanDoOptsFromSession } = await import("@/lib/auth-session");
-    const { orgRole } = await buildCanDoOptsFromSession(session);
-    return orgRole ? { ...actor, orgRole } : actor;
-  } catch (roleErr) {
-    logMarketplaceFailureForOperator(
-      `${operation}-actor`,
-      packageName,
-      "unrecoverable",
-      roleErr,
-    );
-    return actor;
-  }
-}
+type FormActionSession = LifecycleActorSession;
 
 /**
  * Build the actor for a COMPENSATING uninstall (an install-rollback), with the
  * membership standing the rollback actually needs.
  *
- * The install actor is the standing-free envelope (see above), but the P5
+ * The install actor is the standing-free envelope (`buildActorEnvelope`, in
+ * ./lifecycle-actor), but the P5
  * row-scoped lifecycle standing gate (resolveLifecycleTargetRow →
  * assertActorWriteStandingOverRow) requires the actor to hold destructive-write
  * standing over the org-anchored row before it will remove it. So a role-less
@@ -315,17 +241,34 @@ function rejectEmptyInstallVersion(
 // sees only the reason-derived, non-technical copy (which for `dependents` names
 // the blocking installed extensions); the FULL technical error stays here for
 // operators. Same CWE-134-safe constant-format-string discipline.
+/** The STABLE, duck-typed refusal code a thrown lifecycle error carries
+ *  (NO_ADDRESSABLE_ROW / AMBIGUOUS_LIFECYCLE_TARGET / NO_LIFECYCLE_WRITE_STANDING
+ *  / PLATFORM_ADMIN_REQUIRED, plus the removal guards' own codes), or undefined.
+ *  Duck-typed rather than `instanceof` — these errors cross a dynamic-import
+ *  boundary (cinatra#2416). */
+function stableErrorCode(err: unknown): string | undefined {
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === "string" && code.length > 0 ? code : undefined;
+}
+
 function logRemovalFailureForOperator(
   operation: string,
   packageName: string,
   failure: RemovalActionResult,
   err: unknown,
+  errorCode?: string,
 ): void {
+  // cinatra#2416: record the refusal's STABLE code alongside the coarse reason.
+  // The returned user-facing contract stays generic by design — this is the
+  // operator-side discriminant that makes an addressability refusal greppable,
+  // and the observable "expected error code" for a crafted direct submission
+  // that the UI now renders as unavailable.
   console.error(
-    "[extension-removal] %s refused/failed for %s (reason=%s):",
+    "[extension-removal] %s refused/failed for %s (reason=%s code=%s):",
     operation,
     packageName,
     failure.reason,
+    errorCode ?? "none",
     err instanceof Error ? (err.stack ?? err.message) : String(err),
   );
 }
@@ -478,7 +421,16 @@ export async function uninstallExtensionPackage(
   packageName: string,
   packageVersion: string,
   actor: Actor,
-): Promise<{ success: boolean; error?: string; failure?: RemovalActionResult }> {
+): Promise<{
+  success: boolean;
+  error?: string;
+  /** cinatra#2416: the refusal's STABLE code, captured HERE — the only place
+   *  that still holds the thrown error OBJECT (the caller receives `error` as a
+   *  flattened string). Operator-side only; the user-facing `failure` contract
+   *  stays deliberately generic. */
+  errorCode?: string;
+  failure?: RemovalActionResult;
+}> {
   "use server";
   await requireAdminSession();
   try {
@@ -501,6 +453,7 @@ export async function uninstallExtensionPackage(
     return {
       success: false,
       error: err instanceof Error ? err.message : String(err),
+      errorCode: stableErrorCode(err),
       failure: classifyRemovalFailure(err),
     };
   }
@@ -514,7 +467,16 @@ export async function archiveExtensionPackage(
   packageName: string,
   packageVersion: string,
   actor: Actor,
-): Promise<{ success: boolean; error?: string; failure?: RemovalActionResult }> {
+): Promise<{
+  success: boolean;
+  error?: string;
+  /** cinatra#2416: the refusal's STABLE code, captured HERE — the only place
+   *  that still holds the thrown error OBJECT (the caller receives `error` as a
+   *  flattened string). Operator-side only; the user-facing `failure` contract
+   *  stays deliberately generic. */
+  errorCode?: string;
+  failure?: RemovalActionResult;
+}> {
   "use server";
   await requireAdminSession();
   try {
@@ -534,6 +496,7 @@ export async function archiveExtensionPackage(
     return {
       success: false,
       error: err instanceof Error ? err.message : String(err),
+      errorCode: stableErrorCode(err),
       failure: classifyRemovalFailure(err),
     };
   }
@@ -1190,7 +1153,13 @@ export async function archiveExtensionPackageFormAction(input: {
     // cinatra#1061: RETURN the classified refusal (see uninstall action note) so
     // the archive dependents/system message survives to the production client.
     const failure = result.failure ?? { ok: false as const, reason: "error" as const };
-    logRemovalFailureForOperator("archive", input.packageName, failure, result.error);
+    logRemovalFailureForOperator(
+      "archive",
+      input.packageName,
+      failure,
+      result.error,
+      result.errorCode,
+    );
     return failure;
   }
   // revalidatePath is unnecessary because redirect re-renders the destination.

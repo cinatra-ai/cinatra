@@ -13,6 +13,11 @@ import {
   resolveUpdateRow,
   settingsHrefFor,
 } from "../extension-settings-model";
+import type {
+  LifecycleCapability,
+  LifecycleCapabilityMap,
+  LifecycleCapabilityOp,
+} from "../../lifecycle-target-resolver";
 
 function ext(
   over: Partial<InstalledExtension> & { source?: ExtensionSource } = {},
@@ -146,24 +151,59 @@ describe("canPublishToMarketplace (§V — one-way Publish)", () => {
   });
 });
 
+// cinatra#2416: every affordance now folds in a SERVER-DERIVED capability
+// verdict. `ALLOW_ALL` is the "this session can address and act on the row"
+// verdict — with it, every pre-#2416 expectation below must hold UNCHANGED.
+const cap = (
+  op: LifecycleCapabilityOp,
+  denial?: { code: "no_addressable_row" | "platform_admin_required"; reason: string },
+): LifecycleCapability =>
+  denial
+    ? { op, allowed: false, code: denial.code, reason: denial.reason }
+    : { op, allowed: true, code: "ok", reason: null };
+
+const ALLOW_ALL: LifecycleCapabilityMap = {
+  archive: cap("archive"),
+  activate: cap("activate"),
+  uninstall: cap("uninstall"),
+  force_delete: cap("force_delete"),
+};
+
+const SCOPE_REASON =
+  "Installed for the whole platform — an organization-scoped session can't act on it.";
+
+/** The exact verdict #2416 reports: a platform-anchored row, org-active session. */
+const PLATFORM_ROW_FROM_ORG_SESSION: LifecycleCapabilityMap = {
+  archive: cap("archive", { code: "no_addressable_row", reason: SCOPE_REASON }),
+  activate: cap("activate", { code: "no_addressable_row", reason: SCOPE_REASON }),
+  uninstall: cap("uninstall", { code: "no_addressable_row", reason: SCOPE_REASON }),
+  // force_delete takes no row resolver — platform standing is its only gate.
+  force_delete: cap("force_delete"),
+};
+
 describe("resolveSettingsAffordances (§V — locked/system + complementary Archive/Activate)", () => {
   it("active install: Archive live, Activate greyed (exactly one live)", () => {
     const a = resolveSettingsAffordances({
       canonical: ext({ status: "active" }),
+      lockedRow: null,
       isArchived: false,
       versionKnown: true,
+      capabilities: ALLOW_ALL,
     });
     expect(a.archiveDisabled).toBeNull();
     expect(a.activateDisabled).toBe("Already active");
     expect(a.reinstallDisabled).toBeNull();
     expect(a.forceDeleteDisabled).toBeNull();
+    expect(a.capabilityReasons).toEqual({});
   });
 
   it("archived install: Activate live, Archive greyed (the pair flips)", () => {
     const a = resolveSettingsAffordances({
       canonical: ext({ status: "archived" }),
+      lockedRow: null,
       isArchived: true,
       versionKnown: true,
+      capabilities: ALLOW_ALL,
     });
     expect(a.archiveDisabled).toBe("Already archived");
     expect(a.activateDisabled).toBeNull();
@@ -172,8 +212,10 @@ describe("resolveSettingsAffordances (§V — locked/system + complementary Arch
   it("locked / system: Archive + Force-delete + Reinstall disabled-in-place", () => {
     const a = resolveSettingsAffordances({
       canonical: ext({ status: "locked", requiredInProd: true }),
+      lockedRow: ext({ status: "locked", requiredInProd: true }),
       isArchived: false,
       versionKnown: true,
+      capabilities: ALLOW_ALL,
     });
     expect(a.archiveDisabled).toBeTruthy();
     expect(a.forceDeleteDisabled).toBeTruthy();
@@ -183,13 +225,140 @@ describe("resolveSettingsAffordances (§V — locked/system + complementary Arch
   it("no canonical row + unknown version: version-requiring actions disabled; the pair still resolves", () => {
     const a = resolveSettingsAffordances({
       canonical: null,
+      lockedRow: null,
       isArchived: false,
       versionKnown: false,
+      capabilities: ALLOW_ALL,
     });
     expect(a.archiveDisabled).toBe("Installed version unknown");
     expect(a.forceDeleteDisabled).toBe("Installed version unknown");
     expect(a.activateDisabled).toBe("Already active");
     expect(a.reinstallDisabled).toBeNull();
+  });
+});
+
+describe("resolveSettingsAffordances — the server capability (cinatra#2416)", () => {
+  it("a platform-anchored row + org-active session: the three row-scoped actions carry the SCOPE reason, Force-delete stays live", () => {
+    const a = resolveSettingsAffordances({
+      canonical: ext({ status: "active" }),
+      lockedRow: null,
+      isArchived: false,
+      versionKnown: true,
+      capabilities: PLATFORM_ROW_FROM_ORG_SESSION,
+    });
+    expect(a.archiveDisabled).toBe(SCOPE_REASON);
+    expect(a.activateDisabled).toBe(SCOPE_REASON);
+    expect(a.reinstallDisabled).toBe(SCOPE_REASON);
+    expect(a.forceDeleteDisabled).toBeNull();
+    // …and all three are flagged as CAPABILITY denials, so the view renders the
+    // reason visibly rather than only as a tooltip.
+    expect(a.capabilityReasons).toEqual({
+      archive: SCOPE_REASON,
+      activate: SCOPE_REASON,
+      reinstall: SCOPE_REASON,
+    });
+  });
+
+  it("the capability OUTRANKS the status reason — an unaddressable row never reads 'Already active'", () => {
+    const a = resolveSettingsAffordances({
+      canonical: ext({ status: "active" }),
+      lockedRow: null,
+      isArchived: false,
+      versionKnown: true,
+      capabilities: PLATFORM_ROW_FROM_ORG_SESSION,
+    });
+    expect(a.activateDisabled).not.toBe("Already active");
+  });
+
+  it("the #1036 locked/system invariant still OUTRANKS the capability (the stronger rule wins)", () => {
+    const a = resolveSettingsAffordances({
+      canonical: ext({ status: "locked", requiredInProd: true }),
+      lockedRow: ext({ status: "locked", requiredInProd: true }),
+      isArchived: false,
+      versionKnown: true,
+      capabilities: PLATFORM_ROW_FROM_ORG_SESSION,
+    });
+    expect(a.archiveDisabled).toContain("locked");
+    expect(a.archiveDisabled).not.toBe(SCOPE_REASON);
+    // …and a locked-claimed affordance is NOT reported as a capability denial.
+    expect(a.capabilityReasons.archive).toBeUndefined();
+  });
+
+  it("the capability-denial flag is keyed STRUCTURALLY, not by comparing the copy", () => {
+    // Pathological but decisive: the invariant copy and the capability copy are
+    // the SAME string. The invariant won, so the affordance must NOT be flagged
+    // as a capability denial (a string comparison would mis-attribute it and
+    // render a spurious visible line).
+    const collidingCopy = "Cannot archive — locked; update is permitted.";
+    const a = resolveSettingsAffordances({
+      canonical: ext({ status: "active" }),
+      lockedRow: ext({ status: "locked", requiredInProd: false }),
+      isArchived: false,
+      versionKnown: true,
+      capabilities: {
+        ...ALLOW_ALL,
+        archive: {
+          op: "archive",
+          allowed: false,
+          code: "no_addressable_row",
+          reason: collidingCopy,
+        },
+      },
+    });
+    expect(a.archiveDisabled).toBe(collidingCopy);
+    expect(a.capabilityReasons.archive).toBeUndefined();
+  });
+
+  it("an ORG admin's Force-delete carries the platform-admin standing copy", () => {
+    const a = resolveSettingsAffordances({
+      canonical: ext({ status: "active" }),
+      lockedRow: null,
+      isArchived: false,
+      versionKnown: true,
+      capabilities: {
+        ...ALLOW_ALL,
+        force_delete: cap("force_delete", {
+          code: "platform_admin_required",
+          reason: "Requires platform admin.",
+        }),
+      },
+    });
+    expect(a.forceDeleteDisabled).toBe("Requires platform admin.");
+    expect(a.capabilityReasons.forceDelete).toBe("Requires platform admin.");
+  });
+
+  it("a LOCKED SIBLING in another scope disables the affordances even when the TARGET row is addressable and active", () => {
+    // codex-found regression pin. `assertNoLockedCanonicalRow` is PACKAGE-WIDE:
+    // a locked platform row refuses archive / uninstall / force_delete for every
+    // scope. Describing the lock from the resolved TARGET row alone would render
+    // those live and have the dispatcher refuse — the exact defect #2416 fixes.
+    const a = resolveSettingsAffordances({
+      // the actor's own org row: active, addressable, standing held
+      canonical: ext({ status: "active", organizationId: "org-x", ownerLevel: "organization" }),
+      // …but a platform sibling is LOCKED
+      lockedRow: ext({ id: "iext-platform", status: "locked", requiredInProd: true }),
+      isArchived: false,
+      versionKnown: true,
+      capabilities: ALLOW_ALL,
+    });
+    expect(a.archiveDisabled).toContain("locked");
+    expect(a.reinstallDisabled).toContain("locked");
+    expect(a.forceDeleteDisabled).toContain("locked");
+    // Activate is not a destructive op, so the lock does not claim it.
+    expect(a.activateDisabled).toBe("Already active");
+    // None of these are capability denials — no visible scope line.
+    expect(a.capabilityReasons).toEqual({});
+  });
+
+  it("a version-unknown row that is ALSO unaddressable reports the SCOPE reason (the more fundamental fact)", () => {
+    const a = resolveSettingsAffordances({
+      canonical: null,
+      lockedRow: null,
+      isArchived: false,
+      versionKnown: false,
+      capabilities: PLATFORM_ROW_FROM_ORG_SESSION,
+    });
+    expect(a.archiveDisabled).toBe(SCOPE_REASON);
   });
 });
 

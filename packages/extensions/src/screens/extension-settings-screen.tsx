@@ -46,6 +46,12 @@ import {
   reinstallLatestFormAction,
   restoreExtensionPackageFormAction,
 } from "../actions";
+// cinatra#2416 — the per-affordance capability comes from the module that
+// ENFORCES it, evaluated against the actor built by the SAME builder the form
+// actions use. Nothing about the addressing rule is re-derived here or shipped
+// to the client.
+import { buildLifecycleActorFromSession } from "../lifecycle-actor";
+import { describeLifecycleCapabilities } from "../lifecycle-target-resolver";
 import { ExtensionAccessControl } from "./extension-access-control";
 import { ExtensionSettingsView } from "./extension-settings-view";
 
@@ -102,10 +108,68 @@ export async function ExtensionSettingsScreen({
   const isArchived = row.status === "archived";
   const isPublic = row.visibility === "public";
 
-  // Locked / system disabled-action reasons (#1036 mechanism) + status/version
-  // fallbacks (complementary Archive/Activate; version-requiring actions).
-  const { archiveDisabled, activateDisabled, reinstallDisabled, forceDeleteDisabled } =
-    resolveSettingsAffordances({ canonical, isArchived, versionKnown });
+  // cinatra#2416 — SERVER-DERIVED per-affordance capability.
+  //
+  // The page used to render Archive / Activate / Reinstall / Force-delete
+  // enabled whatever the session was, and let the server refuse. For a
+  // PLATFORM-ANCHORED row (organization_id NULL) an org-active session is
+  // refused by the row resolver every time ("No addressable installed_extension
+  // row … in scope org … — refusing"), so the page offered controls that could
+  // not succeed — the #2400 defect class, here for row scope.
+  //
+  // The fix keeps the enforcement untouched and asks the ENFORCING module for
+  // its verdict, against the actor built by the SAME builder the form actions
+  // below will build on submit. No addressing rule is re-implemented, and none
+  // of the scope facts (row ids, org ids, actor scope) reach the client — only
+  // `allowed` + human copy.
+  const lifecycleActor = await buildLifecycleActorFromSession(
+    session,
+    "settings-capability",
+    packageName,
+  );
+  const {
+    resolution,
+    lockedRow,
+    byOp: capabilities,
+  } = await describeLifecycleCapabilities(packageName, lifecycleActor);
+
+  // The row the lifecycle actions will TARGET. The card row above is the
+  // collapsed locked>active>archived winner across every identity visible to
+  // this session, so for a package installed at BOTH platform and org scope it
+  // can carry a different status than the row the action acts on. Describe the
+  // affordances from the TARGET row whenever one resolves; fall back to the
+  // card row (the historical behaviour, and identical whenever a package has a
+  // single row — the overwhelmingly common case).
+  const lifecycleRow = resolution.ok ? resolution.row : canonical;
+  const lifecycleIsArchived = resolution.ok
+    ? resolution.row.status === "archived"
+    : isArchived;
+
+  // The PACKAGE-WIDE locked/system invariant, which is a different row from the
+  // target: `assertNoLockedCanonicalRow` refuses when ANY canonical row for the
+  // package is locked, in any scope. `lockedRow` is that row (scope-blind, from
+  // the same read the capability used); when the capability read failed we fall
+  // back to the card row, which the installed-rows collapse already ranks
+  // locked-first among the identities visible to this session.
+  const lifecycleLockedRow =
+    lockedRow ?? (canonical?.status === "locked" ? canonical : null);
+
+  // Locked / system disabled-action reasons (#1036 mechanism) → the capability
+  // verdict → status/version fallbacks (complementary Archive/Activate;
+  // version-requiring actions).
+  const {
+    archiveDisabled,
+    activateDisabled,
+    reinstallDisabled,
+    forceDeleteDisabled,
+    capabilityReasons,
+  } = resolveSettingsAffordances({
+    canonical: lifecycleRow,
+    lockedRow: lifecycleLockedRow,
+    isArchived: lifecycleIsArchived,
+    versionKnown,
+    capabilities,
+  });
 
   // Server actions — identity baked into the closure, each returning void so
   // they satisfy the native `<form action>` / confirm-dialog contract (the
@@ -292,6 +356,7 @@ export async function ExtensionSettingsScreen({
       activateDisabled={activateDisabled}
       reinstallDisabled={reinstallDisabled}
       forceDeleteDisabled={forceDeleteDisabled}
+      lifecycleCapabilityReasons={capabilityReasons}
       archiveDependents={archiveDependents}
       isPublic={isPublic}
       isRegisteredVendor={isRegisteredVendor}
