@@ -22,7 +22,8 @@
     "./toast": "./src/toast.ts",
     "./search-param-toast": "./src/search-param-toast.tsx",
     "./lib/utils": "./src/lib/utils.ts",
-    "./lib/extension-accent": "./src/lib/extension-accent.ts"
+    "./lib/extension-accent": "./src/lib/extension-accent.ts",
+    "./icons/plug-connector-kind": "./src/icons/plug-connector-kind.tsx"
   },
   "files": [
     "src/**/*.ts",

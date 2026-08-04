@@ -1,0 +1,50 @@
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { renderToStaticMarkup } from "react-dom/server";
+
+// The sdk-ui vitest env is `node` (no DOM render — see the Tabs +
+// connection-status primitive tests). This is a module-load render smoke
+// (react-dom/server works fine without a DOM) + source-text contract over
+// the connector-kind glyph (cinatra#2364, epic #2360): the lower-half-plug
+// mark that supersedes the app's prior lucide `Plug` kind emblem.
+
+const SRC_DIR = join(__dirname, "..");
+const PKG_DIR = join(SRC_DIR, "..", "..");
+const glyphSrc = readFileSync(join(SRC_DIR, "plug-connector-kind.tsx"), "utf8");
+const pkg = JSON.parse(readFileSync(join(PKG_DIR, "package.json"), "utf8")) as {
+  exports: Record<string, string>;
+};
+
+describe("PlugConnectorKind glyph — module load + render", () => {
+  it("loads and exports a component that renders without throwing", async () => {
+    const mod = await import("../plug-connector-kind");
+    expect(typeof mod.PlugConnectorKind).toBe("function");
+    const html = renderToStaticMarkup(<mod.PlugConnectorKind />);
+    expect(html).toContain("<svg");
+    expect(html).toContain('viewBox="0 0 24 24"');
+  });
+
+  it("forwards className and a caller strokeWidth override (lucide-compatible call sites)", async () => {
+    const { PlugConnectorKind } = await import("../plug-connector-kind");
+    const html = renderToStaticMarkup(<PlugConnectorKind className="size-[13px]" strokeWidth={2.2} />);
+    expect(html).toContain('class="size-[13px]"');
+    expect(html).toContain('stroke-width="2.2"');
+  });
+
+  it("inherits currentColor (never a hard-coded stroke colour)", () => {
+    expect(glyphSrc).toContain('stroke="currentColor"');
+    expect(glyphSrc).not.toMatch(/stroke="#[0-9a-fA-F]/);
+  });
+
+  it("recentres/rescales the lower-plug-half drawing across the full 24-unit viewBox (not a literal crop)", () => {
+    // The spec's own transform (design commit c144f39, app-extensions.html
+    // §I byline SVG) — pinning the exact recentre/rescale, not just "some
+    // transform exists".
+    expect(glyphSrc).toContain('transform="translate(-1.03,-11.33) scale(1.515)"');
+  });
+
+  it("is exported from the sdk-ui package as a dedicated subpath (single glyph-module owner)", () => {
+    expect(pkg.exports["./icons/plug-connector-kind"]).toBe("./src/icons/plug-connector-kind.tsx");
+  });
+});
