@@ -24,22 +24,20 @@ import { RESERVED_SUBSTRINGS } from "./reserved-patterns";
 const MAX_LEN = 39;
 const MIN_LEN = 2;
 
-// Unicode combining-diacritical-marks code point block. After NFKD
-// decomposition an accented character like "é" becomes "e" plus a trailing
-// combining acute accent; stripCombiningMarks drops marks in this block so
-// the fold below sees a plain "e", not a leftover mark that would otherwise
-// fall through to the punctuation-collapse step as a stray hyphen.
-const COMBINING_MARKS_START = 0x0300;
-const COMBINING_MARKS_END = 0x036f;
-
+// Unicode combining marks. After NFKD decomposition an accented character
+// like "é" becomes "e" plus a trailing combining acute accent (U+0301, in the
+// common Combining Diacritical Marks block, U+0300-U+036F); stripCombiningMarks
+// drops ANY combining mark — not just that one block — so the fold below sees
+// a plain "e", not a leftover mark that would otherwise fall through to the
+// punctuation-collapse step as a stray hyphen. `\p{M}` is the Unicode
+// General_Category "Mark" (Mn + Mc + Me), which also covers marks outside the
+// common block (e.g. Combining Diacritical Marks Extended, U+1AB0-U+1AFF) that
+// a fixed U+0300-U+036F range would miss (cinatra#2418 review). Requires the
+// `u` flag; supported by every deployment target this module ships to
+// (Node.js and evergreen browsers have supported Unicode property escapes
+// since ES2018).
 function stripCombiningMarks(input: string): string {
-  let out = "";
-  for (const ch of input) {
-    const code = ch.codePointAt(0) ?? 0;
-    if (code >= COMBINING_MARKS_START && code <= COMBINING_MARKS_END) continue;
-    out += ch;
-  }
-  return out;
+  return input.replace(/\p{M}/gu, "");
 }
 
 function trimHyphens(value: string): string {

@@ -17,7 +17,7 @@ describe("getNamespaceMutabilityCopy", () => {
 
   it("states all four mutability states for an ordinary install", () => {
     const copy = getNamespaceMutabilityCopy(false);
-    expect(copy).toMatch(/Administration/); // (1) freely editable post-setup
+    expect(copy).toMatch(/Configuration/); // (1) freely editable post-setup
     expect(copy).toMatch(/pending or approved/); // (2) locked while vendor app pending/approved
     expect(copy).toMatch(/publish your first extension/); // (4) frozen at first publish
     expect(copy).toMatch(/rename flow/); // the escape stays reachable
@@ -29,6 +29,22 @@ describe("getNamespaceMutabilityCopy", () => {
     expect(managed).toMatch(/marketplace-managed/i);
     expect(managed).toMatch(/isn.t supported yet/i);
     expect(managed).not.toBe(ordinary);
+  });
+
+  // cinatra#2418 review: the marketplace-managed branch must not contradict
+  // itself by also advertising the ordinary-install "dedicated rename flow"
+  // — provisionAndPersist's MARKETPLACE_INSTANCE_TOKEN block refuses EVERY
+  // namespace change on a marketplace-managed instance, so there is no local
+  // rename flow to point operators at.
+  it("does not advertise a local rename flow for a marketplace-managed install", () => {
+    const managed = getNamespaceMutabilityCopy(true);
+    expect(managed).not.toMatch(/dedicated.*rename flow/i);
+    expect(managed).not.toMatch(/rename flow still exists/i);
+  });
+
+  it("still advertises the dedicated rename flow for an ordinary install", () => {
+    const ordinary = getNamespaceMutabilityCopy(false);
+    expect(ordinary).toMatch(/rename flow/i);
   });
 });
 

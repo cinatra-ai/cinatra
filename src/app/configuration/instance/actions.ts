@@ -467,10 +467,30 @@ async function provisionAndPersist(
   const tokenEnc = encryptSecret(token, "vendor.token");
   const passwordEnc = encryptSecret(password, "vendor.password");
 
+  // Re-read the identity row FRESH, synchronously, immediately before
+  // building the write payload below — NOT the `current` snapshot captured
+  // before the awaits above (assertNamespaceRenameAllowed's marketplace
+  // round-trip, and createNpmUser's registry round-trip in mode (b)).
+  //
+  // Without this, a same-submit display-name save (editVendorAction's frozen
+  // branch, a synchronous read-then-write with no intervening await) that
+  // lands WHILE this function is still awaiting registry work would be
+  // silently overwritten: `next` would spread the stale pre-await `current`,
+  // whose `instanceDisplayName` no longer matches what was just saved
+  // (cinatra#2418 review — lost display-name update during a rename).
+  //
+  // Nothing can interleave between this read and the `writeInstanceIdentity`
+  // call below — there is no `await` in between, and Node is single-threaded
+  // — so this read-then-write pair is atomic with respect to any OTHER
+  // request's synchronous read-then-write (editVendorAction's writes are
+  // themselves synchronous relative to their own read, so they can only ever
+  // land fully before or fully after this point, never straddle it).
+  const latest = readInstanceIdentity() ?? current;
+
   // Build the next identity. createdAt is preserved. firstPublishedAt
   // is reset to null — under a new scope nothing is published yet.
   const next: InstanceIdentity = {
-    ...current,
+    ...latest,
     instanceNamespace: newName,
     tokenCiphertext: tokenEnc.ciphertext,
     tokenIv: tokenEnc.iv,
@@ -483,9 +503,14 @@ async function provisionAndPersist(
   if (opts.append) {
     // Append the previous identity to oldInstanceNamespaces[]. Old packages
     // remain on the registry under the orphaned scope; extension-template DB
-    // rows are not rewritten.
+    // rows are not rewritten. The archived `name`/token snapshot intentionally
+    // uses the pre-await `current` (the namespace this rename was gated and
+    // provisioned against), not `latest` — a concurrent write in the window
+    // above only ever touches metadata fields like instanceDisplayName, never
+    // instanceNamespace (renames are the only namespace-mutating path and are
+    // themselves gated by assertNamespaceRenameAllowed).
     next.oldInstanceNamespaces = [
-      ...(current.oldInstanceNamespaces ?? []),
+      ...(latest.oldInstanceNamespaces ?? current.oldInstanceNamespaces ?? []),
       {
         name: current.instanceNamespace,
         frozenAt: new Date().toISOString(),

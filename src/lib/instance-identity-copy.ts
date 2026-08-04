@@ -24,7 +24,7 @@
 
 export function getNamespaceMutabilityCopy(isMarketplaceManaged: boolean): string {
   const editablePart =
-    "You can change this later from Administration → Environment → Instance. ";
+    "You can change this later from Configuration → Environment → Instance. ";
   const lockedWhilePendingPart =
     "A rename is temporarily locked while a marketplace vendor application is pending or approved. ";
   const frozenPart =
@@ -32,12 +32,16 @@ export function getNamespaceMutabilityCopy(isMarketplaceManaged: boolean): strin
     "rename flow still exists, but old published packages stay reachable under the previous name.";
 
   if (isMarketplaceManaged) {
+    // Marketplace-managed instances can never rename through this UI (see
+    // provisionAndPersist's unconditional MARKETPLACE_INSTANCE_TOKEN block) —
+    // do NOT append `frozenPart` here, which advertises "a dedicated rename
+    // flow still exists". That would contradict the sentence right before it
+    // in the same paragraph (cinatra#2418 review).
     return (
       editablePart +
       lockedWhilePendingPart +
       "This instance is marketplace-managed, so renaming the namespace isn’t supported yet " +
-      "— contact Cinatra Marketplace support to coordinate a change. " +
-      frozenPart
+      "— contact Cinatra Marketplace support to coordinate a change."
     );
   }
   return editablePart + lockedWhilePendingPart + frozenPart;

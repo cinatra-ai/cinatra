@@ -88,6 +88,12 @@ export default async function SetupNamePage({ searchParams }: SetupNamePageProps
     <NamespaceValidationProvider
       initialValue={identity?.instanceNamespace ?? devDefaults?.instanceNamespace ?? ""}
       initialDisplayName={identity?.instanceDisplayName ?? devDefaults?.instanceDisplayName ?? ""}
+      // A saved identity's namespace is a real decision (persisted, possibly
+      // hand-edited) — start detached so re-visiting this step never silently
+      // overwrites it. A dev-mode default (cinatra#2418 review) is a
+      // machine-generated suggestion nobody has chosen yet — start it linked
+      // so editing the display name still re-derives the namespace below.
+      initiallyDetached={Boolean(identity?.instanceNamespace)}
       approvedExactNames={getApprovedInstanceNamespaces()}
     >
     <div className="flex flex-col gap-6">
@@ -119,7 +125,7 @@ export default async function SetupNamePage({ searchParams }: SetupNamePageProps
       <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
         <form id="instance-name-form" action={saveInstanceIdentityAction} className="grid gap-4">
           <Field>
-            <FieldLabel>Instance display name</FieldLabel>
+            <FieldLabel htmlFor="instance-display-name">Instance display name</FieldLabel>
             <InstanceDisplayNameInput
               defaultValue={identity?.instanceDisplayName ?? devDefaults?.instanceDisplayName ?? ""}
             />

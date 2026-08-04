@@ -321,7 +321,7 @@ describe("InstanceSettingsPage — frozen namespace + rename mount (cinatra#2387
     // (not a client-island input), so it's directly visible here.
     expect(texts.some((t) => t.includes(FROZEN_IDENTITY_223.instanceNamespace))).toBe(true);
     // Honest mutability copy: all four states named, no absolute claim.
-    expect(texts.some((t) => t.includes("Administration"))).toBe(true);
+    expect(texts.some((t) => t.includes("Configuration"))).toBe(true);
     expect(texts.some((t) => t.includes("pending or approved"))).toBe(true);
     expect(texts.some((t) => t.includes("publish your first extension"))).toBe(true);
     expect(texts.some((t) => t.toLowerCase().includes("cannot be changed"))).toBe(false);

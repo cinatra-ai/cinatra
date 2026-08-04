@@ -35,6 +35,15 @@ describe("deriveInstanceNamespace", () => {
     expect(deriveInstanceNamespace("日本語テスト")).toBe("");
   });
 
+  // Extended combining-mark boundary (cinatra#2418 review): U+1AB0 sits in
+  // Combining Diacritical Marks Extended, outside the U+0300-U+036F block a
+  // fixed-range stripper would cover. Without stripping it, the punctuation
+  // collapse step would treat the leftover mark as a separator and produce
+  // "a-b" instead of "ab".
+  it("strips combining marks outside the common U+0300-U+036F block", () => {
+    expect(deriveInstanceNamespace("A᪰B")).toBe("ab");
+  });
+
   // Reserved-string boundary — see reserved-patterns.ts (currently ["cinatra"]).
   it("strips a reserved substring embedded in a longer name", () => {
     expect(deriveInstanceNamespace("Cinatra Corp")).toBe("corp");

@@ -63,6 +63,7 @@ const NamespaceValidationContext = createContext<NamespaceValidationContextValue
 export function NamespaceValidationProvider({
   initialValue,
   initialDisplayName = "",
+  initiallyDetached = initialValue.trim().length > 0,
   approvedExactNames = [],
   children,
 }: {
@@ -72,6 +73,14 @@ export function NamespaceValidationProvider({
   // InstanceDisplayNameInput (e.g. the administration edit form, which keeps
   // its own plain, unlinked display-name field) can omit it.
   initialDisplayName?: string;
+  // Explicit initial-detachment override (cinatra#2418 review). Defaults to
+  // the old "any non-empty initialValue starts detached" heuristic for
+  // backward compatibility with callers that don't pass this (e.g. the
+  // administration edit form). /setup/name passes this explicitly so it can
+  // distinguish a genuinely-decided starting value (a saved identity) from a
+  // machine-generated dev-mode suggestion nobody has actually chosen yet —
+  // see the callers below for why the blanket heuristic conflated the two.
+  initiallyDetached?: boolean;
   // Config-file-driven approved namespaces, read server-side in page.tsx and
   // passed down so the client validator matches the server's authoritative gate.
   approvedExactNames?: readonly string[];
@@ -84,14 +93,17 @@ export function NamespaceValidationProvider({
   const [displayName, setDisplayNameState] = useState(initialDisplayName);
   const [hasBlurred, setHasBlurred] = useState(false);
 
-  // Linked-until-first-manual-edit state (cinatra#2387). `detached` starts
-  // true whenever the namespace field already carries a value (a saved
-  // identity, a dev-mode default, or a `stay=1` return from a validation
-  // error) — a non-empty starting value already represents a decision the
-  // display-name field must not silently overwrite. It starts false only for
-  // a genuinely fresh, empty namespace field, which is the case the
-  // auto-derive link exists for.
-  const [detached, setDetached] = useState(() => initialValue.trim().length > 0);
+  // Linked-until-first-manual-edit state (cinatra#2387). `detached` starts at
+  // `initiallyDetached` — true whenever the namespace field already carries a
+  // value the operator (or a real saved row) actually decided on, which the
+  // display-name field must not silently overwrite. The DEFAULT heuristic
+  // (any non-empty `initialValue`) starts false only for a genuinely fresh,
+  // empty namespace field. Callers that can distinguish "a real decision"
+  // from "an unchosen machine-generated suggestion" (a dev-mode default —
+  // see /setup/name/page.tsx) should pass `initiallyDetached` explicitly so
+  // editing the display name keeps deriving the namespace until the operator
+  // actually types into the namespace field themselves.
+  const [detached, setDetached] = useState(() => initiallyDetached);
 
   // Namespace field's own onChange — a MANUAL edit permanently detaches the
   // link for the rest of this component's lifetime (the page's session).
@@ -202,6 +214,7 @@ export function InstanceDisplayNameInput({ defaultValue: _ }: { defaultValue: st
 
   return (
     <Input
+      id="instance-display-name"
       name="instanceDisplayName"
       required
       minLength={1}
