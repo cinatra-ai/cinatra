@@ -660,6 +660,20 @@ jobs:
           CINATRA_DB_INTEGRATION_TESTS: '1'
         run: pnpm exec vitest run src/lib/__tests__/integration/skill-injection-drop-ledger.integration.test.ts
 
+      # cinatra#2415. The compensation invariant is a claim about WHICH
+      # `installed_extension` rows survive a failed batch — the rows the batch
+      # created must be gone, and every pre-existing row (the same package in
+      # the SAME org, and every OTHER org's row — the #2410 boundary) must be
+      # byte-identical. A mock cannot prove that, so this drives the real saga,
+      # a real canonical insert per member, the real durable ledger, and the
+      # real row-scoped inverse against this job's service Postgres. Own vitest
+      # invocation (own process) so its SUPABASE_DB_URL/pool lifecycle never
+      # touches the steps above.
+      - name: Batch-compensation scope DB test (cinatra#2415)
+        env:
+          CINATRA_DB_INTEGRATION_TESTS: '1'
+        run: pnpm exec vitest run src/lib/__tests__/integration/install-batch-compensation-scope.integration.test.ts
+
       # cinatra#2092 (epic #2086 S5). The upload-on-install CRASH WINDOW is a
       # claim about what survives in Postgres between COMMIT and the worker run,
       # so a mock cannot prove it: this drives the REAL catalog-transaction tail
