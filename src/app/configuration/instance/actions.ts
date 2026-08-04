@@ -64,6 +64,11 @@ import {
 // Cache invalidation lives in a separate module so vi.mock can spy on it
 // reliably.
 import { invalidateInstanceIdentityCache } from "@/lib/instance-identity-cache";
+import {
+  readPendingProvisionedCredentials,
+  writePendingProvisionedCredentials,
+  clearPendingProvisionedCredentials,
+} from "@/lib/instance-identity-pending-provision";
 import { encryptSecret } from "@/lib/instance-secrets";
 import {
   getEffectiveViewerScope,
@@ -405,8 +410,8 @@ async function provisionAndPersist(
   // before persisting anything.
   const envToken = process.env.CINATRA_AGENT_REGISTRY_TOKEN?.trim();
 
-  let token: string;
-  let password: string;
+  let tokenEnc: { ciphertext: string; iv: string };
+  let passwordEnc: { ciphertext: string; iv: string };
 
   if (envToken) {
     // Mode (a) — pre-provisioned token.
@@ -420,53 +425,94 @@ async function provisionAndPersist(
     if (process.env.CINATRA_AGENT_REGISTRY_SCOPE?.trim() !== expectedScope) {
       redirectWithError("registry-scope-mismatch");
     }
-    token = envToken;
     // No in-app password in the pre-provisioned flow — the operator holds the
     // htpasswd credential out-of-band. Persist a random placeholder so the
     // row's encrypted shape is intact; publish/install authenticate with the
     // token, never this password.
-    password =
+    const placeholderPassword =
       process.env.CINATRA_AGENT_REGISTRY_PASSWORD?.trim() ||
       randomBytes(32).toString("base64url");
+    // Encrypt BEFORE writing so a failed encrypt never leaves partial state.
+    // Per-field AAD binding prevents a metadata-row swap of
+    // tokenCiphertext+tokenIv with passwordCiphertext+passwordIv from yielding
+    // a successful decryption of the wrong field.
+    // No credential stash in mode (a): the token comes from env, so a retry
+    // after a write conflict re-reads it — nothing mint-once about it.
+    tokenEnc = encryptSecret(envToken, "vendor.token");
+    passwordEnc = encryptSecret(placeholderPassword, "vendor.password");
   } else {
-    // Mode (b) — self-register on a registry that allows it. Generate a
-    // 32-byte base64url password (43 chars on the wire), then provision the
-    // npm user under the new name.
-    password = randomBytes(32).toString("base64url");
-    try {
-      const result = await createNpmUser({
+    // Mode (b) — self-register on a registry that allows it.
+    //
+    // Minted-credentials-as-recoverable-state: `createNpmUser` mints the npm
+    // user BEFORE the identity-row CAS write below. If that write does not
+    // land, the request used to discard the minted token — and the operator's
+    // retry called `createNpmUser` again for the SAME namespace, which
+    // Verdaccio 409s (VerdaccioUserAlreadyRegisteredError), misreported as
+    // "namespace-taken": a transient write conflict became a permanent dead
+    // end. So: reuse a stashed mint for this namespace when one exists (skip
+    // the duplicate adduser); otherwise mint, encrypt, and stash the
+    // ciphertexts before attempting the write. The stash is cleared once the
+    // write lands.
+    const pending = readPendingProvisionedCredentials(newName);
+    if (pending) {
+      // Stashed ciphertexts were produced under the same per-field AADs the
+      // identity row uses ("vendor.token" / "vendor.password") — reuse them
+      // directly; no decrypt round-trip, no plaintext in scope.
+      tokenEnc = { ciphertext: pending.tokenCiphertext, iv: pending.tokenIv };
+      passwordEnc = {
+        ciphertext: pending.passwordCiphertext,
+        iv: pending.passwordIv,
+      };
+    } else {
+      // Generate a 32-byte base64url password (43 chars on the wire), then
+      // provision the npm user under the new name.
+      const password = randomBytes(32).toString("base64url");
+      let token: string;
+      try {
+        const result = await createNpmUser({
+          instanceNamespace: newName,
+          password,
+          email,
+          registryUrl: REGISTRY_URL,
+        });
+        token = result.token;
+      } catch (e) {
+        if (e instanceof VerdaccioUserAlreadyRegisteredError) {
+          redirectWithError("namespace-taken");
+        }
+        if (e instanceof VerdaccioRegistrationDisabledError) {
+          redirectWithError("registry-registration-disabled");
+        }
+        if (e instanceof VerdaccioUnexpectedResponseError) {
+          redirectWithError("registry-unexpected-response");
+        }
+        // Emit a generic redirect message and log the full error server-side.
+        // Reflecting the inner Error.message into ?error= leaks network
+        // diagnostics (DNS errors with the configured registry host,
+        // EHOSTUNREACH targets, etc.) into URL query params.
+        console.error("[provisionAndPersist] unexpected registry error:", e);
+        redirectWithError("registry-provision-failed");
+        throw e; // unreachable; satisfies TS narrowing
+      }
+      // Encrypt BEFORE writing so a failed encrypt never leaves partial state.
+      // Per-field AAD binding prevents a metadata-row swap of
+      // tokenCiphertext+tokenIv with passwordCiphertext+passwordIv from
+      // yielding a successful decryption of the wrong field.
+      tokenEnc = encryptSecret(token, "vendor.token");
+      passwordEnc = encryptSecret(password, "vendor.password");
+      // Stash the encrypted mint BEFORE the CAS attempt so a non-landed write
+      // leaves the credentials recoverable for the operator's retry.
+      writePendingProvisionedCredentials({
         instanceNamespace: newName,
-        password,
-        email,
-        registryUrl: REGISTRY_URL,
+        tokenCiphertext: tokenEnc.ciphertext,
+        tokenIv: tokenEnc.iv,
+        tokenAlgo: "aes-256-gcm",
+        passwordCiphertext: passwordEnc.ciphertext,
+        passwordIv: passwordEnc.iv,
+        mintedAt: new Date().toISOString(),
       });
-      token = result.token;
-    } catch (e) {
-      if (e instanceof VerdaccioUserAlreadyRegisteredError) {
-        redirectWithError("namespace-taken");
-      }
-      if (e instanceof VerdaccioRegistrationDisabledError) {
-        redirectWithError("registry-registration-disabled");
-      }
-      if (e instanceof VerdaccioUnexpectedResponseError) {
-        redirectWithError("registry-unexpected-response");
-      }
-      // Emit a generic redirect message and log the full error server-side.
-      // Reflecting the inner Error.message into ?error= leaks network
-      // diagnostics (DNS errors with the configured registry host,
-      // EHOSTUNREACH targets, etc.) into URL query params.
-      console.error("[provisionAndPersist] unexpected registry error:", e);
-      redirectWithError("registry-provision-failed");
-      throw e; // unreachable; satisfies TS narrowing
     }
   }
-
-  // Encrypt BEFORE writing so a failed encrypt never leaves partial state.
-  // Per-field AAD binding prevents a metadata-row swap of
-  // tokenCiphertext+tokenIv with passwordCiphertext+passwordIv from yielding a
-  // successful decryption of the wrong field.
-  const tokenEnc = encryptSecret(token, "vendor.token");
-  const passwordEnc = encryptSecret(password, "vendor.password");
 
   // Commit atomically via row-level CAS with bounded retry — NOT a single
   // synchronous re-read-then-write. A plain re-read only serialises against
@@ -496,10 +542,15 @@ async function provisionAndPersist(
   if (outcome !== "swapped") {
     console.error(
       `[provisionAndPersist] identity-write CAS did not land (outcome: ${outcome}) — ` +
-        "registry provisioning already completed under the new namespace; the operator must retry the save.",
+        "registry provisioning already completed under the new namespace; the " +
+        "minted credentials are stashed for reuse, so the operator's retry " +
+        "skips the duplicate registry call.",
     );
     redirectWithError("identity-write-conflict");
   }
+  // The identity write landed — the stashed mint (if any) is committed to the
+  // row; clear the slot so a later provisioning attempt starts fresh.
+  clearPendingProvisionedCredentials();
   revalidatePath("/setup");
   revalidatePath("/configuration/environment");
 }

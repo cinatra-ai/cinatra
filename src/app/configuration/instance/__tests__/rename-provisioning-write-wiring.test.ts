@@ -31,6 +31,14 @@ vi.mock("@/lib/instance-identity-store", () => ({
 vi.mock("@/lib/instance-identity-cache", () => ({
   invalidateInstanceIdentityCache: vi.fn(),
 }));
+// Pending-provision stash (minted-credential reuse across a write conflict) —
+// empty here so every run takes the fresh-mint path; the reuse behaviour has
+// its own suite (rename-pending-provision-reuse.test.ts).
+vi.mock("@/lib/instance-identity-pending-provision", () => ({
+  readPendingProvisionedCredentials: vi.fn(() => null),
+  writePendingProvisionedCredentials: vi.fn(),
+  clearPendingProvisionedCredentials: vi.fn(),
+}));
 vi.mock("@/lib/auth-session", () => ({
   requireAdminSession: vi.fn(async () => ({
     user: { id: "admin-1", email: "admin@example.com" },
