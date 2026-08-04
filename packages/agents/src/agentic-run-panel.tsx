@@ -9,9 +9,12 @@ import {
   LLM_PROVIDER_SETTINGS_HREF,
   isMcpUnreachableError,
   MCP_CONFIG_HREF,
+  isGenericWayflowFailure,
 } from "./agent-error-display";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { StartNewRunButton } from "./start-new-run-button";
+import { resetAgentRun } from "./run-actions";
 import { HitlConversationPanel, type HitlConversationEntry } from "./hitl-conversation-panel";
 import type { AgentRunMessageBody } from "./store";
 import { fieldRendererRegistry } from "./field-renderer-registry";
@@ -85,6 +88,11 @@ type AgenticRunPanelProps = {
   // From agent_runs.agUiEnabled. When true, the panel opens an SSE stream for
   // live status + presentationHint. When null/false, the pure polling path is used.
   agUiEnabled?: boolean | null;
+  // Template slug ("<vendor>/<packageName>") used to route the failed-state
+  // "Start new run" affordance (cinatra#2412). Optional: callers that don't
+  // have the slug handy (e.g. chat surfaces) still get the Retry action,
+  // which only needs runId; they just don't get Start new run.
+  agentId?: string;
   // Agent package name (template slug) used to resolve selective overrides from
   // agentUIOverrideRegistry. Optional: when absent, override resolution is skipped
   // and DispatchRenderer is used.
@@ -306,6 +314,7 @@ export function AgenticRunPanel({
   initialError,
   initialMessages,
   agUiEnabled,
+  agentId,
   agentPackageName,
   traceId,
   inputParams,
@@ -327,6 +336,29 @@ export function AgenticRunPanel({
   const [messages, setMessages] = useState<SerializedAgentRunMessage[]>(initialMessages);
   const [hitlContext, setHitlContext] = useState<HitlContext | null>(null);
   const [isApproving, setIsApproving] = useState(false);
+  // Failed-run retry (cinatra#2412). resetAgentRun transitions the run
+  // failed -> pending_input WITHOUT touching inputParams, then a full reload
+  // re-reads it so the Setup screen's existing pending_input gating shows the
+  // Run button again with the original inputs still filled in. A soft
+  // router.refresh() is not enough here: this panel's status is local state
+  // seeded once from initialStatus, so it would not pick up the server's new
+  // value without a fresh mount.
+  const [isRetrying, setIsRetrying] = useState(false);
+  const handleRetryFailedRun = useCallback(async () => {
+    setIsRetrying(true);
+    try {
+      const result = await resetAgentRun({ runId });
+      if (result.ok) {
+        window.location.reload();
+        return;
+      }
+      toast.error(result.error ?? "Could not reset this run for retry.");
+    } catch {
+      toast.error("Could not reset this run for retry.");
+    } finally {
+      setIsRetrying(false);
+    }
+  }, [runId]);
   // Pending paperclip attachments captured at Suggest time
   // (HitlConversationPanel passes them via the 2nd onSubmit arg), persisted
   // across Suggest invocations, and consumed at gate Continue time (both the
@@ -1191,6 +1223,34 @@ export function AgenticRunPanel({
               Check your MCP server configuration →
             </Link>
           )}
+          {/* Generic fallback text ("WayFlow task failed") carries no cause and no
+              next step on its own — pair it with plain-language guidance. Failures
+              that already have an actionable link above (OpenAI key, MCP) don't
+              need this restated. (cinatra#2412) */}
+          {isGenericWayflowFailure(error) && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              The run failed before completing. Retry, or start a new run.
+            </p>
+          )}
+          {/* Recovery affordance for EVERY failure, not just the OpenAI-key / MCP
+              hinted classes above (cinatra#2412). Retry resets this run back to
+              pending_input (inputParams untouched) so the Setup tab's Run button
+              reappears with the original inputs already filled in; Start new run
+              creates a fresh run with blank inputs (StartNewRunButton — orphaned
+              since it was first exported, cinatra#2412 archaeology). Start new
+              run needs the template slug, so it's omitted where the caller
+              doesn't have one (e.g. chat surfaces) rather than mounted broken. */}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={isRetrying}
+              onClick={handleRetryFailedRun}
+            >
+              {isRetrying ? "Retrying…" : "Retry"}
+            </Button>
+            {agentId ? <StartNewRunButton agentId={agentId} /> : null}
+          </div>
         </div>
       )}
 

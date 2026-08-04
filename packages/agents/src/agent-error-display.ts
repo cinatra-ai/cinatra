@@ -74,3 +74,15 @@ const MCP_RE = /\bmcp\b/i;
 export function isMcpUnreachableError(text: string): boolean {
   return HTTP_424_RE.test(text) && MCP_RE.test(text);
 }
+
+// Whether an error is the WayFlow runtime's uninformative catch-all (cinatra#2412).
+// `execution.ts` falls back to the literal string "WayFlow task failed" when a
+// failing node's status message carries no text part — the run-panel then has a
+// raw message with no cause and no next step. Exact-match (trimmed) rather than
+// a substring test: the string is a fixed runtime constant, not free text, so a
+// loose match risks matching an unrelated message that happens to contain it.
+const GENERIC_WAYFLOW_FAILURE_TEXT = "WayFlow task failed";
+
+export function isGenericWayflowFailure(text: string): boolean {
+  return text.trim() === GENERIC_WAYFLOW_FAILURE_TEXT;
+}
