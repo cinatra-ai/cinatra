@@ -9,9 +9,10 @@
  *         spec — single outer hairline border + hairline dividers, no gaps,
  *         7px radius — NOT the generic shadcn `outline` variant (grey accent
  *         fill on a grey ground).
- *   #605  connection state renders as a plug icon (green PlugZap when connected,
- *         red Unplug when not) instead of a text StatusPill, keeping the
- *         connectedLabel count alongside the green plug when one is provided.
+ *   #605  connection state renders as a plug icon (green joined plug when
+ *         connected, red Unplug when not) instead of a text StatusPill, keeping
+ *         the connectedLabel count alongside the green plug when one is
+ *         provided. (The connected glyph was `PlugZap` until #2356 below.)
  *   #606  the Cinatra mark in connector cards renders in brand mustard
  *         (text-brand-mustard) rather than the default ink foreground.
  *   #681  the toolbar carries a "+ Connector" button linking to the
@@ -28,6 +29,20 @@
  *         item carries its OWN semantic status colour at all times (soft tint
  *         idle, solid + white text/icon selected) instead of the previous grey
  *         idle / indigo-primary selected treatment.
+ *   #2356 (epic #2353; design/specs/app-connectors.html v0.7.0, pinned at
+ *         design@3d33cc800) the CONNECTED glyph is re-specified: lucide's
+ *         `PlugZap` (a half plug + a lightning bolt) is replaced everywhere the
+ *         connected state is drawn by the first-party `PlugConnected` mark —
+ *         literally the two halves of the Disconnected `Unplug` glyph with the
+ *         gap closed, so the pair reads as one drawing. lucide carries no such
+ *         icon, so it is defined ONCE in `@cinatra-ai/sdk-ui/icons` and
+ *         imported by every render site (toggle segment, card badge, the setup
+ *         page's status badge, the setup form's Connect action). Disconnected
+ *         stays `Unplug`; the identity fallback tile
+ *         (src/components/connector-brand-icons.tsx) and the extension-kind
+ *         emblem are NOT swapped — they are identity/kind glyphs, not status
+ *         glyphs (negative locks live in
+ *         src/components/__tests__/status-glyph-scope.test.ts).
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -86,30 +101,45 @@ describe("ConnectorsClient design-system contract", () => {
       expect(SRC).not.toMatch(/<StatusPill\b/);
     });
 
-    it("uses the lucide plug icons", () => {
-      expect(SRC).toContain("PlugZap");
+    it("pairs the first-party joined plug with the lucide Unplug (cinatra#2356)", () => {
+      // RE-SPECIFIED by cinatra#2356: the connected mark is no longer lucide's
+      // `PlugZap` (a half plug + a lightning bolt, which never paired with
+      // `Unplug`) but the first-party `PlugConnected` glyph — literally the two
+      // halves of `Unplug` with the gap closed. lucide carries no such icon, so
+      // it is defined ONCE in `@cinatra-ai/sdk-ui/icons` (sdk-ui sits BELOW this
+      // package in the dependency graph) and imported here — never re-drawn
+      // locally, which is what a per-package twin would be.
+      expect(SRC).toContain("PlugConnected");
       expect(SRC).toContain("Unplug");
+      expect(SRC).toMatch(
+        /import \{ PlugConnected \} from "@cinatra-ai\/sdk-ui\/icons"/,
+      );
+      expect(SRC).not.toContain("PlugZap");
     });
 
-    it("renders the connected plug in a SOLID success-variant badge (cinatra#1014)", () => {
-      // The connected branch is a <Badge variant="success"> wrapping <PlugZap>,
-      // with a className override (bg-success/text-success-foreground) making
-      // it a filled solid chip rather than the variant's default soft tint
-      // (see #682 / #1014). The badge now lives in the shared connector-badge.tsx.
-      expect(BADGE_SRC).toMatch(/variant="success"[\s\S]*?<PlugZap\b/);
+    it("renders the connected plug in a SOLID success-variant badge (cinatra#1014, glyph re-specified by #2356)", () => {
+      // The connected branch is a <Badge variant="success"> wrapping
+      // <PlugConnected>, with a className override
+      // (bg-success/text-success-foreground) making it a filled solid chip
+      // rather than the variant's default soft tint (see #682 / #1014). The
+      // badge now lives in the shared connector-badge.tsx. Only the GLYPH
+      // changed in #2356 — the solid-chip treatment is untouched.
+      expect(BADGE_SRC).toMatch(/variant="success"[\s\S]*?<PlugConnected\b/);
       expect(BADGE_SRC).toContain("bg-success text-success-foreground");
     });
 
     it("renders the disconnected plug in a SOLID destructive-variant badge (cinatra#1014)", () => {
       // The disconnected branch is a <Badge variant="destructive"> wrapping
       // <Unplug>, overridden to a filled bg-destructive + white text chip.
+      // #2356 leaves the DISCONNECTED mark exactly as it was — `Unplug` is the
+      // glyph the new connected mark was derived from.
       expect(BADGE_SRC).toMatch(/variant="destructive"[\s\S]*?<Unplug\b/);
       expect(BADGE_SRC).toContain("bg-destructive text-destructive-foreground");
     });
 
     it("keeps the connectedLabel count alongside the connected plug", () => {
       // label is rendered inside the connected branch (after the plug icon)
-      expect(BADGE_SRC).toMatch(/<PlugZap[\s\S]*?\{label \? <span/);
+      expect(BADGE_SRC).toMatch(/<PlugConnected[\s\S]*?\{label \? <span/);
     });
   });
 
@@ -167,8 +197,13 @@ describe("ConnectorsClient design-system contract", () => {
     });
 
     it("leads each toggle item with the matching card plug glyph", () => {
-      // connected item → PlugZap before the label; disconnected → Unplug.
-      expect(SRC).toMatch(/value="connected"[\s\S]*?<PlugZap[\s\S]*?Connected/);
+      // connected item → PlugConnected before the label; disconnected → Unplug.
+      // RE-SPECIFIED by cinatra#2356: the segment draws the same first-party
+      // joined plug the card badge draws (it was `PlugZap`), so the toggle and
+      // the cards keep speaking ONE glyph language.
+      expect(SRC).toMatch(
+        /value="connected"[\s\S]*?<PlugConnected[\s\S]*?Connected/,
+      );
       expect(SRC).toMatch(/value="available"[\s\S]*?<Unplug[\s\S]*?Disconnected/);
     });
   });

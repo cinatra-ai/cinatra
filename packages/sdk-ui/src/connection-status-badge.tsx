@@ -1,6 +1,7 @@
 import * as React from "react";
-import { LoaderCircle, PlugZap, Unplug } from "lucide-react";
+import { LoaderCircle, Unplug } from "lucide-react";
 import { cva, type VariantProps } from "class-variance-authority";
+import { PlugConnected } from "./icons";
 import { cn } from "./lib/utils";
 
 // ---------------------------------------------------------------------------
@@ -16,8 +17,12 @@ import { cn } from "./lib/utils";
 // badge). sdk-ui sits BELOW `@cinatra-ai/connectors` in the dependency graph,
 // so it cannot import that component; instead the two are kept in visual
 // lockstep by using the IDENTICAL design tokens:
-//   connected    → SOLID green chip, white plug (`bg-success` +
-//                  `text-success-foreground`, PlugZap) — matches ConnectorBadge.
+//   connected    → SOLID green chip, white JOINED plug (`bg-success` +
+//                  `text-success-foreground`, the first-party `PlugConnected`
+//                  glyph from `./icons` — cinatra#2356: the two halves of
+//                  `Unplug` with the gap closed, so the connected and
+//                  disconnected marks read as one pair) — matches
+//                  ConnectorBadge.
 //   disconnected → SOLID red chip, white unplug (`bg-destructive` +
 //                  `text-destructive-foreground`, Unplug) — matches ConnectorBadge.
 //   checking     → TRANSIENT indigo-tint chip with a spinning loader
@@ -57,7 +62,7 @@ const DEFAULT_LABEL: Record<ConnectionStatus, string> = {
 function StatusGlyph({ status }: { status: ConnectionStatus }) {
   switch (status) {
     case "connected":
-      return <PlugZap aria-hidden="true" />;
+      return <PlugConnected aria-hidden="true" />;
     case "checking":
       // Spinner — the transient probe state (spec: icon spinning until resolved).
       return <LoaderCircle aria-hidden="true" className="animate-spin" />;

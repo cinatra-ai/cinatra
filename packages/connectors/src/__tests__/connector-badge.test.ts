@@ -13,6 +13,9 @@ import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 
 const SRC = readFileSync(join(__dirname, "..", "connector-badge.tsx"), "utf8");
+const PKG = JSON.parse(
+  readFileSync(join(__dirname, "..", "..", "package.json"), "utf8"),
+) as { dependencies?: Record<string, string> };
 const BADGE_UI_SRC = readFileSync(
   join(__dirname, "..", "..", "..", "..", "src", "components", "ui", "badge.tsx"),
   "utf8",
@@ -29,27 +32,48 @@ describe("ConnectorBadge shared component", () => {
     );
   });
 
-  it("uses the design-system Badge with the lucide plug icons", () => {
+  it("uses the design-system Badge with the paired plug glyphs (cinatra#2356)", () => {
+    // RE-SPECIFIED by cinatra#2356 (epic #2353; design/specs/app-connectors.html
+    // v0.7.0, pinned at design@3d33cc800): the connected mark is the first-party
+    // `PlugConnected` glyph — the two halves of `Unplug` with the gap closed —
+    // NOT lucide's `PlugZap` (a half plug + a lightning bolt that never paired
+    // with the disconnected mark). lucide has no joined-plug icon, so the glyph
+    // is defined ONCE in `@cinatra-ai/sdk-ui/icons` (sdk-ui sits BELOW
+    // @cinatra-ai/connectors in the dependency graph, declared in this package's
+    // package.json) and imported here — never re-drawn per package.
     expect(SRC).toContain('from "@/components/ui/badge"');
-    expect(SRC).toContain("PlugZap");
+    expect(SRC).toMatch(
+      /import \{ PlugConnected \} from "@cinatra-ai\/sdk-ui\/icons"/,
+    );
     expect(SRC).toContain("Unplug");
+    expect(SRC).not.toContain("<PlugZap");
   });
 
-  it("renders the connected state as a SOLID success-variant badge wrapping PlugZap (cinatra#1014)", () => {
+  it("renders the connected state as a SOLID success-variant badge wrapping PlugConnected (cinatra#1014, glyph #2356)", () => {
     // Still `variant="success"` (the shared ui/badge.tsx primitive is
     // vendored verbatim into 5 extension repos and stays untouched — see the
     // #1014 describe block below), but with a `className` override that
     // replaces the variant's default soft bg-success/10 tint with a SOLID
-    // bg-success + white text-success-foreground chip.
-    expect(SRC).toMatch(/variant="success"[\s\S]*?<PlugZap\b/);
+    // bg-success + white text-success-foreground chip. #2356 changed the GLYPH
+    // inside the chip only; the #1014 solid treatment is unchanged.
+    expect(SRC).toMatch(/variant="success"[\s\S]*?<PlugConnected\b/);
   });
 
   it("renders the disconnected state as a SOLID destructive-variant badge wrapping Unplug (cinatra#1014)", () => {
+    // Untouched by #2356: `Unplug` IS the disconnected mark, and the new
+    // connected glyph is derived from it.
     expect(SRC).toMatch(/variant="destructive"[\s\S]*?<Unplug\b/);
   });
 
   it("keeps the connection-count label alongside the connected plug", () => {
-    expect(SRC).toMatch(/<PlugZap[\s\S]*?\{label \? <span/);
+    expect(SRC).toMatch(/<PlugConnected[\s\S]*?\{label \? <span/);
+  });
+
+  it("declares the sdk-ui glyph dependency explicitly (cinatra#2356 AC)", () => {
+    // The joined-plug glyph is imported from @cinatra-ai/sdk-ui, so this
+    // package OWNS that workspace edge — an undeclared (phantom) dependency
+    // would resolve only by hoisting accident.
+    expect(PKG.dependencies?.["@cinatra-ai/sdk-ui"]).toBe("workspace:*");
   });
 
   it("labels the badge for assistive tech (connected count / not connected)", () => {

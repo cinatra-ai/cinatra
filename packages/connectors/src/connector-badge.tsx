@@ -1,6 +1,7 @@
 "use client";
 
-import { PlugZap, Unplug } from "lucide-react";
+import { Unplug } from "lucide-react";
+import { PlugConnected } from "@cinatra-ai/sdk-ui/icons";
 import { Badge } from "@/components/ui/badge";
 
 // ---------------------------------------------------------------------------
@@ -27,12 +28,20 @@ import { Badge } from "@/components/ui/badge";
 // class; the `--success`/`--destructive` CSS custom properties themselves
 // already resolve to the correct light/dark shade, so no other dark:
 // override is needed), wrapping the #605 plug icon:
-//   connected    → filled green chip: "connected plug" (PlugZap, white) in the
-//                  design success token, keeping the connector's
+//   connected    → filled green chip: the JOINED plug (`PlugConnected`, white)
+//                  in the design success token, keeping the connector's
 //                  `connectedLabel` count alongside it when one is provided.
 //   disconnected → filled red chip: "unplug" (Unplug, white) in the
 //                  destructive token.
 // (#1014 replaces the prior soft-tint treatment on THIS badge only.)
+//
+// cinatra#2356 (epic #2353, design/specs/app-connectors.html v0.7.0 pinned at
+// design@3d33cc800) replaces the connected glyph: `PlugZap` (a half plug + a
+// lightning bolt) never paired visually with `Unplug`, so the spec draws the
+// Connected mark as the two halves of `Unplug` with the gap closed. lucide has
+// no such icon, so the first-party `PlugConnected` glyph is defined ONCE in
+// `@cinatra-ai/sdk-ui/icons` (sdk-ui sits BELOW this package in the dependency
+// graph) and consumed by every render site — no per-package twins.
 export function ConnectorBadge({ connected, label }: { connected: boolean; label?: string }) {
   if (connected) {
     return (
@@ -43,7 +52,7 @@ export function ConnectorBadge({ connected, label }: { connected: boolean; label
         className="bg-success text-success-foreground dark:bg-success font-semibold"
         aria-label={label ? `Connected (${label})` : "Connected"}
       >
-        <PlugZap data-icon="inline-start" aria-hidden="true" />
+        <PlugConnected data-icon="inline-start" aria-hidden="true" />
         {label ? <span aria-hidden="true">{label}</span> : null}
       </Badge>
     );

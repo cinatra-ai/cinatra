@@ -16,7 +16,10 @@
 // admin-only value at the write handler — defense in depth).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CheckIcon, CopyIcon, PlugZap, PlusIcon, RefreshCwIcon, Trash2Icon, Unplug } from "lucide-react";
+import { CheckIcon, CopyIcon, PlusIcon, RefreshCwIcon, Trash2Icon, Unplug } from "lucide-react";
+// The Connect action's glyph is the first-party joined plug (cinatra#2356) —
+// the SAME mark the status badge and the §I card grid draw for Connected.
+import { PlugConnected } from "@cinatra-ai/sdk-ui/icons";
 import { toast } from "@/lib/cinatra-toast";
 import {
   AlertDialog,
@@ -624,9 +627,10 @@ function NamedActionRow({
  * SIDE BY SIDE, never stacked: Connect (indigo primary, plug leadingIcon) on the
  * left, Disconnect (destructive red, unplug leadingIcon) on the right. Disconnect
  * is disabled until the connector is connected, and its confirmation is a neutral
- * AlertDialog (never a bare prompt). The icons are the SAME PlugZap / Unplug the
- * status badge + §I card grid use, so the whole surface speaks one status
- * language (item 33).
+ * AlertDialog (never a bare prompt). The icons are the SAME PlugConnected /
+ * Unplug the status badge + §I card grid use (cinatra#2356 — the joined plug
+ * replaces `PlugZap` on the Connect action; Disconnect and its confirm keep
+ * `Unplug`), so the whole surface speaks one status language (item 33).
  */
 function ConnectionActionsRow({
   actions,
@@ -667,7 +671,7 @@ function ConnectionActionsRow({
   );
 }
 
-/** Connect (role:"connect") — indigo primary + plug. Saves the form inputs. */
+/** Connect (role:"connect") — indigo primary + the joined plug. Saves the form inputs. */
 function ConnectButton({
   field,
   installId,
@@ -691,7 +695,7 @@ function ConnectButton({
   }, [installId, field.actionId, onConnected, onActionResult]);
   return (
     <Button type="button" data-testid="connector-connect" onClick={run} disabled={pending}>
-      <PlugZap />
+      <PlugConnected />
       {field.label}
     </Button>
   );

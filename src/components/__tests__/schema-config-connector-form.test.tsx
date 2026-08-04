@@ -60,4 +60,41 @@ describe("SchemaConfigConnectorForm composition (shadcn contract)", () => {
   it("status probes render through StatusPill (not a hand-rolled status indicator)", () => {
     expect(SRC).toContain("<StatusPill");
   });
+
+  describe("cinatra#2356 — the connection actions speak the §II status-glyph language", () => {
+    // design/specs/app-connectors.html §II (v0.7.0, pinned at design@3d33cc800):
+    // "an icon-led Connect (indigo primary, THE JOINED PLUG FROM THE CONNECTED
+    // BADGE) and Disconnect (destructive, red-on-tint, THE UNPLUG FROM THE
+    // DISCONNECTED BADGE) … its confirm the same unplug icon". So the Connect
+    // action must draw the SAME first-party glyph the §I card badge and the
+    // status badge draw — which is only structurally guaranteed by importing
+    // the single sdk-ui definition rather than picking a similar lucide icon
+    // (the `PlugZap` this replaces was exactly that mistake).
+    it("imports the joined plug from the ONE sdk-ui definition (no lucide look-alike, no local redraw)", () => {
+      expect(SRC).toMatch(
+        /import \{ PlugConnected \} from "@cinatra-ai\/sdk-ui\/icons"/,
+      );
+      expect(SRC).not.toContain("<PlugZap");
+      expect(SRC).not.toMatch(/from "lucide-react"[\s\S]{0,200}PlugZap/);
+      // No hand-drawn twin: the glyph is never re-declared as raw SVG here.
+      expect(SRC).not.toMatch(/<svg[\s>]/);
+    });
+
+    it("leads the Connect action with PlugConnected", () => {
+      expect(SRC).toMatch(
+        /data-testid="connector-connect"[\s\S]*?<PlugConnected \/>/,
+      );
+    });
+
+    it("keeps Unplug on BOTH the Disconnect button and its AlertDialog confirm", () => {
+      // #2356 scope 2 explicitly excludes the disconnect sites — the
+      // destructive action and its confirm keep the disconnected mark.
+      expect(SRC).toMatch(
+        /data-testid="connector-disconnect"[\s\S]*?<Unplug \/>/,
+      );
+      // Two rendered <Unplug /> elements: the trigger and the confirm action.
+      expect(SRC.match(/<Unplug \/>/g)?.length).toBe(2);
+      expect(SRC).toMatch(/AlertDialogAction[\s\S]*?<Unplug \/>/);
+    });
+  });
 });

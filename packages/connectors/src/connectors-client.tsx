@@ -4,7 +4,12 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowDownAZ, ArrowLeftRight, ArrowUpAZ, Check, PlugZap, Plus, SlidersHorizontal, Unplug, X } from "lucide-react";
+import { ArrowDownAZ, ArrowLeftRight, ArrowUpAZ, Check, Plus, SlidersHorizontal, Unplug, X } from "lucide-react";
+// The Connected mark is the first-party joined plug (cinatra#2356) — the two
+// halves of `Unplug` with the gap closed. It is defined ONCE in sdk-ui (which
+// sits BELOW this package in the dependency graph) so the toggle segment, the
+// card badge and the setup surfaces all draw the identical glyph.
+import { PlugConnected } from "@cinatra-ai/sdk-ui/icons";
 import { ConnectorBadge } from "./connector-badge";
 // Paired-logo brand marks (the bidirectional assistant connectors render a
 // `[brand] ⇄ [Cinatra]` pair, not a single mark). The single-mark map lives in
@@ -153,7 +158,9 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
             className="overflow-hidden rounded-[7px] border border-line [&>*:not(:first-child)]:border-l [&>*:not(:first-child)]:border-line"
           >
             {/* Each item leads with the SAME plug glyph the cards use (#605):
-                connected → PlugZap, disconnected → Unplug. The second item's
+                connected → PlugConnected (cinatra#2356 — the joined plug that
+                pairs with the disconnected mark), disconnected → Unplug. The
+                second item's
                 visible label is "Disconnected" (#683), but its `value` stays
                 "available" so the filter semantics (`connected` vs
                 `!connected`) are unchanged. */}
@@ -161,7 +168,7 @@ export function ConnectorsClient({ cards, scopeValue, scopes }: ConnectorsClient
               value="connected"
               className="rounded-none bg-success/10 text-success hover:bg-success/15 data-[state=on]:bg-success data-[state=on]:text-success-foreground data-[state=on]:hover:bg-success"
             >
-              <PlugZap data-icon="inline-start" aria-hidden="true" />
+              <PlugConnected data-icon="inline-start" aria-hidden="true" />
               Connected
             </ToggleGroupItem>
             <ToggleGroupItem
