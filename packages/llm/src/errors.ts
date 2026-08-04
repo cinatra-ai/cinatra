@@ -25,6 +25,70 @@ export class BatchNotSupportedError extends Error {
   }
 }
 
+/**
+ * Thrown when per-request outcomes are asked for before the batch reached a
+ * state that HAS them (batch-v2, cinatra#2396).
+ *
+ * Distinct from `BatchNotSupportedError` — the surface exists and the batch is
+ * real, it simply is not done. Throwing rather than returning `[]` is the whole
+ * point: an empty array is indistinguishable from "the batch ended and every
+ * row is gone", which would silently persist zero results for a live batch.
+ *
+ * Thrown by BOTH sides of the routing seam — core's legacy v1 bridge (which
+ * must retrieve the batch anyway, to learn the file ids) and a v2 adapter's own
+ * `download`. Connector-realm copies carry the same `.code`, so
+ * {@link isBatchResultsNotReadyError} recognises them across module realms
+ * exactly as `isBatchNotSupportedError` does.
+ */
+export class BatchResultsNotReadyError extends Error {
+  readonly code = "batch_results_not_ready" as const;
+  readonly provider: LlmProvider;
+  readonly batchId: string;
+  /** The neutral status observed when results were requested. */
+  readonly status: string;
+
+  constructor(provider: LlmProvider, batchId: string, status: string) {
+    super(
+      `Batch "${batchId}" on provider "${provider}" has no per-request results yet (status: ${status})`,
+    );
+    this.name = "BatchResultsNotReadyError";
+    this.provider = provider;
+    this.batchId = batchId;
+    this.status = status;
+  }
+}
+
+/**
+ * Thrown when per-request outcomes are asked for on a batch that FAILED at the
+ * batch level (batch-v2, cinatra#2396) — the neutral `"failed"` status.
+ *
+ * DELIBERATELY DISTINCT from `BatchResultsNotReadyError`, which means "retry
+ * later". A failed batch never acquires outcomes, so a consumer that
+ * recognised the not-ready sentinel here would poll forever. This one says
+ * "stop": the batch is terminal and produced nothing to read.
+ *
+ * Only OpenAI's lifecycle has a batch-level `failed`; Anthropic reports failure
+ * per request, so an Anthropic batch never raises this.
+ */
+export class BatchFailedError extends Error {
+  readonly code = "batch_failed" as const;
+  readonly provider: LlmProvider;
+  readonly batchId: string;
+  /** The provider's batch-level failure detail, when it reported one. */
+  readonly reason: string | null;
+
+  constructor(provider: LlmProvider, batchId: string, reason: string | null) {
+    super(
+      `Batch "${batchId}" on provider "${provider}" FAILED at batch level and has no per-request results` +
+        (reason ? `: ${reason}` : "."),
+    );
+    this.name = "BatchFailedError";
+    this.provider = provider;
+    this.batchId = batchId;
+    this.reason = reason;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Anthropic skill-delivery errors.
 //
@@ -260,6 +324,16 @@ export function isAnthropicSkillDeliveryError(err: unknown): err is AnthropicSki
 /** Cross-realm recognizer for `BatchNotSupportedError` (unique stable `code`). */
 export function isBatchNotSupportedError(err: unknown): err is BatchNotSupportedError {
   return readStringField(err, "code") === "batch_not_supported";
+}
+
+/** Cross-realm recognizer for `BatchResultsNotReadyError` (unique stable `code`). */
+export function isBatchResultsNotReadyError(err: unknown): err is BatchResultsNotReadyError {
+  return readStringField(err, "code") === "batch_results_not_ready";
+}
+
+/** Cross-realm recognizer for `BatchFailedError` (unique stable `code`). */
+export function isBatchFailedError(err: unknown): err is BatchFailedError {
+  return readStringField(err, "code") === "batch_failed";
 }
 
 /** Cross-realm recognizer for `NativeMcpCapabilityRequiredError`. */
