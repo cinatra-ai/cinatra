@@ -165,11 +165,11 @@ test.describe("keyboard — the pager's disabled edge control is skipped by Tab,
   test("on page 1, Tab never lands on the disabled Previous button", async ({ page }) => {
     await gotoFeed(page);
     // The canonical 8-row fixture never crosses the pager threshold, so no
-    // pager renders (§VII "only when there is more than one page") — this
-    // spec only proves the DISABLED-SKIP contract on a surface that DOES
-    // paginate; the isolated 30-row dataset (notifications-pagination-
-    // threshold.spec.ts) is where the pager is actually present. Here we
-    // assert the negative baseline: no pager, so no dead stop is even
+    // pager renders (§VII "only when there is more than one page"). The
+    // positive DISABLED-SKIP proof (Shift+Tab from the pager's first enabled
+    // control never lands on the disabled Previous edge) lives in
+    // notifications-pagination-threshold.spec.ts, where the pager is actually
+    // present. Here we assert the negative baseline: no pager, so no dead stop is even
     // reachable — a structural sanity check that this suite's fixture size
     // does not accidentally exercise the pager unintentionally.
     await expect(page.locator('[data-conformance-id="notifications-list-pager"]')).toHaveCount(0);

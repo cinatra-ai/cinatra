@@ -37,6 +37,8 @@ describe("notifications PageHeader — single etched rule (S3 hardening)", () =>
 
   it("the notifications page source pins divider={false} on its PageHeader (no double rule against the toolbar)", () => {
     const source = readFileSync(join(__dirname, "..", "page.tsx"), "utf8");
-    expect(source).toMatch(/<PageHeader[\s\S]*?divider=\{false\}/);
+    // [^>]* keeps the match inside the single opening tag — the prop must sit
+    // on the PageHeader element itself, not merely somewhere later in the file.
+    expect(source).toMatch(/<PageHeader\b[^>]*divider=\{false\}/);
   });
 });

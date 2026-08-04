@@ -63,6 +63,14 @@ test.describe("§VII — isolated 26+-entry dataset exercises the pager threshol
     // Page 1: Previous is disabled (§ keyboard/pager — no wraparound); Next enabled.
     await expect(pager.getByRole("button", { name: "Previous page" })).toBeDisabled();
     await expect(pager.getByRole("button", { name: "Next page" })).toBeEnabled();
+    // The disabled edge is skipped by keyboard focus — never a dead tab stop.
+    // Shift+Tab from the pager's FIRST enabled control must leave Previous
+    // untouched: if a tabindex override ever made the disabled button
+    // focusable, this reverse step would land exactly on it.
+    const firstEnabled = pager.locator("button:enabled, a[href]").first();
+    await firstEnabled.focus();
+    await page.keyboard.press("Shift+Tab");
+    await expect(pager.getByRole("button", { name: "Previous page" })).not.toBeFocused();
     // The current-page indicator is a non-interactive aria-current span, never a button.
     const current = pager.locator('[aria-current="page"]');
     await expect(current).toHaveText("1");
@@ -82,18 +90,21 @@ test.describe("§VII — isolated 26+-entry dataset exercises the pager threshol
     await expect(list.locator('[data-conformance-id="notification-row"]')).toHaveCount(25);
   });
 
-  test("§VII · a single page of the isolated set renders no pager at all", async ({ page }) => {
-    // Shrink the isolated set to under the 25-row threshold for this one
-    // assertion (still isolated — the canonical fixture stays cleared).
+  test("§VII · exactly 25 rows — the one-full-page boundary — renders no pager at all", async ({ page }) => {
+    // Shrink the isolated set to EXACTLY the page size for this assertion
+    // (still isolated — the canonical fixture stays cleared). 25 rows is the
+    // sharpest case: one completely full page, zero overflow — a pager
+    // condition keyed to the row count instead of the page count would
+    // wrongly render here.
     await clearPaginationThresholdFixtures({ email: EMAIL, databaseUrl: DATABASE_URL, schema: SCHEMA });
     await seedPaginationThresholdFixtures(
       { email: EMAIL, databaseUrl: DATABASE_URL, schema: SCHEMA },
-      10,
+      25,
     );
     await gotoFeed(page);
     await expect(
       page.locator('[data-conformance-id="notifications-list"] [data-conformance-id="notification-row"]'),
-    ).toHaveCount(10);
+    ).toHaveCount(25);
     await expect(page.locator('[data-conformance-id="notifications-list-pager"]')).toHaveCount(0);
   });
 });

@@ -474,6 +474,32 @@ describe("NotificationsFeed — nested controls never activate the card (S3 hard
     // stretched overlay (absent here — no href) never fired.
     expect(patchBodies()).toEqual([]);
   });
+
+  it("clicking Decide on an href-CARRYING approval does not fire the card's stretched-overlay activation", async () => {
+    const container = await mount(
+      feed([
+        approvalVM({
+          id: "a2",
+          actionable: true,
+          href: "/configuration/agents/approvals/a2",
+        }),
+      ]),
+    );
+    // The href species DOES render the stretched overlay — the exemption
+    // tested above must not leak into this branch.
+    const overlay = container.querySelector('a[data-action="activate -> navigated"]');
+    expect(overlay).not.toBeNull();
+    let overlayClicks = 0;
+    overlay!.addEventListener("click", () => {
+      overlayClicks += 1;
+    });
+    await act(async () => {
+      click(container.querySelector('[data-testid="decide-stub"]'));
+      await Promise.resolve();
+    });
+    expect(overlayClicks).toBe(0);
+    expect(patchBodies()).toEqual([]);
+  });
 });
 
 describe("NotificationsFeed — href-less approval species exemption (§II, S3 hardening)", () => {
