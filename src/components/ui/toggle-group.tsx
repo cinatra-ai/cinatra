@@ -82,19 +82,45 @@ function ToggleGroupItem({
 }: React.ComponentProps<typeof ToggleGroupPrimitive.Item> &
   VariantProps<typeof toggleVariants>) {
   const context = React.useContext(ToggleGroupContext)
+  const resolvedVariant = context.variant || variant
+  const resolvedSize = context.size || size
 
   return (
     <ToggleGroupPrimitive.Item
       data-slot="toggle-group-item"
-      data-variant={context.variant || variant}
-      data-size={context.size || size}
+      data-variant={resolvedVariant}
+      data-size={resolvedSize}
       data-spacing={context.spacing}
       className={cn(
         "shrink-0 group-data-[spacing=0]/toggle-group:rounded-none group-data-[spacing=0]/toggle-group:px-2 focus:z-10 focus-visible:z-10 group-data-[spacing=0]/toggle-group:has-data-[icon=inline-end]:pr-1.5 group-data-[spacing=0]/toggle-group:has-data-[icon=inline-start]:pl-1.5 group-data-horizontal/toggle-group:data-[spacing=0]:first:rounded-l-lg group-data-vertical/toggle-group:data-[spacing=0]:first:rounded-t-lg group-data-horizontal/toggle-group:data-[spacing=0]:last:rounded-r-lg group-data-vertical/toggle-group:data-[spacing=0]:last:rounded-b-lg group-data-horizontal/toggle-group:data-[spacing=0]:data-[variant=outline]:border-l-0 group-data-vertical/toggle-group:data-[spacing=0]:data-[variant=outline]:border-t-0 group-data-horizontal/toggle-group:data-[spacing=0]:data-[variant=outline]:first:border-l group-data-vertical/toggle-group:data-[spacing=0]:data-[variant=outline]:first:border-t",
         toggleVariants({
-          variant: context.variant || variant,
-          size: context.size || size,
+          variant: resolvedVariant,
+          size: resolvedSize,
         }),
+        // The SEGMENTED control's small step is 32px tall, not the shared
+        // toggle scale's 28px (cinatra#2432).
+        //
+        // Both specs that draw this control — app-connectors §I and
+        // app-notifications §III — draw the group at a 34px outer height, with
+        // `box-sizing: border-box`, a 1px hairline on the group and each
+        // segment at `height:100%`. That is a 32px item inside a 1px border:
+        // 32 + 1 + 1 = 34. The item is what has to carry it — the group takes
+        // its height FROM the items, and pinning the group instead would leave
+        // 28px segments floating inside a taller box, each with its own status
+        // fill, which is not what either spec draws.
+        //
+        // Placed HERE, after `toggleVariants(...)` and before `className`, it
+        // is a plain utility in the same `tailwind-merge` conflict group as the
+        // variant's `h-7`: it replaces that h-7 at merge time (not by cascade
+        // order), and a consumer that states its own `h-*` still wins over it.
+        //
+        // Scoped to ToggleGroupItem rather than to `toggleVariants` itself so
+        // the standalone `Toggle`'s small step keeps its own 28px contract —
+        // this is a fact about the segmented control, not about every toggle.
+        // Promoting the segments to `size="default"` would reach 32px too, but
+        // would move the label from 0.8rem to 14px and the icons from 14px to
+        // 16px, away from the 12.5px/13px both specs draw.
+        resolvedSize === "sm" && "h-8",
         className
       )}
       {...props}

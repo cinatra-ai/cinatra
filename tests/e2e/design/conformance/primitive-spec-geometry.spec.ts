@@ -42,6 +42,20 @@ import { ensureSeeded, SEEDED_HARNESS_PATH } from "./contract";
 const SPEC_TOGGLE_RADIUS_PX = "7px";
 /** …and the closing CTA ("the outline variant at the small size, 32px tall"). */
 const SPEC_INSTALL_CTA_HEIGHT_PX = 32;
+/**
+ * The same segmented filter's OUTER height (cinatra#2432). The spec draws the
+ * group under `box-sizing: border-box` with a 1px hairline and each segment at
+ * `height:100%`, so the drawing's 34px is the bordered box.
+ */
+const SPEC_TOGGLE_HEIGHT_PX = 34;
+/**
+ * …and therefore 32px per segment, inside that 1px border (32 + 1 + 1 = 34).
+ * Pinned SEPARATELY from the group: the group takes its height FROM the items,
+ * so a group that measured 34px with 28px segments floating inside it would be
+ * a different, and wrong, rendering — this pins that the fix landed on the item
+ * rather than being faked on the container.
+ */
+const SPEC_TOGGLE_ITEM_HEIGHT_PX = 32;
 
 const mount = (variant: string) =>
   `[data-surface-id="connector-grid"][data-variant="${variant}"]`;
@@ -77,6 +91,34 @@ test.describe("connection filter — corner radius (cinatra#2407 item 1)", () =>
       "border-bottom-left-radius",
     ]) {
       await expect(toggle).toHaveCSS(corner, SPEC_TOGGLE_RADIUS_PX);
+    }
+  });
+});
+
+test.describe("connection filter — height (cinatra#2432)", () => {
+  test("the segmented toggle renders the spec's 34px, on 32px segments", async ({
+    page,
+  }) => {
+    await page.goto(SEEDED_HARNESS_PATH, { waitUntil: "domcontentloaded" });
+
+    const toggle = page.locator(`${mount("populated")} [data-slot="toggle-group"]`);
+    await expect(toggle).toBeVisible();
+    // Same guard as the radius pin: `sm` is the step whose height the fix
+    // moved, so a size change would silently move this measurement elsewhere.
+    await expect(toggle).toHaveAttribute("data-size", "sm");
+
+    // The shared toggle scale's `sm` step is 28px, which put this group at
+    // 28 + 2 = 30px; a silent revert reads 30 here.
+    expect(await renderedHeight(toggle)).toBe(SPEC_TOGGLE_HEIGHT_PX);
+
+    // …and the segments themselves, which are what actually carry the height.
+    const items = toggle.locator('[data-slot="toggle-group-item"]');
+    const count = await items.count();
+    // All three status segments (All · Connected · Disconnected) — a partial
+    // fix that moved only the first would still pass the group assertion.
+    expect(count).toBe(3);
+    for (let i = 0; i < count; i += 1) {
+      expect(await renderedHeight(items.nth(i))).toBe(SPEC_TOGGLE_ITEM_HEIGHT_PX);
     }
   });
 });
