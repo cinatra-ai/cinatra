@@ -34,3 +34,13 @@ Process fix applied coordinator-side: squash bodies are assembled with an explic
 blank line before the trailer block, and the pre-merge validator now asserts the
 paragraph boundary (a body whose trailers touch prose is rejected before the merge
 call is issued).
+
+## Addendum: the first transcription of this correction was itself invalid
+
+The squash record that landed this file (17ee387a8bfdccbc88c9442320ea0fe79a6c84ae)
+carried three Correction-for references in its terminal block; the gate engine
+accepts at most one Correction-for reference per record, so that record is invalid
+as well. This file remains the durable ledger for all three original commits. The
+squash record carrying this addendum names the failed transcription commit as its
+single correction target; the three original records stay red in history and are
+superseded by the green, properly-armed tip.
