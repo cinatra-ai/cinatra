@@ -7,10 +7,66 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/instance-identity-store", () => ({
-  readInstanceIdentity: vi.fn(),
-  writeInstanceIdentity: vi.fn(),
-}));
+vi.mock("@/lib/instance-identity-store", () => {
+  const readInstanceIdentity = vi.fn();
+  const writeInstanceIdentity = vi.fn();
+  // cinatra#2418 review round 2: provisionAndPersist's final write now flows
+  // through a row-level-CAS wrapper (`applyInstanceIdentityProvisioningWrite`)
+  // instead of a plain writeInstanceIdentity call. The action/handler
+  // behavioral contract is unchanged — each path still ends in ONE
+  // merged-identity persist — so this mock shims that wrapper to delegate to
+  // the `writeInstanceIdentity` sink these suites already assert against
+  // (re-read the current identity, apply the caller's write fields, append
+  // oldInstanceNamespaces when requested, persist). Mirrors the existing
+  // `updateInstanceIdentityRegistries` shim convention in the sibling
+  // network/poll-job test suites (cinatra#850). The real CAS engine (bounded
+  // retry, byte-preservation, fresh-row archival) is unit-tested directly in
+  // `src/lib/__tests__/instance-identity-cas.test.ts`.
+  const applyInstanceIdentityProvisioningWrite = vi.fn(
+    (
+      write: {
+        instanceNamespace: string;
+        tokenCiphertext: string;
+        tokenIv: string;
+        tokenAlgo: "aes-256-gcm";
+        passwordCiphertext: string;
+        passwordIv: string;
+      },
+      opts: { appendPreviousNamespace: boolean },
+    ) => {
+      const latest = readInstanceIdentity() as
+        | (typeof write & {
+            oldInstanceNamespaces?: unknown[];
+            [key: string]: unknown;
+          })
+        | null
+        | undefined;
+      const merged: Record<string, unknown> = {
+        ...latest,
+        ...write,
+        firstPublishedAt: null,
+      };
+      if (opts.appendPreviousNamespace && latest) {
+        merged.oldInstanceNamespaces = [
+          ...(latest.oldInstanceNamespaces ?? []),
+          {
+            name: latest.instanceNamespace,
+            frozenAt: new Date().toISOString(),
+            lastTokenCiphertext: latest.tokenCiphertext ?? "",
+            lastTokenIv: latest.tokenIv ?? "",
+          },
+        ];
+      }
+      writeInstanceIdentity(merged, { allowNamespaceRename: true });
+      return "swapped";
+    },
+  );
+  return {
+    readInstanceIdentity,
+    writeInstanceIdentity,
+    applyInstanceIdentityProvisioningWrite,
+  };
+});
 vi.mock("@/lib/instance-identity-cache", () => ({
   invalidateInstanceIdentityCache: vi.fn(),
 }));
@@ -94,7 +150,7 @@ afterEach(() => {
 
 describe("renameInstanceNamespaceAction (post-freeze hard rename)", () => {
   it("appends the previous vendor to oldInstanceNamespaces[]", async () => {
-    vi.mocked(readInstanceIdentity).mockReturnValueOnce(FROZEN_IDENTITY);
+    vi.mocked(readInstanceIdentity).mockReturnValue(FROZEN_IDENTITY);
     await renameInstanceNamespaceAction(buildRenameFormData("newvendor"));
     expect(vi.mocked(writeInstanceIdentity)).toHaveBeenCalledTimes(1);
     const passedIdentity = vi.mocked(writeInstanceIdentity).mock.calls[0]?.[0];
@@ -111,7 +167,7 @@ describe("renameInstanceNamespaceAction (post-freeze hard rename)", () => {
   });
 
   it("replaces instanceNamespace + token + password credentials", async () => {
-    vi.mocked(readInstanceIdentity).mockReturnValueOnce(FROZEN_IDENTITY);
+    vi.mocked(readInstanceIdentity).mockReturnValue(FROZEN_IDENTITY);
     await renameInstanceNamespaceAction(buildRenameFormData("newvendor"));
     const passedIdentity = vi.mocked(writeInstanceIdentity).mock.calls[0]?.[0];
     expect(passedIdentity?.instanceNamespace).toBe("newvendor");
@@ -122,14 +178,14 @@ describe("renameInstanceNamespaceAction (post-freeze hard rename)", () => {
   });
 
   it("resets firstPublishedAt to null after rename", async () => {
-    vi.mocked(readInstanceIdentity).mockReturnValueOnce(FROZEN_IDENTITY);
+    vi.mocked(readInstanceIdentity).mockReturnValue(FROZEN_IDENTITY);
     await renameInstanceNamespaceAction(buildRenameFormData("newvendor"));
     const passedIdentity = vi.mocked(writeInstanceIdentity).mock.calls[0]?.[0];
     expect(passedIdentity?.firstPublishedAt).toBeNull();
   });
 
   it("preserves the original createdAt timestamp", async () => {
-    vi.mocked(readInstanceIdentity).mockReturnValueOnce(FROZEN_IDENTITY);
+    vi.mocked(readInstanceIdentity).mockReturnValue(FROZEN_IDENTITY);
     await renameInstanceNamespaceAction(buildRenameFormData("newvendor"));
     const passedIdentity = vi.mocked(writeInstanceIdentity).mock.calls[0]?.[0];
     expect(passedIdentity?.createdAt).toBe(FROZEN_IDENTITY.createdAt);
@@ -138,7 +194,7 @@ describe("renameInstanceNamespaceAction (post-freeze hard rename)", () => {
 
 describe("editVendorAction (pre-publish, no oldInstanceNamespaces append)", () => {
   it("replaces credentials WITHOUT appending to oldInstanceNamespaces[]", async () => {
-    vi.mocked(readInstanceIdentity).mockReturnValueOnce(PRE_PUBLISH_IDENTITY);
+    vi.mocked(readInstanceIdentity).mockReturnValue(PRE_PUBLISH_IDENTITY);
     await editVendorAction(buildRenameFormData("newvendor"));
     // The provisioning (credential-replacing) write is the LAST writeInstanceIdentity
     // call. Since cinatra#357 the display-name change is pre-persisted first, so the
@@ -155,7 +211,7 @@ describe("editVendorAction (pre-publish, no oldInstanceNamespaces append)", () =
   // needs no provisioning; pre-persisting it guarantees a downstream
   // provisioning failure (createNpmUser) no longer loses the edit.
   it("persists the display-name edit BEFORE namespace provisioning, so a provisioning failure does not lose it", async () => {
-    vi.mocked(readInstanceIdentity).mockReturnValueOnce(PRE_PUBLISH_IDENTITY);
+    vi.mocked(readInstanceIdentity).mockReturnValue(PRE_PUBLISH_IDENTITY);
     // Force the registry adduser to fail so provisionAndPersist redirects with
     // an error and never reaches its own writeInstanceIdentity.
     globalThis.fetch = vi.fn(async () =>
@@ -193,7 +249,7 @@ describe("renameInstanceNamespaceAction (does NOT touch agent_templates)", () =>
     // imports a templates writer here, this test still passes today (no mock
     // exists for it) but the design intent is captured for review.
     // The executor must keep the action templates-free.
-    vi.mocked(readInstanceIdentity).mockReturnValueOnce(FROZEN_IDENTITY);
+    vi.mocked(readInstanceIdentity).mockReturnValue(FROZEN_IDENTITY);
     await renameInstanceNamespaceAction(buildRenameFormData("newvendor"));
     expect(vi.mocked(writeInstanceIdentity)).toHaveBeenCalledTimes(1);
     // Only a single mutation, and it targets the instance_identity row.
