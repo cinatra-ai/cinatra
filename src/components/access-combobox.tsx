@@ -58,8 +58,6 @@ import type { AgentAuthPolicyVisibility } from "@cinatra-ai/agents/auth-policy";
 // and no truncated-id copy drifts (cinatra#1508). The multi-select mode adds
 // the nested-shape label/summary + selection helpers from the same module.
 import {
-  resolveScopeEntityName,
-  unknownScopeEntityName,
   resolveAccessParts,
   resolveAccessLabel as resolveAccessScopeLabel,
   resolveAccessSummary,
@@ -67,6 +65,16 @@ import {
   toggleAccessSelection,
   type AvailableScopes,
   type AccessRowState,
+  // The canonical flat access-option model (cinatra#2372, mkt-install S1): the
+  // ONE resolver the trigger, every dropdown row, AND every single-mode
+  // consumer's submit-committability gate read a value's label/committability
+  // from — trigger ≡ row holds BY CONSTRUCTION because both call this same
+  // function for the same value. Lives in access-scope.ts (not a new sibling
+  // module) so no new reachable first-party module is added to any route that
+  // transitively imports the picker (route-graph no-new-rot ratchet).
+  // Re-exported below so consumers never need a second import path.
+  resolveFlatAccessOption,
+  type FlatAccessOption,
 } from "@/components/access-scope";
 // Containment algebra (cinatra#1607 §VI): the first-class `parentScope` +
 // `allowedScopes` narrowing, in the pure sibling module. Both modes consult it;
@@ -86,6 +94,15 @@ import {
 // through the unified picker module (cinatra#1607).
 export { resolveAccessParts, resolveAccessSummary } from "@/components/access-scope";
 export type { AvailableScopes, AccessRowState } from "@/components/access-scope";
+// The flat model (cinatra#2372) — re-exported so every single-mode consumer
+// (the install dialogs today; a future card/modal panel) gates its submit
+// control on `resolveFlatAccessOption(...).committable` via ONE import path.
+export { resolveFlatAccessOption } from "@/components/access-scope";
+export type {
+  FlatAccessOption,
+  FlatAccessAvailableScopes,
+  FlatAccessResolveContext,
+} from "@/components/access-scope";
 export type {
   AllowedScopes,
   ScopeIdentity,
@@ -142,8 +159,9 @@ export type AccessComboboxProps = {
    */
   disabledReasons?: Record<string, string>;
   /**
-   * When `true`, hides the "Only me" (owner), "Admins only" (admin), and
-   * "Whole Workspace" (workspace) rows entirely. These three are valid
+   * When `true`, hides the "Personal: Only me" (owner), "Workspace: Admins
+   * only" (admin), and "Workspace: All" (workspace) rows entirely. These three
+   * are valid
    * permissions-tab values but are NOT install-target scopes; the
    * InstallScopeDialog passes installMode=true so the picker only shows org /
    * team:* / project:* rows.
@@ -156,8 +174,9 @@ export type AccessComboboxProps = {
   installMode?: boolean;
   /**
    * cinatra#1527: in installMode, ALSO render the two always-offered workspace
-   * scopes — "Whole Workspace" (value `"workspace"`) and "Admins only" (value
-   * `"admin"`) — as SERVER-DRIVEN target rows: their enabled/disabled + reason
+   * scopes — "Workspace: All" (value `"workspace"`) and "Workspace: Admins
+   * only" (value `"admin"`) — as SERVER-DRIVEN target rows: their
+   * enabled/disabled + reason
    * state comes from `disabledScopes` / `disabledReasons` (the buildInstallTargets
    * rows), exactly like the org/team/project rows, NOT from the client `isAdmin`
    * gate. Ignored outside installMode (the permissions tab keeps its own
@@ -251,65 +270,19 @@ export type AnyAccessComboboxProps = AccessComboboxProps | AccessComboboxMultiPr
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve the human-readable label for a given access value.
- * Used by the trigger button to display the current selection.
+ * Resolve the human-readable label for a given access value — a thin
+ * `{ type, name }` view over `resolveFlatAccessOption` (cinatra#2372), kept
+ * for the existing call shape. `type` is now populated for EVERY classified
+ * kind (Personal / Workspace / Organization included, not just Team /
+ * Project): trigger ≡ row, verbatim, for every scope kind (app-permissions.html
+ * c-3.1) — there is no longer a bare-name trigger form for any kind.
  */
 export function resolveAccessLabel(
   value: string,
   availableScopes: AccessComboboxProps["availableScopes"],
 ): { type: string | null; name: string } {
-  if (value === "owner") return { type: null, name: "Only me" };
-  // cinatra#2373 (minimal seam): the closed trigger renders the workspace
-  // AUDIENCE rows verbatim as their dropdown rows read — the in-card install
-  // panel's drawn trigger is "Workspace: All", and a trigger that said
-  // "Whole Workspace" while the row said "Workspace: All" is the exact drift
-  // the marketplace spec forbids. Returned as a BARE name (not the
-  // `{type, name}` prefix form) because the trigger uppercases its `type:`
-  // prefix and the rows do not — the flat form is the drawn string, character
-  // for character. This is the narrowest possible fix for the two workspace
-  // kinds; the general trigger ≡ row model for ALL six scope kinds is #2372's
-  // deliverable and supersedes these two lines when it lands.
-  if (value === "admin") return { type: null, name: "Workspace: Admins only" };
-  if (value === "workspace") return { type: null, name: "Workspace: All" };
-  // Multi-scope W1 retired the bare `"org"` token for the id-carrying
-  // `org:<id>`. The bare form is still ACCEPTED for read-compatibility with any
-  // persisted legacy value (AgentAuthPolicyVisibilitySchema still validates the
-  // literal "org"); it denotes the active org by definition, so it resolves to
-  // the active org's name.
-  if (value === "org") {
-    const orgName = availableScopes.orgName || "your organization";
-    return { type: null, name: `Anyone in ${orgName}` };
-  }
-  // An id-carrying `org:<id>` token: assert the active org's NAME only when the
-  // token is CONFIRMED to scope the active org (its embedded id equals the
-  // supplied `orgId`). On the install surfaces the value is always
-  // `org:<activeOrgId>`, so it always resolves to the name. But this component
-  // also renders the read-only project Permissions tab, where the value is the
-  // PROJECT's own owning-org token (`org:<projectOwnerOrgId>`) while `orgName`
-  // is the VIEWER's active org — a co-owner viewing a project owned by ANOTHER
-  // org (the co-owner short-circuit grants read across the cross-org guard)
-  // would otherwise be shown the WRONG org's name on a permissions-review
-  // surface. When the id is unconfirmed (no `orgId` supplied, or a different
-  // id), fall back to a neutral, id-free label rather than a possibly-wrong
-  // specific name — and never leak the raw token.
-  if (value.startsWith("org:")) {
-    const { orgId, orgName } = availableScopes;
-    if (orgId && value.slice("org:".length) === orgId) {
-      return { type: null, name: `Anyone in ${orgName || "your organization"}` };
-    }
-    return { type: null, name: "Anyone in the organization" };
-  }
-  if (value.startsWith("team:")) {
-    const id = value.slice("team:".length);
-    const team = availableScopes.teams.find((t) => t.id === id);
-    return { type: "Team", name: resolveScopeEntityName("team", id, team?.name) };
-  }
-  if (value.startsWith("project:")) {
-    const id = value.slice("project:".length);
-    const project = availableScopes.projects.find((p) => p.id === id);
-    return { type: "Project", name: resolveScopeEntityName("project", id, project?.name) };
-  }
-  return { type: null, name: value };
+  const option = resolveFlatAccessOption(value, availableScopes);
+  return { type: option.type || null, name: option.name };
 }
 
 // ---------------------------------------------------------------------------
@@ -360,8 +333,7 @@ function AccessComboboxSingleSelect({
 }: AccessComboboxProps) {
   const [open, setOpen] = useState(false);
 
-  const { projects, teams, orgName, orgId } = availableScopes;
-  const resolvedOrgName = orgName || "Your organization";
+  const { projects, teams, orgId } = availableScopes;
   // Org row value: the id-carrying `org:<id>` token (multi-scope W1), matched to
   // the server-built install-target row value `org:<activeOrgId>` EXACTLY so the
   // selected-state, checkmark, and disabledScopes lookup line up — including the
@@ -419,19 +391,29 @@ function AccessComboboxSingleSelect({
     setOpen(false);
   };
 
-  const selected = resolveAccessLabel(value, availableScopes);
+  // The canonical flat model (cinatra#2372): ONE resolver call per value
+  // produces the {type, name} pair BOTH the trigger and its matching row
+  // render — trigger ≡ row holds by construction, not by two hand-written
+  // strings that happen to agree today.
+  const resolveRow = (rowValue: string): FlatAccessOption =>
+    resolveFlatAccessOption(rowValue, availableScopes);
+  const selectedOption = resolveRow(value);
+  const selected = { type: selectedOption.type || null, name: selectedOption.name };
 
-  // Selected-scope synthesis (cinatra#1509 §3.2 / #1508): a `team:<id>` /
-  // `project:<id>` selection that does not hydrate to any available row (the
-  // team/project belongs to another org, or the viewer isn't a member) would
-  // otherwise render NO row — so the selection had no checkmark and looked
-  // unselected. Synthesize an explicit, checked "Unknown team" / "Unknown
-  // project" row so a selection is ALWAYS visible with its checkmark,
-  // independent of hydration.
+  // Selected-scope synthesis (cinatra#1509 §3.2 / #1508, extended to org tokens
+  // by cinatra#2372 c-3.11): a `team:<id>` / `project:<id>` selection that does
+  // not hydrate to any available row (the team/project belongs to another org,
+  // or the viewer isn't a member), or an org token that does not resolve to the
+  // CONFIRMED active org (a mismatched id, an empty tail, or no active org in
+  // scope), would otherwise render NO row — so the selection had no checkmark
+  // and looked unselected. Synthesize an explicit, checked, display-only row
+  // (never committable — `resolveFlatAccessOption` marks it `synthetic`) so a
+  // selection is ALWAYS visible with its checkmark, independent of hydration.
   const needsSynthTeam =
     value.startsWith("team:") && !teams.some((t) => `team:${t.id}` === value);
   const needsSynthProject =
     value.startsWith("project:") && !projects.some((p) => `project:${p.id}` === value);
+  const needsSynthOrg = value.startsWith("org:") && selectedOption.synthetic;
 
   // ---------------------------------------------------------------------------
   // Disabled-row helper.
@@ -541,18 +523,20 @@ function AccessComboboxSingleSelect({
   const offeredTeams = teams.filter((t) => offered(`team:${t.id}`));
   const synthProjectOffered = needsSynthProject && offered(value);
   const synthTeamOffered = needsSynthTeam && offered(value);
+  const synthOrgOffered = needsSynthOrg && offered(value);
 
   const groupNodes: Array<{ key: string; node: React.ReactNode }> = [];
 
   // (1) Personal — hidden in installMode (owner is not an install target, §3.7).
   if (!installMode) {
+    const personal = resolveRow("owner");
     groupNodes.push({
       key: "personal",
       node: (
         <CommandGroup className="p-0">
           <CommandItem value="owner" onSelect={() => commit("owner")} className={itemClass("owner")}>
             <div className="flex items-center w-full">
-              {rowLabel("Personal", "Only me")}
+              {rowLabel(personal.type, personal.name)}
               {renderCheckmark("owner")}
             </div>
           </CommandItem>
@@ -570,17 +554,18 @@ function AccessComboboxSingleSelect({
         <CommandGroup className="p-0">
           {offeredProjects.map((p) => {
             const itemValue = `project:${p.id}`;
+            const row = resolveRow(itemValue);
             const item = (
               <CommandItem key={p.id} value={itemValue} onSelect={() => commit(itemValue)} className={itemClass(itemValue)}>
                 <div className="flex items-center w-full">
-                  {rowLabel("Project", p.name)}
+                  {rowLabel(row.type, row.name)}
                   {renderCheckmark(itemValue)}
                 </div>
               </CommandItem>
             );
             return <React.Fragment key={p.id}>{renderTargetRow(itemValue, item)}</React.Fragment>;
           })}
-          {synthProjectOffered && renderSynthRow(value, "Project", unknownScopeEntityName("project"))}
+          {synthProjectOffered && renderSynthRow(value, selectedOption.type, selectedOption.name)}
         </CommandGroup>
       ),
     });
@@ -594,17 +579,18 @@ function AccessComboboxSingleSelect({
         <CommandGroup className="p-0">
           {offeredTeams.map((t) => {
             const itemValue = `team:${t.id}`;
+            const row = resolveRow(itemValue);
             const item = (
               <CommandItem key={t.id} value={itemValue} onSelect={() => commit(itemValue)} className={itemClass(itemValue)}>
                 <div className="flex items-center w-full">
-                  {rowLabel("Team", t.name)}
+                  {rowLabel(row.type, row.name)}
                   {renderCheckmark(itemValue)}
                 </div>
               </CommandItem>
             );
             return <React.Fragment key={t.id}>{renderTargetRow(itemValue, item)}</React.Fragment>;
           })}
-          {synthTeamOffered && renderSynthRow(value, "Team", unknownScopeEntityName("team"))}
+          {synthTeamOffered && renderSynthRow(value, selectedOption.type, selectedOption.name)}
         </CommandGroup>
       ),
     });
@@ -612,21 +598,28 @@ function AccessComboboxSingleSelect({
 
   // (4) Organization — id-carrying `org:<id>` value so the selected-state,
   //     checkmark, and disabledScopes lookup match the server-built target rows.
-  //     Always rendered UNLESS containment excludes the org itself (§6.1).
-  if (offered(orgRowValue)) {
+  //     Always rendered UNLESS containment excludes the org itself (§6.1). A
+  //     degenerate SELECTED org token (mismatched id / empty tail / no active
+  //     org — cinatra#2372 c-3.11) renders as a SECOND, synthetic, checked row
+  //     in the same group — the real active-org row still renders, unselected,
+  //     with no cross-org lookup performed for the synthetic one.
+  const orgRow = resolveRow(orgRowValue);
+  if (offered(orgRowValue) || synthOrgOffered) {
     groupNodes.push({
       key: "org",
       node: (
         <CommandGroup className="p-0">
-          {renderTargetRow(
-            orgRowValue,
-            <CommandItem value={orgRowValue} onSelect={() => commit(orgRowValue)} className={itemClass(orgRowValue)}>
-              <div className="flex items-center w-full">
-                {rowLabel("Organization", resolvedOrgName)}
-                {renderCheckmark(orgRowValue)}
-              </div>
-            </CommandItem>,
-          )}
+          {offered(orgRowValue) &&
+            renderTargetRow(
+              orgRowValue,
+              <CommandItem value={orgRowValue} onSelect={() => commit(orgRowValue)} className={itemClass(orgRowValue)}>
+                <div className="flex items-center w-full">
+                  {rowLabel(orgRow.type, orgRow.name)}
+                  {renderCheckmark(orgRowValue)}
+                </div>
+              </CommandItem>,
+            )}
+          {synthOrgOffered && renderSynthRow(value, selectedOption.type, selectedOption.name)}
         </CommandGroup>
       ),
     });
@@ -643,6 +636,8 @@ function AccessComboboxSingleSelect({
   const showWorkspaceGroup = installMode
     ? installWorkspaceScopes && (workspaceOffered || adminOffered)
     : workspaceOffered || adminOffered;
+  const workspaceRow = resolveRow("workspace");
+  const adminRow = resolveRow("admin");
   if (showWorkspaceGroup) {
     groupNodes.push({
       key: "workspace",
@@ -655,7 +650,7 @@ function AccessComboboxSingleSelect({
                   "workspace",
                   <CommandItem value="workspace" onSelect={() => commit("workspace")} className={itemClass("workspace")}>
                     <div className="flex items-center w-full">
-                      {rowLabel("Workspace", "All")}
+                      {rowLabel(workspaceRow.type, workspaceRow.name)}
                       {renderCheckmark("workspace")}
                     </div>
                   </CommandItem>,
@@ -665,7 +660,7 @@ function AccessComboboxSingleSelect({
                   "admin",
                   <CommandItem value="admin" onSelect={() => commit("admin")} className={itemClass("admin")}>
                     <div className="flex items-center w-full">
-                      {rowLabel("Workspace", "Admins only")}
+                      {rowLabel(adminRow.type, adminRow.name)}
                       {renderCheckmark("admin")}
                     </div>
                   </CommandItem>,
@@ -677,36 +672,45 @@ function AccessComboboxSingleSelect({
                 (isAdmin ? (
                   <CommandItem value="workspace" onSelect={() => commit("workspace")} className={itemClass("workspace")}>
                     <div className="flex items-center w-full">
-                      {rowLabel("Workspace", "All")}
+                      {rowLabel(workspaceRow.type, workspaceRow.name)}
                       {renderCheckmark("workspace")}
                     </div>
                   </CommandItem>
                 ) : (
+                  // Tooltip wiring fix (cinatra#2372): the TooltipTrigger must
+                  // wrap an outer <span>, NOT the disabled CommandItem directly
+                  // — a disabled CommandItem gets `pointer-events: none` (cmdk),
+                  // so a Tooltip mounted on it never receives hover, and (being
+                  // outside the tab order) never receives focus either. The
+                  // wrapper span below is focusable (tabIndex 0) and receives
+                  // both — the same outer-wrapper-span pattern `renderTargetRow`
+                  // already uses for the org/team/project disabled rows.
                   <Tooltip>
                     <TooltipTrigger asChild>
-                      <CommandItem
-                        value="workspace"
-                        disabled
-                        className="rounded-none px-3 py-2 text-muted-foreground cursor-not-allowed"
-                      >
-                        <div className="flex items-center w-full gap-1">
-                          <span className="flex items-baseline gap-1 min-w-0">
-                            <span className="text-xs tracking-wide text-muted-foreground shrink-0">Workspace:</span>
-                            <span className="whitespace-nowrap">All</span>
-                          </span>
-                          <Lock aria-hidden className="size-3.5 ml-auto" />
-                        </div>
-                      </CommandItem>
+                      <span aria-disabled="true" tabIndex={0}>
+                        <CommandItem
+                          value="workspace"
+                          disabled
+                          aria-disabled="true"
+                          onSelect={undefined}
+                          className="rounded-none px-3 py-2 text-muted-foreground cursor-not-allowed"
+                        >
+                          <div className="flex items-center w-full gap-1">
+                            {rowLabel(workspaceRow.type, workspaceRow.name)}
+                            <Lock aria-hidden className="size-3.5 ml-auto" />
+                          </div>
+                        </CommandItem>
+                      </span>
                     </TooltipTrigger>
                     <TooltipContent side="right" className="max-w-[240px]">
-                      Only platform admins can scope this to the whole workspace.
+                      Only platform admins can select Workspace: All.
                     </TooltipContent>
                   </Tooltip>
                 ))}
               {adminOffered && (
                 <CommandItem value="admin" onSelect={() => commit("admin")} className={itemClass("admin")}>
                   <div className="flex items-center w-full">
-                    {rowLabel("Workspace", "Admins only")}
+                    {rowLabel(adminRow.type, adminRow.name)}
                     {renderCheckmark("admin")}
                   </div>
                 </CommandItem>
@@ -734,12 +738,15 @@ function AccessComboboxSingleSelect({
             // (cinatra#1509 §3.2 — the mechanism behind #1505's misaligned rows).
             className="w-full justify-between rounded-control border-line font-normal"
           >
-            {/* Trigger prefix (spec §3.1): only Team / Project carry the
-                uppercase `<Type>:` prefix; Personal / Organization / Workspace
-                resolve to a bare name. */}
+            {/* Trigger ≡ row, verbatim (spec c-3.1): EVERY kind carries its
+                `<Type>:` prefix, in the SAME casing as the row (no `uppercase`
+                transform — that was the old TEAM:/PROJECT: divergence from the
+                row's Team:/Project:). Both spans mirror rowLabel's structure
+                exactly; only `truncate` (vs. the row's `whitespace-nowrap`) is
+                trigger-specific overflow handling, not a text difference. */}
             <span className="flex items-center min-w-0 gap-1">
               {selected.type && (
-                <span className="text-xs uppercase tracking-wide text-muted-foreground shrink-0">
+                <span className="text-xs tracking-wide text-muted-foreground shrink-0">
                   {selected.type}:
                 </span>
               )}

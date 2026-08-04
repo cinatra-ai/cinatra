@@ -256,12 +256,17 @@ describe("buildInstallTargets — workspace scopes (cinatra#1527)", () => {
     expect(ws?.disabled).toBe(false);
     expect(ws?.level).toBe("workspace");
     expect(ws?.id).toBe(ACTIVE_ORG);
-    expect(ws?.label).toBe("Whole Workspace");
+    // `label` is DEAD for rendering (cinatra#2372 — the flat AccessCombobox
+    // single mode derives row text from the canonical flat-option model, never
+    // this field); it still carries the CURRENT audience vocabulary rather
+    // than the retired "Whole Workspace" / bare "Admins only" copy so nothing
+    // that reads it in the future resurfaces stale copy.
+    expect(ws?.label).toBe("Workspace: All");
     expect(ws?.reason).toBeUndefined();
     expect(ad?.disabled).toBe(false);
     expect(ad?.level).toBe("admin");
     expect(ad?.id).toBe(ACTIVE_ORG);
-    expect(ad?.label).toBe("Admins only");
+    expect(ad?.label).toBe("Workspace: Admins only");
     expect(ad?.reason).toBeUndefined();
   });
 

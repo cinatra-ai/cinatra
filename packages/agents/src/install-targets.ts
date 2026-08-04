@@ -113,8 +113,11 @@ export function buildInstallTargets(
     const enabled = isPlatformAdmin || isOrgAdminOrOwner;
     rows.push({
       // Multi-scope W1: id-carrying org token (retired the bare "org").
+      // `label` is DEAD for rendering (cinatra#2372 — see the workspace/admin
+      // rows below); kept in the current vocabulary rather than the retired
+      // "Anyone in <org>" copy.
       value: `org:${activeOrgId}`,
-      label: `Anyone in ${orgName || "this organization"}`,
+      label: `Organization: ${orgName || "this organization"}`,
       level: "organization",
       id: activeOrgId,
       disabled: !enabled,
@@ -164,9 +167,16 @@ export function buildInstallTargets(
   // the install action re-derives it server-side and never trusts a client id.
   // ---------------------------------------------------------------------------
   if (args.includeWorkspaceScopes) {
+    // `label` is DEAD for rendering (cinatra#2372): the flat AccessCombobox
+    // single mode derives every row's text from the canonical flat-option
+    // model (src/components/access-scope.ts), never from this field — only
+    // ownerEntityNames (org/team/project) feeds it. Kept in the audience's
+    // OWN canonical vocabulary rather than the retired "Whole Workspace" /
+    // bare "Admins only" copy, so nothing that reads this field in the future
+    // (a log line, a debug view) resurfaces stale audience copy.
     rows.push({
       value: "workspace",
-      label: "Whole Workspace",
+      label: "Workspace: All",
       level: "workspace",
       id: activeOrgId,
       disabled: !isPlatformAdmin,
@@ -174,7 +184,7 @@ export function buildInstallTargets(
     });
     rows.push({
       value: "admin",
-      label: "Admins only",
+      label: "Workspace: Admins only",
       level: "admin",
       id: activeOrgId,
       disabled: !isPlatformAdmin,

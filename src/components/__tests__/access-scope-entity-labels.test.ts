@@ -13,6 +13,7 @@ import {
   unknownScopeEntityName,
   resolveScopeEntityName,
   resolveAccessParts,
+  resolveFlatAccessOption,
   type AvailableScopes,
 } from "@/components/access-scope";
 import {
@@ -102,5 +103,43 @@ describe("consumer 2 — flat resolveAccessLabel delegates to the SAME helper", 
     const label = flatResolveAccessLabel(UNRESOLVED_PROJECT, flatScopes);
     expect(label).toEqual({ type: "Project", name: "Unknown project" });
     expect(label.name).not.toContain("zzz999");
+  });
+});
+
+describe("consumer 3 — the flat model's OWN resolver, resolveFlatAccessOption (cinatra#2372 flat additions)", () => {
+  // The full six-kind + committability + degenerate-token contract is pinned
+  // exhaustively in access-scope-flat.test.ts; this block only proves the
+  // unhydrated team/project fallback ALSO delegates to the SAME shared helper
+  // when reached through the model's own entry point (not just via the
+  // `resolveAccessLabel` compatibility wrapper exercised above).
+  it("an unhydrated team/project id delegates to the shared 'Unknown <kind>' helper — no id.slice, no drift from consumer 1/2", () => {
+    const team = resolveFlatAccessOption(UNRESOLVED_TEAM, flatScopes);
+    expect(team.type).toBe("Team");
+    expect(team.name).toBe("Unknown team");
+    expect(team.synthetic).toBe(true);
+    expect(team.committable).toBe(false);
+    expect(team.name).not.toContain("288b9a");
+
+    const project = resolveFlatAccessOption(UNRESOLVED_PROJECT, flatScopes);
+    expect(project.type).toBe("Project");
+    expect(project.name).toBe("Unknown project");
+    expect(project.synthetic).toBe(true);
+    expect(project.committable).toBe(false);
+    expect(project.name).not.toContain("zzz999");
+  });
+
+  it("a resolvable team/project is non-synthetic and committable", () => {
+    expect(resolveFlatAccessOption("team:t1", flatScopes)).toMatchObject({
+      type: "Team",
+      name: "Eng",
+      synthetic: false,
+      committable: true,
+    });
+    expect(resolveFlatAccessOption("project:p1", flatScopes)).toMatchObject({
+      type: "Project",
+      name: "Alpha",
+      synthetic: false,
+      committable: true,
+    });
   });
 });

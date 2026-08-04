@@ -99,8 +99,8 @@ export async function ExtensionsMarketplaceScreen({
   const activeOrgId = session.session?.activeOrganizationId ?? "";
   const { installTargets, ownerEntityNames, defaultValue: pickerFallbackValue } =
     // cinatra#1527: the extension picker ALWAYS offers the two workspace scopes
-    // ("Workspace: All" / "Workspace: Admins only"), platform-admin-only to
-    // install at.
+    // ("Workspace: All" / "Workspace: Admins only" — cinatra#2372 audience
+    // relabel), platform-admin-only to install.
     await buildInstallTargetPickerContext({
       session,
       orgRole,

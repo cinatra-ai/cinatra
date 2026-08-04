@@ -10,12 +10,21 @@
  * (Projects / Teams / Organization: <name> / Workspace / Admin) and bare,
  * unprefixed rows. The spec merge moved to scope-prefixed rows + separators with
  * no heading; this test now locks that.
+ *
+ * cinatra#2372 (mkt-install S1): every row's `{type, name}` pair now comes from
+ * ONE resolver, `resolveFlatAccessOption` (in access-scope.ts, the pure module
+ * the picker already imported), instead of each row hand-writing its own
+ * prefix/name pair — this is what makes the trigger's label
+ * construction-identical to its matching row (c-3.1), not just coincidentally
+ * equal. The "Unknown team"/"Unknown project" fallback (§2.4) moved with it;
+ * the full model contract lives in access-scope-flat.test.ts.
  */
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import * as Mod from "@/components/access-combobox";
 
 const SOURCE = readFileSync("src/components/access-combobox.tsx", "utf-8");
+const FLAT_MODEL_SOURCE = readFileSync("src/components/access-scope.ts", "utf-8");
 
 describe("AccessCombobox single-mode spec alignment (app-permissions.html §III)", () => {
   it("module still loads and exports AccessCombobox + resolveAccessLabel", () => {
@@ -44,18 +53,25 @@ describe("AccessCombobox single-mode spec alignment (app-permissions.html §III)
     expect(SOURCE).not.toMatch(/Organization:\s*\{resolvedOrgName\}/);
   });
 
-  it("§2.3/§3.2: every row is scope-PREFIXED via rowLabel(<Scope>, <name>)", () => {
+  it("§2.3/§3.2: every row is scope-PREFIXED via rowLabel(<Scope>, <name>), sourced from the ONE flat-option resolver (cinatra#2372)", () => {
     expect(SOURCE).toMatch(/const rowLabel = \(prefix: string, name: string\)/);
-    expect(SOURCE).toMatch(/rowLabel\("Personal", "Only me"\)/);
-    expect(SOURCE).toMatch(/rowLabel\("Project", p\.name\)/);
-    expect(SOURCE).toMatch(/rowLabel\("Team", t\.name\)/);
-    expect(SOURCE).toMatch(/rowLabel\("Organization", resolvedOrgName\)/);
-    expect(SOURCE).toMatch(/rowLabel\("Workspace", "All"\)/);
-    expect(SOURCE).toMatch(/rowLabel\("Workspace", "Admins only"\)/);
+    // Every group resolves its row(s) via resolveRow (= resolveFlatAccessOption)
+    // rather than hand-writing a second prefix/name pair — this is the
+    // construction that makes the trigger's label identical to the row's.
+    expect(SOURCE).toMatch(/const resolveRow = \(rowValue: string\): FlatAccessOption =>\s*\n?\s*resolveFlatAccessOption\(rowValue, availableScopes\)/);
+    expect(SOURCE).toMatch(/rowLabel\(personal\.type, personal\.name\)/);
+    expect(SOURCE).toMatch(/rowLabel\(row\.type, row\.name\)/); // project + team loops
+    expect(SOURCE).toMatch(/rowLabel\(orgRow\.type, orgRow\.name\)/);
+    expect(SOURCE).toMatch(/rowLabel\(workspaceRow\.type, workspaceRow\.name\)/);
+    expect(SOURCE).toMatch(/rowLabel\(adminRow\.type, adminRow\.name\)/);
+    // No literal old-style hand-written row label calls survive.
+    expect(SOURCE).not.toMatch(/rowLabel\("Organization", resolvedOrgName\)/);
+    expect(SOURCE).not.toMatch(/rowLabel\("Workspace", "All"\)/);
+    expect(SOURCE).not.toMatch(/rowLabel\("Workspace", "Admins only"\)/);
     // The org ROW is the bare org name behind an "Organization:" prefix — the
-    // old "Anyone in <org>" ROW copy is gone (that phrasing survives on the
-    // TRIGGER only, via resolveAccessLabel, per spec §3.1).
-    expect(SOURCE).not.toMatch(/whitespace-nowrap">\s*\n?\s*Anyone in \{resolvedOrgName\}/);
+    // old "Anyone in <org>" copy is retired everywhere (trigger AND row now
+    // read the same "Organization: <name>" text, per spec §3.1).
+    expect(SOURCE).not.toMatch(/Anyone in /);
   });
 
   it("§2.3: consecutive scope groups are divided by a hairline CommandSeparator", () => {
@@ -74,19 +90,30 @@ describe("AccessCombobox single-mode spec alignment (app-permissions.html §III)
     expect(SOURCE).toMatch(/offeredTeams\.length > 0 \|\| synthTeamOffered/);
   });
 
-  it("§3.4: synthesizes a scope-prefixed, checked Unknown team / Unknown project row", () => {
+  it("§3.4 / c-3.11: synthesizes a scope-prefixed, checked, non-committable row for an unhydrated team/project OR a degenerate org token (cinatra#2372)", () => {
     expect(SOURCE).toMatch(/const needsSynthTeam =/);
     expect(SOURCE).toMatch(/const needsSynthProject =/);
-    expect(SOURCE).toMatch(/renderSynthRow\(value, "Project", unknownScopeEntityName\("project"\)\)/);
-    expect(SOURCE).toMatch(/renderSynthRow\(value, "Team", unknownScopeEntityName\("team"\)\)/);
+    expect(SOURCE).toMatch(/const needsSynthOrg =/);
+    // All three synth rows render via the SAME selectedOption (the resolver's
+    // output for the CURRENT value) rather than three separately-worded calls.
+    expect(SOURCE).toMatch(
+      /renderSynthRow\(value, selectedOption\.type, selectedOption\.name\)/g,
+    );
+    expect((SOURCE.match(/renderSynthRow\(value, selectedOption\.type, selectedOption\.name\)/g) ?? []).length).toBe(3);
   });
 
-  it("delegates the unknown-entity fallback to the shared access-scope helper (no id.slice)", () => {
-    expect(SOURCE).toMatch(
-      /import \{[\s\S]*resolveScopeEntityName[\s\S]*\} from "@\/components\/access-scope"/,
-    );
-    expect(SOURCE).toMatch(/resolveScopeEntityName\("team", id, team\?\.name\)/);
-    expect(SOURCE).toMatch(/resolveScopeEntityName\("project", id, project\?\.name\)/);
+  it("delegates the unknown-entity fallback to the shared access-scope helper (no id.slice) — relocated to the flat model (cinatra#2372)", () => {
+    // The team/project unhydrated-id fallback now lives beside
+    // resolveScopeEntityName's OWN definition, in access-scope.ts (same file —
+    // no import needed), which access-combobox.tsx consumes via
+    // resolveFlatAccessOption rather than calling resolveScopeEntityName itself.
+    expect(FLAT_MODEL_SOURCE).toMatch(/export function resolveScopeEntityName/);
+    expect(FLAT_MODEL_SOURCE).toMatch(/export function resolveFlatAccessOption/);
+    expect(FLAT_MODEL_SOURCE).toMatch(/resolveScopeEntityName\("team", id, team\?\.name\)/);
+    expect(FLAT_MODEL_SOURCE).toMatch(/resolveScopeEntityName\("project", id, project\?\.name\)/);
+    // No LIVE code path falls back to a truncated id (comments documenting the
+    // historical bug this replaced are expected and fine).
+    expect(FLAT_MODEL_SOURCE).not.toMatch(/name:\s*id\.slice\(-6\)/);
     expect(SOURCE).not.toMatch(/id\.slice\(-6\)/);
   });
 

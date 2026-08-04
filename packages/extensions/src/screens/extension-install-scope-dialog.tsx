@@ -44,7 +44,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
-import { AccessCombobox } from "@/components/access-combobox";
+import { AccessCombobox, resolveFlatAccessOption } from "@/components/access-combobox";
 import { toast } from "@/lib/cinatra-toast";
 import type { InstallTarget } from "@cinatra-ai/agents/install-targets";
 import { isRedirectError } from "./is-redirect-error";
@@ -210,14 +210,30 @@ export function ExtensionInstallScopeDialog({
 
   const noInstallableScope = defaultValue === null;
 
-  // Human-readable scope fragment for the success toast.
+  // Committability (cinatra#2372): the ONE gate every single-mode consumer
+  // reads instead of bare value-truthiness — synthetic/degenerate rows (a
+  // mismatched or empty-tail org token, an unhydrated team/project id) and
+  // any server-disabled target are never committable, closing the empty-tail
+  // `org:` defect at the source rather than relying on the value→target
+  // adapter's structural-only null guard.
+  const selectedOption = resolveFlatAccessOption(value, availableScopes, {
+    disabledScopes,
+    ownerOffered: false,
+    workspaceOffered: installWorkspaceScopes,
+    adminOffered: installWorkspaceScopes,
+  });
+
+  // Human-readable scope fragment for the success toast — audience-facing
+  // rows name the canonical vocabulary (cinatra#2372: "Workspace: All" /
+  // "Workspace: Admins only", not the retired "the whole workspace" /
+  // "platform admins" copy).
   const scopeLabelFor = (
     target: { level: InstallTargetLevel },
     pickerValue: string,
   ): string => {
     const entityName = ownerEntityNames[pickerValue];
-    if (target.level === "workspace") return "the whole workspace";
-    if (target.level === "admin") return "platform admins";
+    if (target.level === "workspace") return "Workspace: All";
+    if (target.level === "admin") return "Workspace: Admins only";
     if (target.level === "team") return entityName ? `team ${entityName}` : "team";
     if (target.level === "project") {
       return entityName ? `project ${entityName}` : "project";
@@ -246,7 +262,7 @@ export function ExtensionInstallScopeDialog({
   // Next.js performs the success navigation (MarketplaceInstallForm idiom).
   async function handleSubmit() {
     const target = pickerValueToTarget(value, activeOrgId);
-    if (!target) {
+    if (!target || !selectedOption.committable) {
       setErrorMessage(
         "Selected value is not a valid install target. Please pick a scope from the list.",
       );
@@ -332,9 +348,6 @@ export function ExtensionInstallScopeDialog({
               installMode
               installWorkspaceScopes={installWorkspaceScopes}
             />
-            <p className="text-sm text-muted-foreground">
-              Targets you cannot install at are disabled.
-            </p>
             {errorMessage ? (
               <Alert variant="destructive">
                 <AlertDescription>{errorMessage}</AlertDescription>
@@ -353,7 +366,7 @@ export function ExtensionInstallScopeDialog({
           </Button>
           {!noInstallableScope ? (
             <form action={handleSubmit}>
-              <InstallSubmitButton disabled={!value} />
+              <InstallSubmitButton disabled={!selectedOption.committable} />
             </form>
           ) : null}
         </DialogFooter>

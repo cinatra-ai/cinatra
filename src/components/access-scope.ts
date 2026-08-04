@@ -291,3 +291,212 @@ export function toggleAccessSelection(
   ) as AgentAuthPolicyVisibility[];
   return normalizeVisibilitySelection(raw);
 }
+
+// ---------------------------------------------------------------------------
+// The canonical flat access-option model (cinatra#2372, mkt-install S1).
+//
+// Kept in THIS file — the pure module the flat picker already imports for the
+// "Unknown …" fallback — rather than a new sibling module, so no new
+// reachable first-party module is added to any route that transitively
+// imports the picker (the route-graph no-new-rot ratchet).
+//
+// ONE resolver, `resolveFlatAccessOption`, is the single source of truth for
+// EVERY selectable value in the flat (single-select) picker's six scope
+// kinds — Personal / Project / Team / Organization / Workspace(All) /
+// Workspace(Admins only). Both the closed trigger AND the open dropdown row
+// read a value's `{ type, name }` off the SAME returned option, so
+// "trigger ≡ row, verbatim" (app-permissions.html c-3.1) holds BY
+// CONSTRUCTION — there is no second, independently-maintained trigger label
+// path that can drift from the row copy (the bug this model replaces: the old
+// `resolveAccessLabel` in access-combobox.tsx and the row-building code each
+// hand-wrote their own strings for the same value).
+//
+// A degenerate / legacy / unhydrated value (a stale team/project id, a
+// mismatched or empty-tail org token, an org token with no active org in
+// scope) still resolves to a SELECTED, visible option — `synthetic: true` —
+// so the picker never silently hides what is actually stored
+// (app-permissions.html c-3.11). `committable` is `false` for every synthetic
+// option and for any option whose value is not currently offered/enabled;
+// submit gating in every single-mode consumer reads THIS field instead of
+// value-truthiness, closing the reachable defect where an enabled empty-tail
+// `org:` default reached a server action that then rejected it.
+// ---------------------------------------------------------------------------
+
+/** The four Personal/Team/Project/Organization/Workspace row prefixes the
+ * closed trigger and every dropdown row render verbatim (app-permissions.html
+ * §II / §3.2). */
+export type FlatAccessOptionType =
+  | "Personal"
+  | "Project"
+  | "Team"
+  | "Organization"
+  | "Workspace";
+
+export type FlatAccessOption = {
+  /** The picker value ("owner" | "admin" | "workspace" | "org" | `org:<id>` |
+   * `team:<id>` | `project:<id>`, or an arbitrary/degenerate string). */
+  value: string;
+  /** The row prefix. Empty string only for a value this model cannot classify
+   * at all (never reachable through the picker's own rows). */
+  type: FlatAccessOptionType | "";
+  /** The row's name half — combined with `type` as `${type}: ${name}`, this
+   * IS the trigger's rendered text, verbatim (c-3.1). */
+  name: string;
+  /** True for a display-only row synthesized because the value does not
+   * resolve to a live, server-offered, non-synthetic target (c-3.11): an
+   * unhydrated team/project id, or a degenerate/legacy/cross-org org token. */
+  synthetic: boolean;
+  /** True only when this value maps to an enabled, server-offered,
+   * non-synthetic target — the ONE signal every single-mode consumer gates
+   * its submit control on (never bare value-truthiness). */
+  committable: boolean;
+};
+
+export type FlatAccessAvailableScopes = {
+  projects: { id: string; name: string }[];
+  teams: { id: string; name: string }[];
+  orgName: string;
+  /** Active organization id. Absent (no active org in scope) degrades any
+   * `org:<id>` / bare `org` token to the neutral synthetic option — see
+   * `resolveFlatAccessOption`. */
+  orgId?: string;
+};
+
+export type FlatAccessResolveContext = {
+  /** Values the server marked non-selectable (still resolved + rendered, just
+   * not committable). */
+  disabledScopes?: readonly string[];
+  /** Whether "owner" (Personal: Only me) is offered as a row at all —
+   * `installMode` hides it entirely, so it can never be committable there.
+   * Defaults to `true` (the permissions-tab shape, where owner is always the
+   * narrowing floor). */
+  ownerOffered?: boolean;
+  /** Whether "workspace" (Workspace: All) is offered as a row at all.
+   * Defaults to `true`; install-mode consumers that did not request the
+   * always-offered workspace scopes (`installWorkspaceScopes` /
+   * `includeWorkspaceScopes`) must pass `false` so a value of "workspace" can
+   * never be committable when the row was never actually rendered. */
+  workspaceOffered?: boolean;
+  /** Whether "admin" (Workspace: Admins only) is offered as a row at all.
+   * Same default / rationale as `workspaceOffered`. */
+  adminOffered?: boolean;
+};
+
+/** The canonical org row VALUE for the active org — `org:<id>` when an id is
+ * supplied, degrading to the legacy bare `"org"` only when no org id is
+ * supplied at all (matches the picker's own `orgRowValue` derivation). */
+export function canonicalOrgToken(orgId?: string): string {
+  return orgId != null ? `org:${orgId}` : "org";
+}
+
+/**
+ * Resolve ANY picker value — a real row's value or a degenerate/legacy one —
+ * to its canonical `FlatAccessOption`. This is the ONE function the trigger,
+ * every dropdown row, and every single-mode consumer's submit gate call for a
+ * given value; there is no second label or committability path.
+ */
+export function resolveFlatAccessOption(
+  value: string,
+  scopes: FlatAccessAvailableScopes,
+  ctx: FlatAccessResolveContext = {},
+): FlatAccessOption {
+  const disabledScopes = ctx.disabledScopes ?? [];
+  const isDisabled = (v: string) => disabledScopes.includes(v);
+
+  if (value === "owner") {
+    return {
+      value,
+      type: "Personal",
+      name: "Only me",
+      synthetic: false,
+      committable: (ctx.ownerOffered ?? true) && !isDisabled(value),
+    };
+  }
+  if (value === "admin") {
+    return {
+      value,
+      type: "Workspace",
+      name: "Admins only",
+      synthetic: false,
+      committable: (ctx.adminOffered ?? true) && !isDisabled(value),
+    };
+  }
+  if (value === "workspace") {
+    return {
+      value,
+      type: "Workspace",
+      name: "All",
+      synthetic: false,
+      committable: (ctx.workspaceOffered ?? true) && !isDisabled(value),
+    };
+  }
+  if (value === "org" || value.startsWith("org:")) {
+    const { orgId, orgName } = scopes;
+    // The legacy bare "org" token denotes the active org BY DEFINITION
+    // (read-compat only — the row itself always emits the id-carrying form
+    // when an orgId is supplied). An id-carrying token is confirmed to scope
+    // the active org only when its embedded id equals the supplied `orgId`.
+    const matchesActiveOrg =
+      value === "org" || (orgId != null && value.slice("org:".length) === orgId);
+    if (matchesActiveOrg) {
+      return {
+        value,
+        type: "Organization",
+        name: orgName || "Your organization",
+        synthetic: false,
+        committable: !isDisabled(canonicalOrgToken(orgId)),
+      };
+    }
+    // Degenerate: a mismatched org id, an empty tail ("org:"), or no active
+    // org in scope at all. No cross-org lookup — a neutral, id-free,
+    // NEVER-committable synthetic row (c-3.11 / c-2.5's "never the wrong
+    // org's name" rule extended to the flat model's row-label shape).
+    return {
+      value,
+      type: "Organization",
+      name: "the organization",
+      synthetic: true,
+      committable: false,
+    };
+  }
+  if (value.startsWith("team:")) {
+    const id = value.slice("team:".length);
+    const team = scopes.teams.find((t) => t.id === id);
+    // resolveScopeEntityName is the ONE shared "Unknown <kind>" fallback
+    // (§4.0-a) — it also trims/blank-checks the resolved name, so a team
+    // with a genuinely blank name degrades to "Unknown team" the same way an
+    // unhydrated id does, rather than rendering an empty label.
+    return {
+      value,
+      type: "Team",
+      name: resolveScopeEntityName("team", id, team?.name),
+      synthetic: !team,
+      committable: !!team && !isDisabled(value),
+    };
+  }
+  if (value.startsWith("project:")) {
+    const id = value.slice("project:".length);
+    const project = scopes.projects.find((p) => p.id === id);
+    return {
+      value,
+      type: "Project",
+      name: resolveScopeEntityName("project", id, project?.name),
+      synthetic: !project,
+      committable: !!project && !isDisabled(value),
+    };
+  }
+  // An empty value (no selection yet) or any other non-canonical string —
+  // never crash, never committable, and never leak the raw value as if it
+  // were a real type/name pair.
+  return { value, type: "", name: value, synthetic: true, committable: false };
+}
+
+/** Convenience: the exact string the trigger renders for a resolved option —
+ * `${type}: ${name}` for every classified kind, or the bare `name` for the
+ * unclassified fallback (empty `type`). Used by tests that assert verbatim
+ * trigger/row text equality; the component itself composes the same two
+ * halves via `rowLabel` so both places render identically without calling
+ * this helper. */
+export function flatAccessOptionLabel(option: FlatAccessOption): string {
+  return option.type ? `${option.type}: ${option.name}` : option.name;
+}

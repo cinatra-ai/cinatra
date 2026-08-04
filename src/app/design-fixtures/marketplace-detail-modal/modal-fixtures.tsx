@@ -220,7 +220,11 @@ const CONNECTOR_DETAIL: MarketplaceDetailView = {
 // route. The action is a side-effect-free stand-in (no persistence here — the
 // completed-install proof is a separate operator-gated run).
 const CONNECTOR_INSTALL_TARGETS: InstallTarget[] = [
-  { value: "org:acme", label: "Anyone in Acme Corp", level: "organization", id: "acme", disabled: false },
+  // `label` is DEAD for rendering (cinatra#2372 — the flat AccessCombobox
+  // single mode derives row/trigger text from the canonical flat-option
+  // model, never this field); kept in the current vocabulary for doc
+  // accuracy rather than the retired "Anyone in <org>" copy.
+  { value: "org:acme", label: "Organization: Acme Corp", level: "organization", id: "acme", disabled: false },
   { value: "team:eng", label: "Engineering", level: "team", id: "eng", disabled: false },
 ];
 const CONNECTOR_INSTALL_SCOPE: ModalInstallScopeContext = {
