@@ -60,6 +60,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Full history (all branches) so the recorded PR base commit is
+          # present and the merge base below resolves without any extra fetch.
           fetch-depth: 0
 
       - name: Set up Node.js
@@ -67,18 +69,55 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Fetch PR base ref
+      # cinatra#2212 — diff against THIS RUN'S OWN merge base, pinned as a SHA.
+      # Replaces a `git fetch --no-tags --depth=1 origin
+      # <base>:refs/remotes/origin/<base>`: against the complete clone the
+      # checkout above produces, that fetch left the ref untouched when the live
+      # tip was already present and only wrote .git/shallow at that tip, cutting
+      # its ancestry. Any run whose recorded merge commit predated the live tip
+      # then had no reachable common ancestor and the gate died with
+      # `fatal: origin/<base>...HEAD: no merge base` — a red that mimics a
+      # contract violation over a clean contract (run 30448925863, job
+      # 90566008119). github.event.pull_request.base.sha is frozen in THIS run's
+      # event, so the base derived from it is a property of the snapshot under
+      # test and main cannot move out from under it. For a fresh run it is the
+      # same commit the old expression resolved to — the no-new-debt result is
+      # unchanged (equivalence cases in
+      # scripts/audit/__tests__/extension-readme-gate.test.mjs).
+      - name: Resolve PR merge base
+        id: merge-base
         if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          git fetch --no-tags --depth=1 origin \
-            "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+          set -euo pipefail
+          # fetch-depth: 0 already fetched every branch, so the recorded base
+          # commit is normally in hand; this best-effort fetch only covers a
+          # base commit since rewritten off every branch tip (GitHub may refuse
+          # a fully unreachable one — that is a loud, correct failure). NEVER
+          # pass --depth here: the shallow graft is the bug.
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin "${BASE_SHA}"
+          fi
+          # Normally base.sha IS the merge commit's first parent, i.e. the merge
+          # base itself; merge-base still resolves correctly if the payload and
+          # the merge ref were computed a beat apart, so only note the anomaly.
+          git merge-base --is-ancestor "${BASE_SHA}" HEAD \
+            || echo "::notice::recorded base ${BASE_SHA} is not an ancestor of HEAD; falling back to their common ancestor"
+          # Fail-closed: an unresolvable merge base is a real anomaly and must
+          # be a loud red, never a silently skipped no-new-debt check.
+          MERGE_BASE="$(git merge-base "${BASE_SHA}" HEAD)"
+          echo "sha=${MERGE_BASE}" >> "$GITHUB_OUTPUT"
+          echo "no-new-debt base: ${MERGE_BASE} (recorded PR base ${BASE_SHA})"
 
       - name: Clone companion extension repos
         uses: ./.github/actions/clone-extensions
 
       - name: Run gate
         env:
-          CINATRA_README_GATE_BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
+          # Empty on push (the step above is skipped) — same as before, so the
+          # push arm still skips the no-new-debt check.
+          CINATRA_README_GATE_BASE_REF: ${{ steps.merge-base.outputs.sha }}
         run: node scripts/audit/extension-readme-gate.mjs
 
   tests:
