@@ -6,7 +6,7 @@ import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase, readSk
 import { runPostgresQueriesSync } from "@/lib/postgres-sync";
 import { getExtensionStoreSkillRootPath } from "./extension-store-root";
 // installedSkillPackages + canonical access-policy helpers (W4, #1073) live in ./skill-packages (already graph-reachable): 0 route-graph delta, size-ratchet headroom.
-import { assertPersonalSkillOwnership, installedSkillPackages, normalizeStoredAccessPolicy, projectSelectionToLevelScope, readSkillsCatalogSnapshot, resolveUpsertAccessConfig, visibilityToLevelScope } from "./skill-packages";
+import { assertPersonalSkillOwnership, catalogSignature, EXTENSION_SKILL_SOURCE_ORIGIN, installedSkillPackages, isExtensionRegisteredSkill, normalizeStoredAccessPolicy, projectSelectionToLevelScope, readSkillsCatalogSnapshot, resolveUpsertAccessConfig, sortCatalog, visibilityToLevelScope } from "./skill-packages";
 export { resolveEffectiveSkillAccessPolicy } from "./skill-packages";
 import { commitSkillChange } from "./storage/git-commit";
 import { buildSkillSourceForWrite, buildUpsertRevisionWrite, isSkillSource, resolveSkillSource, type RevisionSource, type SkillSource, type UpsertBundleFile } from "./skill-source";
@@ -908,17 +908,6 @@ function isPersistedSkill(value: PersistedSkill | null): value is PersistedSkill
   return value !== null;
 }
 
-function sortCatalog<T extends { id: string }>(items: T[]) {
-  return [...items].sort((left, right) => left.id.localeCompare(right.id));
-}
-
-function catalogSignature(input: { skillPackages: PersistedSkillPackage[]; skills: PersistedSkill[] }) {
-  return JSON.stringify({
-    skillPackages: sortCatalog(input.skillPackages),
-    skills: sortCatalog(input.skills),
-  });
-}
-
 // options.catalogWriteGuard (cinatra#1364): locked-rebuild-only lease fence for the catalog-write transaction.
 // options.uploadReconcileReason (cinatra#2092, S5): the lifecycle reason label
 // carried onto the reconcile-request row this write commits in its OWN
@@ -933,24 +922,27 @@ export async function syncInstalledSkillsToDatabase(options?: { catalogWriteGuar
 
   const scanned = scanInstalledPackageCatalog();
   const current = readSkillCatalogFromDatabase();
-  // Keep DB-persisted custom packages/skills.
-  //
-  // Custom rows with `packageId.startsWith("github:")` are valid rich rows,
-  // not stale scanner artifacts. Dropping them is harmful:
-  // installSkillPackageFromGitHub stores
-  // rich metadata under `github:owner/repo`, and dropping those rows
-  // forced the skills surface to fall back to the minimal scanner row
-  // (`installed:<slug>` with empty description/license/authors). Keep
-  // them; the scanner is taught to honor the .cinatra-skill-source.json
-  // marker so it doesn't synthesize a duplicate row.
-  const customPackages = current.skillPackages
-    .map(normalizeStoredSkillPackage)
-    .filter(isPersistedSkillPackage)
-    .filter((entry) => entry.isCustom);
+  // Keep the DB-persisted rows this disk scanner cannot produce, under TWO keys:
+  //  1. `isCustom` — custom rows, incl. the `github:owner/repo` rich rows from
+  //     installSkillPackageFromGitHub (dropping those forced the skills surface
+  //     onto the minimal `installed:<slug>` scanner row; the scanner honors the
+  //     .cinatra-skill-source.json marker so it never duplicates them);
+  //  2. EXTENSION PROVENANCE (cinatra#2398) — rows an extension registrar wrote
+  //     for a package's co-located skills/<slug>/SKILL.md, which live in the
+  //     canonical store mirror this scanner never walks (key def: ./skill-packages).
+  // A package row rides along while it still owns a preserved extension row, so
+  // an emptied extension package is dropped rather than lingering.
   const customSkills = current.skills
     .map(normalizeStoredSkill)
     .filter(isPersistedSkill)
-    .filter((entry) => entry.isCustom);
+    .filter((entry) => entry.isCustom || isExtensionRegisteredSkill(entry));
+  const extensionPackageIds = new Set(
+    customSkills.filter(isExtensionRegisteredSkill).map((entry) => entry.packageId),
+  );
+  const customPackages = current.skillPackages
+    .map(normalizeStoredSkillPackage)
+    .filter(isPersistedSkillPackage)
+    .filter((entry) => entry.isCustom || extensionPackageIds.has(entry.packageId));
 
   // When a custom package and a scanner package share an id
   // (the install path wrote a rich row AND the disk-scanner found the
@@ -1138,6 +1130,9 @@ export async function upsertSkill(input: {
   // describes the WHOLE file set (not a bundle of ONE) and a re-registration whose
   // bytes already match records NO new revision. See resolveUpsertBundleFiles.
   bundleFiles?: readonly UpsertBundleFile[];
+  // EXTENSION REGISTRATION (cinatra#2398): an extension package's co-located
+  // skill, not a user-authored one. Passed ONLY by register-extension-skill.ts.
+  extensionRegistered?: boolean;
 }): Promise<PersistedSkill> {
   const existingCatalog = await readSkillsCatalog();
   const updatedAt = new Date().toISOString();
@@ -1320,9 +1315,14 @@ export async function upsertSkill(input: {
       scope: isPersonal ? input.ownerUserId : undefined,
       isCustomSkill: isPersonal || undefined,
       content: input.content,
+      // RECORDED, never derived: the `custom:` packageId minted above would
+      // otherwise classify an extension's own bundle as a custom skill.
+      origin: input.extensionRegistered === true ? EXTENSION_SKILL_SOURCE_ORIGIN : undefined,
     }),
     usedBy: [],
-    isCustom: true,
+    // cinatra#2398: an extension registrar's row is not user-authored; it is
+    // preserved across the rebuild by its recorded provenance instead.
+    isCustom: input.extensionRegistered !== true,
     isCustomSkill: isPersonal || undefined,
     ownerUserId: input.ownerUserId,
     agentId: input.agentId,

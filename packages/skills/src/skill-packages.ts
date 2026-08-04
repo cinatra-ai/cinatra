@@ -262,6 +262,72 @@ export async function readSkillsCatalogSnapshot(): Promise<SkillsCatalogSnapshot
   };
 }
 
+// ---------------------------------------------------------------------------
+// EXTENSION PROVENANCE (cinatra#2398) — the rebuild's second preservation key.
+//
+// `syncInstalledSkillsToDatabase` merges two sources: the legacy disk scanner
+// (which walks `data/skills`, never `extensions/**` and never the canonical
+// `data/skill-store/workspace` mirror) and the DB rows it decides to KEEP. It
+// used to keep exactly the `isCustom` rows — and because `upsertSkill` stamped
+// `isCustom: true` on EVERY row it wrote, an image-bundled extension's
+// co-located skill survived the rebuild only by wearing the user-authored
+// flag. That is the flag the shared assignability predicate reads as "a user
+// wrote this", so those rows were refused as `not-globally-visible`.
+//
+// The fix is to say the true thing on the row and preserve it for the true
+// reason: an extension-registered row is NOT custom (`isCustom: false`), and it
+// survives the rebuild because it carries the EXPLICIT extension provenance the
+// two registrars — and only they — write.
+//
+// These predicates are the single definition of that key, co-located here (a
+// pure, already-graph-reachable module) so the store's merge and the boot
+// registrar's sweep can never disagree about which rows the platform owns.
+// ---------------------------------------------------------------------------
+
+/**
+ * Deterministic catalog ordering + the signature the rebuild engine compares to
+ * decide whether it must write at all. Pure; extracted from skills-store.ts (its
+ * only caller) to keep that file under the file-size ratchet — behaviour is
+ * identical, and co-locating them with the preservation key below keeps every
+ * pure decision the merge makes in one place.
+ */
+export function sortCatalog<T extends { id: string }>(items: T[]) {
+  return [...items].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export function catalogSignature(input: {
+  skillPackages: PersistedSkillPackage[];
+  skills: PersistedSkill[];
+}) {
+  return JSON.stringify({
+    skillPackages: sortCatalog(input.skillPackages),
+    skills: sortCatalog(input.skills),
+  });
+}
+
+/** The recorded `source.origin` that marks an extension-registered catalog row. */
+export const EXTENSION_SKILL_SOURCE_ORIGIN = "extension" as const;
+
+/**
+ * True iff this SKILL row was written by an extension registrar — i.e. it
+ * carries the explicitly RECORDED extension provenance.
+ *
+ * Deliberately reads the STORED `source` blob rather than re-deriving it:
+ * `resolveSkillSource` classifies any legacy row whose packageId is neither
+ * `custom:`/`github:`/`verdaccio:` as "extension", and a derived guess must
+ * never decide either preservation or retirement.
+ */
+export function isExtensionRegisteredSkill(skill: {
+  source?: { origin?: unknown } | null;
+}): boolean {
+  return skill.source?.origin === EXTENSION_SKILL_SOURCE_ORIGIN;
+}
+
+/** True iff this PACKAGE row was created by an extension registrar. */
+export function isExtensionRegisteredSkillPackage(pkg: { origin?: unknown }): boolean {
+  return pkg.origin === EXTENSION_SKILL_SOURCE_ORIGIN;
+}
+
 export type SkillsCatalogRebuildState = { completedAt: string; reason: string } | null;
 
 /**
@@ -486,6 +552,47 @@ function isCatalogWriteLeaseLostAbort(db: DatabaseModule, error: unknown): boole
   return (
     error instanceof Error && error.message.includes(db.CATALOG_WRITE_LEASE_LOST_ERROR_MARKER)
   );
+}
+
+/**
+ * Run `fn` holding the SAME cross-process catalog-rebuild lease
+ * `rebuildSkillsCatalog` takes (cinatra#2398).
+ *
+ * The boot registrar drives one `upsertSkill` per bundled skill, and each of
+ * those is a read-merge-REPLACE of the WHOLE catalog. Two instances booting at
+ * once would interleave those replaces — and interleave them with a leased
+ * rebuild — so the registrar runs inside the lease and RELEASES it before the
+ * boot phase's `rebuildSkillsCatalog` re-acquires it (sequential acquisitions;
+ * nothing nests, so there is no self-deadlock: `upsertSkill`'s internal
+ * `readSkillsCatalog()` runs the LEGACY engine, which never takes the lease).
+ *
+ * Stated honestly, this NARROWS a window rather than closing one, in two named
+ * ways:
+ *
+ *   - it serializes only LEASE-PARTICIPATING work. An unrelated `upsertSkill`
+ *     in another process (the lazy resolver, the llm-bridge mount) still writes
+ *     the whole catalog last-writer-wins, exactly as it did before;
+ *   - the lease is NOT renewed and the callback is NOT fenced. A pass that
+ *     outlives its TTL keeps writing while a new holder owns the lease — the
+ *     same exposure `rebuildSkillsCatalog` has, except that its catalog write
+ *     is additionally guarded by the lease token. What makes the residual
+ *     tolerable here is that the registrar is content-idempotent: a clobbered
+ *     pass is re-derived, byte-for-byte, by the next boot.
+ *
+ * The TTL is a caller input for the same reason the rebuild's is — a registrar
+ * pass is a different length of work than a rebuild.
+ */
+export async function withSkillsCatalogRebuildLease<T>(
+  fn: () => Promise<T>,
+  options: RebuildSkillsCatalogOptions = {},
+): Promise<T> {
+  const db = await loadDb();
+  const leaseToken = await acquireCatalogRebuildLease(db, options);
+  try {
+    return await fn();
+  } finally {
+    releaseCatalogRebuildLease(db, leaseToken);
+  }
 }
 
 /** Best-effort release; an expired-and-stolen lease is left alone (CAS-guarded). */

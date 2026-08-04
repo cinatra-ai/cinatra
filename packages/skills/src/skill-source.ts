@@ -193,6 +193,28 @@ export interface SkillSourceWriteInput extends SkillSourceResolvable {
   content: string;
   /** SKILL.md path relative to the package/checkout root. Defaults to "SKILL.md". */
   relativePath?: string;
+  /**
+   * EXPLICIT origin override (cinatra#2398). When set it WINS over
+   * `deriveOrigin`'s classification.
+   *
+   * Why it has to exist: an extension's co-located bundle is registered through
+   * `upsertSkill`, which mints `packageId = custom:<slugify(packageName)>` —
+   * and that `custom:` prefix is load-bearing elsewhere (it is what tells the
+   * bundle store the DATABASE, not the disk, is this row's content authority;
+   * see `isCustomOrPersonalSkillPayload` below and its twin in
+   * `src/lib/skill-bundle-store.ts`). So the prefix cannot be changed, and
+   * `deriveOrigin` reads it back as `"custom"` — i.e. the recorded provenance
+   * of every extension-bundled skill row LIED, calling an image-bundled
+   * extension bundle a user-authored custom skill.
+   *
+   * The two extension registrars (`registerExtensionSkill`,
+   * `registerPackageAgentSkill`) pass `"extension"` here so the row records
+   * what it actually is. Nothing derives this value — an extension-origin
+   * `source` blob is written by those registrars alone, which is exactly what
+   * lets the catalog rebuild treat it as an OWNERSHIP marker (the rows it must
+   * preserve, and the rows whose vanished bundles it may retire).
+   */
+  origin?: SkillSourceOrigin;
 }
 
 /**
@@ -215,11 +237,16 @@ export interface SkillSourceWriteInput extends SkillSourceResolvable {
 export function buildSkillSourceForWrite(input: SkillSourceWriteInput): SkillSource | null {
   const derived = resolveSkillSource(input);
   if (!derived) return null;
+  // An explicit `origin` (cinatra#2398) wins over the derived classification —
+  // and drives the revision tag with it, so an extension-registered row records
+  // the immutable-snapshot semantics its origin already documents.
+  const origin: SkillSourceOrigin = input.origin ?? derived.origin;
   const revisionKind: SkillSourceRevision["kind"] =
-    derived.origin === "extension" ? "digest" : "activeHead";
+    origin === "extension" ? "digest" : "activeHead";
   const revisionValue = computeSkillSourceRevision(input.content);
   return {
     ...derived,
+    origin,
     revision: { kind: revisionKind, value: revisionValue } as SkillSourceRevision,
     relativePath: input.relativePath ?? "SKILL.md",
   };

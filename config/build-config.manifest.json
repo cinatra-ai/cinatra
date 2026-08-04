@@ -372,6 +372,7 @@
     { "alias": "@cinatra-ai/skills/agent-package-resolver", "target": "./packages/skills/src/agent-package-resolver.ts" },
     { "alias": "@cinatra-ai/skills/agent-skill-assignability", "target": "./packages/skills/src/agent-skill-assignability.ts" },
     { "alias": "@cinatra-ai/skills/assignable-skill-search", "target": "./packages/skills/src/assignable-skill-search.ts" },
+    { "alias": "@cinatra-ai/skills/bundled-skill-registration", "target": "./packages/skills/src/bundled-skill-registration.ts" },
     { "alias": "@cinatra-ai/skills/skill-packages", "target": "./packages/skills/src/skill-packages.ts" },
     { "alias": "@cinatra-ai/skills/store", "target": "./packages/skills/src/skills-store.ts" },
     { "alias": "@cinatra-ai/skills/pages", "target": "./packages/skills/src/plugin-pages.tsx" },

@@ -187,3 +187,63 @@ describe("retireExtensionSkillsByExactId", () => {
     expect(replaceCatalogMock).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// The `require` re-check (cinatra#2398).
+//
+// The boot registrar SELECTS its retirement candidates from an earlier catalog
+// snapshot and then asks this helper to delete them. Between those two reads a
+// concurrent write can change what the row IS. The predicate the caller
+// selected with therefore rides along and is re-evaluated HERE, against the row
+// as freshly read — so a row that stopped qualifying survives.
+// ---------------------------------------------------------------------------
+
+describe("retireExtensionSkillsByExactId — the `require` re-check", () => {
+  it("re-evaluates the predicate against the FRESHLY READ row, not the caller's", async () => {
+    // The caller selected this id when it still carried extension provenance;
+    // by the time the helper reads the catalog it is a custom row.
+    dbCatalog.skills = [
+      extensionRow("@cinatra-ai/chat:changed-underneath", path.join(legacyRoot, "workspace", "x", "SKILL.md"), {
+        source: { origin: "custom", scope: null, packageRef: null, revision: { kind: "activeHead", value: null }, relativePath: null },
+      }),
+    ];
+
+    const retired = await retireExtensionSkillsByExactId(["@cinatra-ai/chat:changed-underneath"], {
+      require: (skill) =>
+        (skill as { source?: { origin?: string } | null }).source?.origin === "extension",
+    });
+
+    expect(retired).toEqual([]);
+    expect(replaceCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("retires when the freshly read row still satisfies the predicate", async () => {
+    dbCatalog.skills = [
+      extensionRow("@cinatra-ai/chat:still-bundled", path.join(legacyRoot, "workspace", "x", "SKILL.md"), {
+        source: { origin: "extension", scope: null, packageRef: null, revision: { kind: "digest", value: "d" }, relativePath: "SKILL.md" },
+      }),
+    ];
+
+    const retired = await retireExtensionSkillsByExactId(["@cinatra-ai/chat:still-bundled"], {
+      require: (skill) =>
+        (skill as { source?: { origin?: string } | null }).source?.origin === "extension",
+    });
+
+    expect(retired).toEqual(["@cinatra-ai/chat:still-bundled"]);
+  });
+
+  it("keeps the owner-shape refusals even when the predicate says yes", async () => {
+    dbCatalog.skills = [
+      extensionRow("@cinatra-ai/chat:agent-bound", path.join(legacyRoot, "workspace", "x", "SKILL.md"), {
+        agentId: "@acme/an-agent",
+        source: { origin: "extension", scope: null, packageRef: null, revision: { kind: "digest", value: "d" }, relativePath: "SKILL.md" },
+      }),
+    ];
+
+    const retired = await retireExtensionSkillsByExactId(["@cinatra-ai/chat:agent-bound"], {
+      require: () => true,
+    });
+
+    expect(retired).toEqual([]);
+  });
+});
