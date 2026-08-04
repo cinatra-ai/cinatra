@@ -39,6 +39,7 @@ vi.mock("next/link", () => ({
 // The save button posts a server action; it is irrelevant to the removal contract.
 vi.mock("@/app/campaigns/actions", () => ({
   setDefaultProvidersAction: vi.fn(),
+  setDefaultLlmProviderAction: vi.fn(),
 }));
 
 import { DefaultProvidersCard } from "../_default-llm-select";

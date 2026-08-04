@@ -36,6 +36,19 @@ import {
   writeAnthropicMcpMode,
 } from "@/lib/setup-readiness-saga";
 import { createSetupReadinessPorts } from "@/lib/setup-readiness-ports";
+// S3 (cinatra#2388): the provider-commit state machine — fenced claims, the
+// atomic setup sink, ownership-proven compensation — and the keyed credential
+// fingerprint the commitment stores.
+import {
+  beginSetupProviderClaim,
+  commitSetupProviderClaim,
+  compensateOwnedSetupCommitment,
+  readSetupProviderCommitSnapshot,
+  readSetupProviderCommitState,
+  refreshCommittedCredentialFingerprint,
+  releaseSetupProviderClaim,
+} from "@/lib/setup-provider-commit";
+import { readLiveCredentialFingerprint } from "@/lib/llm-credential-fingerprint";
 import {
   SETUP_CREDENTIAL_SAVE_STEP_ID,
   SETUP_PROVIDER_SELECTION_CONFIG_KEY,
@@ -82,6 +95,17 @@ export async function selectSetupProviderAction(formData: FormData) {
   const parsed = providerSchema().safeParse(formData.get("provider"));
   if (!parsed.success) {
     redirect("/setup/ai?stay=1&error=setup-provider-invalid");
+  }
+  // S3 (cinatra#2388): provider selection REFUSES switches while a claim is
+  // pending or a commitment exists. Re-selecting the already-committed
+  // provider is allowed (it only decides which form renders); switching away
+  // is Administration's transactional transition, not a wizard click.
+  const commitState = readSetupProviderCommitState();
+  if (commitState.kind === "claim-pending") {
+    redirect("/setup/ai?stay=1&error=setup-provider-claim-pending");
+  }
+  if (commitState.kind === "committed" && commitState.commitment.provider !== parsed.data) {
+    redirect("/setup/ai?stay=1&error=setup-provider-locked");
   }
   writeConnectorConfigToDatabase(SETUP_PROVIDER_SELECTION_CONFIG_KEY, parsed.data);
   redirect("/setup/ai?stay=1");
@@ -251,28 +275,129 @@ export async function completeAiSetupAction(formData: FormData) {
   }
   const provider = parsed.data as LlmProvider;
   const actor = await getActorContext();
+  const actorUserId = session.user?.id ?? null;
+
+  // -------------------------------------------------------------------------
+  // S3 (cinatra#2388): Continue enters the provider-commit STATE MACHINE.
+  //
+  //   pending claim        → refuse (any claim, including a stale own tab —
+  //                          claims are short-lived and expiry is the recovery)
+  //   committed, DIFFERENT → refuse (the lock; Administration is the change path)
+  //   committed, SAME      → RE-VERIFY: run the readiness saga with a no-op
+  //                          commit (the matrix's idempotent no-op — the
+  //                          audited default already matches the commitment)
+  //                          and refresh the stored credential fingerprint on
+  //                          success, which is how a key rotation closes the
+  //                          reopened key flow without touching the lock.
+  //   absent               → CLAIM (fenced, nonce-owned), run the saga, and
+  //                          commit through the atomic setup sink; the audited
+  //                          mutation is NEVER invoked unfenced from setup.
+  // -------------------------------------------------------------------------
+  const snapshot = readSetupProviderCommitSnapshot();
+  if (snapshot.state.kind === "claim-pending") {
+    redirect("/setup/ai?stay=1&error=setup-provider-claim-pending");
+  }
+  if (snapshot.state.kind === "committed" && snapshot.state.commitment.provider !== provider) {
+    redirect("/setup/ai?stay=1&error=setup-provider-locked");
+  }
+
+  // The keyed digest of the credential this run is about to verify. A
+  // non-readable outcome is carried as null (fail-closed mismatch on every
+  // later readiness read — the step will honestly reopen).
+  const liveFingerprint = await readLiveCredentialFingerprint(provider);
+  const credentialFingerprint =
+    liveFingerprint.status === "readable" ? liveFingerprint.fingerprint : null;
+
+  // --- Acquire the fence (absent → claimed) --------------------------------
+  let claimNonce: string | null = null;
+  let priorDefault: string | null = null;
+  if (snapshot.state.kind === "absent") {
+    const begun = beginSetupProviderClaim({
+      provider,
+      actorId: actorUserId,
+      startingCredentialFingerprint: credentialFingerprint,
+    });
+    if (!begun.ok) {
+      redirect(
+        begun.refusal === "committed"
+          ? "/setup/ai?stay=1&error=setup-provider-locked"
+          : "/setup/ai?stay=1&error=setup-provider-claim-pending",
+      );
+    }
+    claimNonce = begun.claim.nonce;
+    priorDefault = begun.claim.priorDefault;
+  }
+
+  // Committed-record ownership handoff for the saga's forced-restore path (a
+  // receipt-write failure AFTER a landed commit): compensation is CAS-tombstone
+  // under proven ownership, never an unconditional default write.
+  let committed: { raw: string; provider: string } | null = null;
 
   // The commit port is ASYNC by contract, so the audited mutation is awaited
   // INSIDE the saga — before its post-commit verification and before the
-  // receipt is written. An earlier version smuggled the promise out through a
-  // side channel, which made the verification read the PRE-commit value and
-  // could leave a committed provider with no receipt behind it.
+  // receipt is written. With a claim held, the port is the ATOMIC SETUP SINK:
+  // nonce guard + claim→committed CAS + audited default write, one fenced
+  // step. On the committed-same re-verify path the port is the matrix's
+  // idempotent no-op.
   const ports = createSetupReadinessPorts({
-    setDefaultProvider: (p) => updateDefaultLlmProvider({ actor, provider: p }),
+    setDefaultProvider: async (p) => {
+      if (claimNonce === null) {
+        // Committed-same re-verify: the audited default already matches the
+        // commitment; the machine is not re-entered and nothing is written.
+        return;
+      }
+      const committedResult = await commitSetupProviderClaim({
+        nonce: claimNonce,
+        credentialFingerprint,
+        writeAuditedDefault: (pp) => updateDefaultLlmProvider({ actor, provider: pp }),
+      });
+      if (!committedResult.ok) {
+        throw new Error(committedResult.message);
+      }
+      committed = { raw: committedResult.raw, provider: p };
+    },
   });
+  // Override the default restore port: under the machine, compensation must
+  // prove ownership (byte-equal CAS) before touching anything — an
+  // unconditional `writeDefaultLlmProviderToDatabase(prior)` could clobber a
+  // concurrent execution's landed state.
+  ports.restoreDefaultProvider = async () => {
+    if (committed && priorDefault !== null) {
+      compensateOwnedSetupCommitment({
+        committedRaw: committed.raw,
+        committedProvider: committed.provider,
+        priorDefault,
+      });
+      committed = null;
+    }
+  };
+
+  const releaseClaimIfHeld = () => {
+    // No-op when the sink consumed the claim (the record is committed now) or
+    // when no claim was taken (re-verify path); conditional-delete otherwise.
+    if (claimNonce !== null && committed === null) {
+      try {
+        releaseSetupProviderClaim({ nonce: claimNonce });
+      } catch (err) {
+        console.error(`[setup-ai] could not release the setup claim (${errorClass(err)})`);
+      }
+    }
+  };
 
   let result;
   try {
     result = await runSetupReadinessSaga({
       provider,
-      actorUserId: session.user?.id ?? null,
+      actorUserId,
       // The wizard's compensation is "setup-incomplete": the step keeps
       // prompting with the actionable error. A rollback would be meaningless
-      // here — the saga never committed anything to roll back to.
+      // here — a failed run never leaves a commitment behind (the sink's own
+      // compensation and the claim release both act under proven ownership).
       onFailure: "leave-incomplete",
       ports,
     });
   } catch (err) {
+    releaseClaimIfHeld();
     if (isNextRedirect(err)) throw err;
     writeConnectorConfigToDatabase(SETUP_READINESS_FAILURE_CONFIG_KEY, {
       step: "commit",
@@ -284,6 +409,7 @@ export async function completeAiSetupAction(formData: FormData) {
   }
 
   if (!result.ok) {
+    releaseClaimIfHeld();
     writeConnectorConfigToDatabase(SETUP_READINESS_FAILURE_CONFIG_KEY, {
       step: result.failure.step,
       message: result.failure.message,
@@ -291,6 +417,17 @@ export async function completeAiSetupAction(formData: FormData) {
       at: new Date().toISOString(),
     });
     redirect("/setup/ai?stay=1&error=setup-readiness-failed");
+  }
+
+  // Committed-same re-verify success: refresh the commitment's stored
+  // credential fingerprint to the one this run just verified (byte-equal CAS —
+  // a concurrent Administration transition simply wins and the refresh yields).
+  if (claimNonce === null && snapshot.state.kind === "committed" && snapshot.raw !== null) {
+    refreshCommittedCredentialFingerprint({
+      expectedRaw: snapshot.raw,
+      commitment: snapshot.state.commitment,
+      credentialFingerprint,
+    });
   }
 
   writeConnectorConfigToDatabase(SETUP_READINESS_FAILURE_CONFIG_KEY, null);

@@ -5,9 +5,11 @@
 //   - CINATRA_ENCRYPTION_KEY ready/not-ready states
 //   - Gemini step is NOT present
 //   - isSetupWizardComplete() gate behavior
-//   - the AI step's readiness is RECEIPT VALIDITY (cinatra#2093, epic #2086 S6),
-//     not a cached OpenAI connection boolean — so it is provider-agnostic and a
-//     saved key alone never completes the step.
+//   - the AI step's readiness derives from the provider-commit state machine
+//     (cinatra#2388, epic #2385 S3): commitment (the lock) + fresh credential
+//     fingerprint + provider-specific readiness — and completion is re-derived
+//     FRESHLY on every read (the positive completion cache is gone, so a
+//     complete→incomplete flip is visible immediately).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -34,20 +36,24 @@ vi.mock("@cinatra-ai/openai-connector", () => ({
 vi.mock("@/lib/nango-system", () => ({
   getNangoStatus: () => ({ status: "connected" }),
 }));
-// S6 (cinatra#2093): the AI step reads the setup READINESS RECEIPT. Stubbed at
-// the readiness-state seam so the wizard's step/gate logic is exercised in
-// isolation; the receipt's own validity + invalidation rules are pinned by
-// setup-readiness-receipt.test.ts.
+// S3 (cinatra#2388): the AI step reads the provider-commit machine's FRESH
+// derivation. Stubbed at that seam so the wizard's step/gate logic is
+// exercised in isolation; the machine's own claim/commit/fingerprint rules are
+// pinned by setup-provider-commit.test.ts.
 const readinessState = { ready: false as boolean };
-vi.mock("@/lib/setup-readiness-saga", () => ({
-  readSetupReadinessState: () => ({ ready: readinessState.ready, receipt: null }),
+vi.mock("@/lib/setup-provider-commit", () => ({
+  deriveSetupAiStepState: async () => ({
+    ready: readinessState.ready,
+    locked: readinessState.ready,
+    credentialFresh: readinessState.ready,
+    commitState: { kind: readinessState.ready ? "committed" : "absent" },
+  }),
 }));
 
 import {
   getSetupWizardSteps,
   isSetupWizardComplete,
   getFirstIncompleteStep,
-  invalidateSetupWizardCache,
 } from "@/lib/setup-wizard";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import type { InstanceIdentity } from "@/lib/instance-identity-store";
@@ -168,7 +174,7 @@ describe("getSetupWizardSteps - no gemini step", () => {
 // S6 (cinatra#2093): the AI step is RECEIPT-driven and provider-agnostic
 // ---------------------------------------------------------------------------
 
-describe("getSetupWizardSteps - the AI step follows the readiness receipt", () => {
+describe("getSetupWizardSteps - the AI step follows the commit machine's derivation", () => {
   it("the ai step is NOT ready without a valid receipt, whatever any connection says", async () => {
     vi.mocked(readInstanceIdentity).mockReturnValue(SAMPLE_IDENTITY);
     readinessState.ready = false;
@@ -196,14 +202,6 @@ describe("getSetupWizardSteps - the AI step follows the readiness receipt", () =
 // ---------------------------------------------------------------------------
 
 describe("getSetupWizardSteps - the sign-up step (cinatra#2386)", () => {
-  beforeEach(() => {
-    // isSetupWizardComplete() only caches a TRUE result (see setup-wizard.ts)
-    // — an earlier test in this file (the AI-receipt describe block above)
-    // legitimately leaves a cached `true` behind. Invalidate it so this
-    // block's flip-to-incomplete assertions aren't served a stale cache hit.
-    invalidateSetupWizardCache();
-  });
-
   it("is steps[0], not ready, when zero Better Auth users exist", async () => {
     hasUsersState.value = false;
     vi.mocked(readInstanceIdentity).mockReturnValueOnce(null);
@@ -236,5 +234,24 @@ describe("getSetupWizardSteps - the sign-up step (cinatra#2386)", () => {
     readinessState.ready = true;
     const steps = await getSetupWizardSteps();
     expect(getFirstIncompleteStep(steps)?.id).toBe("sign-up");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S3 (cinatra#2388): NO completion cache — completion is re-derived freshly,
+// so a complete→incomplete flip (credential deletion invalidating the
+// fingerprint) is visible on the very next read. Under the retired positive
+// cache this exact sequence served a stale `true` for up to 60 s.
+// ---------------------------------------------------------------------------
+
+describe("isSetupWizardComplete - fresh derivation, no stale-true window (cinatra#2388)", () => {
+  it("reflects a complete→incomplete flip immediately", async () => {
+    vi.mocked(readInstanceIdentity).mockReturnValue(SAMPLE_IDENTITY);
+    readinessState.ready = true;
+    await expect(isSetupWizardComplete()).resolves.toBe(true);
+    // The credential disappears (fingerprint mismatch) — the machine's fresh
+    // derivation flips, and the wizard must flip WITH it, instantly.
+    readinessState.ready = false;
+    await expect(isSetupWizardComplete()).resolves.toBe(false);
   });
 });

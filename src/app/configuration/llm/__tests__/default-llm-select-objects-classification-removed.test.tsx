@@ -42,6 +42,7 @@ vi.mock("next/link", () => ({
 
 vi.mock("@/app/campaigns/actions", () => ({
   setDefaultProvidersAction: vi.fn(),
+  setDefaultLlmProviderAction: vi.fn(),
 }));
 
 import { DefaultProvidersCard } from "../_default-llm-select";

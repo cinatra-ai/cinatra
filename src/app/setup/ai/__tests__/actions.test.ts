@@ -79,6 +79,36 @@ vi.mock("@/lib/setup-readiness-ports", () => ({
   createSetupReadinessPorts: vi.fn(() => ({})),
 }));
 
+// S3 (cinatra#2388): the provider-commit machine, stubbed at its seam. The
+// machine's own fencing/compensation rules are pinned by
+// setup-provider-commit.test.ts; here it stands in as controllable state so
+// the ACTIONS' refusal/redirect protocol can be proven.
+const commitMachineState = {
+  snapshot: { raw: null as string | null, state: { kind: "absent" } as Record<string, unknown> },
+};
+const beginSetupProviderClaim = vi.fn<(arg: unknown) => unknown>();
+const commitSetupProviderClaim = vi.fn<(arg: unknown) => unknown>();
+const releaseSetupProviderClaim = vi.fn<(arg: unknown) => boolean>(() => true);
+const refreshCommittedCredentialFingerprint = vi.fn<(arg: unknown) => boolean>(() => true);
+const compensateOwnedSetupCommitment = vi.fn<(arg: unknown) => boolean>(() => true);
+vi.mock("@/lib/setup-provider-commit", () => ({
+  readSetupProviderCommitSnapshot: () => commitMachineState.snapshot,
+  readSetupProviderCommitState: () => commitMachineState.snapshot.state,
+  beginSetupProviderClaim: (arg: unknown) => beginSetupProviderClaim(arg),
+  commitSetupProviderClaim: (arg: unknown) => commitSetupProviderClaim(arg),
+  releaseSetupProviderClaim: (arg: unknown) => releaseSetupProviderClaim(arg),
+  refreshCommittedCredentialFingerprint: (arg: unknown) =>
+    refreshCommittedCredentialFingerprint(arg),
+  compensateOwnedSetupCommitment: (arg: unknown) => compensateOwnedSetupCommitment(arg),
+}));
+
+vi.mock("@/lib/llm-credential-fingerprint", () => ({
+  readLiveCredentialFingerprint: async () => ({
+    status: "readable",
+    fingerprint: "cfv1:test",
+  }),
+}));
+
 vi.mock("@/lib/auth-session", () => ({
   requireAdminSession: vi.fn(async () => ({ user: { id: "user_admin" } })),
   getActorContext: vi.fn(async () => ({ userId: "user_admin" })),
@@ -95,7 +125,10 @@ vi.mock("@cinatra-ai/sdk-extensions/llm-provider-contract", () => ({
 import {
   saveAnthropicSetupKeyAction,
   enableAnthropicNativeSkillDeliveryAction,
+  selectSetupProviderAction,
+  completeAiSetupAction,
 } from "@/app/setup/ai/actions";
+import { runSetupReadinessSaga } from "@/lib/setup-readiness-saga";
 import {
   SETUP_CREDENTIAL_SAVE_STEP_ID,
   SETUP_READINESS_FAILURE_CONFIG_KEY,
@@ -141,6 +174,9 @@ let errorLogArgs: unknown[][];
 beforeEach(() => {
   vi.clearAllMocks();
   storedConfig.clear();
+  commitMachineState.snapshot = { raw: null, state: { kind: "absent" } };
+  releaseSetupProviderClaim.mockReturnValue(true);
+  refreshCommittedCredentialFingerprint.mockReturnValue(true);
   isNangoConfigured.mockReturnValue(true);
   saveAPISettings.mockImplementation(async () => ({}));
   readAnthropicMcpMode.mockReturnValue("function-tools");
@@ -342,5 +378,106 @@ describe("F2 — enableAnthropicNativeSkillDeliveryAction: the fix-forward is pe
     expect(clearSetupReadinessReceipt).not.toHaveBeenCalled();
     expect(writeAnthropicMcpMode).not.toHaveBeenCalled();
     expect(writeConnectorConfigToDatabase).not.toHaveBeenCalled();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// S3 (cinatra#2388) — the actions honor the provider-commit machine.
+// ---------------------------------------------------------------------------
+
+function providerForm(provider: string): FormData {
+  const form = new FormData();
+  form.set("provider", provider);
+  return form;
+}
+
+describe("S3 — selectSetupProviderAction refuses switches under the machine", () => {
+  it("refuses ANY selection while a claim is pending", async () => {
+    commitMachineState.snapshot = {
+      raw: "{}",
+      state: { kind: "claim-pending", claim: { actorId: "someone" } },
+    };
+    const url = await redirectOf(() => selectSetupProviderAction(providerForm("openai")));
+    expect(url).toBe("/setup/ai?stay=1&error=setup-provider-claim-pending");
+    // The stored pick was NOT written.
+    expect(
+      writeConnectorConfigToDatabase.mock.calls.filter(
+        (c) => c[0] === "setup_provider_selection",
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("refuses switching AWAY from a committed provider, allows re-selecting it", async () => {
+    commitMachineState.snapshot = {
+      raw: "{}",
+      state: { kind: "committed", commitment: { provider: "anthropic" } },
+    };
+    const refused = await redirectOf(() => selectSetupProviderAction(providerForm("openai")));
+    expect(refused).toBe("/setup/ai?stay=1&error=setup-provider-locked");
+    const allowed = await redirectOf(() => selectSetupProviderAction(providerForm("anthropic")));
+    expect(allowed).toBe("/setup/ai?stay=1");
+  });
+});
+
+describe("S3 — completeAiSetupAction under the machine", () => {
+  it("refuses Continue while a claim is pending (no saga run, no claim taken)", async () => {
+    commitMachineState.snapshot = {
+      raw: "{}",
+      state: { kind: "claim-pending", claim: { actorId: "someone" } },
+    };
+    const url = await redirectOf(() => completeAiSetupAction(providerForm("openai")));
+    expect(url).toBe("/setup/ai?stay=1&error=setup-provider-claim-pending");
+    expect(beginSetupProviderClaim).not.toHaveBeenCalled();
+    expect(vi.mocked(runSetupReadinessSaga)).not.toHaveBeenCalled();
+  });
+
+  it("refuses Continue for a provider DIFFERENT from the committed one (the lock)", async () => {
+    commitMachineState.snapshot = {
+      raw: "{}",
+      state: { kind: "committed", commitment: { provider: "anthropic" } },
+    };
+    const url = await redirectOf(() => completeAiSetupAction(providerForm("openai")));
+    expect(url).toBe("/setup/ai?stay=1&error=setup-provider-locked");
+    expect(vi.mocked(runSetupReadinessSaga)).not.toHaveBeenCalled();
+  });
+
+  it("absent state: claims, and RELEASES the claim when the saga reports failure", async () => {
+    beginSetupProviderClaim.mockReturnValue({
+      ok: true,
+      claim: { nonce: "nonce-1", priorDefault: "openai" },
+    });
+    vi.mocked(runSetupReadinessSaga).mockResolvedValue({
+      ok: false,
+      failure: {
+        step: "credential-validation",
+        message: "no key",
+        compensation: "setup-incomplete",
+      },
+    } as never);
+    const url = await redirectOf(() => completeAiSetupAction(providerForm("openai")));
+    expect(url).toBe("/setup/ai?stay=1&error=setup-readiness-failed");
+    expect(beginSetupProviderClaim).toHaveBeenCalledTimes(1);
+    expect(releaseSetupProviderClaim).toHaveBeenCalledWith({ nonce: "nonce-1" });
+  });
+
+  it("committed-same re-verify: NO claim is taken and success refreshes the stored fingerprint", async () => {
+    commitMachineState.snapshot = {
+      raw: '{"stored":"commitment"}',
+      state: { kind: "committed", commitment: { provider: "openai" } },
+    };
+    vi.mocked(runSetupReadinessSaga).mockResolvedValue({
+      ok: true,
+      receipt: {},
+      matcherConstraint: null,
+    } as never);
+    const url = await redirectOf(() => completeAiSetupAction(providerForm("openai")));
+    expect(url).toBe("/setup/ai?stay=1");
+    expect(beginSetupProviderClaim).not.toHaveBeenCalled();
+    expect(refreshCommittedCredentialFingerprint).toHaveBeenCalledWith({
+      expectedRaw: '{"stored":"commitment"}',
+      commitment: { provider: "openai" },
+      credentialFingerprint: "cfv1:test",
+    });
   });
 });

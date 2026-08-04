@@ -3,16 +3,59 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActorContext } from "@/lib/authz/actor-context";
 
 const getActorContext = vi.fn<() => Promise<ActorContext | undefined>>();
+// STATEFUL default-provider seam: the S3 Administration transition verifies
+// its audited write actually LANDED by re-reading the stored default, so the
+// read must observe the write (a fixed "openai" would read as a silent
+// non-landing and roll the transition back).
+const storedDefault = { value: "openai" };
+// The spy is observation-only; the STATE update lives in the factory wrapper
+// below so a per-test `mockImplementation` (e.g. the audit/write ordering
+// probe) can never break the read-your-write behavior the transition verifies.
 const writeDefaultLlmProviderToDatabase = vi.fn();
-const readDefaultLlmProviderFromDatabase = vi.fn(() => "openai");
+const readDefaultLlmProviderFromDatabase = vi.fn(() => storedDefault.value);
 const logAuditEventStrict = vi.fn();
+
+// In-memory metadata rows for the provider-commit record the route's S3
+// transition (cinatra#2388) fences its write through.
+const metadataStore = new Map<string, string>();
 
 vi.mock("@/lib/auth-session", () => ({
   getActorContext: () => getActorContext(),
 }));
 vi.mock("@/lib/database", () => ({
-  writeDefaultLlmProviderToDatabase: (p: unknown) => writeDefaultLlmProviderToDatabase(p),
+  writeDefaultLlmProviderToDatabase: (p: unknown) => {
+    storedDefault.value = String(p);
+    writeDefaultLlmProviderToDatabase(p);
+  },
   readDefaultLlmProviderFromDatabase: () => readDefaultLlmProviderFromDatabase(),
+  readRawMetadataStringFromDatabase: (key: string) => metadataStore.get(key) ?? null,
+  writeMetadataValueIfAbsentToDatabase: (key: string, value: unknown) => {
+    if (!metadataStore.has(key)) metadataStore.set(key, JSON.stringify(value));
+  },
+  compareAndSwapMetadataValueFromDatabase: (
+    key: string,
+    value: unknown,
+    expectedRaw: string,
+  ) => {
+    if (metadataStore.get(key) !== expectedRaw) return false;
+    metadataStore.set(key, JSON.stringify(value));
+    return true;
+  },
+}));
+// The transition's credential-fingerprint read (host-owned keyed digest) is
+// exercised by llm-credential-fingerprint.test.ts; here it degrades to
+// unreadable so no connector surface is needed.
+vi.mock("@/lib/llm-credential-fingerprint", () => ({
+  readLiveCredentialFingerprint: async () => ({
+    status: "unreadable",
+    reason: "connector-unavailable",
+  }),
+  liveCredentialFingerprintMatches: () => false,
+}));
+// The receipt seam the commit module imports (unused by the route's path).
+vi.mock("@/lib/setup-readiness-saga", () => ({
+  readSetupReadinessState: () => ({ ready: false, receipt: null }),
+  readSetupReadinessReceipt: () => null,
 }));
 vi.mock("@/lib/authz/audit", async () => {
   const actual = await vi.importActual<typeof import("@/lib/authz/audit")>("@/lib/authz/audit");
@@ -55,6 +98,8 @@ function putReq(body: unknown, headers?: Record<string, string>): Request {
 describe("default-llm-provider PUT", () => {
   beforeEach(() => {
     logAuditEventStrict.mockResolvedValue({ id: "audit-1" });
+    storedDefault.value = "openai";
+    metadataStore.clear();
   });
   afterEach(() => {
     vi.clearAllMocks();
@@ -130,6 +175,47 @@ describe("default-llm-provider PUT", () => {
     const res = await PUT(putReq({ provider: "mistral" }));
     expect(res.status).toBe(400);
     expect(writeDefaultLlmProviderToDatabase).not.toHaveBeenCalled();
+  });
+
+  // S3 (cinatra#2388): a provider change during a PENDING setup claim is a
+  // CLASSIFIED conflict — 409 with the conflict kind, never an unclassified 500.
+  it("409 (classified) while a setup claim is pending; nothing is written", async () => {
+    getActorContext.mockResolvedValue(platformAdmin());
+    metadataStore.set(
+      "setup_provider_commit",
+      JSON.stringify({
+        recordVersion: 1,
+        state: "claimed",
+        nonce: "n1",
+        provider: "openai",
+        startingCredentialFingerprint: null,
+        priorDefault: "openai",
+        actorId: "someone",
+        claimedAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    );
+    const { PUT } = await import("../route");
+    const res = await PUT(putReq({ provider: "anthropic" }));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ conflict: "claim-pending" });
+    expect(writeDefaultLlmProviderToDatabase).not.toHaveBeenCalled();
+    expect(logAuditEventStrict).not.toHaveBeenCalled();
+  });
+
+  // S3 (cinatra#2388): the landed change also moves the COMMITMENT record.
+  it("a landed change leaves a committed record matching the audited default", async () => {
+    getActorContext.mockResolvedValue(platformAdmin());
+    const { PUT } = await import("../route");
+    const res = await PUT(putReq({ provider: "anthropic" }));
+    expect(res.status).toBe(200);
+    const record = JSON.parse(metadataStore.get("setup_provider_commit") ?? "null");
+    expect(record).toMatchObject({
+      state: "committed",
+      provider: "anthropic",
+      provenance: "administration",
+    });
+    expect(storedDefault.value).toBe("anthropic");
   });
 
   it("rejects a cross-origin request 403 before auth runs", async () => {

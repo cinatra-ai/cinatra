@@ -27,9 +27,10 @@ import {
   writeInstanceIdentity,
 } from "@/lib/instance-identity-store";
 // Cache invalidation lives in a separate module to keep side effects isolated.
+// (The setup-wizard completion cache is gone — S3 cinatra#2388 re-derives
+// completion freshly on every read, so there is nothing to invalidate here.)
 import { invalidateInstanceIdentityCache } from "@/lib/instance-identity-cache";
 import { encryptSecret } from "@/lib/instance-secrets";
-import { invalidateSetupWizardCache } from "@/lib/setup-wizard";
 import {
   createNpmUser,
   VerdaccioUserAlreadyRegisteredError,
@@ -226,7 +227,7 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
 
   let token: string;
   let password: string;
-  let resolvedRegistryUrl: string = resolveRegistryUrl();
+  const resolvedRegistryUrl: string = resolveRegistryUrl();
   let marketplaceRemote: RemoteRegistryConnection | undefined;
 
   if (marketplaceInstanceToken) {
@@ -313,7 +314,6 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
     if (redirectTarget) {
       redirect(redirectTarget);
     }
-    invalidateSetupWizardCache();
     revalidatePath("/setup");
     revalidatePath("/configuration/environment");
     redirect("/setup");
@@ -346,7 +346,6 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
         instanceDisplayName,
         registryUrl: resolvedRegistryUrl,
       });
-      invalidateSetupWizardCache();
       revalidatePath("/setup");
       revalidatePath("/configuration/environment");
       redirect("/setup");
@@ -375,7 +374,6 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
           instanceDisplayName,
           registryUrl: resolvedRegistryUrl,
         });
-        invalidateSetupWizardCache();
         revalidatePath("/setup");
         revalidatePath("/configuration/environment");
         redirect("/setup");
@@ -424,7 +422,6 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
 
   // Step 9 — Invalidate caches and revalidate the setup + administration paths.
   invalidateInstanceIdentityCache();
-  invalidateSetupWizardCache();
   revalidatePath("/setup");
   revalidatePath("/configuration/environment");
 

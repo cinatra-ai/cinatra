@@ -10,6 +10,9 @@ import { PageContent } from "@/components/page-content";
 import { Main } from "@/components/layout/main";
 import { saveOpenAIConnectionAction } from "@/app/campaigns/actions";
 import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy";
+// S3 (cinatra#2388): the Administration selector offers the FULL default-capable
+// set (derived from the ABI v2 declarations), serialized for the client card.
+import { buildKnownDefaultCapableProviders } from "@cinatra-ai/sdk-extensions/llm-provider-contract";
 import { Label } from "@/components/ui/label";
 import { readDefaultLlmProviderFromDatabase, readDefaultImageProviderFromDatabase, readAgentCreationLlmProviderFromDatabase, readAgentCreationModelFromDatabase, isAgentCreationPinActive } from "@/lib/database";
 import { isAppDevelopmentMode } from "@/lib/runtime-mode";
@@ -355,6 +358,7 @@ export default async function APIsPage({ searchParams }: APIsPageProps) {
               <CardContent className="p-6">
                 <DefaultProvidersCard
                   defaultLlmProvider={currentDefaultProvider}
+                  defaultCapableProviders={[...buildKnownDefaultCapableProviders()]}
                   defaultImageProvider={currentImageProvider}
                   openaiConnected={openaiConnected}
                   anthropicConnected={anthropicConnected}
@@ -398,6 +402,16 @@ export default async function APIsPage({ searchParams }: APIsPageProps) {
                   value: OPENAI_PARTIAL_SAVE_NOTICE_CODE,
                   message: OPENAI_PARTIAL_SAVE_NOTICE_MESSAGE,
                   variant: "warning" as const,
+                },
+                // S3 (cinatra#2388): the provider-change transition's CLASSIFIED
+                // conflict (a pending setup claim / a concurrent transition) —
+                // codes-only, a static message, never URL-derived text.
+                {
+                  param: "error",
+                  value: "provider-change-conflict",
+                  message:
+                    "The provider was not changed: an AI-setup run (or another provider change) is completing right now. Retry once it finishes.",
+                  variant: "error" as const,
                 },
               ]}
             />
