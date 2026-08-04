@@ -26,8 +26,10 @@ set -euo pipefail
 #      polls. Probed from INSIDE the network (a one-shot probe container
 #      running the image's own node — no extra image pulls);
 #   5. page-render smoke: GET / followed through its redirects (route guard
-#      307s an unauthenticated request to /sign-in) must end in HTTP 200 —
-#      the real page pipeline + a Better Auth session check on the fresh DB;
+#      307s an unauthenticated request to /sign-in, which — since this DB is
+#      ALWAYS completely fresh, zero Better Auth users, cinatra#2386 — then
+#      hops again to /setup/sign-up) must end in HTTP 200 — the real page
+#      pipeline + a Better Auth session check on the fresh DB;
 #   6. data-driven post-boot assertions (no extension-name literals):
 #      a. the static-bundle lifecycle anchor seeding wrote platform-scoped
 #         anchor rows on the fresh DB, including required-in-prod rows, and
@@ -360,14 +362,28 @@ if ! printf '%s' "$HEALTH_OUT" | grep -q '"status":"ok"'; then
 fi
 echo "    /api/health OK"
 
-# ── 5. Page-render smoke: / -> (route guard) -> sign-up|sign-in -> 200 ──────
+# ── 5. Page-render smoke: / -> (route guard) -> /setup/sign-up -> 200 ───────
 # Follows the unauthenticated fresh-instance redirect chain and requires a
 # final 200 ON AN AUTH SURFACE — this exercises the real page pipeline (proxy
 # route guard, Better Auth session check against the fresh DB, a
 # server-rendered page), not just a DB-free route handler. A redirect loop or
 # a 500 on first paint fails here; so does a 200 on any OTHER path (an
-# unauthenticated `/` must never leak an app page — a fresh instance lands on
-# /sign-up, an instance with users on /sign-in; both are guard-approved).
+# unauthenticated `/` must never leak an app page).
+#
+# cinatra#2386: the DB this script provisions is ALWAYS completely fresh (no
+# step in this script ever creates a Better Auth user), so the bootstrap step
+# — the first-account creation form — now moved from `/sign-up` into the
+# setup wizard at `/setup/sign-up`; a bare `/sign-up` or `/sign-in` can no
+# longer be the FINAL landing for this always-zero-user harness (PermissionsAuthPage
+# redirects both away while zero users exist — packages/permissions/src/pages.tsx).
+# The landing URL is query-free (`/setup/sign-up`, no `?next=`): the
+# sign-in -> setup/sign-up hop drops a `next` of exactly "/" as redundant
+# (that's the guard's OWN stamp on a plain GET /, not real caller intent) —
+# see the comment beside `buildSetupSignUpPath` in pages.tsx. Still matched
+# with a defensive `\?*` wildcard (this file's existing style for every
+# guard-approved destination) in case an unrelated query param ever rides
+# along; the guard-approved set is otherwise unchanged — this still fails
+# closed on any other destination, exactly as before.
 echo "==> page-render smoke: GET ${APP_ORIGIN}/"
 PAGE_OUT=$(probe "${APP_ORIGIN}/")
 PAGE_STATUS_LINE="${PAGE_OUT%%$'\n'*}"
@@ -378,8 +394,8 @@ if [ "$PAGE_CODE" != "200" ]; then
 fi
 PAGE_PATH="${PAGE_URL#"${APP_ORIGIN}"}"
 case "$PAGE_PATH" in
-  /sign-up|/sign-up\?*|/sign-in|/sign-in\?*) ;;
-  *) fail "GET / ended 200 at '${PAGE_URL}' — expected the route guard to land on /sign-up or /sign-in, not '${PAGE_PATH}' (unauthenticated leak?)." ;;
+  /setup/sign-up|/setup/sign-up\?*) ;;
+  *) fail "GET / ended 200 at '${PAGE_URL}' — expected the route guard to land on /setup/sign-up (cinatra#2386 — this harness's DB is always a fresh, zero-user install), not '${PAGE_PATH}' (unauthenticated leak?)." ;;
 esac
 echo "    GET / -> ${PAGE_CODE} at ${PAGE_URL}"
 

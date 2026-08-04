@@ -41,13 +41,25 @@ export type {
   OrchestrateFileInputGenerateInput,
   OrchestrateUploadFileInput,
   OrchestrateDeleteFileInput,
-  // Batch API surface
+  // Batch API surface — v1 (OpenAI-canonical, shipped ABI)
   LlmBatchRequest,
   LlmBatchSubmitInput,
   LlmBatchSubmitResult,
   LlmBatchResult,
   LlmBatchStatus,
   LlmBatchOutputLine,
+  // Batch API surface — v2 (provider-neutral, additive; cinatra#2396)
+  LlmBatchV2Message,
+  LlmBatchV2Request,
+  LlmBatchV2SubmitInput,
+  LlmBatchV2SubmitResult,
+  LlmBatchV2Status,
+  LlmBatchV2Counts,
+  LlmBatchV2State,
+  LlmBatchV2ErrorCode,
+  LlmBatchV2Error,
+  LlmBatchV2Outcome,
+  LlmBatchV2Surface,
 } from "./types";
 
 // Attachment capability registry (pure).
@@ -91,7 +103,22 @@ export type {
 } from "./mcp-materializer";
 
 // Batch errors
-export { BatchNotSupportedError } from "./errors";
+export { BatchNotSupportedError, BatchResultsNotReadyError, BatchFailedError } from "./errors";
+
+// Batch-v2 normalization primitives (cinatra#2396). Exported so a caller can
+// fold outcomes into tallies and so the v1-canonical body builder is pinnable
+// from a test without reaching into the module graph.
+export {
+  BATCH_V2_CUSTOM_ID_MAX_LENGTH,
+  BATCH_V2_DEFAULT_MAX_TOKENS,
+  V1_CANONICAL_BATCH_PROVIDER,
+  normalizeBatchErrorCode,
+  normalizeV1BatchStatus,
+  toBatchV2Error,
+  toV1CanonicalChatCompletionsBody,
+  v1OutputLineToOutcome,
+  v1ResultToState,
+} from "./batch-v2";
 
 // Cross-realm STRUCTURAL error discriminators (#1715 D1) — recognize a
 // connector-inlined copy of these sentinels (different constructor identity)
@@ -99,6 +126,8 @@ export { BatchNotSupportedError } from "./errors";
 export {
   isAnthropicSkillDeliveryError,
   isBatchNotSupportedError,
+  isBatchResultsNotReadyError,
+  isBatchFailedError,
   isNativeMcpCapabilityRequiredError,
   isMcpApprovalUnsupportedError,
   ANTHROPIC_SKILL_DELIVERY_ERROR_CODES,
@@ -546,10 +575,26 @@ export function createStreamUsageEmitter(params: {
 // on StreamInput. Use createStreamUsageEmitter() to create a callback that automatically
 // emits usage events. The generate()-based wrappers below handle emission automatically.
 
+/**
+ * The provider the platform resolved for a request, plus the MODEL that
+ * provider's adapter would actually use by default.
+ *
+ * `model` (cinatra#2396) closes a real gap: a caller that has to freeze a run
+ * context — `{provider, model, evaluatorVersion}` — could learn the provider
+ * here but had NO seam for the model, because `defaultModel` lives on the
+ * resolved adapter and the adapter is not returned. It is read straight off
+ * `LlmProviderAdapter.defaultModel` (the connector's configured default, not a
+ * core guess), so it is the model a subsequent call with no explicit `model`
+ * really lands on.
+ *
+ * It is a REQUIRED field on every variant, which makes this a deliberate source
+ * migration for in-repo constructors of the union — not an adapter-ABI change:
+ * no connector implements or consumes this type.
+ */
 export type ResolvedLlmRuntime =
-  | { provider: "openai"; connection: OpenAIConnectionConfig }
-  | { provider: "anthropic" }
-  | { provider: "gemini" };
+  | { provider: "openai"; connection: OpenAIConnectionConfig; model: string }
+  | { provider: "anthropic"; model: string }
+  | { provider: "gemini"; model: string };
 
 export type DeterministicLlmExecutionInput = {
   provider: LlmProvider;
@@ -1741,6 +1786,233 @@ export async function orchestrateCancelBatch(
   return adapter.cancelBatch(input.batchId);
 }
 
+// ---------------------------------------------------------------------------
+// Batch API dispatch — v2 (provider-neutral), cinatra#2396
+//
+// The v2-PREFERRING wrappers. Each resolves the adapter once, probes for the
+// additive `batchV2` surface, and takes the neutral path when it is declared;
+// otherwise it drives the LEGACY v1 methods through the bridge in `./batch-v2`
+// and normalizes the result into the same neutral shapes. A provider offering
+// NEITHER still raises `BatchNotSupportedError` — unchanged, so a capability
+// router keeps its existing signal for "take the synchronous fan-out path".
+//
+// Everything provider-shaped lives in `./batch-v2`; what stays here is only the
+// routing decision, so "which surface answered this call" is legible in one
+// screen.
+// ---------------------------------------------------------------------------
+
+import type {
+  LlmBatchV2Outcome,
+  LlmBatchV2Request,
+  LlmBatchV2State,
+  LlmBatchV2SubmitResult,
+  LlmBatchV2Surface,
+} from "./types";
+import { BatchFailedError, BatchResultsNotReadyError } from "./errors";
+import {
+  assertValidBatchV2Requests,
+  countOutcomes,
+  normalizeV1BatchStatus,
+  sanitizeBatchV2Requests,
+  toV1CanonicalChatCompletionsBody,
+  v1OutputLineToOutcome,
+  v1ResultToState,
+  V1_CANONICAL_BATCH_PROVIDER,
+} from "./batch-v2";
+
+/**
+ * Which batch surface a provider actually offers.
+ *
+ *  - `2`    — the adapter declares the neutral `batchV2` surface;
+ *  - `1`    — only the legacy OpenAI-canonical methods are usable;
+ *  - `null` — no batch surface at all; the v2 wrappers raise
+ *             `BatchNotSupportedError` and a router should fan out synchronously.
+ */
+export type LlmBatchSupport = {
+  provider: LlmProvider;
+  batchVersion: 2 | 1 | null;
+  /** Whether cancellation is available on the surface that answered. */
+  cancelSupported: boolean;
+};
+
+/**
+ * Read the batch surface off a RESOLVED adapter.
+ *
+ * The v1 leg is gated on the provider identity, not just on method presence:
+ * the shipped Anthropic adapter defines all four v1 methods as throwing stubs,
+ * so a presence-only probe would report it batch-capable and the bridge would
+ * then hand it OpenAI-canonical bodies. v1 is OpenAI-canonical by contract, so
+ * `openai` is the only provider it can legitimately drive.
+ */
+function readBatchSupport(adapter: LlmProviderAdapter, provider: LlmProvider): LlmBatchSupport {
+  const v2 = adapter.batchV2;
+  // EXACT discriminator only. An unrecognised version is not a newer surface we
+  // may guess at — it falls through to v1 (fail-closed).
+  if (v2 && v2.version === 2) {
+    return { provider, batchVersion: 2, cancelSupported: typeof v2.cancel === "function" };
+  }
+  if (
+    provider === V1_CANONICAL_BATCH_PROVIDER &&
+    adapter.submitBatch &&
+    adapter.retrieveBatch &&
+    adapter.downloadBatchResults
+  ) {
+    return {
+      provider,
+      batchVersion: 1,
+      cancelSupported: typeof adapter.cancelBatch === "function",
+    };
+  }
+  return { provider, batchVersion: null, cancelSupported: false };
+}
+
+/**
+ * Capability probe for a provider's batch surface. Resolving the adapter is the
+ * only way to answer honestly — the manifest declares model/capability policy,
+ * not which optional adapter members were built.
+ */
+export async function probeBatchCapability(provider: LlmProvider): Promise<LlmBatchSupport> {
+  const adapter = await resolveProviderAdapter(provider);
+  if (!adapter) return { provider, batchVersion: null, cancelSupported: false };
+  return readBatchSupport(adapter, provider);
+}
+
+/** Resolve the adapter plus its batch surface, or raise the unchanged signal. */
+async function requireBatchSurface(
+  provider: LlmProvider,
+): Promise<{ adapter: LlmProviderAdapter; support: LlmBatchSupport; v2: LlmBatchV2Surface | null }> {
+  const adapter = await getAdapter(provider);
+  const support = readBatchSupport(adapter, provider);
+  if (support.batchVersion === null) throw new BatchNotSupportedError(provider);
+  return {
+    adapter,
+    support,
+    v2: support.batchVersion === 2 ? (adapter.batchV2 as LlmBatchV2Surface) : null,
+  };
+}
+
+export type OrchestrateSubmitBatchV2Input = {
+  provider: LlmProvider;
+  requests: LlmBatchV2Request[];
+  /** Best-effort tags; providers without a native slot drop them. */
+  metadata?: Record<string, string>;
+};
+
+export type OrchestrateBatchV2ByIdInput = {
+  provider: LlmProvider;
+  batchId: string;
+};
+
+/**
+ * Submit a provider-neutral batch.
+ *
+ * `outputSchema` is sanitized for the target provider HERE — once, at the
+ * core→adapter seam (cinatra#2339/#2343) — for BOTH the v2 and the v1-bridge
+ * branch, so a connector never carries sanitizer policy and nothing downstream
+ * re-sanitizes.
+ */
+export async function orchestrateSubmitBatchV2(
+  input: OrchestrateSubmitBatchV2Input,
+): Promise<LlmBatchV2SubmitResult> {
+  assertValidBatchV2Requests(input.requests);
+  const { adapter, v2 } = await requireBatchSurface(input.provider);
+  const requests = sanitizeBatchV2Requests(input.provider, input.requests);
+
+  if (v2) {
+    return v2.submit({
+      requests,
+      ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+    });
+  }
+
+  const submitted = await adapter.submitBatch!({
+    requests: requests.map((request) => ({
+      customId: request.customId,
+      body: toV1CanonicalChatCompletionsBody(request, adapter.defaultModel),
+    })),
+    ...(input.metadata === undefined ? {} : { metadata: input.metadata }),
+  });
+  return {
+    batchId: submitted.batchId,
+    status: normalizeV1BatchStatus(submitted.status),
+  };
+}
+
+/** Neutral lifecycle state for a submitted batch. */
+export async function orchestrateRetrieveBatchV2(
+  input: OrchestrateBatchV2ByIdInput,
+): Promise<LlmBatchV2State> {
+  const { adapter, v2 } = await requireBatchSurface(input.provider);
+  if (v2) return v2.retrieve(input.batchId);
+  return v1ResultToState(await adapter.retrieveBatch!(input.batchId));
+}
+
+/**
+ * Normalized per-request outcomes, addressed by BATCH id.
+ *
+ * On the v1 bridge this is necessarily a three-call sequence: retrieve (to
+ * learn the file ids), then download the output file AND the error file, since
+ * v1 splits success and failure across two files and v2 promises both streams
+ * in one list. Rows are correlated only by `customId` — v1 guarantees no order.
+ *
+ * A batch that has not ended raises `BatchResultsNotReadyError` rather than
+ * returning `[]`; an empty array would be indistinguishable from "the batch
+ * ended and produced nothing", which is exactly the confusion that persists
+ * zero rows for a live batch.
+ */
+export async function orchestrateDownloadBatchOutcomesV2(
+  input: OrchestrateBatchV2ByIdInput,
+): Promise<LlmBatchV2Outcome[]> {
+  const { adapter, v2 } = await requireBatchSurface(input.provider);
+  if (v2) return v2.download(input.batchId);
+
+  const raw = await adapter.retrieveBatch!(input.batchId);
+  const state = v1ResultToState(raw);
+  if (state.status === "failed") {
+    // TERMINAL, not retryable — a failed batch never acquires outcomes, so the
+    // "not ready" sentinel here would invite a consumer to poll forever.
+    throw new BatchFailedError(input.provider, input.batchId, state.errorMessage);
+  }
+  if (state.status !== "ended") {
+    throw new BatchResultsNotReadyError(input.provider, input.batchId, state.status);
+  }
+  const fileIds = [raw.outputFileId, raw.errorFileId].filter(
+    (id): id is string => typeof id === "string" && id.length > 0,
+  );
+  const pages = await Promise.all(
+    fileIds.map((fileId) => adapter.downloadBatchResults!(fileId)),
+  );
+  return pages.flat().map(v1OutputLineToOutcome);
+}
+
+/**
+ * Cancel a batch and report the resulting neutral state.
+ *
+ * The v1 leg's `cancelBatch` returns only `{batchId, status}`, so the neutral
+ * state it yields carries `counts: null` and null timestamps — the legacy
+ * surface simply never reported them, and inventing values would be a lie about
+ * a live batch. Call `orchestrateRetrieveBatchV2` for the full picture.
+ */
+export async function orchestrateCancelBatchV2(
+  input: OrchestrateBatchV2ByIdInput,
+): Promise<LlmBatchV2State> {
+  const { adapter, support, v2 } = await requireBatchSurface(input.provider);
+  if (!support.cancelSupported) throw new BatchNotSupportedError(input.provider);
+  if (v2) return v2.cancel!(input.batchId);
+  const cancelled = await adapter.cancelBatch!(input.batchId);
+  return {
+    batchId: cancelled.batchId,
+    status: normalizeV1BatchStatus(cancelled.status),
+    counts: null,
+    endedAt: null,
+    expiresAt: null,
+    errorMessage: null,
+  };
+}
+
+/** Re-exported for callers that fold a downloaded outcome list into tallies. */
+export { countOutcomes as countBatchV2Outcomes };
+
 export async function resolveConfiguredLlmRuntime(input?: {
   preferredProviders?: LlmProvider[];
   openaiConnection?: OpenAIConnectionConfig | null;
@@ -1790,10 +2062,10 @@ export async function resolveConfiguredLlmRuntime(input?: {
         const connection =
           (await mod?.getConfiguredOpenAIConnection(input?.openaiConnection)) ?? null;
         if (connection) {
-          return { provider: "openai", connection };
+          return { provider: "openai", connection, model: adapter.defaultModel };
         }
       } else {
-        return { provider } as ResolvedLlmRuntime;
+        return { provider, model: adapter.defaultModel } as ResolvedLlmRuntime;
       }
     }
   }

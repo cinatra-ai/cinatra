@@ -39,7 +39,13 @@ vi.mock("@/lib/llm-provider-surfaces", () => ({
       ? {
           abiVersion: 1 as const,
           providerId,
-          createAdapter: async () => ({ provider: providerId }),
+          // `defaultModel` is what the resolved-runtime `model` seam
+          // (cinatra#2396) reads — the CONNECTOR's configured default, never a
+          // core guess. Distinct per provider so a mis-wired read is visible.
+          createAdapter: async () => ({
+            provider: providerId,
+            defaultModel: `${providerId}-configured-default`,
+          }),
         }
       : null,
   ),
@@ -120,17 +126,18 @@ describe("resolveConfiguredLlmRuntime — exact binding to the stored provider (
     expect(await resolveConfiguredLlmRuntime()).toEqual({
       provider: "openai",
       connection: { apiKey: "sk-openai" },
+      model: "openai-configured-default",
     });
   });
 
   it("UN-FENCED: an Anthropic-only install with dbDefault=anthropic resolves Anthropic — no flag, no special case", async () => {
     configure({ dbDefault: "anthropic", openai: false, gemini: false, anthropic: true });
-    expect(await resolveConfiguredLlmRuntime()).toEqual({ provider: "anthropic" });
+    expect(await resolveConfiguredLlmRuntime()).toEqual({ provider: "anthropic", model: "anthropic-configured-default" });
   });
 
   it("Anthropic is preferred over an available OpenAI when it is the STORED default (the pre-S6 order is gone)", async () => {
     configure({ dbDefault: "anthropic", openai: true, gemini: true, anthropic: true });
-    expect(await resolveConfiguredLlmRuntime()).toEqual({ provider: "anthropic" });
+    expect(await resolveConfiguredLlmRuntime()).toEqual({ provider: "anthropic", model: "anthropic-configured-default" });
   });
 
   it("NO SILENT HOP: an unavailable stored provider resolves null even though another provider IS configured", async () => {
@@ -152,22 +159,56 @@ describe("resolveConfiguredLlmRuntime — exact binding to the stored provider (
 describe("resolveConfiguredLlmRuntime — the explicit 'ordered' failover admin policy (cinatra#2093)", () => {
   it("falls through to the next default-capable provider ONLY under the stored ordered policy", async () => {
     configure({ dbDefault: "openai", failover: "ordered", openai: false, gemini: true, anthropic: true });
-    expect(await resolveConfiguredLlmRuntime()).toEqual({ provider: "anthropic" });
+    expect(await resolveConfiguredLlmRuntime()).toEqual({ provider: "anthropic", model: "anthropic-configured-default" });
   });
 
   it("ordered failover still prefers the stored provider when it is available", async () => {
     configure({ dbDefault: "gemini", failover: "ordered", openai: true, gemini: true, anthropic: true });
-    expect(await resolveConfiguredLlmRuntime()).toEqual({ provider: "gemini" });
+    expect(await resolveConfiguredLlmRuntime()).toEqual({ provider: "gemini", model: "gemini-configured-default" });
   });
 
   it("ordered failover can now reach Anthropic (it is defaultCapable) — the pre-S6 exclusion is gone", async () => {
     configure({ dbDefault: "openai", failover: "ordered", openai: false, gemini: false, anthropic: true });
-    expect(await resolveConfiguredLlmRuntime()).toEqual({ provider: "anthropic" });
+    expect(await resolveConfiguredLlmRuntime()).toEqual({ provider: "anthropic", model: "anthropic-configured-default" });
   });
 
   it("ordered failover with nothing configured -> null", async () => {
     configure({ dbDefault: "openai", failover: "ordered", openai: false, gemini: false, anthropic: false });
     expect(await resolveConfiguredLlmRuntime()).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2396 — the RESOLVED-MODEL seam.
+//
+// A caller that must freeze a run context (`{provider, model, evaluatorVersion}`)
+// could previously learn the provider here but had no seam for the model:
+// `defaultModel` lives on the resolved adapter, and the adapter is not returned.
+// These pin that `model` is the CONNECTOR's own default for the provider that
+// actually resolved — not a core constant, and not the stored default's model
+// when resolution landed somewhere else.
+// ---------------------------------------------------------------------------
+describe("resolveConfiguredLlmRuntime — the resolved-model seam (cinatra#2396)", () => {
+  it("carries the resolved ADAPTER's defaultModel, not a core-side guess", async () => {
+    configure({ dbDefault: "anthropic", anthropic: true });
+    const runtime = await resolveConfiguredLlmRuntime();
+    expect(runtime?.model).toBe("anthropic-configured-default");
+  });
+
+  it("the model belongs to the provider that ACTUALLY resolved under ordered failover", async () => {
+    configure({ dbDefault: "openai", failover: "ordered", openai: false, gemini: true });
+    const runtime = await resolveConfiguredLlmRuntime();
+    expect(runtime).toMatchObject({ provider: "gemini", model: "gemini-configured-default" });
+  });
+
+  it("the openai variant carries the model ALONGSIDE its connection", async () => {
+    configure({ dbDefault: "openai", openai: true });
+    const runtime = await resolveConfiguredLlmRuntime();
+    expect(runtime).toMatchObject({
+      provider: "openai",
+      connection: { apiKey: "sk-openai" },
+      model: "openai-configured-default",
+    });
   });
 });
 
@@ -181,6 +222,7 @@ describe("resolveConfiguredLlmRuntime — explicit preferredProviders stays auth
     configure({ dbDefault: "openai", openai: false, gemini: false, anthropic: true });
     expect(await resolveConfiguredLlmRuntime({ preferredProviders: ["anthropic"] })).toEqual({
       provider: "anthropic",
+      model: "anthropic-configured-default",
     });
   });
 
@@ -188,6 +230,7 @@ describe("resolveConfiguredLlmRuntime — explicit preferredProviders stays auth
     configure({ dbDefault: "openai", openai: false, gemini: true, anthropic: false });
     expect(await resolveConfiguredLlmRuntime({ preferredProviders: ["openai", "gemini"] })).toEqual({
       provider: "gemini",
+      model: "gemini-configured-default",
     });
   });
 });

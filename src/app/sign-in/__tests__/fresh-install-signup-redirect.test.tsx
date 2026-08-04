@@ -2,17 +2,19 @@
  * Fresh-install canonical auth URL coverage for `PermissionsAuthPage`.
  *
  * On a fresh install (0 Better Auth users) an unauthenticated visitor to a
- * protected route must END UP on /sign-up — not /sign-in — via the two-hop
- * flow:
+ * protected route must END UP on /setup/sign-up — not /sign-in, and no longer
+ * /sign-up (cinatra#2386 moved the bootstrap step into the setup wizard) —
+ * via the two-hop flow:
  *
- *   protected route → /sign-in   (middleware guardAppRoute, cookie-only)
- *   /sign-in        → /sign-up   (PermissionsAuthPage server redirect)
+ *   protected route → /sign-in        (middleware guardAppRoute, cookie-only)
+ *   /sign-in        → /setup/sign-up  (PermissionsAuthPage server redirect)
  *
  * The guard stays DB-free, so the user-count-aware hop lives in the page.
- * A guard-only unit test cannot prove the visitor lands on /sign-up; these
- * tests exercise the page (server-component) layer and assert the rendered
- * destination for BOTH user-count states, plus the bootstrap-form and
- * authenticated-redirect regressions.
+ * A guard-only unit test cannot prove the visitor lands on /setup/sign-up;
+ * these tests exercise the page (server-component) layer and assert the
+ * rendered destination for BOTH user-count states, plus the bootstrap-form
+ * and authenticated-redirect regressions. /setup/sign-up itself is covered
+ * separately (src/app/setup/sign-up/__tests__/page.test.tsx).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -100,18 +102,19 @@ describe("fresh install (0 Better Auth users)", () => {
     await mockAuthState({ hasUsers: false, session: null });
   });
 
-  it("unauthenticated visitor to a protected route ends up on /sign-up (full two-hop flow)", async () => {
+  it("unauthenticated visitor to a protected route ends up on /setup/sign-up (full two-hop flow, cinatra#2386)", async () => {
     // Hop 1 — middleware guard (cookie-only, DB-free) still targets /sign-in.
     expect(await guardDestination("/")).toBe("/sign-in");
     // Hop 2 — the /sign-in page performs the user-count-aware server redirect,
-    // so the rendered destination (browser URL) is /sign-up.
-    await expectAuthPageRedirect("sign-in", "/sign-up");
+    // so the rendered destination (browser URL) is /setup/sign-up (no longer
+    // the bare /sign-up — the bootstrap step lives in the setup wizard now).
+    await expectAuthPageRedirect("sign-in", "/setup/sign-up");
   });
 
-  it("visiting /sign-up directly still renders the bootstrap 'Create the first account' form (no redirect loop)", async () => {
-    const html = await renderAuthPage("sign-up");
-    expect(html).toMatch(/Create the first account/);
-    expect(html).toMatch(/data-testid="sign-up-form"/);
+  it("visiting /sign-up directly now redirects into the wizard too, no bootstrap form here (cinatra#2386)", async () => {
+    // Before #2386 this rendered the bootstrap form in place; now /sign-up
+    // stops being the first-account surface entirely while zero users exist.
+    await expectAuthPageRedirect("sign-up", "/setup/sign-up");
   });
 
   it("sign-out is NOT bounced to /sign-up", async () => {
@@ -166,12 +169,9 @@ describe("closed registration (D7 display-side notice)", () => {
     expect(html).not.toMatch(/Registration is closed/);
   });
 
-  it("zero humans + closed: /sign-up STILL shows the bootstrap create-first-account form (bootstrap wins over flag)", async () => {
+  it("zero humans + closed: /sign-up STILL redirects into the wizard (bootstrap wins over the closed flag, cinatra#2386)", async () => {
     await mockAuthState({ hasUsers: false, session: null, registrationClosed: true });
-    const html = await renderAuthPage("sign-up");
-    expect(html).toMatch(/Create the first account/);
-    expect(html).toMatch(/data-testid="sign-up-form"/);
-    expect(html).not.toMatch(/Registration is closed/);
+    await expectAuthPageRedirect("sign-up", "/setup/sign-up");
   });
 
   it("humans + open: /sign-up renders the normal sign-up view (regression)", async () => {

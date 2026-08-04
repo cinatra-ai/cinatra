@@ -1,14 +1,28 @@
 import { Suspense } from "react";
 
 import { BrandMark } from "@/components/brand-mark";
-import { getSetupWizardSteps } from "@/lib/setup-wizard";
+import { getSetupWizardSteps, type SetupWizardStep } from "@/lib/setup-wizard";
+import { getAuthSession } from "@/lib/auth-session";
 import { PageHeader } from "@/components/page-header";
 import { SearchParamToast } from "@/components/search-param-toast";
 import { SetupStepNav } from "./setup-step-nav";
 import { SETUP_FLASH_TOASTS } from "./setup-flash";
 
+// cinatra#2386 — the ONLY /setup/* route a sessionless visitor can ever reach
+// is /setup/sign-up (the sole PUBLIC_EXACT_PATHS entry under this prefix;
+// every other /setup/* route stays session-protected by the middleware
+// guard). So "no session" here always means "rendering /setup/sign-up for an
+// unauthenticated visitor" — a STATIC single-step progress chrome that never
+// calls getSetupWizardSteps()/the readiness reader (no setup-status work, no
+// readiness disclosure to an unauthenticated visitor). An authenticated
+// visitor gets the real, live step rail as before.
+const SESSIONLESS_SETUP_STEPS: SetupWizardStep[] = [
+  { id: "sign-up", title: "Sign up", href: "/setup/sign-up", ready: false },
+];
+
 export default async function SetupLayout({ children }: { children: React.ReactNode }) {
-  const steps = await getSetupWizardSteps();
+  const session = await getAuthSession();
+  const steps = session ? await getSetupWizardSteps() : SESSIONLESS_SETUP_STEPS;
 
   return (
     <main className="flex min-h-screen flex-col items-center justify-center px-5 py-12">

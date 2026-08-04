@@ -648,6 +648,242 @@ export type LlmBatchOutputLine = {
 };
 
 // ---------------------------------------------------------------------------
+// Batch API — v2 (provider-NEUTRAL, ADDITIVE, VERSIONED) — cinatra#2396
+//
+// WHY A SECOND SURFACE RATHER THAN A RESHAPE. Everything above this comment is
+// SHIPPED ABI and is OpenAI-canonical by construction: `LlmBatchRequest.body`
+// is a native `/v1/chat/completions` payload, `LlmBatchStatus` is OpenAI's own
+// eight-value lifecycle, results are addressed by FILE id, and
+// `LlmBatchOutputLine` carries a `response.body.choices` envelope. Anthropic's
+// Message Batches API is structurally different in every one of those axes —
+// requests are submitted INLINE (no input file), results are retrieved by BATCH
+// id (no output/error file ids), the batch lifecycle is
+// `in_progress|canceling|ended`, and each request carries its OWN terminal
+// outcome (`succeeded|errored|canceled|expired`). Reshaping the v1 types in
+// place would break the shipped OpenAI adapter's ABI, so v2 is a SEPARATE,
+// OPTIONAL, EXPLICITLY VERSIONED member (`LlmProviderAdapter.batchV2`) and the
+// v1 methods stay byte-for-byte as they are.
+//
+// SKEW, both directions, is a consequence of that placement rather than a
+// runtime negotiation:
+//   - NEW core / OLD connector — `adapter.batchV2` is simply absent, so core
+//     falls back to the v1 path (or raises `BatchNotSupportedError`);
+//   - OLD core / NEW connector — an old core never reads `batchV2`, and the
+//     connector's v1 methods are untouched, so its behavior is unchanged.
+// The OUTER `LLM_PROVIDER_ADAPTER_ABI_VERSION` deliberately stays at 1: this
+// discriminator is NESTED inside the adapter object. Bumping the outer surface
+// version would make an old host REFUSE the whole connector (fail-closed) long
+// before it could ignore an unknown optional member.
+//
+// SANITIZATION BOUNDARY. `LlmBatchV2Request.outputSchema` reaches the adapter
+// ALREADY SANITIZED for the target provider by the core→adapter seam
+// (`sanitizeOutputSchemaForProvider`, cinatra#2339/#2343). The adapter owns
+// native BODY CONSTRUCTION only; no sanitizer policy moves into a connector and
+// nothing downstream re-sanitizes.
+// ---------------------------------------------------------------------------
+
+/**
+ * The v2 batch-surface version discriminator. A host probes for the EXACT
+ * value; an unrecognised version is treated as "no v2 surface" (fail-closed to
+ * the v1 path), never as a newer surface it may guess at.
+ *
+ * A connector should write `version: 2 as const` rather than value-importing
+ * this constant: under old-host/new-connector skew the host-resolved
+ * `@cinatra-ai/sdk-extensions` may predate this file, and a runtime value
+ * import would fail to resolve. Type-only imports stay safe (they erase).
+ */
+export const LLM_BATCH_V2_VERSION = 2 as const;
+
+/**
+ * A single conversational turn in a batch request.
+ *
+ * DELIBERATELY NARROWER than {@link LlmMessage}: no `attachments` and no
+ * `resolvedAttachments`. Those carry provider-native FILE identifiers, and
+ * "no file ids" is the whole point of the v2 surface — a neutral descriptor
+ * must be submittable to any provider without a prior per-provider upload.
+ * Attachment-bearing batch requests are out of scope for v2 and must go through
+ * the synchronous path.
+ */
+export type LlmBatchV2Message = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+/**
+ * Provider-NEUTRAL per-request descriptor. Carries intent, never a native body:
+ * the adapter constructs its own provider-native request from these fields.
+ */
+export type LlmBatchV2Request = {
+  /**
+   * Stable per-request identifier, unique within the batch. Both providers cap
+   * it at 64 characters and both return results UNORDERED, so this is the only
+   * legitimate way to correlate an outcome back to its request.
+   */
+  customId: string;
+  /** Absent ⇒ the adapter's own `defaultModel`. */
+  model?: string;
+  /** System instructions for this request. */
+  system?: string;
+  /** The conversation. MUST contain at least one message. */
+  messages: LlmBatchV2Message[];
+  /** Output-token ceiling. Adapters supply a provider-appropriate default. */
+  maxTokens?: number;
+  /** Sampling temperature, when the caller wants to pin it. */
+  temperature?: number;
+  /**
+   * JSON Schema for structured output — ALREADY SANITIZED for the target
+   * provider by the core seam. The adapter emits it VERBATIM into its native
+   * structured-output slot and MUST NOT re-sanitize (see the boundary note
+   * above).
+   */
+  outputSchema?: Record<string, unknown>;
+};
+
+export type LlmBatchV2SubmitInput = {
+  requests: LlmBatchV2Request[];
+  /**
+   * BEST-EFFORT tags. OpenAI has a native `batch.metadata` slot; Anthropic's
+   * Message Batches API has none and the adapter drops them. Callers must not
+   * depend on metadata surviving the round trip — persist anything you need to
+   * read back on your own side, keyed by `batchId`.
+   */
+  metadata?: Record<string, string>;
+};
+
+/**
+ * NEUTRAL batch lifecycle — four values, not OpenAI's eight.
+ *
+ *  - `"in_progress"` — accepted and processing (OpenAI `validating`,
+ *    `in_progress`, `finalizing`; Anthropic `in_progress`).
+ *  - `"canceling"`   — cancellation initiated, processing not yet ended
+ *    (OpenAI `cancelling`; Anthropic `canceling`).
+ *  - `"ended"`       — processing ended and per-request outcomes ARE
+ *    retrievable (OpenAI `completed` / `expired` / `cancelled`; Anthropic
+ *    `ended`). Per-request expiry/cancellation surfaces on the OUTCOME, not
+ *    here — a batch can end with a mix of all four outcome kinds.
+ *  - `"failed"`      — the BATCH itself failed before per-request outcomes
+ *    existed (OpenAI `failed`). Anthropic never emits it. Kept distinct from
+ *    `"ended"` precisely so a consumer never has to read `errorMessage` to
+ *    discover whether `download()` is meaningful.
+ */
+export type LlmBatchV2Status = "in_progress" | "canceling" | "ended" | "failed";
+
+/** Per-outcome tallies. The five buckets always sum to `total`. */
+export type LlmBatchV2Counts = {
+  total: number;
+  processing: number;
+  succeeded: number;
+  errored: number;
+  canceled: number;
+  expired: number;
+};
+
+export type LlmBatchV2State = {
+  batchId: string;
+  status: LlmBatchV2Status;
+  /**
+   * `null` when the underlying surface does not report counts at all — today
+   * only the LEGACY v1 bridge, whose `LlmBatchResult` carries none. Never
+   * synthesized as zeros: a batch always has at least one request, so
+   * `total: 0` would be a factual lie about a live batch.
+   */
+  counts: LlmBatchV2Counts | null;
+  /** ISO 8601; `null` until processing ends. */
+  endedAt: string | null;
+  /** ISO 8601 processing-expiry deadline when the provider states one. */
+  expiresAt: string | null;
+  /** Batch-level failure detail. `null` unless something failed at batch level. */
+  errorMessage: string | null;
+};
+
+export type LlmBatchV2SubmitResult = {
+  batchId: string;
+  status: LlmBatchV2Status;
+};
+
+/**
+ * STABLE normalized per-request error vocabulary. Provider-specific detail is
+ * carried SEPARATELY on {@link LlmBatchV2Error} so a consumer can branch on a
+ * code that never changes shape while still logging the vendor's own words.
+ * `"unknown"` is the honest catch-all — a code is never guessed.
+ */
+export type LlmBatchV2ErrorCode =
+  | "invalid_request"
+  | "authentication"
+  | "permission"
+  | "not_found"
+  | "rate_limit"
+  | "request_too_large"
+  | "overloaded"
+  | "timeout"
+  | "billing"
+  | "provider_error"
+  | "unknown";
+
+export type LlmBatchV2Error = {
+  code: LlmBatchV2ErrorCode;
+  message: string;
+  /** The provider's OWN error identifier, verbatim ("invalid_request_error", …). */
+  providerCode: string | null;
+  /** HTTP status when the provider reported one; `null` otherwise. */
+  providerStatus: number | null;
+};
+
+/**
+ * One request's terminal outcome. A FLAT discriminated union on `status` so a
+ * consumer narrows directly and `customId` is reachable on every branch.
+ *
+ * `download()` returns BOTH streams: an adapter whose provider splits success
+ * and failure across separate transports (OpenAI's output file + error file) is
+ * responsible for merging them here.
+ */
+export type LlmBatchV2Outcome =
+  | {
+      customId: string;
+      status: "succeeded";
+      /** Concatenated assistant text, or `null` when the model emitted none. */
+      text: string | null;
+      /** The model that actually answered, when the provider reports it. */
+      model: string | null;
+      usage?: LlmUsageData;
+      /** Provider stop/finish reason, verbatim; `null` when unreported. */
+      stopReason: string | null;
+      /** Provider-native per-request payload, JSON-stringified (parity with `LlmResponse.rawBody`). */
+      rawBody: string;
+    }
+  | {
+      customId: string;
+      status: "errored";
+      error: LlmBatchV2Error;
+      /** Native error payload, JSON-stringified; `null` when the provider sent none. */
+      rawBody: string | null;
+    }
+  | { customId: string; status: "canceled" }
+  | { customId: string; status: "expired" };
+
+/**
+ * The additive, versioned batch surface. Present ⇒ core prefers it over every
+ * v1 method; absent ⇒ core falls back to the v1 path.
+ */
+export type LlmBatchV2Surface = {
+  /** EXACT discriminator. Anything else is treated as "no v2 surface". */
+  readonly version: typeof LLM_BATCH_V2_VERSION;
+  /** Submit neutral descriptors. Adapters own native body construction. */
+  submit(input: LlmBatchV2SubmitInput): Promise<LlmBatchV2SubmitResult>;
+  /** Neutral lifecycle state + counts. */
+  retrieve(batchId: string): Promise<LlmBatchV2State>;
+  /**
+   * Normalized per-request outcomes, addressed by BATCH id — never a file id.
+   * Implementations MUST raise a recognisable "results not ready" error rather
+   * than returning `[]` while the batch is still `in_progress` / `canceling`;
+   * an empty array is otherwise indistinguishable from "every row is gone".
+   */
+  download(batchId: string): Promise<LlmBatchV2Outcome[]>;
+  /** OPTIONAL — a provider without native cancellation simply omits it. */
+  cancel?(batchId: string): Promise<LlmBatchV2State>;
+};
+
+// ---------------------------------------------------------------------------
 // Provider adapter interface
 // ---------------------------------------------------------------------------
 
@@ -703,6 +939,13 @@ export interface LlmProviderAdapter {
 
   /** Cancel an in-progress batch. */
   cancelBatch?(batchId: string): Promise<{ batchId: string; status: LlmBatchStatus }>;
+
+  /**
+   * The ADDITIVE provider-neutral batch surface (cinatra#2396). Absent ⇒ core
+   * uses the v1 methods above. Never a replacement for them: the two coexist
+   * on a migrated adapter so the shipped v1 ABI keeps working untouched.
+   */
+  readonly batchV2?: LlmBatchV2Surface;
 }
 
 // ---------------------------------------------------------------------------

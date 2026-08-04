@@ -416,6 +416,48 @@ describe("auth-route-guard - cinatra#340 generic /webhook namespace (behavioral)
   });
 });
 
+describe("auth-route-guard - cinatra#2386 /setup/sign-up (first-account bootstrap step)", () => {
+  function isNext(res: { status?: number; headers?: Headers }): boolean {
+    const status = res.status ?? 200;
+    const location = res.headers?.get?.("location") ?? null;
+    return status !== 307 && location === null;
+  }
+
+  it("EXACT-exempts /setup/sign-up so a sessionless visitor reaches the bootstrap form (not 307->/sign-in)", async () => {
+    const res = await guardAppRoute(fakeRequest("/setup/sign-up"));
+    expect(isNext(res)).toBe(true);
+    // Source pin: the exact entry is present with an in-handler rationale.
+    expect(guardSource).toMatch(/"\/setup\/sign-up",\s*\/\//);
+    const line = guardSource.split("\n").find((l) => l.includes('"/setup/sign-up"'));
+    expect(line).toBeDefined();
+    expect((line ?? "").toLowerCase()).toMatch(/bootstrap/);
+  });
+
+  it("does NOT exempt a broad /setup prefix — every other /setup/* route stays session-guarded", async () => {
+    // PUBLIC_EXACT_PATHS (exact-match list) must not carry a bare "/setup"
+    // entry. SETUP_PATH_PREFIXES (a SEPARATE, unrelated list used only for
+    // isSetupPath's app-shell bypass classification, not by guardAppRoute)
+    // legitimately contains "/setup" — scope the assertion to the
+    // PUBLIC_EXACT_PATHS block only so that unrelated list doesn't false-positive.
+    const publicExactPathsBlock = guardSource.match(
+      /const PUBLIC_EXACT_PATHS = \[([\s\S]*?)\];/,
+    )?.[1];
+    expect(publicExactPathsBlock).toBeDefined();
+    expect(publicExactPathsBlock ?? "").not.toMatch(/"\/setup"\s*,/);
+    for (const p of ["/setup", "/setup/key", "/setup/name", "/setup/ai", "/setup/connections", "/setup/complete"]) {
+      const res = await guardAppRoute(fakeRequest(p));
+      expect(res.status, `${p} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("PREFIX-BOUNDARY CONTROL: a string-prefix sibling NOT the exact path (e.g. /setup/sign-up-extra) still 307s", async () => {
+    const res = await guardAppRoute(fakeRequest("/setup/sign-up-extra"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/sign-in");
+  });
+});
+
 describe("auth-route-guard DEV_ONLY_PUBLIC_EXACT_PATHS — design-fixture harness routes", () => {
   function isNext(res: { status?: number; headers?: Headers }): boolean {
     const status = res.status ?? 200;

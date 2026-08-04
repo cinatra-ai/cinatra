@@ -4,7 +4,7 @@ import { AuthView, SignUpForm } from "@/components/auth-view-client";
 import { hasAnyBetterAuthUsers } from "@/lib/auth";
 import { isRegistrationClosed } from "@/lib/authz/instance-mode";
 import { getAuthSession } from "@/lib/auth-session";
-import { resolvePostAuthDestination, buildSignUpPath, sanitizeNextPath } from "@/lib/auth-redirect-target";
+import { resolvePostAuthDestination, buildSetupSignUpPath, sanitizeNextPath } from "@/lib/auth-redirect-target";
 import { Main } from "@/components/layout/main";
 import { BrandMark } from "@/components/brand-mark";
 import { PasswordToggleA11y, ForgotPasswordBelowField } from "@/components/password-toggle-a11y";
@@ -47,15 +47,27 @@ export async function PermissionsAuthPage({
     redirect(resolvePostAuthDestination(safeNext));
   }
 
-  // Fresh install (no Better Auth users yet): make /sign-up the canonical URL
-  // for the bootstrap state. The middleware route guard (cookie-only, DB-free)
-  // still sends sessionless visitors to /sign-in first; this server redirect
-  // performs the second hop so the browser lands on /sign-up instead of
-  // rendering the sign-up form under the /sign-in URL. Carry `next` across
-  // the hop (cinatra#2359) — otherwise this bootstrap redirect would drop it
-  // even though the sign-in <-> sign-up client-side toggle preserves it.
-  if (!hasUsers && path === "sign-in") {
-    redirect(buildSignUpPath(rawNext));
+  // Fresh install (no Better Auth users yet): the bootstrap step now lives in
+  // the setup wizard (cinatra#2386), not at this bare auth-page URL. The
+  // middleware route guard (cookie-only, DB-free) still sends sessionless
+  // visitors to /sign-in first; this server redirect performs the second hop
+  // so the browser lands on /setup/sign-up instead of rendering the sign-up
+  // form here — whether the visitor was headed to /sign-in OR typed /sign-up
+  // directly. Carry `next` across the hop (cinatra#2359) — otherwise this
+  // bootstrap redirect would drop it even though the sign-in <-> sign-up
+  // client-side toggle preserves it. Once at least one user exists, /sign-up
+  // resumes serving later accounts here, unchanged.
+  //
+  // A `next` of exactly "/" is dropped rather than carried: the route guard
+  // (auth-route-guard.ts) always stamps `?next=<currentPath>` on its /sign-in
+  // redirect, even for the plain, common case of a sessionless GET / — so
+  // "/" here carries no more caller intent than "no next at all" would, and
+  // /setup/sign-up's own redirectTo default already resolves the no-next
+  // case straight into the wizard (see src/app/setup/sign-up/page.tsx). This
+  // keeps the landing URL a clean, query-free /setup/sign-up for the common
+  // root-visit case instead of a redundant /setup/sign-up?next=%2F.
+  if (!hasUsers && (path === "sign-in" || path === "sign-up")) {
+    redirect(buildSetupSignUpPath(rawNext === "/" ? undefined : rawNext));
   }
 
   const showBootstrapRegistration = !hasUsers && path !== "sign-out";

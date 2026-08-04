@@ -15,6 +15,14 @@ vi.mock("@/lib/instance-identity-store", () => ({
   readInstanceIdentity: vi.fn(),
 }));
 
+// cinatra#2386 — the sign-up step's presence is gated on hasAnyBetterAuthUsers().
+// Default true (no step) so pre-existing tests below — written before the
+// sign-up step existed — keep asserting steps[0]==="key" etc. without edits.
+const hasUsersState = { value: true };
+vi.mock("@/lib/auth", () => ({
+  hasAnyBetterAuthUsers: () => Promise.resolve(hasUsersState.value),
+}));
+
 // The setup-wizard module imports several connector modules whose real
 // implementations chain through @cinatra/connector-* barrels. Stub the LLM/
 // Nango status helpers so the wizard logic runs in isolation.
@@ -35,7 +43,12 @@ vi.mock("@/lib/setup-readiness-saga", () => ({
   readSetupReadinessState: () => ({ ready: readinessState.ready, receipt: null }),
 }));
 
-import { getSetupWizardSteps, isSetupWizardComplete } from "@/lib/setup-wizard";
+import {
+  getSetupWizardSteps,
+  isSetupWizardComplete,
+  getFirstIncompleteStep,
+  invalidateSetupWizardCache,
+} from "@/lib/setup-wizard";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import type { InstanceIdentity } from "@/lib/instance-identity-store";
 
@@ -55,6 +68,7 @@ const ORIGINAL_KEY = process.env.CINATRA_ENCRYPTION_KEY;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  hasUsersState.value = true;
   readinessState.ready = false;
   // Default: set a valid 64-char hex key so CINATRA_ENCRYPTION_KEY tests
   // don't bleed onto unrelated tests.
@@ -173,5 +187,54 @@ describe("getSetupWizardSteps - the AI step follows the readiness receipt", () =
     vi.mocked(readInstanceIdentity).mockReturnValue(SAMPLE_IDENTITY);
     readinessState.ready = true;
     await expect(isSetupWizardComplete()).resolves.toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2386 (setup-flow S1): the sign-up step is FIRST, but present ONLY
+// while hasAnyBetterAuthUsers() is false.
+// ---------------------------------------------------------------------------
+
+describe("getSetupWizardSteps - the sign-up step (cinatra#2386)", () => {
+  beforeEach(() => {
+    // isSetupWizardComplete() only caches a TRUE result (see setup-wizard.ts)
+    // — an earlier test in this file (the AI-receipt describe block above)
+    // legitimately leaves a cached `true` behind. Invalidate it so this
+    // block's flip-to-incomplete assertions aren't served a stale cache hit.
+    invalidateSetupWizardCache();
+  });
+
+  it("is steps[0], not ready, when zero Better Auth users exist", async () => {
+    hasUsersState.value = false;
+    vi.mocked(readInstanceIdentity).mockReturnValueOnce(null);
+    const steps = await getSetupWizardSteps();
+    expect(steps[0]?.id).toBe("sign-up");
+    expect(steps[0]?.href).toBe("/setup/sign-up");
+    expect(steps[0]?.ready).toBe(false);
+    // key shifts to index 1 while sign-up is present.
+    expect(steps[1]?.id).toBe("key");
+  });
+
+  it("is ABSENT (not merely ready:true) once at least one user exists", async () => {
+    hasUsersState.value = true;
+    vi.mocked(readInstanceIdentity).mockReturnValueOnce(null);
+    const steps = await getSetupWizardSteps();
+    expect(steps.find((s) => s.id === "sign-up")).toBeUndefined();
+    expect(steps[0]?.id).toBe("key");
+  });
+
+  it("isSetupWizardComplete returns false while the sign-up step is present, even if every other gate is satisfied", async () => {
+    hasUsersState.value = false;
+    vi.mocked(readInstanceIdentity).mockReturnValue(SAMPLE_IDENTITY);
+    readinessState.ready = true;
+    await expect(isSetupWizardComplete()).resolves.toBe(false);
+  });
+
+  it("getFirstIncompleteStep resolves to the sign-up step ahead of every other step while it is present", async () => {
+    hasUsersState.value = false;
+    vi.mocked(readInstanceIdentity).mockReturnValue(SAMPLE_IDENTITY);
+    readinessState.ready = true;
+    const steps = await getSetupWizardSteps();
+    expect(getFirstIncompleteStep(steps)?.id).toBe("sign-up");
   });
 });
