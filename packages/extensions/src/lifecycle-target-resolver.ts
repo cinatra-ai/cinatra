@@ -378,6 +378,18 @@ export type LifecycleCapabilityDescription = {
    *  loader to describe the row the action actually acts on (not the collapsed
    *  card row). Never serialized to the client. */
   resolution: LifecycleScopeResolution;
+  /**
+   * SERVER-ONLY. A locked canonical row for this package IN ANY SCOPE, or null.
+   *
+   * The lock is a PACKAGE-WIDE refusal, not a row-scoped one:
+   * `assertNoLockedCanonicalRow` refuses archive / uninstall / force_delete when
+   * ANY canonical row for the package is locked, whatever scope it is anchored
+   * to. So a UI that described the lock from the TARGET row alone would render
+   * an affordance live while a locked sibling deterministically refuses it —
+   * the same enabled-but-refused defect this issue fixes. The settings loader
+   * takes its locked/system reason from THIS row (codex-found, cinatra#2416).
+   */
+  lockedRow: InstalledExtension | null;
   byOp: LifecycleCapabilityMap;
 };
 
@@ -504,6 +516,8 @@ export async function describeLifecycleCapabilities(
         packageName,
         scope: scopeLabel(actor),
       },
+      // Unknown — the caller falls back to whatever row it already holds.
+      lockedRow: null,
       byOp: {
         archive: indeterminate("archive"),
         activate: indeterminate("activate"),
@@ -516,6 +530,8 @@ export async function describeLifecycleCapabilities(
   }
   return {
     resolution: resolveLifecycleScope(rows, actor),
+    // Scope-blind ON PURPOSE — mirrors assertNoLockedCanonicalRow.
+    lockedRow: rows.find((r) => r.status === "locked") ?? null,
     byOp: evaluateLifecycleCapabilities(rows, actor),
   };
 }

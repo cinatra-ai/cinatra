@@ -61,6 +61,15 @@ describe("AC1 — the enabled state comes from the ENFORCING module", () => {
     expect(MODEL).not.toMatch(/capabilities\?:/);
   });
 
+  it("the PACKAGE-WIDE lock is a separate, required input from the target row", () => {
+    // `assertNoLockedCanonicalRow` is scope-blind; the affordance must be greyed
+    // by a locked SIBLING, not only by a locked target row.
+    expect(MODEL).toMatch(/lockedRow:\s*InstalledExtension \| null;/);
+    expect(MODEL).toContain("lockedRow ? lifecycleInvariantReason(lockedRow, action) : null");
+    expect(SCREEN).toContain("lockedRow: lifecycleLockedRow,");
+    expect(RESOLVER).toContain('rows.find((r) => r.status === "locked") ?? null');
+  });
+
   it("the enforcement and the capability share ONE addressing implementation", () => {
     // pickLifecycleTargetRow (what the dispatcher calls) is a wrapper over the
     // same resolveLifecycleScope the capability evaluates.

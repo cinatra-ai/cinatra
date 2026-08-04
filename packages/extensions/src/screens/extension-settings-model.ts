@@ -162,61 +162,74 @@ export type SettingsAffordances = {
  * pre-#2416 enabled-by-default behavior reachable by a production caller, which
  * is precisely the defect: every caller must supply a server-derived verdict.
  *
- * `canonical` should be the row the dispatcher will TARGET (the resolver's
- * resolved row) when one resolved — not the collapsed card row, which for a
- * package installed at BOTH platform and org scope can carry a different
- * status than the row the action acts on.
+ * The two row inputs are DIFFERENT rows on purpose (codex-found, cinatra#2416):
+ *   • `canonical` is the row the dispatcher will TARGET — the resolver's
+ *     resolved row, not the collapsed card row, which for a package installed
+ *     at BOTH platform and org scope can carry a different status than the row
+ *     the action acts on. It supplies the STATUS/version reasons.
+ *   • `lockedRow` carries the PACKAGE-WIDE locked/system invariant. The
+ *     dispatcher's `assertNoLockedCanonicalRow` refuses when ANY canonical row
+ *     for the package is locked, in any scope — so reading the lock off the
+ *     target row alone would render an affordance live that a locked SIBLING
+ *     deterministically refuses: the very defect this issue fixes.
  */
 export function resolveSettingsAffordances(input: {
   canonical: InstalledExtension | null;
+  lockedRow: InstalledExtension | null;
   isArchived: boolean;
   versionKnown: boolean;
   capabilities: LifecycleCapabilityMap;
 }): SettingsAffordances {
-  const { canonical, isArchived, versionKnown, capabilities } = input;
-  // Tier 1 — the #1036 locked / system INVARIANT only. Deliberately NOT the
-  // whole `disabledActionReason`: its status half ("Already archived" /
-  // "Already active") is a weak, descriptive reason that must rank BELOW the
-  // capability, or an unaddressable row would read "Already active" — a
-  // statement about a row the action will never target.
+  const { canonical, lockedRow, isArchived, versionKnown, capabilities } = input;
+  // Tier 1 — the #1036 locked / system INVARIANT only, from the PACKAGE-WIDE
+  // locked row. Deliberately NOT the whole `disabledActionReason`: its status
+  // half ("Already archived" / "Already active") is a weak, descriptive reason
+  // that must rank BELOW the capability, or an unaddressable row would read
+  // "Already active" — a statement about a row the action will never target.
   const invariant = (
     action: "archive" | "activate" | "uninstall" | "force_delete",
-  ): string | null => (canonical ? lifecycleInvariantReason(canonical, action) : null);
+  ): string | null => (lockedRow ? lifecycleInvariantReason(lockedRow, action) : null);
   // Tier 2 — the SERVER-DERIVED capability.
   const capabilityReason = (
     op: "archive" | "activate" | "uninstall" | "force_delete",
   ): string | null => (capabilities[op].allowed ? null : capabilities[op].reason);
-  // Tier 3 — the status / version fallbacks (below).
+  // Tier 3 — the status / version fallbacks.
 
-  const archiveDisabled =
-    invariant("archive") ??
-    capabilityReason("archive") ??
-    (isArchived ? "Already archived" : !versionKnown ? "Installed version unknown" : null);
-  const activateDisabled =
-    invariant("activate") ??
-    capabilityReason("activate") ??
-    (!isArchived ? "Already active" : null);
-  const forceDeleteDisabled =
-    invariant("force_delete") ??
-    capabilityReason("force_delete") ??
-    (!versionKnown ? "Installed version unknown" : null);
-  const reinstallDisabled = invariant("uninstall") ?? capabilityReason("uninstall");
-
-  // Which of the four are showing a CAPABILITY reason (i.e. the #1036 rule did
-  // not already claim them). Keyed by AFFORDANCE name, not op name.
   const capabilityReasons: SettingsAffordances["capabilityReasons"] = {};
-  if (archiveDisabled && archiveDisabled === capabilityReason("archive")) {
-    capabilityReasons.archive = archiveDisabled;
-  }
-  if (activateDisabled && activateDisabled === capabilityReason("activate")) {
-    capabilityReasons.activate = activateDisabled;
-  }
-  if (reinstallDisabled && reinstallDisabled === capabilityReason("uninstall")) {
-    capabilityReasons.reinstall = reinstallDisabled;
-  }
-  if (forceDeleteDisabled && forceDeleteDisabled === capabilityReason("force_delete")) {
-    capabilityReasons.forceDelete = forceDeleteDisabled;
-  }
+
+  /** Resolve one affordance through the three tiers, recording STRUCTURALLY
+   *  (never by comparing the resolved copy) whether tier 2 is what claimed it. */
+  const resolve = (
+    affordance: "archive" | "activate" | "reinstall" | "forceDelete",
+    op: "archive" | "activate" | "uninstall" | "force_delete",
+    statusFallback: string | null,
+  ): string | null => {
+    const invariantReason = invariant(op);
+    if (invariantReason) return invariantReason;
+    const capReason = capabilityReason(op);
+    if (capReason) {
+      capabilityReasons[affordance] = capReason;
+      return capReason;
+    }
+    return statusFallback;
+  };
+
+  const archiveDisabled = resolve(
+    "archive",
+    "archive",
+    isArchived ? "Already archived" : !versionKnown ? "Installed version unknown" : null,
+  );
+  const activateDisabled = resolve(
+    "activate",
+    "activate",
+    !isArchived ? "Already active" : null,
+  );
+  const reinstallDisabled = resolve("reinstall", "uninstall", null);
+  const forceDeleteDisabled = resolve(
+    "forceDelete",
+    "force_delete",
+    !versionKnown ? "Installed version unknown" : null,
+  );
 
   return {
     archiveDisabled,

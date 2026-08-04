@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import type { Actor } from "@cinatra-ai/extension-types";
 import type { InstalledExtension } from "../canonical-types";
 import {
+  describeLifecycleCapabilities,
   evaluateLifecycleCapability,
   evaluateLifecycleCapabilities,
   resolveLifecycleScope,
@@ -358,6 +359,94 @@ describe("pickLifecycleTargetRow parity after the resolveLifecycleScope extracti
     const rows = [row("e", "")];
     expect(resolveLifecycleScope(rows, { ...orgAdmin("org-x"), orgId: "" }).ok).toBe(true);
     expect(resolveLifecycleScope(rows, platformAdmin(null)).ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// describeLifecycleCapabilities — the IO wrapper.
+// ---------------------------------------------------------------------------
+
+vi.mock("../canonical-store", () => ({
+  readInstalledExtensionsByPackageName: vi.fn(),
+}));
+
+async function mockedStore() {
+  return (await import("../canonical-store")) as unknown as {
+    readInstalledExtensionsByPackageName: ReturnType<typeof vi.fn>;
+  };
+}
+
+describe("describeLifecycleCapabilities", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("reports the PACKAGE-WIDE locked row, scope-blind (mirrors assertNoLockedCanonicalRow)", async () => {
+    const locked = row("iext-platform", null, { status: "locked" });
+    const target = row("iext-orgx", "org-x");
+    const store = await mockedStore();
+    store.readInstalledExtensionsByPackageName.mockResolvedValue([locked, target]);
+
+    const d = await describeLifecycleCapabilities(PKG, orgAdmin("org-x"));
+    expect(d.resolution.ok && d.resolution.row.id).toBe("iext-orgx");
+    // The locked row is in ANOTHER scope, and it still surfaces — the caller
+    // must be able to grey the affordances the dispatcher will refuse.
+    expect(d.lockedRow?.id).toBe("iext-platform");
+  });
+
+  it("reports no locked row when none exists", async () => {
+    const store = await mockedStore();
+    store.readInstalledExtensionsByPackageName.mockResolvedValue([row("iext-orgx", "org-x")]);
+    expect((await describeLifecycleCapabilities(PKG, orgAdmin("org-x"))).lockedRow).toBeNull();
+  });
+
+  it("a canonical-read failure fails CLOSED for the row-scoped ops and leaves force_delete role-derived", async () => {
+    const store = await mockedStore();
+    store.readInstalledExtensionsByPackageName.mockRejectedValue(new Error("db down"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const admin = await describeLifecycleCapabilities(PKG, platformAdmin("org-x"));
+    for (const op of ROW_SCOPED_OPS) {
+      expect(admin.byOp[op]).toEqual({
+        op,
+        allowed: false,
+        code: "indeterminate",
+        reason: "Couldn't check this extension's install scope. Try again.",
+      });
+    }
+    // force_delete never consulted the row scope, so reporting a scope-check
+    // failure for it would be a lie — it keeps its honest platform-role verdict.
+    expect(admin.byOp.force_delete).toEqual({
+      op: "force_delete",
+      allowed: true,
+      code: "ok",
+      reason: null,
+    });
+    expect(admin.lockedRow).toBeNull();
+    expect(warn).toHaveBeenCalled();
+
+    // …and a non-platform actor is still denied force_delete on standing.
+    store.readInstalledExtensionsByPackageName.mockRejectedValue(new Error("db down"));
+    const org = await describeLifecycleCapabilities(PKG, orgAdmin("org-x"));
+    expect(org.byOp.force_delete.allowed).toBe(false);
+    expect(org.byOp.force_delete.code).toBe("platform_admin_required");
+  });
+
+  it("an evaluation-time defect is NOT masked as `indeterminate` (only the READ is guarded)", async () => {
+    const store = await mockedStore();
+    // A row set that makes the pure evaluator throw would be a programming
+    // defect; prove the guard is narrow by asserting a POISONED row propagates.
+    store.readInstalledExtensionsByPackageName.mockResolvedValue([
+      new Proxy(row("iext-orgx", "org-x"), {
+        get(t, k) {
+          if (k === "organizationId") throw new Error("poisoned row");
+          return Reflect.get(t, k);
+        },
+      }),
+    ]);
+    await expect(describeLifecycleCapabilities(PKG, orgAdmin("org-x"))).rejects.toThrow(
+      "poisoned row",
+    );
   });
 });
 

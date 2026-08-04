@@ -127,10 +127,11 @@ export async function ExtensionSettingsScreen({
     "settings-capability",
     packageName,
   );
-  const { resolution, byOp: capabilities } = await describeLifecycleCapabilities(
-    packageName,
-    lifecycleActor,
-  );
+  const {
+    resolution,
+    lockedRow,
+    byOp: capabilities,
+  } = await describeLifecycleCapabilities(packageName, lifecycleActor);
 
   // The row the lifecycle actions will TARGET. The card row above is the
   // collapsed locked>active>archived winner across every identity visible to
@@ -144,6 +145,15 @@ export async function ExtensionSettingsScreen({
     ? resolution.row.status === "archived"
     : isArchived;
 
+  // The PACKAGE-WIDE locked/system invariant, which is a different row from the
+  // target: `assertNoLockedCanonicalRow` refuses when ANY canonical row for the
+  // package is locked, in any scope. `lockedRow` is that row (scope-blind, from
+  // the same read the capability used); when the capability read failed we fall
+  // back to the card row, which the installed-rows collapse already ranks
+  // locked-first among the identities visible to this session.
+  const lifecycleLockedRow =
+    lockedRow ?? (canonical?.status === "locked" ? canonical : null);
+
   // Locked / system disabled-action reasons (#1036 mechanism) → the capability
   // verdict → status/version fallbacks (complementary Archive/Activate;
   // version-requiring actions).
@@ -155,6 +165,7 @@ export async function ExtensionSettingsScreen({
     capabilityReasons,
   } = resolveSettingsAffordances({
     canonical: lifecycleRow,
+    lockedRow: lifecycleLockedRow,
     isArchived: lifecycleIsArchived,
     versionKnown,
     capabilities,
