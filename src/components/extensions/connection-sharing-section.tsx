@@ -24,6 +24,55 @@ import "server-only";
 // come from the actor's actual memberships (AvailableScopes) — the exact
 // `org:<id>` / `team:<id>` / `project:<id>` tokens `evaluateExtensionAccess`
 // enforces at use time.
+//
+// ---------------------------------------------------------------------------
+// THE REAL PRODUCT CONSUMER of the §II connection primitives (cinatra#2357,
+// closing the #2382 §4 disclosure).
+//
+// `ConnectionsList` / `ConnectionRow` / `ConnectionsStatusCard` shipped with
+// #2354 with NO core consumer: the conformance harness played the consumer
+// itself, so the only thing exercising the row primitive's status→presentation
+// derivation was test-owned wiring. This section is the host surface that has
+// always listed the actor's own saved connections for a connector — it just
+// drew its own identity line (a bare mono `<p>` of the connection id, and only
+// when there was more than one). It now composes the SHIPPED primitives:
+//
+//   • the roll-up `ConnectionsStatusCard` heads the section whenever the actor
+//     holds MORE THAN ONE connection here — the spec's "multiple connections"
+//     shape, counting only statuses in play;
+//   • the list is the real `ConnectionsList`, so `connector-connections` is
+//     emitted by a PRODUCTION route (every connector setup page where the
+//     actor owns a connection), not by a fixture;
+//   • each connection's identity line is a real `ConnectionRow` — its name and
+//     the mono secondary line.
+//
+// WHAT IS STILL NOT WIRED, precisely — two things, both for the same reason
+// (the host holds no per-connection signal):
+//   1. The row ACTION slot. A per-connection Disconnect would be a destructive
+//      write addressed by connection-row id, and no such host path exists —
+//      disconnecting is owned by each connector's own `role:"disconnect"` named
+//      action on its setup form, not by a generic host-level endpoint.
+//      Inventing one here would mean inventing its authz.
+//   2. The row STATUS badge — see "Status honesty" below.
+// So the two `connector-connections` row ACTION drivers and the badge
+// derivation stay harness-owned. The SURFACE, its states, its cardinality and
+// its row chrome now have a real production consumer; those three do not, and
+// that is the whole of the remaining gap.
+//
+// Status honesty — WHY THESE ROWS CARRY NO BADGE. A row returned by
+// `listNangoConnectionsByOwner` proves the identity is STORED and not
+// soft-deleted. It does NOT prove the connection still answers: readiness
+// probes are per CONNECTOR, not per connection, so a credential revoked at the
+// provider leaves a row that looks untouched. Passing `status="connected"`
+// would paint a green joined-plug chip and `data-status="connected"` — the
+// colour and the glyph are the claim as much as any label would be, so a
+// relabelled green chip is not a softer claim, it is the same one in different
+// words. The rows therefore omit `status` entirely (the prop is optional for
+// exactly this case), and the connector-level answer this page CAN back is
+// already on it, in the right-column status card. A genuine per-connection
+// reachability signal is a follow-up, not something to fake here — and so the
+// row primitive's status→presentation derivation stays harness-driven along
+// with the two row actions.
 // ---------------------------------------------------------------------------
 
 import { inArray } from "drizzle-orm";
@@ -51,6 +100,8 @@ import {
 import type { AvailableScopes } from "@/components/access-scope";
 import type { OwnerView } from "@/components/permissions-form";
 import { ExtensionPermissionsClient } from "@/components/extension-permissions-client";
+import { ConnectionsStatusCard } from "@cinatra-ai/sdk-ui/connection-status-card";
+import { ConnectionsList, ConnectionRow } from "@cinatra-ai/sdk-ui/connections-list";
 
 type ConnectionSharingSectionProps = {
   /** The connector package whose OWN connections the actor manages here. */
@@ -174,13 +225,23 @@ export async function ConnectionSharingSection({
           acts through your connected account and is audited.
         </p>
       </div>
+      {/* The multi-connection roll-up (spec §II): one count badge per status in
+          play, shown only when there IS more than one connection to roll up. No
+          Check and no "All connections" link — this list is directly beneath
+          it, so there is no other tab to open. */}
+      {panels.length > 1 ? (
+        <ConnectionsStatusCard counts={{ connected: panels.length }} />
+      ) : null}
+      <ConnectionsList>
       {panels.map(({ identity, surface, policy, coOwners, sharingAllowed }) => (
         <div key={identity.id} className="flex flex-col gap-2">
-          {panels.length > 1 && (
-            <p className="text-xs text-muted-foreground font-mono truncate">
-              {identity.connectionId}
-            </p>
-          )}
+          {/* The connection's own identity row: its name and the mono secondary
+              line (the connector key it authenticates through). NO status and
+              NO action — see the header. */}
+          <ConnectionRow
+            name={identity.connectionId}
+            url={identity.connectorKey}
+          />
           <ExtensionPermissionsClient
             kind="connection"
             resourceId={identity.id}
@@ -207,6 +268,7 @@ export async function ConnectionSharingSection({
           />
         </div>
       ))}
+      </ConnectionsList>
     </section>
   );
 }

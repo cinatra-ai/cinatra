@@ -98,3 +98,41 @@ describe("SchemaConfigConnectorForm composition (shadcn contract)", () => {
     });
   });
 });
+
+describe("collectFormInputs origin is REQUIRED (cinatra#2357, closing the #2382 review)", () => {
+  // #2382 scoped the input scan to the triggering button's own form because a
+  // document-wide `querySelector` submits the FIRST form on the page — a
+  // different connector's field values. It left the parameter OPTIONAL, with
+  // that same document-wide scan surviving as the `undefined` branch. No
+  // caller ever took it, so the branch was unreachable code whose only
+  // behaviour was the leak the fix exists to prevent. These assertions are the
+  // only ones that can fail on its return: the behavioural cross-form test in
+  // src/components/extensions/__tests__ was green before the branch was
+  // deleted and stays green after.
+  it("declares a non-optional origin parameter", () => {
+    expect(SRC).toMatch(
+      /function collectFormInputs\(origin: Element \| null\): Record<string, string>/,
+    );
+    expect(SRC).not.toMatch(/function collectFormInputs\(origin\?/);
+  });
+
+  it("has no document-wide form lookup left to fall back to", () => {
+    expect(SRC).not.toMatch(
+      /document\.querySelector<HTMLElement>\('\[data-testid="schema-config-form"\]'\)/,
+    );
+    expect(SRC).not.toMatch(/origin === undefined/);
+    // The ONE resolution path is the triggering element's own form, failing
+    // closed to {} when it resolves to none.
+    expect(SRC).toMatch(
+      /const form = origin\?\.closest<HTMLElement>\('\[data-testid="schema-config-form"\]'\) \?\? null;/,
+    );
+  });
+
+  it("passes an origin at every call site", () => {
+    // The three dispatching sites, named exactly: the generic named action and
+    // the Connect action pass the clicked button; the disconnect confirm lives
+    // in a portal OUTSIDE the form, so it anchors to its in-form trigger ref.
+    expect(SRC.match(/collectFormInputs\(origin\)/g)).toHaveLength(2);
+    expect(SRC).toContain("collectFormInputs(triggerRef.current)");
+  });
+});

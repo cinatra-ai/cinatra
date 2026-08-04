@@ -30,7 +30,12 @@
 // ---------------------------------------------------------------------------
 
 import { useState } from "react";
-import { PlugZap, Unplug } from "lucide-react";
+import { Unplug } from "lucide-react";
+// cinatra#2356/#2357: the Connect action carries the joined plug from the
+// Connected badge (spec §II), so this harness row draws the SAME first-party
+// glyph every status site draws — never lucide `PlugZap`, which the epic
+// retired everywhere the connected state is shown.
+import { PlugConnected } from "@cinatra-ai/sdk-ui/icons";
 
 import {
   AlertDialog,
@@ -193,7 +198,7 @@ function FixtureConnectionRow({
             data-testid="connection-row-connect"
             onClick={() => setConnected(true)}
           >
-            <PlugZap />
+            <PlugConnected />
             Connect
           </Button>
         )

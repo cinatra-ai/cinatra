@@ -58,6 +58,12 @@ export async function ConnectorGridFixture() {
         cards={cards}
         scopeValue={["workspace"]}
         scopes={{ orgs: [], projects: [], canGrantWorkspace: true }}
+        // cinatra#2357: the seeded harness actor stands in for an actor WITH
+        // marketplace access, so the toolbar's "+ Connector" and the closing
+        // "Install more connectors" CTA both render here. The no-access
+        // variant (neither button, and the All+0 panel's buttonless copy) gets
+        // its own mount alongside the empty-state fixtures.
+        canReachMarketplace
       />
     </div>
   );

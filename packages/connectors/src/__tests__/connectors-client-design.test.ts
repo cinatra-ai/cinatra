@@ -43,6 +43,37 @@
  *         emblem are NOT swapped — they are identity/kind glyphs, not status
  *         glyphs (negative locks live in
  *         src/components/__tests__/status-glyph-scope.test.ts).
+ *   #2357 (epic #2353; same pinned spec) the filter becomes THREE-state and the
+ *         page gains a closing install CTA:
+ *           · `FilterType` widens to "all" | "connected" | "available" and the
+ *             default becomes "all" — an explicit owner-directed supersession
+ *             of #1092's "every visit starts on Connected". #1092's
+ *             NON-persistence half is retained verbatim (plain state, no URL,
+ *             no storage) and is still locked below.
+ *           · The All segment leads the group. It names no connection status,
+ *             so it takes neither status colour nor a plug: the page's own
+ *             `--ink` navy (`bg-foreground`, solid when selected with a white
+ *             icon + label; a soft navy tint idle) and lucide `LayoutGrid` —
+ *             the whole grid, every card. It is deliberately NOT the indigo
+ *             `--primary`, so the §VII selected-primary prohibition below is
+ *             satisfied unchanged rather than re-specified.
+ *           · Empty states become a MATRIX with scope-neutral copy (cards are
+ *             actor- AND scope-filtered server-side, so zero visible cards is
+ *             not evidence that nothing is installed): All+0 → the
+ *             "No connectors to show" panel carrying the SINGLE install CTA
+ *             (and no button at all without marketplace access); Connected+0 →
+ *             the #1092 panel with re-specified scope-neutral copy and its
+ *             unchanged "Connect a service" action; Disconnected+0 → no panel.
+ *           · A centred `outline`/`sm` "Install more connectors" button closes
+ *             the page in every state except All+0 (whose panel already
+ *             carries it — one screen never shows the same CTA twice).
+ *           · Both install affordances — the toolbar's "+ Connector" and this
+ *             CTA — render ONLY for an actor who can reach the marketplace;
+ *             the destination is admin-gated, so "+ Connector" was a dead
+ *             action for every non-admin and the pair is fixed together.
+ *           · The `.faded-bottom` overlay is CONTAINED to the list (the <ul>
+ *             becomes the positioned block) and the CTA sits outside it, so
+ *             the fade can never wash over the button.
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -60,6 +91,14 @@ const SRC = readFileSync(
 // assertions stay on `connectors-client.tsx` (`SRC`).
 const BADGE_SRC = readFileSync(
   join(__dirname, "..", "connector-badge.tsx"),
+  "utf8",
+);
+
+// The app stylesheet, read for the ONE cross-file invariant this suite owns:
+// the `.faded-bottom` overlay's height and the list's trailing gutter are a
+// single decision split across two files (cinatra#2357 scope 3).
+const GLOBALS = readFileSync(
+  join(__dirname, "..", "..", "..", "..", "src", "app", "globals.css"),
   "utf8",
 );
 
@@ -208,9 +247,12 @@ describe("ConnectorsClient design-system contract", () => {
     });
   });
 
-  describe("cinatra#1092 defaults to Connected and drops filter persistence", () => {
-    it("defaults filterType to \"connected\" on every mount", () => {
-      expect(SRC).toMatch(/useState<FilterType>\("connected"\)/);
+  describe("cinatra#1092 drops filter persistence (its DEFAULT is superseded by #2357)", () => {
+    it("no longer defaults filterType to \"connected\" — #2357 lands on \"all\"", () => {
+      // The retained half of #1092 is NON-persistence, asserted below. The
+      // default half was explicitly superseded by epic #2353 / #2357; the new
+      // default is locked in the #2357 block.
+      expect(SRC).not.toMatch(/useState<FilterType>\("connected"\)/);
     });
 
     it("no longer persists the connection filter to localStorage", () => {
@@ -311,6 +353,248 @@ describe("ConnectorsClient design-system contract", () => {
       expect(SRC).toContain("data-[state=on]:text-destructive-foreground");
       expect(SRC).not.toMatch(/data-\[state=on\]:bg-primary\b/);
       expect(SRC).not.toMatch(/data-\[state=on\]:text-primary\b/);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // cinatra#2357 — three-state All-default filter · empty-state matrix ·
+  // closing install CTA · shared marketplace-access gating · fade containment.
+  // -------------------------------------------------------------------------
+
+  describe("cinatra#2357 three-state filter, All first and default", () => {
+    it("widens FilterType to all | connected | available", () => {
+      expect(SRC).toMatch(
+        /type FilterType = "all" \| "connected" \| "available";/,
+      );
+    });
+
+    it("lands on \"all\" on every mount", () => {
+      expect(SRC).toMatch(/useState<FilterType>\("all"\)/);
+    });
+
+    it("gives \"all\" a PASS-ALL predicate — it narrows nothing", () => {
+      // The status branches must stay `c.connected` / `!c.connected`; only the
+      // "all" arm is unconditional. A regression that made "all" fall through
+      // to one of the status arms would drop cards silently.
+      expect(SRC).toMatch(
+        /filterType === "all" \? true : filterType === "connected" \? c\.connected : !c\.connected/,
+      );
+    });
+
+    it("orders the segments All → Connected → Disconnected, All FIRST", () => {
+      const allIdx = SRC.indexOf('value="all"');
+      const connectedIdx = SRC.indexOf('value="connected"');
+      const availableIdx = SRC.indexOf('value="available"');
+      for (const idx of [allIdx, connectedIdx, availableIdx]) {
+        expect(idx).toBeGreaterThan(-1);
+      }
+      expect(allIdx).toBeLessThan(connectedIdx);
+      expect(connectedIdx).toBeLessThan(availableIdx);
+      // …and all three live inside the ONE ToggleGroup (not a stray literal
+      // elsewhere in the file).
+      const groupStart = SRC.indexOf("<ToggleGroup");
+      const groupEnd = SRC.indexOf("</ToggleGroup>");
+      expect(allIdx).toBeGreaterThan(groupStart);
+      expect(availableIdx).toBeLessThan(groupEnd);
+    });
+
+    it("leads the All segment with the four-square LayoutGrid, never a plug", () => {
+      // The plug family stays exclusive to STATUS: All draws the whole grid.
+      expect(SRC).toMatch(/import \{[^}]*\bLayoutGrid\b[^}]*\} from "lucide-react"/);
+      expect(SRC).toMatch(/value="all"[\s\S]*?<LayoutGrid[\s\S]*?All\n/);
+      // Between the All item and the Connected item there is no plug glyph.
+      const allIdx = SRC.indexOf('value="all"');
+      const connectedIdx = SRC.indexOf('value="connected"');
+      const allSegment = SRC.slice(allIdx, connectedIdx);
+      expect(allSegment).not.toContain("<PlugConnected");
+      expect(allSegment).not.toContain("<Unplug");
+    });
+
+    it("dresses All in the page's own navy — solid selected, soft tint idle", () => {
+      const allIdx = SRC.indexOf('value="all"');
+      const connectedIdx = SRC.indexOf('value="connected"');
+      const allSegment = SRC.slice(allIdx, connectedIdx);
+      // idle: soft navy tint + navy ink (never grey — #604/#1014 forbid
+      // text-muted-foreground anywhere in the group, asserted above).
+      expect(allSegment).toContain("bg-foreground/10");
+      expect(allSegment).toMatch(/text-foreground(?!-)\b/);
+      // selected: SOLID navy with a white icon + label.
+      expect(allSegment).toContain("data-[state=on]:bg-foreground");
+      expect(allSegment).toContain("data-[state=on]:text-surface-strong");
+      // and NOT the indigo primary — the §VII prohibition above holds for the
+      // whole file, so the All segment must satisfy it rather than re-specify
+      // it. Assert the narrower fact here too so a local regression names
+      // itself.
+      expect(allSegment).not.toContain("bg-primary");
+      expect(allSegment).not.toContain("text-primary");
+    });
+  });
+
+  describe("cinatra#2357 empty-state matrix (scope-neutral copy)", () => {
+    it("keys BOTH panels off the server-resolved cards, never the search-narrowed list", () => {
+      // A client-side search miss is not a scope/visibility/nothing-installed
+      // cause, so it must leave a bare list rather than a panel asserting one.
+      expect(SRC).toMatch(
+        /const showAllEmptyState = filterType === "all" && cards\.length === 0/,
+      );
+      expect(SRC).toMatch(
+        /const showConnectedEmptyState = filterType === "connected" && !hasConnectedConnectors/,
+      );
+    });
+
+    it("All+0 renders the scope-neutral panel, never asserting nothing is installed", () => {
+      expect(SRC).toContain("No connectors to show");
+      // All three causes are named and each gets its remedy.
+      expect(SRC).toContain(
+        "installed here yet, that what is installed sits outside the scope",
+      );
+      expect(SRC).toContain("outside what you are allowed");
+      expect(SRC).toContain(
+        "Try a wider scope, ask for access to what you cannot see,",
+      );
+      // and it never claims the flat negative the old Connected copy did.
+      expect(SRC).not.toContain("You have not connected any services yet");
+    });
+
+    it("All+0 WITHOUT marketplace access keeps the panel, swaps the last clause, and renders NO button", () => {
+      expect(SRC).toContain(
+        "Try a wider scope, or ask an administrator for access —",
+      );
+      expect(SRC).toContain("or for an install.");
+      // The panel's own button is inside a canReachMarketplace branch, so the
+      // no-access variant has no action at all.
+      const panelStart = SRC.indexOf('data-testid="connectors-empty-panel"');
+      const panelEnd = SRC.indexOf("showConnectedEmptyState ?", panelStart);
+      const panel = SRC.slice(panelStart, panelEnd);
+      expect(panel).toMatch(
+        /canReachMarketplace \? \([\s\S]*?Install more connectors[\s\S]*?\) : null/,
+      );
+    });
+
+    it("Connected+0 adopts the spec's re-specified scope-neutral copy", () => {
+      expect(SRC).toContain("No connected services in this view");
+      expect(SRC).toContain(
+        "Nothing here is connected. Either nothing is installed in this scope",
+      );
+      expect(SRC).not.toContain("No connected services yet");
+    });
+
+    it("Disconnected+0 has NO panel branch — the grid area is simply bare", () => {
+      // Exactly two empty panels exist, and neither is reachable from the
+      // disconnected segment: the only `filterType ===` guards on the panels
+      // are "all" and "connected".
+      const panelGuards = SRC.match(
+        /const show(?:All|Connected)EmptyState = filterType === "(\w+)"/g,
+      );
+      expect(panelGuards).toHaveLength(2);
+      expect(SRC).not.toMatch(/filterType === "available" &&[\s\S]{0,80}Empty/);
+    });
+  });
+
+  describe("cinatra#2357 closing install CTA", () => {
+    it("is a centred outline/sm Button-as-Link to the marketplace connector tab", () => {
+      expect(SRC).toMatch(
+        /<div className="mt-6 flex justify-center[^"]*">[\s\S]*?variant="outline"[\s\S]*?size="sm"[\s\S]*?href="\/configuration\/marketplace\?tab=connector"[\s\S]*?Install more connectors/,
+      );
+    });
+
+    it("carries NO leading glyph — the plug family belongs to status", () => {
+      const ctaIdx = SRC.indexOf('data-testid="connectors-install-cta"');
+      expect(ctaIdx).toBeGreaterThan(-1);
+      const cta = SRC.slice(ctaIdx, SRC.indexOf("</div>", ctaIdx));
+      expect(cta).not.toMatch(/<(Plus|PlugConnected|Unplug|LayoutGrid)\b/);
+    });
+
+    it("renders in every state EXCEPT All+0, where the panel already carries it", () => {
+      // Read the WHOLE declaration and pin it exactly: All+0 is the only
+      // suppression case. Connected+0 is NOT one — that panel's action is a
+      // different one, so the bottom button keeps rendering beneath it — and a
+      // regression that added it here would change this statement.
+      const decl = SRC.match(/const showInstallCta = [^;]+;/);
+      expect(decl).not.toBeNull();
+      expect(decl![0]).toBe(
+        "const showInstallCta = canReachMarketplace && !showAllEmptyState;",
+      );
+    });
+  });
+
+  describe("cinatra#2357 shared marketplace-access gating", () => {
+    it("takes the access decision as a REQUIRED prop (no permissive default)", () => {
+      expect(SRC).toMatch(/canReachMarketplace: boolean;/);
+      expect(SRC).not.toMatch(/canReachMarketplace\s*=\s*true/);
+      expect(SRC).toMatch(/canReachMarketplace,\n\}: ConnectorsClientProps/);
+    });
+
+    it("gates the toolbar's + Connector action AND its leading divider", () => {
+      // Both live inside the same branch, so hiding the action never leaves a
+      // doubled hairline behind it.
+      expect(SRC).toMatch(
+        /\{canReachMarketplace \? \(\s*<>\s*<ToolbarSeparator \/>\s*<ToolbarGroup>[\s\S]*?href="\/configuration\/marketplace\?tab=connector"/,
+      );
+    });
+
+    it("gates the closing CTA on the SAME fact, so the pair is never split", () => {
+      expect(SRC).toMatch(/showInstallCta = canReachMarketplace &&/);
+    });
+  });
+
+  describe("cinatra#2357 fade containment", () => {
+    // The live overlap proof is the Playwright viewport check on the running
+    // page; these are the STRUCTURAL facts that make the overlap impossible,
+    // each of which a refactor could silently undo.
+    // The fade, its positioning and its gutter are ONE conditional class
+    // group — they must never be separable, which is what these read.
+    const fadeGroup = () => {
+      const m = SRC.match(/"(faded-bottom[^"]*)"/);
+      expect(m).not.toBeNull();
+      return m![1];
+    };
+
+    it("makes the faded list its OWN positioned containing block", () => {
+      // `after:absolute` resolves against the nearest positioned ancestor —
+      // without `relative` on the same element the band escapes the list.
+      expect(fadeGroup()).toContain("relative");
+    });
+
+    it("gives the fade a trailing gutter AT LEAST as tall as the band itself", () => {
+      // The rework that matters: a contained band is anchored to this
+      // element's bottom, so anything shorter than the band's own height gets
+      // washed. Read the utility's height out of globals.css rather than
+      // restating it — the two are ONE decision, and a future change to either
+      // side alone is exactly the regression this guards.
+      const utility = GLOBALS.match(/@utility faded-bottom \{[\s\S]*?\n\}/);
+      expect(utility).not.toBeNull();
+      const bandHeight = Number(utility![0].match(/after:h-(\d+)\b/)![1]);
+      // The band is `md:after:block` — hidden below `md` — so the 128px gutter
+      // must be `md:`-scoped too, or it is dead space on a phone.
+      expect(utility![0]).toContain("md:after:block");
+      const gutter = fadeGroup().match(/\bmd:pb-(\d+)\b/);
+      expect(gutter).not.toBeNull();
+      expect(Number(gutter![1])).toBeGreaterThanOrEqual(bandHeight);
+      // …and it is genuinely a rework of the old value, not the old value.
+      expect(fadeGroup()).not.toContain("pb-16");
+    });
+
+    it("reserves the fade and its gutter ONLY when there are cards to fade", () => {
+      // An empty grid (Disconnected+0, or a search that matches nothing) has
+      // nothing to fade, so it must not reserve the band's gutter above the
+      // CTA either.
+      expect(SRC).toMatch(
+        /filteredConnectors\.length > 0 && "faded-bottom relative pb-\d+ md:pb-\d+"/,
+      );
+    });
+
+    it("places the CTA OUTSIDE that block, and wraps neither in a positioned parent", () => {
+      const ulClose = SRC.indexOf("</ul>");
+      const ctaIdx = SRC.indexOf('data-testid="connectors-install-cta"');
+      expect(ulClose).toBeGreaterThan(-1);
+      expect(ctaIdx).toBeGreaterThan(ulClose);
+      // Between the list's close and the CTA there is no positioned wrapper —
+      // the two are siblings under the component's bare fragment, so nothing
+      // can establish a shared containing block for the overlay.
+      const between = SRC.slice(ulClose, ctaIdx);
+      expect(between).not.toMatch(/className="[^"]*\b(relative|absolute|fixed|sticky)\b/);
+      expect(SRC).not.toMatch(/<div className="[^"]*relative[^"]*">\s*<ul className="[^"]*faded-bottom/);
     });
   });
 });

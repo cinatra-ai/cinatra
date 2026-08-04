@@ -3,6 +3,7 @@ import { PageContent } from "@/components/page-content";
 import {
   requireAuthSession,
   getActorContext,
+  isPlatformAdmin,
 } from "@/lib/auth-session";
 import {
   readOrgsWithTeamsForUserActiveOnly,
@@ -203,6 +204,13 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
   }));
   const cards: ConnectorCardData[] = [...catalogCards, ...runtimeOnlyCardData];
 
+  // cinatra#2357 scope 4: both install affordances on this page (the toolbar's
+  // "+ Connector" and the closing "Install more connectors" CTA) lead to
+  // `/configuration/marketplace`, which is `requireAdminSession`-gated. Read
+  // the SAME platform-admin fact that gate reads, from the session we already
+  // hold, so a non-admin is never shown a control that leads nowhere.
+  const canReachMarketplace = isPlatformAdmin(session);
+
   return (
     <Main className="min-h-screen">
       <PageHeader
@@ -211,7 +219,12 @@ export async function ConnectorsPage({ searchParams }: ConnectorsPageProps) {
         divider={false}
       />
       <PageContent>
-        <ConnectorsClient cards={cards} scopeValue={effectiveScopeTokens} scopes={scopes} />
+        <ConnectorsClient
+          cards={cards}
+          scopeValue={effectiveScopeTokens}
+          scopes={scopes}
+          canReachMarketplace={canReachMarketplace}
+        />
       </PageContent>
     </Main>
   );
