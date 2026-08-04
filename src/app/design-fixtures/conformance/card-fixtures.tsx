@@ -167,8 +167,15 @@ function ConformanceCard({ fixture }: { fixture: ConformanceCardFixture }) {
 }
 
 export function ConformanceCardFixtures() {
+  // 4-column tail (cinatra#2363 geometry proof): the prior md:2/xl:3 grid never
+  // exercised the CARD-BODY-tight case the one-line CTA/details row contract
+  // depends on (md ~172px, lg/xl ~207-208px with the expanded sidebar) — a
+  // 3-up xl column is wide enough to always fit the pair, silently hiding a
+  // wrap regression. lg:3/xl:4 keeps md 2-up (already tight) and tightens the
+  // wider breakpoints too, so every state's CTA+details row is proven at the
+  // real minimum width, not just the roomiest one.
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {CONFORMANCE_CARD_FIXTURES.map((fixture) => (
         <ConformanceCard key={fixture.surfaceId} fixture={fixture} />
       ))}

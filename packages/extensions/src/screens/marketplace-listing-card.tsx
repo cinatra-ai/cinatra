@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { formatDistanceToNow } from "date-fns";
 import Link from "next/link";
-import { Check, CircleCheck, CircleHelp, Star, TriangleAlert } from "lucide-react";
+import { Check, CircleHelp, Star, TriangleAlert } from "lucide-react";
 
 import { ExtensionCardListingBanner } from "@/components/extension-card";
 import { MarketplaceCardIcon } from "@/components/extension-card-icon-image";
@@ -21,16 +21,17 @@ import { resolveCardPriceLabel } from "./marketplace-card-model";
 // ---------------------------------------------------------------------------
 // MarketplaceListingCard — the §IV "Extensions" ListingCard (cinatra#988).
 //
-// The full card anatomy of the design spec 0.5.0 §I, in spec order:
+// The full card anatomy of the design spec 0.11.0 §I, in spec order:
 //   1. Banner: the 46×46 icon tile beside a name (line-clamp 2) + the "{Kind}
 //      by {Vendor}" byline directly beneath the name, ALL on the coloured
 //      ground — the byline recoloured white to match the name (0.5.0 moved it
-//      here off the body). The 13px kind emblem, kind label, vendor link and
-//      circled-check VERIFIED mark (only when the catalog carried a vendor) all
-//      read white. Commerce lives in the price row, not a banner badge.
+//      here off the body). The 13px kind emblem, kind label and vendor link
+//      all read white. Commerce lives in the price row, not a banner badge.
 //   2. Body top block (min-height 62px): the 3-line-clamped description only.
 //   3. Centred column: the price row ("Free" / "Free, Open Source" / price,
-//      Archivo 700 16px ink), the install CTA, the "More details" link.
+//      Archivo 700 16px ink), then the install CTA and the "More details"
+//      link SIDE BY SIDE on one row (0.11.0 §I, cinatra#2363), details to the
+//      right of the CTA, wrapping only when the pair does not fit.
 //   4. Footer meta, two columns: LEFT stars + average + (count) with the
 //      install count beneath; RIGHT the compat verdict + "Updated N ago",
 //      right-aligned.
@@ -110,20 +111,27 @@ function RatingRow({
 }
 
 /**
- * The "{Kind} by {Vendor}" publisher line (design spec 0.5.0 §I): rendered
+ * The "{Kind} by {Vendor}" publisher line (design spec 0.11.0 §I): rendered
  * INSIDE the coloured banner, directly beneath the name (0.5.0 relocated it
  * off the body block). Everything reads WHITE on the category ground — the
- * kind emblem, the kind label, the vendor and the circled-check VERIFIED mark
- * all inherit the banner's `currentColor` (the banner sets the white `fg`), so
- * the byline recolours to match the name.
+ * kind emblem, the kind label and the vendor all inherit the banner's
+ * `currentColor` (the banner sets the white `fg`), so the byline recolours to
+ * match the name.
  *
  * The vendor label comes ONLY from `resolveVendorPresentation` (cinatra#1528) —
  * this surface never derives a label from the package scope or a slug. A
  * `known` vendor renders its display name (a link out to its scheme-guarded
  * marketplace store when a valid `storeUrl` is present, plain text otherwise);
  * a `missing` vendor renders the localized placeholder as PLAIN, unlinked text.
- * The VERIFIED mark shows ONLY when the vendor resolves `known` — a missing
- * display name reads as unavailable data, not as an unverified vendor.
+ * The vendor label carries a native always-on `title=` (cinatra#2363) so a
+ * truncated/ellipsised long name is still readable on hover — the unclipped
+ * text stays in the accessibility tree regardless.
+ *
+ * The checkmark this byline used to render for a `known` vendor is REMOVED
+ * (cinatra#2363/#2362): it fired on `vendor.kind === "known"` — i.e. "the
+ * catalog carried a vendor display name" — never any real verification field
+ * (none exists in the model), so its `title="Verified vendor"` was actively
+ * misleading. Removal loses no information in-app.
  */
 function PublisherLine({ card }: { card: MarketplaceCardData }) {
   const vendor = resolveVendorPresentation(
@@ -154,29 +162,20 @@ function PublisherLine({ card }: { card: MarketplaceCardData }) {
             rel="noopener noreferrer"
             data-slot="extension-card-vendor-label"
             className="font-semibold text-current hover:underline"
+            title={vendorLabel}
           >
             {vendorLabel}
           </Link>
         ) : (
-          <span data-slot="extension-card-vendor-label" className="font-semibold text-current">
+          <span
+            data-slot="extension-card-vendor-label"
+            className="font-semibold text-current"
+            title={vendorLabel}
+          >
             {vendorLabel}
           </span>
         )}
       </span>
-      {vendor.kind === "known" && (
-        // The circled-check VERIFIED mark — the spec drawing renders the check
-        // alone, with no visible "VERIFIED" copy; the accessible name + native
-        // tooltip carry the meaning. White on the banner ground (text-current).
-        // Shown ONLY for a resolved `known` vendor; a missing display name is
-        // unavailable data, never a (silently unverified) vendor identity.
-        <span
-          data-slot="extension-card-verified"
-          className="inline-flex shrink-0"
-          title="Verified vendor"
-        >
-          <CircleCheck aria-label="Verified vendor" className="size-3 text-current" />
-        </span>
-      )}
     </div>
   );
 }
@@ -299,7 +298,10 @@ export function MarketplaceListingCard({
             </p>
           )}
         </div>
-        {/* Centred price + CTA + details column (spec §IV L470–474). */}
+        {/* Centred price + CTA/details column (spec 0.11.0 §I). The price
+            keeps its own line; the CTA and "More details" render as a single
+            row beneath it (cinatra#2363) — details to the RIGHT of the CTA,
+            wrapping only when the pair does not fit the card body width. */}
         <div className="mt-3 flex flex-col items-center gap-2">
           {price && (
             <div
@@ -309,14 +311,16 @@ export function MarketplaceListingCard({
               {price}
             </div>
           )}
-          {/* Conformance-contract CTA slot (cinatra#985): `display: contents`
-              so the wrapper adds ZERO layout impact while giving the
-              functional-acceptance suite a stable hook + the resolved
-              six-state identity. */}
-          <div data-testid="extension-card-cta" data-cta-state={ctaState} className="contents">
-            {ctaControl}
+          <div className="flex min-w-0 flex-row flex-wrap items-center justify-center gap-2">
+            {/* Conformance-contract CTA slot (cinatra#985): `display: contents`
+                so the wrapper adds ZERO layout impact while giving the
+                functional-acceptance suite a stable hook + the resolved
+                six-state identity. */}
+            <div data-testid="extension-card-cta" data-cta-state={ctaState} className="contents">
+              {ctaControl}
+            </div>
+            {detailsControl}
           </div>
-          {detailsControl}
         </div>
         {/* Two-column footer meta (spec §IV L475–483): rating + installs LEFT,
             compat + freshness RIGHT (right-aligned). */}

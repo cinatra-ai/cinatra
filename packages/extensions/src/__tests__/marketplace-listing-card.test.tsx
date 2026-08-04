@@ -146,14 +146,17 @@ describe("MarketplaceListingCard — 0.5.0 §I byline in the banner (cinatra#124
     expect(body).toContain("line-clamp-3");
   });
 
-  it("shows the VERIFIED check only for a known vendor, and the vendor links out", () => {
+  it("never renders the (removed) VERIFIED checkmark, for a known OR missing vendor, and the vendor still links out (cinatra#2362/#2363)", () => {
     const withVendor = renderCard({
       vendor: { name: "Foundry", storeUrl: "https://marketplace.cinatra.ai/store/foundry" },
     });
-    expect(withVendor).toContain('data-slot="extension-card-verified"');
+    // The checkmark rendered on `vendor.kind === "known"` alone (never a real
+    // verification field) and its "Verified vendor" title was misleading —
+    // removed for every vendor state (cinatra#2363).
+    expect(withVendor).not.toContain('data-slot="extension-card-verified"');
     expect(withVendor).toContain('href="https://marketplace.cinatra.ai/store/foundry"');
     expect(withVendor).toContain('data-vendor-state="known"');
-    // A missing vendor (no block) renders the placeholder, NO verified mark.
+    // A missing vendor (no block) renders the placeholder, still no mark.
     const noVendor = renderCard({ vendor: null });
     expect(noVendor).not.toContain('data-slot="extension-card-verified"');
     expect(noVendor).toContain('data-vendor-state="missing"');
@@ -198,14 +201,15 @@ describe("MarketplaceListingCard — §I vendor byline never substitutes a machi
     return html.match(/data-slot="extension-card-vendor-label"[^>]*>([^<]*)</)?.[1];
   }
 
-  it("renders the display name as the label (slug ignored) when a real name is present", () => {
+  it("renders the display name as the label (slug ignored) when a real name is present, with no VERIFIED checkmark (cinatra#2362/#2363)", () => {
     const html = renderFromCatalog({
       vendor: { name: "Distinct Vendor Name", slug: "machine-slug-sentinel", store_url: "https://marketplace.cinatra.ai/store/distinct" },
     });
     expect(vendorLabel(html)).toBe("Distinct Vendor Name");
     expect(vendorLabel(html)).not.toContain("machine-slug-sentinel");
     expect(html).toContain('data-vendor-state="known"');
-    expect(html).toContain('data-slot="extension-card-verified"');
+    // The checkmark is removed for every vendor state, including "known".
+    expect(html).not.toContain('data-slot="extension-card-verified"');
   });
 
   it("renders the missing-vendor placeholder — never the slug, never the package scope — when the name is blank", () => {
@@ -238,6 +242,23 @@ describe("MarketplaceListingCard — §I vendor byline never substitutes a machi
     });
     expect(vendorLabel(html)).toBe(name);
     expect(html).toContain('data-vendor-state="known"');
+  });
+
+  it("carries a native always-on title= on the vendor label with the FULL text, on a short name AND a long/truncated one (cinatra#2363)", () => {
+    // Short, non-linked vendor name (the plain <span> variant of the slot).
+    const shortHtml = renderFromCatalog({
+      vendor: { name: "Foundry", slug: "machine-slug-sentinel", store_url: null },
+    });
+    const shortLabelTag = shortHtml.match(/<span[^>]*data-slot="extension-card-vendor-label"[^>]*>/)?.[0];
+    expect(shortLabelTag).toContain('title="Foundry"');
+
+    // Long name, linked (the <Link> variant of the same slot).
+    const longName = "A Very Long Vendor Display Name That Overflows The Ellipsised Byline Row";
+    const longHtml = renderFromCatalog({
+      vendor: { name: longName, slug: "machine-slug-sentinel", store_url: "https://marketplace.cinatra.ai/store/long" },
+    });
+    const longLabelTag = longHtml.match(/<a[^>]*data-slot="extension-card-vendor-label"[^>]*>/)?.[0];
+    expect(longLabelTag).toContain(`title="${longName}"`);
   });
 });
 

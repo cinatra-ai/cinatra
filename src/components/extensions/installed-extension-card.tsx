@@ -350,7 +350,13 @@ export function InstalledExtensionCard({
                   shows the localized placeholder — never a silently dropped
                   clause, never a slug. */}
               {` ${VENDOR_BY_CONNECTIVE} `}
-              <span data-slot="installed-extension-vendor-label" className="font-medium">
+              <span
+                data-slot="installed-extension-vendor-label"
+                className="font-medium"
+                // Native always-on hover title (cinatra#2363): the ellipsised
+                // vendor label still exposes its full text on hover.
+                title={vendor?.kind === "known" ? vendor.displayName : VENDOR_MISSING_LABEL}
+              >
                 {vendor?.kind === "known" ? vendor.displayName : VENDOR_MISSING_LABEL}
               </span>
               {/* §VI SOURCE indicator (cinatra#1572): an INDEPENDENT byline
