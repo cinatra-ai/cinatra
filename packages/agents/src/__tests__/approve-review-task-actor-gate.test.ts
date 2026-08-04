@@ -73,6 +73,7 @@ const authPolicyMock = vi.hoisted(() => ({
 vi.mock("../auth-policy", () => authPolicyMock);
 
 vi.mock("../wayflow-url", () => ({
+  WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,
   resolveWayflowUrl: vi.fn(() => "http://wayflow.test"),
   createWayflowFetch: vi.fn(() => globalThis.fetch),
   WAYFLOW_A2A_TIMEOUT_MS: 60_000,

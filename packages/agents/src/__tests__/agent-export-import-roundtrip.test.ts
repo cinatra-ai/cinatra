@@ -150,6 +150,7 @@ vi.mock("@cinatra-ai/objects", () => ({
 }));
 vi.mock("../compiler", () => ({ compileWorkflow: vi.fn() }));
 vi.mock("../wayflow-url", () => ({
+  WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,
   resolveWayflowUrl: vi.fn(),
   createWayflowFetch: vi.fn(),
   AGENT_RUN_TIMEOUT_MAX_SECONDS: 86_400,

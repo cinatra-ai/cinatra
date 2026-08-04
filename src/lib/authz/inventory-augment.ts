@@ -448,6 +448,7 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   skills_installed_resolve_for_agent:         { resourceType: "skill", action: "read",    status: "enforced" },
   skills_installed_upsert:                    { resourceType: "skill", action: "update",  status: "enforced" },
   skills_library_list:                        { resourceType: "skill", action: "list",    status: "enforced" },
+  skills_match_batch_cancel:                  { resourceType: "skill", action: "execute", status: "enforced" },
   skills_match_batch_run_now:                 { resourceType: "skill", action: "execute", status: "enforced" },
   skills_match_evaluate_pair:                 { resourceType: "skill", action: "execute", status: "enforced" },
   skills_match_schedule_get:                  { resourceType: "skill", action: "read",    status: "enforced" },

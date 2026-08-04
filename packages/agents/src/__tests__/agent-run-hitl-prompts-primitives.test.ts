@@ -104,7 +104,11 @@ vi.mock("@/lib/authz", () => authzMock);
 // mcp-run-read-policy.test.ts).
 // ---------------------------------------------------------------------------
 vi.mock("../compiler", () => ({ compileWorkflow: vi.fn() }));
-vi.mock("../wayflow-url", () => ({ resolveWayflowUrl: vi.fn(), AGENT_RUN_TIMEOUT_MAX_SECONDS: 3600 }));
+vi.mock("../wayflow-url", () => ({
+  resolveWayflowUrl: vi.fn(),
+  AGENT_RUN_TIMEOUT_MAX_SECONDS: 3600,
+  WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,
+}));
 vi.mock("../verdaccio/client", () => ({
   deleteAgentPackageVersion: vi.fn(),
   deprecateAgentPackageVersion: vi.fn(),

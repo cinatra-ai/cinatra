@@ -1,10 +1,15 @@
-import "server-only";
-
 /**
  * Idempotent DDL slice for the skill-matcher's provider-neutral run model
  * (setup-flow S6), spread into `ensurePostgresSchema`'s query list by
  * `src/lib/drizzle-store.ts`. Extracted as a vertical slice so the
  * size-ratcheted store module does not grow.
+ *
+ * PURE DDL-STRING LEAF — no `server-only` marker, no imports, mirroring
+ * `skill-lifecycle-schema.ts`: the schema harnesses (extension-anchor
+ * lifecycle DB tests, fresh-schema DDL guard) load the bootstrap query list
+ * under plain Node/tsx, where the marker package throws unconditionally.
+ * Nothing here touches a connection, secret, or server capability; execution
+ * happens in the (server-only) caller.
  *
  *  - `skill_matches.provider` / `.model`: run-context provenance on match
  *    rows. Nullable — rule/manual rows never carry them, and rows persisted

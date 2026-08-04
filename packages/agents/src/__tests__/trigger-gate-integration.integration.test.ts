@@ -73,6 +73,7 @@ vi.mock("../trigger-gate", () => ({
 }));
 
 vi.mock("../wayflow-url", () => ({
+  WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,
   resolveWayflowUrl: vi.fn(() => "http://localhost:9999"),
 }));
 
