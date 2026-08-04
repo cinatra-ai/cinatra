@@ -321,6 +321,11 @@ async function registerExtensionSkillUnserialized(input: {
     // one-hop lint refuses the skill as an upload candidate, and cinatra#2254's
     // honesty rule turns that into a FAILED `initial-sync` on a fresh instance.
     bundleFiles,
+    // PROVENANCE (cinatra#2398). Without it the row comes out `isCustom: true`
+    // with a `source.origin` of "custom" — the shape the shared assignability
+    // predicate refuses as `not-globally-visible`, so an image-bundled skill
+    // could never be offered for assignment even once it was registered.
+    extensionRegistered: true,
   });
 
   const sourcePath = (upserted as { sourcePath?: string }).sourcePath;
@@ -438,6 +443,12 @@ async function registerPackageAgentSkillUnserialized(input: {
     prefillText: "-",
     // Same content authority as the workspace writer (cinatra#2274).
     bundleFiles,
+    // Same provenance as the workspace writer (cinatra#2398): an agent-bundled
+    // skill is not user-authored either. It stays UNassignable regardless — the
+    // predicate refuses any agent-scoped row — but the recorded origin is what
+    // the catalog rebuild preserves the row by, so the two registrars must
+    // agree or the agent rows would start being deleted on every rebuild.
+    extensionRegistered: true,
   });
 
   const sourcePath = (upserted as { sourcePath?: string }).sourcePath;

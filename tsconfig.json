@@ -384,6 +384,7 @@
       "@cinatra-ai/skills/agent-package-resolver": ["./packages/skills/src/agent-package-resolver.ts"],
       "@cinatra-ai/skills/agent-skill-assignability": ["./packages/skills/src/agent-skill-assignability.ts"],
       "@cinatra-ai/skills/assignable-skill-search": ["./packages/skills/src/assignable-skill-search.ts"],
+      "@cinatra-ai/skills/bundled-skill-registration": ["./packages/skills/src/bundled-skill-registration.ts"],
       "@cinatra-ai/skills/skill-packages": ["./packages/skills/src/skill-packages.ts"],
       "@cinatra-ai/skills/store": ["./packages/skills/src/skills-store.ts"],
       "@cinatra-ai/skills/pages": ["./packages/skills/src/plugin-pages.tsx"],

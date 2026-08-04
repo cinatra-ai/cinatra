@@ -49,6 +49,11 @@ vi.mock("@/lib/boot/phases/agent-runtime-dep-backfill", () => ({
     { name: "agent-runtime-dep-backfill", policy: "retryable", run: async () => {} },
   ],
 }));
+vi.mock("@/lib/boot/phases/bundled-skill-registration", () => ({
+  bundledSkillRegistrationPhases: () => [
+    { name: "bundled-skill-registration", policy: "degraded", run: async () => {} },
+  ],
+}));
 vi.mock("@/lib/boot/phases/skills-catalog-rebuild", () => ({
   skillsCatalogRebuildPhases: () => [
     { name: "skills-catalog-rebuild", policy: "degraded", run: async () => {} },
@@ -129,6 +134,7 @@ describe("runBoot orchestration", () => {
       "agent-mount-projection", // cinatra#793 — store→mount self-heal, before marker backfill
       "agent-marker-backfill", // engineering #418 — always-on, AWAITED, before the dev scan
       "agent-runtime-dep-backfill", // cinatra#1056 — always-on, AWAITED, after marker backfill
+      "bundled-skill-registration", // cinatra#2398 — always-on colocated scan, BEFORE the rebuild
       "skills-catalog-rebuild", // cinatra#1364 — explicit rebuild AFTER activation/materialization
       "dashboard-contribution-reconcile", // cinatra#1628 (S11c) — dormant adoption reconcile, AWAITED
       "dashboard-template-materialize", // cinatra#1896 (Scope 2) — dormant install→materialize trigger, AWAITED (dev + prod)
@@ -168,6 +174,7 @@ describe("runBoot orchestration", () => {
       "agent-mount-projection", // cinatra#793 — store→mount self-heal (runs in PROD too)
       "agent-marker-backfill", // engineering #418 — runs in PROD too (self-heal)
       "agent-runtime-dep-backfill", // cinatra#1056 — runs in PROD too
+      "bundled-skill-registration", // cinatra#2398 — runs in PROD too (that is the whole fix)
       "skills-catalog-rebuild", // cinatra#1364 — runs in PROD too (explicit boot rebuild)
       "dashboard-contribution-reconcile", // cinatra#1628 (S11c) — dormant adoption reconcile, runs in PROD too
       "dashboard-template-materialize", // cinatra#1896 (Scope 2) — dormant install→materialize trigger, runs in PROD too

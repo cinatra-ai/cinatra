@@ -202,3 +202,69 @@ describe("scanSkillExtensions — manifest retention (cinatra#2348)", () => {
     expect((await scanOne("internal-skills")).skillRole).toBe("internal");
   });
 });
+
+// ---------------------------------------------------------------------------
+// STRICT-MODE COMPLETENESS (cinatra#2398).
+//
+// The default scan is fail-SOFT by design: one unreadable package must never
+// stop the rest from resolving. That posture is wrong for the ONE caller that
+// deletes rows on the strength of a bundle's ABSENCE — under it, an fs blip is
+// indistinguishable from a removed bundle. `{ strict: true }` is the
+// completeness-bearing variant, and these cases pin the difference on REAL
+// filesystem states rather than a mocked rejection.
+// ---------------------------------------------------------------------------
+
+describe("scanSkillExtensions — strict completeness (cinatra#2398)", () => {
+  it("THROWS on an unparseable manifest that the default scan silently skips", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "good-skill",
+      name: "@acme/good-skill",
+      kind: "skill",
+      slugs: ["do-thing"],
+    });
+    const brokenDir = path.join(tmpDir, "extensions", "acme", "broken-skill");
+    await mkdir(brokenDir, { recursive: true });
+    await writeFile(path.join(brokenDir, "package.json"), "{ not json");
+
+    // Fail-soft: the broken package is dropped, the good one still resolves.
+    const soft = await scanSkillExtensions();
+    expect(soft.map((e) => e.pkgDirName)).toEqual(["good-skill"]);
+
+    // Strict: the question could not be answered, so it is not answered.
+    await expect(scanSkillExtensions({ strict: true })).rejects.toThrow();
+  });
+
+  it("treats a non-directory vendor entry as ABSENCE in both modes (not an enumeration failure)", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "good-skill",
+      name: "@acme/good-skill",
+      kind: "skill",
+      slugs: ["do-thing"],
+    });
+    // A vendor entry that is a FILE, not a directory: `readdir` on it fails with
+    // ENOTDIR — an enumeration failure, not an absence.
+    await writeFile(path.join(tmpDir, "extensions", "notavendor"), "");
+    // The scan only recurses into DIRECTORY entries, so a file vendor is skipped
+    // by both modes; the enumerable tree is what must agree.
+    expect((await scanSkillExtensions()).map((e) => e.pkgDirName)).toEqual(["good-skill"]);
+    expect((await scanSkillExtensions({ strict: true })).map((e) => e.pkgDirName)).toEqual([
+      "good-skill",
+    ]);
+  });
+
+  it("agrees with the fail-soft scan when nothing is broken", async () => {
+    await writeExtension({
+      vendor: "acme",
+      pkgDir: "one-skill",
+      name: "@acme/one-skill",
+      kind: "skill",
+      slugs: ["alpha", "beta"],
+    });
+    const soft = await scanSkillExtensions();
+    const strict = await scanSkillExtensions({ strict: true });
+    expect(strict.map((e) => e.pkgDirName)).toEqual(soft.map((e) => e.pkgDirName));
+    expect(strict[0]!.slugs.sort()).toEqual(["alpha", "beta"]);
+  });
+});

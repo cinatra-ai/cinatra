@@ -23,6 +23,7 @@ import { schemaVersionPreconditionPhases } from "@/lib/boot/phases/schema-versio
 import { extensionActivationPhases } from "@/lib/boot/phases/extension-activation";
 import { requiredExtensionMaterializePhases } from "@/lib/boot/phases/required-extension-materialize";
 import { agentMarkerBackfillPhases } from "@/lib/boot/phases/agent-marker-backfill";
+import { bundledSkillRegistrationPhases } from "@/lib/boot/phases/bundled-skill-registration";
 import { skillsCatalogRebuildPhases } from "@/lib/boot/phases/skills-catalog-rebuild";
 import { agentRuntimeDepBackfillPhases } from "@/lib/boot/phases/agent-runtime-dep-backfill";
 import { dashboardContributionReconcilePhases } from "@/lib/boot/phases/dashboard-contribution-reconcile";
@@ -151,6 +152,16 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
   // continues (the pass is idempotent and retries next boot).
   await run(agentRuntimeDepBackfillPhases());
 
+
+  // ── bundled colocated-skill registration (cinatra#2398) ───────────────────────
+  // ALWAYS-ON (dev AND prod), immediately BEFORE the rebuild below. The
+  // equivalent scan used to exist only on the detached DEV block further down,
+  // so a production boot left every image-bundled extension's co-located
+  // SKILL.md out of the catalog until something lazily self-healed it. Ordered
+  // here so the rebuild that follows merges — and fences — a catalog that
+  // already holds those rows. `degraded`: a failure logs and boot continues
+  // (the lazy resolver still self-heals on demand, as before).
+  await run(bundledSkillRegistrationPhases());
 
   // ── skills-catalog explicit rebuild (cinatra#1364) ────────────────────────────
   // AFTER extension activation + the materialize/projection phases above, so the

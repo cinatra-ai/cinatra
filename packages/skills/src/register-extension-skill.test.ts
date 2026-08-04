@@ -113,6 +113,11 @@ describe("registerExtensionSkill — skills-layer invariant", () => {
     expect(call.name).toBe("chat-assistant");
     expect(call.description).toContain("Cinatra chat assistant");
     expect(call.content).toContain("You are the Cinatra AI assistant.");
+    // cinatra#2398: the write declares itself an EXTENSION registration, which
+    // is what keeps the resulting row out of the user-authored `isCustom` class
+    // (the class the shared assignability predicate refuses) while still giving
+    // the catalog rebuild a reason to preserve it.
+    expect(call.extensionRegistered).toBe(true);
 
     await rm(dir, { recursive: true, force: true });
   });

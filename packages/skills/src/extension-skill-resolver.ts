@@ -36,7 +36,7 @@ import "server-only";
 // lifecycle-tracked — "no row" must not read as "retired", so unseeded prod
 // rows cannot regress), and a failed status read keeps everything (fail-open).
 
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { revalidatePath } from "next/cache";
@@ -49,6 +49,7 @@ import {
   getSkillsDataRootPath,
   isRealpathContained,
   readSkillsCatalog,
+  type PersistedSkill,
 } from "./skills-store";
 
 // ---------------------------------------------------------------------------
@@ -360,22 +361,26 @@ export type SkillExtensionDescriptor = {
  * bundled `cwd/extensions` root is always present as the floor. Deduped by
  * realpath (the install-dir default IS `cwd/extensions`).
  */
-async function resolveExtensionRoots(): Promise<string[]> {
+async function resolveExtensionRoots(strict = false): Promise<string[]> {
   const candidates: string[] = [path.join(process.cwd(), "extensions")];
   try {
     const { resolveAgentRuntimeMountDir } = await import("@cinatra-ai/agents/agent-runtime-mount");
     candidates.push(resolveAgentRuntimeMountDir());
-  } catch {
-    // Bundled root is sufficient for image-shipped extensions.
+  } catch (err) {
+    // Bundled root is sufficient for image-shipped extensions — EXCEPT under
+    // `strict`, where silently scanning one root of two would let a caller
+    // conclude the install-dir's packages do not exist (cinatra#2398).
+    if (strict) throw err;
   }
   const seen = new Set<string>();
   const roots: string[] = [];
   for (const c of candidates) {
-    if (!existsSync(c)) continue;
+    if (!pathExists(c, strict)) continue;
     let real: string;
     try {
       real = realpathSync(c);
-    } catch {
+    } catch (err) {
+      if (strict) throw err;
       real = c;
     }
     if (seen.has(real)) continue;
@@ -386,19 +391,51 @@ async function resolveExtensionRoots(): Promise<string[]> {
 }
 
 /**
+ * `existsSync`, except that under `strict` a probe that fails for a reason
+ * OTHER than "not there" (EACCES on a mount, EIO on a bad disk) THROWS instead
+ * of reporting absence (cinatra#2398).
+ *
+ * The distinction is the whole basis of the retirement sweep: absence is only
+ * evidence that a bundle was removed if absence could not also mean "the
+ * filesystem would not answer".
+ */
+function pathExists(target: string, strict: boolean): boolean {
+  if (!strict) return existsSync(target);
+  try {
+    statSync(target);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
+  }
+}
+
+/**
  * Walk `<root>/<vendor>/<pkg>` across all extension roots and return a
  * descriptor for every package carrying a `cinatra.kind`. Deduped by package
  * dir realpath (bundled root wins over a same-path install root). Fail-soft.
+ *
+ * `opts.strict` (cinatra#2398) makes the walk COMPLETENESS-BEARING: every
+ * enumeration, probe and manifest parse that this function otherwise swallows
+ * into "that package is not there" is rethrown instead. Callers that merely
+ * REGISTER what they find want the fail-soft default (one unreadable package
+ * must never stop the rest from resolving); the caller that RETIRES rows whose
+ * bundle is absent needs the strict one, because under the default an fs blip
+ * is indistinguishable from a removed bundle — and would license a deletion.
  */
-export async function scanSkillExtensions(): Promise<SkillExtensionDescriptor[]> {
-  const roots = await resolveExtensionRoots();
+export async function scanSkillExtensions(
+  opts?: { strict?: boolean },
+): Promise<SkillExtensionDescriptor[]> {
+  const strict = opts?.strict === true;
+  const roots = await resolveExtensionRoots(strict);
   const out: SkillExtensionDescriptor[] = [];
   const seenPkgDir = new Set<string>();
   for (const root of roots) {
     let vendors;
     try {
       vendors = await readdir(root, { withFileTypes: true });
-    } catch {
+    } catch (err) {
+      if (strict) throw err;
       continue;
     }
     for (const vendor of vendors) {
@@ -409,7 +446,8 @@ export async function scanSkillExtensions(): Promise<SkillExtensionDescriptor[]>
       let pkgs;
       try {
         pkgs = await readdir(vendorDir, { withFileTypes: true });
-      } catch {
+      } catch (err) {
+        if (strict) throw err;
         continue;
       }
       for (const pkg of pkgs) {
@@ -420,12 +458,13 @@ export async function scanSkillExtensions(): Promise<SkillExtensionDescriptor[]>
         let realPkgDir: string;
         try {
           realPkgDir = realpathSync(pkgDir);
-        } catch {
+        } catch (err) {
+          if (strict) throw err;
           realPkgDir = pkgDir;
         }
         if (seenPkgDir.has(realPkgDir)) continue;
         const pkgJsonPath = path.join(pkgDir, "package.json");
-        if (!existsSync(pkgJsonPath)) continue;
+        if (!pathExists(pkgJsonPath, strict)) continue;
         let pkgJson: {
           name?: string;
           author?: unknown;
@@ -440,7 +479,8 @@ export async function scanSkillExtensions(): Promise<SkillExtensionDescriptor[]>
         };
         try {
           pkgJson = JSON.parse(await readFile(pkgJsonPath, "utf8"));
-        } catch {
+        } catch (err) {
+          if (strict) throw err;
           continue;
         }
         const kind = pkgJson?.cinatra?.kind;
@@ -455,14 +495,16 @@ export async function scanSkillExtensions(): Promise<SkillExtensionDescriptor[]>
         }
         const skillsRoot = path.join(pkgDir, "skills");
         let slugs: string[] = [];
-        if (existsSync(skillsRoot)) {
+        if (pathExists(skillsRoot, strict)) {
           try {
             slugs = (await readdir(skillsRoot, { withFileTypes: true }))
               .filter(
-                (e) => e.isDirectory() && existsSync(path.join(skillsRoot, e.name, "SKILL.md")),
+                (e) =>
+                  e.isDirectory() && pathExists(path.join(skillsRoot, e.name, "SKILL.md"), strict),
               )
               .map((e) => e.name);
-          } catch {
+          } catch (err) {
+            if (strict) throw err;
             slugs = [];
           }
         }
@@ -1158,6 +1200,17 @@ export async function resolveDeclaredSkillEdgeForPackage(
  */
 export async function retireExtensionSkillsByExactId(
   skillIds: readonly string[],
+  opts?: {
+    /**
+     * An EXTRA condition re-evaluated against the freshly-read row, at the
+     * moment of retirement (cinatra#2398). A caller that selected its
+     * candidates from an earlier read passes the same predicate here, so a row
+     * that changed in between — a concurrent write that turned it into a custom
+     * skill, or moved it out of extension provenance — is not deleted on the
+     * strength of a stale observation.
+     */
+    require?: (skill: PersistedSkill) => boolean;
+  },
 ): Promise<string[]> {
   if (skillIds.length === 0) return [];
   const catalog = await readSkillsCatalog();
@@ -1166,7 +1219,8 @@ export async function retireExtensionSkillsByExactId(
     (skill) =>
       wanted.has(skill.id) &&
       !skill.ownerUserId &&
-      !skill.agentId,
+      !skill.agentId &&
+      (opts?.require === undefined || opts.require(skill)),
   );
   if (toRetire.length === 0) return [];
   const retiredIds = new Set(toRetire.map((s) => s.id));
