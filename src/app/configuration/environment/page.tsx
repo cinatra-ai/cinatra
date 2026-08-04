@@ -28,8 +28,14 @@ import {
   NamespaceValidationProvider,
 } from "@/app/setup/name/instance-namespace-input";
 
-import { editVendorAction } from "../instance/actions";
+import { editVendorAction, renameInstanceNamespaceAction } from "../instance/actions";
+import { RenameConfirmation } from "../instance/rename-confirmation";
 import { ReconciliationMount } from "../instance/reconciliation-mount";
+import {
+  getNamespaceMutabilityCopy,
+  getNetworkParticipationCopy,
+  isMarketplaceManagedInstance,
+} from "@/lib/instance-identity-copy";
 import { MarketplacePublishCard } from "./marketplace-publish-card";
 import { MarketplaceConnectionCard } from "./marketplace-connection-card";
 import { BecomeAVendorCard } from "./become-a-vendor-card";
@@ -207,9 +213,19 @@ async function InstanceTabContent() {
 
   const scopePrefix = "@" + identity.instanceNamespace + "/";
   const scopedPackages = publishedPackages.filter((p) => p.packageName.startsWith(scopePrefix));
+  const isMarketplaceManaged = isMarketplaceManagedInstance();
 
   return (
-    <NamespaceValidationProvider initialValue={identity.instanceNamespace}>
+    // `key` forces a full remount when the server-read namespace changes —
+    // e.g. right after a successful rename (cinatra#2387). Next.js server
+    // action redirects are a SOFT navigation that keeps this client
+    // component's instance alive, and NamespaceValidationProvider seeds its
+    // internal state from `initialValue` only via useState's one-time
+    // initializer, so without this key a fresh identity.instanceNamespace
+    // prop would silently NOT reach the already-mounted namespace input —
+    // the badge/toast/published-packages sections would show the new state
+    // while the input kept showing the pre-rename value until a hard reload.
+    <NamespaceValidationProvider key={identity.instanceNamespace} initialValue={identity.instanceNamespace}>
       <ReconciliationMount />
       {/* Codes-only flash island (cinatra#357 → toast migration): the edit/rename
           actions redirect back with ?error=<code> / ?saved=1; the island maps
@@ -223,8 +239,9 @@ async function InstanceTabContent() {
             <div>
               <CardTitle>Name your Cinatra instance</CardTitle>
               <CardDescription className="mt-2 max-w-2xl leading-6">
-                Define how this Cinatra instance is identified across the Cinatra network. Its display name is shown in
-                user-facing places, while its namespace is used in technical references.
+                Define how this Cinatra instance is identified. Its display name is shown in
+                user-facing places, while its namespace is used in technical references.{" "}
+                {getNetworkParticipationCopy(isMarketplaceManaged)}
               </CardDescription>
             </div>
             <CardAction>
@@ -235,42 +252,81 @@ async function InstanceTabContent() {
               )}
             </CardAction>
           </CardHeader>
-          <CardContent>
-            <form action={editVendorAction} className="grid gap-4">
-              <Field>
-                <FieldLabel>Instance display name</FieldLabel>
-                <Input
-                  name="instanceDisplayName"
-                  required
-                  minLength={1}
-                  maxLength={120}
-                  autoComplete="off"
-                  defaultValue={identity.instanceDisplayName ?? ""}
-                  placeholder="e.g. ACME Group"
-                />
-                <span className="text-xs font-normal text-muted-foreground">
-                  Human-readable name shown wherever this Cinatra instance is referenced.
-                </span>
-              </Field>
-              <Field>
-                <FieldLabel>Instance namespace</FieldLabel>
-                {isFrozen ? (
-                  <Input value={identity.instanceNamespace} disabled aria-disabled className="bg-surface-muted" />
-                ) : (
+          <CardContent className="flex flex-col gap-4">
+            <Alert variant="info">
+              <AlertDescription>{getNamespaceMutabilityCopy(isMarketplaceManaged)}</AlertDescription>
+            </Alert>
+            {isFrozen ? (
+              <>
+                <form action={editVendorAction} className="grid gap-4">
+                  <Field>
+                    <FieldLabel>Instance display name</FieldLabel>
+                    <Input
+                      name="instanceDisplayName"
+                      required
+                      minLength={1}
+                      maxLength={120}
+                      autoComplete="off"
+                      defaultValue={identity.instanceDisplayName ?? ""}
+                      placeholder="e.g. ACME Group"
+                    />
+                    <span className="text-xs font-normal text-muted-foreground">
+                      Human-readable name shown wherever this Cinatra instance is referenced.
+                    </span>
+                  </Field>
+                  <div className="flex justify-end">
+                    <Button type="submit">Save</Button>
+                  </div>
+                </form>
+                <Field>
+                  <FieldLabel>Instance namespace</FieldLabel>
+                  <span className="rounded-control border border-line bg-surface-muted px-3 py-2 text-sm text-foreground">
+                    {identity.instanceNamespace}
+                  </span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    Machine-readable name used to uniquely identify this instance. Fixed since your
+                    first published extension ({frozenDateLabel}) — use Rename below to change it.
+                  </span>
+                  {/* The rename escape the copy above and getNamespaceMutabilityCopy both
+                      reference — previously implemented but never mounted (cinatra#2387).
+                      renameInstanceNamespaceAction itself refuses on a marketplace-managed
+                      instance (the existing "marketplace-rename-unsupported" flash code), so
+                      this stays mounted unconditionally rather than duplicating that gate here. */}
+                  <RenameConfirmation
+                    currentInstanceNamespace={identity.instanceNamespace}
+                    renameAction={renameInstanceNamespaceAction}
+                  />
+                </Field>
+              </>
+            ) : (
+              <form action={editVendorAction} className="grid gap-4">
+                <Field>
+                  <FieldLabel>Instance display name</FieldLabel>
+                  <Input
+                    name="instanceDisplayName"
+                    required
+                    minLength={1}
+                    maxLength={120}
+                    autoComplete="off"
+                    defaultValue={identity.instanceDisplayName ?? ""}
+                    placeholder="e.g. ACME Group"
+                  />
+                  <span className="text-xs font-normal text-muted-foreground">
+                    Human-readable name shown wherever this Cinatra instance is referenced.
+                  </span>
+                </Field>
+                <Field>
+                  <FieldLabel>Instance namespace</FieldLabel>
                   <InstanceNamespaceInput defaultValue={identity.instanceNamespace} />
-                )}
-                <span className="text-xs font-normal text-muted-foreground">
-                  Machine-readable name used to uniquely identify this instance across the Cinatra network.
-                </span>
-              </Field>
-              <div className="flex justify-end">
-                {isFrozen ? (
-                  <Button type="submit">Save</Button>
-                ) : (
+                  <span className="text-xs font-normal text-muted-foreground">
+                    Machine-readable name used to uniquely identify this instance.
+                  </span>
+                </Field>
+                <div className="flex justify-end">
                   <InstanceSaveButton />
-                )}
-              </div>
-            </form>
+                </div>
+              </form>
+            )}
           </CardContent>
         </Card>
       </div>

@@ -3,11 +3,18 @@
 //
 // Three actions land here:
 //
-//   1. editVendorAction (pre-publish):
-//      - Replaces credentials WITHOUT appending to oldInstanceNamespaces[].
-//      - Allowed only when firstPublishedAt === null.
-//      - Provisions a new Verdaccio user under the new vendor name; encrypts
-//        the new token + password; persists; redirects.
+//   1. editVendorAction:
+//      - Pre-publish (firstPublishedAt === null): replaces credentials WITHOUT
+//        appending to oldInstanceNamespaces[]. Provisions a new Verdaccio user
+//        under the new vendor name; encrypts the new token + password;
+//        persists; redirects.
+//      - Post-publish (firstPublishedAt !== null): the namespace is frozen.
+//        Display-name-only edits still save. A namespace change reaching this
+//        action anyway (the UI's namespace field is disabled/unsubmitted, but
+//        this action is the validated entry point regardless of caller) is
+//        EXPLICITLY refused with the `frozen-namespace-use-rename` code
+//        (cinatra#2387) — never silently dropped. renameInstanceNamespaceAction
+//        below is the only path forward for a frozen namespace.
 //
 //   2. renameInstanceNamespaceAction (post-freeze):
 //      - Same provisioning flow, but ALSO appends the previous identity
@@ -535,6 +542,18 @@ export async function editVendorAction(formData: FormData): Promise<void> {
   const updatedCurrent: InstanceIdentity = { ...current, instanceDisplayName };
 
   if (current.firstPublishedAt !== null) {
+    // Frozen namespace (cinatra#2387). This form's namespace field is
+    // read-only in the UI (the disabled-input value is never submitted), so
+    // in normal use `newName` already equals `current.instanceNamespace`
+    // here. But this action is the validated entry point regardless of what
+    // called it — a stale cached form, a scripted POST, or a future UI
+    // regression could still submit a real change. Refuse it EXPLICITLY
+    // rather than silently keeping only the display-name edit: the operator
+    // gets a clear "use Rename" message instead of a namespace change that
+    // silently vanished.
+    if (newName !== current.instanceNamespace) {
+      redirectWithError("frozen-namespace-use-rename");
+    }
     writeInstanceIdentity(updatedCurrent);
     invalidateInstanceIdentityCache();
     revalidatePath("/configuration/environment");

@@ -8,9 +8,15 @@
 // set.
 //
 // Copy and field ordering:
-//   - Heading and two-paragraph body copy
-//   - "Instance display name" field ABOVE the namespace field
-//   - Warning Alert above the namespace field (exact wording locked)
+//   - Heading and two-paragraph body copy (the second paragraph is mode-aware
+//     marketplace-participation copy — see getNetworkParticipationCopy)
+//   - "Instance display name" field ABOVE the namespace field; typing here
+//     live-derives the namespace field until the operator edits it directly
+//     (see ./instance-namespace-input.tsx, cinatra#2387)
+//   - Honest, four-state mutability Alert above the namespace field (see
+//     getNamespaceMutabilityCopy in @/lib/instance-identity-copy — shared
+//     with the /configuration/environment administration copy so the two
+//     surfaces cannot drift into inconsistent claims)
 //   - Namespace field relabeled "Instance namespace"
 //
 // Interactive elements use src/components/ui/* and semantic tokens only; no raw
@@ -21,10 +27,10 @@ import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
 
 import {
+  InstanceDisplayNameInput,
   InstanceNamespaceInput,
   NamespaceValidationProvider,
   SubmitContinueButton,
@@ -35,6 +41,11 @@ import { getApprovedInstanceNamespaces } from "@/lib/instance-namespace/approved
 import { getSetupWizardSteps, getFirstIncompleteStep } from "@/lib/setup-wizard";
 import { getSetupNameDefaults } from "@/lib/setup-defaults";
 import { requireAuthSession } from "@/lib/auth-session";
+import {
+  getNamespaceMutabilityCopy,
+  getNetworkParticipationCopy,
+  isMarketplaceManagedInstance,
+} from "@/lib/instance-identity-copy";
 
 export const metadata: Metadata = { title: "Setup: Name" };
 
@@ -71,9 +82,12 @@ export default async function SetupNamePage({ searchParams }: SetupNamePageProps
     }
   }
 
+  const isMarketplaceManaged = isMarketplaceManagedInstance();
+
   return (
     <NamespaceValidationProvider
       initialValue={identity?.instanceNamespace ?? devDefaults?.instanceNamespace ?? ""}
+      initialDisplayName={identity?.instanceDisplayName ?? devDefaults?.instanceDisplayName ?? ""}
       approvedExactNames={getApprovedInstanceNamespaces()}
     >
     <div className="flex flex-col gap-6">
@@ -85,12 +99,11 @@ export default async function SetupNamePage({ searchParams }: SetupNamePageProps
       <div>
         <p className="text-base font-semibold text-foreground">Name your Cinatra instance</p>
         <p className="mt-2 text-sm text-muted-foreground">
-          Define how this Cinatra instance is identified across the Cinatra network. Its display
-          name is shown in user-facing places, while its namespace is used in technical references.
+          Define how this Cinatra instance is identified. Its display name is shown in
+          user-facing places, while its namespace is used in technical references.
         </p>
         <p className="mt-2 text-sm text-muted-foreground">
-          This identity may appear when publishing extensions, sharing AI agents with other Cinatra
-          instances, or when AI assistants communicate across instances.
+          {getNetworkParticipationCopy(isMarketplaceManaged)}
         </p>
       </div>
 
@@ -107,34 +120,26 @@ export default async function SetupNamePage({ searchParams }: SetupNamePageProps
         <form id="instance-name-form" action={saveInstanceIdentityAction} className="grid gap-4">
           <Field>
             <FieldLabel>Instance display name</FieldLabel>
-            <Input
-              name="instanceDisplayName"
-              required
-              minLength={1}
-              maxLength={120}
-              autoComplete="off"
+            <InstanceDisplayNameInput
               defaultValue={identity?.instanceDisplayName ?? devDefaults?.instanceDisplayName ?? ""}
-              placeholder="e.g. ACME Group"
             />
             <span className="text-xs font-normal text-muted-foreground">
-              Human-readable name shown wherever this Cinatra instance is referenced.
+              Human-readable name shown wherever this Cinatra instance is referenced. Typing here
+              auto-fills the namespace below until you edit it directly.
             </span>
           </Field>
 
           <Field>
             <FieldLabel>Instance namespace</FieldLabel>
-            <Alert variant="destructive">
-              <AlertDescription>
-                Choose the namespace carefully: it cannot be changed after setup. Use lowercase
-                letters, digits, and hyphens. Must be 2–39 characters.
-              </AlertDescription>
+            <Alert variant="info">
+              <AlertDescription>{getNamespaceMutabilityCopy(isMarketplaceManaged)}</AlertDescription>
             </Alert>
             <InstanceNamespaceInput
               defaultValue={identity?.instanceNamespace ?? devDefaults?.instanceNamespace ?? ""}
             />
             <span className="text-xs font-normal text-muted-foreground">
-              Machine-readable name used to uniquely identify this instance across the Cinatra
-              network.
+              Machine-readable name used to uniquely identify this instance. Lowercase letters,
+              digits, and hyphens only; 2–39 characters.
             </span>
           </Field>
 

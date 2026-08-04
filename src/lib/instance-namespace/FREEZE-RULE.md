@@ -36,7 +36,7 @@ The validator does NOT know about the freeze rule — that lives in the actions.
 
 The current policy intentionally excludes:
 
-- **No new rename UI.** `RenameConfirmation` is the existing rename UI; the validator must remain wired into that flow. If a new rename surface is added, it MUST call `validateInstanceNamespace`.
+- **No new rename UI.** `RenameConfirmation` is the existing rename UI, mounted on `/configuration/environment`'s frozen-instance card (cinatra#2387); the validator must remain wired into that flow. If a new rename surface is added, it MUST call `validateInstanceNamespace`.
 - **No fetch-at-startup for the reserved list.** `reserved-patterns.ts` is the canonical source, consumed directly by the validator; there is no runtime fetch. To change the list, edit that file (see "Updating the Reserved List" below).
 - **No display-name validation.** This handles namespace only. `instanceDisplayName` keeps its existing Zod schema in `saveInstanceIdentityAction`.
 - **No registry uniqueness check during typing.** Registry provisioning happens at submit; uniqueness is enforced by Verdaccio's `createNpmUser` returning `VerdaccioUserAlreadyRegisteredError`.

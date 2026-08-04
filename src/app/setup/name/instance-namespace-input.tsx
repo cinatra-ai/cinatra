@@ -35,6 +35,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import {
   validateInstanceNamespace,
+  deriveInstanceNamespace,
   NAMESPACE_FORMAT_REGEX_SOURCE,
   type NamespaceValidationError,
 } from "@/lib/instance-namespace";
@@ -61,10 +62,16 @@ const NamespaceValidationContext = createContext<NamespaceValidationContextValue
 
 export function NamespaceValidationProvider({
   initialValue,
+  initialDisplayName = "",
   approvedExactNames = [],
   children,
 }: {
   initialValue: string;
+  // Display-name seed for the linked-auto-derive island (see
+  // InstanceDisplayNameInput below). Optional — callers that don't render
+  // InstanceDisplayNameInput (e.g. the administration edit form, which keeps
+  // its own plain, unlinked display-name field) can omit it.
+  initialDisplayName?: string;
   // Config-file-driven approved namespaces, read server-side in page.tsx and
   // passed down so the client validator matches the server's authoritative gate.
   approvedExactNames?: readonly string[];
@@ -73,8 +80,39 @@ export function NamespaceValidationProvider({
   // The provider also owns the input value so onChange can update both the
   // shared isValid state AND the visible Input. The Input is rendered by the
   // child <InstanceNamespaceInput /> which reads/writes via this provider.
-  const [value, setValue] = useState(initialValue);
+  const [value, setValueState] = useState(initialValue);
+  const [displayName, setDisplayNameState] = useState(initialDisplayName);
   const [hasBlurred, setHasBlurred] = useState(false);
+
+  // Linked-until-first-manual-edit state (cinatra#2387). `detached` starts
+  // true whenever the namespace field already carries a value (a saved
+  // identity, a dev-mode default, or a `stay=1` return from a validation
+  // error) — a non-empty starting value already represents a decision the
+  // display-name field must not silently overwrite. It starts false only for
+  // a genuinely fresh, empty namespace field, which is the case the
+  // auto-derive link exists for.
+  const [detached, setDetached] = useState(() => initialValue.trim().length > 0);
+
+  // Namespace field's own onChange — a MANUAL edit permanently detaches the
+  // link for the rest of this component's lifetime (the page's session).
+  const setValue = useCallback((next: string) => {
+    setDetached(true);
+    setValueState(next);
+  }, []);
+
+  // Display-name field's onChange — while still linked, every keystroke
+  // re-derives the namespace candidate (see deriveInstanceNamespace). Once
+  // detached, this only updates the display-name value; the namespace field
+  // is left exactly as the operator last set it.
+  const setDisplayName = useCallback(
+    (next: string) => {
+      setDisplayNameState(next);
+      if (!detached) {
+        setValueState(deriveInstanceNamespace(next));
+      }
+    },
+    [detached],
+  );
 
   const result = useMemo(
     () => validateInstanceNamespace(value, { approvedExactNames }),
@@ -95,6 +133,8 @@ export function NamespaceValidationProvider({
         value={{
           value,
           setValue,
+          displayName,
+          setDisplayName,
           hasBlurred,
           setHasBlurred,
           result,
@@ -117,6 +157,8 @@ export function useNamespaceValidation(): NamespaceValidationContextValue {
 type InternalState = {
   value: string;
   setValue: (next: string) => void;
+  displayName: string;
+  setDisplayName: (next: string) => void;
   hasBlurred: boolean;
   setHasBlurred: (next: boolean) => void;
   result: ReturnType<typeof validateInstanceNamespace>;
@@ -132,6 +174,44 @@ function useInternal(): InternalState {
     );
   }
   return ctx;
+}
+
+// -----------------------------------------------------------------------------
+// InstanceDisplayNameInput — the "Instance display name" field, wired into the
+// same provider as InstanceNamespaceInput so it can drive the linked
+// auto-derive (cinatra#2387). Optional to render: a consumer that mounts only
+// InstanceNamespaceInput (the administration edit form) keeps its own plain,
+// unlinked display-name field and this component is simply unused there.
+//
+// defaultValue is forwarded via NamespaceValidationProvider's
+// initialDisplayName — the island reads shared state from context and does
+// not use the prop directly (parity with InstanceNamespaceInput's signature
+// below; this is a CONTROLLED input, so passing both `value` and
+// `defaultValue` to the DOM element would trip React's controlled/uncontrolled
+// warning).
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function InstanceDisplayNameInput({ defaultValue: _ }: { defaultValue: string }) {
+  const { displayName, setDisplayName } = useInternal();
+
+  const onChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setDisplayName(e.target.value);
+    },
+    [setDisplayName],
+  );
+
+  return (
+    <Input
+      name="instanceDisplayName"
+      required
+      minLength={1}
+      maxLength={120}
+      autoComplete="off"
+      value={displayName}
+      onChange={onChange}
+      placeholder="e.g. ACME Group"
+    />
+  );
 }
 
 // -----------------------------------------------------------------------------
