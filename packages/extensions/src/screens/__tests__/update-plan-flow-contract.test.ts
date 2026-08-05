@@ -171,3 +171,26 @@ describe("cinatra#2406 — the modal footer (and the update-plan flow it carried
     expect(CATALOG).toContain("defaultOpen={openUpdateFor === row.packageName}");
   });
 });
+
+describe("§V settings-side no-direct-write invariants — SURVIVE the footer removal", () => {
+  // These four assertions predate cinatra#2406 and are INDEPENDENT of the
+  // modal footer: the §V settings row must never perform a direct update
+  // write, and the catalog card must never grow an inline "Update now"
+  // button. With the footer (the old modal-side update UI) gone, these
+  // guards are MORE load-bearing, not moot — the settings row's link is now
+  // a known dead-end pending the replacement update affordance (flagged on
+  // cinatra#2406), and the ONLY acceptable regression path is a reviewed
+  // re-design, never a quiet direct-write escape hatch.
+  const CATALOG = read("../registry-catalog-screen.tsx");
+  const SETTINGS_VIEW = read("../extension-settings-view.tsx");
+  const SETTINGS_SCREEN = read("../extension-settings-screen.tsx");
+
+  it("the §V settings row's Update affordance stays a LINK to the catalog, never a direct write", () => {
+    expect(SETTINGS_VIEW).toContain("/configuration/extensions?update=");
+    expect(SETTINGS_VIEW).not.toContain("<form action={actions.update}>");
+    expect(SETTINGS_SCREEN).not.toContain("updateExtensionPackageFormAction");
+  });
+  it("the catalog card never renders an inline direct-update button", () => {
+    expect(CATALOG).not.toContain("Update now</Button>");
+  });
+});
