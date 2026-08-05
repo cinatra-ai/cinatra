@@ -2,23 +2,37 @@
  * MarketplaceListingCard — one-line CTA + "More details" row geometry proof
  * (cinatra#2363, epic #2360).
  *
- * The current ratified card spec §I moved the install CTA and "More details" from a
- * stacked column onto one row (details to the RIGHT of the CTA). Contract
- * (epic #2360, decided architecture): a guaranteed single line everywhere is
- * impossible with `shrink-0 whitespace-nowrap` buttons and long pending
- * labels at the narrowest card width — so the pair renders on ONE line
- * whenever it fits, and gracefully `flex-wrap`s onto two lines otherwise.
- * This proves that contract at increasing breakpoints on the REAL six-state
- * conformance harness (/design-fixtures/conformance, cinatra#985/#986): the
- * CTA and details slot are both present and visible at every width, and at
- * the WIDEST viewport (xl) the two standard-label states (available,
- * installed) render strictly on one row — the row never regresses back to a
- * stacked column now that the wrapper is `flex-row`.
+ * The current ratified card spec §I moved the install CTA and "More details"
+ * from a stacked column onto one row (details to the RIGHT of the CTA).
+ * Contract (epic #2360, decided architecture): a guaranteed single line
+ * everywhere is impossible with `shrink-0 whitespace-nowrap` buttons and long
+ * pending labels at the narrowest card width — so the pair renders on ONE
+ * line whenever it fits, and gracefully `flex-wrap`s onto two lines
+ * otherwise. Proven here on TWO real compositions:
+ *
+ *   1. The six-state conformance harness (/design-fixtures/conformance,
+ *      cinatra#985): every at-rest CTA label is short, and the sampled
+ *      viewports sit INSIDE the Tailwind bands (mid-band slack over the
+ *      band-minimum card widths), so the one-line arrangement is
+ *      deterministic — asserted STRICTLY (same row, details right of the
+ *      CTA, no overlap) for all six states at md, lg AND xl. A revert to the
+ *      stacked column fails every one of these, at every breakpoint.
+ *   2. The seeded production-density grid (cinatra#986 — the REAL
+ *      ExtensionsMarketplaceClient grid), where each card renders a
+ *      DIFFERENT six-state CTA identity at rest (cinatra#2363 item 2),
+ *      including the long "Installing…" pending label the wrap allowance
+ *      exists for.
+ *
+ * The "Installing…" pending presentation is ALSO exercised live (not only at
+ * rest): the harness's installing fixture is clicked into its real pending
+ * state (MarketplaceInstallSubmit, 8s fixture latency) and the rendered
+ * label, geometry contract and a screenshot are captured mid-flight.
  */
 import { test, expect, type Locator, type Page } from "@playwright/test";
 
-import { HARNESS_PATH } from "./conformance/contract";
+import { HARNESS_PATH, SEEDED_HARNESS_PATH } from "./conformance/contract";
 import { CONFORMANCE_CARD_FIXTURES } from "../../../src/app/design-fixtures/conformance/fixture-data";
+import { SEEDED_GRID_CARDS } from "../../../src/app/design-fixtures/conformance/seed-data";
 
 /**
  * Card root + its CTA/details slots for one conformance card fixture.
@@ -50,12 +64,55 @@ function sameRow(a: { top: number; bottom: number }, b: { top: number; bottom: n
   return a.top < b.bottom && b.top < a.bottom;
 }
 
+type Box = { top: number; bottom: number; left: number; right: number };
+
+/**
+ * The STRICT one-line contract: same visual row, details strictly to the
+ * right of the CTA's right edge (1px tolerance for subpixel rounding) — the
+ * form that excludes overlap and equal left edges, per the review of this
+ * suite's first iteration.
+ */
+function expectOneLineRow(ctaBox: Box, detailsBox: Box) {
+  expect(sameRow(ctaBox, detailsBox)).toBe(true);
+  expect(detailsBox.left).toBeGreaterThanOrEqual(ctaBox.right - 1);
+}
+
+/**
+ * The graceful-wrap contract for the one composition where the pair may
+ * legitimately not fit (the long pending label at the tightest density):
+ * never overlapping, order preserved — details on the same row to the right,
+ * or wrapped strictly BELOW. Returns which branch held so callers can record
+ * it instead of hiding it inside a disjunction.
+ */
+function expectRowOrWrappedBelow(ctaBox: Box, detailsBox: Box): "one-line" | "wrapped" {
+  if (sameRow(ctaBox, detailsBox)) {
+    expect(detailsBox.left).toBeGreaterThanOrEqual(ctaBox.right - 1);
+    return "one-line";
+  }
+  expect(detailsBox.top).toBeGreaterThanOrEqual(ctaBox.bottom - 1);
+  return "wrapped";
+}
+
 const VIEWPORTS = {
   md: { width: 900, height: 1000 },
   lg: { width: 1200, height: 1000 },
   xl: { width: 1440, height: 1000 },
 } as const;
 
+// ---------------------------------------------------------------------------
+// 1. Six-state harness — STRICT one-line at every sampled breakpoint.
+//
+// Every fixture's at-rest label is short ("Install now" / "Installed" /
+// "Update now" / "Restore" — the installing fixture rests at "Install now",
+// its pending label is exercised below), and the harness grid's md:2/lg:3/
+// xl:4 columns at these viewports leave mid-band slack over the band-minimum
+// card widths. The layout is therefore deterministic: the pair MUST sit on
+// one row, details strictly right of the CTA. #2363's AC names lg and xl;
+// md is asserted too because the evidence renders one-line there as well —
+// a wrap at md would be a real presentation change, and this suite's first
+// iteration was rightly faulted for a disjunction 18 of 20 tests could
+// never fail.
+// ---------------------------------------------------------------------------
 for (const [bp, size] of Object.entries(VIEWPORTS)) {
   test.describe(`MarketplaceListingCard CTA/details row @ ${bp} (${size.width}px)`, () => {
     test.beforeEach(async ({ page }) => {
@@ -64,47 +121,105 @@ for (const [bp, size] of Object.entries(VIEWPORTS)) {
     });
 
     for (const fixture of CONFORMANCE_CARD_FIXTURES) {
-      test(`${fixture.surfaceId}: CTA + "More details" both render, side by side or gracefully wrapped`, async ({
+      test(`${fixture.surfaceId}: CTA + "More details" render strictly on one row, details to the right`, async ({
         page,
       }) => {
         const { cta, details } = cardSlots(page, fixture.surfaceId);
         await expect(cta).toBeVisible();
         await expect(details).toBeVisible();
-
-        const ctaBox = await box(cta);
-        const detailsBox = await box(details);
-
-        if (sameRow(ctaBox, detailsBox)) {
-          // On one line: details sits to the RIGHT of the CTA (never above/
-          // before it — the spec's fixed left-to-right order).
-          expect(detailsBox.left).toBeGreaterThanOrEqual(ctaBox.left);
-        } else {
-          // Wrapped (only expected on the tightest fixtures at the tightest
-          // breakpoint — e.g. the "Installing…" pending label): the details
-          // control still renders BELOW the CTA, never overlapping it.
-          expect(detailsBox.top).toBeGreaterThanOrEqual(ctaBox.bottom - 1);
-        }
+        expectOneLineRow(await box(cta), await box(details));
       });
     }
   });
 }
 
-test.describe("MarketplaceListingCard CTA/details row — single line at the widest breakpoint (xl)", () => {
-  test.beforeEach(async ({ page }) => {
-    await page.setViewportSize(VIEWPORTS.xl);
+// ---------------------------------------------------------------------------
+// 2. The "Installing…" pending presentation, exercised for real (cinatra#2363
+//    — the label the wrap contract is written around, previously measured by
+//    nothing and shown in no screenshot).
+// ---------------------------------------------------------------------------
+for (const bp of ["md", "xl"] as const) {
+  test(`installing pending state @ ${bp}: clicked into "Installing…", geometry contract holds, screenshot captured`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize(VIEWPORTS[bp]);
     await page.goto(HARNESS_PATH, { waitUntil: "domcontentloaded" });
-  });
 
-  // The two short-label states (Install now / Installed) are the standard
-  // case the epic's geometry contract guarantees a single line for at lg/xl
-  // — assert it explicitly rather than only "not overlapping".
-  for (const surfaceId of ["extension-listing-card-available", "extension-listing-card-installed"] as const) {
-    test(`${surfaceId}: CTA and "More details" render strictly on one row at xl`, async ({ page }) => {
-      const { cta, details } = cardSlots(page, surfaceId);
-      const ctaBox = await box(cta);
-      const detailsBox = await box(details);
-      expect(sameRow(ctaBox, detailsBox)).toBe(true);
-      expect(detailsBox.left).toBeGreaterThan(ctaBox.left);
+    const { root, cta, details } = cardSlots(page, "extension-listing-card-installing");
+    await expect(cta).toHaveText("Install now");
+    await cta.click();
+
+    // The REAL pending presentation (MarketplaceInstallSubmit + useFormStatus,
+    // 8s fixture latency — no race): label swap + busy marker.
+    await expect(cta).toHaveText("Installing…");
+    await expect(cta).toHaveAttribute("data-pending", "");
+    await expect(cta).toBeDisabled();
+    await expect(details).toBeVisible();
+
+    // Pending is the one label the graceful-wrap allowance exists for; record
+    // which arrangement rendered instead of hiding it in a disjunction.
+    const arrangement = expectRowOrWrappedBelow(await box(cta), await box(details));
+    testInfo.annotations.push({
+      type: `pending-row-arrangement@${bp}`,
+      description: arrangement,
     });
-  }
-});
+
+    await testInfo.attach(`installing-pending-card-${bp}`, {
+      body: await root.screenshot(),
+      contentType: "image/png",
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 3. Seeded production-density grid (cinatra#986 harness, cinatra#2363 item
+//    2): the REAL ExtensionsMarketplaceClient grid, one card per six-state
+//    CTA identity AT REST (seed-data.ts assignment) — every CTA label
+//    asserted, geometry proven at the real grid density. Short labels assert
+//    the strict one-line row; the at-rest "Installing…" card asserts the
+//    no-overlap contract with its arrangement recorded (it is the one label
+//    the wrap allowance legitimately covers at the tightest density).
+// ---------------------------------------------------------------------------
+for (const [bp, size] of Object.entries(VIEWPORTS)) {
+  test.describe(`Seeded grid CTA/details row @ ${bp} (${size.width}px)`, () => {
+    test.beforeEach(async ({ page }) => {
+      await page.setViewportSize(size);
+      await page.goto(SEEDED_HARNESS_PATH, { waitUntil: "domcontentloaded" });
+    });
+
+    for (const card of SEEDED_GRID_CARDS) {
+      test(`${card.packageName} (${card.ctaState}): CTA label + row geometry at grid density`, async ({
+        page,
+      }, testInfo) => {
+        const item = page
+          .locator('[data-surface-id="extension-listing-grid"][data-variant="populated"]')
+          .locator('[data-testid="marketplace-grid-item"]')
+          .filter({ hasText: card.displayName });
+        await expect(
+          item.locator('[data-testid="extension-card-cta"]'),
+        ).toHaveAttribute("data-cta-state", card.ctaState);
+
+        const cta = item.locator('[data-testid="extension-card-cta"] button');
+        const details = item.getByRole("button", { name: "More details" });
+        await expect(cta).toHaveText(card.ctaLabel);
+        await expect(details).toBeVisible();
+
+        const ctaBox = await box(cta);
+        const detailsBox = await box(details);
+        if (card.ctaState === "installing") {
+          const arrangement = expectRowOrWrappedBelow(ctaBox, detailsBox);
+          testInfo.annotations.push({
+            type: `seeded-pending-row-arrangement@${bp}`,
+            description: arrangement,
+          });
+          await testInfo.attach(`seeded-installing-at-rest-${bp}`, {
+            body: await item.screenshot(),
+            contentType: "image/png",
+          });
+        } else {
+          expectOneLineRow(ctaBox, detailsBox);
+        }
+      });
+    }
+  });
+}

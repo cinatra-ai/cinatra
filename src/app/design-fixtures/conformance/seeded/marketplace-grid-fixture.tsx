@@ -4,10 +4,17 @@
 // SERVER component mirroring the real composition exactly: the server builds
 // the card nodes (REAL MarketplaceListingCard) and hands them, with their
 // filter metadata, to the REAL ExtensionsMarketplaceClient — the same
-// server/client split ExtensionsMarketplaceScreen uses. The card CTA is an
-// inert placeholder here (per-card CTA behavior is covered by the
-// extension-listing-card-* surfaces on /design-fixtures/conformance); the
-// GRID surface asserts cardinality + the empty/loading state variants.
+// server/client split ExtensionsMarketplaceScreen uses. The card CTAs are
+// INERT here (per-card CTA behavior is covered by the
+// extension-listing-card-* surfaces on /design-fixtures/conformance), but
+// each card renders a DIFFERENT six-state CTA identity at rest — one card per
+// state, assigned in seed-data.ts (cinatra#2363 item 2) — mirroring the
+// presentation of the real controls (labels, variants, the pending spinner)
+// so the production-density grid composition exercises every CTA label,
+// including the long "Installing…" one the wrap contract is written around.
+// The GRID conformance surface itself still asserts cardinality + the
+// empty/loading state variants; the per-state geometry is measured by
+// tests/e2e/design/marketplace-listing-card-geometry.spec.ts.
 // ---------------------------------------------------------------------------
 
 // Deep module imports ON PURPOSE (cinatra#985 convention): the screens barrel
@@ -16,6 +23,8 @@
 import { ExtensionsMarketplaceClient } from "@cinatra-ai/extensions/screens/extensions-marketplace-client";
 import { MarketplaceListingCard } from "@cinatra-ai/extensions/screens/marketplace-listing-card";
 import type { MarketplaceCardData } from "@cinatra-ai/extensions/screens/marketplace-card-model";
+
+import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { deriveExtensionAccent } from "@/lib/extension-accent";
@@ -39,9 +48,62 @@ function toCardData(seed: SeededGridCard): MarketplaceCardData {
     iconSlug: null,
     iconUrl: null,
     vendorLogoUrl: null,
-    sdkAbiRange: "*",
+    // The incompatible-state card declares an unsatisfiable ABI range so its
+    // compat meta row agrees with its greyed CTA (same derivation the real
+    // screen and the per-surface harness use).
+    sdkAbiRange: seed.ctaState === "incompatible" ? ">=999.0.0" : "*",
     vendor: { name: "Cinatra Fixtures", storeUrl: null },
   };
+}
+
+/**
+ * Inert per-state CTA control mirroring the REAL six-state presentation
+ * (extensions-marketplace-screen.tsx / card-fixtures.tsx branches): same
+ * labels, same variants, same disabled treatments — the "installing" card
+ * mirrors MarketplaceInstallSubmit's pending presentation (spinner +
+ * pending label + `disabled:opacity-70` + `data-pending`) at rest.
+ */
+function inertCtaControl(seed: SeededGridCard) {
+  const title = "Grid fixture — CTA behavior is covered by the extension-listing-card-* surfaces";
+  switch (seed.ctaState) {
+    case "installed":
+      return (
+        <Button size="sm" variant="secondary" disabled className="disabled:opacity-90" title={title}>
+          {seed.ctaLabel}
+        </Button>
+      );
+    case "restore":
+      return (
+        <Button size="sm" variant="outline" disabled title={title}>
+          {seed.ctaLabel}
+        </Button>
+      );
+    case "installing":
+      return (
+        <Button size="sm" disabled data-pending="" className="disabled:opacity-70" title={title}>
+          <Loader2 className="animate-spin" aria-hidden="true" />
+          {seed.ctaLabel}
+        </Button>
+      );
+    case "incompatible":
+      return (
+        <Button
+          size="sm"
+          disabled
+          className="cursor-not-allowed disabled:pointer-events-auto disabled:opacity-40"
+          title="Requires a newer Cinatra version"
+        >
+          {seed.ctaLabel}
+        </Button>
+      );
+    case "install":
+    case "update":
+      return (
+        <Button size="sm" disabled title={title}>
+          {seed.ctaLabel}
+        </Button>
+      );
+  }
 }
 
 function gridCards() {
@@ -58,12 +120,8 @@ function gridCards() {
         <MarketplaceListingCard
           card={card}
           accentColor={deriveExtensionAccent(card.packageName)}
-          ctaControl={
-            <Button size="sm" disabled title="Grid fixture — CTA behavior is covered by the extension-listing-card-* surfaces">
-              Install now
-            </Button>
-          }
-          ctaState="install"
+          ctaControl={inertCtaControl(seed)}
+          ctaState={seed.ctaState}
           detailsControl={
             <Button type="button" variant="link" size="sm">
               More details
