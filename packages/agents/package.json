@@ -80,6 +80,7 @@
     "@cinatra-ai/sdk-extensions": "workspace:*",
     "@cinatra-ai/sdk-ui": "workspace:*",
     "@cinatra-ai/skills": "workspace:*",
+    "@modelcontextprotocol/client": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "cron-parser": "^5.6.2",
     "cronstrue": "^3.14.0",
