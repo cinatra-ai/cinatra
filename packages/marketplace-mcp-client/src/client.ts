@@ -179,6 +179,44 @@ export class MarketplaceMcpError extends Error {
   }
 }
 
+/**
+ * What a failed marketplace call proves about the MARKETPLACE — the vocabulary
+ * `classifyMarketplaceFailure()` (in the server-only `./http-client` sub-entry)
+ * answers in, stated here so a caller can type the outcome without importing the
+ * MCP SDK.
+ *
+ * - `"unreachable"` — no HTTP response was ever received (DNS / connection
+ *   refused / TLS). The ONLY outcome a caller may relax a gate on.
+ * - `"peer-response"` — the marketplace answered: an HTTP status, a JSON-RPC
+ *   error, or a structured ability error.
+ * - `"indeterminate"` — cannot be shown either way (a timeout, a closed
+ *   connection, a malformed body, an auth-scope refusal). It is NOT a synonym
+ *   for `"unreachable"` and must be handled like `"peer-response"` by anything
+ *   whose safe default is to refuse.
+ */
+export type MarketplaceFailureOrigin = "unreachable" | "peer-response" | "indeterminate";
+
+/**
+ * Brand stamped by the HTTP client on an error thrown by the `fetch()` call
+ * ITSELF — i.e. the request never produced a response. It is the ONLY evidence
+ * `classifyMarketplaceFailure()` accepts for `"unreachable"`.
+ *
+ * The error CLASS cannot carry this fact. `TypeError` is what undici raises for
+ * a connect failure, but it is ALSO what it raises when a response arrives and
+ * its body stream then dies mid-read (`TypeError: terminated`) — measured, with
+ * a real HTTP 200 on the wire — and what a malformed local `Headers`
+ * construction raises. Classifying bare `TypeError` as unreachable would let a
+ * REACHABLE marketplace relax the offline-rename gate, so the fact is recorded
+ * at the only place it is unambiguous: the moment the `fetch()` promise rejects,
+ * before any response object exists.
+ *
+ * `Symbol.for` so the brand survives duplicate module instances. Exported
+ * because the classifier's contract is testable only by producing it.
+ */
+export const MARKETPLACE_CONNECT_FAILURE: unique symbol = Symbol.for(
+  "cinatra.marketplace-mcp-client.connect-failure",
+) as never;
+
 // ---------------------------------------------------------------------------
 // Mock client — for tests + dev
 // ---------------------------------------------------------------------------

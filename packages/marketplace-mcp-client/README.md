@@ -15,9 +15,27 @@ See `src/types.ts` for the vendoring boundary — every type carries a comment p
 | File | What |
 |---|---|
 | `src/types.ts` | Vendored TS types — extension / vendor / package / self-service shapes |
-| `src/client.ts` | **Pure** (no `server-only`, no MCP SDK): `MarketplaceMcpClient` interface + `MarketplaceMcpError` + `createMockMarketplaceMcpClient(fixtures)`. Safe to import anywhere. |
-| `src/http-client.ts` | **Server-only**: the real `createHttpMarketplaceMcpClient(opts)` — speaks MCP (SDK `Client` + `StreamableHTTPClientTransport`) against `/wp-json/cinatra/mcp`. Reached via the `@cinatra-ai/marketplace-mcp-client/http-client` sub-entry. |
+| `src/client.ts` | **Pure** (no `server-only`, no MCP SDK): `MarketplaceMcpClient` interface + `MarketplaceMcpError` + `MarketplaceFailureOrigin` + `createMockMarketplaceMcpClient(fixtures)`. Safe to import anywhere. |
+| `src/http-client.ts` | **Server-only**: the real `createHttpMarketplaceMcpClient(opts)` — speaks MCP (`@modelcontextprotocol/client@2.0.0` `Client` + `StreamableHTTPClientTransport`, `versionNegotiation: { mode: 'auto' }`) against `/wp-json/cinatra/mcp` — plus `classifyMarketplaceFailure(err)`. Reached via the `@cinatra-ai/marketplace-mcp-client/http-client` sub-entry. |
 | `src/index.ts` | Re-exports the PURE surface only (types + interface + mock + error). |
+
+### Classifying a failure
+
+A caller deciding whether a failed call means "the marketplace is unreachable"
+must ask `classifyMarketplaceFailure(err)` rather than testing SDK error classes
+itself. It answers `"unreachable"` (no HTTP response was ever received),
+`"peer-response"` (the marketplace answered), or `"indeterminate"` (cannot be
+shown either way — a timeout, a malformed body, an auth-scope refusal). Anything
+whose safe default is to refuse must treat `"indeterminate"` exactly like
+`"peer-response"`; only `"unreachable"` may relax a gate. See the offline-rename
+gate in `src/app/configuration/instance/actions.ts` for the reference consumer.
+
+`"unreachable"` requires the `MARKETPLACE_CONNECT_FAILURE` brand, which the
+client stamps on the rejection of the `fetch()` call itself. **The error class is
+not the evidence**: undici raises `TypeError` both for a connect failure
+(`fetch failed`) and for a response that arrived and whose body stream then died
+(`terminated`), so an `instanceof TypeError` test would report a reachable
+marketplace as unreachable.
 
 ### Transport + URL
 

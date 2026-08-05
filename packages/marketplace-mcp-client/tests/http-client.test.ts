@@ -1,36 +1,47 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock the MCP SDK so we can assert transport wiring without a live server.
-// vi.hoisted keeps the spies available to the hoisted vi.mock factories; the
-// constructor mocks use regular functions so `new` works.
-const { connectMock, callToolMock, closeMock, transportCtor } = vi.hoisted(() => ({
+// Mock the MCP client package so we can assert transport + negotiation wiring
+// without a live server. `vi.hoisted` keeps the spies available to the hoisted
+// `vi.mock` factory; the constructor mocks use regular functions so `new` works.
+//
+// The REAL error classes are re-exported through the mock (via importActual) —
+// `classifyMarketplaceFailure` discriminates on them, so stubbing them would
+// make every classification test vacuous.
+const { connectMock, callToolMock, closeMock, transportCtor, clientCtor } = vi.hoisted(() => ({
   connectMock: vi.fn().mockResolvedValue(undefined),
   callToolMock: vi.fn(),
   closeMock: vi.fn().mockResolvedValue(undefined),
   transportCtor: vi.fn(),
+  clientCtor: vi.fn(),
 }));
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
-  Client: vi.fn(function (this: Record<string, unknown>) {
-    this.connect = connectMock;
-    this.callTool = callToolMock;
-    this.close = closeMock;
-  }),
-}));
-vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
-  StreamableHTTPClientTransport: vi.fn(function (this: unknown, url: URL, opts: unknown) {
-    transportCtor(url, opts);
-  }),
-}));
+vi.mock("@modelcontextprotocol/client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@modelcontextprotocol/client")>();
+  return {
+    ...actual,
+    Client: vi.fn(function (this: Record<string, unknown>, info: unknown, options: unknown) {
+      clientCtor(info, options);
+      this.connect = connectMock;
+      this.callTool = callToolMock;
+      this.close = closeMock;
+    }),
+    StreamableHTTPClientTransport: vi.fn(function (this: unknown, url: URL, opts: unknown) {
+      transportCtor(url, opts);
+    }),
+  };
+});
+
+import { ProtocolError, SdkError, SdkErrorCode, SdkHttpError } from "@modelcontextprotocol/client";
 
 import {
+  classifyMarketplaceFailure,
   createHttpMarketplaceMcpClient,
   fetchPublicMarketplaceExtensionDetail,
   fetchPublicMarketplaceExtensionList,
   resolveMarketplaceBaseUrl,
   MARKETPLACE_BASE_URL,
 } from "../src/http-client";
-import { MarketplaceMcpError } from "../src/client";
+import { MARKETPLACE_CONNECT_FAILURE, MarketplaceMcpError } from "../src/client";
 
 describe("createHttpMarketplaceMcpClient", () => {
   beforeEach(() => {
@@ -38,6 +49,48 @@ describe("createHttpMarketplaceMcpClient", () => {
     callToolMock.mockReset();
     closeMock.mockClear();
     transportCtor.mockClear();
+    clientCtor.mockClear();
+  });
+
+  // -------------------------------------------------------------------------
+  // Protocol-revision negotiation (cinatra#2218 L2b).
+  //
+  // `versionNegotiation` is an OPTIONS OBJECT whose default mode is `legacy`.
+  // Passed as a bare string the client reads `options?.mode` as `undefined` and
+  // silently negotiates legacy — a working client on an era nobody chose. These
+  // assertions are what make the mode a decision instead of a default, and they
+  // fail if a refactor drops the option, flattens it to a string, or flips the
+  // mode without moving the supported-revisions contract row.
+  // -------------------------------------------------------------------------
+
+  it("passes versionNegotiation to the Client as an OBJECT with mode 'auto' (never a bare string)", async () => {
+    callToolMock.mockResolvedValue({ structuredContent: {} });
+    await createHttpMarketplaceMcpClient({ baseUrl: "https://mk.test" }).vendorGetSelf();
+
+    const [info, options] = clientCtor.mock.calls[0] as [
+      { name: string },
+      { versionNegotiation?: unknown } | undefined,
+    ];
+    expect(info.name).toBe("cinatra-marketplace-client");
+
+    const negotiation = options?.versionNegotiation;
+    // An object, not a string — the bare-string form is the silent-legacy trap.
+    expect(typeof negotiation).toBe("object");
+    expect(negotiation).not.toBeNull();
+    expect(negotiation).toEqual({ mode: "auto" });
+    expect((negotiation as { mode?: unknown }).mode).toBe("auto");
+  });
+
+  it("uses the SAME negotiation options object on every call (fresh connection per call)", async () => {
+    callToolMock.mockResolvedValue({ structuredContent: {} });
+    const client = createHttpMarketplaceMcpClient({ baseUrl: "https://mk.test" });
+    await client.vendorGetSelf();
+    await client.vendorApplicationStatus();
+
+    expect(clientCtor).toHaveBeenCalledTimes(2);
+    const first = (clientCtor.mock.calls[0][1] as { versionNegotiation: unknown }).versionNegotiation;
+    const second = (clientCtor.mock.calls[1][1] as { versionNegotiation: unknown }).versionNegotiation;
+    expect(second).toBe(first);
   });
 
   it("targets the MCP endpoint and uses the cinatra-<kebab> tool name", async () => {
@@ -929,6 +982,229 @@ describe("createHttpMarketplaceMcpClient", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Failure-origin classification (cinatra#2218 L2b).
+//
+// This is the seam the offline-rename gate in
+// `src/app/configuration/instance/actions.ts` fails OPEN on, so every case here
+// is a security assertion, not a formatting one. The error classes are REAL
+// (`importOriginal` above keeps them un-stubbed) and each construction below
+// mirrors a shape that was MEASURED escaping a real connect/callTool cycle
+// against a real peer.
+// ---------------------------------------------------------------------------
+describe("classifyMarketplaceFailure", () => {
+  /** What `brandConnectFailures` stamps when the `fetch()` call itself rejects. */
+  const asConnectFailure = <T extends object>(err: T): T => {
+    Object.defineProperty(err, MARKETPLACE_CONNECT_FAILURE, {
+      value: true,
+      enumerable: false,
+      configurable: true,
+    });
+    return err;
+  };
+
+  it("reports a BRANDED connect failure as unreachable", () => {
+    // What undici throws for DNS failure / ECONNREFUSED / a TLS error, branded by
+    // the client's fetch wrapper. This is the ONLY origin the rename gate is
+    // allowed to relax on (cinatra#396).
+    expect(
+      classifyMarketplaceFailure(
+        asConnectFailure(
+          Object.assign(new TypeError("fetch failed"), {
+            cause: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+          }),
+        ),
+      ),
+    ).toBe("unreachable");
+  });
+
+  it("does NOT report an UNBRANDED TypeError as unreachable — the class is not the evidence", () => {
+    // `TypeError: terminated` is what undici raises when a response ARRIVED and
+    // its body stream then died; `TypeError` also covers local Headers/URL
+    // construction faults. Neither proves the marketplace was unreachable, and
+    // treating the class as proof is the fail-open hazard this brand removes.
+    expect(classifyMarketplaceFailure(new TypeError("terminated"))).toBe("indeterminate");
+    expect(classifyMarketplaceFailure(new TypeError("fetch failed"))).toBe("indeterminate");
+  });
+
+  it("reports an unreachable peer as unreachable THROUGH the auto-mode negotiation wrapper", () => {
+    // Measured: with `{ mode: 'auto' }` the `server/discover` probe fails first,
+    // so a connect failure surfaces as SdkError(EraNegotiationFailed) rather than
+    // a bare TypeError — with the original TypeError preserved on `.data.cause`.
+    // If this regressed, choosing `auto` would silently break the cinatra#396
+    // offline rename, which is exactly the coupling this classifier removes.
+    const wrapped = new SdkError(
+      SdkErrorCode.EraNegotiationFailed,
+      "Version negotiation probe failed: fetch failed",
+      { cause: asConnectFailure(new TypeError("fetch failed")) },
+    );
+    expect(classifyMarketplaceFailure(wrapped)).toBe("unreachable");
+
+    // ...and an UNBRANDED cause through the same wrapper does not qualify.
+    expect(
+      classifyMarketplaceFailure(
+        new SdkError(SdkErrorCode.EraNegotiationFailed, "probe failed", {
+          cause: new TypeError("terminated"),
+        }),
+      ),
+    ).toBe("indeterminate");
+  });
+
+  it("reports an HTTP status as peer-response — including one the negotiator labels EraNegotiationFailed", () => {
+    expect(
+      classifyMarketplaceFailure(
+        new SdkHttpError(SdkErrorCode.ClientHttpNotImplemented, "Error POSTing to endpoint", {
+          status: 503,
+          statusText: "Service Unavailable",
+        }),
+      ),
+    ).toBe("peer-response");
+
+    // A probe answered HTTP 5xx carries the SAME code as the network-failure
+    // wrapper above, on an SdkHttpError SUBCLASS. Measured. If the subclass were
+    // not tested first, a reachable-but-erroring marketplace would be reported
+    // unreachable and the gate would fail OPEN.
+    expect(
+      classifyMarketplaceFailure(
+        new SdkHttpError(
+          SdkErrorCode.EraNegotiationFailed,
+          "Version negotiation failed: the server answered the probe with HTTP 503",
+          { status: 503, statusText: "Service Unavailable" },
+        ),
+      ),
+    ).toBe("peer-response");
+  });
+
+  it("reports a JSON-RPC error as peer-response (ProtocolError is a separate class tree)", () => {
+    expect(classifyMarketplaceFailure(new ProtocolError(-32603, "internal error"))).toBe(
+      "peer-response",
+    );
+    expect(classifyMarketplaceFailure(new ProtocolError(-32010, "Unauthorized: User not authenticated"))).toBe(
+      "peer-response",
+    );
+  });
+
+  it("reports a structured ability error as peer-response", () => {
+    expect(classifyMarketplaceFailure(new MarketplaceMcpError("bad gateway", 502, ""))).toBe(
+      "peer-response",
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // The three measured escapes that a DENYLIST let through. Before this change
+  // the gate enumerated {MarketplaceMcpError, StreamableHTTPError, McpError} and
+  // failed OPEN on everything else, so each of these — all from a REACHABLE
+  // marketplace — could relax the rename gate on a local instance.
+  // -------------------------------------------------------------------------
+
+  it("does NOT report a malformed 200 body as unreachable (SyntaxError, measured)", () => {
+    expect(classifyMarketplaceFailure(new SyntaxError("Unexpected token n in JSON at position 1"))).toBe(
+      "indeterminate",
+    );
+  });
+
+  it("does NOT report a 403 insufficient_scope refusal as unreachable (measured)", () => {
+    // The real class is InsufficientScopeError, which extends neither SdkError
+    // nor ProtocolError; any Error outside both trees must land indeterminate.
+    const insufficientScope = new Error('Insufficient scope: required "mcp:connect"');
+    insufficientScope.name = "InsufficientScopeError";
+    expect(classifyMarketplaceFailure(insufficientScope)).toBe("indeterminate");
+  });
+
+  it("does NOT report an unsupported negotiated revision as unreachable (plain Error, measured)", () => {
+    expect(
+      classifyMarketplaceFailure(new Error("Server's protocol version is not supported: 1999-01-01")),
+    ).toBe("indeterminate");
+  });
+
+  it("does NOT report a timeout / closed connection / unexpected content as unreachable", () => {
+    expect(
+      classifyMarketplaceFailure(new SdkError(SdkErrorCode.RequestTimeout, "Request timed out")),
+    ).toBe("indeterminate");
+    expect(
+      classifyMarketplaceFailure(new SdkError(SdkErrorCode.ConnectionClosed, "Connection closed")),
+    ).toBe("indeterminate");
+    expect(
+      classifyMarketplaceFailure(
+        new SdkError(SdkErrorCode.ClientHttpUnexpectedContent, "Unexpected content type: text/plain"),
+      ),
+    ).toBe("indeterminate");
+    expect(
+      classifyMarketplaceFailure(new SdkError(SdkErrorCode.InvalidResult, "Invalid result for initialize")),
+    ).toBe("indeterminate");
+  });
+
+  it("does NOT report a thrown non-Error as unreachable", () => {
+    expect(classifyMarketplaceFailure(null)).toBe("indeterminate");
+    expect(classifyMarketplaceFailure(undefined)).toBe("indeterminate");
+    expect(classifyMarketplaceFailure("fetch failed")).toBe("indeterminate");
+    expect(classifyMarketplaceFailure({ message: "fetch failed" })).toBe("indeterminate");
+  });
+
+  it("terminates on a self-referential negotiation cause chain", () => {
+    const looped = new SdkError(SdkErrorCode.EraNegotiationFailed, "loop", {}) as SdkError & {
+      data: { cause?: unknown };
+    };
+    looped.data.cause = looped;
+    expect(classifyMarketplaceFailure(looped)).toBe("indeterminate");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE FAIL-OPEN HAZARD THIS PR'S ATOMICITY CONSTRAINT EXISTS FOR.
+//
+// The pre-migration gate discriminated by CLASS NAME on the v1 SDK. Migrating
+// this client without migrating that gate in the same change would leave the
+// gate matching classes the client can no longer raise — so a REACHABLE,
+// erroring marketplace would look like an unreachable one and the rename gate
+// would fail OPEN.
+//
+// This reproduces the old predicate exactly (as a local counterfactual, so the
+// repo keeps no live v1 dependency for it) and proves it now misses; the
+// classifier above is the green side.
+// ---------------------------------------------------------------------------
+describe("counterfactual: the v1 denylist fails OPEN on the v2 error classes", () => {
+  /** The gate's pre-migration test, verbatim in behaviour. */
+  const v1MarketplaceAnswered = (err: unknown): boolean =>
+    err instanceof MarketplaceMcpError ||
+    // `instanceof StreamableHTTPError` / `instanceof McpError` against the v1
+    // package — reproduced by name because those classes no longer exist here.
+    (err instanceof Error &&
+      (err.constructor.name === "StreamableHTTPError" || err.constructor.name === "McpError"));
+
+  const v2Errors: ReadonlyArray<[string, unknown]> = [
+    [
+      "SdkHttpError (was StreamableHTTPError)",
+      new SdkHttpError(SdkErrorCode.ClientHttpNotImplemented, "Error POSTing to endpoint", {
+        status: 503,
+      }),
+    ],
+    ["ProtocolError (was McpError)", new ProtocolError(-32603, "internal error")],
+  ];
+
+  it.each(v2Errors)("%s is MISSED by the v1 predicate (would fail OPEN)", (_label, err) => {
+    expect(v1MarketplaceAnswered(err)).toBe(false);
+  });
+
+  it.each(v2Errors)("%s is caught by the migrated classifier (fails CLOSED)", (_label, err) => {
+    expect(classifyMarketplaceFailure(err)).toBe("peer-response");
+  });
+
+  it("both predicates still agree on the two cases that did NOT change class", () => {
+    const structured = new MarketplaceMcpError("bad gateway", 502, "");
+    expect(v1MarketplaceAnswered(structured)).toBe(true);
+    expect(classifyMarketplaceFailure(structured)).toBe("peer-response");
+
+    const offline = Object.defineProperty(new TypeError("fetch failed"), MARKETPLACE_CONNECT_FAILURE, {
+      value: true,
+      enumerable: false,
+      configurable: true,
+    });
+    expect(v1MarketplaceAnswered(offline)).toBe(false);
+    expect(classifyMarketplaceFailure(offline)).toBe("unreachable");
   });
 });
 

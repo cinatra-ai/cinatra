@@ -75,13 +75,11 @@ import {
   resolveConsumerOrVendorMarketplaceToken,
   VendorCredentialsMissingError,
 } from "@/lib/marketplace-credentials";
-import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
 import {
-  MarketplaceMcpError,
-  type MarketplaceVendorApplicationStatusOutput,
-} from "@cinatra-ai/marketplace-mcp-client";
-import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
+  createHttpMarketplaceMcpClient,
+  classifyMarketplaceFailure,
+} from "@cinatra-ai/marketplace-mcp-client/http-client";
+import type { MarketplaceVendorApplicationStatusOutput } from "@cinatra-ai/marketplace-mcp-client";
 import {
   loadVerdaccioConfigForReads,
   loadVerdaccioConfigForServer,
@@ -234,12 +232,31 @@ export async function reconcileFirstPublishedAtAndPersist(): Promise<void> {
 // failure is a GENUINE local/offline situation safe to fail-OPEN on. ALL must
 // hold:
 //
-//   1. The error is a real TRANSPORT/network failure — NOT a reachable
-//      marketplace error. A reachable-but-erroring marketplace (a structured
-//      MarketplaceMcpError, an SDK StreamableHTTPError for a 401/403/5xx HTTP
-//      response, or an McpError JSON-RPC error) means the marketplace ANSWERED;
-//      that stays fail-CLOSED. Only a raw connect/transport failure (DNS,
-//      ECONNREFUSED, TLS, timeout) qualifies as "unreachable".
+//   1. The failure is PROVEN to have happened before any HTTP response was
+//      received. The marketplace client owns that judgement — it is the module
+//      that raises the errors — and answers it as a three-way
+//      `classifyMarketplaceFailure()` origin. This gate owns the POLICY, and the
+//      policy is an ALLOWLIST: only `"unreachable"` may relax the gate.
+//      `"peer-response"` (the marketplace answered with an HTTP status, a
+//      JSON-RPC error, or a structured ability error) and `"indeterminate"`
+//      (a timeout, a closed connection, a malformed body, an auth-scope refusal
+//      — anything that cannot be shown to be a connect failure) both stay
+//      fail-CLOSED.
+//
+//      This replaces a DENYLIST (`err instanceof MarketplaceMcpError ||
+//      StreamableHTTPError || McpError`, which failed OPEN on every class it did
+//      not enumerate) and is strictly tighter: four failures measured escaping a
+//      REACHABLE marketplace — a `SyntaxError` from a malformed 200 body, an
+//      `InsufficientScopeError` from a 403 `insufficient_scope` challenge, a
+//      plain `Error` from an unsupported negotiated revision, and a
+//      `TypeError: terminated` from a body stream that died AFTER a real HTTP
+//      200 — all failed OPEN before cinatra#2218 L2b. They are
+//      `"indeterminate"` now and fail CLOSED.
+//
+//      The last one is why the evidence is a BRAND rather than an error class:
+//      undici raises `TypeError` both for a connect failure and for a dead body
+//      stream, so the client marks the `fetch()` rejection itself, which is the
+//      only point at which "no response arrived" is unambiguous.
 //
 //   2. There is NO local vendor reservation to protect. The instance identity
 //      row mirrors the cm-side reservation (`vendorState` applied/approved, or a
@@ -261,13 +278,10 @@ function canFailOpenOnUnreachableMarketplace(
   identity: InstanceIdentity,
   err: unknown,
 ): boolean {
-  // (1) Only a genuine transport/network failure qualifies. Any error class
-  // that signals the marketplace ANSWERED keeps the gate closed.
-  const marketplaceAnswered =
-    err instanceof MarketplaceMcpError ||
-    err instanceof StreamableHTTPError ||
-    err instanceof McpError;
-  if (marketplaceAnswered) {
+  // (1) Only a PROVEN pre-response connect failure qualifies. Written as an
+  // allowlist on purpose: an origin this gate does not recognise must keep the
+  // gate closed, never open it.
+  if (classifyMarketplaceFailure(err) !== "unreachable") {
     return false;
   }
 

@@ -253,18 +253,18 @@ exactly what the implementation above does).
 
 ### CURRENT
 
-Two of the four surfaces still run `@modelcontextprotocol/sdk`, declared
+One of the four surfaces still runs `@modelcontextprotocol/sdk`, declared
 `^1.29.0` in the root `package.json` and resolved to **`1.29.0`** in the
 lockfile, whose `LATEST_PROTOCOL_VERSION` is `2025-11-25` and whose
 `SUPPORTED_PROTOCOL_VERSIONS` is the same five-revision list the inbound legacy
 leg accepts. **Unchanged by cinatra#2218 L1** — that lane was the server surface
 only. The client migration to `@modelcontextprotocol/client@2.0.0` runs one
-surface at a time; two have landed.
+surface at a time; three have landed.
 
 | Surface | Client | Negotiation | Offers on `initialize` | Accepts from server |
 | --- | --- | --- | --- | --- |
 | `src/lib/connector-instance-mcp-transport.ts` | SDK `Client` + `StreamableHTTPClientTransport` | none (v1 has no `versionNegotiation`) | `2025-11-25` | the five legacy revisions |
-| `http-client.ts` in `packages/marketplace-mcp-client` | SDK `Client` + `StreamableHTTPClientTransport` | none (v1 has no `versionNegotiation`) | `2025-11-25` | the five legacy revisions |
+| `http-client.ts` in `packages/marketplace-mcp-client` | **`@modelcontextprotocol/client@2.0.0`** | **`{ mode: 'auto' }` — explicit, measured** | `2026-07-28` on the probe, then `2025-11-25` on the legacy fallback | `2026-07-28` when the peer offers it; today the five legacy revisions |
 | `packages/objects/src/graphiti-client.ts` | **`@modelcontextprotocol/client@2.0.0`** | **`{ mode: 'legacy' }` — explicit, measured** | `2025-11-25` | the five legacy revisions |
 | `packages/agents/src/external-mcp-caller.ts` | **`@modelcontextprotocol/client@2.0.0`** | **`{ mode: 'auto' }` — explicit, wire-observed** | nothing on a modern peer (`server/discover` instead); `2025-11-25` on the legacy fallback | `2026-07-28` where the peer answers the probe, else the five legacy revisions |
 
@@ -340,6 +340,39 @@ protocol timeout, where the same deadline imposed through the transport's
 `~1200 ms`. This surface therefore carries its per-server budget on the custom
 `fetch` and on the protocol-level `timeout`, not on `requestInit`.
 
+**The marketplace row moved with cinatra#2218 L2b, and it lands on `auto` rather
+than graphiti's `legacy` because the two peers differ in exactly the way the
+policy below turns on.** The peer — the wordpress/mcp-adapter at
+`/wp-json/cinatra/mcp`, probed live and anonymously — does not implement
+`2026-07-28` today: it answers a `server/discover` probe `400` / `-32600
+"Missing Mcp-Session-Id header"`, refuses a session-less `tools/list` the same
+way, and on `initialize` the server SELECTS `2025-06-18`. Measured on the live
+wire, per connect-and-call cycle: `{ mode: 'auto' }` reaches era `legacy` at
+`2025-06-18` in 3 frames, `{ mode: 'legacy' }` reaches the identical era and
+revision in 2. But this peer is an independently-operated hosted service, not a
+digest-pinned image — it can gain `2026-07-28` (or drop the 2025-era
+`initialize`) with no change in this repo and no signal that would prompt one.
+The explicit-`legacy` exception is scoped to a peer that is *known* 2025-era AND
+PINNED, so it does not reach here: `auto` costs one rejected round trip if the
+peer never moves, and `legacy` breaks outright if it does.
+The client package's `tests/marketplace-wire-negotiation.manual.test.ts` is the
+re-runnable live probe (gated on `RUN_MARKETPLACE_WIRE_PROOF=1`); when it starts
+failing, the peer answered the probe and this row moves to the modern revision
+with no code change.
+
+That same change reworked the one consumer that discriminated marketplace errors
+BY CLASS — the offline-rename gate in
+`src/app/configuration/instance/actions.ts` — in the same commit, because the v2
+client raises `SdkHttpError`/`ProtocolError` where v1 raised
+`StreamableHTTPError`/`McpError`, and a gate left on the old classes would have
+read a reachable-but-erroring marketplace as an unreachable one and failed OPEN.
+The gate now consumes a three-way origin (`unreachable` / `peer-response` /
+`indeterminate`) from `classifyMarketplaceFailure()` in the client package and
+may only relax on `unreachable`, which requires a brand the client stamps on the
+`fetch()` rejection itself — no error CLASS is accepted as proof, because undici
+raises `TypeError` both for a connect failure and for a body stream that dies
+after a real HTTP 200.
+
 Not MCP protocol surfaces, listed so they are not mistaken for gaps:
 `src/lib/wordpress-mcp-connection.ts` and `src/lib/drupal-mcp-connection.ts`
 issue `HEAD` reachability probes only and carry no MCP traffic; the raw `fetch`
@@ -400,7 +433,7 @@ Per surface:
 | Surface | TARGET client | TARGET negotiation | TARGET accepted from server |
 | --- | --- | --- | --- |
 | `src/lib/connector-instance-mcp-transport.ts` | `@modelcontextprotocol/client@2.0.0` | `{ mode: 'auto' }` — or explicit `{ mode: 'legacy' }` while the peer is the sessionful 2025-era gateway | `2026-07-28` preferred; the five legacy revisions via fallback |
-| `http-client.ts` in `packages/marketplace-mcp-client` | `@modelcontextprotocol/client@2.0.0` | `{ mode: 'auto' }` | `2026-07-28` preferred; the five legacy revisions via fallback |
+| `http-client.ts` in `packages/marketplace-mcp-client` | ~~`@modelcontextprotocol/client@2.0.0`~~ **LANDED — see CURRENT** | **`{ mode: 'auto' }`**, measured: the peer refuses `server/discover` today and `auto` falls back cleanly, but it is a hosted service that can move without a cinatra change | `2026-07-28` preferred; the five legacy revisions via fallback |
 | `packages/objects/src/graphiti-client.ts` | ~~`@modelcontextprotocol/client@2.0.0`~~ **LANDED — see CURRENT** | **`{ mode: 'legacy' }`**, measured: the pinned image rejects `server/discover`. Flip to `{ mode: 'auto' }` when the image pin moves to one that answers it | the five legacy revisions |
 | `packages/agents/src/external-mcp-caller.ts` | ~~`@modelcontextprotocol/client@2.0.0` — migrate off hand-rolled `fetch`~~ **LANDED — see CURRENT** | **`{ mode: 'auto' }`**, wire-observed against both peer classes | `2026-07-28` preferred; the five legacy revisions via fallback |
 
