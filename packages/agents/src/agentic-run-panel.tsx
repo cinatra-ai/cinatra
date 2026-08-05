@@ -336,6 +336,10 @@ export function AgenticRunPanel({
   const [messages, setMessages] = useState<SerializedAgentRunMessage[]>(initialMessages);
   const [hitlContext, setHitlContext] = useState<HitlContext | null>(null);
   const [isApproving, setIsApproving] = useState(false);
+  // cinatra#2444 — bare-gate inline Reject. Tracks WHICH decision is in
+  // flight so the Approve button doesn't flip to its pending label while a
+  // Reject submit (which also drives isApproving via trackApproving) runs.
+  const [isRejecting, setIsRejecting] = useState(false);
   // Failed-run retry (cinatra#2412). resetAgentRun transitions the run
   // failed -> pending_input WITHOUT touching inputParams, then a full reload
   // re-reads it so the Setup screen's existing pending_input gating shows the
@@ -888,8 +892,71 @@ export function AgenticRunPanel({
     }
   };
 
-  const approvalActionsRow: ReactNode = effectiveHitlContext && (
-    <div className="flex justify-end items-center pt-2 border-t border-line">
+  // cinatra#2444 — the shared decision row, parameterized so the bare
+  // tool-call-gate fallback branch can render the SAME approve machinery
+  // (identical envelope: {approved, approvedAt}, attachment wrap,
+  // context-selector synthesis, performGateSubmit plumbing) with an
+  // additional inline Reject and gate-appropriate labels. Every existing
+  // call site keeps the zero-arg `approvalActionsRow` below — byte-identical
+  // behavior (single Continue button, no Reject).
+  const renderApprovalActionsRow = (opts?: {
+    withReject?: boolean;
+    approveLabel?: string;
+    approvingLabel?: string;
+  }): ReactNode => effectiveHitlContext && (
+    <div className="flex justify-end items-center gap-2 pt-2 border-t border-line">
+      {opts?.withReject ? (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={isApproving}
+          onClick={async () => {
+            // Bare-gate Reject rides the SAME resume wire as Approve
+            // (performGateSubmit → approveReviewTask): the decision is
+            // delivered in place and the run resumes without leaving the run
+            // surface. The envelope mirrors the Approve payload with
+            // approved:false; the "[Rejected by operator]" userResponse is the
+            // reject analog of the server-side "[Approved by operator]"
+            // fallback (review-task-actions resumeText precedence), so the
+            // paused WayFlow gate receives an explicit operator decline. A
+            // renderer/composer-authored userResponse (if any) is preserved —
+            // the marker only fills when absent.
+            setIsRejecting(true);
+            try {
+              let nextBuffered: Record<string, unknown> = {
+                ...bufferedHitlValue,
+                approved: false,
+                approvedAt: new Date().toISOString(),
+              };
+              if (
+                typeof nextBuffered.userResponse !== "string" ||
+                (nextBuffered.userResponse as string).trim().length === 0
+              ) {
+                nextBuffered.userResponse = "[Rejected by operator]";
+              }
+              if (!isSetupGateTaskId(effectiveHitlContext.reviewTaskId)) {
+                nextBuffered = applyAttachmentEnvelopeUserResponseOnly(
+                  nextBuffered,
+                  pendingAttachmentsRef.current,
+                );
+              }
+              await performGateSubmit({
+                reviewTaskId: effectiveHitlContext.reviewTaskId,
+                xRenderer: effectiveHitlContext.xRenderer,
+                payload: nextBuffered,
+                trackApproving: true,
+                suppressGate: true,
+                clearAttachmentsOnSuccess: true,
+                errorMode: "toast",
+              });
+            } finally {
+              setIsRejecting(false);
+            }
+          }}
+        >
+          {isRejecting ? "Rejecting…" : "Reject"}
+        </Button>
+      ) : null}
       <Button
         size="sm"
         disabled={isApproving}
@@ -940,11 +1007,14 @@ export function AgenticRunPanel({
           });
         }}
       >
-        {isApproving ? "Continuing…" : "Continue"}
+        {isApproving && !isRejecting
+          ? (opts?.approvingLabel ?? "Continuing…")
+          : (opts?.approveLabel ?? "Continue")}
         <ArrowRight className="h-3.5 w-3.5" />
       </Button>
     </div>
   );
+  const approvalActionsRow: ReactNode = renderApprovalActionsRow();
 
   return (
     <>
@@ -1146,27 +1216,43 @@ export function AgenticRunPanel({
           )}
         </>
       ) : isPendingApproval ? (
-        // Standard HITL approval banner (tool-call gate without x-renderer)
+        // Standard HITL approval banner (tool-call gate without x-renderer).
+        // cinatra#2444 — the decision for an actively-watched run is taken
+        // INLINE: the shared renderApprovalActionsRow (the same machinery the
+        // x-renderer paths use — approvalActionsRow only needs a
+        // reviewTaskId, not an x-renderer) resumes the run in place on
+        // Approve/Reject. The #1558 E8 /notifications unification stays the
+        // out-of-band surface: the deep-linked "Review approval" CTA is
+        // retained as a SECONDARY affordance, and it is also the sole
+        // degraded path when no gate context (reviewTaskId) is available to
+        // submit against — renderApprovalActionsRow renders nothing then.
         <>
           {/* Skill chip row — tool-call gate HITL surface */}
           <HitlSkillChips skills={hitlSkills} />
-          <div className="rounded-control border border-line bg-surface-muted px-4 py-3 flex items-center justify-between gap-3">
-            <span className="text-sm text-muted-foreground">
-              Run paused — awaiting human approval before continuing.
-            </span>
-            <Button asChild variant="outline" size="sm">
-              {/* Approvals moved into the unified /notifications feed in the E8
-                  cutover (cinatra#1558); the run's pending approval surfaces
-                  there as a row. cinatra#2413 — deep-link with `?run=<runId>`
-                  instead of a bare link, so the feed highlights this run's
-                  row (or its run-failure supersession) rather than dropping
-                  the viewer on the generic list to hunt for it. Degrades
-                  gracefully: if the gate already resolved and left no row
-                  behind, the query param simply matches nothing. */}
-              <Link href={`/notifications?run=${encodeURIComponent(runId)}`}>
-                Review approval
-              </Link>
-            </Button>
+          <div className="rounded-control border border-line bg-surface-muted px-4 py-3 flex flex-col gap-2">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm text-muted-foreground">
+                Run paused — awaiting human approval before continuing.
+              </span>
+              <Button asChild variant="outline" size="sm">
+                {/* Approvals moved into the unified /notifications feed in the E8
+                    cutover (cinatra#1558); the run's pending approval surfaces
+                    there as a row. cinatra#2413 — deep-link with `?run=<runId>`
+                    instead of a bare link, so the feed highlights this run's
+                    row (or its run-failure supersession) rather than dropping
+                    the viewer on the generic list to hunt for it. Degrades
+                    gracefully: if the gate already resolved and left no row
+                    behind, the query param simply matches nothing. */}
+                <Link href={`/notifications?run=${encodeURIComponent(runId)}`}>
+                  Review approval
+                </Link>
+              </Button>
+            </div>
+            {renderApprovalActionsRow({
+              withReject: true,
+              approveLabel: "Approve",
+              approvingLabel: "Approving…",
+            })}
           </div>
         </>
       ) : null}
