@@ -1,8 +1,10 @@
 # Supported MCP protocol revisions
 
 Which MCP specification revisions cinatra accepts inbound on `/api/mcp`, which it
-offers outbound per client surface, and what it does when it meets a peer on an
-older revision — in both directions.
+offers outbound per client surface, what it does when it meets a peer on an
+older revision — in both directions — and, for each feature the current revision
+deprecates, the migration position cinatra has recorded
+([Deprecated features](#deprecated-features--cinatras-migration-positions)).
 
 ## How to read this document
 
@@ -434,6 +436,250 @@ control the servers we call, while the inbound set is a product decision about w
 may call us. Neither set may be inferred from the other, and neither may be
 inferred from the installed package version alone.
 
+## Deprecated features — cinatra's migration positions
+
+`2026-07-28` deprecates a set of features with a stated **twelve-month minimum**
+removal window running from the revision's publication date, 2026-07-28.
+Deprecation is not removal: nothing on the list stops working inside the window,
+and the window is about removal TIMING — it is not a promise that old and new
+revisions interoperate.
+
+This section is the cinatra#2218 scope-item-7 record: for each deprecated
+feature, **the position cinatra takes** and **the evidence that position rests
+on**. Every row is CURRENT unless it says otherwise.
+
+**Grounding method, and why it matters here.** Each "not used" position below was
+re-derived by grep against the tree at the time this section was written, over
+`src/`, `packages/`, `tests/`, `extensions/` and `scripts/`, excluding
+`node_modules/`. The searched token set is named in each row so the claim is
+re-runnable rather than merely asserted. That re-derivation is not ceremony: it
+already **corrected** one carried-forward claim (the legacy HTTP+SSE row below —
+a flat "no usage found" that is true of the server half and false of the client
+half). A position copied from an earlier assessment is not evidence.
+
+### Logging — NOT USED
+
+**Position: no migration. The window may expire with no action on our side.**
+
+Evidence: **zero** occurrences of `logging/setLevel`, `notifications/message`,
+`sendLoggingMessage`, `LoggingMessageNotification`, `setLoggingLevel`,
+`LoggingLevel`, or a `logging` member of a capabilities literal. cinatra's
+per-request runtime server (`packages/mcp-server/src/runtime-server.ts`)
+registers tools, resources, prompts, screens and an optional `experimental`
+block — never a `logging` capability — so `/api/mcp` does not advertise one, and
+no outbound surface sets a log level or reads `notifications/message`.
+
+**The near-namesake that is NOT this feature.** `src/lib/mcp-logging.ts`, the
+`/configuration/mcp` logging toggles, and the JSON transcripts under
+`data/logs/mcp-server/` + `data/logs/mcp-client/` are cinatra-local **file**
+logging of MCP traffic. They carry no capability, no RPC and no notification —
+they are ordinary application logging that happens to log MCP — and the
+deprecation does not touch them. Anyone reading "logging is deprecated" onto that
+module would be deleting a working admin feature for no reason.
+
+### Legacy HTTP+SSE transport — NO PRODUCTION RELIANCE; one retained CI fallback
+
+**Position: nothing to migrate on any production surface, and one live fallback
+branch in a CI-only capture producer that is deleted (not ported) when that
+producer's SDK dependency goes.** Stated that way deliberately: the branch is
+retained code that will execute if its condition is met, so "no usage" would be
+false. What is true is that no shipped surface, and no code path a cinatra user
+can reach, speaks the deprecated transport.
+
+This row **corrects** the earlier flat "no `SSEServerTransport` / `SSEClientTransport`
+usage found". The server half is right; the client half is not.
+
+- **`SSEServerTransport` — zero occurrences in source, tests and tooling** (the
+  only occurrences of the name anywhere in the repo are in this document itself).
+  cinatra never offers the legacy two-endpoint SSE transport inbound. `/api/mcp`
+  is served only by the two legs recorded above
+  (`WebStandardStreamableHTTPServerTransport` for the 2025 era,
+  `createMcpHandler` for the 2026 era), and `GET` / `DELETE` on that path are
+  answered `405`.
+- **`SSEClientTransport` — exactly one file.**
+  `tests/e2e/wp-mcp-gateway/capture-annotations.mjs` (lines 280, 286, 295, 313)
+  dynamically imports `@modelcontextprotocol/sdk/client/sse.js` and uses it
+  **only as a fallback** after a StreamableHTTP attempt throws, when capturing
+  `tools/list` annotations from the pinned WordPress gateway fixture. It runs on a
+  CI runner from `.github/workflows/wp-mcp-gateway-capture.yml` against a
+  docker-composed fixture; it is in no runtime bundle and no user-facing path.
+  The committed capture records which transport actually answered, and for both
+  captured servers that is `"transport": "streamable-http"`
+  (`tests/e2e/wp-mcp-gateway/captures/annotations-b-sdk-listtools.json`) — the SSE
+  branch did not fire **in the captured runs**. That is evidence about the runs
+  observed, not a guarantee about future ones: the branch is still live and would
+  execute if the StreamableHTTP attempt threw.
+
+  **Migration position:** the fallback is deleted, not re-expressed, when
+  `@modelcontextprotocol/sdk` is removed from the root manifest (the last step of
+  the outbound migration). It needs no deprecation window of its own: it is a
+  diagnostic convenience against a fixture we pin and control, whose gateway is
+  observed serving Streamable HTTP, and a red capture run is a CI signal rather
+  than a user-visible outage. Until then it stays, and it stays **live**: if the
+  StreamableHTTP attempt throws, the producer takes the SSE branch and uses its
+  result. The position is "retained as an optional CI fallback", not "unused" and
+  not "unrelied upon" — the honest scope of the claim is that nothing a cinatra
+  user can reach depends on it.
+
+**Three things that look like this feature and are not.** The deprecated feature
+is the two-endpoint `GET`-a-stream + `POST`-messages transport pair, not SSE
+framing in general:
+
+- `Accept: application/json, text/event-stream` on Streamable HTTP calls (e.g.
+  `src/app/api/external-mcp/proxy/[serverId]/route.ts`) is the 2025-era
+  Streamable-HTTP requirement, not the SSE transport.
+- The `text/event-stream` responses under `/api/a2a`, `/api/notifications/stream`
+  and the agent/assistant run streams are cinatra's own streaming surfaces on
+  other protocols entirely.
+- The inbound legacy leg's `normaliseAcceptHeader` (see the CORS/Accept bullet
+  above) appends `text/event-stream` to satisfy that same requirement while the
+  leg still answers `application/json`.
+
+### Roots / Sampling / Elicitation — NOT USED
+
+**Position: no migration. The window may expire with no action on our side.**
+Ruled on cinatra#2223, which closed as "no change".
+
+Evidence, re-derived rather than carried over: **zero** occurrences of
+`elicitInput`, `elicitation/create`, `elicitUrl`, `createMessage`,
+`requestSampling`, `sampling/createMessage`, `roots/list` or `listRoots`. The
+vendored server tree that used to carry the vocabulary was deleted by the L1
+cutover, so not even a dormant copy remains.
+
+The one flow with an elicitation-*shaped* contract — the connector-instance
+destructive-call confirmation park — is a first-party typed refusal plus an
+out-of-band resume, not an MCP primitive. cinatra#2223 evaluated re-expressing it
+as Multi Round-Trip Requests and declined, recording a reopen trigger on that
+thread. Nothing here depends on the deprecated primitives in either direction.
+
+### Dynamic Client Registration (DCR) — RETAIN, with usage telemetry
+
+**Position: RETAIN through the deprecation window.** This is the one deprecated
+feature cinatra actually relies on. Recorded maintainer decision (cinatra#2218,
+2026-08-05), quoted in full so the terms are not paraphrased away:
+
+> **Dynamic Client Registration: retain.** DCR stays enabled through the
+> deprecation window (twelve-month minimum from 2026-07-28). Usage telemetry is
+> added now so any removal is evidence-gated; removal happens only via a future
+> issue that also delivers the successor mechanism (Client ID Metadata
+> Documents). The L4 dispositions record carries this as the recorded migration
+> position.
+
+Three terms bind, and all three are load-bearing:
+
+1. **DCR stays enabled** — no flag flip, no soft-deprecation, no warning banner
+   inside the window.
+2. **Removal is evidence-gated** — the telemetry below is the evidence channel, so
+   a removal proposal that cites no observation window is not admissible.
+3. **Removal ships the successor in the same issue** — Client ID Metadata
+   Documents (CIMD). Removing DCR without CIMD would strip the only self-service
+   admission path for MCP clients, so "remove DCR" is never a standalone change.
+
+#### Where DCR actually lives (CURRENT)
+
+| Piece | Where | What it does |
+| --- | --- | --- |
+| The endpoint | `POST /api/auth/oauth2/register` (`registerOAuthClient` in `@better-auth/oauth-provider`) | RFC 7591 client registration |
+| The enablement | `buildMcpAuthPlugins` in `packages/mcp-server/src/auth-plugins.ts` | `allowDynamicClientRegistration: options.… ?? true` **and** `allowUnauthenticatedClientRegistration: options.… ?? true` |
+| The caller | `createMcpServerAuthPlugins(...)` in `src/lib/auth.ts` | passes **neither** flag, so both keep the `?? true` default; passes `clientRegistrationDefaultScopes` (the base scopes) and `clientRegistrationAllowedScopes` (base + CLI) |
+| The advertisement | `src/app/.well-known/oauth-authorization-server/api/auth/route.ts` | the provider emits `registration_endpoint` **only while** dynamic registration is enabled |
+| The cinatra shim | `POST` in `src/app/api/auth/[...all]/route.ts` | unions `mcp:connect` into a **client-supplied** `scope` |
+
+Two facts worth stating plainly, because they change what "retain" costs:
+
+- **DCR is on by cinatra's choice, not by inheritance.** The upstream plugin
+  defaults `allowDynamicClientRegistration` *and*
+  `allowUnauthenticatedClientRegistration` to `false`; cinatra's builder flips
+  both to `true`. So the endpoint is open to unauthenticated registration, rate-
+  limited by the provider's own default budget on `/oauth2/register`.
+- **The shim exists because of an ordering rule in the provider.** Its
+  registration handler applies `clientRegistrationDefaultScopes` only when
+  `scope` is FALSY — absent, `undefined` or `""`
+  (`if (!body.scope) body.scope = …`). An MCP client that registers with an
+  explicit narrow scope (the MCP CLI proxy registers with `openid email profile`
+  and asks for `mcp:connect` later, from the protected-resource metadata)
+  therefore bypasses the default and fails the subsequent authorize with
+  `invalid_scope`. The shim unions `mcp:connect` into that explicit scope; it
+  leaves a falsy-scope body untouched so the provider's own default still
+  applies.
+
+#### The usage telemetry (CURRENT)
+
+`src/lib/mcp-dcr-telemetry.ts` emits one structured event per DCR registration
+attempt, from the single seam both paths pass through (the `POST` handler in
+`src/app/api/auth/[...all]/route.ts`). It follows the repo's existing
+structured-event convention — `console.info(JSON.stringify({ event: "…", … }))`,
+as used by the skill-match maintenance sweeps — rather than introducing a new
+telemetry substrate for one counter.
+
+`omitted` and `unusable-scope` are kept apart on purpose. The provider fills in
+`clientRegistrationDefaultScopes` only when `scope` is FALSY — absent,
+`undefined`, or `""` — so a whitespace-only `scope` is truthy and gets no
+defaults, and a non-string `scope` is refused by the endpoint's body schema.
+Reporting either as "the client omitted scope" would describe a client the
+provider defaults for and a client it does not as the same observation. Both are
+forwarded untouched: this lane records admission behaviour, it does not change
+it.
+
+Event name: `mcp_dcr_registration`. Fields:
+
+| Field | Values | Answers |
+| --- | --- | --- |
+| `path` | `plugin-default` · `cinatra-scope-shim` | Is the reliance the endpoint, or the endpoint **plus** our shim? |
+| `scopeDisposition` | `omitted` · `already-required` · `widened` · `unusable-scope` · `unreadable-body` | Which branch of the scope rule the client landed in |
+| `clientRequestedScopeCount` | integer, pre-union | How specific the client's own request was |
+| `outcome` | `accepted` · `rejected` · `handler-error` | Whether the attempt succeeded |
+| `status` | HTTP status, or `null` when the handler threw | The rejection class |
+| `occurredAt` | ISO-8601 | When |
+
+**What is deliberately NOT in the payload**, and this is a contract, not an
+oversight: no `client_id`, no `client_secret`, no bearer or session token, no
+`redirect_uris`, no `client_name` / `software_id`, no request headers, no
+response body, and no verbatim client-supplied scope string. A registration
+response carries a freshly minted client secret; nothing derived from it is
+logged. The payload is dimensions and counts only.
+
+**Silence is part of the contract, and it is scoped.** The event fires for a DCR
+registration attempt and for nothing else — no other auth route, no `GET`, no
+non-registration `POST`, and not for a near-miss path like
+`/api/auth/x/oauth2/register` (the seam matches the registration path exactly, so
+an over-matching predicate cannot inflate the reading). Both halves are pinned by
+tests (`src/lib/__tests__/mcp-dcr-telemetry.test.ts` and
+`src/app/api/auth/[...all]/__tests__/route-dcr-telemetry.test.ts`).
+
+**But the emit is best-effort, so a quiet log is NOT self-certifying.** The
+recorder swallows its own failures — telemetry must never turn a working client
+registration into a failed one — which means "no events observed" is consistent
+with both "no client registered" and "the log sink was broken, or this build was
+not deployed, or its stdout was never collected". Stated here rather than
+discovered later: an empty reading supports a **no-observed-use** claim only once
+the deployment-and-collection question is answered separately. It is not a
+prerequisite for removal either — a reading full of events can also clear the
+gate, once CIMD demonstrably covers the cases those events describe.
+
+#### What the telemetry can and cannot decide
+
+It can distinguish three states that "is DCR used?" collapses together, and the
+successor work differs in each:
+
+1. **No events at all** — no client registered dynamically *in what was
+   collected*. DCR removal costs nothing observable; CIMD is still required as
+   the replacement admission path. This state is the one that needs the
+   deployment/collection check above before it counts.
+2. **Events with `path: plugin-default` only** — clients use DCR, but none needs
+   our scope shim. The shim can be deleted independently of, and before, the DCR
+   decision.
+3. **Events with `path: cinatra-scope-shim`** — at least one client depends on
+   the narrow-scope workaround, so CIMD must cover that case before DCR goes.
+
+It **cannot** substitute for the decision. It is one install's server-side view;
+it says nothing about clients that would register if they tried; the emit is
+best-effort, so an empty reading also has to rule out a broken or uncollected log
+path; and an observation window has to be declared **before** the reading is
+taken, not chosen afterwards to fit a conclusion. A removal proposal cites the
+window it declared, that the instrumented build ran and was collected across it,
+the counts within it, and the CIMD design — not a bare "we saw nothing".
+
 ## What this document does not settle
 
 - ~~**The inbound accepted set / `legacy` posture.**~~ **Settled: row A**
@@ -454,5 +700,12 @@ inferred from the installed package version alone.
   the CORS bullet above for the reasoning, the security boundary, and the
   `x-mcp-header` / `Mcp-Param-{Name}` trigger that would reopen the
   browser-client CORS design.
+- ~~**What cinatra does about the features `2026-07-28` deprecates.**~~
+  **Settled: recorded above** (cinatra#2218 scope item 7) — Logging and
+  Roots/Sampling/Elicitation are unused; the legacy HTTP+SSE transport has no
+  production reliance and one retained CI-only fallback branch; and DCR is
+  RETAINED with usage telemetry per the 2026-08-05 maintainer decision. What is
+  NOT settled there, deliberately: the DCR **removal** decision and the CIMD
+  successor design, which are a future evidence-gated issue.
 - **Anything about conformance.** The presence of a TARGET paragraph is not
   evidence that any surface implements it.
