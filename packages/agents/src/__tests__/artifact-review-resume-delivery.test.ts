@@ -25,6 +25,7 @@ const storeMock = vi.hoisted(() => ({
 vi.mock("../store", () => storeMock);
 
 vi.mock("../wayflow-url", () => ({
+  WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,
   resolveWayflowUrl: vi.fn(() => "http://wayflow.test"),
   WAYFLOW_A2A_TIMEOUT_MS: 86_400_000,
   createWayflowFetch: vi.fn(() => globalThis.fetch),

@@ -15,6 +15,9 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { cancelBatchRunAction } from "./actions";
 // Import the centralized OpenAI Batch API status sets so the panel and the
 // BullMQ poller (jobs.ts) agree on which statuses are in-flight vs terminal.
 // A divergent local set would silently treat a new OpenAI status as terminal
@@ -39,6 +42,11 @@ export type StatusPanelBatchRun = {
   lastPolledAt: string | null;
   errorMessage: string | null;
   evaluatorVersion: string;
+  /** Frozen run context provenance (null on pre-S6 rows). */
+  provider: string | null;
+  model: string | null;
+  /** Pairs processed so far (synchronous fan-out progress; 0 for batches). */
+  processedPairCount: number;
 };
 
 /**
@@ -58,6 +66,16 @@ function badgeVariantFor(status: string): "default" | "secondary" | "destructive
   if (status === "completed") return "secondary";
   if (status === "failed" || status === "expired" || status === "cancelled") return "destructive";
   return "outline";
+}
+
+/**
+ * Terminal success reads "Finished", not "completed": a finished run means
+ * processing ended and outcomes were applied — NOT that every request
+ * succeeded (a finished run can carry a mix of ok / errored / canceled /
+ * expired per-request results).
+ */
+function statusLabel(status: string): string {
+  return status === "completed" ? "Finished" : status;
 }
 
 export function MatchesStatusPanel({ initialLatest }: { initialLatest: StatusPanelBatchRun | null }) {
@@ -94,8 +112,18 @@ export function MatchesStatusPanel({ initialLatest }: { initialLatest: StatusPan
         {latest ? (
           <>
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={badgeVariantFor(latest.status)}>{latest.status}</Badge>
-              <span className="text-muted-foreground">{latest.pairCount} pairs</span>
+              <Badge variant={badgeVariantFor(latest.status)}>{statusLabel(latest.status)}</Badge>
+              <span className="text-muted-foreground">
+                {inFlight && latest.processedPairCount > 0
+                  ? `${latest.processedPairCount} / ${latest.pairCount} pairs`
+                  : `${latest.pairCount} pairs`}
+              </span>
+              {latest.provider ? (
+                <span className="text-xs text-muted-foreground">
+                  {latest.provider}
+                  {latest.model ? ` · ${latest.model}` : null}
+                </span>
+              ) : null}
             </div>
             <div className="text-xs text-muted-foreground">
               Submitted {new Date(latest.submittedAt).toLocaleString()}
@@ -106,8 +134,18 @@ export function MatchesStatusPanel({ initialLatest }: { initialLatest: StatusPan
             ) : null}
             <div className="text-xs text-muted-foreground">Evaluator: {latest.evaluatorVersion}</div>
             {inFlight ? (
-              <div className="text-xs text-muted-foreground">
-                Polling every 30 seconds while the batch is in progress…
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs text-muted-foreground">
+                  Polling every 30 seconds while the run is in progress…
+                </div>
+                {latest.status !== "cancelling" ? (
+                  <form action={cancelBatchRunAction}>
+                    <Input type="hidden" name="batchId" value={latest.batchId} />
+                    <Button type="submit" variant="outline" size="sm">
+                      Cancel run
+                    </Button>
+                  </form>
+                ) : null}
               </div>
             ) : null}
           </>

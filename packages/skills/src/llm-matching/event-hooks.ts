@@ -22,7 +22,11 @@ import "server-only";
 
 import { createHash } from "node:crypto";
 import { enqueueBackgroundJob, BACKGROUND_JOB_NAMES } from "@/lib/background-jobs";
-import { LLM_MATCHER_VERSION } from "./constants";
+import {
+  LLM_MATCHER_VERSION,
+  SKILL_MATCH_INLINE_JOB_ATTEMPTS,
+  SKILL_MATCH_JOB_BACKOFF_MS,
+} from "./constants";
 import {
   deleteSkillMatchesForSkill,
   deleteSkillMatchesForAgent,
@@ -43,7 +47,14 @@ export async function enqueueInlineForSkill(skillId: string): Promise<void> {
   await enqueueBackgroundJob(
     BACKGROUND_JOB_NAMES.SKILL_MATCH_INLINE_FOR_SKILL,
     { skillId, jobStartedAt },
-    { jobId },
+    {
+      jobId,
+      // Failure taxonomy (setup-flow S6): invocation/resolution throws rethrow
+      // out of the handler; BullMQ retries the idempotent window with bounded
+      // attempts + backoff. Parse failures never throw (terminal error rows).
+      attempts: SKILL_MATCH_INLINE_JOB_ATTEMPTS,
+      backoff: { type: "exponential", delay: SKILL_MATCH_JOB_BACKOFF_MS },
+    },
   );
 }
 
@@ -57,7 +68,12 @@ export async function enqueueInlineForAgent(agentId: string): Promise<void> {
   await enqueueBackgroundJob(
     BACKGROUND_JOB_NAMES.SKILL_MATCH_INLINE_FOR_AGENT,
     { agentId, jobStartedAt },
-    { jobId },
+    {
+      jobId,
+      // Bounded retry topology — see enqueueInlineForSkill.
+      attempts: SKILL_MATCH_INLINE_JOB_ATTEMPTS,
+      backoff: { type: "exponential", delay: SKILL_MATCH_JOB_BACKOFF_MS },
+    },
   );
 }
 

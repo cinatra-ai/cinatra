@@ -226,6 +226,17 @@ export default defineConfig({
           "packages/llm/src/mcp-materializer.ts",
         ),
       },
+      // Dependency-free structured-JSON leaf (request-side schema sanitizer +
+      // response-side tolerant extraction). The skills matcher's response
+      // parser imports it via this subpath; like the other leaves it must be
+      // aliased BEFORE the bare entry.
+      {
+        find: "@cinatra-ai/llm/structured-json",
+        replacement: path.join(
+          __dirname,
+          "packages/llm/src/structured-json.ts",
+        ),
+      },
       {
         find: "@cinatra-ai/llm",
         replacement: path.join(

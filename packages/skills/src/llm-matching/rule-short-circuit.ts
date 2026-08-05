@@ -42,6 +42,9 @@ export function evaluateRuleShortCircuit(
         score: 1.0,
         rationale: `Rule short-circuit: ${describeClause(clause)}`,
         evaluatorVersion: RULE_MATCHER_VERSION,
+        // No LLM involved: deterministic rule rows carry no provider/model.
+        provider: null,
+        model: null,
         agentInputHash,
         skillInputHash,
         status: "ok",

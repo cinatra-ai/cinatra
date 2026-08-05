@@ -20,6 +20,7 @@ vi.mock("../skill-matches-store", () => ({
 import { parseMatchWhen } from "../match-when-parser";
 import { evaluatePair } from "../evaluate-pair";
 import { buildPromptForPair } from "../prompt-builder";
+import { TEST_RUN_CONTEXT } from "./__fixtures__/run-context";
 
 const baseAgent: AgentForMatching = {
   packageId: "@cinatra/email-agent",
@@ -85,7 +86,7 @@ describe("match-when malformed warning", () => {
 
     await evaluatePair(
       { agent: baseAgent, skill: skillWith(MALFORMED_RAW) },
-      { now: () => NOW, jobStartedAt: NOW },
+      { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT },
     );
 
     expect(orchestrateGenerateMock).toHaveBeenCalledTimes(1);
@@ -104,7 +105,7 @@ describe("match-when malformed warning", () => {
 
     await evaluatePair(
       { agent: baseAgent, skill: skillWith(MALFORMED_RAW) },
-      { now: () => NOW, jobStartedAt: NOW },
+      { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT },
     );
 
     expect(orchestrateGenerateMock).toHaveBeenCalledTimes(1);

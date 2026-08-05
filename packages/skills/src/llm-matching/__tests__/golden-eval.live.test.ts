@@ -53,6 +53,7 @@ import {
 } from "./__fixtures__/golden-fixture-schema";
 import { evaluatePair } from "../evaluate-pair";
 import { computeCalibration, type CalibrationPair } from "../eval-calibration";
+import { TEST_RUN_CONTEXT } from "./__fixtures__/run-context";
 
 // The suite gates on TWO env vars:
 //
@@ -107,6 +108,10 @@ function makeNoopStoreDeps() {
   return {
     now: () => now,
     jobStartedAt: now,
+    // The live arm freezes its own run context (setup-flow S6): the golden
+    // thresholds below were calibrated on this provider/model pair, so the
+    // context is pinned per-arm rather than minted from the instance default.
+    runContext: TEST_RUN_CONTEXT,
     storeOverride: noopStore,
   };
 }

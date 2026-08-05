@@ -48,6 +48,7 @@ vi.mock("../skill-matches-store", () => ({
 import * as store from "../skill-matches-store";
 import { evaluatePair } from "../evaluate-pair";
 import { upsertMatchRow } from "../upsert";
+import { TEST_RUN_CONTEXT } from "./__fixtures__/run-context";
 
 const NOW = new Date("2026-05-11T12:00:00Z");
 const T_OLD = new Date("2026-05-11T08:00:00Z");
@@ -76,6 +77,8 @@ function manualRow(overrides: Partial<SkillMatchRow>): SkillMatchRow {
     score: null,
     rationale: "admin pinned",
     evaluatorVersion: "manual-v1",
+    provider: null,
+    model: null,
     agentInputHash: "a".repeat(64),
     skillInputHash: "b".repeat(64),
     status: "ok",
@@ -104,7 +107,7 @@ describe("manual-row protection", () => {
 
     const result = await evaluatePair(
       { agent: baseAgent, skill: baseSkill },
-      { now: () => NOW, jobStartedAt: T_NEW },
+      { now: () => NOW, jobStartedAt: T_NEW, runContext: TEST_RUN_CONTEXT },
     );
 
     // The LLM is invoked because rule short-circuiting does not apply when
@@ -153,6 +156,8 @@ describe("manual-row protection", () => {
       score: null,
       rationale: "admin removed",
       evaluatorVersion: "manual-v1",
+      provider: null,
+      model: null,
       agentInputHash: "a".repeat(64),
       skillInputHash: "b".repeat(64),
       status: "ok",

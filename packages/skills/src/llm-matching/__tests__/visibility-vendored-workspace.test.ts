@@ -22,6 +22,8 @@ function makeRow(agentId: string, skillId: string): SkillMatchRow {
     score: 0.9,
     rationale: "test",
     evaluatorVersion: "v0",
+    provider: null,
+    model: null,
     agentInputHash: "h0",
     skillInputHash: "h0",
     status: "ok",

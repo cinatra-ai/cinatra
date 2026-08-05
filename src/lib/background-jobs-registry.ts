@@ -1318,12 +1318,19 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
       // and @cinatra-ai/skills. Catalog provider injected via the
       // CatalogProvider seam; the handler no longer reaches into the host
       // app's stores directly.
-      const { handleInlineForSkill } = await import("@cinatra-ai/skills");
+      const { handleInlineForSkill, buildSkillMatchWorkerActorContext } =
+        await import("@cinatra-ai/skills");
       // A3 (cinatra#1363): candidate-creation path — gate out non-deliverable skills.
       const catalog = await buildDeliverableSkillMatchCatalogProvider();
       await handleInlineForSkill(
         job.data as { skillId: string; jobStartedAt: string },
-        { catalog },
+        {
+          catalog,
+          // Explicit actor source (setup-flow S6): production deterministic
+          // LLM calls fail closed without an actor frame, and this handler
+          // mints no ambient one (actorSource above is attribution-only).
+          actorContext: buildSkillMatchWorkerActorContext("inline-for-skill"),
+        },
       );
     },
   },
@@ -1338,12 +1345,17 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
       .passthrough(),
     async handle(job) {
       // Inline-for-agent fan-out (one agent x all matchable skills).
-      const { handleInlineForAgent } = await import("@cinatra-ai/skills");
+      const { handleInlineForAgent, buildSkillMatchWorkerActorContext } =
+        await import("@cinatra-ai/skills");
       // A3 (cinatra#1363): candidate-creation path — gate out non-deliverable skills.
       const catalog = await buildDeliverableSkillMatchCatalogProvider();
       await handleInlineForAgent(
         job.data as { agentId: string; jobStartedAt: string },
-        { catalog },
+        {
+          catalog,
+          // Explicit actor source (setup-flow S6) — see inline-for-skill.
+          actorContext: buildSkillMatchWorkerActorContext("inline-for-agent"),
+        },
       );
     },
   },
@@ -1356,11 +1368,17 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
     },
     payloadSchema: z.object({ submittedBy: z.string() }).passthrough(),
     async handle(job) {
-      // Submit a single OpenAI batch covering all current pairs.
-      const { handleBatchSubmit } = await import("@cinatra-ai/skills");
+      // Mint the frozen run context and capability-route the full-catalog run
+      // (provider batch OR synchronous fan-out; setup-flow S6).
+      const { handleBatchSubmit, buildSkillMatchWorkerActorContext } =
+        await import("@cinatra-ai/skills");
       // A3 (cinatra#1363): candidate-creation path — gate out non-deliverable skills.
       const catalog = await buildDeliverableSkillMatchCatalogProvider();
-      await handleBatchSubmit(job.data as { submittedBy: string }, { catalog });
+      await handleBatchSubmit(job.data as { submittedBy: string }, {
+        catalog,
+        // Explicit actor source (setup-flow S6) — see inline-for-skill.
+        actorContext: buildSkillMatchWorkerActorContext("batch-submit"),
+      });
     },
   },
   [BACKGROUND_JOB_NAMES.SKILL_MATCH_BATCH_POLL]: {
@@ -1371,14 +1389,40 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
       .object({ batchId: z.string(), jobStartedAt: z.string() })
       .passthrough(),
     async handle(job) {
-      // Poll an in-flight batch; self-reschedule until terminal status; on
-      // completion, download results and upsert via the shared evaluator core.
-      const { handleBatchPoll } = await import("@cinatra-ai/skills");
+      // Poll an in-flight run; self-reschedule until terminal status. Provider
+      // batches download + upsert through the submission manifest; synchronous
+      // runs process their next manifest chunk here (setup-flow S6).
+      const {
+        handleBatchPoll,
+        handleBatchPollExhausted,
+        buildSkillMatchWorkerActorContext,
+      } = await import("@cinatra-ai/skills");
       const catalog = await buildSkillMatchCatalogProvider();
-      await handleBatchPoll(
-        job.data as { batchId: string; jobStartedAt: string },
-        { catalog },
-      );
+      const pollData = job.data as { batchId: string; jobStartedAt: string };
+      try {
+        await handleBatchPoll(pollData, {
+          catalog,
+          // Explicit actor source (setup-flow S6): the synchronous fan-out
+          // path evaluates pairs from this handler.
+          actorContext: buildSkillMatchWorkerActorContext("batch-poll"),
+        });
+      } catch (err) {
+        // FINAL BullMQ attempt (1-based, mirroring the recurring-loop check
+        // below): the queue is about to drop this job, so no retry and no
+        // chain re-enqueue would ever run again. Synchronous runs transition
+        // to a truthful terminal `failed`; provider batches get a fresh poll
+        // so the chain survives our own polling failure.
+        const attemptsConfigured = job.opts?.attempts ?? 1;
+        if (job.attemptsMade + 1 >= attemptsConfigured) {
+          await handleBatchPollExhausted(pollData, err).catch((hookErr) => {
+            console.warn(
+              "[background-jobs] skill-match poll exhaustion hook failed:",
+              hookErr,
+            );
+          });
+        }
+        throw err;
+      }
     },
   },
   [BACKGROUND_JOB_NAMES.SKILL_MATCH_DRIFT_SAMPLE]: {
@@ -1399,10 +1443,13 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
         recordDriftObservations,
         readSkillMatchDriftFlags,
         writeSkillMatchDriftFlags,
+        buildSkillMatchWorkerActorContext,
       } = await import("@cinatra-ai/skills");
       const catalog = await buildSkillMatchCatalogProvider();
       await handleDriftSample({
         catalog,
+        // Explicit actor source (setup-flow S6) — see inline-for-skill.
+        actorContext: buildSkillMatchWorkerActorContext("drift-sample"),
         // Persist per-pair drift observations (cinatra #1365) so repeatedly
         // drifting pairs are auto-flagged. The KV read/write is host-side; the
         // sampler stays decoupled behind this injected recorder.
@@ -1432,10 +1479,14 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
         writeSkillMatchOrphanTombstones,
         clearSkillMatchDriftFlagsForPairKeys,
         writeSkillMatchManualStale,
+        buildSkillMatchWorkerActorContext,
       } = await import("@cinatra-ai/skills");
       const catalog = await buildSkillMatchCatalogProvider();
       await handleMaintenanceTick({
         catalog,
+        // Explicit actor source (setup-flow S6) — the staleness sweep
+        // re-evaluates pairs from this handler.
+        actorContext: buildSkillMatchWorkerActorContext("maintenance-tick"),
         // --- orphan GC deps ---
         readTombstones: async () => readSkillMatchOrphanTombstones(),
         writeTombstones: async (map) => writeSkillMatchOrphanTombstones(map),

@@ -89,3 +89,27 @@ describe("response-parser", () => {
     expect(redacted).not.toContain("�"); // no replacement char
   });
 });
+
+describe("response-parser — fence/prose tolerance (setup-flow S6)", () => {
+  it("accepts a ```json fenced decision", () => {
+    const raw = "```json\n" + JSON.stringify({ matched: true, score: 0.7, rationale: "fits" }) + "\n```";
+    const r = parseLlmResponse(raw);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.score).toBe(0.7);
+  });
+
+  it("accepts a decision wrapped in prose", () => {
+    const raw =
+      'Here is my decision: {"matched": false, "score": 0.1, "rationale": "unrelated"} — hope that helps.';
+    const r = parseLlmResponse(raw);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value.matched).toBe(false);
+  });
+
+  it("the zod schema stays authoritative: a fenced but invalid decision still fails", () => {
+    const raw = "```json\n" + JSON.stringify({ matched: true, score: 1.5, rationale: "out of range" }) + "\n```";
+    const r = parseLlmResponse(raw);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.errorCode).toBe("llm_schema_violation");
+  });
+});

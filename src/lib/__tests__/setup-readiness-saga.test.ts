@@ -146,20 +146,14 @@ describe("setup readiness saga — the OpenAI path (no Anthropic egress)", () =>
     expect(r.calls.some((c) => c.startsWith("probeNativeSkills"))).toBe(false);
   });
 
-  it("surfaces the matcher constraint only when the choice makes it apply", async () => {
-    const openai = await runSetupReadinessSaga({
-      provider: "openai",
-      actorUserId: null,
-      ports: makePorts().ports,
-    });
-    expect(openai.ok && openai.matcherConstraint).toBeNull();
-
+  it("carries no per-provider matcher constraint (matching is provider-neutral since setup-flow S6)", async () => {
     const anthropic = await runSetupReadinessSaga({
       provider: "anthropic",
       actorUserId: null,
       ports: makePorts().ports,
     });
-    expect(anthropic.ok && anthropic.matcherConstraint).toContain("Skill auto-matching requires OpenAI");
+    expect(anthropic.ok).toBe(true);
+    expect(anthropic).not.toHaveProperty("matcherConstraint");
   });
 });
 

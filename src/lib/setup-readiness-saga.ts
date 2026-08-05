@@ -66,7 +66,6 @@ import {
   isGlobalDefaultLlmProviderEligible,
   readSkillCatalogFromDatabase,
 } from "@/lib/database";
-import { describeMatcherProviderConstraint } from "@/lib/llm-purpose-policy";
 // ONE derivation for the credential fingerprint, shared with the sync service:
 // two different derivations would let a key rotation invalidate the sync
 // namespace and NOT the readiness receipt (or vice versa), which is exactly the
@@ -152,8 +151,6 @@ export type SetupReadinessResult =
   | {
       ok: true;
       receipt: SetupReadinessReceipt;
-      /** Non-null when skill auto-matching cannot run on the chosen provider. */
-      matcherConstraint: string | null;
     }
   | { ok: false; failure: SetupReadinessFailure };
 
@@ -746,7 +743,6 @@ export async function runSetupReadinessSaga(
   return {
     ok: true,
     receipt,
-    matcherConstraint: describeMatcherProviderConstraint(provider),
   };
 }
 

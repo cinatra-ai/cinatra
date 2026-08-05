@@ -334,6 +334,7 @@
     { "alias": "@cinatra-ai/llm/scripted-test-provider", "target": "./packages/llm/src/scripted-test-provider.ts" },
     { "alias": "@cinatra-ai/llm/execution-plane", "target": "./packages/llm/src/execution-plane/index.ts" },
     { "alias": "@cinatra-ai/llm/mcp-materializer", "target": "./packages/llm/src/mcp-materializer.ts" },
+    { "alias": "@cinatra-ai/llm/structured-json", "target": "./packages/llm/src/structured-json.ts" },
     { "alias": "@cinatra-ai/execution-plane", "target": "./packages/execution-plane/src/index.ts" },
     { "alias": "@cinatra-ai/execution-plane/environment/promotion", "target": "./packages/execution-plane/src/environment/promotion.ts" },
     { "alias": "@cinatra-ai/execution-plane/voucher", "target": "./packages/execution-plane/src/authz/voucher.ts" },

@@ -9,3 +9,23 @@ export const runDeterministicLlmTask = async () => ({});
 export const runSkillAwareDeterministicLlmTask = async () => ({});
 export const generate = async () => ({});
 export const stream = async () => ({});
+// Provider-neutral batch surface (setup-flow S6). Tests that exercise the
+// capability-routed pipeline inject their own seams via SkillMatchJobDeps.batch;
+// these stubs only need to exist so module resolution succeeds.
+export const probeBatchCapability = async () => ({
+  provider: "openai",
+  batchVersion: null,
+  cancelSupported: false,
+});
+export const orchestrateSubmitBatchV2 = async () => {
+  throw new Error("orchestrateSubmitBatchV2 stub: inject deps.batch in tests");
+};
+export const orchestrateRetrieveBatchV2 = async () => {
+  throw new Error("orchestrateRetrieveBatchV2 stub: inject deps.batch in tests");
+};
+export const orchestrateDownloadBatchOutcomesV2 = async () => {
+  throw new Error("orchestrateDownloadBatchOutcomesV2 stub: inject deps.batch in tests");
+};
+export const orchestrateCancelBatchV2 = async () => {
+  throw new Error("orchestrateCancelBatchV2 stub: inject deps.batch in tests");
+};

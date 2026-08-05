@@ -66,6 +66,7 @@ vi.mock("../skill-autosave", () => ({
   runSkillAutosaveOnRunCompletion: vi.fn(async () => undefined),
 }));
 vi.mock("../wayflow-url", () => ({
+  WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,
   resolveWayflowUrl: vi.fn(() => "http://wayflow.test"),
   AGENT_RUN_TIMEOUT_MAX_SECONDS: 86_400,
 }));

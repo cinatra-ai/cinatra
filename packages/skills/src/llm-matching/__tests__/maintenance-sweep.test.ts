@@ -32,6 +32,7 @@ import type {
   SkillMatchRow,
   MatchSource,
 } from "../types";
+import { TEST_RUN_CONTEXT } from "./__fixtures__/run-context";
 
 const NOW = new Date("2026-05-12T03:00:00Z");
 
@@ -74,6 +75,8 @@ function row(opts: {
     evaluatorVersion:
       opts.evaluatorVersion ??
       (source === "llm" ? LLM_MATCHER_VERSION : source === "rule" ? RULE_MATCHER_VERSION : MANUAL_VERSION),
+    provider: null,
+    model: null,
     agentInputHash: opts.agentInputHash,
     skillInputHash: opts.skillInputHash,
     status: "ok",
@@ -104,6 +107,7 @@ describe("sweepStaleMatches", () => {
 
     const evaluate = vi.fn().mockResolvedValue({ skipped: false });
     const res = await sweepStaleMatches({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: catalogOf([a], [sNew]), // catalog serves the NEW content
       readAllRows: async () => [stored],
       evaluate: evaluate as never,
@@ -125,6 +129,7 @@ describe("sweepStaleMatches", () => {
 
     const evaluate = vi.fn().mockResolvedValue({ skipped: false });
     const res = await sweepStaleMatches({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: catalogOf([a], [s]),
       readAllRows: async () => [stored],
       evaluate: evaluate as never,
@@ -143,6 +148,7 @@ describe("sweepStaleMatches", () => {
     const evaluate = vi.fn().mockResolvedValue({ skipped: false });
     const recordManualStale = vi.fn().mockResolvedValue(undefined);
     const res = await sweepStaleMatches({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: catalogOf([a], [s]),
       readAllRows: async () => [stored],
       evaluate: evaluate as never,
@@ -168,6 +174,7 @@ describe("sweepStaleMatches", () => {
     });
     const evaluate = vi.fn().mockResolvedValue({ skipped: false });
     const res = await sweepStaleMatches({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: catalogOf([a], [s]),
       readAllRows: async () => [stored],
       evaluate: evaluate as never,
@@ -190,6 +197,7 @@ describe("sweepStaleMatches", () => {
     }
     const evaluate = vi.fn().mockResolvedValue({ skipped: false });
     const res = await sweepStaleMatches({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: catalogOf(agents, skills),
       readAllRows: async () => rows,
       evaluate: evaluate as never,
@@ -217,6 +225,7 @@ describe("sweepStaleMatches", () => {
     // LLM call, so it must consume the cap.
     const evaluate = vi.fn().mockResolvedValue({ skipped: true });
     const res = await sweepStaleMatches({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: catalogOf(agents, skills),
       readAllRows: async () => rows,
       evaluate: evaluate as never,
@@ -234,6 +243,7 @@ describe("sweepStaleMatches", () => {
     const stored = row({ a, s, agentInputHash: "stale", skillInputHash: "stale" });
     const evaluate = vi.fn().mockResolvedValue({ skipped: false });
     const res = await sweepStaleMatches({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: catalogOf([], []), // pair no longer installed
       readAllRows: async () => [stored],
       evaluate: evaluate as never,
@@ -247,6 +257,7 @@ describe("sweepStaleMatches", () => {
   it("fails closed: a row-read error propagates (never a false-empty sweep)", async () => {
     await expect(
       sweepStaleMatches({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
         catalog: catalogOf([], []),
         readAllRows: async () => {
           throw new Error("db down");
@@ -254,5 +265,34 @@ describe("sweepStaleMatches", () => {
         now: () => NOW,
       }),
     ).rejects.toThrow("db down");
+  });
+
+  it("no runtime: stale rows do not consume the re-eval cap and are not reported deferredOverCap", async () => {
+    // More stale rows than the cap; with a null runtime NONE may burn capacity.
+    const a1 = agent(1);
+    const a2 = agent(2);
+    const s1 = skill(1, "content one");
+    const s2 = skill(2, "content two");
+    const agents = [a1, a2];
+    const skills = [s1, s2];
+    const rows = [
+      row({ a: a1, s: s1, agentInputHash: "stale", skillInputHash: "stale" }),
+      row({ a: a1, s: s2, agentInputHash: "stale", skillInputHash: "stale" }),
+      row({ a: a2, s: s1, agentInputHash: "stale", skillInputHash: "stale" }),
+    ];
+    const evaluate = vi.fn();
+    const res = await sweepStaleMatches({
+      mintRunContext: async () => null,
+      catalog: catalogOf(agents, skills),
+      readAllRows: async () => rows,
+      evaluate,
+      now: () => NOW,
+      maxReevals: 1,
+    });
+    expect(res.stale).toBe(3);
+    expect(res.deferredOverCap).toBe(0);
+    expect(res.reevaluated).toBe(0);
+    expect(res.errors).toBe(0);
+    expect(evaluate).not.toHaveBeenCalled();
   });
 });

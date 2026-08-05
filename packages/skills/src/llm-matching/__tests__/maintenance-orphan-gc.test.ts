@@ -35,6 +35,8 @@ function rowFor(agentId: string, skillId: string, evaluatedAt: Date): SkillMatch
     score: 0.8,
     rationale: "r",
     evaluatorVersion: "llm-matcher-v1",
+    provider: null,
+    model: null,
     agentInputHash: "a",
     skillInputHash: "s",
     status: "ok",

@@ -26,6 +26,8 @@ function row(skillId: string): SkillMatchRow {
     score: 0.9,
     rationale: "test",
     evaluatorVersion: "llm-matcher-v1",
+    provider: null,
+    model: null,
     agentInputHash: "a".repeat(64),
     skillInputHash: "b".repeat(64),
     status: "ok",

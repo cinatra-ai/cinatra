@@ -120,7 +120,10 @@ vi.mock("../trigger-service", () => ({
   triggerAgentManually: vi.fn(),
 }));
 vi.mock("../compiler", () => ({ compileWorkflow: vi.fn() }));
-vi.mock("../wayflow-url", () => ({ resolveWayflowUrl: vi.fn() }));
+vi.mock("../wayflow-url", () => ({
+  resolveWayflowUrl: vi.fn(),
+  WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,
+}));
 vi.mock("../zip-helpers", () => ({ createZipBuffer: vi.fn() }));
 vi.mock("../validate-agent-json", () => ({ validateOasAgentJson: vi.fn() }));
 vi.mock("../oas-compiler", () => ({ compileOasAgentJson: vi.fn() }));

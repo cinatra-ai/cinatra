@@ -35,6 +35,7 @@ import type {
   CatalogSkill,
   SkillMatchRow,
 } from "../types";
+import { TEST_RUN_CONTEXT } from "./__fixtures__/run-context";
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -77,6 +78,8 @@ function buildSkillMatchRow(opts: {
     score: opts.score,
     rationale: opts.matched ? "Applicable." : "Not applicable.",
     evaluatorVersion: opts.evaluatorVersion ?? LLM_MATCHER_VERSION,
+    provider: null,
+    model: null,
     agentInputHash: `agent-hash-${opts.i}`,
     skillInputHash: `skill-hash-${opts.i}`,
     status: opts.status ?? "ok",
@@ -108,6 +111,7 @@ describe("handleDriftSample — production drift sampler", () => {
     const readRandomLlmOkMatches = vi.fn().mockResolvedValue([]);
     const evaluate = vi.fn();
     await handleDriftSample({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: buildCatalog([], []),
       readRandomLlmOkMatches,
       evaluate,
@@ -135,6 +139,8 @@ describe("handleDriftSample — production drift sampler", () => {
           score: 0.9,
           rationale: "still applicable",
           evaluatorVersion: LLM_MATCHER_VERSION,
+          provider: null,
+          model: null,
           agentInputHash: `agent-hash`,
           skillInputHash: `skill-hash`,
           status: "ok" as const,
@@ -145,6 +151,7 @@ describe("handleDriftSample — production drift sampler", () => {
     );
 
     const result = await handleDriftSample({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: buildCatalog(agents, skills),
       readRandomLlmOkMatches,
       evaluate,
@@ -170,6 +177,8 @@ describe("handleDriftSample — production drift sampler", () => {
         score: 0.82, // small change, no flip, below threshold
         rationale: "Still applicable.",
         evaluatorVersion: LLM_MATCHER_VERSION,
+        provider: null,
+        model: null,
         agentInputHash: "agent-hash",
         skillInputHash: "skill-hash",
         status: "ok" as const,
@@ -179,6 +188,7 @@ describe("handleDriftSample — production drift sampler", () => {
     });
 
     const result = await handleDriftSample({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: buildCatalog([buildAgent(0)], [buildSkill(0)]),
       readRandomLlmOkMatches,
       evaluate,
@@ -207,6 +217,7 @@ describe("handleDriftSample — production drift sampler", () => {
     // Catalog returns NO agents and NO skills — the resolvePair() call
     // returns null and the sampler skips silently.
     const result = await handleDriftSample({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: buildCatalog([], []),
       readRandomLlmOkMatches,
       evaluate,
@@ -223,6 +234,7 @@ describe("handleDriftSample — production drift sampler", () => {
     const readRandomLlmOkMatches = vi.fn().mockResolvedValue([]);
     const evaluate = vi.fn();
     const result = await handleDriftSample({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: buildCatalog([], []),
       readRandomLlmOkMatches,
       evaluate,
@@ -250,6 +262,8 @@ describe("handleDriftSample — production drift sampler", () => {
         score: 0.9,
         rationale: "still applicable",
         evaluatorVersion: LLM_MATCHER_VERSION,
+        provider: null,
+        model: null,
         agentInputHash: "h",
         skillInputHash: "h",
         status: "ok" as const,
@@ -260,6 +274,7 @@ describe("handleDriftSample — production drift sampler", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const result = await handleDriftSample({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: buildCatalog([buildAgent(0)], [buildSkill(0)]),
       readRandomLlmOkMatches,
       evaluate,
@@ -288,6 +303,8 @@ describe("handleDriftSample — production drift sampler", () => {
         score: 0.65, // delta = 0.20, below threshold 0.30
         rationale: "still applicable",
         evaluatorVersion: LLM_MATCHER_VERSION,
+        provider: null,
+        model: null,
         agentInputHash: "h",
         skillInputHash: "h",
         status: "ok" as const,
@@ -298,6 +315,7 @@ describe("handleDriftSample — production drift sampler", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const result = await handleDriftSample({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: buildCatalog([buildAgent(0)], [buildSkill(0)]),
       readRandomLlmOkMatches,
       evaluate,
@@ -326,6 +344,8 @@ describe("handleDriftSample — production drift sampler", () => {
         score: 0.21, // small score change but matched flipped
         rationale: "now applicable",
         evaluatorVersion: LLM_MATCHER_VERSION,
+        provider: null,
+        model: null,
         agentInputHash: "h",
         skillInputHash: "h",
         status: "ok" as const,
@@ -336,6 +356,7 @@ describe("handleDriftSample — production drift sampler", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const result = await handleDriftSample({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: buildCatalog([buildAgent(0)], [buildSkill(0)]),
       readRandomLlmOkMatches,
       evaluate,
@@ -375,6 +396,8 @@ describe("handleDriftSample — production drift sampler", () => {
         score: 0.55, // delta = 0.40 > threshold 0.30
         rationale: "still matched but less confident",
         evaluatorVersion: LLM_MATCHER_VERSION,
+        provider: null,
+        model: null,
         agentInputHash: "h",
         skillInputHash: "h",
         status: "ok" as const,
@@ -385,6 +408,7 @@ describe("handleDriftSample — production drift sampler", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const result = await handleDriftSample({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: buildCatalog([buildAgent(0)], [buildSkill(0)]),
       readRandomLlmOkMatches,
       evaluate,
@@ -418,6 +442,8 @@ describe("handleDriftSample — production drift sampler", () => {
         score: 0.40, // delta = 0.55 > threshold 0.30
         rationale: "no longer applicable",
         evaluatorVersion: LLM_MATCHER_VERSION,
+        provider: null,
+        model: null,
         agentInputHash: "h",
         skillInputHash: "h",
         status: "ok" as const,
@@ -428,6 +454,7 @@ describe("handleDriftSample — production drift sampler", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const result = await handleDriftSample({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: buildCatalog([buildAgent(0)], [buildSkill(0)]),
       readRandomLlmOkMatches,
       evaluate,
@@ -465,6 +492,8 @@ describe("handleDriftSample — production drift sampler", () => {
         score: 0.79, // delta = 0.29 — strictly under threshold 0.30
         rationale: "borderline",
         evaluatorVersion: LLM_MATCHER_VERSION,
+        provider: null,
+        model: null,
         agentInputHash: "h",
         skillInputHash: "h",
         status: "ok" as const,
@@ -475,6 +504,7 @@ describe("handleDriftSample — production drift sampler", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     const result = await handleDriftSample({
+      mintRunContext: async () => TEST_RUN_CONTEXT,
       catalog: buildCatalog([buildAgent(0)], [buildSkill(0)]),
       readRandomLlmOkMatches,
       evaluate,
@@ -490,50 +520,70 @@ describe("handleDriftSample — production drift sampler", () => {
     warnSpy.mockRestore();
   });
 
-  it("evaluator throw is caught and skips the row (does not propagate)", async () => {
+  it("evaluator invocation throw RETHROWS after logging (failure taxonomy: bounded BullMQ retry, not a silent skip)", async () => {
     const sample = [
       buildSkillMatchRow({ i: 0, matched: true, score: 0.9 }),
       buildSkillMatchRow({ i: 1, matched: true, score: 0.9 }),
     ];
     const readRandomLlmOkMatches = vi.fn().mockResolvedValue(sample);
-    const evaluate = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("OpenAI 429 rate limit"))
-      .mockResolvedValueOnce({
-        ok: true,
-        row: {
-          agentId: sample[1].agentId,
-          skillId: sample[1].skillId,
-          source: "llm" as const,
-          matched: true,
-          score: 0.9,
-          rationale: "ok",
-          evaluatorVersion: LLM_MATCHER_VERSION,
-          agentInputHash: "h",
-          skillInputHash: "h",
-          status: "ok" as const,
-          errorCode: null,
-          errorMessage: null,
-        },
-      });
+    const evaluate = vi.fn().mockRejectedValueOnce(new Error("provider 429 rate limit"));
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const result = await handleDriftSample({
-      catalog: buildCatalog([buildAgent(0), buildAgent(1)], [buildSkill(0), buildSkill(1)]),
-      readRandomLlmOkMatches,
-      evaluate,
-      now: () => NOW,
-    });
+    await expect(
+      handleDriftSample({
+        mintRunContext: async () => TEST_RUN_CONTEXT,
+        catalog: buildCatalog([buildAgent(0), buildAgent(1)], [buildSkill(0), buildSkill(1)]),
+        readRandomLlmOkMatches,
+        evaluate,
+        now: () => NOW,
+      }),
+    ).rejects.toThrow("provider 429 rate limit");
 
-    expect(result.sampledCount).toBe(2);
-    expect(evaluate).toHaveBeenCalledTimes(2);
-    expect(result.evaluatedCount).toBe(1);
-    expect(result.diffs).toHaveLength(1);
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining("drift-sampler evaluation failed"),
       expect.any(Error),
     );
 
     warnSpy.mockRestore();
+  });
+
+  it("AbortError escapes the sampler immediately (cancellation, never retried as drift)", async () => {
+    const sample = [buildSkillMatchRow({ i: 0, matched: true, score: 0.9 })];
+    const abortError = new Error("aborted");
+    abortError.name = "AbortError";
+    const evaluate = vi.fn().mockRejectedValueOnce(abortError);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(
+      handleDriftSample({
+        mintRunContext: async () => TEST_RUN_CONTEXT,
+        catalog: buildCatalog([buildAgent(0)], [buildSkill(0)]),
+        readRandomLlmOkMatches: vi.fn().mockResolvedValue(sample),
+        evaluate,
+        now: () => NOW,
+      }),
+    ).rejects.toThrow("aborted");
+    // No invocation-failure log for a cancellation.
+    expect(
+      warnSpy.mock.calls.filter(
+        (c) => typeof c[0] === "string" && c[0].includes("drift-sampler evaluation failed"),
+      ),
+    ).toHaveLength(0);
+    warnSpy.mockRestore();
+  });
+
+  it("no configured runtime: the sampler run is a clean no-op", async () => {
+    const readRandomLlmOkMatches = vi.fn();
+    const evaluate = vi.fn();
+    const result = await handleDriftSample({
+      mintRunContext: async () => null,
+      catalog: buildCatalog([buildAgent(0)], [buildSkill(0)]),
+      readRandomLlmOkMatches,
+      evaluate,
+      now: () => NOW,
+    });
+    expect(result).toEqual({ sampledCount: 0, evaluatedCount: 0, diffs: [], driftCount: 0 });
+    expect(readRandomLlmOkMatches).not.toHaveBeenCalled();
+    expect(evaluate).not.toHaveBeenCalled();
   });
 });

@@ -41,6 +41,7 @@ vi.mock("../skill-matches-store", () => ({
 import * as store from "../skill-matches-store";
 import { evaluatePair } from "../evaluate-pair";
 import { buildPromptForPair } from "../prompt-builder";
+import { TEST_RUN_CONTEXT } from "./__fixtures__/run-context";
 
 const NOW = new Date("2026-05-11T14:00:00Z");
 const MALFORMED_RAW = "this: is: malformed: yaml: { unbalanced";
@@ -90,7 +91,7 @@ describe("malformed match_when end-to-end behavior", () => {
 
     await evaluatePair(
       { agent: baseAgent, skill: malformedSkill },
-      { now: () => NOW, jobStartedAt: NOW },
+      { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT },
     );
 
     const events = warnSpy.mock.calls
@@ -121,7 +122,7 @@ describe("malformed match_when end-to-end behavior", () => {
 
     await evaluatePair(
       { agent: baseAgent, skill: malformedSkill },
-      { now: () => NOW, jobStartedAt: NOW },
+      { now: () => NOW, jobStartedAt: NOW, runContext: TEST_RUN_CONTEXT },
     );
 
     expect(store.upsertSkillMatch).toHaveBeenCalledTimes(1);

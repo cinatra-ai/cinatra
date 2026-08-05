@@ -7,11 +7,27 @@
  * change rationale for rule).
  */
 
-export const LLM_MATCHER_VERSION = "llm-matcher-v1" as const;
+/**
+ * v2 (setup-flow S6): the matcher became provider-neutral. Rows written by the
+ * pinned-era evaluator (v1, hardwired gpt-4o-mini) carry no provider/model
+ * provenance; without this bump they would persist invisibly as apparently
+ * current. Refresh is lazy by default (staleness sweep where operators enabled
+ * it); rule rows are unaffected (RULE_MATCHER_VERSION unchanged).
+ */
+export const LLM_MATCHER_VERSION = "llm-matcher-v2" as const;
 export const RULE_MATCHER_VERSION = "rule-matcher-v1" as const;
 export const MANUAL_VERSION = "manual-v1" as const;
 
-export const SKILL_MATCH_MODEL = "gpt-4o-mini" as const;
+/**
+ * The ONLY model the cl100k pricing snapshot below prices. This is NOT a call
+ * pin — evaluation runs on the frozen per-run context's provider/model (see
+ * `SkillMatchRunContext`). It exists solely so the OpenAI batch dry-run cost
+ * estimate can honestly answer "is this run priced?": a run context on any
+ * other model/provider gets `estimatedUsd: null`, never a cl100k-priced
+ * substitution and never $0.
+ */
+export const SKILL_MATCH_PRICED_MODEL = "gpt-4o-mini" as const;
+export const SKILL_MATCH_PRICED_PROVIDER = "openai" as const;
 export const SKILL_MATCH_MAX_PAIRS_PER_INLINE_EVENT = 200;
 export const SKILL_MATCH_INLINE_CONCURRENCY = 4;
 export const SKILL_MATCH_MAX_INPUT_TOKENS_PER_PAIR = 4000;
@@ -123,34 +139,43 @@ export const SKILL_MATCH_MAINTENANCE_SCHEDULER_ID = "skill-match-maintenance-tic
 export const SKILL_MATCH_MAINTENANCE_CRON_ENV = "SKILL_MATCH_MAINTENANCE_CRON" as const;
 
 // ---------------------------------------------------------------------------
-// OpenAI Batch API status enum, single source of truth.
+// Persisted batch-run status vocabulary, single source of truth.
 //
-// The OpenAI Batch API surfaces the following statuses (per OpenAI's docs):
-//   - in-flight:  validating, in_progress, finalizing
-//   - terminal:   completed, cancelled, failed, expired
+// Historically these were the OpenAI Batch API literals verbatim. With the
+// provider-neutral pipeline (setup-flow S6) the PERSISTED vocabulary is kept
+// stable — existing rows, the status panel, and the partial index keep their
+// meaning — and provider states are MAPPED onto it at the poll seam:
 //
-// Two divergent sets lived in the codebase:
-//   - jobs.ts          -> TERMINAL_STATUSES = { completed, failed, expired, cancelled }
-//   - _matches-status-panel.tsx -> IN_FLIGHT_STATUSES = { validating, in_progress, finalizing }
-// They covered the same enum from opposite sides; a new OpenAI status (e.g. an
-// `awaiting_quota` intermediate) would be silently classified as terminal by
-// the panel (stopping the poll loop) AND non-terminal by jobs.ts (rescheduling
-// forever) — a split that's invisible until the status panel goes quiet on a
-// live batch.
+//   neutral batch-v2 `in_progress` → `in_progress`
+//   neutral batch-v2 `canceling`   → `cancelling`
+//   neutral batch-v2 `ended`       → `completed`
+//   neutral batch-v2 `failed`      → `failed`
+//
+// `completed` means "processing ended and per-request outcomes were
+// retrievable" (surfaced as "Finished" in the UI) — NOT "every request
+// succeeded": a finished run can carry a mix of ok / errored / canceled /
+// expired per-request outcomes, which land as normalized result rows.
+//
+// The legacy OpenAI literals (`validating`, `finalizing`, `expired`,
+// `cancelled`) remain in the sets so rows persisted by the v1 pipeline keep
+// classifying correctly.
 //
 // Centralizing here makes the contract explicit, lets the disjoint+complete
-// invariant be unit-tested, and gives a single edit site when OpenAI adds a
-// new state.
+// invariant be unit-tested, and gives a single edit site when a state is added.
 // ---------------------------------------------------------------------------
 
-/** OpenAI Batch API in-flight statuses (mid-execution; should keep polling). */
+/** In-flight persisted statuses (mid-execution; should keep polling). */
 export const BATCH_STATUS_IN_FLIGHT = new Set<string>([
   "validating",
   "in_progress",
   "finalizing",
+  // Cancellation initiated but processing not yet ended. Present in the
+  // adapter contract; previously missing here, so a cancelling batch was
+  // treated as terminal by the poll loop and never observed its end.
+  "cancelling",
 ]);
 
-/** OpenAI Batch API terminal statuses (chain done; stop polling). */
+/** Terminal persisted statuses (chain done; stop polling). */
 export const BATCH_STATUS_TERMINAL = new Set<string>([
   "completed",
   "cancelled",
@@ -159,11 +184,78 @@ export const BATCH_STATUS_TERMINAL = new Set<string>([
 ]);
 
 /**
- * Union of all known OpenAI Batch API statuses (in-flight + terminal). New
- * states from OpenAI should be added here AND to one of the two subsets above;
- * the `batch-status` unit test enforces both disjointness and completeness.
+ * Union of all known persisted statuses (in-flight + terminal). New states
+ * must be added here AND to one of the two subsets above; the `batch-status`
+ * unit test enforces both disjointness and completeness.
  */
 export const BATCH_STATUS_ALL = new Set<string>([
   ...BATCH_STATUS_IN_FLIGHT,
   ...BATCH_STATUS_TERMINAL,
 ]);
+
+/**
+ * Map a neutral batch-v2 lifecycle status onto the PERSISTED vocabulary above.
+ * Unknown inputs pass through verbatim (fail-open into the panel's "unknown =
+ * keep polling" stance rather than inventing a terminal state).
+ *
+ * INVARIANT AT THE CALL SITES: a provider-batch run with an outstanding
+ * submission manifest is never PERSISTED terminal — `"ended"` maps to
+ * `"completed"`, but only the poll handler writes that, and only AFTER
+ * `processBatchResults` has durably applied the outcomes. Submit clamps an
+ * ended-at-submit report to the in-flight `"finalizing"` literal, and cancel
+ * persists `"cancelling"` for an ended-at-cancel report, so the poll chain
+ * drains the outcomes in every case.
+ */
+export function mapBatchV2StatusToPersisted(status: string): string {
+  switch (status) {
+    case "in_progress":
+      return "in_progress";
+    case "canceling":
+      return "cancelling";
+    case "ended":
+      return "completed";
+    case "failed":
+      return "failed";
+    default:
+      return status;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Synchronous full-catalog fan-out (capability routing, setup-flow S6).
+//
+// Providers whose adapter declares no batch surface run "Re-evaluate all" as a
+// chunked synchronous fan-out over the frozen submission manifest. Runs are
+// persisted in `skill_match_batch_runs` with a `sync-` batch-id prefix so the
+// status panel and cancel semantics are shared with the batch path.
+// ---------------------------------------------------------------------------
+
+/** Batch-id prefix identifying a synchronous fan-out run. */
+export const SKILL_MATCH_SYNC_RUN_PREFIX = "sync-" as const;
+
+/** Pairs evaluated per synchronous chunk job (progress + cancel granularity). */
+export const SKILL_MATCH_SYNC_RUN_CHUNK_SIZE = 25;
+
+// ---------------------------------------------------------------------------
+// Retry topology (failure taxonomy, setup-flow S6). Fixed per path:
+//
+//   - inline fan-out + continuations: 3 attempts, 30s exponential backoff —
+//     an invocation/resolution throw RETHROWS out of the handler so BullMQ
+//     retries the (idempotent) window; parse failures stay terminal error rows.
+//   - sync-run chunks: 3 attempts, 30s exponential backoff (same rationale).
+//   - batch poll: 1 attempt — the poll chain self-reschedules every 30s, which
+//     IS its retry topology; BullMQ-level retries would double the chain.
+//   - drift sample + maintenance tick: 1 attempt — both are periodic
+//     schedulers; the next tick is the retry.
+// ---------------------------------------------------------------------------
+
+export const SKILL_MATCH_INLINE_JOB_ATTEMPTS = 3;
+export const SKILL_MATCH_SYNC_CHUNK_JOB_ATTEMPTS = 3;
+/**
+ * Provider-batch poll jobs get bounded BullMQ retries too: a transient
+ * retrieve/download failure must not kill the self-rescheduling chain (the
+ * chain re-enqueue is the cadence, BullMQ attempts are the per-poll flake
+ * shield). Exhaustion is handled by `handleBatchPollExhausted`.
+ */
+export const SKILL_MATCH_POLL_JOB_ATTEMPTS = 3;
+export const SKILL_MATCH_JOB_BACKOFF_MS = 30_000;
