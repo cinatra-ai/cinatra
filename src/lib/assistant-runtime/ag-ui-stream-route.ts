@@ -2,6 +2,7 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 import { createAgUiSinkAdapter } from "@/lib/assistant-runtime/ag-ui-sink-adapter";
+import { classifyAssistantRuntimeError } from "@/lib/assistant-runtime/ports";
 import {
   appendAssistantTurn,
   createAssistantThread,
@@ -262,9 +263,16 @@ export async function streamAgUiChatTurn(params: {
       await runProducer(adapter.send, runAbort.signal, { turnId: turn.id, runId });
       adapter.ensureTerminal();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Chat request failed.";
-      adapter.ensureTerminal(message);
-      console.error("[assistants/chat] runProducer threw:", err);
+      // S5 (cinatra#2390): a producer throw — including skill-delivery /
+      // provider failures raised BEFORE the runtime's own stream handling —
+      // is CLASSIFIED into a stable code + sanitized actionable copy, never
+      // forwarded raw.
+      const classified = classifyAssistantRuntimeError(err);
+      adapter.ensureTerminal(classified.message, classified.code);
+      console.error(
+        `[assistants/chat] runProducer threw (classified ${classified.code}):`,
+        err,
+      );
     }
     await adapter.drain().catch((err) => {
       publishFailure = publishFailure ?? err;

@@ -82,7 +82,7 @@ export type AgUiSinkAdapter = {
    * emitted. Call after the runtime resolves (covers `done`-less returns) or
    * throws.
    */
-  ensureTerminal: (errorMessage?: string) => void;
+  ensureTerminal: (errorMessage?: string, errorCode?: string) => void;
   /**
    * Await every queued publish. Rethrows the FIRST publish failure (the
    * durable log is the wire — a lost append means subscribers never complete).
@@ -170,7 +170,7 @@ export function createAgUiSinkAdapter(params: {
     openMessageId = null;
   }
 
-  function emitTerminal(kind: "finished" | "error", message?: string): void {
+  function emitTerminal(kind: "finished" | "error", message?: string, code?: string): void {
     if (terminal) return;
     terminal = true;
     sealOpenText();
@@ -181,6 +181,9 @@ export function createAgUiSinkAdapter(params: {
         threadId,
         runId,
         message: message ?? "Chat request failed.",
+        // S5 (cinatra#2390): the stable classification code rides the terminal
+        // frame so clients can key recovery affordances on it.
+        ...(code ? { code } : {}),
         timestamp: Date.now(),
       });
     } else {
@@ -297,7 +300,8 @@ export function createAgUiSinkAdapter(params: {
         return;
       case "error": {
         const message = typeof d.message === "string" ? d.message : "Chat request failed.";
-        emitTerminal("error", message);
+        const code = typeof d.code === "string" ? d.code : undefined;
+        emitTerminal("error", message, code);
         return;
       }
       case "done": {
@@ -316,8 +320,8 @@ export function createAgUiSinkAdapter(params: {
     start(): void {
       emit({ type: "RUN_STARTED", threadId, runId, timestamp: Date.now() });
     },
-    ensureTerminal(errorMessage?: string): void {
-      emitTerminal(errorMessage !== undefined ? "error" : "finished", errorMessage);
+    ensureTerminal(errorMessage?: string, errorCode?: string): void {
+      emitTerminal(errorMessage !== undefined ? "error" : "finished", errorMessage, errorCode);
     },
     async drain(): Promise<void> {
       await chain;

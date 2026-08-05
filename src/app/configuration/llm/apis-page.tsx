@@ -24,6 +24,9 @@ import { SearchParamToast } from "@/components/search-param-toast";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { DefaultProvidersCard } from "@/app/configuration/llm/_default-llm-select";
+// S5 (cinatra#2390): the native-skills probe, demoted out of the setup gate
+// into an on-demand Administration diagnostic.
+import { AnthropicDiagnosticsCard } from "@/app/configuration/llm/anthropic-diagnostics-card";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -378,6 +381,18 @@ export default async function APIsPage({ searchParams }: APIsPageProps) {
                 />
               </CardContent>
             </Card>
+
+            {/* Anthropic diagnostics (S5, cinatra#2390): the native-skills
+                probe as a NON-BLOCKING run-on-demand action with a classified
+                result. Rendered only when an Anthropic connection exists —
+                there is nothing to probe without one. */}
+            {anthropicConnected ? (
+              <Card className="border-line bg-surface backdrop-blur-none">
+                <CardContent className="p-6">
+                  <AnthropicDiagnosticsCard />
+                </CardContent>
+              </Card>
+            ) : null}
           </section>
 
           <Suspense fallback={null}>

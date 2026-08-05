@@ -89,6 +89,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Upload-on-install reconcile drain (cinatra#2092, epic #2086 S5): claims/completes/releases rows in the anthropic_skill_reconcile_outbox from a BACKGROUND WORKER only — never a request path. Sync today purely to share one runner shape with the catalog-transaction writers that append these rows; nothing here is authorization-adjacent, so it migrates with the core-store async conversion.",
   },
+  "src/lib/anthropic-setup-consent-store.ts": {
+    class: "migratable-background-setup",
+    justification:
+      "Setup-card Anthropic consent transaction (cinatra#2390, epic #2385 S5): the workspace upload opt-in + the setup-bulk consent-ledger grant in ONE batch, invoked only from the admin-gated setup save action — a one-shot setup/settings write, never a per-request hot path. Sync to share the same runner + query-builder shape as the database.ts consent writers it was extracted from (the file-size ratchet holds that facade at its ceiling); migrates with the core-store async conversion.",
+  },
   "src/lib/database.ts": {
     class: "migratable-background-setup",
     justification:

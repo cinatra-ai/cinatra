@@ -1,21 +1,22 @@
 /**
  * THE SETUP READINESS SAGA — ordering, path-skipping, failure and compensation
- * (cinatra#2093, epic #2086 S6).
+ * (cinatra#2093, epic #2086 S6; reshaped by cinatra#2390 S5).
  *
  * These drive the saga through recording ports so every ARM of the control flow
  * is provable, including the ones a live run cannot be made to take on demand
- * (a rejected probe, a throwing strict sync, a commit that silently does not
- * land). The DB-bound half — real Postgres, real S5 consent ledger and strict
- * reconcile, Anthropic stubbed only at the HTTP boundary — is the separate
- * integration walk; this file owns the logic.
+ * (a throwing strict sync, a commit that silently does not land). The DB-bound
+ * half — real Postgres, real consent ledger and strict reconcile, Anthropic
+ * stubbed only at the HTTP boundary — is the separate integration walk; this
+ * file owns the logic.
  *
  * The properties that matter most and are easiest to regress:
- *   - the OpenAI path performs NO Anthropic egress (no consent, no sync, no
- *     probe) — asserted by recording the calls, not by inspecting comments;
- *   - a failed probe NEVER leaves a receipt behind;
- *   - the disposable probe skill is reclaimed on BOTH the success and the
- *     failure path;
- *   - the `function-tools` MCP mode gets the fix-forward prompt the AC names.
+ *   - the OpenAI path performs NO Anthropic egress (no consent check, no sync,
+ *     no probe) — asserted by recording the calls, not by inspecting comments;
+ *   - the native-skills probe is DEMOTED (cinatra#2390 S5): the saga NEVER
+ *     invokes it — it lives on as an Administration diagnostics action;
+ *   - the bulk-consent step VERIFIES the consent recorded at save time and
+ *     BLOCKS the commit when it is absent (a throwing port fails the saga);
+ *   - a failed run NEVER leaves a receipt behind.
  */
 import { describe, it, expect, vi } from "vitest";
 
@@ -158,7 +159,7 @@ describe("setup readiness saga — the OpenAI path (no Anthropic egress)", () =>
 });
 
 describe("setup readiness saga — the Anthropic path", () => {
-  it("runs the five steps in order: validate -> consent -> strict sync -> probe -> commit", async () => {
+  it("runs the steps in order: validate -> consent check -> strict sync -> commit (NO probe — demoted, cinatra#2390 S5)", async () => {
     const r = makePorts();
     const result = await runSetupReadinessSaga({
       provider: "anthropic",
@@ -172,26 +173,28 @@ describe("setup readiness saga — the Anthropic path", () => {
       "isSurfaceReady:anthropic",
       "grantBulkConsent:admin-1",
       "runStrictInitialSync",
-      "probeNativeSkills:skill_uploaded_1@v1",
       "commitDefaultProvider:anthropic",
       "writeReceipt",
     ]);
   });
 
-  it("probes with an ACTUALLY-UPLOADED revision id, not a fabricated one", async () => {
+  it("NEVER invokes the probe or creates a disposable probe skill — the probe is an Administration diagnostic now", async () => {
     const r = makePorts({
-      runStrictInitialSync: async () => ({
-        uploadedSkillIds: [{ skillId: "skill_real_abc", version: "rev-7" }],
-      }),
+      runStrictInitialSync: async () => ({ uploadedSkillIds: [] }),
     });
-    await runSetupReadinessSaga({ provider: "anthropic", actorUserId: null, ports: r.ports });
-    // BOTH halves of the container.skills reference — an id alone could resolve
-    // a different revision than the one the sync just uploaded.
-    expect(r.calls).toContain("probeNativeSkills:skill_real_abc@rev-7");
+    const result = await runSetupReadinessSaga({
+      provider: "anthropic",
+      actorUserId: null,
+      ports: r.ports,
+    });
+    // Even with a legitimately EMPTY synced set (the case that used to mint a
+    // throwaway probe skill), setup completes without any probe egress.
+    expect(result.ok).toBe(true);
     expect(r.calls).not.toContain("createDisposableProbeSkill");
+    expect(r.calls.some((c) => c.startsWith("probeNativeSkills"))).toBe(false);
   });
 
-  it("records probe + sync evidence on the receipt", async () => {
+  it("records sync evidence on the receipt — and NO probe record", async () => {
     const r = makePorts({
       runStrictInitialSync: async () => ({
         uploadedSkillIds: [
@@ -209,29 +212,32 @@ describe("setup readiness saga — the Anthropic path", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.receipt.syncedSkillCount).toBe(3);
-      expect(result.receipt.probe).toEqual({
-        accepted: true,
-        mode: "container-skills",
-        skillId: "a",
-        version: "v1",
-        disposable: false,
-      });
+      expect(result.receipt.probe).toBeUndefined();
     }
   });
 
-  it("falls back to a DISPOSABLE probe skill when the synced set is legitimately empty, and reclaims it", async () => {
-    const r = makePorts({ runStrictInitialSync: async () => ({ uploadedSkillIds: [] }) });
+  it("S5: a FAILING consent check (consent never recorded at save) blocks the commit with the actionable step", async () => {
+    const r = makePorts({
+      grantBulkConsent: () => {
+        throw new Error(
+          "the Anthropic skills-upload consent has not been recorded. Tick the consent checkbox on the Anthropic card and save the key, then run this step again.",
+        );
+      },
+    });
     const result = await runSetupReadinessSaga({
       provider: "anthropic",
-      actorUserId: null,
+      actorUserId: "admin-1",
       ports: r.ports,
     });
-
-    expect(result.ok).toBe(true);
-    expect(r.calls).toContain("createDisposableProbeSkill");
-    expect(r.calls).toContain("probeNativeSkills:skill_disposable@vprobe");
-    expect(r.calls).toContain("disposeProbeSkill");
-    if (result.ok) expect(result.receipt.probe?.disposable).toBe(true);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.failure.step).toBe("bulk-consent");
+      expect(result.failure.message).toContain("consent");
+      expect(result.failure.message).toContain("checkbox");
+    }
+    expect(r.calls).not.toContain("runStrictInitialSync");
+    expect(r.calls).not.toContain("commitDefaultProvider:anthropic");
+    expect(r.receipts).toEqual([]);
   });
 });
 
@@ -278,100 +284,12 @@ describe("setup readiness saga — failure + compensation", () => {
     expect(r.calls).not.toContain("commitDefaultProvider:anthropic");
   });
 
-  it("a function-tools MCP mode fails the probe with the FIX-FORWARD prompt (the AC by name)", async () => {
-    const r = makePorts({
-      probeNativeSkills: async () => ({
-        accepted: false,
-        mode: "function-tools",
-        reason: "container.skills is not supported in function-tools mode",
-      }),
-    });
-    const result = await runSetupReadinessSaga({
-      provider: "anthropic",
-      actorUserId: null,
-      ports: r.ports,
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.failure.step).toBe("native-skills-probe");
-      expect(result.failure.message).toContain("container.skills");
-      expect(result.failure.fixForward).toContain("'native'");
-      // FOLLOWABLE, not merely accurate (the F2 finding on PR #2213). The
-      // prompt used to say "in its settings" — but no settings surface renders
-      // this field and, during setup, every admin route redirects back into the
-      // wizard, so the instruction named a control that did not exist. It must
-      // name the in-step control, which `enableAnthropicNativeSkillDeliveryAction`
-      // provides.
-      expect(result.failure.fixForward).toContain("Switch to native MCP delivery");
-      expect(result.failure.fixForward).not.toContain("in its settings");
-    }
-    // The decisive property: setup did NOT complete, so nothing reads as ready.
-    expect(r.receipts).toEqual([]);
-    expect(r.calls).not.toContain("commitDefaultProvider:anthropic");
-  });
-
-  it("a THROWN probe is inconclusive and therefore FAILS (fail-closed)", async () => {
-    const r = makePorts({
-      probeNativeSkills: async () => {
-        throw new Error("network unreachable");
-      },
-    });
-    const result = await runSetupReadinessSaga({
-      provider: "anthropic",
-      actorUserId: null,
-      ports: r.ports,
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.failure.step).toBe("native-skills-probe");
-    expect(r.receipts).toEqual([]);
-  });
-
-  it("the disposable probe skill is reclaimed even when the probe REJECTS", async () => {
-    const r = makePorts({
-      runStrictInitialSync: async () => ({ uploadedSkillIds: [] }),
-      probeNativeSkills: async () => ({ accepted: false, mode: "function-tools" }),
-    });
-    await runSetupReadinessSaga({ provider: "anthropic", actorUserId: null, ports: r.ports });
-    expect(r.calls).toContain("disposeProbeSkill");
-  });
-
-  it("the disposable probe skill is reclaimed even when the probe THROWS", async () => {
-    const r = makePorts({
-      runStrictInitialSync: async () => ({ uploadedSkillIds: [] }),
-      probeNativeSkills: async () => {
-        throw new Error("boom");
-      },
-    });
-    await runSetupReadinessSaga({ provider: "anthropic", actorUserId: null, ports: r.ports });
-    expect(r.calls).toContain("disposeProbeSkill");
-  });
-
-  it("a failed dispose does not turn a passing setup into a failure", async () => {
-    const r = makePorts({
-      runStrictInitialSync: async () => ({ uploadedSkillIds: [] }),
-      createDisposableProbeSkill: async () => ({
-        skillId: "skill_disposable",
-        version: "vprobe",
-        dispose: async () => {
-          throw new Error("delete failed");
-        },
-      }),
-    });
-    const result = await runSetupReadinessSaga({
-      provider: "anthropic",
-      actorUserId: null,
-      ports: r.ports,
-    });
-    // The probe SUCCEEDED; failing to clean up remote litter is a warning, not
-    // a reason to refuse a working configuration.
-    expect(result.ok).toBe(true);
-  });
-
   it("onFailure:'rollback' restores the previously stored provider", async () => {
     const r = makePorts({
       initialProvider: "openai",
-      probeNativeSkills: async () => ({ accepted: false, mode: "function-tools" }),
+      runStrictInitialSync: async () => {
+        throw new Error("upload interrupted");
+      },
     });
     const result = await runSetupReadinessSaga({
       provider: "anthropic",
@@ -388,7 +306,9 @@ describe("setup readiness saga — failure + compensation", () => {
 
   it("the default compensation is 'setup-incomplete' — the wizard keeps prompting", async () => {
     const r = makePorts({
-      probeNativeSkills: async () => ({ accepted: false }),
+      runStrictInitialSync: async () => {
+        throw new Error("upload interrupted");
+      },
     });
     const result = await runSetupReadinessSaga({
       provider: "anthropic",
@@ -485,7 +405,9 @@ describe("setup readiness saga — codex round-1 regressions", () => {
 
   it("#2 a failing clearReceipt does NOT mask the original failure", async () => {
     const r = makePorts({
-      probeNativeSkills: async () => ({ accepted: false, mode: "function-tools" }),
+      runStrictInitialSync: async () => {
+        throw new Error("upload interrupted");
+      },
       clearReceipt: () => {
         throw new Error("clear failed");
       },
@@ -495,9 +417,9 @@ describe("setup readiness saga — codex round-1 regressions", () => {
       actorUserId: null,
       ports: r.ports,
     });
-    // The reported step is the PROBE, not the bookkeeping that also failed.
+    // The reported step is the SYNC, not the bookkeeping that also failed.
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.failure.step).toBe("native-skills-probe");
+    if (!result.ok) expect(result.failure.step).toBe("initial-sync");
   });
 
   it("#9 a configuration change DURING the run is refused rather than stamped verified", async () => {
@@ -524,11 +446,9 @@ describe("setup readiness saga — codex round-1 regressions", () => {
 
   it("#10 a provider error carrying a credential is REDACTED before it becomes durable state", async () => {
     const r = makePorts({
-      probeNativeSkills: async () => ({
-        accepted: false,
-        mode: "unknown",
-        reason: "rejected for key sk-ant-abcdefghijklmnopqrstuvwxyz012345",
-      }),
+      runStrictInitialSync: async () => {
+        throw new Error("rejected for key sk-ant-abcdefghijklmnopqrstuvwxyz012345");
+      },
     });
     const result = await runSetupReadinessSaga({
       provider: "anthropic",

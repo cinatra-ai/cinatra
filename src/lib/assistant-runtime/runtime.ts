@@ -102,7 +102,13 @@ import { buildPendingConfirmationContext } from "./pending-confirmation-context"
 // Chat-side resolver ports are scoped to the session's active org
 // (auth-derived; never caller-controlled).
 import { buildAttachmentResolverPorts } from "@/lib/artifacts/attachment-resolver-ports";
-import { isAllowedByList, type AssistantRuntimeConfig } from "./ports";
+// S5 (cinatra#2390): terminal stream errors are CLASSIFIED (stable code +
+// sanitized actionable copy with an Administration pointer), never raw.
+import {
+  classifyAssistantRuntimeError,
+  isAllowedByList,
+  type AssistantRuntimeConfig,
+} from "./ports";
 import {
   selectAdapterProvider,
   isConversationOnlyProvider,
@@ -891,6 +897,8 @@ export async function runAssistantTurn(
           `(model "${adapter.defaultModel}"). The turn was refused instead of ` +
           "answering without them — check the provider's model setting at " +
           "/configuration/llm.",
+        // S5 (cinatra#2390): stable classification for the loud no-vehicle refusal.
+        code: "skill_delivery_refused",
       });
       return;
     }
@@ -1354,7 +1362,11 @@ export async function runAssistantTurn(
         // if we only evaluated after the stream — so the verdict is taken here,
         // on the text accumulated so far, before the terminal goes out.
         markUnverifiedExecutionClaim();
-        send("error", { message: error.message });
+        // S5 (cinatra#2390): classify — provider stream failures (including
+        // skill-delivery rejections surfaced mid-iteration) carry a stable
+        // code + sanitized actionable copy, never the raw provider message.
+        const classified = classifyAssistantRuntimeError(error);
+        send("error", { message: classified.message, code: classified.code });
       },
     });
 
@@ -1371,8 +1383,12 @@ export async function runAssistantTurn(
     // persisted either way, so an unbacked claim inside it must be marked
     // either way.
     markUnverifiedExecutionClaim();
-    const message = error instanceof Error ? error.message : "Chat request failed.";
-    send("error", { message });
+    // S5 (cinatra#2390): classified runtime recovery — a throw anywhere in
+    // the turn (skill delivery BEFORE the stream handler included: not-yet-
+    // synced skills, an MCP-mode remnant) becomes a stable code + sanitized
+    // actionable copy, never a raw provider/internal message.
+    const classified = classifyAssistantRuntimeError(error);
+    send("error", { message: classified.message, code: classified.code });
   } finally {
     // Commit ONLY when a provider request demonstrably carried these skills: a
     // step began AND the provider PRODUCED something. Anything that failed

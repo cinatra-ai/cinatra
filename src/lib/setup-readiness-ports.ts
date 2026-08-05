@@ -4,9 +4,10 @@ import "server-only";
  * The REAL {@link SetupReadinessPorts} implementation (cinatra#2093, epic #2086
  * S6) — the wiring that binds the saga to the genuine machinery:
  *
- *   bulk consent      → S5's `grantSetupWithAnthropicBulkConsent` (the consent
- *                       ledger + the derived `allowAnthropicUpload` projection
- *                       + the reconcile-outbox row, all in one transaction)
+ *   bulk consent      → a VERIFICATION of the consent the setup card recorded
+ *                       at save time (cinatra#2390 S5: the workspace opt-in +
+ *                       the bulk ledger grant land in one transaction there;
+ *                       the commit refuses to run without the recorded act)
  *   strict sync       → S5's `syncCatalogSkillsToAnthropicStrict` (THROWS
  *                       rather than letting an all-skipped run pass)
  *   probe             → the connector's ABI v2 `probeNativeSkills` surface
@@ -22,11 +23,10 @@ import type { LlmProvider } from "@cinatra-ai/agents/llm-provider-policy";
 import type { LlmNativeSkillsProbeResult } from "@cinatra-ai/sdk-extensions";
 
 import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
-import { grantSetupWithAnthropicBulkConsent } from "@/lib/anthropic-skill-config-service";
 import {
+  readAnthropicSkillSyncEnabledFromDatabase,
   readDefaultLlmProviderFromDatabase,
   writeDefaultLlmProviderToDatabase,
-  writeAnthropicSkillSyncEnabledToDatabase,
 } from "@/lib/database";
 import {
   computeReadinessFingerprint,
@@ -108,21 +108,22 @@ export function createSetupReadinessPorts(options?: {
       return surface.isConnectionReady(connection ?? undefined) === true;
     },
 
-    grantBulkConsent(grantedBy) {
-      // The ledger grant ALONE is not enough (codex round-1 finding #4). The
-      // strict catalog sync is INERT — it returns cleanly having done nothing —
-      // while the workspace opt-in (`anthropic_skill_sync_enabled`) is OFF, so
-      // a saga that only granted consent would upload nothing and still
-      // "succeed". Turning the workspace opt-in ON is precisely what
-      // "setup with Anthropic" MEANS, and it is the same act the admin Skills
-      // tab performs; the operator's explicit provider choice IS that act.
-      //
-      // Order matters: enable the outer gate FIRST, then grant, so a crash
-      // between them leaves the gate on with no consent (upload-ineligible,
-      // fail-closed) rather than consent with no gate (which would look
-      // consented but never upload).
-      writeAnthropicSkillSyncEnabledToDatabase(true);
-      grantSetupWithAnthropicBulkConsent(grantedBy);
+    grantBulkConsent(_grantedBy) {
+      // S5 (cinatra#2390): CONSENT LANDS AT SAVE, NOT AT COMMIT. The Anthropic
+      // setup card records the operator's EXPLICIT, actor-attributed consent —
+      // the workspace opt-in plus the bulk ledger grant in ONE transaction —
+      // when the key is saved. This step therefore VERIFIES the recorded act
+      // instead of silently performing it: a commit must never manufacture a
+      // consent the operator did not literally give on the card. Fail-closed —
+      // opt-in OFF (or unreadable) means the consent transaction never landed,
+      // and the commit is BLOCKED with an actionable message.
+      if (readAnthropicSkillSyncEnabledFromDatabase() !== true) {
+        throw new Error(
+          "the Anthropic skills-upload consent has not been recorded. Tick the " +
+            "consent checkbox on the Anthropic card and save the key, then run " +
+            "this step again.",
+        );
+      }
     },
 
     async runStrictInitialSync() {
@@ -256,7 +257,7 @@ export function createSetupReadinessPorts(options?: {
  * that may already have been reclaimed remotely, so probing it would exercise
  * the API's 404 path rather than the `container.skills` acceptance path.
  */
-async function readSyncedAnthropicSkillTargets(): Promise<
+export async function readSyncedAnthropicSkillTargets(): Promise<
   Array<{ skillId: string; version: string }>
 > {
   const { deriveApiKeyFingerprint, deriveEnvironmentNamespace } = await import(

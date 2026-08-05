@@ -1,29 +1,34 @@
-// The ANTHROPIC connection form for the setup AI step (cinatra#2093, epic
-// #2086 S6).
+// The ANTHROPIC connection form for the setup AI step (cinatra#2093 S6,
+// reshaped by cinatra#2390 S5).
 //
-// Deliberately minimal: the key, and an HONEST statement of what finishing
-// setup on this provider will do. The heavy lifting — bulk consent, the strict
-// initial upload, and the native-skills probe — belongs to the readiness saga
-// on the orchestrating page, not to a form, because those steps must run as one
-// compensating sequence rather than as side effects of a save.
+// Deliberately minimal: the key, the EXPLICIT skills-upload consent, and an
+// honest statement of what finishing setup on this provider will do. The card
+// posts through the TYPED save action (`useActionState` island + toasts) —
+// failures surface as toasts carrying the server-sanitized message, never as
+// error text in a URL and never as durable failure records.
 //
-// Every reader/writer resolves through the `llm-provider-surface` capability the
-// anthropic connector registers at activation. Connector absent → the degraded
-// info state replaces the form (never a form that could not possibly save).
-
-import { TriangleAlert } from "lucide-react";
+// THE CONSENT IS PART OF THE SAVE (S5): the checkbox carries the upload
+// gate's advisory content, the server input carries the literal consent plus
+// the acting admin's attribution, and the workspace opt-in + the bulk
+// consent-ledger grant land in ONE transaction. Scope: installed non-personal
+// package identities (personal skills keep per-skill grants). A consent
+// failure blocks the S3 commit — the readiness saga verifies the recorded
+// consent instead of granting it silently.
+//
+// Every reader/writer resolves through the `llm-provider-surface` capability
+// the anthropic connector registers at activation. Connector absent → the
+// degraded info state replaces the form (never a form that could not save).
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
 
 import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
-import { saveAnthropicSetupKeyAction } from "@/app/setup/ai/actions";
-import {
-  SETUP_CREDENTIAL_SAVE_STEP_ID,
-  readSetupReadinessFailure,
-} from "@/app/setup/ai/readiness-state";
+import { saveSetupAnthropicConnectionAction } from "@/app/setup/ai/actions";
+import { SetupProviderConnectionForm } from "@/app/setup/ai/provider-connection-form";
+import { ANTHROPIC_SETUP_CONSENT_FIELD } from "@/app/setup/ai/readiness-state";
 
 export async function SetupAnthropicProviderStep() {
   const surface = getLlmProviderSurface("anthropic");
@@ -46,13 +51,6 @@ export async function SetupAnthropicProviderStep() {
     | undefined;
   const hasApiKey = Boolean(configured?.apiKey);
 
-  // A failed KEY SAVE renders here, at the control the operator used — not in
-  // the readiness section below, which reports on a saga run that never
-  // started. The wizard's flash protocol carries codes only, so the actionable
-  // text comes from the durable failure record.
-  const failure = readSetupReadinessFailure();
-  const saveFailure = failure?.step === SETUP_CREDENTIAL_SAVE_STEP_ID ? failure : null;
-
   return (
     <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
       <p className="text-base font-semibold text-foreground">Anthropic credentials</p>
@@ -61,30 +59,12 @@ export async function SetupAnthropicProviderStep() {
         again.
       </p>
 
-      <Alert className="mt-4">
-        <AlertTitle>What finishing setup on Anthropic will do</AlertTitle>
-        <AlertDescription>
-          Your installed skills are uploaded to your Anthropic workspace so Claude can use them
-          natively. That is a transfer of your skill content to Anthropic. Cinatra asks for your
-          explicit consent as part of the verification step, and you can revoke it later in
-          Administration.
-        </AlertDescription>
-      </Alert>
-
-      {saveFailure ? (
-        <Alert variant="destructive" className="mt-4" data-testid="setup-anthropic-key-save-failure">
-          <TriangleAlert className="size-4" aria-hidden />
-          <AlertTitle>Could not save the Anthropic API key</AlertTitle>
-          <AlertDescription>
-            <span className="block">{saveFailure.message}</span>
-            {saveFailure.fixForward ? (
-              <span className="mt-2 block font-medium">{saveFailure.fixForward}</span>
-            ) : null}
-          </AlertDescription>
-        </Alert>
-      ) : null}
-
-      <form action={saveAnthropicSetupKeyAction} className="mt-5 grid gap-4">
+      <SetupProviderConnectionForm
+        action={saveSetupAnthropicConnectionAction}
+        successMessage="Anthropic connection saved and skills-upload consent recorded."
+        className="mt-5 grid gap-4"
+        testId="setup-anthropic-connection-form"
+      >
         <Field>
           <FieldLabel>API key</FieldLabel>
           <Input
@@ -95,10 +75,37 @@ export async function SetupAnthropicProviderStep() {
             placeholder={hasApiKey ? "••••••••••••••••" : "sk-ant-..."}
           />
         </Field>
+
+        {/* The EXPLICIT consent — the upload gate's advisory content, at the
+            act. Native HTML `required` is the client backstop; the server
+            action independently refuses a save without the literal consent
+            input. */}
+        <label className="flex items-start gap-3 rounded-card border border-line p-4 text-sm">
+          <Checkbox
+            name={ANTHROPIC_SETUP_CONSENT_FIELD}
+            required
+            data-testid="setup-anthropic-consent"
+            className="mt-0.5"
+          />
+          <span className="flex flex-col gap-1">
+            <span className="font-medium text-foreground">
+              Upload my installed skills to my Anthropic workspace
+            </span>
+            <span className="text-muted-foreground">
+              Anthropic Custom Skills are not ZDR-eligible: setup uploads each installed
+              skill&apos;s full SKILL.md and its bundled files off this instance to your Anthropic
+              workspace, where Anthropic retains them. The consent covers your installed
+              non-personal skill packages, survives skill versions, and stands until you revoke it
+              in Administration. Personal skills are excluded — they keep their own per-skill
+              consent.
+            </span>
+          </span>
+        </label>
+
         <div className="flex justify-end">
           <Button type="submit">{hasApiKey ? "Change" : "Save"}</Button>
         </div>
-      </form>
+      </SetupProviderConnectionForm>
     </section>
   );
 }
