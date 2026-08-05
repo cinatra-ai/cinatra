@@ -18,7 +18,7 @@ import { assistantThreadSchemaQueries, assistantHandleSchemaQueries, assistantTu
 import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema";
-import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSchemaQueries, skillUploadConsentSchemaQueries, agentAssignedSkillsSchemaQueries } from "@/lib/skill-lifecycle-schema";
+import { skillLifecycleSchemaQueries, skillEfficacySchemaQueries, skillBundleSchemaQueries, skillUploadConsentSchemaQueries, agentAssignedSkillsSchemaQueries, skillMatchRunContextDdl } from "@/lib/skill-lifecycle-schema";
 import { chatCaptureSchemaQueries } from "@/lib/chat-capture-schema";
 import {
   artifactClaimSchemaQueries,
@@ -36,7 +36,6 @@ import {
   skillPackageCoOwnerConstraintQueries,
   skillCoOwnerConstraintQueries,
 } from "@/lib/co-owner-constraint-schema";
-import { skillMatchRunContextDdl } from "@/lib/skill-match-run-ddl";
 
 type QueryInput = {
   text: string;
@@ -3010,7 +3009,7 @@ END $$` },
 
     // 2. skill_match_batch_runs: one row per matching run (provider batch OR
     //    'sync-'-prefixed synchronous fan-out). The setup-flow S6 columns +
-    //    in-flight index replacement live in skill-match-run-ddl.ts (spread below).
+    //    in-flight index replacement live in skill-lifecycle-schema.ts (spread below).
     {
       text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."skill_match_batch_runs" (
         batch_id text PRIMARY KEY,
@@ -3030,7 +3029,7 @@ END $$` },
     {
       text: `CREATE INDEX IF NOT EXISTS skill_match_batch_runs_submitted_at_idx ON "${schemaName.replaceAll('"', '""')}"."skill_match_batch_runs" (submitted_at DESC)`,
     },
-    // Provider-neutral run model DDL (setup-flow S6) — extracted vertical slice.
+    // Provider-neutral run model DDL (setup-flow S6) — skills-DDL leaf slice.
     ...skillMatchRunContextDdl(schemaName),
 
     // 3. skill_match_schedule: single-row cron config.

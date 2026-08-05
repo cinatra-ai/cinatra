@@ -11,7 +11,7 @@
 // submissions expose no provider file ids at all, and synchronous fan-out runs
 // (batch-less providers; `sync-` batch ids) never touch a provider file. The
 // fresh-install bootstrap DDL (src/lib/drizzle-store.ts +
-// src/lib/skill-match-run-ddl.ts) describes the nullable shape in the SAME PR;
+// src/lib/skill-lifecycle-schema.ts) describes the nullable shape in the SAME PR;
 // this module is the operator-upgrade twin for databases whose table already
 // exists with the NOT NULL constraint (ADD COLUMN IF NOT EXISTS cannot express
 // a constraint relaxation, and the bootstrap's guarded ALTER only converges

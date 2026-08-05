@@ -509,3 +509,55 @@ export function agentAssignedSkillsSchemaQueries(schemaName: string): Array<{ te
     },
   ];
 }
+
+/**
+ * Skill-matcher provider-neutral run-model DDL (setup-flow S6), spread into
+ * `buildCreateStoreSchemaQueries` after the skill_match_* base tables. Folded
+ * into this existing skills-DDL leaf (rather than a standalone module) so the
+ * locked route graphs that reach drizzle-store gain no new module.
+ *
+ *  - `skill_matches.provider` / `.model`: run-context provenance on match
+ *    rows. Nullable — rule/manual rows never carry them, and rows persisted
+ *    by the pinned-era evaluator (llm-matcher-v1) predate provenance; the
+ *    LLM_MATCHER_VERSION bump makes those visible to the staleness sweep.
+ *  - `skill_match_batch_runs.provider` / `.model`: the FROZEN run context,
+ *    persisted at run creation so poll/cancel/download always drive the
+ *    submitting provider's adapter (never the live default).
+ *  - `skill_match_batch_runs.manifest_json`: the durable per-request
+ *    submission manifest (customId → pair identity + submit-time input
+ *    hashes); nulled after terminal processing to shed bulk.
+ *  - `skill_match_batch_runs.processed_pair_count`: truthful progress for
+ *    synchronous fan-out runs.
+ *  - `input_file_id` DROP NOT NULL converges the bootstrap lineage with
+ *    migrations/core/core__0090 (the operator-upgrade twin): the neutral
+ *    batch-v2 surface exposes no provider file ids, and synchronous runs
+ *    never had one.
+ *  - The in-flight partial index gains `cancelling` (present in the adapter
+ *    contract's lifecycle, previously missing, so a cancelling batch fell out
+ *    of the in-flight reader). Replaced under a NEW name so the change is a
+ *    plain idempotent drop+create-once, not per-boot churn.
+ */
+export function skillMatchRunContextDdl(schemaName: string): Array<{ text: string }> {
+  const q = schemaName.replaceAll('"', '""');
+  return [
+    {
+      text: `ALTER TABLE "${q}"."skill_matches"
+        ADD COLUMN IF NOT EXISTS provider text,
+        ADD COLUMN IF NOT EXISTS model text`,
+    },
+    {
+      text: `ALTER TABLE "${q}"."skill_match_batch_runs"
+        ADD COLUMN IF NOT EXISTS provider text,
+        ADD COLUMN IF NOT EXISTS model text,
+        ADD COLUMN IF NOT EXISTS manifest_json text,
+        ADD COLUMN IF NOT EXISTS processed_pair_count integer NOT NULL DEFAULT 0,
+        ALTER COLUMN input_file_id DROP NOT NULL`,
+    },
+    {
+      text: `DROP INDEX IF EXISTS "${q}"."skill_match_batch_runs_status_idx"`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS skill_match_batch_runs_in_flight_idx ON "${q}"."skill_match_batch_runs" (status) WHERE status IN ('validating', 'in_progress', 'finalizing', 'cancelling')`,
+    },
+  ];
+}
