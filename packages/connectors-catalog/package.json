@@ -10,7 +10,7 @@
     "./descriptors.mjs": "./src/descriptors.mjs"
   },
   "scripts": {
-    "test": "vitest"
+    "test": "vitest run"
   },
   "devDependencies": {
     "vitest": "^4.1.10"

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -28,6 +28,41 @@ import {
   auditTestFiles,
   findUngatedAuditTests,
   findStaleRootExclusions,
+  trackedTestPaths,
+  shellTokens,
+  wholesaleVitestArgv,
+  packageScriptIsWholesaleVitest,
+  packageScriptInvocation,
+  segmentTargetDir,
+  findWholesalePackageRuns,
+  parseVitestTestGlobs,
+  packageDiscoverySet,
+  readPackageSuiteExceptions,
+  auditPackageSuiteRunners,
+  isNonUnitTierFile,
+  hasUnquotedExpansion,
+  hasTopLevelRedirect,
+  workflowRunsOnChanges,
+  splitShellCommands,
+  stepContinuesOnError,
+  jobContinuesOnError,
+  isLiterallyTrue,
+  groupShellLists,
+  errexitSetting,
+  isErrexitBashShell,
+  findRivalVitestConfig,
+  resolveEnforcedPins,
+  rootSuiteIsEnforced,
+  packageTestFiles,
+  enforcingSegmentsInBlock,
+  runKeyIsStep,
+  stripEnvPrefix,
+  hasTerminalFlag,
+  isShellControlCommand,
+  invocationCannotProveExecution,
+  jobRunsOnLinux,
+  testBlockHasShorthand,
+  PACKAGE_EXCEPTIONS_FILE,
   AUDIT_TEST_DIR,
   REPO_ROOT,
 } from "../ci-pinned-tests-exist.mjs";
@@ -657,5 +692,1435 @@ describe("audit-suite → runner coverage", () => {
     expect(findUngatedAuditTests(REPO_ROOT)).toEqual([]);
     expect(findStaleRootExclusions(REPO_ROOT)).toEqual([]);
     expect(findRootSuiteInvocations()).toContain("build-image.yml");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Direction 3 — packages/** suite → runner (cinatra#2439)
+//
+// The adversarial bar is the one #2434 set for direction 2: every way a
+// workflow line can LOOK like a wholesale package run without being one, and
+// every way the ledger can drift from CI's real shape, has a case here. A
+// false POSITIVE (crediting a run that does not happen) is the failure this
+// direction exists to prevent, so most of these assert a REFUSAL.
+// ---------------------------------------------------------------------------
+
+/** A fixture workspace: workflows + package dirs with configs and test files. */
+function pkgFixture({ workflow = "", packages = {}, exceptions, trigger = "on: [pull_request, push]\n" } = {}) {
+  const root = mkdtempSync(join(tmpdir(), "ci-pkg-"));
+  mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+  // Every fixture workflow gets a change trigger unless a case is testing the
+  // trigger check itself — findWholesalePackageRuns credits nothing from a
+  // workflow that never fires on a PR or a main push.
+  // Every real job declares `runs-on`, and the guard reads it: the runner
+  // decides the default shell, so a job without a recognisable Linux runner is
+  // refused. Injected here so each fixture states only what its case is about.
+  const withRunner = workflow.includes("runs-on:")
+    ? workflow
+    : workflow.replace(/\n(\s*)steps:/g, "\n$1runs-on: ubuntu-latest\n$1steps:");
+  writeFileSync(join(root, ".github", "workflows", "build-image.yml"), trigger + withRunner);
+  const tracked = [];
+  const pkgDirs = new Map();
+  for (const [name, spec] of Object.entries(packages)) {
+    const dir = `packages/${name}`;
+    mkdirSync(join(root, dir), { recursive: true });
+    writeFileSync(
+      join(root, dir, "package.json"),
+      JSON.stringify({ name: spec.pkgName ?? `@cinatra-ai/${name}`, scripts: spec.scripts ?? {} }),
+    );
+    pkgDirs.set(spec.pkgName ?? `@cinatra-ai/${name}`, dir);
+    if (spec.config !== undefined) writeFileSync(join(root, dir, "vitest.config.ts"), spec.config);
+    for (const f of spec.files ?? []) {
+      const abs = join(root, dir, f);
+      mkdirSync(join(abs, ".."), { recursive: true });
+      writeFileSync(abs, "// test");
+      tracked.push(`${dir}/${f}`);
+    }
+  }
+  if (exceptions !== undefined) {
+    writeFileSync(join(root, PACKAGE_EXCEPTIONS_FILE), JSON.stringify({ exceptions }));
+  }
+  return { root, tracked, pkgDirs, workflowDir: join(root, ".github", "workflows") };
+}
+
+/** Root globs that select nothing, so a fixture's coverage comes only from workflows. */
+const NO_ROOT_GLOBS = { include: ["src/**/*.test.ts"], exclude: ["**/node_modules/**"] };
+const NO_PINS = { resolved: new Set(), nodeExact: new Set(), missing: [] };
+
+function auditFixture(fx, extra = {}) {
+  return auditPackageSuiteRunners(fx.root, fx.workflowDir, {
+    tracked: fx.tracked,
+    // The fixture is not a git repo, so the git-backed inventory would come
+    // back empty; the fixture's own file list stands in for it.
+    packageFiles: fx.tracked,
+    pkgDirs: fx.pkgDirs,
+    globs: NO_ROOT_GLOBS,
+    pins: NO_PINS,
+    rootEnforced: true,
+    exceptions: [],
+    ...extra,
+  });
+}
+
+describe("direction 3 — quote-aware tokenization", () => {
+  it("keeps a quoted value with spaces as ONE token", () => {
+    expect(shellTokens(`a --outputFile.json="one two/x.json" b`)).toEqual([
+      "a",
+      `--outputFile.json="one two/x.json"`,
+      "b",
+    ]);
+  });
+
+  it("keeps an UNQUOTED ${{ … }} expression atomic", () => {
+    expect(shellTokens("pnpm test --out ${{ github.workspace }}/r.json")).toEqual([
+      "pnpm",
+      "test",
+      "--out",
+      "${{ github.workspace }}/r.json",
+    ]);
+  });
+
+  it("handles single quotes, escaped spaces and an unterminated quote without losing text", () => {
+    expect(shellTokens("a 'b c' d")).toEqual(["a", "'b c'", "d"]);
+    expect(shellTokens("a b\\ c d")).toEqual(["a", "b\\ c", "d"]);
+    expect(shellTokens(`a "b c`)).toEqual(["a", `"b c`]);
+  });
+
+  it("is what makes the real execution-plane step read as WHOLESALE", () => {
+    // The regression this tokenizer exists for: a naive /\s+/ split turns the
+    // GitHub expression into three words, two of which look like positional
+    // filters, so 36 genuinely-covered suites report as unrun.
+    const seg =
+      'pnpm --filter @cinatra-ai/execution-plane run test --reporter=default --reporter=json --outputFile.json="${{ github.workspace }}/execution-plane-unit-report.json"';
+    const call = packageScriptInvocation(seg);
+    expect(call.script).toBe("test");
+    expect(wholesaleVitestArgv(call.forwarded, "vitest.config.ts")).toBe(true);
+  });
+});
+
+describe("direction 3 — wholesale vitest argv", () => {
+  it("accepts an unnarrowed run and the dotted --outputFile.<reporter> form", () => {
+    expect(wholesaleVitestArgv([], null)).toBe(true);
+    expect(wholesaleVitestArgv(["--no-coverage"], null)).toBe(true);
+    expect(wholesaleVitestArgv(["--reporter", "dot", "--outputFile.json=/tmp/x.json"], null)).toBe(true);
+    expect(wholesaleVitestArgv(["--outputFile.junit", "/tmp/x.xml"], null)).toBe(true);
+  });
+
+  it("REFUSES a positional operand — every positional is a filter", () => {
+    expect(wholesaleVitestArgv(["src/a.test.ts"], null)).toBe(false);
+    expect(wholesaleVitestArgv(["--no-coverage", "src/a.test.ts"], null)).toBe(false);
+  });
+
+  it("REFUSES an unknown flag rather than assuming it is harmless", () => {
+    // vitest keeps adding options that run FEWER tests; an allowlist is the
+    // only shape that does not silently accept each new one.
+    expect(wholesaleVitestArgv(["--exclude", "src/a.test.ts"], null)).toBe(false);
+    expect(wholesaleVitestArgv(["--changed"], null)).toBe(false);
+    expect(wholesaleVitestArgv(["--shard=1/2"], null)).toBe(false);
+    expect(wholesaleVitestArgv(["--testNamePattern=foo"], null)).toBe(false);
+  });
+
+  it("does not mistake a value-flag's VALUE for a positional", () => {
+    expect(wholesaleVitestArgv(["--reporter", "dot"], null)).toBe(true);
+    expect(wholesaleVitestArgv(["--maxWorkers", "2", "--no-coverage"], null)).toBe(true);
+  });
+
+  it("REFUSES --config when no config is expected, and enforces the value when one is", () => {
+    expect(wholesaleVitestArgv(["--config", "vitest.integration.config.ts"], null)).toBe(false);
+    expect(wholesaleVitestArgv(["--config", "vitest.config.ts"], "vitest.config.ts")).toBe(true);
+    expect(wholesaleVitestArgv(["--config", "vitest.integration.config.ts"], "vitest.config.ts")).toBe(false);
+    expect(wholesaleVitestArgv(["-c=vitest.config.ts"], "vitest.config.ts")).toBe(true);
+  });
+});
+
+describe("direction 3 — package script resolution", () => {
+  const scriptFixture = (scripts) => {
+    const root = mkdtempSync(join(tmpdir(), "ci-pkgscript-"));
+    mkdirSync(join(root, "packages", "p"), { recursive: true });
+    writeFileSync(join(root, "packages", "p", "package.json"), JSON.stringify({ name: "@x/p", scripts }));
+    return root;
+  };
+
+  it("accepts a script that is a wholesale `vitest run`", () => {
+    const root = scriptFixture({ test: "vitest run" });
+    expect(packageScriptIsWholesaleVitest(root, "packages/p", "test", "vitest.config.ts")).toBe(true);
+  });
+
+  it("REFUSES a script that narrows the run with a positional", () => {
+    const root = scriptFixture({ test: "vitest run src/a.test.ts src/b.test.ts" });
+    expect(packageScriptIsWholesaleVitest(root, "packages/p", "test", "vitest.config.ts")).toBe(false);
+  });
+
+  it("REFUSES a script that does not run vitest at all (the `\"test\": \"true\"` rewrite)", () => {
+    expect(packageScriptIsWholesaleVitest(scriptFixture({ test: "true" }), "packages/p", "test", null)).toBe(false);
+    expect(packageScriptIsWholesaleVitest(scriptFixture({ test: "echo vitest run" }), "packages/p", "test", null)).toBe(
+      false,
+    );
+  });
+
+  it("REFUSES a missing script, a missing package.json and a non-string script", () => {
+    expect(packageScriptIsWholesaleVitest(scriptFixture({}), "packages/p", "test", null)).toBe(false);
+    expect(packageScriptIsWholesaleVitest(scriptFixture({ test: "vitest run" }), "packages/gone", "test", null)).toBe(
+      false,
+    );
+    expect(packageScriptIsWholesaleVitest(scriptFixture({ test: ["vitest", "run"] }), "packages/p", "test", null)).toBe(
+      false,
+    );
+  });
+
+  it("reads a &&-chained script body as the commands it is", () => {
+    const root = scriptFixture({ test: "rimraf dist && vitest run --no-coverage" });
+    expect(packageScriptIsWholesaleVitest(root, "packages/p", "test", "vitest.config.ts")).toBe(true);
+    // …but a chain whose vitest half is narrowed still refuses.
+    const narrowed = scriptFixture({ test: "rimraf dist && vitest run src/a.test.ts" });
+    expect(packageScriptIsWholesaleVitest(narrowed, "packages/p", "test", "vitest.config.ts")).toBe(false);
+  });
+
+  it("bare `vitest` (no `run`) is NOT a wholesale run — it is watch mode outside CI", () => {
+    expect(packageScriptIsWholesaleVitest(scriptFixture({ test: "vitest" }), "packages/p", "test", null)).toBe(false);
+  });
+});
+
+describe("direction 3 — script invocation + target directory", () => {
+  it("recognises `pnpm test`, `pnpm run test` and `pnpm --filter <pkg> run test`", () => {
+    expect(packageScriptInvocation("pnpm test").script).toBe("test");
+    expect(packageScriptInvocation("pnpm run test").script).toBe("test");
+    expect(packageScriptInvocation("pnpm --filter @x/p run test").script).toBe("test");
+    expect(packageScriptInvocation("pnpm test:invariants").script).toBe("test:invariants");
+  });
+
+  it("collects forwarded arguments, cut at a redirection", () => {
+    expect(packageScriptInvocation("pnpm test --no-coverage").forwarded).toEqual(["--no-coverage"]);
+    expect(packageScriptInvocation("pnpm test > out.log").forwarded).toEqual([]);
+  });
+
+  it("REFUSES a binary word — `pnpm exec vitest` is a runner, not a script", () => {
+    expect(packageScriptInvocation("pnpm exec vitest run")).toBe(null);
+    expect(packageScriptInvocation("pnpm dlx something")).toBe(null);
+    expect(packageScriptInvocation("npx vitest run")).toBe(null);
+  });
+
+  it("REFUSES a bare command word with no package manager in front", () => {
+    expect(packageScriptInvocation("test")).toBe(null);
+    expect(packageScriptInvocation("./run-tests.sh")).toBe(null);
+    expect(packageScriptInvocation("run test")).toBe(null);
+  });
+
+  it("ignores env assignments, flags and a trailing comment", () => {
+    expect(packageScriptInvocation("CI=1 pnpm --silent test").script).toBe("test");
+    expect(packageScriptInvocation("pnpm test # pnpm other")).toEqual({ script: "test", forwarded: [] });
+    expect(packageScriptInvocation("# pnpm test")).toBe(null);
+  });
+
+  it("resolves the target dir from --filter, -C and the carried cwd", () => {
+    const pkgDirs = new Map([["@x/p", "packages/p"]]);
+    expect(segmentTargetDir("pnpm --filter @x/p test", "", pkgDirs)).toBe("packages/p");
+    expect(segmentTargetDir("pnpm --filter=@x/p test", "", pkgDirs)).toBe("packages/p");
+    expect(segmentTargetDir("pnpm -C packages/q exec vitest run", "", pkgDirs)).toBe("packages/q");
+    expect(segmentTargetDir("pnpm -C ./packages/q/ exec vitest run", "", pkgDirs)).toBe("packages/q");
+    expect(segmentTargetDir("pnpm test", "packages/carried", pkgDirs)).toBe("packages/carried");
+  });
+
+  it("returns null for an UNRESOLVABLE --filter rather than falling back to the cwd", () => {
+    // A glob/path filter credited to whatever dir the block happened to be
+    // sitting in would be a coverage claim about a package nobody ran.
+    const pkgDirs = new Map([["@x/p", "packages/p"]]);
+    expect(segmentTargetDir("pnpm --filter './packages/*' test", "packages/p", pkgDirs)).toBe(null);
+    expect(segmentTargetDir("pnpm --filter @x/unknown test", "packages/p", pkgDirs)).toBe(null);
+  });
+});
+
+describe("direction 3 — wholesale run discovery in workflows", () => {
+  const wf = (body) => {
+    const fx = pkgFixture({
+      workflow: body,
+      packages: { p: { scripts: { test: "vitest run" }, config: "export default { test: { include: ['src/**/*.test.ts'] } };", files: ["src/a.test.ts"] } },
+    });
+    return { fx, runs: findWholesalePackageRuns(fx.root, fx.workflowDir, fx.pkgDirs) };
+  };
+
+  it("credits `cd packages/p && pnpm test`", () => {
+    const { runs } = wf("jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm test\n");
+    expect([...runs.keys()]).toEqual(["packages/p"]);
+  });
+
+  it("credits `pnpm -C packages/p exec vitest run --no-coverage`", () => {
+    const { runs } = wf("jobs:\n  a:\n    steps:\n      - run: pnpm -C packages/p exec vitest run --no-coverage\n");
+    expect([...runs.keys()]).toEqual(["packages/p"]);
+  });
+
+  it("credits a step-level working-directory: with `pnpm exec vitest run`", () => {
+    const { runs } = wf(
+      "jobs:\n  a:\n    steps:\n      - name: x\n        working-directory: packages/p\n        run: pnpm exec vitest run --no-coverage\n",
+    );
+    expect([...runs.keys()]).toEqual(["packages/p"]);
+  });
+
+  it("does NOT credit a run narrowed by a positional or an --exclude", () => {
+    expect([...wf("jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm exec vitest run src/a.test.ts\n").runs.keys()]).toEqual([]);
+    expect(
+      [...wf("jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm exec vitest run --exclude '**/b.test.ts'\n").runs.keys()],
+    ).toEqual([]);
+  });
+
+  it("does NOT credit a run redirected to another config", () => {
+    // packages/agents' integration tier runs under vitest.integration.config.ts;
+    // crediting that as the UNIT suite would be a different suite wearing this
+    // package's name.
+    expect(
+      [...wf("jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm exec vitest run --config vitest.integration.config.ts\n").runs.keys()],
+    ).toEqual([]);
+  });
+
+  it("does NOT credit an echoed, commented-out, short-circuited or heredoc'd runner", () => {
+    expect([...wf('jobs:\n  a:\n    steps:\n      - run: echo "cd packages/p && pnpm test"\n').runs.keys()]).toEqual([]);
+    expect([...wf("jobs:\n  a:\n    steps:\n      - run: |\n          # cd packages/p && pnpm test\n").runs.keys()]).toEqual([]);
+    expect([...wf("jobs:\n  a:\n    steps:\n      - run: true || pnpm -C packages/p test\n").runs.keys()]).toEqual([]);
+    expect(
+      [...wf("jobs:\n  a:\n    steps:\n      - run: |\n          cat <<EOF\n          cd packages/p && pnpm test\n          EOF\n").runs.keys()],
+    ).toEqual([]);
+  });
+
+  it("does NOT credit a step or job switched OFF with a literal-false if:", () => {
+    expect(
+      [...wf("jobs:\n  a:\n    steps:\n      - name: x\n        if: false\n        run: cd packages/p && pnpm test\n").runs.keys()],
+    ).toEqual([]);
+    expect(
+      [...wf("jobs:\n  a:\n    if: ${{ false }}\n    steps:\n      - run: cd packages/p && pnpm test\n").runs.keys()],
+    ).toEqual([]);
+  });
+
+  it("does NOT credit a package whose `test` script is not a wholesale vitest run", () => {
+    const fx = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm test\n",
+      packages: { p: { scripts: { test: "vitest run src/a.test.ts" }, files: ["src/a.test.ts"] } },
+    });
+    expect([...findWholesalePackageRuns(fx.root, fx.workflowDir, fx.pkgDirs).keys()]).toEqual([]);
+  });
+
+  it("does NOT credit `cd <pkg> && pnpm test && cd ../..` mid-block — that shape CANNOT fail its step", () => {
+    // Measured against `bash -e`, GitHub's default run shell:
+    //   bash -e -c 'cd /tmp && false && cd /'           → 1
+    //   bash -e -c $'cd /tmp && false && cd /\ncd /tmp' → 0
+    // errexit does not fire for a command inside an `&&`-list, and the next
+    // line overwrites the list's status. This is the exact shape build-image.yml
+    // carried on four pinned package runs, none of which could turn red.
+    const { runs } = wf(
+      "jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p && pnpm test && cd ../..\n          echo next\n",
+    );
+    expect([...runs.keys()]).toEqual([]);
+    // The same list AS THE LAST list does gate: `&&` short-circuits, so the
+    // list ends on the runner's failure and that becomes the step's status.
+    expect([...wf("jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm test\n").runs.keys()]).toEqual([
+      "packages/p",
+    ]);
+    // …and the repaired shape — one SIMPLE command per line — gates on every
+    // line, because errexit fires on a simple command wherever it sits.
+    expect(
+      [...wf("jobs:\n  a:\n    steps:\n      - run: |\n          pnpm -C packages/p exec vitest run --no-coverage\n          echo next\n").runs.keys()],
+    ).toEqual(["packages/p"]);
+  });
+
+  it("tracks `cd ../..` back out, so a later bare run is not credited to the package", () => {
+    const { runs } = wf(
+      "jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p\n          pnpm test\n          cd ../..\n          pnpm exec vitest run\n",
+    );
+    expect([...runs.keys()]).toEqual(["packages/p"]);
+  });
+
+  it("credits nothing outside packages/** (a repo-root wholesale run is direction 2's business)", () => {
+    const { runs } = wf("jobs:\n  a:\n    steps:\n      - run: pnpm exec vitest run\n");
+    expect([...runs.keys()]).toEqual([]);
+  });
+});
+
+describe("direction 3 — per-package vitest config parsing", () => {
+  const cfg = (text) => {
+    const root = mkdtempSync(join(tmpdir(), "ci-cfg-"));
+    writeFileSync(join(root, "vitest.config.ts"), text);
+    return join(root, "vitest.config.ts");
+  };
+
+  it("an ABSENT config means vitest's defaults (include null = every test file)", () => {
+    const g = parseVitestTestGlobs(join(mkdtempSync(join(tmpdir(), "ci-cfg-")), "vitest.config.ts"));
+    expect(g.include).toBe(null);
+    expect(g.exclude).toEqual(["**/node_modules/**", "**/.git/**"]);
+  });
+
+  it("an absent `exclude` falls back to vitest's default exclude, not to nothing", () => {
+    const g = parseVitestTestGlobs(cfg("export default { test: { include: ['src/**/*.test.ts'] } };"));
+    expect(g.include).toEqual(["src/**/*.test.ts"]);
+    expect(g.exclude).toEqual(["**/node_modules/**", "**/.git/**"]);
+  });
+
+  it("REFUSES a `root:` key rather than resolving every glob against the wrong base", () => {
+    expect(() => parseVitestTestGlobs(cfg("export default { root: '../..', test: { include: ['a/*.test.ts'] } };"))).toThrow(
+      /root:/,
+    );
+  });
+
+  it("REFUSES a DUPLICATED include (it cannot tell which one governs)", () => {
+    expect(() =>
+      parseVitestTestGlobs(cfg("export default { test: { include: ['a/*.test.ts'] }, x: { include: ['b/*.test.ts'] } };")),
+    ).toThrow(/at most one/);
+  });
+
+  it("REFUSES an empty include and an unmodelled element shape", () => {
+    expect(() => parseVitestTestGlobs(cfg("export default { test: { include: [] } };"))).toThrow(/EMPTY/);
+    expect(() => parseVitestTestGlobs(cfg("export default { test: { include: [...others] } };"))).toThrow(/Refusing/);
+  });
+
+  it("folds a conditional exclude tier's literals in (the fail-CLOSED reading)", () => {
+    const g = parseVitestTestGlobs(
+      cfg(
+        "export default { test: { include: ['src/**/*.test.ts'], exclude: [...(process.env.F === '1' ? [] : ['**/*.integration.test.ts'])] } };",
+      ),
+    );
+    expect(g.exclude).toEqual(["**/*.integration.test.ts"]);
+  });
+});
+
+describe("direction 3 — package discovery sets", () => {
+  it("applies include and exclude, relative to the package dir", () => {
+    const fx = pkgFixture({
+      packages: {
+        p: {
+          config: "export default { test: { include: ['src/**/*.test.ts'], exclude: ['**/*.manual.test.ts'] } };",
+          files: ["src/a.test.ts", "src/b.manual.test.ts", "tests/c.test.ts"],
+        },
+      },
+    });
+    expect([...packageDiscoverySet("packages/p", fx.tracked, fx.root)]).toEqual(["packages/p/src/a.test.ts"]);
+  });
+
+  it("a config-less package discovers EVERY tracked test file under it (vitest's default include)", () => {
+    const fx = pkgFixture({
+      packages: { p: { files: ["src/a.test.ts", "src/__tests__/b.test.tsx", "tests/c.test.mjs"] } },
+    });
+    expect(packageDiscoverySet("packages/p", fx.tracked, fx.root).size).toBe(3);
+  });
+
+  it("never reaches into a sibling package", () => {
+    const fx = pkgFixture({
+      packages: { p: { files: ["src/a.test.ts"] }, q: { files: ["src/a.test.ts"] } },
+    });
+    expect([...packageDiscoverySet("packages/p", fx.tracked, fx.root)]).toEqual(["packages/p/src/a.test.ts"]);
+  });
+});
+
+describe("direction 3 — the quarantine ledger", () => {
+  const ok = {
+    file: "packages/p/src/a.test.ts",
+    kind: "quarantine",
+    issue: "https://github.com/cinatra-ai/cinatra/issues/2440",
+    reason: "A written reason long enough to be a real sentence.",
+  };
+
+  it("accepts a well-formed entry", () => {
+    expect(readPackageSuiteExceptions(".", JSON.stringify({ exceptions: [ok] }))).toEqual([ok]);
+    expect(readPackageSuiteExceptions(".", JSON.stringify({ exceptions: [] }))).toEqual([]);
+  });
+
+  it("THROWS on malformed JSON or a missing exceptions array rather than reading as 'no exceptions'", () => {
+    expect(() => readPackageSuiteExceptions(".", "{oops")).toThrow(/not valid JSON/);
+    expect(() => readPackageSuiteExceptions(".", "{}")).toThrow(/exceptions/);
+    expect(() => readPackageSuiteExceptions(".", JSON.stringify({ exceptions: {} }))).toThrow(/exceptions/);
+    expect(() => readPackageSuiteExceptions(".", JSON.stringify({ exceptions: ["x"] }))).toThrow(/expected an object/);
+  });
+
+  it("REFUSES a file outside packages/**, a non-test path, and a duplicate", () => {
+    const bad = (f) => JSON.stringify({ exceptions: [{ ...ok, file: f }] });
+    expect(() => readPackageSuiteExceptions(".", bad("src/a.test.ts"))).toThrow(/packages/);
+    expect(() => readPackageSuiteExceptions(".", bad("packages/p/src/a.ts"))).toThrow(/packages/);
+    expect(() => readPackageSuiteExceptions(".", JSON.stringify({ exceptions: [ok, ok] }))).toThrow(/duplicate/);
+  });
+
+  it("REFUSES any kind but `quarantine` — main-only is a RUNNER, never an exception", () => {
+    for (const kind of ["main-only", "skip", "", undefined]) {
+      expect(() => readPackageSuiteExceptions(".", JSON.stringify({ exceptions: [{ ...ok, kind }] }))).toThrow(/quarantine/);
+    }
+  });
+
+  it("REFUSES a missing/!GitHub issue link and a throwaway reason", () => {
+    // A quarantine without a filed follow-up is an unrun test with paperwork.
+    for (const issue of ["", "see the tracker", "https://example.com/issues/1", "https://github.com/o/r/pull/1"]) {
+      expect(() => readPackageSuiteExceptions(".", JSON.stringify({ exceptions: [{ ...ok, issue }] }))).toThrow(/issue/);
+    }
+    expect(() => readPackageSuiteExceptions(".", JSON.stringify({ exceptions: [{ ...ok, reason: "broken" }] }))).toThrow(
+      /reason/,
+    );
+  });
+});
+
+describe("direction 3 — the verdict", () => {
+  const wholesalePkg = {
+    scripts: { test: "vitest run" },
+    config: "export default { test: { include: ['src/**/*.test.ts'] } };",
+  };
+
+  it("FLAGS a package suite that no workflow runs — the cinatra#2439 shape", () => {
+    const fx = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: pnpm typecheck\n",
+      packages: { llm: { ...wholesalePkg, files: ["src/a.test.ts"] } },
+    });
+    const v = auditFixture(fx);
+    expect(v.ungated.map((u) => u.file)).toEqual(["packages/llm/src/a.test.ts"]);
+    expect(v.ungated[0].wholesale).toBe(false);
+  });
+
+  it("CLEARS it once a wholesale runner exists — including a file added later", () => {
+    const fx = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: cd packages/llm && pnpm test\n",
+      packages: { llm: { ...wholesalePkg, files: ["src/a.test.ts", "src/added-later.test.ts"] } },
+    });
+    expect(auditFixture(fx).ungated).toEqual([]);
+  });
+
+  it("FLAGS a file the package config EXCLUDES even though the package has a wholesale runner", () => {
+    // The carve-out-with-no-other-runner shape: excluded from the package run
+    // and reachable by nothing else.
+    const fx = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: cd packages/llm && pnpm test\n",
+      packages: {
+        llm: {
+          scripts: { test: "vitest run" },
+          config: "export default { test: { include: ['src/**/*.test.ts'], exclude: ['src/dark.test.ts'] } };",
+          files: ["src/a.test.ts", "src/dark.test.ts"],
+        },
+      },
+    });
+    const v = auditFixture(fx);
+    expect(v.ungated.map((u) => u.file)).toEqual(["packages/llm/src/dark.test.ts"]);
+    expect(v.ungated[0].discovered).toBe(false);
+  });
+
+  it("does NOT credit a vitest PIN for a file the package config excludes", () => {
+    // vitest applies include/exclude BEFORE the CLI positional, so the pin
+    // selects nothing and the step passes green — the same trap direction 2
+    // already refuses for the root config.
+    const fx = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: cd packages/llm && pnpm exec vitest run src/dark.test.ts\n",
+      packages: {
+        llm: {
+          scripts: { test: "vitest run" },
+          config: "export default { test: { include: ['src/**/*.test.ts'], exclude: ['src/dark.test.ts'] } };",
+          files: ["src/dark.test.ts"],
+        },
+      },
+    });
+    const v = auditFixture(fx, { pins: { resolved: new Set(["packages/llm/src/dark.test.ts"]), nodeExact: new Set(), missing: [] } });
+    expect(v.ungated.map((u) => u.file)).toEqual(["packages/llm/src/dark.test.ts"]);
+  });
+
+  it("DOES credit an exact `node --test` pin for a config-excluded file (node takes a path, not a filter)", () => {
+    const fx = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: node --test packages/llm/src/dark.test.ts\n",
+      packages: {
+        llm: {
+          config: "export default { test: { include: ['src/**/*.test.ts'], exclude: ['src/dark.test.ts'] } };",
+          files: ["src/dark.test.ts"],
+        },
+      },
+    });
+    const v = auditFixture(fx, { pins: { resolved: new Set(), nodeExact: new Set(["packages/llm/src/dark.test.ts"]), missing: [] } });
+    expect(v.ungated).toEqual([]);
+  });
+
+  it("credits the ROOT include independently of the package's own config", () => {
+    const fx = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: pnpm typecheck\n",
+      packages: { llm: { files: ["src/a.test.ts"] } },
+    });
+    const v = auditFixture(fx, { globs: { include: ["packages/llm/src/**/*.test.ts"], exclude: ["**/node_modules/**"] } });
+    expect(v.ungated).toEqual([]);
+  });
+
+  it("a ledger entry EXEMPTS an unrun file — and only that file", () => {
+    const fx = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: pnpm typecheck\n",
+      packages: { llm: { ...wholesalePkg, files: ["src/quarantined.test.ts", "src/other.test.ts"] } },
+    });
+    const v = auditFixture(fx, {
+      exceptions: [
+        {
+          file: "packages/llm/src/quarantined.test.ts",
+          kind: "quarantine",
+          issue: "https://github.com/cinatra-ai/cinatra/issues/1",
+          reason: "A written reason long enough to be a real sentence.",
+        },
+      ],
+    });
+    expect(v.exempt.map((e) => e.file)).toEqual(["packages/llm/src/quarantined.test.ts"]);
+    expect(v.ungated.map((u) => u.file)).toEqual(["packages/llm/src/other.test.ts"]);
+  });
+
+  it("FLAGS a ledger entry whose file is gone, and one whose file DOES run", () => {
+    const fx = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: cd packages/llm && pnpm test\n",
+      packages: { llm: { ...wholesalePkg, files: ["src/a.test.ts"] } },
+    });
+    const v = auditFixture(fx, {
+      exceptions: [
+        { file: "packages/llm/src/gone.test.ts", kind: "quarantine", issue: "https://github.com/o/r/issues/1", reason: "A written reason long enough to be a real sentence." },
+        { file: "packages/llm/src/a.test.ts", kind: "quarantine", issue: "https://github.com/o/r/issues/2", reason: "A written reason long enough to be a real sentence." },
+      ],
+    });
+    expect(v.staleExceptions.map((e) => e.file)).toEqual(["packages/llm/src/gone.test.ts"]);
+    expect(v.redundantExceptions.map((e) => e.file)).toEqual(["packages/llm/src/a.test.ts"]);
+  });
+
+  it("leaves the non-unit tiers out of the governed set — but only when nothing runs them", () => {
+    expect(isNonUnitTierFile("packages/p/src/a.integration.test.ts")).toBe(true);
+    expect(isNonUnitTierFile("packages/p/src/a.integration.test.tsx")).toBe(true);
+    expect(isNonUnitTierFile("packages/p/src/__tests__/e2e/a.e2e.test.ts")).toBe(true);
+    expect(isNonUnitTierFile("packages/p/src/a.manual.test.ts")).toBe(true);
+    expect(isNonUnitTierFile("packages/p/src/a.test.ts")).toBe(false);
+    // Unrun tier file → out of scope, not a failure and NOT reported as a
+    // quarantine (that would put a filed-issue claim on a file nobody filed).
+    const unrun = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: pnpm typecheck\n",
+      packages: { agents: { ...wholesalePkg, files: ["src/a.integration.test.ts"] } },
+    });
+    const uv = auditFixture(unrun);
+    expect(uv.ungated).toEqual([]);
+    expect(uv.exempt).toEqual([]);
+    expect(uv.tierExcluded).toEqual(["packages/agents/src/a.integration.test.ts"]);
+    // A tier file a runner DOES execute stays credited as covered, so the tier
+    // list can never HIDE a suite that runs.
+    const run = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: cd packages/agents && pnpm test\n",
+      packages: { agents: { ...wholesalePkg, files: ["src/a.integration.test.ts"] } },
+    });
+    expect(auditFixture(run).tierExcluded).toEqual([]);
+  });
+});
+
+describe("direction 3 — the LIVE repo", () => {
+  it("every packages/** unit suite has a statically detected runner", () => {
+    const v = auditPackageSuiteRunners();
+    expect(v.ungated).toEqual([]);
+    expect(v.staleExceptions).toEqual([]);
+    expect(v.redundantExceptions).toEqual([]);
+    expect(v.packageFiles.length).toBeGreaterThan(900);
+  });
+
+  it("the eighteen packages cinatra#2439 wired have a WHOLESALE runner, not a file pin", () => {
+    const wholesale = findWholesalePackageRuns();
+    for (const p of [
+      "llm", "objects", "chat", "agent-ui-protocol", "registries", "metric-cost-api", "memory",
+      "marketplace-mcp-client", "webhooks", "streams", "extension-types", "artifacts",
+      "connectors-catalog", "marketplace-application-reconcile", "marketplace-sync",
+      "metric-contracts", "pm-schedule-reconcile", "projects",
+      // …plus the packages that already had one, which must not regress.
+      "extensions", "agents", "skills", "a2a", "execution-plane", "dashboards", "org-write-kernel",
+    ]) {
+      expect(wholesale.has(`packages/${p}`), `packages/${p} has no wholesale CI runner`).toBe(true);
+    }
+  });
+
+  it("the LIVE ledger parses, and every entry names a file that exists and is excluded in its package config", () => {
+    const entries = readPackageSuiteExceptions();
+    expect(entries.length).toBeGreaterThan(0);
+    const tracked = new Set(trackedTestPaths());
+    for (const e of entries) {
+      expect(tracked.has(e.file), `${e.file} is not tracked`).toBe(true);
+      const pkgDir = e.file.split("/").slice(0, 2).join("/");
+      const configText = readFileSync(join(REPO_ROOT, pkgDir, "vitest.config.ts"), "utf8");
+      // The exclusion and the ledger entry are a PAIR; neither may outlive the
+      // other, so the config must name the same file.
+      expect(configText.includes(e.file.slice(pkgDir.length + 1)), `${pkgDir}/vitest.config.ts does not exclude ${e.file}`).toBe(true);
+    }
+  });
+});
+
+describe("direction 3 — a credited runner must be able to turn the check RED", () => {
+  const wf = (body) => {
+    const fx = pkgFixture({
+      workflow: body,
+      packages: { p: { scripts: { test: "vitest run" }, config: "export default { test: { include: ['src/**/*.test.ts'] } };", files: ["src/a.test.ts"] } },
+    });
+    return [...findWholesalePackageRuns(fx.root, fx.workflowDir, fx.pkgDirs).keys()];
+  };
+
+  it("does NOT credit a step marked continue-on-error: true", () => {
+    expect(wf("jobs:\n  a:\n    steps:\n      - name: x\n        continue-on-error: true\n        run: cd packages/p && pnpm test\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - name: x\n        continue-on-error: ${{ true }}\n        run: cd packages/p && pnpm test\n")).toEqual([]);
+    // An EXPRESSION cannot be evaluated here, and `continue-on-error: ${{ 1 == 1 }}`
+    // is an ordinary way to write `true` — so an unevaluable value reads as
+    // NON-blocking. (Unlike the `if:` residual this costs nothing: no workflow
+    // in this repo writes an expression for continue-on-error.)
+    expect(wf("jobs:\n  a:\n    steps:\n      - name: x\n        continue-on-error: ${{ github.event_name == 'push' }}\n        run: cd packages/p && pnpm test\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - name: x\n        continue-on-error: ${{ 1 == 1 }}\n        run: cd packages/p && pnpm test\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - name: x\n        continue-on-error: false\n        run: cd packages/p && pnpm test\n")).toEqual(["packages/p"]);
+  });
+
+  it("does NOT credit a JOB marked continue-on-error: true", () => {
+    expect(wf("jobs:\n  a:\n    continue-on-error: true\n    steps:\n      - run: cd packages/p && pnpm test\n")).toEqual([]);
+  });
+
+  it("does NOT credit a runner reached after `set +e` (the informational-tier shape)", () => {
+    // build-image.yml's whole-tier integration step is exactly this: the run
+    // reports its failure as a ::warning:: and the step exits 0.
+    expect(
+      wf("jobs:\n  a:\n    steps:\n      - run: |\n          set +e\n          cd packages/p && pnpm test\n          exit 0\n"),
+    ).toEqual([]);
+    // …and errexit coming back ON restores the credit.
+    expect(
+      wf("jobs:\n  a:\n    steps:\n      - run: |\n          set +e\n          echo probing\n          set -e\n          cd packages/p && pnpm test\n"),
+    ).toEqual(["packages/p"]);
+    // `set -euo pipefail` / `set -uxo pipefail` are read for their `e` correctly.
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          set -euo pipefail\n          cd packages/p && pnpm test\n")).toEqual(["packages/p"]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          set +uxe\n          cd packages/p && pnpm test\n")).toEqual([]);
+  });
+
+  it("does NOT credit a runner whose failure is swallowed by `|| true`", () => {
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm test || true\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm test || echo failed\n")).toEqual([]);
+  });
+
+  it("the LIVE repo: the informational whole-tier agents step credits nothing", () => {
+    // It runs a wholesale vitest under vitest.integration.config.ts inside
+    // `set +e … exit 0`. Two independent reasons it must not be credited (the
+    // config redirect AND the swallowed exit); packages/agents is credited only
+    // by the blocking `cd packages/agents && pnpm test` step in the `test` job.
+    const runs = findWholesalePackageRuns();
+    expect(runs.get("packages/agents")).toEqual(new Set(["build-image.yml"]));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Direction 3 — the fail-open holes a Codex adversarial pass found, each closed
+// and each pinned here so it cannot reopen. Every case asserts a REFUSAL.
+// ---------------------------------------------------------------------------
+describe("direction 3 — adversarial fail-open closures", () => {
+  const wf = (body, opts = {}) => {
+    const fx = pkgFixture({
+      workflow: body,
+      packages: {
+        p: { scripts: { test: "vitest run" }, config: "export default { test: { include: ['src/**/*.test.ts'] } };", files: ["src/a.test.ts"] },
+        q: { scripts: { test: "vitest run" }, config: "export default { test: { include: ['src/**/*.test.ts'] } };", files: ["src/a.test.ts"] },
+      },
+      ...opts,
+    });
+    return [...findWholesalePackageRuns(fx.root, fx.workflowDir, fx.pkgDirs).keys()];
+  };
+
+  it("credits NOTHING from a workflow that never fires on a change", () => {
+    const body = "jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm test\n";
+    expect(wf(body, { trigger: "on: [workflow_dispatch]\n" })).toEqual([]);
+    expect(wf(body, { trigger: "on:\n  schedule:\n    - cron: '0 6 * * *'\n" })).toEqual([]);
+    expect(wf(body, { trigger: "on:\n  workflow_call:\n" })).toEqual([]);
+    expect(wf(body, { trigger: "" })).toEqual([]);
+    // …and DOES credit each real change trigger, in both YAML shapes.
+    expect(wf(body, { trigger: "on:\n  pull_request:\n  workflow_dispatch:\n" })).toEqual(["packages/p"]);
+    expect(wf(body, { trigger: "on: push\n" })).toEqual(["packages/p"]);
+    expect(wf(body, { trigger: "# a leading comment block\n# second line\non:\n  merge_group:\n" })).toEqual(["packages/p"]);
+  });
+
+  it("REFUSES two selectors — `-C p --filter q` runs q, so crediting p would be WRONG, not merely absent", () => {
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: pnpm -C packages/p --filter @cinatra-ai/q test\n")).toEqual([]);
+    expect(segmentTargetDir("pnpm -C packages/p --filter @x/q test", "", new Map([["@x/q", "packages/q"]]))).toBe(null);
+  });
+
+  it("REFUSES a selector or a `cd` whose value is an unquoted expansion", () => {
+    expect(segmentTargetDir("pnpm -C $PKG_DIR test", "", new Map())).toBe(null);
+    expect(segmentTargetDir("pnpm --filter $PKG test", "", new Map())).toBe(null);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: cd $DIR && pnpm test\n")).toEqual([]);
+  });
+
+  it("does NOT propagate a `cd` that ran in a pipeline or behind `||`", () => {
+    // `cd x | y` runs the cd in a SUBSHELL; the parent's cwd is untouched.
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p | cat\n          pnpm test\n")).toEqual([]);
+    // The second `cd` may never have run, so the cwd from there on is unknown.
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p || cd packages/q\n          pnpm test\n")).toEqual([]);
+  });
+
+  it("stops at a top-level `exit` — nothing after it runs", () => {
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p\n          exit 0\n          pnpm test\n")).toEqual([]);
+  });
+
+  it("does NOT credit a runner in a pipeline (the last command's status wins)", () => {
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm test | tee out.log\n")).toEqual([]);
+  });
+
+  it("does NOT credit a runner carrying a redirection, which hides operands after it", () => {
+    // `vitest run >out src/a.test.ts` passes a positional filter the argv walk
+    // never sees, because argv recovery stops at the redirect.
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm exec vitest run > out.log src/a.test.ts\n")).toEqual([]);
+    expect(hasTopLevelRedirect("vitest run > out.log")).toBe(true);
+    expect(hasTopLevelRedirect("vitest run --reporter='a>b'")).toBe(false);
+  });
+
+  it("REFUSES an unquoted expansion in a vitest argument — it WORD-SPLITS into positionals", () => {
+    // ARGS='default src/a.test.ts' turns `--reporter=$ARGS` into a reporter
+    // plus a filter.
+    expect(wholesaleVitestArgv(["--reporter=$ARGS"], null)).toBe(false);
+    expect(wholesaleVitestArgv(["--reporter", "$ARGS"], null)).toBe(false);
+    expect(wholesaleVitestArgv(["--reporter=$(cat r)"], null)).toBe(false);
+    // …but a QUOTED expansion cannot word-split, so it stays acceptable — this
+    // is the real `--outputFile.json="${{ github.workspace }}/…"` shape.
+    expect(wholesaleVitestArgv(['--outputFile.json="${{ github.workspace }}/r.json"'], null)).toBe(true);
+    expect(hasUnquotedExpansion('--outputFile.json="${{ x }}/r.json"')).toBe(false);
+    expect(hasUnquotedExpansion("--outputFile.json=${{ x }}/r.json")).toBe(true);
+  });
+
+  it("REFUSES --mode: it can change test.include through a mode-dependent config", () => {
+    expect(wholesaleVitestArgv(["--mode", "ci"], null)).toBe(false);
+    expect(wholesaleVitestArgv(["--mode=ci"], null)).toBe(false);
+  });
+
+  it("REFUSES a package script whose vitest failure does not become the script's status", () => {
+    const scriptFixture = (test) => {
+      const root = mkdtempSync(join(tmpdir(), "ci-pkgscript2-"));
+      mkdirSync(join(root, "packages", "p"), { recursive: true });
+      writeFileSync(join(root, "packages", "p", "package.json"), JSON.stringify({ name: "@x/p", scripts: { test } }));
+      return root;
+    };
+    const wholesale = (test) => packageScriptIsWholesaleVitest(scriptFixture(test), "packages/p", "test", "vitest.config.ts");
+    // A pnpm script runs with errexit OFF, so the LAST command's status wins.
+    expect(wholesale("vitest run")).toBe(true);
+    expect(wholesale("rimraf dist && vitest run")).toBe(true);
+    expect(wholesale("vitest run && echo done")).toBe(true);
+    expect(wholesale("vitest run || true")).toBe(false);
+    expect(wholesale("vitest run; true")).toBe(false);
+    expect(wholesale("vitest run; echo done")).toBe(false);
+    expect(wholesale("vitest run | tee out.log")).toBe(false);
+    expect(wholesale("vitest run & wait")).toBe(false);
+    expect(wholesale("(true) || vitest run")).toBe(false);
+    expect(wholesale('test -z "$SKIP" || vitest run')).toBe(false);
+    expect(wholesale("vitest run > out.log")).toBe(false);
+    expect(wholesale("vitest run $EXTRA_ARGS")).toBe(false);
+  });
+
+  it("the LIVE repo still credits every wired package after all of the above", () => {
+    const runs = findWholesalePackageRuns();
+    expect(runs.size).toBeGreaterThanOrEqual(23);
+    expect(auditPackageSuiteRunners().ungated).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Direction 3 — round-2 adversarial closures. Every case here is a shape a
+// second Codex pass credited before the fix, each verified against real `bash
+// -e` semantics rather than assumed.
+// ---------------------------------------------------------------------------
+describe("direction 3 — round-2 fail-open closures", () => {
+  const wf = (body, opts = {}) => {
+    const fx = pkgFixture({
+      workflow: body,
+      packages: { p: { scripts: { test: "vitest run" }, config: "export default { test: { include: ['src/**/*.test.ts'] } };", files: ["src/a.test.ts"] } },
+      ...opts,
+    });
+    return [...findWholesalePackageRuns(fx.root, fx.workflowDir, fx.pkgDirs).keys()];
+  };
+
+  it("groups commands into &&/|| LISTS with their terminator", () => {
+    expect(groupShellLists(splitShellCommands("a && b\nc"))).toEqual([
+      { commands: [{ text: "a ", op: "&&" }, { text: " b", op: null }], terminator: "\n" },
+      { commands: [{ text: "c", op: null }], terminator: "" },
+    ]);
+  });
+
+  it("reads every `set` spelling that moves errexit", () => {
+    expect(errexitSetting("set +e")).toBe(false);
+    expect(errexitSetting("set -e")).toBe(true);
+    expect(errexitSetting("set +o errexit")).toBe(false);
+    expect(errexitSetting("set -o errexit")).toBe(true);
+    expect(errexitSetting("set -euo pipefail")).toBe(true);
+    expect(errexitSetting("set +uxe")).toBe(false);
+    expect(errexitSetting("set -o pipefail")).toBe(null); // does not touch errexit
+    expect(errexitSetting("setup")).toBe(null);
+    // …and the long form is honoured end to end.
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          set +o errexit\n          cd packages/p && pnpm test\n          true\n")).toEqual([]);
+  });
+
+  it("does NOT credit a runner after `exec`, which REPLACES the shell", () => {
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          exec true\n          cd packages/p && pnpm test\n")).toEqual([]);
+  });
+
+  it("does NOT credit a BACKGROUNDED runner in a workflow block", () => {
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p\n          pnpm test & wait\n")).toEqual([]);
+  });
+
+  it("does NOT credit a runner in a list that also holds `||`, however it is reached", () => {
+    // `test -d /missing && pnpm test; true` exits 0 under bash -e (measured).
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p\n          [ -d node_modules ] || pnpm test\n          echo next\n")).toEqual([]);
+  });
+
+  it("only credits a shell whose failure semantics are modelled", () => {
+    expect(isErrexitBashShell(undefined)).toBe(true);
+    expect(isErrexitBashShell("bash")).toBe(true);
+    expect(isErrexitBashShell("sh")).toBe(true);
+    expect(isErrexitBashShell("bash {0}")).toBe(false); // custom template, no -e
+    expect(isErrexitBashShell("pwsh")).toBe(false);
+    expect(isErrexitBashShell("python")).toBe(false);
+    expect(wf("jobs:\n  a:\n    steps:\n      - name: x\n        shell: bash {0}\n        run: cd packages/p && pnpm test\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - name: x\n        shell: pwsh\n        run: cd packages/p && pnpm test\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - name: x\n        shell: bash\n        run: cd packages/p && pnpm test\n")).toEqual(["packages/p"]);
+  });
+
+  it("does NOT count a change trigger narrowed by a path filter", () => {
+    const body = "jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm test\n";
+    expect(wf(body, { trigger: "on:\n  pull_request:\n    paths:\n      - 'src/**'\n" })).toEqual([]);
+    expect(wf(body, { trigger: "on:\n  push:\n    paths-ignore:\n      - '**'\n" })).toEqual([]);
+    // A trigger carrying only `branches`/`types` still fires on every change
+    // to the package, so it counts — this is build-image.yml's real shape.
+    expect(wf(body, { trigger: "on:\n  pull_request:\n    types: [opened, synchronize]\n" })).toEqual(["packages/p"]);
+    // …and one FILTERED trigger does not poison an unfiltered sibling.
+    expect(wf(body, { trigger: "on:\n  push:\n    paths-ignore: ['docs/**']\n  pull_request:\n" })).toEqual(["packages/p"]);
+  });
+
+  it("REFUSES a computed or conditional `include` instead of reading it as 'discovers everything'", () => {
+    const cfg = (text) => {
+      const root = mkdtempSync(join(tmpdir(), "ci-cfg2-"));
+      writeFileSync(join(root, "vitest.config.ts"), text);
+      return join(root, "vitest.config.ts");
+    };
+    expect(() => parseVitestTestGlobs(cfg("export default { test: { include: buildInclude() } };"))).toThrow(/array literal/);
+    expect(() => parseVitestTestGlobs(cfg("export default { test: { include: MINIMAL ? ['a/*.test.ts'] : ['b/*.test.ts'] } };"))).toThrow(/array literal/);
+    // A conditional SPREAD inside the array is refused too — folding both
+    // branches would UNION them and credit files only one branch discovers.
+    expect(() =>
+      parseVitestTestGlobs(cfg("export default { test: { include: [...(process.env.M === '1' ? ['a/*.test.ts'] : ['b/*.test.ts'])] } };")),
+    ).toThrow(/Refusing/);
+  });
+
+  it("REFUSES a package whose discovery is governed by a config filename this parser does not read", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-cfg3-"));
+    writeFileSync(join(root, "vitest.config.mts"), "export default { test: { include: ['a/*.test.ts'] } };");
+    expect(() => parseVitestTestGlobs(join(root, "vitest.config.ts"))).toThrow(/does not read/);
+    expect(findRivalVitestConfig(join(root, "vitest.config.ts"))).toContain("vitest.config.mts");
+    // No rival ⇒ vitest's defaults, as before.
+    const bare = mkdtempSync(join(tmpdir(), "ci-cfg4-"));
+    expect(parseVitestTestGlobs(join(bare, "vitest.config.ts")).include).toBe(null);
+  });
+
+  it("credits a PIN only where it can turn the check red", () => {
+    // A `node --test` pin in a manual-only workflow, or in a
+    // continue-on-error step, proves the file exists and nothing more.
+    const mk = (workflow, trigger) => {
+      const fx = pkgFixture({ workflow, trigger, packages: { p: { files: ["src/a.test.mjs"] } } });
+      return resolveEnforcedPins(fx.root, fx.workflowDir, fx.tracked, fx.pkgDirs);
+    };
+    const enforcing = mk("jobs:\n  a:\n    steps:\n      - run: node --test packages/p/src/a.test.mjs\n", undefined);
+    expect([...enforcing.nodeExact]).toEqual(["packages/p/src/a.test.mjs"]);
+    const dispatchOnly = mk("jobs:\n  a:\n    steps:\n      - run: node --test packages/p/src/a.test.mjs\n", "on: [workflow_dispatch]\n");
+    expect([...dispatchOnly.nodeExact]).toEqual([]);
+    const soft = mk("jobs:\n  a:\n    steps:\n      - name: x\n        continue-on-error: true\n        run: node --test packages/p/src/a.test.mjs\n", undefined);
+    expect([...soft.nodeExact]).toEqual([]);
+  });
+
+  it("drops root-include coverage when the root suite is not ENFORCED anywhere", () => {
+    const fx = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: pnpm typecheck\n",
+      packages: { llm: { files: ["src/a.test.ts"] } },
+    });
+    const globs = { include: ["packages/llm/src/**/*.test.ts"], exclude: ["**/node_modules/**"] };
+    expect(auditFixture(fx, { globs, rootEnforced: true }).ungated).toEqual([]);
+    expect(auditFixture(fx, { globs, rootEnforced: false }).ungated.map((u) => u.file)).toEqual([
+      "packages/llm/src/a.test.ts",
+    ]);
+  });
+
+  it("governs `*.spec.*` too — vitest's default include is {test,spec}", () => {
+    const fx = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: pnpm typecheck\n",
+      packages: { llm: { files: ["src/a.spec.ts"] } },
+    });
+    expect(auditFixture(fx).ungated.map((u) => u.file)).toEqual(["packages/llm/src/a.spec.ts"]);
+  });
+
+  it("the LIVE repo: the enforced view still covers everything, and the root suite IS enforced", () => {
+    expect(rootSuiteIsEnforced()).toBe(true);
+    expect(packageTestFiles().length).toBeGreaterThan(900);
+    const v = auditPackageSuiteRunners();
+    expect(v.ungated).toEqual([]);
+    expect(v.staleExceptions).toEqual([]);
+    expect(v.redundantExceptions).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Direction 3 — round-3 adversarial closures.
+// ---------------------------------------------------------------------------
+describe("direction 3 — round-3 fail-open closures", () => {
+  const wf = (body, opts = {}) => {
+    const fx = pkgFixture({
+      workflow: body,
+      packages: { p: { scripts: { test: "vitest run" }, config: "export default { test: { include: ['src/**/*.test.ts'] } };", files: ["src/a.test.ts"] } },
+      ...opts,
+    });
+    return [...findWholesalePackageRuns(fx.root, fx.workflowDir, fx.pkgDirs).keys()];
+  };
+
+  it("credits only a `run:` that belongs to a STEP, never one that is just data", () => {
+    // `env: { run: … }` is a variable named `run`; nothing executes it.
+    expect(wf("env:\n  run: cd packages/p && pnpm test\njobs:\n  a:\n    steps:\n      - run: echo hi\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    env:\n      run: cd packages/p && pnpm test\n    steps:\n      - run: echo hi\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - uses: ./x\n        with:\n          run: cd packages/p && pnpm test\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm test\n")).toEqual(["packages/p"]);
+  });
+
+  it("stops at `exit`/`exec` ANYWHERE in a list, not just at its head", () => {
+    // `true && exit 0 && pnpm test` reaches the exit and never the runner.
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p\n          true && exit 0 && pnpm test\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p\n          true && exec true\n          pnpm test\n")).toEqual([]);
+  });
+
+  it("honours a `set +e` that appears mid-list", () => {
+    expect(
+      wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p\n          true && set +e\n          pnpm test\n          echo survived\n"),
+    ).toEqual([]);
+  });
+
+  it("refuses a block installing an ERR trap — it can turn every later failure green", () => {
+    // `trap "exit 0" ERR` + a failing runner exits 0 under `bash -eo pipefail`.
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          trap \"exit 0\" ERR\n          cd packages/p && pnpm test\n")).toEqual([]);
+  });
+
+  it("refuses a package script whose vitest command is unreachable or whose errexit moves", () => {
+    const scriptFixture = (test) => {
+      const root = mkdtempSync(join(tmpdir(), "ci-pkgscript3-"));
+      mkdirSync(join(root, "packages", "p"), { recursive: true });
+      writeFileSync(join(root, "packages", "p", "package.json"), JSON.stringify({ name: "@x/p", scripts: { test } }));
+      return root;
+    };
+    const wholesale = (t) => packageScriptIsWholesaleVitest(scriptFixture(t), "packages/p", "test", "vitest.config.ts");
+    expect(wholesale("true && exit 0 && vitest run --config vitest.config.ts")).toBe(false);
+    expect(wholesale("trap 'exit 0' ERR && vitest run")).toBe(false);
+    expect(wholesale("set +e && vitest run")).toBe(false);
+    expect(wholesale("vitest run")).toBe(true);
+  });
+
+  it("treats a backslash-quoted heredoc body as DATA", () => {
+    // `cat <<\EOF … EOF` quotes the body exactly like `<<'EOF'`.
+    expect(
+      wf("jobs:\n  a:\n    steps:\n      - run: |\n          cat <<\\EOF\n          cd packages/p && pnpm test\n          EOF\n"),
+    ).toEqual([]);
+  });
+
+  it("detects a FLOW-style path filter, not only the block-style one", () => {
+    const body = "jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm test\n";
+    expect(wf(body, { trigger: "on:\n  pull_request: { paths: ['docs/**'] }\n" })).toEqual([]);
+    expect(wf(body, { trigger: "on: { pull_request: { paths-ignore: ['**'] } }\n" })).toEqual([]);
+    expect(wf(body, { trigger: "on: { pull_request: null }\n" })).toEqual(["packages/p"]);
+  });
+
+  it("the LIVE gate uses the ENFORCED pin view (the CLI no longer passes the raw one)", () => {
+    // A pin in a manual-only workflow must not count as coverage anywhere.
+    const fx = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: node --test packages/llm/src/a.test.mjs\n",
+      trigger: "on: [workflow_dispatch]\n",
+      packages: { llm: { files: ["src/a.test.mjs"] } },
+    });
+    const enforced = resolveEnforcedPins(fx.root, fx.workflowDir, fx.tracked, fx.pkgDirs);
+    expect([...enforced.nodeExact]).toEqual([]);
+    const v = auditPackageSuiteRunners(fx.root, fx.workflowDir, {
+      tracked: fx.tracked,
+      packageFiles: fx.tracked,
+      pkgDirs: fx.pkgDirs,
+      globs: NO_ROOT_GLOBS,
+      rootEnforced: true,
+      exceptions: [],
+    });
+    expect(v.ungated.map((u) => u.file)).toEqual(["packages/llm/src/a.test.mjs"]);
+  });
+
+  it("the LIVE repo is still fully covered after every round-3 closure", () => {
+    expect(auditPackageSuiteRunners().ungated).toEqual([]);
+    expect(findWholesalePackageRuns().size).toBeGreaterThanOrEqual(23);
+    expect(rootSuiteIsEnforced()).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Direction 3 — round-4 adversarial closures.
+// ---------------------------------------------------------------------------
+describe("direction 3 — round-4 fail-open closures", () => {
+  const wf = (body, opts = {}) => {
+    const fx = pkgFixture({
+      workflow: body,
+      packages: { p: { scripts: { test: "vitest run" }, config: "export default { test: { include: ['src/**/*.test.ts'] } };", files: ["src/a.test.ts"] } },
+      ...opts,
+    });
+    return [...findWholesalePackageRuns(fx.root, fx.workflowDir, fx.pkgDirs).keys()];
+  };
+
+  it("abandons a block containing a shell CONTROL construct — a dead branch runs nothing", () => {
+    // `if false; then pnpm test; fi` exits 0 having executed no suite.
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p\n          if false; then pnpm test; fi\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p\n          for i in 1; do pnpm test; done\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p\n          while false; do pnpm test; done\n")).toEqual([]);
+  });
+
+  it("keeps a trailing `&&`/`||` joined to the next LINE", () => {
+    // `true ||\n  pnpm test` is one list; the runner is short-circuited away.
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p\n          true ||\n            pnpm test\n")).toEqual([]);
+    // …and a genuine `&&` continuation still gates as the block's last list.
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p &&\n            pnpm test\n")).toEqual(["packages/p"]);
+  });
+
+  it("sees `exit` behind an env prefix, and `set -x +e` mid-flags", () => {
+    expect(stripEnvPrefix("X=1 Y=2 exit 0")).toBe("exit 0");
+    expect(errexitSetting("set -x +e")).toBe(false);
+    expect(errexitSetting("set +x -e")).toBe(true);
+    expect(errexitSetting("set -x")).toBe(null);
+    expect(errexitSetting("set +o errexit")).toBe(false);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p\n          X=1 exit 0\n          pnpm test\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          set -x +e\n          cd packages/p && pnpm test\n          true\n")).toEqual([]);
+  });
+
+  it("treats a NUMERIC heredoc delimiter as a delimiter", () => {
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cat <<123\n          cd packages/p && pnpm test\n          123\n")).toEqual([]);
+  });
+
+  it("does NOT count a trigger narrowed by branches-ignore", () => {
+    const body = "jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm test\n";
+    expect(wf(body, { trigger: "on:\n  push:\n    branches-ignore: ['**']\n" })).toEqual([]);
+    // A plain `branches:` allowlist is build-image.yml's real shape and stays credited.
+    expect(wf(body, { trigger: "on:\n  push:\n    branches: [main]\n" })).toEqual(["packages/p"]);
+  });
+
+  it("requires `steps:` to belong to a JOB", () => {
+    expect(runKeyIsStep(["jobs:", "  a:", "    steps:", "      - run: x"], 3, 8)).toBe(true);
+    expect(runKeyIsStep(["steps:", "  - run: x"], 1, 4)).toBe(false);
+    expect(wf("steps:\n  - run: cd packages/p && pnpm test\n")).toEqual([]);
+  });
+
+  it("does NOT credit a package script that `cd`s into another package", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-pkgscript4-"));
+    mkdirSync(join(root, "packages", "p"), { recursive: true });
+    writeFileSync(
+      join(root, "packages", "p", "package.json"),
+      JSON.stringify({ name: "@x/p", scripts: { test: "cd ../agents && vitest run --config vitest.config.ts" } }),
+    );
+    expect(packageScriptIsWholesaleVitest(root, "packages/p", "test", "vitest.config.ts")).toBe(false);
+  });
+
+  it("does NOT read a workspace-recursive invocation as the repo-root suite", () => {
+    expect(invokesRootSuite("npm --workspaces --if-present run test:root")).toBe(false);
+    expect(invokesRootSuite("pnpm -r run test:root")).toBe(false);
+    expect(invokesRootSuite("pnpm test:root")).toBe(true);
+  });
+
+  it("does NOT read an unparseable working-directory as the repo root", () => {
+    // A trailing comment used to break the value match and fall back to "",
+    // which would credit a package-local script as the wholesale root suite.
+    const commented = extractRunBlocks(
+      "jobs:\n  a:\n    steps:\n      - name: x\n        working-directory: packages/p # note\n        run: pnpm exec vitest run\n",
+    );
+    expect(commented[0].baseCwd).toBe("packages/p");
+    expect(commented[0].baseCwdUnknown).toBe(false);
+    const expanded = extractRunBlocks(
+      "jobs:\n  a:\n    steps:\n      - name: x\n        working-directory: ${{ env.WD }}\n        run: pnpm exec vitest run\n",
+    );
+    expect(expanded[0].baseCwdUnknown).toBe(true);
+    expect(wf("jobs:\n  a:\n    steps:\n      - name: x\n        working-directory: ${{ env.WD }}\n        run: pnpm exec vitest run\n")).toEqual([]);
+  });
+
+  it("REFUSES a computed, shorthand or imported discovery config instead of defaulting open", () => {
+    const cfg = (text) => {
+      const root = mkdtempSync(join(tmpdir(), "ci-cfg5-"));
+      writeFileSync(join(root, "vitest.config.ts"), text);
+      return join(root, "vitest.config.ts");
+    };
+    expect(() => parseVitestTestGlobs(cfg("export default { test: { include: ['a/*.test.ts'], exclude: exclusions } };"))).toThrow(/exclude/);
+    expect(() => parseVitestTestGlobs(cfg("const include = ['a/*.test.ts']; export default { test: { include } };"))).toThrow(/include/);
+    expect(() => parseVitestTestGlobs(cfg("import { test } from './shared'; export default { test };"))).toThrow(/object literal/);
+    // The ordinary shape still parses.
+    expect(parseVitestTestGlobs(cfg("export default { test: { include: ['a/*.test.ts'] } };")).include).toEqual(["a/*.test.ts"]);
+  });
+
+  it("the LIVE repo survives every round-4 closure", () => {
+    expect(auditPackageSuiteRunners().ungated).toEqual([]);
+    expect(findWholesalePackageRuns().size).toBe(26);
+    expect(rootSuiteIsEnforced()).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Direction 3 — round-5 adversarial closures.
+// ---------------------------------------------------------------------------
+describe("direction 3 — round-5 fail-open closures", () => {
+  const wf = (body, opts = {}) => {
+    const fx = pkgFixture({
+      workflow: body,
+      packages: { p: { scripts: { test: "vitest run" }, config: "export default { test: { include: ['src/**/*.test.ts'] } };", files: ["src/a.test.ts"] } },
+      ...opts,
+    });
+    return [...findWholesalePackageRuns(fx.root, fx.workflowDir, fx.pkgDirs).keys()];
+  };
+
+  it("refuses a TERMINAL flag — `--help`/`--version` print and exit 0, running nothing", () => {
+    expect(hasTerminalFlag(["pnpm", "--help", "run", "test:root"])).toBe(true);
+    expect(invokesRootSuite("pnpm --help run test:root")).toBe(false);
+    expect(invokesRootSuite("pnpm --version")).toBe(false);
+    expect(runnerArgv("pnpm exec vitest run --help a.test.ts")).toBe(null);
+    expect(runnerArgv("node --test --help a.test.mjs")).toBe(null);
+    expect(packageScriptInvocation("pnpm --help test")).toBe(null);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm --help test\n")).toEqual([]);
+    // The ordinary invocations are untouched.
+    expect(invokesRootSuite("pnpm test:root")).toBe(true);
+    expect(runnerArgv("pnpm exec vitest run a.test.ts")?.runner).toBe("vitest");
+  });
+
+  it("sees a terminator or a `set` behind `command`/`builtin`, and behind a quoted env value", () => {
+    expect(stripEnvPrefix("command exit 0")).toBe("exit 0");
+    expect(stripEnvPrefix("builtin set +e")).toBe("set +e");
+    expect(stripEnvPrefix('FOO="a b" exit 0')).toBe("exit 0");
+    expect(stripEnvPrefix('"exit" 0')).toBe("exit 0");
+    expect(errexitSetting("command set +e")).toBe(false);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          command exit 0\n          cd packages/p && pnpm test\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          command set +e\n          cd packages/p && pnpm test\n          true\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          FOO=\"a b\" exit 0\n          cd packages/p && pnpm test\n")).toEqual([]);
+  });
+
+  it("abandons a block defining a shell FUNCTION — its body is never called", () => {
+    expect(isShellControlCommand("demo() {")).toBe(true);
+    expect(isShellControlCommand("function demo {")).toBe(true);
+    expect(isShellControlCommand("pnpm test")).toBe(false);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          demo() {\n          cd packages/p && pnpm test\n          }\n")).toEqual([]);
+  });
+
+  it("treats a dotted heredoc delimiter as a delimiter", () => {
+    expect(
+      wf("jobs:\n  a:\n    steps:\n      - run: |\n          cat <<\"END.DOC\"\n          cd packages/p && pnpm test\n          END.DOC\n"),
+    ).toEqual([]);
+  });
+
+  it("does NOT let a subshell `cd` (either side of a pipe, or backgrounded) move the cwd", () => {
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          true | cd packages/p\n          pnpm test\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p & wait\n          pnpm test\n")).toEqual([]);
+  });
+
+  it("does NOT credit a package for a run pnpm redirects to the WORKSPACE ROOT", () => {
+    const pkgDirs = new Map([["@x/p", "packages/p"]]);
+    expect(segmentTargetDir("pnpm -w test", "packages/p", pkgDirs)).toBe("");
+    expect(segmentTargetDir("pnpm --workspace-root run test", "packages/p", pkgDirs)).toBe("");
+    expect(
+      wf("jobs:\n  a:\n    steps:\n      - name: x\n        working-directory: packages/p\n        run: pnpm -w test\n"),
+    ).toEqual([]);
+  });
+
+  it("the LIVE repo survives every round-5 closure", () => {
+    expect(auditPackageSuiteRunners().ungated).toEqual([]);
+    expect(findWholesalePackageRuns().size).toBe(26);
+    expect(rootSuiteIsEnforced()).toBe(true);
+    expect(findRootSuiteInvocations()).toContain("build-image.yml");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Direction 3 — round-6 adversarial closures.
+// ---------------------------------------------------------------------------
+describe("direction 3 — round-6 fail-open closures", () => {
+  const wf = (body, opts = {}) => {
+    const fx = pkgFixture({
+      workflow: body,
+      packages: {
+        p: { scripts: { test: "vitest run" }, config: "export default { test: { include: ['src/**/*.test.ts'] } };", files: ["src/a.test.ts"] },
+        q: { scripts: { test: "vitest run" }, config: "export default { test: { include: ['src/**/*.test.ts'] } };", files: ["src/a.test.ts"] },
+      },
+      ...opts,
+    });
+    return [...findWholesalePackageRuns(fx.root, fx.workflowDir, fx.pkgDirs).keys()];
+  };
+
+  it("does NOT apply a CONDITIONAL `cd` — only the first command of a list is unconditional", () => {
+    // `test -d missing && cd ../q` leaves the shell where it was.
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p\n          test -d missing && cd ../q\n          pnpm test\n")).toEqual([]);
+    // The ordinary `cd <pkg> && pnpm test` (cd first) still credits.
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm test\n")).toEqual(["packages/p"]);
+  });
+
+  it("sees a `cd` behind an env prefix rather than silently keeping the old cwd", () => {
+    // `X=1 cd ../q` DOES move the shell; keeping packages/p would credit the
+    // wrong package's suite.
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cd packages/p\n          X=1 cd ../q\n          pnpm test\n")).toEqual(["packages/q"]);
+  });
+
+  it("recognises `demo () { … }` with a space before the parens", () => {
+    expect(isShellControlCommand("demo () {")).toBe(true);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          demo () {\n          cd packages/p && pnpm test\n          }\n")).toEqual([]);
+  });
+
+  it("accepts any non-metacharacter heredoc delimiter (`END+DOC`)", () => {
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: |\n          cat <<END+DOC\n          cd packages/p && pnpm test\n          END+DOC\n")).toEqual([]);
+  });
+
+  it("honours a QUOTED disabling key (`\"if\": false`)", () => {
+    expect(wf("jobs:\n  a:\n    steps:\n      - name: x\n        \"if\": false\n        run: cd packages/p && pnpm test\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - name: x\n        'continue-on-error': true\n        run: cd packages/p && pnpm test\n")).toEqual([]);
+  });
+
+  it("REFUSES a `test.dir` that re-bases discovery, exactly like `root:`", () => {
+    const root = mkdtempSync(join(tmpdir(), "ci-cfg6-"));
+    writeFileSync(join(root, "vitest.config.ts"), 'export default { test: { dir: "src/unit-only" } };');
+    expect(() => parseVitestTestGlobs(join(root, "vitest.config.ts"))).toThrow(/re-bases/);
+  });
+
+  it("the LIVE repo survives every round-6 closure", () => {
+    expect(auditPackageSuiteRunners().ungated).toEqual([]);
+    expect(findWholesalePackageRuns().size).toBe(26);
+    expect(rootSuiteIsEnforced()).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Direction 3 — round-7 adversarial closures (the last mechanical class:
+// quoted YAML keys, case-insensitive booleans, non-Linux runners, and pins
+// that select nothing).
+// ---------------------------------------------------------------------------
+describe("direction 3 — round-7 fail-open closures", () => {
+  const wf = (body, opts = {}) => {
+    const fx = pkgFixture({
+      workflow: body,
+      packages: { p: { scripts: { test: "vitest run" }, config: "export default { test: { include: ['src/**/*.test.ts'] } };", files: ["src/a.test.ts"] } },
+      ...opts,
+    });
+    return [...findWholesalePackageRuns(fx.root, fx.workflowDir, fx.pkgDirs).keys()];
+  };
+
+  it("does NOT credit a pin that can select nothing (`--exclude`, `--passWithNoTests`)", () => {
+    expect(invocationCannotProveExecution("pnpm exec vitest run src/dark.test.ts --exclude=**/dark.test.ts")).toBe(true);
+    expect(invocationCannotProveExecution("pnpm exec vitest run src/dark.test.ts --passWithNoTests")).toBe(true);
+    expect(invocationCannotProveExecution("pnpm exec vitest run src/dark.test.ts --no-coverage")).toBe(false);
+    // …and `--passWithNoTests` no longer makes a WHOLESALE run acceptable
+    // either: a run that exits 0 having collected nothing is the vacuous green
+    // this gate exists to catch.
+    expect(wholesaleVitestArgv(["--passWithNoTests"], null)).toBe(false);
+    const fx = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm exec vitest run src/a.test.ts --exclude=**/a.test.ts --passWithNoTests\n",
+      packages: { p: { config: "export default { test: { include: ['src/**/*.test.ts'] } };", files: ["src/a.test.ts"] } },
+    });
+    expect([...resolveEnforcedPins(fx.root, fx.workflowDir, fx.tracked, fx.pkgDirs).resolved]).toEqual([]);
+  });
+
+  it("does NOT let a REPO-ROOT vitest pin stand in for a package config's discovery", () => {
+    // `vitest run packages/p/a.test.ts` from the root is filtered by the ROOT
+    // config, so it says nothing about what packages/p's own config discovers.
+    const fx = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: pnpm exec vitest run packages/p/src/a.test.ts\n",
+      packages: { p: { config: "export default { test: { include: ['src/**/*.test.ts'] } };", files: ["src/a.test.ts"] } },
+    });
+    expect([...resolveEnforcedPins(fx.root, fx.workflowDir, fx.tracked, fx.pkgDirs).resolved]).toEqual([]);
+    // A pin scoped INSIDE the package still counts.
+    const scoped = pkgFixture({
+      workflow: "jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm exec vitest run src/a.test.ts\n",
+      packages: { p: { config: "export default { test: { include: ['src/**/*.test.ts'] } };", files: ["src/a.test.ts"] } },
+    });
+    expect([...resolveEnforcedPins(scoped.root, scoped.workflowDir, scoped.tracked, scoped.pkgDirs).resolved]).toEqual([
+      "packages/p/src/a.test.ts",
+    ]);
+  });
+
+  it("reads QUOTED vitest config keys", () => {
+    const cfg = (text) => {
+      const root = mkdtempSync(join(tmpdir(), "ci-cfg7-"));
+      writeFileSync(join(root, "vitest.config.ts"), text);
+      return join(root, "vitest.config.ts");
+    };
+    expect(() => parseVitestTestGlobs(cfg('export default { test: { "dir": "src" } };'))).toThrow(/re-bases/);
+    expect(parseVitestTestGlobs(cfg('export default { test: { "include": ["src/only.test.ts"] } };')).include).toEqual([
+      "src/only.test.ts",
+    ]);
+  });
+
+  it("treats npm's --prefix as the directory selector it is", () => {
+    const pkgDirs = new Map();
+    expect(segmentTargetDir("npm --prefix=../q test", "packages/p", pkgDirs)).toBe("../q");
+    expect(segmentTargetDir("npm --prefix ../q test", "packages/p", pkgDirs)).toBe("../q");
+  });
+
+  it("honours a QUOTED job id and a case-insensitive YAML boolean", () => {
+    expect(isLiterallyFalse("FALSE")).toBe(true);
+    expect(isLiterallyFalse("False")).toBe(true);
+    expect(isLiterallyTrue("TRUE")).toBe(true);
+    expect(wf("jobs:\n  \"gate\":\n    if: false\n    steps:\n      - run: cd packages/p && pnpm test\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - name: x\n        if: FALSE\n        run: cd packages/p && pnpm test\n")).toEqual([]);
+  });
+
+  it("honours a QUOTED block-style path filter key", () => {
+    const body = "jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm test\n";
+    expect(wf(body, { trigger: "on:\n  pull_request:\n    \"paths\":\n      - 'docs/**'\n" })).toEqual([]);
+  });
+
+  it("refuses a job whose runner is not demonstrably Linux (the default shell differs)", () => {
+    expect(wf("jobs:\n  a:\n    runs-on: windows-latest\n    steps:\n      - run: cd packages/p && pnpm test\n")).toEqual([]);
+    expect(wf("jobs:\n  a:\n    steps:\n      - run: cd packages/p && pnpm test\n")).toEqual(["packages/p"]); // fixture injects ubuntu-latest
+    expect(wf("jobs:\n  a:\n    runs-on: [self-hosted, linux]\n    steps:\n      - run: cd packages/p && pnpm test\n")).toEqual(["packages/p"]);
+    // …but an explicit modelled `shell:` overrides the runner default.
+    expect(
+      wf("jobs:\n  a:\n    runs-on: windows-latest\n    steps:\n      - name: x\n        shell: bash\n        run: cd packages/p && pnpm test\n"),
+    ).toEqual(["packages/p"]);
+  });
+
+  it("the LIVE repo survives every round-7 closure", () => {
+    expect(auditPackageSuiteRunners().ungated).toEqual([]);
+    expect(findWholesalePackageRuns().size).toBe(26);
+    expect(rootSuiteIsEnforced()).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Direction 3 — round-8 adversarial closures. This is where the review loop was
+// closed: every finding from here on was a narrower spelling of a class already
+// modelled, and the residual is documented in the module header rather than
+// chased further.
+// ---------------------------------------------------------------------------
+describe("direction 3 — round-8 fail-open closures", () => {
+  const wf = (body, opts = {}) => {
+    const fx = pkgFixture({
+      workflow: body,
+      packages: { p: { scripts: { test: "vitest run" }, config: "export default { test: { include: ['src/**/*.test.ts'] } };", files: ["src/a.test.ts"] } },
+      ...opts,
+    });
+    return [...findWholesalePackageRuns(fx.root, fx.workflowDir, fx.pkgDirs).keys()];
+  };
+
+  it("sees a narrowing pin flag however it is quoted, and covers -t / --config", () => {
+    expect(invocationCannotProveExecution('vitest run a.test.ts "--exclude=a.test.ts"')).toBe(true);
+    expect(invocationCannotProveExecution("vitest run a.test.ts '--passWithNoTests'")).toBe(true);
+    expect(invocationCannotProveExecution("vitest run a.test.ts -t nope")).toBe(true);
+    expect(invocationCannotProveExecution("vitest run a.test.ts --config other.ts")).toBe(true);
+    expect(invocationCannotProveExecution("vitest run a.test.ts --no-coverage")).toBe(false);
+  });
+
+  it("treats yarn's --cwd as a directory selector", () => {
+    expect(segmentTargetDir("yarn --cwd=../q test", "packages/p", new Map())).toBe("../q");
+  });
+
+  it("does NOT accept an EXPANSION in runs-on as a demonstrable Linux runner", () => {
+    expect(jobRunsOnLinux(["jobs:", "  a:", "    runs-on: ${{ vars.R || 'ubuntu-latest' }}", "    steps:", "      - run: x"], 4)).toBe(false);
+    expect(jobRunsOnLinux(["jobs:", "  a:", "    runs-on: ubuntu-latest", "    steps:", "      - run: x"], 4)).toBe(true);
+    expect(
+      wf("jobs:\n  a:\n    runs-on: ${{ vars.R || 'ubuntu-latest' }}\n    steps:\n      - run: cd packages/p && pnpm test\n"),
+    ).toEqual([]);
+  });
+
+  it("reads a QUOTED `run:` key", () => {
+    const blocks = extractRunBlocks("jobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - \"run\": pnpm exec vitest run\n");
+    expect(blocks.length).toBe(1);
+    expect(wf("jobs:\n  a:\n    steps:\n      - \"run\": cd packages/p && pnpm test\n")).toEqual(["packages/p"]);
+  });
+
+  it("REFUSES a re-basing key in the ROOT config too, and a `dir` SHORTHAND in the test block", () => {
+    expect(() => parseRootVitestTestGlobs(".", "export default { root: 'src', test: { include: ['a/*.test.ts'], exclude: ['x'] } };")).toThrow(/re-bases/);
+    expect(testBlockHasShorthand("export default { test: { dir, include: ['a'] } };", "dir")).toBe(true);
+    // …but a local `root` used as a FUNCTION ARGUMENT is not a config key —
+    // every package config that aliases paths writes `path.join(root, "…")`.
+    expect(testBlockHasShorthand("const x = path.join(root, 'a'); export default { test: { include: ['a'] } };", "dir")).toBe(false);
+    expect(parseVitestTestGlobs("/nonexistent/vitest.config.ts", "const p = path.join(\n  root,\n  'x',\n);\nexport default { test: { include: ['a/*.test.ts'] } };").include).toEqual(["a/*.test.ts"]);
+  });
+
+  it("the LIVE repo survives every round-8 closure — the final state", () => {
+    const v = auditPackageSuiteRunners();
+    expect(v.ungated).toEqual([]);
+    expect(v.staleExceptions).toEqual([]);
+    expect(v.redundantExceptions).toEqual([]);
+    expect(findWholesalePackageRuns().size).toBe(26);
+    expect(rootSuiteIsEnforced()).toBe(true);
+    expect(findUngatedAuditTests(REPO_ROOT)).toEqual([]);
+    expect(findMissingPinnedTests()).toEqual([]);
   });
 });

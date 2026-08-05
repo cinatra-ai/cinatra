@@ -1081,16 +1081,23 @@ jobs:
         run: echo "scripts/audit/archive-acceptance-gate.mjs not present yet (cinatra#2207 not merged) — reporting this CI-wiring job as a deliberate green no-op stub until it lands; see cinatra#1943."
 
   # Gate the canonical-extension invariants as an independent job so the gate
-  # is visible regardless of the agents-suite baseline. Runs the
-  # `pnpm test:invariants` script from packages/extensions (dispatcher +
-  # lifecycle primitive + lifecycle UI + dep closure + system inventory +
-  # add-from-chat + required-in-prod + verdaccio immutability + publish
-  # authority + naming-conformance + mcp-tools), plus the repaired drift suites
-  # (promotion-action, install-adapter topology A/B, visibility-filter,
-  # publish-destination-picker, and the clone-back-dependent blog-agent
-  # produces-plumbing) — previously excluded as "known failures", now gated so
-  # they cannot silently re-drift. Closes the CI coverage gap for
-  # resolver-bypass-regression.
+  # is visible regardless of the agents-suite baseline.
+  #
+  # cinatra#2439: this job used to run `pnpm test:invariants`, a HAND-MAINTAINED
+  # list of 40 test files out of the 113 packages/extensions ships. The other 73
+  # ran in no workflow at all — and joined that hole BY DEFAULT, because joining
+  # the gate required somebody to remember to append a path to a package.json
+  # script. That is the same failure shape cinatra#2288 documents for the
+  # extension fleet and cinatra#2316 for packages/execution-plane.
+  #
+  # The step now runs the WHOLE package (`pnpm test` = `vitest run` over the
+  # package's own config), the `test:invariants` script is deleted so it cannot
+  # come back, and every carve-out is an explicit `exclude` entry in
+  # packages/extensions/vitest.config.ts with a written reason and a filed
+  # follow-up issue (mirrored in
+  # scripts/audit/package-suite-runner-exceptions.json). Measured: 110 files /
+  # 2,165 tests, 6s of vitest locally, against 40 files before — the whole-suite
+  # run costs seconds, not minutes, so no tier split was needed.
   v64-invariants:
     name: Canonical extension invariants
     needs: detect
@@ -1115,8 +1122,154 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Extension invariants (packages/extensions)
-        run: cd packages/extensions && pnpm test:invariants
+      # WHOLE package, from the package dir, under its own config — not a file
+      # list. A new test file under `src/**/__tests__/` is gated by default.
+      - name: Extension invariants (packages/extensions — whole suite)
+        run: cd packages/extensions && pnpm test
+
+  # ── Workspace package unit suites (cinatra#2439) ────────────────────────────
+  #
+  # WHAT WAS BROKEN. The sweep in cinatra#2434 inventoried every test file in
+  # the tree against every workflow runner and found ~209 plain package unit
+  # suites that NO workflow invoked at all — the whole of packages/llm (56
+  # files), packages/chat (40), packages/agent-ui-protocol (13), most of
+  # packages/objects and packages/registries (which had 5 and 3 hand-pinned
+  # files respectively), and a dozen small packages with one to seven files
+  # each. Not carved out, not quarantined: never wired, because a package's
+  # tests join CI only when somebody adds a step and nothing said when nobody
+  # did. The repo-wide `tsc` still compiled those files, so a TYPE error reded
+  # CI while a FAILING ASSERTION did not — the identical gap cinatra#2316
+  # closed for packages/execution-plane and cinatra#2288 for the extension
+  # fleet.
+  #
+  # It was not theoretical. First-running these suites for this change found
+  # real defects that had been invisible: a stale two-argument assertion in
+  # packages/objects' read-path suite that missed the cinatra#1428 ownership
+  # filter, a missing sandbox alias that had eight packages/objects handler
+  # suites failing at assertion time with ERR_MODULE_NOT_FOUND, and four
+  # genuinely red fleet-drift suites now quarantined against filed issues
+  # (cinatra#2454, cinatra#2455).
+  #
+  # WHY ONE JOB AND NOT STEPS ON AN EXISTING ONE. The whole set is 219 files /
+  # 2,493 tests and 17.4s of vitest SEQUENTIALLY (measured locally, per-package
+  # figures beside each step below) — nowhere near the ~5-minute per-PR budget
+  # cinatra#2439 sets as the main-only threshold, so every package here runs on
+  # the per-PR path and none needed a main-only tier. But the job still pays a
+  # checkout + companion clone + `pnpm install`, so folding it into
+  # `perpetual-loops-invariants` would have spent that job's remaining margin
+  # (10-11 min against an 18-minute cap, reasoned in its own header) on suites
+  # that do not need anything that job has. A sibling job runs in PARALLEL, so
+  # the workflow's critical path — the ~30-minute `build` job — is unchanged.
+  #
+  # WHY HAND-LISTED STEPS ARE SAFE HERE, when hand-listing is exactly what let
+  # this hole grow. Because the default is now inverted somewhere else: the
+  # `Pinned-test existence gate` step in perpetual-loops-invariants
+  # (scripts/audit/ci-pinned-tests-exist.mjs, direction 3) reads THIS file and
+  # fails closed on any packages/** unit test with no statically detected
+  # runner and no written exception. Adding a package with tests and forgetting
+  # this job turns that gate RED with the file named. Every step below is
+  # WHOLE-PACKAGE (`pnpm test` from the package dir, under the package's own
+  # config), never a file list, so a new test file inside an already-wired
+  # package is gated by default with no edit here at all.
+  #
+  # REQUIRED STRUCTURALLY, not via branch protection: the `build` job `needs`
+  # this job and its "Guard prerequisite gates" step hard-fails the
+  # (branch-protection-required) `build` if it did not succeed — the exact
+  # mechanism behind `test` / `skills-unit` / `a2a-unit` /
+  # `execution-plane-unit`, so NO branch-protection contexts change is needed
+  # and this job's own context stays non-required.
+  #
+  # The companion clone is needed: several packages/objects suites
+  # (register-types-*, semantic-manifest*, the seed-pack parity tier) read the
+  # MATERIALIZED extension tree off disk, exactly as the seed-pack tier in
+  # perpetual-loops-invariants does.
+  package-unit-suites:
+    name: Workspace package unit suites
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Setup (checkout + clone-extensions + install) is the whole cost here;
+    # 17.4s of measured vitest sits on top of it. 12 leaves room for runner
+    # variance and fleet growth without hiding a genuine stall.
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone companion extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Each step is the WHOLE package under its own vitest config. The figure
+      # is the locally measured wall time of that one invocation (files/tests
+      # as of this change); the sum is 17.4s.
+      - name: llm unit suite (56 files / 656 tests, 1.4s)
+        run: cd packages/llm && pnpm test
+
+      - name: objects unit suite (59 files / 692 tests, 1.5s)
+        run: cd packages/objects && pnpm test
+
+      - name: chat unit suite (40 files / 412 tests, 3.0s)
+        run: cd packages/chat && pnpm test
+
+      - name: agent-ui-protocol unit suite (13 files / 153 tests, 0.7s)
+        run: cd packages/agent-ui-protocol && pnpm test
+
+      - name: registries unit suite (16 files / 142 tests, 1.4s)
+        run: cd packages/registries && pnpm test
+
+      - name: metric-cost-api unit suite (7 files / 30 tests, 0.7s)
+        run: cd packages/metric-cost-api && pnpm test
+
+      - name: memory unit suite (7 files / 61 tests, 1.9s)
+        run: cd packages/memory && pnpm test
+
+      - name: marketplace-mcp-client unit suite (5 files / 79 tests, 0.6s)
+        run: cd packages/marketplace-mcp-client && pnpm test
+
+      - name: webhooks unit suite (4 files / 138 tests, 0.6s)
+        run: cd packages/webhooks && pnpm test
+
+      - name: streams unit suite (3 files / 36 tests, 0.9s)
+        run: cd packages/streams && pnpm test
+
+      - name: extension-types unit suite (2 files / 19 tests, 0.6s)
+        run: cd packages/extension-types && pnpm test
+
+      - name: artifacts unit suite (1 file / 3 tests, 0.5s)
+        run: cd packages/artifacts && pnpm test
+
+      - name: connectors-catalog unit suite (1 file / 6 tests, 0.5s)
+        run: cd packages/connectors-catalog && pnpm test
+
+      - name: marketplace-application-reconcile unit suite (1 file / 8 tests, 0.6s)
+        run: cd packages/marketplace-application-reconcile && pnpm test
+
+      - name: marketplace-sync unit suite (1 file / 20 tests, 0.5s)
+        run: cd packages/marketplace-sync && pnpm test
+
+      - name: metric-contracts unit suite (1 file / 4 tests, 0.5s)
+        run: cd packages/metric-contracts && pnpm test
+
+      - name: pm-schedule-reconcile unit suite (1 file / 12 tests, 0.6s)
+        run: cd packages/pm-schedule-reconcile && pnpm test
+
+      - name: projects unit suite (1 file / 24 tests, 0.8s)
+        run: cd packages/projects && pnpm test
 
   # Dev-mode build performance invariants — gates the locked measurement
   # contract + the chokepoint-narrowing invariants. Runs the 4 test files under
@@ -1864,12 +2017,32 @@ jobs:
           scripts/extensions/__tests__/schema-config-validator-parity.test.ts
           --no-coverage
 
+      # These four lines used to read
+      #   cd packages/<x> && pnpm exec vitest run <file> --no-coverage && cd ../..
+      # and NONE of them could turn this step red. GitHub runs a `run:` block
+      # under `bash -e`, and errexit does NOT fire for a command inside an
+      # `&&`-list: the list's own non-zero status is then discarded by the next
+      # line, and the final line ends on a SUCCEEDING `cd ../..`, so its status
+      # is 0 too. Measured, not inferred:
+      #   bash -e -c 'cd /tmp && false && cd /'              → 1
+      #   bash -e -c $'cd /tmp && false && cd /\ncd /tmp'    → 0
+      # Four advertised pins that could not fail — found by cinatra#2439 while
+      # building the packages/** SUITE → RUNNER guard, which has to model
+      # exactly this to avoid crediting a runner that cannot red a check.
+      #
+      # `pnpm -C <dir>` runs each invocation in the package directory without a
+      # `cd`, so every line is a SIMPLE command and errexit fires on it. All
+      # four files are also covered wholesale now (packages/objects,
+      # packages/registries by the `package-unit-suites` job; packages/dashboards
+      # by dashboards-suite-gate.yml; packages/sdk-extensions by the root
+      # include), so these pins are belt-and-suspenders — but a pin that cannot
+      # fail is worse than no pin, because it reads as coverage.
       - name: Runtime installer package-scoped unit tests
         run: |
-          cd packages/objects && pnpm exec vitest run src/__tests__/registry-package-provenance.test.ts --no-coverage && cd ../..
-          cd packages/dashboards && pnpm exec vitest run src/extension/__tests__/cube-guard.test.ts --no-coverage && cd ../..
-          cd packages/registries && pnpm exec vitest run tests/resolve-dist-integrity.test.ts tests/registry-auth-options.test.ts tests/registry-auth.integration.test.ts --no-coverage && cd ../..
-          cd packages/sdk-extensions && pnpm exec vitest run src/__tests__/runtime-loader.test.ts --no-coverage && cd ../..
+          pnpm -C packages/objects exec vitest run src/__tests__/registry-package-provenance.test.ts --no-coverage
+          pnpm -C packages/dashboards exec vitest run src/extension/__tests__/cube-guard.test.ts --no-coverage
+          pnpm -C packages/registries exec vitest run tests/resolve-dist-integrity.test.ts tests/registry-auth-options.test.ts tests/registry-auth.integration.test.ts --no-coverage
+          pnpm -C packages/sdk-extensions exec vitest run src/__tests__/runtime-loader.test.ts --no-coverage
 
       # Seed-pack manifest parity tier (packages/objects). These four suites are
       # the ONLY host-side assertion that each seeded artifact extension's typed
@@ -2509,8 +2682,13 @@ jobs:
     # merge gate WITHOUT adding a branch-protection context.
     # `execution-plane-unit` (cinatra#2316) joins on the identical footing: it is
     # the ONLY CI runner for the packages/execution-plane unit tier.
-    needs: [detect, test, skills-unit, a2a-unit, execution-plane-unit]
-    # Run even when a prerequisite (`detect`/`test`/`skills-unit`/`a2a-unit`/`execution-plane-unit`) FAILED, so the guard step
+    # `package-unit-suites` (cinatra#2439) joins on the identical footing again:
+    # it is the ONLY CI runner for the unit suites of eighteen workspace
+    # packages — packages/llm, packages/chat, packages/objects,
+    # packages/registries and the rest — which until this change executed in no
+    # workflow at all.
+    needs: [detect, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites]
+    # Run even when a prerequisite (`detect`/`test`/`skills-unit`/`a2a-unit`/`execution-plane-unit`/`package-unit-suites`) FAILED, so the guard step
     # below reports a definitive job FAILURE instead of a SKIP. GitHub can count a
     # skipped required check as successful, so a failed `test` merely *skipping*
     # `build` would NOT block a merge gated on the build status. The guard closes
@@ -2539,10 +2717,10 @@ jobs:
       # Hard-fail the build (definitive RED, never a non-failing "skip") when a
       # prerequisite gate did not pass — the type-safety enforcement for the
       # CI-only in-build-tsc skip (see the `test` job). No-ops on the success path.
-      - name: Guard prerequisite gates (detect + test + skills-unit + a2a-unit + execution-plane-unit)
-        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' || needs['a2a-unit'].result != 'success' || needs['execution-plane-unit'].result != 'success' }}
+      - name: Guard prerequisite gates (detect + test + skills-unit + a2a-unit + execution-plane-unit + package-unit-suites)
+        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' || needs['a2a-unit'].result != 'success' || needs['execution-plane-unit'].result != 'success' || needs['package-unit-suites'].result != 'success' }}
         run: |
-          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }} a2a-unit=${{ needs['a2a-unit'].result }} execution-plane-unit=${{ needs['execution-plane-unit'].result }}. Refusing to build the image."
+          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }} a2a-unit=${{ needs['a2a-unit'].result }} execution-plane-unit=${{ needs['execution-plane-unit'].result }} package-unit-suites=${{ needs['package-unit-suites'].result }}. Refusing to build the image."
           exit 1
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

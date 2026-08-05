@@ -1,0 +1,48 @@
+{
+  "$comment": [
+    "QUARANTINE LEDGER for direction 3 of scripts/audit/ci-pinned-tests-exist.mjs",
+    "(cinatra#2439). A packages/** test file with no statically detected CI runner",
+    "turns that gate RED unless it is named here. This is the ONLY no-runner state",
+    "the contract admits: a quarantined suite runs nowhere, so it MUST carry a filed",
+    "follow-up issue. The other contract state — main-only — is not an exception at",
+    "all: such a suite still executes and still reds its check, so the gate detects",
+    "its runner like any other. There is no third state.",
+    "",
+    "Every entry is validated by readPackageSuiteExceptions(): `file` must be a",
+    "tracked packages/** test path, `kind` must be \"quarantine\", `issue` must be a",
+    "GitHub issue URL, and `reason` must be a written sentence. An entry whose file",
+    "is GONE, or whose file a runner DOES execute, fails the gate — a ledger that",
+    "does not describe CI's actual shape is worse than none.",
+    "",
+    "Retiring an entry: repair the suite, delete its exclusion from the package's",
+    "vitest.config.ts AND its entry here in the same change, and close the issue.",
+    "The exclusion and the entry are a PAIR; the gate's redundant-entry check is",
+    "what stops one from outliving the other."
+  ],
+  "exceptions": [
+    {
+      "file": "packages/objects/src/__tests__/artifact-bridge.test.ts",
+      "kind": "quarantine",
+      "issue": "https://github.com/cinatra-ai/cinatra/issues/2454",
+      "reason": "Asserts zero drift between the live pinned extensions tree and the object-type ids registerArtifactExtensions registers. Genuinely RED at the committed dev-lock pins: @cinatra-ai/cms-snapshot-artifact mints the umbrella-shaped id '@cinatra-ai/cms-snapshot-artifact:artifact', which the suite forbids. A real fleet finding whose repair belongs in the companion extension repo, outside cinatra#2439's CI-wiring scope bound."
+    },
+    {
+      "file": "packages/extensions/src/__tests__/blog-text-parity.test.ts",
+      "kind": "quarantine",
+      "issue": "https://github.com/cinatra-ai/cinatra/issues/2455",
+      "reason": "Blog-text parity against the materialized companion tree: blog-draft-writer-agent, blog-idea-generator-agent and blog-linkedin-writer-agent ship no auto-discovered SKILL.md at their pinned shas and their leaf OAS still wires store-mutating tools the parity contract forbids (7 failing cases). Fleet drift, repaired in the companion repos."
+    },
+    {
+      "file": "packages/extensions/src/__tests__/contextslots-require-explicit-context-selection-agent.test.ts",
+      "kind": "quarantine",
+      "issue": "https://github.com/cinatra-ai/cinatra/issues/2455",
+      "reason": "Requires every contextSlots agent to declare @cinatra-ai/context-selection-agent in cinatra.agentDependencies; email-outreach-agent declares none at its pinned sha. Fleet drift, repaired in the companion repo."
+    },
+    {
+      "file": "packages/extensions/src/__tests__/email-outreach-agent-explicit-context-selection-agent.test.ts",
+      "kind": "quarantine",
+      "issue": "https://github.com/cinatra-ai/cinatra/issues/2455",
+      "reason": "Asserts email-outreach-agent declares the context-selection-agent dependency and routes skills_flow to context_offeringContext to drafts_flow in its OAS; neither holds at the pinned sha (4 failing cases). Fleet drift, repaired in the companion repo."
+    }
+  ]
+}
