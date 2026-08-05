@@ -16,7 +16,7 @@ import "server-only";
  */
 import Link from "next/link";
 import { formatDistanceToNow } from "date-fns";
-import { AlertTriangle, Braces, Search } from "lucide-react";
+import { AlertTriangle, Braces } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -26,8 +26,19 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Input } from "@/components/ui/input";
 import type { ActorContext } from "@/lib/authz/actor-context";
+import type { AvailableScopes } from "@/components/access-scope";
+import {
+  readOrgsWithTeamsForUserActiveOnly,
+  readProjectsForUser,
+} from "@/lib/better-auth-db";
+import {
+  isDefaultScopeSelection,
+  parseScopeFilterParam,
+  scopeSelectionMatchesAny,
+  type ScopeToken,
+} from "@/lib/scope-filter";
+import { artifactScopeEntries } from "@/lib/artifacts/artifact-scope-entries";
 import {
   listArtifacts,
   type ArtifactSummary,
@@ -38,7 +49,7 @@ import { isSelectionPreparing } from "@/app/artifacts/[id]/renderer-dispatch";
 import { isDashboardArtifactType } from "@/lib/dashboards/dashboard-artifact-surface";
 import type { DashboardArtifactPointer } from "@/lib/dashboards/dashboard-artifact-surface";
 import { resolveLibraryDashboardPointers } from "@/lib/dashboards/dashboard-artifact-pointer-resolvers";
-import { LibraryFacetControl } from "./library-facet-control";
+import { LibraryToolbar } from "./library-toolbar";
 import { isFileMime, LibraryRowGlyph } from "./library-row-glyph";
 import { DashboardLibraryRow } from "./dashboard-library-row";
 import {
@@ -101,21 +112,65 @@ type VisibleLibraryItem =
 export async function LibraryMode({
   orgId,
   actor,
+  userId,
   query,
   facet,
+  scopeParam,
 }: {
   orgId: string | null;
   actor: ActorContext;
+  /** The acting user's id (session-resolved by the page). */
+  userId: string | null;
   query?: string;
   facet?: string;
+  /** The raw `?scope=` search param (parsed by the canonical parser here). */
+  scopeParam?: string | string[];
 }) {
+  // Scope filter (cinatra#2449) — the SAME wiring as /connectors and /skills:
+  // build the actor's accessible scopes (orgs they belong to, projects they
+  // can read) for the shared picker, gate org/team/project tokens to those
+  // memberships, and parse `?scope=` through the ONE canonical multi-scope
+  // parser (invalid / inaccessible tokens drop; an empty or workspace-
+  // containing selection collapses to the default, broadest view). Artifacts
+  // carry no admin-only tier, so the "admin" token is not offered and a stale
+  // `?scope=admin` collapses to the default.
+  const orgs = userId ? await readOrgsWithTeamsForUserActiveOnly(userId) : [];
+  const projects = userId && orgId ? await readProjectsForUser(userId, orgId) : [];
+  const scopes: AvailableScopes = {
+    orgs: orgs.map((org) => ({
+      id: org.id,
+      name: org.name,
+      teams: org.teams.map((t) => ({ id: t.id, name: t.name })),
+    })),
+    projects: projects.map((p) => ({ id: p.id, name: p.name })),
+    canGrantWorkspace: true,
+  };
+  const accessibleScopeTokens = new Set<string>(["personal", "workspace"]);
+  for (const org of orgs) {
+    accessibleScopeTokens.add(`org:${org.id}`);
+    for (const team of org.teams) accessibleScopeTokens.add(`team:${team.id}`);
+  }
+  for (const project of projects) accessibleScopeTokens.add(`project:${project.id}`);
+  const effectiveScopeTokens = parseScopeFilterParam(
+    scopeParam,
+    accessibleScopeTokens,
+  );
+
   let all: ArtifactSummary[];
   try {
     all = listArtifacts({ orgId, actor, limit: 200 });
   } catch {
-    return <LibraryToolbarShell query={query} facet={[]} selectedFacet={facet}>
-      <LibraryErrorState />
-    </LibraryToolbarShell>;
+    return (
+      <LibraryToolbarShell
+        query={query}
+        facet={[]}
+        selectedFacet={facet}
+        scopeValue={effectiveScopeTokens}
+        scopes={scopes}
+      >
+        <LibraryErrorState />
+      </LibraryToolbarShell>
+    );
   }
 
   // §VIII — resolve the pointer for every dashboard-typed row, applying the
@@ -147,10 +202,23 @@ export async function LibraryMode({
 
   const q = (query ?? "").trim().toLowerCase();
   const facetActive = Boolean(facet && facet !== "__all__");
+  const scopeActive = !isDefaultScopeSelection(effectiveScopeTokens);
 
   const visible: VisibleLibraryItem[] = [];
   for (const a of all) {
     if (facet && facet !== "__all__" && facetKeyOf(a.presentationIdentity) !== facet) {
+      continue;
+    }
+    // Scope OR-filter (cinatra#2449): the default (broadest) selection shows
+    // every visible row; otherwise a row survives when ANY of its scope
+    // entries (owner locus + optional project binding) OR-matches the
+    // selection — the same predicate lift as the connectors card filter.
+    if (
+      scopeActive &&
+      !artifactScopeEntries(a).some((entry) =>
+        scopeSelectionMatchesAny(effectiveScopeTokens, entry),
+      )
+    ) {
       continue;
     }
     if (isDashboardArtifactType(a.objectType)) {
@@ -171,9 +239,15 @@ export async function LibraryMode({
   }
 
   return (
-    <LibraryToolbarShell query={query} facet={facetOptions} selectedFacet={facet}>
+    <LibraryToolbarShell
+      query={query}
+      facet={facetOptions}
+      selectedFacet={facet}
+      scopeValue={effectiveScopeTokens}
+      scopes={scopes}
+    >
       {visible.length === 0 ? (
-        <LibraryEmptyState filtered={Boolean(q) || facetActive} />
+        <LibraryEmptyState filtered={Boolean(q) || facetActive || scopeActive} />
       ) : (
         <ul
           className="overflow-hidden rounded-lg border border-line bg-surface-strong"
@@ -310,46 +384,32 @@ function LibraryToolbarShell({
   query,
   facet,
   selectedFacet,
+  scopeValue,
+  scopes,
   children,
 }: {
   query?: string;
   facet: Array<{ value: string; label: string }>;
   selectedFacet?: string;
+  scopeValue: ScopeToken[];
+  scopes: AvailableScopes;
   children: React.ReactNode;
 }) {
   return (
     <LibraryUploadProvider>
       <div className="flex flex-col gap-3.5">
-        {/* Toolbar: search · facet · scope · Upload. GET form keeps mode =
-            library (default), so submitting stays on this page. The Upload
-            control (§VI) sits at the toolbar's right edge — a plain type=button,
-            so it never submits the GET form; the whole list below is a drop
-            target (LibraryUploadDropZone). */}
-        <form
-          method="get"
-          className="flex flex-wrap items-center gap-2 rounded-lg bg-toolbar p-2"
-        >
-          <label className="flex h-[34px] flex-1 items-center gap-2 rounded-md bg-surface-strong px-3">
-            <Search aria-hidden className="size-4 flex-none text-muted-foreground" />
-            <Input
-              type="search"
-              name="q"
-              defaultValue={query ?? ""}
-              placeholder="Search artifacts"
-              className="h-full border-0 bg-transparent p-0 text-xs shadow-none focus-visible:ring-0"
-            />
-          </label>
-          <LibraryFacetControl options={facet} selected={selectedFacet} />
-          <span className="inline-flex h-[34px] items-center gap-1.5 rounded-md border border-line bg-surface-strong px-3 text-xs text-foreground">
-            <span className="text-muted-foreground">Scope:</span> Workspace
-          </span>
-          <Button type="submit" size="sm" variant="secondary">
-            Apply
-          </Button>
-          <div className="ml-auto flex items-center">
-            <LibraryUploadButton />
-          </div>
-        </form>
+        {/* Toolbar: search · facet · scope (§I, spec L311–319) with the §VI
+            Upload control at the right edge — live filtering via the shared
+            toolbar composition (LibraryToolbar), no Apply step. The whole
+            list below is a drop target (LibraryUploadDropZone). */}
+        <LibraryToolbar
+          query={query}
+          facetOptions={facet}
+          selectedFacet={selectedFacet}
+          scopeValue={scopeValue}
+          scopes={scopes}
+          uploadAction={<LibraryUploadButton />}
+        />
         <LibraryUploadDropZone>{children}</LibraryUploadDropZone>
       </div>
     </LibraryUploadProvider>

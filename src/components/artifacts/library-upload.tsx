@@ -15,9 +15,9 @@
  * dispatch spine); this file adds three client ISLANDS sharing one context —
  * `LibraryUploadProvider` (state + the hidden file input), `LibraryUploadButton`
  * (the toolbar control), and `LibraryUploadDropZone` (the list drop target,
- * overlay, progress row, typed banner + the picker/marketplace dialogs). The
- * pattern mirrors the existing `library-facet-control` island inside the
- * server-rendered toolbar.
+ * overlay, progress row, typed banner + the picker/marketplace dialogs).
+ * `LibraryUploadButton` is composed by the server shell (library-mode.tsx)
+ * into the client `LibraryToolbar`'s right edge (cinatra#2449).
  *
  * SCOPED OUT (honest, spec §VI.1 "Derived meaning & suggestion chips", ruling 2):
  * the classifier-derived SUGGESTION chip + auto-surface are the matcher service
