@@ -20,6 +20,7 @@
       "id": "app-extensions",
       "file": "app-extensions.json",
       "source": "repo",
+      "$specCommit": "design@c144f39 — specs/app-extensions.html version 0.11.0 (epic cinatra#2360, adopted by cinatra#2362). Regenerated at that commit with `node scripts/generate-conformance.mjs specs/app-extensions.html`; the spec bytes at that commit hash to specContentHash and the generator's output is byte-identical to the artifact committed alongside it in the design-system source of truth — the copy under manifests/ is those bytes verbatim.",
       "manifestSha256": "57d86bf3f175f5ab08e8ec3a63c54f9be101071d2bd1fa1a9f6657f1492990c4",
       "specContentHash": "sha256:7aa3e214d6b35805b6eef4b005a389febe9f5d3fb914abb93e40a344e6f0379f"
     },
