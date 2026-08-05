@@ -253,20 +253,20 @@ exactly what the implementation above does).
 
 ### CURRENT
 
-Three of the four surfaces still run `@modelcontextprotocol/sdk`, declared
+Two of the four surfaces still run `@modelcontextprotocol/sdk`, declared
 `^1.29.0` in the root `package.json` and resolved to **`1.29.0`** in the
 lockfile, whose `LATEST_PROTOCOL_VERSION` is `2025-11-25` and whose
 `SUPPORTED_PROTOCOL_VERSIONS` is the same five-revision list the inbound legacy
 leg accepts. **Unchanged by cinatra#2218 L1** — that lane was the server surface
 only. The client migration to `@modelcontextprotocol/client@2.0.0` runs one
-surface at a time; the first one has landed.
+surface at a time; two have landed.
 
 | Surface | Client | Negotiation | Offers on `initialize` | Accepts from server |
 | --- | --- | --- | --- | --- |
 | `src/lib/connector-instance-mcp-transport.ts` | SDK `Client` + `StreamableHTTPClientTransport` | none (v1 has no `versionNegotiation`) | `2025-11-25` | the five legacy revisions |
 | `http-client.ts` in `packages/marketplace-mcp-client` | SDK `Client` + `StreamableHTTPClientTransport` | none (v1 has no `versionNegotiation`) | `2025-11-25` | the five legacy revisions |
 | `packages/objects/src/graphiti-client.ts` | **`@modelcontextprotocol/client@2.0.0`** | **`{ mode: 'legacy' }` — explicit, measured** | `2025-11-25` | the five legacy revisions |
-| `packages/agents/src/external-mcp-caller.ts` | hand-rolled JSON-RPC over `fetch` | none | **nothing — no `initialize` at all** | n/a (no negotiation) |
+| `packages/agents/src/external-mcp-caller.ts` | **`@modelcontextprotocol/client@2.0.0`** | **`{ mode: 'auto' }` — explicit, wire-observed** | nothing on a modern peer (`server/discover` instead); `2025-11-25` on the legacy fallback | `2026-07-28` where the peer answers the probe, else the five legacy revisions |
 
 **The graphiti row moved with cinatra#2218 L2a**, and its mode is a measured
 decision rather than a holding position. The peer is a digest-pinned image —
@@ -300,13 +300,45 @@ The session id the pinned peer requires is minted and held by the client
 library and stays transport-private — cinatra does not read, persist, route, or
 authorize on it, per this issue's acceptance criterion 4.
 
-`external-mcp-caller.ts` is the outlier and the one to watch. It POSTs
-`tools/list` and `tools/call` directly with `Content-Type: application/json` and
-`Accept: application/json`, performs no handshake, and sends **no**
-`MCP-Protocol-Version` header. It declares no revision, so it is a claim-less
-POST: against a `2026-07-28` endpoint it classifies as **legacy** traffic and is
-served only if that endpoint runs `legacy: 'stateless'`. Against a modern-only
-peer it fails.
+**The `external-mcp-caller.ts` row moved with cinatra#2218 L2c**, and it is the
+one surface whose mode is `{ mode: 'auto' }` on principle rather than on a
+measurement of one peer: its peers are arbitrary third-party servers an
+administrator registers at run time, at URLs cinatra neither controls nor pins,
+so per-peer negotiation is the only posture that can be correct. It was the
+outlier before that change — a hand-rolled `tools/list` POST with
+`Accept: application/json`, no handshake and no `MCP-Protocol-Version` header,
+i.e. a claim-less POST with no revision to state. Two properties of the surface
+it replaced, both measured on the wire rather than inferred:
+
+- a conformant 2025-era peer refuses that POST **`406`** on the `Accept` header
+  alone, before any protocol question is reached;
+- against a modern-only peer it fails with no negotiation error to explain why.
+
+Measured for the migrated module against real `@modelcontextprotocol/server@2.0.0`
+peers, through a frame-recording proxy
+(`packages/agents/src/__tests__/external-mcp-caller-negotiation.test.ts`, which
+runs ungated in the normal suite — the peers are in-process, so no container and
+no network access are required):
+
+| Peer | Mode passed | Negotiated era | Revision | HTTP frames |
+| --- | --- | --- | --- | --- |
+| modern (`2026-07-28`) | `{ mode: 'auto' }` | `modern` | `2026-07-28` | 2 |
+| 2025-era only | `{ mode: 'auto' }` | `legacy` | `2025-11-25` | 4 (the first is the refused probe) |
+| modern (`2026-07-28`) | `'auto'` as a bare string | `legacy` | `2025-11-25` | 3 — **no probe issued at all** |
+
+The third row is the bare-string trap in its costly form: the peer *does* speak
+`2026-07-28`, and the string still lands the connection on the 2025 era with
+nothing reporting it.
+
+**Implementation note carried by this row.** On both `client@2.0.0` and
+`sdk@1.29.0` the Streamable HTTP transport builds each request as
+`{ ...requestInit, method, headers, signal }`, so a caller-supplied
+`requestInit.signal` is **overwritten and bounds nothing**. Measured against a
+black-hole peer: a `1200 ms` `requestInit.signal` returned only after the
+protocol timeout, where the same deadline imposed through the transport's
+`fetch` option, or through `connect(transport, { timeout })`, returned at
+`~1200 ms`. This surface therefore carries its per-server budget on the custom
+`fetch` and on the protocol-level `timeout`, not on `requestInit`.
 
 Not MCP protocol surfaces, listed so they are not mistaken for gaps:
 `src/lib/wordpress-mcp-connection.ts` and `src/lib/drupal-mcp-connection.ts`
@@ -370,18 +402,19 @@ Per surface:
 | `src/lib/connector-instance-mcp-transport.ts` | `@modelcontextprotocol/client@2.0.0` | `{ mode: 'auto' }` — or explicit `{ mode: 'legacy' }` while the peer is the sessionful 2025-era gateway | `2026-07-28` preferred; the five legacy revisions via fallback |
 | `http-client.ts` in `packages/marketplace-mcp-client` | `@modelcontextprotocol/client@2.0.0` | `{ mode: 'auto' }` | `2026-07-28` preferred; the five legacy revisions via fallback |
 | `packages/objects/src/graphiti-client.ts` | ~~`@modelcontextprotocol/client@2.0.0`~~ **LANDED — see CURRENT** | **`{ mode: 'legacy' }`**, measured: the pinned image rejects `server/discover`. Flip to `{ mode: 'auto' }` when the image pin moves to one that answers it | the five legacy revisions |
-| `packages/agents/src/external-mcp-caller.ts` | `@modelcontextprotocol/client@2.0.0` — **migrate off hand-rolled `fetch`** | `{ mode: 'auto' }` | `2026-07-28` preferred; the five legacy revisions via fallback |
+| `packages/agents/src/external-mcp-caller.ts` | ~~`@modelcontextprotocol/client@2.0.0` — migrate off hand-rolled `fetch`~~ **LANDED — see CURRENT** | **`{ mode: 'auto' }`**, wire-observed against both peer classes | `2026-07-28` preferred; the five legacy revisions via fallback |
 
 Whichever mode a surface lands on, the migration must **prove** it: an assertion
 that `server/discover` was (or was not) issued and that the expected revision was
 negotiated. A package version is not evidence of a negotiation — the bare-string
 trap above produces a fully working client on the wrong era.
 
-The last row is a decision, not a deferral. `external-mcp-caller.ts` negotiates
-nothing today, which means it fails silently against a modern-only peer and can
-never reach `2026-07-28`; leaving it hand-rolled would make it the single surface
-whose revision posture is unstatable. It moves onto the SDK client so that all
-four outbound surfaces have one negotiation model. Also TARGET, in the same
+The last row was a decision rather than a deferral, and it has landed:
+`external-mcp-caller.ts` negotiated nothing, which meant it failed silently
+against a modern-only peer and could never reach `2026-07-28`; leaving it
+hand-rolled would have made it the single surface whose revision posture was
+unstatable. It now runs the SDK client, so three of the four outbound surfaces
+share one negotiation model. Also TARGET, in the same
 change: the stale `MCP_PROTOCOL_VERSION = "2025-06-18"` constant and its module
 comment are deleted rather than updated — the SDK owns the offered revision, so no
 cinatra constant should appear to.
@@ -398,17 +431,27 @@ deliberately: on `client@2.0.0` with `{ mode: 'legacy' }` it runs the plain
 with its sessionful 2025-era peer. Its peer is one cinatra pins, so "an
 older-revision peer" is not a contingency there but the measured steady state.
 
-`external-mcp-caller.ts` performs no negotiation, so it does not *observe* the
-peer's revision — but the peer's revision posture still decides the outcome. Its
-headerless, claim-less POST succeeds only against peers that answer a **bare
-`tools/list`** with no prior handshake. That is narrower than "2025-era": a
-2025-era server is free to require the `initialize` exchange and a protocol
-session, and some do — the module header of
+The migrated `external-mcp-caller.ts` surface reaches the same outcome by
+negotiating it per peer, which is the only way it *can* be reached there: its
+peers are arbitrary and change at run time, so there is no peer whose era could
+be decided once in the source. Under `{ mode: 'auto' }` a 2025-era peer refuses
+the `server/discover` probe and the connection completes on the legacy
+`initialize` path; a `2026-07-28` peer answers the probe and the connection
+never issues `initialize` at all. Both outcomes are wire-observed, not inferred.
+
+Before that migration this surface performed no negotiation, so it did not
+*observe* the peer's revision — but the peer's revision posture still decided
+the outcome. Its headerless, claim-less POST succeeded only against peers that
+answer a **bare `tools/list`** with no prior handshake, *and* accept
+`Accept: application/json` alone — narrower still than "2025-era", since a
+conformant 2025-era peer answers that Accept header `406` before reaching any
+protocol question, and is free to require the `initialize` exchange and a
+protocol session on top (the module header of
 `src/lib/connector-instance-mcp-transport.ts` records exactly that case, where a
-bare `tools/list` returns HTTP 400 `-32600 "Missing Mcp-Session-Id header"`. It
-also **fails against a modern-only peer**, with no negotiation error to explain
-why. So "negotiates nothing" is not "unaffected" — it means the surface has no
-revision posture to state and no diagnostic when a peer's posture excludes it.
+bare `tools/list` returns HTTP 400 `-32600 "Missing Mcp-Session-Id header"`). It
+also **failed against a modern-only peer**, with no negotiation error to explain
+why. "Negotiates nothing" was never "unaffected": it meant the surface had no
+revision posture to state and no diagnostic when a peer's posture excluded it.
 
 **TARGET.** Unchanged in outcome for the SDK-client surfaces, by design: under
 `versionNegotiation: { mode: 'auto' }` an older-revision server is detected by
@@ -419,10 +462,30 @@ same five stay reachable without the probe at all. **cinatra does not drop
 support for calling 2025-era MCP servers.** Any future change to that is a
 separate decision with its own release communication.
 
-For `external-mcp-caller.ts` the TARGET is a strict improvement rather than parity:
-after the migration an older-revision peer is reached through the same legacy
-fallback as the other three, and a modern-only peer becomes reachable instead of
-silently failing.
+For `external-mcp-caller.ts` the change has landed, and it is an improvement for
+every **conformant** peer rather than a strict improvement for every peer: an
+older-revision peer is now reached through the same legacy fallback as the other
+surfaces, and a modern-only peer became reachable instead of silently failing.
+
+**Two non-conformant peer classes became unreachable**, recorded here rather
+than left to be discovered. Both were measured on the wire:
+
+1. a peer that answers a bare `tools/list` with no handshake **and** accepts
+   `Accept: application/json` alone, but does not implement `initialize`. Both
+   extra conditions are load-bearing — a conformant 2025-era peer answers that
+   Accept header `406` before reaching any protocol question — so this class is
+   narrower than "permissive 2025-era server", but it is not empty;
+2. a peer whose `tools/list` **result** is not schema-conformant. Measured case:
+   `{ tools: [{ name: "x" }] }` with no `inputSchema`. The hand-rolled code read
+   `.name` off whatever JSON came back; `client.listTools()` validates the
+   result against the spec schema and rejects, so such a row now yields nothing
+   instead of its tool names.
+
+Neither class fails silently or blocks anything: each fails per-row, is logged
+with the row's label, and leaves the compile running with the remaining rows —
+the same degradation as an unreachable server. Recovering them would mean
+keeping a hand-rolled parse beside the SDK client, which reinstates exactly the
+unstatable-revision-posture problem this row's migration removed.
 
 ### What outbound clients do with the `DiscoverResult` (cinatra#2222)
 
