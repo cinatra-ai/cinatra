@@ -10,10 +10,15 @@ function baseAgentRunsCube() {
     templateId: text("template_id"),
     status: text("status"),
     createdAt: timestamp("created_at"),
+    title: text("title"),
     orgId: text("org_id"),
     runBy: text("run_by"),
   });
-  const agentTemplates = pgTable("agent_templates", { id: text("id").primaryKey(), name: text("name") });
+  const agentTemplates = pgTable("agent_templates", {
+    id: text("id").primaryKey(),
+    name: text("name"),
+    packageName: text("package_name"),
+  });
   return createAgentRunsCube({
     tableRef: agentRuns,
     columns: {
@@ -21,11 +26,16 @@ function baseAgentRunsCube() {
       templateId: agentRuns.templateId,
       status: agentRuns.status,
       createdAt: agentRuns.createdAt,
+      title: agentRuns.title,
       orgId: agentRuns.orgId,
       runBy: agentRuns.runBy,
     },
     templatesTableRef: agentTemplates,
-    templateColumns: { id: agentTemplates.id, name: agentTemplates.name },
+    templateColumns: {
+      id: agentTemplates.id,
+      name: agentTemplates.name,
+      packageName: agentTemplates.packageName,
+    },
   });
 }
 

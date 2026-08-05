@@ -131,14 +131,20 @@ function buildBundledCubesById(): Map<string, RegisteredCube> {
         templateId: agentRuns.templateId,
         status: agentRuns.status,
         createdAt: agentRuns.createdAt,
+        // Run title — the `run_name` dimension's primary source (#2448).
+        title: agentRuns.title,
         orgId: agentRuns.orgId,
         runBy: agentRuns.runBy,
       },
-      // LEFT JOIN target for the agent_name dimension.
+      // LEFT JOIN target for the agent_name / run_name / vendor /
+      // package_name dimensions.
       templatesTableRef: agentTemplates,
       templateColumns: {
         id: agentTemplates.id,
         name: agentTemplates.name,
+        // Scoped npm identity (`@vendor/name`) — split in-cube into the
+        // vendor + package_name href coordinates (#2448).
+        packageName: agentTemplates.packageName,
       },
     }),
     createProjectsCube({

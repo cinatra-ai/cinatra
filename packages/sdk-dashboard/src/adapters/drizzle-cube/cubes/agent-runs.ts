@@ -2,8 +2,11 @@
  * Production `agent_runs` cube.
  *
  * Real cube that:
- *   - exposes 4 dimensions (agent_id alias of templateId, status, created_at)
- *     and 2 measures (count, last_run_at).
+ *   - exposes per-agent dimensions (agent_id alias of templateId, agent_name,
+ *     status, created_at), per-run dimensions (run_id, run_name, vendor,
+ *     package_name — cinatra#2448, so portlets can render one row per RUN
+ *     and build the run href from row data) and 2 measures (count,
+ *     last_run_at).
  *   - injects an access-scoped SQL predicate from the SecurityContext:
  *     `org_id IN (...ctx.accessibleOrgIds) OR run_by = ctx.userId`.
  *     Surfaces all runs in every org the caller is a member of PLUS any
@@ -39,6 +42,12 @@ export type AgentRunsTable = {
   readonly templateId: AnyColumn;
   readonly status: AnyColumn;
   readonly createdAt: AnyColumn;
+  /**
+   * `title` — the nullable user-given run name. The `run_name` dimension
+   * maps it with a fallback chain (title → template name → template id) so
+   * a per-run table always has display text (cinatra#2448).
+   */
+  readonly title: AnyColumn;
   readonly orgId: AnyColumn;
   /**
    * `run_by` — the user (Better Auth user.id) who triggered the run.
@@ -57,6 +66,13 @@ export type AgentRunsTable = {
 export type AgentTemplatesTable = {
   readonly id: AnyColumn;
   readonly name: AnyColumn;
+  /**
+   * `package_name` — the scoped npm package identity (`@vendor/name`). The
+   * `vendor` / `package_name` dimensions split it in SQL so a portlet can
+   * build the run href `/agents/<vendor>/<packageName>/<runId>` purely from
+   * row DATA (cinatra#2448). Same split as the host's `agent-url.ts`.
+   */
+  readonly packageName: AnyColumn;
 };
 
 /**
@@ -99,6 +115,13 @@ export const AGENT_RUNS_CUBE_DESCRIPTOR: CubeDescriptor = {
     // still references it. New portlets should use agent_name.
     { id: "agent_id", displayName: "Agent ID", type: "string" },
     { id: "agent_name", displayName: "Agent", type: "string" },
+    // Per-run dimensions (cinatra#2448) — grouping by run_id yields one row
+    // per RUN (no per-agent collapsing); run_name/vendor/package_name carry
+    // the display text + href coordinates for a linked per-run table.
+    { id: "run_id", displayName: "Run ID", type: "string" },
+    { id: "run_name", displayName: "Run", type: "string" },
+    { id: "vendor", displayName: "Vendor", type: "string" },
+    { id: "package_name", displayName: "Package", type: "string" },
     { id: "status", displayName: "Status", type: "string" },
     { id: "created_at", displayName: "Created at", type: "date" },
   ],
@@ -203,6 +226,7 @@ export function createAgentRunsCube(
         templateColumns: {
           id: (arg as AgentRunsTable).templateId,
           name: (arg as AgentRunsTable).templateId,
+          packageName: (arg as AgentRunsTable).templateId,
         },
       };
   const { tableRef, columns, templatesTableRef, templateColumns } = opts;
@@ -253,6 +277,18 @@ export function createAgentRunsCube(
       // → prefers the template name; falls back to the UUID when name
       //   is missing/empty (runs without a resolvable template name).
       agent_name: sql<string>`coalesce(nullif(${templateColumns.name}, ''), ${columns.templateId})`,
+      // Per-run key — one row per run when a portlet dimensions on it.
+      run_id: columns.id,
+      // Run display name with a sensible fallback chain: the user-given run
+      // title, else the agent (template) display name, else the template id.
+      run_name: sql<string>`coalesce(nullif(${columns.title}, ''), nullif(${templateColumns.name}, ''), ${columns.templateId})`,
+      // Split the scoped package identity `@vendor/name` into the two URL
+      // coordinates a run href needs (`/agents/<vendor>/<packageName>/<runId>`).
+      // Mirrors the host's `agent-url.ts` regex `^@([^/]+)\/(.+)$`. Unscoped
+      // package names yield an empty vendor — consumers treat that as
+      // "no link" (fail-closed, never a broken href).
+      vendor: sql<string>`coalesce(substring(${templateColumns.packageName} from '^@([^/]+)/'), '')`,
+      package_name: sql<string>`coalesce(substring(${templateColumns.packageName} from '^@[^/]+/(.+)$'), ${templateColumns.packageName})`,
       status: columns.status,
       created_at: columns.createdAt,
     },
