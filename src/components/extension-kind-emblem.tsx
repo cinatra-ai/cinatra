@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Bot, FileText, Package, Sparkles, Workflow } from "lucide-react";
 
-import { PlugConnectorKind } from "@cinatra-ai/sdk-ui/icons/plug-connector-kind";
+import { PlugConnectorKind } from "@cinatra-ai/sdk-ui/icons";
 
 /**
  * Kind slugs that carry a dedicated emblem. "unknown" covers
@@ -24,7 +24,10 @@ export type ExtensionEmblemKind =
  * cinatra#2364, epic #2360) instead of the generic lucide `Plug` — so the
  * kind emblem and the sibling status glyph read as one visual family without
  * sharing a component: this file's vocabulary stays kinds, never states.
- * Every other kind arm is byte-unchanged.
+ * The glyph lives in the shared sdk-ui glyph registry (single module owner,
+ * per #2364) as a distinct export beside the status mark — imported from the
+ * same `@cinatra-ai/sdk-ui/icons` entrypoint, never as the status export
+ * itself. Every other kind arm is byte-unchanged.
  */
 export function extensionKindEmblem(
   kind: ExtensionEmblemKind,

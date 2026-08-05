@@ -24,15 +24,16 @@
  * positive per-site locks — which is exactly what a negative lock is for.
  *
  * #2364 (epic #2360, landing AFTER this lock) adds a THIRD, sibling joined-plug
- * mark for site 2: `PlugConnectorKind`, in its own dedicated subpath module
- * `@cinatra-ai/sdk-ui/icons/plug-connector-kind` — never the bare `.../icons`
- * barrel `PlugConnected` lives in. It is the KIND glyph epic #2360 mandates for
- * "what kind of extension is this", drawn once in sdk-ui alongside (and
- * visually related to, but a distinct export from) the STATUS glyph so the two
- * read as one icon family without collapsing into the same component. Site 2's
- * lock below asserts THAT boundary now: the connector arm renders the dedicated
- * KIND subpath export, never lucide's generic `Plug` and never the barrel's
- * `PlugConnected` status export.
+ * mark for site 2: `PlugConnectorKind` — the KIND glyph epic #2360 mandates for
+ * "what kind of extension is this", drawn in the SAME sdk-ui glyph registry
+ * (`@cinatra-ai/sdk-ui/icons`, single module owner per #2364) as a distinct
+ * export beside the STATUS glyph, so the two read as one icon family without
+ * collapsing into the same component. Site 2's lock below therefore reduces to
+ * the boundary that actually matters: the connector arm renders the KIND
+ * export `PlugConnectorKind` — never lucide's generic `Plug` and never the
+ * STATUS export `PlugConnected`. The registry entrypoint itself is a
+ * legitimate import for site 2 now; the ban is on the status TOKEN, not the
+ * specifier.
  * Source-text assertions: the root vitest env is "node" (no DOM render).
  */
 import { readFileSync } from "node:fs";
@@ -68,13 +69,14 @@ describe("cinatra#2356 — the identity fallback is NOT swapped to the status gl
 describe("cinatra#2356 — the extension-kind emblem is NOT swapped to the status glyph", () => {
   it("renders the dedicated connector KIND glyph (cinatra#2364) — never lucide's generic `Plug`", () => {
     // One assertion, not two: `PlugConnectorKind` must be a NAMED IMPORT from
-    // its OWN dedicated subpath — never the bare `.../icons` barrel the status
-    // glyph `PlugConnected` lives in. Asserting "an sdk-ui import exists" and
-    // "the token PlugConnectorKind appears" separately would pass on a
-    // locally-defined `PlugConnectorKind` beside an unrelated import — exactly
-    // the substitution this lock exists to catch.
+    // the shared glyph registry entrypoint (exactly `.../icons`, the closing
+    // quote pinning it — a nested-subpath parallel module would not match).
+    // Asserting "an sdk-ui import exists" and "the token PlugConnectorKind
+    // appears" separately would pass on a locally-defined `PlugConnectorKind`
+    // beside an unrelated import — exactly the substitution this lock exists
+    // to catch.
     expect(KIND_EMBLEM_SRC).toMatch(
-      /import \{ PlugConnectorKind \} from "@cinatra-ai\/sdk-ui\/icons\/plug-connector-kind"/,
+      /import \{ PlugConnectorKind \} from "@cinatra-ai\/sdk-ui\/icons"/,
     );
     expect(KIND_EMBLEM_SRC).toMatch(
       /case "connector":\s*\n\s*return <PlugConnectorKind className=\{className\} \/>/,
@@ -86,12 +88,11 @@ describe("cinatra#2356 — the extension-kind emblem is NOT swapped to the statu
   });
 
   it("never reaches for the connected-status glyph", () => {
+    // The STATUS boundary reduces to the token ban (cinatra#2364): the
+    // registry entrypoint is a LEGITIMATE import for the KIND glyph now, so
+    // banning the specifier would forbid the conformant arrangement. What must
+    // never appear is the status export itself.
     expect(KIND_EMBLEM_SRC).not.toContain("PlugConnected");
-    // Bans the STATUS glyph's own bare barrel specifier specifically — not a
-    // blanket ban on the sdk-ui icons namespace, which would also catch the
-    // dedicated KIND subpath (`@cinatra-ai/sdk-ui/icons/plug-connector-kind`)
-    // site 2 legitimately imports from (see the top-of-file note, cinatra#2364).
-    expect(KIND_EMBLEM_SRC).not.toMatch(/from "@cinatra-ai\/sdk-ui\/icons"/);
   });
 
   it("keeps one emblem per extension kind — the vocabulary is kinds, not states", () => {
