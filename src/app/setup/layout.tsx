@@ -25,7 +25,7 @@ export default async function SetupLayout({ children }: { children: React.ReactN
   const steps = session ? await getSetupWizardSteps() : SESSIONLESS_SETUP_STEPS;
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center px-5 py-12">
+    <main className="flex min-h-screen flex-col items-center justify-start px-5 py-12">
       {/* Codes-only flash island (replaces the retired SetupToast). /setup is a
           shell-bypass route where useNotify() is unavailable, so wizard action
           outcomes sink to bare cinatraToast via <SearchParamToast>. The static
