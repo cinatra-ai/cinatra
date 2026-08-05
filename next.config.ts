@@ -188,8 +188,11 @@ const nextConfig: NextConfig = {
     // external lets Node.js resolve them from node_modules at runtime instead of
     // Turbopack pulling the whole chunk graph into the module graph. cinatra#2218 L1
     // retired the vendored copies; the -node / -express shims were never imported.
+    // cinatra#2218 L2a added the client package for the graphiti outbound surface;
+    // it exact-pins @modelcontextprotocol/core@2.0.0 the same way server does.
     "@modelcontextprotocol/sdk",
     "@modelcontextprotocol/server",
+    "@modelcontextprotocol/client",
     "@modelcontextprotocol/core",
     // BullMQ and IORedis are server-only Redis/queue runtimes (bullmq: 5 MB). External
     // keeps them out of the Turbopack module graph entirely.

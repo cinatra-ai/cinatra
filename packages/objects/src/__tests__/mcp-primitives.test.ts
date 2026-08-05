@@ -11,7 +11,7 @@ const mockCallTool = vi.fn();
 const mockConnect = vi.fn();
 const mockClose = vi.fn();
 
-vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+vi.mock("@modelcontextprotocol/client", () => ({
   Client: function (this: unknown) {
     return {
       connect: mockConnect,
@@ -19,9 +19,6 @@ vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
       close: mockClose,
     };
   },
-}));
-
-vi.mock("@modelcontextprotocol/sdk/client/streamableHttp.js", () => ({
   StreamableHTTPClientTransport: function (this: unknown) {
     return {};
   },
