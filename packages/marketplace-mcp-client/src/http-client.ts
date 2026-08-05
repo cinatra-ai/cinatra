@@ -19,10 +19,22 @@ import "server-only";
  * changes its tool-naming scheme, {@see mcpToolName} is the single place to adjust.
  */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  Client,
+  ProtocolError,
+  SdkError,
+  SdkErrorCode,
+  SdkHttpError,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
+import type { VersionNegotiationOptions } from "@modelcontextprotocol/client";
 
-import { MarketplaceMcpError, type MarketplaceMcpClient } from "./client";
+import {
+  MARKETPLACE_CONNECT_FAILURE,
+  MarketplaceMcpError,
+  type MarketplaceFailureOrigin,
+  type MarketplaceMcpClient,
+} from "./client";
 import type {
   ExtensionKind,
   ExtensionVisibility,
@@ -250,6 +262,256 @@ export async function fetchPublicMarketplaceExtensionDetail(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Protocol-revision negotiation — EXPLICIT auto, not defaulted legacy.
+//
+// The peer on this surface is the LIVE hosted marketplace: the
+// wordpress/mcp-adapter at `https://marketplace.cinatra.ai/wp-json/cinatra/mcp`
+// (serverInfo `Cinatra Marketplace`). It was PROBED on the wire, anonymously,
+// and it does NOT implement `2026-07-28` today:
+//
+//   POST server/discover (2026-07-28 `_meta` envelope)
+//     -> HTTP 400 {"error":{"code":-32600,
+//                  "message":"Invalid Request: Missing Mcp-Session-Id header"}}
+//   POST initialize (offering 2025-11-25)
+//     -> HTTP 200, the server SELECTS "2025-06-18" and mints an Mcp-Session-Id
+//
+// Driven through this client, per connect-and-call cycle:
+//
+//   { mode: "auto" }   -> era "legacy", negotiated 2025-06-18, 3 frames
+//                         (server/discover rejected 400, then initialize +
+//                          notifications/initialized)
+//   { mode: "legacy" } -> era "legacy", negotiated 2025-06-18, 2 frames
+//
+// So `auto` reaches the identical era today at the cost of one rejected round
+// trip, and this client opens a fresh connection PER CALL, so that cost is per
+// call. `auto` is still the right setting here, and the reason is the PEER, not
+// the price:
+//
+//   * This peer is an independently-operated hosted service. It can gain
+//     `2026-07-28` — or drop the 2025-era `initialize` — with no change in this
+//     repo and no signal that would prompt one. Pinning `legacy` would leave the
+//     whole marketplace surface (vendor lifecycle, submissions, gatekept
+//     install) with no negotiation path and no diagnostic on the day that
+//     happens, and nothing in cinatra would trigger the flip.
+//   * That is exactly the condition the supported-revisions contract names for
+//     `{ mode: 'auto' }`. The contract's explicit-`legacy` exception is scoped to
+//     a peer that is *known* 2025-era AND PINNED — `packages/objects`' graphiti
+//     client, whose peer is a digest-pinned image in `docker-compose.yml`, so
+//     its posture cannot move without a visible pin bump. This peer is not
+//     pinned, so that exception does not apply.
+//   * `auto` degrades to one wasted round trip if the peer never moves;
+//     `legacy` breaks outright if it does. The measured probe proves `auto`
+//     interoperates with the peer as it is today.
+//
+// The peer's session id is peer-required and stays SDK-managed and
+// transport-private: cinatra never reads, persists, routes, or authorizes on it
+// (cinatra#2218 AC4).
+//
+// The mode is written out rather than left to the default because
+// `versionNegotiation` is an OPTIONS OBJECT whose default mode is `legacy`:
+// written as a bare string (`versionNegotiation: "auto"`) the client reads
+// `options?.mode` as `undefined` and silently selects legacy, producing a
+// working client whose era was never chosen. Typing this constant as
+// `VersionNegotiationOptions` makes the bare string a compile error, and a test
+// asserts the object reaches the `Client` constructor with `mode === "auto"`.
+//
+// `marketplace-wire-negotiation.manual.test.ts` is the re-runnable live probe
+// behind every number above.
+// ---------------------------------------------------------------------------
+const MARKETPLACE_VERSION_NEGOTIATION: VersionNegotiationOptions = { mode: "auto" };
+
+// ---------------------------------------------------------------------------
+// Failure-origin classification (cinatra#2218 L2b).
+//
+// The offline-rename gate in `src/app/configuration/instance/actions.ts` must
+// decide whether a failed marketplace probe is a genuine "this box cannot reach
+// the marketplace" situation (safe to fail OPEN on a local instance with no
+// reservation — cinatra#396) or anything else (fail CLOSED). That decision needs
+// to know which errors this module can raise, which is THIS module's knowledge —
+// so the classification lives here and the POLICY stays in the gate.
+//
+// It is an ALLOWLIST, and the allowed evidence is a BRAND rather than a class.
+// Only a failure proven to have happened BEFORE any HTTP response was received —
+// recorded at the moment the `fetch()` promise rejects, see
+// `brandConnectFailures` — is reported `unreachable`; everything else is
+// `peer-response` (a response demonstrably arrived) or `indeterminate` (cannot
+// be shown either way). The gate may fail open on `unreachable` alone.
+//
+// The class cannot carry that fact. `TypeError` is undici's connect-failure
+// contract, but it is ALSO what surfaces when a response arrives and its body
+// stream then dies (`TypeError: terminated`) — measured, after a real HTTP 200
+// with headers on the wire — so an `instanceof TypeError` rule would report a
+// REACHABLE marketplace as unreachable and fail the gate OPEN.
+//
+// That inversion is deliberate and it TIGHTENS the gate. The pre-migration gate
+// was a denylist — `err instanceof MarketplaceMcpError || StreamableHTTPError ||
+// McpError` — so every error class it did not enumerate fell through to
+// fail-OPEN. Three such classes were measured escaping a real connect/callTool
+// cycle from a REACHABLE peer, and all three failed open before this change:
+//
+//   HTTP 200 with a malformed JSON body      -> SyntaxError
+//   HTTP 403 + WWW-Authenticate
+//     `error="insufficient_scope"`           -> InsufficientScopeError
+//   an initialize result naming a revision
+//     this client does not support           -> plain Error
+//
+// None of them is in either SDK error tree, in v1 or in v2. Under the allowlist
+// all three are `indeterminate` and the gate fails CLOSED.
+//
+// Measured v1 -> v2 error-class map for this surface (both SDKs run against real
+// peers; the v1 column is `@modelcontextprotocol/sdk@1.29.0`):
+//
+//   failure mode                       v1                     v2
+//   ---------------------------------  ---------------------  ---------------------
+//   peer unreachable (ECONNREFUSED,    TypeError              TypeError
+//     DNS, TLS)                        "fetch failed"         "fetch failed"
+//   response received, body stream     TypeError              TypeError
+//     dies mid-read                    "terminated"           "terminated"
+//   peer answers HTTP 4xx/5xx          StreamableHTTPError    SdkHttpError
+//                                      (name "Error", .code   (name "SdkHttpError",
+//                                       = status, message      .status = status,
+//                                       prefixed "Streamable   message WITHOUT the
+//                                       HTTP error: ")         prefix)
+//   peer answers a JSON-RPC error      McpError               ProtocolError
+//                                      (message prefixed      (.code = the JSON-RPC
+//                                       "MCP error <code>: ")  code, message WITHOUT
+//                                                              the prefix)
+//   request timeout / connection       McpError(-32001/       SdkError(RequestTimeout
+//     closed / not connected           -32000)                 / ConnectionClosed)
+//
+// The two message PREFIXES are gone in v2. That matters to one text-matching
+// consumer — `isTerminalAuthFailure` in
+// `src/app/configuration/environment/vendor-application-cm-errors.ts` read the
+// JSON-RPC code out of v1's message text — which is migrated in the same change.
+//
+// One more measured v2 behaviour, load-bearing for the mode above: under
+// `{ mode: "auto" }` an unreachable peer surfaces as
+// `SdkError(EraNegotiationFailed)` rather than a bare `TypeError`, because the
+// `server/discover` probe fails first and the negotiator wraps it. The original
+// `TypeError` is preserved on `.data.cause`, so the pre-response fact survives —
+// which is what lets this classifier stay correct under BOTH modes, and what
+// keeps the negotiation mode and the security gate independent of each other.
+// A probe answered with an HTTP status carries the SAME code on an `SdkHttpError`
+// SUBCLASS, so the subclass is tested first.
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap a `fetch` so that a rejection proving the MARKETPLACE was never reached
+ * — and only such a rejection — is branded {@link MARKETPLACE_CONNECT_FAILURE}.
+ *
+ * Two conditions, both necessary:
+ *
+ *  1. The rejection is of the `fetch()` call ITSELF. Once the promise resolves a
+ *     status and headers arrived, so a later body-stream failure (undici raises
+ *     `TypeError: terminated`, measured against a real HTTP 200) is outside the
+ *     `try` and stays unbranded. Local faults before the call — a malformed
+ *     `Headers`, a bad URL — are outside it too.
+ *
+ *  2. NO response has been seen yet on this transport. The wrapper is created
+ *     per `callMarketplaceTool` invocation, so the latch spans exactly one
+ *     connect-call-close cycle, and that cycle issues several requests: the
+ *     `{ mode: 'auto' }` `server/discover` probe, `initialize`, the initialized
+ *     notification, the standalone `GET` stream, `tools/call`, the closing
+ *     `DELETE`. If ANY of them came back, the marketplace demonstrably answered
+ *     during this call — a later socket loss is then `"indeterminate"`, not
+ *     evidence of an unreachable marketplace.
+ *
+ * Behaviour-neutral otherwise: it returns the identical `Response` without
+ * touching its body and rethrows the identical rejection. Branding is
+ * best-effort — a frozen or primitive rejection value cannot carry the mark and
+ * therefore classifies `"indeterminate"`, which fails CLOSED.
+ */
+function brandConnectFailures(inner: typeof fetch): typeof fetch {
+  let responseSeen = false;
+  return async function brandedFetch(input, init) {
+    try {
+      const response = await inner(input, init);
+      responseSeen = true;
+      return response;
+    } catch (err) {
+      if (!responseSeen && err !== null && typeof err === "object") {
+        try {
+          Object.defineProperty(err, MARKETPLACE_CONNECT_FAILURE, {
+            value: true,
+            enumerable: false,
+            configurable: true,
+          });
+        } catch {
+          // Frozen/sealed rejection value — leave it unbranded (fails CLOSED).
+        }
+      }
+      throw err;
+    }
+  };
+}
+
+/**
+ * True when `err` carries the connect-failure brand — directly, or through the
+ * `{ mode: 'auto' }` negotiator's wrapper, which records the original error on
+ * `.data.cause` when the `server/discover` probe fails before a response.
+ *
+ * The brand is the ONLY accepted evidence; no error class is treated as proof.
+ */
+function isPreResponseNetworkFailure(err: unknown, depth = 0): boolean {
+  if (err === null || typeof err !== "object") {
+    return false;
+  }
+  if ((err as Record<PropertyKey, unknown>)[MARKETPLACE_CONNECT_FAILURE] === true) {
+    return true;
+  }
+  // An HTTP status was received — even when the negotiator labels it with the
+  // same EraNegotiationFailed code as a network failure. Tested BEFORE the
+  // SdkError branch below, because SdkHttpError is a subclass of it.
+  if (err instanceof SdkHttpError) {
+    return false;
+  }
+  if (
+    depth < 4 &&
+    err instanceof SdkError &&
+    err.code === SdkErrorCode.EraNegotiationFailed
+  ) {
+    const cause = (err.data as { cause?: unknown } | undefined)?.cause;
+    return isPreResponseNetworkFailure(cause, depth + 1);
+  }
+  return false;
+}
+
+/**
+ * Classify why a call through {@link createHttpMarketplaceMcpClient} (or the
+ * public REST helpers) failed, in terms of what it proves about the MARKETPLACE
+ * rather than in terms of SDK classes.
+ *
+ * - `"unreachable"` — no HTTP response was ever received.
+ * - `"peer-response"` — the marketplace answered: an HTTP status, a JSON-RPC
+ *   error, or a structured ability error this module turned into a
+ *   `MarketplaceMcpError`.
+ * - `"indeterminate"` — anything else. NOT a synonym for unreachable: a
+ *   timeout, a closed connection, a malformed body, and an auth-scope refusal
+ *   all land here, and a caller that may only relax on a proven unreachable
+ *   peer must treat this exactly like `"peer-response"`.
+ *
+ * Callers must switch on the outcome, never on `!== "unreachable"`-style
+ * negation of a class list — the whole point is that unknown failures are not
+ * silently treated as "the marketplace is down".
+ */
+export function classifyMarketplaceFailure(err: unknown): MarketplaceFailureOrigin {
+  if (isPreResponseNetworkFailure(err)) {
+    return "unreachable";
+  }
+  if (err instanceof MarketplaceMcpError || err instanceof SdkHttpError) {
+    return "peer-response";
+  }
+  // A JSON-RPC error response is a response. `ProtocolError` is a SEPARATE class
+  // tree from `SdkError` (it does not extend it), so it needs its own test; its
+  // `instanceof` is brand-matched by the SDK, so this holds across separately
+  // bundled copies of the package.
+  if (err instanceof ProtocolError) {
+    return "peer-response";
+  }
+  return "indeterminate";
+}
+
 /**
  * Connect, call one tool, parse the result, close. Prefers `structuredContent`
  * (clean JSON) and falls back to the first text content parsed as JSON — the
@@ -275,9 +537,16 @@ async function callMarketplaceTool<TOutput>(
   const baseUrl = resolveMarketplaceBaseUrl(opts.baseUrl);
   const endpoint = new URL(baseUrl + MCP_ROUTE);
   const transport = new StreamableHTTPClientTransport(endpoint, {
+    // Behaviour-neutral wrapper around the platform fetch: it only marks a
+    // rejection of the call itself, so `classifyMarketplaceFailure()` can tell a
+    // connect failure from a response that arrived and then went wrong.
+    fetch: brandConnectFailures(fetch),
     requestInit: { headers: authHeaders(opts.token) },
   });
-  const client = new Client({ name: "cinatra-marketplace-client", version: "1.0.0" });
+  const client = new Client(
+    { name: "cinatra-marketplace-client", version: "1.0.0" },
+    { versionNegotiation: MARKETPLACE_VERSION_NEGOTIATION },
+  );
   try {
     await client.connect(transport);
     const result = await client.callTool({ name: mcpToolName(abilityKey), arguments: args });

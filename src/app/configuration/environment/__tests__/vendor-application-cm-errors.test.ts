@@ -32,6 +32,48 @@ describe("isTerminalAuthFailure", () => {
     expect(isTerminalAuthFailure(err)).toBe(true);
   });
 
+  // ---------------------------------------------------------------------------
+  // cinatra#2218 L2b — the MCP client's message format changed underneath this
+  // classifier. Under `@modelcontextprotocol/sdk@1.29.0` a JSON-RPC error was an
+  // `McpError` whose message EMBEDDED the code ("MCP error -32010: …"), so the
+  // text scan saw it. Under `@modelcontextprotocol/client@2.0.0` it is a
+  // `ProtocolError` whose message is the bare server text and whose code lives
+  // on `.code` — measured, not assumed. Without the structural read these first
+  // two cases regress to resting entirely on the English phrase.
+  // ---------------------------------------------------------------------------
+
+  it("matches a v2 ProtocolError-shaped error by its numeric .code alone (no code in the message)", () => {
+    // The exact post-migration shape: unprefixed message, code on the property.
+    const err = Object.assign(new Error("Unauthorized: User not authenticated"), {
+      code: -32010,
+    });
+    expect(isTerminalAuthFailure(err)).toBe(true);
+  });
+
+  it("matches by numeric .code even when the message carries NO recognisable text", () => {
+    // Guards the signal itself rather than the phrase: if cm ever rewords the
+    // refusal, the code must still classify it terminal.
+    const err = Object.assign(new Error("refused"), { code: -32010 });
+    expect(isTerminalAuthFailure(err)).toBe(true);
+  });
+
+  it("does NOT match a NEIGHBOURING numeric code", () => {
+    expect(isTerminalAuthFailure(Object.assign(new Error("nope"), { code: -32011 }))).toBe(false);
+    expect(isTerminalAuthFailure(Object.assign(new Error("nope"), { code: -320100 }))).toBe(false);
+    expect(isTerminalAuthFailure(Object.assign(new Error("nope"), { code: -32603 }))).toBe(false);
+  });
+
+  it("does NOT match a non-numeric .code that merely stringifies to the refusal code", () => {
+    // An SdkError's `code` is a STRING enum member; a MarketplaceMcpError has no
+    // `code` at all. Neither may be coerced into a terminal verdict — a false
+    // terminal match discards the idempotency marker and lets a retry mint a
+    // duplicate cm row.
+    expect(isTerminalAuthFailure(Object.assign(new Error("nope"), { code: "-32010" }))).toBe(false);
+    expect(
+      isTerminalAuthFailure(Object.assign(new Error("nope"), { code: "ERA_NEGOTIATION_FAILED" })),
+    ).toBe(false);
+  });
+
   it("matches the explicit 'User not authenticated' phrase without the code", () => {
     expect(isTerminalAuthFailure(new Error("Unauthorized: User not authenticated"))).toBe(true);
   });

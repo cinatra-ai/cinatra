@@ -11,15 +11,60 @@
 //
 // These tests drive the PUBLIC action (`renameInstanceNamespaceAction`) and
 // observe whether the gate let the rename through to `writeInstanceIdentity`
-// (allowed) or short-circuited via `redirect(...&error=...)` (blocked). The
-// marketplace MCP client is mocked so each case can reject the status probe
-// with a specific error class; the SDK error classes themselves stay REAL so
-// the `instanceof` discrimination in the fix is exercised faithfully.
+// (allowed) or short-circuited via `redirect(...&error=...)` (blocked). Only the
+// client FACTORY is mocked, so each case can reject the status probe with a
+// specific error class; the real `classifyMarketplaceFailure` and the real SDK
+// error classes stay in play, so the gate's discrimination is exercised
+// faithfully rather than against a stub.
+//
+// cinatra#2218 L2b moved that discrimination from a v1-SDK class DENYLIST in the
+// gate to an ALLOWLIST owned by the marketplace client
+// (`classifyMarketplaceFailure`), atomically with the client's migration to
+// `@modelcontextprotocol/client@2.0.0`.
+//
+// COVERAGE SPLIT — deliberate, not a gap. `@modelcontextprotocol/client` is a
+// dependency of `packages/marketplace-mcp-client` ONLY; the app's root manifest
+// does not (and after this change still must not) declare it, so this suite
+// cannot construct `SdkHttpError` / `ProtocolError` / the auto-mode negotiation
+// wrapper. The split is:
+//
+//   * `packages/marketplace-mcp-client/tests/http-client.test.ts` owns
+//     CLASS -> ORIGIN fidelity against the REAL v2 error classes, including the
+//     auto-mode wrapper and the counterfactual proof that the pre-migration
+//     denylist now fails OPEN on `SdkHttpError` / `ProtocolError`.
+//   * `packages/marketplace-mcp-client/tests/failure-origin-transport.test.ts`
+//     owns the same fidelity against the REAL transport on a local socket —
+//     notably the connect-failure vs mid-body-failure split, which cannot be
+//     shown by constructing an error class because both are `TypeError`.
+//   * THIS suite owns ORIGIN -> GATE OUTCOME, end to end through the real
+//     (un-stubbed) classifier, using failures it can construct without the SDK:
+//     a branded `TypeError` (unreachable), an UNBRANDED one (indeterminate), a
+//     `MarketplaceMcpError` (peer-response), and the measured plain-`Error`
+//     escapes.
+//
+// Composed, the two cover gate -> classifier -> outcome for every migrated class.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
-import { MarketplaceMcpError } from "@cinatra-ai/marketplace-mcp-client";
+import {
+  MARKETPLACE_CONNECT_FAILURE,
+  MarketplaceMcpError,
+} from "@cinatra-ai/marketplace-mcp-client";
+
+/**
+ * Stamp the brand the marketplace client puts on an error thrown by the
+ * `fetch()` call ITSELF. The brand — not the error class — is what
+ * `classifyMarketplaceFailure` accepts as proof that no HTTP response arrived:
+ * `TypeError` alone is ambiguous, because undici also raises it (`terminated`)
+ * when a response WAS received and its body stream then died.
+ */
+function asConnectFailure<T extends object>(err: T): T {
+  Object.defineProperty(err, MARKETPLACE_CONNECT_FAILURE, {
+    value: true,
+    enumerable: false,
+    configurable: true,
+  });
+  return err;
+}
 
 vi.mock("@/lib/instance-identity-store", () => {
   const readInstanceIdentity = vi.fn();
@@ -106,12 +151,21 @@ vi.mock("next/cache", () => ({
 
 // Configurable marketplace MCP client: each test sets what the status probe
 // does (reject with a chosen error, or resolve to a non-locking state).
+//
+// ONLY the factory is replaced. `classifyMarketplaceFailure` is re-exported from
+// the REAL module, because it is the thing under test here — stubbing it would
+// make every assertion below vacuous.
 const vendorApplicationStatusMock = vi.fn();
-vi.mock("@cinatra-ai/marketplace-mcp-client/http-client", () => ({
-  createHttpMarketplaceMcpClient: vi.fn(() => ({
-    vendorApplicationStatus: vendorApplicationStatusMock,
-  })),
-}));
+vi.mock("@cinatra-ai/marketplace-mcp-client/http-client", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@cinatra-ai/marketplace-mcp-client/http-client")>();
+  return {
+    ...actual,
+    createHttpMarketplaceMcpClient: vi.fn(() => ({
+      vendorApplicationStatus: vendorApplicationStatusMock,
+    })),
+  };
+});
 
 import { renameInstanceNamespaceAction } from "@/app/configuration/instance/actions";
 import {
@@ -204,10 +258,12 @@ afterEach(() => {
 
 describe("namespace rename — offline LOCAL instance fails OPEN (cinatra#396)", () => {
   it("allows the rename when the marketplace is genuinely unreachable (raw network error)", async () => {
-    // A connect/transport failure surfaces as a raw Error (undici TypeError, DNS,
-    // ECONNREFUSED, …), NOT a MarketplaceMcpError/SDK error.
+    // A connect failure: undici's TypeError, branded by the client's fetch
+    // wrapper at the moment the call rejected.
     vendorApplicationStatusMock.mockRejectedValue(
-      Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } }),
+      asConnectFailure(
+        Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } }),
+      ),
     );
 
     await runRename("newlocalvendor");
@@ -219,33 +275,78 @@ describe("namespace rename — offline LOCAL instance fails OPEN (cinatra#396)",
       "newlocalvendor",
     );
   });
+
 });
 
 describe("namespace rename — still fails CLOSED when the marketplace ANSWERED", () => {
-  it("blocks on a StreamableHTTPError (reachable 503 — marketplace transiently erroring, not unreachable)", async () => {
-    vendorApplicationStatusMock.mockRejectedValue(
-      new StreamableHTTPError(503, "Error POSTing to endpoint: service unavailable"),
-    );
-
-    await runRename("newlocalvendor");
-
-    expect(wasBlockedWithError()).toBe(true);
-    expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
-  });
-
-  it("blocks on an McpError (reachable JSON-RPC error)", async () => {
-    vendorApplicationStatusMock.mockRejectedValue(new McpError(-32603, "internal error"));
-
-    await runRename("newlocalvendor");
-
-    expect(wasBlockedWithError()).toBe(true);
-    expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
-  });
-
   it("blocks on a MarketplaceMcpError (structured marketplace error)", async () => {
     vendorApplicationStatusMock.mockRejectedValue(
       new MarketplaceMcpError("bad gateway", 502, ""),
     );
+
+    await runRename("newlocalvendor");
+
+    expect(wasBlockedWithError()).toBe(true);
+    expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The allowlist inversion (cinatra#2218 L2b). The pre-migration gate enumerated
+// the classes that meant "answered" and fell through to fail-OPEN on everything
+// else. These three were MEASURED escaping a real connect/callTool cycle against
+// a REACHABLE peer and were in no enumerated tree, so each one could relax the
+// rename gate on a local instance before this change.
+// ---------------------------------------------------------------------------
+describe("namespace rename — fails CLOSED on a failure that cannot be PROVEN unreachable", () => {
+  it("blocks on a SyntaxError (reachable peer, malformed 200 body)", async () => {
+    vendorApplicationStatusMock.mockRejectedValue(
+      new SyntaxError("Unexpected token n in JSON at position 1"),
+    );
+
+    await runRename("newlocalvendor");
+
+    expect(wasBlockedWithError()).toBe(true);
+    expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
+  });
+
+  it("blocks on an insufficient_scope refusal (reachable peer, HTTP 403 challenge)", async () => {
+    const insufficientScope = new Error('Insufficient scope: required "mcp:connect"');
+    insufficientScope.name = "InsufficientScopeError";
+    vendorApplicationStatusMock.mockRejectedValue(insufficientScope);
+
+    await runRename("newlocalvendor");
+
+    expect(wasBlockedWithError()).toBe(true);
+    expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
+  });
+
+  it("blocks on an unsupported negotiated revision (reachable peer, plain Error)", async () => {
+    vendorApplicationStatusMock.mockRejectedValue(
+      new Error("Server's protocol version is not supported: 1999-01-01"),
+    );
+
+    await runRename("newlocalvendor");
+
+    expect(wasBlockedWithError()).toBe(true);
+    expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
+  });
+
+  it("blocks on an UNBRANDED TypeError — a response arrived and its body then died", async () => {
+    // `TypeError: terminated` is what undici raises AFTER a real HTTP 200 whose
+    // body stream fails. It is the same CLASS as a connect failure, from a
+    // demonstrably reachable marketplace: the pre-fix rule (`instanceof
+    // TypeError` as proof of unreachability) failed OPEN here.
+    vendorApplicationStatusMock.mockRejectedValue(new TypeError("terminated"));
+
+    await runRename("newlocalvendor");
+
+    expect(wasBlockedWithError()).toBe(true);
+    expect(vi.mocked(writeInstanceIdentity)).not.toHaveBeenCalled();
+  });
+
+  it("blocks on a thrown non-Error (nothing to classify)", async () => {
+    vendorApplicationStatusMock.mockRejectedValue("fetch failed");
 
     await runRename("newlocalvendor");
 
@@ -261,7 +362,7 @@ describe("namespace rename — fails CLOSED when a reservation could be orphaned
       vendorState: "applied",
       vendorApplicationId: "app_123",
     });
-    vendorApplicationStatusMock.mockRejectedValue(new TypeError("fetch failed"));
+    vendorApplicationStatusMock.mockRejectedValue(asConnectFailure(new TypeError("fetch failed")));
 
     await runRename("newlocalvendor");
 
@@ -274,7 +375,7 @@ describe("namespace rename — fails CLOSED when a reservation could be orphaned
       ...LOCAL_FROZEN_IDENTITY,
       vendorApplicationId: "app_456",
     });
-    vendorApplicationStatusMock.mockRejectedValue(new TypeError("fetch failed"));
+    vendorApplicationStatusMock.mockRejectedValue(asConnectFailure(new TypeError("fetch failed")));
 
     await runRename("newlocalvendor");
 
@@ -286,7 +387,7 @@ describe("namespace rename — fails CLOSED when a reservation could be orphaned
 describe("namespace rename — hosted/governed instance never fails OPEN", () => {
   it("blocks an unreachable-marketplace rename in production (NODE_ENV=production)", async () => {
     vi.stubEnv("NODE_ENV", "production");
-    vendorApplicationStatusMock.mockRejectedValue(new TypeError("fetch failed"));
+    vendorApplicationStatusMock.mockRejectedValue(asConnectFailure(new TypeError("fetch failed")));
 
     await runRename("newlocalvendor");
 
@@ -296,7 +397,7 @@ describe("namespace rename — hosted/governed instance never fails OPEN", () =>
 
   it("blocks an unreachable-marketplace rename when MARKETPLACE_BASE_URL is configured", async () => {
     vi.stubEnv("MARKETPLACE_BASE_URL", "https://marketplace.example.com");
-    vendorApplicationStatusMock.mockRejectedValue(new TypeError("fetch failed"));
+    vendorApplicationStatusMock.mockRejectedValue(asConnectFailure(new TypeError("fetch failed")));
 
     await runRename("newlocalvendor");
 
