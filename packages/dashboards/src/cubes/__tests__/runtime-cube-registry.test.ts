@@ -23,9 +23,10 @@ import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
 
 const ownerScope = { ownerLevel: "organization", ownerId: "org_1", organizationId: "org_1" };
 
-// agent_runs publishes: agent_id, agent_name, status, created_at (dims) + count, last_run_at (measures)
+// agent_runs publishes: agent_id, agent_name, run_id, run_name, vendor,
+// package_name, status, created_at (dims) + count, last_run_at (measures)
 const PUBLISHED: Record<string, string[]> = {
-  agent_runs: ["agent_id", "agent_name", "status", "created_at", "count", "last_run_at"],
+  agent_runs: ["agent_id", "agent_name", "run_id", "run_name", "vendor", "package_name", "status", "created_at", "count", "last_run_at"],
   projects: ["id", "name", "slug", "organization_id", "organization_name", "created_at", "count"],
   teams: ["id", "name", "organization_id", "organization_name", "created_at", "count", "member_count"],
   organizations: ["id", "name", "slug", "role", "team_names", "created_at", "count", "member_count"],
@@ -182,15 +183,20 @@ describe("buildRuntimeRegisteredCubes", () => {
       templateId: text("template_id"),
       status: text("status"),
       createdAt: timestamp("created_at"),
+      title: text("title"),
       orgId: text("org_id"),
       runBy: text("run_by"),
     });
-    const agentTemplates = pgTable("agent_templates", { id: text("id").primaryKey(), name: text("name") });
+    const agentTemplates = pgTable("agent_templates", {
+      id: text("id").primaryKey(),
+      name: text("name"),
+      packageName: text("package_name"),
+    });
     return createAgentRunsCube({
       tableRef: agentRuns,
-      columns: { id: agentRuns.id, templateId: agentRuns.templateId, status: agentRuns.status, createdAt: agentRuns.createdAt, orgId: agentRuns.orgId, runBy: agentRuns.runBy },
+      columns: { id: agentRuns.id, templateId: agentRuns.templateId, status: agentRuns.status, createdAt: agentRuns.createdAt, title: agentRuns.title, orgId: agentRuns.orgId, runBy: agentRuns.runBy },
       templatesTableRef: agentTemplates,
-      templateColumns: { id: agentTemplates.id, name: agentTemplates.name },
+      templateColumns: { id: agentTemplates.id, name: agentTemplates.name, packageName: agentTemplates.packageName },
     });
   }
 

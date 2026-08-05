@@ -54,7 +54,7 @@ test.describe("/agents tab bar + route split", () => {
       page.getByRole("heading", { name: "Agents", exact: true }),
     ).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText("Top 5 recently used agents")).toBeVisible();
-    await expect(page.getByText("5 latest run agents")).toBeVisible();
+    await expect(page.getByText("5 latest agent runs")).toBeVisible();
 
     const allAgentsTab = page.getByRole("tab", { name: "All Agents" });
     const executionsTab = page.getByRole("tab", { name: "Executions" });

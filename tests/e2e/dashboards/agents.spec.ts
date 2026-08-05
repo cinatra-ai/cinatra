@@ -156,7 +156,7 @@ test.describe("/agents/executions live-verify", () => {
     // 3: page chrome.
     // exact: true — getByRole name matching is substring by default, so a
     // bare "Agents" ALSO resolves the portlet card headings ("Top 5 recently
-    // used agents", "5 latest run agents") once DC mounts them, tripping
+    // used agents", "5 latest agent runs") once DC mounts them, tripping
     // strict mode. Latent race: only visible when the portlets render before
     // this assertion (warm CI runs). The page-chrome h1 is the exact match.
     await expect(
@@ -165,7 +165,7 @@ test.describe("/agents/executions live-verify", () => {
 
     // 4: both portlets.
     await expect(page.getByText("Top 5 recently used agents")).toBeVisible();
-    await expect(page.getByText("5 latest run agents")).toBeVisible();
+    await expect(page.getByText("5 latest agent runs")).toBeVisible();
 
     // 5 + 6: cube endpoint round-trip. The listener is already armed
     // (see top of test). Await it now — DC fires /v1/load on portlet

@@ -2,10 +2,13 @@
  * Seed config for /agents.
  *
  * Two portlets backed by the agent_runs cube:
- *   1. "Top 5 recently used agents" — bar chart of run count by agent_id,
+ *   1. "Top 5 recently used agents" — bar chart of run count by agent_name,
  *      descending, limit 5.
- *   2. "5 latest run agents" — table of last_run_at by agent_id,
- *      descending, limit 5.
+ *   2. "5 latest agent runs" — PER-RUN `cinatraLinkedTable` (cinatra#2448):
+ *      one row per run_id, columns Run name (linked to
+ *      `/agents/<vendor>/<packageName>/<runId>`), Agent, Status, Created at
+ *      — newest first, limit 5. run_id/vendor/package_name ride along as
+ *      hidden link-material dimensions consumed by the renderer.
  *
  * The drizzle-cube `DashboardGrid` mounts this directly as a
  * `DashboardConfig` (its TS type). We use the local `DashboardConfigV1_1`
@@ -58,7 +61,7 @@ export const AGENTS_DEFAULT_CONFIG: DashboardConfigV1_1 = {
     },
     {
       id: "agents-latest-runs",
-      title: "5 latest run agents",
+      title: "5 latest agent runs",
       w: 6,
       h: 8,
       x: 6,
@@ -69,15 +72,29 @@ export const AGENTS_DEFAULT_CONFIG: DashboardConfigV1_1 = {
         activeView: "table",
         charts: {
           query: {
-            chartType: "table",
+            // Per-run linked table (cinatra#2448): the renderer links the
+            // Run cell to `/agents/<vendor>/<packageName>/<runId>` built
+            // from the row's own vendor/package_name/run_id values and
+            // hides those three link-material columns.
+            chartType: "cinatraLinkedTable",
             chartConfig: {},
             displayConfig: {},
           },
         },
         query: {
-          measures: ["agent_runs.last_run_at"],
-          dimensions: ["agent_runs.agent_name"],
-          order: { "agent_runs.last_run_at": "desc" },
+          measures: [],
+          // Dimensioning on run_id makes each RUN its own row — two runs
+          // of the same agent never collapse (cinatra#2448).
+          dimensions: [
+            "agent_runs.run_id",
+            "agent_runs.run_name",
+            "agent_runs.agent_name",
+            "agent_runs.status",
+            "agent_runs.created_at",
+            "agent_runs.vendor",
+            "agent_runs.package_name",
+          ],
+          order: { "agent_runs.created_at": "desc" },
           limit: 5,
         },
       },
