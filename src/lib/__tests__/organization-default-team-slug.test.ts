@@ -8,26 +8,29 @@ import {
 } from "../better-auth-org-hooks";
 
 // ---------------------------------------------------------------------------
-// cinatra#1494 regression: creating an organization with teams enabled AND a
-// required `team.slug` must succeed. Better Auth's create-organization path
-// creates a DEFAULT team supplying only { name, organizationId } — no slug —
-// so `public.team.slug` (NOT NULL, CHECK-constrained, unique per org) trips
-// `null value in column "slug" ... violates not-null constraint`, 500s the
-// request, and leaves a partially-created org. The
+// cinatra#2461: creating an organization must create NO team. Better Auth's
+// create-organization route auto-creates a same-name default team whenever
+// `teams.enabled` is on and `teams.defaultTeam.enabled` is not explicitly
+// false (upstream gates on `!== false`, so omission means ON) — a phantom
+// "default" team the user never asked for. `cinatraOrganizationOptions` now
+// pins `defaultTeam: { enabled: false }`; the integration tests below create
+// real orgs through the plugin against the in-memory adapter and assert the
+// team/teamMember tables stay EMPTY while the org + owner member commit
+// consistently.
+//
+// cinatra#1494 context (the hook these tests also cover): public.team.slug is
+// NOT NULL + CHECK-constrained, and the auto-created default team used to
+// arrive slug-less and 500 the request — the
 // `organizationHooks.beforeCreateTeam` hook (src/lib/better-auth-org-hooks.ts,
 // wired in src/lib/auth.ts, threaded through the shared factory in
 // src/lib/better-auth-plugins.ts) supplies a CHECK-conforming, unique-per-org
-// slug — and is strictly FILL-ONLY-WHEN-ABSENT, because the hook is
-// plugin-wide (it also fires on the public create-team endpoint) and both
-// routes spread the hook's returned data AFTER the caller's teamData, i.e. a
-// returned slug would OVERRIDE a caller-supplied one.
-//
-// The in-memory adapter has no NOT NULL / CHECK enforcement (that's Postgres'
-// job — which is exactly why the missing slug reached the DB), so the
-// integration tests assert on the ROW the routes write: with the hook the
-// default team carries a valid slug; without it the slug is absent (the
-// pre-fix state Postgres rejected); an explicit create-team slug is preserved
-// byte-exactly.
+// slug. With the default team gone, org creation no longer exercises the
+// hook; it stays wired as defense-in-depth for create-team callers, and it is
+// strictly FILL-ONLY-WHEN-ABSENT because the routes spread the hook's
+// returned data AFTER the caller's teamData (a returned slug would OVERRIDE a
+// caller-supplied one). The unit suites below pin that contract; the
+// integration suite asserts on the ROWS the routes write (the in-memory
+// adapter has no NOT NULL / CHECK enforcement — that's Postgres' job).
 // ---------------------------------------------------------------------------
 
 // Mirrors the live `public.team.slug` CHECK constraint (see
@@ -171,8 +174,8 @@ describe("ensureUniqueTeamSlug (unit)", () => {
   });
 });
 
-describe("organization creation with teams enabled + required team.slug", () => {
-  it("creates the default team WITH a slug (cinatra#1494)", async () => {
+describe("organization creation with teams enabled + defaultTeam disabled", () => {
+  it("creates NO team on org creation — org + owner member commit consistently (cinatra#2461)", async () => {
     const db = makeDb();
     const auth = makeAuth(db, true);
     const userId = await seedOwner(auth);
@@ -182,23 +185,21 @@ describe("organization creation with teams enabled + required team.slug", () => 
     });
     expect(org).toBeTruthy();
 
-    const teams = (db.team ?? []) as TeamRow[];
-    expect(teams).toHaveLength(1);
-    expect(teams[0].slug).toBe("acme-corp");
-    expect(teams[0].slug ?? "").toMatch(TEAM_SLUG_CHECK);
+    // The #2461 regression: zero team rows, zero team memberships — a team
+    // exists only when a user explicitly creates one.
+    expect((db.team ?? []) as TeamRow[]).toHaveLength(0);
+    expect((db.teamMember ?? []) as TeamMemberRow[]).toHaveLength(0);
 
-    // The whole org create committed consistently: org + owner member +
-    // default team + team membership all present (no partial write).
+    // The org create still committed consistently: org + owner member
+    // present (no 500, no partial write) with the default team disabled.
     expect((db.organization ?? []) as unknown[]).toHaveLength(1);
     const members = (db.member ?? []) as MemberRow[];
     expect(
       members.some((m) => m.userId === userId && m.role === "owner"),
     ).toBe(true);
-    const teamMembers = (db.teamMember ?? []) as TeamMemberRow[];
-    expect(teamMembers.some((m) => m.userId === userId)).toBe(true);
   });
 
-  it("without the hook the default team row carries no slug (pre-fix NOT NULL violation)", async () => {
+  it("creates NO team regardless of the slug hook being wired (the gate is config, not the hook)", async () => {
     const db = makeDb();
     const auth = makeAuth(db, false);
     const userId = await seedOwner(auth);
@@ -207,14 +208,11 @@ describe("organization creation with teams enabled + required team.slug", () => 
       body: { name: "Beta Inc", slug: "beta-inc", userId },
     });
 
-    const teams = (db.team ?? []) as TeamRow[];
-    expect(teams).toHaveLength(1);
-    // Absent slug — the exact value Postgres rejected with
-    // `null value in column "slug" ... violates not-null constraint`.
-    expect(teams[0].slug ?? null).toBeNull();
+    expect((db.team ?? []) as TeamRow[]).toHaveLength(0);
+    expect((db.organization ?? []) as unknown[]).toHaveLength(1);
   });
 
-  it("preserves an explicit slug on a second team created via createTeam", async () => {
+  it("preserves an explicit slug on a team created via createTeam (the org's FIRST team)", async () => {
     const db = makeDb();
     const auth = makeAuth(db, true);
     const userId = await seedOwner(auth);
@@ -223,8 +221,8 @@ describe("organization creation with teams enabled + required team.slug", () => 
     });
 
     // Server-side create-team WITH an explicit slug. The hook fires on this
-    // route too, and its returned data would OVERRIDE the body slug (both
-    // routes spread hook data last) — fill-only-when-absent must leave it.
+    // route, and its returned data would OVERRIDE the body slug (the route
+    // spreads hook data last) — fill-only-when-absent must leave it.
     const created = await auth.api.createTeam({
       body: {
         name: "Growth",
@@ -234,13 +232,11 @@ describe("organization creation with teams enabled + required team.slug", () => 
     });
     expect(created).toBeTruthy();
 
+    // Exactly the one explicitly-created team — no auto-created sibling.
     const teams = (db.team ?? []) as TeamRow[];
-    expect(teams).toHaveLength(2);
-    const second = teams.find((t) => t.name === "Growth");
-    expect(second?.slug).toBe("growth-squad");
-    // The default team's slug is untouched and distinct.
-    const first = teams.find((t) => t.name === "Acme Corp");
-    expect(first?.slug).toBe("acme-corp");
+    expect(teams).toHaveLength(1);
+    expect(teams[0].name).toBe("Growth");
+    expect(teams[0].slug).toBe("growth-squad");
   });
 
   it("rejects a slugless createTeam at body validation (before insert)", async () => {
@@ -263,7 +259,8 @@ describe("organization creation with teams enabled + required team.slug", () => 
       }),
     ).rejects.toThrow();
 
-    // No partial write: still only the default team.
-    expect((db.team ?? []) as TeamRow[]).toHaveLength(1);
+    // No partial write: still zero teams (none auto-created, none from the
+    // rejected call).
+    expect((db.team ?? []) as TeamRow[]).toHaveLength(0);
   });
 });

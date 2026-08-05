@@ -69,6 +69,11 @@ export const cinatraOrganizationOptions = {
     enabled: true,
     maximumTeams: 50,
     allowRemovingAllTeams: true,
+    // cinatra#2461: without this, better-auth's create-organization route
+    // silently writes a same-name default team in the org-create transaction
+    // (upstream gates on `defaultTeam?.enabled !== false`, so omission means
+    // ON). Teams exist only when a user explicitly creates one.
+    defaultTeam: { enabled: false },
   },
   schema: {
     organization: {
