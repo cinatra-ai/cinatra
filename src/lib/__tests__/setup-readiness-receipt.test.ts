@@ -37,6 +37,8 @@ vi.mock("@/lib/anthropic-skill-sync-service", () => ({
 }));
 
 import {
+  areProviderReadinessInputsSatisfied,
+  isAnthropicUploadOptInStanding,
   computeReadinessFingerprint,
   readSetupReadinessState,
   writeSetupReadinessReceipt,
@@ -275,5 +277,59 @@ describe("readiness fingerprint — provider isolation", () => {
     dbState.connectorConfig.set("anthropic", { mcpMode: "function-tools" });
     dbState.catalogSkills = [{ id: "x" }];
     expect(computeReadinessFingerprint("openai")).toBe(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// S4 (cinatra#2389): the RECEIPT-FREE provider-specific readiness inputs the
+// commit machine's fresh derivation consults. Driven from the SAME
+// connector-config values the running system uses — the stored MCP mode and
+// the workspace upload opt-in the setup consent records.
+// ---------------------------------------------------------------------------
+
+describe("areProviderReadinessInputsSatisfied — receipt-free provider inputs (cinatra#2389)", () => {
+  it("anthropic is satisfied only with native MCP delivery AND the standing upload opt-in", () => {
+    dbState.connectorConfig.set("anthropic", { mcpMode: "native" });
+    dbState.connectorConfig.set("anthropic_skill_sync_enabled", { enabled: true });
+    expect(areProviderReadinessInputsSatisfied("anthropic")).toBe(true);
+  });
+
+  it("anthropic FAILS on function-tools mode (or an unset mode, which behaves as function-tools)", () => {
+    dbState.connectorConfig.set("anthropic_skill_sync_enabled", { enabled: true });
+    dbState.connectorConfig.set("anthropic", { mcpMode: "function-tools" });
+    expect(areProviderReadinessInputsSatisfied("anthropic")).toBe(false);
+    dbState.connectorConfig.set("anthropic", {});
+    expect(areProviderReadinessInputsSatisfied("anthropic")).toBe(false);
+  });
+
+  it("anthropic FAILS when the upload opt-in was revoked (Administration reopens the step honestly)", () => {
+    dbState.connectorConfig.set("anthropic", { mcpMode: "native" });
+    dbState.connectorConfig.set("anthropic_skill_sync_enabled", { enabled: false });
+    expect(areProviderReadinessInputsSatisfied("anthropic")).toBe(false);
+    dbState.connectorConfig.delete("anthropic_skill_sync_enabled");
+    expect(areProviderReadinessInputsSatisfied("anthropic")).toBe(false);
+  });
+
+  it("openai needs no provider-specific inputs (the lock + fresh credential carry it)", () => {
+    // Deliberately hostile Anthropic state: it must not leak into OpenAI.
+    dbState.connectorConfig.set("anthropic", { mcpMode: "function-tools" });
+    expect(areProviderReadinessInputsSatisfied("openai")).toBe(true);
+  });
+
+  it("boolean-shaped opt-in rows read correctly too", () => {
+    dbState.connectorConfig.set("anthropic", { mcpMode: "native" });
+    dbState.connectorConfig.set("anthropic_skill_sync_enabled", true);
+    expect(areProviderReadinessInputsSatisfied("anthropic")).toBe(true);
+    dbState.connectorConfig.set("anthropic_skill_sync_enabled", false);
+    expect(areProviderReadinessInputsSatisfied("anthropic")).toBe(false);
+  });
+
+  it("isAnthropicUploadOptInStanding is the standalone opt-in read (drives the setup form re-open)", () => {
+    dbState.connectorConfig.set("anthropic_skill_sync_enabled", { enabled: true });
+    expect(isAnthropicUploadOptInStanding()).toBe(true);
+    dbState.connectorConfig.set("anthropic_skill_sync_enabled", { enabled: false });
+    expect(isAnthropicUploadOptInStanding()).toBe(false);
+    dbState.connectorConfig.delete("anthropic_skill_sync_enabled");
+    expect(isAnthropicUploadOptInStanding()).toBe(false);
   });
 });

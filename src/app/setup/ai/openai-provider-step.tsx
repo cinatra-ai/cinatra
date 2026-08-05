@@ -1,38 +1,40 @@
-// The OPENAI connection form for the setup AI step.
+// The OPENAI connection section for the setup LLM-provider step.
 //
-// Extracted from `page.tsx` by cinatra#2093 (epic #2086 S6), which made the AI
-// step PROVIDER-AGNOSTIC: `page.tsx` is now the orchestrator that offers the
-// wizard-eligible providers and runs the readiness saga, and each provider
-// contributes only its own connection form. The OpenAI form itself is
-// unchanged — its key/project/organization + service-tier + default-model
-// affordances are exactly what they were.
+// Reshaped by cinatra#2389 (epic #2385 S4) to the minimal form the step needs:
+// the API key plus a how-to-get-a-key helper link — nothing else. The
+// Project ID / Organization ID passthrough fields and the "Additional
+// administration" section (service tier + default-model picker) are REMOVED
+// from setup: the tier stays Standard and the default model is the provider
+// surface's declared default; both remain configurable in Administration.
+//
+// A stored connection that reads READY hides the key field behind a one-line
+// Administration pointer (key rotation/replacement happens there) — unless
+// the commit machine reopened the key flow (`keyReopened`: the committed
+// credential fingerprint no longer matches), in which case the key field is
+// forced open for re-entry.
+//
+// The form posts through the TYPED save action (`useActionState` island +
+// toasts, S5 cinatra#2390) — failures surface as toasts carrying the
+// server-sanitized message, never as error text in a URL.
+
+import Link from "next/link";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-// S5 (cinatra#2390): the setup surface posts through the TYPED save action
-// (useActionState island + toasts) — the redirecting `saveOpenAIConnectionAction`
-// path (error text in the URL) is retired on this surface.
 import { saveSetupOpenAIConnectionAction } from "@/app/setup/ai/actions";
 import { SetupProviderConnectionForm } from "@/app/setup/ai/provider-connection-form";
-import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy";
 import { readOpenAIConnection } from "@/lib/openai-connection-store";
 // Every OpenAI reader resolves through the `llm-provider-surface` capability
 // the openai connector registers at activation (lazy/guarded host-access
-// cutover). Connector absent → the degraded info state below
-// replaces the connection form.
+// cutover). Connector absent → the degraded info state below replaces the
+// connection form.
 import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 
-
-// "Standard" is the human label of the "default" tier (see OPENAI_SERVICE_TIER_OPTIONS).
-const REQUIRED_SERVICE_TIER = "default" as const;
-
-type SetupOpenAIPageProps = {
-  searchParams?: Promise<Record<string, string | string[] | undefined>>;
-};
+/** The OpenAI key-console page the helper links to (pinned by cinatra#2389). */
+const OPENAI_KEY_CONSOLE_URL = "https://platform.openai.com/api-keys";
 
 /** Does this host have a live, ready OpenAI connection? Used by the orchestrator. */
 export async function isOpenAIConnectionReady(): Promise<boolean> {
@@ -43,199 +45,79 @@ export async function isOpenAIConnectionReady(): Promise<boolean> {
   return surface.isConnectionReady?.(configured ?? connection ?? undefined) === true;
 }
 
-function pickSearchParam(value: string | string[] | undefined) {
-  return Array.isArray(value) ? value[0] : value;
-}
-
-export async function SetupOpenAIProviderStep({ searchParams }: SetupOpenAIPageProps) {
-  const resolvedSearchParams = await (searchParams ?? Promise.resolve({} as Record<string, string | string[] | undefined>));
+export async function SetupOpenAIProviderStep({ keyReopened }: { keyReopened?: boolean }) {
   const openAISurface = getLlmProviderSurface("openai");
   if (!openAISurface) {
     // Degraded mode: the openai connector is not installed/active on this
     // host. Render an explanatory state instead of a connection form that
     // could never validate or save.
     return (
-      <div className="flex flex-col gap-6">
-        <div>
-          <p className="text-base font-semibold text-foreground">OpenAI credentials</p>
-        </div>
-        <Alert>
-          <AlertTitle>OpenAI connector unavailable</AlertTitle>
-          <AlertDescription>
-            The OpenAI connector extension is not installed or active on this instance, so the
-            default LLM provider cannot be configured here. Install/activate it (or configure a
-            different provider in Administration) and reload this step.
-          </AlertDescription>
-        </Alert>
-      </div>
+      <Alert>
+        <AlertTitle>OpenAI connector unavailable</AlertTitle>
+        <AlertDescription>
+          The OpenAI connector extension is not installed or active on this instance, so the
+          default LLM provider cannot be configured here. Install/activate it (or configure a
+          different provider in Administration) and reload this step.
+        </AlertDescription>
+      </Alert>
     );
   }
   const connection = readOpenAIConnection();
   const configuredConnection = (await openAISurface.getConfiguredConnection?.(
     connection ?? undefined,
-  )) as { apiKey?: string; projectId?: string; organizationId?: string; availableModels?: string[]; serviceTier?: string; defaultModel?: string } | null | undefined;
+  )) as { apiKey?: string } | null | undefined;
   const isConnected =
     openAISurface.isConnectionReady?.(configuredConnection ?? connection ?? undefined) === true;
   const hasApiKey = Boolean(configuredConnection?.apiKey || connection?.apiKey);
-
-  let availableModels = connection?.availableModels ?? configuredConnection?.availableModels ?? [];
-  if (configuredConnection?.apiKey) {
-    try {
-      const fetchedModels = await openAISurface.listAvailableModels?.({
-        projectId: configuredConnection.projectId,
-        organizationId: configuredConnection.organizationId,
-      });
-      if (fetchedModels && fetchedModels.length > 0) {
-        availableModels = fetchedModels;
-      }
-    } catch {
-      // Keep the last validated model list if the live refresh fails.
-    }
-  }
-  availableModels = openAISurface.filterVisibleModels?.(availableModels) ?? availableModels;
-  const selectableModels = new Set(
-    openAISurface.filterSelectableModels?.(availableModels) ?? availableModels,
-  );
-
-  // Wizard NAVIGATION (auto-forward + Continue) moved to the orchestrating
-  // page: with a provider CHOICE ahead of the form, "the connection is saved"
-  // is no longer the same thing as "the AI step is done" — only a valid
-  // readiness receipt is. `stay`/`errorMessage` are still read so this form can
-  // suppress its own transient states.
-  const lockedServiceTier = REQUIRED_SERVICE_TIER;
+  // A ready stored connection hides the key field — unless the commit machine
+  // reopened the key flow (fingerprint mismatch: re-entry is the remedy).
+  const showKeyForm = !isConnected || keyReopened === true;
 
   return (
-    <div className="flex flex-col gap-6">
-      <div>
-        <p className="text-base font-semibold text-foreground">OpenAI credentials</p>
-        <p className="mt-0.5 text-sm text-muted-foreground">
-          Configure your secret key, project, and organization from platform.openai.com.
-        </p>
-      </div>
-
-      <p className="text-sm text-muted-foreground">
-        OpenAI is the default LLM provider for Cinatra. After setup, you can update this OpenAI
-        configuration and add other providers (Anthropic, Gemini, etc.) in Administration.
-      </p>
-
-      {isConnected ? (
-        <Alert>
-          <AlertTitle>OpenAI connection saved</AlertTitle>
-          <AlertDescription>
-            Your OpenAI API key, as well as the project and organization ID and other administration
-            have been configured.
-          </AlertDescription>
-        </Alert>
-      ) : null}
-
-      {/* A failed save surfaces as a TOAST carrying the server-sanitized
-          message from the typed action result (S5, cinatra#2390) — never as
-          error text in the URL, and never through the codes-only flash. */}
-
-      {/* Card 1: API key + project + organization */}
-      <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
-        <SetupProviderConnectionForm
-          action={saveSetupOpenAIConnectionAction}
-          successMessage="OpenAI connection saved."
-          className="grid gap-4"
-          testId="setup-openai-connection-form"
-        >
-          <Field>
-            <FieldLabel>API key</FieldLabel>
-            <Input
-              name="apiKey"
-              type="password"
-              autoComplete="off"
-              placeholder={hasApiKey ? "••••••••••••••••" : "sk-..."}
-            />
-          </Field>
-          <div className="grid items-start gap-4 sm:grid-cols-2">
-            <Field>
-              <FieldLabel>Project ID</FieldLabel>
-              <Input name="projectId" defaultValue={connection?.projectId ?? ""} />
-            </Field>
-            <Field>
-              <FieldLabel>Organization ID</FieldLabel>
-              <Input name="organizationId" defaultValue={connection?.organizationId ?? ""} />
-            </Field>
-          </div>
-          <div className="flex justify-end">
-            <Button type="submit">{hasApiKey ? "Change" : "Save"}</Button>
-          </div>
-        </SetupProviderConnectionForm>
-      </section>
-
-      {/* Card 2: Service tier + default model */}
-      <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
-        <p className="text-base font-semibold text-foreground">Additional administration</p>
-        {!hasApiKey ? (
+    <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
+      <p className="text-base font-semibold text-foreground">OpenAI API key</p>
+      {showKeyForm ? (
+        <>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            Save your API key above to unlock these settings.
+            Create or copy a secret key in the{" "}
+            <Link
+              href={OPENAI_KEY_CONSOLE_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary underline"
+            >
+              OpenAI API keys console
+            </Link>
+            . Cinatra stores it encrypted and never shows it again.
           </p>
-        ) : null}
-        <SetupProviderConnectionForm
-          action={saveSetupOpenAIConnectionAction}
-          successMessage="OpenAI settings saved."
-          className="mt-5"
-        >
-          <fieldset disabled={!hasApiKey} className="grid items-start gap-4 sm:grid-cols-2 disabled:opacity-50">
+          <SetupProviderConnectionForm
+            action={saveSetupOpenAIConnectionAction}
+            successMessage="OpenAI connection saved."
+            className="mt-4 grid gap-4"
+            testId="setup-openai-connection-form"
+          >
             <Field>
-              <FieldLabel>Service tier</FieldLabel>
-              <Input type="hidden" name="serviceTier" value={lockedServiceTier} />
-              <Select value={lockedServiceTier} disabled={!hasApiKey}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Standard" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(openAISurface.serviceTierOptions ?? []).map((option) => (
-                    <SelectItem
-                      key={option.value}
-                      value={option.value}
-                      disabled={option.value !== lockedServiceTier}
-                    >
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <span className="text-xs font-normal text-muted-foreground">
-                Standard is required to ensure Cinatra&apos;s base functionality.
-              </span>
+              <FieldLabel>API key</FieldLabel>
+              <Input
+                name="apiKey"
+                type="password"
+                autoComplete="off"
+                placeholder={hasApiKey ? "••••••••••••••••" : "sk-..."}
+              />
             </Field>
-            <Field>
-              <FieldLabel>Default model</FieldLabel>
-              {availableModels.length > 0 ? (
-                <Select
-                  name="defaultModel"
-                  defaultValue={
-                    connection?.defaultModel && selectableModels.has(connection.defaultModel)
-                      ? connection.defaultModel
-                      : DEFAULT_OPENAI_MODEL_ID
-                  }
-                  disabled={!hasApiKey}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableModels.map((model) => (
-                      <SelectItem key={model} value={model} disabled={!selectableModels.has(model)}>
-                        {model}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              ) : (
-                <Input name="defaultModel" defaultValue={connection?.defaultModel ?? DEFAULT_OPENAI_MODEL_ID} />
-              )}
-            </Field>
-            <div className="sm:col-span-2 flex justify-end">
-              <Button type="submit">Save</Button>
+            <div className="flex justify-end">
+              <Button type="submit">{hasApiKey ? "Change" : "Save"}</Button>
             </div>
-          </fieldset>
-        </SetupProviderConnectionForm>
-      </section>
-
-    </div>
+          </SetupProviderConnectionForm>
+        </>
+      ) : (
+        // The stored connection is ready: no key field — rotation and
+        // replacement live in Administration, not in setup.
+        <p className="mt-0.5 text-sm text-muted-foreground" data-testid="setup-openai-admin-pointer">
+          A ready OpenAI connection is already stored. Rotate or replace the key later in
+          Administration.
+        </p>
+      )}
+    </section>
   );
 }

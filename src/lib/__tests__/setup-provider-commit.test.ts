@@ -53,14 +53,19 @@ vi.mock("@/lib/database", () => ({
 
 // The receipt re-derivation (provider binding + credential + MCP mode +
 // catalog + upload opt-in) is pinned by setup-readiness-receipt.test.ts; here
-// it is a controllable seam.
+// it is a controllable seam. The receipt drives ONLY the lazy migration now —
+// the fresh derivation consults the RECEIPT-FREE provider-specific inputs
+// (S4, cinatra#2389), stubbed as their own seam below and pinned for real by
+// setup-readiness-receipt.test.ts.
 const readiness = {
   ready: false as boolean,
   receipt: null as { provider: string } | null,
 };
+const readinessInputs = { satisfied: false as boolean };
 vi.mock("@/lib/setup-readiness-saga", () => ({
   readSetupReadinessState: () => ({ ready: readiness.ready, receipt: readiness.receipt }),
   readSetupReadinessReceipt: () => readiness.receipt,
+  areProviderReadinessInputsSatisfied: () => readinessInputs.satisfied,
 }));
 
 // The keyed live-credential reader; its derivation/match rules are pinned by
@@ -114,6 +119,7 @@ beforeEach(() => {
   defaultProvider.value = "openai";
   readiness.ready = false;
   readiness.receipt = null;
+  readinessInputs.satisfied = false;
   liveFingerprint.value = { status: "unreadable", reason: "connector-unavailable" };
   auditedWrites.length = 0;
   vi.restoreAllMocks();
@@ -583,10 +589,12 @@ describe("deriveSetupAiStepState — lock survives credential loss; readiness fa
     expect(state).toMatchObject({ locked: false, ready: false });
   });
 
-  it("commitment + fresh fingerprint + readiness → ready", async () => {
+  it("commitment + fresh fingerprint + satisfied provider inputs → ready (NO receipt consulted — S4, cinatra#2389)", async () => {
     await committedWith("cfv1:aa");
     liveFingerprint.value = { status: "readable", fingerprint: "cfv1:aa" };
-    readiness.ready = true;
+    readinessInputs.satisfied = true;
+    // The receipt seam stays at its defaults (no receipt, not ready): the
+    // fresh derivation must not need one.
     const state = await deriveSetupAiStepState();
     expect(state).toMatchObject({ locked: true, credentialFresh: true, ready: true });
   });
@@ -594,14 +602,14 @@ describe("deriveSetupAiStepState — lock survives credential loss; readiness fa
   it("credential ROTATION (fingerprint mismatch) reopens readiness while the lock STANDS", async () => {
     await committedWith("cfv1:aa");
     liveFingerprint.value = { status: "readable", fingerprint: "cfv1:ROTATED" };
-    readiness.ready = true;
+    readinessInputs.satisfied = true;
     const state = await deriveSetupAiStepState();
     expect(state).toMatchObject({ locked: true, credentialFresh: false, ready: false });
   });
 
   it("credential DELETION and an UNREADABLE surface both fail closed, lock intact", async () => {
     await committedWith("cfv1:aa");
-    readiness.ready = true;
+    readinessInputs.satisfied = true;
     liveFingerprint.value = { status: "absent" };
     expect(await deriveSetupAiStepState()).toMatchObject({
       locked: true,
@@ -616,10 +624,10 @@ describe("deriveSetupAiStepState — lock survives credential loss; readiness fa
     });
   });
 
-  it("readiness evidence missing → locked but not ready (commitment ≠ readiness)", async () => {
+  it("unsatisfied provider-specific inputs → locked but not ready (commitment ≠ readiness)", async () => {
     await committedWith("cfv1:aa");
     liveFingerprint.value = { status: "readable", fingerprint: "cfv1:aa" };
-    readiness.ready = false;
+    readinessInputs.satisfied = false;
     const state = await deriveSetupAiStepState();
     expect(state).toMatchObject({ locked: true, credentialFresh: true, ready: false });
   });

@@ -504,5 +504,9 @@ export async function completeAiSetupAction(formData: FormData) {
   }
 
   writeConnectorConfigToDatabase(SETUP_READINESS_FAILURE_CONFIG_KEY, null);
-  redirect("/setup/ai?stay=1");
+  // S4 (cinatra#2389): Continue IS the commit — on success it advances. The
+  // redirect deliberately drops `stay=1` so the step's auto-forward (which
+  // re-derives readiness freshly) carries the operator to the next incomplete
+  // step; a run that somehow left the step not-ready simply re-renders it.
+  redirect("/setup/ai");
 }

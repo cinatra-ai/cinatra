@@ -94,9 +94,12 @@ export async function getSetupWizardSteps(): Promise<SetupWizardStep[]> {
     });
   }
 
+  // S4 (cinatra#2389): the step's pill reads "LLM Provider" — the step is the
+  // choice of the LLM that drives the Cinatra chat assistant, not a generic
+  // "AI" bucket. The id stays "ai" (it is a stable route/anchor identifier).
   steps.push({
     id: "ai",
-    title: "AI",
+    title: "LLM Provider",
     href: "/setup/ai",
     ready: aiReady,
   });
@@ -113,7 +116,9 @@ export function getFirstIncompleteStep(steps: SetupWizardStep[]): SetupWizardSte
 // 1. CINATRA_ENCRYPTION_KEY is set, which gates all setup
 // 2. Instance name (namespace) is configured, which gates registry access
 // 3. Nango is connected, which gates OAuth connections
-// 4. The AI step holds a VALID readiness receipt for the chosen LLM provider
+// 4. The AI step's commit machine reads ready: a committed provider (the
+//    lock) + a fresh matching credential fingerprint + the live
+//    provider-specific readiness inputs (S4, cinatra#2389 — no receipt)
 function isStepsComplete(steps: SetupWizardStep[]): boolean {
   // Defensive: the sign-up step never carries ready:true (see
   // getSetupWizardSteps), so its mere presence already means incomplete. In
