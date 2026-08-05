@@ -4,6 +4,7 @@ import {
   buildCinatraBetterAuthPlugins,
   buildMcpAuthPlugins,
   cinatraAuthAdditionalUserFields,
+  cinatraOrganizationOptions,
   DEFAULT_MCP_SCOPES,
 } from "../better-auth-plugins";
 import { buildMigrationAuthOptions } from "../../../scripts/better-auth-migrate.mts";
@@ -148,6 +149,14 @@ describe("Better Auth schema parity (runtime ↔ migration)", () => {
 
   it("declares the team.slug additionalField (organization plugin)", () => {
     expect(normalizedRuntime.team.slug).toEqual({ type: "string", required: true });
+  });
+
+  it("pins defaultTeam OFF — org creation must not auto-create a team (cinatra#2461)", () => {
+    // Upstream gates on `defaultTeam?.enabled !== false`, so removing this
+    // option (not just flipping it) silently re-enables the phantom
+    // same-name team. The behavioral proof lives in
+    // organization-default-team-slug.test.ts; this pins the shared config.
+    expect(cinatraOrganizationOptions.teams.defaultTeam.enabled).toBe(false);
   });
 
   // normalize() keeps only the column shape (type + optionality); the
