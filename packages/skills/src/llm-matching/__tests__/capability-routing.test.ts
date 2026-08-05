@@ -57,7 +57,12 @@ vi.mock("@/lib/background-jobs", () => ({
   },
 }));
 
-import { handleBatchSubmit, handleBatchPoll, cancelBatchRun } from "../jobs";
+import {
+  handleBatchSubmit,
+  handleBatchPoll,
+  handleBatchPollExhausted,
+  cancelBatchRun,
+} from "../jobs";
 import {
   LLM_MATCHER_VERSION,
   SKILL_MATCH_SYNC_RUN_PREFIX,
@@ -371,5 +376,195 @@ describe("synchronous fan-out chunks — progress, frozen context, cancel", () =
     const result = await cancelBatchRun("batch-x", { batch: { cancelBatchV2 } });
     expect(cancelBatchV2).toHaveBeenCalledWith({ provider: "anthropic", batchId: "batch-x" });
     expect(result).toEqual({ ok: true, status: "cancelling" });
+  });
+});
+
+describe("terminal status is never persisted ahead of undrained outcomes", () => {
+  it("submit reporting ended clamps to the in-flight 'finalizing' literal (poll drains it)", async () => {
+    const batch = batchSeams({
+      submitBatchV2: vi.fn().mockResolvedValue({ batchId: "batch-instant", status: "ended" }),
+    });
+    await handleBatchSubmit(
+      { submittedBy: "admin-1" },
+      { catalog: catalog(), mintRunContext: async () => ANTHROPIC_CONTEXT, batch },
+    );
+    const run = runsStore.runs.get("batch-instant") as Record<string, unknown>;
+    expect(run.status).toBe("finalizing");
+    expect(run.manifest).not.toBeNull();
+    // A poll was scheduled to drain it.
+    expect(
+      enqueueBackgroundJob.mock.calls.some(
+        (c) => (c[1] as { batchId?: string }).batchId === "batch-instant",
+      ),
+    ).toBe(true);
+  });
+
+  it("cancel reporting ended keeps the run pollable as 'cancelling' (outcomes undrained)", async () => {
+    runsStore.runs.set("batch-cx", {
+      batchId: "batch-cx",
+      status: "in_progress",
+      provider: "anthropic",
+      model: "m",
+      evaluatorVersion: LLM_MATCHER_VERSION,
+      manifest: [{ customId: "c", agentId: "a", skillId: "s", agentInputHash: "h", skillInputHash: "h" }],
+      processedPairCount: 0,
+      pairCount: 1,
+      lastPolledAt: null,
+    });
+    const cancelBatchV2 = vi.fn().mockResolvedValue({
+      batchId: "batch-cx",
+      status: "ended",
+      counts: null,
+      endedAt: new Date().toISOString(),
+      expiresAt: null,
+      errorMessage: null,
+    });
+    const result = await cancelBatchRun("batch-cx", { batch: { cancelBatchV2 } });
+    expect(result).toEqual({ ok: true, status: "cancelling" });
+    const run = runsStore.runs.get("batch-cx") as Record<string, unknown>;
+    expect(run.status).toBe("cancelling");
+    expect(run.manifest).not.toBeNull();
+  });
+
+  it("a batch-level 'failed' poll result is terminal and sheds the manifest", async () => {
+    runsStore.runs.set("batch-f", {
+      batchId: "batch-f",
+      status: "in_progress",
+      provider: "anthropic",
+      model: "m",
+      evaluatorVersion: LLM_MATCHER_VERSION,
+      manifest: [{ customId: "c", agentId: "a", skillId: "s", agentInputHash: "h", skillInputHash: "h" }],
+      processedPairCount: 0,
+      pairCount: 1,
+      lastPolledAt: null,
+    });
+    await handleBatchPoll(
+      { batchId: "batch-f", jobStartedAt: new Date().toISOString() },
+      {
+        catalog: catalog(),
+        batch: batchSeams({
+          retrieveBatchV2: vi.fn().mockResolvedValue({
+            batchId: "batch-f",
+            status: "failed",
+            counts: null,
+            endedAt: null,
+            expiresAt: null,
+            errorMessage: "batch exploded",
+          }),
+        }),
+      },
+    );
+    const run = runsStore.runs.get("batch-f") as Record<string, unknown>;
+    expect(run.status).toBe("failed");
+    expect(run.manifest).toBeNull();
+    expect(String(run.errorMessage)).toContain("batch exploded");
+    expect(enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+});
+
+describe("cancel failure classification", () => {
+  function seedRun(batchId: string) {
+    runsStore.runs.set(batchId, {
+      batchId,
+      status: "in_progress",
+      provider: "anthropic",
+      model: "m",
+      evaluatorVersion: LLM_MATCHER_VERSION,
+      manifest: [],
+      processedPairCount: 0,
+      pairCount: 1,
+      lastPolledAt: null,
+    });
+  }
+
+  it("BatchNotSupportedError reports cancel_unsupported", async () => {
+    seedRun("batch-nu");
+    const err = new Error('Batch API is not supported by provider "anthropic"');
+    err.name = "BatchNotSupportedError";
+    const result = await cancelBatchRun("batch-nu", {
+      batch: { cancelBatchV2: vi.fn().mockRejectedValue(err) },
+    });
+    expect(result).toEqual({ ok: false, reason: "cancel_unsupported" });
+  });
+
+  it("network/provider failures RETHROW instead of reporting a false capability verdict", async () => {
+    seedRun("batch-net");
+    await expect(
+      cancelBatchRun("batch-net", {
+        batch: { cancelBatchV2: vi.fn().mockRejectedValue(new Error("ECONNRESET")) },
+      }),
+    ).rejects.toThrow("ECONNRESET");
+    // Run untouched — still cancellable/pollable.
+    expect((runsStore.runs.get("batch-net") as Record<string, unknown>).status).toBe(
+      "in_progress",
+    );
+  });
+});
+
+describe("poll-attempt exhaustion (dispatch-site hook)", () => {
+  it("a synchronous run transitions to terminal 'failed' with the manifest shed", async () => {
+    const runId = `${SKILL_MATCH_SYNC_RUN_PREFIX}exhausted`;
+    runsStore.runs.set(runId, {
+      batchId: runId,
+      status: "in_progress",
+      provider: "anthropic",
+      model: "m",
+      evaluatorVersion: LLM_MATCHER_VERSION,
+      manifest: [{ customId: "c", agentId: "a", skillId: "s", agentInputHash: "h", skillInputHash: "h" }],
+      processedPairCount: 3,
+      pairCount: 10,
+      lastPolledAt: null,
+    });
+    await handleBatchPollExhausted(
+      { batchId: runId, jobStartedAt: new Date().toISOString() },
+      new Error("provider 500"),
+    );
+    const run = runsStore.runs.get(runId) as Record<string, unknown>;
+    expect(run.status).toBe("failed");
+    expect(run.manifest).toBeNull();
+    expect(String(run.errorMessage)).toContain("provider 500");
+    expect(enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+
+  it("a provider batch is NOT failed — a fresh poll keeps the chain alive", async () => {
+    runsStore.runs.set("batch-alive", {
+      batchId: "batch-alive",
+      status: "in_progress",
+      provider: "anthropic",
+      model: "m",
+      evaluatorVersion: LLM_MATCHER_VERSION,
+      manifest: [],
+      processedPairCount: 0,
+      pairCount: 1,
+      lastPolledAt: null,
+    });
+    await handleBatchPollExhausted(
+      { batchId: "batch-alive", jobStartedAt: new Date().toISOString() },
+      new Error("retrieve flake"),
+    );
+    expect((runsStore.runs.get("batch-alive") as Record<string, unknown>).status).toBe(
+      "in_progress",
+    );
+    expect(enqueueBackgroundJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("a terminal run is left untouched", async () => {
+    runsStore.runs.set("batch-done", {
+      batchId: "batch-done",
+      status: "completed",
+      provider: "anthropic",
+      model: "m",
+      evaluatorVersion: LLM_MATCHER_VERSION,
+      manifest: null,
+      processedPairCount: 0,
+      pairCount: 1,
+      lastPolledAt: null,
+    });
+    await handleBatchPollExhausted(
+      { batchId: "batch-done", jobStartedAt: new Date().toISOString() },
+      new Error("late failure"),
+    );
+    expect((runsStore.runs.get("batch-done") as Record<string, unknown>).status).toBe("completed");
+    expect(enqueueBackgroundJob).not.toHaveBeenCalled();
   });
 });

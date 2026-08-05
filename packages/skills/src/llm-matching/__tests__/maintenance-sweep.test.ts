@@ -266,4 +266,33 @@ describe("sweepStaleMatches", () => {
       }),
     ).rejects.toThrow("db down");
   });
+
+  it("no runtime: stale rows do not consume the re-eval cap and are not reported deferredOverCap", async () => {
+    // More stale rows than the cap; with a null runtime NONE may burn capacity.
+    const a1 = agent(1);
+    const a2 = agent(2);
+    const s1 = skill(1, "content one");
+    const s2 = skill(2, "content two");
+    const agents = [a1, a2];
+    const skills = [s1, s2];
+    const rows = [
+      row({ a: a1, s: s1, agentInputHash: "stale", skillInputHash: "stale" }),
+      row({ a: a1, s: s2, agentInputHash: "stale", skillInputHash: "stale" }),
+      row({ a: a2, s: s1, agentInputHash: "stale", skillInputHash: "stale" }),
+    ];
+    const evaluate = vi.fn();
+    const res = await sweepStaleMatches({
+      mintRunContext: async () => null,
+      catalog: catalogOf(agents, skills),
+      readAllRows: async () => rows,
+      evaluate,
+      now: () => NOW,
+      maxReevals: 1,
+    });
+    expect(res.stale).toBe(3);
+    expect(res.deferredOverCap).toBe(0);
+    expect(res.reevaluated).toBe(0);
+    expect(res.errors).toBe(0);
+    expect(evaluate).not.toHaveBeenCalled();
+  });
 });

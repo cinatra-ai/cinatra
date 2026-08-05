@@ -6,6 +6,11 @@
  * frozen candidate set makes the fan-out immune to catalog churn mid-run (no
  * skipped or duplicated pairs).
  *
+ * Setup-flow S6: the externally-enqueued job is a SEED that mints the frozen
+ * run context + candidate set and hands off to a fully-frozen eval job
+ * without evaluating anything itself — so a BullMQ retry can never split one
+ * logical fan-out across two contexts (regression tests below).
+ *
  * `evaluatePair` and the background-job queue are mocked so the fan-out logic
  * is exercised without an LLM or BullMQ; continuation jobs are "run" by feeding
  * the captured enqueue payload back into the handler.
@@ -92,13 +97,25 @@ describe("handleInlineForSkill chunked fan-out", () => {
     expect(anchors).toEqual(new Set([jobStartedAt]));
   });
 
-  it("enqueues a continuation with the frozen candidateIds and a run-nonce + offset jobId", async () => {
+  it("the seed hands off a fully-frozen eval job; the eval job enqueues a continuation with the frozen candidateIds and a run-nonce + offset jobId", async () => {
     const jobStartedAt = new Date("2026-05-12T00:00:00Z").toISOString();
     const agentsRef = { current: Array.from({ length: CAP + 5 }, (_, i) => agent(i)) };
-    await handleInlineForSkill(
-      { skillId: SKILL.id, jobStartedAt },
-      { catalog: catalogWith(agentsRef) },
-    );
+    const catalog = catalogWith(agentsRef);
+
+    // Seed: mints + freezes, evaluates NOTHING, enqueues the off0 eval job.
+    await handleInlineForSkill({ skillId: SKILL.id, jobStartedAt }, { catalog });
+    expect(evaluatePair).not.toHaveBeenCalled();
+    expect(enqueueBackgroundJob).toHaveBeenCalledTimes(1);
+    const [, seedData, seedOpts] = enqueueBackgroundJob.mock.calls[0];
+    expect((seedData as { offset: number }).offset).toBe(0);
+    expect((seedData as { candidateIds: string[] }).candidateIds).toHaveLength(CAP + 5);
+    expect(seedData).toHaveProperty("runContext");
+    expect((seedOpts as { jobId: string }).jobId).toContain("-off0");
+    enqueueBackgroundJob.mockClear();
+
+    // The off0 eval job processes its window and chains the continuation.
+    await handleInlineForSkill(seedData as never, { catalog });
+    expect(evaluatePair).toHaveBeenCalledTimes(CAP);
     expect(enqueueBackgroundJob).toHaveBeenCalledTimes(1);
     const [, data, opts] = enqueueBackgroundJob.mock.calls[0];
     expect((data as { offset: number }).offset).toBe(CAP);
@@ -137,12 +154,18 @@ describe("handleInlineForSkill chunked fan-out", () => {
     const total = CAP + 20;
     const agentsRef = { current: Array.from({ length: total }, (_, i) => agent(i)) };
     const originalIds = new Set(agentsRef.current.map((a) => a.packageId));
+    const catalog = catalogWith(agentsRef);
 
-    // First window (offset 0) processes CAP agents and enqueues a continuation.
+    // Seed freezes the candidate set and hands off the off0 eval job.
     await handleInlineForSkill(
       { skillId: SKILL.id, jobStartedAt: new Date("2026-05-12T00:00:00Z").toISOString() },
-      { catalog: catalogWith(agentsRef) },
+      { catalog },
     );
+    const off0 = enqueueBackgroundJob.mock.calls[0][1];
+    enqueueBackgroundJob.mockClear();
+
+    // First window (offset 0) processes CAP agents and enqueues a continuation.
+    await handleInlineForSkill(off0 as never, { catalog });
     const continuation = enqueueBackgroundJob.mock.calls[0][1] as { candidateIds: string[] };
     enqueueBackgroundJob.mockClear();
 
@@ -150,11 +173,51 @@ describe("handleInlineForSkill chunked fan-out", () => {
     for (let i = 0; i < 100; i += 1) agentsRef.current.push(agent(10000 + i));
 
     // Run the continuation — it uses the FROZEN candidateIds, not the mutated catalog.
-    await handleInlineForSkill(continuation as never, { catalog: catalogWith(agentsRef) });
+    await handleInlineForSkill(continuation as never, { catalog });
 
     const processed = new Set(evaluatePair.mock.calls.map((c) => (c[0] as { agent: { packageId: string } }).agent.packageId));
     // Exactly the original set — none of the 100 late arrivals, no duplicates.
     expect(processed.size).toBe(total);
     for (const id of processed) expect(originalIds.has(id)).toBe(true);
+  });
+
+  it("frozen context across retries: an eval-job retry keeps its payload context even after the configured default changes; a seed retry re-mints uniformly", async () => {
+    const jobStartedAt = new Date("2026-05-12T00:00:00Z").toISOString();
+    const agentsRef = { current: Array.from({ length: 3 }, (_, i) => agent(i)) };
+    const catalog = catalogWith(agentsRef);
+    const contextA = { provider: "openai", model: "model-a", evaluatorVersion: "llm-matcher-v2" };
+    const contextB = { provider: "anthropic", model: "model-b", evaluatorVersion: "llm-matcher-v2" };
+
+    // Seed under default A → the handed-off eval payload freezes A.
+    await handleInlineForSkill(
+      { skillId: SKILL.id, jobStartedAt },
+      { catalog, mintRunContext: async () => contextA },
+    );
+    const off0 = enqueueBackgroundJob.mock.calls[0][1] as { runContext: unknown };
+    expect(off0.runContext).toEqual(contextA);
+    enqueueBackgroundJob.mockClear();
+
+    // Default changes to B; the eval job (and any BullMQ RETRY of it, which
+    // replays the same payload) still evaluates under FROZEN A — the mint
+    // seam is never consulted on an eval job.
+    await handleInlineForSkill(off0 as never, {
+      catalog,
+      mintRunContext: async () => contextB,
+    });
+    for (const call of evaluatePair.mock.calls) {
+      expect((call[1] as { runContext: unknown }).runContext).toEqual(contextA);
+    }
+
+    // A SEED retry (payload still has no runContext) re-mints — under B — and
+    // hands off a uniformly-B run: no evaluation ever ran under two contexts.
+    enqueueBackgroundJob.mockClear();
+    evaluatePair.mockClear();
+    await handleInlineForSkill(
+      { skillId: SKILL.id, jobStartedAt },
+      { catalog, mintRunContext: async () => contextB },
+    );
+    expect(evaluatePair).not.toHaveBeenCalled();
+    const retriedSeedPayload = enqueueBackgroundJob.mock.calls[0][1] as { runContext: unknown };
+    expect(retriedSeedPayload.runContext).toEqual(contextB);
   });
 });

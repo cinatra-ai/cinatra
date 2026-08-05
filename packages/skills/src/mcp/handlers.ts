@@ -1256,8 +1256,14 @@ export function createSkillsPrimitiveHandlers() {
       // actor frame, and this handler previously dropped its actor before
       // `evaluatePair`.
       const runContext = await mintSkillMatchRunContext();
+      // Same active-org resolution as the other actor-building handlers in
+      // this file, so the actor frame carries org-scoped team/project grants.
+      const orgId = await resolveOrgIdFromSession(
+        request.actor as { orgId?: string | null } | undefined,
+      );
       const actorCtx = await actorContextFromMcpRequest(
         request.actor as PrimitiveActorContext,
+        orgId,
       );
 
       const result = await evaluatePair(

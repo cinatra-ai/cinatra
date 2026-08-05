@@ -351,3 +351,88 @@ describe("write parity: batch outcome vs synchronous evaluator on identical mode
     expect(strip(batchRow)).toEqual(strip(syncRow));
   });
 });
+
+describe("terminal write ordering on the ended path", () => {
+  it("a download failure leaves the run NON-terminal, re-enqueues a poll, and propagates", async () => {
+    const batchId = "batch-dl-fail";
+    runsStore.runs.set(batchId, {
+      batchId,
+      status: "in_progress",
+      provider: "anthropic",
+      model: "m",
+      evaluatorVersion: RUN_EVALUATOR_VERSION,
+      manifest: [
+        { customId: "c1", agentId: AGENT.packageId, skillId: SKILL.id, ...currentHashes(SKILL) },
+      ],
+      processedPairCount: 0,
+      pairCount: 1,
+      lastPolledAt: null,
+    });
+    await expect(
+      handleBatchPoll(
+        { batchId, jobStartedAt: new Date().toISOString() },
+        {
+          catalog: catalog([AGENT], [SKILL]),
+          batch: {
+            retrieveBatchV2: vi.fn().mockResolvedValue(endedState(batchId)),
+            downloadBatchOutcomesV2: vi.fn().mockRejectedValue(new Error("download flake")),
+          },
+        },
+      ),
+    ).rejects.toThrow("download flake");
+
+    const run = runsStore.runs.get(batchId) as Record<string, unknown>;
+    // NOT completed: the next poll can retry the drain.
+    expect(run.status).toBe("in_progress");
+    expect(run.manifest).not.toBeNull();
+    expect(matchStore.upsertSkillMatch).not.toHaveBeenCalled();
+    // Chain kept alive.
+    expect(enqueueBackgroundJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("the terminal 'completed' write lands only AFTER outcomes are applied", async () => {
+    const h = currentHashes(SKILL);
+    const batchId = "batch-order";
+    runsStore.runs.set(batchId, {
+      batchId,
+      status: "in_progress",
+      provider: "anthropic",
+      model: "m",
+      evaluatorVersion: RUN_EVALUATOR_VERSION,
+      manifest: [{ customId: "c1", agentId: AGENT.packageId, skillId: SKILL.id, ...h }],
+      processedPairCount: 0,
+      pairCount: 1,
+      lastPolledAt: null,
+    });
+    const statusAtUpsert: unknown[] = [];
+    matchStore.upsertSkillMatch.mockImplementation(async () => {
+      statusAtUpsert.push((runsStore.runs.get(batchId) as Record<string, unknown>).status);
+    });
+    await handleBatchPoll(
+      { batchId, jobStartedAt: new Date().toISOString() },
+      {
+        catalog: catalog([AGENT], [SKILL]),
+        batch: {
+          retrieveBatchV2: vi.fn().mockResolvedValue(endedState(batchId)),
+          downloadBatchOutcomesV2: vi.fn().mockResolvedValue([
+            {
+              customId: "c1",
+              status: "succeeded" as const,
+              text: JSON.stringify({ matched: true, score: 0.5, rationale: "ok" }),
+              model: "m",
+              stopReason: "end_turn",
+              rawBody: "{}",
+            },
+          ]),
+        },
+      },
+    );
+    // Every row write happened while the run was still NON-terminal.
+    expect(statusAtUpsert).toEqual(["in_progress"]);
+    const run = runsStore.runs.get(batchId) as Record<string, unknown>;
+    expect(run.status).toBe("completed");
+    expect(run.manifest).toBeNull();
+    matchStore.upsertSkillMatch.mockReset();
+    matchStore.upsertSkillMatch.mockResolvedValue(undefined);
+  });
+});

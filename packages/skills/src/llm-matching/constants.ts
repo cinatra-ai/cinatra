@@ -197,6 +197,14 @@ export const BATCH_STATUS_ALL = new Set<string>([
  * Map a neutral batch-v2 lifecycle status onto the PERSISTED vocabulary above.
  * Unknown inputs pass through verbatim (fail-open into the panel's "unknown =
  * keep polling" stance rather than inventing a terminal state).
+ *
+ * INVARIANT AT THE CALL SITES: a provider-batch run with an outstanding
+ * submission manifest is never PERSISTED terminal — `"ended"` maps to
+ * `"completed"`, but only the poll handler writes that, and only AFTER
+ * `processBatchResults` has durably applied the outcomes. Submit clamps an
+ * ended-at-submit report to the in-flight `"finalizing"` literal, and cancel
+ * persists `"cancelling"` for an ended-at-cancel report, so the poll chain
+ * drains the outcomes in every case.
  */
 export function mapBatchV2StatusToPersisted(status: string): string {
   switch (status) {
@@ -243,4 +251,11 @@ export const SKILL_MATCH_SYNC_RUN_CHUNK_SIZE = 25;
 
 export const SKILL_MATCH_INLINE_JOB_ATTEMPTS = 3;
 export const SKILL_MATCH_SYNC_CHUNK_JOB_ATTEMPTS = 3;
+/**
+ * Provider-batch poll jobs get bounded BullMQ retries too: a transient
+ * retrieve/download failure must not kill the self-rescheduling chain (the
+ * chain re-enqueue is the cadence, BullMQ attempts are the per-poll flake
+ * shield). Exhaustion is handled by `handleBatchPollExhausted`.
+ */
+export const SKILL_MATCH_POLL_JOB_ATTEMPTS = 3;
 export const SKILL_MATCH_JOB_BACKOFF_MS = 30_000;

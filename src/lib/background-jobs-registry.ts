@@ -1392,18 +1392,37 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
       // Poll an in-flight run; self-reschedule until terminal status. Provider
       // batches download + upsert through the submission manifest; synchronous
       // runs process their next manifest chunk here (setup-flow S6).
-      const { handleBatchPoll, buildSkillMatchWorkerActorContext } =
-        await import("@cinatra-ai/skills");
+      const {
+        handleBatchPoll,
+        handleBatchPollExhausted,
+        buildSkillMatchWorkerActorContext,
+      } = await import("@cinatra-ai/skills");
       const catalog = await buildSkillMatchCatalogProvider();
-      await handleBatchPoll(
-        job.data as { batchId: string; jobStartedAt: string },
-        {
+      const pollData = job.data as { batchId: string; jobStartedAt: string };
+      try {
+        await handleBatchPoll(pollData, {
           catalog,
           // Explicit actor source (setup-flow S6): the synchronous fan-out
           // path evaluates pairs from this handler.
           actorContext: buildSkillMatchWorkerActorContext("batch-poll"),
-        },
-      );
+        });
+      } catch (err) {
+        // FINAL BullMQ attempt (1-based, mirroring the recurring-loop check
+        // below): the queue is about to drop this job, so no retry and no
+        // chain re-enqueue would ever run again. Synchronous runs transition
+        // to a truthful terminal `failed`; provider batches get a fresh poll
+        // so the chain survives our own polling failure.
+        const attemptsConfigured = job.opts?.attempts ?? 1;
+        if (job.attemptsMade + 1 >= attemptsConfigured) {
+          await handleBatchPollExhausted(pollData, err).catch((hookErr) => {
+            console.warn(
+              "[background-jobs] skill-match poll exhaustion hook failed:",
+              hookErr,
+            );
+          });
+        }
+        throw err;
+      }
     },
   },
   [BACKGROUND_JOB_NAMES.SKILL_MATCH_DRIFT_SAMPLE]: {

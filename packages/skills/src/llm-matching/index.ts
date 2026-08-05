@@ -65,6 +65,7 @@ export {
   handleInlineForAgent,
   handleBatchSubmit,
   handleBatchPoll,
+  handleBatchPollExhausted,
   cancelBatchRun,
   type CancelBatchRunResult,
   type SkillMatchJobDeps,

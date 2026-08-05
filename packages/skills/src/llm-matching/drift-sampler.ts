@@ -503,6 +503,10 @@ export async function sweepStaleMatches(deps: SweepDeps): Promise<StaleSweepResu
     }
 
     result.stale += 1;
+    // No runtime ⇒ evaluatePair would clean-skip every LLM re-eval; do not
+    // burn the LLM-cost cap (or report deferredOverCap) on no-ops. The rows
+    // stay counted stale and are swept for real once a runtime exists.
+    if (runContext === null) continue;
     if (attempted >= maxReevals) {
       result.deferredOverCap += 1;
       continue;

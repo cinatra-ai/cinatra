@@ -91,6 +91,7 @@ import {
   LLM_MATCHER_VERSION,
   SKILL_MATCH_INLINE_JOB_ATTEMPTS,
   SKILL_MATCH_JOB_BACKOFF_MS,
+  SKILL_MATCH_POLL_JOB_ATTEMPTS,
   SKILL_MATCH_SYNC_CHUNK_JOB_ATTEMPTS,
   SKILL_MATCH_SYNC_RUN_CHUNK_SIZE,
   SKILL_MATCH_SYNC_RUN_PREFIX,
@@ -192,6 +193,19 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === "AbortError";
 }
 
+/**
+ * Cross-realm-safe check for the orchestration layer's BatchNotSupportedError
+ * (name + stable `code` are set by its constructor; `instanceof` alone can
+ * fail across duplicated module instances in test/bundle realms).
+ */
+function isBatchNotSupportedError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err.name === "BatchNotSupportedError" ||
+      (err as { code?: unknown }).code === "batch_not_supported")
+  );
+}
+
 // The per-file `adaptAgent` / `adaptSkill` / `extractMatchWhenRaw` helpers
 // used to live here; they're now sourced from the shared `./adapters` module
 // so the inline, batch, and admin re-evaluate transports all compute the same
@@ -286,25 +300,53 @@ export async function handleInlineForSkill(
 ): Promise<void> {
   const jobStartedAt = new Date(data.jobStartedAt);
   const runNonce = data.runNonce ?? randomUUID();
-  // Mint ONCE on the first invocation; continuations carry the frozen value.
-  const runContext =
-    data.runContext !== undefined
-      ? coerceRunContext(data.runContext)
-      : await (deps.mintRunContext ?? mintSkillMatchRunContext)();
   const skill = await deps.catalog.getSkillById(data.skillId);
   if (!skill) return; // skill uninstalled while job pending — drop silently.
+
+  // SEED handoff: the externally-enqueued job carries no runContext key. It
+  // mints the frozen context + candidate set and hands off to a fully-frozen
+  // eval job WITHOUT evaluating anything itself. This keeps the mint
+  // retryable (a resolver failure fails the seed, BullMQ retries it) while
+  // making a BullMQ retry incapable of splitting one logical fan-out across
+  // two contexts: every job that EVALUATES carries the frozen payload, and a
+  // re-minted seed retry has, by construction, evaluated nothing yet.
+  if (data.runContext === undefined) {
+    const runContext = await (deps.mintRunContext ?? mintSkillMatchRunContext)();
+    const agents = await deps.catalog.readAgents();
+    // Freeze the ordered candidate set (de-duplicated so a pair is never
+    // evaluated twice and the window math stays exact); eval jobs reuse the
+    // frozen list rather than re-deriving it from a possibly-mutated catalog.
+    const candidateIds = [...new Set(agents.map((a) => a.packageId))].sort((x, y) =>
+      x.localeCompare(y),
+    );
+    if (candidateIds.length === 0) return;
+    await enqueueBackgroundJob(
+      BACKGROUND_JOB_NAMES.SKILL_MATCH_INLINE_FOR_SKILL,
+      {
+        skillId: data.skillId,
+        jobStartedAt: data.jobStartedAt,
+        offset: 0,
+        candidateIds,
+        runNonce,
+        runContext,
+      },
+      {
+        jobId: `skill-match-inline-for-skill-${hashId(data.skillId)}-${LLM_MATCHER_VERSION}-${runNonce}-off0`,
+        attempts: SKILL_MATCH_INLINE_JOB_ATTEMPTS,
+        backoff: { type: "exponential", delay: SKILL_MATCH_JOB_BACKOFF_MS },
+        inheritActorContext: false,
+      },
+    );
+    return;
+  }
+
+  const runContext = coerceRunContext(data.runContext);
   const adaptedSkill = adaptSkill(skill);
 
   const agents = await deps.catalog.readAgents();
   const agentByPackageId = new Map(agents.map((a) => [a.packageId, a]));
 
-  // On the first invocation, freeze the ordered candidate set (de-duplicated so
-  // a pair is never evaluated twice and the window math stays exact);
-  // continuations reuse the frozen list rather than re-deriving it from a
-  // possibly-mutated catalog.
-  const candidateIds =
-    data.candidateIds ??
-    [...new Set(agents.map((a) => a.packageId))].sort((x, y) => x.localeCompare(y));
+  const candidateIds = data.candidateIds ?? [];
   const offset = data.offset ?? 0;
   const window = candidateIds.slice(offset, offset + SKILL_MATCH_MAX_PAIRS_PER_INLINE_EVENT);
 
@@ -372,29 +414,50 @@ export async function handleInlineForAgent(
 ): Promise<void> {
   const jobStartedAt = new Date(data.jobStartedAt);
   const runNonce = data.runNonce ?? randomUUID();
-  const runContext =
-    data.runContext !== undefined
-      ? coerceRunContext(data.runContext)
-      : await (deps.mintRunContext ?? mintSkillMatchRunContext)();
   const agents = await deps.catalog.readAgents();
   const agent = agents.find((a) => a.packageId === data.agentId);
   if (!agent) return; // agent deleted while job pending — drop.
+
+  // SEED handoff — see handleInlineForSkill. Skip level=agent (self-match)
+  // and level=system (global inject) when deriving the frozen candidate set.
+  if (data.runContext === undefined) {
+    const runContext = await (deps.mintRunContext ?? mintSkillMatchRunContext)();
+    const seedSkills = await deps.catalog.listSkills();
+    const candidateIds = [
+      ...new Set(
+        seedSkills
+          .filter((s) => s.level !== "agent" && s.level !== "system")
+          .map((s) => s.id),
+      ),
+    ].sort((x, y) => x.localeCompare(y));
+    if (candidateIds.length === 0) return;
+    await enqueueBackgroundJob(
+      BACKGROUND_JOB_NAMES.SKILL_MATCH_INLINE_FOR_AGENT,
+      {
+        agentId: data.agentId,
+        jobStartedAt: data.jobStartedAt,
+        offset: 0,
+        candidateIds,
+        runNonce,
+        runContext,
+      },
+      {
+        jobId: `skill-match-inline-for-agent-${hashId(data.agentId)}-${LLM_MATCHER_VERSION}-${runNonce}-off0`,
+        attempts: SKILL_MATCH_INLINE_JOB_ATTEMPTS,
+        backoff: { type: "exponential", delay: SKILL_MATCH_JOB_BACKOFF_MS },
+        inheritActorContext: false,
+      },
+    );
+    return;
+  }
+
+  const runContext = coerceRunContext(data.runContext);
   const adaptedAgent = adaptAgent(agent);
 
   const skills = await deps.catalog.listSkills();
   const skillById = new Map(skills.map((s) => [s.id, s]));
 
-  // Freeze the candidate set on the first invocation (de-duplicated). Skip
-  // level=agent (self-match) and level=system (global inject) when deriving it.
-  const candidateIds =
-    data.candidateIds ??
-    [
-      ...new Set(
-        skills
-          .filter((s) => s.level !== "agent" && s.level !== "system")
-          .map((s) => s.id),
-      ),
-    ].sort((x, y) => x.localeCompare(y));
+  const candidateIds = data.candidateIds ?? [];
   const offset = data.offset ?? 0;
   const window = candidateIds.slice(offset, offset + SKILL_MATCH_MAX_PAIRS_PER_INLINE_EVENT);
 
@@ -572,6 +635,14 @@ export async function handleBatchSubmit(
       },
     });
 
+    // INVARIANT: a run with an outstanding manifest is never persisted
+    // terminal. A batch that already reports "ended" at submit time still has
+    // undrained outcomes — persist the in-flight "finalizing" literal so the
+    // poll chain drains it (the poll's ended branch applies the outcomes and
+    // only then writes "completed"). A batch-level "failed" at submit never
+    // acquires outcomes, so it is honestly terminal and sheds the manifest.
+    const submitStatus = mapBatchV2StatusToPersisted(submit.status);
+    const failedAtSubmit = submitStatus === "failed";
     await insertBatchRun({
       batchId: submit.batchId,
       submittedBy: data.submittedBy,
@@ -580,16 +651,17 @@ export async function handleBatchSubmit(
       inputFileId: null,
       outputFileId: null,
       errorFileId: null,
-      status: mapBatchV2StatusToPersisted(submit.status),
+      status: submitStatus === "completed" ? "finalizing" : submitStatus,
       lastPolledAt: null,
-      completedAt: null,
+      completedAt: failedAtSubmit ? new Date() : null,
       errorMessage: null,
       evaluatorVersion: runContext.evaluatorVersion,
       provider: runContext.provider,
       model: runContext.model,
-      manifest,
+      manifest: failedAtSubmit ? null : manifest,
       processedPairCount: 0,
     });
+    if (failedAtSubmit) return;
 
     // Schedule first poll in 30s. Timestamped jobId so each poll is distinct
     // (no BullMQ HSETNX coalescing across rescheduled polls). Use the captured
@@ -601,6 +673,8 @@ export async function handleBatchSubmit(
       {
         jobId: `skill-match-batch-poll-${submit.batchId}-${Date.now()}`,
         delay: 30_000,
+        attempts: SKILL_MATCH_POLL_JOB_ATTEMPTS,
+        backoff: { type: "exponential", delay: SKILL_MATCH_JOB_BACKOFF_MS },
         // SYSTEM_JOB worker-internal enqueue; avoid inheriting HumanUser
         // attribution. See docs/developer/notifications.md.
         inheritActorContext: false,
@@ -690,6 +764,8 @@ export async function handleBatchPoll(
       {
         jobId: `skill-match-batch-poll-${data.batchId}-${Date.now()}`,
         delay: 30_000,
+        attempts: SKILL_MATCH_POLL_JOB_ATTEMPTS,
+        backoff: { type: "exponential", delay: SKILL_MATCH_JOB_BACKOFF_MS },
         inheritActorContext: false,
       },
     );
@@ -703,20 +779,58 @@ export async function handleBatchPoll(
   const retrieve = deps.batch?.retrieveBatchV2 ?? defaultRetrieveBatchV2;
   const state = await retrieve({ provider, batchId: data.batchId });
   const persistedStatus = mapBatchV2StatusToPersisted(state.status);
+  // Redact provider error to <= 1024 bytes BEFORE writing.
+  const errorMessage = state.errorMessage ? redactErrorMessage(state.errorMessage) : null;
+  const completedAt = state.endedAt ? new Date(state.endedAt) : null;
+
+  if (state.status === "ended") {
+    // Stay NON-terminal until the outcomes are durably applied. Writing
+    // "completed" first would make a processBatchResults failure (download,
+    // catalog read) permanent: the terminal-status guard above turns every
+    // later poll into a no-op while the results were never written.
+    await updateBatchRun(data.batchId, { lastPolledAt: new Date(), errorMessage });
+    try {
+      await processBatchResults(existing, jobStartedAt, deps);
+    } catch (err) {
+      // Keep the chain alive (the ended batch still holds undrained
+      // outcomes), then rethrow so the job-level failure stays visible and
+      // BullMQ's bounded per-poll attempts apply.
+      await enqueueBackgroundJob(
+        BACKGROUND_JOB_NAMES.SKILL_MATCH_BATCH_POLL,
+        { batchId: data.batchId, jobStartedAt: data.jobStartedAt },
+        {
+          jobId: `skill-match-batch-poll-${data.batchId}-${Date.now()}`,
+          delay: 30_000,
+          attempts: SKILL_MATCH_POLL_JOB_ATTEMPTS,
+          backoff: { type: "exponential", delay: SKILL_MATCH_JOB_BACKOFF_MS },
+          inheritActorContext: false,
+        },
+      );
+      throw err;
+    }
+    await updateBatchRun(data.batchId, { status: persistedStatus, completedAt });
+    return;
+  }
+
+  if (state.status === "failed") {
+    // Batch-level failure: per-request outcomes never existed, so the run is
+    // honestly terminal now — and the manifest bulk is shed with it.
+    await updateBatchRun(data.batchId, {
+      status: persistedStatus,
+      lastPolledAt: new Date(),
+      completedAt,
+      errorMessage,
+      manifest: null,
+    });
+    return;
+  }
 
   await updateBatchRun(data.batchId, {
     status: persistedStatus,
     lastPolledAt: new Date(),
-    completedAt: state.endedAt ? new Date(state.endedAt) : null,
-    // Redact provider error to <= 1024 bytes BEFORE writing.
-    errorMessage: state.errorMessage ? redactErrorMessage(state.errorMessage) : null,
+    completedAt,
+    errorMessage,
   });
-
-  if (state.status === "ended") {
-    await processBatchResults(existing, jobStartedAt, deps);
-    return;
-  }
-  if (state.status === "failed") return;
 
   // Re-enqueue another poll in 30s — distinct jobId per poll.
   await enqueueBackgroundJob(
@@ -725,6 +839,8 @@ export async function handleBatchPoll(
     {
       jobId: `skill-match-batch-poll-${data.batchId}-${Date.now()}`,
       delay: 30_000,
+      attempts: SKILL_MATCH_POLL_JOB_ATTEMPTS,
+      backoff: { type: "exponential", delay: SKILL_MATCH_JOB_BACKOFF_MS },
       inheritActorContext: false,
     },
   );
@@ -882,18 +998,105 @@ export async function cancelBatchRun(
   try {
     state = await cancel({ provider, batchId });
   } catch (err) {
-    // BatchNotSupportedError from a cancel-less surface — report honestly.
-    console.warn(`[skill-match] cancel unsupported for ${provider}:`, err);
-    return { ok: false, reason: "cancel_unsupported" };
+    if (isBatchNotSupportedError(err)) {
+      // A cancel-less batch surface — report honestly.
+      console.warn(`[skill-match] cancel unsupported for ${provider}:`, err);
+      return { ok: false, reason: "cancel_unsupported" };
+    }
+    // Network / provider / credential failures are NOT "unsupported" — rethrow
+    // so the caller sees a retryable failure instead of a false capability
+    // verdict.
+    throw err;
   }
+
+  if (state.status === "ended") {
+    // The batch ended (possibly before the cancel took effect) and its
+    // per-request outcomes — including canceled ones — are still undrained.
+    // Persisting "completed" here would trip the poll's terminal guard and
+    // strand the outcomes; keep the run pollable as "cancelling" and let the
+    // live poll chain drain it (its ended branch applies outcomes, then
+    // finalizes). lastPolledAt is deliberately NOT stamped — cancel is not a
+    // poll, and stamping it would stale-guard-delay the drain.
+    await updateBatchRun(batchId, { status: "cancelling" });
+    return { ok: true, status: "cancelling" };
+  }
+
   const persistedStatus = mapBatchV2StatusToPersisted(state.status);
+  if (state.status === "failed") {
+    // Batch-level failure: no outcomes will ever exist — terminal, manifest shed.
+    await updateBatchRun(batchId, {
+      status: persistedStatus,
+      completedAt: state.endedAt ? new Date(state.endedAt) : new Date(),
+      errorMessage: state.errorMessage ? redactErrorMessage(state.errorMessage) : null,
+      manifest: null,
+    });
+    return { ok: true, status: persistedStatus };
+  }
+
   await updateBatchRun(batchId, {
     status: persistedStatus,
-    lastPolledAt: new Date(),
-    completedAt: state.endedAt ? new Date(state.endedAt) : null,
     errorMessage: state.errorMessage ? redactErrorMessage(state.errorMessage) : null,
   });
   return { ok: true, status: persistedStatus };
+}
+
+// ---------------------------------------------------------------------------
+// Poll-attempt exhaustion (dispatch-site hook)
+// ---------------------------------------------------------------------------
+
+/**
+ * Called by the SKILL_MATCH_BATCH_POLL dispatch site when a poll job's FINAL
+ * BullMQ attempt failed (the queue is about to drop it, so no retry and no
+ * chain re-enqueue would ever run again).
+ *
+ *  - Synchronous runs: the chunk processor IS the run; with its attempts
+ *    exhausted the run can never progress, so it transitions to a truthful
+ *    terminal `failed` (redacted error, manifest shed). Without this the row
+ *    stays `in_progress` forever and the status panel polls indefinitely.
+ *  - Provider batches: the batch itself may be fine — only OUR polling
+ *    failed. Marking it failed would be a lie; instead a fresh poll is
+ *    enqueued so the chain survives the exhausted job (each fresh poll again
+ *    carries bounded attempts).
+ */
+export async function handleBatchPollExhausted(
+  data: { batchId: string; jobStartedAt: string },
+  err: unknown,
+): Promise<void> {
+  const run = await readBatchRun(data.batchId);
+  if (!run || TERMINAL_STATUSES.has(run.status)) return;
+
+  if (run.batchId.startsWith(SKILL_MATCH_SYNC_RUN_PREFIX)) {
+    const message = err instanceof Error ? err.message : String(err);
+    await updateBatchRun(data.batchId, {
+      status: "failed",
+      completedAt: new Date(),
+      errorMessage: redactErrorMessage(
+        `Synchronous run chunk failed after all retry attempts: ${message}`,
+      ),
+      manifest: null,
+    });
+    console.warn(
+      JSON.stringify({
+        event: "skill_match_sync_run_failed_attempts_exhausted",
+        batchId: data.batchId,
+        processedPairCount: run.processedPairCount,
+        pairCount: run.pairCount,
+      }),
+    );
+    return;
+  }
+
+  await enqueueBackgroundJob(
+    BACKGROUND_JOB_NAMES.SKILL_MATCH_BATCH_POLL,
+    { batchId: data.batchId, jobStartedAt: data.jobStartedAt },
+    {
+      jobId: `skill-match-batch-poll-${data.batchId}-${Date.now()}`,
+      delay: 30_000,
+      attempts: SKILL_MATCH_POLL_JOB_ATTEMPTS,
+      backoff: { type: "exponential", delay: SKILL_MATCH_JOB_BACKOFF_MS },
+      inheritActorContext: false,
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
