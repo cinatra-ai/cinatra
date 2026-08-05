@@ -356,8 +356,10 @@ export type FlatAccessAvailableScopes = {
   projects: { id: string; name: string }[];
   teams: { id: string; name: string }[];
   orgName: string;
-  /** Active organization id. Absent (no active org in scope) degrades any
-   * `org:<id>` / bare `org` token to the neutral synthetic option — see
+  /** Active organization id. Absent OR empty/whitespace (the production
+   * no-active-org shape is `""` via `activeOrgId ?? ""`) counts as NO active
+   * org: any `org:<id>` token degrades to the neutral synthetic option and
+   * the bare legacy `org` token stays display-only (non-committable) — see
    * `resolveFlatAccessOption`. */
   orgId?: string;
 };
@@ -432,12 +434,30 @@ export function resolveFlatAccessOption(
   }
   if (value === "org" || value.startsWith("org:")) {
     const { orgId, orgName } = scopes;
-    // The legacy bare "org" token denotes the active org BY DEFINITION
-    // (read-compat only — the row itself always emits the id-carrying form
-    // when an orgId is supplied). An id-carrying token is confirmed to scope
-    // the active org only when its embedded id equals the supplied `orgId`.
-    const matchesActiveOrg =
-      value === "org" || (orgId != null && value.slice("org:".length) === orgId);
+    // A genuinely ACTIVE org requires a non-empty, non-whitespace id. The
+    // production no-active-organization shape is `orgId === ""` (callers wire
+    // `activeOrgId ?? ""`), NOT `undefined` — an emptiness check, never a
+    // bare null check, or the empty-tail `org:` token would "confirm" against
+    // the empty id and become committable (cinatra#2372 AC2's named defect).
+    const hasActiveOrg = typeof orgId === "string" && orgId.trim().length > 0;
+    if (value === "org") {
+      // The legacy bare "org" token denotes the active org BY DEFINITION
+      // (read-compat only — the row itself always emits the id-carrying form
+      // when an orgId is supplied), so its LABEL mapping is preserved even
+      // with no active org. Committability is gated separately: with no
+      // genuinely non-empty active org there is nothing to commit to, so the
+      // token is a display-only degenerate (synthetic) — never submittable.
+      return {
+        value,
+        type: "Organization",
+        name: orgName || "Your organization",
+        synthetic: !hasActiveOrg,
+        committable: hasActiveOrg && !isDisabled(canonicalOrgToken(orgId)),
+      };
+    }
+    // An id-carrying token is confirmed to scope the active org only when a
+    // genuinely non-empty active org exists AND the embedded id equals it.
+    const matchesActiveOrg = hasActiveOrg && value.slice("org:".length) === orgId;
     if (matchesActiveOrg) {
       return {
         value,

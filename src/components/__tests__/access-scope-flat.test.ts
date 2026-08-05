@@ -274,6 +274,64 @@ describe("resolveFlatAccessOption — committability edge cases", () => {
   });
 });
 
+describe("resolveFlatAccessOption — the PRODUCTION no-active-org shape: orgId === '' (review D1)", () => {
+  // The production wiring is `activeOrgId ?? ""` (install-target-picker.ts,
+  // screens.tsx, install-scope-dialog.tsx) — orgId arrives as the EMPTY
+  // STRING, not undefined. The original predicate (`orgId != null`) passed
+  // for "" and `"org:".slice(4) === ""` matched, so the degenerate empty-tail
+  // default resolved as a confirmed, committable active-org match and a
+  // platform admin got an ENABLED Install button submitting "org:".
+  const prodNoOrgScopes: FlatAccessAvailableScopes = {
+    projects: [],
+    teams: [],
+    orgName: "",
+    orgId: "",
+  };
+
+  it('the literal defect shape — orgId: "" × value "org:" — is synthetic, display-only, never committable', () => {
+    const opt = resolveFlatAccessOption("org:", prodNoOrgScopes, {
+      disabledScopes: [],
+      ownerOffered: false,
+      workspaceOffered: false,
+      adminOffered: false,
+    });
+    expect(opt).toEqual({
+      value: "org:",
+      type: "Organization",
+      name: "the organization",
+      synthetic: true,
+      committable: false,
+    });
+  });
+
+  it('the second leg (codex) — orgId: "" × bare legacy "org" — keeps the Organization label mapping but is display-only, never committable', () => {
+    const opt = resolveFlatAccessOption("org", prodNoOrgScopes);
+    expect(opt.type).toBe("Organization");
+    // Label mapping preserved (the issue's own bare-org rule): the name half
+    // stays the org-name fallback, NOT the raw token.
+    expect(opt.name).toBe("Your organization");
+    expect(opt.synthetic).toBe(true);
+    expect(opt.committable).toBe(false);
+  });
+
+  it("a WHITESPACE-only orgId also counts as no active org", () => {
+    const wsScopes: FlatAccessAvailableScopes = { ...prodNoOrgScopes, orgId: "  " };
+    expect(resolveFlatAccessOption("org:  ", wsScopes).committable).toBe(false);
+    expect(resolveFlatAccessOption("org:  ", wsScopes).synthetic).toBe(true);
+    expect(resolveFlatAccessOption("org", wsScopes).committable).toBe(false);
+  });
+
+  it('an id-carrying token can never "confirm" against the empty active-org id', () => {
+    // Belt and braces around the slice(4) === orgId comparison: with orgId ""
+    // NO org token whatsoever may reach the confirmed/committable branch.
+    for (const value of ["org:", "org:x", "org:org-acme"]) {
+      const opt = resolveFlatAccessOption(value, prodNoOrgScopes);
+      expect(opt.synthetic).toBe(true);
+      expect(opt.committable).toBe(false);
+    }
+  });
+});
+
 describe("canonicalOrgToken", () => {
   it("returns the id-carrying token when an orgId is supplied", () => {
     expect(canonicalOrgToken("abc")).toBe("org:abc");

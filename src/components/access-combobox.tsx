@@ -444,6 +444,13 @@ function AccessComboboxSingleSelect({
     // Disabled treatment: prevent select + flag for AT.
     // Cast to a permissive props bag because cmdk's CommandItem props are
     // not exposed publicly enough for cloneElement's strict generic.
+    // The disabled reason is ALSO rendered as sr-only text inside the option
+    // content (cinatra#2372 F5): with the "Targets you cannot install at are
+    // disabled." helper line removed, the tooltip was the only carrier of the
+    // reason and it is pointer-only. Screen readers now get the reason as part
+    // of the option's own text. Deliberately NOT a tabIndex on the wrapper —
+    // a tabbable role-less element inside the cmdk listbox competes with the
+    // combobox's aria-activedescendant keyboard model (F6).
     const disabledItem = React.cloneElement(
       item as React.ReactElement<Record<string, unknown>>,
       {
@@ -451,6 +458,10 @@ function AccessComboboxSingleSelect({
         onSelect: undefined,
         "aria-disabled": true,
       },
+      <>
+        {(item.props as { children?: React.ReactNode }).children}
+        <span className="sr-only"> — {tooltipText}</span>
+      </>,
     );
     // Wrapper span receives hover/focus; the disabled CommandItem cannot, so
     // the tooltip would never appear without this wrapper-span outside the
@@ -485,10 +496,6 @@ function AccessComboboxSingleSelect({
     />
   );
 
-  // A synthesized, checked, selectable row for an unhydrated selection
-  // (rowValue === the current value, so `itemClass` marks it selected and
-  // `renderCheckmark` shows its check). Label is the shared "Unknown …"
-  // fallback (§4.0-a) — never a raw id.
   // Scope-prefixed row label (spec §2.3 / §3.2): `<Scope>: <name>`, no heading.
   // The muted title-case prefix matches the multi-mode row prefix so the two
   // modes read consistently.
@@ -501,12 +508,21 @@ function AccessComboboxSingleSelect({
     </span>
   );
 
-  // A synthesized, checked, selectable row for an unhydrated selection
-  // (rowValue === the current value, so `itemClass` marks it selected and
-  // `renderCheckmark` shows its check). Scope-prefixed (§3.4) with the shared
-  // "Unknown …" fallback (§2.4) — never a raw id.
+  // A synthesized, checked, DISPLAY-ONLY row for an unhydrated/degenerate
+  // selection (rowValue === the current value, so `itemClass` marks it
+  // selected and `renderCheckmark` shows its check). Scope-prefixed (§3.4)
+  // with the shared "Unknown …" fallback (§2.4) — never a raw id.
+  // cinatra#2372 c-3.11: synthetic degenerate options are display-only, so
+  // the row is disabled (no onSelect) — it exists to make the stored
+  // selection visible with its checkmark, never to be re-committed.
   const renderSynthRow = (rowValue: string, prefix: string, name: string) => (
-    <CommandItem value={rowValue} onSelect={() => commit(rowValue)} className={itemClass(rowValue)}>
+    <CommandItem
+      value={rowValue}
+      disabled
+      aria-disabled="true"
+      data-synthetic="true"
+      className={itemClass(rowValue)}
+    >
       <div className="flex items-center w-full">
         {rowLabel(prefix, name)}
         {renderCheckmark(rowValue)}
@@ -523,7 +539,11 @@ function AccessComboboxSingleSelect({
   const offeredTeams = teams.filter((t) => offered(`team:${t.id}`));
   const synthProjectOffered = needsSynthProject && offered(value);
   const synthTeamOffered = needsSynthTeam && offered(value);
-  const synthOrgOffered = needsSynthOrg && offered(value);
+  // No second synthetic row when the degenerate selection IS the org row's own
+  // value (the no-active-org shape, where orgRowValue is the empty-tail
+  // `org:`): the org row itself then renders display-only + checked below —
+  // two identical-value rows would double-render the same option.
+  const synthOrgOffered = needsSynthOrg && offered(value) && value !== orgRowValue;
 
   const groupNodes: Array<{ key: string; node: React.ReactNode }> = [];
 
@@ -599,26 +619,36 @@ function AccessComboboxSingleSelect({
   // (4) Organization — id-carrying `org:<id>` value so the selected-state,
   //     checkmark, and disabledScopes lookup match the server-built target rows.
   //     Always rendered UNLESS containment excludes the org itself (§6.1). A
-  //     degenerate SELECTED org token (mismatched id / empty tail / no active
-  //     org — cinatra#2372 c-3.11) renders as a SECOND, synthetic, checked row
-  //     in the same group — the real active-org row still renders, unselected,
-  //     with no cross-org lookup performed for the synthetic one.
+  //     degenerate SELECTED org token with a DIFFERENT value (mismatched id)
+  //     renders as a SECOND, synthetic, checked row in the same group — the
+  //     real active-org row still renders, unselected, with no cross-org
+  //     lookup performed for the synthetic one. When the org row's OWN value
+  //     is degenerate (no active org in scope → the empty-tail `org:` token,
+  //     cinatra#2372 AC2), the row is display-only: server-disabled rows keep
+  //     the reasoned disabled treatment (tooltip), and even without a
+  //     disabledScopes entry the synthetic resolution renders it
+  //     non-selectable — a role cannot make a nonexistent org committable.
   const orgRow = resolveRow(orgRowValue);
+  const orgRowServerDisabled = disabledScopes?.includes(orgRowValue) ?? false;
   if (offered(orgRowValue) || synthOrgOffered) {
     groupNodes.push({
       key: "org",
       node: (
         <CommandGroup className="p-0">
           {offered(orgRowValue) &&
-            renderTargetRow(
-              orgRowValue,
-              <CommandItem value={orgRowValue} onSelect={() => commit(orgRowValue)} className={itemClass(orgRowValue)}>
-                <div className="flex items-center w-full">
-                  {rowLabel(orgRow.type, orgRow.name)}
-                  {renderCheckmark(orgRowValue)}
-                </div>
-              </CommandItem>,
-            )}
+            (orgRow.synthetic && !orgRowServerDisabled ? (
+              renderSynthRow(orgRowValue, orgRow.type, orgRow.name)
+            ) : (
+              renderTargetRow(
+                orgRowValue,
+                <CommandItem value={orgRowValue} onSelect={() => commit(orgRowValue)} className={itemClass(orgRowValue)}>
+                  <div className="flex items-center w-full">
+                    {rowLabel(orgRow.type, orgRow.name)}
+                    {renderCheckmark(orgRowValue)}
+                  </div>
+                </CommandItem>,
+              )
+            ))}
           {synthOrgOffered && renderSynthRow(value, selectedOption.type, selectedOption.name)}
         </CommandGroup>
       ),

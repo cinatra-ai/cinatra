@@ -336,3 +336,82 @@ describe("pickDefaultPickerValue", () => {
     expect(pickDefaultPickerValue(targets, undefined)).toBe(`org:${ACTIVE_ORG}`);
   });
 });
+
+describe("cinatra#2372 AC2 — the no-active-organization shape (activeOrgId: '')", () => {
+  // Production wires `activeOrgId ?? ""` into buildInstallTargets, so with no
+  // active organization the org row carries the degenerate empty-tail "org:"
+  // token. It must be DISPLAY-ONLY (disabled, with a reason) for EVERY role —
+  // a platform admin previously got it ENABLED and defaulted, producing the
+  // enabled-but-server-rejected "org:" submit the issue names.
+  it("platform_admin with no active org: the org row is disabled with the no-active-org reason", () => {
+    const targets = buildInstallTargets({
+      actor: {
+        principalId: ALICE,
+        organizationId: "",
+        platformRole: "platform_admin",
+      },
+      activeOrgId: "",
+      orgName: "",
+      teams: [],
+      projects: [],
+    });
+    const orgRow = targets.find((t) => t.level === "organization");
+    expect(orgRow?.value).toBe("org:");
+    expect(orgRow?.disabled).toBe(true);
+    expect(orgRow?.reason).toBe("Requires an active organization.");
+  });
+
+  it("a WHITESPACE-only activeOrgId also disables the org row", () => {
+    const targets = buildInstallTargets({
+      actor: {
+        principalId: ALICE,
+        organizationId: "  ",
+        platformRole: "platform_admin",
+      },
+      activeOrgId: "  ",
+      orgName: "",
+      teams: [],
+      projects: [],
+    });
+    expect(targets.find((t) => t.level === "organization")?.disabled).toBe(true);
+  });
+
+  it("org_admin with no active org: still disabled (role can never enable a nonexistent org)", () => {
+    const targets = buildInstallTargets({
+      actor: {
+        principalId: ALICE,
+        organizationId: "",
+        orgRole: "org_admin",
+      },
+      activeOrgId: "",
+      orgName: "",
+      teams: [],
+      projects: [],
+    });
+    expect(targets.find((t) => t.level === "organization")?.disabled).toBe(true);
+  });
+
+  it("pickDefaultPickerValue NEVER defaults to the degenerate 'org:' row — even if fed an (impossible) enabled one", async () => {
+    const { pickDefaultPickerValue } = await import("../install-targets");
+    // The real pipeline: buildInstallTargets disables the row, so the default
+    // is null (the dialog renders its empty state instead of the picker).
+    const real = buildInstallTargets({
+      actor: {
+        principalId: ALICE,
+        organizationId: "",
+        platformRole: "platform_admin",
+      },
+      activeOrgId: "",
+      orgName: "",
+      teams: [],
+      projects: [],
+    });
+    expect(pickDefaultPickerValue(real, undefined)).toBeNull();
+    // Defense in depth: even an enabled empty-id org row (rows built by some
+    // future non-buildInstallTargets path) is refused as a default.
+    const forged = [
+      { value: "org:", label: "", level: "organization" as const, id: "", disabled: false },
+    ];
+    expect(pickDefaultPickerValue(forged, undefined)).toBeNull();
+  });
+});

@@ -50,23 +50,38 @@ function triggerText() {
   return readTwoSpanLabel(labelWrap ?? btn);
 }
 
-function openAndRowTexts() {
-  fireEvent.click(screen.getByRole("combobox"));
-  return screen.getAllByRole("option").map((o) => {
-    const labelWrap = o.querySelector("div.flex.items-center.w-full > span.flex") as Element | null;
-    return readTwoSpanLabel(labelWrap ?? o);
-  });
+function rowText(o: Element): string {
+  const labelWrap = o.querySelector("div.flex.items-center.w-full > span.flex") as Element | null;
+  return readTwoSpanLabel(labelWrap ?? o);
 }
 
-// The row whose text should equal the trigger's — the row is the ONE among
-// the open list whose own text matches (there is exactly one selected row for
-// a real value; for a degenerate/synthetic value there are two org-shaped
-// rows, and the SYNTHETIC one — not the always-rendered real org row — must
-// equal the trigger).
+function openAndRowTexts() {
+  fireEvent.click(screen.getByRole("combobox"));
+  return screen.getAllByRole("option").map(rowText);
+}
+
+// The SELECTED row is the one whose checkmark is visible (renderCheckmark
+// flips the Check svg to opacity-100 only for the row whose value equals the
+// current selection) — anchoring on it, not on list containment, so a trigger
+// rendering the WRONG row's text cannot pass just because the list also
+// happens to contain a matching row somewhere (review T3).
+function openAndSelectedRowText(): string {
+  fireEvent.click(screen.getByRole("combobox"));
+  const selectedRows = screen
+    .getAllByRole("option")
+    .filter((o) => o.querySelector("svg.opacity-100") !== null);
+  expect(selectedRows).toHaveLength(1);
+  return rowText(selectedRows[0]);
+}
+
+// The row whose text should equal the trigger's is the CHECKED/selected row —
+// there is exactly one for a real value; for a degenerate/synthetic value the
+// list carries two org-shaped rows, and the SYNTHETIC one (never the
+// always-rendered real org row) must be the checked one that equals the
+// trigger.
 function assertTriggerEqualsSelectedRow(expected: string) {
   expect(triggerText()).toBe(expected);
-  const rows = openAndRowTexts();
-  expect(rows).toContain(expected);
+  expect(openAndSelectedRowText()).toBe(expected);
 }
 
 describe("AccessCombobox — trigger ≡ row, verbatim, casing included (all six kinds)", () => {
@@ -114,17 +129,18 @@ describe("AccessCombobox — trigger ≡ row for degenerate/legacy values (c-3.1
       />,
     );
     expect(triggerText()).toBe("Organization: the organization");
-    const rows = openAndRowTexts();
-    expect(rows).toContain("Organization: the organization");
+    // Anchored on the CHECKED row (review T3): the synthetic row — not the
+    // real org row also present in the list — is the selected one.
+    expect(openAndSelectedRowText()).toBe("Organization: the organization");
     // The real active-org row is STILL rendered (just not selected/checked).
-    expect(rows).toContain("Organization: Acme Corp");
+    expect(screen.getAllByRole("option").map(rowText)).toContain("Organization: Acme Corp");
     expect(triggerText()).not.toContain("Acme");
   });
 
-  it("an empty-tail org: token -> the same synthetic neutral row", () => {
+  it("an empty-tail org: token -> the same synthetic neutral row (checked)", () => {
     render(<AccessCombobox value="org:" onValueChange={() => {}} availableScopes={SCOPES} isAdmin />);
     expect(triggerText()).toBe("Organization: the organization");
-    expect(openAndRowTexts()).toContain("Organization: the organization");
+    expect(openAndSelectedRowText()).toBe("Organization: the organization");
   });
 
   it("an org token with no active org in scope -> the same synthetic neutral row", () => {
@@ -147,6 +163,83 @@ describe("AccessCombobox — trigger ≡ row for degenerate/legacy values (c-3.1
   it("an unhydrated team selection -> 'Team: Unknown team', selected", () => {
     render(<AccessCombobox value="team:ghost" onValueChange={() => {}} availableScopes={SCOPES} isAdmin />);
     assertTriggerEqualsSelectedRow("Team: Unknown team");
+  });
+
+  it("synthetic rows are DISPLAY-ONLY: the degenerate checked row is aria-disabled and never fires onValueChange", () => {
+    let committed: string | null = null;
+    render(
+      <AccessCombobox
+        value="org:org-OTHER"
+        onValueChange={(v) => {
+          committed = v;
+        }}
+        availableScopes={SCOPES}
+        isAdmin
+      />,
+    );
+    fireEvent.click(screen.getByRole("combobox"));
+    const synthRow = screen
+      .getAllByRole("option")
+      .find((o) => rowText(o) === "Organization: the organization") as HTMLElement;
+    expect(synthRow).toBeTruthy();
+    expect(synthRow.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(synthRow);
+    expect(committed).toBeNull();
+  });
+});
+
+describe("AccessCombobox — the PRODUCTION no-active-org shape (orgId: '' via `activeOrgId ?? \"\"`) — cinatra#2372 AC2", () => {
+  // The wiring the defect shipped on: install-target-picker.ts /
+  // screens.tsx pass `activeOrgId ?? ""`, so the picker receives orgId ""
+  // (NOT undefined) and the org row's own value is the empty-tail "org:".
+  const PROD_NO_ORG_SCOPES: AccessComboboxProps["availableScopes"] = {
+    projects: [],
+    teams: [],
+    orgName: "",
+    orgId: "",
+    workspaceExposed: false,
+  };
+
+  it("the org row renders DISPLAY-ONLY (aria-disabled, no commit) — a platform admin gets no enabled 'org:' row", () => {
+    let committed: string | null = null;
+    render(
+      <AccessCombobox
+        value=""
+        onValueChange={(v) => {
+          committed = v;
+        }}
+        availableScopes={PROD_NO_ORG_SCOPES}
+        isAdmin
+        installMode
+      />,
+    );
+    const rows = openAndRowTexts();
+    expect(rows).toContain("Organization: the organization");
+    const orgRow = screen
+      .getAllByRole("option")
+      .find((o) => rowText(o) === "Organization: the organization") as HTMLElement;
+    expect(orgRow.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(orgRow);
+    expect(committed).toBeNull();
+  });
+
+  it("a stored empty-tail 'org:' selection renders checked but stays display-only — no duplicate org rows", () => {
+    render(
+      <AccessCombobox
+        value="org:"
+        onValueChange={() => {}}
+        availableScopes={PROD_NO_ORG_SCOPES}
+        isAdmin
+        installMode
+      />,
+    );
+    expect(triggerText()).toBe("Organization: the organization");
+    expect(openAndSelectedRowText()).toBe("Organization: the organization");
+    const orgShaped = screen
+      .getAllByRole("option")
+      .filter((o) => rowText(o) === "Organization: the organization");
+    expect(orgShaped).toHaveLength(1);
+    expect((orgShaped[0] as HTMLElement).getAttribute("aria-disabled")).toBe("true");
   });
 });
 

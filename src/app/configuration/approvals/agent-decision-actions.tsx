@@ -15,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { AccessCombobox } from "@/components/access-combobox";
+import { AccessCombobox, resolveFlatAccessOption } from "@/components/access-combobox";
 import {
   pickerValueToTarget,
   canSubmitApprovalScope,
@@ -127,10 +127,6 @@ export function AgentDecisionActions({
   const approveTarget = scopeCtx
     ? pickerValueToTarget(scopeValue, scopeCtx.activeOrgId)
     : null;
-  const canConfirm =
-    scopeCtx !== null &&
-    !noInstallableScope &&
-    canSubmitApprovalScope(scopeValue, scopeCtx.activeOrgId);
 
   // AccessCombobox props derived from the server-computed installTargets (same
   // shape the install dialog builds). Workspace is gated off via installMode.
@@ -153,6 +149,24 @@ export function AgentDecisionActions({
   const disabledScopes = scopeCtx
     ? scopeCtx.installTargets.filter((t) => t.disabled).map((t) => t.value)
     : [];
+
+  // Committability (cinatra#2372): the SAME model-layer gate the two install
+  // dialogs read, so every single-mode consumer inherits it — the structural
+  // adapter (`canSubmitApprovalScope`) alone would leave an unhydrated
+  // `team:<ghost>` or degenerate org selection enabled-but-rejected here.
+  const selectedScopeOption = availableScopes
+    ? resolveFlatAccessOption(scopeValue, availableScopes, {
+        disabledScopes,
+        ownerOffered: false,
+        workspaceOffered: false,
+        adminOffered: false,
+      })
+    : null;
+  const canConfirm =
+    scopeCtx !== null &&
+    !noInstallableScope &&
+    canSubmitApprovalScope(scopeValue, scopeCtx.activeOrgId) &&
+    (selectedScopeOption?.committable ?? false);
   const disabledReasons: Record<string, string> = scopeCtx
     ? Object.fromEntries(
         scopeCtx.installTargets
