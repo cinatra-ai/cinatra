@@ -521,7 +521,6 @@ describe("S3 — completeAiSetupAction under the machine", () => {
     vi.mocked(runSetupReadinessSaga).mockResolvedValue({
       ok: true,
       receipt: {},
-      matcherConstraint: null,
     } as never);
 
     const url = await redirectOf(() => completeAiSetupAction(providerForm("anthropic")));
@@ -549,7 +548,6 @@ describe("S3 — completeAiSetupAction under the machine", () => {
     vi.mocked(runSetupReadinessSaga).mockResolvedValue({
       ok: true,
       receipt: {},
-      matcherConstraint: null,
     } as never);
 
     await redirectOf(() => completeAiSetupAction(providerForm("anthropic")));
@@ -565,7 +563,6 @@ describe("S3 — completeAiSetupAction under the machine", () => {
     vi.mocked(runSetupReadinessSaga).mockResolvedValue({
       ok: true,
       receipt: {},
-      matcherConstraint: null,
     } as never);
 
     await redirectOf(() => completeAiSetupAction(providerForm("openai")));

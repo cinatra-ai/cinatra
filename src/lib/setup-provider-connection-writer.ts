@@ -33,6 +33,10 @@ import { dispatchExtensionUiAction } from "@/lib/extension-action-dispatch";
 import { resolveExtensionUiAction } from "@/lib/extension-ui-registry";
 import { resolveVersionKeyedUiAction } from "@/lib/extension-version-keyed-serving";
 import { resolveExtensionActorContext } from "@/lib/extension-host-actor";
+// The connector PACKAGE identity is resolved from the provider's LIVE
+// `llm-provider-surface` capability registration — core never names a concrete
+// extension package (the core→extension instance-coupling ban, pinned empty).
+import { getLlmProviderSurfacePackageName } from "@/lib/llm-provider-surfaces";
 import { sanitizeReadinessMessage } from "@/lib/setup-readiness-saga";
 // Side-effect import: loads the host extension wiring so `ctx.ui` action
 // registrations exist in THIS graph (mirrors the dispatch route).
@@ -40,11 +44,6 @@ import "@/lib/extensions";
 
 /** The providers the setup wizard's typed writer serves. */
 export type SetupConnectionProvider = "openai" | "anthropic";
-
-const PROVIDER_CONNECTOR_PACKAGE: Record<SetupConnectionProvider, string> = {
-  openai: "@cinatra-ai/openai-connector",
-  anthropic: "@cinatra-ai/anthropic-connector",
-};
 
 /**
  * The typed result every setup save path returns. `code` is a STABLE
@@ -68,6 +67,9 @@ const SAVED_DEGRADED_MESSAGE =
 type DispatchDeps = Parameters<typeof dispatchExtensionUiAction>[1];
 
 export type SaveSetupProviderConnectionDeps = {
+  /** providerId → the registering connector's package name (live capability
+   *  registration), or null when the provider's connector is absent. */
+  resolvePackageName: (providerId: string) => string | null;
   resolveInstallRows: typeof readInstalledExtensionsByPackageName;
   resolveActor: () => Promise<unknown>;
   dispatch: (
@@ -78,6 +80,7 @@ export type SaveSetupProviderConnectionDeps = {
 
 function defaultDeps(): SaveSetupProviderConnectionDeps {
   return {
+    resolvePackageName: getLlmProviderSurfacePackageName,
     resolveInstallRows: readInstalledExtensionsByPackageName,
     resolveActor: resolveExtensionActorContext,
     dispatch: dispatchExtensionUiAction,
@@ -124,7 +127,17 @@ export async function saveSetupProviderConnection(
   values: Record<string, string>,
   deps: SaveSetupProviderConnectionDeps = defaultDeps(),
 ): Promise<SetupConnectionSaveResult> {
-  const packageName = PROVIDER_CONNECTOR_PACKAGE[provider];
+  // The registering connector's package identity, off the LIVE capability
+  // registration. Absent → the connector is not installed/active, which is
+  // the same degraded state every other consumer of the surface reports.
+  const packageName = deps.resolvePackageName(provider);
+  if (!packageName) {
+    return {
+      ok: false,
+      code: "connector-unavailable",
+      sanitizedMessage: `The ${provider} connector is not installed or active on this instance.`,
+    };
+  }
 
   let rows: Awaited<ReturnType<typeof readInstalledExtensionsByPackageName>>;
   try {

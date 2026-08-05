@@ -40,6 +40,13 @@ vi.mock("@/lib/extension-version-keyed-serving", () => ({
 vi.mock("@/lib/extension-host-actor", () => ({
   resolveExtensionActorContext: vi.fn(async () => ({ userId: "admin" })),
 }));
+// The default deps resolve the connector's package identity from the LIVE
+// capability registration (never a named package — the instance-coupling ban);
+// these tests inject `resolvePackageName` per case, so the module surface only
+// needs to exist.
+vi.mock("@/lib/llm-provider-surfaces", () => ({
+  getLlmProviderSurfacePackageName: vi.fn(() => null),
+}));
 // A marker sanitizer: the real redaction is pinned by
 // setup-readiness-saga.test.ts; here we prove the writer ROUTES through it.
 vi.mock("@/lib/setup-readiness-saga", () => ({
@@ -65,7 +72,7 @@ type InstallRow = {
 function liveInstall(overrides: Partial<InstallRow> = {}): InstallRow {
   return {
     id: "install-1",
-    packageName: "@cinatra-ai/openai-connector",
+    packageName: "@test-scope/fake-openai",
     kind: "connector",
     status: "active",
     isDefault: true,
@@ -85,6 +92,11 @@ function depsWith(params: {
 }) {
   const handlerCalls: unknown[] = [];
   const deps = {
+    // The capability-registration package identity (the writer's first
+    // resolution step — never a named package in core).
+    resolvePackageName: vi.fn(
+      () => params.rows[0]?.packageName ?? "@test-scope/fake-openai",
+    ),
     resolveInstallRows: vi.fn(async () => params.rows as never),
     resolveActor: vi.fn(async () => ({ userId: "admin" })),
     dispatch: vi.fn(
@@ -177,7 +189,7 @@ describe("saveSetupProviderConnection — typed, sanitized, redirect-free", () =
 
   it("a THROWING handler (the 500 arm) is SANITIZED — a provider echoing the key back never survives raw", async () => {
     const { deps } = depsWith({
-      rows: [liveInstall({ packageName: "@cinatra-ai/anthropic-connector" })],
+      rows: [liveInstall({ packageName: "@test-scope/fake-anthropic" })],
       handler: async () => {
         throw new Error("upstream rejected sk-ant-SECRETVALUE0123456789");
       },
@@ -207,6 +219,7 @@ describe("saveSetupProviderConnection — typed, sanitized, redirect-free", () =
 
   it("a failing install-row read is a typed save-failed, never a throw", async () => {
     const deps = {
+      resolvePackageName: vi.fn(() => "@test-scope/fake-openai"),
       resolveInstallRows: vi.fn(async () => {
         throw new Error("canonical store down");
       }),
@@ -216,5 +229,18 @@ describe("saveSetupProviderConnection — typed, sanitized, redirect-free", () =
     const result = await saveSetupProviderConnection("openai", {}, deps as never);
     expect(result).toMatchObject({ ok: false, code: "save-failed" });
     expect(result.sanitizedMessage).toContain("[sanitized]");
+  });
+
+  it("NO capability registration for the provider → connector-unavailable BEFORE any store read (coupling-ban route: identity comes from the live registration, never a named package)", async () => {
+    const deps = {
+      resolvePackageName: vi.fn(() => null),
+      resolveInstallRows: vi.fn(),
+      resolveActor: vi.fn(),
+      dispatch: vi.fn(),
+    };
+    const result = await saveSetupProviderConnection("anthropic", { apiKey: "k" }, deps as never);
+    expect(result).toMatchObject({ ok: false, code: "connector-unavailable" });
+    expect(deps.resolveInstallRows).not.toHaveBeenCalled();
+    expect(deps.dispatch).not.toHaveBeenCalled();
   });
 });

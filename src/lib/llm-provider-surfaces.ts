@@ -52,6 +52,21 @@ export function getLlmProviderSurface(providerId: string): LlmProviderSurface | 
   return listLlmProviderSurfaces().find((s) => s.providerId === providerId) ?? null;
 }
 
+/**
+ * The EXTENSION PACKAGE that registered one provider's surface, or null when
+ * absent (S5, cinatra#2390). This is how host code addresses a provider's
+ * connector through the installed-extension dispatch WITHOUT ever naming a
+ * concrete package (the core→extension instance-coupling ban): the registering
+ * package identity comes off the LIVE capability registration, so it follows
+ * renames and third-party providers for free.
+ */
+export function getLlmProviderSurfacePackageName(providerId: string): string | null {
+  const provider = resolveCapabilityProviders(LLM_PROVIDER_SURFACE_CAPABILITY).find(
+    (p) => isLlmProviderSurface(p.impl) && p.impl.providerId === providerId,
+  );
+  return provider?.packageName ?? null;
+}
+
 /** Fail-loud variant for actions that cannot proceed without the provider. */
 export function requireLlmProviderSurface(providerId: string): LlmProviderSurface {
   const surface = getLlmProviderSurface(providerId);
