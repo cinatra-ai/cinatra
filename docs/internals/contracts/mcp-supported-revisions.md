@@ -10,8 +10,10 @@ Every statement below is tagged **CURRENT** or **TARGET**.
 
 - **CURRENT** describes what the code on `main` actually does. Each claim names
   the file (and, for SDK behaviour, the bundled function) it was read from. The
-  outbound section was verified against `origin/main` @ `a57a6c4` on 2026-07-29;
-  the inbound section was rewritten by the cinatra#2218 **L1** server cutover
+  outbound section was verified against `origin/main` @ `a57a6c4` on 2026-07-29,
+  and its graphiti row was rewritten by the cinatra#2218 **L2a** client
+  migration from a live wire measurement against the pinned peer image; the
+  inbound section was rewritten by the cinatra#2218 **L1** server cutover
   (base `03fe07a`) and names the code that implements it.
 - **TARGET** describes the policy cinatra#2218 adopts. **It is not implemented.**
 
@@ -249,19 +251,52 @@ exactly what the implementation above does).
 
 ### CURRENT
 
-`@modelcontextprotocol/sdk` is declared `^1.29.0` in the root `package.json` and
-the lockfile resolves **`1.29.0`**, whose `LATEST_PROTOCOL_VERSION` is
-`2025-11-25` and whose `SUPPORTED_PROTOCOL_VERSIONS` is the same five-revision
-list the inbound legacy leg accepts. **Unchanged by cinatra#2218 L1** — that lane
-is the server surface only; the client migration to
-`@modelcontextprotocol/client@2.0.0` is its own lane.
+Three of the four surfaces still run `@modelcontextprotocol/sdk`, declared
+`^1.29.0` in the root `package.json` and resolved to **`1.29.0`** in the
+lockfile, whose `LATEST_PROTOCOL_VERSION` is `2025-11-25` and whose
+`SUPPORTED_PROTOCOL_VERSIONS` is the same five-revision list the inbound legacy
+leg accepts. **Unchanged by cinatra#2218 L1** — that lane was the server surface
+only. The client migration to `@modelcontextprotocol/client@2.0.0` runs one
+surface at a time; the first one has landed.
 
-| Surface | Client | Offers on `initialize` | Accepts from server |
+| Surface | Client | Negotiation | Offers on `initialize` | Accepts from server |
+| --- | --- | --- | --- | --- |
+| `src/lib/connector-instance-mcp-transport.ts` | SDK `Client` + `StreamableHTTPClientTransport` | none (v1 has no `versionNegotiation`) | `2025-11-25` | the five legacy revisions |
+| `http-client.ts` in `packages/marketplace-mcp-client` | SDK `Client` + `StreamableHTTPClientTransport` | none (v1 has no `versionNegotiation`) | `2025-11-25` | the five legacy revisions |
+| `packages/objects/src/graphiti-client.ts` | **`@modelcontextprotocol/client@2.0.0`** | **`{ mode: 'legacy' }` — explicit, measured** | `2025-11-25` | the five legacy revisions |
+| `packages/agents/src/external-mcp-caller.ts` | hand-rolled JSON-RPC over `fetch` | none | **nothing — no `initialize` at all** | n/a (no negotiation) |
+
+**The graphiti row moved with cinatra#2218 L2a**, and its mode is a measured
+decision rather than a holding position. The peer is a digest-pinned image —
+`zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2`, pinned in
+`docker-compose.yml` — and it was probed. It does not implement `2026-07-28`:
+it answers a `server/discover` probe `400` / `-32600 "Missing session ID"`, and
+it refuses a session-less `tools/list` the same way, so it is a **sessionful
+2025-era peer**. Measured against that exact digest, on the live wire:
+
+| Mode passed | Negotiated era | Revision | HTTP frames per connect-and-call |
 | --- | --- | --- | --- |
-| `src/lib/connector-instance-mcp-transport.ts` | SDK `Client` + `StreamableHTTPClientTransport` | `2025-11-25` | the five legacy revisions |
-| `http-client.ts` in `packages/marketplace-mcp-client` | SDK `Client` + `StreamableHTTPClientTransport` | `2025-11-25` | the five legacy revisions |
-| `packages/objects/src/graphiti-client.ts` | SDK `Client` + `StreamableHTTPClientTransport` | `2025-11-25` | the five legacy revisions |
-| `packages/agents/src/external-mcp-caller.ts` | hand-rolled JSON-RPC over `fetch` | **nothing — no `initialize` at all** | n/a (no negotiation) |
+| `{ mode: 'legacy' }` | `legacy` | `2025-11-25` | 5 |
+| `{ mode: 'auto' }` | `legacy` | `2025-11-25` | 6 (the extra one is the rejected probe) |
+| `'auto'` as a bare string | `legacy` | `2025-11-25` | 5 — **no probe issued at all** |
+
+`auto` therefore reaches an identical era at the cost of one rejected round
+trip, and this client opens a fresh connection **per call**, so that cost would
+be per call rather than once per process. That is the general policy below
+applied, not an exception to it: the policy names explicit `{ mode: 'legacy' }`
+as correct for a surface whose peer is *known* 2025-era and whose transport
+reconnects per call.
+
+The third row is the bare-string trap, confirmed on the wire rather than only
+from the source: it produces a fully working client that never negotiated.
+`packages/objects/src/__tests__/graphiti-client.test.ts` asserts the options
+object reaches the `Client` constructor with `mode === 'legacy'`, and
+`graphiti-wire-negotiation.manual.test.ts` is the re-runnable live probe (gated
+on `RUN_GRAPHITI_WIRE_PROOF=1`).
+
+The session id the pinned peer requires is minted and held by the client
+library and stays transport-private — cinatra does not read, persist, route, or
+authorize on it, per this issue's acceptance criterion 4.
 
 `external-mcp-caller.ts` is the outlier and the one to watch. It POSTs
 `tools/list` and `tools/call` directly with `Content-Type: application/json` and
@@ -332,7 +367,7 @@ Per surface:
 | --- | --- | --- | --- |
 | `src/lib/connector-instance-mcp-transport.ts` | `@modelcontextprotocol/client@2.0.0` | `{ mode: 'auto' }` — or explicit `{ mode: 'legacy' }` while the peer is the sessionful 2025-era gateway | `2026-07-28` preferred; the five legacy revisions via fallback |
 | `http-client.ts` in `packages/marketplace-mcp-client` | `@modelcontextprotocol/client@2.0.0` | `{ mode: 'auto' }` | `2026-07-28` preferred; the five legacy revisions via fallback |
-| `packages/objects/src/graphiti-client.ts` | `@modelcontextprotocol/client@2.0.0` | `{ mode: 'auto' }` — the era choice tracks the pinned peer image | `2026-07-28` preferred; the five legacy revisions via fallback |
+| `packages/objects/src/graphiti-client.ts` | ~~`@modelcontextprotocol/client@2.0.0`~~ **LANDED — see CURRENT** | **`{ mode: 'legacy' }`**, measured: the pinned image rejects `server/discover`. Flip to `{ mode: 'auto' }` when the image pin moves to one that answers it | the five legacy revisions |
 | `packages/agents/src/external-mcp-caller.ts` | `@modelcontextprotocol/client@2.0.0` — **migrate off hand-rolled `fetch`** | `{ mode: 'auto' }` | `2026-07-28` preferred; the five legacy revisions via fallback |
 
 Whichever mode a surface lands on, the migration must **prove** it: an assertion
@@ -355,6 +390,12 @@ cinatra constant should appear to.
 answers with any of the five accepted revisions is accepted and used, including
 `2025-06-18`. A server answering a revision outside that set fails the handshake.
 
+The migrated graphiti surface behaves the same way and reaches it more
+deliberately: on `client@2.0.0` with `{ mode: 'legacy' }` it runs the plain
+2025 sequence — byte-identical to the pre-migration client — and interoperates
+with its sessionful 2025-era peer. Its peer is one cinatra pins, so "an
+older-revision peer" is not a contingency there but the measured steady state.
+
 `external-mcp-caller.ts` performs no negotiation, so it does not *observe* the
 peer's revision — but the peer's revision posture still decides the outcome. Its
 headerless, claim-less POST succeeds only against peers that answer a **bare
@@ -367,12 +408,14 @@ also **fails against a modern-only peer**, with no negotiation error to explain
 why. So "negotiates nothing" is not "unaffected" — it means the surface has no
 revision posture to state and no diagnostic when a peer's posture excludes it.
 
-**TARGET.** Unchanged in outcome for the three SDK-client surfaces, by design:
-under `versionNegotiation: { mode: 'auto' }` an older-revision server is detected
-by the absent or non-overlapping `server/discover` probe and served through the
+**TARGET.** Unchanged in outcome for the SDK-client surfaces, by design: under
+`versionNegotiation: { mode: 'auto' }` an older-revision server is detected by
+the absent or non-overlapping `server/discover` probe and served through the
 legacy `initialize` path, so the five legacy revisions stay reachable outbound.
-**cinatra does not drop support for calling 2025-era MCP servers.** Any future
-change to that is a separate decision with its own release communication.
+On a surface that ships explicit `{ mode: 'legacy' }` — graphiti today — the
+same five stay reachable without the probe at all. **cinatra does not drop
+support for calling 2025-era MCP servers.** Any future change to that is a
+separate decision with its own release communication.
 
 For `external-mcp-caller.ts` the TARGET is a strict improvement rather than parity:
 after the migration an older-revision peer is reached through the same legacy
