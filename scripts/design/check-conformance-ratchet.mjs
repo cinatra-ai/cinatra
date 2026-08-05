@@ -18,7 +18,10 @@
  * entry, and widening an aspects entry back to whole-surface.
  *
  * Usage: node scripts/design/check-conformance-ratchet.mjs [<base-git-ref>]
- *   base-git-ref defaults to origin/main; CI passes origin/$GITHUB_BASE_REF.
+ *   base-git-ref defaults to origin/main. Any rev-parse-able ref works; CI
+ *   passes the RUN'S OWN recorded base commit as a raw SHA
+ *   (github.event.pull_request.base.sha) rather than the base branch's live
+ *   tip — see .github/workflows/design-visual-verify.yml and cinatra#2430.
  *   A missing allowlist at base (first introduction) passes trivially.
  */
 import { execFileSync } from "node:child_process";

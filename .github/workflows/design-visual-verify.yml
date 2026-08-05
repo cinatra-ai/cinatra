@@ -219,13 +219,50 @@ jobs:
 
       # Coverage ratchet (cinatra#985): the not-yet-covered allowlist is
       # SHRINK-ONLY vs the PR base — an added (or re-added) surface is a red.
-      # The refspec materializes refs/remotes/origin/<base> explicitly (a bare
-      # `git fetch origin <branch>` may only populate FETCH_HEAD on the shallow
-      # CI checkout); the script FAILS CLOSED when the base ref is missing.
+      #
+      # cinatra#2430 — compare against THIS RUN'S OWN recorded base commit,
+      # pinned as a SHA. This replaces a
+      # `git fetch --no-tags --depth=1 origin "+refs/heads/$GITHUB_BASE_REF:…"`
+      # that resolved the base branch's LIVE TIP at step-execution time while
+      # HEAD is the merge commit GitHub froze into the run's event. The two can
+      # legitimately disagree: on a RE-RUN of an older run the frozen HEAD still
+      # carries exemptions the base has since removed, and the shrink-only
+      # comparison reads those as "added vs base" — a hard red on a PR that
+      # touched nothing. github.event.pull_request.base.sha is frozen in this
+      # run's event (the workflow triggers on `pull_request` only, so it is
+      # always present), which makes the comparison a property of the snapshot
+      # under test. Same class as the extension-README gate fix in cinatra#2212.
+      #
+      # NOT a merge base (unlike cinatra#2212's gate, which diffs): this check
+      # is snapshot set-inclusion — it reads the allowlist file AT the ref, so
+      # it needs no common ancestor. A merge base would be strictly weaker here
+      # (it can reintroduce an exemption the base dropped after the PR forked).
+      #
+      # NO `--depth` on the fetch: the depth-1 branch re-fetch is exactly the
+      # cinatra#2212 anti-pattern, and the pinned SHA costs no more without it
+      # (measured on this repo: ~10-27 MiB / ~1.5 s either way, because the
+      # checkout is already shallow and the server only sends the delta).
+      #
+      # The script FAILS CLOSED when the ref is unresolvable; so does this step.
       - name: conformance coverage ratchet (shrink-only)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          git fetch --no-tags --depth=1 origin "+refs/heads/$GITHUB_BASE_REF:refs/remotes/origin/$GITHUB_BASE_REF"
-          node scripts/design/check-conformance-ratchet.mjs "origin/$GITHUB_BASE_REF"
+          set -euo pipefail
+          if [ -z "${BASE_SHA:-}" ]; then
+            echo "conformance ratchet FAILED: this run's event carries no pull_request.base.sha — refusing to run the ratchet against an unknown base" >&2
+            exit 1
+          fi
+          # The default-depth checkout holds only the merge commit, so the
+          # recorded base commit is normally fetched here, BY SHA.
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags origin "${BASE_SHA}" \
+              || { echo "conformance ratchet FAILED: recorded PR base commit ${BASE_SHA} could not be fetched — the ratchet must not fail open" >&2; exit 1; }
+          fi
+          git rev-parse --verify --quiet "${BASE_SHA}^{commit}" >/dev/null \
+            || { echo "conformance ratchet FAILED: recorded PR base commit ${BASE_SHA} is unresolvable in this checkout — the ratchet must not fail open" >&2; exit 1; }
+          echo "conformance ratchet base: ${BASE_SHA} (recorded PR base commit)"
+          node scripts/design/check-conformance-ratchet.mjs "${BASE_SHA}"
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 

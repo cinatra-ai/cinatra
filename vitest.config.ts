@@ -411,6 +411,10 @@ export default defineConfig({
       "scripts/ci/__tests__/**/*.test.{ts,mjs}",
       // Generic WordPress blog-connector binding migration (pure; no DB).
       "scripts/signing/__tests__/**/*.test.{ts,mjs}",
+      // Design-system CI guards (cinatra#2430): the conformance coverage
+      // ratchet's base resolution. Real git over temp fixtures + the workflow
+      // step's own shell body — no network, no browser, no DB.
+      "scripts/design/__tests__/**/*.test.{ts,mjs}",
       // Manifest-driven build-config generator: renders the tsconfig path
       // aliases + next.config package lists from one manifest and gates
       // byte-exact drift. Pure renderers + CLI --check (no DB/network).
