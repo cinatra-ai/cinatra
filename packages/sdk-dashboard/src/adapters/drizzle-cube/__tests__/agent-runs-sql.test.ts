@@ -280,5 +280,13 @@ describe("agent_runs cube — org-scoped SQL predicate", () => {
     // The access predicate is still enforced on the per-run shape.
     expect(result.sql).toMatch(/org_id/);
     expect(result.params ?? []).toContain("org_acme");
+    // Newest-first + top-5 are part of the pinned per-run contract — the
+    // portlet's "newest-first, limited to 5" acceptance criterion depends
+    // on the compiler emitting them, so a regression dropping the sort or
+    // the row cap must fail HERE. drizzle-cube orders by the aliased
+    // output column and binds the LIMIT as the trailing parameter.
+    expect(result.sql).toMatch(/order by\s+"agent_runs\.created_at" desc/i);
+    expect(result.sql).toMatch(/limit\s+\$\d+\s*$/i);
+    expect((result.params ?? []).at(-1)).toBe(5);
   });
 });
