@@ -201,6 +201,40 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // The UNIT tier — and, since cinatra#2439, the set the CI runner actually
+    // executes. The `extension-invariants` job used to run `pnpm
+    // test:invariants`, a HAND-MAINTAINED list of 40 of these 113 files: a new
+    // test file joined the unrun 73 by default, because joining the gate needed
+    // someone to remember to edit a package.json script. The job now runs the
+    // whole package (`pnpm test`) and that script is gone, so discovery is the
+    // default and every carve-out below is a written decision instead.
     include: ["src/**/__tests__/**/*.test.{ts,tsx}"],
+    exclude: [
+      "**/node_modules/**",
+      // QUARANTINE — cinatra#2455 (filed by cinatra#2439). All three suites
+      // read the MATERIALIZED companion-extension tree at its committed
+      // dev-lock pins and are genuinely RED there. They are fleet-drift
+      // findings, not sandbox gaps, and each repair belongs in a companion
+      // repo — outside cinatra#2439's scope bound (CI wiring, not repair):
+      //
+      //   blog-text-parity.test.ts
+      //     blog-draft-writer-agent / blog-idea-generator-agent /
+      //     blog-linkedin-writer-agent ship no auto-discovered SKILL.md at
+      //     their pinned shas, and their leaf OAS still wires store-mutating
+      //     tools the parity contract forbids (7 failing cases).
+      //   contextslots-require-explicit-context-selection-agent.test.ts
+      //   email-outreach-agent-explicit-context-selection-agent.test.ts
+      //     email-outreach-agent declares no
+      //     `cinatra.agentDependencies["@cinatra-ai/context-selection-agent"]`
+      //     and its OAS control flow does not route
+      //     skills_flow → context_offeringContext → drafts_flow (4 cases).
+      //
+      // Mirrored in scripts/audit/package-suite-runner-exceptions.json so the
+      // pinned-test existence gate keeps naming all three until #2441 retires
+      // the entries and these lines together.
+      "src/__tests__/blog-text-parity.test.ts",
+      "src/__tests__/contextslots-require-explicit-context-selection-agent.test.ts",
+      "src/__tests__/email-outreach-agent-explicit-context-selection-agent.test.ts",
+    ],
   },
 });

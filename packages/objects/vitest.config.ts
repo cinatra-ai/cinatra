@@ -107,10 +107,47 @@ export default defineConfig({
       // can import `mcpRequestContextStorage` without pulling in the real
       // next/navigation + better-auth entry point.
       "@cinatra-ai/mcp-server": path.join(__dirname, "src/__tests__/__stubs__/mcp-server.ts"),
+      // Draftable write-path lock, reached by a DYNAMIC import inside
+      // `enforceDraftableLock` in src/mcp/handlers.ts. The real module imports
+      // server-only + the pooled-pg publication ledger. Route to a stub whose
+      // default is the real module's own behaviour under this sandbox's
+      // no-claims reader (see the stub header). Without it eight handler suites
+      // fail at assertion time with ERR_MODULE_NOT_FOUND — the state they sat
+      // in for as long as this package had no CI runner (cinatra#2439).
+      "@/lib/objects/draftable-lock-gate": path.join(
+        __dirname,
+        "src/__tests__/__stubs__/draftable-lock-gate.ts",
+      ),
     },
   },
   test: {
     environment: "node",
+    // The UNIT tier. `src/**/*.test.ts` is the discovery set the whole-package
+    // CI runner executes (cinatra#2439); every non-unit tier below is carved
+    // out EXPLICITLY, by name, so a tier can never leave the gate by omission.
     include: ["src/**/*.test.ts"],
+    exclude: [
+      "**/node_modules/**",
+      // MANUAL tier. `*.manual.test.ts` files drive a live Graphiti instance
+      // (wire negotiation + a search-nodes smoke). They self-skip without one,
+      // so leaving them in would be harmless-but-vacuous; naming them here
+      // makes the tier a decision instead of an accident. Run them by hand
+      // against a live Graphiti:
+      //   pnpm exec vitest run src/__tests__/<name>.manual.test.ts
+      "src/**/*.manual.test.ts",
+      // QUARANTINE — cinatra#2454 (filed by cinatra#2439, which wired this
+      // package's suite into CI for the first time). `artifact-bridge.test.ts`
+      // asserts zero drift between the LIVE pinned extensions tree and the
+      // object-type ids the bridge registers, and it is genuinely RED at the
+      // committed dev-lock pins: `@cinatra-ai/cms-snapshot-artifact` mints the
+      // umbrella-shaped id `@cinatra-ai/cms-snapshot-artifact:artifact`, which
+      // the suite forbids. That is a real finding in the extension fleet, not a
+      // sandbox gap, and repairing it means changing the companion extension —
+      // out of scope for a CI-wiring change (cinatra#2439's scope bound). The
+      // exclusion is mirrored in
+      // scripts/audit/package-suite-runner-exceptions.json, so the pinned-test
+      // existence gate keeps naming this file until #2440 retires both.
+      "src/__tests__/artifact-bridge.test.ts",
+    ],
   },
 });

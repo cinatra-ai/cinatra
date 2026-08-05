@@ -93,7 +93,18 @@ describe("objects_get — Postgres-primary read", () => {
       actor: ACTOR,
       mode: "deterministic",
     });
-    expect(mockGet).toHaveBeenCalledWith("obj-1", { orgId: "org-1" });
+    // cinatra#1428 added a THIRD argument: the actor-scoped ownership filter
+    // derived from the request actor (`readScopeActor`), which hides rows
+    // outside the actor's ownership/visibility reach. This assertion was
+    // written against the two-argument call and had been stale ever since —
+    // invisibly, because no workflow ran this package's suite until
+    // cinatra#2439. Repaired by ASSERTING the third argument rather than
+    // loosening the check, so dropping the ownership filter still reds here.
+    expect(mockGet).toHaveBeenCalledWith(
+      "obj-1",
+      { orgId: "org-1" },
+      expect.objectContaining({ organizationId: "org-1" }),
+    );
     expect(mockSearch).not.toHaveBeenCalled();
     expect(mockGetEpisodes).not.toHaveBeenCalled();
   });
