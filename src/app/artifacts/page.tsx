@@ -37,6 +37,9 @@ type PageProps = {
   searchParams?: Promise<{
     q?: string;
     facet?: string;
+    // `?scope=` — the comma-separated multi-scope OR-filter (cinatra#2449),
+    // parsed by the ONE canonical parser inside LibraryMode.
+    scope?: string | string[];
   }>;
 };
 
@@ -56,7 +59,14 @@ export default async function ArtifactsPage({ searchParams }: PageProps) {
         description="Everything your agents and uploads have produced."
       />
       <PageContent className="flex flex-col gap-4 pb-8">
-        <LibraryMode orgId={orgId} actor={actor} query={sp.q} facet={sp.facet} />
+        <LibraryMode
+          orgId={orgId}
+          actor={actor}
+          userId={session.user?.id ?? null}
+          query={sp.q}
+          facet={sp.facet}
+          scopeParam={sp.scope}
+        />
       </PageContent>
     </Main>
   );

@@ -99,6 +99,14 @@ export type ArtifactSummary = {
   // new query, no write.
   ownerLevel: "user" | "team" | "organization" | "workspace";
   visibility: "private" | "team" | "organization" | "public";
+  // Scope projection for the library's scope filter (cinatra#2449) — the
+  // owning locus id axis next to `ownerLevel`, projected straight from the
+  // object row exactly like `ownerLevel` (no new query, no write). At
+  // ownerLevel "team" `ownerId` is the owning team's id; at "user" it is the
+  // owning user's id. `projectId` rides the objects.project_id column.
+  ownerId: string | null;
+  organizationId: string | null;
+  projectId: string | null;
   // Semantic identity resolves through the effective-identity service
   // (epic #1785): `effectiveIdentity` is the type-driven resolution (the
   // installed namespace-defining extension, or no-primary); `primaryExtension`
@@ -258,6 +266,9 @@ function toSummary(
     updatedAt?: string;
     ownerLevel?: "user" | "team" | "organization" | "workspace" | null;
     visibility?: "private" | "team" | "organization" | "public" | null;
+    ownerId?: string | null;
+    orgId?: string | null;
+    projectId?: string | null;
   },
   semanticIdentity?: ArtifactIdentityEnrichment,
   presentation?: PresentationIdentity,
@@ -280,6 +291,9 @@ function toSummary(
     updatedAt: rec.updatedAt ?? "",
     ownerLevel: rec.ownerLevel ?? "organization",
     visibility: rec.visibility ?? "organization",
+    ownerId: rec.ownerId ?? null,
+    organizationId: rec.orgId ?? null,
+    projectId: rec.projectId ?? null,
     // Default to no-primary if the caller didn't enrich (e.g., from a
     // unit test that doesn't drive the resolver).
     eligibleExtensions: semanticIdentity?.eligibleExtensions ?? [],
