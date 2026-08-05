@@ -144,9 +144,10 @@ function PublisherLine({ card }: { card: MarketplaceCardData }) {
     <div
       data-slot="extension-card-publisher"
       data-vendor-state={vendor.kind}
-      // On the coloured banner: `text-current` so kind/label/vendor/check all
-      // inherit the banner's white (or archived-muted) ground colour. `text-xs`
-      // is the app's sanctioned byline size (named-token/standard-size gate).
+      // On the coloured banner: `text-current` so the kind emblem, kind label
+      // and vendor label all inherit the banner's white (or archived-muted)
+      // ground colour. `text-xs` is the app's sanctioned byline size
+      // (named-token/standard-size gate).
       className="flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-xs leading-tight text-current"
     >
       <span className="shrink-0 text-current" aria-hidden="true">
