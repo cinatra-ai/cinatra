@@ -524,7 +524,9 @@ describe("S3 — completeAiSetupAction under the machine", () => {
     } as never);
 
     const url = await redirectOf(() => completeAiSetupAction(providerForm("anthropic")));
-    expect(url).toBe("/setup/ai?stay=1");
+    // S4 (cinatra#2389): a SUCCESSFUL Continue-commit advances (no `stay=1`) —
+    // the step's auto-forward carries the operator onward.
+    expect(url).toBe("/setup/ai");
 
     expect(writeAnthropicMcpMode).toHaveBeenCalledWith("native");
     // Resurrection guard: the mode is a fingerprint input, so the receipt is
@@ -591,7 +593,8 @@ describe("S3 — completeAiSetupAction under the machine", () => {
       receipt: {},
     } as never);
     const url = await redirectOf(() => completeAiSetupAction(providerForm("openai")));
-    expect(url).toBe("/setup/ai?stay=1");
+    // S4 (cinatra#2389): success advances — no `stay=1` on the redirect.
+    expect(url).toBe("/setup/ai");
     expect(beginSetupProviderClaim).not.toHaveBeenCalled();
     expect(refreshCommittedCredentialFingerprint).toHaveBeenCalledWith({
       expectedRaw: '{"stored":"commitment"}',

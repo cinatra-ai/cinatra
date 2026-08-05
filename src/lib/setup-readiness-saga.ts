@@ -315,6 +315,38 @@ export function writeAnthropicMcpMode(mode: "native" | "function-tools"): void {
 }
 
 /**
+ * S4 (cinatra#2389): the RECEIPT-FREE provider-specific readiness inputs the
+ * commit machine's fresh derivation consults. Under the reshaped setup step
+ * the committed record supplies the provider LOCK and the keyed credential
+ * fingerprint covers the credential — what remains provider-specific is
+ * re-read LIVE here, with no receipt in the derivation:
+ *
+ *   anthropic — skill delivery must stand in native MCP mode (the exact mode
+ *               the setup commit leaves behind) AND the workspace skills-upload
+ *               opt-in recorded with the explicit setup consent must still
+ *               stand (revoking it in Administration honestly reopens the
+ *               step). Both fail closed: an unreadable value never satisfies.
+ *   others    — no inputs beyond the lock + the fresh credential fingerprint
+ *               (the OpenAI path performs no upload and no mode switch).
+ */
+export function areProviderReadinessInputsSatisfied(provider: LlmProvider): boolean {
+  if (provider !== "anthropic") return true;
+  return readAnthropicMcpMode() === "native" && isAnthropicUploadOptInStanding();
+}
+
+/**
+ * Does the workspace-wide Anthropic skills-upload opt-in currently STAND?
+ * Fail-closed (an unreadable value never stands). Exported for the setup
+ * step's Anthropic section: consent is only grantable through the consented
+ * key save (S5), so a missing/revoked opt-in must force the save form back
+ * open even over a connection that reads ready — otherwise the step would
+ * point at Administration while Continue can never complete.
+ */
+export function isAnthropicUploadOptInStanding(): boolean {
+  return readAnthropicUploadOptIn() === "true";
+}
+
+/**
  * The workspace-wide Anthropic upload opt-in. Read defensively: an unreadable
  * value is its OWN state and never matches a recorded readable one.
  */

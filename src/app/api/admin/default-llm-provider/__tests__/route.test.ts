@@ -56,6 +56,10 @@ vi.mock("@/lib/llm-credential-fingerprint", () => ({
 vi.mock("@/lib/setup-readiness-saga", () => ({
   readSetupReadinessState: () => ({ ready: false, receipt: null }),
   readSetupReadinessReceipt: () => null,
+  // S4 (cinatra#2389): imported by setup-provider-commit's fresh derivation;
+  // this route's own paths never reach it — shimmed per the cinatra#850
+  // vi.mock-factory convention.
+  areProviderReadinessInputsSatisfied: () => false,
 }));
 vi.mock("@/lib/authz/audit", async () => {
   const actual = await vi.importActual<typeof import("@/lib/authz/audit")>("@/lib/authz/audit");

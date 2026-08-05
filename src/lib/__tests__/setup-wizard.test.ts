@@ -174,6 +174,16 @@ describe("getSetupWizardSteps - no gemini step", () => {
 // S6 (cinatra#2093): the AI step is RECEIPT-driven and provider-agnostic
 // ---------------------------------------------------------------------------
 
+describe("getSetupWizardSteps - the AI step's pill (cinatra#2389)", () => {
+  it('the step pill reads "LLM Provider" while the id stays the stable "ai"', async () => {
+    vi.mocked(readInstanceIdentity).mockReturnValueOnce(null);
+    const steps = await getSetupWizardSteps();
+    const aiStep = steps.find((s) => s.id === "ai");
+    expect(aiStep?.title).toBe("LLM Provider");
+    expect(aiStep?.href).toBe("/setup/ai");
+  });
+});
+
 describe("getSetupWizardSteps - the AI step follows the commit machine's derivation", () => {
   it("the ai step is NOT ready without a valid receipt, whatever any connection says", async () => {
     vi.mocked(readInstanceIdentity).mockReturnValue(SAMPLE_IDENTITY);

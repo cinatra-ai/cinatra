@@ -34,9 +34,10 @@ import "server-only";
  * COMMITMENT ≠ READINESS. The committed record is the provider LOCK and
  * survives credential loss. Completion/readiness is derived FRESHLY on every
  * read ({@link deriveSetupAiStepState}): lock + a fresh matching keyed
- * credential fingerprint + the provider-specific readiness evidence (the
- * receipt). A fingerprint mismatch reopens the committed provider's key +
- * Continue flow while the CHOICE stays locked.
+ * credential fingerprint + the provider-specific readiness INPUTS re-read
+ * live (S4, cinatra#2389 — no receipt in the derivation). A fingerprint
+ * mismatch reopens the committed provider's key + Continue flow while the
+ * CHOICE stays locked.
  *
  * TRANSIENT-STATE HONESTY (ordering of the setup sink). The metadata store has
  * no multi-key transaction, so "nonce guard + audited default write +
@@ -64,6 +65,7 @@ import {
   writeMetadataValueIfAbsentToDatabase,
 } from "@/lib/database";
 import {
+  areProviderReadinessInputsSatisfied,
   readSetupReadinessState,
   readSetupReadinessReceipt,
 } from "@/lib/setup-readiness-saga";
@@ -758,15 +760,15 @@ export type SetupAiStepState = {
   commitState: SetupProviderCommitState;
   /** True iff the LIVE keyed credential fingerprint matches the commitment's. */
   credentialFresh: boolean;
-  /** Lock + fresh credential + provider-specific readiness evidence. */
+  /** Lock + fresh credential + live provider-specific readiness inputs. */
   ready: boolean;
 };
 
 /**
  * The FRESH derivation of the AI step's state — what replaced the positive
  * completion cache. Cheap by construction (metadata reads + one connector
- * credential read + the receipt-fingerprint re-derivation), and NEVER stale:
- * there is no memo, so there is no stale-true window after invalidation.
+ * credential read + the live provider-input reads), and NEVER stale: there is
+ * no memo, so there is no stale-true window after invalidation.
  */
 export async function deriveSetupAiStepState(deps?: {
   readCredentialFingerprint?: (provider: string) => Promise<LiveCredentialFingerprint>;
@@ -790,13 +792,18 @@ export async function deriveSetupAiStepState(deps?: {
   } catch {
     credentialFresh = false; // unreadable ⇒ fail-closed mismatch
   }
-  // Provider-specific readiness inputs ride the receipt re-derivation
-  // (provider binding + credential + MCP mode + catalog + upload opt-in).
-  const readiness = readSetupReadinessState();
+  // S4 (cinatra#2389): readiness is RECEIPT-FREE. The committed record is the
+  // provider lock, the keyed fingerprint above covers the credential, and the
+  // provider-specific readiness inputs are re-read LIVE (Anthropic: native MCP
+  // delivery + the standing skills-upload opt-in). The receipt survives only
+  // as the lazy-migration source ({@link maybeMigrateReceiptCommitment}).
+  const inputsSatisfied = areProviderReadinessInputsSatisfied(
+    commitState.commitment.provider as LlmProvider,
+  );
   return {
     locked: true,
     commitState,
     credentialFresh,
-    ready: credentialFresh && readiness.ready,
+    ready: credentialFresh && inputsSatisfied,
   };
 }
