@@ -144,10 +144,14 @@ export function LibraryToolbar({
       <ToolbarSeparator />
       <ToolbarGroup>
         <Select value={facetValue} onValueChange={selectFacet}>
+          {/* Explicit accessible name (repo Select precedent): with only a
+              <SelectValue/> inside, the trigger's computed name would collapse
+              to the CURRENT selection ("Dashboards") after a pick. */}
           <SelectTrigger
             data-testid="artifacts-facet"
             data-conformance-id="artifacts-facet"
             data-action="filter-facet -> filtered"
+            aria-label="Filter by type"
             className="h-[34px] w-auto gap-1.5 rounded-md border-line bg-surface-strong px-3 text-xs text-foreground"
           >
             <SelectValue />

@@ -53,6 +53,9 @@ const UI_ALLOWLIST = new Set<string>([
   "packages/skills/src/permissions-page-data.ts",
   "packages/skills/src/plugin-pages.tsx",
   "packages/connectors/src/pages.tsx",
+  // /artifacts library scope filter (cinatra#2449) — same picker wiring as
+  // /connectors and /skills.
+  "src/components/artifacts/library-mode.tsx",
   "packages/extensions/src/screens/extension-settings-screen.tsx",
   "packages/agents/src/screens.tsx",
   "packages/agents/src/instance-screens.tsx",

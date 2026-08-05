@@ -101,6 +101,18 @@ describe("LibraryToolbar (client half) — canonical composition", () => {
     expect(TOOLBAR).toMatch(/data-action="filter-facet -> filtered"/);
   });
 
+  it("every filter control carries an explicit accessible name (a11y)", () => {
+    // The facet trigger renders only <SelectValue/>, so without an explicit
+    // label its accessible name would collapse to the current selection.
+    const facetTrigger = TOOLBAR.slice(
+      TOOLBAR.indexOf("<SelectTrigger"),
+      TOOLBAR.indexOf("</SelectTrigger>"),
+    );
+    expect(facetTrigger).toMatch(/aria-label="Filter by type"/);
+    expect(TOOLBAR).toMatch(/aria-label="Search artifacts"/);
+    expect(TOOLBAR).toMatch(/aria-label="Artifacts filters"/);
+  });
+
   it("search and facet write the URL via the param-preserving pushWith (SkillsToolbar ref pattern)", () => {
     expect(TOOLBAR).toMatch(/const searchParamsRef = useRef\(searchParams\?\.toString\(\) \?\? ""\)/);
     expect(TOOLBAR).toMatch(/new URLSearchParams\(searchParamsRef\.current\)/);
