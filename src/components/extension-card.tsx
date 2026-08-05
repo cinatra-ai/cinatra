@@ -298,11 +298,11 @@ export function ExtensionCardListingBanner({
    */
   iconRender?: React.ReactNode;
   /**
-   * The `{Kind} by {Vendor}` byline (design spec 0.5.0 §I/§III/§IV): renders
+   * The `{Kind} by {Vendor}` byline (current ratified card spec §I/§III/§IV): renders
    * directly BENEATH the name, inside the coloured banner. The caller supplies
-   * the slot content already shaped for its surface (§I carries the vendor link
-   * + verified check; §III/§IV a plain vendor span). Text colour INHERITS the
-   * banner ground — `currentColor` (white `fg`) on an active card, muted-grey on
+   * the slot content already shaped for its surface (§I carries the vendor
+   * link; §III/§IV a plain vendor span). Text colour INHERITS the banner
+   * ground — `currentColor` (white `fg`) on an active card, muted-grey on
    * the `muted` (archived) variant — so the byline recolours to match the name
    * automatically; callers must not hard-code a text colour on the slot.
    */
@@ -419,6 +419,10 @@ export function ExtensionCardListingBanner({
             // name never runs underneath the badges.
             badges && "pr-20",
           )}
+          // Native always-on hover title (cinatra#2363): a `line-clamp-2`
+          // name still exposes its full text on hover, matching the vendor
+          // byline's truncation-hover contract.
+          title={name}
         >
           {name}
         </div>

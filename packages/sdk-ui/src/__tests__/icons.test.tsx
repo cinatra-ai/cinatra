@@ -19,7 +19,12 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
-import { PlugConnected, PLUG_CONNECTED_ICON_NODE } from "../icons";
+import {
+  PlugConnected,
+  PLUG_CONNECTED_ICON_NODE,
+  PlugConnectorKind,
+  PLUG_CONNECTOR_KIND_ICON_NODE,
+} from "../icons";
 
 const SRC_DIR = join(__dirname, "..");
 const PKG_DIR = join(SRC_DIR, "..");
@@ -144,6 +149,135 @@ describe("PlugConnected — prop-compatible with the lucide call sites it replac
   });
 });
 
+// ---------------------------------------------------------------------------
+// PlugConnectorKind — the "connector" KIND emblem (cinatra#2364, epic #2360).
+//
+// The ratified card spec draws this glyph as four paths inside
+// `<g transform="translate(-1.03,-11.33) scale(1.515)" stroke-width="1.32">`
+// under a 1.85-stroke root. The registry entry BAKES that transform into the
+// path coordinates (a flat `IconNode` carries neither nested groups nor
+// dynamic per-node attributes, and a per-path transform would multiply the
+// drawn stroke by the 1.515 scale — see icons.tsx). The block below is the
+// redraw-identity lock for that derivation: it recomputes the baked strings
+// from the spec's own PRE-transform drawing and compares them literally, so a
+// nudged control point or a mis-applied map goes red instead of silently
+// shipping a different mark.
+// ---------------------------------------------------------------------------
+
+/** The spec's group transform: (x, y) → (s·x + tx, s·y + ty), deltas/radii ×s. */
+const KIND_TRANSFORM = { tx: -1.03, ty: -11.33, scale: 1.515 } as const;
+/** The spec's stroke calibration: group 1.32 under a 1.85 root. */
+const KIND_SPEC_STROKE = { root: 1.85, group: 1.32 } as const;
+
+const kfmt = (n: number) => String(Math.round(n * 1e4) / 1e4);
+const kabs = ([x, y]: readonly [number, number]) =>
+  `${kfmt(KIND_TRANSFORM.scale * x + KIND_TRANSFORM.tx)} ${kfmt(KIND_TRANSFORM.scale * y + KIND_TRANSFORM.ty)}`;
+const krel = ([dx, dy]: readonly [number, number]) =>
+  `${kfmt(KIND_TRANSFORM.scale * dx)} ${kfmt(KIND_TRANSFORM.scale * dy)}`;
+const krad = (r: number) => kfmt(KIND_TRANSFORM.scale * r);
+
+/**
+ * The spec's four pre-transform paths, transcribed command by command —
+ * cord `m2 22 6-6`; socket half `M9.3 17.3a2.4 2.4 0 0 0 3.4 0L15 15l-6-6
+ * -2.3 2.3a2.4 2.4 0 0 0 0 3.4Z`; prong stubs `M10.5 10.5 13 8` and
+ * `M13.5 13.5 16 11` — pushed through the affine map above and serialized in
+ * the canonical form icons.tsx commits (absolute initial moveto, explicit
+ * command letters, space-separated args, 4-decimal rounding).
+ */
+const KIND_SPEC_PATHS_BAKED = [
+  `M${kabs([2, 22])}l${krel([6, -6])}`,
+  `M${kabs([9.3, 17.3])}a${krad(2.4)} ${krad(2.4)} 0 0 0 ${krel([3.4, 0])}L${kabs([15, 15])}l${krel([-6, -6])}l${krel([-2.3, 2.3])}a${krad(2.4)} ${krad(2.4)} 0 0 0 ${krel([0, 3.4])}Z`,
+  `M${kabs([10.5, 10.5])}L${kabs([13, 8])}`,
+  `M${kabs([13.5, 13.5])}L${kabs([16, 11])}`,
+];
+
+describe("PlugConnectorKind — the spec drawing, derivation-locked", () => {
+  it("draws exactly the spec's four transformed paths, in the spec's order", () => {
+    const html = renderToStaticMarkup(<PlugConnectorKind />);
+    expect(dsOf(html)).toEqual(KIND_SPEC_PATHS_BAKED);
+    expect(html.match(/<path/g)).toHaveLength(4);
+    expect(html).not.toMatch(/<(circle|rect|line|polyline|polygon|ellipse|g)[\s/>]/);
+  });
+
+  it("exports the baked path set so a consumer/lock can assert geometry without rendering", () => {
+    expect(PLUG_CONNECTOR_KIND_ICON_NODE.map(([tag]) => tag)).toEqual([
+      "path",
+      "path",
+      "path",
+      "path",
+    ]);
+    expect(PLUG_CONNECTOR_KIND_ICON_NODE.map(([, a]) => a.d)).toEqual(
+      KIND_SPEC_PATHS_BAKED,
+    );
+  });
+
+  it("is the KIND glyph, not the STATUS glyph — the two path sets share nothing", () => {
+    const kindDs = PLUG_CONNECTOR_KIND_ICON_NODE.map(([, a]) => a.d);
+    for (const d of kindDs) expect(SPEC_PATHS).not.toContain(d);
+  });
+
+  it("carries the transform in its coordinates: no transform and no per-path stroke-width in the markup", () => {
+    // The baked-geometry contract (see icons.tsx): the paths inherit the ROOT
+    // stroke directly, so lucide's stroke semantics (strokeWidth /
+    // absoluteStrokeWidth) apply to the drawn glyph unscaled.
+    const html = renderToStaticMarkup(<PlugConnectorKind />);
+    expect(html).not.toContain("transform=");
+    expect(html.match(/<path[^>]*stroke-width/)).toBeNull();
+  });
+});
+
+describe("PlugConnectorKind — stroke calibration (the spec's 1.85/1.32 ratio, under lucide chrome)", () => {
+  it("lucide's default stroke reproduces the spec's calibrated drawn weight (group × scale ≈ 2)", () => {
+    // The identity that makes the baked entry stroke-exact: the spec draws the
+    // glyph at group 1.32 under the 1.515 scale — a drawn weight of 1.99998,
+    // i.e. lucide's own default stroke-width of 2 to 0.01%. Asserted, not
+    // assumed, so a recalibrated spec pair goes red here instead of silently
+    // rendering off-weight.
+    expect(KIND_SPEC_STROKE.group * KIND_TRANSFORM.scale).toBeCloseTo(2, 3);
+    expect(attr(renderToStaticMarkup(<PlugConnectorKind />), "stroke-width")).toBe("2");
+  });
+
+  it("a caller strokeWidth override scales the DRAWN glyph proportionally (root carries it, no path overrides it)", () => {
+    // The fix over the predecessor single-file component, which forwarded the
+    // caller value onto the drawing group UNDER the 1.515 scale (an override
+    // of 2.2 painted at ~3.33). Here the override lands on the root, the
+    // paths inherit it, and nothing rescales it. (Residual vs a strict
+    // root:group ratio reading — ×1.0 instead of ×1.081 on overrides — is
+    // documented at the definition; the ratio itself is pinned above.)
+    const html = renderToStaticMarkup(<PlugConnectorKind strokeWidth={2.2} />);
+    expect(attr(html, "stroke-width")).toBe("2.2");
+    expect(html.match(/<path[^>]*stroke-width/)).toBeNull();
+    expect(KIND_SPEC_STROKE.group / KIND_SPEC_STROKE.root).toBeCloseTo(1.32 / 1.85, 10);
+  });
+});
+
+describe("PlugConnectorKind — prop-compatible at every kind-emblem call site", () => {
+  it.each(["size-[13px]", "size-[34px]"])(
+    "forwards the %s className alongside the lucide class hooks (both required render sizes)",
+    (sizeClass) => {
+      const html = renderToStaticMarkup(<PlugConnectorKind className={sizeClass} />);
+      const cls = (attr(html, "class") ?? "").split(/\s+/);
+      expect(cls).toEqual(
+        expect.arrayContaining(["lucide", "lucide-plug-connector-kind", sizeClass]),
+      );
+    },
+  );
+
+  it("renders lucide-identical chrome: currentColor stroke, 24x24 box, decorative by default", () => {
+    const html = renderToStaticMarkup(<PlugConnectorKind />);
+    expect(attr(html, "stroke")).toBe("currentColor");
+    expect(attr(html, "viewBox")).toBe("0 0 24 24");
+    expect(attr(html, "fill")).toBe("none");
+    expect(attr(html, "aria-hidden")).toBe("true");
+  });
+
+  it("forwards size to BOTH width and height", () => {
+    const html = renderToStaticMarkup(<PlugConnectorKind size={13} />);
+    expect(attr(html, "width")).toBe("13");
+    expect(attr(html, "height")).toBe("13");
+  });
+});
+
 describe("first-party glyph registry — build + export wiring", () => {
   it("is built with lucide's public factory (prop compatibility is structural, not asserted-by-hand)", () => {
     expect(iconsSrc).toMatch(
@@ -154,8 +288,10 @@ describe("first-party glyph registry — build + export wiring", () => {
     expect(iconsSrc).not.toMatch(/<svg[\s>]/);
   });
 
-  it("is a registry, not a single-glyph file (a second glyph is one node + one factory line)", () => {
+  it("is a registry, not a single-glyph file — and the second glyph IS one node + one factory line", () => {
     expect(iconsSrc).toMatch(/export const PLUG_CONNECTED_ICON_NODE: IconNode/);
+    expect(iconsSrc).toMatch(/export const PLUG_CONNECTOR_KIND_ICON_NODE: IconNode/);
+    expect(iconsSrc).toMatch(/createLucideIcon\(\s*"plug-connector-kind"/);
     expect(iconsSrc).toMatch(/export type CinatraIconProps = LucideProps/);
   });
 
@@ -165,6 +301,16 @@ describe("first-party glyph registry — build + export wiring", () => {
     expect(marketplaceSrc).not.toContain("./icons");
     expect(indexSrc).not.toContain("PlugConnected");
     expect(marketplaceSrc).not.toContain("PlugConnected");
+  });
+
+  it("is the SINGLE glyph-module owner: `./icons` is the only icons subpath (cinatra#2364)", () => {
+    // The parallel-module shape this locks out: a sibling glyph file under
+    // src/icons/ with its own `./icons/<name>` subpath export. Every
+    // first-party mark ships from THIS registry, through THIS subpath.
+    const iconExportKeys = Object.keys(pkg.exports).filter((k) =>
+      k.startsWith("./icons"),
+    );
+    expect(iconExportKeys).toEqual(["./icons"]);
   });
 
   it("stays portable: no host `@/` alias, no root-barrel import", () => {

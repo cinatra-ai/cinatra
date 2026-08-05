@@ -243,6 +243,17 @@ describe("InstalledExtensionCard — §III/§IV vendor byline contract (cinatra#
     );
     expect(vendorLabel(html)).toBe("Unknown vendor");
   });
+
+  it("carries a native always-on title= on the vendor label with the FULL text, on a short name AND a long/truncated one (cinatra#2363)", () => {
+    const shortHtml = renderVendor(knownVendor("Foundry"));
+    const shortTag = shortHtml.match(/<span data-slot="installed-extension-vendor-label"[^>]*>/)?.[0];
+    expect(shortTag).toContain('title="Foundry"');
+
+    const longName = "A Very Long Vendor Display Name That Overflows The Ellipsised Byline Row";
+    const longHtml = renderVendor(knownVendor(longName));
+    const longTag = longHtml.match(/<span data-slot="installed-extension-vendor-label"[^>]*>/)?.[0];
+    expect(longTag).toContain(`title="${longName}"`);
+  });
 });
 
 describe("InstalledExtensionCard — accent-panel detail hotspot (cinatra#1121)", () => {

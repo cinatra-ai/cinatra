@@ -43,6 +43,21 @@ describe("ExtensionCard listing banner (§IV, shell mode, variant=listing)", () 
     expect(html).toContain("text-listing-title");
   });
 
+  it("carries a native always-on title= on the name, matching the FULL text on both a short AND a truncated (clamped) name (cinatra#2363)", () => {
+    // Short name: the always-on contract means title= is present regardless
+    // of whether the name actually overflows the clamp.
+    const shortHtml = renderToStaticMarkup(<ExtensionCard {...shellProps} />);
+    const shortNameDiv = shortHtml.match(/<div data-slot="extension-card-name"[^>]*>/)?.[0];
+    expect(shortNameDiv).toContain(`title="${shellProps.name}"`);
+
+    // Long name: title= carries the FULL, un-clamped string.
+    const longName =
+      "A Very Long Extension Display Name That Would Overflow The Two-Line Clamp In A Narrow Card";
+    const longHtml = renderToStaticMarkup(<ExtensionCard {...shellProps} name={longName} />);
+    const longNameDiv = longHtml.match(/<div data-slot="extension-card-name"[^>]*>/)?.[0];
+    expect(longNameDiv).toContain(`title="${longName}"`);
+  });
+
   it("renders the byline slot beneath the name inside the banner (0.5.0 §I)", () => {
     const html = renderToStaticMarkup(
       <ExtensionCard {...shellProps} byline={<span data-testid="byline-slot">Agent by Cinatra</span>} />,

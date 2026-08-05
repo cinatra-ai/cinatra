@@ -15,7 +15,10 @@ import { createLucideIcon, type IconNode, type LucideProps } from "lucide-react"
 //
 // This module is DELIBERATELY a plural registry, not a single-glyph file: the
 // design system is expected to gain further first-party marks. Adding one is
-// two lines — an exported `…_ICON_NODE` (the path set, verbatim from the spec)
+// two lines — an exported `…_ICON_NODE` (the path set, verbatim from the spec;
+// or, when the spec draws through a group transform the flat `IconNode` cannot
+// carry, the spec's own transform applied to its coordinates and the
+// derivation locked in the tests — see `PlugConnectorKind`)
 // plus a `createLucideIcon("<kebab-name>", NODE)` component below it. The
 // nodes are exported alongside the components so a consumer (or a lock test)
 // can assert the exact geometry without rendering.
@@ -75,4 +78,59 @@ export const PLUG_CONNECTED_ICON_NODE: IconNode = [
 export const PlugConnected = createLucideIcon(
   "plug-connected",
   PLUG_CONNECTED_ICON_NODE,
+);
+
+/**
+ * `PlugConnectorKind` — the "connector" extension-KIND emblem (cinatra#2364,
+ * epic #2360): the LOWER HALF of the joined-plug mark `PlugConnected` draws
+ * above, recentred and rescaled across the full 24-unit viewBox — not a
+ * literal crop — so it reads clean at the 13px byline size. "What kind of
+ * extension is this" and "is it connected" thereby read as one icon family
+ * without collapsing into one component: this export is the KIND vocabulary,
+ * `PlugConnected` the STATUS vocabulary, and the two never substitute for
+ * each other (locked by src/components/__tests__/status-glyph-scope.test.ts
+ * in the host app). Supersedes lucide's generic `Plug` in the kind emblem.
+ *
+ * GEOMETRY — the spec's transform, applied rather than carried. The ratified
+ * card spec draws this glyph as four paths (cord, socket half, two prong
+ * stubs — the joined plug minus its upper half) inside a nested
+ * `<g transform="translate(-1.03,-11.33) scale(1.515)" stroke-width="1.32">`
+ * under a 1.85-stroke root. `IconNode` is a flat `[tag, attrs][]` — no
+ * nested groups, no dynamic per-node attributes — and carrying the transform
+ * on each path instead would multiply the DRAWN stroke by the 1.515 scale
+ * (lucide's default 2 would paint at 3.03). So the affine map is applied to
+ * the path COORDINATES once, here: (x, y) → (1.515·x − 1.03, 1.515·y − 11.33);
+ * relative deltas and arc radii × 1.515; arc flags untouched. Identical
+ * rendered geometry, unit stroke space. The derivation is LOCKED in
+ * __tests__/icons.test.tsx, which recomputes these strings from the spec's
+ * own pre-transform drawing and compares them literally.
+ *
+ * STROKE — lucide's default chrome IS the spec's calibration. The spec's
+ * nested pair nets a drawn weight of 1.32 × 1.515 = 1.99998 — lucide's own
+ * default stroke-width of 2, to 0.01%. With the transform baked, the entry
+ * therefore draws the spec's exact calibrated weight at default props, and a
+ * caller-supplied `strokeWidth` scales the drawing proportionally like every
+ * lucide icon (the predecessor single-file component forwarded caller
+ * overrides UNDER the 1.515 group scale — ~1.4× too heavy). One residual vs
+ * the spec's root:group ratio (1.32/1.85): a strict ratio reading would scale
+ * an override by ×1.081 rather than ×1.0 — inexpressible without dynamic
+ * per-node attributes, ~8% off only under an explicit override, and exact at
+ * the defaults every production call site uses (they pass `className` only).
+ */
+export const PLUG_CONNECTOR_KIND_ICON_NODE: IconNode = [
+  ["path", { d: "M2 22l9.09 -9.09", key: "plug-connector-kind-cord" }],
+  [
+    "path",
+    {
+      d: "M13.0595 14.8795a3.636 3.636 0 0 0 5.151 0L21.695 11.395l-9.09 -9.09l-3.4845 3.4845a3.636 3.636 0 0 0 0 5.151Z",
+      key: "plug-connector-kind-socket-half",
+    },
+  ],
+  ["path", { d: "M14.8775 4.5775L18.665 0.79", key: "plug-connector-kind-prong-a" }],
+  ["path", { d: "M19.4225 9.1225L23.21 5.335", key: "plug-connector-kind-prong-b" }],
+];
+
+export const PlugConnectorKind = createLucideIcon(
+  "plug-connector-kind",
+  PLUG_CONNECTOR_KIND_ICON_NODE,
 );
