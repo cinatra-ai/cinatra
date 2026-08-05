@@ -125,6 +125,24 @@ jobs:
               - 'scripts/ci/upgrade-proof.sh'
               - 'tests/fixtures/works-after-agent/**'
               - '.github/workflows/works-after-proof.yml'
+              # cinatra#1467: the harness's upgrade-from arms resolve every
+              # modeled transition through the matrix + its shared loader
+              # (scripts/upgrade/resolve-transition.mjs -> scripts/lib/
+              # upgrade-matrix.mjs -> config/upgrade/upgrade-matrix.json,
+              # schema-checked against upgrade-matrix.schema.json) — all are
+              # RUNTIME dependencies of the real proof, so a matrix-only PR
+              # must not green-stub. (The matrix + schema relocated
+              # docs/architecture/ -> config/upgrade/ in #1491/cinatra#1446;
+              # these paths reflect the current location.) scripts/upgrade/**
+              # is included too: wa_matrix_pin() (scripts/ci/works-after/
+              # lib.sh) shells out to resolve-transition.mjs, and every
+              # upgrade-from arm (scripts/ci/works-after/upgrade-*.sh) invokes
+              # the matching scripts/upgrade/*-upgrade-major.sh directly and
+              # sources scripts/upgrade/lib.sh — see the explicit carve-out
+              # noted in docs/internals/workflows/upgrade-track.md.
+              - 'config/upgrade/**'
+              - 'scripts/upgrade/**'
+              - 'scripts/lib/upgrade-matrix.mjs'
 
   # proof — the REQUIRED status context (`works-after proof / proof`). Always
   # runs so the context always reports; a green stub when no upgrade path changed
