@@ -39,6 +39,21 @@ function ToggleGroup({
       data-size={size}
       data-spacing={spacing}
       data-orientation={orientation}
+      // Forwarded to the Radix root (cinatra#2436): `data-orientation` above
+      // only drives styling. Without ALSO passing `orientation` here, Radix's
+      // roving-focus group never learns the group's orientation — Radix has
+      // no "horizontal" default of its own, so an unset orientation leaves
+      // BOTH axes live and every arrow key moves focus regardless of layout
+      // (`@radix-ui/react-roving-focus`'s `getFocusIntent` only excludes the
+      // cross-axis keys once it has a concrete "horizontal" | "vertical"
+      // value). Forwarding the same value keeps visual and keyboard
+      // orientation in agreement for every orientation, not just a future
+      // vertical one: this also correctly scopes today's horizontal
+      // consumers to Left/Right-only roving focus for the first time (Up/Down
+      // previously moved focus too, since orientation was never set). Visual
+      // geometry is unaffected either way — only the roving-focus axis and
+      // each item's own `data-orientation` attribute change.
+      orientation={orientation}
       style={{ "--gap": spacing } as React.CSSProperties}
       className={cn(
         "group/toggle-group flex w-fit flex-row items-center gap-[--spacing(var(--gap))] data-vertical:flex-col data-vertical:items-stretch",
