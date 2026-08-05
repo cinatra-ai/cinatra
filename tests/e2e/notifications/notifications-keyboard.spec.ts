@@ -70,6 +70,7 @@ test.describe("keyboard — the toolbar filter toggle group is one tab stop with
     // Activating a focused (but not yet selected) segment with Space selects
     // it — same outcome as a click.
     await page.keyboard.press("ArrowRight"); // -> Needs action
+    await expect(needsAction).toBeFocused(); // absorb Radix's deferred (setTimeout) focus move before activating
     await page.keyboard.press("Space");
     await expect(needsAction).toHaveAttribute("aria-checked", "true");
 
