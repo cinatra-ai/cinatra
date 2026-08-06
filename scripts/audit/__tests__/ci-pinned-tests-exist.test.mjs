@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -1319,8 +1319,21 @@ describe("direction 3 — the LIVE repo", () => {
   });
 
   it("the LIVE ledger parses, and every entry names a file that exists and is excluded in its package config", () => {
+    // An EMPTY ledger is the HEALTHY end state, not a failure: the ledger's own
+    // contract says an entry is retired by repairing the suite and deleting the
+    // exclusion + the entry together, so "there is at least one quarantined
+    // suite" was never an invariant (cinatra#2455 retired the last three).
+    // What must hold is the PAIRING contract, for however many entries exist —
+    // and readPackageSuiteExceptions() throws on a malformed one, which the
+    // fixture-driven cases above prove.
+    // The ledger FILE stays, empty or not: the reader maps a missing file to
+    // [], so without this the whole ledger could be deleted and every check
+    // below would pass vacuously.
+    expect(
+      existsSync(join(REPO_ROOT, "scripts/audit/package-suite-runner-exceptions.json")),
+      "the quarantine ledger must remain a durable policy artifact even when empty",
+    ).toBe(true);
     const entries = readPackageSuiteExceptions();
-    expect(entries.length).toBeGreaterThan(0);
     const tracked = new Set(trackedTestPaths());
     for (const e of entries) {
       expect(tracked.has(e.file), `${e.file} is not tracked`).toBe(true);

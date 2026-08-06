@@ -4,8 +4,9 @@
  * Runtime auto-wiring for context selection is intentionally not used.
  * Every agent OAS that declares a non-empty `metadata.cinatra.contextSlots`
  * MUST carry EXPLICIT, author-placed wiring:
- *   (1) package.json `cinatra.agentDependencies` declares
- *       `@cinatra-ai/context-selection-agent`.
+ *   (1) the package manifest declares an install-blocking runtime dependency on
+ *       `@cinatra-ai/context-selection-agent`, read through the host's own
+ *       dependency reader (see the vocabulary note below).
  *   (2) The OAS has at least one explicit `context_<slot>` FlowNode whose
  *       inlined subflow is the real context-resolution subflow (an
  *       ApiNode hits `/api/context-resolve`).
@@ -21,12 +22,38 @@
  *   - INTERACTIVE selectors that list `context-selector` in `hitlScreens`
  *     must also have a real context FlowNode (renderer is wired, not just
  *     declared).
+ *
+ * DEPENDENCY VOCABULARY (cinatra#2455). (1) used to read
+ * `pkg.cinatra.agentDependencies[...]` directly. That npm-style map is the
+ * LEGACY agent-package vocabulary; the canonical declaration is
+ * `cinatra.dependencies: ExtensionDependency[]` (canonical-types.ts), and
+ * `manifest-dependencies.ts` — the single reader EVERY install path uses to turn
+ * a verified manifest into the edges persisted on the canonical
+ * `installed_extension` row — dual-reads both, canonical winning. 111 of 111
+ * companion manifests now declare the canonical array; 4 still carry the legacy
+ * map alongside it; `email-outreach-agent` carries only the canonical one and so
+ * failed a check that had nothing to do with its context wiring. Reading through
+ * `parseManifestDependencyEdges` makes this assert what the HOST resolves rather
+ * than which spelling the manifest happens to use, and it tightens the claim
+ * from "the key is truthy" to "an install-blocking runtime edge exists".
  */
 import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { parseManifestDependencyEdges } from "../manifest-dependencies";
+
 const EXT = join(__dirname, "..", "..", "..", "..", "extensions");
+
+const CONTEXT_SELECTION_AGENT = "@cinatra-ai/context-selection-agent";
+
+/** The context-selection edge as the host's own reader resolves it — an
+ *  install-blocking runtime requirement, in either manifest vocabulary. */
+function contextSelectionEdge(pkg: unknown) {
+  return parseManifestDependencyEdges(pkg).edges.find(
+    (e) => e.packageName === CONTEXT_SELECTION_AGENT,
+  );
+}
 
 type OasFile = { scope: string; agent: string; oasPath: string; pkgPath: string };
 
@@ -66,8 +93,13 @@ function dfes(oas: Ref): Array<Ref> {
 }
 
 /** Detect a context FlowNode by structural signal: its subflow contains an
- *  ApiNode whose url hits `/api/context-resolve`. Independent of metadata
- *  tags, so it survives vendoring metadata trimming. */
+ *  ApiNode whose url IS the context-resolve endpoint. Independent of metadata
+ *  tags, so it survives vendoring metadata trimming. Matched by EXACT equality
+ *  (cinatra#2455): a substring test would classify a decoy such as
+ *  `{{CINATRA_BASE_URL}}/api/context-resolve-noop`, or an off-host origin, as
+ *  real context resolution. */
+const CONTEXT_RESOLVE_URL = "{{CINATRA_BASE_URL}}/api/context-resolve";
+
 function isContextFlowNode(oas: Ref, component: Ref): boolean {
   if (component.component_type !== "FlowNode") return false;
   const subRef = (component.subflow as { "$component_ref"?: string } | undefined)?.["$component_ref"];
@@ -76,8 +108,7 @@ function isContextFlowNode(oas: Ref, component: Ref): boolean {
   if (!sub || sub.component_type !== "Flow") return false;
   const subRefs = ((sub["$referenced_components"] as Record<string, Ref>) ?? {});
   for (const c of Object.values(subRefs)) {
-    if (c.component_type === "ApiNode" && typeof c.url === "string"
-        && (c.url as string).includes("/api/context-resolve")) {
+    if (c.component_type === "ApiNode" && c.url === CONTEXT_RESOLVE_URL) {
       return true;
     }
   }
@@ -115,9 +146,13 @@ describe("every contextSlots agent carries explicit context-resolution wiring", 
     it(`${f.scope}/${f.agent}: declares dep + explicit context FlowNode + contextSlotBindings producer`, () => {
       const oas = JSON.parse(readFileSync(f.oasPath, "utf8")) as Ref;
       const pkg = JSON.parse(readFileSync(f.pkgPath, "utf8")) as Ref;
-      const cinatra = (pkg.cinatra as Record<string, unknown> | undefined) ?? {};
-      const deps = (cinatra.agentDependencies as Record<string, string> | undefined) ?? {};
-      expect(deps["@cinatra-ai/context-selection-agent"]).toBeTruthy();
+      const edge = contextSelectionEdge(pkg);
+      expect(edge, `must declare a ${CONTEXT_SELECTION_AGENT} dependency edge`)
+        .toBeTruthy();
+      // Install-blocking, not merely present: a peer/optional edge would let the
+      // slot resolve against a sub-agent that was never installed.
+      expect(edge!.edgeType).toBe("runtime");
+      expect(edge!.requirement).toBe("required");
 
       const all = refs(oas);
       const ctxFlowNodes = Object.entries(all).filter(([, c]) => isContextFlowNode(oas, c));
