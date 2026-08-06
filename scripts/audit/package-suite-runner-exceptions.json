@@ -19,24 +19,5 @@
     "The exclusion and the entry are a PAIR; the gate's redundant-entry check is",
     "what stops one from outliving the other."
   ],
-  "exceptions": [
-    {
-      "file": "packages/extensions/src/__tests__/blog-text-parity.test.ts",
-      "kind": "quarantine",
-      "issue": "https://github.com/cinatra-ai/cinatra/issues/2455",
-      "reason": "Blog-text parity against the materialized companion tree: blog-draft-writer-agent, blog-idea-generator-agent and blog-linkedin-writer-agent ship no auto-discovered SKILL.md at their pinned shas and their leaf OAS still wires store-mutating tools the parity contract forbids (7 failing cases). Fleet drift, repaired in the companion repos."
-    },
-    {
-      "file": "packages/extensions/src/__tests__/contextslots-require-explicit-context-selection-agent.test.ts",
-      "kind": "quarantine",
-      "issue": "https://github.com/cinatra-ai/cinatra/issues/2455",
-      "reason": "Requires every contextSlots agent to declare @cinatra-ai/context-selection-agent in cinatra.agentDependencies; email-outreach-agent declares none at its pinned sha. Fleet drift, repaired in the companion repo."
-    },
-    {
-      "file": "packages/extensions/src/__tests__/email-outreach-agent-explicit-context-selection-agent.test.ts",
-      "kind": "quarantine",
-      "issue": "https://github.com/cinatra-ai/cinatra/issues/2455",
-      "reason": "Asserts email-outreach-agent declares the context-selection-agent dependency and routes skills_flow to context_offeringContext to drafts_flow in its OAS; neither holds at the pinned sha (4 failing cases). Fleet drift, repaired in the companion repo."
-    }
-  ]
+  "exceptions": []
 }
