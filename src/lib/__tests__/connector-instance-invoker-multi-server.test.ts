@@ -1,3 +1,4 @@
+import { SdkErrorCode, SdkHttpError } from "@modelcontextprotocol/client";
 import { describe, expect, it, vi } from "vitest";
 import {
   CATALOG_MAX_STALE_MS,
@@ -9,7 +10,7 @@ import {
   type EnrolledServerRef,
   type InvokerTrustedActor,
 } from "@/lib/connector-instance-invoker";
-import { InvokerError } from "@/lib/connector-instance-mcp-transport";
+import { classifyTransportError, InvokerError } from "@/lib/connector-instance-mcp-transport";
 import {
   CATALOG_DEFAULT_SERVER_ID,
   createInMemoryConnectorInstanceCatalogCache,
@@ -409,6 +410,52 @@ describe("mapCatalogLoadErrorToServerHealth", () => {
       mapCatalogLoadErrorToServerHealth(new InvokerError("network_error", "denied", { httpStatus: 403 })),
     ).toBe("auth_error");
     expect(mapCatalogLoadErrorToServerHealth(new Error("unclassified"))).toBe("catalog_unavailable");
+  });
+
+  // cinatra#2218 L2d — the END-TO-END consumer contract, classifier through to
+  // the persisted health state. `unreachable` is the relaxed outcome (the one
+  // state that is not a TOCTOU denial code downstream), so what matters is that
+  // a v2 client error can only reach it on positive proof.
+  it("the fail-CLOSED transport_error lands on catalog_unavailable, never unreachable", () => {
+    expect(mapCatalogLoadErrorToServerHealth(new InvokerError("transport_error"))).toBe("catalog_unavailable");
+  });
+
+  it("an ANSWERING peer's failure never reaches `unreachable` through classifyTransportError", () => {
+    const answered = [
+      // HTTP 500 from a reachable peer.
+      new SdkHttpError(SdkErrorCode.ClientHttpNotImplemented, "Error POSTing to endpoint: boom", {
+        status: 500,
+        statusText: "",
+        text: "boom",
+      }),
+      // A peer body that says "timed out" — the deleted text tail's forgery.
+      new SdkHttpError(SdkErrorCode.ClientHttpNotImplemented, "Error POSTing to endpoint: Gateway timed out", {
+        status: 504,
+        statusText: "",
+        text: "Gateway timed out",
+      }),
+    ];
+    for (const err of answered) {
+      expect(mapCatalogLoadErrorToServerHealth(classifyTransportError(err))).toBe("catalog_unavailable");
+    }
+  });
+
+  it("an auth wall now reaches auth_error instead of unreachable (httpStatus survives classification)", () => {
+    for (const status of [401, 403]) {
+      const raised = new SdkHttpError(SdkErrorCode.ClientHttpNotImplemented, "Error POSTing to endpoint: denied", {
+        status,
+        statusText: "",
+        text: "denied",
+      });
+      expect(mapCatalogLoadErrorToServerHealth(classifyTransportError(raised))).toBe("auth_error");
+    }
+  });
+
+  it("a PROVEN pre-response network failure still reaches unreachable", () => {
+    const brand = Symbol.for("cinatra.connector-instance-mcp.connect-failure");
+    const err = new TypeError("fetch failed");
+    Object.defineProperty(err, brand, { value: true, enumerable: false, configurable: true });
+    expect(mapCatalogLoadErrorToServerHealth(classifyTransportError(err))).toBe("unreachable");
   });
 });
 

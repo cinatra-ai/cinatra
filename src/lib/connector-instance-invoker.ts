@@ -90,9 +90,20 @@ export type EnrolledServerRef = {
 /** Map a catalog-load failure onto the persisted per-server health state
  * (cinatra#2018 S3 §7): wire 401/403 → `auth_error`; absent-stack
  * (`network_error`/`timeout`) → `unreachable`; everything else — the endpoint
- * answered but expansion failed (`session_required`/`tool_error`/
- * `empty_response`/`invalid_response`) or an unclassified expansion error —
- * → `catalog_unavailable`. */
+ * answered but expansion failed (`session_required`/`session_not_found`/
+ * `transport_error`/`tool_error`/`empty_response`/`invalid_response`) or an
+ * unclassified expansion error — → `catalog_unavailable`.
+ *
+ * `unreachable` is the RELAXED outcome (it is the one server-health state that
+ * is NOT a TOCTOU denial code in the pending-call executor), so the two codes
+ * that reach it are the two `classifyTransportError` requires positive proof
+ * for. cinatra#2218 L2d made that classifier an allowlist whose fail-CLOSED
+ * default is `transport_error`, and gave it an `httpStatus` on every
+ * HTTP-answered failure — which is what finally lets the 401/403 branch above
+ * fire. Before that, an auth wall arrived as a bare `network_error` with no
+ * status and was persisted as `unreachable`. No change is needed HERE: the
+ * default branch already fails closed on any code it does not enumerate, which
+ * is exactly the property the new code relies on. */
 export function mapCatalogLoadErrorToServerHealth(
   err: unknown,
 ): "catalog_unavailable" | "unreachable" | "auth_error" {

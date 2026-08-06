@@ -253,17 +253,20 @@ exactly what the implementation above does).
 
 ### CURRENT
 
-One of the four surfaces still runs `@modelcontextprotocol/sdk`, declared
-`^1.29.0` in the root `package.json` and resolved to **`1.29.0`** in the
-lockfile, whose `LATEST_PROTOCOL_VERSION` is `2025-11-25` and whose
-`SUPPORTED_PROTOCOL_VERSIONS` is the same five-revision list the inbound legacy
-leg accepts. **Unchanged by cinatra#2218 L1** — that lane was the server surface
-only. The client migration to `@modelcontextprotocol/client@2.0.0` runs one
-surface at a time; three have landed.
+**Zero of the four outbound surfaces run `@modelcontextprotocol/sdk`.** The
+client migration to `@modelcontextprotocol/client@2.0.0` ran one surface at a
+time and all four have landed — the connector-instance transport was the last
+(cinatra#2218 **L2d**). `@modelcontextprotocol/sdk` is still declared `^1.29.0`
+in the root `package.json` and resolved to `1.29.0` in the lockfile, but its only
+remaining consumer in the tree is one CI capture harness
+(`tests/e2e/wp-mcp-gateway/capture-annotations.mjs`, whose retained
+`SSEClientTransport` fallback is recorded in the deprecated-features section
+below). Removing the dependency, its build-externalization entries and that last
+consumer is **L2z**, a separate change.
 
 | Surface | Client | Negotiation | Offers on `initialize` | Accepts from server |
 | --- | --- | --- | --- | --- |
-| `src/lib/connector-instance-mcp-transport.ts` | SDK `Client` + `StreamableHTTPClientTransport` | none (v1 has no `versionNegotiation`) | `2025-11-25` | the five legacy revisions |
+| `src/lib/connector-instance-mcp-transport.ts` | **`@modelcontextprotocol/client@2.0.0`** | **`{ mode: 'auto' }` — explicit, live-wire-measured** | nothing on a modern peer (`server/discover` instead); `2025-11-25` on the legacy fallback | `2026-07-28` where the peer answers the probe; today's pinned WordPress adapter, the five legacy revisions |
 | `http-client.ts` in `packages/marketplace-mcp-client` | **`@modelcontextprotocol/client@2.0.0`** | **`{ mode: 'auto' }` — explicit, measured** | `2026-07-28` on the probe, then `2025-11-25` on the legacy fallback | `2026-07-28` when the peer offers it; today the five legacy revisions |
 | `packages/objects/src/graphiti-client.ts` | **`@modelcontextprotocol/client@2.0.0`** | **`{ mode: 'legacy' }` — explicit, measured** | `2025-11-25` | the five legacy revisions |
 | `packages/agents/src/external-mcp-caller.ts` | **`@modelcontextprotocol/client@2.0.0`** | **`{ mode: 'auto' }` — explicit, wire-observed** | nothing on a modern peer (`server/discover` instead); `2025-11-25` on the legacy fallback | `2026-07-28` where the peer answers the probe, else the five legacy revisions |
@@ -379,19 +382,72 @@ issue `HEAD` reachability probes only and carry no MCP traffic; the raw `fetch`
 calls in that same `http-client.ts` are REST catalog `GET`s, distinct from the
 `Client` on the same file's MCP path.
 
-**Known divergence — documentation, not wire.**
-`src/lib/connector-instance-mcp-transport.ts` exports
-`MCP_PROTOCOL_VERSION = "2025-06-18"` and its module header documents the
-handshake at that revision. **That constant is never passed to the SDK `Client`**
-— it has exactly one other occurrence in the tree, a locally re-declared copy in
-a test. The real handshake offers the installed SDK's
-`LATEST_PROTOCOL_VERSION`, i.e. `2025-11-25`. The constant and the comment are
-stale; the wire is not. Anyone reasoning about the outbound revision must read
-the SDK version, not that constant.
+**The connector-instance row moved with cinatra#2218 L2d — the last outbound
+surface, and the one the restated acceptance criterion 4 exists for.** Its peers
+are the reason it is on `auto` rather than graphiti's explicit `legacy`: they are
+**independently-operated WordPress and Drupal adapter instances at customer
+URLs**, one per instance row, that cinatra neither controls nor pins. There is no
+peer whose era could be decided once in the source, so per-peer negotiation is
+the only posture that can be correct for every row at once. The explicit-`legacy`
+exception is scoped to a peer that is *known* 2025-era AND PINNED and cannot
+reach a customer endpoint.
 
-### TARGET
+Today's pinned adapter (`mcp-adapter` 0.5.0, the digest-pinned CI fixture) does
+**not** implement `2026-07-28`, re-verified live on 2026-08-05: it answers a
+`server/discover` probe carrying the modern `_meta` envelope `400` / `-32600
+"Invalid Request: Missing Mcp-Session-Id header"`, and refuses a session-less
+`tools/list` identically — a **sessionful 2025-era peer**. Measured on the live
+wire through a recording proxy, one connect-and-call cycle under
+`{ mode: 'auto' }` is **5 frames**: the refused probe, `initialize` (the server
+echoes `2025-11-25` and mints an `Mcp-Session-Id`), the initialized
+notification, the standalone `GET` (answered `405`), then the call. The refusal
+is a legacy VERDICT, not a failure — `classifyHttpError` parses the JSON-RPC body
+and falls back.
 
-The outbound path moves to `@modelcontextprotocol/client@2.0.0`. This is a
+`src/lib/__tests__/connector-instance-mcp-wire-negotiation.manual.test.ts` is the
+re-runnable live probe (gated on `RUN_CONNECTOR_WIRE_PROOF=1`); when it starts
+failing, the adapter answered the probe and this row moves to the modern
+revision with no code change.
+`src/lib/__tests__/connector-instance-mcp-negotiation.test.ts` runs ungated and
+covers both eras in-process — the 2025-era leg against the pinned adapter's own
+recorded frames, the modern leg against a real `@modelcontextprotocol/server@2.0.0`.
+
+The stale `MCP_PROTOCOL_VERSION = "2025-06-18"` constant this section previously
+recorded as a documentation-only divergence is **deleted**: the client now
+negotiates, so no source file in this surface claims a revision.
+
+**Sessions on this surface (acceptance criterion 4).** The pinned peer REQUIRES a
+session handshake, and that is permitted: the id is minted and held by the client
+library, replayed by it on every post-handshake frame, and stays
+transport-private. cinatra never reads, persists, routes, or authorizes on it.
+The transport exposes no accessor for it, and it reaches no application value, no
+error, and no log line — proven behaviourally (capture the id the peer actually
+minted, then assert its absence from every escape channel) in the AC4 suite of
+`connector-instance-mcp-negotiation.test.ts`, and on the live wire in the manual
+probe.
+
+**Error-taxonomy note carried by this row.** v2 drops v1's message prefixes
+(`"Streamable HTTP error: "`, `"MCP error <code>: "`), so this surface's session
+split — `session_required` (JSON-RPC `-32600`) vs `session_not_found`
+(`-32005`, which buys exactly one bounded retry) — is now read STRUCTURALLY from
+`SdkHttpError.status` and the JSON-RPC code parsed out of `SdkHttpError.data.text`.
+`classifyTransportError` became an ALLOWLIST at the same time: only
+`network_error` and `timeout` map to the relaxed `unreachable` server-health
+state, so both now require positive proof (a brand stamped on the `fetch()`
+rejection itself; `SdkErrorCode.RequestTimeout` or the `AbortSignal` contract),
+and every unproven shape becomes the new fail-CLOSED `transport_error`. The
+pre-migration classifier defaulted the other way — its final statement was an
+unconditional `network_error` — so an answering peer's 5xx, and an auth wall,
+both reported as `unreachable`.
+
+### The standing outbound policy (now CURRENT on every surface)
+
+This section stated the TARGET while the migration was in flight. **All four
+surfaces have landed**, so it now describes implemented behaviour and the rules
+any future outbound surface inherits. The only outstanding outbound work is
+**L2z** — removing `@modelcontextprotocol/sdk` and its last CI-harness consumer.
+
+The outbound path runs `@modelcontextprotocol/client@2.0.0`. This was a
 **package migration, not a version bump** — `@modelcontextprotocol/sdk@1.30.0`
 contains zero occurrences of `2026-07-28`, so the v1 line is not a route to this
 revision.
@@ -414,7 +470,7 @@ be passed explicitly.
 - **`{ mode: { pin: '<modern revision>' } }`** — pin a modern revision; pinning a
   legacy revision is a `TypeError`.
 
-**TARGET outbound policy: `versionNegotiation: { mode: 'auto' }` on every surface
+**Outbound policy: `versionNegotiation: { mode: 'auto' }` on every surface
 whose peer may plausibly speak `2026-07-28`, no pins, no modern-only surface.**
 cinatra calls third-party MCP servers it does not control, so preferring
 `2026-07-28` while retaining the legacy fallback is the only posture that does not
@@ -428,35 +484,38 @@ client costs **four**. On a surface whose peer is *known* 2025-era — and whose
 transport reconnects per call — an explicit `{ mode: 'legacy' }` is the correct
 setting until that peer's posture changes, not a regression from this policy.
 
-Per surface:
+Per surface — **all four LANDED; see CURRENT above for the measurement behind
+each mode**:
 
-| Surface | TARGET client | TARGET negotiation | TARGET accepted from server |
+| Surface | Client | Negotiation | Accepted from server |
 | --- | --- | --- | --- |
-| `src/lib/connector-instance-mcp-transport.ts` | `@modelcontextprotocol/client@2.0.0` | `{ mode: 'auto' }` — or explicit `{ mode: 'legacy' }` while the peer is the sessionful 2025-era gateway | `2026-07-28` preferred; the five legacy revisions via fallback |
-| `http-client.ts` in `packages/marketplace-mcp-client` | ~~`@modelcontextprotocol/client@2.0.0`~~ **LANDED — see CURRENT** | **`{ mode: 'auto' }`**, measured: the peer refuses `server/discover` today and `auto` falls back cleanly, but it is a hosted service that can move without a cinatra change | `2026-07-28` preferred; the five legacy revisions via fallback |
-| `packages/objects/src/graphiti-client.ts` | ~~`@modelcontextprotocol/client@2.0.0`~~ **LANDED — see CURRENT** | **`{ mode: 'legacy' }`**, measured: the pinned image rejects `server/discover`. Flip to `{ mode: 'auto' }` when the image pin moves to one that answers it | the five legacy revisions |
-| `packages/agents/src/external-mcp-caller.ts` | ~~`@modelcontextprotocol/client@2.0.0` — migrate off hand-rolled `fetch`~~ **LANDED — see CURRENT** | **`{ mode: 'auto' }`**, wire-observed against both peer classes | `2026-07-28` preferred; the five legacy revisions via fallback |
+| `src/lib/connector-instance-mcp-transport.ts` | **LANDED** (L2d) | **`{ mode: 'auto' }`**, live-wire-measured: peers are customer-operated adapter instances, so no pinned-peer exception applies | `2026-07-28` preferred; the five legacy revisions via fallback |
+| `http-client.ts` in `packages/marketplace-mcp-client` | **LANDED** (L2b) | **`{ mode: 'auto' }`**, measured: the peer refuses `server/discover` today and `auto` falls back cleanly, but it is a hosted service that can move without a cinatra change | `2026-07-28` preferred; the five legacy revisions via fallback |
+| `packages/objects/src/graphiti-client.ts` | **LANDED** (L2a) | **`{ mode: 'legacy' }`**, measured: the pinned image rejects `server/discover`. Flip to `{ mode: 'auto' }` when the image pin moves to one that answers it | the five legacy revisions |
+| `packages/agents/src/external-mcp-caller.ts` | **LANDED** (L2c) | **`{ mode: 'auto' }`**, wire-observed against both peer classes | `2026-07-28` preferred; the five legacy revisions via fallback |
 
 Whichever mode a surface lands on, the migration must **prove** it: an assertion
 that `server/discover` was (or was not) issued and that the expected revision was
 negotiated. A package version is not evidence of a negotiation — the bare-string
 trap above produces a fully working client on the wrong era.
 
-The last row was a decision rather than a deferral, and it has landed:
-`external-mcp-caller.ts` negotiated nothing, which meant it failed silently
+The `external-mcp-caller.ts` row was a decision rather than a deferral:
+it negotiated nothing, which meant it failed silently
 against a modern-only peer and could never reach `2026-07-28`; leaving it
 hand-rolled would have made it the single surface whose revision posture was
-unstatable. It now runs the SDK client, so three of the four outbound surfaces
-share one negotiation model. Also TARGET, in the same
-change: the stale `MCP_PROTOCOL_VERSION = "2025-06-18"` constant and its module
-comment are deleted rather than updated — the SDK owns the offered revision, so no
-cinatra constant should appear to.
+unstatable. With L2d landed, **all four outbound surfaces now share one
+negotiation model**, and the stale `MCP_PROTOCOL_VERSION = "2025-06-18"` constant
+and its module comment are deleted rather than updated — the client library owns
+the offered revision, so no cinatra constant should appear to.
 
 ### Behaviour on an older-revision outbound peer
 
-**CURRENT.** Interoperate. The SDK `Client` offers `2025-11-25`; a server that
-answers with any of the five accepted revisions is accepted and used, including
-`2025-06-18`. A server answering a revision outside that set fails the handshake.
+**CURRENT.** Interoperate. On the legacy leg the client offers `2025-11-25`; a
+server that answers with any of the five accepted revisions is accepted and used,
+including `2025-06-18`. A server answering a revision outside that set fails the
+handshake. With L2d landed this is `client@2.0.0` behaviour on every outbound
+surface — reached through the `{ mode: 'auto' }` fallback on three of them and
+through explicit `{ mode: 'legacy' }` on graphiti.
 
 The migrated graphiti surface behaves the same way and reaches it more
 deliberately: on `client@2.0.0` with `{ mode: 'legacy' }` it runs the plain
@@ -486,7 +545,8 @@ also **failed against a modern-only peer**, with no negotiation error to explain
 why. "Negotiates nothing" was never "unaffected": it meant the surface had no
 revision posture to state and no diagnostic when a peer's posture excluded it.
 
-**TARGET.** Unchanged in outcome for the SDK-client surfaces, by design: under
+**Standing policy** (was TARGET; now implemented on all four surfaces).
+Unchanged in outcome, by design: under
 `versionNegotiation: { mode: 'auto' }` an older-revision server is detected by
 the absent or non-overlapping `server/discover` probe and served through the
 legacy `initialize` path, so the five legacy revisions stay reachable outbound.
