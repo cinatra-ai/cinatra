@@ -108,6 +108,62 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
     ).not.toBeNull();
   });
 
+  // A DECLARED `<pkg>:artifact` id is a legal, ratified type id — not the retired
+  // umbrella (cinatra#2454). The #1785 wave preserved those identifiers as
+  // explicit definitions instead of migrating live rows (see the scope note in
+  // migrations/core/core__0056_purge-retired-object-types.mjs); four
+  // required-in-prod packs declare theirs today. What was retired is DERIVATION,
+  // and the distinction is observable HERE: a derived umbrella carried the
+  // package-wide surface under a permissive catch-all schema, while a declared
+  // type registers under its OWN enforcing inline schema. This case pins the
+  // difference at the exact id where the two would collide — the one construction
+  // the live-tree set-equality check cannot distinguish on its own.
+  it("registers a DECLARED `<pkg>:artifact` id as a normal type — under its own enforcing schema, no derived overwrite", () => {
+    writeExt(root, "snapshot-artifact", {
+      name: "@cinatra-ai/snapshot-artifact",
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        artifact: {
+          accepts: { file: { mimeTypes: ["application/json"] } },
+          skills: { matchers: ["@cinatra-ai/fixture-matcher:skill"] },
+          objectTypes: [
+            {
+              type: "@cinatra-ai/snapshot-artifact:artifact",
+              claim: "dedicated",
+              schema: {
+                type: "object",
+                required: ["capturedAt"],
+                properties: { capturedAt: { type: "string" } },
+                additionalProperties: true,
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(registerArtifactExtensions(root)).toBe(1);
+
+    // It registers — the id's SHAPE is not a rejection reason.
+    const def = objectTypeRegistry.resolve("@cinatra-ai/snapshot-artifact:artifact");
+    expect(def).not.toBeNull();
+    // …and under the DECLARED schema, not a permissive umbrella catch-all. A
+    // derived-umbrella overwrite at this id would accept anything; this fails.
+    expect(def!.schema.safeParse({ capturedAt: "2026-01-01" }).success).toBe(true);
+    expect(def!.schema.safeParse({}).success).toBe(false);
+    // The package-wide matcher surface is NOT inherited onto it (entry 95) — the
+    // other observable the retired umbrella used to carry.
+    const artifacts = objectTypeRegistry.listArtifacts();
+    const entry = artifacts.find((d) => d.type === "@cinatra-ai/snapshot-artifact:artifact");
+    expect(entry).toBeDefined();
+    expect(entry?.isArtifact?.skills).toBeUndefined();
+    // Exactly one type — the declared one. Nothing else is minted alongside it.
+    expect(artifacts.map((d) => d.type)).toEqual([
+      "@cinatra-ai/snapshot-artifact:artifact",
+    ]);
+  });
+
   it("registers a manifest carrying the cross-kind dependencies + roles keys (cinatra#151 Stage 5)", () => {
     writeExt(root, "roled-artifact", {
       name: "@cinatra-ai/roled-artifact",
@@ -380,16 +436,51 @@ describe("registerArtifactExtensions — live extensions tree", () => {
     }
     expect(threw, String(threw)).toBeNull();
     const registered = new Set(objectTypeRegistry.listArtifacts().map((d) => d.type));
-    for (const type of expectedTypes) {
+    const declared = new Set(expectedTypes);
+    // ZERO DRIFT is SET EQUALITY between the manifests and the registry, checked
+    // in both directions.
+    //
+    // FORWARD — every self-owned declared type registered (a miss means the
+    // schema/allowlist drifted from the real manifests).
+    for (const type of declared) {
       expect(registered.has(type), `${type} did not register`).toBe(true);
     }
-    // No derived umbrella (`${pkg}:artifact`) is EVER minted for any present pack.
+    // REVERSE — the bridge registered NOTHING that no manifest declares. This is
+    // the honest statement of "umbrella/derived-type minting is retired" (entry
+    // 95, epic cinatra#1785): derivation is banned, so any id with no declaring
+    // manifest is by definition minted, whatever its shape.
+    //
+    // It replaces an `endsWith(":artifact")` SHAPE ban (cinatra#2454). That proxy
+    // read as "no umbrella" only while the fleet declared no such id; it does not
+    // survive the model it was written for. `<pkg>:artifact` is a LEGAL declared
+    // local id (CLAIMED_OBJECT_TYPE_ID_RE admits it, and no write surface rejects
+    // it), and the #1785 wave deliberately PRESERVED those identifiers as explicit
+    // definitions rather than migrating live rows — see the scope note in
+    // migrations/core/core__0056_purge-retired-object-types.mjs, which excludes
+    // them from the retired-type purge for exactly that reason. Four packs the
+    // required-in-prod lock carries (text / json / zip / document) declare theirs
+    // today, and `src/lib/artifacts/upload-artifact-type-map.ts` resolves uploads
+    // ONTO those ids. The shape ban therefore condemned ratified production
+    // identifiers, which is why it was permanently red.
+    //
+    // The two assertions are INCOMPARABLE, not one strictly stronger than the
+    // other (codex round-1): the shape ban caught every `:artifact` id, declared
+    // or derived, and this check catches every UNDECLARED id, `:artifact` or not.
+    // What makes the swap correct is not strength but VALIDITY — this one states
+    // the model (registration follows declaration), while the old one stated a
+    // shape rule the model never had. The one construction set-equality alone
+    // cannot see — a bridge re-deriving an umbrella over an id a pack ALSO
+    // declares — is pinned by its own hermetic case above ("registers a DECLARED
+    // `<pkg>:artifact` id … enforcing schema"), which fails the moment a derived
+    // permissive descriptor overwrites the declared one.
     for (const t of registered) {
-      expect(t.endsWith(":artifact"), `umbrella-shaped id leaked: ${t}`).toBe(false);
+      expect(declared.has(t), `bridge registered an undeclared type: ${t}`).toBe(true);
     }
     // cinatra#1891 A3: the bundled matcher packs land REAL channel entries (the
-    // candidate source the matcher runtime reads) — the marketing-strategy pack
-    // that registers no object type is now discoverable.
+    // candidate source the matcher runtime reads). The channel is ORTHOGONAL to
+    // object-type registration — it is populated from the pack-wide matcher
+    // surface whether or not the pack declares an objectType — so asserting it on
+    // marketing-strategy pins the meaning surface, not the type registration.
     const channelPkgs = new Set(matcherManifestRegistry.list().map((e) => e.packageName));
     expect(channelPkgs.has("@cinatra-ai/marketing-strategy-artifact")).toBe(true);
     objectTypeRegistry._clearForTests();

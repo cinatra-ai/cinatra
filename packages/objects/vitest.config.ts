@@ -135,19 +135,6 @@ export default defineConfig({
       // against a live Graphiti:
       //   pnpm exec vitest run src/__tests__/<name>.manual.test.ts
       "src/**/*.manual.test.ts",
-      // QUARANTINE — cinatra#2454 (filed by cinatra#2439, which wired this
-      // package's suite into CI for the first time). `artifact-bridge.test.ts`
-      // asserts zero drift between the LIVE pinned extensions tree and the
-      // object-type ids the bridge registers, and it is genuinely RED at the
-      // committed dev-lock pins: `@cinatra-ai/cms-snapshot-artifact` mints the
-      // umbrella-shaped id `@cinatra-ai/cms-snapshot-artifact:artifact`, which
-      // the suite forbids. That is a real finding in the extension fleet, not a
-      // sandbox gap, and repairing it means changing the companion extension —
-      // out of scope for a CI-wiring change (cinatra#2439's scope bound). The
-      // exclusion is mirrored in
-      // scripts/audit/package-suite-runner-exceptions.json, so the pinned-test
-      // existence gate keeps naming this file until #2440 retires both.
-      "src/__tests__/artifact-bridge.test.ts",
     ],
   },
 });

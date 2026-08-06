@@ -21,12 +21,6 @@
   ],
   "exceptions": [
     {
-      "file": "packages/objects/src/__tests__/artifact-bridge.test.ts",
-      "kind": "quarantine",
-      "issue": "https://github.com/cinatra-ai/cinatra/issues/2454",
-      "reason": "Asserts zero drift between the live pinned extensions tree and the object-type ids registerArtifactExtensions registers. Genuinely RED at the committed dev-lock pins: @cinatra-ai/cms-snapshot-artifact mints the umbrella-shaped id '@cinatra-ai/cms-snapshot-artifact:artifact', which the suite forbids. A real fleet finding whose repair belongs in the companion extension repo, outside cinatra#2439's CI-wiring scope bound."
-    },
-    {
       "file": "packages/extensions/src/__tests__/blog-text-parity.test.ts",
       "kind": "quarantine",
       "issue": "https://github.com/cinatra-ai/cinatra/issues/2455",
