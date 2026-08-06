@@ -10,9 +10,25 @@
 //
 // `scopes_supported` lists the EXACT CLI scopes (not a wildcard) — the AS does
 // not support wildcard scopes.
+//
+// ADVERTISED ORIGINS (cinatra#2478). The URLs in this document are what a
+// client dials next, so they must be the PUBLIC origin, not whatever internal
+// address this process happens to be reached at. On a deployment that hands the
+// app its own bind-origin URL, `new URL(request.url).origin` is the wildcard
+// bind address, and this document advertised `https://0.0.0.0:<port>/api/cli` —
+// measured live during cinatra-cli#204, which is why that CLI hard-codes the
+// `/api/auth` mount instead of discovering it from here. The response therefore
+// goes through `rewriteJsonOriginResponse`, the SAME treatment the sibling
+// authorization-server-metadata route already applies, which takes the public
+// origin from the same trusted source (`x-forwarded-proto` + `x-forwarded-host`
+// when both are present, the request URL's own origin otherwise). Imported from
+// the leaf `@cinatra-ai/mcp-server/origin-rewrite` subpath, not the barrel: the
+// leaf is app-graph-free, so this route module stays directly loadable (the
+// `__tests__` sibling exercises the real rewrite, not a stub).
 // ---------------------------------------------------------------------------
 
-import { CLI_SCOPES } from "@cinatra-ai/mcp-server";
+import { CLI_SCOPES } from "@cinatra-ai/mcp-server/auth-plugins";
+import { rewriteJsonOriginResponse } from "@cinatra-ai/mcp-server/origin-rewrite";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,25 +48,36 @@ export function OPTIONS(): Response {
   return new Response(null, { status: 204, headers: corsHeaders() });
 }
 
-export function GET(request: Request): Response {
-  const origin = safeOrigin(request);
+export async function GET(request: Request): Promise<Response> {
+  const requestOrigin = requestUrlOrigin(request);
   const metadata = {
-    resource: `${origin}${CLI_BASE_PATH}`,
-    authorization_servers: [`${origin}${AUTH_BASE_PATH}`],
+    resource: `${requestOrigin ?? fallbackOrigin()}${CLI_BASE_PATH}`,
+    authorization_servers: [`${requestOrigin ?? fallbackOrigin()}${AUTH_BASE_PATH}`],
     scopes_supported: [...CLI_SCOPES],
     bearer_methods_supported: ["header"],
     resource_name: "Cinatra CLI control plane",
   };
-  return Response.json(metadata, { status: 200, headers: corsHeaders() });
+  const response = Response.json(metadata, { status: 200, headers: corsHeaders() });
+
+  // `rewriteJsonOriginResponse` derives the origin to rewrite FROM out of
+  // `request.url` itself. When that URL does not parse there is nothing to
+  // rewrite from, so the configured-fallback document is served as-is rather
+  // than letting the shared helper throw on the same malformed URL.
+  return requestOrigin === null ? response : rewriteJsonOriginResponse({ request, response });
 }
 
-function safeOrigin(request: Request): string {
+/** The request URL's own origin, or `null` when `request.url` does not parse. */
+function requestUrlOrigin(request: Request): string | null {
   try {
     return new URL(request.url).origin;
   } catch {
-    return (
-      process.env.NEXT_PUBLIC_APP_URL?.replace(/\/+$/, "") ??
-      "http://localhost:3000"
-    );
+    return null;
   }
+}
+
+function fallbackOrigin(): string {
+  return (
+    process.env.NEXT_PUBLIC_APP_URL?.replace(/\/+$/, "") ??
+    "http://localhost:3000"
+  );
 }

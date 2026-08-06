@@ -44,7 +44,7 @@ import {
 import { mcpRequestContextStorage, resolveRequestRunContext, selectDelegatedToolPolicy, type DelegatedMcpActor, type McpRequestContext, type DurableRunContextResolution, type RunContextServedBy } from "./request-context";
 import { resolveFrameOrgWriteAuthority, type OrgWriteAuthorityForwardOptions } from "./org-write-authority-forward";
 import { buildMcpHandshakeUrls } from "./handshake-urls";
-import { replaceOriginInValue } from "./origin-rewrite";
+import { inferRequestOrigin, rewriteJsonOriginResponse } from "./origin-rewrite";
 import { McpAuthFlowBridge } from "./components/mcp-auth-flow-bridge";
 import { McpAuthUiProvider } from "./components/mcp-auth-ui-provider";
 import { McpClientDetailManager, McpClientsDashboard, type OAuthClientRecord } from "./components/mcp-client-manager";
@@ -313,17 +313,6 @@ function combineOriginAndPath(origin: string, path: string) {
   return `${origin}${path === "/" ? "" : path}`;
 }
 
-function inferRequestOrigin(request: Request) {
-  const forwardedProto = request.headers.get("x-forwarded-proto");
-  const forwardedHost = request.headers.get("x-forwarded-host");
-
-  if (forwardedProto && forwardedHost) {
-    return `${forwardedProto}://${forwardedHost}`;
-  }
-
-  return new URL(request.url).origin;
-}
-
 function inferLocalAppOrigin() {
   return normalizeOptionalUrl(
     process.env.BETTER_AUTH_URL ??
@@ -414,39 +403,6 @@ function emitDevTrustedHostsWarningOnce(): void {
     "[mcp-dev-admin-bypass] CINATRA_MCP_DEV_TRUSTED_HOSTS active — requests reaching the following hostnames will SKIP OAuth and run as platform_admin: " +
       hosts.join(", ") +
       ". Never list a publicly-reachable hostname unless you accept unauthenticated admin access.",
-  );
-}
-
-async function rewriteJsonOriginResponse(input: {
-  request: Request;
-  response: Response;
-}) {
-  const contentType = input.response.headers.get("content-type");
-  if (!contentType?.includes("application/json")) {
-    return input.response;
-  }
-
-  const internalOrigin = new URL(input.request.url).origin;
-  const publicOrigin = inferRequestOrigin(input.request);
-  if (internalOrigin === publicOrigin) {
-    return input.response;
-  }
-
-  const body = await input.response.clone().json().catch(() => null);
-  if (!body) {
-    return input.response;
-  }
-
-  const headers = new Headers(input.response.headers);
-  headers.delete("content-length");
-
-  return new Response(
-    JSON.stringify(replaceOriginInValue(body, internalOrigin, publicOrigin)),
-    {
-      status: input.response.status,
-      statusText: input.response.statusText,
-      headers,
-    },
   );
 }
 

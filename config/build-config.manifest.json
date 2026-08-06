@@ -280,6 +280,7 @@
     { "alias": "@cinatra-ai/mcp-server/credentials", "target": "./packages/mcp-server/src/llm-credentials.ts" },
     { "alias": "@cinatra-ai/mcp-server/dev-admin-bypass", "target": "./packages/mcp-server/src/dev-admin-bypass.ts" },
     { "alias": "@cinatra-ai/mcp-server/delegated-chat-tool-policy", "target": "./packages/mcp-server/src/delegated-chat-tool-policy.ts" },
+    { "alias": "@cinatra-ai/mcp-server/origin-rewrite", "target": "./packages/mcp-server/src/origin-rewrite.ts" },
     { "alias": "@cinatra-ai/mcp-client", "target": "./packages/mcp-client/src/index.ts" },
     { "alias": "@cinatra-ai/org-write-kernel", "target": "./packages/org-write-kernel/src/index.ts" },
     { "alias": "@cinatra-ai/org-write-kernel/testing", "target": "./packages/org-write-kernel/src/testing.ts" },
