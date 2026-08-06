@@ -416,8 +416,11 @@ export function ExtensionCardListingBanner({
             // the third line's room beneath it.
             "line-clamp-2 min-w-0 font-display text-listing-title font-extrabold italic",
             // Reserve room for the top-right badge overlay so a long, line-clamped
-            // name never runs underneath the badges.
-            badges && "pr-20",
+            // name never runs underneath the badges. Without badges, the italic
+            // overhang safe-area (cinatra#2409) keeps the final right-leaning
+            // glyph clear of `line-clamp`'s overflow clip; the badge reservation
+            // is a superset of that safe-area, so exactly one of the two applies.
+            badges ? "pr-20" : "italic-overhang-safe",
           )}
           // Native always-on hover title (cinatra#2363): a `line-clamp-2`
           // name still exposes its full text on hover, matching the vendor
