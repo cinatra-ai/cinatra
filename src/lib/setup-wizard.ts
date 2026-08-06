@@ -24,7 +24,7 @@
 import { deriveSetupAiStepState } from "@/lib/setup-provider-commit";
 import { getNangoStatus } from "@/lib/nango-system";
 // Instance identity presence determines whether the name step is ready.
-// The setup wizard uses /setup/key, /setup/name, and /setup/ai route segments.
+// The setup wizard uses /setup/key, /setup/name, and /setup/model route segments.
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 // cinatra#2386 — whether the sign-up step exists at all (it is present only
 // until the first Better Auth user is created).
@@ -59,8 +59,8 @@ export async function getSetupWizardSteps(): Promise<SetupWizardStep[]> {
   // instead; the owner review pinned the universal indicator.)
   steps.push({
     id: "sign-up",
-    title: "Sign up",
-    href: "/setup/sign-up",
+    title: "Account",
+    href: "/setup/account",
     ready: hasUsers,
   });
 
@@ -93,13 +93,14 @@ export async function getSetupWizardSteps(): Promise<SetupWizardStep[]> {
     });
   }
 
-  // S4 (cinatra#2389): the step's pill reads "LLM Provider" — the step is the
-  // choice of the LLM that drives the Cinatra chat assistant, not a generic
-  // "AI" bucket. The id stays "ai" (it is a stable route/anchor identifier).
+  // S4 (cinatra#2389), relabeled "Model" + route /setup/model in the #2477
+  // owner review: the step is the choice of the LLM that drives the Cinatra
+  // chat assistant. The id stays "ai" — a stable internal identifier the
+  // wizard logic keys on (like "sign-up" above), decoupled from label/route.
   steps.push({
     id: "ai",
-    title: "LLM Provider",
-    href: "/setup/ai",
+    title: "Model",
+    href: "/setup/model",
     ready: aiReady,
   });
 

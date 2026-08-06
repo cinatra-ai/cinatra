@@ -1,5 +1,5 @@
 /**
- * cinatra#2386 (setup-flow S1) — /setup/sign-up routing state matrix.
+ * cinatra#2386 (setup-flow S1) — /setup/account routing state matrix.
  *
  * The four states this page must handle, in the order it checks them:
  *   1. authenticated                -> redirect to the first incomplete

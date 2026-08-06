@@ -61,7 +61,7 @@ describe("resolveAgentCreationDispatch — pin INACTIVE default", () => {
   });
 
   it("HONORS the operator-configured OpenAI default model when one is stored", async () => {
-    // /setup/ai + /configuration/llm persist openai_connection.defaultModel;
+    // /setup/model + /configuration/llm persist openai_connection.defaultModel;
     // the inactive-pin dispatch must use it verbatim, never base gpt-5.
     dbMock.readOpenAIConnectionFromDatabase.mockReturnValue({ defaultModel: "gpt-5.4" });
     const result = await resolveAgentCreationDispatch({ hasSkillIds: true });

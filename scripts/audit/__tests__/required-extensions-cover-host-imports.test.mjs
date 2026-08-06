@@ -506,7 +506,7 @@ describe("repo-live coverage (the gate's own contract against THIS tree)", () =>
     // These connectors stay guarded-optional (NOT in the required/system set),
     // so the host never statically imports them. openai-connector was
     // RE-PROMOTED to the required/system set (refs #595), and
-    // anthropic-connector followed it (refs #2332, so the /setup/ai provider
+    // anthropic-connector followed it (refs #2332, so the /setup/model provider
     // choice is selectable on a production image) — both are now legitimately
     // host-imported via their generated `required` loaders and covered by the
     // declaration + lock, so neither is pinned here.

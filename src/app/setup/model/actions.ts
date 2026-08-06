@@ -62,7 +62,7 @@ import {
   SETUP_PROVIDER_SELECTION_CONFIG_KEY,
   SETUP_READINESS_FAILURE_CONFIG_KEY,
   readSetupReadinessFailure,
-} from "@/app/setup/ai/readiness-state";
+} from "@/app/setup/model/readiness-state";
 
 /**
  * `redirect()` signals by THROWING a tagged error, so any `catch` placed around
@@ -102,7 +102,7 @@ export async function selectSetupProviderAction(formData: FormData) {
   await requireAdminSession();
   const parsed = providerSchema().safeParse(formData.get("provider"));
   if (!parsed.success) {
-    redirect("/setup/ai?stay=1&error=setup-provider-invalid");
+    redirect("/setup/model?stay=1&error=setup-provider-invalid");
   }
   // S3 (cinatra#2388): provider selection REFUSES switches while a claim is
   // pending or a commitment exists. Re-selecting the already-committed
@@ -110,13 +110,13 @@ export async function selectSetupProviderAction(formData: FormData) {
   // is Administration's transactional transition, not a wizard click.
   const commitState = readSetupProviderCommitState();
   if (commitState.kind === "claim-pending") {
-    redirect("/setup/ai?stay=1&error=setup-provider-claim-pending");
+    redirect("/setup/model?stay=1&error=setup-provider-claim-pending");
   }
   if (commitState.kind === "committed" && commitState.commitment.provider !== parsed.data) {
-    redirect("/setup/ai?stay=1&error=setup-provider-locked");
+    redirect("/setup/model?stay=1&error=setup-provider-locked");
   }
   writeConnectorConfigToDatabase(SETUP_PROVIDER_SELECTION_CONFIG_KEY, parsed.data);
-  redirect("/setup/ai?stay=1");
+  redirect("/setup/model?stay=1");
 }
 
 // ---------------------------------------------------------------------------
@@ -292,7 +292,7 @@ export async function enableAnthropicNativeSkillDeliveryAction() {
   // the render that produced the button.
   const standing = readSetupReadinessFailure();
   if (standing?.step !== "native-skills-probe" || readAnthropicMcpMode() !== "function-tools") {
-    redirect("/setup/ai?stay=1");
+    redirect("/setup/model?stay=1");
   }
 
   try {
@@ -311,17 +311,17 @@ export async function enableAnthropicNativeSkillDeliveryAction() {
     );
     // (3) The step re-renders whatever durable state actually survived — which
     // is why the write order above matters more than this message does.
-    redirect("/setup/ai?stay=1&error=setup-mcp-mode-switch-failed");
+    redirect("/setup/model?stay=1&error=setup-mcp-mode-switch-failed");
   }
 
-  redirect("/setup/ai?stay=1");
+  redirect("/setup/model?stay=1");
 }
 
 export async function completeAiSetupAction(formData: FormData) {
   const session = await requireAdminSession();
   const parsed = providerSchema().safeParse(formData.get("provider"));
   if (!parsed.success) {
-    redirect("/setup/ai?stay=1&error=setup-provider-invalid");
+    redirect("/setup/model?stay=1&error=setup-provider-invalid");
   }
   const provider = parsed.data as LlmProvider;
   const actor = await getActorContext();
@@ -345,10 +345,10 @@ export async function completeAiSetupAction(formData: FormData) {
   // -------------------------------------------------------------------------
   const snapshot = readSetupProviderCommitSnapshot();
   if (snapshot.state.kind === "claim-pending") {
-    redirect("/setup/ai?stay=1&error=setup-provider-claim-pending");
+    redirect("/setup/model?stay=1&error=setup-provider-claim-pending");
   }
   if (snapshot.state.kind === "committed" && snapshot.state.commitment.provider !== provider) {
-    redirect("/setup/ai?stay=1&error=setup-provider-locked");
+    redirect("/setup/model?stay=1&error=setup-provider-locked");
   }
 
   // S5 (cinatra#2390): NATIVE MCP AT COMMIT. Committing Anthropic sets/
@@ -370,7 +370,7 @@ export async function completeAiSetupAction(formData: FormData) {
         `[setup-ai] migrating the Anthropic MCP mode to native at commit failed (${errorClass(err)}): ` +
           sanitizeReadinessMessage(err instanceof Error ? err.message : String(err)),
       );
-      redirect("/setup/ai?stay=1&error=setup-mcp-mode-switch-failed");
+      redirect("/setup/model?stay=1&error=setup-mcp-mode-switch-failed");
     }
   }
 
@@ -393,8 +393,8 @@ export async function completeAiSetupAction(formData: FormData) {
     if (!begun.ok) {
       redirect(
         begun.refusal === "committed"
-          ? "/setup/ai?stay=1&error=setup-provider-locked"
-          : "/setup/ai?stay=1&error=setup-provider-claim-pending",
+          ? "/setup/model?stay=1&error=setup-provider-locked"
+          : "/setup/model?stay=1&error=setup-provider-claim-pending",
       );
     }
     claimNonce = begun.claim.nonce;
@@ -478,7 +478,7 @@ export async function completeAiSetupAction(formData: FormData) {
       fixForward: null,
       at: new Date().toISOString(),
     });
-    redirect("/setup/ai?stay=1&error=setup-readiness-failed");
+    redirect("/setup/model?stay=1&error=setup-readiness-failed");
   }
 
   if (!result.ok) {
@@ -489,7 +489,7 @@ export async function completeAiSetupAction(formData: FormData) {
       fixForward: result.failure.fixForward ?? null,
       at: new Date().toISOString(),
     });
-    redirect("/setup/ai?stay=1&error=setup-readiness-failed");
+    redirect("/setup/model?stay=1&error=setup-readiness-failed");
   }
 
   // Committed-same re-verify success: refresh the commitment's stored
@@ -508,5 +508,5 @@ export async function completeAiSetupAction(formData: FormData) {
   // redirect deliberately drops `stay=1` so the step's auto-forward (which
   // re-derives readiness freshly) carries the operator to the next incomplete
   // step; a run that somehow left the step not-ready simply re-renders it.
-  redirect("/setup/ai");
+  redirect("/setup/model");
 }

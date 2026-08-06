@@ -146,12 +146,12 @@ import {
   enableAnthropicNativeSkillDeliveryAction,
   selectSetupProviderAction,
   completeAiSetupAction,
-} from "@/app/setup/ai/actions";
+} from "@/app/setup/model/actions";
 import { runSetupReadinessSaga } from "@/lib/setup-readiness-saga";
 import {
   ANTHROPIC_SETUP_CONSENT_FIELD,
   SETUP_READINESS_FAILURE_CONFIG_KEY,
-} from "@/app/setup/ai/readiness-state";
+} from "@/app/setup/model/readiness-state";
 
 /** Run an action and return the URL it redirected to (failing if it did not). */
 async function redirectOf(run: () => Promise<unknown>): Promise<string> {
@@ -346,7 +346,7 @@ describe("F2 — enableAnthropicNativeSkillDeliveryAction: the fix-forward is pe
 
     expect(writeAnthropicMcpMode).toHaveBeenCalledWith("native");
     expect(lastFailureRecord()).toBeNull();
-    expect(url).toBe("/setup/ai?stay=1");
+    expect(url).toBe("/setup/model?stay=1");
   });
 
   it("does NOT commit a provider or write a receipt — the operator re-runs the verification", async () => {
@@ -387,7 +387,7 @@ describe("F2 — enableAnthropicNativeSkillDeliveryAction: the fix-forward is pe
     const url = await redirectOf(() => enableAnthropicNativeSkillDeliveryAction());
 
     expect(writeAnthropicMcpMode).not.toHaveBeenCalled();
-    expect(url).toBe("/setup/ai?stay=1&error=setup-mcp-mode-switch-failed");
+    expect(url).toBe("/setup/model?stay=1&error=setup-mcp-mode-switch-failed");
   });
 
   it("re-checks the standing condition AT MUTATION TIME: an UNRELATED failure is not erased", async () => {
@@ -403,7 +403,7 @@ describe("F2 — enableAnthropicNativeSkillDeliveryAction: the fix-forward is pe
 
     const url = await redirectOf(() => enableAnthropicNativeSkillDeliveryAction());
 
-    expect(url).toBe("/setup/ai?stay=1");
+    expect(url).toBe("/setup/model?stay=1");
     expect(writeAnthropicMcpMode).not.toHaveBeenCalled();
     expect(clearSetupReadinessReceipt).not.toHaveBeenCalled();
     expect(writeConnectorConfigToDatabase).not.toHaveBeenCalled();
@@ -415,7 +415,7 @@ describe("F2 — enableAnthropicNativeSkillDeliveryAction: the fix-forward is pe
 
     const url = await redirectOf(() => enableAnthropicNativeSkillDeliveryAction());
 
-    expect(url).toBe("/setup/ai?stay=1");
+    expect(url).toBe("/setup/model?stay=1");
     expect(writeAnthropicMcpMode).not.toHaveBeenCalled();
     expect(writeConnectorConfigToDatabase).not.toHaveBeenCalled();
   });
@@ -450,7 +450,7 @@ describe("S3 — selectSetupProviderAction refuses switches under the machine", 
       state: { kind: "claim-pending", claim: { actorId: "someone" } },
     };
     const url = await redirectOf(() => selectSetupProviderAction(providerForm("openai")));
-    expect(url).toBe("/setup/ai?stay=1&error=setup-provider-claim-pending");
+    expect(url).toBe("/setup/model?stay=1&error=setup-provider-claim-pending");
     // The stored pick was NOT written.
     expect(
       writeConnectorConfigToDatabase.mock.calls.filter(
@@ -465,9 +465,9 @@ describe("S3 — selectSetupProviderAction refuses switches under the machine", 
       state: { kind: "committed", commitment: { provider: "anthropic" } },
     };
     const refused = await redirectOf(() => selectSetupProviderAction(providerForm("openai")));
-    expect(refused).toBe("/setup/ai?stay=1&error=setup-provider-locked");
+    expect(refused).toBe("/setup/model?stay=1&error=setup-provider-locked");
     const allowed = await redirectOf(() => selectSetupProviderAction(providerForm("anthropic")));
-    expect(allowed).toBe("/setup/ai?stay=1");
+    expect(allowed).toBe("/setup/model?stay=1");
   });
 });
 
@@ -478,7 +478,7 @@ describe("S3 — completeAiSetupAction under the machine", () => {
       state: { kind: "claim-pending", claim: { actorId: "someone" } },
     };
     const url = await redirectOf(() => completeAiSetupAction(providerForm("openai")));
-    expect(url).toBe("/setup/ai?stay=1&error=setup-provider-claim-pending");
+    expect(url).toBe("/setup/model?stay=1&error=setup-provider-claim-pending");
     expect(beginSetupProviderClaim).not.toHaveBeenCalled();
     expect(vi.mocked(runSetupReadinessSaga)).not.toHaveBeenCalled();
   });
@@ -489,7 +489,7 @@ describe("S3 — completeAiSetupAction under the machine", () => {
       state: { kind: "committed", commitment: { provider: "anthropic" } },
     };
     const url = await redirectOf(() => completeAiSetupAction(providerForm("openai")));
-    expect(url).toBe("/setup/ai?stay=1&error=setup-provider-locked");
+    expect(url).toBe("/setup/model?stay=1&error=setup-provider-locked");
     expect(vi.mocked(runSetupReadinessSaga)).not.toHaveBeenCalled();
   });
 
@@ -507,7 +507,7 @@ describe("S3 — completeAiSetupAction under the machine", () => {
       },
     } as never);
     const url = await redirectOf(() => completeAiSetupAction(providerForm("openai")));
-    expect(url).toBe("/setup/ai?stay=1&error=setup-readiness-failed");
+    expect(url).toBe("/setup/model?stay=1&error=setup-readiness-failed");
     expect(beginSetupProviderClaim).toHaveBeenCalledTimes(1);
     expect(releaseSetupProviderClaim).toHaveBeenCalledWith({ nonce: "nonce-1" });
   });
@@ -526,7 +526,7 @@ describe("S3 — completeAiSetupAction under the machine", () => {
     const url = await redirectOf(() => completeAiSetupAction(providerForm("anthropic")));
     // S4 (cinatra#2389): a SUCCESSFUL Continue-commit advances (no `stay=1`) —
     // the step's auto-forward carries the operator onward.
-    expect(url).toBe("/setup/ai");
+    expect(url).toBe("/setup/model");
 
     expect(writeAnthropicMcpMode).toHaveBeenCalledWith("native");
     // Resurrection guard: the mode is a fingerprint input, so the receipt is
@@ -578,7 +578,7 @@ describe("S3 — completeAiSetupAction under the machine", () => {
     });
 
     const url = await redirectOf(() => completeAiSetupAction(providerForm("anthropic")));
-    expect(url).toBe("/setup/ai?stay=1&error=setup-mcp-mode-switch-failed");
+    expect(url).toBe("/setup/model?stay=1&error=setup-mcp-mode-switch-failed");
     expect(beginSetupProviderClaim).not.toHaveBeenCalled();
     expect(vi.mocked(runSetupReadinessSaga)).not.toHaveBeenCalled();
   });
@@ -594,7 +594,7 @@ describe("S3 — completeAiSetupAction under the machine", () => {
     } as never);
     const url = await redirectOf(() => completeAiSetupAction(providerForm("openai")));
     // S4 (cinatra#2389): success advances — no `stay=1` on the redirect.
-    expect(url).toBe("/setup/ai");
+    expect(url).toBe("/setup/model");
     expect(beginSetupProviderClaim).not.toHaveBeenCalled();
     expect(refreshCommittedCredentialFingerprint).toHaveBeenCalledWith({
       expectedRaw: '{"stored":"commitment"}',

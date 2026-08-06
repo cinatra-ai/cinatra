@@ -56,22 +56,22 @@ import {
   SETUP_CREDENTIAL_SAVE_STEP_ID,
   readSetupProviderSelection,
   readSetupReadinessFailure,
-} from "@/app/setup/ai/readiness-state";
+} from "@/app/setup/model/readiness-state";
 import {
   selectSetupProviderAction,
   completeAiSetupAction,
   enableAnthropicNativeSkillDeliveryAction,
-} from "@/app/setup/ai/actions";
+} from "@/app/setup/model/actions";
 import {
   SetupOpenAIProviderStep,
   isOpenAIConnectionReady,
-} from "@/app/setup/ai/openai-provider-step";
+} from "@/app/setup/model/openai-provider-step";
 import {
   SetupAnthropicProviderStep,
   isAnthropicConnectionReady,
-} from "@/app/setup/ai/anthropic-provider-step";
+} from "@/app/setup/model/anthropic-provider-step";
 
-export const metadata: Metadata = { title: "Setup: LLM Provider" };
+export const metadata: Metadata = { title: "Setup: Model" };
 
 type SetupAiPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;

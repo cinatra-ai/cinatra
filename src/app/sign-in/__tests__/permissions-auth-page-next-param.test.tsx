@@ -124,37 +124,37 @@ describe("PermissionsAuthPage — threads next into the rendered form's redirect
     expect(html).toMatch(/data-redirect-to=""/);
   });
 
-  it("cinatra#2386: first-admin bootstrap no longer renders SignUpForm HERE — it redirects to /setup/sign-up, next carried on the URL, not a redirectTo prop", async () => {
+  it("cinatra#2386: first-admin bootstrap no longer renders SignUpForm HERE — it redirects to /setup/account, next carried on the URL, not a redirectTo prop", async () => {
     await mockAuthState({ hasUsers: false, session: null });
-    await expectAuthPageRedirect("sign-up", "/artifacts", "/setup/sign-up?next=%2Fartifacts");
+    await expectAuthPageRedirect("sign-up", "/artifacts", "/setup/account?next=%2Fartifacts");
     // The rendered form + its redirectTo threading now live at the new page's
-    // own test suite: src/app/setup/sign-up/__tests__/page.test.tsx.
+    // own test suite: src/app/setup/account/__tests__/page.test.tsx.
   });
 });
 
-describe("PermissionsAuthPage — preserves next across the fresh-install sign-in -> /setup/sign-up hop (cinatra#2359, inverted by cinatra#2386)", () => {
+describe("PermissionsAuthPage — preserves next across the fresh-install sign-in -> /setup/account hop (cinatra#2359, inverted by cinatra#2386)", () => {
   it("carries a safe next through the bootstrap redirect", async () => {
     await mockAuthState({ hasUsers: false, session: null });
-    await expectAuthPageRedirect("sign-in", "/artifacts", "/setup/sign-up?next=%2Fartifacts");
+    await expectAuthPageRedirect("sign-in", "/artifacts", "/setup/account?next=%2Fartifacts");
   });
 
   it("SECURITY: a hostile next is dropped, not carried through the bootstrap redirect", async () => {
     await mockAuthState({ hasUsers: false, session: null });
-    await expectAuthPageRedirect("sign-in", "https://evil.com", "/setup/sign-up");
+    await expectAuthPageRedirect("sign-in", "https://evil.com", "/setup/account");
   });
 
-  it("no next present still hops to a bare /setup/sign-up (regression)", async () => {
+  it("no next present still hops to a bare /setup/account (regression)", async () => {
     await mockAuthState({ hasUsers: false, session: null });
-    await expectAuthPageRedirect("sign-in", undefined, "/setup/sign-up");
+    await expectAuthPageRedirect("sign-in", undefined, "/setup/account");
   });
 
-  it("a direct /sign-up visit also hops to /setup/sign-up while zero users exist (cinatra#2386)", async () => {
+  it("a direct /sign-up visit also hops to /setup/account while zero users exist (cinatra#2386)", async () => {
     await mockAuthState({ hasUsers: false, session: null });
-    await expectAuthPageRedirect("sign-up", "/artifacts", "/setup/sign-up?next=%2Fartifacts");
+    await expectAuthPageRedirect("sign-up", "/artifacts", "/setup/account?next=%2Fartifacts");
   });
 
-  it("a next of exactly '/' (the guard's own stamp on a plain GET / visit) is dropped, landing on a bare /setup/sign-up, not a redundant ?next=%2F (CI prod-boot-e2e follow-up, cinatra#2386)", async () => {
+  it("a next of exactly '/' (the guard's own stamp on a plain GET / visit) is dropped, landing on a bare /setup/account, not a redundant ?next=%2F (CI prod-boot-e2e follow-up, cinatra#2386)", async () => {
     await mockAuthState({ hasUsers: false, session: null });
-    await expectAuthPageRedirect("sign-in", "/", "/setup/sign-up");
+    await expectAuthPageRedirect("sign-in", "/", "/setup/account");
   });
 });

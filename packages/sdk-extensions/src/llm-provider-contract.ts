@@ -447,7 +447,7 @@ export function buildKnownDefaultCapableProviders(): LlmProvider[] {
   return LLM_PROVIDERS.filter((p) => BUILD_KNOWN_LLM_PROVIDER_FLAGS[p].defaultCapable);
 }
 
-/** The BUILD-KNOWN wizard-eligible set (the providers `/setup/ai` may offer). */
+/** The BUILD-KNOWN wizard-eligible set (the providers `/setup/model` may offer). */
 export function buildKnownWizardEligibleProviders(): LlmProvider[] {
   return LLM_PROVIDERS.filter(
     (p) =>

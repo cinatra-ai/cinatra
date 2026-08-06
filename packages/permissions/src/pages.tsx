@@ -51,7 +51,7 @@ export async function PermissionsAuthPage({
   // the setup wizard (cinatra#2386), not at this bare auth-page URL. The
   // middleware route guard (cookie-only, DB-free) still sends sessionless
   // visitors to /sign-in first; this server redirect performs the second hop
-  // so the browser lands on /setup/sign-up instead of rendering the sign-up
+  // so the browser lands on /setup/account instead of rendering the sign-up
   // form here — whether the visitor was headed to /sign-in OR typed /sign-up
   // directly. Carry `next` across the hop (cinatra#2359) — otherwise this
   // bootstrap redirect would drop it even though the sign-in <-> sign-up
@@ -62,10 +62,10 @@ export async function PermissionsAuthPage({
   // (auth-route-guard.ts) always stamps `?next=<currentPath>` on its /sign-in
   // redirect, even for the plain, common case of a sessionless GET / — so
   // "/" here carries no more caller intent than "no next at all" would, and
-  // /setup/sign-up's own redirectTo default already resolves the no-next
-  // case straight into the wizard (see src/app/setup/sign-up/page.tsx). This
-  // keeps the landing URL a clean, query-free /setup/sign-up for the common
-  // root-visit case instead of a redundant /setup/sign-up?next=%2F.
+  // /setup/account's own redirectTo default already resolves the no-next
+  // case straight into the wizard (see src/app/setup/account/page.tsx). This
+  // keeps the landing URL a clean, query-free /setup/account for the common
+  // root-visit case instead of a redundant /setup/account?next=%2F.
   if (!hasUsers && (path === "sign-in" || path === "sign-up")) {
     redirect(buildSetupSignUpPath(rawNext === "/" ? undefined : rawNext));
   }

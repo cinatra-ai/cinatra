@@ -57,7 +57,7 @@ describe("setup flash — the notice (partial-success) channel", () => {
 });
 
 // The connector's degraded save redirects to whatever `redirectTo` the FORM sent.
-// The setup wizard sends `/setup/ai`; the LLM admin modal sends
+// The setup wizard sends `/setup/model`; the LLM admin modal sends
 // `/configuration/llm?modal=openai` and posts to the PLAIN server action (not the
 // schema-config `runWrite` path that maps the outcome to a banner). So the admin
 // page needs its own `?notice=` entry, or the partial save reads there as a clean

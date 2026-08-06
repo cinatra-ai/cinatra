@@ -310,7 +310,7 @@ export function declarationSatisfiesCapability(
 // These answer the two setup-time questions off the DECLARATION catalog rather
 // than off a re-listed provider-id set:
 //   defaultCapableProviders() — who may be stored in `llm_default_provider`
-//   wizardEligibleProviders() — who `/setup/ai` may offer as the first-run pick
+//   wizardEligibleProviders() — who `/setup/model` may offer as the first-run pick
 //
 // The RUNTIME un-fencing chokepoints (`src/lib/database.ts`'s eligibility
 // predicate and `packages/llm`'s two implicit-global resolvers) deliberately
@@ -495,7 +495,7 @@ export const ALLOWED_MODEL_IDS: Record<LlmProvider, readonly string[]> = Object.
 
 // ---------------------------------------------------------------------------
 // Default OpenAI model for a connection without a saved `defaultModel`. Shared
-// by every default source — the /setup/ai and /configuration/llm default-model
+// by every default source — the /setup/model and /configuration/llm default-model
 // pickers plus src/lib/openai-connection-store.ts — so the fallbacks cannot
 // drift apart. A saved, still-selectable `connection.defaultModel` always wins
 // over this fallback. DERIVED from the openai declaration's `models.default`

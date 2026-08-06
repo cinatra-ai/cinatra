@@ -49,27 +49,27 @@ vi.mock("@/lib/setup-provider-commit", () => ({
 vi.mock("@/components/connector-brand-icons", () => ({
   connectorBrandIcon: () => null,
 }));
-vi.mock("@/app/setup/ai/readiness-state", () => ({
+vi.mock("@/app/setup/model/readiness-state", () => ({
   SETUP_CREDENTIAL_SAVE_STEP_ID: "credential-save",
   readSetupProviderSelection: () => null,
   readSetupReadinessFailure: () => null,
 }));
-vi.mock("@/app/setup/ai/actions", () => ({
+vi.mock("@/app/setup/model/actions", () => ({
   selectSetupProviderAction: vi.fn(),
   completeAiSetupAction: vi.fn(),
   enableAnthropicNativeSkillDeliveryAction: vi.fn(),
 }));
-vi.mock("@/app/setup/ai/openai-provider-step", () => ({
+vi.mock("@/app/setup/model/openai-provider-step", () => ({
   SetupOpenAIProviderStep: () => <div data-testid="openai-step" />,
   isOpenAIConnectionReady: async () => false,
 }));
-vi.mock("@/app/setup/ai/anthropic-provider-step", () => ({
+vi.mock("@/app/setup/model/anthropic-provider-step", () => ({
   SetupAnthropicProviderStep: () => <div data-testid="anthropic-step" />,
   isAnthropicConnectionReady: async () => false,
 }));
 vi.mock("@/lib/setup-wizard", () => ({
   getSetupWizardSteps: vi.fn().mockResolvedValue([]),
-  getFirstIncompleteStep: vi.fn().mockReturnValue({ id: "ai", href: "/setup/ai" }),
+  getFirstIncompleteStep: vi.fn().mockReturnValue({ id: "ai", href: "/setup/model" }),
 }));
 
 async function renderAiPage(): Promise<string> {

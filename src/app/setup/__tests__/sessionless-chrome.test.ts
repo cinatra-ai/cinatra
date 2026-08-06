@@ -1,7 +1,7 @@
 /**
  * cinatra#2386 (setup-flow S1) — SetupLayout's sessionless chrome branch.
  *
- * /setup/sign-up is the ONLY /setup/* route a sessionless visitor can reach
+ * /setup/account is the ONLY /setup/* route a sessionless visitor can reach
  * (see src/lib/__tests__/auth-route-guard-public-paths.test.ts for the
  * middleware-level pin). Its parent layout (src/app/setup/layout.tsx) must:
  *   - render a STATIC full-rail progress chrome for that visitor — sign-up as
@@ -73,10 +73,10 @@ describe("SetupLayout — sessionless branch (no session)", () => {
     const steps = findStepsProp(ui);
     expect(steps).toBeDefined();
     expect(steps).toEqual([
-      { id: "sign-up", title: "Sign up", href: "/setup/sign-up", ready: false },
+      { id: "sign-up", title: "Account", href: "/setup/account", ready: false },
       { id: "key", title: "Key", href: "/setup/key", ready: false },
       { id: "name", title: "Name", href: "/setup/name", ready: false },
-      { id: "ai", title: "LLM Provider", href: "/setup/ai", ready: false },
+      { id: "ai", title: "Model", href: "/setup/model", ready: false },
     ]);
   });
 });

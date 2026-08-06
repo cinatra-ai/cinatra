@@ -465,7 +465,7 @@ describe("/api/llm-bridge cinatra_llm routing", () => {
   // -------------------------------------------------------------------------
   // 11. NO_LLM_PROVIDER-503 (cinatra#2332 AC5)
   //     Promoting @cinatra-ai/anthropic-connector into the required/system set
-  //     makes Anthropic SELECTABLE at /setup/ai on a production image, so an
+  //     makes Anthropic SELECTABLE at /setup/model on a production image, so an
   //     instance can commit "anthropic" as its stored default and then run with
   //     NO Anthropic credentials (keys come from Nango/DB, never env, and the
   //     connector's register() is I/O-free). That must stay a REQUEST-time 503

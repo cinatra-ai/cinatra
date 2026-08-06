@@ -91,7 +91,7 @@ export default defineConfig({
     // of the fail-closed actor gate (it never bypasses in production).
     // CINATRA_E2E_SETUP_BYPASS=true (same as the sibling e2e configs): clears
     // the setup-wizard gate on a fresh instance — without it the #410
-    // hosted-login popup redirects to /setup/ai (AI wizard step incomplete)
+    // hosted-login popup redirects to /setup/model (AI wizard step incomplete)
     // and the consent step never renders, so every login-gated scenario
     // times out.
     // allowedDevOrigins + reactDebugChannel:false are already in next.config.ts

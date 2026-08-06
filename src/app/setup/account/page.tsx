@@ -48,7 +48,7 @@ import { buildSignInPath, sanitizeNextPath } from "@/lib/auth-redirect-target";
 import { SignUpForm } from "@/components/auth-view-client";
 import { PasswordToggleA11y } from "@/components/password-toggle-a11y";
 
-export const metadata: Metadata = { title: "Setup: Sign up" };
+export const metadata: Metadata = { title: "Setup: Account" };
 
 // cinatra#2477 (owner acceptance review) — the SignUpForm submit IS this
 // step's Continue, so it must look like every other setup step's Continue:

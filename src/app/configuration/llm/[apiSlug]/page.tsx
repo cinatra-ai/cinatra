@@ -27,7 +27,7 @@ export default async function SettingsAPIPluginRoutePage({ params, searchParams 
   const resolvedSearchParams = await (searchParams ?? Promise.resolve({} as Record<string, string | string[] | undefined>));
 
   if (apiSlug === "initial-setup") {
-    redirect(buildRedirectTarget("/setup/ai", resolvedSearchParams));
+    redirect(buildRedirectTarget("/setup/model", resolvedSearchParams));
   }
 
   if (apiSlug === "drupal") {

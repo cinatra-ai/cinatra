@@ -175,12 +175,12 @@ describe("getSetupWizardSteps - no gemini step", () => {
 // ---------------------------------------------------------------------------
 
 describe("getSetupWizardSteps - the AI step's pill (cinatra#2389)", () => {
-  it('the step pill reads "LLM Provider" while the id stays the stable "ai"', async () => {
+  it('the step pill reads "Model" (#2477 owner review) while the id stays the stable "ai"', async () => {
     vi.mocked(readInstanceIdentity).mockReturnValueOnce(null);
     const steps = await getSetupWizardSteps();
     const aiStep = steps.find((s) => s.id === "ai");
-    expect(aiStep?.title).toBe("LLM Provider");
-    expect(aiStep?.href).toBe("/setup/ai");
+    expect(aiStep?.title).toBe("Model");
+    expect(aiStep?.href).toBe("/setup/model");
   });
 });
 
@@ -217,7 +217,7 @@ describe("getSetupWizardSteps - the sign-up step (cinatra#2477)", () => {
     vi.mocked(readInstanceIdentity).mockReturnValueOnce(null);
     const steps = await getSetupWizardSteps();
     expect(steps[0]?.id).toBe("sign-up");
-    expect(steps[0]?.href).toBe("/setup/sign-up");
+    expect(steps[0]?.href).toBe("/setup/account");
     expect(steps[0]?.ready).toBe(false);
     expect(steps[1]?.id).toBe("key");
   });
@@ -228,7 +228,7 @@ describe("getSetupWizardSteps - the sign-up step (cinatra#2477)", () => {
     const steps = await getSetupWizardSteps();
     expect(steps[0]).toMatchObject({
       id: "sign-up",
-      href: "/setup/sign-up",
+      href: "/setup/account",
       ready: true,
     });
     expect(steps[1]?.id).toBe("key");

@@ -9,16 +9,16 @@ import { SetupStepNav } from "./setup-step-nav";
 import { SETUP_FLASH_TOASTS } from "./setup-flash";
 
 // cinatra#2386 — the ONLY /setup/* route a sessionless visitor can ever reach
-// is /setup/sign-up (the sole PUBLIC_EXACT_PATHS entry under this prefix;
+// is /setup/account (the sole PUBLIC_EXACT_PATHS entry under this prefix;
 // every other /setup/* route stays session-protected by the middleware
-// guard). So "no session" here always means "rendering /setup/sign-up for an
+// guard). So "no session" here always means "rendering /setup/account for an
 // unauthenticated visitor" — a STATIC progress chrome that never calls
 // getSetupWizardSteps()/the readiness reader (no setup-status work, no
 // readiness disclosure to an unauthenticated visitor). An authenticated
 // visitor gets the real, live step rail as before.
 //
 // cinatra#2477 (owner acceptance review) — the static chrome shows the FULL
-// step rail (sign-up is step 1 of it), not a lone "Sign up" pill, so the
+// step rail (the account step is step 1 of it), not a lone "Account" pill, so the
 // signup page carries the same indicator as every other setup page. The list
 // is a hardcoded forecast of the wizard's unconditional steps: every entry is
 // `ready: false` (nothing is disclosed, nothing is clickable — SetupStepNav
@@ -27,10 +27,10 @@ import { SETUP_FLASH_TOASTS } from "./setup-flash";
 // sessionless branch must never perform; the live rail adds it after sign-up
 // when it is relevant.
 const SESSIONLESS_SETUP_STEPS: SetupWizardStep[] = [
-  { id: "sign-up", title: "Sign up", href: "/setup/sign-up", ready: false },
+  { id: "sign-up", title: "Account", href: "/setup/account", ready: false },
   { id: "key", title: "Key", href: "/setup/key", ready: false },
   { id: "name", title: "Name", href: "/setup/name", ready: false },
-  { id: "ai", title: "LLM Provider", href: "/setup/ai", ready: false },
+  { id: "ai", title: "Model", href: "/setup/model", ready: false },
 ];
 
 export default async function SetupLayout({ children }: { children: React.ReactNode }) {

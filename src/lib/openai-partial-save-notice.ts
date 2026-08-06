@@ -7,7 +7,7 @@
 // redirect as `?notice=<code>` instead of `?error=<message>`. Two host surfaces
 // receive that redirect and must both render it:
 //
-//   * the setup wizard (`redirectTo=/setup/ai`) — src/app/setup/setup-flash.ts;
+//   * the setup wizard (`redirectTo=/setup/model`) — src/app/setup/setup-flash.ts;
 //   * the LLM admin modal (`redirectTo=/configuration/llm?modal=openai`) —
 //     src/app/configuration/llm/apis-page.tsx.
 //
