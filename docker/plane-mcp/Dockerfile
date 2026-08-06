@@ -32,10 +32,23 @@ EXPOSE 8211
 # credentials from there.
 #
 # Transport mode: the DEFAULT (stateful) Streamable-HTTP is used deliberately —
-# it drives the canonical MCP lifecycle (initialize -> Mcp-Session-Id ->
+# it drives the canonical 2025-era MCP lifecycle (initialize -> Mcp-Session-Id ->
 # notifications/initialized -> tools/list), which is exactly what both the
-# connector's dev-setup probe and the host's runtime `@modelcontextprotocol/sdk`
-# client speak. (mcp-proxy's `--stateless` flips to session-less JSON, whose
-# per-request lifecycle enforcement across separate POSTs is less predictable.)
+# connector's dev-setup probe and the host's runtime external-MCP client speak.
+# (mcp-proxy's `--stateless` flips to session-less JSON, whose per-request
+# lifecycle enforcement across separate POSTs is less predictable.)
+#
+# The host client is `@modelcontextprotocol/client@2.0.0` on
+# `versionNegotiation: { mode: 'auto' }` (packages/agents/src/external-mcp-caller.ts)
+# since cinatra#2218 L2c — NOT the v1 `@modelcontextprotocol/sdk` this comment
+# used to name, whose ROOT dependency and build externalization cinatra#2218 L2z
+# removed. That does not change what this fixture must serve: under `auto` a peer
+# that REJECTS the `server/discover` probe with a legacy-classified response is
+# still reached through exactly the lifecycle above. (A transport-level failure —
+# timeout, connection refused — is NOT a legacy verdict and does not fall back;
+# it surfaces as an error.) A session id this peer requires is minted by the PEER;
+# the client transport stores and replays it, and it never becomes application or
+# authorization state (cinatra#2218 acceptance criterion 4). This fixture's own
+# revision posture has not been probed on the wire and is not claimed here.
 ENTRYPOINT ["mcp-proxy"]
 CMD ["--pass-environment", "--host=0.0.0.0", "--port=8211", "--", "python", "-m", "plane_mcp", "stdio"]

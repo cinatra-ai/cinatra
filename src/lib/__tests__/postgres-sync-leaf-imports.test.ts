@@ -1,7 +1,7 @@
 // Sync-leaf import-graph gate (cinatra#104).
 //
 // Under Turbopack dev, a module whose static import graph reaches an
-// `import()`-loaded external (`pg`, `@modelcontextprotocol/sdk`, ...) is
+// `import()`-loaded external (`pg`, `@modelcontextprotocol/server`, ...) is
 // compiled as an ASYNC module. Turbopack's asyncModule() runtime permanently
 // replaces `module.exports` with a getter returning the module's Promise, so
 // a CommonJS `require()` of such a module yields a Promise and every named
