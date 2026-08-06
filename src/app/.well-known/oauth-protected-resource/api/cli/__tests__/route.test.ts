@@ -94,7 +94,16 @@ describe("GET /.well-known/oauth-protected-resource/api/cli — behind a proxy",
     expect(response.headers.get("content-length")).toBeNull();
   });
 
-  it("does not trust a half-set forwarded pair", async () => {
+  it("does not itself promote a half-set forwarded pair to the public origin", async () => {
+    // Scope of this case, stated precisely: it pins what THIS HANDLER does with
+    // the `Request` it is given. It is NOT a claim that a wire request carrying
+    // a lone `x-forwarded-host` cannot reach the client's chosen host in the
+    // document — measured 2026-08-06 on both `next dev` and `next start`
+    // (Next 16.2.10), the server folds `x-forwarded-host` into `request.url`
+    // BEFORE the handler runs, so such a request yields that host on this route
+    // and equally on the already-shipped `/api/mcp` sibling. Stripping
+    // client-supplied forwarded headers is the reverse proxy's job; the handler
+    // simply does not add a second, weaker promotion path of its own.
     const { body } = await metadataOf(
       new Request(`${INTERNAL}${METADATA_PATH}`, { headers: { "x-forwarded-host": "attacker.example" } }),
     );
