@@ -39,6 +39,7 @@
 
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
+import { ArrowRight } from "lucide-react";
 
 import { hasAnyBetterAuthUsers } from "@/lib/auth";
 import { getAuthSession } from "@/lib/auth-session";
@@ -48,6 +49,21 @@ import { SignUpForm } from "@/components/auth-view-client";
 import { PasswordToggleA11y } from "@/components/password-toggle-a11y";
 
 export const metadata: Metadata = { title: "Setup: Sign up" };
+
+// cinatra#2477 (owner acceptance review) — the SignUpForm submit IS this
+// step's Continue, so it must look like every other setup step's Continue:
+// right-aligned with the trailing arrow. better-auth-ui renders
+// `localization.SIGN_UP_ACTION` directly (and solely) as the submit button's
+// children, so a ReactNode passes through and renders like the other steps'
+// `Continue <ArrowRight/>` children; the localization slot is TYPED as a
+// plain string, hence the cast. The button's base classes already carry
+// `gap-2` and size the svg, matching the wizard's own Button.
+const SETUP_SIGN_UP_CONTINUE_LABEL = (
+  <>
+    Continue
+    <ArrowRight className="size-4" />
+  </>
+) as unknown as string;
 
 type SetupSignUpPageProps = {
   searchParams?: Promise<{ next?: string }>;
@@ -107,7 +123,15 @@ export default async function SetupSignUpPage({ searchParams }: SetupSignUpPageP
       </div>
       <div className="mx-auto w-full max-w-md">
         <PasswordToggleA11y>
-          <SignUpForm localization={{ SIGN_UP_ACTION: "Continue" }} redirectTo={redirectTarget} />
+          {/* cinatra#2477 — `justify-self-end w-auto` right-aligns the submit
+              inside the form's grid (twMerge lets `w-auto` supersede the
+              form's default full-width button), Continue-button parity with
+              the other setup steps. */}
+          <SignUpForm
+            classNames={{ primaryButton: "w-auto justify-self-end" }}
+            localization={{ SIGN_UP_ACTION: SETUP_SIGN_UP_CONTINUE_LABEL }}
+            redirectTo={redirectTarget}
+          />
         </PasswordToggleA11y>
       </div>
     </div>

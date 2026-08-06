@@ -81,16 +81,12 @@ function pickSearchParam(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
 
-const PROVIDER_COPY: Record<string, { label: string; blurb: string }> = {
-  openai: {
-    label: "OpenAI",
-    blurb: "Runs the chat assistant, agents, skill generation and skill matching on OpenAI models.",
-  },
-  anthropic: {
-    label: "Anthropic",
-    blurb:
-      "Runs the chat assistant, agents, skill generation and skill matching on Claude, and delivers your skills natively. Setup uploads your installed skills to your Anthropic workspace — you will be asked to confirm.",
-  },
+// cinatra#2477 (owner acceptance review) — the cards carry NO descriptive
+// blurb: logo + name only. The only text a card may show below its label is
+// functional state (connector not installed / choice locked), never copy.
+const PROVIDER_COPY: Record<string, { label: string }> = {
+  openai: { label: "OpenAI" },
+  anthropic: { label: "Anthropic" },
 };
 
 /**
@@ -219,7 +215,7 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
       {/* The two provider cards — standalone (no wrapper card, no heading). */}
       <div className="grid gap-3 sm:grid-cols-2">
         {eligible.map((provider) => {
-          const copy = PROVIDER_COPY[provider] ?? { label: provider, blurb: "" };
+          const copy = PROVIDER_COPY[provider] ?? { label: provider };
           const installed = getLlmProviderSurface(provider) !== null;
           const isSelected = selected === provider;
           // S3 (cinatra#2388): a commitment LOCKS the choice — the other card
@@ -259,13 +255,15 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
                   </span>
                   {isSelected ? <Check className="size-4 text-primary" aria-hidden /> : null}
                 </span>
-                <span className="block text-xs font-normal text-muted-foreground">
-                  {!installed
-                    ? `The ${copy.label} connector is not installed or active on this instance.`
-                    : lockedOut
-                      ? "The provider choice is committed — changeable later in Administration."
-                      : copy.blurb}
-                </span>
+                {/* Functional state only (cinatra#2477): a normally
+                    selectable card renders no text below its label. */}
+                {!installed || lockedOut ? (
+                  <span className="block text-xs font-normal text-muted-foreground">
+                    {!installed
+                      ? `The ${copy.label} connector is not installed or active on this instance.`
+                      : "The provider choice is committed — changeable later in Administration."}
+                  </span>
+                ) : null}
               </Button>
             </form>
           );

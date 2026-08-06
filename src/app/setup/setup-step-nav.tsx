@@ -36,9 +36,16 @@ export function SetupStepNav({ steps }: SetupStepNavProps) {
           //   • it's the first incomplete step AND at least one other step is
           //     complete (so the operator has some progress to navigate against).
           // Subsequent incomplete steps stay non-clickable.
+          //
+          // cinatra#2477 — the sign-up step is the one exception: its pill is
+          // NEVER a link. The bootstrap form can only render once (before the
+          // first account exists); afterwards /setup/sign-up unconditionally
+          // redirects forward, so a link would be a silent bounce.
           const isFirstIncomplete = !step.ready && index === firstIncompleteIndex;
           const isNavigable =
-            !isActive && (step.ready || (isFirstIncomplete && anyReady));
+            !isActive &&
+            step.id !== "sign-up" &&
+            (step.ready || (isFirstIncomplete && anyReady));
 
           const pillClasses = step.ready
             ? isNavigable

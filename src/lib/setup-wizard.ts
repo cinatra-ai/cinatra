@@ -52,20 +52,19 @@ export async function getSetupWizardSteps(): Promise<SetupWizardStep[]> {
 
   const steps: SetupWizardStep[] = [];
 
-  // cinatra#2386 — the sign-up step is FIRST, but only PRESENT while no
-  // Better Auth user exists yet. It never carries `ready: true`: its
-  // completion signal is its own DISAPPEARANCE once the first account is
-  // created (hasAnyBetterAuthUsers() flips true), not a checked pill.
-  if (!hasUsers) {
-    steps.push({
-      id: "sign-up",
-      title: "Sign up",
-      href: "/setup/sign-up",
-      ready: false,
-    });
-  }
+  // cinatra#2477 (owner acceptance review, was cinatra#2386) — the sign-up
+  // step is ALWAYS step 1 of the rail, on every setup page. It completes
+  // like any other step: `ready` flips true (a checked pill) once the first
+  // Better Auth user exists. (Pre-#2477 the step retired — disappeared —
+  // instead; the owner review pinned the universal indicator.)
+  steps.push({
+    id: "sign-up",
+    title: "Sign up",
+    href: "/setup/sign-up",
+    ready: hasUsers,
+  });
 
-  // The key step follows sign-up (or is first, once sign-up has retired). The
+  // The key step follows sign-up. The
   // env var must be set with at least 32 chars before any other setup can
   // proceed. Absence blocks the wizard.
   const encryptionKeyOk = (process.env.CINATRA_ENCRYPTION_KEY?.trim().length ?? 0) >= 32;
@@ -112,7 +111,7 @@ export function getFirstIncompleteStep(steps: SetupWizardStep[]): SetupWizardSte
 }
 
 // Setup is complete when:
-// 0. The first account exists (the sign-up step has retired — cinatra#2386)
+// 0. The first account exists (the sign-up step reads ready — cinatra#2477)
 // 1. CINATRA_ENCRYPTION_KEY is set, which gates all setup
 // 2. Instance name (namespace) is configured, which gates registry access
 // 3. Nango is connected, which gates OAuth connections
@@ -120,11 +119,10 @@ export function getFirstIncompleteStep(steps: SetupWizardStep[]): SetupWizardSte
 //    lock) + a fresh matching credential fingerprint + the live
 //    provider-specific readiness inputs (S4, cinatra#2389 — no receipt)
 function isStepsComplete(steps: SetupWizardStep[]): boolean {
-  // Defensive: the sign-up step never carries ready:true (see
-  // getSetupWizardSteps), so its mere presence already means incomplete. In
-  // practice this never fires from an authenticated caller (a session implies
-  // a user exists, which is exactly when the step is absent), but the gate
-  // stays honest without relying on that invariant holding forever.
+  // The sign-up step is always present (cinatra#2477); it blocks completion
+  // until the first account exists (`ready: hasUsers`). In practice an
+  // authenticated caller implies a user exists, so this never blocks a real
+  // session — but the gate stays honest without relying on that invariant.
   const signUpStep = steps.find((s) => s.id === "sign-up");
   if (signUpStep && !signUpStep.ready) return false;
   // The key must be ready as a hard precondition.

@@ -4,7 +4,10 @@
  * /setup/sign-up is the ONLY /setup/* route a sessionless visitor can reach
  * (see src/lib/__tests__/auth-route-guard-public-paths.test.ts for the
  * middleware-level pin). Its parent layout (src/app/setup/layout.tsx) must:
- *   - render a STATIC single-step "Sign up" progress chrome for that visitor,
+ *   - render a STATIC full-rail progress chrome for that visitor — sign-up as
+ *     step 1 followed by the wizard's unconditional steps, every entry
+ *     ready:false (cinatra#2477: the signup page carries the same step
+ *     indicator as every other setup page),
  *   - WITHOUT ever calling getSetupWizardSteps() — the readiness reader
  *     (readSetupReadinessState / getNangoStatus / readInstanceIdentity are
  *     all real DB reads) must never run for an unauthenticated caller.
@@ -52,7 +55,7 @@ beforeEach(() => {
 });
 
 describe("SetupLayout — sessionless branch (no session)", () => {
-  it("renders a static single-step 'Sign up' progress chrome, never calling getSetupWizardSteps()", async () => {
+  it("renders the static full step rail (sign-up first, all not-ready), never calling getSetupWizardSteps()", async () => {
     const { getAuthSession } = await import("@/lib/auth-session");
     const { getSetupWizardSteps } = await import("@/lib/setup-wizard");
     (getAuthSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(null);
@@ -63,10 +66,18 @@ describe("SetupLayout — sessionless branch (no session)", () => {
     // The readiness reader must NEVER run for a sessionless visitor.
     expect(getSetupWizardSteps).not.toHaveBeenCalled();
 
+    // cinatra#2477 — the FULL static rail: the wizard's unconditional steps
+    // with sign-up as step 1. Every entry is ready:false (nothing disclosed,
+    // nothing navigable); the conditional Connections step is absent because
+    // whether it applies is itself a status read this branch must never do.
     const steps = findStepsProp(ui);
     expect(steps).toBeDefined();
-    expect(steps).toHaveLength(1);
-    expect(steps?.[0]).toMatchObject({ id: "sign-up", href: "/setup/sign-up", ready: false });
+    expect(steps).toEqual([
+      { id: "sign-up", title: "Sign up", href: "/setup/sign-up", ready: false },
+      { id: "key", title: "Key", href: "/setup/key", ready: false },
+      { id: "name", title: "Name", href: "/setup/name", ready: false },
+      { id: "ai", title: "LLM Provider", href: "/setup/ai", ready: false },
+    ]);
   });
 });
 
