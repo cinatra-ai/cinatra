@@ -7,7 +7,10 @@ import * as React from "react";
 // Same seam the design fixtures use — keeps server-only code out of this
 // "use client" bundle.
 import type { MarketplaceCardData } from "@cinatra-ai/extensions/screens/marketplace-card-model";
-import { resolveCardIconChain } from "@cinatra-ai/extensions/screens/marketplace-card-model";
+import {
+  resolveCardIconChain,
+  safeManifestLogoSrc,
+} from "@cinatra-ai/extensions/screens/marketplace-card-model";
 import { connectorBrandIcon } from "@/components/connector-brand-icons";
 
 /**
@@ -27,6 +30,7 @@ import { connectorBrandIcon } from "@/components/connector-brand-icons";
 export function ExtensionCardIconImage({
   src,
   srcs,
+  glyphSrc,
   emblem,
 }: {
   /** Single hosted URL (legacy callers). Ignored when `srcs` is provided. */
@@ -37,6 +41,22 @@ export function ExtensionCardIconImage({
    * already de-duplicated + guarded by the caller (`resolveCardIconChain`).
    */
   srcs?: string[];
+  /**
+   * The one candidate in `srcs` that is the extension's OWN `cinatra.logo`
+   * (cinatra#1482), or null/undefined. It is presented DIFFERENTLY from the
+   * marketplace-supplied tiers: a self-declared logo is a bare brand GLYPH, so
+   * it renders centred + contained at the spec's 24px glyph size inside the
+   * 46×46 tile (design `specs/app-extensions.html` §I ListingCard: a 46×46
+   * `place-items-center` tile carrying a 24×24 mark) — the same inset treatment
+   * the emblem and the `/connectors` tile give it. The catalog `icon_url` /
+   * vendor-logo tiers stay full-bleed `object-cover`: those are square product
+   * ARTWORK authored to fill the tile, not glyphs.
+   *
+   * Without this split, adopting `cinatra.logo` would blow a 20px brand mark up
+   * to a 46px edge-to-edge image — a visible, spec-deviating change to every
+   * card the rollout touches.
+   */
+  glyphSrc?: string | null;
   emblem: React.ReactNode;
 }) {
   const chain = srcs ?? (src != null ? [src] : []);
@@ -63,7 +83,11 @@ export function ExtensionCardIconImage({
       key={current}
       src={current}
       alt=""
-      className="h-full w-full object-cover"
+      className={
+        glyphSrc != null && current === glyphSrc
+          ? "size-6 object-contain"
+          : "h-full w-full object-cover"
+      }
       loading="lazy"
       decoding="async"
       onError={() => setState({ key: chainKey, index: index + 1 })}
@@ -106,5 +130,14 @@ export function MarketplaceCardIcon({
       : null;
   const chain = resolveCardIconChain(card, { hasClientIcon: brand !== null });
   const emblem = chain.emblem === "client-icon" ? brand : kindEmblem;
-  return <ExtensionCardIconImage srcs={chain.imageSrcs} emblem={emblem} />;
+  return (
+    <ExtensionCardIconImage
+      srcs={chain.imageSrcs}
+      // cinatra#1482: tier 1 (the extension's OWN cinatra.logo) is a glyph, not
+      // square product artwork — resolved through the SAME guard the chain used,
+      // so the identity comparison in the render is exact.
+      glyphSrc={safeManifestLogoSrc(card.manifestLogoUrl)}
+      emblem={emblem}
+    />
+  );
 }

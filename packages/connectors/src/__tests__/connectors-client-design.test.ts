@@ -679,4 +679,22 @@ describe("ConnectorsClient design-system contract", () => {
       expect(SRC).not.toMatch(/<div className="[^"]*relative[^"]*">\s*<ul className="[^"]*faded-bottom/);
     });
   });
+
+  describe("cinatra#1482 — a self-declared cinatra.logo is contained, never stretched", () => {
+    it("renders the manifest logo in the 20px tile with an EXPLICIT object-fit", () => {
+      // The logo bytes come from the EXTENSION author, not from this repo, so
+      // the aspect-ratio contract cannot rest on the asset's own viewBox /
+      // preserveAspectRatio: `fill` is the CSS initial value, and a non-square
+      // mark under it is stretched to the box. `object-contain` letterboxes it.
+      const img = SRC.match(/<img\s+src=\{connector\.logo\}[\s\S]*?\/>/);
+      expect(img).not.toBeNull();
+      expect(img![0]).toMatch(/className="size-5 object-contain"/);
+    });
+
+    it("keeps the host icon map as the FALLBACK for a connector that declares none", () => {
+      // The self-describing tier is additive: no cinatra.logo → the render is
+      // byte-identical to what it was before the rollout.
+      expect(SRC).toMatch(/\{connector\.logo \? \([\s\S]*?\) : \(\s*iconForSlug\(connector\.slug\)/);
+    });
+  });
 });

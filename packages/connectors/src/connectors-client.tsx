@@ -490,7 +490,19 @@ export function ConnectorsClient({
                   <div className="flex h-10 w-10 items-center justify-center rounded-control border border-line bg-white text-foreground">
                     {connector.logo ? (
                       // eslint-disable-next-line @next/next/no-img-element -- bounded, sanitized inline-SVG data URI (no remote fetch); Next <Image> is unnecessary
-                      <img src={connector.logo} alt="" aria-hidden="true" className="size-5" />
+                      // cinatra#1482: `object-contain` makes the aspect-ratio
+                      // contract EXPLICIT rather than relying on the asset's own
+                      // viewBox/preserveAspectRatio — a self-declared logo comes
+                      // from the extension author, so a non-square mark must be
+                      // letterboxed in the 20px box, never stretched to fill it
+                      // (`fill` is the CSS initial value). No-op for the square
+                      // 24×24 glyphs this rollout ships.
+                      <img
+                        src={connector.logo}
+                        alt=""
+                        aria-hidden="true"
+                        className="size-5 object-contain"
+                      />
                     ) : (
                       iconForSlug(connector.slug)
                     )}

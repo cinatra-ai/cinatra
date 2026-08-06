@@ -218,10 +218,6 @@ export function sanitizeSvgToDataUri(svg) {
   return `data:image/svg+xml;base64,${Buffer.from(s, "utf8").toString("base64")}`;
 }
 
-// Read + sanitize `cinatra.logo` (a package-relative .svg) into a data URI,
-// or null. Path-contained to the package via realpath on BOTH ends (a package-
-// local symlink that escapes the package is rejected); any read failure or
-// rejected content → null so the host falls back to its static icon map.
 /**
  * Read a connector's RAW `cinatra/config.json` (cinatra#951) — parsed JSON
  * pass-through carried on the record as `accessConfig`; the HOST resolves +
@@ -273,28 +269,118 @@ export function validateAgentAssistantDeclaration(dir, packageName) {
   );
 }
 
-export function sanitizeLogoDataUri(dir, logoRel) {
-  if (typeof logoRel !== "string" || !logoRel.trim().toLowerCase().endsWith(".svg")) return null;
+/**
+ * Resolve a DECLARED `cinatra.logo` to `{ dataUri, error }` (cinatra#1482).
+ *
+ * Same resolution + containment + sanitizer rules {@link sanitizeLogoDataUri}
+ * has always applied — this form additionally REPORTS WHY a declared logo did
+ * not resolve, so the per-connector `cinatra.logo` rollout cannot degrade
+ * SILENTLY. The distinction that matters:
+ *
+ *   - ABSENT (`undefined` / `null`) → `{ dataUri: null, error: null }`. The
+ *     documented default: the host falls back through its client icon map →
+ *     catalog icon → vendor logo → kind emblem exactly as before. NOT an error.
+ *   - DECLARED but unresolvable (wrong extension, missing file, escapes the
+ *     package, unreadable, or REJECTED by the SVG sanitizer) →
+ *     `{ dataUri: null, error: "<why>" }`. The author asked for a self-describing
+ *     logo and would otherwise get the generic fallback with no signal at all;
+ *     the generation gate turns that into a loud build failure.
+ *
+ * @param {string} dir source dir (relative to REPO_ROOT), e.g. `extensions/cinatra-ai/x`
+ * @param {unknown} logoRel the raw `cinatra.logo` value
+ * @returns {{ dataUri: string | null, error: string | null }}
+ */
+export function resolveDeclaredLogo(dir, logoRel) {
+  if (logoRel === undefined || logoRel === null) return { dataUri: null, error: null };
+  if (typeof logoRel !== "string" || logoRel.trim().length === 0) {
+    return {
+      dataUri: null,
+      error:
+        `cinatra.logo must be a non-empty package-relative ".svg" path ` +
+        `(got ${typeof logoRel === "string" ? "an empty/blank string" : typeof logoRel})`,
+    };
+  }
+  // NOTE (codex round-1): resolution runs on the RAW value, exactly as before —
+  // `trim()` is used only for the emptiness + ".svg" suffix checks, which is
+  // what the pre-#1482 function did. Trimming the path before `resolve` would
+  // silently START resolving `" ./logo.svg "` (a declaration that used to fail);
+  // that stays a failure, now with a reason instead of a silent null.
+  const rel = logoRel;
+  if (!rel.trim().toLowerCase().endsWith(".svg")) {
+    return {
+      dataUri: null,
+      error: `cinatra.logo "${rel}" is not a ".svg" path — the host inlines a sanitized SVG, no other format is read`,
+    };
+  }
   const pkgRoot = resolve(join(REPO_ROOT, dir));
-  const abs = resolve(pkgRoot, logoRel);
+  const abs = resolve(pkgRoot, rel);
   // Lexical containment first (cheap reject of `../` escapes).
-  if (abs !== pkgRoot && !abs.startsWith(pkgRoot + sep)) return null;
+  if (abs !== pkgRoot && !abs.startsWith(pkgRoot + sep)) {
+    return { dataUri: null, error: `cinatra.logo "${rel}" escapes the package directory` };
+  }
   let realRoot;
   let realAbs;
   try {
     realRoot = realpathSync(pkgRoot);
     realAbs = realpathSync(abs); // follows symlinks — then re-check containment
   } catch {
-    return null;
+    // realpath fails for a missing path AND for an unreadable/permission-denied
+    // one (codex round-2) — say both rather than assert the file is absent.
+    return {
+      dataUri: null,
+      error: `cinatra.logo "${rel}" does not resolve to a readable file inside the package`,
+    };
   }
-  if (realAbs !== realRoot && !realAbs.startsWith(realRoot + sep)) return null;
+  if (realAbs !== realRoot && !realAbs.startsWith(realRoot + sep)) {
+    return {
+      dataUri: null,
+      error: `cinatra.logo "${rel}" resolves (through a symlink) outside the package directory`,
+    };
+  }
   let svg;
   try {
     svg = readFileSync(realAbs, "utf8");
   } catch {
-    return null;
+    return { dataUri: null, error: `cinatra.logo "${rel}" could not be read` };
   }
-  return sanitizeSvgToDataUri(svg);
+  const dataUri = sanitizeSvgToDataUri(svg);
+  if (dataUri === null) {
+    return {
+      dataUri: null,
+      error:
+        `cinatra.logo "${rel}" was REJECTED by the SVG sanitizer — it must be a bare <svg> document ` +
+        `of at most ${MAX_LOGO_BYTES} bytes using only the allowed element/attribute vocabulary, with no ` +
+        `external reference (no script/style/use/image, no url() outside url(#id), no entities/CDATA/doctype)`,
+    };
+  }
+  return { dataUri, error: null };
+}
+
+// Read + sanitize `cinatra.logo` (a package-relative .svg) into a data URI,
+// or null. Path-contained to the package via realpath on BOTH ends (a package-
+// local symlink that escapes the package is rejected); any read failure or
+// rejected content → null so the host falls back to its static icon map. The
+// REASON a declared logo failed is carried by `resolveDeclaredLogo` above (the
+// generation gate consumes it); this value-only form stays the record-assembly
+// accessor, so a rejected logo can never become byte-pinned generated data.
+export function sanitizeLogoDataUri(dir, logoRel) {
+  return resolveDeclaredLogo(dir, logoRel).dataUri;
+}
+
+/**
+ * Generation-gate arm for `cinatra.logo` (cinatra#1482) — same shape as
+ * {@link validateAgentAssistantDeclaration}: returns an array of error strings
+ * (empty = valid OR undeclared) that the caller pushes into the fail-closed
+ * `bindingErrors` set. Undeclared is ALWAYS clean: the host fallback chain is
+ * the documented default for every extension that has not adopted the field.
+ * @param {string} dir source dir (relative to REPO_ROOT)
+ * @param {string} packageName
+ * @param {Record<string, unknown>} cin the package's `cinatra` manifest block
+ * @returns {string[]}
+ */
+export function validateDeclaredLogo(dir, packageName, cin) {
+  const { error } = resolveDeclaredLogo(dir, cin?.logo);
+  return error ? [`${packageName} — ${error}`] : [];
 }
 
 function entryFlags(rec) {
@@ -2296,6 +2382,17 @@ export async function buildManifest() {
     if (cin.kind === "agent") {
       bindingErrors.push(...validateAgentAssistantDeclaration(r.sourceDir, r.packageName));
     }
+    // Self-describing logo gate (cinatra#1482, follow-up to #1325): an extension
+    // that DECLARES `cinatra.logo` must resolve to a safe, in-package SVG. Not
+    // declaring one stays the documented default (the host's client-icon-map /
+    // catalog / vendor / kind-emblem fallback chain — unchanged, no regression);
+    // declaring one that the sanitizer rejects, or that points at a missing or
+    // out-of-package file, would otherwise degrade SILENTLY to that same generic
+    // fallback with no signal — the exact failure mode a per-connector rollout
+    // across ~29 companion repos cannot afford. Fail-closed at generation, like
+    // every other declaration gate here, so a mis-declared logo is a BUILD error
+    // and never becomes byte-pinned generated data.
+    bindingErrors.push(...validateDeclaredLogo(r.sourceDir, r.packageName, cin));
   }
   const { merged: agentFieldRendererBindings, errors: mergeErrors } =
     mergeFieldRendererBindings(allFieldRendererEntries);
@@ -2390,7 +2487,7 @@ export async function buildManifest() {
   // above (fail-closed for any future role); this wave simply carries none.
   if (bindingErrors.length > 0) {
     throw new Error(
-      `[extension-manifest] invalid extension binding / role declarations:\n  - ${bindingErrors.join("\n  - ")}`,
+      `[extension-manifest] invalid extension binding / role / logo declarations:\n  - ${bindingErrors.join("\n  - ")}`,
     );
   }
 

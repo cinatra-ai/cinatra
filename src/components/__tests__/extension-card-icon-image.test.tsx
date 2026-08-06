@@ -205,6 +205,75 @@ describe("MarketplaceCardIcon — the /connectors-aligned chain (cinatra#1325)",
     expect(container.querySelector('[data-testid="kind-emblem"]')).not.toBeNull();
   });
 
+  // -------------------------------------------------------------------------
+  // cinatra#1482 — glyph vs. product artwork inside the 46×46 tile.
+  //
+  // A self-declared `cinatra.logo` is a bare brand GLYPH (the same mark
+  // `/connectors` insets in its tile), while the catalog `icon_url` / vendor
+  // logo are square product ARTWORK authored to fill. Rendering the glyph with
+  // the artwork's full-bleed `object-cover` would blow a 20px brand mark up to
+  // an edge-to-edge 46px image and deviate from design `specs/app-extensions.html`
+  // §I (a 46×46 `place-items-center` tile carrying a 24×24 mark) on every card
+  // the rollout touches.
+  // -------------------------------------------------------------------------
+  it("presents manifest.logo as an INSET GLYPH (24px, object-contain), not full-bleed artwork", () => {
+    act(() => {
+      root.render(
+        <MarketplaceCardIcon
+          card={iconCard({
+            kindSlug: "connector",
+            iconSlug: "unmapped-connector",
+            manifestLogoUrl: LOGO_DATA_URI,
+          })}
+          kindEmblem={<Emblem />}
+        />,
+      );
+    });
+    const img = container.querySelector("img")!;
+    expect(img.getAttribute("src")).toBe(LOGO_DATA_URI);
+    expect(img.className).toContain("object-contain");
+    expect(img.className).toContain("size-6");
+    expect(img.className).not.toContain("object-cover");
+  });
+
+  it("keeps the catalog / vendor tiers FULL-BLEED (object-cover) — only the own-logo tier is inset", () => {
+    act(() => {
+      root.render(
+        <MarketplaceCardIcon
+          card={iconCard({
+            kindSlug: "connector",
+            iconSlug: "unmapped-connector",
+            manifestLogoUrl: LOGO_DATA_URI,
+            iconUrl: "https://a/catalog.png",
+            vendorLogoUrl: "https://a/vendor.png",
+          })}
+          kindEmblem={<Emblem />}
+        />,
+      );
+    });
+    // Tier 1 — inset glyph.
+    expect(container.querySelector("img")!.className).toContain("object-contain");
+    failCurrentImage();
+    // Tier 3 — marketplace artwork, unchanged full-bleed presentation.
+    let img = container.querySelector("img")!;
+    expect(img.getAttribute("src")).toBe("https://a/catalog.png");
+    expect(img.className).toContain("h-full w-full object-cover");
+    failCurrentImage();
+    // Tier 4 — same.
+    img = container.querySelector("img")!;
+    expect(img.getAttribute("src")).toBe("https://a/vendor.png");
+    expect(img.className).toContain("h-full w-full object-cover");
+  });
+
+  it("the legacy single-src callers (§V installed card) keep full-bleed presentation — no glyphSrc, no change", () => {
+    act(() => {
+      root.render(
+        <ExtensionCardIconImage src="https://a/catalog.png" emblem={<Emblem />} />,
+      );
+    });
+    expect(container.querySelector("img")!.className).toContain("h-full w-full object-cover");
+  });
+
   it("AC#4: a connector with no logo, no brand, no catalog/vendor still degrades to the kind emblem — never blank", () => {
     act(() => {
       root.render(

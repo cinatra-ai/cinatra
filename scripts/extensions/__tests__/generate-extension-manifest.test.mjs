@@ -8,6 +8,8 @@ import {
   resolveVendor,
   sanitizeSvgToDataUri,
   sanitizeLogoDataUri,
+  resolveDeclaredLogo,
+  validateDeclaredLogo,
   extractFactoryExport,
   validateWidgetStreamDeclaration,
   validateWebhooksDeclaration,
@@ -139,6 +141,104 @@ describe("D10 logo path containment (symlink-safe)", () => {
     expect(sanitizeLogoDataUri(relDir, "./escape.svg")).toBeNull();
     expect(sanitizeLogoDataUri(relDir, "../../etc/hostname.svg")).toBeNull();
     expect(sanitizeLogoDataUri(relDir, "logo.png")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#1482 — a DECLARED `cinatra.logo` that does not resolve must be LOUD.
+//
+// #1325 landed the host-side resolution order (manifest.logo → client icon map
+// → catalog icon_url → vendor logo → kind emblem). The per-connector rollout
+// then hangs on one silent failure mode: a connector declares `cinatra.logo`,
+// the path/asset is wrong, the generator emits `logo: null`, and the card falls
+// back to the SAME generic emblem it showed before — the author sees no signal
+// and believes the connector self-describes when it does not. `resolveDeclaredLogo`
+// separates ABSENT (the documented default, never an error) from DECLARED-but-
+// unresolvable (an authoring error the generation gate throws on).
+// ---------------------------------------------------------------------------
+describe("resolveDeclaredLogo — declared-but-unresolvable is an ERROR, absent is not (cinatra#1482)", () => {
+  const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+  const relDir = ".tmp-1482-declared-logo-test";
+  const absDir = path.join(REPO_ROOT, relDir);
+  let outsideFile;
+
+  beforeAll(() => {
+    rmSync(absDir, { recursive: true, force: true });
+    mkdirSync(absDir, { recursive: true });
+    writeFileSync(
+      path.join(absDir, "logo.svg"),
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg>',
+    );
+    // Structurally valid file, sanitizer-REJECTED content (a script element).
+    writeFileSync(path.join(absDir, "hostile.svg"), '<svg><script>alert(1)</script></svg>');
+    // Over the inline budget.
+    writeFileSync(path.join(absDir, "huge.svg"), `<svg>${"x".repeat(MAX_LOGO_BYTES + 1)}</svg>`);
+    const outsideDir = mkdtempSync(path.join(tmpdir(), "d1482-outside-"));
+    outsideFile = path.join(outsideDir, "evil.svg");
+    writeFileSync(outsideFile, '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0h1v1H0z"/></svg>');
+    symlinkSync(outsideFile, path.join(absDir, "escape.svg"));
+  });
+  afterAll(() => {
+    rmSync(absDir, { recursive: true, force: true });
+    if (outsideFile) rmSync(path.dirname(outsideFile), { recursive: true, force: true });
+  });
+
+  // THE no-regression case: not declaring a logo is the documented default and
+  // must stay silent — every connector that ships today is in this state.
+  it("ABSENT (undefined / null) → no data URI and NO error (the untouched fallback default)", () => {
+    expect(resolveDeclaredLogo(relDir, undefined)).toEqual({ dataUri: null, error: null });
+    expect(resolveDeclaredLogo(relDir, null)).toEqual({ dataUri: null, error: null });
+  });
+
+  it("a resolvable in-package SVG → the data URI, no error", () => {
+    const { dataUri, error } = resolveDeclaredLogo(relDir, "./logo.svg");
+    expect(dataUri).toMatch(/^data:image\/svg\+xml;base64,/);
+    expect(error).toBeNull();
+    // Byte-identical to the value-only accessor the record assembly uses.
+    expect(dataUri).toBe(sanitizeLogoDataUri(relDir, "./logo.svg"));
+  });
+
+  it.each([
+    ["a missing file", "./nope.svg", /does not resolve to a readable file inside the package/],
+    ["a non-.svg path", "./logo.png", /is not a "\.svg" path/],
+    ["a lexical escape", "../../etc/hostname.svg", /escapes the package directory/],
+    ["a symlink escape", "./escape.svg", /outside the package directory/],
+    ["sanitizer-rejected content", "./hostile.svg", /REJECTED by the SVG sanitizer/],
+    ["an over-budget asset", "./huge.svg", /REJECTED by the SVG sanitizer/],
+    ["an empty string", "   ", /non-empty package-relative/],
+    ["a non-string", 42, /non-empty package-relative/],
+    // Resolution runs on the RAW value (pre-#1482 behavior preserved): a padded
+    // path resolved literally then, and still does not resolve now.
+    ["a whitespace-padded path", " ./logo.svg ", /does not resolve to a readable file inside the package/],
+  ])("DECLARED but unresolvable — %s → null + a reason", (_label, value, reason) => {
+    const { dataUri, error } = resolveDeclaredLogo(relDir, value);
+    expect(dataUri).toBeNull();
+    expect(error).toMatch(reason);
+    // The value-only accessor keeps its exact pre-#1482 contract (null, never a throw).
+    expect(sanitizeLogoDataUri(relDir, value)).toBeNull();
+    // …and the gate arm the generator pushes into `bindingErrors` reports it,
+    // package-name-prefixed, so the build failure names the offending extension.
+    const errs = validateDeclaredLogo(relDir, "@cinatra-ai/x-connector", { logo: value });
+    expect(errs).toHaveLength(1);
+    expect(errs[0]).toMatch(/^@cinatra-ai\/x-connector — /);
+    expect(errs[0]).toMatch(reason);
+  });
+
+  it("the gate arm is SILENT for an undeclared logo and for a resolvable one", () => {
+    expect(validateDeclaredLogo(relDir, "@cinatra-ai/x-connector", {})).toEqual([]);
+    expect(validateDeclaredLogo(relDir, "@cinatra-ai/x-connector", { logo: null })).toEqual([]);
+    expect(validateDeclaredLogo(relDir, "@cinatra-ai/x-connector", undefined)).toEqual([]);
+    expect(validateDeclaredLogo(relDir, "@cinatra-ai/x-connector", { logo: "./logo.svg" })).toEqual([]);
+  });
+});
+
+describe("the real extension tree carries no mis-declared logo (cinatra#1482 gate, live)", () => {
+  it("buildManifest succeeds and every record.logo is null or a sanitized inline-SVG data URI", async () => {
+    const { records } = await buildManifest();
+    expect(records.length).toBeGreaterThan(0);
+    for (const r of records) {
+      expect(r.logo === null || /^data:image\/svg\+xml;base64,/.test(r.logo), r.packageName).toBe(true);
+    }
   });
 });
 
