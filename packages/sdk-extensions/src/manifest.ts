@@ -112,7 +112,20 @@ export type CinatraManifest = {
   /**
    * Package-relative path to a small SVG logo asset (e.g. `./logo.svg`). The
    * host's manifest generator sanitizes + inlines it as a bounded data URI;
-   * falls back to the host icon map when absent or invalid.
+   * falls back to the host icon map when absent.
+   *
+   * CROSS-KIND (cinatra#2469, maintainer decision 2026-08-06: "every extension
+   * kind must be able to self-define `cinatra.logo`"). It is not a connector
+   * key: the generator's gate + emission and the host card chain have always
+   * been kind-agnostic, and the artifact kind's closed allowlist
+   * (`ARTIFACT_ALLOWED_CINATRA_KEYS` in `./artifact-contract`) now admits it
+   * too — the same reconciliation `displayName` and `vendor` already had.
+   *
+   * FAIL-CLOSED, not best-effort: DECLARING a logo that does not resolve to a
+   * readable, in-package, symlink-contained `.svg` the SVG sanitizer accepts is
+   * a BUILD ERROR with a named reason (`validateDeclaredLogo`), for every kind
+   * — it never degrades silently to the fallback chain. NOT declaring one is
+   * the documented default and stays completely clean.
    */
   logo?: string;
   /**

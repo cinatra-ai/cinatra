@@ -25,6 +25,20 @@ describe("ARTIFACT_ALLOWED_CINATRA_KEYS", () => {
     expect(ARTIFACT_ALLOWED_CINATRA_KEYS.has("dashboardContribution")).toBe(true);
   });
 
+  it("admits the cross-kind self-declared logo key (cinatra#2469 — every extension kind may self-define cinatra.logo)", () => {
+    expect(ARTIFACT_ALLOWED_CINATRA_KEYS.has("logo")).toBe(true);
+  });
+
+  it("keeps the three self-describing card-identity keys admitted TOGETHER (logo + displayName + vendor)", () => {
+    // The card identity is one triple on `NormalizedExtensionRecord`
+    // ({logo, displayName, vendor}); admitting only two of the three is the
+    // asymmetry cinatra#2469 closed. Pin them as a set so a future narrowing
+    // cannot silently drop one back out.
+    for (const key of ["logo", "displayName", "vendor"]) {
+      expect(ARTIFACT_ALLOWED_CINATRA_KEYS.has(key), key).toBe(true);
+    }
+  });
+
   it("admits exactly the expected closed set (narrowly additive)", () => {
     expect([...ARTIFACT_ALLOWED_CINATRA_KEYS].sort()).toEqual(
       [
@@ -35,6 +49,7 @@ describe("ARTIFACT_ALLOWED_CINATRA_KEYS", () => {
         "displayName",
         "fieldRenderers",
         "kind",
+        "logo",
         "roles",
         "vendor",
         "views",
@@ -50,6 +65,9 @@ describe("ARTIFACT_ALLOWED_CINATRA_KEYS", () => {
       "migrationsDir",
       "vendored", // near-miss of `vendor` — must NOT be admitted
       "vendors",
+      "logos", // near-misses of `logo` (cinatra#2469) — must NOT be admitted
+      "logoUrl",
+      "logoSvg",
     ]) {
       expect(ARTIFACT_ALLOWED_CINATRA_KEYS.has(unknown)).toBe(false);
     }

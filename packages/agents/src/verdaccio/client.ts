@@ -76,6 +76,150 @@ export async function carryManifestConsumes(
   return parseConsumedPrimitives({ name: packageName, cinatra: { consumes: raw } }, { packageName });
 }
 
+/**
+ * Carry the source `cinatra.logo` into the generated distribution manifest
+ * (cinatra#2469 — "every extension kind must be able to self-define
+ * `cinatra.logo`"; maintainer decision 2026-08-06).
+ *
+ * `publishAgentPackageFromGitDir` BUILDS A FRESH `cinatra` block rather than
+ * spreading the source one, so any field not explicitly carried is LOST on
+ * publish — the same trap `produces`, `consumes` and `license` each needed their
+ * own carry for. For `logo` the loss was especially quiet: `walkPackageFiles`
+ * copies the package's `logo.svg` INTO the tarball while the synthesized
+ * package.json replaces the on-disk one, so the ASSET shipped and its manifest
+ * POINTER was erased, leaving a dangling logo. A logo-less manifest generates
+ * `logo: null`, and the card reverts to the generic kind emblem — exactly the
+ * silent degradation #1482/#2467 made loud everywhere else.
+ *
+ * (The erasure was not repaired downstream either: installation projects the
+ * tarball through the materializer's own allowlisted file set, the same reason
+ * `license` and the LICENSE/NOTICE files each needed their own explicit carry
+ * there. Deliberately NOT restating which directory that projection targets —
+ * the long-standing prose in `_copyRuntimeFiles` says "the source dir" and codex
+ * round-2 reports that is stale post-#793; the carry is required either way, so
+ * this comment does not depend on resolving it.)
+ *
+ * The ASSET half of the round-trip is closed in `materialize-agent-package.ts`
+ * (`_copyDeclaredLogo`): carrying the pointer without carrying the file it
+ * points at would only move the breakage one step later.
+ *
+ * Carried as an OPAQUE STRING and deliberately NOT resolved/sanitized here (the
+ * same data-only discipline the artifact allowlist uses). The path's safety —
+ * `.svg`-only, in-package containment, symlink escape, size budget and the SVG
+ * sanitizer verdict — is owned FAIL-CLOSED by `resolveDeclaredLogo` at
+ * manifest-generation time, which is also the ONLY producer of the inline data
+ * URI any surface renders.
+ *
+ * ABSENT (missing or explicit `null`) → `undefined`: absence stays absence, the
+ * documented default, byte-mirroring `resolveDeclaredLogo`'s no-error pair.
+ *
+ * PRESENT but malformed (non-string, blank) → THROWS, exactly like
+ * `carryManifestConsumes`. An earlier version returned `undefined` for these,
+ * which looked conservative and was the opposite: it made a broken declaration
+ * indistinguishable from an absent one, so the generator downstream had nothing
+ * left to fail loudly on — the silent degradation #1482/#2467 exist to end,
+ * reintroduced at the publish seam.
+ */
+export function carryManifestLogo(gitPkgJson: Record<string, unknown>): string | undefined {
+  const cinatra = gitPkgJson.cinatra;
+  if (typeof cinatra !== "object" || cinatra === null || Array.isArray(cinatra)) return undefined;
+  const raw = (cinatra as Record<string, unknown>).logo;
+  // ABSENT (missing or explicit null) is the documented default — byte-mirroring
+  // `resolveDeclaredLogo`, which returns `{dataUri:null, error:null}` for exactly
+  // those two and an ERROR for everything else malformed.
+  if (raw === undefined || raw === null) return undefined;
+  // PRESENT but malformed is an authoring error, and it must NOT be laundered
+  // into `undefined` (codex round-6): dropping it here publishes a manifest
+  // indistinguishable from one that never declared a logo, so the generator
+  // downstream has nothing left to fail loudly on — the silent degradation
+  // #1482/#2467 exist to end, reintroduced at the publish seam.
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    throw new Error(
+      `cinatra.logo must be a non-empty package-relative ".svg" path ` +
+        `(got ${typeof raw === "string" ? "an empty/blank string" : typeof raw})`,
+    );
+  }
+  return raw;
+}
+
+/**
+ * Refuse a publish whose carried `cinatra.logo` names a file that would NOT
+ * ship in the tarball (cinatra#2469, codex round-2).
+ *
+ * `walkPackageFiles` — the single source of truth for "publishable files" — skips
+ * generated directories (`dist/`, `build/`, `out/`, `node_modules/`, …), symlinks
+ * and blocked `.env*` files. A declaration pointing into one of those satisfies
+ * the generator's containment + `.svg` + sanitizer checks on the AUTHORING tree
+ * and is still absent from the published package, so the manifest ships a
+ * POINTER with no REFERENT — a dangling logo that renders as the generic kind
+ * emblem for every consumer, with no signal to the author.
+ *
+ * THROWS rather than dropping the declaration, matching the `produces` /
+ * `consumes` posture in this module: silently un-declaring the logo would be
+ * indistinguishable from never declaring one, which is precisely the silent
+ * degradation #1482/#2467 exist to end. The message names the offending path and
+ * the fix.
+ *
+ * PATH SEMANTICS — deliberately IDENTICAL to the two components that will later
+ * consume the published declaration, and NOT a bespoke string normalization
+ * (codex round-3 BLOCKER on an earlier version that trimmed and folded `\` to
+ * `/` for the COMPARISON while the manifest published the string VERBATIM):
+ * the declaration is resolved against the package root exactly as
+ * `resolveDeclaredLogo` (`scripts/extensions/generate-extension-manifest.mjs`)
+ * and `_copyDeclaredLogo` (`materialize-agent-package.ts`) resolve it, and the
+ * resulting package-relative path is compared to the walker's own `relPath`s.
+ *
+ * That mismatch was not cosmetic in either direction:
+ *   - `"  ./logo.svg  "` and `"assets\\brand\\mark.svg"` PASSED the string form
+ *     while the verbatim pointer resolves to NOTHING on POSIX — certifying one
+ *     file and publishing a reference to another;
+ *   - `"././logo.svg"`, `"assets/../logo.svg"` and duplicate separators were
+ *     REJECTED even though the generator resolves all of them fine.
+ * Resolving instead of rewriting makes both classes correct by construction.
+ *
+ * `relPaths` are POSIX-style package-relative paths as `walkPackageFiles`
+ * produces them; a path that escapes `packageRoot` is refused outright (the
+ * generator refuses it too, so it could never render).
+ */
+export function assertDeclaredLogoShips({
+  logo,
+  packageRoot,
+  relPaths,
+  packageName,
+}: {
+  logo: string | undefined;
+  packageRoot: string;
+  relPaths: readonly string[];
+  packageName: string;
+}): void {
+  if (logo === undefined) return;
+  // `.svg` on the TRIMMED value, path resolved RAW — the third copy of the one
+  // rule (generator `resolveDeclaredLogo`, materializer `_copyDeclaredLogo`).
+  // Without it the publisher was the LOOSE link (codex round-5): a shipped
+  // `./logo.png` passed publish, then the generator rejects it outright and the
+  // materializer skips it — a manifest published in a state its own consumers
+  // cannot build. Refusing here reports the mistake to the author who made it.
+  if (!logo.trim().toLowerCase().endsWith(".svg")) {
+    throw new Error(
+      `${packageName}: cinatra.logo "${logo}" is not a ".svg" path — the host inlines a sanitized SVG, ` +
+        `no other format is read. Point the declaration at an SVG asset, or remove it.`,
+    );
+  }
+  const abs = path.resolve(packageRoot, logo);
+  const rootWithSep = path.resolve(packageRoot) + path.sep;
+  if (abs.startsWith(rootWithSep)) {
+    // Fold to the walker's POSIX relPath form for the lookup only — the value
+    // PUBLISHED is still the author's verbatim string.
+    const rel = path.relative(packageRoot, abs).split(path.sep).join("/");
+    if (relPaths.includes(rel)) return;
+  }
+  throw new Error(
+    `${packageName}: cinatra.logo "${logo}" does not resolve to a file that ships in the published package ` +
+      `(the publishable file set excludes generated dirs like dist/build/out, symlinks, and .env* files). ` +
+      `Move the asset into a published path (e.g. ./logo.svg or ./assets/logo.svg), or remove the declaration.`,
+  );
+}
+
 export type PublishAgentPackageResult = {
   packageName: string;
   packageVersion: string;
@@ -448,6 +592,12 @@ export async function publishAgentPackageFromGitDir(
       ? gitPkgJson.license
       : undefined;
 
+  // Carry the source `cinatra.logo` through the generated distribution manifest
+  // (cinatra#2469). Same class of trap as `produces`/`consumes`/`license` above:
+  // this path BUILDS a FRESH cinatra block, so an un-carried field is lost on
+  // publish. See `carryManifestLogo` for the full failure mode it closes.
+  const logo = carryManifestLogo(gitPkgJson);
+
   // Build distribution-format package.json (satisfies AgentPackageManifest schema)
   const distManifest: Record<string, unknown> = {
     name: packageName,
@@ -472,6 +622,8 @@ export async function publishAgentPackageFromGitDir(
       ...(Array.isArray(cinatraDeps) && cinatraDeps.length > 0 ? { dependencies: cinatraDeps } : {}),
       ...(producesEntries.length > 0 ? { produces: producesEntries } : {}),
       ...(consumesEntries !== undefined ? { consumes: consumesEntries } : {}),
+      // cinatra#2469: the agent's self-declared card logo survives the rebuild.
+      ...(logo !== undefined ? { logo } : {}),
       ...(executionProvider && executionProvider !== "default" ? { executionProvider } : {}),
       // Unconditionally force kind + apiVersion on the published manifest.
       // Without normalization, chat-created packages can lack `cinatra.kind`,
@@ -627,13 +779,35 @@ export async function publishAgentPackageFromGitDir(
     // blocked .env* files are excluded from both.
     const { walkPackageFiles } = await import("../scan-package-siblings");
     const publishableFiles = await walkPackageFiles(input.agentDir);
+    // A carried `cinatra.logo` must name a file that ACTUALLY SHIPS (cinatra#2469,
+    // codex round-2 BLOCKER). `walkPackageFiles` excludes generated dirs
+    // (dist/, build/, out/, node_modules/, …), so a declaration like
+    // `./dist/brand.svg` can satisfy the generator's containment + sanitizer
+    // checks and still be absent from the tarball — publishing the POINTER
+    // without its REFERENT, the exact dangling state this whole change closes.
+    // FAIL LOUD (the `produces`/`consumes` posture), never silently drop the
+    // declaration: a silently-dropped logo is indistinguishable from never
+    // having declared one, which is the failure mode #1482/#2467 exist to end.
+    //
+    // Derived from the ACTUAL copy set, not the raw walk (codex round-4): the
+    // loop below additionally drops the synthesized package.json/agent.json and
+    // every `isEnvBlocked` file, so asserting against the unfiltered walk would
+    // certify a file the tarball does not in fact contain. Same predicate, one
+    // definition, so the two cannot drift.
+    const shipsInTarball = (f: { relPath: string; isEnvBlocked: boolean }): boolean =>
+      f.relPath !== "package.json" && f.relPath !== "agent.json" && !f.isEnvBlocked;
+    assertDeclaredLogoShips({
+      logo,
+      packageRoot: input.agentDir,
+      relPaths: publishableFiles.filter(shipsInTarball).map((f) => f.relPath),
+      packageName,
+    });
     for (const file of publishableFiles) {
       // Top-level package.json + agent.json are synthesized above (distManifest
-      // + distPayload), so skip the original-on-disk versions.
-      if (file.relPath === "package.json" || file.relPath === "agent.json") continue;
-      // .env* files (other than .env.example) MUST NOT ship. The sibling scan
-      // would have rejected the package at the gate; this is defense-in-depth.
-      if (file.isEnvBlocked) continue;
+      // + distPayload), so skip the original-on-disk versions. .env* files
+      // (other than .env.example) MUST NOT ship — the sibling scan would have
+      // rejected the package at the gate; this is defense-in-depth.
+      if (!shipsInTarball(file)) continue;
       const dstPath = path.join(tempDir, file.relPath);
       await mkdir(path.dirname(dstPath), { recursive: true });
       if (file.isBinary) {
@@ -798,9 +972,25 @@ export async function publishExtensionPackageFromDir(
   const tempDir = await mkdtemp(path.join(tmpdir(), "cinatra-ext-publish-"));
   try {
     const publishableFiles = await walkPackageFiles(input.packageDir);
+    // The DECLARATIVE (artifact|skill) half of the cinatra#2469 logo contract.
+    // This publisher spreads `incomingCinatra` VERBATIM, so unlike the agent
+    // path it never dropped `cinatra.logo` — but it also never checked that the
+    // declared asset SHIPS, leaving artifacts and skills able to publish a
+    // dangling `./dist/brand.svg` or a `.svg`-less path that the generator will
+    // then refuse to build (codex round-6). #2469 is explicitly cross-kind, so
+    // the same two-step the agent publisher runs applies here: validate the
+    // declaration shape, then prove its referent is in the tarball.
+    const extShipsInTarball = (f: { relPath: string; isEnvBlocked: boolean }): boolean =>
+      f.relPath !== "package.json" && !f.isEnvBlocked;
+    assertDeclaredLogoShips({
+      logo: carryManifestLogo({ cinatra: incomingCinatra }),
+      packageRoot: input.packageDir,
+      relPaths: publishableFiles.filter(extShipsInTarball).map((f) => f.relPath),
+      packageName,
+    });
     for (const file of publishableFiles) {
-      if (file.relPath === "package.json") continue; // synthesized below
-      if (file.isEnvBlocked) continue;
+      // package.json is synthesized below (distManifest); .env* files must not ship.
+      if (!extShipsInTarball(file)) continue;
       const dstPath = path.join(tempDir, file.relPath);
       await mkdir(path.dirname(dstPath), { recursive: true });
       if (file.isBinary) {

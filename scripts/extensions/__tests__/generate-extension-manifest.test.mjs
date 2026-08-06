@@ -1150,3 +1150,113 @@ describe("assertManifestWidgetIdsCovered (manifest/widgets pairing)", () => {
     await expect(buildManifest()).resolves.toBeTruthy();
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#2469 — `cinatra.logo` is a CROSS-KIND declaration.
+//
+// Maintainer decision (2026-08-06): "Every extension kind must be able to
+// self-define `cinatra.logo`". The generator half was ALREADY kind-agnostic
+// when #1482/#2467 landed — `validateDeclaredLogo` runs over every record in
+// the collection loop with no `kind` branch, and the record assembly emits
+// `logo: sanitizeLogoDataUri(...)` unconditionally. What blocked the other
+// kinds was the artifact allowlist (`ARTIFACT_ALLOWED_CINATRA_KEYS`), fixed in
+// `packages/sdk-extensions`.
+//
+// These fixtures PIN the kind-agnosticism rather than assuming it: the exact
+// #1482 fail-closed matrix (absent → clean; valid → data URI; declared-but-
+// unresolvable → one named reason) is re-run against an IN-REPO fixture package
+// of EACH kind, and the live-tree assertion below pins that the generator emits
+// the `logo` field for every kind it actually scans.
+//
+// NOTE on what makes these non-tautological: `validateDeclaredLogo` receives the
+// whole cinatra block, so it COULD branch on `cin.kind` — the per-kind cases
+// below pass genuinely different `kind` values and would catch such a branch.
+// (An earlier draft asserted the function's formal-parameter count instead;
+// codex round-0 correctly called that noise with a false rationale — a
+// third-argument branch needs no extra parameter — and it was removed.)
+// ---------------------------------------------------------------------------
+describe("validateDeclaredLogo / sanitizeLogoDataUri are KIND-AGNOSTIC (cinatra#2469)", () => {
+  const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+  const relDir = ".tmp-2469-cross-kind-logo-test";
+  const absDir = path.join(REPO_ROOT, relDir);
+
+  // The five kinds the extension model names (`workflow` is the retired install
+  // path still tolerated on the normalized record — included on purpose so a
+  // legacy-kind package is proven to behave identically, not specially).
+  const KINDS = ["agent", "connector", "artifact", "skill", "workflow"];
+
+  beforeAll(() => {
+    rmSync(absDir, { recursive: true, force: true });
+    mkdirSync(absDir, { recursive: true });
+    writeFileSync(
+      path.join(absDir, "logo.svg"),
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>',
+    );
+    writeFileSync(path.join(absDir, "hostile.svg"), '<svg><script>alert(1)</script></svg>');
+  });
+  afterAll(() => {
+    rmSync(absDir, { recursive: true, force: true });
+  });
+
+  it.each(KINDS)("kind=%s — ABSENT stays completely clean (the documented default)", (kind) => {
+    expect(validateDeclaredLogo(relDir, `@cinatra-ai/fixture-${kind}`, { kind })).toEqual([]);
+    expect(validateDeclaredLogo(relDir, `@cinatra-ai/fixture-${kind}`, { kind, logo: null })).toEqual([]);
+  });
+
+  it.each(KINDS)("kind=%s — a VALID in-package logo passes the gate and inlines to a data URI", (kind) => {
+    const cin = { kind, apiVersion: "cinatra.ai/v1", logo: "./logo.svg" };
+    expect(validateDeclaredLogo(relDir, `@cinatra-ai/fixture-${kind}`, cin)).toEqual([]);
+    const { dataUri, error } = resolveDeclaredLogo(relDir, cin.logo);
+    expect(error).toBeNull();
+    expect(dataUri).toMatch(/^data:image\/svg\+xml;base64,/);
+    // Byte-identical to the value the record assembly emits.
+    expect(dataUri).toBe(sanitizeLogoDataUri(relDir, cin.logo));
+  });
+
+  it.each(KINDS)(
+    "kind=%s — a DECLARED-but-unresolvable logo fails CLOSED with a named reason (never a silent fallback)",
+    (kind) => {
+      const pkgName = `@cinatra-ai/fixture-${kind}`;
+      for (const [value, reason] of [
+        ["./nope.svg", /does not resolve to a readable file inside the package/],
+        ["./logo.png", /is not a "\.svg" path/],
+        ["../../etc/hostname.svg", /escapes the package directory/],
+        ["./hostile.svg", /REJECTED by the SVG sanitizer/],
+        ["", /non-empty package-relative/],
+      ]) {
+        const errs = validateDeclaredLogo(relDir, pkgName, { kind, logo: value });
+        expect(errs, `${kind} ${value}`).toHaveLength(1);
+        expect(errs[0]).toMatch(new RegExp(`^${pkgName.replace("/", "\\/")} — `));
+        expect(errs[0]).toMatch(reason);
+        expect(sanitizeLogoDataUri(relDir, value)).toBeNull();
+      }
+    },
+  );
+
+  it("every kind produces the IDENTICAL error text for the identical bad declaration (no per-kind wording)", () => {
+    const texts = new Set(
+      KINDS.map(
+        (kind) => validateDeclaredLogo(relDir, "@cinatra-ai/same-name", { kind, logo: "./nope.svg" })[0],
+      ),
+    );
+    expect(texts.size).toBe(1);
+  });
+});
+
+describe("the generator emits `logo` for EVERY scanned kind, not only connectors (cinatra#2469, live tree)", () => {
+  it("every record carries the logo field and the scanned tree spans non-connector kinds", async () => {
+    const { records } = await buildManifest();
+    expect(records.length).toBeGreaterThan(0);
+    const kinds = new Set(records.map((r) => r.kind));
+    // The emission is unconditional, so the field must exist on every record
+    // regardless of kind — a per-kind branch would show up as a missing field.
+    for (const r of records) {
+      expect(Object.hasOwn(r, "logo"), r.packageName).toBe(true);
+      expect(r.logo === null || /^data:image\/svg\+xml;base64,/.test(r.logo), r.packageName).toBe(true);
+    }
+    // Guard the guard: the assertion above is only meaningful if the scanned
+    // tree actually contains non-connector kinds.
+    expect(kinds.has("connector")).toBe(true);
+    expect([...kinds].some((k) => k !== "connector")).toBe(true);
+  });
+});

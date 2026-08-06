@@ -208,6 +208,23 @@ export const cinatraAgentPackageMetadataSchema = z.object({
   // packages without these fields to continue validating.
   kind: cinatraExtensionKindSchema.optional(),
   apiVersion: z.string().optional(),
+  // The agent's SELF-DECLARED card logo (cinatra#2469 — "every extension kind
+  // must be able to self-define `cinatra.logo`"). Optional for back-compat with
+  // every already-published package.
+  //
+  // This schema is a plain `z.object` (neither `.strict()` nor `.passthrough()`),
+  // so Zod's default STRIP behavior applies: an undeclared key parses without
+  // error but is silently removed from the parsed value. Declaring `logo` here is
+  // therefore load-bearing — without it the publish path's carried declaration
+  // (see `verdaccio/client.ts`) is erased again the moment the manifest is parsed.
+  //
+  // A path STRING only. Deliberately unvalidated beyond the type: `.svg`-only,
+  // in-package containment, symlink escape, size budget and the SVG-sanitizer
+  // verdict are owned FAIL-CLOSED by `resolveDeclaredLogo` at manifest generation
+  // (`scripts/extensions/generate-extension-manifest.mjs`), which is also the
+  // ONLY producer of the inline data URI any surface renders. Nothing downstream
+  // of this schema turns the string into markup.
+  logo: z.string().min(1).optional(),
   // `produces: SemanticArtifactRef[]` declarations are the ONLY path for typed
   // agent output (cinatra#1788, epic #1785): each entry names a REQUIRED
   // artifact-kind dependency (`extension`) and OPTIONALLY the exact

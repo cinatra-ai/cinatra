@@ -42,6 +42,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -86,6 +87,58 @@ function copyPlain(src, dest) {
       return true;
     },
   });
+}
+
+/**
+ * Copy the `cinatra.logo` asset a seeded slug declares, preserving its relative
+ * path (cinatra#2469).
+ *
+ * Mirrors `_copyDeclaredLogo` in `packages/agents/src/materialize-agent-package.ts`
+ * — same rules, same skip-don't-throw posture, for the same reason: a cosmetic
+ * asset must never fail an image build, and a skipped-but-declared logo still
+ * fail-closes LOUDLY at manifest generation (`resolveDeclaredLogo`) and at the
+ * conformance gate (`manifest.logo-*`), so the mistake is never swallowed.
+ *
+ * The suffix is tested on the TRIMMED value while the path resolves RAW, and
+ * containment is checked both lexically and (because a symlinked PARENT dir is
+ * invisible to a leaf `lstat`) against the realpath.
+ */
+function projectDeclaredLogo(slugDir, destSlugDir) {
+  let declared;
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(slugDir, "package.json"), "utf8"));
+    declared = pkg?.cinatra?.logo;
+  } catch {
+    return;
+  }
+  if (typeof declared !== "string" || declared.trim().length === 0) return;
+  if (!declared.trim().toLowerCase().endsWith(".svg")) return;
+
+  const root = path.resolve(slugDir);
+  const abs = path.resolve(root, declared);
+  if (!abs.startsWith(root + path.sep)) return;
+  let st;
+  try {
+    st = lstatSync(abs);
+  } catch {
+    return;
+  }
+  if (st.isSymbolicLink() || !st.isFile()) return;
+  try {
+    if (!realpathSync(abs).startsWith(realpathSync(root) + path.sep)) return;
+  } catch {
+    return;
+  }
+
+  const rel = path.relative(root, abs);
+  const dest = path.resolve(destSlugDir, rel);
+  if (!dest.startsWith(path.resolve(destSlugDir) + path.sep)) return;
+  try {
+    mkdirSync(path.dirname(dest), { recursive: true });
+    copyPlain(abs, dest);
+  } catch {
+    // A cosmetic asset never fails the image build.
+  }
 }
 
 /**
@@ -175,6 +228,17 @@ export function buildRequiredOasSeed({ source, out }) {
           copyPlain(srcFile, path.join(destSlugDir, file));
         }
       }
+
+      // The manifest-DECLARED `cinatra.logo` asset (cinatra#2469, codex round-7).
+      // `PROJECTED_FILES` carries package.json, so WITHOUT this the seed keeps
+      // the logo POINTER and drops its REFERENT — the dangling state the
+      // publisher and the runtime materializer each close at their own seam,
+      // arriving instead through the production image build (this seed is what
+      // the Dockerfile bakes, bypassing `materializeAgentPackageToDisk`).
+      // Declaration-driven for the same reason as there: `cinatra.logo` is an
+      // arbitrary package-relative path, so no static entry in PROJECTED_FILES
+      // can express it.
+      projectDeclaredLogo(slugDir, destSlugDir);
 
       // Per-slug ownership marker — the boot materializer prunes ONLY dirs
       // carrying this marker.
