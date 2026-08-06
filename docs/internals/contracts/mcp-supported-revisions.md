@@ -257,12 +257,69 @@ exactly what the implementation above does).
 client migration to `@modelcontextprotocol/client@2.0.0` ran one surface at a
 time and all four have landed — the connector-instance transport was the last
 (cinatra#2218 **L2d**). `@modelcontextprotocol/sdk` is still declared `^1.29.0`
-in the root `package.json` and resolved to `1.29.0` in the lockfile, but its only
-remaining consumer in the tree is one CI capture harness
-(`tests/e2e/wp-mcp-gateway/capture-annotations.mjs`, whose retained
-`SSEClientTransport` fallback is recorded in the deprecated-features section
-below). Removing the dependency, its build-externalization entries and that last
-consumer is **L2z**, a separate change.
+in the root `package.json` and resolved to `1.29.0` in the lockfile.
+
+**Correction (cinatra#2218 L2z grounding).** An earlier revision of this section
+said that dependency's "only remaining consumer in the tree is one CI capture
+harness". **That was wrong**, and the error mattered: it missed **two
+cinatra-owned production consumers** and would have let the root dependency be
+removed on a false premise. The complete consumer set, established by repo-wide
+search over source, tests, scripts, configs, build lists and every workspace
+`package.json`:
+
+| Consumer | Kind | Removable here? |
+| --- | --- | --- |
+| `extensions/cinatra-ai/drupal-mcp-connector` — `src/lib/drupal-mcp-client.ts` imports `Client` + `StreamableHTTPClientTransport` and backs `callDrupalMcp`, the transport behind every Drupal content handler | **Production source, cinatra-owned. A FIFTH outbound MCP surface the L2a–L2d plan never enumerated.** Declares nothing — see below | **No** — its own repo (`cinatra-ai/drupal-mcp-connector`), synced here by `scripts/ci/sync-dev-extensions.mjs`; `extensions/` is gitignored |
+| `@cinatra-ai/cinatra` (the cinatra CLI, repo `cinatra-ai/cinatra-cli`; a root devDependency here) — `src/marketplace-mcp.mjs` imports `Client` + `StreamableHTTPClientTransport`, `src/login.mjs` imports the whole OAuth surface from `@modelcontextprotocol/sdk/client/auth.js` | **Production source, cinatra-owned. A SIXTH v1 consumer.** Unlike the Drupal connector it **declares** `^1.29.0` properly, so it resolves from its own `.pnpm` sibling `node_modules` and does **not** depend on the root symlink | **No** — its own repo. Does not block the root-dep removal; does block any claim that cinatra is off v1 |
+| `tests/e2e/wp-mcp-gateway/capture-annotations.mjs` | CI capture harness (sub-claim (b)); its retained `SSEClientTransport` fallback is recorded in the deprecated-features section below | Not in the same change — the harness's bytes are a provenance input (see below) |
+| `extensions/cinatra-ai/wordpress-mcp-connector` | Declares `@modelcontextprotocol/sdk` `^1.29.0` in its own `package.json` but **never imports it** — a stale first-party declaration | **No** — its own repo |
+| `drizzle-cube` (`packages/dashboards`, `packages/sdk-dashboard`), `@modelcontextprotocol/ext-apps` (required peer, via drizzle-cube) | Third-party hard dependencies | **No** — but they only keep the package in the lockfile; they add no cinatra source import |
+| `@google/genai` (`packages/llm`, `extensions/cinatra-ai/gemini-connector`) | **Optional** peer; cinatra never calls `mcpToTool` (zero hits repo-wide) | Not load-bearing |
+
+**The Drupal connector does not declare the dependency.** Its `package.json`
+lists only `class-variance-authority`, `clsx`, `radix-ui` and `tailwind-merge`.
+It resolves the v1 SDK purely through the root manifest's hoisted symlink: pnpm's
+default `isolated` linker (this repo sets no `.npmrc`, and `pnpm-workspace.yaml`
+sets no linker or hoist option) publicly links a package into the root
+`node_modules/` **only** when it is a direct dependency of the root importer,
+while transitive copies stay inside `.pnpm/` where a workspace package's upward
+directory walk cannot reach them. So the root declaration is the only thing
+keeping that import resolvable — an undeclared (phantom) dependency masked by the
+very line L2z set out to delete.
+
+Measured, not reasoned: deleting **only** the root `package.json` line and
+re-running `pnpm install` drops the `node_modules/@modelcontextprotocol/sdk`
+symlink; a `createRequire` probe from `drupal-mcp-client.ts` then returns
+`MODULE_NOT_FOUND` for both of its specifiers, and the root `pnpm typecheck`
+goes from exit 0 to exit 2 with three `TS2307` errors — its two production
+imports plus the one in its sibling unit test, all inside the Drupal connector.
+
+**So `@modelcontextprotocol/sdk` cannot be removed from the root manifest yet,
+and L2z is blocked.** The prerequisite is a lane in `cinatra-ai/drupal-mcp-connector`
+that migrates that surface to `@modelcontextprotocol/client@2.0.0` and declares
+its dependency explicitly, followed by a pin bump in
+`cinatra-dev-extensions.lock.json`. The build-externalization entries are gated
+on the same work — the v1 package is still reached from the Next module graph
+through that connector, so they still have something to externalize. (That is a
+reason to keep them, not a measurement: no negative build was run to show that
+dropping them fails.)
+
+**A note on what "removed" can ever mean here.** `drizzle-cube` and the CLI
+hard-depend on `@modelcontextprotocol/sdk`, so it keeps a lockfile entry for as
+long as those edges exist — which is not something this repo's own manifests
+decide. Zero lockfile occurrences is therefore the wrong completion test for
+cinatra#2218. The right one is all four of:
+
+1. zero cinatra-owned **source** imports (production, tests and CI harnesses alike);
+2. zero first-party **direct declarations** — including the stale one in the
+   WordPress connector, which declares the package without importing it;
+3. zero direct **installs** outside the manifests — today the capture workflow's
+   `npm install --prefix tests/e2e/wp-mcp-gateway` step;
+4. both build-externalization entries (`config/build-config.manifest.json` and
+   the `next.config.ts` block it generates) removed.
+
+Items 1–3 span three repos beyond this one: `cinatra-ai/drupal-mcp-connector`,
+`cinatra-ai/cinatra-cli`, and `cinatra-ai/wordpress-mcp-connector`.
 
 | Surface | Client | Negotiation | Offers on `initialize` | Accepts from server |
 | --- | --- | --- | --- | --- |
@@ -444,8 +501,13 @@ both reported as `unreachable`.
 
 This section stated the TARGET while the migration was in flight. **All four
 surfaces have landed**, so it now describes implemented behaviour and the rules
-any future outbound surface inherits. The only outstanding outbound work is
-**L2z** — removing `@modelcontextprotocol/sdk` and its last CI-harness consumer.
+any future outbound surface inherits — for the four surfaces **this repo owns**.
+**L2z** — removing `@modelcontextprotocol/sdk` — is blocked behind a fifth
+outbound surface the original lane plan missed
+(`extensions/cinatra-ai/drupal-mcp-connector`, which imports the v1 SDK without
+declaring it), and a sixth cinatra-owned v1 consumer, the CLI, still ships v1 in
+its own repo. See the correction under **Outbound — CURRENT** above for the full
+consumer set and the measured proof.
 
 The outbound path runs `@modelcontextprotocol/client@2.0.0`. This was a
 **package migration, not a version bump** — `@modelcontextprotocol/sdk@1.30.0`
@@ -709,9 +771,20 @@ usage found". The server half is right; the client half is not.
   observed, not a guarantee about future ones: the branch is still live and would
   execute if the StreamableHTTP attempt threw.
 
-  **Migration position:** the fallback is deleted, not re-expressed, when
-  `@modelcontextprotocol/sdk` is removed from the root manifest (the last step of
-  the outbound migration). It needs no deprecation window of its own: it is a
+  **Migration position:** the fallback is deleted, not re-expressed, when this
+  harness stops using `@modelcontextprotocol/sdk`. Two mechanical facts set the
+  shape of that change, and neither was understood when this position was first
+  recorded. First, the capture **workflow** does not rely on the root manifest —
+  it `npm install`s its own copy into `tests/e2e/wp-mcp-gateway/node_modules`, so
+  removing the root dependency neither breaks the CI run nor retires the
+  fallback. (Run locally without that nested install, the harness would still
+  reach the root copy by the ordinary upward walk; the CI path is the one that
+  matters here.) Second, the harness's own bytes are a provenance input
+  (`producerSha256`), so **any** edit to it invalidates the nine provenanced
+  captures and reds the required capture-freshness gate until a fixture-boot
+  harvest rewrites the transcripts. Retiring the fallback is therefore its own
+  change, carrying its own recapture — not a rider on the dependency removal.
+  It needs no deprecation window of its own: it is a
   diagnostic convenience against a fixture we pin and control, whose gateway is
   observed serving Streamable HTTP, and a red capture run is a CI signal rather
   than a user-visible outage. Until then it stays, and it stays **live**: if the
