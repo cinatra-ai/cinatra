@@ -356,3 +356,50 @@ describe("MarketplaceListingCard — rating stars use the dedicated rating-star 
     expect(html).not.toContain("text-rating-star");
   });
 });
+
+describe("MarketplaceListingCard — footer meta cannot be clipped by the card (cinatra#2409)", () => {
+  // The card root is `overflow-hidden` and EVERY child of the meta row is
+  // `whitespace-nowrap`: the left column is a grid (min-width:auto — it
+  // cannot shrink) and the right column is `shrink-0` on purpose (squeezing a
+  // nowrap verdict clips it just as badly). With no fit strategy the row's
+  // intrinsic width overflowed the card body at the widths this card actually
+  // renders at, and the overflow was SILENTLY sliced — "Compatibility
+  // unknown" rendered as "Compatibilit", "Updated about 1 month ago" lost its
+  // tail. The geometric proof lives in
+  // tests/e2e/design/marketplace-listing-card-geometry.spec.ts §4; this pins
+  // the three class-level decisions that proof depends on.
+  function metaRow(html: string): string {
+    const at = html.indexOf('data-slot="extension-card-meta"');
+    expect(at).toBeGreaterThan(-1);
+    return html.slice(at, html.indexOf(">", at) + 1);
+  }
+
+  it("gives the meta row a wrap allowance so a non-fitting column drops instead of overflowing", () => {
+    const row = metaRow(renderCard());
+    expect(row).toContain("flex-wrap");
+    // Axis-split gaps: the wrapped arrangement needs its own (tighter) row
+    // gap, so the single-line column gap is not reused vertically.
+    expect(row).toContain("gap-x-3.5");
+    expect(row).toContain("gap-y-2");
+  });
+
+  it("keeps the compat/freshness column right-aligned in BOTH arrangements", () => {
+    // `ml-auto` right-aligns the column when it wraps onto its own line (where
+    // `justify-between` would leave it at the start) and does the
+    // justify-between job on the one-line path — one rule, both arrangements.
+    const html = renderCard();
+    const at = html.indexOf('data-slot="extension-card-compat"');
+    const column = html.lastIndexOf("<div", at);
+    expect(html.slice(column, at)).toContain("ml-auto");
+  });
+
+  it("keeps the nowrap verdict unshrinkable — the row wraps, the label is never squeezed", () => {
+    const html = renderCard({ sdkAbiRange: null });
+    const at = html.indexOf('data-slot="extension-card-compat"');
+    const column = html.lastIndexOf("<div", at);
+    expect(html.slice(column, at)).toContain("shrink-0");
+    // The full label survives: a fit strategy that truncated it would satisfy
+    // "does not overflow" while still failing the actual requirement.
+    expect(html).toContain(">Compatibility unknown<");
+  });
+});

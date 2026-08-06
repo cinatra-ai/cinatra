@@ -418,10 +418,33 @@ export function MarketplaceListingCard({
           </div>
         </div>
         {/* Two-column footer meta (spec §IV L475–483): rating + installs LEFT,
-            compat + freshness RIGHT (right-aligned). */}
+            compat + freshness RIGHT (right-aligned).
+
+            `flex-wrap` is the row's FIT STRATEGY, and it is load-bearing
+            (cinatra#2409): every child here is `whitespace-nowrap`, the left
+            column is a grid (min-width:auto — it cannot shrink) and the right
+            column is `shrink-0` by design (squeezing a nowrap verdict would
+            clip it just the same). Without a wrap allowance the row's
+            INTRINSIC width — the widest rating row beside the widest of the
+            compat verdict / "Updated N ago" — simply exceeds the card body at
+            the widths this card actually renders at, and the card root's
+            `overflow-hidden` silently slices the right column: "Compatibility
+            unknown" and the freshness line lost their tails. The pinned
+            drawing fits only because it is drawn at a wider card.
+
+            So: the two columns stay side by side WHENEVER they fit (the
+            drawn arrangement is unchanged at the drawn width), and the right
+            column drops to its own line — still right-aligned, via `ml-auto`,
+            which also does the `justify-between` job on the one-line path —
+            rather than overflow the clip box. This is the SAME "one line when
+            it fits, wrap otherwise" contract the CTA + "More details" pair
+            above already carries (cinatra#2363), for the same reason: a
+            guaranteed single line is impossible with nowrap content at the
+            narrowest real card width, and a wrapped row still reads, while a
+            clipped one does not. */}
         <div
           data-slot="extension-card-meta"
-          className="mt-auto flex items-start justify-between gap-3.5 pt-3.5"
+          className="mt-auto flex flex-wrap items-start justify-between gap-x-3.5 gap-y-2 pt-3.5"
         >
           <div className="grid gap-1">
             {card.rating && <RatingRow rating={card.rating} />}
@@ -431,7 +454,7 @@ export function MarketplaceListingCard({
               </span>
             )}
           </div>
-          <div className="flex shrink-0 flex-col items-end gap-1">
+          <div className="ml-auto flex shrink-0 flex-col items-end gap-1">
             {/* 3-state in-instance ABI compatibility verdict, derived locally
                 from the catalog's declared sdkAbiRange (absent → neutral
                 "Unknown", never green) — a PLAIN meta row (spec §IV L481/
