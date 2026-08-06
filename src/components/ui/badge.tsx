@@ -14,6 +14,14 @@ const badgeVariants = cva(
           "bg-secondary text-secondary-foreground [a]:hover:bg-secondary/80",
         destructive:
           "bg-destructive/10 text-destructive focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 [a]:hover:bg-destructive/20",
+        // Solid red attention counter — the notifications spec's bell badge
+        // treatment (app-notifications.html §IV: `background: var(--red);
+        // color: var(--surface-strong)`). SOLID fill with light text, mapped
+        // through the app tokens (--destructive = --cinatra-red = the spec's
+        // --red; --destructive-foreground = light in BOTH themes). Distinct
+        // from the TINTED `destructive` status treatment above — do not merge.
+        attention:
+          "bg-destructive text-destructive-foreground focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 [a]:hover:bg-destructive/80",
         success:
           "bg-success/10 text-success focus-visible:ring-success/20 dark:bg-success/20 dark:focus-visible:ring-success/40 [a]:hover:bg-success/20",
         warning:

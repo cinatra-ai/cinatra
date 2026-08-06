@@ -168,7 +168,6 @@ export function NotificationsBellTrigger(): React.ReactElement {
     [collapsed, pathname],
   );
   const totalForBadge = unread.length + approvalsNeedsActionCount;
-  const unreadHasError = unread.some((n) => n.kind === "error");
   const label =
     totalForBadge > 0
       ? `Notifications, ${totalForBadge} need your attention`
@@ -184,9 +183,16 @@ export function NotificationsBellTrigger(): React.ReactElement {
       <Link href="/notifications" aria-label={label}>
         <Bell className="h-5 w-5" />
         {totalForBadge > 0 ? (
+          // Spec §IV badge rule (app-notifications.html, `.bell .badge`): ONE
+          // treatment — a solid red pill with light text, mono bold digits,
+          // 16px min geometry, and a 2px page-background ring
+          // (`box-shadow: 0 0 0 2px var(--paper)` → ring-background). The
+          // former error-tinted branch is retired: §IV defines no per-kind
+          // bell variant, and error semantics live on the /notifications rows
+          // themselves.
           <Badge
-            variant={unreadHasError ? "destructive" : "default"}
-            className="absolute -right-1 -top-1 min-w-5 px-1 text-badge-xs"
+            variant="attention"
+            className="absolute -right-1 -top-1 h-4 min-w-4 px-1 font-mono text-badge-xs font-bold ring-2 ring-background"
           >
             {totalForBadge > 99 ? "99+" : totalForBadge}
           </Badge>

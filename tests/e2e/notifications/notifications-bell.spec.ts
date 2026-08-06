@@ -7,8 +7,11 @@
  * store's derived count) PLUS the viewer's Inbox-actionable approval count
  * (server-resolved). With the seed (4 unread terminal notifications incl. the
  * E9 row + 1 actionable Inbox approval, and NO actionable approval among the
- * viewer's own requests) the badge is 4 + 1 = 5, destructive because an unread
- * error notification is present.
+ * viewer's own requests) the badge is 4 + 1 = 5, rendered as the spec's ONE
+ * badge treatment — the solid-red `attention` pill (§IV `.bell .badge`;
+ * cinatra#2460). The seed still includes an unread error notification: the
+ * former error-tinted variant branch is retired, so the treatment must NOT
+ * change because of it.
  */
 import { expect, test } from "@playwright/test";
 
@@ -48,7 +51,7 @@ test.describe("notifications bell (badge + link, spec §IV)", () => {
     );
   });
 
-  test("§IV · badge = unread notifications + actionable approvals, destructive when an unread error exists", async ({
+  test("§IV · badge = unread notifications + actionable approvals, ONE solid-red treatment even with an unread error", async ({
     page,
   }) => {
     const bell = page.getByRole("link", { name: /^Notifications/ });
@@ -57,8 +60,14 @@ test.describe("notifications bell (badge + link, spec §IV)", () => {
     // 4 unread notifications + 1 Inbox-actionable approval = 5.
     await expect(badge).toBeVisible();
     await expect(badge).toContainText("5");
-    // Destructive variant because an unread notification is kind=error.
-    await expect(badge).toHaveClass(/destructive/);
+    // The spec's single badge treatment (§IV `.bell .badge`: solid red, light
+    // text) — the `attention` Badge variant. The seed contains an unread
+    // kind=error notification; the retired error-tinted branch must NOT
+    // resurface as a different variant.
+    await expect(badge).toHaveAttribute("data-variant", "attention");
+    await expect(badge).toHaveClass(/bg-destructive/);
+    // §IV ring: box-shadow 0 0 0 2px var(--paper) → ring-2 ring-background.
+    await expect(badge).toHaveClass(/ring-background/);
     // The count is carried in the accessible name (§IV — "what needs the viewer").
     await expect(bell).toHaveAttribute("aria-label", "Notifications, 5 need your attention");
   });
