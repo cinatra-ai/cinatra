@@ -113,6 +113,14 @@
      `bg-rating-star` / `text-rating-star-muted` through @theme inline. */
   --rating-star: #f5a623;
   --rating-star-muted: #d0cbbd;
+  /* Attention-counter digit (notifications spec §IV bell badge, cinatra#2460):
+     ALWAYS white, in BOTH themes — the pill's solid red fill (--cinatra-red)
+     never flips with the theme, so neither may its text. Deliberately NOT
+     --destructive-foreground (that token is theme-varying by construction:
+     #ffffff light / oklch(0.984 …) dark). :root only, no .cinatra/.dark
+     overrides — theme-invariant like the type scale and --brand-mustard.
+     Consumed via `text-attention-foreground` through @theme inline. */
+  --attention-foreground: #ffffff;
   --border: var(--line);
   /* Input chrome carries the strong navy line, not the low-alpha hairline.
      Cascades through every shadcn primitive that uses `border-input`
@@ -488,6 +496,9 @@
      border-brand-mustard. Separate from --warning so page-title display and
      wordmark do not collide with status semantics. */
   --color-brand-mustard: var(--brand-mustard);
+  /* Attention-counter digit utility (spec §IV bell badge): always-white text
+     on the solid red attention pill, theme-invariant by construction. */
+  --color-attention-foreground: var(--attention-foreground);
   /* Marketplace review-star utilities (design spec §V): text-rating-star /
      bg-rating-star (filled + histogram fill) and text-rating-star-muted
      (empty star). */

@@ -41,6 +41,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
@@ -709,9 +710,13 @@ function NotificationsBellFixture() {
           className="relative inline-grid size-9 place-items-center rounded-full border border-line bg-surface-strong text-foreground"
         >
           <Bell className="h-5 w-5" aria-hidden />
-          <span className="absolute -right-1 -top-1 grid min-w-4 place-items-center rounded-full bg-destructive px-1 font-mono text-badge-xs text-white">
+          {/* The REAL bell badge treatment — the same Badge call-site classes
+              as NotificationsBellTrigger (spec §IV `.bell .badge`: solid red,
+              ALWAYS-white text in both themes, mono bold, 2px paper ring),
+              pinned identical by the bell-badge-spec-treatment parity test. */}
+          <Badge className="absolute -right-1 -top-1 h-4 min-w-4 bg-destructive px-1 font-mono text-badge-xs font-bold text-attention-foreground ring-2 ring-background [a]:hover:bg-destructive/80">
             2
-          </span>
+          </Badge>
         </Link>
       </div>
 
