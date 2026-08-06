@@ -5,8 +5,8 @@
 // Under Turbopack dev, `src/lib/database.ts` is an ASYNC MODULE: its static
 // import graph reaches externals that Turbopack loads via dynamic `import()`
 // (`pg` through drizzle-store -> drizzle-orm/node-postgres, and
-// `@modelcontextprotocol/sdk` through objects-dual-write -> objects-store ->
-// @/lib/mcp-server). Async-ness propagates to every static importer, and
+// `@modelcontextprotocol/server` through objects-dual-write -> objects-store ->
+// @cinatra-ai/mcp-server). Async-ness propagates to every static importer, and
 // Turbopack's `asyncModule()` runtime permanently replaces such a module's
 // `module.exports` with a getter that returns the module's Promise. Any
 // CommonJS `require()` of an async module therefore receives a pending

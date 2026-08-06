@@ -190,7 +190,9 @@ const nextConfig: NextConfig = {
     // retired the vendored copies; the -node / -express shims were never imported.
     // cinatra#2218 L2a added the client package for the graphiti outbound surface;
     // it exact-pins @modelcontextprotocol/core@2.0.0 the same way server does.
-    "@modelcontextprotocol/sdk",
+    // cinatra#2218 L2z dropped the v1 @modelcontextprotocol/sdk entry with the root
+    // dependency: no cinatra source reaches it from the Next module graph any more,
+    // so there is nothing left on that specifier to externalize.
     "@modelcontextprotocol/server",
     "@modelcontextprotocol/client",
     "@modelcontextprotocol/core",
