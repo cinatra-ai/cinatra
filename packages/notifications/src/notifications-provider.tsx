@@ -184,16 +184,27 @@ export function NotificationsBellTrigger(): React.ReactElement {
         <Bell className="h-5 w-5" />
         {totalForBadge > 0 ? (
           // Spec §IV badge rule (app-notifications.html, `.bell .badge`): ONE
-          // treatment — a solid red pill with light text, mono bold digits,
-          // 16px min geometry, and a 2px page-background ring
-          // (`box-shadow: 0 0 0 2px var(--paper)` → ring-background). The
-          // former error-tinted branch is retired: §IV defines no per-kind
-          // bell variant, and error semantics live on the /notifications rows
-          // themselves.
-          <Badge
-            variant="attention"
-            className="absolute -right-1 -top-1 h-4 min-w-4 px-1 font-mono text-badge-xs font-bold ring-2 ring-background"
-          >
+          // treatment — a SOLID red pill (`var(--red)` → bg-destructive, the
+          // theme-invariant --cinatra-red) with ALWAYS-WHITE text in BOTH
+          // themes (text-attention-foreground, the :root-only invariant token
+          // minted for this pill — NOT the theme-varying
+          // --destructive-foreground), mono bold digits, 16px min geometry,
+          // and a 2px page-background ring (`box-shadow: 0 0 0 2px
+          // var(--paper)` → ring-background).
+          //
+          // Deliberately a CALL-SITE treatment, not a Badge variant: badge.tsx
+          // is a design-registry primitive vendored byte-for-byte into
+          // companion extension repos (vendor-extension-primitives provenance
+          // gate), so a variant there obligates the multi-repo re-vendor
+          // choreography — out of scope for this one-surface fix. The
+          // explicit `[a]:hover:bg-destructive/80` wins the tailwind-merge
+          // slot over the default variant's `[a]:hover:bg-primary/80` (the
+          // badge sits inside the bell link).
+          //
+          // The former error-tinted branch is retired: §IV defines no
+          // per-kind bell variant, and error semantics live on the
+          // /notifications rows themselves.
+          <Badge className="absolute -right-1 -top-1 h-4 min-w-4 bg-destructive px-1 font-mono text-badge-xs font-bold text-attention-foreground ring-2 ring-background [a]:hover:bg-destructive/80">
             {totalForBadge > 99 ? "99+" : totalForBadge}
           </Badge>
         ) : null}

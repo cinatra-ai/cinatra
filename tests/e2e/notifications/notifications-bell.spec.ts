@@ -60,16 +60,37 @@ test.describe("notifications bell (badge + link, spec §IV)", () => {
     // 4 unread notifications + 1 Inbox-actionable approval = 5.
     await expect(badge).toBeVisible();
     await expect(badge).toContainText("5");
-    // The spec's single badge treatment (§IV `.bell .badge`: solid red, light
-    // text) — the `attention` Badge variant. The seed contains an unread
-    // kind=error notification; the retired error-tinted branch must NOT
-    // resurface as a different variant.
-    await expect(badge).toHaveAttribute("data-variant", "attention");
+    // The spec's single badge treatment (§IV `.bell .badge`: solid red,
+    // always-white text). The seed contains an unread kind=error
+    // notification; the retired error-tinted branch must NOT resurface as a
+    // different treatment.
     await expect(badge).toHaveClass(/bg-destructive/);
+    await expect(badge).toHaveClass(/text-attention-foreground/);
     // §IV ring: box-shadow 0 0 0 2px var(--paper) → ring-2 ring-background.
     await expect(badge).toHaveClass(/ring-background/);
     // The count is carried in the accessible name (§IV — "what needs the viewer").
     await expect(bell).toHaveAttribute("aria-label", "Notifications, 5 need your attention");
+
+    // COMPUTED colors, not class names (PR #2472 review): the digit is WHITE
+    // and the fill is the spec red (#a6384f = rgb(166, 56, 79)) in BOTH
+    // themes — the pill never flips with the theme. Theme forcing mirrors
+    // design-fixtures.spec.ts (next-themes localStorage key + reload).
+    for (const theme of ["cinatra", "dark"] as const) {
+      await page.evaluate((t) => window.localStorage.setItem("theme", t), theme);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      const themedBadge = page
+        .getByRole("link", { name: /^Notifications/ })
+        .locator(".absolute");
+      await expect(themedBadge, `${theme}: badge visible`).toBeVisible();
+      await expect(themedBadge, `${theme}: digit always white`).toHaveCSS(
+        "color",
+        "rgb(255, 255, 255)",
+      );
+      await expect(themedBadge, `${theme}: solid spec red fill`).toHaveCSS(
+        "background-color",
+        "rgb(166, 56, 79)",
+      );
+    }
   });
 
   test("§IV · activating the bell navigates to /notifications and opens NO popover", async ({
