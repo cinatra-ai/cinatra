@@ -275,8 +275,11 @@ export function ExtensionCardListingBanner({
         className={cn(
           "line-clamp-3 min-w-0 font-display text-listing-title font-extrabold italic",
           // Reserve room for the top-right badge overlay so a long, line-clamped
-          // name never runs underneath the badges.
-          badges && "pr-20",
+          // name never runs underneath the badges. Without badges, the italic
+          // overhang safe-area (cinatra#2409) keeps the final right-leaning
+          // glyph clear of `line-clamp`'s overflow clip; the badge reservation
+          // is a superset of that safe-area, so exactly one of the two applies.
+          badges ? "pr-20" : "italic-overhang-safe",
         )}
       >
         {name}

@@ -6,6 +6,9 @@
  * with the icon resolving a hosted-URL → kind-emblem fallback chain. Button
  * mode (the §V running-agent chip) is unchanged and keeps its accessible name.
  */
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -136,5 +139,83 @@ describe("ExtensionCard button mode (§V) — unchanged accessible name", () => 
     expect(html).toContain('aria-label="Email Outreach Agent"');
     // Button mode does NOT use the §IV listing banner.
     expect(html).not.toContain('data-slot="extension-card-banner"');
+  });
+});
+
+describe("italic overhang safe-area (cinatra#2409)", () => {
+  const shellProps = {
+    variant: "listing" as const,
+    name: "Auditor Agent",
+    accentColor: "plum" as const,
+    emblem: <SquareEmblem />,
+    description: "Audits agent runs.",
+  };
+
+  const nameDiv = (html: string) =>
+    html.match(/<div data-slot="extension-card-name"[^>]*>/)?.[0] ?? "";
+
+  it("guards the badge-less clamped italic name with the safe-area utility", () => {
+    // `line-clamp-2` is an `overflow: hidden` box; without the safe-area the
+    // final right-leaning italic glyph ("Auditor Agen*t*") is clipped.
+    const html = renderToStaticMarkup(<ExtensionCard {...shellProps} />);
+    expect(nameDiv(html)).toContain("italic-overhang-safe");
+    expect(nameDiv(html)).not.toContain("pr-20");
+  });
+
+  it("lets the badge reservation (a superset safe-area) supersede the utility", () => {
+    // With badges the name reserves `pr-20` for the overlay — 80px of trailing
+    // padding already keeps every line's last glyph clear of the clip edge, so
+    // exactly one of the two paddings applies (no specificity race).
+    const html = renderToStaticMarkup(
+      <ExtensionCard {...shellProps} badges={<span data-testid="badge" />} />,
+    );
+    expect(nameDiv(html)).toContain("pr-20");
+    expect(nameDiv(html)).not.toContain("italic-overhang-safe");
+  });
+
+  it("defines the utility as a zero-layout-shift pad/margin pair, mirrored app <-> design package", () => {
+    const globals = readFileSync(
+      join(__dirname, "..", "..", "app", "globals.css"),
+      "utf8",
+    );
+    const designUtilities = readFileSync(
+      join(__dirname, "..", "..", "..", "packages", "design", "src", "utilities.css"),
+      "utf8",
+    );
+
+    const appUtility = globals.match(
+      /@utility italic-overhang-safe \{[\s\S]*?\n\}/,
+    )?.[0];
+    const designClass = designUtilities.match(
+      /\.italic-overhang-safe \{[\s\S]*?\n\}/,
+    )?.[0];
+    expect(appUtility).toBeTruthy();
+    expect(designClass).toBeTruthy();
+
+    // The pad reserves clip room; the EQUAL negative margin hands the space
+    // back to the layout, so alignment and wrap points cannot shift. Read the
+    // two values instead of restating them — they are ONE decision.
+    const readPair = (css: string) => {
+      const pad = css.match(/padding-inline-end:\s*([0-9.]+em)/)?.[1];
+      const margin = css.match(/margin-inline-end:\s*-([0-9.]+em)/)?.[1];
+      return { pad, margin };
+    };
+    const app = readPair(appUtility!);
+    const design = readPair(designClass!);
+    expect(app.pad).toBeTruthy();
+    expect(app.pad).toBe(app.margin);
+    // The design-package mirror carries the identical pair (SDK consumers get
+    // the same treatment the app compiles via Tailwind).
+    expect(design).toEqual(app);
+  });
+
+  it("pins the sdk-ui card's line-clamp-3 variant to the same treatment", () => {
+    const sdkUiSrc = readFileSync(
+      join(__dirname, "..", "..", "..", "packages", "sdk-ui", "src", "extension-card.tsx"),
+      "utf8",
+    );
+    expect(sdkUiSrc).toMatch(
+      /badges \? "pr-20" : "italic-overhang-safe"/,
+    );
   });
 });

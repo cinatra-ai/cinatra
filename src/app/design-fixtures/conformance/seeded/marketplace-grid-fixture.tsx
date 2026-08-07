@@ -35,6 +35,29 @@ import { deriveExtensionAccent } from "@/lib/extension-accent";
 
 import { SEEDED_GRID_CARDS, type SeededGridCard } from "../seed-data";
 
+// Footer-meta content for the production-density grid (cinatra#2409). The
+// fixture used to leave `rating` / `installCount` / `freshnessAt` null, so its
+// "production density" cards rendered an EMPTY footer meta row — the one part
+// of the card anatomy whose intrinsic width overflowed the card body on the
+// real screen went unmeasured by every suite. These are the values the pinned
+// drawing itself uses (specs/app-extensions.html §I: "4.8 (312)",
+// "2.1k installations", "Updated N ago"), so the fixture now renders the meta
+// row the spec draws.
+const FIXTURE_RATING = { average: 4.8, count: 312 } as const;
+const FIXTURE_INSTALL_COUNT = 2100;
+/**
+ * "Updated about 1 month ago" — anchored to a fixed offset from NOW, not to a
+ * calendar date, so the RELATIVE label (and therefore its rendered width, the
+ * thing the geometry suite measures) does not drift through "about 1 year" /
+ * "over 2 years" as the fixture ages.
+ *
+ * 40 days, not 45: `formatDistanceToNow` switches from "about 1 month" to
+ * "about 2 months" at ~45 days, so a 45-day offset would sit ON that rounding
+ * boundary and could flip label (and width) with a DST/timezone shift. 40
+ * days sits well inside the bucket.
+ */
+const FIXTURE_FRESHNESS_OFFSET_MS = 40 * 24 * 60 * 60 * 1000;
+
 function toCardData(seed: SeededGridCard): MarketplaceCardData {
   return {
     packageName: seed.packageName,
@@ -44,10 +67,10 @@ function toCardData(seed: SeededGridCard): MarketplaceCardData {
     kindSlug: seed.kindSlug,
     kindLabel: seed.kindLabel,
     badge: { text: "Free", variant: "free" },
-    freshnessAt: null,
-    rating: null,
+    freshnessAt: new Date(Date.now() - FIXTURE_FRESHNESS_OFFSET_MS).toISOString(),
+    rating: FIXTURE_RATING,
     detailHref: `/configuration/marketplace/fixtures/${seed.packageName.split("/")[1]}`,
-    installCount: null,
+    installCount: FIXTURE_INSTALL_COUNT,
     // cinatra#2469: the extension's OWN sanitized `cinatra.logo` — the value
     // STATIC_EXTENSION_MANIFEST carries for a package that declares one.
     //
@@ -67,8 +90,17 @@ function toCardData(seed: SeededGridCard): MarketplaceCardData {
     vendorLogoUrl: null,
     // The incompatible-state card declares an unsatisfiable ABI range so its
     // compat meta row agrees with its greyed CTA (same derivation the real
-    // screen and the per-surface harness use).
-    sdkAbiRange: seed.ctaState === "incompatible" ? ">=999.0.0" : "*",
+    // screen and the per-surface harness use). The restore-state card declares
+    // NO range, so the grid also renders the third verdict — the neutral
+    // "Compatibility unknown" (cinatra#2409). That is the LONGEST of the three
+    // labels and therefore the widest footer-meta case; leaving it unrendered
+    // is why the meta row's overflow went unmeasured.
+    sdkAbiRange:
+      seed.ctaState === "incompatible"
+        ? ">=999.0.0"
+        : seed.ctaState === "restore"
+          ? null
+          : "*",
     vendor: { name: "Cinatra Fixtures", storeUrl: null },
   };
 }

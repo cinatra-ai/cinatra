@@ -739,6 +739,20 @@ body {
   padding-inline: 2rem;
 }
 
+/* Italic-overhang safe-area (cinatra#2409) — for the display-italic title
+   treatment inside an `overflow: hidden` box (`line-clamp-*`, `truncate`).
+   The final right-leaning glyph of an italic title (t/f/l/d, …) overhangs its
+   advance width, and the listing-title's negative tracking leaves no trailing
+   side-bearing to absorb the lean, so `overflow: hidden` slices the glyph's
+   right edge. The trailing pad keeps the last glyph inside the clip box; the
+   equal negative margin returns the reserved space to the layout so alignment
+   and wrap points are unchanged. Mirrored for SDK consumers in
+   `packages/design/src/utilities.css` — keep the two values identical. */
+@utility italic-overhang-safe {
+  padding-inline-end: 0.08em;
+  margin-inline-end: -0.08em;
+}
+
 ::selection {
   background: rgba(15, 23, 42, 0.14);
 }

@@ -276,3 +276,77 @@ for (const [bp, size] of Object.entries(VIEWPORTS)) {
     }
   });
 }
+
+// ---------------------------------------------------------------------------
+// 4. Footer-meta CLIP contract (cinatra#2409): the compat verdict and the
+//    "Updated N ago" line must render INSIDE the card's clip box.
+//
+// The card root is `overflow-hidden`, and every child of the two-column meta
+// row is `whitespace-nowrap` with a non-shrinkable left column and a
+// `shrink-0` right one — so before the row had a fit strategy its intrinsic
+// width simply ran past the card body and the right column's tails were
+// sliced with no ellipsis and no other symptom ("Compatibility unknown" read
+// as "Compatibilit"). Nothing measured it: both conformance harnesses left
+// rating/installs/freshness null, so their meta rows were empty.
+//
+// Measured on the seeded production-density grid, which now renders the meta
+// content the pinned drawing carries (rating, install count, freshness) and
+// all THREE compat verdicts. The assertion is deliberately geometric, not
+// class-based: no meta text may extend past the card body's content edge, at
+// any sampled breakpoint. A revert of the wrap allowance fails it at every
+// one.
+// ---------------------------------------------------------------------------
+for (const [bp, size] of Object.entries(VIEWPORTS)) {
+  test.describe(`Seeded grid footer meta @ ${bp} (${size.width}px)`, () => {
+    test.beforeEach(async ({ page }) => {
+      await page.setViewportSize(size);
+      await page.goto(SEEDED_HARNESS_PATH, { waitUntil: "domcontentloaded" });
+    });
+
+    for (const card of SEEDED_GRID_CARDS) {
+      test(`${card.packageName}: compat verdict + freshness stay inside the card clip box`, async ({
+        page,
+      }, testInfo) => {
+        const item = page
+          .locator('[data-surface-id="extension-listing-grid"][data-variant="populated"]')
+          .locator('[data-testid="marketplace-grid-item"]')
+          .filter({ hasText: card.displayName });
+        const compat = item.locator('[data-slot="extension-card-compat"]');
+        await expect(compat).toBeVisible();
+
+        const geometry = await item.evaluate((el) => {
+          const meta = el.querySelector('[data-slot="extension-card-meta"]')!;
+          // The meta row's own container is the card BODY; its content box
+          // (padding excluded) is the edge the card's overflow clips at.
+          const body = meta.parentElement!;
+          const bodyRect = body.getBoundingClientRect();
+          const bodyStyle = getComputedStyle(body);
+          const contentRight = bodyRect.right - parseFloat(bodyStyle.paddingRight);
+          const rights = [...meta.querySelectorAll("span")].map(
+            (s) => s.getBoundingClientRect().right,
+          );
+          return {
+            contentRight,
+            maxRight: Math.max(...rights),
+            metaOverflow: meta.scrollWidth - meta.clientWidth,
+            compatText:
+              meta.querySelector('[data-slot="extension-card-compat"]')?.textContent?.trim() ?? "",
+          };
+        });
+
+        // 1px tolerance for subpixel rounding, the same allowance the
+        // one-line row assertions above use.
+        expect(geometry.maxRight).toBeLessThanOrEqual(geometry.contentRight + 1);
+        expect(geometry.metaOverflow).toBeLessThanOrEqual(1);
+        // The verdict is one of the three FULL labels — never a sliced tail.
+        expect(["Compatible", "Incompatible", "Compatibility unknown"]).toContain(
+          geometry.compatText,
+        );
+        testInfo.annotations.push({
+          type: `footer-meta-compat@${bp}`,
+          description: `${geometry.compatText} (overflow ${geometry.metaOverflow}px)`,
+        });
+      });
+    }
+  });
+}
