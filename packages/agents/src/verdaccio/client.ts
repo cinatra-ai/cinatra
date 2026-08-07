@@ -220,6 +220,70 @@ export function assertDeclaredLogoShips({
   );
 }
 
+/**
+ * Carry the source `cinatra.displayName` / `cinatra.vendor` into the
+ * generated distribution manifest (cinatra#2494 — same class as `cinatra.logo`
+ * cinatra#2469 above: `publishAgentPackageFromGitDir` BUILDS A FRESH `cinatra`
+ * block rather than spreading the source one, so any field not explicitly
+ * carried is LOST on publish). #2469's own PR named this exact gap and scoped
+ * it out deliberately, with codex agreement: "the sibling card-identity keys
+ * admitted cross-kind by #1570/#1605 … are also not carried through the agent
+ * publisher's manifest rebuild. That is pre-existing and identical in kind,
+ * but outside #2469's mandate. Worth its own issue." This is that issue.
+ *
+ * Both fields are CROSS-KIND PRESENTATION metadata
+ * (`ARTIFACT_ALLOWED_CINATRA_KEYS` in `@cinatra-ai/sdk-extensions/artifact-contract`)
+ * carried through UNVALIDATED beyond shape — ownership/uniqueness is the
+ * marketplace publish gate's job, not this publisher's or the SDK's (see that
+ * file's `vendor`/`displayName` doc comment). Unlike `logo` there is no
+ * separate ASSET a pointer can dangle from — both values live entirely inside
+ * package.json — so there is no ship-check counterpart to
+ * `assertDeclaredLogoShips` needed here, and no asset-copy counterpart to
+ * `materialize-agent-package.ts`'s `_copyDeclaredLogo`: once the value
+ * survives this rebuild, it rides package.json through every downstream
+ * layer (tarball, install, the required-agent seed's wholesale
+ * `PROJECTED_FILES = ["package.json"]` copy) exactly like every other
+ * already-carried field (`produces`, `consumes`, `license`, `logo`).
+ *
+ * Mirrors the manifest generator's own resolution
+ * (`resolveDisplayName`/`resolveVendor` in
+ * `scripts/extensions/generate-extension-manifest.mjs`) rather than
+ * `carryManifestLogo`'s fail-loud posture: a non-empty TRIMMED string for
+ * `displayName`, a `{key,name}` object with both non-empty TRIMMED strings for
+ * `vendor`. Anything else (wrong type, blank, explicit `null`, a malformed
+ * vendor shape) resolves to ABSENT rather than throwing — these are soft
+ * presentation hints the generator itself only ever silently degrades to
+ * `null` for, unlike `logo`'s build-time fail-closed contract, so there is no
+ * "malformed declaration laundered into silence" failure mode to guard
+ * against here the way there is for `logo`.
+ *
+ * The DECLARATIVE (artifact|skill) publisher (`publishExtensionPackageFromDir`)
+ * needs no equivalent call: it spreads `incomingCinatra` VERBATIM, so it never
+ * dropped these fields — that publisher's `carryManifestLogo` call exists to
+ * layer `logo`'s fail-closed VALIDATION on top of that verbatim spread, a
+ * concern `displayName`/`vendor` do not have.
+ */
+export function carryManifestDisplayName(gitPkgJson: Record<string, unknown>): string | undefined {
+  const cinatra = gitPkgJson.cinatra;
+  if (typeof cinatra !== "object" || cinatra === null || Array.isArray(cinatra)) return undefined;
+  const raw = (cinatra as Record<string, unknown>).displayName;
+  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : undefined;
+}
+
+export function carryManifestVendor(
+  gitPkgJson: Record<string, unknown>,
+): { key: string; name: string } | undefined {
+  const cinatra = gitPkgJson.cinatra;
+  if (typeof cinatra !== "object" || cinatra === null || Array.isArray(cinatra)) return undefined;
+  const raw = (cinatra as Record<string, unknown>).vendor;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const rawVendor = raw as Record<string, unknown>;
+  const key = typeof rawVendor.key === "string" ? rawVendor.key.trim() : "";
+  const name = typeof rawVendor.name === "string" ? rawVendor.name.trim() : "";
+  if (key.length === 0 || name.length === 0) return undefined;
+  return { key, name };
+}
+
 export type PublishAgentPackageResult = {
   packageName: string;
   packageVersion: string;
@@ -597,6 +661,14 @@ export async function publishAgentPackageFromGitDir(
   // this path BUILDS a FRESH cinatra block, so an un-carried field is lost on
   // publish. See `carryManifestLogo` for the full failure mode it closes.
   const logo = carryManifestLogo(gitPkgJson);
+  // Carry the source `cinatra.displayName` / `cinatra.vendor` through the
+  // generated distribution manifest (cinatra#2494 — the sibling card-identity
+  // keys #2469 scoped out of its own mandate). Same class of trap: this path
+  // BUILDS a FRESH cinatra block, so an un-carried field is lost on publish.
+  // See `carryManifestDisplayName` / `carryManifestVendor` for the full
+  // reasoning.
+  const displayName = carryManifestDisplayName(gitPkgJson);
+  const vendor = carryManifestVendor(gitPkgJson);
 
   // Build distribution-format package.json (satisfies AgentPackageManifest schema)
   const distManifest: Record<string, unknown> = {
@@ -624,6 +696,10 @@ export async function publishAgentPackageFromGitDir(
       ...(consumesEntries !== undefined ? { consumes: consumesEntries } : {}),
       // cinatra#2469: the agent's self-declared card logo survives the rebuild.
       ...(logo !== undefined ? { logo } : {}),
+      // cinatra#2494: the agent's self-declared card displayName/vendor
+      // survive the rebuild — same class of fix, same rebuild site as logo.
+      ...(displayName !== undefined ? { displayName } : {}),
+      ...(vendor !== undefined ? { vendor } : {}),
       ...(executionProvider && executionProvider !== "default" ? { executionProvider } : {}),
       // Unconditionally force kind + apiVersion on the published manifest.
       // Without normalization, chat-created packages can lack `cinatra.kind`,

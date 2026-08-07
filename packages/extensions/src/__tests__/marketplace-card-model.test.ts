@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { MarketplaceCatalogEntry } from "@cinatra-ai/marketplace-mcp-client";
+import { carryManifestDisplayName } from "@cinatra-ai/agents/verdaccio/client";
 import {
   catalogEntryToCardData,
   resolveCardDisplayName,
@@ -376,6 +377,57 @@ describe("catalogEntryToCardData — display-name resolution (cinatra#1605)", ()
     );
     expect(card!.displayName).toBe(MANIFEST_NAME);
     expect(card!.displayName).not.toBe(card!.packageName);
+  });
+});
+
+describe("catalogEntryToCardData — displayName for an agent published through the FIXED publisher rebuild (cinatra#2494 AC3)", () => {
+  // cinatra#2494: the agent publisher's manifest rebuild
+  // (`publishAgentPackageFromGitDir` in `@cinatra-ai/agents/verdaccio/client`)
+  // used to BUILD A FRESH `cinatra` block and drop a declared `displayName`
+  // the same way `logo` was dropped before #2469 fixed it for that key. This
+  // pins the value one hop past the carry: what
+  // `carryManifestDisplayName` PRODUCES for a real source package.json is fed
+  // to the card model exactly as the generator (`resolveDisplayName` in
+  // `scripts/extensions/generate-extension-manifest.mjs`) would inject it —
+  // `STATIC_EXTENSION_MANIFEST[pkg].displayName` → `manifestDisplayName` — and
+  // asserts the card renders THAT value, never the raw package name.
+  //
+  // Anti-lookalike pair (shares no token with the package name/slug — see the
+  // `resolveCardDisplayName` describe block above), so a resolver that leaked
+  // or prettified the package name could never coincidentally pass.
+  const PKG = "@cinatra-fixtures/ledger-beacon-agent";
+
+  it("renders the carried displayName, never the package name, for a catalog entry that echoes the package identity (the live #1605 symptom)", () => {
+    // A source package.json shaped exactly like an agent author's git
+    // checkout — the input `publishAgentPackageFromGitDir` reads.
+    const sourcePkgJson = {
+      name: PKG,
+      version: "1.0.0",
+      cinatra: { kind: "agent", displayName: "Ledger Beacon" },
+    };
+    const carriedDisplayName = carryManifestDisplayName(sourcePkgJson);
+    expect(carriedDisplayName).toBe("Ledger Beacon"); // the publish-side carry survived
+
+    // The production symptom #1605 documents: the storefront catalog stores
+    // the package name AS display_name for the majority of entries. The
+    // manifest tier (fed by the now-fixed rebuild) is the rescue.
+    const card = catalogEntryToCardData(catalogEntry({ package_name: PKG, display_name: PKG }), {
+      manifestDisplayName: carriedDisplayName ?? null,
+    });
+
+    expect(card!.displayName).toBe("Ledger Beacon");
+    expect(card!.displayName).not.toBe(PKG);
+    expect(card!.displayName).not.toBe(card!.packageName);
+  });
+
+  it("a NEGATIVE CONTROL proves the assertion is real: reverting to the pre-fix (undropped-to-dropped) manifestDisplayName falls through to the package name", () => {
+    // Simulates the bug this issue fixes: the rebuild dropped displayName, so
+    // the generator would have emitted `null` for this package — exactly
+    // `STATIC_EXTENSION_MANIFEST[pkg].displayName` before cinatra#2494.
+    const card = catalogEntryToCardData(catalogEntry({ package_name: PKG, display_name: PKG }), {
+      manifestDisplayName: null,
+    });
+    expect(card!.displayName).toBe(PKG);
   });
 });
 
