@@ -349,8 +349,13 @@ export function createArtifactExtensionHandler(): ExtensionTypeHandler {
           (k) => !ALLOWED_CINATRA_KEYS.has(k),
         );
         if (extraneous.length > 0) {
+          // The key list is RENDERED FROM the imported Set, never re-typed as a
+          // prose literal (cinatra#2469): the hand-copied form here silently
+          // went stale every time the canonical Set widened, telling an author
+          // their conformant key was disallowed. Same fix applied to the
+          // twin message in `packages/agents/src/mcp/handlers.ts`.
           errors.push(
-            `artifact extensions may only declare cinatra.{kind,apiVersion,artifact,dependencies,roles,displayName,vendor,views,fieldRenderers,dashboardContribution}; ` +
+            `artifact extensions may only declare cinatra.{${[...ALLOWED_CINATRA_KEYS].join(",")}}; ` +
               `unexpected key(s): ${extraneous.join(", ")}`,
           );
         }

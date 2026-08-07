@@ -24,7 +24,7 @@ import "server-only";
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomBytes } from "node:crypto";
-import { cp, lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { cp, lstat, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { moveDirExdevSafe } from "./exdev-safe-move";
 
@@ -369,6 +369,120 @@ async function _copyRuntimeFiles(srcRoot: string, dstRoot: string): Promise<void
     // stat) so symlinks are visible.
     await _refuseSymlinksUnder(src);
     await cp(src, dst, { recursive: entry.recursive, force: true });
+  }
+  // The manifest-DECLARED logo asset (cinatra#2469). The allowlist above is a
+  // fixed list of well-known paths; `cinatra.logo` is an arbitrary
+  // package-relative path (`./logo.svg`, `./assets/brand/mark.svg`, …), so it
+  // cannot be expressed as a static entry — it has to be READ from the manifest
+  // being materialized.
+  //
+  // Without this the agent kind's logo breaks in exactly the way the LICENSE
+  // entries above were added to prevent, only more confusingly: the publisher
+  // carries `cinatra.logo` into the distribution manifest and `walkPackageFiles`
+  // ships the asset in the tarball, but the materializer atomically replaces the
+  // source dir with this allowlisted subset — so the POINTER survives and its
+  // REFERENT is deleted, leaving a declaration aimed at a missing file.
+  // (Codex round-1 BLOCKER on the cinatra#2469 PR.)
+  await _copyDeclaredLogo(srcRoot, dstRoot);
+}
+
+/**
+ * Copy the `cinatra.logo` asset declared by the package being materialized.
+ *
+ * DECLARATION-DRIVEN, not name-matched: exactly the ONE file the manifest points
+ * at is copied, preserving its relative path, so the runtime-mount manifest and
+ * its asset stay together.
+ *
+ * SKIP-DON'T-THROW, deliberately diverging from the allowlist loop's symlink
+ * posture above: a logo is cosmetic, so a malformed/hostile declaration must
+ * never fail an otherwise-valid install. Every rejection path below simply
+ * declines to copy:
+ *   - a non-string / blank declaration                        → skip
+ *   - a LEXICAL escape from the package (`../`, absolute)     → skip
+ *   - a REALPATH escape (a symlinked PARENT directory)        → skip
+ *   - a non-`.svg` path                                       → skip
+ *   - a symlinked leaf, a directory, or a missing file        → skip
+ * A skipped-but-declared logo is NOT silently swallowed downstream: the manifest
+ * generator's `resolveDeclaredLogo` fail-closes on a declared-but-unresolvable
+ * path, so the authoring mistake still surfaces LOUDLY as a build error — the
+ * #1482/#2467 contract, preserved rather than bypassed.
+ *
+ * THREAT MODEL, stated precisely rather than absolutely (codex round-3): the
+ * checks above are check-then-use, so they are sound against a STATIC hostile
+ * tarball — the only input this function is designed to defend against — but
+ * they are not TOCTOU-safe against a concurrent writer able to swap a component
+ * of `srcRoot` between the `realpath` and the `cp`. That writer does not exist
+ * in the install path: `srcRoot` is a freshly-extracted private temp dir and
+ * `dstRoot` is a private staging sibling, both created by this process for this
+ * install. The same check-then-use shape is what `_refuseSymlinksUnder` +
+ * `cp` above already rely on for every other allowlisted path.
+ */
+async function _copyDeclaredLogo(srcRoot: string, dstRoot: string): Promise<void> {
+  let declared: unknown;
+  try {
+    const raw = await readFile(path.join(srcRoot, "package.json"), "utf8");
+    declared = (JSON.parse(raw) as { cinatra?: { logo?: unknown } })?.cinatra?.logo;
+  } catch {
+    return;
+  }
+  if (typeof declared !== "string" || declared.trim().length === 0) return;
+  // `.svg` only — the host inlines a sanitized SVG and reads no other format.
+  // The suffix test is applied to the TRIMMED value while the path is resolved
+  // RAW, byte-mirroring `resolveDeclaredLogo`
+  // (`scripts/extensions/generate-extension-manifest.mjs`), which comments that
+  // split explicitly. An untrimmed suffix test here looked equivalent and was
+  // not (codex round-4): a real file literally named `logo.svg ` declared as
+  // `"./logo.svg "` is ACCEPTED by the generator and would have been SKIPPED
+  // here — re-creating the dangling pointer this function exists to prevent,
+  // in the one case where the two components disagree.
+  if (!declared.trim().toLowerCase().endsWith(".svg")) return;
+
+  // Containment, in TWO independent layers. Both are required — codex round-2
+  // caught an earlier version that documented a realpath check it never
+  // performed, which left a live parent-directory symlink escape:
+  // `assets -> /outside` plus `cinatra.logo: "./assets/mark.svg"` passes a
+  // lexical check AND an `lstat` of the final component (that component is a
+  // real file), so `/outside/mark.svg` would have been copied into the install.
+  //
+  //   (1) LEXICAL — the normalized join must stay under srcRoot (`../` escapes).
+  const rel = path.normalize(declared);
+  const srcAbs = path.resolve(srcRoot, rel);
+  const rootWithSep = path.resolve(srcRoot) + path.sep;
+  if (!srcAbs.startsWith(rootWithSep)) return;
+
+  let st;
+  try {
+    st = await lstat(srcAbs);
+  } catch {
+    return;
+  }
+  // lstat (NOT stat): a symlink at the FINAL component is visible rather than
+  // followed, so `cp` can never read through it.
+  if (st.isSymbolicLink() || !st.isFile()) return;
+
+  //   (2) REALPATH — resolves EVERY intermediate component, which is the only
+  //       layer that catches a symlinked PARENT directory. Compared against the
+  //       realpath of srcRoot itself, so a symlinked package root (a legitimate
+  //       layout) is not mistaken for an escape.
+  let realSrc: string;
+  let realRoot: string;
+  try {
+    realSrc = await realpath(srcAbs);
+    realRoot = await realpath(srcRoot);
+  } catch {
+    return;
+  }
+  if (!realSrc.startsWith(realRoot + path.sep)) return;
+
+  const dstAbs = path.resolve(dstRoot, rel);
+  const dstRootWithSep = path.resolve(dstRoot) + path.sep;
+  if (!dstAbs.startsWith(dstRootWithSep)) return;
+
+  try {
+    await mkdir(path.dirname(dstAbs), { recursive: true });
+    await cp(srcAbs, dstAbs, { force: true });
+  } catch {
+    // A cosmetic asset never fails an install.
   }
 }
 

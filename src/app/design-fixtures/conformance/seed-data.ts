@@ -225,6 +225,52 @@ export type SeededGridCtaState =
   | "installing"
   | "incompatible";
 
+/**
+ * Sanitized inline logo data URIs for the seeded grid's declared-logo cards
+ * (cinatra#2469).
+ *
+ * PROVENANCE — these are not hand-written strings: each is the EXACT output of
+ * the repository's own manifest-generator sanitizer
+ * (`sanitizeSvgToDataUri`, scripts/extensions/generate-extension-manifest.mjs)
+ * over the committed source glyph in ./logos/<kind>-glyph.svg — the same
+ * function that produces `STATIC_EXTENSION_MANIFEST[pkg].logo` for a package
+ * that declares `cinatra.logo`. ../__tests__/seeded-declared-logo.test.ts
+ * re-derives all three from those .svg sources through the real sanitizer and
+ * fails if a literal here ever drifts, so the harness can never render a value
+ * the generator would not emit.
+ *
+ * They are inlined as literals because this file is DEPENDENCY-FREE by
+ * contract (see the header): the Playwright suite imports it by relative path
+ * outside the Next.js toolchain, so it cannot read a file or import a script.
+ *
+ * The three glyphs are deliberately DISTINCT in shape and colour (agent = blue
+ * ringed disc, skill = green rounded square, artifact = amber diamond) so a
+ * render proof shows WHICH kind resolved WHICH logo — a single shared mark
+ * could pass while the cards were cross-wired.
+ */
+export const SEEDED_AGENT_LOGO_DATA_URI =
+  "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiByb2xlPSJpbWciIGFyaWEtaGlkZGVuPSJ0cnVlIj48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIxMCIgZmlsbD0iIzBCNUZGRiIgLz48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSI0IiBmaWxsPSIjRkZGRkZGIiAvPjwvc3ZnPg==";
+export const SEEDED_SKILL_LOGO_DATA_URI =
+  "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiByb2xlPSJpbWciIGFyaWEtaGlkZGVuPSJ0cnVlIj48cmVjdCB4PSIyIiB5PSIyIiB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHJ4PSIzIiBmaWxsPSIjMTBCOTgxIiAvPjxyZWN0IHg9IjgiIHk9IjgiIHdpZHRoPSI4IiBoZWlnaHQ9IjgiIGZpbGw9IiNGRkZGRkYiIC8+PC9zdmc+";
+export const SEEDED_ARTIFACT_LOGO_DATA_URI =
+  "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgd2lkdGg9IjI0IiBoZWlnaHQ9IjI0IiByb2xlPSJpbWciIGFyaWEtaGlkZGVuPSJ0cnVlIj48cG9seWdvbiBwb2ludHM9IjEyLDEgMjMsMTIgMTIsMjMgMSwxMiIgZmlsbD0iI0Y1OUUwQiIgLz48cG9seWdvbiBwb2ludHM9IjEyLDcgMTcsMTIgMTIsMTcgNywxMiIgZmlsbD0iI0ZGRkZGRiIgLz48L3N2Zz4=";
+
+/**
+ * The two brand-gate cards' package BASENAMES (cinatra#2469). Both are slugs
+ * that ARE mapped in the host client-icon map (`ICON_BY_SLUG`,
+ * src/components/connector-brand-icons.tsx).
+ *
+ * They live in the package NAME rather than a hand-set field on purpose: the
+ * production card model derives the client-icon slug from the package name for
+ * EVERY kind (`deriveIconSlug`), so injecting a slug directly would have made
+ * the gate test unable to fail on broken slug derivation. One
+ * card is a connector (the gate must ALLOW it), the other is a SKILL whose
+ * basename collides with a mapped connector slug — the exact hazard the
+ * cinatra#1325 connector-only gate exists for (the gate must DENY it).
+ */
+export const SEEDED_BRAND_GATE_CONNECTOR_BASENAME = "github-connector";
+export const SEEDED_BRAND_GATE_NON_CONNECTOR_BASENAME = "plane-connector";
+
 export type SeededGridCard = {
   packageName: string;
   packageVersion: string;
@@ -233,6 +279,20 @@ export type SeededGridCard = {
   description: string;
   kindSlug: "agent" | "skill" | "connector" | "artifact";
   kindLabel: string;
+  /**
+   * The extension's OWN `cinatra.logo`, already sanitized into the inline data
+   * URI the manifest generator emits — i.e. exactly what
+   * `STATIC_EXTENSION_MANIFEST[pkg].logo` holds for a package that declares one
+   * (cinatra#2469, closing the #2469 render gap). Absent/undefined = the
+   * ABSENT-LOGO CONTROL: the card must fall straight through to its kind
+   * emblem, unchanged.
+   *
+   * Three NON-connector kinds carry one (agent, skill, artifact) because #2469
+   * generalized `cinatra.logo` to every extension kind; the tile must render it
+   * `size-6 object-contain` (24×24, contained) rather than the full-bleed
+   * `object-cover` the catalog/vendor artwork tiers get.
+   */
+  manifestLogoUrl?: string;
   /**
    * The CTA state this card renders AT REST on the seeded grid (cinatra#2363
    * item 2): one card per six-state identity, so the production-density grid
@@ -247,14 +307,47 @@ export type SeededGridCard = {
   ctaLabel: string;
 };
 
+// The declared-logo assignment (cinatra#2469) rides the EXISTING six cards — no
+// card is added or removed, so every cardinality constant and the pairwise
+// distinctness invariant are untouched. The six split into four proof cells:
+//
+//   DECLARED    agent field-notes / skill page-turner / artifact style-pack —
+//               the three kinds #2469 newly admitted; each must render its own
+//               24×24 `object-contain` glyph. (A CONNECTOR could always declare
+//               one structurally and its render landed with cinatra#1482 — it is
+//               not #2469's gap, so the connector card is spent on the gate.)
+//   CONTROL     agent quote-mill — no declared logo, no mapped slug: the kind
+//               emblem, unchanged. Proves the declared-logo tier is what moved
+//               the render, not some unrelated tile change.
+//   GATE-ALLOW  connector github-connector — no declared logo, its basename
+//               DERIVES a mapped slug: the client-icon brand mark still
+//               resolves for a CONNECTOR.
+//   GATE-DENY   skill plane-connector — no declared logo, its basename likewise
+//               derives a mapped slug: a non-connector must NOT borrow the
+//               brand mark; it falls to its kind emblem (the cinatra#1325
+//               gate, pinned here on the live surface rather than
+//               only in jsdom).
+//
+// The two gate basenames REPLACE the previous `wire-tap` / `lens-cap` names.
+// Nothing outside this file referenced them (every consumer iterates the array),
+// and the rename is what makes the gate genuinely derivable rather than injected.
 export const SEEDED_GRID_CARDS: SeededGridCard[] = [
-  { packageName: "@cinatra-fixtures/field-notes", packageVersion: "1.0.0", displayName: "Survey Companion", description: "Collects structured observations on the go.", kindSlug: "agent", kindLabel: "Agent", ctaState: "install", ctaLabel: "Install now" },
-  { packageName: "@cinatra-fixtures/page-turner", packageVersion: "2.3.0", displayName: "Longform Skimmer", description: "Summarizes book-length PDFs chapter by chapter.", kindSlug: "skill", kindLabel: "Skill", ctaState: "installed", ctaLabel: "Installed" },
-  { packageName: "@cinatra-fixtures/wire-tap", packageVersion: "1.1.2", displayName: "Event Stream Bridge", description: "Subscribes the workspace to external event feeds.", kindSlug: "connector", kindLabel: "Connector", ctaState: "update", ctaLabel: "Update now" },
-  { packageName: "@cinatra-fixtures/style-pack", packageVersion: "4.0.0", displayName: "Voice Guide Bundle", description: "House tone-of-voice templates and examples.", kindSlug: "artifact", kindLabel: "Artifact", ctaState: "restore", ctaLabel: "Restore" },
+  { packageName: "@cinatra-fixtures/field-notes", packageVersion: "1.0.0", displayName: "Survey Companion", description: "Collects structured observations on the go.", kindSlug: "agent", kindLabel: "Agent", ctaState: "install", ctaLabel: "Install now", manifestLogoUrl: SEEDED_AGENT_LOGO_DATA_URI },
+  { packageName: "@cinatra-fixtures/page-turner", packageVersion: "2.3.0", displayName: "Longform Skimmer", description: "Summarizes book-length PDFs chapter by chapter.", kindSlug: "skill", kindLabel: "Skill", ctaState: "installed", ctaLabel: "Installed", manifestLogoUrl: SEEDED_SKILL_LOGO_DATA_URI },
+  { packageName: `@cinatra-fixtures/${SEEDED_BRAND_GATE_CONNECTOR_BASENAME}`, packageVersion: "1.1.2", displayName: "Event Stream Bridge", description: "Subscribes the workspace to external event feeds.", kindSlug: "connector", kindLabel: "Connector", ctaState: "update", ctaLabel: "Update now" },
+  { packageName: "@cinatra-fixtures/style-pack", packageVersion: "4.0.0", displayName: "Voice Guide Bundle", description: "House tone-of-voice templates and examples.", kindSlug: "artifact", kindLabel: "Artifact", ctaState: "restore", ctaLabel: "Restore", manifestLogoUrl: SEEDED_ARTIFACT_LOGO_DATA_URI },
   { packageName: "@cinatra-fixtures/quote-mill", packageVersion: "1.5.0", displayName: "Proposal Drafter", description: "Assembles priced proposals from catalog items.", kindSlug: "agent", kindLabel: "Agent", ctaState: "installing", ctaLabel: "Installing…" },
-  { packageName: "@cinatra-fixtures/lens-cap", packageVersion: "0.2.1", displayName: "Screenshot Annotator", description: "Marks up captures with callouts and blur.", kindSlug: "skill", kindLabel: "Skill", ctaState: "incompatible", ctaLabel: "Install now" },
+  { packageName: `@cinatra-fixtures/${SEEDED_BRAND_GATE_NON_CONNECTOR_BASENAME}`, packageVersion: "0.2.1", displayName: "Screenshot Annotator", description: "Marks up captures with callouts and blur.", kindSlug: "skill", kindLabel: "Skill", ctaState: "incompatible", ctaLabel: "Install now" },
 ];
+
+/** The seeded cards that declare their own `cinatra.logo` (cinatra#2469). */
+export const SEEDED_DECLARED_LOGO_CARDS = SEEDED_GRID_CARDS.filter(
+  (c) => c.manifestLogoUrl != null,
+); // 3 — one per non-connector kind (agent, skill, artifact)
+/** The seeded cards with NO declared logo — the absent-logo control set. */
+export const SEEDED_ABSENT_LOGO_CARDS = SEEDED_GRID_CARDS.filter(
+  (c) => c.manifestLogoUrl == null,
+); // 3
 
 export const SEEDED_GRID_CARD_COUNT = SEEDED_GRID_CARDS.length; // 6 (workflow card removed — cinatra#1035)
 

@@ -36,9 +36,9 @@
 // initial rollout on remediation that is a different issue's job. New,
 // non-baselined findings always fail.
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   loadLiveRules,
@@ -326,6 +326,144 @@ function checkManifest(pkgDir, pkg, rules) {
   // is (the carrier is a connector, but running it regardless is strictly safe).
   findings.push(...checkLlmProvider(pkg, rules));
 
+  // cinatra.logo self-declared card glyph (cinatra#2469): CROSS-KIND by the
+  // maintainer decision "every extension kind must be able to self-define
+  // cinatra.logo". Absent → zero findings (the documented default); declared →
+  // fail-closed, including the PACKAGING check that no other layer can make.
+  findings.push(...checkDeclaredLogo(pkgDir, pkg));
+
+  return findings;
+}
+
+// ---------------------------------------------------------------------------
+// cinatra.logo — the self-declared card glyph (cinatra#2469, follow-up to
+// #1482/#2467).
+//
+// SCOPE, stated precisely (codex round-8): this gate polices the DECLARATION and
+// its PACKAGING. For the declaration it mirrors `resolveDeclaredLogo`'s rules
+// rule-for-rule — trimmed `.svg` suffix test, RAW path resolution, lexical AND
+// realpath containment — because an extension repo's own CI runs this checker
+// with no host generator to lean on and must reach the same verdict on the same
+// manifest.
+//
+// It deliberately does NOT reproduce the CONTENT half: the SVG sanitizer verdict
+// and the inline size budget stay solely with `resolveDeclaredLogo`, which is
+// the only producer of the data URI anything renders. So this gate is a
+// NECESSARY, not sufficient, condition — a logo that passes here can still be
+// rejected at manifest generation on content grounds, which is the correct
+// direction for the asymmetry (the gate never green-lights something the
+// generator would then render unsafely).
+//
+// The `files`-scope check has NO counterpart anywhere else, and it is the one
+// this gate uniquely can make (codex round-7). A package with
+// `files: ["src","cinatra"]` that declares `cinatra.logo: "./logo.svg"` is
+// perfectly resolvable ON DISK — the generator is happy, the file exists — but
+// `npm pack` obeys `files`, so the published tarball carries the POINTER and not
+// the ASSET. Every consumer then resolves nothing and silently falls back to the
+// generic kind emblem: the dangling-logo state, arriving through packaging
+// rather than through a bad path. Mirrors the existing
+// `manifest.artifact-ui-entry-out-of-scope` / `manifest.chat-views-entry-out-of-scope`
+// rules, which police exactly this boundary for their own declared entries.
+// ---------------------------------------------------------------------------
+function checkDeclaredLogo(pkgDir, pkg) {
+  const findings = [];
+  const file = "package.json";
+  const raw = pkg?.cinatra?.logo;
+  // ABSENT (missing or explicit null) is the documented default — byte-mirroring
+  // resolveDeclaredLogo, which returns no error for exactly those two.
+  if (raw === undefined || raw === null) return findings;
+
+  if (typeof raw !== "string" || raw.trim().length === 0) {
+    findings.push({
+      rule: "manifest.logo-malformed",
+      file,
+      detail: `cinatra.logo must be a non-empty package-relative ".svg" path (got ${
+        typeof raw === "string" ? "an empty/blank string" : typeof raw
+      }).`,
+    });
+    return findings;
+  }
+  // Suffix tested on the TRIMMED value, path resolved RAW — the split
+  // resolveDeclaredLogo documents explicitly (trimming before resolve would
+  // silently START resolving `" ./logo.svg "`, which must stay a failure).
+  if (!raw.trim().toLowerCase().endsWith(".svg")) {
+    findings.push({
+      rule: "manifest.logo-not-svg",
+      file,
+      detail: `cinatra.logo "${raw}" is not a ".svg" path — the host inlines a sanitized SVG, no other format is read.`,
+    });
+    return findings;
+  }
+
+  const pkgRoot = resolve(pkgDir);
+  const abs = resolve(pkgRoot, raw);
+  // `sep`, not a hardcoded "/" — the same containment idiom `resolveDeclaredLogo`
+  // uses. A hardcoded separator rejects every valid NESTED logo on Windows
+  // (codex round-9).
+  if (abs !== pkgRoot && !abs.startsWith(pkgRoot + sep)) {
+    findings.push({
+      rule: "manifest.logo-escapes-package",
+      file,
+      detail: `cinatra.logo "${raw}" escapes the package directory.`,
+    });
+    return findings;
+  }
+
+  // npm reports package-relative POSIX paths with no leading "./" — fold the
+  // platform separator to match that form exactly.
+  const rel = relative(pkgRoot, abs).split(sep).join("/");
+  if (!existsSync(abs) || !statSync(abs).isFile()) {
+    findings.push({
+      rule: "manifest.logo-unresolved",
+      file,
+      detail: `cinatra.logo "${raw}" does not resolve to a readable file inside the package.`,
+    });
+    return findings;
+  }
+  // Realpath containment — `existsSync`/`statSync` FOLLOW symlinks, so the
+  // lexical check above cannot see a symlinked PARENT directory pointing out of
+  // the package. resolveDeclaredLogo performs the same second pass.
+  try {
+    const realRoot = realpathSync(pkgRoot);
+    if (!realpathSync(abs).startsWith(realRoot + sep)) {
+      findings.push({
+        rule: "manifest.logo-escapes-package",
+        file,
+        detail: `cinatra.logo "${raw}" resolves (through a symlink) outside the package directory.`,
+      });
+      return findings;
+    }
+  } catch {
+    findings.push({
+      rule: "manifest.logo-unresolved",
+      file,
+      detail: `cinatra.logo "${raw}" does not resolve to a readable file inside the package.`,
+    });
+    return findings;
+  }
+
+  // SHIPMENT — proved against npm's OWN packlist, not a `files` heuristic
+  // (codex round-8). `isInScope` models only the `files` array; npm additionally
+  // applies root AND NESTED `.npmignore` files, its built-in ignores, and full
+  // glob semantics. `files:["assets"]` + `assets/.npmignore` containing `*.svg`
+  // passes the heuristic and ships NO logo — the dangling state, straight
+  // through the release path. The heuristic survives only as a FLOOR for the
+  // case where the dry run could not be performed at all (reported separately
+  // and once, by `checkPacklist`), so an infra failure degrades to the weaker
+  // check instead of to a silent pass.
+  const { files: packed } = resolvePacklist(pkgDir);
+  const ships = packed === null ? isInScope(rel, pkg.files) : packed.includes(rel);
+  if (!ships) {
+    findings.push({
+      rule: "manifest.logo-out-of-scope",
+      file,
+      detail:
+        `cinatra.logo "${raw}" resolves on disk but does NOT ship in the published package` +
+        `${packed === null ? ' (per the "files" allowlist; `npm pack --dry-run` was unavailable)' : " (per `npm pack --dry-run`)"}` +
+        ` — every consumer would install the declaration WITHOUT the asset and fall back to the generic kind ` +
+        `emblem. Add "${rel}" to package.json "files" and make sure no .npmignore excludes it.`,
+    });
+  }
   return findings;
 }
 
@@ -1204,31 +1342,53 @@ const FORBIDDEN_PACK_PATTERNS = [
   { re: /(^|\/)\.planning(\/|$)/, label: "a .planning working file" },
 ];
 
-function checkPacklist(pkgDir, pkg) {
-  const findings = [];
-  let report;
+// npm's AUTHORITATIVE "what actually ships" list for a package dir, memoized per
+// run (cinatra#2469, codex round-8). `npm pack --dry-run` is the only thing that
+// resolves the FULL rule stack — `files`, root and NESTED `.npmignore`, npm's
+// built-in ignores, glob semantics, symlink handling — none of which the
+// `isInScope` heuristic models. Two checks consume it now (`checkPacklist` and
+// `checkDeclaredLogo`), and `npm pack` is the slowest thing this gate does, so
+// the result is computed once.
+//
+// Returns `{ files: string[] }` on success or `{ files: null, error }` — never
+// throws. A failure is reported ONCE, by `checkPacklist`
+// (`packlist.pack-dry-run-failed`), so consumers degrade without double-flagging
+// the same infra problem.
+const _packlistCache = new Map();
+function resolvePacklist(pkgDir) {
+  if (_packlistCache.has(pkgDir)) return _packlistCache.get(pkgDir);
+  let result;
   try {
-    // --ignore-scripts: `npm pack` runs `prepack`/`prepare`/`postpack`
-    // lifecycle scripts by default — this checker must never execute
-    // arbitrary code from a package it is merely INSPECTING (core CI runs
-    // this over every pinned extension on every PR; a compromised or
-    // malicious extension's lifecycle script must not get a free execution
-    // there).
+    // --ignore-scripts: never execute lifecycle scripts from a package this
+    // checker is merely INSPECTING (see checkPacklist's note).
     const out = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
       cwd: pkgDir,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
-    report = JSON.parse(out);
+    const report = JSON.parse(out);
+    result = { files: (report[0]?.files ?? []).map((f) => f.path), error: null };
   } catch (err) {
+    result = { files: null, error: err instanceof Error ? err.message : String(err) };
+  }
+  _packlistCache.set(pkgDir, result);
+  return result;
+}
+
+function checkPacklist(pkgDir, pkg) {
+  const findings = [];
+  // Shared, memoized (`resolvePacklist`) — the SAME list `checkDeclaredLogo`
+  // proves the declared logo against, so the two can never disagree about what
+  // ships. This is the sole reporter of a dry-run failure.
+  const { files, error } = resolvePacklist(pkgDir);
+  if (files === null) {
     findings.push({
       rule: "packlist.pack-dry-run-failed",
       file: "package.json",
-      detail: `\`npm pack --dry-run\` failed: ${err instanceof Error ? err.message : String(err)}`,
+      detail: `\`npm pack --dry-run\` failed: ${error}`,
     });
     return findings;
   }
-  const files = (report[0]?.files ?? []).map((f) => f.path);
   for (const path of files) {
     for (const { re, label } of FORBIDDEN_PACK_PATTERNS) {
       if (re.test(path)) {

@@ -23,6 +23,10 @@
 import { ExtensionsMarketplaceClient } from "@cinatra-ai/extensions/screens/extensions-marketplace-client";
 import { MarketplaceListingCard } from "@cinatra-ai/extensions/screens/marketplace-listing-card";
 import type { MarketplaceCardData } from "@cinatra-ai/extensions/screens/marketplace-card-model";
+import {
+  deriveIconSlug,
+  safeManifestLogoSrc,
+} from "@cinatra-ai/extensions/screens/marketplace-card-model";
 
 import { Loader2 } from "lucide-react";
 
@@ -44,8 +48,21 @@ function toCardData(seed: SeededGridCard): MarketplaceCardData {
     rating: null,
     detailHref: `/configuration/marketplace/fixtures/${seed.packageName.split("/")[1]}`,
     installCount: null,
-    manifestLogoUrl: null,
-    iconSlug: null,
+    // cinatra#2469: the extension's OWN sanitized `cinatra.logo` — the value
+    // STATIC_EXTENSION_MANIFEST carries for a package that declares one.
+    //
+    // Both fields go through the SAME functions the production mapper
+    // (`catalogEntryToCardData`) applies, rather than being hand-assigned: the
+    // guard `safeManifestLogoSrc` must admit the value, and the client-icon slug
+    // is DERIVED from the package name for every kind. So a regression in either
+    // — a tightened guard that rejects real generator output, or broken slug
+    // derivation — fails the seeded harness instead of sailing past it. What
+    // stays outside this fixture is the loader hop that feeds the
+    // real screen (STATIC_EXTENSION_MANIFEST → manifestLogoForPackage); the
+    // storefront catalog is an HTTP source, so the harness supplies the entry
+    // exactly as the real screen's own composition does.
+    manifestLogoUrl: safeManifestLogoSrc(seed.manifestLogoUrl ?? null),
+    iconSlug: deriveIconSlug(seed.packageName),
     iconUrl: null,
     vendorLogoUrl: null,
     // The incompatible-state card declares an unsatisfiable ABI range so its

@@ -287,3 +287,88 @@ describe("MarketplaceCardIcon — the /connectors-aligned chain (cinatra#1325)",
     expect(container.querySelector('[data-testid="kind-emblem"]')).not.toBeNull();
   });
 });
+
+/**
+ * cinatra#2469 — the 24×24 glyph presentation is KIND-AGNOSTIC.
+ *
+ * The maintainer decision ("every extension kind must be able to self-define
+ * `cinatra.logo`") only makes sense if the host card actually RENDERS a
+ * non-connector kind's declared logo the same way it renders a connector's.
+ * #1482 measured this path as kind-agnostic; these cases PIN it, so a future
+ * kind-specific branch in the tier resolution breaks a test instead of silently
+ * dropping an artifact's/agent's/skill's self-declared brand mark.
+ *
+ * The ONE deliberate kind branch stays: the `client-icon` brand-map tier is
+ * gated to `kind === "connector"` so a non-connector package sharing a slug
+ * basename can never borrow a connector brand mark (#1325 codex round-0). That
+ * gate sits BELOW the manifest-logo tier and is asserted intact below.
+ */
+describe("MarketplaceCardIcon — a declared cinatra.logo renders as a 24×24 glyph for EVERY kind (cinatra#2469)", () => {
+  it.each(["artifact", "agent", "skill", "unknown"] as const)(
+    "kind=%s renders the manifest logo at size-6 object-contain (the same tier-1 treatment as a connector)",
+    (kindSlug) => {
+      act(() => {
+        root.render(
+          <MarketplaceCardIcon
+            card={iconCard({ kindSlug, manifestLogoUrl: LOGO_DATA_URI })}
+            kindEmblem={<Emblem />}
+          />,
+        );
+      });
+      const img = container.querySelector("img")!;
+      expect(img.getAttribute("src")).toBe(LOGO_DATA_URI);
+      expect(img.className).toContain("size-6 object-contain");
+      expect(img.className).not.toContain("object-cover");
+      expect(container.querySelector('[data-testid="kind-emblem"]')).toBeNull();
+    },
+  );
+
+  it("an ARTIFACT card without a declared logo is unchanged — straight to the kind emblem, never blank", () => {
+    act(() => {
+      root.render(
+        <MarketplaceCardIcon card={iconCard({ kindSlug: "artifact" })} kindEmblem={<Emblem />} />,
+      );
+    });
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector('[data-testid="kind-emblem"]')).not.toBeNull();
+  });
+
+  it("an artifact's declared logo still degrades to the catalog/vendor tiers and then the emblem on load failure", () => {
+    act(() => {
+      root.render(
+        <MarketplaceCardIcon
+          card={iconCard({
+            kindSlug: "artifact",
+            manifestLogoUrl: LOGO_DATA_URI,
+            iconUrl: "https://a/catalog.png",
+          })}
+          kindEmblem={<Emblem />}
+        />,
+      );
+    });
+    expect(container.querySelector("img")!.className).toContain("size-6 object-contain");
+    failCurrentImage();
+    const img = container.querySelector("img")!;
+    expect(img.getAttribute("src")).toBe("https://a/catalog.png");
+    // Marketplace ARTWORK stays full-bleed for a non-connector kind too.
+    expect(img.className).toContain("h-full w-full object-cover");
+    failCurrentImage();
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector('[data-testid="kind-emblem"]')).not.toBeNull();
+  });
+
+  it("the connector-only client-icon-map gate is UNCHANGED — a non-connector kind never borrows a brand mark", () => {
+    // `github` is a mapped connector slug. On a kind=artifact card the brand
+    // tier must NOT engage: with no other candidate the card falls to the
+    // generic kind emblem, not the GitHub mark.
+    act(() => {
+      root.render(
+        <MarketplaceCardIcon
+          card={iconCard({ kindSlug: "artifact", iconSlug: "github" })}
+          kindEmblem={<Emblem />}
+        />,
+      );
+    });
+    expect(container.querySelector('[data-testid="kind-emblem"]')).not.toBeNull();
+  });
+});

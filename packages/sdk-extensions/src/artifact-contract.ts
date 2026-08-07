@@ -223,6 +223,38 @@ export type SemanticArtifactRef = { extension: string; objectTypeId?: string };
 // validated fail-closed + field-tolerantly at consumption via the sdk leaf's
 // `parseDashboardContribution` (`./dashboard-contribution-contract`). Narrowly
 // additive — unknown keys stay rejected.
+//
+// `logo` (cinatra#2469, follow-up to #1482/#2467): the package-relative `.svg`
+// path an extension points at its OWN brand glyph (`cinatra.logo` on
+// `CinatraManifest`). Admitted here under the maintainer decision recorded on
+// cinatra#2469 (2026-08-06): "Every extension kind must be able to self-define
+// cinatra.logo". It is the LAST of the cross-kind PRESENTATION keys to be
+// reconciled — `displayName` and `vendor` above are already admitted for exactly
+// this reason, and `logo` is the third field of the same self-describing card
+// identity (`{logo, displayName, vendor}` on `NormalizedExtensionRecord`).
+//
+// This allowlist was the ONLY thing standing in the way: every other stage of
+// the logo path is ALREADY kind-agnostic and needs no change —
+//   - the generator's fail-closed arm (`validateDeclaredLogo` in
+//     `scripts/extensions/generate-extension-manifest.mjs`) runs over EVERY
+//     record regardless of kind, so an unresolvable/unsanitizable declared logo
+//     is a BUILD error with a named reason for an artifact exactly as for a
+//     connector, and an ABSENT logo stays clean;
+//   - the generator emits `logo: sanitizeLogoDataUri(...)` on every record;
+//   - the host card chain (`resolveCardIconChain` /
+//     `MarketplaceCardIcon` → `ExtensionCardIconImage`) reads
+//     `manifestLogoUrl` kind-agnostically and renders tier 1 as a 24×24
+//     `size-6 object-contain` glyph (only the `client-icon` brand-map tier is
+//     connector-gated, deliberately).
+// Without admitting the key here, an artifact that declared a logo would be
+// rejected WHOLESALE by the three host consumers below (bridge / handler /
+// mcp handlers) — dropping its `artifact` descriptor AND its `objectTypes`
+// claims at boot — and flagged `manifest.artifact-extraneous-keys` by the
+// conformance gate, which derives this very Set from this file's live source.
+// Admitted as DATA only (same discipline as `views`/`vendor`/`displayName`):
+// the VALUE's safety (in-package containment, symlink escape, `.svg`-only,
+// SVG-sanitizer verdict) is owned fail-closed by `resolveDeclaredLogo` at
+// generation. Narrowly additive — unknown keys stay rejected.
 export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
   "kind",
   "apiVersion",
@@ -231,6 +263,7 @@ export const ARTIFACT_ALLOWED_CINATRA_KEYS: ReadonlySet<string> = new Set([
   "roles",
   "displayName",
   "vendor",
+  "logo",
   "views",
   "fieldRenderers",
   "dashboardContribution",

@@ -1070,3 +1070,218 @@ describe("conformance-gate — cinatra.artifact.ui.registryItems (fail-closed at
     rmSync(pkgDir, { recursive: true, force: true });
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra.logo across EVERY extension kind (cinatra#2469, follow-up to
+// #1482/#2467).
+//
+// Maintainer decision on cinatra#2469 (2026-08-06): "Every extension kind must
+// be able to self-define `cinatra.logo`". The ONLY per-kind cinatra-key set the
+// gate closes is the artifact one (`rules.artifactAllowedCinatraKeys`, DERIVED
+// from the live `ARTIFACT_ALLOWED_CINATRA_KEYS` source) — connector / agent /
+// skill / workflow carry no closed set, so the key was already structurally
+// admitted for them. These fixtures pin BOTH halves of the outcome: the artifact
+// widening actually landed in the derived rules, and no kind regressed.
+//
+// Every fixture below is IN-REPO (a tmpdir the test writes), never an external
+// package — the acceptance criterion on the issue.
+// ---------------------------------------------------------------------------
+
+// A minimal, sanitizer-clean brand glyph: a bare <svg> document with one path.
+const FIXTURE_LOGO_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>\n';
+
+/** A metadata-only fixture of any kind, optionally declaring `cinatra.logo`. */
+function kindLogoFixture(kind, { logo, extraCinatra = {} } = {}) {
+  const cinatra = {
+    kind,
+    apiVersion: "cinatra.ai/v1",
+    ...(kind === "artifact" ? { artifact: { accepts: { file: { mimeTypes: ["text/markdown"] } } } } : {}),
+    ...(logo !== undefined ? { logo } : {}),
+    ...extraCinatra,
+  };
+  const files = {
+    "package.json": JSON.stringify(
+      {
+        name: `@cinatra-ai/fixture-${kind}`,
+        version: "0.0.1",
+        license: "Apache-2.0",
+        // `logo.svg` is listed so the fixture is a package that would ACTUALLY
+        // ship its declared asset (codex round-1): a fixture whose `files`
+        // omitted the logo would prove the gate accepts the declaration while
+        // quietly modelling a package that publishes a dangling pointer.
+        files: ["src", "cinatra", "logo.svg"],
+        main: "src/index.ts",
+        cinatra,
+      },
+      null,
+      2,
+    ),
+    "README.md": `# Fixture ${kind}\n`,
+    "src/index.ts": "export {};\n",
+    "logo.svg": FIXTURE_LOGO_SVG,
+  };
+  // An agent fixture must ship the authored `cinatra/oas.json` proxy or the
+  // agent arm flags `manifest.agent-missing-oas` for reasons unrelated to logo.
+  if (kind === "agent") files["cinatra/oas.json"] = JSON.stringify({ openapi: "3.1.0" }, null, 2);
+  return files;
+}
+
+/** Every finding the gate produced, at any severity. */
+function allFindings(result) {
+  return [...result.blocking, ...(result.advisory ?? []), ...(result.info ?? [])];
+}
+
+/** Findings that name the extraneous-key rule for the artifact kind. */
+function extraneousKeyFindings(result) {
+  return allFindings(result).filter((f) => f.rule === "manifest.artifact-extraneous-keys");
+}
+
+/**
+ * Findings that COMPLAIN about the logo declaration, at any severity and under
+ * ANY rule. Used for the non-artifact kinds, where filtering on the artifact
+ * extraneous-key rule alone would be vacuous (codex round-0): those kinds have
+ * no closed key set, so that rule can never fire for them and asserting its
+ * absence proves nothing. Matching the word `logo` across every rule catches a
+ * kind-specific rejection landing under some OTHER rule name.
+ */
+function logoComplaints(result) {
+  return allFindings(result).filter((f) => /\blogo\b/i.test(`${f.rule} ${f.detail ?? ""}`));
+}
+
+describe("conformance-gate — cinatra.logo is admitted for EVERY kind (cinatra#2469)", () => {
+  it("derives the WIDENED artifact key set from live source — `logo` alongside displayName/vendor", () => {
+    const rules = loadLiveRules(REPO_ROOT);
+    expect(rules.ok).toBe(true);
+    // The derivation is the load-bearing half: the gate reads
+    // ARTIFACT_ALLOWED_CINATRA_KEYS out of the live .ts source text, so this
+    // failing means the widening did not reach the gate at all.
+    expect(rules.artifactAllowedCinatraKeys.has("logo")).toBe(true);
+    expect(rules.artifactAllowedCinatraKeys.has("displayName")).toBe(true);
+    expect(rules.artifactAllowedCinatraKeys.has("vendor")).toBe(true);
+  });
+
+  it("renders the DERIVED key list in the extraneous-key detail (never a stale hand-copied list)", () => {
+    const pkgDir = writeFixture(kindLogoFixture("artifact", { extraCinatra: { riskLevel: "low" } }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    const found = extraneousKeyFindings(result);
+    expect(found.length).toBe(1);
+    // The message must advertise `logo` as declarable now that it is.
+    expect(found[0].detail).toMatch(/\blogo\b/);
+    expect(found[0].detail).toMatch(/riskLevel/);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("an ARTIFACT fixture declaring a valid cinatra.logo conforms cleanly (the #2469 capability gap, closed)", () => {
+    const pkgDir = writeFixture(kindLogoFixture("artifact", { logo: "./logo.svg" }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.infra).toBe(false);
+    expect(extraneousKeyFindings(result)).toEqual([]);
+    expect(result.blocking).toEqual([]);
+    expect(result.conform).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("the SAME artifact fixture WITHOUT a logo is equally clean (absent stays the documented default)", () => {
+    const pkgDir = writeFixture(kindLogoFixture("artifact"));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking).toEqual([]);
+    expect(result.conform).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it.each([
+    ["a non-.svg path", "./logo.png", "manifest.logo-not-svg"],
+    ["a blank declaration", "   ", "manifest.logo-malformed"],
+    ["a non-string declaration", 42, "manifest.logo-malformed"],
+    ["a lexical escape", "../evil.svg", "manifest.logo-escapes-package"],
+    ["a missing file", "./nope.svg", "manifest.logo-unresolved"],
+  ])("fails CLOSED on %s (the #1482/#2467 contract, mirrored for every kind)", (_label, logo, rule) => {
+    const pkgDir = writeFixture(kindLogoFixture("artifact", { logo }));
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    expect(result.blocking.some((f) => f.rule === rule)).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a logo that resolves on disk but would NOT SHIP (outside the `files` allowlist)", () => {
+    // codex round-7: the ONE check no other layer can make. The asset exists and
+    // every path rule passes, so the generator is happy — but `npm pack` obeys
+    // `files`, so the tarball carries the POINTER and not the ASSET and every
+    // consumer silently falls back to the generic kind emblem.
+    const files = kindLogoFixture("artifact", { logo: "./logo.svg" });
+    const pkg = JSON.parse(files["package.json"]);
+    pkg.files = ["src", "cinatra"]; // logo.svg deliberately NOT listed
+    files["package.json"] = JSON.stringify(pkg, null, 2);
+
+    const pkgDir = writeFixture(files);
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.conform).toBe(false);
+    const finding = result.blocking.find((f) => f.rule === "manifest.logo-out-of-scope");
+    expect(finding).toBeDefined();
+    // The message must tell the author exactly what to add.
+    expect(finding.detail).toContain("logo.svg");
+    expect(finding.detail).toContain('"files"');
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("flags a logo excluded by a NESTED .npmignore — proved against npm's own packlist, not the `files` heuristic", () => {
+    // codex round-8: `isInScope` models ONLY the `files` array. npm additionally
+    // applies root and NESTED .npmignore files, its built-in ignores, and full
+    // glob semantics. This package lists the logo's directory in `files` (so the
+    // heuristic is satisfied) while a nested .npmignore excludes every .svg —
+    // `npm pack` ships package.json and NOT the logo. Only the real packlist
+    // catches it, and this is the release path for all ~111 extension repos.
+    const files = kindLogoFixture("artifact", { logo: "./assets/logo.svg" });
+    const pkg = JSON.parse(files["package.json"]);
+    pkg.files = ["src", "cinatra", "assets"];
+    files["package.json"] = JSON.stringify(pkg, null, 2);
+    delete files["logo.svg"];
+    files["assets/logo.svg"] = FIXTURE_LOGO_SVG;
+    files["assets/.npmignore"] = "*.svg\n";
+
+    const pkgDir = writeFixture(files);
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    const finding = result.blocking.find((f) => f.rule === "manifest.logo-out-of-scope");
+    expect(finding).toBeDefined();
+    expect(finding.detail).toContain("npm pack --dry-run");
+    expect(finding.detail).toContain(".npmignore");
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it("passes the SAME package once the nested .npmignore stops excluding the asset (the check is not blanket-strict)", () => {
+    const files = kindLogoFixture("artifact", { logo: "./assets/logo.svg" });
+    const pkg = JSON.parse(files["package.json"]);
+    pkg.files = ["src", "cinatra", "assets"];
+    files["package.json"] = JSON.stringify(pkg, null, 2);
+    delete files["logo.svg"];
+    files["assets/logo.svg"] = FIXTURE_LOGO_SVG;
+
+    const pkgDir = writeFixture(files);
+    const result = runConformanceGate({ packageDir: pkgDir, sdkRoot: REPO_ROOT });
+    expect(result.blocking.some((f) => f.rule === "manifest.logo-out-of-scope")).toBe(false);
+    expect(result.conform).toBe(true);
+    rmSync(pkgDir, { recursive: true, force: true });
+  });
+
+  it.each(["connector", "agent", "skill", "workflow"])(
+    "a %s fixture declaring cinatra.logo raises no key-set finding (no closed set — unchanged by #2469)",
+    (kind) => {
+      const withLogo = writeFixture(kindLogoFixture(kind, { logo: "./logo.svg" }));
+      const without = writeFixture(kindLogoFixture(kind));
+      const a = runConformanceGate({ packageDir: withLogo, sdkRoot: REPO_ROOT });
+      const b = runConformanceGate({ packageDir: without, sdkRoot: REPO_ROOT });
+      expect(a.infra).toBe(false);
+      // NOT the artifact extraneous-key rule (which can never fire for these
+      // kinds, so asserting its absence would be vacuous): assert that NO
+      // finding, under ANY rule and at ANY severity, complains about the logo.
+      expect(logoComplaints(a)).toEqual([]);
+      // Declaring a logo must change NOTHING about the kind's blocking verdict:
+      // same rules fire with and without it (a per-kind no-regression pin, not
+      // an assertion that these bare fixtures are otherwise conformant).
+      expect(a.blocking.map((f) => f.rule).sort()).toEqual(b.blocking.map((f) => f.rule).sort());
+      rmSync(withLogo, { recursive: true, force: true });
+      rmSync(without, { recursive: true, force: true });
+    },
+  );
+});

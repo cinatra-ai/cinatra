@@ -4702,7 +4702,11 @@ async function validateArtifactPackageOnDisk(
   // stale agent keys left from a reused slug — the kind-disjointness guard).
   const extraneous = Object.keys(pkgCinatra).filter((k) => !ARTIFACT_ALLOWED_CINATRA_KEYS.has(k));
   if (extraneous.length > 0) {
-    errors.push(`artifact extensions may only declare cinatra.{kind,apiVersion,artifact,dependencies,roles,displayName,vendor,views,fieldRenderers,dashboardContribution}; unexpected key(s): ${extraneous.join(", ")}.`);
+    // Key list RENDERED FROM the imported Set, never re-typed as a prose
+    // literal (cinatra#2469) — the hand-copied form went stale on every
+    // widening of the canonical Set. Twin of the message in
+    // `packages/extensions/src/artifact-handler.ts`.
+    errors.push(`artifact extensions may only declare cinatra.{${[...ARTIFACT_ALLOWED_CINATRA_KEYS].join(",")}}; unexpected key(s): ${extraneous.join(", ")}.`);
   }
   // Forbidden kind-foreign sidecars on disk (stale from a reused slug): an
   // agent oas.json must not coexist in an artifact package.

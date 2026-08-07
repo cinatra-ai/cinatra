@@ -153,3 +153,103 @@ describe("buildRequiredOasSeed", () => {
     expect(outOas.equals(srcOas)).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The manifest-DECLARED `cinatra.logo` asset (cinatra#2469, codex round-7).
+//
+// `PROJECTED_FILES` carries package.json, so without a declaration-driven copy
+// the seed keeps the logo POINTER and drops its REFERENT. This seed is what the
+// Dockerfile bakes for the required-agent set, so it bypasses the runtime
+// materializer entirely — it is its own dangling-logo path, not a duplicate of
+// the one `materialize-agent-package.test.ts` covers.
+// ---------------------------------------------------------------------------
+describe("buildRequiredOasSeed — the declared cinatra.logo asset (cinatra#2469)", () => {
+  const LOGO_SVG =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>\n';
+
+  /** Re-declare a seeded agent's package.json with a `cinatra.logo`. */
+  function declareLogo(vendor, slug, logo) {
+    const slugDir = path.join(source, vendor, slug);
+    writeFileSync(
+      path.join(slugDir, "package.json"),
+      JSON.stringify({
+        name: `@${vendor}/${slug}`,
+        version: "1.2.3",
+        cinatra: { kind: "agent", logo },
+      }) + "\n",
+    );
+    return slugDir;
+  }
+
+  it("projects a declared top-level logo alongside the package.json that points at it", () => {
+    writeAcquiredAgent("cinatra-ai", "logo-agent");
+    const slugDir = declareLogo("cinatra-ai", "logo-agent", "./logo.svg");
+    writeFileSync(path.join(slugDir, "logo.svg"), LOGO_SVG);
+
+    buildRequiredOasSeed({ source, out });
+    const dst = path.join(out, "cinatra-ai", "logo-agent", "logo.svg");
+    expect(existsSync(dst)).toBe(true);
+    expect(readFileSync(dst, "utf8")).toBe(LOGO_SVG);
+    // The pointer it resolves is seeded too — pointer and referent together.
+    const seededPkg = JSON.parse(
+      readFileSync(path.join(out, "cinatra-ai", "logo-agent", "package.json"), "utf8"),
+    );
+    expect(seededPkg.cinatra.logo).toBe("./logo.svg");
+  });
+
+  it("projects a NESTED declared path (no static PROJECTED_FILES entry could)", () => {
+    writeAcquiredAgent("cinatra-ai", "nested-logo-agent");
+    const slugDir = declareLogo("cinatra-ai", "nested-logo-agent", "./assets/brand/mark.svg");
+    mkdirSync(path.join(slugDir, "assets", "brand"), { recursive: true });
+    writeFileSync(path.join(slugDir, "assets", "brand", "mark.svg"), LOGO_SVG);
+
+    buildRequiredOasSeed({ source, out });
+    expect(
+      existsSync(path.join(out, "cinatra-ai", "nested-logo-agent", "assets", "brand", "mark.svg")),
+    ).toBe(true);
+  });
+
+  it("seeds NOTHING extra when no logo is declared (the projection stays narrow)", () => {
+    writeAcquiredAgent("cinatra-ai", "plain-agent");
+    // An undeclared stray svg must not ride along.
+    writeFileSync(path.join(source, "cinatra-ai", "plain-agent", "logo.svg"), LOGO_SVG);
+
+    buildRequiredOasSeed({ source, out });
+    expect(existsSync(path.join(out, "cinatra-ai", "plain-agent", "logo.svg"))).toBe(false);
+    // …and the ordinary projection is untouched.
+    expect(existsSync(path.join(out, "cinatra-ai", "plain-agent", "cinatra", "oas.json"))).toBe(true);
+  });
+
+  it("SKIPS an escaping / non-svg / missing declaration without failing the build", () => {
+    for (const [slug, logo] of [
+      ["escape-agent", "../../evil.svg"],
+      ["png-agent", "./logo.png"],
+      ["missing-agent", "./nope.svg"],
+    ]) {
+      writeAcquiredAgent("cinatra-ai", slug);
+      const slugDir = declareLogo("cinatra-ai", slug, logo);
+      writeFileSync(path.join(slugDir, "logo.png"), "not an svg");
+    }
+    // A cosmetic asset must never fail the image build.
+    expect(() => buildRequiredOasSeed({ source, out })).not.toThrow();
+    expect(existsSync(path.join(out, "cinatra-ai", "png-agent", "logo.png"))).toBe(false);
+    expect(existsSync(path.join(out, "cinatra-ai", "escape-agent", "cinatra", "oas.json"))).toBe(true);
+  });
+
+  it("SKIPS a logo behind a symlinked PARENT dir (realpath containment)", () => {
+    writeAcquiredAgent("cinatra-ai", "symlink-parent-agent");
+    const slugDir = declareLogo("cinatra-ai", "symlink-parent-agent", "./assets/mark.svg");
+    const outsideDir = mkdtempSync(path.join(os.tmpdir(), "seed-outside-"));
+    try {
+      writeFileSync(path.join(outsideDir, "mark.svg"), LOGO_SVG);
+      symlinkSync(outsideDir, path.join(slugDir, "assets"));
+
+      expect(() => buildRequiredOasSeed({ source, out })).not.toThrow();
+      expect(
+        existsSync(path.join(out, "cinatra-ai", "symlink-parent-agent", "assets", "mark.svg")),
+      ).toBe(false);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+});

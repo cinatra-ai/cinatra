@@ -506,3 +506,205 @@ describe("materializeAgentPackageToDisk", () => {
     expect(existsSync(path.join(slugDir, ".cinatra-published.json"))).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The manifest-DECLARED `cinatra.logo` asset (cinatra#2469).
+//
+// Exactly the failure class the LICENSE-file guard above exists for, one level
+// nastier: the publisher carries `cinatra.logo` into the distribution manifest
+// and `walkPackageFiles` ships the asset in the tarball, but the materializer
+// atomically replaces the source dir with its allowlisted subset — so without
+// the declaration-driven copy the POINTER survived and its REFERENT was
+// deleted, leaving an installed manifest aimed at a missing file.
+//
+// The allowlist cannot express this: `cinatra.logo` is an arbitrary
+// package-relative path, so the copy is driven by the DECLARATION.
+// ---------------------------------------------------------------------------
+describe("materializeAgentPackageToDisk — the declared cinatra.logo asset (cinatra#2469)", () => {
+  let tempDir: string;
+  let agentsRoot: string;
+
+  const LOGO_SVG =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>\n';
+
+  /** Rewrite the fixture package.json with a `cinatra.logo` declaration. */
+  function declareLogo(rel: string | unknown): void {
+    writeFileSync(
+      path.join(tempDir, "package.json"),
+      JSON.stringify(
+        { name: "@cinatra/test-agent", version: "0.1.0", cinatra: { kind: "agent", logo: rel } },
+        null,
+        2,
+      ),
+    );
+  }
+
+  async function materialize() {
+    return materializeAgentPackageToDisk({
+      extractedTempDir: tempDir,
+      packageName: "@cinatra/test-agent",
+      agentInstallDir: agentsRoot,
+    });
+  }
+
+  beforeEach(() => {
+    tempDir = _writeTarballTempDir();
+    agentsRoot = mkdtempSync(path.join(os.tmpdir(), "materialize-mount-logo-"));
+  });
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+    rmSync(agentsRoot, { recursive: true, force: true });
+  });
+
+  it("copies a declared top-level ./logo.svg alongside its manifest", async () => {
+    writeFileSync(path.join(tempDir, "logo.svg"), LOGO_SVG);
+    declareLogo("./logo.svg");
+
+    const result = await materialize();
+    expect(result.materialized).toBe(true);
+    if (!result.materialized) return;
+    const dst = path.join(result.targetDir, "logo.svg");
+    expect(existsSync(dst)).toBe(true);
+    // Byte-identical — the materializer copies, never rewrites.
+    expect(readFileSync(dst, "utf-8")).toBe(LOGO_SVG);
+    // …and the pointer it resolves is still on the installed manifest.
+    const installed = JSON.parse(readFileSync(path.join(result.targetDir, "package.json"), "utf-8"));
+    expect(installed.cinatra.logo).toBe("./logo.svg");
+  });
+
+  it("preserves a NESTED declared path (the allowlist could never express this)", async () => {
+    mkdirSync(path.join(tempDir, "assets", "brand"), { recursive: true });
+    writeFileSync(path.join(tempDir, "assets", "brand", "mark.svg"), LOGO_SVG);
+    declareLogo("./assets/brand/mark.svg");
+
+    const result = await materialize();
+    expect(result.materialized).toBe(true);
+    if (!result.materialized) return;
+    expect(existsSync(path.join(result.targetDir, "assets", "brand", "mark.svg"))).toBe(true);
+  });
+
+  it("copies NOTHING extra when no logo is declared (the install surface stays narrow)", async () => {
+    // A stray svg that is NOT declared must not ride along — the copy is
+    // declaration-driven, not a blanket "*.svg" widening of the allowlist.
+    writeFileSync(path.join(tempDir, "logo.svg"), LOGO_SVG);
+
+    const result = await materialize();
+    expect(result.materialized).toBe(true);
+    if (!result.materialized) return;
+    expect(existsSync(path.join(result.targetDir, "logo.svg"))).toBe(false);
+  });
+
+  it.each([
+    ["a lexical escape", "../evil.svg"],
+    ["an absolute path", "/etc/hostname.svg"],
+    ["a non-.svg path", "./logo.png"],
+    ["a blank declaration", "   "],
+    ["a non-string declaration", 42],
+  ])("SKIPS %s and still materializes the install successfully", async (_label, rel) => {
+    writeFileSync(path.join(tempDir, "logo.svg"), LOGO_SVG);
+    writeFileSync(path.join(tempDir, "logo.png"), "not an svg");
+    declareLogo(rel);
+
+    const result = await materialize();
+    // A cosmetic asset must NEVER fail an otherwise-valid install…
+    expect(result.materialized).toBe(true);
+    if (!result.materialized) return;
+    expect(existsSync(path.join(result.targetDir, "cinatra", "oas.json"))).toBe(true);
+    // …and nothing was written outside the package, nor was a rejected path copied.
+    expect(existsSync(path.join(result.targetDir, "logo.png"))).toBe(false);
+    expect(existsSync(path.join(agentsRoot, "evil.svg"))).toBe(false);
+    expect(existsSync(path.join(result.targetDir, "..", "evil.svg"))).toBe(false);
+  });
+
+  it("SKIPS a symlinked logo — a crafted tarball cannot make cp write through it", async () => {
+    const outsideDir = mkdtempSync(path.join(os.tmpdir(), "materialize-outside-"));
+    try {
+      const outside = path.join(outsideDir, "evil.svg");
+      writeFileSync(outside, LOGO_SVG);
+      await fs.symlink(outside, path.join(tempDir, "logo.svg"));
+      declareLogo("./logo.svg");
+
+      const result = await materialize();
+      expect(result.materialized).toBe(true);
+      if (!result.materialized) return;
+      expect(existsSync(path.join(result.targetDir, "logo.svg"))).toBe(false);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("SKIPS a logo behind a symlinked PARENT dir — realpath containment, not just the leaf", async () => {
+    // codex round-2 BLOCKER: `lstat` only exposes a symlink at the FINAL
+    // component. With `assets -> /outside`, `./assets/mark.svg` is a real file
+    // at a real path, so a lexical check and a leaf lstat both pass and the
+    // out-of-package asset would be copied into the install. Only resolving
+    // EVERY intermediate component catches it.
+    const outsideDir = mkdtempSync(path.join(os.tmpdir(), "materialize-outside-parent-"));
+    try {
+      writeFileSync(path.join(outsideDir, "mark.svg"), LOGO_SVG);
+      await fs.symlink(outsideDir, path.join(tempDir, "assets"));
+      declareLogo("./assets/mark.svg");
+
+      const result = await materialize();
+      expect(result.materialized).toBe(true);
+      if (!result.materialized) return;
+      expect(existsSync(path.join(result.targetDir, "assets", "mark.svg"))).toBe(false);
+      expect(existsSync(path.join(result.targetDir, "assets"))).toBe(false);
+    } finally {
+      rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still copies a logo when the PACKAGE ROOT itself is reached through a symlink (a legit layout)", async () => {
+    // The realpath check compares against the realpath of srcRoot, so a
+    // symlinked package root is not mistaken for an escape. Without that, the
+    // fix for the case above would break ordinary /var -> /private/var layouts.
+    writeFileSync(path.join(tempDir, "logo.svg"), LOGO_SVG);
+    declareLogo("./logo.svg");
+    const linkParent = mkdtempSync(path.join(os.tmpdir(), "materialize-linkroot-"));
+    const linkRoot = path.join(linkParent, "pkg");
+    try {
+      await fs.symlink(tempDir, linkRoot);
+      const result = await materializeAgentPackageToDisk({
+        extractedTempDir: linkRoot,
+        packageName: "@cinatra/test-agent",
+        agentInstallDir: agentsRoot,
+      });
+      expect(result.materialized).toBe(true);
+      if (!result.materialized) return;
+      expect(existsSync(path.join(result.targetDir, "logo.svg"))).toBe(true);
+    } finally {
+      rmSync(linkParent, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts the exact form the GENERATOR accepts — trimmed suffix test, RAW path resolution", async () => {
+    // codex round-4: the generator tests `.svg` on the TRIMMED value while
+    // resolving the RAW one (an explicit, commented split in
+    // `resolveDeclaredLogo`). An untrimmed suffix test here disagreed in exactly
+    // one case — a file literally named `logo.svg ` — which the generator
+    // ACCEPTS and this materializer would have skipped, re-creating the dangling
+    // pointer. The filename below carries a REAL trailing space.
+    writeFileSync(path.join(tempDir, "logo.svg "), LOGO_SVG);
+    declareLogo("./logo.svg ");
+
+    const result = await materialize();
+    expect(result.materialized).toBe(true);
+    if (!result.materialized) return;
+    expect(existsSync(path.join(result.targetDir, "logo.svg "))).toBe(true);
+    expect(readFileSync(path.join(result.targetDir, "logo.svg "), "utf-8")).toBe(LOGO_SVG);
+  });
+
+  it("SKIPS a declared logo whose file is missing (the generator stays the loud authority)", async () => {
+    declareLogo("./logo.svg");
+    const result = await materialize();
+    expect(result.materialized).toBe(true);
+    if (!result.materialized) return;
+    expect(existsSync(path.join(result.targetDir, "logo.svg"))).toBe(false);
+    // The declaration is still on the installed manifest, so
+    // `resolveDeclaredLogo` fail-closes at the next manifest generation rather
+    // than the mistake vanishing silently (the #1482/#2467 contract).
+    const installed = JSON.parse(readFileSync(path.join(result.targetDir, "package.json"), "utf-8"));
+    expect(installed.cinatra.logo).toBe("./logo.svg");
+  });
+});

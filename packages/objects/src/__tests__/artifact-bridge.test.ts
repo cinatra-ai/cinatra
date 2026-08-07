@@ -220,6 +220,64 @@ describe("registerArtifactExtensions — descriptor bridge", () => {
     ).not.toBeNull();
   });
 
+  it("registers a manifest carrying the cross-kind logo key (cinatra#2469 — every kind may self-define cinatra.logo)", () => {
+    // The runtime registration path validates the SAME
+    // ARTIFACT_ALLOWED_CINATRA_KEYS set the conformance gate derives, so the
+    // widening has to hold HERE too — otherwise an artifact that declares a
+    // logo passes CI and is then silently skipped at boot, dropping its
+    // `artifact` descriptor AND its `objectTypes` claims (the wholesale-reject
+    // failure mode the allowlist has always had).
+    writeExt(root, "logoed-artifact", {
+      name: "@cinatra-ai/logoed-artifact",
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        displayName: "Logoed Artifact",
+        vendor: { key: "cinatra-ai", name: "Cinatra" },
+        logo: "./logo.svg",
+        artifact: {
+          accepts: { file: { mimeTypes: ["text/markdown"] } },
+          objectTypes: [
+            {
+              type: "@cinatra-ai/logoed-artifact:doc",
+              claim: "dedicated",
+              schema: { type: "object" },
+            },
+          ],
+        },
+      },
+    });
+    expect(registerArtifactExtensions(root)).toBe(1);
+    expect(
+      objectTypeRegistry.resolve("@cinatra-ai/logoed-artifact:doc"),
+    ).not.toBeNull();
+  });
+
+  it("still rejects a near-miss of the logo key (the allowlist stayed closed)", () => {
+    writeExt(root, "logourl-artifact", {
+      name: "@cinatra-ai/logourl-artifact",
+      version: "0.0.1",
+      cinatra: {
+        kind: "artifact",
+        logoUrl: "https://cdn.example/logo.svg",
+        artifact: {
+          accepts: { file: { mimeTypes: ["text/markdown"] } },
+          objectTypes: [
+            {
+              type: "@cinatra-ai/logourl-artifact:doc",
+              claim: "dedicated",
+              schema: { type: "object" },
+            },
+          ],
+        },
+      },
+    });
+    expect(registerArtifactExtensions(root)).toBe(0);
+    expect(
+      objectTypeRegistry.resolve("@cinatra-ai/logourl-artifact:doc"),
+    ).toBeNull();
+  });
+
   it("skips a kind:'artifact' package with an invalid/missing descriptor", () => {
     writeExt(root, "broken-artifact", {
       name: "@cinatra-ai/broken-artifact",
