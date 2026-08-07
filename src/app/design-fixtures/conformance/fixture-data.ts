@@ -45,13 +45,19 @@ export type ConformanceCardFixture = {
 
 export const CONFORMANCE_CARD_FIXTURES: ConformanceCardFixture[] = [
   {
+    // An ACCESS-TARGET kind (connector), per the spec exemplar corrected in
+    // design#114: this surface's pinned action is `install -> panel-open`, and
+    // only connector/artifact/workflow installs carry an access target — an
+    // agent install with one fails closed and rolls back, so a kind:agent
+    // exemplar declared an action the platform can never perform. The pinned
+    // manifest state for this surface is `kind:connector` to match.
     surfaceId: "extension-listing-card-available",
     packageName: "@cinatra-fixtures/outreach-pipeline",
     packageVersion: "1.4.0",
-    displayName: "Research Outreach Agent",
-    description: "Plans multi-step outreach research and drafts cited briefs.",
-    kindSlug: "agent",
-    kindLabel: "Agent",
+    displayName: "Research Assistant Connector",
+    description: "Feeds outreach research into the workspace as cited briefs.",
+    kindSlug: "connector",
+    kindLabel: "Connector",
     sdkAbiRange: "*",
     installed: null,
     ctaDelayMs: 250,

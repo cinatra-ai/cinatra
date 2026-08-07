@@ -27,6 +27,43 @@
     "extension-listing-card-restore": { "$ref": "extension-listing-card" },
     "extension-listing-card-installing": { "$ref": "extension-listing-card" },
     "extension-listing-card-incompatible": { "$ref": "extension-listing-card" },
+    "extension-install-panel": {
+      "manifest": "app-extensions",
+      "selector": "[data-testid=\"extension-install-panel\"] (install-face root; the card's body swapped in place — access-target kinds only, never a dialog). Name field: the header band's [data-slot=\"extension-card-name\"], carried over unchanged from the idle face. Opened from [data-testid=\"extension-install-panel-open\"]; close ✕ [data-testid=\"extension-install-panel-close\"]; body [data-testid=\"extension-install-panel-body\"][data-availability]; picker [data-testid=\"extension-install-panel-picker\"]; cancel [data-testid=\"extension-install-panel-cancel\"]; submit [data-testid=\"extension-install-panel-submit\"] (busy: [data-pending] — the `loading` state variant of extension-listing-card-installing, an ARTIFACT, is driven here); hidden failure mirror [data-testid=\"extension-install-panel-error\"][role=\"alert\"]",
+      "requires": [
+        {
+          "file": "packages/extensions/src/screens/marketplace-listing-card.tsx",
+          "literals": ["data-testid=\"extension-install-panel\""]
+        },
+        {
+          "file": "packages/extensions/src/screens/card-face-switcher.tsx",
+          "literals": [
+            "data-testid=\"extension-install-panel-open\"",
+            "data-testid=\"extension-install-panel-close\"",
+            "data-testid=\"extension-install-panel-cancel\""
+          ]
+        },
+        {
+          "file": "packages/extensions/src/screens/extension-install-scope-panel.tsx",
+          "literals": [
+            "data-testid=\"extension-install-panel-body\"",
+            "data-availability={availability.state}",
+            "data-testid=\"extension-install-panel-picker\"",
+            "data-testid=\"extension-install-panel-submit\"",
+            "data-testid=\"extension-install-panel-error\"",
+            "data-pending={pending ? \"\" : undefined}"
+          ]
+        },
+        {
+          "file": "packages/extensions/src/screens/extensions-marketplace-screen.tsx",
+          "literals": ["<CardFaceSwitcher", "<ExtensionInstallScopePanel"]
+        },
+        {
+          "file": "src/components/extension-card.tsx",
+          "literals": ["data-slot=\"extension-card-name\""]
+        }
+      ]
+    },
     "extension-listing-grid": {
       "manifest": "app-extensions",
       "selector": "[data-testid=\"marketplace-grid\"] (items: [data-testid=\"marketplace-grid-item\"]; empty state: [data-testid=\"marketplace-grid-empty\"]; loading fallback: [data-testid=\"marketplace-grid-loading\"])",
@@ -438,7 +475,7 @@
   "shared": {
     "extension-listing-card": {
       "manifest": "app-extensions",
-      "selector": "[data-testid=\"extension-listing-card\"] (idle-face root, carries data-kind); name field: [data-slot=\"extension-card-name\"]; CTA: [data-testid=\"extension-card-cta\"][data-cta-state]. INSTALL FACE (cinatra#2373, access-target kinds only — the card swaps its body in place instead of opening a dialog): root [data-testid=\"extension-install-panel\"]; opened from [data-testid=\"extension-install-panel-open\"]; close ✕ [data-testid=\"extension-install-panel-close\"]; body [data-testid=\"extension-install-panel-body\"][data-availability]; picker [data-testid=\"extension-install-panel-picker\"]; cancel [data-testid=\"extension-install-panel-cancel\"]; submit [data-testid=\"extension-install-panel-submit\"] (busy: [data-pending] — the `loading` state variant of extension-listing-card-installing, an ARTIFACT, is now driven here); hidden failure mirror [data-testid=\"extension-install-panel-error\"][role=\"alert\"]",
+      "selector": "[data-testid=\"extension-listing-card\"] (idle-face root, carries data-kind); name field: [data-slot=\"extension-card-name\"]; CTA: [data-testid=\"extension-card-cta\"][data-cta-state]. The card's `install` action opens the in-card INSTALL FACE, whose own contract is the sibling `extension-install-panel` surface entry (access-target kinds only — the card swaps its body in place instead of opening a dialog).",
       "requires": [
         {
           "file": "packages/extensions/src/screens/marketplace-listing-card.tsx",
@@ -446,32 +483,8 @@
             "data-testid=\"extension-listing-card\"",
             "data-kind={card.kindSlug}",
             "data-testid=\"extension-card-cta\"",
-            "data-cta-state={ctaState}",
-            "data-testid=\"extension-install-panel\""
+            "data-cta-state={ctaState}"
           ]
-        },
-        {
-          "file": "packages/extensions/src/screens/card-face-switcher.tsx",
-          "literals": [
-            "data-testid=\"extension-install-panel-open\"",
-            "data-testid=\"extension-install-panel-close\"",
-            "data-testid=\"extension-install-panel-cancel\""
-          ]
-        },
-        {
-          "file": "packages/extensions/src/screens/extension-install-scope-panel.tsx",
-          "literals": [
-            "data-testid=\"extension-install-panel-body\"",
-            "data-availability={availability.state}",
-            "data-testid=\"extension-install-panel-picker\"",
-            "data-testid=\"extension-install-panel-submit\"",
-            "data-testid=\"extension-install-panel-error\"",
-            "data-pending={pending ? \"\" : undefined}"
-          ]
-        },
-        {
-          "file": "packages/extensions/src/screens/extensions-marketplace-screen.tsx",
-          "literals": ["<CardFaceSwitcher", "<ExtensionInstallScopePanel"]
         },
         {
           "file": "packages/extensions/src/screens/extensions-marketplace-screen.tsx",

@@ -20,9 +20,9 @@
       "id": "app-extensions",
       "file": "app-extensions.json",
       "source": "repo",
-      "$specCommit": "design@f4489c5 — specs/app-extensions.html version 0.13.1 (epic cinatra#2371 S1, adopted by cinatra#2372; includes the design#108 detail-modal footer removal ratified by the owner ruling on cinatra#2406 and the design#111 copy reconciliation). Regenerated at that commit with `node scripts/generate-conformance.mjs specs/app-extensions.html`; the spec bytes at that commit hash to specContentHash and the generator's output is byte-identical to the artifact committed alongside it in the design-system source of truth — the copy under manifests/ is those bytes verbatim. Known staged gap: the spec's extension-install-panel surface (design#106) has no in-app surface until mkt-install S2 lands; the allowlist ratchet is shrink-only, so its coverage red is the honest staged state, not maskable.",
-      "manifestSha256": "046786e64ed63ffd47d8df5ab4ec7abeaecdd3159ccc0a41a4c798929c8b5c9a",
-      "specContentHash": "sha256:279ed0cb8d0161ea51bc9372f60b4705f5a39b16d60dbc49cf0a6b966431f240"
+      "$specCommit": "design@ca118d4e — specs/app-extensions.html version 0.13.2 (epic cinatra#2371 S1, adopted by cinatra#2372). Carries the design#108 detail-modal footer removal ratified by the owner ruling on cinatra#2406, the design#111 copy reconciliation, and the design#114 correction that makes the available-card exemplar an access-target kind (connector) — the platform accepts an install access target only for connector/artifact/workflow, so the previous kind:agent exemplar declared an unsatisfiable `install -> panel-open` action. Regenerated at that commit with `node scripts/generate-conformance.mjs specs/app-extensions.html`; the spec bytes at that commit hash to specContentHash and the generator's output is byte-identical to the artifact committed alongside it in the design-system source of truth — the copy under manifests/ is those bytes verbatim. The prior staged gap is closed: the spec's extension-install-panel surface now has its in-app counterpart (mkt-install S2, cinatra#2373), so both it and the available-card install action are driveable at this pin.",
+      "manifestSha256": "3a7abe90f988be62252b357e6a1af4c24b4c2c6c28ce7f45298b2450559ad196",
+      "specContentHash": "sha256:797c44f7b2ed706c74aef0cc4a949352cb1625d5eb9e856c42e25460fe4e06fd"
     },
     {
       "id": "app-connectors",
