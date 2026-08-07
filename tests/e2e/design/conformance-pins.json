@@ -20,9 +20,9 @@
       "id": "app-extensions",
       "file": "app-extensions.json",
       "source": "repo",
-      "$specCommit": "design@c144f39 — specs/app-extensions.html version 0.11.0 (epic cinatra#2360, adopted by cinatra#2362). Regenerated at that commit with `node scripts/generate-conformance.mjs specs/app-extensions.html`; the spec bytes at that commit hash to specContentHash and the generator's output is byte-identical to the artifact committed alongside it in the design-system source of truth — the copy under manifests/ is those bytes verbatim.",
-      "manifestSha256": "57d86bf3f175f5ab08e8ec3a63c54f9be101071d2bd1fa1a9f6657f1492990c4",
-      "specContentHash": "sha256:7aa3e214d6b35805b6eef4b005a389febe9f5d3fb914abb93e40a344e6f0379f"
+      "$specCommit": "design@ca118d4e — specs/app-extensions.html version 0.13.2 (epic cinatra#2371 S1, adopted by cinatra#2372). Carries the design#108 detail-modal footer removal ratified by the owner ruling on cinatra#2406, the design#111 copy reconciliation, and the design#114 correction that makes the available-card exemplar an access-target kind (connector) — the platform accepts an install access target only for connector/artifact/workflow, so the previous kind:agent exemplar declared an unsatisfiable `install -> panel-open` action. Regenerated at that commit with `node scripts/generate-conformance.mjs specs/app-extensions.html`; the spec bytes at that commit hash to specContentHash and the generator's output is byte-identical to the artifact committed alongside it in the design-system source of truth — the copy under manifests/ is those bytes verbatim. The prior staged gap is closed: the spec's extension-install-panel surface now has its in-app counterpart (mkt-install S2, cinatra#2373), so both it and the available-card install action are driveable at this pin.",
+      "manifestSha256": "3a7abe90f988be62252b357e6a1af4c24b4c2c6c28ce7f45298b2450559ad196",
+      "specContentHash": "sha256:797c44f7b2ed706c74aef0cc4a949352cb1625d5eb9e856c42e25460fe4e06fd"
     },
     {
       "id": "app-connectors",

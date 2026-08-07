@@ -16,8 +16,6 @@ import {
   updateExtensionPackageFormAction,
   restoreExtensionPackageFormAction,
 } from "../actions";
-// §II modal-footer dry-run (cinatra#1041) — screens-only server action.
-import { planExtensionUpdateFormAction } from "./update-plan-action";
 import {
   ExtensionsMarketplaceClient,
   MarketplaceGridLoadingFallback,
@@ -99,8 +97,8 @@ export async function ExtensionsMarketplaceScreen({
   const activeOrgId = session.session?.activeOrganizationId ?? "";
   const { installTargets, ownerEntityNames, defaultValue: pickerFallbackValue } =
     // cinatra#1527: the extension picker ALWAYS offers the two workspace scopes
-    // ("Workspace: All" / "Workspace: Admins only"), platform-admin-only to
-    // install at.
+    // ("Workspace: All" / "Workspace: Admins only" — cinatra#2372 audience
+    // relabel), platform-admin-only to install.
     await buildInstallTargetPickerContext({
       session,
       orgRole,
@@ -109,15 +107,16 @@ export async function ExtensionsMarketplaceScreen({
   // Marketplace-local availability + default (cinatra#2373). The SHARED
   // `pickDefaultPickerValue` the agent registry uses is untouched — it is only
   // consulted here as the fallback when `Workspace: All` is not offered.
+  // The panel reads its own default off `availability` (state "ready" carries
+  // `defaultValue`); nothing else needs it separately since the detail modal
+  // stopped taking an install action at all (cinatra#2406 — the owner-ratified
+  // footer removal deleted the modal's `installScope` prop, the only other
+  // consumer this value ever had).
   const installPanelAvailability = resolveInstallPanelAvailability({
     activeOrgId,
     installTargets,
     fallbackDefaultValue: pickerFallbackValue,
   });
-  const installScopeDefaultValue =
-    installPanelAvailability.state === "ready"
-      ? installPanelAvailability.defaultValue
-      : null;
 
   // Registry temp-policy declaration (config-driven; default off → no banner).
   // When configured, warn operators that this registry's private packages are
@@ -180,13 +179,6 @@ export async function ExtensionsMarketplaceScreen({
     });
     const restoreAction = restoreExtensionPackageFormAction.bind(null, {
       packageName: card.packageName,
-    });
-    // §II modal-footer dry-run (cinatra#1041): the footer's "Update now" plans
-    // first (against THIS card's catalog version) and the admin confirms the
-    // rendered Update plan before `updateAction` applies through the batch.
-    const planUpdateAction = planExtensionUpdateFormAction.bind(null, {
-      packageName: card.packageName,
-      targetVersion: card.packageVersion,
     });
 
     const ctaControl =
@@ -294,39 +286,10 @@ export async function ExtensionsMarketplaceScreen({
           // More details opens the in-app extension-detail modal (embedding
           // the marketplace listing detail) instead of navigating to the
           // full-page route; the trigger renders as the centred underlined
-          // link button of spec §IV. The modal footer carries the same
-          // six-state install CTA.
-          <MarketplaceDetailModal
-            card={card}
-            cta={cta}
-            installAction={installAction}
-            updateAction={updateAction}
-            restoreAction={restoreAction}
-            planUpdateAction={planUpdateAction}
-            // cinatra#1541: the modal footer's "Install now" for a connector /
-            // artifact / workflow opens the SAME pre-install access-scope dialog
-            // the card opens (cinatra#805), layered above the modal — plumbed
-            // from the SAME server-computed, already-authorized picker context
-            // (no broader lookup; AC2/AC3). Passed only for the access-target
-            // kinds, mirroring the card's own isInstallAccessTargetKind branch.
-            installScope={
-              isInstallAccessTargetKind(card.kindSlug)
-                ? {
-                    installTargets,
-                    ownerEntityNames,
-                    activeOrgId,
-                    defaultValue: installScopeDefaultValue,
-                    failureCopyByCategory: buildMarketplaceFailureCopy("install", card.displayName),
-                    defaultFailureMessage: marketplaceFailureCopy(
-                      "unrecoverable",
-                      "install",
-                      card.displayName,
-                    ),
-                    installAction: installExtensionPackageFormAction,
-                  }
-                : undefined
-            }
-          />
+          // link button of spec §IV. cinatra#2406 (owner ruling): the modal
+          // renders no footer — details-only. Install/update/restore stay on
+          // the card's own `ctaControl` above.
+          <MarketplaceDetailModal card={card} />
         }
       />
     );

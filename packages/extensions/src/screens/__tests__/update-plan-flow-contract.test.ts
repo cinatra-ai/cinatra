@@ -26,10 +26,6 @@ const read = (rel: string): string =>
 const v = (semver: string): string => `v${semver}`;
 
 const FLOW = read("../update-plan-flow.tsx");
-const MODAL = read("../marketplace-detail-modal.tsx");
-const CATALOG = read("../registry-catalog-screen.tsx");
-const SETTINGS_VIEW = read("../extension-settings-view.tsx");
-const SETTINGS_SCREEN = read("../extension-settings-screen.tsx");
 
 function member(over: Partial<UpdatePlanPreviewMemberDto>): UpdatePlanPreviewMemberDto {
   return {
@@ -150,32 +146,51 @@ describe("§II flow source contract — dry-run first, confirm before apply", ()
   });
 });
 
-describe("§II/§III placement contract — the update runs ONLY from the modal footer", () => {
-  it("the installed-page modal renders a footer ONLY for the update flow", () => {
-    expect(MODAL).toContain(
-      'cta?.state === "update" && updateAction != null && planUpdateAction != null',
-    );
-    expect(MODAL).toContain("ModalUpdatePlanFlow");
+describe("cinatra#2406 — the modal footer (and the update-plan flow it carried) is gone", () => {
+  // The dry-run/confirm UpdatePlanFlow component itself is unchanged (tested
+  // above) but cinatra#2406's owner ruling removed the "More details" modal's
+  // footer everywhere, so ModalUpdatePlanFlow no longer has a UI entry point —
+  // it is not wired into marketplace-detail-modal.tsx or registry-catalog-
+  // screen.tsx any more.
+  const MODAL = read("../marketplace-detail-modal.tsx");
+  const CATALOG = read("../registry-catalog-screen.tsx");
+
+  it("the detail modal renders no footer bar / CTA of any kind", () => {
+    expect(MODAL).not.toContain("ModalUpdatePlanFlow");
+    expect(MODAL).not.toContain("ModalFooterCta");
+    expect(MODAL).not.toContain("planUpdateAction");
   });
-  it("the browse-card footer update state routes through the dry-run flow when wired", () => {
-    expect(MODAL).toContain("if (isUpdate && planUpdateAction)");
-  });
-  it("the installed screen wires the flow ONLY for the update-available state and keeps card actions Settings + More details", () => {
-    expect(CATALOG).toContain('state === "update-available" && latestVersion != null');
-    expect(CATALOG).toContain("planExtensionUpdateFormAction.bind");
-    expect(CATALOG).toContain("updateExtensionPackageFormAction.bind");
-    // The card's actions panel stays exactly Settings + More details — the
-    // update affordance on the card is the CHIP only.
+  it("the installed screen no longer wires the dry-run/apply actions into the modal", () => {
+    expect(CATALOG).not.toContain("planExtensionUpdateFormAction");
+    expect(CATALOG).not.toContain("updateExtensionPackageFormAction");
+    // The card's actions panel stays exactly Settings + More details.
     expect(CATALOG).toContain("renderDetailModal(row, isArchived)");
-    expect(CATALOG).not.toContain("Update now</Button>");
   });
-  it("the §V settings row's live Update button OPENS the modal flow (link), never a direct write", () => {
+  it("the settings deep link still opens the matching row's (now footer-less) modal (`?update=<pkg>`)", () => {
+    expect(CATALOG).toContain('resolvedSearchParams?.update === "string"');
+    expect(CATALOG).toContain("defaultOpen={openUpdateFor === row.packageName}");
+  });
+});
+
+describe("§V settings-side no-direct-write invariants — SURVIVE the footer removal", () => {
+  // These four assertions predate cinatra#2406 and are INDEPENDENT of the
+  // modal footer: the §V settings row must never perform a direct update
+  // write, and the catalog card must never grow an inline "Update now"
+  // button. With the footer (the old modal-side update UI) gone, these
+  // guards are MORE load-bearing, not moot — the settings row's link is now
+  // a known dead-end pending the replacement update affordance (flagged on
+  // cinatra#2406), and the ONLY acceptable regression path is a reviewed
+  // re-design, never a quiet direct-write escape hatch.
+  const CATALOG = read("../registry-catalog-screen.tsx");
+  const SETTINGS_VIEW = read("../extension-settings-view.tsx");
+  const SETTINGS_SCREEN = read("../extension-settings-screen.tsx");
+
+  it("the §V settings row's Update affordance stays a LINK to the catalog, never a direct write", () => {
     expect(SETTINGS_VIEW).toContain("/configuration/extensions?update=");
     expect(SETTINGS_VIEW).not.toContain("<form action={actions.update}>");
     expect(SETTINGS_SCREEN).not.toContain("updateExtensionPackageFormAction");
   });
-  it("the settings deep link auto-opens the matching row's modal (`?update=<pkg>`)", () => {
-    expect(CATALOG).toContain('resolvedSearchParams?.update === "string"');
-    expect(CATALOG).toContain("defaultOpen={openUpdateFor === row.packageName}");
+  it("the catalog card never renders an inline direct-update button", () => {
+    expect(CATALOG).not.toContain("Update now</Button>");
   });
 });

@@ -7,15 +7,20 @@
 // navigating. Its body embeds the marketplace listing detail (the plain §V
 // light-panel hero + Details / Reviews / Changelog tabs + share row, per
 // design spec §V — the drawing has NO banner or coloured ground anywhere in
-// the modal) stripped of storefront chrome; the footer carries the
-// per-instance install CTA (the six visual states of the design spec §IV,
-// assembled from the existing pieces). The marketplace detail is fetched
+// the modal) stripped of storefront chrome. The marketplace detail is fetched
 // on-demand via an admin-gated server action (the marketplace MCP client
 // stays server-only), projected into the client-safe MarketplaceDetailView.
 //
 // The full-page detail route is intentionally KEPT — it remains the deep-link
 // target of the agent/instance page header and the registry catalog. This modal
 // is the browse-card "More details" experience only.
+//
+// cinatra#2406 (owner ruling, 2026-08-04): the modal renders NO footer —
+// details-only everywhere it is shown in the app. It previously carried a
+// per-instance install/update/restore CTA bar (and, for a connector /
+// artifact / workflow, opened a layered pre-install access-scope dialog from
+// that footer's "Install now"); both are removed. Install/update/restore
+// affordances live on the browse card and the Installed-extensions page only.
 // ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
@@ -39,7 +44,6 @@ import {
   type ExtensionEmblemKind,
 } from "@/components/extension-kind-emblem";
 import { ACCENT_PALETTE, deriveExtensionAccent } from "@/lib/extension-accent";
-import { deriveExtensionCompatState } from "@/lib/extension-compat-badge";
 import {
   MarketplaceReadmeMarkdownBody,
   hasRenderableReadmeMarkdown,
@@ -50,7 +54,6 @@ import {
   ratingBars,
   reviewInitials,
   formatInstallations,
-  resolveModalInstallState,
   safeHttpUrl,
   type MarketplaceDetailChangelogEntry,
   type MarketplaceDetailDependency,
@@ -61,48 +64,7 @@ import {
 import { getPublicMarketplaceDetailAction } from "@/lib/marketplace-detail-actions";
 import { isRedirectError } from "./is-redirect-error";
 import { MarketplaceModalByline } from "./marketplace-modal-byline";
-import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
-import {
-  buildMarketplaceFailureCopy,
-  marketplaceFailureCopy,
-} from "./marketplace-failure-copy";
-// cinatra#1541 — the modal footer's install CTA for a connector / artifact /
-// workflow opens the SAME pre-install access-scope dialog (cinatra#805) the
-// §I/§IV card opens, layered above the modal; gated by the SAME predicate.
-import {
-  ExtensionInstallScopeDialog,
-  type ExtensionInstallScopeDialogProps,
-} from "./extension-install-scope-dialog";
-import { isInstallAccessTargetKind } from "../install-access-target";
-import type { MarketplaceCardData, MarketplaceCardCta } from "./marketplace-card-model";
-import type { MarketplaceInstallActionResult } from "./marketplace-failure-copy";
-// §II footer update flow (cinatra#1041): "Update now" dry-runs the resolver and
-// renders the Update plan the admin confirms; apply rides the batch path.
-import { ModalUpdatePlanFlow } from "./update-plan-flow";
-import type { PlanExtensionUpdateResult } from "./update-plan-model";
-
-type BoundLifecycleAction = () => Promise<MarketplaceInstallActionResult | void>;
-
-/**
- * Pre-install access-scope context (cinatra#1541). Exactly the already-
- * authorized picker rows + owner names + default selection + failure copy the
- * §I/§IV card computes SERVER-SIDE and passes to its ExtensionInstallScopeDialog
- * — reused verbatim (Pick of the dialog's own prop types, single source of
- * truth). packageName / packageVersion / displayName are derived from `card`,
- * so they are excluded here. `installAction` is the object-arg
- * installExtensionPackageFormAction (the same UNBOUND action the card wires),
- * the adapter AC1 anticipates over the modal's zero-arg `installAction` prop.
- */
-export type ModalInstallScopeContext = Pick<
-  ExtensionInstallScopeDialogProps,
-  | "installTargets"
-  | "ownerEntityNames"
-  | "activeOrgId"
-  | "defaultValue"
-  | "failureCopyByCategory"
-  | "defaultFailureMessage"
-  | "installAction"
->;
+import type { MarketplaceCardData } from "./marketplace-card-model";
 
 type LoadStatus = "idle" | "loading" | "loaded" | "notfound" | "error";
 
@@ -120,39 +82,12 @@ export type MarketplaceDetailModalInitialLoad =
 export interface MarketplaceDetailModalProps {
   card: MarketplaceCardData;
   /**
-   * The card's install-lifecycle CTA. Optional (cinatra#948 reopen,
-   * 2026-07-05): the Marketplace browse card passes it and the footer renders
-   * its 6-state install CTA; the §VI Installed-extensions modal is
-   * DETAILS-ONLY and passes NONE of the footer props, so the footer bar is not
-   * rendered at all (owner ruling: an installed extension's modal shows no
-   * install/uninstall/manage buttons and no footer info). The footer renders
-   * only when the full CTA + lifecycle actions are all provided. The six-state
-   * CTA already encodes registry state in `disabled` and folds the ABI verdict
-   * into "incompatible" (#1003).
-   */
-  cta?: MarketplaceCardCta;
-  installAction?: BoundLifecycleAction;
-  updateAction?: BoundLifecycleAction;
-  restoreAction?: BoundLifecycleAction;
-  /**
-   * §II footer update DRY-RUN (cinatra#1041 outcome 2): the bound
-   * `planExtensionUpdateFormAction`. When provided and the footer resolves to
-   * the update state, "Update now" runs the resolver dry-run FIRST and renders
-   * the Update plan (direct update / shared-dep upgrades / side-by-side /
-   * dependents rebound) for the admin to confirm; "Confirm update" then applies
-   * through the planner/batch path (`updateAction`). The §VI Installed page
-   * passes ONLY `cta` (update state) + `updateAction` + this — its modal footer
-   * exists exclusively for the update flow (every other installed state stays
-   * details-only, per the 2026-07-05 owner ruling refined by the §II/§III
-   * update-flow spec at the 2026-07-12 pin: the update runs ONLY from this
-   * footer; the card's actions stay exactly Settings + More details).
-   */
-  planUpdateAction?: () => Promise<PlanExtensionUpdateResult>;
-  /**
    * Open the (uncontrolled) modal on mount — the §V settings page's
    * Maintenance · Update row deep-links to the Installed page with
-   * `?update=<pkg>` and the matching row's modal opens directly onto the
-   * update flow (the spec's "opens the §II detail-modal update flow").
+   * `?update=<pkg>` and the matching row's modal opens directly (details-only:
+   * cinatra#2406 removed the modal footer, so this deep link no longer lands
+   * on an update flow — it opens the same details-only modal every trigger
+   * does).
    */
   defaultOpen?: boolean;
   /**
@@ -194,33 +129,10 @@ export interface MarketplaceDetailModalProps {
    */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
-  /**
-   * Pre-install access-scope context (cinatra#1541). When present AND the
-   * footer resolves to the INSTALL state for a connector / artifact / workflow
-   * (the isInstallAccessTargetKind kinds), the footer's "Install now" opens the
-   * pre-install access-scope dialog LAYERED above this modal instead of
-   * submitting directly — closing the bypass where a modal install skipped the
-   * access selection the card enforces.
-   *
-   * Confidentiality (AC3): this is ONLY the card's already-authorized target
-   * set + owner names — the modal performs no broader lookup and exposes no
-   * extra entity names; the server action stays the authorization boundary and
-   * re-validates the submitted target. When ABSENT for an access-target kind
-   * the scoped install is DEFERRED (disabled CTA), never a silent direct submit
-   * (AC2) — that would recreate the bypass. Non-access kinds ignore it and keep
-   * the direct-submit form, matching the card (AC5). The update flow is
-   * untouched (AC7).
-   */
-  installScope?: ModalInstallScopeContext;
 }
 
 export function MarketplaceDetailModal({
   card,
-  cta,
-  installAction,
-  updateAction,
-  restoreAction,
-  planUpdateAction,
   defaultOpen = false,
   loadDetail = getPublicMarketplaceDetailAction,
   trigger,
@@ -228,7 +140,6 @@ export function MarketplaceDetailModal({
   linkTrigger,
   open: controlledOpen,
   onOpenChange: controlledOnOpenChange,
-  installScope,
 }: MarketplaceDetailModalProps) {
   // cinatra#1121 — opt-in controlled open. When `controlledOpen` is passed the
   // Dialog is externally controlled and the lifted setter is the single source
@@ -396,46 +307,10 @@ export function MarketplaceDetailModal({
             <ModalBody card={card} detail={detail} />
           ) : null}
         </div>
-
-        {/* Footer — the six-state install CTA, right-aligned per the §V
-            drawing (hairline separator, 15px/26px padding). Rendered for the
-            Marketplace browse card (all four footer props supplied). The §VI
-            Installed-extensions modal stays details-only (no footer) in every
-            state EXCEPT update-available, where it passes exactly `cta`
-            (update) + `updateAction` + `planUpdateAction` and the footer
-            carries the §II update flow — the ONLY place the update runs
-            (2026-07-05 owner ruling refined by the update-flow spec at the
-            2026-07-12 §II/§III pin). */}
-        {cta != null &&
-        installAction != null &&
-        updateAction != null &&
-        restoreAction != null ? (
-          <div className="flex shrink-0 items-center justify-end border-t border-line px-6.5 py-3.75">
-            <ModalFooterCta
-              card={card}
-              cta={cta}
-              installAction={installAction}
-              updateAction={updateAction}
-              restoreAction={restoreAction}
-              planUpdateAction={planUpdateAction}
-              installScope={installScope}
-            />
-          </div>
-        ) : cta?.state === "update" && updateAction != null && planUpdateAction != null ? (
-          <div className="flex shrink-0 items-center justify-end border-t border-line px-6.5 py-3.75">
-            <ModalUpdatePlanFlow
-              displayName={card.displayName}
-              planAction={planUpdateAction}
-              updateAction={updateAction}
-              failureCopyByCategory={buildMarketplaceFailureCopy("update", card.displayName)}
-              defaultFailureMessage={marketplaceFailureCopy(
-                "unrecoverable",
-                "update",
-                card.displayName,
-              )}
-            />
-          </div>
-        ) : null}
+        {/* cinatra#2406 (owner ruling): no footer renders here — the modal is
+            details-only everywhere. It used to carry a six-state
+            install/update/restore CTA bar (and, for the §VI Installed page,
+            an update-plan dry-run flow); both are removed. */}
       </DialogContent>
     </Dialog>
   );
@@ -973,170 +848,6 @@ function StarRow({
         />
       ))}
     </span>
-  );
-}
-
-function ModalFooterCta({
-  card,
-  cta,
-  installAction,
-  updateAction,
-  restoreAction,
-  planUpdateAction,
-  installScope,
-}: {
-  card: MarketplaceCardData;
-  cta: MarketplaceCardCta;
-  installAction: BoundLifecycleAction;
-  updateAction: BoundLifecycleAction;
-  restoreAction: BoundLifecycleAction;
-  planUpdateAction?: () => Promise<PlanExtensionUpdateResult>;
-  installScope?: ModalInstallScopeContext;
-}) {
-  const compat = deriveExtensionCompatState(card.sdkAbiRange);
-  const state = resolveModalInstallState(cta, compat);
-
-  // §V footer drawing: the CTA sits right-aligned at its natural width; the
-  // incompatible state keeps the "Install now" label greyed to 40% with the
-  // reason in its tooltip (the button itself never relabels).
-  if (state.kind === "incompatible") {
-    return (
-      <Button size="sm" disabled className="disabled:opacity-40" title="Requires a newer Cinatra version">
-        Install now
-      </Button>
-    );
-  }
-
-  if (state.kind === "installed") {
-    return (
-      // §V "Installed" state: the secondary pill at 90% — a settled state,
-      // not the 50% disabled dimming.
-      <Button size="sm" variant="secondary" disabled className="disabled:opacity-90">
-        Installed
-      </Button>
-    );
-  }
-
-  if (state.kind === "restore") {
-    return (
-      <MarketplaceInstallForm
-        action={restoreAction}
-        failureCopyByCategory={buildMarketplaceFailureCopy("restore", card.displayName)}
-        defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "restore", card.displayName)}
-      >
-        <MarketplaceInstallSubmit variant="outline" pendingLabel="Restoring…">
-          Restore
-        </MarketplaceInstallSubmit>
-      </MarketplaceInstallForm>
-    );
-  }
-
-  // install | update
-  const isUpdate = state.kind === "update";
-  if (state.disabled) {
-    return (
-      <Button
-        size="sm"
-        disabled
-        title={`Connect the package registry to ${isUpdate ? "update" : "install"}`}
-      >
-        {isUpdate ? "Update now" : "Install now"}
-      </Button>
-    );
-  }
-  // §II update flow (cinatra#1041): when the dry-run action is wired, "Update
-  // now" plans FIRST and the admin confirms the rendered Update plan before
-  // the write — the direct-submit form below remains only for callers that do
-  // not pass `planUpdateAction`.
-  if (isUpdate && planUpdateAction) {
-    return (
-      <ModalUpdatePlanFlow
-        displayName={card.displayName}
-        planAction={planUpdateAction}
-        updateAction={updateAction}
-        failureCopyByCategory={buildMarketplaceFailureCopy("update", card.displayName)}
-        defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "update", card.displayName)}
-      />
-    );
-  }
-  // Install access-target dialog (cinatra#1541): for a NOT-installed connector
-  // / artifact / workflow, "Install now" must open the SAME pre-install
-  // access-scope dialog the §I/§IV card opens (cinatra#805) — NOT submit
-  // directly. Gate is the SAME isInstallAccessTargetKind predicate the card
-  // uses (AC5), never a second rule; the update path is handled above (AC7).
-  if (!isUpdate && isInstallAccessTargetKind(card.kindSlug)) {
-    // AC2: the scoped flow requires the already-authorized picker context the
-    // card computes server-side. If it is not plumbed, DISABLE the CTA
-    // (deferred) — NEVER fall through to the direct-submit form, which would
-    // recreate the bypass this issue closes.
-    if (!installScope) {
-      return (
-        <Button size="sm" disabled title="Preparing install options…">
-          Install now
-        </Button>
-      );
-    }
-    return <ModalInstallScopeCta card={card} installScope={installScope} />;
-  }
-  const op = isUpdate ? "update" : "install";
-  return (
-    <MarketplaceInstallForm
-      action={isUpdate ? updateAction : installAction}
-      failureCopyByCategory={buildMarketplaceFailureCopy(op, card.displayName)}
-      defaultFailureMessage={marketplaceFailureCopy("unrecoverable", op, card.displayName)}
-    >
-      <MarketplaceInstallSubmit pendingLabel={isUpdate ? "Updating…" : "Installing…"}>
-        {isUpdate ? "Update now" : "Install now"}
-      </MarketplaceInstallSubmit>
-    </MarketplaceInstallForm>
-  );
-}
-
-/**
- * The footer "Install now" CTA for an access-target kind (cinatra#1541). The
- * button is the trigger — clicking it opens the pre-install access-scope
- * dialog controlled-open, so the dialog layers ABOVE this modal (AC4); Radix
- * returns focus to this button when the dialog closes. The dialog carries the
- * SAME server-side install contract as the card (same UNBOUND action + the
- * card's already-authorized target rows), so an install from the modal
- * persists the SAME access outcome as one from the card (AC1/AC6).
- */
-function ModalInstallScopeCta({
-  card,
-  installScope,
-}: {
-  card: MarketplaceCardData;
-  installScope: ModalInstallScopeContext;
-}) {
-  const [scopeOpen, setScopeOpen] = useState(false);
-  const ctaRef = useRef<HTMLButtonElement>(null);
-  return (
-    <>
-      <Button ref={ctaRef} size="sm" onClick={() => setScopeOpen(true)}>
-        Install now
-      </Button>
-      <ExtensionInstallScopeDialog
-        open={scopeOpen}
-        onOpenChange={setScopeOpen}
-        // Radix modal content restores focus to its registered trigger on close
-        // and preventDefaults the browser restore; the scope dialog suppresses
-        // that trigger when controlled, so return focus to THIS CTA (AC4).
-        onCloseAutoFocus={(event) => {
-          event.preventDefault();
-          ctaRef.current?.focus();
-        }}
-        packageName={card.packageName}
-        packageVersion={card.packageVersion}
-        displayName={card.displayName}
-        installTargets={installScope.installTargets}
-        ownerEntityNames={installScope.ownerEntityNames}
-        activeOrgId={installScope.activeOrgId}
-        defaultValue={installScope.defaultValue}
-        failureCopyByCategory={installScope.failureCopyByCategory}
-        defaultFailureMessage={installScope.defaultFailureMessage}
-        installAction={installScope.installAction}
-      />
-    </>
   );
 }
 

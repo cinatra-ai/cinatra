@@ -91,6 +91,7 @@ export type BuildInstallTargetsArgs = {
 };
 
 const REASON_ORG = "Requires organization admin role.";
+const REASON_NO_ACTIVE_ORG = "Requires an active organization.";
 const REASON_TEAM = "Requires team admin role on this team.";
 const REASON_PROJECT =
   "Requires project ownership or team admin of the owning team.";
@@ -110,15 +111,24 @@ export function buildInstallTargets(
   // Org row.
   // ---------------------------------------------------------------------------
   {
-    const enabled = isPlatformAdmin || isOrgAdminOrOwner;
+    // cinatra#2372 AC2: an empty/whitespace activeOrgId is the production
+    // no-active-organization shape (`activeOrgId ?? ""`). The org row then
+    // carries the degenerate empty-tail `org:` token — display-only, NEVER
+    // enabled, regardless of role: a platform admin must not get an enabled
+    // row whose submit the server action can only reject.
+    const hasActiveOrg = activeOrgId.trim().length > 0;
+    const enabled = hasActiveOrg && (isPlatformAdmin || isOrgAdminOrOwner);
     rows.push({
       // Multi-scope W1: id-carrying org token (retired the bare "org").
+      // `label` is DEAD for rendering (cinatra#2372 — see the workspace/admin
+      // rows below); kept in the current vocabulary rather than the retired
+      // "Anyone in <org>" copy.
       value: `org:${activeOrgId}`,
-      label: `Anyone in ${orgName || "this organization"}`,
+      label: `Organization: ${orgName || "this organization"}`,
       level: "organization",
       id: activeOrgId,
       disabled: !enabled,
-      reason: enabled ? undefined : REASON_ORG,
+      reason: enabled ? undefined : hasActiveOrg ? REASON_ORG : REASON_NO_ACTIVE_ORG,
     });
   }
 
@@ -164,9 +174,16 @@ export function buildInstallTargets(
   // the install action re-derives it server-side and never trusts a client id.
   // ---------------------------------------------------------------------------
   if (args.includeWorkspaceScopes) {
+    // `label` is DEAD for rendering (cinatra#2372): the flat AccessCombobox
+    // single mode derives every row's text from the canonical flat-option
+    // model (src/components/access-scope.ts), never from this field — only
+    // ownerEntityNames (org/team/project) feeds it. Kept in the audience's
+    // OWN canonical vocabulary rather than the retired "Whole Workspace" /
+    // bare "Admins only" copy, so nothing that reads this field in the future
+    // (a log line, a debug view) resurfaces stale audience copy.
     rows.push({
       value: "workspace",
-      label: "Whole Workspace",
+      label: "Workspace: All",
       level: "workspace",
       id: activeOrgId,
       disabled: !isPlatformAdmin,
@@ -174,7 +191,7 @@ export function buildInstallTargets(
     });
     rows.push({
       value: "admin",
-      label: "Admins only",
+      label: "Workspace: Admins only",
       level: "admin",
       id: activeOrgId,
       disabled: !isPlatformAdmin,
@@ -207,7 +224,12 @@ export function pickDefaultPickerValue(
   }
   const enabledTeam = targets.find((t) => t.level === "team" && !t.disabled);
   if (enabledTeam) return enabledTeam.value;
+  // The degenerate no-active-org row (empty-tail `org:` token) is never a
+  // default: buildInstallTargets already disables it, and the explicit
+  // empty-id guard here keeps the invariant even if the two functions are
+  // ever fed rows built elsewhere (cinatra#2372 AC2 — the defaulted `org:`
+  // value is exactly how the enabled-but-rejected submit became reachable).
   const orgRow = targets.find((t) => t.level === "organization" && !t.disabled);
-  if (orgRow && !orgRow.disabled) return orgRow.value;
+  if (orgRow && !orgRow.disabled && orgRow.id.trim().length > 0) return orgRow.value;
   return null;
 }

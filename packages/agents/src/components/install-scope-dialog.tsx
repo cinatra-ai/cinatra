@@ -29,7 +29,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogT
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
-import { AccessCombobox } from "@/components/access-combobox";
+import { AccessCombobox, resolveFlatAccessOption } from "@/components/access-combobox";
 import { toast } from "@/lib/cinatra-toast";
 import type { InstallTarget } from "../install-targets";
 
@@ -149,6 +149,18 @@ export function InstallScopeDialog({
 
   const noInstallableScope = defaultValue === null;
 
+  // Committability (cinatra#2372): the ONE gate every single-mode consumer
+  // reads instead of bare value-truthiness — synthetic/degenerate rows (a
+  // mismatched or empty-tail org token, an unhydrated team/project id) and
+  // any server-disabled target are never committable. Workspace/admin are
+  // never offered on this picker (installWorkspaceScopes is never passed).
+  const selectedOption = resolveFlatAccessOption(value, availableScopes, {
+    disabledScopes,
+    ownerOffered: false,
+    workspaceOffered: false,
+    adminOffered: false,
+  });
+
   // -------------------------------------------------------------------------
   // Submit handler.
   // -------------------------------------------------------------------------
@@ -157,7 +169,7 @@ export function InstallScopeDialog({
     setErrorMessage(null);
     try {
       const target = pickerValueToTarget(value, activeOrgId);
-      if (!target) {
+      if (!target || !selectedOption.committable) {
         setErrorMessage(
           "Selected value is not a valid install target. Please pick organization, team, or project.",
         );
@@ -243,9 +255,6 @@ export function InstallScopeDialog({
               // project:* are valid install targets.
               installMode
             />
-            <p className="text-sm text-muted-foreground">
-              Targets you cannot install at are disabled.
-            </p>
             {errorMessage ? (
               <Alert variant="destructive">
                 <AlertDescription>{errorMessage}</AlertDescription>
@@ -267,7 +276,7 @@ export function InstallScopeDialog({
             <Button
               type="button"
               onClick={handleSubmit}
-              disabled={!value || submitting}
+              disabled={!selectedOption.committable || submitting}
               aria-busy={submitting || undefined}
             >
               {submitting ? "Installing..." : "Install"}

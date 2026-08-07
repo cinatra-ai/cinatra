@@ -957,7 +957,8 @@ function matchRunVisibilityToken(
 ): boolean {
   if (visibility === "workspace") {
     // "Workspace: All" means EVERY workspace user can use the resource — not
-    // just org_admin/org_owner — matching the UI label "Whole Workspace / All".
+    // just org_admin/org_owner — matching the canonical UI label
+    // "Workspace: All" (cinatra#2372 audience vocabulary).
     // Safe here because policyAllows() runs AFTER enforceRunAccess() + the
     // kernel can() cross-org guard for non-owners (src/lib/authz/enforce.ts):
     // an anonymous/missing actor is already rejected upstream and a

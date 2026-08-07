@@ -200,17 +200,25 @@ function cardDriver(fixture: ConformanceCardFixture): SurfaceDriver {
   switch (fixture.surfaceId) {
     case "extension-listing-card-available":
       driver.actions.install = {
-        outcome: "installed",
-        run: async (_page, root) => {
+        // Outcome "panel-open" (spec §I / §I.1, exemplar corrected in
+        // design#114): Install now does NOT submit and does NOT open a popup —
+        // it swaps the card's body in place to the install face. This fixture
+        // is a CONNECTOR, an install-access-target kind, which is what makes
+        // that the real product behaviour here. The panel's own four actions
+        // (including the install that actually completes) are the sibling
+        // `extension-install-panel` surface's contract, not this one's.
+        outcome: "panel-open",
+        run: async (page, root) => {
           const cta = root.locator('[data-testid="extension-card-cta"]');
           await expect(cta).toHaveAttribute("data-cta-state", "install");
-          await clickCtaUntil(root, "Install now", async () => {
-            // Outcome "installed": the harness action mutates the installed
-            // state and the REAL resolveMarketplaceCardCta re-derives the
-            // CTA — the card must reach the §IV Installed presentation.
-            await expect(cta).toHaveAttribute("data-cta-state", "installed", { timeout: 5_000 });
-          });
-          await expect(cta.getByRole("button", { name: "Installed" })).toBeDisabled();
+          const face = await openInstallPanel(root);
+          // The header band is carried over and the body is the panel.
+          await expect(face.locator('[data-slot="extension-card-name"]')).toBeVisible();
+          await expect(face.locator('[data-testid="extension-install-panel-body"]')).toBeVisible();
+          // Exactly ONE face is mounted: the idle CTA is gone, not hidden.
+          await expect(root.locator('[data-testid="extension-card-cta"]')).toHaveCount(0);
+          // No dialog anywhere on the card path.
+          await expect(page.locator('[role="dialog"]')).toHaveCount(0);
         },
       };
       break;
@@ -984,29 +992,9 @@ const EXTENSION_DETAIL_MODAL_DRIVER: SurfaceDriver = {
       },
     },
   },
-  actions: {
-    // install → installed THROUGH the real machinery: the footer CTA is the
-    // REAL pending-aware install form; the harness action mutates the
-    // installed-state input and the REAL resolveMarketplaceCardCta re-derives
-    // the footer to the §V "Installed" settled state.
-    install: {
-      outcome: "installed",
-      run: async (page, root) => {
-        const dialog = await openDetailModal(page, root);
-        const installButton = dialog.getByRole("button", { name: "Install now" });
-        await clickUntil(installButton, async () => {
-          await expect(dialog.getByRole("button", { name: "Installed" })).toBeVisible({
-            timeout: 5_000,
-          });
-        });
-        await expect(dialog.getByRole("button", { name: "Installed" })).toBeDisabled();
-        await expect(root).toHaveAttribute(
-          "data-installed-version",
-          SEEDED_MODAL_FIXTURE.packageVersion,
-        );
-      },
-    },
-  },
+  // cinatra#2406 (owner ruling): the modal renders no footer, so there is no
+  // more install action to drive from here — the modal is details-only.
+  actions: {},
   states: {
     "kind:agent": async (page, root) => {
       const dialog = await openDetailModal(page, root);
@@ -2559,6 +2547,22 @@ const INSTALL_PANEL_MOUNT = '[data-surface-id="extension-install-panel"]';
 const INSTALL_PANEL_FACE = '[data-testid="extension-install-panel"]';
 
 /**
+ * A `<Type>: <name>` access label as it actually reaches the DOM. Since
+ * cinatra#2372 both the trigger and the row render the type prefix and the name
+ * as two sibling elements separated by a CSS gap, so their text carries no
+ * separating space. Every literal part is regex-escaped; only the separator
+ * after the FIRST colon becomes whitespace-optional, which is where the gap is.
+ */
+function typeNamePairPattern(label: string): RegExp {
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const at = label.indexOf(": ");
+  if (at === -1) return new RegExp(escape(label));
+  return new RegExp(
+    `${escape(label.slice(0, at + 1))}\\s*${escape(label.slice(at + 2))}`,
+  );
+}
+
+/**
  * Open the panel from the idle card's CTA, retrying through hydration (a click
  * landing before React hydrates is silently swallowed on the standalone build).
  */
@@ -2620,9 +2624,12 @@ const INSTALL_PANEL_DRIVER: SurfaceDriver = {
         const face = await openInstallPanel(root);
         const picker = face.locator('[data-testid="extension-install-panel-picker"]');
         // The closed trigger renders the preselected row VERBATIM (spec §I.1:
-        // "its closed value renders exactly as the row reads").
+        // "its closed value renders exactly as the row reads"). Since
+        // cinatra#2372 the TRIGGER composes the same two gap-separated elements
+        // the row does, so — exactly like the row assertions below — its text
+        // carries no separating space and the pair must be matched.
         const trigger = picker.getByRole("combobox");
-        await expect(trigger).toContainText(CONFORMANCE_INSTALL_PANEL_DEFAULT_LABEL);
+        await expect(trigger).toContainText(typeNamePairPattern(CONFORMANCE_INSTALL_PANEL_DEFAULT_LABEL));
         await trigger.click();
         // Outcome "options-listed": the server-offered rows are listed. The
         // popover is PORTALLED, so it is searched on the page, not in the card

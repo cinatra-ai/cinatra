@@ -1,27 +1,35 @@
 /**
- * Org token-contract regression (cinatra#1526).
+ * Org token-contract regression (cinatra#1526), updated for the canonical flat
+ * access-option model (cinatra#2372, mkt-install S1).
  *
- * Multi-scope W1 retired the bare `"org"` visibility token in favour of the
- * id-carrying `org:<id>`. Three consumers never followed: the label resolver,
- * the install dialogs' org-name lookup key, and the flyout org row's own value.
- * This locks the fix:
+ * `resolveAccessLabel` is now a thin `{ type, name }` view over
+ * `resolveFlatAccessOption` (src/components/access-scope.ts) — the model
+ * whose full contract (committability, synthetic rows, all six kinds) is
+ * pinned in access-scope-flat.test.ts. This file keeps the org-token-specific
+ * regression coverage, updated to the trigger ≡ row vocabulary
+ * (app-permissions.html c-3.1): the org token resolves to `Organization:
+ * <name>` — never the old bare "Anyone in <org>" phrasing, which was a SECOND,
+ * independently-worded trigger string that could (and did) drift from the
+ * row's `Organization: <name>` copy.
  *
- *  - `resolveAccessLabel("org:<id>")` resolves to the organization NAME (never
- *    the raw token) — a well-formed org token never reaches the raw-value
- *    fallback.
+ *  - `resolveAccessLabel("org:<id>")` resolves to `{ type: "Organization",
+ *    name: <org name> }` (never the raw token) — a well-formed org token never
+ *    reaches the raw-value fallback.
  *  - The bare `"org"` form is still ACCEPTED (read-compat with any persisted
  *    legacy value — AgentAuthPolicyVisibilitySchema still validates it).
  *  - An id-carrying `org:<id>` token resolves to the active org's NAME only
  *    when its embedded id is CONFIRMED to equal the supplied active `orgId`.
  *    An unconfirmed token — no `orgId` supplied (the read-only Permissions tab,
  *    whose value is the PROJECT's own owning-org token), a different id
- *    (cross-org), or a malformed empty tail — degrades to a neutral, id-free
- *    label ("Anyone in the organization"): never the raw token, and never a
- *    possibly-WRONG specific org name on a permissions-review surface
- *    (cinatra#1526 review — a co-owner of a project owned by another org must
- *    not be shown the viewer's own active-org name for that project's scope).
- *  - The generic fallback ("your organization") renders ONLY when the confirmed
- *    active org has no name.
+ *    (cross-org), or a malformed empty tail — degrades to the neutral,
+ *    id-free, NEVER-committable synthetic label `{ type: "Organization", name:
+ *    "the organization" }`: never the raw token, and never a possibly-WRONG
+ *    specific org name on a permissions-review surface (cinatra#1526 review —
+ *    a co-owner of a project owned by another org must not be shown the
+ *    viewer's own active-org name for that project's scope).
+ *  - The generic fallback (`"Your organization"`, capital Y — matching the
+ *    row's own fallback, cinatra#2372) renders ONLY when the CONFIRMED active
+ *    org has no name.
  *  - The flyout org row emits the id-carrying `org:${orgId}` token (never a
  *    hardcoded bare `"org"`), degrading to bare `"org"` only when no org id is
  *    supplied.
@@ -57,41 +65,38 @@ const namelessScopes = {
   workspaceExposed: false,
 };
 
-describe("resolveAccessLabel — org token contract (cinatra#1526)", () => {
-  it("resolves the id-carrying org:<id> token to the organization name (AC1)", () => {
+describe("resolveAccessLabel — org token contract (cinatra#1526 / cinatra#2372)", () => {
+  it("resolves the id-carrying org:<id> token to Organization: <name> (AC1)", () => {
     const label = resolveAccessLabel(`org:${ORG_ID}`, namedScopes);
-    expect(label).toEqual({ type: null, name: "Anyone in Acme Corp" });
+    expect(label).toEqual({ type: "Organization", name: "Acme Corp" });
     // The raw token must NOT leak into the label.
     expect(label.name).not.toContain(ORG_ID);
   });
 
   it("still accepts the retired bare 'org' token for read-compat (AC4)", () => {
     expect(resolveAccessLabel("org", namedScopes)).toEqual({
-      type: null,
-      name: "Anyone in Acme Corp",
+      type: "Organization",
+      name: "Acme Corp",
     });
   });
 
-  it("renders the generic fallback ONLY when the org has no name (AC2)", () => {
+  it("renders the generic 'Your organization' fallback ONLY when the org has no name (AC2)", () => {
     // org:<id> with a named org → the name.
-    expect(resolveAccessLabel(`org:${ORG_ID}`, namedScopes).name).toBe(
-      "Anyone in Acme Corp",
-    );
-    // org:<id> with a genuinely nameless org → the generic fallback, never
-    // a hardcoded "Organization" and never the raw token.
+    expect(resolveAccessLabel(`org:${ORG_ID}`, namedScopes).name).toBe("Acme Corp");
+    // org:<id> with a genuinely nameless org → the generic fallback, matching
+    // the row's own fallback verbatim (capital Y — cinatra#2372 trigger ≡ row),
+    // never a raw token.
     const nameless = resolveAccessLabel(`org:${ORG_ID}`, namelessScopes);
-    expect(nameless).toEqual({ type: null, name: "Anyone in your organization" });
-    expect(nameless.name).not.toContain("Organization");
+    expect(nameless).toEqual({ type: "Organization", name: "Your organization" });
     expect(nameless.name).not.toContain(ORG_ID);
   });
 
-  it("a cross-org org:<id> does NOT claim the active org's name — neutral label (cinatra#1526 review)", () => {
+  it("a cross-org org:<id> does NOT claim the active org's name — synthetic neutral label (cinatra#1526 review / cinatra#2372 c-3.11)", () => {
     // The token scopes a DIFFERENT org than the supplied active `orgId`; the
     // active org's name would be a WRONG, confidently-rendered label on a
-    // permissions surface. Degrade to a neutral, id-free label instead.
+    // permissions surface. Degrade to a neutral, id-free, display-only label.
     const label = resolveAccessLabel(`org:${OTHER_ORG_ID}`, namedScopes);
-    expect(label.type).toBeNull();
-    expect(label.name).toBe("Anyone in the organization");
+    expect(label).toEqual({ type: "Organization", name: "the organization" });
     expect(label.name).not.toContain("Acme Corp");
     expect(label.name).not.toContain(OTHER_ORG_ID);
   });
@@ -108,26 +113,21 @@ describe("resolveAccessLabel — org token contract (cinatra#1526)", () => {
       workspaceExposed: false,
     };
     const label = resolveAccessLabel(`org:${OTHER_ORG_ID}`, noOrgIdScopes);
-    expect(label.type).toBeNull();
-    expect(label.name).toBe("Anyone in the organization");
+    expect(label).toEqual({ type: "Organization", name: "the organization" });
     expect(label.name).not.toContain("Acme Corp");
     expect(label.name).not.toContain(OTHER_ORG_ID);
   });
 
   it("degrades a malformed org: (empty tail) safely — no raw-token leak (AC6)", () => {
     const label = resolveAccessLabel("org:", namedScopes);
-    expect(label.type).toBeNull();
-    expect(label.name).toBe("Anyone in the organization");
+    expect(label).toEqual({ type: "Organization", name: "the organization" });
     expect(label.name).not.toBe("org:");
   });
 
-  it("keeps team:/project:/owner/admin/workspace labels intact (no over-capture)", () => {
-    expect(resolveAccessLabel("owner", namedScopes).name).toBe("Only me");
-    // cinatra#2373: the two workspace AUDIENCE labels now read exactly as
-    // their dropdown rows do (the in-card install panel's drawn trigger is
-    // "Workspace: All"); the org-token resolution below is unaffected.
-    expect(resolveAccessLabel("admin", namedScopes).name).toBe("Workspace: Admins only");
-    expect(resolveAccessLabel("workspace", namedScopes).name).toBe("Workspace: All");
+  it("keeps team:/project:/owner/admin/workspace labels intact under the new trigger ≡ row vocabulary (no over-capture)", () => {
+    expect(resolveAccessLabel("owner", namedScopes)).toEqual({ type: "Personal", name: "Only me" });
+    expect(resolveAccessLabel("admin", namedScopes)).toEqual({ type: "Workspace", name: "Admins only" });
+    expect(resolveAccessLabel("workspace", namedScopes)).toEqual({ type: "Workspace", name: "All" });
     expect(resolveAccessLabel("team:abc", namedScopes).type).toBe("Team");
     expect(resolveAccessLabel("project:xyz", namedScopes).type).toBe("Project");
   });
@@ -158,7 +158,7 @@ describe("AccessCombobox org row — id-carrying value wiring (AC3)", () => {
     // Post-#1607 the row select goes through the `commit` helper (set value +
     // clear any invalidation note + close), so the org row wires commit(orgRowValue).
     expect(SOURCE).toMatch(/commit\(orgRowValue\)/);
-    expect(SOURCE).toMatch(/renderTargetRow\(\s*orgRowValue,/);
+    expect(SOURCE).toMatch(/renderTargetRow\(\s*\n?\s*orgRowValue,/);
     expect(SOURCE).toMatch(/itemClass\(orgRowValue\)/);
     expect(SOURCE).toMatch(/renderCheckmark\(orgRowValue\)/);
     // No literal org CommandItem value / onSelect writing the retired token.

@@ -144,6 +144,30 @@ describe("InstallScopeDialog", () => {
     expect(SOURCE).toMatch(/installTargets[\s\n]*\.\s*filter/);
   });
 
+  it("COMMITTABILITY (cinatra#2372): the install submit is disabled unless the selected value is committable, not bare value-truthiness", () => {
+    // Mirrors the marketplace extension dialog's gate (same shared model,
+    // access-scope.ts's resolveFlatAccessOption) — a synthetic/degenerate
+    // selection (an unhydrated team/project, or a stray org token) can be a
+    // non-empty `value` and STILL leave submit disabled.
+    expect(SOURCE).toMatch(/resolveFlatAccessOption\(value, availableScopes, \{/);
+    expect(SOURCE).toMatch(/disabledScopes,/);
+    expect(SOURCE).toMatch(/ownerOffered:\s*false,/);
+    // This dialog never requests the always-offered workspace scopes
+    // (installWorkspaceScopes is never passed to AccessCombobox below), so
+    // "workspace"/"admin" can never be committable here — hardcoded false,
+    // not a flag this dialog doesn't otherwise have.
+    expect(SOURCE).toMatch(/workspaceOffered:\s*false,/);
+    expect(SOURCE).toMatch(/adminOffered:\s*false,/);
+    expect(SOURCE).toMatch(/disabled=\{!selectedOption\.committable \|\| submitting\}/);
+    // Defense in depth: the submit handler ALSO re-checks committability, not
+    // just the button's disabled prop.
+    expect(SOURCE).toMatch(/if \(!target \|\| !selectedOption\.committable\)/);
+  });
+
+  it("no bare value-truthiness gate survives on the submit button (the old `!value` check is retired)", () => {
+    expect(SOURCE).not.toMatch(/disabled=\{!value \|\| submitting\}/);
+  });
+
   it("uses semantic CSS tokens only — no bg-white / text-slate-* / border-gray-* / bg-slate-*", () => {
     // Allow comments to reference these tokens for documentation; strip
     // single-line comments before scanning.

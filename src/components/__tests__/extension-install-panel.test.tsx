@@ -242,7 +242,12 @@ describe("default audience + availability states", () => {
     const trigger = screen
       .getByTestId("extension-install-panel-picker")
       .querySelector('[role="combobox"]')!;
-    expect(trigger.textContent).toContain("Workspace: All");
+    // Since cinatra#2372 the trigger composes the SAME two elements the row
+    // does — a `<Type>:` prefix span and a name span separated by a CSS gap —
+    // so its textContent carries no separating space. That is the trigger ≡ row
+    // guarantee, not a drift from it: match the pair, exactly as the Playwright
+    // conformance driver for this surface does.
+    expect(trigger.textContent).toMatch(/Workspace:\s*All/);
     // Not the retired trigger-only phrasing.
     expect(trigger.textContent).not.toContain("Whole Workspace");
   });
@@ -330,12 +335,13 @@ describe("failure path — toast + hidden live region, panel stays put", () => {
     expect(body.textContent).not.toContain("unrecoverable");
     expect(body.querySelector('[data-slot="alert"]')).toBeNull();
 
-    // The panel stayed open with the selection retained.
+    // The panel stayed open with the selection retained. (Trigger ≡ row renders
+    // the type prefix and the name as two gap-separated elements — cinatra#2372.)
     expect(screen.getByTestId("extension-install-panel-body")).toBeTruthy();
     const trigger = screen
       .getByTestId("extension-install-panel-picker")
       .querySelector('[role="combobox"]')!;
-    expect(trigger.textContent).toContain("Workspace: All");
+    expect(trigger.textContent).toMatch(/Workspace:\s*All/);
   });
 
   it("re-announces an IDENTICAL repeat failure (the alert node is remounted)", async () => {
@@ -375,5 +381,86 @@ describe("failure path — toast + hidden live region, panel stays put", () => {
       FAILURE_COPY.unrecoverable,
     );
     expect(toastError).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Committability gate (cinatra#2372). The panel is the newest single-mode
+// install consumer: it landed while the flat access-option model was parked, so
+// it shipped gating submit on bare value-truthiness. The model supersedes that,
+// exactly as it does in both install dialogs — a selection that is synthetic,
+// degenerate, or server-disabled is NOT committable, so the submit is disabled
+// and the handler refuses even if the control is driven anyway.
+// ---------------------------------------------------------------------------
+describe("committability gate — non-committable selections cannot install", () => {
+  /** A panel whose ONLY offered org row is server-disabled. */
+  function DisabledOrgPanel({
+    installAction,
+  }: {
+    installAction: (input: {
+      packageName: string;
+      packageVersion: string;
+      accessTarget: { level: string; id: string };
+    }) => Promise<MarketplaceInstallActionResult | void>;
+  }) {
+    const targets = [
+      {
+        value: `org:${ORG_ID}`,
+        label: "Anyone in Acme Corp",
+        level: "organization" as const,
+        id: ORG_ID,
+        disabled: true,
+        reason: "Requires an active organization.",
+      },
+    ];
+    return (
+      <CardFaceSwitcher
+        idleFace={
+          <div data-testid="idle-face">
+            <InstallPanelOpenButton>Install now</InstallPanelOpenButton>
+          </div>
+        }
+        installFace={
+          <div>
+            <InstallPanelCloseButton />
+            <ExtensionInstallScopePanel
+              packageName="@cinatra-fixtures/ledger-sync"
+              packageVersion="2.0.0"
+              displayName="Ledger Sync"
+              installTargets={targets}
+              ownerEntityNames={ENTITY_NAMES}
+              activeOrgId={ORG_ID}
+              availability={
+                { state: "ready", defaultValue: `org:${ORG_ID}` } as InstallPanelAvailability
+              }
+              failureCopyByCategory={
+                FAILURE_COPY as Parameters<
+                  typeof ExtensionInstallScopePanel
+                >[0]["failureCopyByCategory"]
+              }
+              defaultFailureMessage={FAILURE_COPY.unrecoverable}
+              installAction={
+                installAction as Parameters<typeof ExtensionInstallScopePanel>[0]["installAction"]
+              }
+            />
+          </div>
+        }
+      />
+    );
+  }
+
+  it("disables submit for a server-DISABLED selection, and the handler refuses it", async () => {
+    const installAction = vi.fn(async () => undefined);
+    render(<DisabledOrgPanel installAction={installAction} />);
+    fireEvent.click(screen.getByRole("button", { name: "Install now" }));
+
+    const submit = screen.getByTestId("extension-install-panel-submit") as HTMLButtonElement;
+    // The value is truthy — the OLD `!value` gate would have enabled this.
+    expect(submit.disabled).toBe(true);
+
+    // Drive the form anyway: the handler is the second, independent gate.
+    fireEvent.submit(submit.closest("form")!);
+    await waitFor(() => expect(toastError).toHaveBeenCalled());
+    expect(installAction).not.toHaveBeenCalled();
   });
 });

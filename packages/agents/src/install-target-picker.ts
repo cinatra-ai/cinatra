@@ -74,10 +74,11 @@ export async function buildInstallTargetPickerContext(args: {
   orgRole: "org_owner" | "org_admin" | "member" | undefined;
   currentProjectId?: string;
   /**
-   * cinatra#1527: append the always-offered "Whole Workspace" / "Admins only"
-   * scopes. Passed `true` by the extension marketplace picker; left off (the
-   * default) by the agent at-scope picker, whose install path persists an owner
-   * level rather than an audience policy and so cannot target these scopes.
+   * cinatra#1527: append the always-offered "Workspace: All" / "Workspace:
+   * Admins only" scopes (cinatra#2372 audience relabel). Passed `true` by the
+   * extension marketplace picker; left off (the default) by the agent
+   * at-scope picker, whose install path persists an owner level rather than
+   * an audience policy and so cannot target these scopes.
    */
   includeWorkspaceScopes?: boolean;
 }): Promise<InstallTargetPickerContext> {
