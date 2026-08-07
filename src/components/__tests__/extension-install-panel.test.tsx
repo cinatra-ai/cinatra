@@ -242,7 +242,12 @@ describe("default audience + availability states", () => {
     const trigger = screen
       .getByTestId("extension-install-panel-picker")
       .querySelector('[role="combobox"]')!;
-    expect(trigger.textContent).toContain("Workspace: All");
+    // Since cinatra#2372 the trigger composes the SAME two elements the row
+    // does — a `<Type>:` prefix span and a name span separated by a CSS gap —
+    // so its textContent carries no separating space. That is the trigger ≡ row
+    // guarantee, not a drift from it: match the pair, exactly as the Playwright
+    // conformance driver for this surface does.
+    expect(trigger.textContent).toMatch(/Workspace:\s*All/);
     // Not the retired trigger-only phrasing.
     expect(trigger.textContent).not.toContain("Whole Workspace");
   });
@@ -330,12 +335,13 @@ describe("failure path — toast + hidden live region, panel stays put", () => {
     expect(body.textContent).not.toContain("unrecoverable");
     expect(body.querySelector('[data-slot="alert"]')).toBeNull();
 
-    // The panel stayed open with the selection retained.
+    // The panel stayed open with the selection retained. (Trigger ≡ row renders
+    // the type prefix and the name as two gap-separated elements — cinatra#2372.)
     expect(screen.getByTestId("extension-install-panel-body")).toBeTruthy();
     const trigger = screen
       .getByTestId("extension-install-panel-picker")
       .querySelector('[role="combobox"]')!;
-    expect(trigger.textContent).toContain("Workspace: All");
+    expect(trigger.textContent).toMatch(/Workspace:\s*All/);
   });
 
   it("re-announces an IDENTICAL repeat failure (the alert node is remounted)", async () => {

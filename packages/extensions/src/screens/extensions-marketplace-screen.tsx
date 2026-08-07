@@ -107,15 +107,16 @@ export async function ExtensionsMarketplaceScreen({
   // Marketplace-local availability + default (cinatra#2373). The SHARED
   // `pickDefaultPickerValue` the agent registry uses is untouched — it is only
   // consulted here as the fallback when `Workspace: All` is not offered.
+  // The panel reads its own default off `availability` (state "ready" carries
+  // `defaultValue`); nothing else needs it separately since the detail modal
+  // stopped taking an install action at all (cinatra#2406 — the owner-ratified
+  // footer removal deleted the modal's `installScope` prop, the only other
+  // consumer this value ever had).
   const installPanelAvailability = resolveInstallPanelAvailability({
     activeOrgId,
     installTargets,
     fallbackDefaultValue: pickerFallbackValue,
   });
-  const installScopeDefaultValue =
-    installPanelAvailability.state === "ready"
-      ? installPanelAvailability.defaultValue
-      : null;
 
   // Registry temp-policy declaration (config-driven; default off → no banner).
   // When configured, warn operators that this registry's private packages are
