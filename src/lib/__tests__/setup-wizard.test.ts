@@ -1,7 +1,7 @@
 // Tests for setup wizard step list.
 //
 // Covers:
-//   - key is step 0, name is step 1
+//   - sign-up is ALWAYS step 0 (cinatra#2477); key is step 1, name is step 2
 //   - CINATRA_ENCRYPTION_KEY ready/not-ready states
 //   - Gemini step is NOT present
 //   - isSetupWizardComplete() gate behavior
@@ -17,9 +17,9 @@ vi.mock("@/lib/instance-identity-store", () => ({
   readInstanceIdentity: vi.fn(),
 }));
 
-// cinatra#2386 — the sign-up step's presence is gated on hasAnyBetterAuthUsers().
-// Default true (no step) so pre-existing tests below — written before the
-// sign-up step existed — keep asserting steps[0]==="key" etc. without edits.
+// cinatra#2477 — the sign-up step is always present; hasAnyBetterAuthUsers()
+// drives its `ready` flag. Default true (step present + ready), the state of
+// every authenticated wizard visit.
 const hasUsersState = { value: true };
 vi.mock("@/lib/auth", () => ({
   hasAnyBetterAuthUsers: () => Promise.resolve(hasUsersState.value),
@@ -92,14 +92,14 @@ afterEach(() => {
 // key step is step 0
 // ---------------------------------------------------------------------------
 
-describe("getSetupWizardSteps - key is step 0", () => {
-  it("returns key as steps[0] with ready=false when CINATRA_ENCRYPTION_KEY is unset", async () => {
+describe("getSetupWizardSteps - key is step 1, after the ever-present sign-up step", () => {
+  it("returns key as steps[1] with ready=false when CINATRA_ENCRYPTION_KEY is unset", async () => {
     delete process.env.CINATRA_ENCRYPTION_KEY;
     vi.mocked(readInstanceIdentity).mockReturnValueOnce(null);
     const steps = await getSetupWizardSteps();
-    expect(steps[0]?.id).toBe("key");
-    expect(steps[0]?.href).toBe("/setup/key");
-    expect(steps[0]?.ready).toBe(false);
+    expect(steps[1]?.id).toBe("key");
+    expect(steps[1]?.href).toBe("/setup/key");
+    expect(steps[1]?.ready).toBe(false);
   });
 
   it("returns key step as ready=true when CINATRA_ENCRYPTION_KEY is a 64-char hex", async () => {
@@ -132,13 +132,13 @@ describe("isSetupWizardComplete - key gate", () => {
 // name step is index 1 after key
 // ---------------------------------------------------------------------------
 
-describe("getSetupWizardSteps - name step is index 1 after key", () => {
-  it("returns name as step[1] when no identity is configured", async () => {
+describe("getSetupWizardSteps - name step is index 2 after sign-up and key", () => {
+  it("returns name as step[2] when no identity is configured", async () => {
     vi.mocked(readInstanceIdentity).mockReturnValueOnce(null);
     const steps = await getSetupWizardSteps();
-    expect(steps[1]?.id).toBe("name");
-    expect(steps[1]?.href).toBe("/setup/name");
-    expect(steps[1]?.ready).toBe(false);
+    expect(steps[2]?.id).toBe("name");
+    expect(steps[2]?.href).toBe("/setup/name");
+    expect(steps[2]?.ready).toBe(false);
   });
 
   it("marks the name step as ready when identity is configured", async () => {
@@ -175,12 +175,12 @@ describe("getSetupWizardSteps - no gemini step", () => {
 // ---------------------------------------------------------------------------
 
 describe("getSetupWizardSteps - the AI step's pill (cinatra#2389)", () => {
-  it('the step pill reads "LLM Provider" while the id stays the stable "ai"', async () => {
+  it('the step pill reads "Model" (#2477 owner review) while the id stays the stable "ai"', async () => {
     vi.mocked(readInstanceIdentity).mockReturnValueOnce(null);
     const steps = await getSetupWizardSteps();
     const aiStep = steps.find((s) => s.id === "ai");
-    expect(aiStep?.title).toBe("LLM Provider");
-    expect(aiStep?.href).toBe("/setup/ai");
+    expect(aiStep?.title).toBe("Model");
+    expect(aiStep?.href).toBe("/setup/model");
   });
 });
 
@@ -207,31 +207,34 @@ describe("getSetupWizardSteps - the AI step follows the commit machine's derivat
 });
 
 // ---------------------------------------------------------------------------
-// cinatra#2386 (setup-flow S1): the sign-up step is FIRST, but present ONLY
-// while hasAnyBetterAuthUsers() is false.
+// cinatra#2477 (owner acceptance review; was cinatra#2386): the sign-up step
+// is ALWAYS steps[0]; hasAnyBetterAuthUsers() drives its `ready` flag.
 // ---------------------------------------------------------------------------
 
-describe("getSetupWizardSteps - the sign-up step (cinatra#2386)", () => {
+describe("getSetupWizardSteps - the sign-up step (cinatra#2477)", () => {
   it("is steps[0], not ready, when zero Better Auth users exist", async () => {
     hasUsersState.value = false;
     vi.mocked(readInstanceIdentity).mockReturnValueOnce(null);
     const steps = await getSetupWizardSteps();
     expect(steps[0]?.id).toBe("sign-up");
-    expect(steps[0]?.href).toBe("/setup/sign-up");
+    expect(steps[0]?.href).toBe("/setup/account");
     expect(steps[0]?.ready).toBe(false);
-    // key shifts to index 1 while sign-up is present.
     expect(steps[1]?.id).toBe("key");
   });
 
-  it("is ABSENT (not merely ready:true) once at least one user exists", async () => {
+  it("stays PRESENT as steps[0] with ready:true once at least one user exists (cinatra#2477 — no longer retires)", async () => {
     hasUsersState.value = true;
     vi.mocked(readInstanceIdentity).mockReturnValueOnce(null);
     const steps = await getSetupWizardSteps();
-    expect(steps.find((s) => s.id === "sign-up")).toBeUndefined();
-    expect(steps[0]?.id).toBe("key");
+    expect(steps[0]).toMatchObject({
+      id: "sign-up",
+      href: "/setup/account",
+      ready: true,
+    });
+    expect(steps[1]?.id).toBe("key");
   });
 
-  it("isSetupWizardComplete returns false while the sign-up step is present, even if every other gate is satisfied", async () => {
+  it("isSetupWizardComplete returns false while no user exists (sign-up not ready), even if every other gate is satisfied", async () => {
     hasUsersState.value = false;
     vi.mocked(readInstanceIdentity).mockReturnValue(SAMPLE_IDENTITY);
     readinessState.ready = true;

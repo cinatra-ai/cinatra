@@ -122,42 +122,42 @@ export default async function SetupNamePage({ searchParams }: SetupNamePageProps
         </Alert>
       ) : null}
 
-      <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
-        <form id="instance-name-form" action={saveInstanceIdentityAction} className="grid gap-4">
-          <Field>
-            <FieldLabel htmlFor="instance-display-name">Instance display name</FieldLabel>
-            <InstanceDisplayNameInput
-              defaultValue={identity?.instanceDisplayName ?? devDefaults?.instanceDisplayName ?? ""}
-            />
-            <span className="text-xs font-normal text-muted-foreground">
-              Human-readable name shown wherever this Cinatra instance is referenced. Typing here
-              auto-fills the namespace below until you edit it directly.
-            </span>
-          </Field>
+      {/* cinatra#2477 (owner acceptance review) — the fields sit directly on
+          the page: no card wrapper around the form. */}
+      <form id="instance-name-form" action={saveInstanceIdentityAction} className="grid gap-4">
+        <Field>
+          <FieldLabel htmlFor="instance-display-name">Instance display name</FieldLabel>
+          <InstanceDisplayNameInput
+            defaultValue={identity?.instanceDisplayName ?? devDefaults?.instanceDisplayName ?? ""}
+          />
+          <span className="text-xs font-normal text-muted-foreground">
+            Human-readable name shown wherever this Cinatra instance is referenced. Typing here
+            auto-fills the namespace below until you edit it directly.
+          </span>
+        </Field>
 
-          <Field>
-            <FieldLabel>Instance namespace</FieldLabel>
-            <Alert variant="info">
-              <AlertDescription>{getNamespaceMutabilityCopy(isMarketplaceManaged)}</AlertDescription>
-            </Alert>
-            <InstanceNamespaceInput
-              defaultValue={identity?.instanceNamespace ?? devDefaults?.instanceNamespace ?? ""}
-            />
-            <span className="text-xs font-normal text-muted-foreground">
-              Machine-readable name used to uniquely identify this instance. Lowercase letters,
-              digits, and hyphens only; 2–39 characters.
-            </span>
-          </Field>
+        <Field>
+          <FieldLabel>Instance namespace</FieldLabel>
+          <Alert variant="info">
+            <AlertDescription>{getNamespaceMutabilityCopy(isMarketplaceManaged)}</AlertDescription>
+          </Alert>
+          <InstanceNamespaceInput
+            defaultValue={identity?.instanceNamespace ?? devDefaults?.instanceNamespace ?? ""}
+          />
+          <span className="text-xs font-normal text-muted-foreground">
+            Machine-readable name used to uniquely identify this instance. Lowercase letters,
+            digits, and hyphens only; 2–39 characters.
+          </span>
+        </Field>
 
-          {/* Continue button stays inside the form so useFormStatus() can read
-              its pending lifecycle. SubmitContinueButton composes the
-              namespace-validity gate with the form-pending gate and renders
-              <Spinner> during pending. */}
-          <div className="flex justify-end mt-2">
-            <SubmitContinueButton />
-          </div>
-        </form>
-      </section>
+        {/* Continue button stays inside the form so useFormStatus() can read
+            its pending lifecycle. SubmitContinueButton composes the
+            namespace-validity gate with the form-pending gate and renders
+            <Spinner> during pending. */}
+        <div className="flex justify-end mt-2">
+          <SubmitContinueButton />
+        </div>
+      </form>
     </div>
     </NamespaceValidationProvider>
   );

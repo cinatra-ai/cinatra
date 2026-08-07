@@ -9,8 +9,12 @@ type SetupStepNavProps = {
   steps: SetupWizardStep[];
 };
 
+// whitespace-nowrap (#2483 review): a pill label must never break across
+// lines. The rail is a max-content row — when it outgrows the wizard column
+// it scrolls horizontally (see the nav's overflow-x-auto) instead of
+// wrapping labels.
 const PILL_BASE =
-  "flex h-8 items-center gap-2 rounded-full px-3 text-xs font-semibold uppercase tracking-wide";
+  "flex h-8 shrink-0 items-center gap-2 whitespace-nowrap rounded-full px-3 text-xs font-semibold uppercase tracking-wide";
 const PILL_READY =
   "border border-success/30 bg-success/10 text-success";
 const PILL_READY_LINK =
@@ -26,8 +30,10 @@ export function SetupStepNav({ steps }: SetupStepNavProps) {
   const firstIncompleteIndex = steps.findIndex((s) => !s.ready);
 
   return (
-    <nav aria-label="Setup progress" className="mb-8">
-      <ol className="flex items-center justify-center gap-2">
+    <nav aria-label="Setup progress" className="mb-8 overflow-x-auto">
+      {/* w-max + mx-auto: centered while the rail fits, horizontally
+          scrollable (never label-wrapping) once it doesn't. */}
+      <ol className="mx-auto flex w-max items-center gap-2">
         {steps.map((step, index) => {
           const isActive = pathname === step.href;
           const showCheck = step.ready;
@@ -36,9 +42,16 @@ export function SetupStepNav({ steps }: SetupStepNavProps) {
           //   • it's the first incomplete step AND at least one other step is
           //     complete (so the operator has some progress to navigate against).
           // Subsequent incomplete steps stay non-clickable.
+          //
+          // cinatra#2477 — the sign-up step is the one exception: its pill is
+          // NEVER a link. The bootstrap form can only render once (before the
+          // first account exists); afterwards /setup/account unconditionally
+          // redirects forward, so a link would be a silent bounce.
           const isFirstIncomplete = !step.ready && index === firstIncompleteIndex;
           const isNavigable =
-            !isActive && (step.ready || (isFirstIncomplete && anyReady));
+            !isActive &&
+            step.id !== "sign-up" &&
+            (step.ready || (isFirstIncomplete && anyReady));
 
           const pillClasses = step.ready
             ? isNavigable

@@ -1,5 +1,5 @@
 /**
- * cinatra#2386 (setup-flow S1) — /setup/sign-up routing state matrix.
+ * cinatra#2386 (setup-flow S1) — /setup/account routing state matrix.
  *
  * The four states this page must handle, in the order it checks them:
  *   1. authenticated                -> redirect to the first incomplete
@@ -24,7 +24,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ReactElement } from "react";
+import React from "react";
+import type { ReactElement, ReactNode } from "react";
 
 vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
@@ -33,20 +34,29 @@ vi.mock("next/navigation", () => ({
 }));
 
 // Stub the client re-export with a marker that surfaces the props tests care
-// about (localization + redirectTo), mirroring the sign-in test suites.
+// about (localization + redirectTo + classNames), mirroring the sign-in test
+// suites. SIGN_UP_ACTION is rendered as the submit button's CHILDREN — the
+// exact thing better-auth-ui does with it — because since cinatra#2477 the
+// page passes a ReactNode (Continue + arrow) through that slot, not a string.
 vi.mock("@/components/auth-view-client", () => ({
   SignUpForm: ({
     localization,
     redirectTo,
+    classNames,
   }: {
-    localization?: { SIGN_UP_ACTION?: string };
+    localization?: { SIGN_UP_ACTION?: ReactNode };
     redirectTo?: string;
+    classNames?: { primaryButton?: string };
   }) => (
     <form
       data-testid="sign-up-form"
       data-redirect-to={redirectTo ?? ""}
-      data-submit-label={localization?.SIGN_UP_ACTION ?? ""}
-    />
+      data-primary-button-classes={classNames?.primaryButton ?? ""}
+    >
+      {/* React.createElement (no JSX) sidesteps the raw-element lint rule,
+          mirroring the repo's next/link stub convention. */}
+      {React.createElement("button", { type: "submit" }, localization?.SIGN_UP_ACTION)}
+    </form>
   ),
 }));
 
@@ -159,7 +169,22 @@ describe("state 3: zero humans + sessionless — renders the bootstrap step", ()
     const html = await renderPage();
     expect(html).toMatch(/Create the first account/);
     expect(html).toMatch(/data-testid="sign-up-form"/);
-    expect(html).toMatch(/data-submit-label="Continue"/);
+    expect(html).toMatch(/Continue/);
+  });
+
+  it("cinatra#2477: the submit is the wizard Continue — trailing arrow icon, right-aligned via classNames.primaryButton", async () => {
+    await mockState({ hasUsers: false, session: null });
+    const html = await renderPage();
+    // The label node carries the same trailing <ArrowRight class="size-4">
+    // every other setup step's Continue button renders.
+    expect(html).toMatch(/Continue<svg[^>]*class="[^"]*size-4/);
+    // Right-aligned inside the form grid, width shrunk from the library's
+    // full-width default (twMerge lets w-auto supersede w-full).
+    const m = html.match(/data-primary-button-classes="([^"]*)"/);
+    expect(m).not.toBeNull();
+    const classes = (m?.[1] ?? "").split(/\s+/);
+    expect(classes).toContain("justify-self-end");
+    expect(classes).toContain("w-auto");
   });
 
   it("defaults redirectTo to /setup (the next incomplete step) when no next is supplied", async () => {

@@ -24,8 +24,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
 
-import { saveSetupOpenAIConnectionAction } from "@/app/setup/ai/actions";
-import { SetupProviderConnectionForm } from "@/app/setup/ai/provider-connection-form";
+import { saveSetupOpenAIConnectionAction } from "@/app/setup/model/actions";
+import { SetupProviderConnectionForm } from "@/app/setup/model/provider-connection-form";
 import { readOpenAIConnection } from "@/lib/openai-connection-store";
 // Every OpenAI reader resolves through the `llm-provider-surface` capability
 // the openai connector registers at activation (lazy/guarded host-access

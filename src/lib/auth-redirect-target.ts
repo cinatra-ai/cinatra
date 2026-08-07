@@ -41,7 +41,7 @@ const SIGN_UP_PATH = "/sign-up";
 // user exists, the bootstrap form is only ever rendered inside the setup
 // wizard, never at the bare /sign-up URL (which continues to serve later
 // accounts, unchanged, once at least one user exists).
-const SETUP_SIGN_UP_PATH = "/setup/sign-up";
+const SETUP_SIGN_UP_PATH = "/setup/account";
 const NEXT_PARAM = "next";
 
 /**
@@ -110,7 +110,7 @@ export function buildSignUpPath(nextPath?: string | null): string {
 }
 
 /**
- * Builds `/setup/sign-up`, or `/setup/sign-up?next=<encoded path>` when
+ * Builds `/setup/account`, or `/setup/account?next=<encoded path>` when
  * `nextPath` is a safe relative path (cinatra#2386). This is the bootstrap
  * destination for the zero-user `/sign-in` (and direct `/sign-up`) hop —
  * `buildSignUpPath` above stays reserved for the later-account URL itself.

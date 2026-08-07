@@ -114,7 +114,7 @@ export async function resolveAgentCreationDispatch(input: {
     // INACTIVE pin (the live default today — `isAgentCreationPinActive`
     // returns false unconditionally). Provider stays openai, but the MODEL
     // honors the operator-configured OpenAI default
-    // (`cinatra.metadata openai_connection.defaultModel`, set via /setup/ai +
+    // (`cinatra.metadata openai_connection.defaultModel`, set via /setup/model +
     // /configuration/llm). `readOpenAIConnectionFromDatabase` resolves that
     // stored value and itself falls back to the canonical
     // `DEFAULT_OPENAI_MODEL_ID` ("gpt-5.5") when unset.

@@ -80,9 +80,13 @@ export default async function SetupSecretKeyPage({ searchParams }: SetupSecretKe
         </Alert>
       )}
 
+      {/* cinatra#2483 review — same treatment as the Name page (cinatra#2477):
+          the instruction blocks sit directly on the page, no card wrapper.
+          The section element stays for its FUNCTIONAL role only: it dims and
+          de-activates the instructions once the key is already set. */}
       <section
         aria-disabled={secretsKeyOk || undefined}
-        className={cn("rounded-card border border-line bg-surface-strong p-6 shadow-sm", secretsKeyOk ? "pointer-events-none opacity-60" : "")}
+        className={cn(secretsKeyOk ? "pointer-events-none opacity-60" : "")}
       >
         <div>
           <p className="text-sm font-semibold text-foreground">Generate a key</p>

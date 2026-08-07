@@ -2,7 +2,7 @@
  * Contract tests for the shared default OpenAI model constant in
  * `llm-provider-policy.ts`.
  *
- * Locks DEFAULT_OPENAI_MODEL_ID to "gpt-5.5" so the /setup/ai and
+ * Locks DEFAULT_OPENAI_MODEL_ID to "gpt-5.5" so the /setup/model and
  * /configuration/llm default-model pickers and the persisted
  * openai-connection store (which all route their fallbacks through the
  * constant) cannot silently drift to another default, and asserts the

@@ -35,9 +35,9 @@ import { Field, FieldLabel } from "@/components/ui/field";
 
 import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 import { isAnthropicUploadOptInStanding } from "@/lib/setup-readiness-saga";
-import { saveSetupAnthropicConnectionAction } from "@/app/setup/ai/actions";
-import { SetupProviderConnectionForm } from "@/app/setup/ai/provider-connection-form";
-import { ANTHROPIC_SETUP_CONSENT_FIELD } from "@/app/setup/ai/readiness-state";
+import { saveSetupAnthropicConnectionAction } from "@/app/setup/model/actions";
+import { SetupProviderConnectionForm } from "@/app/setup/model/provider-connection-form";
+import { ANTHROPIC_SETUP_CONSENT_FIELD } from "@/app/setup/model/readiness-state";
 
 /** The Anthropic key-console page the helper links to (pinned by cinatra#2389). */
 const ANTHROPIC_KEY_CONSOLE_URL = "https://console.anthropic.com/settings/keys";
