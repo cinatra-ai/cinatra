@@ -33,7 +33,7 @@ import { useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Label } from "@/components/ui/label";
-import { AccessCombobox } from "@/components/access-combobox";
+import { AccessCombobox, resolveFlatAccessOption } from "@/components/access-combobox";
 import { toast } from "@/lib/cinatra-toast";
 import type { InstallTarget } from "@cinatra-ai/agents/install-targets";
 import { useCardFace, InstallPanelCancelButton } from "./card-face-switcher";
@@ -179,6 +179,22 @@ export function ExtensionInstallScopePanel({
       .map((t) => [t.value, t.reason ?? "Not available"]),
   );
 
+  // Committability (cinatra#2372): the ONE gate every single-mode install
+  // consumer reads instead of bare value-truthiness. This panel is the newest
+  // such consumer — it landed (cinatra#2373) while the model was parked, so it
+  // shipped with a `!value` gate; the model supersedes that here, exactly as it
+  // does in both install dialogs. Synthetic/degenerate rows (a mismatched or
+  // empty-tail org token, an unhydrated team/project id) and any
+  // server-disabled target are never committable. The context mirrors the
+  // AccessCombobox props below so the gate and the rendered rows can never
+  // disagree about what is offered.
+  const selectedOption = resolveFlatAccessOption(value, availableScopes, {
+    disabledScopes,
+    ownerOffered: false,
+    workspaceOffered: installWorkspaceScopes,
+    adminOffered: installWorkspaceScopes,
+  });
+
   const failureMessageForResult = (
     result: MarketplaceInstallActionResult,
   ): string => {
@@ -202,11 +218,13 @@ export function ExtensionInstallScopePanel({
   };
 
   async function handleSubmit() {
-    // Defense in depth: `ready` gates the submit control's existence, and the
-    // adapter fails closed on any value that is not a real target.
+    // Defense in depth: `ready` gates the submit control's existence, the
+    // committability gate rejects synthetic/degenerate and server-disabled
+    // selections, and the adapter fails closed on any value that is not a real
+    // target.
     if (!ready) return;
     const target = pickerValueToInstallTarget(value, activeOrgId);
-    if (!target) {
+    if (!target || !selectedOption.committable) {
       reportFailure(
         "Pick who can access this extension before installing — the current selection is not an installable audience.",
       );
@@ -318,7 +336,7 @@ export function ExtensionInstallScopePanel({
       {/* Fixed action row (spec §I.1: Cancel / Install now, right-aligned). */}
       <form action={handleSubmit} className="flex flex-none justify-end gap-2">
         <InstallPanelCancelButton />
-        {ready ? <InstallPanelSubmitButton disabled={!value} /> : null}
+        {ready ? <InstallPanelSubmitButton disabled={!selectedOption.committable} /> : null}
       </form>
     </div>
   );

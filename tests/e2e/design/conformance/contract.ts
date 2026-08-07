@@ -2608,9 +2608,14 @@ const INSTALL_PANEL_DRIVER: SurfaceDriver = {
         const face = await openInstallPanel(root);
         const picker = face.locator('[data-testid="extension-install-panel-picker"]');
         // The closed trigger renders the preselected row VERBATIM (spec §I.1:
-        // "its closed value renders exactly as the row reads").
+        // "its closed value renders exactly as the row reads"). Since
+        // cinatra#2372 the TRIGGER composes the same two gap-separated elements
+        // the row does, so — exactly like the row assertions below — its text
+        // carries no separating space and the pair must be matched.
         const trigger = picker.getByRole("combobox");
-        await expect(trigger).toContainText(CONFORMANCE_INSTALL_PANEL_DEFAULT_LABEL);
+        await expect(trigger).toContainText(
+          new RegExp(CONFORMANCE_INSTALL_PANEL_DEFAULT_LABEL.replace(": ", ":\\s*")),
+        );
         await trigger.click();
         // Outcome "options-listed": the server-offered rows are listed. The
         // popover is PORTALLED, so it is searched on the page, not in the card
