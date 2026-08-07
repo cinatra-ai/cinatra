@@ -27,6 +27,13 @@ import {
 // kernel guard instead of directly on the module `db` (owner ruling 2026-07-26,
 // ruling 1: "now").
 import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
+// cinatra#2484: the setup-resume path is the LAST place a type-violating setup
+// value can be stopped before it becomes `agent_runs.inputParams` and reaches
+// the run. It needs the SAME effective schema the setup loop rendered from —
+// the DB row's `inputSchema` is stale-empty for a whole class of installed
+// templates, and the resolver is what fills it from the mounted OAS.
+import { resolveTemplateInputSchema } from "./input-schema-resolver";
+import { assertValuesMatchDeclaredObjectTypes } from "./setup-input-type-guard";
 import {
   WAYFLOW_A2A_TIMEOUT_MS,
   createWayflowFetch,
@@ -45,6 +52,26 @@ const RESERVED_APPROVAL_ENVELOPE_KEYS = new Set<string>([
   "stepNumber",
   "approvalNote",
 ]);
+
+/**
+ * Reject a setup value that violates its input's DECLARED type (cinatra#2484).
+ *
+ * Thin binding over the shared leaf guard: the SAME assertion runs at run
+ * CREATION (execution.ts, before dispatch) so the invariant does not depend on
+ * which door the value came through. See `./setup-input-type-guard` for the
+ * scoping rationale (object-typed only, recursive over declared sub-shapes,
+ * `undefined` = absence).
+ */
+export function assertSetupValuesMatchDeclaredObjectTypes(
+  properties: Record<string, Record<string, unknown>>,
+  fieldValues: Record<string, unknown>,
+): void {
+  assertValuesMatchDeclaredObjectTypes(
+    properties,
+    fieldValues,
+    "Setup approval rejected",
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Auth-neutral review task approval helper.
@@ -198,6 +225,44 @@ export async function approveReviewTaskInternal(
     // variant) up front, so the DB write below stays ONE statement. All
     // validation and the template-allowlist read happen BEFORE the write.
     let inputParamsMerge: SQL | null = null;
+    // Effective declared inputs for this run's template, resolved at most once
+    // per approval (the resolver memoizes per packageName@version internally).
+    // `null` = no template identity ⇒ nothing to validate against.
+    let templateCache: Awaited<ReturnType<typeof readAgentTemplateById>> | undefined;
+    const setupTemplate = async () => {
+      if (templateCache === undefined) {
+        templateCache =
+          (run.templateId ? await readAgentTemplateById(run.templateId) : null) ?? null;
+      }
+      return templateCache;
+    };
+    let declaredPropertiesCache: Record<string, Record<string, unknown>> | null | undefined;
+    const declaredProperties = async () => {
+      if (declaredPropertiesCache !== undefined) return declaredPropertiesCache;
+      const template = await setupTemplate();
+      // Resolution reads the mounted OAS from disk, so it can fail for reasons
+      // that have NOTHING to do with the value being approved (codex round 1).
+      // Letting that failure escape would turn this type gate into a new way for
+      // a previously-working approval to break — a worse regression than the
+      // defect it closes. Degrade to "not validated here" instead: the SAME
+      // assertion runs again in execution.ts before dispatch (which resolves the
+      // schema itself), so a violating value is still stopped before the run,
+      // just one step later and with the run landed failed rather than a submit
+      // error. Only the point of report moves; nothing gets through.
+      try {
+        declaredPropertiesCache = template
+          ? (await resolveTemplateInputSchema(template)).properties
+          : null;
+      } catch (err) {
+        console.warn(
+          `[approveReviewTaskInternal] input schema unresolved for run ${runId}; ` +
+            `declared-type validation deferred to dispatch: ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+        );
+        declaredPropertiesCache = null;
+      }
+      return declaredPropertiesCache;
+    };
     if (values !== undefined) {
       // Guard: single-field path requires fieldName to be present in values.
       if (typeof fieldName === "string" && (values === null || !(fieldName in (values as object)))) {
@@ -215,6 +280,14 @@ export async function approveReviewTaskInternal(
         // NOT `inputParams[fieldName] = { [fieldName]: <value> }`. Serialize
         // the inner value only.
         const fieldValue = (values as Record<string, unknown>)[fieldName];
+        // cinatra#2484 — fail loud AT SUBMIT on a type-violating value rather
+        // than merging it into inputParams and letting the run die downstream.
+        const singleFieldProperties = await declaredProperties();
+        if (singleFieldProperties) {
+          assertSetupValuesMatchDeclaredObjectTypes(singleFieldProperties, {
+            [fieldName]: fieldValue,
+          });
+        }
         const serializedValue = JSON.stringify(fieldValue);
         if (serializedValue.length > 65_536) {
           throw new Error(
@@ -246,7 +319,7 @@ export async function approveReviewTaskInternal(
               `[approveReviewTaskInternal] values payload too large (${serialized.length} bytes)`,
             );
           }
-          const template = run.templateId ? await readAgentTemplateById(run.templateId) : null;
+          const template = await setupTemplate();
           const allowedKeys = template?.inputSchema?.properties
             ? Object.keys(template.inputSchema.properties as Record<string, unknown>)
             : null;
@@ -257,6 +330,12 @@ export async function approveReviewTaskInternal(
                 `Setup approval rejected: values contain keys not declared in inputSchema: ${unknownKeys.join(", ")}`,
               );
             }
+          }
+          // cinatra#2484 — same type gate as the single-field path above. Runs
+          // AFTER the allowlist so an unknown key still reports as unknown.
+          const groupedProperties = await declaredProperties();
+          if (groupedProperties) {
+            assertSetupValuesMatchDeclaredObjectTypes(groupedProperties, fieldValues);
           }
           inputParamsMerge = sql`COALESCE(${agentRuns.inputParams}::jsonb, '{}'::jsonb) || ${serialized}::jsonb`;
         }

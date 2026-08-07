@@ -73,6 +73,28 @@ describe("orchestrator-stepper-panel — isGenericObjectSchema Continue button",
     expect(SRC).toMatch(/no renderer configured/);
   });
 
+  // cinatra#2484 — a `setup-` reviewTaskId is the STRUCTURAL identity of the
+  // step-0 INPUT gate: it pauses to COLLECT a declared input, so its schema
+  // being `{type:"object"}` means "this input is object-typed", never "this is
+  // a bare {approved} confirmation". Before #2484 the distinction did not
+  // matter — the fallback's object branch was a text box that emitted a string
+  // either way, which is exactly the emission this guard exists to prevent — so
+  // suppressing the renderer was harmless. It is not harmless now: the object
+  // branch renders real sub-fields (or a JSON box) and emits a REAL object.
+  // Suppressing it would leave an object-typed setup field with NO input at
+  // all, and the setup loop would re-emit the same gate forever.
+  it("EXCLUDES setup gates from isGenericObjectSchema (cinatra#2484)", () => {
+    const match = SRC.match(/isGenericObjectSchema\s*=\s*([^;]+);/);
+    expect(match, "isGenericObjectSchema must be declared").toBeTruthy();
+    const expr = match![1];
+    expect(
+      /isSetupGateTaskId\s*\(\s*interruptContext\.reviewTaskId\s*\)/.test(expr),
+      "isGenericObjectSchema must consult isSetupGateTaskId(interruptContext.reviewTaskId)",
+    ).toBe(true);
+    // …and it must be a NEGATED term: a setup gate is never "generic".
+    expect(expr).toMatch(/!\s*isSetupGateTaskId/);
+  });
+
   it("hides HitlConversationPanel when isGenericObjectSchema is true", () => {
     // The AI-assist panel must be hidden for generic-object gates because
     // there is nothing for the user to refine — they only click Continue.

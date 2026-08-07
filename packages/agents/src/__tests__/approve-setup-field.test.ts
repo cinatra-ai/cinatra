@@ -540,6 +540,163 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     ).rejects.toThrow(/values contain keys not declared in inputSchema: bogus/);
     expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
   });
+
+  // -------------------------------------------------------------------------
+  // cinatra#2484 — declared-type gate for `object` inputs.
+  //
+  // The Setup form used to render an `object`-typed input as ONE free-text box
+  // and accept a bare sentence; `inputParams.idea` became a string and the run
+  // died far downstream ("titleFrom output \"title\" did not resolve to a
+  // non-empty string"). This is the LAST place to stop it: reject at submit,
+  // naming the input, with nothing written and no resume job enqueued.
+  // -------------------------------------------------------------------------
+  const OBJECT_TEMPLATE = {
+    id: "tpl-2484",
+    inputSchema: {
+      type: "object",
+      required: ["idea"],
+      properties: { idea: { type: "object" }, tone: { type: "string" } },
+    },
+  };
+
+  it("cinatra#2484: single-field path REJECTS a bare string for an object-typed input", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-2484a",
+      templateId: "tpl-2484",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue(OBJECT_TEMPLATE);
+
+    await expect(
+      approveReviewTaskInternal(
+        "setup-run-2484a",
+        "actor-1",
+        { idea: "human purpose in an age of agentic ai" },
+        "idea",
+      ),
+    ).rejects.toThrow(
+      /input "idea" is declared type "object" but received a string/,
+    );
+
+    // Nothing merged, nothing resumed — the run never starts with bad inputs.
+    expect(dbWrites).toHaveLength(0);
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#2484: single-field path also rejects an array / null for an object input", async () => {
+    for (const [runId, bad, expected] of [
+      ["run-2484b", ["a", "b"], /received an array/],
+      ["run-2484c", null, /received null/],
+    ] as const) {
+      vi.resetAllMocks();
+      dbWrites.length = 0;
+      vi.mocked(resolveOrgRoleForUser).mockResolvedValue("member");
+      storeMock.readAgentRunById.mockResolvedValue({
+        id: runId,
+        templateId: "tpl-2484",
+        status: "pending_approval",
+        inputParams: {},
+      });
+      storeMock.readAgentTemplateById.mockResolvedValue(OBJECT_TEMPLATE);
+      await expect(
+        approveReviewTaskInternal(`setup-${runId}`, "actor-1", { idea: bad }, "idea"),
+      ).rejects.toThrow(expected);
+      expect(dbWrites).toHaveLength(0);
+    }
+  });
+
+  it("cinatra#2484: single-field path ACCEPTS a real object and merges it", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-2484d",
+      templateId: "tpl-2484",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue(OBJECT_TEMPLATE);
+
+    await approveReviewTaskInternal(
+      "setup-run-2484d",
+      "actor-1",
+      { idea: { title: "Human purpose", outline: ["a"] } },
+      "idea",
+    );
+
+    const write = dbWrites.find((w) => w.set?.inputParams !== undefined);
+    expect(write).toBeDefined();
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalled();
+  });
+
+  it("cinatra#2484: grouped path rejects a bare string for an object-typed input", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-2484e",
+      templateId: "tpl-2484",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue(OBJECT_TEMPLATE);
+
+    await expect(
+      approveReviewTaskInternal("setup-run-2484e", "actor-1", {
+        approved: true,
+        idea: "human purpose in an age of agentic ai",
+        tone: "informative",
+      }),
+    ).rejects.toThrow(/input "idea" is declared type "object"/);
+    expect(dbWrites).toHaveLength(0);
+    expect(bgJobs.enqueueBackgroundJob).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#2484: the gate is scoped to object inputs — a string input is untouched", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-2484f",
+      templateId: "tpl-2484",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue(OBJECT_TEMPLATE);
+
+    // `tone` is declared "string"; a NUMBER is a type violation too, but the
+    // gate deliberately does not widen beyond the object class — no behaviour
+    // change for any existing agent's setup resume.
+    await approveReviewTaskInternal("setup-run-2484f", "actor-1", { tone: 42 }, "tone");
+    expect(dbWrites.find((w) => w.set?.inputParams !== undefined)).toBeDefined();
+  });
+
+  it("cinatra#2484: an ABSENT (undefined) object value is not a type violation", async () => {
+    // A grouped form leaves an untouched OPTIONAL object field `undefined`;
+    // JSON.stringify drops the key on the way to the merge. Treating absence as
+    // a violation would reject every blank optional object input.
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-2484h",
+      templateId: "tpl-2484",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue(OBJECT_TEMPLATE);
+
+    await approveReviewTaskInternal("setup-run-2484h", "actor-1", {
+      approved: true,
+      idea: undefined,
+      tone: "informative",
+    });
+    expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalled();
+  });
+
+  it("cinatra#2484: a template with NO declared properties validates nothing (no false reject)", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-2484g",
+      templateId: "tpl-2484g",
+      status: "pending_approval",
+      inputParams: {},
+    });
+    // Empty inputSchema and no packageName ⇒ the resolver returns an empty
+    // schema; the gate must stay inert rather than reject everything.
+    storeMock.readAgentTemplateById.mockResolvedValue({ id: "tpl-2484g", inputSchema: {} });
+
+    await approveReviewTaskInternal("setup-run-2484g", "actor-1", { idea: "anything" }, "idea");
+    expect(dbWrites.find((w) => w.set?.inputParams !== undefined)).toBeDefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

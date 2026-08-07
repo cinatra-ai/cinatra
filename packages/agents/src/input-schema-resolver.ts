@@ -134,10 +134,30 @@ function deriveFullSchemaFromOas(
     // to empty `{}` inputs. See `oas-compiler.ts` line ~1490 for the matching
     // fix on the persisted compiled inputSchema path.
     const inputAny = input as Record<string, unknown>;
-    const inputItems =
-      inputAny.items ??
-      (inputAny.json_schema as { items?: unknown } | undefined)?.items;
+    const inputJsonSchema = inputAny.json_schema as
+      | { items?: unknown; properties?: unknown; required?: unknown }
+      | undefined;
+    const inputItems = inputAny.items ?? inputJsonSchema?.items;
     if (inputItems !== undefined) prop.items = inputItems;
+    // Object sub-shape (cinatra#2484). Mirrors the `items` lift above: an
+    // OBJECT-typed input declares `{title, summary, outline}` under
+    // `json_schema.properties` (+ `json_schema.required`). Without the lift the
+    // resolved schema is a bare `{type:"object"}` and the Setup form renders one
+    // free-text box for it — which accepts a bare string and sends a
+    // type-violating `input_params` downstream.
+    const inputProperties = inputAny.properties ?? inputJsonSchema?.properties;
+    const inputRequired = inputAny.required ?? inputJsonSchema?.required;
+    // `!Array.isArray` matters: `typeof [] === "object"`, and lifting an array
+    // as `properties` would produce a schema whose sub-fields are index keys.
+    if (
+      prop.type === "object" &&
+      inputProperties &&
+      typeof inputProperties === "object" &&
+      !Array.isArray(inputProperties)
+    ) {
+      prop.properties = inputProperties;
+      if (Array.isArray(inputRequired)) prop.required = inputRequired;
+    }
     properties[input.title] = prop;
   }
 

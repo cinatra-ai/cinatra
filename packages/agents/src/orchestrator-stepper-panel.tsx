@@ -91,6 +91,7 @@ import {
   isGroupedSetupRenderer,
   isSetupGateTaskId,
   liftRendererApprovalNote,
+  setupFieldRendererValue,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
@@ -641,9 +642,22 @@ function HitlApprovalCard({
   // which LangGraph rejects (not isinstance(string, dict)). Show Continue instead so
   // handleContinue sends the correct { approved: true, approvedAt } payload.
   // Only applies when xRenderer mapped to schema-field-fallback (no custom renderer).
+  //
+  // NOT a setup gate (cinatra#2484). A `setup-` reviewTaskId is the structural
+  // identity of the step-0 INPUT gate: it pauses to COLLECT a declared input,
+  // so its schema being `{type:"object"}` means "this input is object-typed",
+  // never "this is a bare {approved} confirmation". Before #2484 the
+  // distinction did not matter — the fallback's object branch was a text box
+  // that emitted a string either way, which is precisely the emission this
+  // guard was added to prevent — so suppressing the renderer was harmless.
+  // It is not harmless now: the object branch renders real sub-fields (or a
+  // JSON box) and emits a REAL object, and suppressing it would leave an
+  // object-typed setup field with no input at all, so the loop would re-emit
+  // the same gate forever. Scope the guard to non-setup gates.
   const isGenericObjectSchema =
     interruptContext.xRenderer === SCHEMA_FIELD_FALLBACK_RENDERER_ID &&
-    (interruptContext.schema as { type?: string })?.type === "object";
+    (interruptContext.schema as { type?: string })?.type === "object" &&
+    !isSetupGateTaskId(interruptContext.reviewTaskId);
   // Keep the outer Continue button for last-step gates whose renderer doesn't
   // own a button, including the text-envelope branch in ReviewerAgentOutputRenderer
   // and schema-field-fallback when no renderer matches. The outer Continue is
@@ -668,10 +682,13 @@ function HitlApprovalCard({
             key={`${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`}
             fieldName="hitl-field"
             schema={renderSchema}
-            value={{
-              ...interruptContext.values,
-              ...bufferedHitlValue,
-            }}
+            // An OBJECT-typed setup field gets its OWN value, not the whole
+            // values envelope (cinatra#2484) — see setupFieldRendererValue.
+            value={setupFieldRendererValue(
+              { ...interruptContext.values, ...bufferedHitlValue },
+              interruptContext.fieldName,
+              renderSchema,
+            )}
             onChange={
               isMidRunHitl
                 ? async (next: unknown) => {
@@ -742,10 +759,17 @@ function HitlApprovalCard({
                     // interruptContext; when present and the value is primitive,
                     // wrap as { [fieldName]: value } and pass fieldName so the
                     // single-field path in the handler runs.
+                    // An object-typed setup input emits the whole object; it
+                    // still belongs under `fieldName` (cinatra#2484).
                     const setupFieldName = (interruptContext as { fieldName?: string }).fieldName;
                     const { payload, payloadFieldName } = wrapPrimitiveSetupPayload(
                       setupFieldName,
                       next,
+                      {
+                        objectTypedField:
+                          (interruptContext.schema as { type?: string } | undefined)?.type
+                            === "object",
+                      },
                     );
                     // Wrap setup-loop fallback submit with the attachment envelope.
                     // Setup-* gates short-circuit inside the helper because the
