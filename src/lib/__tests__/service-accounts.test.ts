@@ -110,6 +110,23 @@ describe("service-accounts — source assertions", () => {
     expect(SOURCE).not.toContain('createHash("sha256")');
   });
 
+  it("insertOAuthClient wrapper pins grantTypes to client_credentials for every service-account oauthClient row (cinatra#2492)", () => {
+    // Both createServiceAccount and rotateServiceAccount route through
+    // this ONE local wrapper (asserted above), so pinning it here covers
+    // both the create AND the rotate paths at once. Without this, the
+    // oauthClient row's grantTypes column is left NULL and Better Auth's
+    // clientAllowsGrant defaults a NULL column to ["authorization_code"]
+    // — silently refusing every client_credentials mint for a freshly
+    // created (or rotated) service account until someone hand-patches
+    // the column.
+    const fn = SOURCE.match(/^async function insertOAuthClient\([\s\S]*?\n\}/m)?.[0] ?? "";
+    expect(fn).not.toBe("");
+    expect(fn).toContain('grantTypes: ["client_credentials"]');
+    // Never silently widened to a multi-grant array — a service account
+    // is a machine-only actor with no interactive login.
+    expect(fn).not.toMatch(/grantTypes:\s*\[[^\]]*,/);
+  });
+
   it("clientSecret is generated via randomBytes(32).toString('base64url') with cinatra_a2a_ prefix", () => {
     // crypto.randomUUID() yields ~122 bits; randomBytes(32) yields 256.
     // The prefix lets leaked-secret scanners locate provenance.

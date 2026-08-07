@@ -126,6 +126,57 @@ describe("insertOAuthClient", () => {
     // easily inspect the parameterized SQL params here, but the
     // hashClientSecret function is the only path used by the impl).
     expect(hashClientSecret("abc-secret")).toMatch(/^[A-Za-z0-9_-]+$/);
+    // No grantTypes supplied ⇒ the column is never mentioned. Better
+    // Auth's clientAllowsGrant then applies its own
+    // ["authorization_code"] fallback for a NULL/absent column — the
+    // behavior every pre-existing caller (assistant users, interactive
+    // MCP clients) already depends on.
+    expect(renderedSql).not.toContain(`"grantTypes"`);
+  });
+
+  // cinatra#2492 — createServiceAccount minted an oauthClient row with
+  // grantTypes NULL, and Better Auth's clientAllowsGrant defaults a NULL
+  // column to ["authorization_code"], so a fresh service account could
+  // never complete a client_credentials mint. A caller that supplies
+  // `grantTypes` explicitly must get it persisted as a real jsonb array,
+  // not silently dropped.
+  it("persists an explicit grantTypes list as a jsonb array column (cinatra#2492)", async () => {
+    const { insertOAuthClient } = await import("@/lib/better-auth-oauth-client");
+
+    await insertOAuthClient({
+      id: "svc-acct-id",
+      userId: null,
+      clientId: "svc-client",
+      clientSecret: "svc-secret",
+      name: "service-account-my-svc",
+      grantTypes: ["client_credentials"],
+    });
+
+    expect(executeCalls.length).toBe(1);
+    const chunks = (executeCalls[0].query as { queryChunks?: Array<unknown> })
+      ?.queryChunks ?? [];
+    // Same shape as the mapper above, but null-safe: a service account's
+    // real call passes `userId: null`, which lands as a bare `null` entry
+    // in queryChunks (not a string, not an object with `.value`).
+    const renderedSql = chunks
+      .map((c) =>
+        typeof c === "string"
+          ? c
+          : c && typeof c === "object" && "value" in c
+            ? ((c as { value?: string }).value ?? "")
+            : "",
+      )
+      .join("");
+
+    // The column must be named in the INSERT list.
+    expect(renderedSql).toContain(`"grantTypes"`);
+    // The actual persisted grant set — a bare parameter value renders
+    // literally via the mapper above, so this proves the exact array
+    // (not an empty array, not merely "some jsonb") reached the query.
+    expect(renderedSql).toContain(JSON.stringify(["client_credentials"]));
+    // Never silently widened to also allow authorization_code — a
+    // service-account client is machine-only.
+    expect(renderedSql).not.toContain(JSON.stringify(["authorization_code"]));
   });
 });
 

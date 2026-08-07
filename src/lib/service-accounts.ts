@@ -109,6 +109,15 @@ async function insertOAuthClient(
     clientSecret,
     name,
     metadata: scopeCeiling ? { allowedScopes: scopeCeiling } : undefined,
+    // Service accounts are machine-only actors: they mint tokens
+    // exclusively via `client_credentials`, never an interactive
+    // authorization_code flow. Without this, the oauthClient row's
+    // `grantTypes` column is left NULL and Better Auth's
+    // `clientAllowsGrant` defaults a NULL column to
+    // `["authorization_code"]` — silently refusing every
+    // client_credentials mint for a freshly created (or rotated) service
+    // account until someone hand-patches the column (cinatra#2492).
+    grantTypes: ["client_credentials"],
   });
 }
 

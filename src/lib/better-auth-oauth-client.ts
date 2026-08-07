@@ -36,6 +36,19 @@ type OAuthClientExecutor = {
   execute: (query: SQL) => Promise<unknown>;
 };
 
+/**
+ * The per-client grant set stored in `oauthClient.grantTypes` (jsonb,
+ * nullable). Better Auth's `clientAllowsGrant` treats a NULL/absent column
+ * as `["authorization_code"]` — that default is correct for interactive
+ * clients (assistant users, DCR-registered MCP clients) but wrong for a
+ * machine-only client that will only ever mint via `client_credentials`
+ * (cinatra#2492).
+ */
+export type OAuthClientGrantType =
+  | "authorization_code"
+  | "client_credentials"
+  | "refresh_token";
+
 export type InsertOAuthClientInput = {
   /**
    * Primary key for the oauthClient row. Convention: for service accounts
@@ -62,6 +75,16 @@ export type InsertOAuthClientInput = {
   name: string;
   /** Optional metadata object — serialized to JSONB. Defaults to `{}`. */
   metadata?: Record<string, unknown>;
+  /**
+   * Grant types this client is authorized to use. Omitted (undefined)
+   * stores a NULL column — Better Auth's `clientAllowsGrant` then falls
+   * back to `["authorization_code"]`, the correct default for every
+   * pre-existing caller (assistant users / interactive MCP clients) and
+   * therefore preserved as the default here. A machine-only caller
+   * (service accounts) MUST pass this explicitly — see
+   * {@link OAuthClientGrantType}.
+   */
+  grantTypes?: readonly OAuthClientGrantType[];
 };
 
 async function insertOAuthClientImpl(
@@ -77,6 +100,39 @@ async function insertOAuthClientImpl(
   // (see tests/e2e/rbac/fixtures/public-schema.sql). Defaulted to an
   // empty array — the built-in assistant + service-account clients do
   // not use authorization-code redirects.
+  //
+  // grantTypes is a genuinely separate INSERT shape (not a NULL parameter
+  // tacked onto the statement below) so a caller that never supplies it
+  // gets the byte-identical statement it always got — the column stays
+  // unset and Better Auth's `clientAllowsGrant` keeps its
+  // `["authorization_code"]` fallback for every pre-existing caller
+  // (assistant users, interactive MCP clients). Only a caller that
+  // supplies `grantTypes` explicitly (service accounts — cinatra#2492)
+  // gets the column written.
+  if (input.grantTypes !== undefined) {
+    const grantTypesJson = JSON.stringify(input.grantTypes);
+    await executor.execute(sql`
+      INSERT INTO public."oauthClient"
+        (id, name, "clientId", "clientSecret", "redirectUris", metadata,
+         "userId", "createdAt", "updatedAt", disabled, "grantTypes")
+      VALUES (
+        ${input.id},
+        ${input.name},
+        ${input.clientId},
+        ${storedSecret},
+        '[]'::jsonb,
+        ${metadataJson}::jsonb,
+        ${userIdValue},
+        ${now},
+        ${now},
+        false,
+        ${grantTypesJson}::jsonb
+      )
+      ON CONFLICT DO NOTHING
+    `);
+    return;
+  }
+
   await executor.execute(sql`
     INSERT INTO public."oauthClient"
       (id, name, "clientId", "clientSecret", "redirectUris", metadata,
