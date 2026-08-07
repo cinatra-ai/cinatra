@@ -59,6 +59,19 @@ async function box(locator: Locator) {
   });
 }
 
+/**
+ * The card's own BOX (width × height) — the quantity the §I.1 block-size
+ * contract is about. Deliberately position-free: clicking a control inside a
+ * long harness page scrolls it, so viewport-absolute top/left would report a
+ * scroll as a geometry change.
+ */
+async function size(locator: Locator) {
+  return locator.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { width: Math.round(r.width * 100) / 100, height: Math.round(r.height * 100) / 100 };
+  });
+}
+
 /** Two boxes sit on the SAME visual row when their vertical ranges overlap. */
 function sameRow(a: { top: number; bottom: number }, b: { top: number; bottom: number }): boolean {
   return a.top < b.bottom && b.top < a.bottom;
@@ -145,29 +158,69 @@ for (const bp of ["md", "xl"] as const) {
     await page.setViewportSize(VIEWPORTS[bp]);
     await page.goto(HARNESS_PATH, { waitUntil: "domcontentloaded" });
 
-    const { root, cta, details } = cardSlots(page, "extension-listing-card-installing");
+    // This fixture is an ARTIFACT — an install-access-target kind — so since
+    // cinatra#2373 its Install now swaps the card body to the in-card install
+    // panel instead of submitting. The pending presentation therefore belongs
+    // to the PANEL's submit, and the geometry that matters at that moment is
+    // that the card's own box does not move while the install is in flight.
+    const { root, cta } = cardSlots(page, "extension-listing-card-installing");
     await expect(cta).toHaveText("Install now");
+    const idleBox = await size(root.locator('[data-testid="extension-listing-card"]'));
     await cta.click();
 
-    // The REAL pending presentation (MarketplaceInstallSubmit + useFormStatus,
-    // 8s fixture latency — no race): label swap + busy marker.
-    await expect(cta).toHaveText("Installing…");
-    await expect(cta).toHaveAttribute("data-pending", "");
-    await expect(cta).toBeDisabled();
-    await expect(details).toBeVisible();
+    const face = root.locator('[data-testid="extension-install-panel"]');
+    await expect(face).toBeVisible();
+    // Opening the panel must not change the card's box (spec §I.1 block-size).
+    expect(await size(face)).toEqual(idleBox);
 
-    // Pending is the one label the graceful-wrap allowance exists for; record
-    // which arrangement rendered instead of hiding it in a disjunction.
-    const arrangement = expectRowOrWrappedBelow(await box(cta), await box(details));
-    testInfo.annotations.push({
-      type: `pending-row-arrangement@${bp}`,
-      description: arrangement,
-    });
+    const submit = root.locator('[data-testid="extension-install-panel-submit"]');
+    await expect(submit).toHaveText("Install now");
+    await submit.click();
+
+    // The REAL pending presentation (useFormStatus, 8s fixture latency — no
+    // race): label swap + busy marker, on the panel's own submit.
+    await expect(submit).toHaveText("Installing…");
+    await expect(submit).toHaveAttribute("data-pending", "");
+    await expect(submit).toBeDisabled();
+    // A failure or a busy state never redraws or grows the panel (spec §I.1).
+    expect(await size(face)).toEqual(idleBox);
 
     await testInfo.attach(`installing-pending-card-${bp}`, {
       body: await root.screenshot(),
       contentType: "image/png",
     });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 2b. The open/close geometry invariant in its WORST case: a single visible
+//     card in its own `auto-rows-fr` row. With no taller peer to hold the
+//     track up, a face that merely stretches (`h-full`) would let the shorter
+//     install body SHRINK the row on open and grow it back on close — the
+//     regression the shared spec block-size floor exists to prevent
+//     (cinatra#2373).
+// ---------------------------------------------------------------------------
+for (const bp of ["md", "lg", "xl"] as const) {
+  test(`in-card install panel @ ${bp}: a SOLE card's track is unchanged across open/close`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(VIEWPORTS[bp]);
+    await page.goto(HARNESS_PATH, { waitUntil: "domcontentloaded" });
+
+    // The dedicated install-panel mount renders exactly one card.
+    const root = page.locator('[data-surface-id="extension-install-panel"]');
+    const idle = root.locator('[data-testid="extension-listing-card"]');
+    await expect(idle).toBeVisible();
+    const idleBox = await size(idle);
+
+    await root.locator('[data-testid="extension-install-panel-open"]').click();
+    const face = root.locator('[data-testid="extension-install-panel"]');
+    await expect(face).toBeVisible();
+    expect(await size(face)).toEqual(idleBox);
+
+    await root.locator('[data-testid="extension-install-panel-cancel"]').click();
+    await expect(idle).toBeVisible();
+    expect(await size(idle)).toEqual(idleBox);
   });
 }
 

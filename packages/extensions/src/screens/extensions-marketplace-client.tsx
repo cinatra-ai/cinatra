@@ -158,16 +158,28 @@ export function ExtensionsMarketplaceClient({ cards }: Props) {
           data-testid="marketplace-grid"
           className="grid auto-rows-fr grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
         >
-          {cards.map((c) => (
-            <div
-              key={c.meta.packageName}
-              data-testid="marketplace-grid-item"
-              className="h-full"
-              style={{ display: matches(c.meta) ? undefined : "none" }}
-            >
-              {c.node}
-            </div>
-          ))}
+          {cards.map((c) => {
+            const visible = matches(c.meta);
+            return (
+              <div
+                key={c.meta.packageName}
+                data-testid="marketplace-grid-item"
+                className="h-full"
+                style={{ display: visible ? undefined : "none" }}
+              >
+                {/* Filter lifecycle (cinatra#2373): a non-matching item's node
+                    is UNMOUNTED — the stable grid-item wrapper stays (so the
+                    exact-cardinality assertions still count VISIBLE items the
+                    same way), but a card filtered away cannot retain an open
+                    install panel, a stale selection, or a focusable control
+                    behind `display:none`. Filtering it back mounts a fresh
+                    node, which is idle by construction. Focus is unaffected:
+                    the only focusable thing during filtering is the filter
+                    control the user is typing in. */}
+                {visible ? c.node : null}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

@@ -22,7 +22,18 @@ import {
   ExtensionsMarketplaceClient,
   MarketplaceGridLoadingFallback,
 } from "./extensions-marketplace-client";
-import { ExtensionInstallScopeDialog } from "./extension-install-scope-dialog";
+// NOTE: the card path no longer mounts ExtensionInstallScopeDialog at all
+// (cinatra#2373) — its Install now swaps the card body to the panel below. The
+// dialog survives ONLY as the §II detail-modal's install flow, which the modal
+// mounts itself from the `installScope` context threaded further down; that
+// path is replaced by the modal's own inline panel in S3.
+import {
+  CardFaceSwitcher,
+  InstallPanelCloseButton,
+  InstallPanelOpenButton,
+} from "./card-face-switcher";
+import { ExtensionInstallScopePanel } from "./extension-install-scope-panel";
+import { resolveInstallPanelAvailability } from "./install-panel-availability";
 import { isInstallAccessTargetKind } from "../install-access-target";
 import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
 import { MarketplaceDetailModal } from "./marketplace-detail-modal";
@@ -32,7 +43,10 @@ import {
 } from "./marketplace-failure-copy";
 import type { MarketplaceCardData } from "./marketplace-card-model";
 import { resolveMarketplaceCardCta } from "./marketplace-card-model";
-import { MarketplaceListingCard } from "./marketplace-listing-card";
+import {
+  MarketplaceListingCard,
+  MarketplaceListingCardInstallFace,
+} from "./marketplace-listing-card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Main } from "@/components/layout/main";
@@ -70,24 +84,40 @@ export async function ExtensionsMarketplaceScreen({
   // -------------------------------------------------------------------------
   // Pre-install access selector context (cinatra#805). Server-computed picker
   // rows (org / team / project) shared with the agent install-scope dialog;
-  // the connector/artifact/workflow Install CTA opens a dialog over these
-  // rows. Default selection is the ORG row when installable — parity with the
-  // per-kind default (workspace access) so the flow stays one-click.
+  // the connector/artifact/workflow Install CTA swaps the card body to the
+  // in-card install panel over these rows (cinatra#2373 — no popup).
+  //
+  // TWO DIMENSIONS: the rows' enabled/disabled state is installer AUTHORITY
+  // (who may install at a target — the server's `assertCanInstallAtTarget` is
+  // the boundary; these rows are its UX shadow). The row a viewer PICKS is the
+  // AUDIENCE (who may then use the extension). The default below widens the
+  // AUDIENCE to `Workspace: All`; it grants no authority the server would not
+  // already have granted, because a row the viewer cannot install at stays
+  // server-disabled and unselectable.
   // -------------------------------------------------------------------------
   const { orgRole } = await buildCanDoOptsFromSession(session);
   const activeOrgId = session.session?.activeOrganizationId ?? "";
   const { installTargets, ownerEntityNames, defaultValue: pickerFallbackValue } =
     // cinatra#1527: the extension picker ALWAYS offers the two workspace scopes
-    // ("Whole Workspace" / "Admins only"), platform-admin-only to install.
+    // ("Workspace: All" / "Workspace: Admins only"), platform-admin-only to
+    // install at.
     await buildInstallTargetPickerContext({
       session,
       orgRole,
       includeWorkspaceScopes: true,
     });
-  const orgRow = installTargets.find(
-    (t) => t.level === "organization" && !t.disabled,
-  );
-  const installScopeDefaultValue = orgRow ? orgRow.value : pickerFallbackValue;
+  // Marketplace-local availability + default (cinatra#2373). The SHARED
+  // `pickDefaultPickerValue` the agent registry uses is untouched — it is only
+  // consulted here as the fallback when `Workspace: All` is not offered.
+  const installPanelAvailability = resolveInstallPanelAvailability({
+    activeOrgId,
+    installTargets,
+    fallbackDefaultValue: pickerFallbackValue,
+  });
+  const installScopeDefaultValue =
+    installPanelAvailability.state === "ready"
+      ? installPanelAvailability.defaultValue
+      : null;
 
   // Registry temp-policy declaration (config-driven; default off → no banner).
   // When configured, warn operators that this registry's private packages are
@@ -126,6 +156,16 @@ export async function ExtensionsMarketplaceScreen({
     // install gate).
     const compatState = deriveExtensionCompatState(card.sdkAbiRange);
     const cta = resolveMarketplaceCardCta(card, installedInfo, registryConnected, compatState);
+
+    // The in-card install panel (cinatra#2373) mounts for exactly the kinds
+    // that HAVE an access target and only in the live "install" CTA state:
+    // agents/skills have no audience to choose and keep their direct
+    // zero-argument bound form, and update/restore/installed/incompatible are
+    // untouched CTA states.
+    const usesInstallPanel =
+      cta.state === "install" &&
+      !cta.disabled &&
+      isInstallAccessTargetKind(card.kindSlug);
 
     // Per-row .bind() — install identifiers come straight from the catalog entry
     // ({packageName, packageVersion}); install resolves the typeId + tarball from
@@ -195,24 +235,13 @@ export async function ExtensionsMarketplaceScreen({
           <Button size="sm" disabled title="Connect the package registry to install">
             Install now
           </Button>
-        ) : isInstallAccessTargetKind(card.kindSlug) ? (
-          // connector / artifact / workflow: pre-install access selector
-          // (cinatra#805) — dialog over the shared server-computed
-          // org/team/project rows; the chosen target is authorized
-          // server-side and persisted via setExtensionInstallAccess.
-          // Failure copy contract matches MarketplaceInstallForm (#685).
-          <ExtensionInstallScopeDialog
-            packageName={card.packageName}
-            packageVersion={card.packageVersion}
-            displayName={card.displayName}
-            installTargets={installTargets}
-            ownerEntityNames={ownerEntityNames}
-            activeOrgId={activeOrgId}
-            defaultValue={installScopeDefaultValue}
-            failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
-            defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "install", card.displayName)}
-            installAction={installExtensionPackageFormAction}
-          />
+        ) : usesInstallPanel ? (
+          // connector / artifact / workflow: the pre-install access selector
+          // (cinatra#805) now lives IN the card (cinatra#2373, spec §I.1) —
+          // this CTA swaps the card body to the install face instead of
+          // opening a dialog. The chosen AUDIENCE is authorized server-side
+          // and persisted via setExtensionInstallAccess exactly as before.
+          <InstallPanelOpenButton>Install now</InstallPanelOpenButton>
         ) : (
           // A failed install toasts instead of crashing the route (#356). The
           // message is now classified per the merged install-failure taxonomy
@@ -251,10 +280,12 @@ export async function ExtensionsMarketplaceScreen({
         </Button>
       );
 
-    const node = (
+    const accentColor = deriveExtensionAccent(card.packageName);
+
+    const idleFace = (
       <MarketplaceListingCard
         card={card}
-        accentColor={deriveExtensionAccent(card.packageName)}
+        accentColor={accentColor}
         ctaControl={ctaControl}
         // Conformance contract (cinatra#985): expose the resolved six-state
         // CTA identity on the card's CTA slot (data-cta-state).
@@ -298,6 +329,44 @@ export async function ExtensionsMarketplaceScreen({
           />
         }
       />
+    );
+
+    // ONE opaque node per extension, exactly as the filter-only client grid
+    // has always received. For an access-target install the node is the client
+    // face switcher over TWO server-rendered faces; exactly one of them is
+    // mounted at any time, so a hidden face can never retain a stale panel.
+    const node = usesInstallPanel ? (
+      <CardFaceSwitcher
+        idleFace={idleFace}
+        installFace={
+          <MarketplaceListingCardInstallFace
+            card={card}
+            accentColor={accentColor}
+            closeControl={<InstallPanelCloseButton />}
+          >
+            <ExtensionInstallScopePanel
+              packageName={card.packageName}
+              packageVersion={card.packageVersion}
+              displayName={card.displayName}
+              installTargets={installTargets}
+              ownerEntityNames={ownerEntityNames}
+              activeOrgId={activeOrgId}
+              availability={installPanelAvailability}
+              failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
+              defaultFailureMessage={marketplaceFailureCopy(
+                "unrecoverable",
+                "install",
+                card.displayName,
+              )}
+              // UNBOUND action — the identifiers travel as arguments, so the
+              // one panel component serves every card.
+              installAction={installExtensionPackageFormAction}
+            />
+          </MarketplaceListingCardInstallFace>
+        }
+      />
+    ) : (
+      idleFace
     );
 
     return {

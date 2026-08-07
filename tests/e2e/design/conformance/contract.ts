@@ -24,6 +24,8 @@ import {
   CONFORMANCE_BUTTON_VARIANTS,
   CONFORMANCE_CARD_FIXTURES,
   CONFORMANCE_INSTALL_CONFIG_CALLOUT,
+  CONFORMANCE_INSTALL_PANEL_DEFAULT_LABEL,
+  CONFORMANCE_INSTALL_PANEL_FIXTURE,
   CONFORMANCE_STATUS_PILL_STATUSES,
   type ConformanceCardFixture,
 } from "../../../../src/app/design-fixtures/conformance/fixture-data";
@@ -240,19 +242,29 @@ function cardDriver(fixture: ConformanceCardFixture): SurfaceDriver {
       };
       break;
     case "extension-listing-card-installing":
-      // Required state "loading": the §IV "Installing…" presentation — the
-      // REAL pending-aware submit (useFormStatus) mid-flight on a slow
-      // harness action (fixture.ctaDelayMs is long enough not to race).
+      // Required state "loading": the "Installing…" presentation — the REAL
+      // pending-aware submit (useFormStatus) mid-flight on a slow harness
+      // action (fixture.ctaDelayMs is long enough not to race).
+      //
+      // This fixture is an ARTIFACT, i.e. an install-access-target kind, so
+      // since cinatra#2373 its install runs through the in-card panel: the
+      // card's Install now swaps the body in place (it no longer submits), and
+      // the busy state belongs to the PANEL's submit. Driving the card's CTA
+      // as a submit here would assert a flow the product no longer has.
       driver.states.loading = async (_page, root) => {
-        const cta = root.locator('[data-testid="extension-card-cta"]');
-        await clickCtaUntil(root, "Install now", async () => {
-          const submit = cta.locator('[data-testid="extension-card-cta-submit"][data-pending]');
-          await expect(submit).toBeVisible({ timeout: 5_000 });
-        });
-        const submit = cta.locator('[data-testid="extension-card-cta-submit"]');
+        const face = await openInstallPanel(root);
+        const submit = face.locator('[data-testid="extension-install-panel-submit"]');
+        await expect(async () => {
+          await submit.click();
+          await expect(
+            face.locator('[data-testid="extension-install-panel-submit"][data-pending]'),
+          ).toBeVisible({ timeout: 2_000 });
+        }).toPass({ timeout: 30_000 });
         await expect(submit).toBeDisabled();
         await expect(submit).toContainText("Installing…");
-        await expect(submit.locator("svg.animate-spin")).toBeVisible();
+        // The card's box does not change while the install is in flight —
+        // errors and busy states never redraw or grow the panel (spec §I.1).
+        await expect(face).toBeVisible();
       };
       break;
     case "extension-listing-card-incompatible":
@@ -2535,8 +2547,124 @@ const CONNECTOR_CONNECTIONS_DRIVER: SurfaceDriver = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// extension-install-panel (cinatra#2373, design spec §I.1).
+//
+// The panel is a FACE of the card, not a separate route: every assertion below
+// opens it from the card's own Install now first, which is the only way a user
+// reaches it. The surface root is the harness mount, so `present`/fields/actions
+// all resolve inside one card.
+// ---------------------------------------------------------------------------
+const INSTALL_PANEL_MOUNT = '[data-surface-id="extension-install-panel"]';
+const INSTALL_PANEL_FACE = '[data-testid="extension-install-panel"]';
+
+/**
+ * Open the panel from the idle card's CTA, retrying through hydration (a click
+ * landing before React hydrates is silently swallowed on the standalone build).
+ */
+async function openInstallPanel(root: Locator): Promise<Locator> {
+  const face = root.locator(INSTALL_PANEL_FACE);
+  await expect(async () => {
+    await root.locator('[data-testid="extension-install-panel-open"]').click();
+    await expect(face).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
+  return face;
+}
+
+/** The idle face is back and no panel is mounted anywhere in this card. */
+async function expectCardRestored(root: Locator): Promise<void> {
+  const cta = root.locator('[data-testid="extension-card-cta"]');
+  await expect(cta).toHaveAttribute("data-cta-state", "install");
+  await expect(cta.getByRole("button", { name: "Install now" })).toBeVisible();
+  // Exactly ONE face is ever mounted — the install face is GONE, not hidden.
+  await expect(root.locator(INSTALL_PANEL_FACE)).toHaveCount(0);
+}
+
+const INSTALL_PANEL_DRIVER: SurfaceDriver = {
+  path: HARNESS_PATH,
+  root: (page) => page.locator(INSTALL_PANEL_MOUNT),
+  present: async (_page, root) => {
+    const face = await openInstallPanel(root);
+    // The header band carried over and the body swapped (spec §I.1).
+    await expect(face.locator('[data-slot="extension-card-name"]')).toBeVisible();
+    await expect(face.locator('[data-testid="extension-install-panel-body"]')).toBeVisible();
+    // No popup anywhere on this path.
+    await expect(_page.locator('[role="dialog"]')).toHaveCount(0);
+  },
+  fields: {
+    // name = manifest.displayName — the header band's name, carried over from
+    // the idle card unchanged, bound to the display name and never the package
+    // name (the exact drift the annotated spec forbids).
+    name: {
+      source: "manifest.displayName",
+      assert: async (_page, root) => {
+        const face = await openInstallPanel(root);
+        const name = face.locator('[data-slot="extension-card-name"]');
+        await expect(name).toHaveText(CONFORMANCE_INSTALL_PANEL_FIXTURE.displayName);
+        await expect(name).not.toContainText(CONFORMANCE_INSTALL_PANEL_FIXTURE.packageName);
+      },
+    },
+  },
+  actions: {
+    "close-panel": {
+      outcome: "card-restored",
+      run: async (_page, root) => {
+        const face = await openInstallPanel(root);
+        await face.locator('[data-testid="extension-install-panel-close"]').click();
+        await expectCardRestored(root);
+      },
+    },
+    "open-picker": {
+      outcome: "options-listed",
+      run: async (page, root) => {
+        const face = await openInstallPanel(root);
+        const picker = face.locator('[data-testid="extension-install-panel-picker"]');
+        // The closed trigger renders the preselected row VERBATIM (spec §I.1:
+        // "its closed value renders exactly as the row reads").
+        const trigger = picker.getByRole("combobox");
+        await expect(trigger).toContainText(CONFORMANCE_INSTALL_PANEL_DEFAULT_LABEL);
+        await trigger.click();
+        // Outcome "options-listed": the server-offered rows are listed. The
+        // popover is PORTALLED, so it is searched on the page, not in the card
+        // — which is also the proof it escapes the panel's overflow.
+        //
+        // A ROW renders its `<Type>:` prefix and its name as two elements with
+        // a CSS gap, so its text carries no separating space; match the pair.
+        const options = page.getByRole("option");
+        await expect(options.filter({ hasText: /Workspace:\s*All/ })).toBeVisible();
+        await expect(options.filter({ hasText: /Workspace:\s*Admins only/ })).toBeVisible();
+        await expect(options.filter({ hasText: /Team:\s*Finance/ })).toBeVisible();
+      },
+    },
+    "cancel-install": {
+      outcome: "card-restored",
+      run: async (_page, root) => {
+        const face = await openInstallPanel(root);
+        await face.locator('[data-testid="extension-install-panel-cancel"]').click();
+        await expectCardRestored(root);
+      },
+    },
+    "submit-install": {
+      outcome: "installed",
+      run: async (_page, root) => {
+        const face = await openInstallPanel(root);
+        await face.locator('[data-testid="extension-install-panel-submit"]').click();
+        // Outcome "installed": the REAL resolveMarketplaceCardCta re-derives
+        // the CTA from the mutated install state, so the card comes back in
+        // the §I Installed presentation — and the panel is gone with it.
+        const cta = root.locator('[data-testid="extension-card-cta"]');
+        await expect(cta).toHaveAttribute("data-cta-state", "installed", { timeout: 15_000 });
+        await expect(cta.getByRole("button", { name: "Installed" })).toBeDisabled();
+        await expect(root.locator(INSTALL_PANEL_FACE)).toHaveCount(0);
+      },
+    },
+  },
+  states: {},
+};
+
 /** Covered manifest surfaces → drivers. Everything else: allowlist or RED. */
 export const SURFACE_DRIVERS: Record<string, SurfaceDriver> = {
+  "extension-install-panel": INSTALL_PANEL_DRIVER,
   "connector-setup": CONNECTOR_SETUP_DRIVER,
   "connector-config-tab": CONNECTOR_CONFIG_TAB_DRIVER,
   "connector-multi-setup": CONNECTOR_MULTI_SETUP_DRIVER,
