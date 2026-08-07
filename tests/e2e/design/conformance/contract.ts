@@ -2547,6 +2547,22 @@ const INSTALL_PANEL_MOUNT = '[data-surface-id="extension-install-panel"]';
 const INSTALL_PANEL_FACE = '[data-testid="extension-install-panel"]';
 
 /**
+ * A `<Type>: <name>` access label as it actually reaches the DOM. Since
+ * cinatra#2372 both the trigger and the row render the type prefix and the name
+ * as two sibling elements separated by a CSS gap, so their text carries no
+ * separating space. Every literal part is regex-escaped; only the separator
+ * after the FIRST colon becomes whitespace-optional, which is where the gap is.
+ */
+function typeNamePairPattern(label: string): RegExp {
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const at = label.indexOf(": ");
+  if (at === -1) return new RegExp(escape(label));
+  return new RegExp(
+    `${escape(label.slice(0, at + 1))}\\s*${escape(label.slice(at + 2))}`,
+  );
+}
+
+/**
  * Open the panel from the idle card's CTA, retrying through hydration (a click
  * landing before React hydrates is silently swallowed on the standalone build).
  */
@@ -2613,9 +2629,7 @@ const INSTALL_PANEL_DRIVER: SurfaceDriver = {
         // the row does, so — exactly like the row assertions below — its text
         // carries no separating space and the pair must be matched.
         const trigger = picker.getByRole("combobox");
-        await expect(trigger).toContainText(
-          new RegExp(CONFORMANCE_INSTALL_PANEL_DEFAULT_LABEL.replace(": ", ":\\s*")),
-        );
+        await expect(trigger).toContainText(typeNamePairPattern(CONFORMANCE_INSTALL_PANEL_DEFAULT_LABEL));
         await trigger.click();
         // Outcome "options-listed": the server-offered rows are listed. The
         // popover is PORTALLED, so it is searched on the page, not in the card
