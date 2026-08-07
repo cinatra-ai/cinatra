@@ -770,6 +770,27 @@ export class InProcessAgentExecutor implements AgentExecutor {
             if (isTerminal && nextState === "completed" && Array.isArray(run.stepResults)) {
               task.artifacts = [stepResultsToArtifact(run.stepResults)];
             }
+            // cinatra#2486 — a terminal FAILURE must carry its reason across the
+            // A2A boundary. Previously a failed poll-observed task exposed only
+            // `state` + `timestamp`, so a remote consumer saw "failed" with no
+            // diagnostic (the streaming path already surfaces `errorMessage`
+            // through buildStatusUpdate; this poll path did not). Load-bearing
+            // now that an artifact-materialization failure lands the run
+            // `failed`: without this, the reason recorded in `agent_runs.error`
+            // would be visible in the host UI but invisible to A2A callers.
+            if (
+              isTerminal &&
+              nextState === "failed" &&
+              typeof run.error === "string" &&
+              run.error.length > 0
+            ) {
+              task.status.message = {
+                kind: "message",
+                role: "agent",
+                messageId: randomUUID(),
+                parts: [{ kind: "text", text: run.error }],
+              };
+            }
             await taskStore.save(task);
           }
           lastStatus = nextState;

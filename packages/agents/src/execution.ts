@@ -526,6 +526,38 @@ export function stripCinatraEndNodeOutputMessages(
   });
 }
 
+/** Upper bound on the `agent_runs.error` message this module composes for a
+ *  materialization failure — enough for every failing output's reason on a
+ *  realistic binding set, short enough that a pathological error string can
+ *  never bloat the row. */
+const MATERIALIZATION_ERROR_MAX_CHARS = 2_000;
+
+/**
+ * cinatra#2486 — the operator-facing reason a terminal-success WayFlow run is
+ * landed as `failed` rather than `completed`: which declared outputs failed to
+ * materialize, and why. Module-private: the honesty suite asserts it through
+ * the persisted `error`, which is the surface that actually matters.
+ */
+function describeMaterializationFailure(
+  failures: ReadonlyArray<Record<string, unknown>>,
+  totalOutcomes: number,
+): string {
+  const detail = failures
+    .map(
+      (outcome) =>
+        `${String(outcome.outputId)}${
+          outcome.extension ? ` [${String(outcome.extension)}]` : ""
+        }: ${String(outcome.error)}`,
+    )
+    .join("; ");
+  const message =
+    `artifact materialization failed — the run declared artifact output(s) it did not produce ` +
+    `(${failures.length} of ${totalOutcomes} failed): ${detail}`;
+  return message.length > MATERIALIZATION_ERROR_MAX_CHARS
+    ? `${message.slice(0, MATERIALIZATION_ERROR_MAX_CHARS - 1)}…`
+    : message;
+}
+
 // ---------------------------------------------------------------------------
 // WayFlow HITL step tracker (Redis-backed)
 // Persists the ordered list of WayFlow task IDs per run in Redis so the gate
@@ -1243,11 +1275,19 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // representationRevisionId} refs (or per-output failures) splice into the
   // SAME stepResults payload: no second transition, no second write path.
   // `materializeRunArtifacts` never throws by contract (every failure is a
-  // visible per-output outcome); the catch below is defense-in-depth. A
-  // materialization problem must NEVER flip a completed run to failed nor
-  // block the terminal transition. Dynamic import keeps the host artifact
-  // stack out of this module's static graph (same posture as the
-  // nango-system import below).
+  // visible per-output outcome); the catch below is defense-in-depth.
+  //
+  // cinatra#2486 — the outcome is LOAD-BEARING, not advisory. A failed
+  // materialization used to be logged + spliced into stepResults while the run
+  // still transitioned to `completed`, so "the run is green" could mean
+  // "silently produced nothing" (registry unreachable ⇒ the wholesale
+  // `(binding-resolution)` outcome; a write node whose output did not parse
+  // into the bound shape ⇒ a per-binding `titleFrom`/`contentFrom` outcome).
+  // The run now lands on the SURFACED-failure path instead — see the
+  // materialization-honesty branch below.
+  //
+  // Dynamic import keeps the host artifact stack out of this module's static
+  // graph (same posture as the nango-system import below).
   let artifactMaterializations: Array<Record<string, unknown>> = [];
   try {
     const { materializeRunArtifacts } = await import(
@@ -1270,7 +1310,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     }
   } catch (err) {
     console.warn(
-      `[artifact-materializer] run=${runId} materialization pass failed (recorded in stepResults; run still completes):`,
+      `[artifact-materializer] run=${runId} materialization pass threw (recorded in stepResults; the run fails honestly):`,
       err instanceof Error ? err.message : err,
     );
     artifactMaterializations = [
@@ -1284,6 +1324,28 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
     ];
   }
 
+  // cinatra#2486 — materialization-honesty gate.
+  //
+  // Any `ok:false` outcome means the run did NOT deliver an artifact it was
+  // asked to deliver. Presenting that as a clean success is the silent-failure
+  // contract violation this gate closes: the run lands `failed`, carrying the
+  // materialization reason in `agent_runs.error` (the run status/UI surface)
+  // and the FULL per-output outcome list in the same `stepResults` payload the
+  // success path writes — nothing is lost, only the verdict changes.
+  //
+  // Fail-CLOSED on purpose, covering both grounded triggers:
+  //   * `(binding-resolution)` — the package's bindings could not be read at
+  //     all (registry unreachable). We cannot prove the run owed no artifact,
+  //     so we do not claim success. (`materializeRunArtifacts` returns `[]` —
+  //     never a failure outcome — for a template with no package, so a
+  //     genuinely binding-free run is untouched by this gate.)
+  //   * a per-binding resolution/validation/write failure — a declared
+  //     artifact was demonstrably not written.
+  // A MIXED batch fails too: a partially materialized run is not a success.
+  const materializationFailures = artifactMaterializations.filter(
+    (outcome) => outcome.ok !== true,
+  );
+
   // Unbound-output capture (cinatra#1893, epic #1883 A5). The derivation-outbox
   // row is written ATOMICALLY with the terminal CAS + snapshot below — a
   // transaction-local capture only (produces/binding discovery is the derivation
@@ -1293,6 +1355,9 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   // to capture (no row, no advisory). File-part outputs + the external-A2A
   // completion branch are explicit v1 deferrals (this is the internal WayFlow
   // success path only).
+  // Only a genuine terminal SUCCESS captures an unbound-output row (the meta
+  // key is legal for `to === "completed"` only). The #2486 failure branch below
+  // therefore neither captures nor enqueues.
   const derivationOutbox =
     finalText.length > 0
       ? {
@@ -1306,6 +1371,73 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         }
       : undefined;
 
+  // The ONE terminal stepResults payload — identical on the success and the
+  // #2486 materialization-failure edge, so a failed run keeps every bit of
+  // evidence a green one would have carried (output, structured EndNode
+  // outputs, per-output materialization outcomes, scrubbed history).
+  const terminalStepResults = [
+    {
+      kind: "wayflow_response",
+      a2aTaskId: task.id,
+      output: parsedOutput,
+      // Structured EndNode declared outputs are surfaced via
+      // the WayFlow synthetic-DataPart sentinel. `packages/a2a/src/
+      // agent-executor.ts:stepResultsToArtifact` renders `output_data`
+      // as an A2A DataPart artifact for external consumers, and
+      // downstream consumers assert on the structured object rather than
+      // lossy text fields such as `failures`, `failureCode`, `items`, and
+      // `extractionNotes`.
+      ...(endNodeOutputs !== null ? { output_data: endNodeOutputs } : {}),
+      // Declarative artifact-materialization outcomes (cinatra#923): one
+      // entry per declared binding — success refs or a visible failure.
+      // Key absent when the run's package declares no bindings.
+      ...(artifactMaterializations.length > 0
+        ? { artifact_materializations: artifactMaterializations }
+        : {}),
+      history: scrubbedHistory,
+    },
+  ];
+
+  // cinatra#2486 — the surfaced-failure edge. Both `running->failed` and
+  // `pending_approval->failed` are legal, matching the two terminal-success
+  // edges below (the `fromStatus === "completed"` re-entry already returned
+  // above, so no illegal `completed->failed` edge is reachable here).
+  if (materializationFailures.length > 0) {
+    const error = describeMaterializationFailure(
+      materializationFailures,
+      artifactMaterializations.length,
+    );
+    let failedTransitioned = true;
+    await transitionRunStatus(
+      runId,
+      fromStatus,
+      "failed",
+      { error, stepResults: terminalStepResults },
+      authority,
+    ).catch((err) => {
+      // stale_from_status: a concurrent stop/cancel already moved the row;
+      // skip RUN_ERROR so the UI reflects the DB winner, not us.
+      if (err instanceof RunTransitionError && err.code === "stale_from_status") {
+        failedTransitioned = false;
+        return;
+      }
+      throw err;
+    });
+    if (!failedTransitioned) return;
+    // Mirror the WayFlow `failed` branch's operator-visible signal so the live
+    // run panel shows the reason, not a spinner that silently stops.
+    await Promise.resolve(
+      publishAgUiEvent(runId, {
+        type: "RUN_ERROR",
+        threadId: runId,
+        runId,
+        message: error,
+        timestamp: Date.now(),
+      } as never),
+    ).catch(() => undefined);
+    return;
+  }
+
   // Both terminal-success edges are legal:
   //   running          -> completed
   //   pending_approval -> completed
@@ -1313,28 +1445,7 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
   await transitionRunStatus(runId, fromStatus, "completed", {
     completedAt: new Date(),
     ...(derivationOutbox ? { derivationOutbox } : {}),
-    stepResults: [
-      {
-        kind: "wayflow_response",
-        a2aTaskId: task.id,
-        output: parsedOutput,
-        // Structured EndNode declared outputs are surfaced via
-        // the WayFlow synthetic-DataPart sentinel. `packages/a2a/src/
-        // agent-executor.ts:stepResultsToArtifact` renders `output_data`
-        // as an A2A DataPart artifact for external consumers, and
-        // downstream consumers assert on the structured object rather than
-        // lossy text fields such as `failures`, `failureCode`, `items`, and
-        // `extractionNotes`.
-        ...(endNodeOutputs !== null ? { output_data: endNodeOutputs } : {}),
-        // Declarative artifact-materialization outcomes (cinatra#923): one
-        // entry per declared binding — success refs or a visible failure.
-        // Key absent when the run's package declares no bindings.
-        ...(artifactMaterializations.length > 0
-          ? { artifact_materializations: artifactMaterializations }
-          : {}),
-        history: scrubbedHistory,
-      },
-    ],
+    stepResults: terminalStepResults,
   }, authority).catch((err) => {
     // stale_from_status: a concurrent stop/cancel already moved the row;
     // skip RUN_FINISHED so the UI reflects the DB winner, not us.
