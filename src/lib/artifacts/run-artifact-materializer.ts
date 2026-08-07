@@ -49,10 +49,13 @@ import {
 // the idempotency ledger (claim → write+finalize atomically → re-drives
 // return the finalized refs).
 //
-// Failure posture: `materializeRunArtifacts` NEVER throws. Every failure is
-// a per-output outcome the caller records into stepResults (visible, not
-// fatal) — a materialization problem must never flip a completed run to
-// failed nor block the terminal transition.
+// Failure posture: `materializeRunArtifacts` NEVER throws. Every failure is a
+// per-output `ok:false` outcome the caller records into stepResults, and that
+// outcome is LOAD-BEARING (cinatra#2486): the WayFlow terminal branch lands the
+// run `failed` — with the reason in `agent_runs.error` and the full outcome
+// list in the same stepResults payload — instead of reporting a clean success
+// for a run that produced nothing. `[]` (no package, or a package declaring no
+// bindings) stays a clean success; only a real `ok:false` fails the run.
 //
 // The declarative path requires NO `skills.authoring` on the extension
 // (`authorArtifact` stays the LLM-judgment path); title and MIME come from
