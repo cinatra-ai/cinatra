@@ -220,6 +220,98 @@ function CompatMeta({ sdkAbiRange }: { sdkAbiRange: string | null | undefined })
   );
 }
 
+/**
+ * The SPEC-PINNED card block size (design spec §I.1: "recorded here as a spec
+ * constant so a card's row in the `grid-auto-rows: 1fr` listing grid never
+ * grows or shrinks when the panel opens or closes: 299px at md / lg / xl
+ * alike — the card face is a single fixed height").
+ *
+ * Applied as a min-block-size to BOTH faces, which is what makes the
+ * open/close invariant unconditional rather than incidental. `auto-rows-fr`
+ * distributes free space but derives each track's BASE size from its content,
+ * so `h-full` alone only holds the invariant while some OTHER card in the row
+ * is at least as tall: filter the grid down to a single card and the install
+ * face — whose content is materially shorter than a listing body — would
+ * shrink its own track on open and grow it again on close. A floor shared by
+ * the two faces removes that case entirely, with no runtime measurement and
+ * nothing to re-resolve at a breakpoint. Above the floor the faces still
+ * stretch together (`h-full`), so a taller row keeps both in lockstep.
+ */
+const CARD_BLOCK_SIZE = "min-h-[299px]";
+
+/**
+ * MarketplaceListingCardInstallFace — the §I.1 in-card install face
+ * (cinatra#2373).
+ *
+ * The SAME card shell as the idle listing card and the SAME header band (icon
+ * tile, name, byline) — spec §I.1: "The header band — icon, name, byline —
+ * carries over unchanged; only the lower region swaps." The body slot is the
+ * shared `ExtensionInstallScopePanel`; the header's top-right corner carries
+ * the close ✕ through the banner's own badge overlay.
+ *
+ * GEOMETRY: the same box as the idle card — the shared `CARD_BLOCK_SIZE` floor
+ * plus `h-full` inside the same 1fr grid track, so the track can neither shrink
+ * nor grow across the swap. `min-h-0` runs the whole flex chain so the panel's
+ * middle region — and only it — absorbs any overflow.
+ */
+export function MarketplaceListingCardInstallFace({
+  card,
+  accentColor,
+  closeControl,
+  children,
+  className,
+}: {
+  card: MarketplaceCardData;
+  accentColor: ExtensionAccent;
+  /** The header ✕ — rendered in the banner's top-right badge overlay. */
+  closeControl: ReactNode;
+  /** The panel body (shared ExtensionInstallScopePanel). */
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      data-slot="extension-card"
+      // Conformance-contract root id for the `extension-install-panel` surface
+      // (cinatra#985 testid-contract.json). The idle face keeps
+      // `extension-listing-card` — exactly one face is ever mounted, so the two
+      // roots never coexist for one extension.
+      data-testid="extension-install-panel"
+      data-kind={card.kindSlug}
+      data-accent={accentColor}
+      className={cn(
+        "flex h-full min-h-0 flex-col overflow-hidden rounded-card border border-line bg-surface-strong",
+        CARD_BLOCK_SIZE,
+        className,
+      )}
+    >
+      {/* The banner is rendered with the IDENTICAL props the idle face passes —
+          no `badges` slot, because that slot reserves `pr-20` on the name and
+          would re-wrap a long title between the two faces. The ✕ is overlaid
+          instead (spec §I.1: 10px from the header's top-right corner), so the
+          header band is byte-identical across the swap. */}
+      <div className="relative flex-none">
+        <ExtensionCardListingBanner
+          name={card.displayName}
+          accentColor={accentColor}
+          emblem={extensionKindEmblem(card.kindSlug)}
+          iconRender={
+            <MarketplaceCardIcon
+              card={card}
+              kindEmblem={extensionKindEmblem(card.kindSlug)}
+            />
+          }
+          byline={<PublisherLine card={card} />}
+        />
+        <div className="absolute top-2.5 right-2.5">{closeControl}</div>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col px-[14px] py-3">
+        {children}
+      </div>
+    </div>
+  );
+}
+
 export type MarketplaceListingCardProps = {
   card: MarketplaceCardData;
   accentColor: ExtensionAccent;
@@ -265,6 +357,8 @@ export function MarketplaceListingCard({
       data-accent={accentColor}
       className={cn(
         "flex h-full flex-col overflow-hidden rounded-card border border-line bg-surface-strong",
+        // Shared with the install face — the open/close geometry invariant.
+        CARD_BLOCK_SIZE,
         className,
       )}
     >

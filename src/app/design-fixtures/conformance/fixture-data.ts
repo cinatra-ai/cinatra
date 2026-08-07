@@ -13,6 +13,7 @@
 export type ConformanceCardFixture = {
   /** Conformance-manifest surface id this fixture instantiates. */
   surfaceId:
+    | "extension-install-panel"
     | "extension-listing-card-available"
     | "extension-listing-card-installed"
     | "extension-listing-card-update"
@@ -124,6 +125,88 @@ export const CONFORMANCE_CARD_FIXTURES: ConformanceCardFixture[] = [
     ctaDelayMs: 0,
   },
 ];
+
+// ---------------------------------------------------------------------------
+// In-card install panel fixture (cinatra#2373, conformance surface
+// `extension-install-panel`, design spec §I.1).
+//
+// Kept OUT of CONFORMANCE_CARD_FIXTURES on purpose: that list auto-derives a
+// six-state CARD driver per entry, and this surface has its own driver (the
+// panel's four actions). It is a CONNECTOR because the in-card panel exists
+// exactly for the kinds that carry an install access target (connector /
+// artifact / workflow) — an agent/skill install has no audience to choose and
+// keeps its direct form.
+// ---------------------------------------------------------------------------
+export const CONFORMANCE_INSTALL_PANEL_FIXTURE: ConformanceCardFixture = {
+  surfaceId: "extension-install-panel",
+  packageName: "@cinatra-fixtures/ledger-sync",
+  packageVersion: "2.0.0",
+  displayName: "Ledger Sync Connector",
+  description: "Keeps the finance ledger in step with the workspace.",
+  kindSlug: "connector",
+  kindLabel: "Connector",
+  sdkAbiRange: "*",
+  installed: null,
+  ctaDelayMs: 250,
+};
+
+/**
+ * SERVER-COMPUTED-shaped picker rows for the install-panel harness — the same
+ * `InstallTarget` shape `buildInstallTargetPickerContext` returns. Typed
+ * structurally so this module stays dependency-free (the Playwright suite
+ * imports it by relative path, outside the Next.js toolchain).
+ *
+ * The platform-admin case: the `Workspace: All` AUDIENCE row is enabled, which
+ * is what makes the panel's default selection assertable.
+ */
+export const CONFORMANCE_INSTALL_PANEL_ACTIVE_ORG_ID =
+  "conformance-org-ledger";
+
+export const CONFORMANCE_INSTALL_PANEL_TARGETS: Array<{
+  value: string;
+  label: string;
+  level: "organization" | "team" | "project" | "workspace" | "admin";
+  id: string;
+  disabled: boolean;
+  reason?: string;
+}> = [
+  {
+    value: `org:${CONFORMANCE_INSTALL_PANEL_ACTIVE_ORG_ID}`,
+    label: "Anyone in Cinatra Fixtures",
+    level: "organization",
+    id: CONFORMANCE_INSTALL_PANEL_ACTIVE_ORG_ID,
+    disabled: false,
+  },
+  {
+    value: "team:conformance-team-finance",
+    label: "Finance",
+    level: "team",
+    id: "conformance-team-finance",
+    disabled: false,
+  },
+  {
+    value: "workspace",
+    label: "Whole Workspace",
+    level: "workspace",
+    id: CONFORMANCE_INSTALL_PANEL_ACTIVE_ORG_ID,
+    disabled: false,
+  },
+  {
+    value: "admin",
+    label: "Admins only",
+    level: "admin",
+    id: CONFORMANCE_INSTALL_PANEL_ACTIVE_ORG_ID,
+    disabled: false,
+  },
+];
+
+export const CONFORMANCE_INSTALL_PANEL_ENTITY_NAMES: Record<string, string> = {
+  [`org:${CONFORMANCE_INSTALL_PANEL_ACTIVE_ORG_ID}`]: "Cinatra Fixtures",
+  "team:conformance-team-finance": "Finance",
+};
+
+/** The row label the panel's picker must preselect and render verbatim. */
+export const CONFORMANCE_INSTALL_PANEL_DEFAULT_LABEL = "Workspace: All";
 
 /** Status-pill statuses rendered by the harness (design system §VI set). */
 export const CONFORMANCE_STATUS_PILL_STATUSES = [

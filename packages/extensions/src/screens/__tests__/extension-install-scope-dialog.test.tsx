@@ -102,25 +102,38 @@ describe("ExtensionInstallScopeDialog", () => {
 });
 
 describe("marketplace screen wiring", () => {
-  it("renders the dialog for connector/artifact/workflow installs and keeps the plain form for other kinds", () => {
+  // cinatra#2373 moved the CARD path off this dialog and onto the in-card
+  // install panel. The dialog itself is unchanged and still serves the §II
+  // detail-modal flow (which the modal mounts from the threaded installScope
+  // context); S3 replaces that last consumer with the modal's inline panel.
+  it("mounts the IN-CARD panel for connector/artifact/workflow installs — no dialog on the card path", () => {
     expect(SCREEN).toMatch(/isInstallAccessTargetKind\(card\.kindSlug\)/);
-    expect(SCREEN).toMatch(/<ExtensionInstallScopeDialog/);
+    expect(SCREEN).toMatch(/<CardFaceSwitcher/);
+    expect(SCREEN).toMatch(/<ExtensionInstallScopePanel/);
+    // The card's own CTA opens the panel; it never renders the popup.
+    expect(SCREEN).toMatch(/<InstallPanelOpenButton>Install now<\/InstallPanelOpenButton>/);
+    expect(SCREEN).not.toMatch(/<ExtensionInstallScopeDialog/);
     // The legacy path must survive for agent/skill/unknown kinds.
     expect(SCREEN).toMatch(/<MarketplaceInstallForm/);
   });
 
-  it("computes the picker rows with the SHARED server-side builder and defaults to the org row", () => {
+  it("computes the picker rows with the SHARED server-side builder and defaults via the marketplace-local availability model", () => {
     expect(SCREEN).toMatch(/buildInstallTargetPickerContext/);
     expect(SCREEN).toMatch(
       /from\s+["']@cinatra-ai\/agents\/install-target-picker["']/,
     );
-    // Org-first one-click default (parity with the implicit workspace default).
-    expect(SCREEN).toMatch(
+    // The org-first override is retired: the default AUDIENCE is now
+    // `Workspace: All`, resolved (with the no-active-organization / empty-state
+    // ordering) by the marketplace-local model. The SHARED default helper stays
+    // untouched and is consulted only as the fallback.
+    expect(SCREEN).toMatch(/resolveInstallPanelAvailability\(\{/);
+    expect(SCREEN).toMatch(/fallbackDefaultValue: pickerFallbackValue/);
+    expect(SCREEN).not.toMatch(
       /t\.level === ["']organization["'] && !t\.disabled/,
     );
   });
 
-  it("passes the UNBOUND action so the dialog can thread accessTarget", () => {
+  it("passes the UNBOUND action so the panel and the dialog both thread accessTarget", () => {
     expect(SCREEN).toMatch(/installAction=\{installExtensionPackageFormAction\}/);
   });
 });

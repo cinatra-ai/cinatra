@@ -8,7 +8,10 @@ import { Button } from "@/components/ui/button";
 import { StatusPill } from "@/components/ui/status-pill";
 import { buildConfigurationNeedsNotificationInput } from "@/lib/agent-configuration-needs-notifications";
 
-import { ConformanceCardFixtures } from "./card-fixtures";
+import {
+  ConformanceCardFixtures,
+  ConformanceInstallPanelFixture,
+} from "./card-fixtures";
 import { NotificationConfigNeedsFixture } from "./notification-config-needs-fixture";
 import { ConnectorSetupConformanceFixture } from "./connector-setup-fixture";
 import {
@@ -125,6 +128,15 @@ export default function ConformanceHarnessPage() {
           </CardHeader>
           <CardContent>
             <ConformanceCardFixtures />
+          </CardContent>
+        </Card>
+
+        <Card className="border-line bg-surface backdrop-blur-none">
+          <CardHeader>
+            <CardTitle>In-card install panel (surface: extension-install-panel)</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ConformanceInstallPanelFixture />
           </CardContent>
         </Card>
 

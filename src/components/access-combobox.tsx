@@ -259,8 +259,18 @@ export function resolveAccessLabel(
   availableScopes: AccessComboboxProps["availableScopes"],
 ): { type: string | null; name: string } {
   if (value === "owner") return { type: null, name: "Only me" };
-  if (value === "admin") return { type: null, name: "Admins only" };
-  if (value === "workspace") return { type: null, name: "Whole Workspace" };
+  // cinatra#2373 (minimal seam): the closed trigger renders the workspace
+  // AUDIENCE rows verbatim as their dropdown rows read — the in-card install
+  // panel's drawn trigger is "Workspace: All", and a trigger that said
+  // "Whole Workspace" while the row said "Workspace: All" is the exact drift
+  // the marketplace spec forbids. Returned as a BARE name (not the
+  // `{type, name}` prefix form) because the trigger uppercases its `type:`
+  // prefix and the rows do not — the flat form is the drawn string, character
+  // for character. This is the narrowest possible fix for the two workspace
+  // kinds; the general trigger ≡ row model for ALL six scope kinds is #2372's
+  // deliverable and supersedes these two lines when it lands.
+  if (value === "admin") return { type: null, name: "Workspace: Admins only" };
+  if (value === "workspace") return { type: null, name: "Workspace: All" };
   // Multi-scope W1 retired the bare `"org"` token for the id-carrying
   // `org:<id>`. The bare form is still ACCEPTED for read-compatibility with any
   // persisted legacy value (AgentAuthPolicyVisibilitySchema still validates the

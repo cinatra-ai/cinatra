@@ -123,8 +123,11 @@ describe("resolveAccessLabel — org token contract (cinatra#1526)", () => {
 
   it("keeps team:/project:/owner/admin/workspace labels intact (no over-capture)", () => {
     expect(resolveAccessLabel("owner", namedScopes).name).toBe("Only me");
-    expect(resolveAccessLabel("admin", namedScopes).name).toBe("Admins only");
-    expect(resolveAccessLabel("workspace", namedScopes).name).toBe("Whole Workspace");
+    // cinatra#2373: the two workspace AUDIENCE labels now read exactly as
+    // their dropdown rows do (the in-card install panel's drawn trigger is
+    // "Workspace: All"); the org-token resolution below is unaffected.
+    expect(resolveAccessLabel("admin", namedScopes).name).toBe("Workspace: Admins only");
+    expect(resolveAccessLabel("workspace", namedScopes).name).toBe("Workspace: All");
     expect(resolveAccessLabel("team:abc", namedScopes).type).toBe("Team");
     expect(resolveAccessLabel("project:xyz", namedScopes).type).toBe("Project");
   });

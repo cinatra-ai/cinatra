@@ -26,7 +26,18 @@
 // (pacote/child_process reach), which a client component must never pull into
 // the browser graph. These four modules are client-safe (pure model helpers +
 // "use client" components).
-import { MarketplaceListingCard } from "@cinatra-ai/extensions/screens/marketplace-listing-card";
+import {
+  MarketplaceListingCard,
+  MarketplaceListingCardInstallFace,
+} from "@cinatra-ai/extensions/screens/marketplace-listing-card";
+import {
+  CardFaceSwitcher,
+  InstallPanelCloseButton,
+  InstallPanelOpenButton,
+} from "@cinatra-ai/extensions/screens/card-face-switcher";
+import { ExtensionInstallScopePanel } from "@cinatra-ai/extensions/screens/extension-install-scope-panel";
+import { resolveInstallPanelAvailability } from "@cinatra-ai/extensions/screens/install-panel-availability";
+import { isInstallAccessTargetKind } from "@cinatra-ai/extensions/install-access-target";
 import {
   MarketplaceInstallForm,
   MarketplaceInstallSubmit,
@@ -46,6 +57,10 @@ import { deriveExtensionCompatState } from "@/lib/extension-compat-badge";
 import { deriveExtensionAccent } from "@/lib/extension-accent";
 import {
   CONFORMANCE_CARD_FIXTURES,
+  CONFORMANCE_INSTALL_PANEL_ACTIVE_ORG_ID,
+  CONFORMANCE_INSTALL_PANEL_ENTITY_NAMES,
+  CONFORMANCE_INSTALL_PANEL_FIXTURE,
+  CONFORMANCE_INSTALL_PANEL_TARGETS,
   type ConformanceCardFixture,
 } from "./fixture-data";
 
@@ -91,6 +106,29 @@ function ConformanceCard({ fixture }: { fixture: ConformanceCardFixture }) {
     setInstalled({ version: card.packageVersion, isArchived: false });
   };
 
+  // Mirror of the live screen's `usesInstallPanel` predicate — same three
+  // inputs, same order (cinatra#2373).
+  const usesInstallPanel =
+    cta.state === "install" && !cta.disabled && isInstallAccessTargetKind(card.kindSlug);
+
+  // The REAL availability resolver over SERVER-COMPUTED-shaped rows. The
+  // platform-admin fixture resolves to `ready` with the `Workspace: All` row
+  // as the default selection.
+  const availability = resolveInstallPanelAvailability({
+    activeOrgId: CONFORMANCE_INSTALL_PANEL_ACTIVE_ORG_ID,
+    installTargets: CONFORMANCE_INSTALL_PANEL_TARGETS,
+    fallbackDefaultValue: null,
+  });
+
+  // Harness scoped install action — the SAME argument shape the real unbound
+  // action takes. It mutates the resolver input, so the REAL resolver
+  // re-derives the post-install CTA and the face switcher's install face stops
+  // being rendered exactly as the live redirect-and-re-render does.
+  const scopedInstallAction = async () => {
+    await new Promise((r) => setTimeout(r, fixture.ctaDelayMs));
+    setInstalled({ version: card.packageVersion, isArchived: false });
+  };
+
   // Mirror of the live screen's six-state ctaControl branches
   // (extensions-marketplace-screen.tsx), composed from the SAME primitives.
   const ctaControl =
@@ -114,15 +152,22 @@ function ConformanceCard({ fixture }: { fixture: ConformanceCardFixture }) {
         {cta.blockedAction === "update" ? "Update now" : "Install now"}
       </Button>
     ) : cta.state === "install" ? (
-      <MarketplaceInstallForm
-        action={lifecycleAction}
-        failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
-        defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "install", card.displayName)}
-      >
-        <MarketplaceInstallSubmit pendingLabel="Installing…">
-          Install now
-        </MarketplaceInstallSubmit>
-      </MarketplaceInstallForm>
+      usesInstallPanel ? (
+        // Mirrors the live screen's in-card panel branch (cinatra#2373): an
+        // access-target kind's Install now swaps the card body, it does not
+        // submit and it does not open a dialog.
+        <InstallPanelOpenButton>Install now</InstallPanelOpenButton>
+      ) : (
+        <MarketplaceInstallForm
+          action={lifecycleAction}
+          failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
+          defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "install", card.displayName)}
+        >
+          <MarketplaceInstallSubmit pendingLabel="Installing…">
+            Install now
+          </MarketplaceInstallSubmit>
+        </MarketplaceInstallForm>
+      )
     ) : cta.state === "update" ? (
       <MarketplaceInstallForm
         action={lifecycleAction}
@@ -139,6 +184,25 @@ function ConformanceCard({ fixture }: { fixture: ConformanceCardFixture }) {
       </Button>
     );
 
+  const accentColor = deriveExtensionAccent(card.packageName);
+
+  const idleFace = (
+    <MarketplaceListingCard
+      card={card}
+      accentColor={accentColor}
+      ctaControl={ctaControl}
+      ctaState={cta.state}
+      detailsControl={
+        // The §V detail modal is a separate conformance surface
+        // (extension-detail-modal — see allowlist.json); the harness renders
+        // the underlined trigger as an inert placeholder.
+        <Button type="button" variant="link" size="sm">
+          More details
+        </Button>
+      }
+    />
+  );
+
   return (
     <div
       // Harness instrumentation (documented in testid-contract.json):
@@ -147,21 +211,52 @@ function ConformanceCard({ fixture }: { fixture: ConformanceCardFixture }) {
       // update → installed-latest outcome is assertable.
       data-surface-id={fixture.surfaceId}
       data-installed-version={installed?.version ?? ""}
+      className="h-full"
     >
-      <MarketplaceListingCard
-        card={card}
-        accentColor={deriveExtensionAccent(card.packageName)}
-        ctaControl={ctaControl}
-        ctaState={cta.state}
-        detailsControl={
-          // The §V detail modal is a separate conformance surface
-          // (extension-detail-modal — see allowlist.json); the harness renders
-          // the underlined trigger as an inert placeholder.
-          <Button type="button" variant="link" size="sm">
-            More details
-          </Button>
-        }
-      />
+      {usesInstallPanel ? (
+        <CardFaceSwitcher
+          idleFace={idleFace}
+          installFace={
+            <MarketplaceListingCardInstallFace
+              card={card}
+              accentColor={accentColor}
+              closeControl={<InstallPanelCloseButton />}
+            >
+              <ExtensionInstallScopePanel
+                packageName={card.packageName}
+                packageVersion={card.packageVersion}
+                displayName={card.displayName}
+                installTargets={CONFORMANCE_INSTALL_PANEL_TARGETS}
+                ownerEntityNames={CONFORMANCE_INSTALL_PANEL_ENTITY_NAMES}
+                activeOrgId={CONFORMANCE_INSTALL_PANEL_ACTIVE_ORG_ID}
+                availability={availability}
+                failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
+                defaultFailureMessage={marketplaceFailureCopy(
+                  "unrecoverable",
+                  "install",
+                  card.displayName,
+                )}
+                installAction={scopedInstallAction}
+              />
+            </MarketplaceListingCardInstallFace>
+          }
+        />
+      ) : (
+        idleFace
+      )}
+    </div>
+  );
+}
+
+/**
+ * The `extension-install-panel` conformance mount (cinatra#2373). One card in
+ * its own surface root so the panel's four annotated actions are driven in
+ * isolation from the six-state card grid above.
+ */
+export function ConformanceInstallPanelFixture() {
+  return (
+    <div className="max-w-[300px]">
+      <ConformanceCard fixture={CONFORMANCE_INSTALL_PANEL_FIXTURE} />
     </div>
   );
 }
