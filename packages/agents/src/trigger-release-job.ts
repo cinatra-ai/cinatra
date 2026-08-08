@@ -13,6 +13,13 @@ import {
 import { deletePmLinkByRunId } from "./pm-link-store";
 import { scheduleTrigger, cancelTriggerSchedule } from "./trigger-schedule";
 import { markTriggerReleased } from "./trigger-gate";
+
+/** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
+ *  the CODE, not `instanceof`, so a refusal is recognized across the dynamic
+ *  import boundary the dispatch guard is reached through. */
+const AGENT_TEMPLATE_SCOPE_DENIED_CODE = "AGENT_TEMPLATE_SCOPE_DENIED";
+const isScopeDenial = (err: unknown): err is { reason: string } =>
+  (err as { code?: string } | null)?.code === AGENT_TEMPLATE_SCOPE_DENIED_CODE;
 import {
   transitionRunStatus,
   RunTransitionError,
@@ -281,10 +288,51 @@ export async function runAgentRunTriggerReleaseJob(
 
   // Enqueue the actual execution job. Idempotent on jobId — re-enqueue is safe
   // if BullMQ has already accepted a job with the same id.
-  await enqueueAgentRun(
-    { runId: data.runId },
-    { jobId: `agent-builder-${data.runId}` },
-  );
+  //
+  // cinatra#2485 C — COMPENSATION on a scope denial. The run is already `queued`
+  // above, and `enqueueAgentRun` re-asserts the dispatch guard: if the agent's
+  // scope changed between the transition's own guard and this one, the enqueue
+  // throws and the run would otherwise sit `queued` forever with no job. Landed
+  // here (not inside the enqueue chokepoint) because this frame already holds
+  // `releaseAuthority` — the chokepoint is deliberately not allowed to mint one
+  // (org-write-boundary-gate R2/R5). Same shape as `releaseTriggerNow`.
+  try {
+    await enqueueAgentRun(
+      { runId: data.runId },
+      { jobId: `agent-builder-${data.runId}` },
+    );
+  } catch (err) {
+    if (!isScopeDenial(err)) throw err;
+    console.warn(
+      "[trigger-release] run",
+      data.runId,
+      `refused — the agent's scope no longer authorizes this run (${err.reason}); failing it`,
+    );
+    try {
+      await transitionRunStatus(
+        data.runId,
+        "queued",
+        "failed",
+        {
+          error:
+            `run refused: the agent's scope no longer authorizes this run (${err.reason})`,
+        },
+        releaseAuthority,
+      );
+    } catch (compErr) {
+      if (
+        !(compErr instanceof RunTransitionError && compErr.code === "stale_from_status")
+      ) {
+        console.error(
+          "[trigger-release] run",
+          data.runId,
+          "was refused but could not be failed — it stays queued with no job:",
+          compErr instanceof Error ? compErr.message : String(compErr),
+        );
+      }
+    }
+    return;
+  }
   console.log(`[trigger-release] enqueued execution for run ${data.runId}`);
 }
 

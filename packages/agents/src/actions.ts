@@ -991,6 +991,14 @@ export async function updateRegistryPackage(input: {
       orgId: planOrgId,
       creatorId: session.user.id,
       status: existing.status === "published" ? "published" : "draft",
+      // cinatra#2485 C — the existing row's anchors are forwarded AS THEY ARE,
+      // including a half-anchor (a narrow `owner_level` whose `owner_id` is
+      // null on a legacy row). Dropping the half-anchor here would be WORSE
+      // than forwarding it: with neither anchor present the canonical ORG
+      // DEFAULT applies, which would silently re-stamp a personal/team agent
+      // — and its dependency rows — as org-wide. So the partial travels to
+      // `withDeterminateInstallScope`, which refuses it at the write boundary.
+      // A corrupt row fails LOUDLY; it is never widened and never guessed at.
       ...(existingOwnerLevel
         ? { ownerLevel: existingOwnerLevel, ...(existing.ownerId ? { ownerId: existing.ownerId } : {}) }
         : {}),

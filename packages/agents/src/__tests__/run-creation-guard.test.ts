@@ -33,6 +33,18 @@ const shared = vi.hoisted(() => ({
   // Rows a select-by-agentRuns query answers with (post-insert re-reads,
   // idempotency-key lookups, readAgentRunById).
   runRows: [] as Array<Record<string, unknown>>,
+  // cinatra#2485 C: the template the scope guard reads. Org-scoped with a
+  // persisted installation principal, so a run created with no explicit actor
+  // and no runBy is authorized as that principal (an org member below).
+  templateRows: [
+    {
+      id: "tmpl-1",
+      orgId: "org-1",
+      ownerLevel: "organization",
+      ownerId: "org-1",
+      creatorId: "user-installer",
+    },
+  ] as Array<Record<string, unknown>>,
   insertedValues: [] as Array<Record<string, unknown>>,
   insertCalls: 0,
   // When set, the NEXT insert throws a 23505-shaped unique-violation.
@@ -83,7 +95,11 @@ vi.mock("../db", async () => {
 
   function rowsFor(table: unknown): Array<Record<string, unknown>> {
     if (table === agentRuns) return shared.runRows;
-    if (table === agentTemplates) return []; // no template row → null owner anchor (benign)
+    // cinatra#2485 C: the creation perimeter now asserts the template's install
+    // scope, so the fixture template is org-scoped with an installation
+    // principal. `ownerLevel`/`ownerId` also feed deriveRunOboCeilingJson's
+    // owner anchor exactly as before.
+    if (table === agentTemplates) return shared.templateRows;
     return []; // agentVersions (readLatestAgentVersionIdForTemplate) → null pin (benign)
   }
 
@@ -139,6 +155,33 @@ vi.mock("../db", async () => {
     agentBuilderPool: { end: vi.fn() },
   };
 });
+
+// cinatra#2485 C: the scope guard first probes LIVE org membership, then builds
+// the actor through the canonical run-actor resolver. Both are stubbed to
+// "plain member of the run's org" so these proofs measure the ORG-WRITE
+// perimeter; the scope rule itself has its own suites.
+vi.mock("@/lib/auth-session", () => ({
+  resolveOrgRoleForUser: async () => "member",
+}));
+
+vi.mock("@/lib/authz/build-actor-context-from-run", () => ({
+  buildActorContextFromRun: async (run: {
+    id: string;
+    runBy: string | null;
+    orgId: string;
+  }) => ({
+    principalType: "HumanUser",
+    principalId: run.runBy ?? "user-installer",
+    organizationId: run.orgId,
+    teamIds: [],
+    projectIds: [],
+    projectGrants: [],
+    orgRole: "member",
+    platformRole: "member",
+    authSource: "worker",
+    policyVersion: "v2",
+  }),
+}));
 
 import { createAgentRun, createAgentRunPendingInput } from "../store";
 

@@ -118,9 +118,9 @@ async function seedRun(runId: string, packageName: string) {
   const templateId = `tpl-${randomUUID()}`;
   await pool(
     `INSERT INTO "${q(TEST_SCHEMA)}"."agent_templates"
-       (id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name)
-     VALUES ($1, 'fixture', '', '[]', '{}', '{}', $2)`,
-    [templateId, packageName],
+       (id, org_id, owner_level, owner_id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name)
+     VALUES ($1, $3, 'organization', $3, 'fixture', '', '[]', '{}', '{}', $2)`,
+    [templateId, packageName, ORG],
   );
   await pool(
     `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs" (id, template_id, input_params, org_id)
@@ -414,9 +414,9 @@ describe.skipIf(!HAS_DB)("cinatra#2047 row 9 — org-scoped review-gate volume",
     const templateId = `tpl-${randomUUID()}`;
     await pool(
       `INSERT INTO "${q(TEST_SCHEMA)}"."agent_templates"
-         (id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name)
-       VALUES ($1,'fixture','','[]','{}','{}',$2)`,
-      [templateId, "@cinatra-ai/foreign-agent"],
+         (id, org_id, owner_level, owner_id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name)
+       VALUES ($1,$3,'organization',$3,'fixture','','[]','{}','{}',$2)`,
+      [templateId, "@cinatra-ai/foreign-agent", ORG],
     );
     await pool(
       `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs" (id, template_id, input_params, org_id)

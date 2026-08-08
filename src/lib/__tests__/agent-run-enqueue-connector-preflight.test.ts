@@ -22,6 +22,9 @@ vi.mock("@/lib/connector-policy", () => ({
 const readAgentRunById = vi.fn();
 vi.mock("@cinatra-ai/agents/store", () => ({
   readAgentRunById: (...a: unknown[]) => readAgentRunById(...(a as [])),
+  // cinatra#2485 C: the shared run-scope guard rides `./store`'s surface.
+  assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
+  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
 }));
 
 const buildActorContextFromRun = vi.fn();

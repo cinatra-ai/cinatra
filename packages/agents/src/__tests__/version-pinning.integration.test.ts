@@ -56,6 +56,12 @@ describe.skipIf(!hasDb)("agent_runs.packageVersion roundtrip", () => {
       compiledPlan: [],
       inputSchema: {},
       approvalPolicy: { steps: [] },
+      // cinatra#2485 C — the template's INSTALL SCOPE is what authorizes a run,
+      // so the fixture agent must be installed in the org its run belongs to.
+      // `createAgentTemplate` stamps `owner_level='organization'` /
+      // `owner_id=orgId` from this anchor; an org-less fixture template has no
+      // determinate scope and every run against it is refused.
+      orgId: TEST_ORG_ID,
     });
     const runId = `r_${randomUUID()}`;
     const input: CreateAgentRunInput = {
@@ -83,6 +89,7 @@ describe.skipIf(!hasDb)("agent_runs.packageVersion roundtrip", () => {
       compiledPlan: [],
       inputSchema: {},
       approvalPolicy: { steps: [] },
+      orgId: TEST_ORG_ID, // see the run-scope note on the sibling test above
     });
     const runId = `r_${randomUUID()}`;
     const created = await createAgentRun({ id: runId, templateId, inputParams: {}, orgId: TEST_ORG_ID }, AUTH);

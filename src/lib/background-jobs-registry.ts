@@ -1206,8 +1206,17 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
       // counter, and move the job to delayed via job.moveToDelayed (BullMQ flow
       // control — does NOT consume a retry attempt). The Redis worker
       // concurrency slot is released between gate-checks.
-      const { runAgentBuilderExecutionJob, TriggerGateClosedError, OrgArchivedFreezeError } =
-        await import("@cinatra-ai/agents");
+      const {
+        runAgentBuilderExecutionJob,
+        TriggerGateClosedError,
+        OrgArchivedFreezeError,
+        // cinatra#2485 C: the fire-time scope recheck could not READ its inputs
+        // (a transient membership/template query fault). Parked + retried, never
+        // failed — an unreadable check is not a denial, and an authorization
+        // read added to the worker prologue must not make a run less likely to
+        // survive a DB blip (`attempts` defaults to 1).
+        ScopeRecheckUnavailableError,
+      } = await import("@cinatra-ai/agents");
       try {
         await runAgentBuilderExecutionJob(
           job.data as { runId: string; gateAttempt?: number },
@@ -1240,6 +1249,23 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
           console.log(
             `[dispatch-freeze] run ${err.runId} org archived — re-queuing in ${err.delayMs}ms`,
           );
+          await job.moveToDelayed(Date.now() + err.delayMs, job.token);
+          throw new DelayedError();
+        }
+        // cinatra#2485 C: same flow-control move for an UNREADABLE fire-time
+        // scope recheck — the run stays `queued`, its job survives, and the
+        // next tick re-checks once the fault clears. Consumes no retry attempt.
+        // The park ordinal is written back onto the job data (the SAME pattern
+        // the trigger gate uses for `gateAttempt`) so the worker's own cap can
+        // land the run `failed` on a PERMANENT fault instead of looping.
+        if (err instanceof ScopeRecheckUnavailableError) {
+          console.warn(
+            `[scope-recheck] run ${err.runId} scope check unreadable — re-queuing in ${err.delayMs}ms: ${err.message}`,
+          );
+          await job.updateData({
+            ...(job.data as Record<string, unknown>),
+            scopeRecheckPark: err.nextAttempt,
+          });
           await job.moveToDelayed(Date.now() + err.delayMs, job.token);
           throw new DelayedError();
         }

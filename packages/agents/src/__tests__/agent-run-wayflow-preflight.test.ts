@@ -44,6 +44,9 @@ vi.mock("@/lib/agent-run-readiness", async (importOriginal) => ({
 }));
 
 const storeMock = vi.hoisted(() => ({
+  // cinatra#2485 C: the shared run-scope guard rides `./store`'s surface.
+  assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
+  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
   readAgentTemplateById: vi.fn(),
   readAgentVersionsByTemplate: vi.fn(),
   createAgentRun: vi.fn(),
@@ -72,6 +75,7 @@ const storeMock = vi.hoisted(() => ({
   countAgentRunsForTemplates: vi.fn(() => new Map()),
 }));
 vi.mock("../store", () => storeMock);
+
 
 const authPolicyMock = vi.hoisted(() => ({
   enforceRunAccess: vi.fn(async () => undefined),

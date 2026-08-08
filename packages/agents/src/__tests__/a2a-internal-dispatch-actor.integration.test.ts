@@ -109,6 +109,12 @@ async function makeTemplate(): Promise<string> {
     compiledPlan: [],
     inputSchema: {},
     approvalPolicy: { steps: [] },
+    // cinatra#2485 C — the template's INSTALL SCOPE is what authorizes a run,
+    // so the fixture agent is installed in ORG (`createAgentTemplate` stamps
+    // `owner_level='organization'` / `owner_id=orgId` from this anchor). An
+    // org-less fixture template has no determinate scope, so every run against
+    // it is refused before this suite's own authority axis is ever exercised.
+    orgId: ORG,
   });
   return templateId;
 }
@@ -193,18 +199,30 @@ describe.skipIf(!hasDb)(
       });
       expect(authority).toBeUndefined();
 
-      await expect(
-        createAgentRun(
-          {
-            id: runId,
-            templateId,
-            inputParams: {},
-            orgId: ORG,
-            runBy: OUTSIDER_USER,
-          },
-          authority,
-        ),
-      ).rejects.toThrow();
+      // cinatra#2485 C — TWO fail-closed gates now stand in front of this write
+      // and the run-scope guard is the FIRST: it re-resolves `runBy` LIVE and
+      // refuses an actor with no membership row (`cross_org`) before the
+      // undefined authority ever reaches `guardedRunWrite`. Assert WHICH gate
+      // refused rather than accepting any throw, so a future silent-success
+      // cannot pass here. The #2202 AUTHORITY seam itself stays pinned by the
+      // sibling test below (no principal at all → the scope guard's org-anchored
+      // autonomous branch admits, and the authority seam is what refuses).
+      const refusal = await createAgentRun(
+        {
+          id: runId,
+          templateId,
+          inputParams: {},
+          orgId: ORG,
+          runBy: OUTSIDER_USER,
+        },
+        authority,
+      ).then(
+        () => null,
+        (err: unknown) => err,
+      );
+      expect(refusal).not.toBeNull();
+      expect((refusal as { code?: string }).code).toBe("AGENT_TEMPLATE_SCOPE_DENIED");
+      expect((refusal as { reason?: string }).reason).toBe("cross_org");
 
       const rows = await queryRows<{ id: string }>(
         `SELECT id FROM "${q(SCHEMA)}"."agent_runs" WHERE id = $1`,

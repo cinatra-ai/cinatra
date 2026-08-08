@@ -54,6 +54,9 @@ vi.mock("@/lib/auth-session", () => authSessionMock);
 // Store mock
 // ---------------------------------------------------------------------------
 const storeMock = vi.hoisted(() => ({
+  // cinatra#2485 C: the shared run-scope guard rides `./store`'s surface.
+  assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
+  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
   createAgentTemplate: vi.fn(),
   createAgentVersion: vi.fn(),
   readAgentVersionsByTemplate: vi.fn(async () => [{ id: "ver-1" }]),
@@ -130,6 +133,7 @@ const storeMock = vi.hoisted(() => ({
   resolveRunCoOwnerUserIds: vi.fn(async () => []),
 }));
 vi.mock("../store", () => storeMock);
+
 
 // ---------------------------------------------------------------------------
 // auth-policy mock — we let enforceRunAccess's behavior be controlled per-test

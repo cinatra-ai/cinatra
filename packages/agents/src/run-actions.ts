@@ -51,6 +51,13 @@ import {
   maybeHoldRunForRecommendation,
   readRecommendationParkForRun,
 } from "./recommendation-hold";
+/** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
+ *  the CODE, not `instanceof`, so a refusal is recognized across bundle /
+ *  module-mock boundaries (the site-level pattern `project-dispatch.ts` uses
+ *  for OBO_CEILING_DISJOINT_CODE). */
+const AGENT_TEMPLATE_SCOPE_DENIED_CODE = "AGENT_TEMPLATE_SCOPE_DENIED";
+const isScopeDenial = (err: unknown): err is { reason: string } =>
+  (err as { code?: string } | null)?.code === AGENT_TEMPLATE_SCOPE_DENIED_CODE;
 
 export type TriggerAgentRunArgs = {
   runId: string;
@@ -545,6 +552,29 @@ export async function releaseTriggerNow(
     };
   }
 
+  // cinatra#2485 C: this is the ONE interactive dispatch that starts SOMEONE
+  // ELSE's run, so the shared dispatch guard's default (authorize the run's
+  // owner) is not enough — the releasing admin must ALSO be inside the agent's
+  // install scope. Admin standing counts at ORG scope only; an org admin who is
+  // not in the owning team/project cannot force-start work that scope reserves
+  // for its members. Asserted BEFORE `markTriggerReleased`, which is a
+  // monotonic gate write that no later refusal can undo.
+  try {
+    const { assertAgentRunDispatchAuthorized } = await import(
+      "./agent-run-serde"
+    );
+    await assertAgentRunDispatchAuthorized({
+      runId: args.runId,
+      stage: "dispatch",
+      actingUserId: userId,
+    });
+  } catch (err) {
+    if (isScopeDenial(err)) {
+      return { ok: false, error: "forbidden — this agent's scope does not include you" };
+    }
+    throw err;
+  }
+
   await markTriggerReleased(args.runId);
 
   // Admin (org-role admin, checked above) acts as a member of the run's org.
@@ -564,10 +594,52 @@ export async function releaseTriggerNow(
   }
 
   // Enqueue an execution job now that the gate is open. Idempotent on jobId.
-  await enqueueAgentRun(
+  //
+  // cinatra#2485 C — COMPENSATION on a scope denial. The run is already `queued`
+  // at this point, and `enqueueAgentRun` re-asserts the dispatch guard: if the
+  // agent's scope changed in the window between the transition's own guard and
+  // this one, the enqueue throws and the run would otherwise sit `queued`
+  // forever with no job to run it and no operator signal.
+  //
+  // The failure is landed HERE rather than inside the enqueue chokepoint because
+  // this frame already holds a member session `authority` for the run, whereas
+  // the chokepoint would have to mint an org-wide run authority it is
+  // deliberately not allowed to hold (org-write-boundary-gate R2/R5).
+  //
+  // `stale_from_status` is swallowed for the same reason as the transition
+  // above: another writer already moved the run off `queued`.
+  try {
+    await enqueueAgentRun(
       { runId: args.runId },
       { jobId: `agent-builder-${args.runId}` },
     );
+  } catch (err) {
+    if (!isScopeDenial(err)) throw err;
+    try {
+      await transitionRunStatus(
+        args.runId,
+        "queued",
+        "failed",
+        {
+          error:
+            `run refused: the agent's scope no longer authorizes this run (${err.reason})`,
+        },
+        authority,
+      );
+    } catch (compErr) {
+      if (
+        !(compErr instanceof RunTransitionError && compErr.code === "stale_from_status")
+      ) {
+        console.error(
+          "[releaseTriggerNow] run",
+          args.runId,
+          "was refused by the install-scope gate but could not be failed — it stays queued with no job:",
+          compErr instanceof Error ? compErr.message : String(compErr),
+        );
+      }
+    }
+    return { ok: false, error: "forbidden — this agent's scope does not include you" };
+  }
 
   return { ok: true };
 }

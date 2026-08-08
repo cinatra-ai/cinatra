@@ -38,6 +38,16 @@ const q = (s: string) => s.replaceAll('"', '""');
 // up here rather than left as a permanent shared fixture.
 const ORG_ID = "org-runtoken";
 const AUTH = { orgId: ORG_ID, can: () => true };
+// cinatra#2485 C — the run-scope gate re-resolves a run's `run_by` LIVE against
+// better-auth (`resolveOrgRoleForUser`), so a synthetic run owner with no
+// membership row is refused as cross-org. This suite's dispatched run carries a
+// human owner, so that human is seeded as a REAL member of ORG_ID (the pattern
+// `lifecycle-repair-dispatch.integration.test.ts` documents: "the dispatch-time
+// principal gate needs a live-resolvable org role"). `public."user"` /
+// `public."member"` are better-auth tables and live UNQUALIFIED in `public`.
+// Suite-UNIQUE id: `public."user"` is shared by every suite in this DB, so a
+// generic id could adopt (and then delete) a row this suite did not create.
+const RUN_OWNER = "user-runtoken-owner";
 
 beforeAll(async () => {
   if (!hasDb) return;
@@ -53,6 +63,16 @@ beforeAll(async () => {
     `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
     [ORG_ID, ORG_ID, ORG_ID],
   );
+  await c.query(
+    `INSERT INTO public."user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+     VALUES ($1, $1, $2, false, now(), now()) ON CONFLICT (id) DO NOTHING`,
+    [RUN_OWNER, `${RUN_OWNER}@runtoken.test`],
+  );
+  await c.query(
+    `INSERT INTO public."member" (id, "organizationId", "userId", role, "createdAt")
+     VALUES ($1, $2, $3, 'member', now()) ON CONFLICT (id) DO NOTHING`,
+    [`m-runtoken-${ORG_ID}`, ORG_ID, RUN_OWNER],
+  );
   await c.end();
 }, 30_000);
 
@@ -60,10 +80,16 @@ afterAll(async () => {
   if (!hasDb) return;
   const c = new Client({ connectionString: dbUrl });
   await c.connect();
+  await c.query(`DELETE FROM public."member" WHERE id = $1`, [`m-runtoken-${ORG_ID}`]);
+  await c.query(`DELETE FROM public."user" WHERE id = $1`, [RUN_OWNER]);
   await c.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG_ID]);
   await c.end();
 });
 
+// cinatra#2485 C — the template's INSTALL SCOPE is what authorizes a run, so
+// the fixture agent is installed in ORG_ID (`createAgentTemplate` stamps
+// `owner_level='organization'` / `owner_id=orgId` from this anchor). An org-less
+// fixture template has no determinate scope and every run against it is refused.
 async function makeTemplate(): Promise<string> {
   const { createAgentTemplate } = await import("../store");
   const templateId = `t_${randomUUID()}`;
@@ -74,6 +100,7 @@ async function makeTemplate(): Promise<string> {
     compiledPlan: [],
     inputSchema: {},
     approvalPolicy: { steps: [] },
+    orgId: ORG_ID,
   });
   return templateId;
 }
@@ -87,7 +114,7 @@ describe.skipIf(!hasDb)("run-token spine — dispatch seam persist + verify", ()
       templateId,
       inputParams: { foo: "bar" },
       orgId: "org-runtoken",
-      runBy: "user-1",
+      runBy: RUN_OWNER,
     }, AUTH);
 
     // The exact dispatch seam: mint, persist ONLY the hash (before sendTask),
@@ -121,7 +148,7 @@ describe.skipIf(!hasDb)("run-token spine — dispatch seam persist + verify", ()
     if (res.ok) {
       expect(res.run.id).toBe(run.id);
       expect(res.run.orgId).toBe("org-runtoken");
-      expect(res.run.runBy).toBe("user-1");
+      expect(res.run.runBy).toBe(RUN_OWNER);
     }
   });
 

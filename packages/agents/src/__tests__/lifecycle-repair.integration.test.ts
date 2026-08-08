@@ -183,8 +183,8 @@ async function seedRepairCapableProducer(runId: string): Promise<void> {
   const templateId = `tmpl-${randomUUID()}`;
   await pool(
     `INSERT INTO "${q(TEST_SCHEMA)}"."agent_templates"
-       (id, org_id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name, lifecycle_config)
-     VALUES ($1,$2,'seed','seed','[]','{}','{}',$3,$4) ON CONFLICT (id) DO NOTHING`,
+       (id, org_id, owner_level, owner_id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name, lifecycle_config)
+     VALUES ($1,$2,'organization',$2,'seed','seed','[]','{}','{}',$3,$4) ON CONFLICT (id) DO NOTHING`,
     [templateId, ORG, `@cinatra-ai/seed-${templateId}`, JSON.stringify({ repairCapable: true })],
   );
   await pool(

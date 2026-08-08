@@ -87,11 +87,64 @@ vi.mock("../db", async () => {
     { update, insert, execute: async () => ({ rows: [] }) },
     shared.kernelAnswers,
   );
+  // cinatra#2485 C: the `→queued` dispatch edge now asserts the run's install
+  // scope before the org-write guard runs, so the fake answers the guard's two
+  // reads — the run row and its org-scoped template.
+  const { agentRuns, agentTemplates } = await import("../schema");
+  const select = () => ({
+    from: (table: unknown) => ({
+      where: () => ({
+        limit: async () =>
+          table === agentRuns
+            ? [{ id: "run-1", templateId: "tmpl-1", orgId: "org-1", runBy: "user-1" }]
+            : table === agentTemplates
+              ? [
+                  {
+                    id: "tmpl-1",
+                    orgId: "org-1",
+                    ownerLevel: "organization",
+                    ownerId: "org-1",
+                    creatorId: "user-1",
+                  },
+                ]
+              : [],
+      }),
+    }),
+  });
   return {
-    db: { transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx) },
+    db: {
+      select,
+      transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+    },
     agentBuilderPool: { end: vi.fn() },
   };
 });
+
+// cinatra#2485 C: the scope guard probes LIVE org membership, then resolves the
+// run owner's actor. Both stubbed to "plain member of the run's org" — this
+// suite proves TRANSITION mechanics, not the scope rule.
+vi.mock("@/lib/auth-session", () => ({
+  resolveOrgRoleForUser: async () => "member",
+}));
+
+vi.mock("@/lib/authz/build-actor-context-from-run", () => ({
+  buildActorContextFromRun: async (run: {
+    id: string;
+    runBy: string | null;
+    orgId: string;
+  }) => ({
+    principalType: "HumanUser",
+    principalId: run.runBy ?? "user-1",
+    organizationId: run.orgId,
+    teamIds: [],
+    projectIds: [],
+    projectGrants: [],
+    orgRole: "member",
+    platformRole: "member",
+    authSource: "worker",
+    policyVersion: "v2",
+  }),
+}));
 
 vi.mock("@cinatra-ai/a2a", async (orig) => {
   const actual = await orig<typeof import("@cinatra-ai/a2a")>();

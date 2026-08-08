@@ -56,3 +56,30 @@ export async function markTriggerReleased(runId: string): Promise<void> {
   await redis.set(REDIS_KEY(runId), "1", "EX", TTL_SECONDS);
   await markTriggerReleasedInDb(runId);
 }
+
+/**
+ * Clears the Redis fast-path flag for `runId` (cinatra#2485 C).
+ *
+ * COMPENSATION ONLY. Deleting the `agent_run_triggers` row removes the DURABLE
+ * half of the gate (`released_at`), but the Redis key outlives it for up to the
+ * 7-day TTL — and `isTriggerReleased` checks Redis FIRST, so a run whose trigger
+ * was rolled back would still read as "already released". A later re-trigger on
+ * that run would then skip its wait and fire immediately instead of on schedule.
+ *
+ * Idempotent, and deliberately best-effort: the DB row is the source of truth,
+ * and the caller is already unwinding a refused operation, so a Redis outage
+ * must not mask the refusal it is compensating for.
+ */
+export async function clearTriggerReleased(runId: string): Promise<void> {
+  try {
+    const redis = await getRedisConnection();
+    await redis.del(REDIS_KEY(runId));
+  } catch (err) {
+    console.warn(
+      "[trigger-gate] failed to clear the released flag for run",
+      runId,
+      "— the DB row is authoritative, but the cached flag may survive its TTL:",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}

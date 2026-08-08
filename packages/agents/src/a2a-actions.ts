@@ -404,7 +404,12 @@ export async function sendAgentBuilderMessage(input: {
               : await resolveRunCreationAuthority(runInput.orgId, {
                   userId: session.user.id,
                 });
-          return createAgentRun(runInput, authority);
+          // cinatra#2485 C: the UI A2A action's in-process executor derives
+          // `runBy` from the frame, but a runInput without one would otherwise
+          // fall through to the installation-principal path. The frame actor
+          // was asserted identical to the dispatching session above, so it is
+          // the right scope actor for this dispatch.
+          return createAgentRun({ ...runInput, scopeActor: actorContext }, authority);
         },
       });
       return client.sendMessage({ json: inputParams });

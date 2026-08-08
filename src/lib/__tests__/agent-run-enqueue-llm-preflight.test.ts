@@ -4,6 +4,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const enqueueBackgroundJob = vi.fn(async () => "job-1");
+vi.mock("@cinatra-ai/agents/store", () => ({
+  // cinatra#2485 C: the shared run-scope guard rides `./store`'s surface;
+  // `readAgentRunById` is the chokepoint's archived-org fallback read.
+  readAgentRunById: vi.fn(async () => null),
+  assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
+  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
+}));
+
 vi.mock("@/lib/background-jobs", () => ({
   BACKGROUND_JOB_NAMES: { AGENT_BUILDER_EXECUTION: "AGENT_BUILDER_EXECUTION" },
   enqueueBackgroundJob: (...a: unknown[]) => enqueueBackgroundJob(...(a as [])),

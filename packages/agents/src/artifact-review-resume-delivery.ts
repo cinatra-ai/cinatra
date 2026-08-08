@@ -1,5 +1,12 @@
 import "server-only";
 import { mintAgentRunExecutionAuthority } from "@/lib/org-write/agent-run-authority-mint";
+/** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
+ *  the CODE, not `instanceof`, so a refusal is recognized across bundle /
+ *  module-mock boundaries (the site-level pattern `project-dispatch.ts` uses
+ *  for OBO_CEILING_DISJOINT_CODE). */
+const AGENT_TEMPLATE_SCOPE_DENIED_CODE = "AGENT_TEMPLATE_SCOPE_DENIED";
+const isScopeDenial = (err: unknown): err is { reason: string } =>
+  (err as { code?: string } | null)?.code === AGENT_TEMPLATE_SCOPE_DENIED_CODE;
 
 // ---------------------------------------------------------------------------
 // Artifact-review RESUME-DELIVERY worker (cinatra#1796, epic #1620 S13).
@@ -68,13 +75,22 @@ export type ResumeDeliveryOutcome =
   | "retryable"
   /** markResumeIntentDelivered lost its lease race (a re-claim already owns the
    *  row) — no re-send, no double-mark. */
-  | "lease-lost";
+  | "lease-lost"
+  /** cinatra#2485 C: the agent's install scope no longer authorizes this run's
+   *  principal, so the resume was NOT sent. TERMINAL for the intent (marked
+   *  delivered): the decision will not change on the next tick, and leaving it
+   *  pending would re-attempt a refused resume forever. */
+  | "refused-out-of-scope";
 
 export interface ResumeSweepSummary {
   attempted: number;
   delivered: number;
   alreadyAdvanced: number;
   retryable: number;
+  /** cinatra#2485 C — intents closed WITHOUT sending because the run fell out
+   *  of the agent's install scope. Counted separately from `failed`: it is a
+   *  decision, not an error. */
+  refusedOutOfScope: number;
   failed: number;
 }
 
@@ -192,6 +208,99 @@ export async function deliverArtifactReviewResumeIntent(
   }
   const wayflowUrl = resolveWayflowUrl(template.packageName);
 
+  // cinatra#2485 C — install-scope recheck at DELIVERY time. This sweeper
+  // resumes a paused run from an intent persisted at gate time, so its
+  // authorization is as old as that intent: a team-scoped run can pause, its
+  // owner lose the owning team, and this delivery resume the run days later.
+  // The resume drives execution through a DIRECT sendTask (no enqueue, no
+  // status transition), so it reaches neither layer-2 chokepoint — the check
+  // has to live here. There is no acting human on a sweeper tick, so the run's
+  // own persisted principal is the subject, resolved LIVE.
+  //
+  // A refusal is TERMINAL for the intent (never retried): the scope decision
+  // will not change on the next tick, and leaving it pending would re-attempt
+  // a refused resume forever. An UNREADABLE check keeps the intent pending for
+  // a later cycle, matching this function's existing "retryable" posture for
+  // transient faults.
+  {
+    const { assertAgentRunDispatchAuthorized } = await import(
+      "./agent-run-serde"
+    );
+    try {
+      await assertAgentRunDispatchAuthorized({ runId: run.id, stage: "dispatch" });
+    } catch (err) {
+      if (isScopeDenial(err)) {
+        console.warn(
+          `[artifact-review-resume] gate=${gateId} run=${run.id} refused — the agent's ` +
+            `scope no longer authorizes this run (${err.reason}); not resuming`,
+        );
+        // Land the RUN terminally, mirroring the worker's fire-time denial
+        // (`execution.ts`: queued→failed with this same reason string). Closing
+        // only the intent would strand the run in `pending_approval` FOREVER:
+        // the intent is the sole thing that would ever resume it, this refusal
+        // is terminal for that intent, and no other actor polls a paused gate.
+        // A descoped run must still be able to land its own failure — the
+        // `→failed` edge is deliberately un-gated for exactly this reason
+        // (run-transition.ts §2b) — so this transition cannot itself be refused.
+        //
+        // Ordering: FAIL FIRST, then close the intent — and close it ONLY if the
+        // run actually reached a terminal disposition. The intent is the sole
+        // thing that would ever resume this run, so closing it after a TRANSIENT
+        // transition failure (a DB blip, an authority mint fault) would strand
+        // the run in `pending_approval` with nothing left to retry. So a
+        // transient fault returns "retryable" instead: the lease lapses, the
+        // sweeper re-claims the intent, re-runs the check (which denies again)
+        // and re-attempts the transition — the same posture this function
+        // already takes for an UNREADABLE check.
+        //
+        // `stale_from_status` is the ONE benign failure: the CAS lost because
+        // another writer already moved the run OFF `pending_approval`, which is
+        // exactly the "already advanced" case that needs no failure stamped —
+        // so the intent is closed as usual.
+        //
+        // Dynamic import mirrors this file's existing discipline (`./execution`
+        // at the delivery step below): no new STATIC route-graph weight.
+        const { transitionRunStatus } = await import("./run-transition");
+        try {
+          await transitionRunStatus(
+            run.id,
+            "pending_approval",
+            "failed",
+            {
+              error:
+                `run refused: the agent's scope no longer authorizes this run (${err.reason})`,
+            },
+            mintAgentRunExecutionAuthority(run.orgId),
+          );
+        } catch (tErr: unknown) {
+          // Branch on the CODE, not `instanceof` — the error class arrives
+          // through a dynamic import, so identity is not guaranteed.
+          if ((tErr as { code?: string } | null)?.code !== "stale_from_status") {
+            console.warn(
+              `[artifact-review-resume] gate=${gateId} run=${run.id} refused, but the terminal ` +
+                `transition did not land — LEAVING the intent pending so a later cycle retries ` +
+                `rather than stranding the run: ` +
+                `${tErr instanceof Error ? tErr.message : String(tErr)}`,
+            );
+            return "retryable";
+          }
+          console.warn(
+            `[artifact-review-resume] gate=${gateId} run=${run.id} refused; the run had already ` +
+              `advanced off pending_approval, so no failure was stamped`,
+          );
+        }
+        const ok = await markResumeIntentDelivered(gateId, leaseToken);
+        return ok ? "refused-out-of-scope" : "lease-lost";
+      }
+      console.warn(
+        `[artifact-review-resume] gate=${gateId} run=${run.id} scope check unreadable — ` +
+          `leaving pending for a later cycle: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+      return "retryable";
+    }
+  }
+
   // Deliver the typed decision verbatim as the WayFlow resume message. Dynamic
   // import mirrors review-task-actions.ts (circular-dep avoidance:
   // agents ← @cinatra-ai/a2a ← mcp-server ← agent-builder).
@@ -262,6 +371,7 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
     delivered: 0,
     alreadyAdvanced: 0,
     retryable: 0,
+    refusedOutOfScope: 0,
     failed: 0,
   };
   // The lease must comfortably EXCEED the time to process the WHOLE claimed batch
@@ -293,6 +403,7 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
       const outcome = await deliverArtifactReviewResumeIntent(intent);
       if (outcome === "delivered") summary.delivered += 1;
       else if (outcome === "already-advanced") summary.alreadyAdvanced += 1;
+      else if (outcome === "refused-out-of-scope") summary.refusedOutOfScope += 1;
       else summary.retryable += 1; // "retryable" | "lease-lost" both leave the row for another owner/cycle
     } catch (err) {
       summary.failed += 1;
@@ -302,5 +413,4 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
       );
     }
   }
-  return summary;
-}
+  return summary;}

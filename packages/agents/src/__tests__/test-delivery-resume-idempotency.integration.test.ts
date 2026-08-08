@@ -34,6 +34,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
+import { getOrCreateByUniqueKey } from "./__fixtures__/integration-fixture-helpers";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import {
   setTestDeliverySendPort,
@@ -50,7 +51,19 @@ const hasDb =
 // The ORM (packages/agents/src/schema.ts) qualifies every table under the schema
 // named by SUPABASE_SCHEMA (default "cinatra"). Provision that exact schema.
 const SCHEMA = process.env.SUPABASE_SCHEMA?.trim() || "cinatra";
-const ORG = "org-1947-idem";
+// The gate-owning agent package below is a GLOBALLY UNIQUE `agent_templates.
+// package_name`, and the sibling suite
+// `test-delivery-send-authz-relocation.integration.test.ts` needs a template
+// under that SAME name (the send-authz gate keys on the binding-ID owner
+// package, so neither suite can substitute its own). One row therefore serves
+// both suites — so both anchor it to the SAME fixture org. cinatra#2485 C makes
+// a template's install scope its run authority, and a template that two orgs
+// took turns claiming would refuse whichever suite ran second. Sharing the org
+// is the honest model for a shared row; it is NOT a fixture that reassigns
+// ownership (the store deliberately LOCKS owner_level/owner_id once
+// `first_run_at` is set — see `updateAgentTemplate`).
+const SHARED_TEST_DELIVERY_ORG = "org-test-delivery-fixture";
+const ORG = SHARED_TEST_DELIVERY_ORG;
 // cinatra#1939 wave 2 / #1940 P3: createAgentRun now runs under guardOrgMutation
 // and REQUIRES a host-minted authority; the guard also reads the org's
 // lifecycle from `public."organization"` — this DB-gated suite needs an
@@ -136,7 +149,14 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!hasDb) return;
   setTestDeliverySendPort(null);
-  await pg.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]).catch(() => {});
+  await pg.query(`DELETE FROM public."member" WHERE "userId" = ANY($1)`, [seededUsers]).catch(() => {});
+  await pg.query(`DELETE FROM public."user" WHERE id = ANY($1)`, [seededUsers]).catch(() => {});
+  // The SHARED fixture org is deliberately NOT deleted: the sibling suite anchors
+  // the same shared template to it, and tearing it down would leave that template
+  // pointing at a vanished org. Same permanently-seeded convention as the
+  // `org-test` fixture in store-org-required.integration.test.ts ("the row is
+  // never deleted so no suite can pull it out from under another"). The
+  // per-test users above ARE suite-owned, so those are cleaned up.
   await pg.end();
 });
 
@@ -147,24 +167,92 @@ beforeEach(() => {
   reconcileOutcome = "unknown";
 });
 
+// cinatra#2485 C — the template's INSTALL SCOPE is what authorizes a run, so the
+// fixture agent is anchored to the shared fixture org (see
+// SHARED_TEST_DELIVERY_ORG). Whichever of the two suites runs first CREATES the
+// row already anchored; the second reuses it as-is.
 async function getOrCreateTemplate(packageName: string): Promise<string> {
-  const existing = await store.readAgentTemplateByPackageName(packageName);
-  if (existing) return existing.id;
-  const templateId = `t_${randomUUID()}`;
-  await store.createAgentTemplate({
-    id: templateId,
-    name: `td-idem-${randomUUID().slice(0, 8)}`,
-    sourceNl: "test",
-    compiledPlan: [],
-    inputSchema: {},
-    approvalPolicy: { steps: [] },
-    packageName,
+  // Same unique-key race as the sibling suite
+  // (test-delivery-send-authz-relocation.integration.test.ts): both resolve THIS
+  // row by its globally-unique `package_name`, so the create must tolerate a
+  // concurrent winner instead of erroring out of fixture setup.
+  const row = await getOrCreateByUniqueKey<{ id: string }>({
+    read: () => store.readAgentTemplateByPackageName(packageName),
+    create: () =>
+      store.createAgentTemplate({
+        id: `t_${randomUUID()}`,
+        name: `td-idem-${randomUUID().slice(0, 8)}`,
+        sourceNl: "test",
+        compiledPlan: [],
+        inputSchema: {},
+        approvalPolicy: { steps: [] },
+        packageName,
+        orgId: ORG,
+      }),
   });
+  const templateId = row.id;
+  // REPAIR-ONLY, and ONLY for a row that is scope-less on ALL THREE columns —
+  // the exact shape `withDeterminateInstallScope` stamps at write time. A
+  // per-column COALESCE would be WRONG: it would silently adopt a PARTIAL tuple
+  // (`owner_level='team'` with a null org, or `owner_id=''`) into a valid-looking
+  // org anchor and could admit an actor the real scope never authorized. It also
+  // never moves an already-anchored template — reassigning ownership is exactly
+  // what the store forbids after first run, and a fixture must not model
+  // something production refuses. The read-back below turns every other shape
+  // (partial, or anchored to a foreign org) into a LOUD fixture failure.
+  await pg.query(
+    `UPDATE "${SCHEMA}".agent_templates
+        SET org_id = $2, owner_level = 'organization', owner_id = $2
+      WHERE id = $1
+        AND org_id IS NULL AND owner_level IS NULL AND owner_id IS NULL`,
+    [templateId, ORG],
+  );
+  const { rows: anchorRows } = await pg.query<{
+    org_id: string | null; owner_level: string | null; owner_id: string | null;
+  }>(
+    `SELECT org_id, owner_level, owner_id FROM "${SCHEMA}".agent_templates WHERE id = $1`,
+    [templateId],
+  );
+  const anchor = anchorRows[0];
+  if (
+    !anchor || anchor.org_id !== ORG
+    || anchor.owner_level !== "organization" || anchor.owner_id !== ORG
+  ) {
+    throw new Error(
+      `fixture: the shared template for ${packageName} carries a foreign or partial `
+      + `install scope ${JSON.stringify(anchor)} — expected org-scoped to ${ORG}. `
+      + `Refusing to reassign an owned template; clear the row or use a clean schema.`,
+    );
+  }
   return templateId;
+}
+
+// cinatra#2485 C — the run-scope gate re-resolves a run's `run_by` LIVE against
+// better-auth (`resolveOrgRoleForUser`), so a synthetic run owner with no
+// membership row is refused as cross-org. Every run below carries a fresh random
+// human, so each one is seeded as a REAL member of ORG first (the pattern
+// `lifecycle-repair-dispatch.integration.test.ts` documents: "the dispatch-time
+// principal gate needs a live-resolvable org role"). `public."user"` /
+// `public."member"` are better-auth tables and live UNQUALIFIED in `public`.
+const seededUsers: string[] = [];
+
+async function seedMember(userId: string): Promise<void> {
+  await pg.query(
+    `INSERT INTO public."user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+     VALUES ($1, $1, $2, false, now(), now()) ON CONFLICT (id) DO NOTHING`,
+    [userId, `${userId}@1947-idem.test`],
+  );
+  await pg.query(
+    `INSERT INTO public."member" (id, "organizationId", "userId", role, "createdAt")
+     VALUES ($1, $2, $3, 'member', now()) ON CONFLICT (id) DO NOTHING`,
+    [`m-1947-${userId}`, ORG, userId],
+  );
+  seededUsers.push(userId);
 }
 
 async function makeRun(userId: string): Promise<{ runId: string; campaignId: string }> {
   const templateId = await getOrCreateTemplate(GATE_OWNER_PKG);
+  await seedMember(userId);
   const campaignId = `camp_${randomUUID()}`;
   const run = await store.createAgentRun({
     id: `r_${randomUUID()}`,

@@ -102,11 +102,62 @@ vi.mock("../db", async () => {
       return inner.execute(q);
     },
   });
+  // cinatra#2485 C: the `→queued` dispatch edge asserts the run's install scope
+  // first; answer the guard's run + template reads.
+  const { agentRuns, agentTemplates } = await import("../schema");
+  const select = () => ({
+    from: (table: unknown) => ({
+      where: () => ({
+        limit: async () =>
+          table === agentRuns
+            ? [{ id: "run-1", templateId: "tmpl-1", orgId: "org-1", runBy: "user-1" }]
+            : table === agentTemplates
+              ? [
+                  {
+                    id: "tmpl-1",
+                    orgId: "org-1",
+                    ownerLevel: "organization",
+                    ownerId: "org-1",
+                    creatorId: "user-1",
+                  },
+                ]
+              : [],
+      }),
+    }),
+  });
   return {
-    db: { transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx) },
+    db: {
+      select,
+      transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+    },
     agentBuilderPool: { end: vi.fn() },
   };
 });
+
+// cinatra#2485 C — see transition-run-status.test.ts: membership probe +
+// run-owner actor both stubbed to a plain org member.
+vi.mock("@/lib/auth-session", () => ({
+  resolveOrgRoleForUser: async () => "member",
+}));
+
+vi.mock("@/lib/authz/build-actor-context-from-run", () => ({
+  buildActorContextFromRun: async (run: {
+    id: string;
+    runBy: string | null;
+    orgId: string;
+  }) => ({
+    principalType: "HumanUser",
+    principalId: run.runBy ?? "user-1",
+    organizationId: run.orgId,
+    teamIds: [],
+    projectIds: [],
+    projectGrants: [],
+    orgRole: "member",
+    platformRole: "member",
+    authSource: "worker",
+    policyVersion: "v2",
+  }),
+}));
 
 vi.mock("@cinatra-ai/a2a", async (orig) => {
   const actual = await orig<typeof import("@cinatra-ai/a2a")>();
