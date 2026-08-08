@@ -538,10 +538,12 @@ export function stripCinatraEndNodeOutputMessages(
 const MATERIALIZATION_ERROR_MAX_CHARS = 2_000;
 
 /**
- * cinatra#2486 — the operator-facing reason a terminal-success WayFlow run is
- * landed as `failed` rather than `completed`: which declared outputs failed to
- * materialize, and why. Module-private: the honesty suite asserts it through
- * the persisted `error`, which is the surface that actually matters.
+ * cinatra#2486 — the operator-facing reason a terminal-success run is landed as
+ * `failed` rather than `completed`: which declared outputs failed to
+ * materialize, and why. Shared by BOTH terminal paths (the WayFlow branch below
+ * and the external-A2A branch, cinatra#2497) so a failed run reads identically
+ * whichever runtime produced it. Module-private: the honesty suites assert it
+ * through the persisted `error`, which is the surface that actually matters.
  */
 function describeMaterializationFailure(
   failures: ReadonlyArray<Record<string, unknown>>,
@@ -561,6 +563,267 @@ function describeMaterializationFailure(
   return message.length > MATERIALIZATION_ERROR_MAX_CHARS
     ? `${message.slice(0, MATERIALIZATION_ERROR_MAX_CHARS - 1)}…`
     : message;
+}
+
+/**
+ * cinatra#2497 — the ONLY A2A task state that means the remote run succeeded.
+ *
+ * Deliberately an ALLOW-list. A stream ending is not evidence of anything: a
+ * peer reporting `failed`/`canceled`/`rejected` closes its stream normally, and
+ * so does one that stops mid-flight on `submitted`/`working`/`input-required`.
+ * Materializing on any of those would either write artifacts for a run that did
+ * not succeed or fail a run for outputs the remote had not produced yet, so the
+ * success-only write requires a POSITIVELY observed `completed`.
+ */
+const EXTERNAL_A2A_SUCCESS_STATE = "completed";
+
+/**
+ * cinatra#2497 — the external-A2A terminal path's materialization-honesty gate,
+ * the sibling of the WayFlow gate #2496 established in `handleWayflowTaskState`.
+ *
+ * Before this, a clean external proxy stream transitioned `running -> completed`
+ * with NO artifact materialization at all (an acknowledged v1 deferral), so an
+ * external run whose package declares artifact bindings reported success having
+ * produced nothing — the same silent-success class #2486 closed for the primary
+ * path. This runs the SAME contract: materialize the declared bindings, and any
+ * failed outcome lands the run `failed` carrying the reason in `agent_runs.error`
+ * plus the full per-output outcome list in `stepResults`.
+ *
+ * ONE deliberate divergence from #2496's posture, and it is NARROW — a wholesale
+ * binding-resolution outcome classified `bindingResolution: "package-not-found"`
+ * is not fatal here, and is not persisted:
+ *
+ *   An external template's `package_name` is minted by `upsertExternalAgentTemplate`
+ *   as `@{connectorSlug}/{remoteAgentId}`. It resolves in the registry EXACTLY
+ *   when the remote peer is a real published cinatra agent package (the
+ *   federated-cinatra case) — which is precisely the case where its declared
+ *   bindings are authoritative and this gate is fully load-bearing. A DEFINITIVE
+ *   404 therefore proves the opposite: an ordinary third-party A2A peer with no
+ *   cinatra package, and so no binding it could owe. Failing closed on that — the
+ *   WayFlow posture, correct there because every WayFlow template IS a published
+ *   package — would fail every non-cinatra external run, the exact opposite of
+ *   "runs without declared bindings complete exactly as today". So it is logged
+ *   and dropped: it is not evidence of an undelivered artifact, and persisting it
+ *   would stamp a permanent false-alarm outcome on every external run's
+ *   `stepResults` (which `stepResultsToArtifact` renders to A2A callers).
+ *
+ *   `bindingResolution: "unavailable"` — a registry outage, a 5xx, an auth or
+ *   config failure, a failed template read — is EVIDENCE-FREE and stays FATAL,
+ *   exactly as on the WayFlow path. Treating it as "declares no bindings" would
+ *   silently reintroduce #2486's Trigger A for a federated cinatra peer whose
+ *   package really does declare bindings. The discriminator is the materializer's
+ *   own positive classification, never the error text or the synthetic outputId.
+ *
+ * Every OTHER `ok:false` outcome — per-binding resolution/validation/write
+ * failures, `(binding-validation)`, and the defensive `(materializer)` outcome —
+ * IS fatal, exactly as on the WayFlow path. A MIXED batch fails too: a partially
+ * materialized run is not a success.
+ *
+ * SUCCESS-ONLY by construction: the materialization pass runs ONLY for a stream
+ * that both completed cleanly AND positively announced `completed`. Every other
+ * end — a remote `failed`/`canceled`/`rejected`, a peer that stopped on
+ * `working`, a timeout, a broken generator — skips it entirely, because a run
+ * that did not succeed owes no artifact and must not have one written for it,
+ * nor be failed for outputs the remote never claimed to have produced. (Those
+ * runs' VERDICTS are left exactly as they are today; remote-state and
+ * stream-completion honesty are separate contracts from artifact honesty,
+ * tracked as residuals on #2497 rather than smuggled in here.)
+ *
+ * Terminal-verdict OWNERSHIP: taking the SSE proxy's `onCleanCompletion` hook
+ * suppresses its RUN_FINISHED, so the terminal AG-UI event is emitted HERE —
+ * RUN_FINISHED only after the `completed` CAS is won, or RUN_ERROR instead,
+ * never both. Both fire only after the CAS, so a concurrent stop/cancel still
+ * owns the verdict and no losing event is emitted.
+ *
+ * Exported for the honesty suite; the ONLY production call site is the external
+ * dispatch branch in `runAgentBuilderExecutionJobInner`.
+ */
+export async function finalizeExternalA2ARun(args: {
+  authority: OrgWriteAuthority | undefined;
+  runId: string;
+  run: AgentRunRecord;
+  /** The remote task id this run proxied — mirrors `a2aTaskId` in the WayFlow payload. */
+  externalTaskId: string;
+  /**
+   * The stream's merged artifact DATA parts — the external analogue of the
+   * WayFlow EndNode sentinel. `null` when the stream carried no data part, and
+   * `null` when it did not complete cleanly at all.
+   */
+  structuredOutputs: Record<string, unknown> | null;
+  /**
+   * The LAST task state the remote announced. A clean stream end is not evidence
+   * of success, so only a positively observed `completed` admits the
+   * success-only materialization pass (see the SUCCESS-ONLY note above).
+   */
+  lastRemoteState: string;
+  /**
+   * False when the proxy ended on a timeout / stream error. Two consequences:
+   * the success-only materialization pass is skipped (a broken stream produced
+   * no verdict-worthy success, and its DB verdict is deliberately unchanged from
+   * before #2497), and the proxy — which has ALREADY put RUN_ERROR on the panel
+   * — keeps terminal AG-UI ownership, so this function emits NO terminal event
+   * and can never double-announce a run's end.
+   */
+  streamCompletedCleanly: boolean;
+}): Promise<void> {
+  const { runId, run, externalTaskId, structuredOutputs, authority } = args;
+
+  const remoteSucceeded =
+    args.streamCompletedCleanly &&
+    args.lastRemoteState.toLowerCase() === EXTERNAL_A2A_SUCCESS_STATE;
+
+  // Dynamic import keeps the host artifact stack out of this module's static
+  // graph (same posture as the WayFlow branch and the nango-system import).
+  // `materializeRunArtifacts` never throws by contract; the catch is
+  // defense-in-depth and its synthetic outcome is fatal, as on the WayFlow path.
+  let artifactMaterializations: Array<Record<string, unknown>> = [];
+  if (!remoteSucceeded) {
+    console.warn(
+      `[external-a2a] run=${runId} did not reach a positively observed remote "completed" (clean stream: ${args.streamCompletedCleanly}, last remote state: "${args.lastRemoteState}") — skipping artifact materialization (a run that did not succeed owes no artifact)`,
+    );
+  } else {
+    try {
+      const { materializeRunArtifacts } = await import(
+        "@/lib/artifacts/run-artifact-materializer"
+      );
+      artifactMaterializations = (await materializeRunArtifacts({
+        runId,
+        orgId: run.orgId,
+        templateId: run.templateId,
+        packageVersion: run.packageVersion,
+        createdBy: run.runBy,
+        endNodeOutputs: structuredOutputs,
+      })) as unknown as Array<Record<string, unknown>>;
+    } catch (err) {
+      console.warn(
+        `[artifact-materializer] run=${runId} (external-a2a) materialization pass threw (the run fails honestly):`,
+        err instanceof Error ? err.message : err,
+      );
+      artifactMaterializations = [
+        {
+          ok: false,
+          outputId: "(materializer)",
+          nodeId: null,
+          extension: null,
+          error: `materialization pass failed: ${err instanceof Error ? err.message : String(err)}`,
+        },
+      ];
+    }
+  }
+
+  // Partition: a wholesale binding-resolution failure the materializer
+  // POSITIVELY classified as `package-not-found` is the "this peer has no cinatra
+  // package" signal on this path (rationale above) — logged, dropped, never
+  // fatal. Every other `ok:false`, including `unavailable`, is recorded AND
+  // load-bearing.
+  const recordedOutcomes: Array<Record<string, unknown>> = [];
+  for (const outcome of artifactMaterializations) {
+    if (outcome.ok !== true && outcome.bindingResolution === "package-not-found") {
+      console.warn(
+        `[external-a2a] run=${runId} template package is not published (treated as "declares no bindings"; no artifact materialized): ${String(outcome.error)}`,
+      );
+      continue;
+    }
+    if (outcome.ok !== true) {
+      console.warn(
+        `[artifact-materializer] run=${runId} (external-a2a) output=${String(outcome.outputId)} extension=${String(outcome.extension ?? "?")} failed: ${String(outcome.error)}`,
+      );
+    }
+    recordedOutcomes.push(outcome);
+  }
+  const materializationFailures = recordedOutcomes.filter((outcome) => outcome.ok !== true);
+
+  // The ONE terminal stepResults payload — identical on the success and the
+  // failure edge, so a failed run keeps every bit of evidence a green one would
+  // have carried. ABSENT when there is nothing to record, which is the steady
+  // state for a non-cinatra external peer: that run's terminal write stays
+  // byte-identical to today's (`undefined` meta).
+  const terminalStepResults =
+    recordedOutcomes.length > 0
+      ? [
+          {
+            kind: "external_a2a_response",
+            a2aTaskId: externalTaskId,
+            ...(structuredOutputs !== null ? { output_data: structuredOutputs } : {}),
+            artifact_materializations: recordedOutcomes,
+          },
+        ]
+      : undefined;
+
+  if (materializationFailures.length > 0) {
+    const error = describeMaterializationFailure(
+      materializationFailures,
+      recordedOutcomes.length,
+    );
+    let failedTransitioned = true;
+    await transitionRunStatus(
+      runId,
+      "running",
+      "failed",
+      { error, ...(terminalStepResults ? { stepResults: terminalStepResults } : {}) },
+      authority,
+    ).catch((err) => {
+      // stale_from_status: a concurrent stop/cancel already moved the row;
+      // skip RUN_ERROR so the UI reflects the DB winner, not us.
+      if (err instanceof RunTransitionError && err.code === "stale_from_status") {
+        failedTransitioned = false;
+        console.log(
+          `[external-a2a] run ${runId} no longer running — skipping running→failed transition`,
+        );
+        return;
+      }
+      throw err;
+    });
+    // Terminal AG-UI ownership is ours ONLY on the clean-stream path; on a
+    // broken stream the proxy already published its own RUN_ERROR and a second
+    // one would double-announce the run's end. (Unreachable today — a broken
+    // stream never materializes — but the gate keeps the two events one-to-one
+    // whatever the materialization path later becomes.)
+    if (!failedTransitioned || !args.streamCompletedCleanly) return;
+    await Promise.resolve(
+      publishAgUiEvent(runId, {
+        type: "RUN_ERROR",
+        threadId: runId,
+        runId,
+        message: error,
+        timestamp: Date.now(),
+      } as never),
+    ).catch(() => undefined);
+    return;
+  }
+
+  // Only swallow stale_from_status (benign race where a concurrent cancel has
+  // already moved the run off "running"). illegal_transition or any other error
+  // must surface so future refactor bugs are caught at test/CI time.
+  let transitioned = true;
+  await transitionRunStatus(
+    runId,
+    "running",
+    "completed",
+    terminalStepResults ? { stepResults: terminalStepResults } : undefined,
+    authority,
+  ).catch((err) => {
+    if (err instanceof RunTransitionError && err.code === "stale_from_status") {
+      transitioned = false;
+      console.log(
+        `[external-a2a] run ${runId} no longer running — skipping running→completed transition`,
+      );
+      return;
+    }
+    throw err;
+  });
+  if (!transitioned || !args.streamCompletedCleanly) return;
+  // The terminal AG-UI signal the proxy deferred to us — emitted only now that
+  // the `completed` CAS is won and the materialization gate passed.
+  await Promise.resolve(
+    publishAgUiEvent(runId, {
+      type: "RUN_FINISHED",
+      threadId: runId,
+      runId,
+      status: "completed",
+      timestamp: Date.now(),
+    } as never),
+  ).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -2215,30 +2478,51 @@ async function runAgentBuilderExecutionJobInner(
       yield* stream;
     }
 
+    // cinatra#2497 — the stream's clean-completion signal + structured declared
+    // outputs. The outputs are the external analogue of the WayFlow EndNode
+    // sentinel: what the artifact-materialization gate below resolves its
+    // bindings against. Taking the hook also transfers the terminal AG-UI event
+    // to this branch (a clean STREAM is not yet a successful RUN).
+    let externalStreamCompletedCleanly = false;
+    let externalStructuredOutputs: Record<string, unknown> | null = null;
+    let externalLastRemoteState = initialStatus;
+
     try {
       await startExternalSseProxyFromStream(resumeStream(), initialStatus, runId, {
         publishAgUiEvent: (event) => publishAgUiEvent(runId, event as never),
+        onCleanCompletion: ({ outputs, lastRemoteState }) => {
+          externalStreamCompletedCleanly = true;
+          externalStructuredOutputs = outputs;
+          externalLastRemoteState = lastRemoteState;
+        },
       });
-      // Only swallow stale_from_status (benign race where a concurrent
-      // cancel has already moved the run off "running"). illegal_transition or
-      // any other error must surface so future refactor bugs (typos, wrong
-      // "from" argument) are caught at test/CI time, not silently masked.
-      await transitionRunStatus(runId, "running", "completed", undefined, executionAuthority).catch((err) => {
-        if (err instanceof RunTransitionError && err.code === "stale_from_status") {
-          console.log(
-            `[external-a2a] run ${runId} no longer running — skipping running→completed transition`,
-          );
-          return;
-        }
-        throw err;
+      // cinatra#2497 — materialization-honesty gate + the ONE terminal
+      // transition. Replaces the bare `running -> completed` that materialized
+      // nothing at all. `stale_from_status` handling lives inside the helper;
+      // any other transition error still surfaces to the catch below.
+      await finalizeExternalA2ARun({
+        authority: executionAuthority,
+        runId,
+        run,
+        externalTaskId,
+        structuredOutputs: externalStructuredOutputs,
+        lastRemoteState: externalLastRemoteState,
+        // A timeout / stream-error end resolves the proxy WITHOUT the hook and
+        // has already put RUN_ERROR on the panel — that run materializes nothing
+        // and its terminal event is not ours to emit (its DB verdict is
+        // unchanged from before #2497).
+        streamCompletedCleanly: externalStreamCompletedCleanly,
       });
     } catch (err) {
-      // Stream error OR an unexpected transition error from the completed path.
+      // Stream error OR an unexpected transition error from the finalize path.
       // Apply the same discrimination on the failed-branch transition.
+      const failure = err instanceof Error ? err.message : String(err);
+      let failedTransitioned = true;
       await transitionRunStatus(runId, "running", "failed", {
-        error: err instanceof Error ? err.message : String(err),
+        error: failure,
       }, executionAuthority).catch((e) => {
         if (e instanceof RunTransitionError && e.code === "stale_from_status") {
+          failedTransitioned = false;
           console.log(
             `[external-a2a] run ${runId} no longer running — skipping running→failed transition`,
           );
@@ -2246,6 +2530,21 @@ async function runAgentBuilderExecutionJobInner(
         }
         throw e;
       });
+      // cinatra#2497: on a CLEAN stream the proxy surrendered the terminal AG-UI
+      // event to this branch and published nothing itself, so a finalize-path
+      // throw would otherwise leave the panel spinning on a failed run. (On the
+      // non-clean path the proxy already published RUN_ERROR — no duplicate.)
+      if (failedTransitioned && externalStreamCompletedCleanly) {
+        await Promise.resolve(
+          publishAgUiEvent(runId, {
+            type: "RUN_ERROR",
+            threadId: runId,
+            runId,
+            message: failure,
+            timestamp: Date.now(),
+          } as never),
+        ).catch(() => undefined);
+      }
     }
     return;
   }

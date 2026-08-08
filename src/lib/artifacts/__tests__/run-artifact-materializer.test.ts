@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   poolQueryMock,
   getAgentPackageMock,
+  getPublishedExtensionSummaryMock,
   listArtifactsMock,
   registerAllObjectTypesMock,
   createSemanticArtifactMock,
@@ -20,6 +21,7 @@ const {
 } = vi.hoisted(() => ({
   poolQueryMock: vi.fn(),
   getAgentPackageMock: vi.fn(),
+  getPublishedExtensionSummaryMock: vi.fn(),
   listArtifactsMock: vi.fn(),
   registerAllObjectTypesMock: vi.fn(),
   resolveBoundArtifactTargetMock: vi.fn(),
@@ -46,6 +48,9 @@ vi.mock("@/lib/postgres-schema-init", () => ({
 }));
 vi.mock("@cinatra-ai/registries", () => ({
   getAgentPackage: getAgentPackageMock,
+  // cinatra#2497: the NAME-level, metadata-only absence probe the wholesale
+  // failure classifier runs to confirm a 404 really means "no such package".
+  getPublishedExtensionSummary: getPublishedExtensionSummaryMock,
 }));
 // getAgentPackage now requires an explicit VerdaccioConfig (cinatra#1454); the
 // materializer loads it via this host wrapper. The mocked getAgentPackage
@@ -161,6 +166,12 @@ function artifactDef(mimes: string[] = ["text/markdown", "application/json"]) {
     type: `${EXT}:artifact`,
     isArtifact: { accepts: { file: { mimeTypes: mimes } } },
   };
+}
+
+/** A pacote-shaped registry 404 (`code`/`statusCode`), the only 404 shape the
+ *  wholesale-failure classifier recognises. */
+function notFoundError(message: string): Error {
+  return Object.assign(new Error(message), { code: "E404", statusCode: 404 });
 }
 
 const BASE_INPUT = {
@@ -390,7 +401,7 @@ describe("materializeRunArtifacts", () => {
     expect(createSemanticArtifactMock).not.toHaveBeenCalled();
   });
 
-  it("records a visible failure when the sentinel surfaced no outputs", async () => {
+  it("records a visible failure when the run surfaced no structured declared outputs", async () => {
     const outcomes = await materializeRunArtifacts({
       ...BASE_INPUT,
       endNodeOutputs: null,
@@ -400,7 +411,9 @@ describe("materializeRunArtifacts", () => {
         ok: false,
         outputId: "draft",
         extension: EXT,
-        error: expect.stringContaining("sentinel absent"),
+        // cinatra#2497: the reason is now runtime-neutral — the same absence is
+        // reachable from the WayFlow sentinel AND the external-A2A data parts.
+        error: expect.stringContaining("no structured declared outputs"),
       }),
     ]);
   });
@@ -561,8 +574,69 @@ describe("materializeRunArtifacts", () => {
         ok: false,
         outputId: "(binding-resolution)",
         error: expect.stringContaining("registry unreachable"),
+        // cinatra#2497: evidence-free by default — callers must not read this
+        // as "the run declared no bindings".
+        bindingResolution: "unavailable",
       }),
     ]);
+  });
+
+  it("classifies a 404 CONFIRMED by the name-level probe as package-not-found (cinatra#2497)", async () => {
+    // pacote reports "this package does not exist" as E404/404, but
+    // getAgentPackage also extracts a tarball — so the 404 is only proof once a
+    // NAME-level, metadata-only packument read 404s too. That is the only
+    // wholesale failure the external-A2A terminal path may tolerate.
+    getAgentPackageMock.mockRejectedValue(notFoundError("404 Not Found - GET .../@peer%2fagent"));
+    getPublishedExtensionSummaryMock.mockRejectedValue(notFoundError("404 Not Found"));
+    const outcomes = await materializeRunArtifacts(BASE_INPUT);
+    expect(outcomes).toEqual([
+      expect.objectContaining({
+        ok: false,
+        outputId: "(binding-resolution)",
+        bindingResolution: "package-not-found",
+      }),
+    ]);
+    expect(getPublishedExtensionSummaryMock).toHaveBeenCalledWith(
+      { packageName: "@test/agent" },
+      expect.anything(),
+    );
+  });
+
+  it("a 404 from the TARBALL of a package that exists stays unavailable, never package-not-found", async () => {
+    // The regression this probe closes: a present package whose tarball 404s is
+    // indistinguishable from an absent one at the getAgentPackage boundary, and
+    // tolerating it would reopen the #2486 silent success.
+    getAgentPackageMock.mockRejectedValue(notFoundError("404 Not Found - GET .../agent-1.2.3.tgz"));
+    getPublishedExtensionSummaryMock.mockResolvedValue({
+      kind: "agent",
+      resolvedVersion: "1.2.3",
+      manifest: {},
+    });
+    const outcomes = await materializeRunArtifacts(BASE_INPUT);
+    expect(outcomes).toEqual([
+      expect.objectContaining({
+        ok: false,
+        outputId: "(binding-resolution)",
+        bindingResolution: "unavailable",
+      }),
+    ]);
+  });
+
+  it("keeps a 5xx / auth failure classified as unavailable, and never probes for it", async () => {
+    const serverError = Object.assign(new Error("503 Service Unavailable"), {
+      code: "E503",
+      statusCode: 503,
+    });
+    getAgentPackageMock.mockRejectedValue(serverError);
+    const outcomes = await materializeRunArtifacts(BASE_INPUT);
+    expect(outcomes).toEqual([
+      expect.objectContaining({
+        ok: false,
+        outputId: "(binding-resolution)",
+        bindingResolution: "unavailable",
+      }),
+    ]);
+    expect(getPublishedExtensionSummaryMock).not.toHaveBeenCalled();
   });
 
   it("continues past a failing binding to materialize the rest", async () => {

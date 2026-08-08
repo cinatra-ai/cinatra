@@ -51,11 +51,17 @@ import {
 //
 // Failure posture: `materializeRunArtifacts` NEVER throws. Every failure is a
 // per-output `ok:false` outcome the caller records into stepResults, and that
-// outcome is LOAD-BEARING (cinatra#2486): the WayFlow terminal branch lands the
-// run `failed` — with the reason in `agent_runs.error` and the full outcome
-// list in the same stepResults payload — instead of reporting a clean success
-// for a run that produced nothing. `[]` (no package, or a package declaring no
-// bindings) stays a clean success; only a real `ok:false` fails the run.
+// outcome is LOAD-BEARING (cinatra#2486): BOTH terminal branches — WayFlow
+// (`handleWayflowTaskState`) and external-A2A (`finalizeExternalA2ARun`,
+// cinatra#2497) — land the run `failed` with the reason in `agent_runs.error`
+// and the full outcome list in the same stepResults payload, instead of
+// reporting a clean success for a run that produced nothing. `[]` (no package,
+// or a package declaring no bindings) stays a clean success; only a real
+// `ok:false` fails the run. ONE documented asymmetry: the external-A2A branch
+// does not treat the WHOLESALE `(binding-resolution)` outcome as fatal, because
+// an external template's package name is a connector-derived routing key that
+// resolves only when the remote peer really is a published cinatra package —
+// see that function for the full rationale.
 //
 // The declarative path requires NO `skills.authoring` on the extension
 // (`authorArtifact` stays the LLM-judgment path); title and MIME come from
@@ -84,7 +90,66 @@ export type RunArtifactMaterializationOutcome =
       nodeId: string | null;
       extension: string | null;
       error: string;
+      /**
+       * cinatra#2497 — set ONLY on the WHOLESALE binding-resolution outcome
+       * (the run's package could not be read at all), and then always. A
+       * POSITIVE classification, so a caller never has to infer intent from an
+       * error string or from the synthetic `outputId`:
+       *
+       *   "package-not-found" — the registry answered a DEFINITIVE 404: this
+       *     package does not exist, therefore the run demonstrably declared no
+       *     artifact binding. The only outcome a caller may treat as "nothing
+       *     was owed".
+       *   "unavailable" — anything else (registry outage, auth/config failure,
+       *     5xx, a failed template read). EVIDENCE-FREE: the package may well
+       *     declare bindings, so a caller must NOT read this as "nothing was
+       *     owed" — that is exactly the #2486 silent success.
+       */
+      bindingResolution?: "package-not-found" | "unavailable";
     };
+
+/** pacote reports a registry 404 as `code: "E404"` / `statusCode: 404`. */
+function isRegistryNotFound(err: unknown): boolean {
+  const candidate = err as { code?: unknown; statusCode?: unknown } | null;
+  return candidate?.code === "E404" || candidate?.statusCode === 404;
+}
+
+/**
+ * cinatra#2497 — positively classify a wholesale binding-resolution failure.
+ *
+ * Fail-closed by default: `unavailable` unless absence is PROVEN. A connection
+ * refusal, a 5xx, an auth or config failure, a failed template read — all stay
+ * `unavailable`, because a caller must never read them as "this run declared no
+ * artifact binding".
+ *
+ * A 404 out of `getAgentPackage` is NOT proof on its own: that call does a
+ * packument read AND a tarball extraction, so a PRESENT package whose tarball
+ * 404s is indistinguishable from an absent one. Absence is therefore confirmed
+ * with a NAME-level, metadata-only packument probe — the only read that can
+ * prove it. Runs on the FAILURE path only, never on the hot path.
+ */
+async function classifyBindingResolutionFailure(
+  err: unknown,
+  packageName: string | null,
+): Promise<"package-not-found" | "unavailable"> {
+  if (packageName === null || !isRegistryNotFound(err)) return "unavailable";
+  try {
+    const [{ getPublishedExtensionSummary }, { loadVerdaccioConfigForReads }] =
+      await Promise.all([
+        import("@cinatra-ai/registries"),
+        import("@/lib/verdaccio-config"),
+      ]);
+    await getPublishedExtensionSummary(
+      { packageName },
+      await loadVerdaccioConfigForReads(),
+    );
+    // The packument resolves: the package EXISTS, so the 404 came from the
+    // tarball (or a moved dist) — evidence-free, fail closed.
+    return "unavailable";
+  } catch (probeErr) {
+    return isRegistryNotFound(probeErr) ? "package-not-found" : "unavailable";
+  }
+}
 
 function pool(): Pool {
   return getPooledDb({
@@ -480,15 +545,25 @@ export async function materializeRunArtifacts(input: {
   packageVersion: string | null;
   /** The run's runBy principal — persisted as the artifact's createdBy. */
   createdBy: string | null;
-  /** Sentinel-surfaced EndNode declared output values (null: no sentinel). */
+  /**
+   * The run's structured declared output values — WayFlow's sentinel-surfaced
+   * EndNode outputs, or (cinatra#2497, external-A2A) the merged artifact DATA
+   * parts the proxy captured, which are the same channel by another name.
+   * `null`: the run surfaced none.
+   */
   endNodeOutputs: Record<string, unknown> | null;
 }): Promise<RunArtifactMaterializationOutcome[]> {
   let bindings: CollectedArtifactBinding[];
   let producesRefs: SemanticArtifactProducesRef[] = [];
   const outcomes: RunArtifactMaterializationOutcome[] = [];
+  // Hoisted so the catch below can run its name-level absence probe. `null` in
+  // the catch means we never got as far as a registry read (the template read
+  // itself failed) — evidence-free by construction.
+  let resolvedPackageName: string | null = null;
   try {
     const packageName = await resolveTemplatePackageName(input.templateId);
     if (packageName === null) return [];
+    resolvedPackageName = packageName;
     const loaded = await loadRunPackageBindings({
       packageName,
       packageVersion: input.packageVersion,
@@ -506,13 +581,19 @@ export async function materializeRunArtifacts(input: {
     }
   } catch (err) {
     // Package/binding resolution failed wholesale (registry unreachable,
-    // template gone). Visible-not-fatal: one synthetic failure outcome.
+    // template gone). One synthetic failure outcome, carrying the POSITIVE
+    // classification (cinatra#2497) callers need to tell "this package does not
+    // exist" apart from "the registry did not answer".
     return [
       {
         ok: false,
         outputId: "(binding-resolution)",
         nodeId: null,
         extension: null,
+        bindingResolution: await classifyBindingResolutionFailure(
+          err,
+          resolvedPackageName,
+        ),
         error: `failed to load the run package's artifact bindings: ${
           err instanceof Error ? err.message : String(err)
         }`,
@@ -550,7 +631,7 @@ export async function materializeRunArtifacts(input: {
       const outputs = input.endNodeOutputs;
       if (outputs === null) {
         fail(
-          "run surfaced no EndNode declared outputs (WayFlow sentinel absent) — cannot resolve the binding",
+          "run surfaced no structured declared outputs (no WayFlow EndNode sentinel / no external-A2A data part) — cannot resolve the binding",
         );
         continue;
       }
