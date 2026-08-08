@@ -49,12 +49,12 @@ describe("AgentLauncherPortlet — run link", () => {
 
   it("falls back to agentRef when agentPackage is absent", async () => {
     launchAgentAction.mockResolvedValue({ ok: true, runId: "run-2" });
-    render(<AgentLauncherPortlet {...baseProps({ agentRef: "@cinatra-ai/planner-agent" })} />);
+    render(<AgentLauncherPortlet {...baseProps({ agentRef: "@cinatra-ai/social-outreach-agent" })} />);
 
     fireEvent.click(screen.getByRole("button", { name: /run agent/i }));
 
     const link = await waitFor(() => screen.getByRole("link", { name: /view run/i }));
-    expect(link.getAttribute("href")).toBe("/agents/cinatra-ai/planner-agent/run-2");
+    expect(link.getAttribute("href")).toBe("/agents/cinatra-ai/social-outreach-agent/run-2");
   });
 
   it("never builds the legacy /agents/runs/<id> shape", async () => {
