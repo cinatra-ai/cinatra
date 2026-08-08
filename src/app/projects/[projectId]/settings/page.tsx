@@ -33,7 +33,9 @@ import { listGuestRows, type GuestRow } from "../permissions/guest-actions";
 // the permissions surface). Hosts everything the former Permissions tab
 // showed: ownership (owner + co-owners), N:M project-access grants, and the
 // admin-only external guest grants. The former standalone /permissions route
-// redirects here; the detail page links here via a header button.
+// redirects here; the project landing reaches this page through the
+// entity-page tablist's Settings entry (cinatra#2474 PR1 — it replaced the
+// landing's top-right settings button).
 // ---------------------------------------------------------------------------
 
 // Gate-repeating metadata (cinatra#1737, the dashboards pattern): repeats the

@@ -21,7 +21,7 @@
  * button, light + dark) are proven by the live Playwright walk recorded on the
  * PR.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 
 const read = (p: string) => readFileSync(p, "utf-8");
@@ -109,6 +109,32 @@ describe("scope Settings pages point Dashboards at the BARE landing (#2474 PR1)"
       expect(src).toContain(bareHref);
       expect(src).not.toContain(retiredHref);
       expect(src).toContain('active="settings"');
+    });
+  }
+});
+
+describe("no tablist anywhere still targets the retired collection route (#2474 PR1)", () => {
+  // The `/<scope>/<id>/dashboards` collection routes survive PR1 (PR2 folds
+  // them onto the landing and DELETES them), but they must not keep pointing
+  // their own Dashboards tab at themselves — the canonical Dashboards surface
+  // is the bare landing from here on, so someone who arrives on a retired route
+  // via an old link can still get back to it.
+  //
+  // Guarded by `existsSync` on purpose: PR2 removes these files, and their
+  // absence is the STRONGER form of this invariant — it must not turn the suite
+  // red.
+  const LEGACY: ReadonlyArray<readonly [string, string]> = [
+    ["src/app/organizations/[id]/dashboards/page.tsx", "/organizations/${encodeURIComponent(org.id)}/dashboards`}"],
+    ["src/app/teams/[teamId]/dashboards/page.tsx", "/teams/${encodeURIComponent(team.id)}/dashboards`}"],
+    ["src/app/projects/[projectId]/dashboards/page.tsx", "/projects/${encodeURIComponent(project.id)}/dashboards`}"],
+  ];
+
+  for (const [file, selfTarget] of LEGACY) {
+    it(`${file} — gone, or its Dashboards tab points at the landing`, () => {
+      if (!existsSync(file)) return; // PR2 landed: the route is deleted outright.
+      const src = read(file);
+      expect(src).toContain("<EntityScopeTabs");
+      expect(src).not.toContain(`dashboardsHref={\`${selfTarget}`);
     });
   }
 });

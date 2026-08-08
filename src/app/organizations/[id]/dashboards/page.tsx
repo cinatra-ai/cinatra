@@ -61,7 +61,7 @@ export default async function OrganizationScopeDashboardsPage({ params }: Props)
       <PageHeader label="Organization" title={org.name} divider={false} />
       <PageContent className="flex flex-col gap-5 pb-8">
         <EntityScopeTabs
-          dashboardsHref={`/organizations/${encodeURIComponent(org.id)}/dashboards`}
+          dashboardsHref={`/organizations/${encodeURIComponent(org.id)}`}
           settingsHref={`/organizations/${encodeURIComponent(org.id)}/settings`}
           active="dashboards"
         />
