@@ -123,17 +123,33 @@ describe("no tablist anywhere still targets the retired collection route (#2474 
   // Guarded by `existsSync` on purpose: PR2 removes these files, and their
   // absence is the STRONGER form of this invariant — it must not turn the suite
   // red.
-  const LEGACY: ReadonlyArray<readonly [string, string]> = [
-    ["src/app/organizations/[id]/dashboards/page.tsx", "/organizations/${encodeURIComponent(org.id)}/dashboards`}"],
-    ["src/app/teams/[teamId]/dashboards/page.tsx", "/teams/${encodeURIComponent(team.id)}/dashboards`}"],
-    ["src/app/projects/[projectId]/dashboards/page.tsx", "/projects/${encodeURIComponent(project.id)}/dashboards`}"],
+  /** [file, the retired self-target, the bare landing href it must carry] */
+  const LEGACY: ReadonlyArray<readonly [string, string, string]> = [
+    [
+      "src/app/organizations/[id]/dashboards/page.tsx",
+      "/organizations/${encodeURIComponent(org.id)}/dashboards`}",
+      "dashboardsHref={`/organizations/${encodeURIComponent(org.id)}`}",
+    ],
+    [
+      "src/app/teams/[teamId]/dashboards/page.tsx",
+      "/teams/${encodeURIComponent(team.id)}/dashboards`}",
+      "dashboardsHref={`/teams/${encodeURIComponent(team.id)}`}",
+    ],
+    [
+      "src/app/projects/[projectId]/dashboards/page.tsx",
+      "/projects/${encodeURIComponent(project.id)}/dashboards`}",
+      "dashboardsHref={`/projects/${encodeURIComponent(project.id)}`}",
+    ],
   ];
 
-  for (const [file, selfTarget] of LEGACY) {
+  for (const [file, selfTarget, bareHref] of LEGACY) {
     it(`${file} — gone, or its Dashboards tab points at the landing`, () => {
       if (!existsSync(file)) return; // PR2 landed: the route is deleted outright.
       const src = read(file);
       expect(src).toContain("<EntityScopeTabs");
+      // Assert the expected href POSITIVELY, not merely the absence of the old
+      // one — a third, wrong URL would satisfy a negative-only check.
+      expect(src).toContain(bareHref);
       expect(src).not.toContain(`dashboardsHref={\`${selfTarget}`);
     });
   }
