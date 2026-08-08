@@ -9,7 +9,7 @@ import { canDo } from "@/lib/authz";
 import { hasAnyBetterAuthUsers } from "@/lib/auth";
 import { isRegistrationClosed, isSingleOrgMode } from "@/lib/authz/instance-mode";
 import { userCanCreateTeams } from "@/lib/better-auth-db";
-import { isSetupWizardComplete } from "@/lib/setup-wizard";
+import { evaluateSetupGate, type SetupGateState } from "@/lib/setup-wizard";
 import { getUserAccentColor } from "@/lib/accent-color-store";
 import type { ExtensionAccent } from "@/lib/extension-accent";
 import { Providers } from "@/app/providers";
@@ -77,8 +77,14 @@ export default async function RootLayout({
   // Wrap in try/catch so a transient Postgres timeout or Nango API error does
   // NOT propagate as an unhandled root-layout exception (which produces a blank
   // white page when there is no global-error.tsx to catch it). Fall back to
-  // safe defaults so the app stays visible — the next navigation will retry.
-  let setupComplete = false;
+  // safe defaults so the app stays visible. (A root layout is not re-rendered
+  // by ordinary client navigation, so "the next navigation retries" is NOT
+  // true; the setup gate's own recovery is wired explicitly below.)
+  // cinatra#2503 — three states, defaulting to INDETERMINATE. The old `false`
+  // default meant "any failure anywhere in this try block ⇒ show the setup
+  // wizard", which bounced a working instance into the `/ ↔ /setup` loop on a
+  // transient DB refusal. Only a successfully-read "steps remain" redirects now.
+  let setupGate: SetupGateState = "indeterminate";
   let googleOAuthSettings: { clientId?: string; clientSecret?: string } = {};
   let canCreateProjects = false;
   let canCreateTeams = false;
@@ -105,19 +111,24 @@ export default async function RootLayout({
   let crumbEpoch = "anon";
   try {
     const [
-      setupCompleteResult,
+      setupGateResult,
       googleOAuthSettingsResult,
       session,
       singleOrgResult,
       registrationClosedResult,
       hasUsersResult,
     ] = await Promise.all([
-      isSetupWizardComplete(),
+      // cinatra#2503 — `evaluateSetupGate()` is the ONLY member of this batch
+      // that cannot reject: it converts its own read failure into the
+      // `indeterminate` state internally. It used to be the only member NOT
+      // guarded here, which meant a single DB blip rejected the whole
+      // `Promise.all` and dropped the gate to its `false` default.
+      evaluateSetupGate(),
       // Per-call .catch so one DB-dependent read failing does NOT reject the
       // whole Promise.all and discard the others. Critically, a failing
       // getGoogleOAuthSettings()/getAuthSession() must NOT wipe out the
-      // CINATRA_E2E_SETUP_BYPASS-driven isSetupWizardComplete()===true — otherwise
-      // setupComplete falls back to false and the app renders the first-run setup
+      // CINATRA_E2E_SETUP_BYPASS-driven "complete" gate — otherwise the gate
+      // falls back to its default and the app renders the first-run setup
       // wizard instead of the requested route (this is exactly what broke the
       // prod-standalone /design-fixtures pixel-diff: no DB → both reads threw →
       // Promise.all rejected → setup wizard rendered). Mirrors the existing
@@ -130,7 +141,7 @@ export default async function RootLayout({
       isRegistrationClosed().catch(() => false),
       hasAnyBetterAuthUsers().catch(() => false),
     ]);
-    setupComplete = setupCompleteResult;
+    setupGate = setupGateResult;
     googleOAuthSettings = googleOAuthSettingsResult;
     singleOrg = singleOrgResult;
     // Hide sign-up only when the instance is past bootstrap (a human exists)
@@ -200,10 +211,31 @@ export default async function RootLayout({
     }
   } catch (err) {
     console.error("[layout] Failed to evaluate setup or OAuth state — using defaults:", err);
-    // setupComplete=false will show the setup wizard as a fallback; this is
-    // safe because the setup pages do not depend on connectionReady.
+    // cinatra#2503 — reaching here means something AFTER the guarded batch
+    // threw. `setupGate` already holds whatever the gate resolved to (the
+    // assignment is the first statement after the `Promise.all`), or stays
+    // `indeterminate` if the batch itself somehow rejected. Either way this
+    // path no longer manufactures a "not set up" verdict out of an error.
   }
-  const connectionReady = setupComplete;
+  // Only a REAL, successfully-read "steps remain" withholds the app shell.
+  // `indeterminate` renders the app rather than bouncing the user between `/`
+  // and `/setup`.
+  //
+  // This IS a fail-open onboarding gate, deliberately, and it is worth being
+  // precise about what that does and does not mean. It is not an authorization
+  // decision: every app route keeps its own `requireAuthSession` /
+  // `requireAdminSession` guard, and a sessionless caller is stopped there
+  // exactly as before. What an unconfigured instance can get during a backend
+  // blip is a shell over pages that have nothing to show — a degraded render,
+  // not access it should not have.
+  //
+  // Nor does it self-correct on its own: a root layout is not re-rendered by an
+  // ordinary client navigation, so this verdict would otherwise persist in the
+  // router cache until a refresh. `setupGateIndeterminate` below hands that to
+  // AppShell, which performs ONE `router.refresh()` to re-derive against a
+  // (hopefully) recovered backend.
+  const connectionReady = setupGate !== "incomplete";
+  const setupGateIndeterminate = setupGate === "indeterminate";
   const googleEnabled = Boolean(googleOAuthSettings.clientId && googleOAuthSettings.clientSecret);
 
   return (
@@ -213,6 +245,7 @@ export default async function RootLayout({
           <CrumbEpochProvider value={crumbEpoch}>
           <AppShell
             connectionReady={connectionReady}
+            setupGateIndeterminate={setupGateIndeterminate}
             canCreateProjects={canCreateProjects}
             canCreateTeams={canCreateTeams}
             canCreateOrganizations={canCreateOrganizations}

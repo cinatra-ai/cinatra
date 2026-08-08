@@ -20,7 +20,24 @@
 // S3 (cinatra#2388, epic #2385): the AI step's readiness now derives from the
 // provider-commit state machine — commitment (the LOCK) + a fresh keyed
 // credential fingerprint + the provider-specific readiness evidence — and the
-// derivation is FRESH on every read (the positive completion cache is gone).
+// derivation is FRESH on every request (the positive completion cache is gone;
+// cinatra#2503 added a per-request memo, which is a dedupe within one render,
+// not a cache across them — see the note below).
+//
+// cinatra#2503: the derivation below is memoized PER SERVER REQUEST with React
+// `cache()`. Two gates read completeness — the root layout's shell gate and
+// `/setup`'s own routing read — and they used to re-derive it separately even
+// when they rendered together, so a flapping backend could hand them opposite
+// answers in ONE render.
+//
+// Scope, stated honestly: React's cache is per server request. It removes
+// same-render disagreement and collapses the duplicate credential reads a setup
+// render made; it does NOT make the two gates agree ACROSS navigations (`/` and
+// `/setup` are separate requests, each with a fresh cache). The cross-request
+// half of the loop is closed by `evaluateSetupGate` below, which stops an error
+// from being read as "incomplete" in the first place.
+import { cache } from "react";
+
 import { deriveSetupAiStepState } from "@/lib/setup-provider-commit";
 import { getNangoStatus } from "@/lib/nango-system";
 // Instance identity presence determines whether the name step is ready.
@@ -37,7 +54,7 @@ export type SetupWizardStep = {
   ready: boolean;
 };
 
-export async function getSetupWizardSteps(): Promise<SetupWizardStep[]> {
+async function computeSetupWizardSteps(): Promise<SetupWizardStep[]> {
   const hasUsers = await hasAnyBetterAuthUsers();
   const identity = readInstanceIdentity();
   const nangoStatus = getNangoStatus();
@@ -107,6 +124,19 @@ export async function getSetupWizardSteps(): Promise<SetupWizardStep[]> {
   return steps;
 }
 
+/**
+ * The wizard's step list, derived ONCE PER SERVER REQUEST (cinatra#2503).
+ *
+ * Every consumer — the root layout's shell gate, `/setup`'s router, the setup
+ * layout's rail, and each step page's own "am I still the next step?" check —
+ * goes through this one memo, so everything rendered by a single request sees
+ * the SAME answer. A later request re-derives from scratch (that is what keeps
+ * a completed step from going stale after a mutation). Outside a server-request
+ * scope (unit tests, scripts) React's `cache` is a pass-through, so behavior
+ * there is unchanged.
+ */
+export const getSetupWizardSteps = cache(computeSetupWizardSteps);
+
 export function getFirstIncompleteStep(steps: SetupWizardStep[]): SetupWizardStep | null {
   return steps.find((step) => !step.ready) ?? null;
 }
@@ -145,9 +175,13 @@ function isStepsComplete(steps: SetupWizardStep[]): boolean {
 // makes false by design: a credential deletion/rotation flips the AI step back
 // to incomplete via the fingerprint mismatch, and a 60 s stale `true` window
 // would keep serving app routes on an instance whose provider can no longer
-// authenticate. Completion is re-derived freshly on every read; the derivation
-// is cheap (metadata reads + one connector credential read), and there is no
-// stale-true window after invalidation because there is nothing to invalidate.
+// authenticate. Completion is re-derived freshly on every REQUEST; the
+// derivation is cheap (metadata reads + one connector credential read), and
+// there is no stale-true window after invalidation because there is nothing to
+// invalidate. (cinatra#2503 narrowed "every read" to "every request": the
+// `cache()` above dedupes repeat reads WITHIN one render. That is not a
+// staleness window in the old cache's sense — the memo does not survive into a
+// later request, so nothing it holds is ever served to one.)
 export async function isSetupWizardComplete(): Promise<boolean> {
   // Browser-e2e affordance: a freshly-provisioned instance has no
   // instance-identity / Nango / OpenAI rows, so the app shell redirects every
@@ -161,4 +195,52 @@ export async function isSetupWizardComplete(): Promise<boolean> {
   }
   const steps = await getSetupWizardSteps();
   return isStepsComplete(steps);
+}
+
+/**
+ * The SHELL gate's view of setup completeness — three states, not two
+ * (cinatra#2503).
+ *
+ * `isSetupWizardComplete()` above answers a boolean and PROPAGATES a read
+ * failure, which is right for its API callers. The root layout needs something
+ * else: it must never turn "I could not find out" into "not set up". That
+ * conflation is the redirect loop. A transient Postgres refusal during
+ * container warm-up made `isSetupWizardComplete()` throw, the layout's
+ * `Promise.all` rejected, `setupComplete` fell back to its `false` default, and
+ * the shell redirected a fully-configured instance to `/setup` — where the
+ * independent gate, reading a moment later when the DB answered, said
+ * "complete" and redirected back to `/`. Round and round until the read
+ * stabilized.
+ *
+ * So an error is its own answer: `indeterminate`. The caller decides what to do
+ * with it, and the layout deliberately does NOT force the wizard on it — an
+ * instance that was working a second ago is far more likely to be mid-blip than
+ * genuinely unconfigured, and the wrong guess in that direction is an infinite
+ * bounce, while the wrong guess in the other direction is a degraded render.
+ * That fail-open guess does not expire by itself (a root layout survives client
+ * navigation), so the shell re-derives it once — see `setupGateIndeterminate`
+ * in src/app/layout.tsx and its retry in src/components/app-shell.tsx.
+ *
+ * `incomplete` still means a real, successfully-read "steps remain" — that is
+ * the ONLY state that redirects.
+ */
+export type SetupGateState = "complete" | "incomplete" | "indeterminate";
+
+export async function evaluateSetupGate(): Promise<SetupGateState> {
+  if (process.env.CINATRA_E2E_SETUP_BYPASS === "true") {
+    return "complete";
+  }
+  try {
+    const steps = await getSetupWizardSteps();
+    return isStepsComplete(steps) ? "complete" : "incomplete";
+  } catch (err) {
+    // Logged, never swallowed silently: an indeterminate gate is a symptom of a
+    // backend problem the operator needs to see, even though the shell degrades
+    // gracefully around it.
+    console.error(
+      "[setup-wizard] setup-completeness read failed — gate is INDETERMINATE (not 'incomplete'):",
+      err,
+    );
+    return "indeterminate";
+  }
 }

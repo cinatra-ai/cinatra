@@ -35,6 +35,7 @@ import {
   createNpmUser,
   VerdaccioUserAlreadyRegisteredError,
   VerdaccioRegistrationDisabledError,
+  VerdaccioUserCredentialConflictError,
   VerdaccioUnexpectedResponseError,
 } from "@cinatra-ai/registries";
 import { createHttpMarketplaceMcpClient } from "@cinatra-ai/marketplace-mcp-client/http-client";
@@ -367,6 +368,12 @@ export async function saveInstanceIdentityAction(formData: FormData): Promise<vo
     } catch (e) {
       if (e instanceof VerdaccioUserAlreadyRegisteredError) {
         redirectWithErrorCode("namespace-taken");
+      }
+      // cinatra#2500 — the namespace exists on the registry under different
+      // credentials (routinely a stale user left behind by an app-data reset).
+      // Actionable, not "see server logs".
+      if (e instanceof VerdaccioUserCredentialConflictError) {
+        redirectWithErrorCode("registry-user-credential-conflict");
       }
       if (e instanceof VerdaccioRegistrationDisabledError) {
         await persistDeferredInstanceIdentity({

@@ -49,6 +49,13 @@ export const INSTANCE_ERROR_MESSAGES = {
   "registry-unexpected-response":
     "Registry returned an unexpected response. Operator: see server logs.",
   "registry-provision-failed": "Could not provision registry user. Operator: see server logs.",
+  // cinatra#2500 — the 401 class, split out of the opaque
+  // "registry-provision-failed" above: the registry already holds a user for
+  // this namespace under a DIFFERENT password (typically stale state that
+  // survived an app-data reset, which clears the app-side credentials but not
+  // the registry's user store).
+  "registry-user-credential-conflict":
+    "That vendor name is already registered on the configured registry under different credentials. Choose a different name, or clear that user from the registry (package storage is unaffected) and try again.",
   "identity-write-conflict":
     "This instance's identity changed while your request was in progress. Registry provisioning already completed under the new namespace — please retry the save to record it (Operator: see server logs for the registry token that was provisioned).",
 } as const;

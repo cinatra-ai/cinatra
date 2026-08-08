@@ -14,6 +14,7 @@ import {
   createNpmUser,
   VerdaccioUserAlreadyRegisteredError,
   VerdaccioRegistrationDisabledError,
+  VerdaccioUserCredentialConflictError,
 } from "../src/verdaccio/user-provisioning";
 import { VerdaccioUnexpectedResponseError } from "../src/verdaccio/errors";
 
@@ -126,6 +127,45 @@ describe("createNpmUser — 409 typed error mapping", () => {
     mockFetch(409, { error: "user registration disabled" });
     await expect(createNpmUser(VALID_OPTS)).rejects.toBeInstanceOf(
       VerdaccioRegistrationDisabledError,
+    );
+  });
+});
+
+describe("createNpmUser — 401 credential-conflict mapping (cinatra#2500)", () => {
+  it("maps 401 to VerdaccioUserCredentialConflictError, NOT the generic throw", async () => {
+    mockFetch(401, { error: "unauthorized" });
+    const caught = await createNpmUser(VALID_OPTS).catch((err: unknown) => err);
+    expect(caught).toBeInstanceOf(VerdaccioUserCredentialConflictError);
+    // The regression this guards: a 401 used to fall through to the generic
+    // "HTTP <status>" throw, which the actions map to the opaque
+    // "registry-provision-failed" flash ("see server logs").
+    expect((caught as Error).message).not.toMatch(/HTTP 401/);
+  });
+
+  it("carries the discriminating code so call sites can branch on it", async () => {
+    mockFetch(401, { error: "unauthorized" });
+    const caught = (await createNpmUser(VALID_OPTS).catch(
+      (err: unknown) => err,
+    )) as VerdaccioUserCredentialConflictError;
+    expect(caught.code).toBe("USER_CREDENTIAL_CONFLICT");
+    expect(caught.name).toBe("VerdaccioUserCredentialConflictError");
+  });
+
+  it("never reflects the 401 response body (no password echo)", async () => {
+    const sensitiveBody = "INPUT_REFLECTED_PASSWORD_LEAK";
+    mockFetch(401, sensitiveBody, true);
+    const caught = (await createNpmUser(VALID_OPTS).catch((err: unknown) => err)) as Error;
+    expect(caught).toBeInstanceOf(VerdaccioUserCredentialConflictError);
+    expect(caught.message).not.toContain(sensitiveBody);
+    // The body is not even READ on this path — the status is the whole
+    // discriminator, unlike the 409 branch which must read to disambiguate.
+    expect(caught.message).not.toContain(VALID_OPTS.password);
+  });
+
+  it("leaves the 409 'already registered' class untouched (distinct remedy)", async () => {
+    mockFetch(409, { error: "user oss is already registered" });
+    await expect(createNpmUser(VALID_OPTS)).rejects.toBeInstanceOf(
+      VerdaccioUserAlreadyRegisteredError,
     );
   });
 });

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Fragment, useMemo } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { LoadingSpinner } from "@cinatra-ai/sdk-ui";
 import { isChatPathname } from "@cinatra-ai/chat/chat-path-codec";
 import { CreateOrganizationDialog } from "@daveyplate/better-auth-ui";
@@ -143,9 +143,57 @@ const pageHeaders = [
   },
 ];
 
+/**
+ * How long the shell waits before re-deriving an INDETERMINATE setup gate
+ * (cinatra#2503). Long enough that a container still warming up has a chance to
+ * answer, short enough that a user does not sit in a fail-open shell.
+ */
+export const SETUP_GATE_RETRY_MS = 3_000;
+
+/**
+ * Recover from an INDETERMINATE setup gate (cinatra#2503).
+ *
+ * When the root layout could not read setup completeness it renders the shell
+ * (fail-open) rather than bouncing the user to `/setup`, which is what the
+ * `/ ↔ /setup` loop was. But a root layout is not re-rendered by ordinary
+ * client navigation, so that guess would persist in the router cache until a
+ * hard reload. One `router.refresh()` re-runs it against a backend that has
+ * very likely recovered by then.
+ *
+ * Fires at most ONCE: an unconditional refresh against a still-broken backend
+ * would be a poll loop, and trading a redirect loop for a request loop is not a
+ * fix. One retry, then the operator's own reload.
+ *
+ * The ref is claimed INSIDE the timer, not when the timer is scheduled. Under
+ * StrictMode's simulated remount the effect runs, is cleaned up (cancelling the
+ * timer), then runs again — a schedule-time claim would be spent by the
+ * cancelled first pass and the second pass would bail, so the refresh would
+ * never happen at all. Claiming it at fire time also returns the retry when a
+ * cleanup comes from a dependency change rather than consuming it.
+ *
+ * Exported so the behavior is testable without mounting the whole shell.
+ */
+export function useSetupGateRecovery(
+  indeterminate: boolean,
+  refresh: () => void,
+  delayMs: number = SETUP_GATE_RETRY_MS,
+): void {
+  const refreshed = useRef(false);
+  useEffect(() => {
+    if (!indeterminate || refreshed.current) return;
+    const timer = setTimeout(() => {
+      if (refreshed.current) return;
+      refreshed.current = true;
+      refresh();
+    }, delayMs);
+    return () => clearTimeout(timer);
+  }, [indeterminate, refresh, delayMs]);
+}
+
 export function AppShell({
   children,
   connectionReady,
+  setupGateIndeterminate = false,
   canCreateProjects = false,
   canCreateTeams = false,
   canCreateOrganizations = false,
@@ -158,6 +206,14 @@ export function AppShell({
 }: {
   children: React.ReactNode;
   connectionReady: boolean;
+  /**
+   * cinatra#2503 — the root layout could not determine setup completeness (a
+   * backend read failed), so `connectionReady` above is a fail-OPEN guess
+   * rather than a verdict. A root layout is not re-rendered by ordinary client
+   * navigation, so that guess would otherwise sit in the router cache until a
+   * hard reload; this flag triggers ONE re-derivation instead.
+   */
+  setupGateIndeterminate?: boolean;
   canCreateProjects?: boolean;
   canCreateTeams?: boolean;
   canCreateOrganizations?: boolean;
@@ -330,6 +386,10 @@ export function AppShell({
       router.replace("/setup");
     }
   }, [requiresSetupRedirect, router]);
+
+  // cinatra#2503 — recover from an INDETERMINATE setup gate (see the hook).
+  const refreshRoute = useCallback(() => router.refresh(), [router]);
+  useSetupGateRecovery(setupGateIndeterminate, refreshRoute);
 
   useEffect(() => {
     // A /chat thread route (cinatra#1878 W3): the URL now carries

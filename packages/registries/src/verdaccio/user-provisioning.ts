@@ -12,11 +12,26 @@
 // rather than silently corrupting state.
 //
 // Error handling philosophy:
+//   - 401 → typed VerdaccioUserCredentialConflictError (cinatra#2500)
 //   - 409 + "already registered" → typed VerdaccioUserAlreadyRegisteredError
 //   - 409 + "user registration disabled" → typed VerdaccioRegistrationDisabledError
 //   - 201 + missing/invalid `token` field → VerdaccioUnexpectedResponseError
 //   - other non-2xx → generic Error with status code only (NEVER include the
 //     response body — it may reflect input back, which leaks the password)
+//
+// cinatra#2500 — WHY 401 IS ITS OWN CLASS. Verdaccio's adduser endpoint answers
+// 401 (not 409) when the namespace ALREADY EXISTS in its htpasswd store under a
+// DIFFERENT password: the PUT is read as a login attempt for an existing user
+// and the password does not match. That is the routine outcome of a
+// `reset --purge-app-data`, which wipes the app-side registry credentials (so
+// the app mints a FRESH password) but leaves the Verdaccio user store intact.
+// Folding it into the generic "HTTP <status>" throw surfaced the opaque
+// "Could not provision registry user. Operator: see server logs." flash, which
+// tells a brand-new operator nothing they can act on. Classified here, both
+// call sites can route it to an ACTIONABLE message ("pick another name, or
+// clear the stale registry user"). The response body is still never read on
+// this path — the status alone is the discriminator, so nothing can reflect the
+// submitted password back into an error message.
 // -----------------------------------------------------------------------------
 
 import { VerdaccioUnexpectedResponseError } from "./errors";
@@ -43,6 +58,29 @@ export class VerdaccioRegistrationDisabledError extends Error {
   }
 }
 
+/**
+ * The namespace already exists on the registry under DIFFERENT credentials
+ * (cinatra#2500) — Verdaccio answers the adduser PUT with 401 because it reads
+ * it as a login for an existing htpasswd user whose password does not match.
+ *
+ * Distinct from {@link VerdaccioUserAlreadyRegisteredError} (the 409 "already
+ * registered" case) because the operator remedy differs: a 409 means the name
+ * is genuinely taken, while a 401 is typically a STALE local registry user left
+ * behind by an app-data reset — the operator can either pick a different name
+ * or clear that one user from the registry and retry.
+ */
+export class VerdaccioUserCredentialConflictError extends Error {
+  readonly code = "USER_CREDENTIAL_CONFLICT" as const;
+
+  constructor(message?: string) {
+    super(
+      message ??
+        "Verdaccio rejected the credentials for an existing user with this namespace.",
+    );
+    this.name = "VerdaccioUserCredentialConflictError";
+  }
+}
+
 // -----------------------------------------------------------------------------
 // createNpmUser
 // -----------------------------------------------------------------------------
@@ -62,6 +100,7 @@ export type CreateNpmUserOptions = {
  * documented CouchDB-compatible body shape. Returns the issued auth token on
  * success.
  *
+ * @throws VerdaccioUserCredentialConflictError on 401 (existing user, other password)
  * @throws VerdaccioUserAlreadyRegisteredError on 409 + "already registered"
  * @throws VerdaccioRegistrationDisabledError on 409 + "user registration disabled"
  * @throws VerdaccioUnexpectedResponseError when 201 response body lacks a
@@ -90,6 +129,15 @@ export async function createNpmUser(opts: CreateNpmUserOptions): Promise<{ token
     },
     body: JSON.stringify(body),
   });
+
+  // cinatra#2500 — checked BEFORE the generic non-2xx throw so the stale-user
+  // case stops being an opaque "see server logs". No body read: the status is
+  // the whole discriminator, so the submitted password can never be reflected.
+  if (response.status === 401) {
+    // Discard the unread body so undici releases the connection promptly.
+    await response.body?.cancel().catch(() => {});
+    throw new VerdaccioUserCredentialConflictError();
+  }
 
   if (response.status === 409) {
     // Read body for discrimination only — never re-emitted in error messages.
