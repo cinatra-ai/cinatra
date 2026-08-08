@@ -1813,16 +1813,12 @@ jobs:
       - name: Verdaccio publish-execution ban gate tests
         run: pnpm exec vitest run scripts/audit/__tests__/verdaccio-publish-ban.test.mjs
 
-      # Workspace phantom-dependency gate (no-new-rot ratchet). Two classes: a
-      # source import of a first-party workspace package OR (cinatra#2480,
-      # synced-extension members only) a production-value import of a
-      # third-party npm-registry package that the importing package's
-      # package.json does not declare in any dependency bucket — it resolves
-      # only via pnpm's hoisted node_modules (+ tsconfig paths for the
-      # first-party case), so tsgo/next build pass while a clean `pnpm install
-      # --frozen-lockfile` (CI default) or extraction to a standalone repo
-      # breaks. Baseline records current debt per class; fails on NEW in
-      # either.
+      # Workspace phantom-dependency gate (no-new-rot ratchet). Flags a source
+      # import of a first-party workspace package that the importing package's
+      # package.json does not declare in any dependency bucket — it resolves only
+      # via pnpm's hoisted node_modules + tsconfig paths, so tsgo/next build pass
+      # while a clean `pnpm install --frozen-lockfile` (CI default) or extraction
+      # to a standalone repo breaks. Baseline records current debt; fails on NEW.
       - name: Workspace phantom-dependency gate
         env:
           # Also fail if the committed baseline GREW vs the base branch (blocks
