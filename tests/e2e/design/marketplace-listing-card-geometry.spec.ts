@@ -433,8 +433,10 @@ async function setContainerWidth(gridRoot: Locator, px: number) {
 /**
  * Wait until the app shell's sidebar width transition (200ms) has finished, so
  * a geometry read is of a SETTLED layout rather than a frame mid-animation.
- * Stability-based, not a fixed sleep: two consecutive animation frames must
- * report the same container width.
+ * Stability-based, not a fixed sleep: ~150ms (10 consecutive animation
+ * frames) must report the same container width — a single repeat is not
+ * proof the transition finished, since two adjacent frames mid-transition can
+ * round to the same fractional value.
  */
 async function waitForSettledContainer(page: Page) {
   // `page.evaluate` (unlike `waitForFunction`) AWAITS a returned promise, so
@@ -449,11 +451,19 @@ async function waitForSettledContainer(page: Page) {
     };
     const frame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
     let previous = read();
+    let stableFrames = 0;
     // 5s at 60fps, matching the poll budget the callers use elsewhere.
     for (let i = 0; i < 300; i++) {
       await frame();
       const current = read();
-      if (Number.isFinite(current) && current === previous) return true;
+      if (Number.isFinite(current) && current === previous) {
+        // A width transition can produce two adjacent frames that round to
+        // the same value, so one repeat is not proof the animation finished.
+        // Require ~150ms (10 frames at 60fps) of continuous stability.
+        if (++stableFrames >= 10) return true;
+      } else {
+        stableFrames = 0;
+      }
       previous = current;
     }
     return false;
@@ -626,7 +636,12 @@ for (const width of MEASURED_VIEWPORTS) {
           (s) => s.getBoundingClientRect().right,
         );
         return {
-          overshoot: Math.max(...rights) - contentRight,
+          spanCount: rights.length,
+          // Math.max of an empty spread is -Infinity, which would silently
+          // pass the overshoot assertion below for a card whose meta content
+          // disappeared. NaN fails loudly instead; the spanCount assertion
+          // below is what actually catches the empty-list case.
+          overshoot: rights.length > 0 ? Math.max(...rights) - contentRight : Number.NaN,
           metaOverflow: meta.scrollWidth - meta.clientWidth,
           compatText:
             meta.querySelector('[data-slot="extension-card-compat"]')?.textContent?.trim() ?? "",
@@ -636,6 +651,7 @@ for (const width of MEASURED_VIEWPORTS) {
 
     expect(perCard.length).toBe(SEEDED_GRID_CARDS.length);
     for (const card of perCard) {
+      expect(card.spanCount).toBeGreaterThan(0);
       expect(card.overshoot).toBeLessThanOrEqual(1);
       expect(card.metaOverflow).toBeLessThanOrEqual(1);
       expect(["Compatible", "Incompatible", "Compatibility unknown"]).toContain(card.compatText);

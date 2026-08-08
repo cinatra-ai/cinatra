@@ -99,10 +99,15 @@ describe("marketplace listing grid — container-driven column contract (#2495)"
 
   it("sizes off NO viewport breakpoint (the #2495 regression guard)", () => {
     // Plain `sm:` / `md:` / `lg:` / `xl:` / `2xl:` variants are viewport media
-    // queries; the `@`-prefixed forms above are container queries and are the
-    // only ones allowed to drive this grid's columns.
-    const viewportSized = gridClassTokens().filter((t) =>
-      /^(sm|md|lg|xl|2xl):grid-cols-/.test(t),
+    // queries; so are Tailwind's arbitrary-value viewport variants like
+    // `min-[640px]:`. The `@`-prefixed forms above are container queries and
+    // are the only ones allowed to drive this grid's columns.
+    const viewportSized = gridClassTokens().filter(
+      (t) =>
+        // Any variant-prefixed `grid-cols-*` that is not an `@`-container
+        // query: named viewport bands (`lg:`) and arbitrary media queries
+        // (`min-[640px]:`) both match here; the bare base class does not.
+        /grid-cols-/.test(t) && !/^grid-cols-\d+$/.test(t) && !t.startsWith("@"),
     );
     expect(viewportSized).toEqual([]);
   });
