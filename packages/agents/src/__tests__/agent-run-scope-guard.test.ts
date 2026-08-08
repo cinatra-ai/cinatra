@@ -565,6 +565,61 @@ describe("autonomous run (no explicit actor, no runBy)", () => {
     ).toBe("no_actor");
   });
 
+  it("REFUSES a CORRUPT org anchor's ownerless run, exactly as it refuses a principal-bearing one", async () => {
+    // `org_id` and `owner_id` are the SAME fact recorded twice; when they
+    // disagree the row has no determinate owner. The evaluator already denies
+    // this `unknown_scope` for every principal-bearing run, so the ownerless
+    // allowance must deny it too — otherwise one corrupt row is fail-closed for
+    // humans and fail-OPEN for autonomous runs, the strictly worse direction
+    // (nobody is watching an autonomous dispatch).
+    seedTemplate({
+      orgId: ORG,
+      ownerLevel: "organization",
+      ownerId: "not-an-org",
+      creatorId: null,
+    });
+    expect(
+      await refusalReason(() =>
+        assertAgentRunScopeAuthorized({
+          stage: "dispatch",
+          templateId: "tmpl-1",
+          orgId: ORG,
+          runId: "run-1",
+          runBy: null,
+        }),
+      ),
+    ).toBe("no_actor");
+  });
+
+  it("REFUSES a CORRUPT org anchor even when an installation principal could be resolved", async () => {
+    // The fall-through must not rescue the row: the installation principal is
+    // resolved and then checked by the evaluator, which denies the corrupt
+    // anchor `unknown_scope`. So the refusal survives a creatorId being present.
+    shared.memberships["user-installer"] = {
+      orgId: ORG,
+      teamIds: [],
+      projectIds: [],
+      orgRole: "admin",
+    };
+    seedTemplate({
+      orgId: ORG,
+      ownerLevel: "organization",
+      ownerId: "not-an-org",
+      creatorId: "user-installer",
+    });
+    expect(
+      await refusalReason(() =>
+        assertAgentRunScopeAuthorized({
+          stage: "dispatch",
+          templateId: "tmpl-1",
+          orgId: ORG,
+          runId: "run-1",
+          runBy: null,
+        }),
+      ),
+    ).toBe("unknown_scope");
+  });
+
   it("REFUSES a scope-less template's ownerless run", async () => {
     seedTemplate({ ownerLevel: null, ownerId: null, creatorId: null });
     expect(

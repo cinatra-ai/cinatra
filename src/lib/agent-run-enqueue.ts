@@ -297,6 +297,31 @@ export async function enqueueAgentRun(
   // in-scope can sit in `pending_input`/`armed` indefinitely, and the agent's
   // scope may be re-set in the meantime. `softPreflight` deliberately does NOT
   // relax this — it softens missing-CONFIGURATION, never authorization.
+  //
+  // A DENIAL is TERMINAL for the run (the PR contract: a denied run fails, it is
+  // never parked) — but the failure transition is NOT written here, and that is
+  // deliberate. Landing `→failed` needs an org-write authority, and this leaf
+  // chokepoint is not sanctioned to mint one: `RUN_DISPATCH_MINT_CONSUMER_ALLOWLIST`
+  // (scripts/audit/org-write-boundary-gate.mjs, rules R2/R5) restricts
+  // `mintAgentRunExecutionAuthority` to four job contexts precisely because it
+  // grants org-wide run capability, and every producer in the system funnels
+  // through this function. Widening that boundary to tidy up a run's status
+  // would be a far worse trade than the status itself.
+  //
+  // So terminalization lives with the CALLERS that already hold an authority for
+  // this run, next to their existing compensation. The strandable shape is
+  // "transition to `queued`, THEN enqueue": the transition's own guard and this
+  // one are separate reads, so a scope change landing between them leaves a
+  // `queued` run whose enqueue is refused. Three call sites have that shape and
+  // each compensates with the authority it already holds:
+  //   - `releaseTriggerNow`      (run-actions.ts)        — member session authority
+  //   - `runTriggerReleaseJob`   (trigger-release-job.ts)— releaseAuthority
+  //   - `setRunTriggerForActor`  (trigger-service.ts)    — member session authority
+  //     (also unwinds its durable trigger row + released gate)
+  //
+  // Callers that CREATE a run and enqueue it in the same frame are not exposed:
+  // the creation perimeter (layer 1) already asserted the same scope, and they
+  // hold no pre-existing `queued` row to strand.
   {
     const { assertAgentRunDispatchAuthorized } = await import(
       "@cinatra-ai/agents/store"

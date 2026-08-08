@@ -138,6 +138,43 @@ export function assertSetupValuesMatchDeclaredObjectTypes(
  * @param roleHints    - Optional role hints forwarded to enforceRunAccess so
  *                       the actor's org is taken from the token (not run.orgId).
  */
+/** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
+ *  the CODE, not `instanceof`, so a refusal is recognized across the dynamic
+ *  `./agent-run-serde` import boundary. */
+const AGENT_TEMPLATE_SCOPE_DENIED_CODE = "AGENT_TEMPLATE_SCOPE_DENIED";
+
+/**
+ * The canonical run-denial copy for this surface (cinatra#2485 C).
+ *
+ * `AgentTemplateScopeError.message` names the TEMPLATE ID, the refusal reason
+ * and the scope level. A caller that renders a thrown message would leak all
+ * three — and the mere fact of a scope refusal already discloses that the
+ * template EXISTS. So the refusal is translated to the same opaque string every
+ * other call site uses (`mcp/handlers.ts`: `"Run access denied."`), with the
+ * detail kept server-side in the log.
+ *
+ * Shared by BOTH gates (setup- and wayflow-) so the two stay in lockstep — the
+ * two branches are otherwise easy to drift apart.
+ */
+async function assertRunScopeOrDeny(
+  runId: string,
+  assert: () => Promise<void>,
+): Promise<void> {
+  try {
+    await assert();
+  } catch (err) {
+    if ((err as { code?: string } | null)?.code === AGENT_TEMPLATE_SCOPE_DENIED_CODE) {
+      console.warn(
+        `[approveReviewTaskInternal] run ${runId} refused — the agent's install scope ` +
+          `does not authorize this approval: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw new Error("Run access denied.");
+    }
+    throw err;
+  }
+}
+
 export async function approveReviewTaskInternal(
   reviewTaskId: string,
   actorId: string,
@@ -253,11 +290,13 @@ export async function approveReviewTaskInternal(
       const { assertAgentRunDispatchAuthorized } = await import(
         "./agent-run-serde"
       );
-      await assertAgentRunDispatchAuthorized({
-        runId,
-        stage: "dispatch",
-        actingUserId: actorId,
-      });
+      await assertRunScopeOrDeny(runId, () =>
+        assertAgentRunDispatchAuthorized({
+          runId,
+          stage: "dispatch",
+          actingUserId: actorId,
+        }),
+      );
     }
 
     // Build the inputParams JSONB-merge fragment (single-field or grouped
@@ -501,11 +540,13 @@ export async function approveReviewTaskInternal(
       const { assertAgentRunDispatchAuthorized } = await import(
         "./agent-run-serde"
       );
-      await assertAgentRunDispatchAuthorized({
-        runId: run.id,
-        stage: "dispatch",
-        actingUserId: actorId,
-      });
+      await assertRunScopeOrDeny(run.id, () =>
+        assertAgentRunDispatchAuthorized({
+          runId: run.id,
+          stage: "dispatch",
+          actingUserId: actorId,
+        }),
+      );
     }
     if (!run.a2aContextId) {
       // Defensive: run must have a2aContextId. execution.ts

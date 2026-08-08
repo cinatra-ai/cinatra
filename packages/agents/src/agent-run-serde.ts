@@ -31,6 +31,7 @@ import { AgentAuthPolicySchema } from "./auth-policy";
 import {
   AgentTemplateScopeError,
   assertActorWithinAgentTemplateScope,
+  hasCorruptOrgAnchor,
   normalizeAgentTemplateScopeLevel,
   type AgentTemplateScopeRef,
 } from "./auth-policy";
@@ -502,7 +503,18 @@ export async function assertAgentRunScopeAuthorized(
     // a runBy-less source — could never dispatch an org-wide agent.
     const level = normalizeAgentTemplateScopeLevel(template.ownerLevel);
     const owningOrgId = template.orgId ?? template.ownerId;
-    if (level === "organization" && owningOrgId && owningOrgId === input.orgId) {
+    // The evaluator's OWN corrupt-org-anchor rule (`hasCorruptOrgAnchor`),
+    // applied here too. `??` never consults `owner_id` once `org_id` is set, so
+    // without this a row whose two org anchors DISAGREE would be fail-closed for
+    // every principal-bearing run (the evaluator denies it `unknown_scope`) and
+    // fail-OPEN for an ownerless one — the strictly worse direction, since an
+    // autonomous run has no human to notice the refusal.
+    if (
+      level === "organization" &&
+      owningOrgId &&
+      owningOrgId === input.orgId &&
+      !hasCorruptOrgAnchor(template)
+    ) {
       return;
     }
     // (b) Narrower scope ⇒ the run must be authorized by the PERSISTED

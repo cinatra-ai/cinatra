@@ -227,6 +227,10 @@ describe("setRunTriggerForActor — immediate re-arm on a terminal run (cinatra#
       "queued",
       undefined,
       expect.anything(),
+      // cinatra#2485 C: the DISPATCHING actor rides the `→queued` guard.
+      // `isOwnerOrAdmin` admits a non-owner admin, so `run_by` alone is not the
+      // scope subject on this path.
+      { actingUserId: TEST_USER_ID },
     );
   });
 });

@@ -297,6 +297,9 @@ describe("setRunTriggerForActor immediate consults the run-start hold (cinatra#2
 
     const dispatched = await triggerAgentRun({ runId: "run-1", templateSlug: TEMPLATE.id });
     expect(dispatched).toEqual({ ok: true });
+    // `triggerAgentRun` is strictly OWNER-bound (`run.runBy !== userId` ⇒
+    // reject), so `run_by` already IS the acting principal and the call keeps
+    // the 5-arg shape — no `actingUserId` to thread.
     expect(transitionRunStatus).toHaveBeenCalledWith(
       "run-1",
       "pending_input",
@@ -334,6 +337,9 @@ describe("setRunTriggerForActor immediate consults the run-start hold (cinatra#2
       "queued",
       undefined,
       expect.anything(),
+      // cinatra#2485 C: the DISPATCHING actor rides the guard — `isOwnerOrAdmin`
+      // admits a non-owner admin, so `run_by` alone is not the scope subject.
+      { actingUserId: actor.userId },
     );
   });
 
@@ -350,6 +356,9 @@ describe("setRunTriggerForActor immediate consults the run-start hold (cinatra#2
       "queued",
       undefined,
       expect.anything(),
+      // cinatra#2485 C: the DISPATCHING actor rides the guard — `isOwnerOrAdmin`
+      // admits a non-owner admin, so `run_by` alone is not the scope subject.
+      { actingUserId: actor.userId },
     );
   });
 
@@ -397,6 +406,9 @@ describe("setRunTriggerForActor immediate consults the run-start hold (cinatra#2
       "queued",
       undefined,
       expect.anything(),
+      // cinatra#2485 C: the DISPATCHING actor rides the guard — `isOwnerOrAdmin`
+      // admits a non-owner admin, so `run_by` alone is not the scope subject.
+      { actingUserId: actor.userId },
     );
   });
 });

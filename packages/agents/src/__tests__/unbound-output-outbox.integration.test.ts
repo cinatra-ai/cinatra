@@ -29,6 +29,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID, createHash } from "node:crypto";
 import { Client } from "pg";
+import { runAllCleanups } from "./__fixtures__/integration-fixture-helpers";
 
 const TEST_SCHEMA = "cinatra_test_unbound_outbox_1893";
 const DB_URL = process.env.SUPABASE_DB_URL ?? "";
@@ -183,9 +184,20 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!HAS_DB) return;
-  await client?.query(`DELETE FROM public."member" WHERE "userId" = $1`, [RUN_OWNER]).catch(() => {});
-  await client?.query(`DELETE FROM public."user" WHERE id = $1`, [RUN_OWNER]).catch(() => {});
-  await client?.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]).catch(() => {});
+  // Not suppressed — see the identical teardown in
+  // artifact-review-gate-store.integration.test.ts: a swallowed delete leaks
+  // shared Better Auth rows into the next run and hides the isolation break.
+  // Captured, not thrown, so the infrastructure teardown below still runs.
+  let cleanupError: unknown;
+  try {
+    await runAllCleanups([
+      () => client?.query(`DELETE FROM public."member" WHERE "userId" = $1`, [RUN_OWNER]),
+      () => client?.query(`DELETE FROM public."user" WHERE id = $1`, [RUN_OWNER]),
+      () => client?.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]),
+    ]);
+  } catch (err) {
+    cleanupError = err;
+  }
   await client?.end().catch(() => {});
   await dbMod?.agentBuilderPool?.end().catch(() => {});
   const admin = new Client({ connectionString: DB_URL });
@@ -194,6 +206,7 @@ afterAll(async () => {
   await admin.end().catch(() => {});
   delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean })
     .__cinatraPostgresSchemaInitialized;
+  if (cleanupError) throw cleanupError;
 });
 
 describe.skipIf(!HAS_DB)(

@@ -594,10 +594,52 @@ export async function releaseTriggerNow(
   }
 
   // Enqueue an execution job now that the gate is open. Idempotent on jobId.
-  await enqueueAgentRun(
+  //
+  // cinatra#2485 C — COMPENSATION on a scope denial. The run is already `queued`
+  // at this point, and `enqueueAgentRun` re-asserts the dispatch guard: if the
+  // agent's scope changed in the window between the transition's own guard and
+  // this one, the enqueue throws and the run would otherwise sit `queued`
+  // forever with no job to run it and no operator signal.
+  //
+  // The failure is landed HERE rather than inside the enqueue chokepoint because
+  // this frame already holds a member session `authority` for the run, whereas
+  // the chokepoint would have to mint an org-wide run authority it is
+  // deliberately not allowed to hold (org-write-boundary-gate R2/R5).
+  //
+  // `stale_from_status` is swallowed for the same reason as the transition
+  // above: another writer already moved the run off `queued`.
+  try {
+    await enqueueAgentRun(
       { runId: args.runId },
       { jobId: `agent-builder-${args.runId}` },
     );
+  } catch (err) {
+    if (!isScopeDenial(err)) throw err;
+    try {
+      await transitionRunStatus(
+        args.runId,
+        "queued",
+        "failed",
+        {
+          error:
+            `run refused: the agent's scope no longer authorizes this run (${err.reason})`,
+        },
+        authority,
+      );
+    } catch (compErr) {
+      if (
+        !(compErr instanceof RunTransitionError && compErr.code === "stale_from_status")
+      ) {
+        console.error(
+          "[releaseTriggerNow] run",
+          args.runId,
+          "was refused by the install-scope gate but could not be failed — it stays queued with no job:",
+          compErr instanceof Error ? compErr.message : String(compErr),
+        );
+      }
+    }
+    return { ok: false, error: "forbidden — this agent's scope does not include you" };
+  }
 
   return { ok: true };
 }

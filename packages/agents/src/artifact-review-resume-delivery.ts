@@ -234,6 +234,61 @@ export async function deliverArtifactReviewResumeIntent(
           `[artifact-review-resume] gate=${gateId} run=${run.id} refused — the agent's ` +
             `scope no longer authorizes this run (${err.reason}); not resuming`,
         );
+        // Land the RUN terminally, mirroring the worker's fire-time denial
+        // (`execution.ts`: queued→failed with this same reason string). Closing
+        // only the intent would strand the run in `pending_approval` FOREVER:
+        // the intent is the sole thing that would ever resume it, this refusal
+        // is terminal for that intent, and no other actor polls a paused gate.
+        // A descoped run must still be able to land its own failure — the
+        // `→failed` edge is deliberately un-gated for exactly this reason
+        // (run-transition.ts §2b) — so this transition cannot itself be refused.
+        //
+        // Ordering: FAIL FIRST, then close the intent — and close it ONLY if the
+        // run actually reached a terminal disposition. The intent is the sole
+        // thing that would ever resume this run, so closing it after a TRANSIENT
+        // transition failure (a DB blip, an authority mint fault) would strand
+        // the run in `pending_approval` with nothing left to retry. So a
+        // transient fault returns "retryable" instead: the lease lapses, the
+        // sweeper re-claims the intent, re-runs the check (which denies again)
+        // and re-attempts the transition — the same posture this function
+        // already takes for an UNREADABLE check.
+        //
+        // `stale_from_status` is the ONE benign failure: the CAS lost because
+        // another writer already moved the run OFF `pending_approval`, which is
+        // exactly the "already advanced" case that needs no failure stamped —
+        // so the intent is closed as usual.
+        //
+        // Dynamic import mirrors this file's existing discipline (`./execution`
+        // at the delivery step below): no new STATIC route-graph weight.
+        const { transitionRunStatus } = await import("./run-transition");
+        try {
+          await transitionRunStatus(
+            run.id,
+            "pending_approval",
+            "failed",
+            {
+              error:
+                `run refused: the agent's scope no longer authorizes this run (${err.reason})`,
+            },
+            mintAgentRunExecutionAuthority(run.orgId),
+          );
+        } catch (tErr: unknown) {
+          // Branch on the CODE, not `instanceof` — the error class arrives
+          // through a dynamic import, so identity is not guaranteed.
+          if ((tErr as { code?: string } | null)?.code !== "stale_from_status") {
+            console.warn(
+              `[artifact-review-resume] gate=${gateId} run=${run.id} refused, but the terminal ` +
+                `transition did not land — LEAVING the intent pending so a later cycle retries ` +
+                `rather than stranding the run: ` +
+                `${tErr instanceof Error ? tErr.message : String(tErr)}`,
+            );
+            return "retryable";
+          }
+          console.warn(
+            `[artifact-review-resume] gate=${gateId} run=${run.id} refused; the run had already ` +
+              `advanced off pending_approval, so no failure was stamped`,
+          );
+        }
         const ok = await markResumeIntentDelivered(gateId, leaseToken);
         return ok ? "refused-out-of-scope" : "lease-lost";
       }

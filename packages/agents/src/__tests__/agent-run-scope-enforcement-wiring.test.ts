@@ -26,6 +26,28 @@ function read(relFromRepo: string): string {
   return readFileSync(join(REPO, relFromRepo), "utf-8");
 }
 
+/**
+ * Index of `needle`, ASSERTED to exist.
+ *
+ * A bare `indexOf` returns -1 when an anchor is reworded, and -1 silently
+ * degrades every window built from it — `slice(0, -1)` becomes "the whole rest
+ * of the file", `slice(at - N, …)` counts from the END of the string. A window
+ * that quietly grows to the file tail turns the NEGATIVE assertions below
+ * (`not.toContain`) into failures with an unrelated cause, or worse, turns a
+ * positive assertion into a false pass. Anchoring is therefore always checked.
+ */
+function at(haystack: string, needle: string): number {
+  const i = haystack.indexOf(needle);
+  expect(i, `anchor not found in source: ${JSON.stringify(needle)}`).toBeGreaterThan(-1);
+  return i;
+}
+
+/** A window around `center`, clamped at 0 so a near-file-start anchor cannot
+ *  wrap into a negative (= from-the-end) slice. */
+function windowAround(src: string, center: number, radius: number): string {
+  return src.slice(Math.max(0, center - radius), center + radius);
+}
+
 // ---------------------------------------------------------------------------
 // Layer 1 — the canonical creation perimeter
 // ---------------------------------------------------------------------------
@@ -122,11 +144,72 @@ describe("layer 2: shared dispatch guard", () => {
     expect(guardAt).toBeLessThan(enqueueAt);
   });
 
+  it("FAILS the run on denial rather than leaving it queued with no job — at the CALLER that holds an authority", () => {
+    // `releaseTriggerNow` transitions armed→queued and THEN enqueues, so a guard
+    // that only throws would strand the run `queued` forever with nothing left to
+    // run it. A denial is terminal (the PR contract), never a park.
+    //
+    // The compensation lives in the CALLER, not in the enqueue chokepoint: the
+    // caller already holds a member session authority for this run, whereas the
+    // chokepoint would have to mint an org-wide run authority that
+    // `org-write-boundary-gate` (R2/R5, RUN_DISPATCH_MINT_CONSUMER_ALLOWLIST)
+    // deliberately withholds from it. This test pins BOTH halves of that
+    // decision, so a future edit cannot quietly relocate the mint.
+    // Assert on the IMPORT and the CALL, not the bare identifier — the
+    // chokepoint's comment names the mint to explain why it must not hold it.
+    const enqueue = read("src/lib/agent-run-enqueue.ts");
+    expect(enqueue).not.toMatch(
+      /(?:from|import\()\s*["']@\/lib\/org-write\/agent-run-authority-mint["']/,
+    );
+    expect(enqueue).not.toMatch(/\bmintAgentRunExecutionAuthority\s*\(/);
+
+    const actions = read("packages/agents/src/run-actions.ts");
+    const body = actions.slice(at(actions, "export async function releaseTriggerNow("));
+    const enqueueAt = at(body, "enqueueAgentRun(");
+    const block = body.slice(enqueueAt);
+    expect(block).toContain("isScopeDenial(err)");
+    expect(block).toMatch(
+      /transitionRunStatus\(\s*args\.runId,\s*"queued",\s*"failed"/,
+    );
+    // It compensates with the authority already in hand — no new mint.
+    expect(block).toMatch(/authority,/);
+    // A benign lost CAS (another writer moved the run off `queued`) is not an
+    // error; anything else is loud, because nothing downstream repairs it.
+    expect(block).toContain("stale_from_status");
+    expect(block).toContain("console.error");
+  });
+
+  it("compensates on EVERY transition-then-enqueue site, not just the interactive one", () => {
+    // The strandable shape is "move the run to `queued`, THEN enqueue": the two
+    // guards are separate reads, so a scope change between them leaves a queued
+    // run whose enqueue is refused. Each such site must compensate with the
+    // authority it already holds — the enqueue chokepoint cannot (R2/R5).
+    const releaseJob = read("packages/agents/src/trigger-release-job.ts");
+    const at0 = at(releaseJob, "enqueueAgentRun(");
+    const block = releaseJob.slice(at0);
+    expect(block).toContain("isScopeDenial(err)");
+    expect(block).toMatch(/transitionRunStatus\(\s*data\.runId,\s*"queued",\s*"failed"/);
+    expect(block).toContain("releaseAuthority");
+  });
+
+  it("unwinds the DURABLE trigger gate, not just its row, when a trigger arm is refused", () => {
+    // `deleteRunTriggerByRunId` clears only `released_at`. `isTriggerReleased`
+    // reads REDIS first, and that flag outlives the row for up to its 7-day TTL
+    // — so a later re-trigger on the same run would skip its wait and fire
+    // immediately instead of on schedule.
+    const gate = read("packages/agents/src/trigger-gate.ts");
+    expect(gate).toContain("export async function clearTriggerReleased(");
+    const svc = read("packages/agents/src/trigger-service.ts");
+    const at0 = at(svc, "isScopeDenial(err)");
+    expect(svc.slice(at0, at0 + 1200)).toContain("clearTriggerReleased");
+  });
+
   it("is NOT relaxed by softPreflight — that flag softens configuration, never authorization", () => {
     const enqueue = read("src/lib/agent-run-enqueue.ts");
-    const guardBlock = enqueue.slice(
-      enqueue.indexOf("assertAgentRunDispatchAuthorized") - 400,
-      enqueue.indexOf("assertAgentRunDispatchAuthorized") + 400,
+    const guardBlock = windowAround(
+      enqueue,
+      at(enqueue, "assertAgentRunDispatchAuthorized"),
+      400,
     );
     expect(guardBlock).not.toMatch(/if\s*\(\s*!?\s*softPreflight/);
   });
@@ -137,6 +220,11 @@ describe("layer 2: shared dispatch guard", () => {
       transition.indexOf("export async function transitionRunStatus("),
     );
     expect(body).toMatch(/if\s*\(to === "queued"\)/);
+    // The guard receives the DISPATCHING human when the caller has one. Without
+    // it the guard checks only `run_by`, so an interactive caller that admits a
+    // non-owner (a co-owner, a platform admin) could drive a dispatch from
+    // outside the agent's team/project.
+    expect(body).toMatch(/actingUserId: opts\?\.actingUserId/);
     const guardAt = body.indexOf("assertAgentRunDispatchAuthorized");
     const capabilityAt = body.indexOf("const capability:");
     expect(guardAt).toBeGreaterThan(-1);
@@ -145,6 +233,55 @@ describe("layer 2: shared dispatch guard", () => {
     const branchStart = body.indexOf('if (to === "queued")');
     expect(guardAt).toBeGreaterThan(branchStart);
     expect(guardAt - branchStart).toBeLessThan(600);
+  });
+
+  it("threads the RESUMING human into the guard on the interactive stopped→queued resume", () => {
+    // `resumeStoppedOrchestratorAction` clears `canActOnRun`, which admits a
+    // CO-OWNER or a platform admin — actors who are not the run's owner. The
+    // `→queued` guard would otherwise evaluate only `run_by` and let an actor
+    // outside the agent's team/project resume the run. Same rule as the two HITL
+    // gates: both the ACTOR and the run OWNER must be inside the agent's scope.
+    const src = read("packages/agents/src/orchestrator-actions.ts");
+    const body = src.slice(at(src, "export async function resumeStoppedOrchestratorAction("));
+    expect(body).toMatch(
+      /transitionRunStatus\(\s*runId,\s*"stopped",\s*"queued",[\s\S]{0,400}?actingUserId: actorUserId/,
+    );
+    // The sweeper stays owner-bound on purpose — it has no human initiator.
+    const sweeper = read("packages/agents/src/artifact-review-resume-delivery.ts");
+    expect(sweeper).not.toContain("actingUserId");
+
+    // Threading the actor makes a denial newly REACHABLE at this transition, so
+    // it must land as this action's documented opaque result rather than
+    // escaping as a raw AgentTemplateScopeError (whose message names the
+    // template id, the reason and the level).
+    expect(body).toContain("isScopeDenial(err)");
+    expect(body).toMatch(/return \{ ok: false, error: "Forbidden" \}/);
+  });
+
+  it("maps a scope denial to the typed result AND compensates the durable trigger state", () => {
+    // `setRunTriggerForActor` has ALREADY persisted the trigger row and opened
+    // its schedule gate by the time the `→queued` guard runs, so a denial that
+    // merely threw would leave a refused run holding an armed immediate trigger
+    // that no dispatch will ever consume.
+    const src = read("packages/agents/src/trigger-service.ts");
+    const at0 = at(src, 'actingUserId: actor.userId');
+    const block = src.slice(at0, at0 + 1600);
+    expect(block).toContain("isScopeDenial(err)");
+    // compensation BEFORE the return, mirroring the schedule-failure path
+    expect(block).toContain("deleteRunTriggerByRunId(args.runId)");
+    expect(block.indexOf("deleteRunTriggerByRunId")).toBeLessThan(
+      block.indexOf('return { ok: false, error: "forbidden" }'),
+    );
+  });
+
+  it("threads the DISPATCHING admin into the guard on the immediate-trigger arm", () => {
+    // `setRunTriggerForActor` admits `role === "admin"` via `isOwnerOrAdmin`, so
+    // like the orchestrator resume it can drive a dispatch for a run it does not
+    // own. Its immediate branch transitions pending_input→queued directly.
+    const src = read("packages/agents/src/trigger-service.ts");
+    expect(src).toMatch(
+      /transitionRunStatus\([\s\S]{0,300}?"pending_input",\s*"queued",[\s\S]{0,300}?actingUserId: actor\.userId/,
+    );
   });
 
   it("keeps enqueueAgentRun the only BullMQ producer (the allowlist is same-run resume only)", () => {
@@ -177,6 +314,13 @@ describe("layer 2: shared dispatch guard", () => {
     const asserts = [...actions.matchAll(/assertAgentRunDispatchAuthorized\(\{/g)];
     expect(asserts.length).toBe(2); // setup- branch + wayflow- branch
     expect(actions).toMatch(/actingUserId: actorId/);
+    // BOTH branches route through the SHARED translation helper: the raw
+    // AgentTemplateScopeError message names the template id, the refusal reason
+    // and the scope level, so a caller rendering it would leak scope internals
+    // AND the template's existence. One helper keeps the two branches in lockstep.
+    const translated = [...actions.matchAll(/assertRunScopeOrDeny\(/g)];
+    expect(translated.length).toBe(3); // the helper's definition + both call sites
+    expect(actions).toContain('throw new Error("Run access denied.")');
     // Each assertion must precede its branch's first irreversible write.
     const setupAt = actions.indexOf("assertAgentRunDispatchAuthorized");
     expect(setupAt).toBeLessThan(actions.indexOf("resumeRunFromSetupApproval("));
@@ -189,15 +333,36 @@ describe("layer 2: shared dispatch guard", () => {
     // with a direct sendTask — no enqueue, no transition — so it too reaches
     // neither layer-2 chokepoint.
     const src = read("packages/agents/src/artifact-review-resume-delivery.ts");
-    const guardAt = src.indexOf("assertAgentRunDispatchAuthorized");
-    expect(guardAt).toBeGreaterThan(-1);
-    expect(guardAt).toBeLessThan(src.indexOf("client.sendTask("));
+    const guardAt = at(src, "assertAgentRunDispatchAuthorized");
+    expect(guardAt).toBeLessThan(at(src, "client.sendTask("));
     // A refusal closes the intent (it will not become authorized on the next
-    // tick); an unreadable check leaves it pending for a later cycle.
+    // tick); an unreadable check leaves it pending for a later cycle. The block
+    // is delimited by CODE tokens, not a fixed byte radius — a radius silently
+    // stops covering the branch as soon as the branch grows.
     expect(src).toContain('"refused-out-of-scope"');
-    const branch = src.slice(guardAt, guardAt + 1400);
+    const branch = src.slice(guardAt, at(src, "createExternalA2AClient"));
     expect(branch).toContain("markResumeIntentDelivered");
     expect(branch).toContain('return "retryable"');
+    // A refusal must also land the RUN terminally. Closing only the intent would
+    // strand the run in `pending_approval` forever: the intent is the only thing
+    // that would ever resume it, and the refusal is terminal for that intent.
+    // Mirrors the fire-time denial in execution.ts.
+    expect(branch).toMatch(
+      /transitionRunStatus\(\s*run\.id,\s*"pending_approval",\s*"failed"/,
+    );
+    // …and it must fail the run BEFORE closing the intent, so a crash between
+    // the two re-claims and retries rather than losing the terminal signal.
+    expect(branch.indexOf("transitionRunStatus(")).toBeLessThan(
+      branch.indexOf("markResumeIntentDelivered"),
+    );
+    // A TRANSIENT transition failure must NOT close the intent — the intent is
+    // the only thing that would ever resume this run, so closing it after a DB
+    // blip would strand the run in pending_approval with nothing left to retry.
+    // Only the benign lost-CAS (`stale_from_status` = already advanced) closes.
+    expect(branch).toContain('"stale_from_status"');
+    expect(branch.indexOf('return "retryable"')).toBeLessThan(
+      branch.indexOf("markResumeIntentDelivered"),
+    );
   });
 
   it("guards the MCP agent_run_resume WayFlow branch, which enqueues NOTHING", () => {
@@ -208,7 +373,7 @@ describe("layer 2: shared dispatch guard", () => {
     const src = read("packages/agents/src/mcp/handlers.ts");
     const guardAt = src.indexOf("assertAgentRunDispatchAuthorized");
     expect(guardAt).toBeGreaterThan(-1);
-    expect(src.slice(guardAt - 900, guardAt + 900)).toContain("actingUserId: actor.userId");
+    expect(windowAround(src, guardAt, 900)).toContain("actingUserId: actor.userId");
     // Before writeHitlPrompt / sendTask — the first irreversible resume steps.
     expect(guardAt).toBeLessThan(src.indexOf("client.sendTask("));
     // The refusal must not distinguish itself from the run-access denial.
@@ -239,9 +404,17 @@ describe("layer 3: worker fire-time recheck", () => {
     execution.indexOf("async function runAgentBuilderExecutionJobInner("),
   );
 
+  /**
+   * The fire-time recheck block: from the recheck call to the first side effect
+   * that follows it (`snapshotSkillsAtRunStart`). Both ends are CODE tokens —
+   * the previous end anchor was a prose comment ("Version pinning"), which a
+   * reword would silently turn into -1 and stretch this window to the file tail.
+   */
+  const recheckBlock = (): string =>
+    body.slice(at(body, 'stage: "execute"'), at(body, "snapshotSkillsAtRunStart"));
+
   it("rechecks before any side effect and before every dispatch branch", () => {
-    const recheckAt = body.indexOf('stage: "execute"');
-    expect(recheckAt).toBeGreaterThan(-1);
+    const recheckAt = at(body, 'stage: "execute"');
     for (const sideEffect of [
       "autoApplyHeadlessRecommendation",
       "snapshotSkillsAtRunStart",
@@ -253,8 +426,7 @@ describe("layer 3: worker fire-time recheck", () => {
   });
 
   it("lands a refusal terminally rather than re-delaying the job forever", () => {
-    const window = body.slice(body.indexOf('stage: "execute"'));
-    const refusal = window.slice(0, window.indexOf("Version pinning"));
+    const refusal = recheckBlock();
     expect(refusal).toContain("isScopeDenial(err)");
     expect(refusal).toMatch(/transitionRunStatus\(runId, "queued", "failed"/);
     expect(refusal).not.toContain("OrgArchivedFreezeError");
@@ -265,8 +437,7 @@ describe("layer 3: worker fire-time recheck", () => {
     // on a blip would mean adding an authorization read to the worker prologue
     // made runs less likely to survive — and BullMQ's default `attempts: 1`
     // means a rethrow strands the row `queued` with no job left to retry it.
-    const window = body.slice(body.indexOf('stage: "execute"'));
-    const refusal = window.slice(0, window.indexOf("Version pinning"));
+    const refusal = recheckBlock();
     expect(refusal).toContain("ScopeRecheckUnavailableError");
     // and the unreadable branch must NOT fall through into the dispatch body.
     expect(refusal).toMatch(/throw new ScopeRecheckUnavailableError\(/);
@@ -289,8 +460,7 @@ describe("layer 3: worker fire-time recheck", () => {
     // read" is either a blip or a permanent fault. Uncapped, the latter loops
     // every 30s forever with no terminal disposition.
     expect(execution).toContain("MAX_SCOPE_RECHECK_PARKS");
-    const window = body.slice(body.indexOf('stage: "execute"'));
-    const refusal = window.slice(0, window.indexOf("Version pinning"));
+    const refusal = recheckBlock();
     expect(refusal).toMatch(
       /currentScopeRecheckPark >= MAX_SCOPE_RECHECK_PARKS[\s\S]{0,400}transitionRunStatus\(runId, "queued", "failed"/,
     );

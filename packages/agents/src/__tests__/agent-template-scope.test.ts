@@ -20,7 +20,9 @@ import {
   AgentTemplateScopeError,
   assertActorWithinAgentTemplateScope,
   evaluateActorWithinAgentTemplateScope,
+  hasCorruptOrgAnchor,
   normalizeAgentTemplateScopeLevel,
+  withDeterminateInstallScope,
   type AgentTemplateScopeRef,
 } from "../auth-policy";
 
@@ -330,5 +332,96 @@ describe("assertActorWithinAgentTemplateScope", () => {
     expect(err.level).toBe("user");
     expect(err.templateId).toBe("tmpl-1");
     expect(err.stage).toBe("create");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The WRITE boundary — a template must never be persisted without a
+// determinate scope, and a HALF-anchor is not a scope (cinatra#2485 C review).
+// ---------------------------------------------------------------------------
+describe("withDeterminateInstallScope", () => {
+  it("leaves an org-less input alone — a row with no tenancy stays scope-less and is refused at run start", () => {
+    expect(withDeterminateInstallScope({ id: "t" } as { id: string; orgId?: string })).toEqual({
+      id: "t",
+    });
+  });
+
+  it("stamps the organization default when NEITHER anchor is supplied", () => {
+    expect(withDeterminateInstallScope({ orgId: ORG })).toEqual({
+      orgId: ORG,
+      ownerLevel: "organization",
+      ownerId: ORG,
+    });
+  });
+
+  it("preserves a COMPLETE narrower anchor", () => {
+    expect(
+      withDeterminateInstallScope({ orgId: ORG, ownerLevel: "team", ownerId: "team-7" }),
+    ).toEqual({ orgId: ORG, ownerLevel: "team", ownerId: "team-7" });
+  });
+
+  it("REFUSES a level with no owner id — the reinstall path's partial anchor", () => {
+    // `actions.ts` used to forward `ownerLevel: existingOwnerLevel` while
+    // omitting `ownerId` whenever the existing row's owner id was null.
+    // Persisting that shape yields a row the evaluator can ONLY ever deny
+    // (`user` with no ownerId → unknown_scope): a silently bricked agent.
+    expect(() => withDeterminateInstallScope({ orgId: ORG, ownerLevel: "user" })).toThrow(
+      /PARTIAL install scope/,
+    );
+  });
+
+  it("REFUSES an owner id with no level — equally indeterminate", () => {
+    expect(() => withDeterminateInstallScope({ orgId: ORG, ownerId: "team-7" })).toThrow(
+      /PARTIAL install scope/,
+    );
+  });
+
+  it("does NOT widen a narrow partial anchor to the whole organization", () => {
+    // The tempting "repair" is to stamp the org default on a half-anchor. That
+    // is WORSE than the brick it fixes: a row whose declared level is
+    // user/team/project is narrow BY INTENT, so org-stamping it would hand a
+    // personal or team agent to every member of the org. Nothing here is an
+    // authoritative source for the missing owner id, so it must not be guessed.
+    for (const level of ["user", "team", "project"] as const) {
+      let stamped: unknown;
+      try {
+        stamped = withDeterminateInstallScope({ orgId: ORG, ownerLevel: level });
+      } catch {
+        continue; // refused — the correct outcome
+      }
+      expect(stamped).not.toMatchObject({ ownerLevel: "organization" });
+    }
+  });
+
+  it("the un-repaired partial would have denied everyone — which is why it must not be persisted", () => {
+    expect(
+      evaluateActorWithinAgentTemplateScope(
+        { id: "tmpl-1", orgId: ORG, ownerLevel: "user", ownerId: null } as AgentTemplateScopeRef,
+        human(),
+      ),
+    ).toEqual({ allowed: false, reason: "unknown_scope", level: "user" });
+  });
+});
+
+describe("hasCorruptOrgAnchor", () => {
+  it("is true only when BOTH anchors are present and disagree", () => {
+    expect(hasCorruptOrgAnchor({ orgId: ORG, ownerId: "not-an-org" })).toBe(true);
+    expect(hasCorruptOrgAnchor({ orgId: ORG, ownerId: ORG })).toBe(false);
+    expect(hasCorruptOrgAnchor({ orgId: ORG, ownerId: null })).toBe(false);
+    expect(hasCorruptOrgAnchor({ orgId: null, ownerId: ORG })).toBe(false);
+    expect(hasCorruptOrgAnchor({})).toBe(false);
+  });
+
+  it("is the SAME rule the evaluator applies, so both admission paths agree", () => {
+    const corrupt = template({
+      ownerLevel: "organization",
+      ownerId: "not-an-org",
+    });
+    expect(hasCorruptOrgAnchor(corrupt)).toBe(true);
+    expect(evaluateActorWithinAgentTemplateScope(corrupt, human())).toEqual({
+      allowed: false,
+      reason: "unknown_scope",
+      level: "organization",
+    });
   });
 });

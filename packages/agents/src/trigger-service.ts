@@ -38,6 +38,14 @@ import {
 // principal (e.g. a cross-org platform admin) — the design's deliberate
 // member-session choice for trigger ops (not a §2d′ non-member site).
 import { verifySessionAuthority } from "@/lib/org-write/authority";
+
+/** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
+ *  the CODE, not `instanceof`, so a refusal is recognized across the dynamic
+ *  import boundary the dispatch guard is reached through. */
+const AGENT_TEMPLATE_SCOPE_DENIED_CODE = "AGENT_TEMPLATE_SCOPE_DENIED";
+const isScopeDenial = (err: unknown): err is { reason: string } =>
+  (err as { code?: string } | null)?.code === AGENT_TEMPLATE_SCOPE_DENIED_CODE;
+
 // Schedule↔PM-task sync (cinatra#317). packages/agents calls OUT to the
 // host-owned PM provider bridge via the Next.js "@/lib/*" alias (Option 2 / the
 // host-owned PM provider bridge); it NEVER imports the SDK PM registry or any
@@ -545,8 +553,48 @@ export async function setRunTriggerForActor(
     } else {
       // Gate is already open; transition directly to queued.
       try {
-        await transitionRunStatus(args.runId, "pending_input", "queued", undefined, authority);
+        // cinatra#2485 C — thread the DISPATCHING human into the `→queued`
+        // guard. `isOwnerOrAdmin` admits `role === "admin"`, i.e. an actor who
+        // is NOT the run's owner; without this the guard would evaluate only
+        // `run_by` and let an admin outside the agent's team/project fire an
+        // in-scope owner's run. Same rule as `releaseTriggerNow` and the two
+        // HITL gates: both the ACTOR and the run OWNER must be inside scope.
+        await transitionRunStatus(
+          args.runId,
+          "pending_input",
+          "queued",
+          undefined,
+          authority,
+          { actingUserId: actor.userId },
+        );
       } catch (err) {
+        // cinatra#2485 C — a SCOPE DENIAL from the `→queued` guard is a
+        // decision, not a fault: map it to this function's documented opaque
+        // result instead of letting the raw AgentTemplateScopeError (which names
+        // the template id, reason and level) escape to the caller.
+        //
+        // COMPENSATE FIRST: the trigger row and its OPEN gate are already
+        // durable at this point (`createOrUpdateRunTrigger` + `scheduleTrigger`
+        // above), so returning without cleanup would leave a refused run holding
+        // an armed immediate trigger that no dispatch will ever consume. Mirrors
+        // the compensation already used on the schedule-failure path.
+        if (isScopeDenial(err)) {
+          await deleteRunTriggerByRunId(args.runId).catch((cleanupErr) => {
+            console.error(
+              "[setRunTriggerForActor] cleanup after scope denial failed",
+              args.runId,
+              cleanupErr,
+            );
+          });
+          // Deleting the row clears only the DURABLE half of the gate. The
+          // immediate path already called `markTriggerReleased`, whose Redis
+          // flag is read FIRST and outlives the row for up to 7 days — leaving
+          // it would make a later re-trigger on this run fire immediately
+          // instead of waiting for its new schedule.
+          const { clearTriggerReleased } = await import("./trigger-gate");
+          await clearTriggerReleased(args.runId);
+          return { ok: false, error: "forbidden" };
+        }
         if (
           !(err instanceof RunTransitionError && err.code === "stale_from_status")
         ) {

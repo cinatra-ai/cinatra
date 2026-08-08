@@ -30,6 +30,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
+import { getOrCreateByUniqueKey } from "./__fixtures__/integration-fixture-helpers";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import {
   setTestDeliverySendPort,
@@ -130,21 +131,27 @@ afterAll(async () => {
 // idempotent across re-runs and faithful (the ADMIT case runs against the REAL
 // registered template). The run rows are always fresh (random ids).
 async function getOrCreateTemplate(packageName: string): Promise<string> {
-  const existing = await store.readAgentTemplateByPackageName(packageName);
-  const templateId = existing?.id ?? `t_${randomUUID()}`;
-  if (!existing) {
-    await store.createAgentTemplate({
-      id: templateId,
-      name: `td-authz-${randomUUID().slice(0, 8)}`,
-      sourceNl: "test",
-      compiledPlan: [],
-      inputSchema: {},
-      approvalPolicy: { steps: [] },
-      packageName,
-      // cinatra#2485 C — the template's INSTALL SCOPE is what authorizes a run.
-      orgId: ORG,
-    });
-  }
+  // `package_name` is UNIQUE and BOTH test-delivery suites resolve this same
+  // row, so a bare read-then-create is a race: run concurrently against one
+  // schema, both miss the read and the loser's INSERT dies on the constraint
+  // during fixture setup. The constraint is the arbiter — a unique violation
+  // means someone else created the shared fixture, so adopt theirs.
+  const row = await getOrCreateByUniqueKey<{ id: string }>({
+    read: () => store.readAgentTemplateByPackageName(packageName),
+    create: () =>
+      store.createAgentTemplate({
+        id: `t_${randomUUID()}`,
+        name: `td-authz-${randomUUID().slice(0, 8)}`,
+        sourceNl: "test",
+        compiledPlan: [],
+        inputSchema: {},
+        approvalPolicy: { steps: [] },
+        packageName,
+        // cinatra#2485 C — the template's INSTALL SCOPE is what authorizes a run.
+        orgId: ORG,
+      }),
+  });
+  const templateId = row.id;
   // REPAIR-ONLY, and ONLY for a row that is scope-less on ALL THREE columns —
   // the exact shape `withDeterminateInstallScope` stamps at write time. A
   // per-column COALESCE would be WRONG: it would silently adopt a PARTIAL tuple

@@ -41,6 +41,7 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
+import { runAllCleanups } from "./__fixtures__/integration-fixture-helpers";
 
 // The review DECISION + REJECTION cores are PURE (no env / db at module load), so
 // they are statically imported — types AND runtime values. Only the env-dependent
@@ -184,9 +185,25 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!HAS_DB) return;
-  await client?.query(`DELETE FROM public."member" WHERE "userId" = $1`, [RUN_OWNER]).catch(() => {});
-  await client?.query(`DELETE FROM public."user" WHERE id = $1`, [RUN_OWNER]).catch(() => {});
-  await client?.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]).catch(() => {});
+  // These row deletes must NOT be suppressed: a swallowed failure leaves this
+  // suite's shared Better Auth fixture rows behind (they live in `public`, NOT
+  // in the TEST_SCHEMA dropped below), and the NEXT run inherits them — the
+  // run-scope gate then resolves a membership this suite believed it had
+  // cleaned up, so an isolation break reads as a pass.
+  //
+  // The failure is CAPTURED rather than thrown here so the infrastructure
+  // teardown underneath it (connections, pool, schema drop) still runs — an
+  // early throw would trade a leaked row for a leaked connection. Rethrown last.
+  let cleanupError: unknown;
+  try {
+    await runAllCleanups([
+      () => client?.query(`DELETE FROM public."member" WHERE "userId" = $1`, [RUN_OWNER]),
+      () => client?.query(`DELETE FROM public."user" WHERE id = $1`, [RUN_OWNER]),
+      () => client?.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]),
+    ]);
+  } catch (err) {
+    cleanupError = err;
+  }
   await client?.end().catch(() => {});
   await dbMod?.agentBuilderPool?.end().catch(() => {});
   const admin = new Client({ connectionString: DB_URL });
@@ -194,6 +211,7 @@ afterAll(async () => {
   await admin.query(`DROP SCHEMA IF EXISTS "${q(TEST_SCHEMA)}" CASCADE`).catch(() => {});
   await admin.end().catch(() => {});
   delete (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized;
+  if (cleanupError) throw cleanupError;
 });
 
 describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real store)", () => {

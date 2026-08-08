@@ -1657,6 +1657,27 @@ function hasOrgAdminStanding(actor: ActorContext): boolean {
  *   3. unrecognized/absent scope → deny.
  *   4. the level rule.
  */
+/**
+ * THE corrupt-org-anchor rule (cinatra#2485 C), shared so every admission path
+ * decides it identically.
+ *
+ * An ORGANIZATION-scoped row carries its owning org twice — on `org_id` and on
+ * `owner_id`. When both are present and DISAGREE the row has no determinate
+ * owner, so there is nothing to authorize against: fail closed rather than pick
+ * a winner. Exported because the run-scope guard's AUTONOMOUS org-anchored
+ * allowance (`agent-run-serde.ts`) admits an ownerless run WITHOUT running the
+ * evaluator — it must apply the same rule or a corrupt row would be fail-closed
+ * for principal-bearing runs and fail-OPEN for autonomous ones.
+ */
+export function hasCorruptOrgAnchor(template: {
+  orgId?: string | null;
+  ownerId?: string | null;
+}): boolean {
+  return (
+    !!template.orgId && !!template.ownerId && template.ownerId !== template.orgId
+  );
+}
+
 export function evaluateActorWithinAgentTemplateScope(
   template: AgentTemplateScopeRef,
   actor: ActorContext | null | undefined,
@@ -1710,7 +1731,7 @@ export function evaluateActorWithinAgentTemplateScope(
       }
       // An `owner_id` that names a DIFFERENT org than the row's own anchor is
       // corrupt ownership — fail closed rather than pick a winner.
-      if (template.orgId && template.ownerId && template.ownerId !== template.orgId) {
+      if (hasCorruptOrgAnchor(template)) {
         return { allowed: false, reason: "unknown_scope", level };
       }
       if (actor.organizationId !== owningOrgId) {
@@ -1777,6 +1798,31 @@ export function withDeterminateInstallScope<
   },
 >(input: T): T {
   if (!input.orgId) return input;
-  if (input.ownerLevel !== undefined || input.ownerId !== undefined) return input;
+  const hasLevel = input.ownerLevel !== undefined;
+  const hasOwner = input.ownerId !== undefined;
+  // A PARTIAL anchor is neither determinate nor safely derivable, so it is
+  // REFUSED rather than repaired. The reinstall path (`actions.ts`:
+  // `ownerLevel: existingOwnerLevel, ...(existing.ownerId ? … : {})`) forwards a
+  // level with NO owner id whenever the existing row's `owner_id` is null, and
+  // persisting that shape yields a row the evaluator can only ever deny
+  // (`user`/`team`/`project` with no `ownerId` → `unknown_scope`) — a silently
+  // bricked agent.
+  //
+  // Defaulting it to ORGANIZATION would be WORSE than the brick: a row whose
+  // declared level is `user`/`team`/`project` is NARROW by intent, so
+  // org-stamping it would hand a personal or team agent to every member of the
+  // org. Nothing here is an authoritative source for the missing owner id, and
+  // this gate never guesses an anchor. So it fails loudly at the WRITE boundary,
+  // where the caller that built the half-tuple is still on the stack — never
+  // silently, and never wider than the row asked for.
+  if (hasLevel !== hasOwner) {
+    throw new Error(
+      "withDeterminateInstallScope: refusing to persist a PARTIAL install scope " +
+        `(ownerLevel=${String(input.ownerLevel)}, ownerId=${String(input.ownerId)}). ` +
+        "Supply BOTH anchors or NEITHER — a half-anchor is not a determinate scope, " +
+        "and widening it to the organization would escalate a narrower scope.",
+    );
+  }
+  if (hasLevel && hasOwner) return input;
   return { ...input, ownerLevel: "organization", ownerId: input.orgId };
 }

@@ -43,6 +43,14 @@ import {
 } from "./wayflow-url";
 import { publishAgUiEvent } from "@cinatra-ai/agent-ui-protocol/server";
 
+/** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
+ *  the CODE, not `instanceof`, so a refusal is recognized across the dynamic
+ *  import boundary the dispatch guard is reached through. */
+const AGENT_TEMPLATE_SCOPE_DENIED_CODE = "AGENT_TEMPLATE_SCOPE_DENIED";
+const isScopeDenial = (err: unknown): err is { reason: string } =>
+  (err as { code?: string } | null)?.code === AGENT_TEMPLATE_SCOPE_DENIED_CODE;
+
+
 // ---------------------------------------------------------------------------
 // cancelOrchestratorAction
 // ---------------------------------------------------------------------------
@@ -229,10 +237,34 @@ export async function resumeStoppedOrchestratorAction(
 
   // Race-safe state transition.
   try {
-    await transitionRunStatus(runId, "stopped", "queued", undefined, authority);
+    // cinatra#2485 C — thread the RESUMING human into the `→queued` dispatch
+    // guard. `canActOnRun` above admits a co-owner or a platform admin, i.e. an
+    // actor who is NOT the run's owner; without this the guard would evaluate
+    // only `run_by` and let someone outside the agent's team/project drive the
+    // resume. Same rule the two HITL gates in `review-task-actions.ts` apply:
+    // both the ACTOR and the run OWNER must be inside the agent's scope.
+    await transitionRunStatus(runId, "stopped", "queued", undefined, authority, {
+      actingUserId: actorUserId,
+    });
   } catch (err) {
     if (err instanceof RunTransitionError && err.code === "stale_from_status") {
       return { ok: false, error: "race condition — run status changed" };
+    }
+    // cinatra#2485 C — a SCOPE DENIAL from the `→queued` guard is a decision,
+    // not a fault. Map it to this action's documented "Forbidden" result rather
+    // than letting the raw AgentTemplateScopeError escape: its message names the
+    // template id, the refusal reason and the scope level, and this action's
+    // error strings are rendered by the UI. "Forbidden" is deliberately the SAME
+    // opaque string the `canActOnRun` refusal above returns, so a scope refusal
+    // is indistinguishable from an ownership refusal.
+    if (isScopeDenial(err)) {
+      console.warn(
+        "[resumeStoppedOrchestratorAction] run",
+        runId,
+        "refused — the agent's install scope does not authorize this resume:",
+        err instanceof Error ? err.message : String(err),
+      );
+      return { ok: false, error: "Forbidden" };
     }
     throw err;
   }

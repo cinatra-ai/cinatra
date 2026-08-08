@@ -246,6 +246,14 @@ export async function transitionRunStatus(
   // run management was dropped (owner ruling 2026-07-26) — non-member run-management
   // flows fail closed at their call site / the seam, never via a special mint.
   authority: OrgWriteAuthority | undefined,
+  // cinatra#2485 C — the HUMAN driving THIS transition, when they are not the
+  // run's owner. Only the `→queued` dispatch guard reads it (§2b). Optional
+  // because most callers have no human initiator at all (workers, sweepers,
+  // scheduled fires); an INTERACTIVE caller that admits a non-owner — a
+  // co-owner, an org admin — MUST pass it, or the guard would check only
+  // `run_by` and let an actor outside the agent's team/project drive the
+  // dispatch. See `resumeStoppedOrchestratorAction`.
+  opts?: { actingUserId?: string | null },
 ): Promise<void> {
   // (1) Legal-transition pre-guard — an illegal edge is a programmer error, not
   // an authority refusal, so it throws BEFORE any org-write work.
@@ -269,7 +277,11 @@ export async function transitionRunStatus(
     const { assertAgentRunDispatchAuthorized } = await import(
       "./agent-run-serde"
     );
-    await assertAgentRunDispatchAuthorized({ runId, stage: "dispatch" });
+    await assertAgentRunDispatchAuthorized({
+      runId,
+      stage: "dispatch",
+      actingUserId: opts?.actingUserId ?? null,
+    });
   }
   const orgId = authority.orgId;
   const isTerminal = TERMINAL_RUN_STATUSES.has(to);

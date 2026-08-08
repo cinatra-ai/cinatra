@@ -34,6 +34,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
 import { Client } from "pg";
+import { getOrCreateByUniqueKey } from "./__fixtures__/integration-fixture-helpers";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 import {
   setTestDeliverySendPort,
@@ -171,20 +172,25 @@ beforeEach(() => {
 // SHARED_TEST_DELIVERY_ORG). Whichever of the two suites runs first CREATES the
 // row already anchored; the second reuses it as-is.
 async function getOrCreateTemplate(packageName: string): Promise<string> {
-  const existing = await store.readAgentTemplateByPackageName(packageName);
-  const templateId = existing?.id ?? `t_${randomUUID()}`;
-  if (!existing) {
-    await store.createAgentTemplate({
-      id: templateId,
-      name: `td-idem-${randomUUID().slice(0, 8)}`,
-      sourceNl: "test",
-      compiledPlan: [],
-      inputSchema: {},
-      approvalPolicy: { steps: [] },
-      packageName,
-      orgId: ORG,
-    });
-  }
+  // Same unique-key race as the sibling suite
+  // (test-delivery-send-authz-relocation.integration.test.ts): both resolve THIS
+  // row by its globally-unique `package_name`, so the create must tolerate a
+  // concurrent winner instead of erroring out of fixture setup.
+  const row = await getOrCreateByUniqueKey<{ id: string }>({
+    read: () => store.readAgentTemplateByPackageName(packageName),
+    create: () =>
+      store.createAgentTemplate({
+        id: `t_${randomUUID()}`,
+        name: `td-idem-${randomUUID().slice(0, 8)}`,
+        sourceNl: "test",
+        compiledPlan: [],
+        inputSchema: {},
+        approvalPolicy: { steps: [] },
+        packageName,
+        orgId: ORG,
+      }),
+  });
+  const templateId = row.id;
   // REPAIR-ONLY, and ONLY for a row that is scope-less on ALL THREE columns —
   // the exact shape `withDeterminateInstallScope` stamps at write time. A
   // per-column COALESCE would be WRONG: it would silently adopt a PARTIAL tuple
