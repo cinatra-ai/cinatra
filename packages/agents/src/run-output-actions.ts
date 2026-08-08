@@ -104,6 +104,7 @@ export async function readRunOutputEvidence(args: {
   // to a 404 before this gate.)
   let outputs: RunProducedOutput[] = [];
   let outputsUnavailable = false;
+  let unlinkableOutputs = false;
   try {
     const viewer = await requireActorContext();
     const { listObjectsByFilter } = await import("@/lib/objects-store");
@@ -128,6 +129,16 @@ export async function readRunOutputEvidence(args: {
           deriveProducedOutputTitle({ data: row.data, type: row.type, id: row.id }),
       });
     }
+    // CONFIRMATION-ROUND FINDING. The artifact gate above is deliberately
+    // strict, so a run whose every provenance row is non-artifact-typed or
+    // read-denied (and whose scan window filled with such rows) came out of
+    // this block with `outputs: []` and no flag — indistinguishable from a run
+    // that wrote nothing at all. The card then told the user "nothing was
+    // returned and nothing was saved" about a run that demonstrably SAVED rows.
+    // That is the same false claim the artifact gate itself was added to
+    // prevent, arriving from the other side. Rows existed but none survived ⇒
+    // say so; the resolver takes the conservative branch.
+    unlinkableOutputs = produced.length > 0 && outputs.length === 0;
   } catch (err) {
     console.warn(
       "[readRunOutputEvidence] produced-output read failed for run",
@@ -143,5 +154,12 @@ export async function readRunOutputEvidence(args: {
     outputsUnavailable = true;
   }
 
-  return { ok: true, outputs, hasTranscript, hasStepResults, outputsUnavailable };
+  return {
+    ok: true,
+    outputs,
+    hasTranscript,
+    hasStepResults,
+    outputsUnavailable,
+    unlinkableOutputs,
+  };
 }

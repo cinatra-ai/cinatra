@@ -160,7 +160,13 @@ describe("readRunOutputEvidence — candidate scan window (cinatra#2482)", () =>
     expect(artifactService.readArtifactForDetail).toHaveBeenCalledTimes(10);
   });
 
-  it("reports no output only when the scan genuinely found none", async () => {
+  // CONFIRMATION-ROUND FINDING. Twelve provenance rows exist; the artifact gate
+  // rejects all twelve. `outputs: []` here does NOT mean the run produced
+  // nothing — it means nothing it produced can be opened from this card. Left
+  // unflagged, the resolver read the empty list as a genuinely empty run and
+  // the card asserted "nothing was returned and nothing was saved" about a run
+  // that saved twelve rows.
+  it("flags rows that existed but could not be linked, rather than reporting absence", async () => {
     stubProduced(producedRows(12, []));
 
     const result = await readRunOutputEvidence({ runId: RUN_ID });
@@ -168,6 +174,28 @@ describe("readRunOutputEvidence — candidate scan window (cinatra#2482)", () =>
     expect(result.ok === true && result.outputs).toEqual([]);
     expect(result.ok === true && result.hasTranscript).toBe(false);
     expect(result.ok === true && result.hasStepResults).toBe(false);
+    expect(result.ok === true && result.unlinkableOutputs).toBe(true);
+    // The read itself SUCCEEDED — this is not an infrastructure failure.
+    expect(result.ok === true && result.outputsUnavailable).toBe(false);
+  });
+
+  it("reports a genuinely empty run as empty — no rows, no unlinkable flag", async () => {
+    stubProduced([]);
+
+    const result = await readRunOutputEvidence({ runId: RUN_ID });
+
+    expect(result.ok === true && result.outputs).toEqual([]);
+    expect(result.ok === true && result.unlinkableOutputs).toBe(false);
+    expect(result.ok === true && result.outputsUnavailable).toBe(false);
+  });
+
+  it("does not flag unlinkable when at least one row DID link", async () => {
+    stubProduced(producedRows(10, ["obj-buried"]));
+
+    const result = await readRunOutputEvidence({ runId: RUN_ID });
+
+    expect(result.ok === true && result.outputs.map((o) => o.id)).toEqual(["obj-buried"]);
+    expect(result.ok === true && result.unlinkableOutputs).toBe(false);
   });
 
   it("never links a row the artifact route would refuse", async () => {
@@ -209,11 +237,14 @@ describe("readRunOutputEvidence — candidate scan window (cinatra#2482)", () =>
     expect(result.ok === true && result.outputsUnavailable).toBe(true);
   });
 
-  it("leaves the flag false on a successful read that simply found nothing", async () => {
+  it("leaves the UNAVAILABLE flag false on a read that succeeded but linked nothing", async () => {
     stubProduced(producedRows(3, []));
 
     const result = await readRunOutputEvidence({ runId: RUN_ID });
 
+    // The read worked, so it is not "unavailable" — but the three rows it found
+    // were unlinkable, which is the separate, weaker claim.
     expect(result.ok === true && result.outputsUnavailable).toBe(false);
+    expect(result.ok === true && result.unlinkableOutputs).toBe(true);
   });
 });

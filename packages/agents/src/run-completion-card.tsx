@@ -92,6 +92,7 @@ export function RunCompletionCard({
             hasTranscript: result.hasTranscript,
             hasStepResults: result.hasStepResults,
             outputsUnavailable: result.outputsUnavailable,
+            unlinkableOutputs: result.unlinkableOutputs,
           },
         });
       })
@@ -117,14 +118,22 @@ export function RunCompletionCard({
   const producedNothing = outcome.kind === "completed-no-output";
   const linkedOutputs =
     outcome.kind === "completed-with-output" ? outcome.outputs : [];
+  // We could not establish what the run left behind (read in flight, read
+  // failed, or only unlinkable rows came back). The card must stay silent about
+  // WHERE the output is — pointing at a transcript that is not there is the
+  // same species of false claim as "produced nothing".
+  const evidenceIndeterminate =
+    outcome.kind === "completed-with-output" && outcome.evidenceIndeterminate;
 
   const description = producedNothing
     ? "This run reached the end of its steps but produced no output — nothing was returned and nothing was saved. Start a new run to try again."
     : linkedOutputs.length > 0
       ? "This run finished and saved its output."
-      : outputHint === "transcript"
-        ? "This run finished. Its output is in the run transcript below."
-        : "This run finished. Its output is recorded on the run's steps — select a completed step to review it.";
+      : evidenceIndeterminate
+        ? "This run finished. Its output could not be loaded here — reload the page to try again."
+        : outputHint === "transcript"
+          ? "This run finished. Its output is in the run transcript below."
+          : "This run finished. Its output is recorded on the run's steps — select a completed step to review it.";
 
   return (
     <Card data-run-completion={producedNothing ? "no-output" : "with-output"}>

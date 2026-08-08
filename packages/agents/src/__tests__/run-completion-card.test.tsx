@@ -188,6 +188,39 @@ describe("RunCompletionCard (cinatra#2482)", () => {
     // Never a false "produced nothing".
     expect(document.querySelector('[data-run-completion="no-output"]')).toBeNull();
     expect(document.querySelector('[data-run-completion="with-output"]')).not.toBeNull();
+    // CONFIRMATION-ROUND FINDING: nor a false "look below". The host panel
+    // suppresses its "No messages yet." line under this card, so the old
+    // conservative copy pointed the user at blank space — permanently, since a
+    // failed read never resolves.
+    await waitFor(() =>
+      expect(screen.queryByText(/could not be loaded here/i)).not.toBeNull(),
+    );
+    expect(screen.queryByText(/its output is in the run transcript below/i)).toBeNull();
+  });
+
+  // CONFIRMATION-ROUND FINDING. Rows were written but none is an openable
+  // artifact: the card must neither claim the run produced nothing nor point at
+  // a transcript it has no evidence for.
+  it("stays neutral when the run saved rows that cannot be linked", async () => {
+    const { RunCompletionCard } = await import("../run-completion-card");
+    render(
+      <RunCompletionCard
+        runId="run-2482"
+        agentId="cinatra-ai/blog-draft-writer-agent"
+        outputHint="transcript"
+        initialEvidence={{
+          outputs: [],
+          hasTranscript: false,
+          hasStepResults: false,
+          unlinkableOutputs: true,
+        }}
+      />,
+    );
+
+    expect(document.querySelector('[data-run-completion="no-output"]')).toBeNull();
+    expect(screen.queryByText(/nothing was returned and nothing was saved/i)).toBeNull();
+    expect(screen.queryByText(/its output is in the run transcript below/i)).toBeNull();
+    expect(screen.queryByText(/could not be loaded here/i)).not.toBeNull();
   });
 
   // Codex round-A finding. A card reused for a different run must never show

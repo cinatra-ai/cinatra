@@ -66,7 +66,12 @@ describe("resolveRunTerminalOutcome", () => {
         status: "completed",
         evidence: { outputs, hasTranscript: false, hasStepResults: false },
       }),
-    ).toEqual({ kind: "completed-with-output", outputs, outputRenderedBelow: false });
+    ).toEqual({
+      kind: "completed-with-output",
+      outputs,
+      outputRenderedBelow: false,
+      evidenceIndeterminate: false,
+    });
   });
 
   it("prefers the linked outputs even when a transcript also exists", () => {
@@ -79,6 +84,7 @@ describe("resolveRunTerminalOutcome", () => {
       kind: "completed-with-output",
       outputs,
       outputRenderedBelow: false,
+      evidenceIndeterminate: false,
     });
   });
 
@@ -88,7 +94,12 @@ describe("resolveRunTerminalOutcome", () => {
         status: "completed",
         evidence: { outputs: [], hasTranscript: true, hasStepResults: false },
       }),
-    ).toEqual({ kind: "completed-with-output", outputs: [], outputRenderedBelow: true });
+    ).toEqual({
+      kind: "completed-with-output",
+      outputs: [],
+      outputRenderedBelow: true,
+      evidenceIndeterminate: false,
+    });
   });
 
   it("counts step results as output", () => {
@@ -97,7 +108,35 @@ describe("resolveRunTerminalOutcome", () => {
         status: "completed",
         evidence: { outputs: [], hasTranscript: false, hasStepResults: true },
       }),
-    ).toEqual({ kind: "completed-with-output", outputs: [], outputRenderedBelow: true });
+    ).toEqual({
+      kind: "completed-with-output",
+      outputs: [],
+      outputRenderedBelow: true,
+      evidenceIndeterminate: false,
+    });
+  });
+
+  // A KNOWN transcript outranks an unusable object read: "its output is below"
+  // is a true statement there, so it must not be downgraded to the vague
+  // indeterminate copy just because the object read came back empty-handed.
+  it("keeps the definite transcript claim even when the object read was unusable", () => {
+    expect(
+      resolveRunTerminalOutcome({
+        status: "completed",
+        evidence: {
+          outputs: [],
+          hasTranscript: true,
+          hasStepResults: false,
+          outputsUnavailable: true,
+          unlinkableOutputs: true,
+        },
+      }),
+    ).toEqual({
+      kind: "completed-with-output",
+      outputs: [],
+      outputRenderedBelow: true,
+      evidenceIndeterminate: false,
+    });
   });
 
   it("reports completed-no-output ONLY for a genuinely empty terminal run", () => {
@@ -110,7 +149,11 @@ describe("resolveRunTerminalOutcome", () => {
     expect(resolveRunTerminalOutcome({ status: "completed", evidence: null })).toEqual({
       kind: "completed-with-output",
       outputs: [],
-      outputRenderedBelow: true,
+      // Confirmation round: unresolved evidence must NOT claim the output is
+      // rendered below. The panel suppresses its "No messages yet." line under
+      // this card, so that claim pointed the user at blank space.
+      outputRenderedBelow: false,
+      evidenceIndeterminate: true,
     });
   });
 
@@ -129,7 +172,37 @@ describe("resolveRunTerminalOutcome", () => {
           outputsUnavailable: true,
         },
       }),
-    ).toEqual({ kind: "completed-with-output", outputs: [], outputRenderedBelow: true });
+    ).toEqual({
+      kind: "completed-with-output",
+      outputs: [],
+      outputRenderedBelow: false,
+      evidenceIndeterminate: true,
+    });
+  });
+
+  // CONFIRMATION-ROUND FINDING. The artifact gate drops every provenance row
+  // that is not an openable artifact. A run whose rows were ALL dropped used to
+  // be indistinguishable from a run that wrote nothing, so the card told the
+  // user "nothing was returned and nothing was saved" about a run that
+  // demonstrably saved rows.
+  it("does not claim 'no output' when rows existed but none were linkable", () => {
+    expect(
+      resolveRunTerminalOutcome({
+        status: "completed",
+        evidence: {
+          outputs: [],
+          hasTranscript: false,
+          hasStepResults: false,
+          outputsUnavailable: false,
+          unlinkableOutputs: true,
+        },
+      }),
+    ).toEqual({
+      kind: "completed-with-output",
+      outputs: [],
+      outputRenderedBelow: false,
+      evidenceIndeterminate: true,
+    });
   });
 
   it("still reports no output when the read SUCCEEDED and found nothing", () => {
@@ -141,6 +214,7 @@ describe("resolveRunTerminalOutcome", () => {
           hasTranscript: false,
           hasStepResults: false,
           outputsUnavailable: false,
+          unlinkableOutputs: false,
         },
       }),
     ).toEqual({ kind: "completed-no-output" });

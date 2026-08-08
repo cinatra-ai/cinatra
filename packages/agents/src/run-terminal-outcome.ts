@@ -61,6 +61,19 @@ export type RunOutputEvidence = {
    * finding). An empty-but-unavailable read takes the conservative branch.
    */
   outputsUnavailable?: boolean;
+  /**
+   * True when the run DID write provenance-linked rows but NONE of them could be
+   * linked — every candidate was non-artifact-typed or read-denied, or the scan
+   * window filled with such rows.
+   *
+   * Distinct from {@link outputsUnavailable}: the read SUCCEEDED, so this is not
+   * an infrastructure failure. It is the stronger statement "this run saved
+   * something we cannot open from here" — and it must never be collapsed into
+   * `outputs: []` meaning "the run produced nothing", because that is a flat
+   * falsehood about a run that demonstrably saved rows (confirmation-round
+   * finding).
+   */
+  unlinkableOutputs?: boolean;
 };
 
 export type RunTerminalOutcome =
@@ -74,6 +87,18 @@ export type RunTerminalOutcome =
        * it rather than claim there is nothing.
        */
       outputRenderedBelow: boolean;
+      /**
+       * True when we could NOT establish what the run left behind: the read is
+       * still in flight, it failed, or it returned only rows we cannot link.
+       *
+       * The card MUST NOT make a definite claim in this state. Before this flag
+       * every conservative branch reused the "its output is in the run
+       * transcript below" copy, so a failed read told the user to look at a
+       * transcript that was not there — the panel even suppresses its "No
+       * messages yet." line under the card, so the user was pointed at blank
+       * space (confirmation-round finding).
+       */
+      evidenceIndeterminate: boolean;
     }
   | { kind: "completed-no-output" };
 
@@ -101,22 +126,44 @@ export function resolveRunTerminalOutcome(input: {
   // "output may exist" rather than asserting the run produced nothing — a false
   // "no output" claim on a run that DID produce output is the worse error.
   if (evidence === null) {
-    return { kind: "completed-with-output", outputs: [], outputRenderedBelow: true };
+    return {
+      kind: "completed-with-output",
+      outputs: [],
+      outputRenderedBelow: false,
+      evidenceIndeterminate: true,
+    };
   }
   if (evidence.outputs.length > 0) {
     return {
       kind: "completed-with-output",
       outputs: evidence.outputs,
       outputRenderedBelow: false,
+      evidenceIndeterminate: false,
     };
   }
+  // Ordered BEFORE the indeterminate branches on purpose: transcript/step
+  // evidence is positively known, so "its output is below" is a TRUE statement
+  // even if the object read separately came back unusable.
   if (evidence.hasTranscript || evidence.hasStepResults) {
-    return { kind: "completed-with-output", outputs: [], outputRenderedBelow: true };
+    return {
+      kind: "completed-with-output",
+      outputs: [],
+      outputRenderedBelow: true,
+      evidenceIndeterminate: false,
+    };
   }
-  // The produced-output read failed, so an empty `outputs` proves nothing.
-  // Stay conservative rather than assert the run produced nothing.
-  if (evidence.outputsUnavailable) {
-    return { kind: "completed-with-output", outputs: [], outputRenderedBelow: true };
+  // Either the produced-output read failed, or it succeeded but every row it
+  // found is unlinkable. In both cases an empty `outputs` proves nothing, so
+  // stay conservative rather than assert the run produced nothing — and mark
+  // the state indeterminate so the card does not point at output it cannot
+  // vouch for.
+  if (evidence.outputsUnavailable || evidence.unlinkableOutputs) {
+    return {
+      kind: "completed-with-output",
+      outputs: [],
+      outputRenderedBelow: false,
+      evidenceIndeterminate: true,
+    };
   }
   return { kind: "completed-no-output" };
 }
