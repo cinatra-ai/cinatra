@@ -489,8 +489,8 @@ export const auditorProposalSnapshots = cinatraSchema.table("auditor_proposal_sn
 // auditor_approval_receipts — single-use Separation-of-Duties receipts
 // (cinatra#1625).
 //
-// approveReviewTask (admin-gated, with the SoD self-approval guard) mints ONE
-// receipt bound to (agent_run_id, snapshot_hash, reviewer_id) — conditionally,
+// approveReviewTask minted ONE receipt bound to
+// (agent_run_id, snapshot_hash, reviewer_id) — conditionally,
 // only when a pending auditor snapshot exists for the resolved run.
 // /api/auditor/apply CONSUMES the receipt with a single-shot CAS
 // (consumed_at IS NULL → now()); a second apply (or a forged resume replay)
