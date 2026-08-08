@@ -14,12 +14,6 @@ import { shadowUpsertObject, shadowDeleteObject } from "@/lib/objects-dual-write
 // append the `WHERE agent_runs.project_id = $projectId` clause.
 import { sealedRoomFilterValue } from "@/lib/sealed-room";
 import type { ActorContext } from "@/lib/authz/actor-context";
-// cinatra#2485 C, layer 1 — the install-scope run gate at the CANONICAL
-// creation perimeter. Every run-creating path in the instance funnels through
-// `createAgentRun` / `createAgentRunPendingInput`, including the ones that
-// never enqueue (host content-editor override dispatch), so this is the one
-// place a creation-side guard cannot be walked around.
-import { assertAgentRunScopeAuthorized } from "./agent-template-scope-guard";
 import { db, agentBuilderPool } from "./db";
 // The force-delete run pre-clean lives in its own vertical slice; the
 // teardown run-id cap it defines is shared with `purgeAgentTemplateAtomic`.
@@ -701,9 +695,29 @@ export async function createAgentTemplate(
 async function _createAgentTemplateImpl(
   input: CreateAgentTemplateInput,
 ): Promise<AgentTemplateRecord> {
+  // cinatra#2485 C — every template must be WRITTEN with a determinate install
+  // scope, because that scope is now the only thing that authorizes a run.
+  //
+  // A template anchored to an organization but given no narrower owner anchor
+  // IS an organization-scoped template; stamping that at write time is the
+  // same defaulting the canonical install row already applies
+  // (`install-package-with-dependencies`: `orgId ? "organization" : …`). Doing
+  // it HERE, at the writer, rather than in the evaluator keeps the read path
+  // strictly fail-closed: a legacy row that really carries no anchor still
+  // denies, and nothing is guessed at authorization time.
+  //
+  // This NARROWS: such a template used to be returned (and runnable) for any
+  // authenticated actor in any org; now it is runnable by its own org. A
+  // template created with NO org anchor at all (e.g. a registry fork) stays
+  // scope-less and is refused at run start — the correct fail-closed outcome
+  // for a row with no tenancy.
+  const scoped: CreateAgentTemplateInput =
+    input.orgId && input.ownerLevel === undefined && input.ownerId === undefined
+      ? { ...input, ownerLevel: "organization", ownerId: input.orgId }
+      : input;
   const [row] = await db
     .insert(agentTemplates)
-    .values(serializeTemplate(input))
+    .values(serializeTemplate(scoped))
     .returning();
   const record = deserializeTemplate(row);
 
@@ -1561,9 +1575,21 @@ export async function createAgentRun(
   // run can never create another run even if its own authority is forwarded.
   authority: OrgWriteAuthority | undefined,
 ): Promise<AgentRunRecord> {
-  // cinatra#2485 C (layer 1): install-scope IS the run-authorization gate.
+  // cinatra#2485 C (layer 1): install-scope IS the run-authorization gate, at
+  // the CANONICAL creation perimeter. Every run-creating path in the instance
+  // funnels through this function and `createAgentRunPendingInput`, including
+  // the ones that never enqueue (the host content-editor override dispatch),
+  // so this is the one place a creation-side guard cannot be walked around.
   // Asserted BEFORE any derivation or insert, so an out-of-scope actor's run
   // never exists — there is no row to leak, resume, or repair into a dispatch.
+  //
+  // DYNAMICALLY imported (the same posture `run-transition.ts` uses): `store.ts`
+  // is reachable from every locked route, and a static edge to the guard's
+  // module would grow each route's first-party graph against the route-graph
+  // ratchet for a module only ever needed on a run WRITE.
+  const { assertAgentRunScopeAuthorized } = await import(
+    "./agent-template-scope-guard"
+  );
   await assertAgentRunScopeAuthorized({
     stage: "create",
     templateId: input.templateId,
@@ -3159,6 +3185,10 @@ export async function createAgentRunPendingInput(
   // cinatra#2485 C (layer 1): the SAME install-scope gate the `createAgentRun`
   // perimeter applies — a `pending_input` run is a run, and the interactive
   // Run button dispatches it later without re-entering `createAgentRun`.
+  // Dynamically imported for the same route-graph reason as above.
+  const { assertAgentRunScopeAuthorized } = await import(
+    "./agent-template-scope-guard"
+  );
   await assertAgentRunScopeAuthorized({
     stage: "create",
     templateId: input.templateId,

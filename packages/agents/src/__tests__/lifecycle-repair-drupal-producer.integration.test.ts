@@ -105,8 +105,8 @@ async function drupalAgentTemplateWith(lifecycle: Record<string, unknown> | null
     const templateId = `tmpl-${randomUUID()}`;
     await pool(
       `INSERT INTO "${q(TEST_SCHEMA)}"."agent_templates"
-         (id, org_id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name, lifecycle_config)
-       VALUES ($1,$2,'seed','seed','[]','{}','{}',$3,NULL)`,
+         (id, org_id, owner_level, owner_id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name, lifecycle_config)
+       VALUES ($1,$2,'organization',$2,'seed','seed','[]','{}','{}',$3,NULL)`,
       [templateId, ORG, DRUPAL_AGENT_PACKAGE],
     );
     drupalTemplateId = templateId;

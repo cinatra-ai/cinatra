@@ -516,8 +516,57 @@ describe("autonomous run (no explicit actor, no runBy)", () => {
     ).toBe("not_team_member");
   });
 
-  it("REFUSES when the template carries no installation principal at all", async () => {
+  it("ALLOWS an ORG-scoped agent's ownerless run when the run belongs to the owning org", async () => {
+    // At org scope "in scope" means "belongs to the owning org", and the run's
+    // own org_id IS that evidence. No principal needed, and no principal
+    // invented — an ownerless lifecycle repair or recurring clone of a
+    // runBy-less source could otherwise never dispatch an org-wide agent.
     seedTemplate({ ownerLevel: "organization", ownerId: ORG, creatorId: null });
+    await expect(
+      assertAgentRunScopeAuthorized({
+        stage: "dispatch",
+        templateId: "tmpl-1",
+        orgId: ORG,
+        runId: "run-1",
+        runBy: null,
+      }),
+    ).resolves.toBeUndefined();
+    expect(shared.resolverCalls).toEqual([]);
+  });
+
+  it("does NOT extend the org-anchored allowance across orgs", async () => {
+    seedTemplate({ ownerLevel: "organization", ownerId: ORG, creatorId: null });
+    expect(
+      await refusalReason(() =>
+        assertAgentRunScopeAuthorized({
+          stage: "dispatch",
+          templateId: "tmpl-1",
+          orgId: OTHER_ORG,
+          runId: "run-1",
+          runBy: null,
+        }),
+      ),
+    ).toBe("no_actor");
+  });
+
+  it("does NOT extend the org-anchored allowance to a NARROWER scope", async () => {
+    // A team/project/personal agent's scope is not proven by the run's org.
+    seedTemplate({ ownerLevel: "team", ownerId: "team-7", creatorId: null });
+    expect(
+      await refusalReason(() =>
+        assertAgentRunScopeAuthorized({
+          stage: "dispatch",
+          templateId: "tmpl-1",
+          orgId: ORG,
+          runId: "run-1",
+          runBy: null,
+        }),
+      ),
+    ).toBe("no_actor");
+  });
+
+  it("REFUSES a scope-less template's ownerless run", async () => {
+    seedTemplate({ ownerLevel: null, ownerId: null, creatorId: null });
     expect(
       await refusalReason(() =>
         assertAgentRunScopeAuthorized({

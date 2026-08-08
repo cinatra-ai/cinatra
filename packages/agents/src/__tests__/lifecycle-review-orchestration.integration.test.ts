@@ -727,9 +727,9 @@ describe.skipIf(!HAS_DB)("cinatra#2039 — review orchestration (real store)", (
     const runId = `run-${randomUUID()}`;
     await pool(
       `INSERT INTO "${q(TEST_SCHEMA)}"."agent_templates"
-         (id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name, lifecycle_config)
-       VALUES ($1, 'manifest-fixture', '', '[]', '{}', '{}', $2, $3)`,
-      [templateId, `@cinatra-ai/manifest-fixture-${randomUUID()}`, JSON.stringify(lifecycleConfig)],
+         (id, org_id, owner_level, owner_id, name, source_nl, compiled_plan, input_schema, approval_policy, package_name, lifecycle_config)
+       VALUES ($1, $4, 'organization', $4, 'manifest-fixture', '', '[]', '{}', '{}', $2, $3)`,
+      [templateId, `@cinatra-ai/manifest-fixture-${randomUUID()}`, JSON.stringify(lifecycleConfig), ORG],
     );
     await pool(
       `INSERT INTO "${q(TEST_SCHEMA)}"."agent_runs" (id, template_id, input_params, org_id)

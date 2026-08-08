@@ -52,6 +52,7 @@ import { agentRuns, agentTemplates } from "./schema";
 import {
   AgentTemplateScopeError,
   assertActorWithinAgentTemplateScope,
+  normalizeAgentTemplateScopeLevel,
   type AgentTemplateScopeRef,
 } from "./agent-template-scope";
 
@@ -269,14 +270,30 @@ export async function assertAgentRunScopeAuthorized(
   }
 
   if (candidates.length === 0) {
-    // Autonomous run with no human chain: authorize it as the PERSISTED
-    // installation principal, resolved live. Absent ⇒ refuse (no generic
-    // system bypass exists).
+    // ---- Autonomous run: no requester, no persisted owner --------------
+    //
+    // (a) ORG-ANCHORED. For an ORGANIZATION-scoped agent, "in scope" means
+    // "belongs to the owning org", and the run's OWN `org_id` is exactly that
+    // evidence — the run is the org's work. Admitting it needs no principal
+    // and is not a system bypass: it cannot admit anything at team, project or
+    // personal scope (where an org anchor proves nothing), and it cannot admit
+    // a run from another org. Without this, an ownerless system run — a
+    // lifecycle repair whose producing run had no human, a recurring clone of
+    // a runBy-less source — could never dispatch an org-wide agent.
+    const level = normalizeAgentTemplateScopeLevel(template.ownerLevel);
+    const owningOrgId = template.orgId ?? template.ownerId;
+    if (level === "organization" && owningOrgId && owningOrgId === input.orgId) {
+      return;
+    }
+    // (b) Narrower scope ⇒ the run must be authorized by the PERSISTED
+    // installation principal (the human who installed the agent at this
+    // scope), resolved LIVE so a revoked installer stops authorizing it.
+    // Absent ⇒ refuse. There is no generic system bypass.
     if (!template.creatorId) {
       throw new AgentTemplateScopeError({
         templateId: template.id,
         reason: "no_actor",
-        level: null,
+        level,
         stage: input.stage,
       });
     }

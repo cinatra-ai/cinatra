@@ -42,6 +42,16 @@ describe("layer 1: creation perimeter", () => {
     expect(guardAt).toBeLessThan(insertAt);
   });
 
+  it("reaches the guard by DYNAMIC import — store.ts is on every locked route", () => {
+    // A static edge would pull the guard (and its own graph) into every locked
+    // route's first-party module budget for something only a run WRITE needs.
+    expect(store).not.toMatch(/^import .*agent-template-scope-guard/m);
+    expect(
+      (store.match(/await import\(\s*"\.\/agent-template-scope-guard"\s*\)/g) ?? [])
+        .length,
+    ).toBe(2);
+  });
+
   it("guards createAgentRunPendingInput before its insert", () => {
     const body = store.slice(
       store.indexOf("export async function createAgentRunPendingInput("),
@@ -65,6 +75,21 @@ describe("layer 1: creation perimeter", () => {
     for (const insertAt of insertPositions) {
       expect(guardPositions.some((g) => g < insertAt)).toBe(true);
     }
+  });
+
+  it("stamps a determinate scope at TEMPLATE-WRITE time, never guesses one at read time", () => {
+    // The evaluator must stay fail-closed on a scope-less row, so the
+    // org-anchored default belongs at the writer. An org-anchored template with
+    // no narrower owner is org-scoped; one with no org anchor at all stays
+    // scope-less and is refused at run start.
+    const body = store.slice(store.indexOf("async function _createAgentTemplateImpl("));
+    expect(body).toMatch(
+      /input\.orgId && input\.ownerLevel === undefined && input\.ownerId === undefined/,
+    );
+    expect(body).toMatch(/ownerLevel: "organization", ownerId: input\.orgId/);
+    // …and the evaluator still refuses an unknown level (no read-time coercion).
+    const evaluator = read("packages/agents/src/agent-template-scope.ts");
+    expect(evaluator).toMatch(/reason: "unknown_scope"/);
   });
 
   it("keeps the scope actor a SERVER-ONLY input, never parsed from a tool payload", () => {
