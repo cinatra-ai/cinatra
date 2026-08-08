@@ -472,6 +472,92 @@ describe("transitionDefaultProviderViaAdministration — the four-state matrix",
     expect(store.get(KEY)).toBe(before);
   });
 
+  // ---------------------------------------------------------------------
+  // cinatra#2504 — the COMMITTED-SAME no-op is a second natural door to heal
+  // a legacy null fingerprint (a pre-openai-connector-0.1.9 commitment).
+  // ---------------------------------------------------------------------
+
+  it("COMMITTED-SAME with a NULL fingerprint opportunistically refreshes it when the live credential now reads readable", async () => {
+    // Created while the credential was unreadable (the beforeEach default) —
+    // the legacy shape: committed, credentialFingerprint null.
+    await transitionDefaultProviderViaAdministration({
+      provider: "anthropic",
+      actorId: "a",
+      writeAuditedDefault: auditedWrite,
+    });
+    const before = storedRecord() as SetupProviderCommitmentRecord;
+    expect(before.credentialFingerprint).toBeNull();
+    auditedWrites.length = 0;
+    liveFingerprint.value = { status: "readable", fingerprint: "cfv1:refreshed" };
+
+    const result = await transitionDefaultProviderViaAdministration({
+      provider: "anthropic",
+      actorId: "b",
+      writeAuditedDefault: auditedWrite,
+    });
+
+    // Still a pure no-op transition — no audited write, same outcome shape.
+    expect(result).toEqual({ outcome: "unchanged", provider: "anthropic" });
+    expect(auditedWrites).toEqual([]);
+    const after = storedRecord() as SetupProviderCommitmentRecord;
+    expect(after.credentialFingerprint).toBe("cfv1:refreshed");
+    // Everything else about the record — including its identity — is
+    // untouched: only the fingerprint field changed.
+    expect({ ...after, credentialFingerprint: before.credentialFingerprint }).toEqual(before);
+  });
+
+  it("COMMITTED-SAME with a NULL fingerprint swallows a THROWN live-credential read and leaves the record byte-identical", async () => {
+    await transitionDefaultProviderViaAdministration({
+      provider: "anthropic",
+      actorId: "a",
+      writeAuditedDefault: auditedWrite,
+    });
+    auditedWrites.length = 0;
+    const before = store.get(KEY);
+    const readCredentialFingerprint = vi.fn(async () => {
+      throw new Error("connector threw mid-read");
+    });
+
+    const result = await transitionDefaultProviderViaAdministration({
+      provider: "anthropic",
+      actorId: "b",
+      writeAuditedDefault: auditedWrite,
+      readCredentialFingerprint,
+    });
+
+    expect(result).toEqual({ outcome: "unchanged", provider: "anthropic" });
+    expect(readCredentialFingerprint).toHaveBeenCalledTimes(1);
+    expect(auditedWrites).toEqual([]);
+    expect(store.get(KEY)).toBe(before);
+  });
+
+  it("COMMITTED-SAME with an ALREADY-CAPTURED fingerprint never attempts a refresh read, and touches nothing", async () => {
+    liveFingerprint.value = { status: "readable", fingerprint: "cfv1:initial" };
+    await transitionDefaultProviderViaAdministration({
+      provider: "anthropic",
+      actorId: "a",
+      writeAuditedDefault: auditedWrite,
+    });
+    auditedWrites.length = 0;
+    const before = store.get(KEY);
+    const readCredentialFingerprint = vi.fn(async () => ({
+      status: "readable" as const,
+      fingerprint: "cfv1:should-never-be-read",
+    }));
+
+    const result = await transitionDefaultProviderViaAdministration({
+      provider: "anthropic",
+      actorId: "b",
+      writeAuditedDefault: auditedWrite,
+      readCredentialFingerprint,
+    });
+
+    expect(result).toEqual({ outcome: "unchanged", provider: "anthropic" });
+    expect(readCredentialFingerprint).not.toHaveBeenCalled();
+    expect(auditedWrites).toEqual([]);
+    expect(store.get(KEY)).toBe(before);
+  });
+
   it("COMMITTED-DIFFERENT → atomically audits + writes the default + moves the record", async () => {
     await transitionDefaultProviderViaAdministration({
       provider: "anthropic",
@@ -630,6 +716,55 @@ describe("deriveSetupAiStepState — lock survives credential loss; readiness fa
     readinessInputs.satisfied = false;
     const state = await deriveSetupAiStepState();
     expect(state).toMatchObject({ locked: true, credentialFresh: true, ready: false });
+  });
+
+  // -------------------------------------------------------------------------
+  // cinatra#2504 — credentialFingerprintNeverCaptured: a legacy commitment
+  // (stored fingerprint null, pre-openai-connector-0.1.9) is a distinct cause
+  // of `credentialFresh: false` from a genuine rotation/removal mismatch.
+  // -------------------------------------------------------------------------
+
+  it("credentialFingerprintNeverCaptured is TRUE for a legacy commitment with a NULL stored fingerprint", async () => {
+    await committedWith(null);
+    liveFingerprint.value = { status: "unreadable", reason: "connector-unavailable" };
+    readinessInputs.satisfied = true;
+    const state = await deriveSetupAiStepState();
+    expect(state).toMatchObject({
+      locked: true,
+      credentialFresh: false,
+      credentialFingerprintNeverCaptured: true,
+      ready: false,
+    });
+  });
+
+  it("credentialFingerprintNeverCaptured is FALSE on a genuine rotation mismatch (a fingerprint WAS captured)", async () => {
+    await committedWith("cfv1:aa");
+    liveFingerprint.value = { status: "readable", fingerprint: "cfv1:ROTATED" };
+    readinessInputs.satisfied = true;
+    const state = await deriveSetupAiStepState();
+    expect(state).toMatchObject({
+      locked: true,
+      credentialFresh: false,
+      credentialFingerprintNeverCaptured: false,
+      ready: false,
+    });
+  });
+
+  it("credentialFingerprintNeverCaptured is FALSE (and irrelevant) once fresh, and when no commitment exists at all", async () => {
+    await committedWith("cfv1:aa");
+    liveFingerprint.value = { status: "readable", fingerprint: "cfv1:aa" };
+    readinessInputs.satisfied = true;
+    expect(await deriveSetupAiStepState()).toMatchObject({
+      credentialFresh: true,
+      credentialFingerprintNeverCaptured: false,
+    });
+    // No commitment at all: not locked, and never-captured is false (there is
+    // no fingerprint slot to be null OR non-null).
+    store.clear();
+    expect(await deriveSetupAiStepState()).toMatchObject({
+      locked: false,
+      credentialFingerprintNeverCaptured: false,
+    });
   });
 });
 

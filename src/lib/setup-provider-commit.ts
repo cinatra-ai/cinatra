@@ -616,6 +616,30 @@ export async function transitionDefaultProviderViaAdministration(input: {
     snapshot.state.kind === "committed" &&
     snapshot.state.commitment.provider === input.provider
   ) {
+    // cinatra#2504: a second natural door to heal a legacy commitment whose
+    // fingerprint was never captured (pre-openai-connector-0.1.9) — the
+    // operator revisiting "the same provider" in Administration is otherwise
+    // a pure no-op, so opportunistically refresh a null fingerprint while
+    // we're here. Best-effort and byte-equal CAS: an unreadable credential or
+    // a lost race just leaves the record exactly as it was — the no-op
+    // contract (no audit, no default write) is unaffected either way.
+    if (snapshot.state.commitment.credentialFingerprint === null && snapshot.raw !== null) {
+      const commitment = snapshot.state.commitment;
+      const expectedRaw = snapshot.raw;
+      try {
+        const live = await readFingerprint(input.provider);
+        if (live.status === "readable") {
+          refreshCommittedCredentialFingerprint({
+            expectedRaw,
+            commitment,
+            credentialFingerprint: live.fingerprint,
+          });
+        }
+      } catch {
+        // Leave the null fingerprint for the next opportunity (setup's own
+        // re-verify, or a later Administration visit).
+      }
+    }
     return { outcome: "unchanged", provider: input.provider };
   }
 
@@ -760,6 +784,15 @@ export type SetupAiStepState = {
   commitState: SetupProviderCommitState;
   /** True iff the LIVE keyed credential fingerprint matches the commitment's. */
   credentialFresh: boolean;
+  /**
+   * True iff a commitment exists and its stored `credentialFingerprint` is
+   * `null` — a legacy commitment made before fingerprint capture existed
+   * (pre-openai-connector-0.1.9, cinatra#2504), not a genuine rotation or
+   * removal. `credentialFresh` is `false` in both cases; this flag lets a
+   * caller tell them apart and render truthful copy instead of the
+   * rotation/removal explanation, which is false for this case.
+   */
+  credentialFingerprintNeverCaptured: boolean;
   /** Lock + fresh credential + live provider-specific readiness inputs. */
   ready: boolean;
 };
@@ -778,8 +811,20 @@ export async function deriveSetupAiStepState(deps?: {
   await maybeMigrateReceiptCommitment(deps);
   const commitState = readSetupProviderCommitState(now);
   if (commitState.kind !== "committed") {
-    return { locked: false, commitState, credentialFresh: false, ready: false };
+    return {
+      locked: false,
+      commitState,
+      credentialFresh: false,
+      credentialFingerprintNeverCaptured: false,
+      ready: false,
+    };
   }
+  // cinatra#2504: a legacy commitment (pre-openai-connector-0.1.9) stored no
+  // fingerprint at all — distinct from a fingerprint that was captured and no
+  // longer matches (rotation/removal). Derived from the already-read
+  // commitment; no extra read.
+  const credentialFingerprintNeverCaptured =
+    commitState.commitment.credentialFingerprint === null;
   const readFingerprint =
     deps?.readCredentialFingerprint ?? readLiveCredentialFingerprint;
   let credentialFresh = false;
@@ -804,6 +849,7 @@ export async function deriveSetupAiStepState(deps?: {
     locked: true,
     commitState,
     credentialFresh,
+    credentialFingerprintNeverCaptured,
     ready: credentialFresh && inputsSatisfied,
   };
 }
