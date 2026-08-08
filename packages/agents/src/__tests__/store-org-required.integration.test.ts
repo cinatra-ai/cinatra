@@ -59,6 +59,14 @@ describe.skipIf(!hasDb)("createAgentRun - orgId required", () => {
       compiledPlan: [],
       inputSchema: {},
       approvalPolicy: { steps: [] },
+      // cinatra#2485 C — the template's INSTALL SCOPE is what authorizes a run,
+      // so the fixture agent is installed in the org under test.
+      // `createAgentTemplate` stamps `owner_level='organization'` /
+      // `owner_id=orgId` from this anchor; an org-less fixture template has no
+      // determinate scope and every run against it is refused. (This test's own
+      // invariant is unchanged: a run with NO orgId is still outside any scope
+      // AND has no authority, so it still throws.)
+      orgId: TEST_ORG_ID,
     });
     const runId = `r_${randomUUID()}`;
     // orgId intentionally omitted - this MUST throw because
@@ -95,6 +103,8 @@ describe.skipIf(!hasDb)("createAgentRun - orgId required", () => {
       compiledPlan: [],
       inputSchema: {},
       approvalPolicy: { steps: [] },
+      // see the run-scope note on the first test
+      orgId: TEST_ORG_ID,
     });
     const runId = `r_${randomUUID()}`;
     let thrown: unknown = null;
@@ -131,6 +141,8 @@ describe.skipIf(!hasDb)("createAgentRun - orgId required", () => {
       compiledPlan: [],
       inputSchema: {},
       approvalPolicy: { steps: [] },
+      // see the run-scope note on the first test
+      orgId: TEST_ORG_ID,
     });
     const runId = `r_${randomUUID()}`;
     const created = await createAgentRun(
@@ -154,14 +166,6 @@ describe.skipIf(!hasDb)("createAgentRun - orgId required", () => {
     // the NOT NULL constraint and must keep roundtripping through reads.
     const { createAgentRun, readAgentRunById, createAgentTemplate } = await import("../store");
     const templateId = `t_${randomUUID()}`;
-    await createAgentTemplate({
-      id: templateId,
-      name: "test-org-required-roundtrip-2",
-      sourceNl: "test",
-      compiledPlan: [],
-      inputSchema: {},
-      approvalPolicy: { steps: [] },
-    });
     const runId = `r_${randomUUID()}`;
     const orgId = `${TEST_ORG_ID}-${randomUUID().slice(0, 8)}`;
     // Unique per-test orgId — insert + clean up (mirrors the
@@ -174,6 +178,17 @@ describe.skipIf(!hasDb)("createAgentRun - orgId required", () => {
         `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now())`,
         [orgId, "Test Org Roundtrip 2", orgId],
       );
+      // cinatra#2485 C — anchored to THIS test's unique org (created just
+      // above), because the install scope is what authorizes the run.
+      await createAgentTemplate({
+        id: templateId,
+        name: "test-org-required-roundtrip-2",
+        sourceNl: "test",
+        compiledPlan: [],
+        inputSchema: {},
+        approvalPolicy: { steps: [] },
+        orgId,
+      });
       await createAgentRun(
         {
           id: runId,

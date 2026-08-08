@@ -60,7 +60,12 @@ afterAll(async () => {
   await c.end();
 });
 
-async function makeTemplate(): Promise<string> {
+// cinatra#2485 C — the template's INSTALL SCOPE is what authorizes a run, so a
+// fixture agent must be installed in the org whose runs will target it.
+// `createAgentTemplate` stamps `owner_level='organization'` / `owner_id=orgId`
+// from this anchor; an org-less fixture template has no determinate scope and
+// every run against it is refused.
+async function makeTemplate(orgId: string): Promise<string> {
   const { createAgentTemplate } = await import("../store");
   const templateId = `t_${randomUUID()}`;
   await createAgentTemplate({
@@ -70,6 +75,7 @@ async function makeTemplate(): Promise<string> {
     compiledPlan: [],
     inputSchema: {},
     approvalPolicy: { steps: [] },
+    orgId,
   });
   return templateId;
 }
@@ -77,7 +83,7 @@ async function makeTemplate(): Promise<string> {
 describe.skipIf(!hasDb)("createAgentRun — idempotent dispatch", () => {
   it("same idempotency key resolves to the SAME child run (at-least-once redispatch)", async () => {
     const { createAgentRun } = await import("../store");
-    const templateId = await makeTemplate();
+    const templateId = await makeTemplate("org-idem");
     const key = `dispatch:${randomUUID()}:1`;
     const first = await createAgentRun({
       id: `r_${randomUUID()}`, templateId, inputParams: {}, orgId: "org-idem",
@@ -93,15 +99,84 @@ describe.skipIf(!hasDb)("createAgentRun — idempotent dispatch", () => {
 
   it("rejects a key reuse with mismatched provenance (fail-closed)", async () => {
     const { createAgentRun } = await import("../store");
-    const templateId = await makeTemplate();
+    // cinatra#2485 C — an agent's install scope is its run authority, so ONE
+    // template can never be runnable from two tenants. The cross-tenant
+    // key-reuse hazard this test pins is therefore expressed the only way it
+    // can now occur in production: each org runs its OWN installed agent, and
+    // the same key arrives against both.
+    const templateA = await makeTemplate("org-A");
+    const templateB = await makeTemplate("org-B");
     const key = `dispatch:${randomUUID()}:1`;
     await createAgentRun({
-      id: `r_${randomUUID()}`, templateId, inputParams: {}, orgId: "org-A",
+      id: `r_${randomUUID()}`, templateId: templateA, inputParams: {}, orgId: "org-A",
       idempotencyKey: key,
     }, AUTH_A);
     let thrown: unknown = null;
     try {
       // Same key, DIFFERENT org → provenance mismatch → fail closed.
+      await createAgentRun({
+        id: `r_${randomUUID()}`, templateId: templateB, inputParams: {}, orgId: "org-B",
+        idempotencyKey: key,
+      }, AUTH_B);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).not.toBeNull();
+    expect((thrown as Error).message).toMatch(/provenance/i);
+  });
+
+  it("rejects a key reuse across DIFFERENT templates in the SAME org (template axis, fail-closed)", async () => {
+    const { createAgentRun } = await import("../store");
+    // The provenance guard is `existing.orgId !== input.orgId || existing.templateId
+    // !== input.templateId`. The cross-tenant case above differs on BOTH axes
+    // (post-#2485 C one template can never be runnable from two orgs), so it
+    // cannot pin either disjunct alone. This case isolates the TEMPLATE axis:
+    // same org, same key, two agents. The ORG axis is isolated by the test
+    // below.
+    const templateOne = await makeTemplate("org-idem");
+    const templateTwo = await makeTemplate("org-idem");
+    const key = `dispatch:${randomUUID()}:1`;
+    await createAgentRun({
+      id: `r_${randomUUID()}`, templateId: templateOne, inputParams: {}, orgId: "org-idem",
+      idempotencyKey: key,
+    }, AUTH_IDEM);
+    let thrown: unknown = null;
+    try {
+      await createAgentRun({
+        id: `r_${randomUUID()}`, templateId: templateTwo, inputParams: {}, orgId: "org-idem",
+        idempotencyKey: key,
+      }, AUTH_IDEM);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).not.toBeNull();
+    expect((thrown as Error).message).toMatch(/provenance/i);
+  });
+
+  it("rejects a key reuse whose existing row belongs to ANOTHER org under the SAME template (org axis, fail-closed)", async () => {
+    const { createAgentRun } = await import("../store");
+    // Isolates the `existing.orgId !== input.orgId` disjunct: the colliding row
+    // shares the template, so ONLY the org comparison can refuse. #2485 C makes
+    // this pair unreachable through two `createAgentRun` calls (the install-scope
+    // gate refuses the second before the insert), so the foreign-tenant row is
+    // seeded RAW — which is exactly the shape the provenance check is
+    // defense-in-depth against: a key colliding with a row from another tenant
+    // that the creation perimeter never vetted.
+    const templateId = await makeTemplate("org-B");
+    const key = `dispatch:${randomUUID()}:1`;
+    const c = new Client({ connectionString: dbUrl });
+    await c.connect();
+    try {
+      await c.query(
+        `INSERT INTO "${q(SCHEMA)}"."agent_runs" (id, template_id, input_params, org_id, idempotency_key)
+         VALUES ($1, $2, '{}', $3, $4)`,
+        [`r_${randomUUID()}`, templateId, "org-A", key],
+      );
+    } finally {
+      await c.end();
+    }
+    let thrown: unknown = null;
+    try {
       await createAgentRun({
         id: `r_${randomUUID()}`, templateId, inputParams: {}, orgId: "org-B",
         idempotencyKey: key,
@@ -115,7 +190,7 @@ describe.skipIf(!hasDb)("createAgentRun — idempotent dispatch", () => {
 
   it("distinct keys (a retry) create distinct runs", async () => {
     const { createAgentRun } = await import("../store");
-    const templateId = await makeTemplate();
+    const templateId = await makeTemplate("org-idem");
     const base = `dispatch:${randomUUID()}`;
     const a1 = await createAgentRun({
       id: `r_${randomUUID()}`, templateId, inputParams: {}, orgId: "org-idem",
@@ -130,7 +205,7 @@ describe.skipIf(!hasDb)("createAgentRun — idempotent dispatch", () => {
 
   it("no idempotency key → plain insert, no collision", async () => {
     const { createAgentRun } = await import("../store");
-    const templateId = await makeTemplate();
+    const templateId = await makeTemplate("org-idem");
     const r1 = await createAgentRun({ id: `r_${randomUUID()}`, templateId, inputParams: {}, orgId: "org-idem" }, AUTH_IDEM);
     const r2 = await createAgentRun({ id: `r_${randomUUID()}`, templateId, inputParams: {}, orgId: "org-idem" }, AUTH_IDEM);
     expect(r1.id).not.toBe(r2.id);

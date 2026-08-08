@@ -36,6 +36,15 @@ const HAS_DB =
   DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-1893-outbox";
+// cinatra#2485 C — the run-scope gate re-resolves a run's `run_by` LIVE against
+// better-auth (`resolveOrgRoleForUser`), so a synthetic run owner with no
+// membership row is refused as cross-org. The owner-carrying run below therefore
+// needs a REAL org/user/member row (the pattern
+// `lifecycle-repair-dispatch.integration.test.ts` documents: "the dispatch-time
+// principal gate needs a live-resolvable org role"). `public."user"` /
+// `public."member"` are better-auth tables and live UNQUALIFIED in `public` —
+// NOT in this suite's TEST_SCHEMA.
+const RUN_OWNER = "user-owner-1893";
 
 let store: typeof import("../store");
 let dbMod: typeof import("../db");
@@ -131,7 +140,8 @@ beforeAll(async () => {
       continue;
     // Skip the GLOBAL public."user" slug trigger (not schema-local): two
     // bootstrapping integration tests racing under file-parallelism collide on it.
-    // This suite never touches public."user".
+    // Safe for the RUN_OWNER seed below: that trigger is AFTER UPDATE OF username,
+    // so a plain INSERT never needs it.
     if (qy.text.includes("user_slug_move_trg")) continue;
     try {
       await admin.query(qy.text, (qy as { values?: unknown[] }).values as never[]);
@@ -159,10 +169,22 @@ beforeAll(async () => {
     `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
     [ORG, ORG, ORG],
   );
+  await client.query(
+    `INSERT INTO public."user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+     VALUES ($1, $1, $2, false, now(), now()) ON CONFLICT (id) DO NOTHING`,
+    [RUN_OWNER, `${RUN_OWNER}@1893.test`],
+  );
+  await client.query(
+    `INSERT INTO public."member" (id, "organizationId", "userId", role, "createdAt")
+     VALUES ($1, $2, $3, 'member', now()) ON CONFLICT (id) DO NOTHING`,
+    [`m-1893-${RUN_OWNER}`, ORG, RUN_OWNER],
+  );
 }, 90_000);
 
 afterAll(async () => {
   if (!HAS_DB) return;
+  await client?.query(`DELETE FROM public."member" WHERE "userId" = $1`, [RUN_OWNER]).catch(() => {});
+  await client?.query(`DELETE FROM public."user" WHERE id = $1`, [RUN_OWNER]).catch(() => {});
   await client?.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]).catch(() => {});
   await client?.end().catch(() => {});
   await dbMod?.agentBuilderPool?.end().catch(() => {});
@@ -180,7 +202,7 @@ describe.skipIf(!HAS_DB)(
     it("captures exactly one pending outbox row ATOMICALLY with the terminal CAS + snapshot", async () => {
       const { runId, templateId } = await seedRunningRun({
         packageVersion: "1.2.3",
-        runBy: "user-owner",
+        runBy: RUN_OWNER,
       });
       const content = JSON.stringify({ headline: "captured", n: 7 });
       await transitionRunStatus(runId, "running", "completed", {
@@ -190,7 +212,7 @@ describe.skipIf(!HAS_DB)(
           orgId: ORG,
           templateId,
           packageVersion: "1.2.3",
-          createdBy: "user-owner",
+          createdBy: RUN_OWNER,
           content,
           contentIsJson: true,
           contentHash: sha(content),
@@ -205,7 +227,7 @@ describe.skipIf(!HAS_DB)(
       expect(row.org_id).toBe(ORG);
       expect(row.template_id).toBe(templateId);
       expect(row.package_version).toBe("1.2.3");
-      expect(row.created_by).toBe("user-owner");
+      expect(row.created_by).toBe(RUN_OWNER);
       expect(row.content).toBe(content);
       expect(row.content_is_json).toBe(true);
       expect(row.content_hash).toBe(sha(content));

@@ -32,6 +32,18 @@ const ORG = "org-hitl-prims";
 // ACTIVE org row for ORG for the guarded writes to pass at runtime (seeded in
 // beforeAll / cleaned up in afterAll below).
 const AUTH = { orgId: ORG, can: () => true };
+// cinatra#2485 C — the run-scope gate re-resolves a run's `run_by` LIVE against
+// better-auth (`resolveOrgRoleForUser`), so a synthetic run owner with no
+// membership row is refused as cross-org. Every run below carries this human, so
+// it is seeded as a REAL member of ORG (the pattern
+// `lifecycle-repair-dispatch.integration.test.ts` documents: "the dispatch-time
+// principal gate needs a live-resolvable org role"). `public."user"` /
+// `public."member"` are better-auth tables and live UNQUALIFIED in `public`.
+// Suite-UNIQUE ids: `public."user"` is shared by every suite in this DB, so a
+// generic id could adopt (and then delete) a row this suite did not create.
+const RUN_OWNER = "user-hitl-prims-owner";
+const SEAM_OWNER = "user-hitl-prims-seam";
+const MEMBERS = [RUN_OWNER, SEAM_OWNER] as const;
 
 type Store = typeof import("../store");
 let store: Store;
@@ -45,6 +57,18 @@ beforeAll(async () => {
     `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
     [ORG, ORG, ORG],
   );
+  for (const userId of MEMBERS) {
+    await c.query(
+      `INSERT INTO public."user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+       VALUES ($1, $1, $2, false, now(), now()) ON CONFLICT (id) DO NOTHING`,
+      [userId, `${userId}@hitl-prims.test`],
+    );
+    await c.query(
+      `INSERT INTO public."member" (id, "organizationId", "userId", role, "createdAt")
+       VALUES ($1, $2, $3, 'member', now()) ON CONFLICT (id) DO NOTHING`,
+      [`m-hitl-prims-${userId}`, ORG, userId],
+    );
+  }
   await c.end();
 });
 
@@ -52,6 +76,8 @@ afterAll(async () => {
   if (!hasDb) return;
   const c = new Client({ connectionString: dbUrl });
   await c.connect();
+  await c.query(`DELETE FROM public."member" WHERE "userId" = ANY($1)`, [[...MEMBERS]]);
+  await c.query(`DELETE FROM public."user" WHERE id = ANY($1)`, [[...MEMBERS]]);
   await c.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]);
   await c.end();
 });
@@ -66,6 +92,12 @@ async function makeTemplate(packageName: string): Promise<string> {
     inputSchema: {},
     approvalPolicy: { steps: [] },
     packageName,
+    // cinatra#2485 C — the template's INSTALL SCOPE is what authorizes a run,
+    // so the fixture agent is installed in ORG (`createAgentTemplate` stamps
+    // `owner_level='organization'` / `owner_id=orgId` from this anchor). An
+    // org-less fixture template has no determinate scope and every run against
+    // it is refused.
+    orgId: ORG,
   });
   return templateId;
 }
@@ -96,8 +128,8 @@ describe.skipIf(!hasDb)("HITL prompt primitives — store-level (run, agent) pre
     const pkgB = `@cinatra-ai/hitl-b-${randomUUID().slice(0, 6)}`;
     const tplA = await makeTemplate(pkgA);
     const tplB = await makeTemplate(pkgB);
-    const runA = await makeRun(tplA, "user-1");
-    const runB = await makeRun(tplB, "user-1");
+    const runA = await makeRun(tplA, RUN_OWNER);
+    const runB = await makeRun(tplB, RUN_OWNER);
 
     await seedPrompt(runA, pkgA, "own-1");
     await seedPrompt(runA, pkgA, "own-2");
@@ -113,8 +145,8 @@ describe.skipIf(!hasDb)("HITL prompt primitives — store-level (run, agent) pre
     const pkgB = `@cinatra-ai/hitl-b-${randomUUID().slice(0, 6)}`;
     const tplA = await makeTemplate(pkgA);
     const tplB = await makeTemplate(pkgB);
-    const runA = await makeRun(tplA, "user-1");
-    const runB = await makeRun(tplB, "user-1");
+    const runA = await makeRun(tplA, RUN_OWNER);
+    const runB = await makeRun(tplB, RUN_OWNER);
 
     await seedPrompt(runA, pkgA, "own-1");
     await seedPrompt(runA, pkgB, "cross-agent");
@@ -153,7 +185,7 @@ describe.skipIf(!hasDb)("HITL prompt primitives — deterministic pre-interrupt 
     const pkgA = `@cinatra-ai/hitl-seam-${randomUUID().slice(0, 6)}`;
     const pkgB = `@cinatra-ai/hitl-seamx-${randomUUID().slice(0, 6)}`;
     const tplA = await makeTemplate(pkgA);
-    const runA = await makeRun(tplA, "user-seam");
+    const runA = await makeRun(tplA, SEAM_OWNER);
 
     await seedPrompt(runA, pkgA, "gate-1");
     await seedPrompt(runA, pkgA, "gate-2");
@@ -162,12 +194,12 @@ describe.skipIf(!hasDb)("HITL prompt primitives — deterministic pre-interrupt 
 
     const { createAgentBuilderPrimitiveHandlers } = await import("../mcp/handlers");
     const handlers = createAgentBuilderPrimitiveHandlers();
-    const actor = { userId: "user-seam", actorType: "model", source: "agent" };
+    const actor = { userId: SEAM_OWNER, actorType: "model", source: "agent" };
 
     // Everything runs inside ONE run-bound frame — exactly the passthrough seam,
     // which stamps the VERIFIED run scope (never the forgeable ambient runId).
     const result = await mcpRequestContextStorage.run(
-      { verifiedRunScopeId: runA, runId: "run-HEADER-FORGED", userId: "user-seam", orgId: ORG },
+      { verifiedRunScopeId: runA, runId: "run-HEADER-FORGED", userId: SEAM_OWNER, orgId: ORG },
       async () => {
         const listed = (await handlers["agent_run_hitl_prompts_list"]({
           primitiveName: "agent_run_hitl_prompts_list",

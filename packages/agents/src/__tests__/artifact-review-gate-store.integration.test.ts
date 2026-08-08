@@ -63,6 +63,17 @@ const HAS_DB =
   DB_URL !== "" && !DB_URL.includes("unused:unused@localhost:5432/unused");
 const q = (s: string) => s.replaceAll('"', '""');
 const ORG = "org-1796-review-gate";
+// cinatra#2485 C — the run-scope gate re-resolves a run's `run_by` LIVE against
+// better-auth (`resolveOrgRoleForUser`), so a synthetic run owner with no
+// membership row is refused as cross-org. The ACCESS test's run carries a human
+// owner, so that human is seeded as a REAL member of ORG (the pattern
+// `lifecycle-repair-dispatch.integration.test.ts` documents: "the dispatch-time
+// principal gate needs a live-resolvable org role"). `public."user"` /
+// `public."member"` are better-auth tables and live UNQUALIFIED in `public` —
+// NOT in this suite's TEST_SCHEMA. The FOREIGN actor is deliberately left
+// unseeded: it must stay a stranger to the run for the denial half to mean
+// anything.
+const RUN_OWNER = "user-owner-1796";
 
 let gateStore: typeof import("../artifact-review-gate-store");
 let store: typeof import("../store");
@@ -156,10 +167,25 @@ beforeAll(async () => {
     `INSERT INTO public."organization" (id, name, slug, "createdAt") VALUES ($1, $2, $3, now()) ON CONFLICT (id) DO NOTHING`,
     [ORG, ORG, ORG],
   );
+  // The run-scope gate's LIVE membership probe (see RUN_OWNER above). Skipping
+  // the user_slug_move_trg DDL above is safe for this seed: that trigger is
+  // AFTER UPDATE OF username, so a plain INSERT never needs it.
+  await client.query(
+    `INSERT INTO public."user" (id, name, email, "emailVerified", "createdAt", "updatedAt")
+     VALUES ($1, $1, $2, false, now(), now()) ON CONFLICT (id) DO NOTHING`,
+    [RUN_OWNER, `${RUN_OWNER}@1796.test`],
+  );
+  await client.query(
+    `INSERT INTO public."member" (id, "organizationId", "userId", role, "createdAt")
+     VALUES ($1, $2, $3, 'member', now()) ON CONFLICT (id) DO NOTHING`,
+    [`m-1796-${RUN_OWNER}`, ORG, RUN_OWNER],
+  );
 }, 90_000);
 
 afterAll(async () => {
   if (!HAS_DB) return;
+  await client?.query(`DELETE FROM public."member" WHERE "userId" = $1`, [RUN_OWNER]).catch(() => {});
+  await client?.query(`DELETE FROM public."user" WHERE id = $1`, [RUN_OWNER]).catch(() => {});
   await client?.query(`DELETE FROM public."organization" WHERE id = $1`, [ORG]).catch(() => {});
   await client?.end().catch(() => {});
   await dbMod?.agentBuilderPool?.end().catch(() => {});
@@ -469,11 +495,11 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
     });
     const runId = `run-${randomUUID()}`;
     await store.createAgentRun(
-      { id: runId, templateId, inputParams: {}, orgId: ORG, runBy: "user-owner" },
+      { id: runId, templateId, inputParams: {}, orgId: ORG, runBy: RUN_OWNER },
       { orgId: ORG, can: () => true },
     );
 
-    const owner = { actorType: "human" as const, userId: "user-owner", source: "route" as const };
+    const owner = { actorType: "human" as const, userId: RUN_OWNER, source: "route" as const };
     const foreign = { actorType: "human" as const, userId: "user-foreign", source: "route" as const };
 
     expect(await gateStore.enforceReviewRunAccess(runId, owner, "approveHitl")).toEqual({ ok: true });
