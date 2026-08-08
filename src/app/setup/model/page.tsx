@@ -278,17 +278,38 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
       ) : null}
 
       {/* The REOPENED key flow: the lock stands, the credential no longer
-          matches — the key section above is forced open for re-entry. */}
+          matches — the key section above is forced open for re-entry.
+          cinatra#2504: a commitment made before credential-fingerprint
+          capture existed (`credentialFingerprintNeverCaptured`) reads the
+          same "not fresh" as a genuine rotation/removal, but the
+          rotation/removal copy is FALSE for it — nothing changed, the
+          fingerprint simply was never recorded. Render the accurate copy for
+          that case; the rotation copy still renders for an actual mismatch. */}
       {keyReopened ? (
         <Alert variant="destructive" data-testid="setup-credential-reopened">
           <TriangleAlert className="size-4" aria-hidden />
-          <AlertTitle>The saved credentials changed</AlertTitle>
-          <AlertDescription>
-            The {PROVIDER_COPY[committedProvider ?? ""]?.label ?? committedProvider} key this
-            instance was set up with was removed, rotated, or can no longer be read. The
-            provider choice stays committed — enter the key above and press Continue to
-            re-verify.
-          </AlertDescription>
+          {aiState.credentialFingerprintNeverCaptured ? (
+            <>
+              <AlertTitle>This setup predates credential verification</AlertTitle>
+              <AlertDescription>
+                This instance&rsquo;s{" "}
+                {PROVIDER_COPY[committedProvider ?? ""]?.label ?? committedProvider} provider
+                was committed before Cinatra verified credentials at setup time — nothing was
+                removed or rotated. The provider choice stays committed; press Continue to
+                verify the saved key now. You do not need to re-enter it.
+              </AlertDescription>
+            </>
+          ) : (
+            <>
+              <AlertTitle>The saved credentials changed</AlertTitle>
+              <AlertDescription>
+                The {PROVIDER_COPY[committedProvider ?? ""]?.label ?? committedProvider} key
+                this instance was set up with was removed, rotated, or can no longer be read.
+                The provider choice stays committed — enter the key above and press Continue
+                to re-verify.
+              </AlertDescription>
+            </>
+          )}
         </Alert>
       ) : null}
 
