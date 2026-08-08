@@ -116,6 +116,42 @@ describe("half 1 — one derivation per request", () => {
     expect(shell).toMatch(/useSetupGateRecovery\(setupGateIndeterminate, refreshRoute\)/);
     expect(shell).toMatch(/router\.refresh\(\)/);
   });
+
+  it("never lets the shell redirect straight off the layout snapshot (cinatra#2544)", () => {
+    // The residual #2503 left behind. Its recovery covers only an
+    // INDETERMINATE gate — a read that never succeeded. A snapshot that was a
+    // correct `incomplete` when it was taken and has since gone stale (the
+    // ordinary end of onboarding) is not indeterminate, so nothing re-derived
+    // it and the shell kept bouncing `/ ↔ /setup` until a hard reload.
+    //
+    // WIRING ONLY: the four-arm verdict contract is a real render test in
+    // src/components/__tests__/setup-redirect-gate.test.tsx. What is pinned
+    // here is that the redirect goes THROUGH the confirmation, because a
+    // future edit restoring the direct `router.replace("/setup")` off
+    // `!connectionReady` would restore the loop with every behavioural test
+    // still passing.
+    const shell = readFileSync(path.join(REPO_ROOT, "src/components/app-shell.tsx"), "utf8");
+    expect(shell).toMatch(/useSetupRedirectGate\(\s*snapshotSaysSetupIncomplete/);
+    // The snapshot is named for what it is — a suspicion, not a verdict.
+    expect(shell).toMatch(/const snapshotSaysSetupIncomplete = !connectionReady && !isSetupPath/);
+    // ...and the only `replace("/setup")` is the callback the hook decides to
+    // call, never an effect firing straight off the prop. Comments are stripped
+    // first — the doc block above the hook QUOTES the old loop, and counting
+    // prose would make this assertion a hostage to how the bug is explained.
+    const shellCode = shell.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const replaceCallSites = shellCode.match(/router\.replace\("\/setup"\)/g) ?? [];
+    expect(replaceCallSites).toHaveLength(1);
+    expect(shell).toMatch(/const replaceToSetup = useCallback\(\(\) => router\.replace\("\/setup"\), \[router\]\)/);
+
+    // And the reconciliation source reports the tri-state gate rather than a
+    // boolean that cannot distinguish "not set up" from "could not find out".
+    const statusRoute = readFileSync(
+      path.join(REPO_ROOT, "src/app/api/app/route-guard-status/route.ts"),
+      "utf8",
+    );
+    expect(statusRoute).toMatch(/evaluateSetupGate/);
+    expect(statusRoute).not.toMatch(/isSetupWizardComplete/);
+  });
 });
 
 describe("half 2 — the two gates agree on identical steps", () => {

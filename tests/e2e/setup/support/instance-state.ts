@@ -159,6 +159,21 @@ export async function readMetadataValue(key: string): Promise<string | null> {
   });
 }
 
+/** Write a metadata row back verbatim (cinatra#2544). Paired with
+ *  {@link readMetadataValue} + {@link deleteMetadataKeys} it flips a setup
+ *  step's readiness OUT OF BAND — no server action, no route refresh — which
+ *  is the only way to leave a client holding a root-layout snapshot that the
+ *  server gate has already moved past. */
+export async function writeMetadataValue(key: string, value: string): Promise<void> {
+  await withClient(async (client) => {
+    await client.query(
+      `insert into ${APP_SCHEMA}.metadata (key, value) values ($1, $2)
+         on conflict (key) do update set value = excluded.value`,
+      [key, value],
+    );
+  });
+}
+
 export async function deleteMetadataKeys(keys: string[]): Promise<void> {
   await withClient(async (client) => {
     await client.query(`delete from ${APP_SCHEMA}.metadata where key = any($1::text[])`, [keys]);
