@@ -58,6 +58,40 @@ export interface StartExternalSseProxyOptions {
    * emitDone.
    */
   persistStreamedText?: (text: string) => void | Promise<void>;
+  /**
+   * cinatra#2497 — clean-completion signal + terminal AG-UI event OWNERSHIP.
+   *
+   * Invoked EXACTLY ONCE, on CLEAN completion only (never on timeout or
+   * generator error), with:
+   *
+   *   `outputs` — every artifact DATA part seen on this stream shallow-merged
+   *     in arrival order (last key wins), or `null` when the stream carried no
+   *     data part at all. The external-A2A analogue of the WayFlow EndNode
+   *     sentinel DataPart: what a caller materializing the run's declared
+   *     artifact bindings resolves `titleFrom`/`contentFrom` against.
+   *   `lastRemoteState` — the LAST task state the remote announced (seeded from
+   *     `initialStatus`). A stream that ends normally says nothing about whether
+   *     the remote task SUCCEEDED: a peer reporting `failed` / `canceled` /
+   *     `rejected` also closes its stream cleanly. A caller that writes on
+   *     success must consult this before acting.
+   *
+   * Providing it also SUPPRESSES the proxy's RUN_FINISHED emission, because a
+   * caller that needs this hook is a caller whose post-stream work can still
+   * turn a clean stream into a FAILED run (the artifact-materialization honesty
+   * gate, cinatra#2486/#2497). Announcing RUN_FINISHED here would put a
+   * contradicting terminal event on the panel ahead of the real verdict, so the
+   * caller owns the terminal AG-UI event instead. The timeout / stream-error
+   * branches are unaffected — they still emit RUN_ERROR here.
+   *
+   * Purely a NOTIFICATION: it must only record what it was handed. A throwing
+   * callback is logged and swallowed (the proxy's never-rejects contract is
+   * unchanged), so terminal-state work belongs AFTER this function resolves,
+   * never inside the callback.
+   */
+  onCleanCompletion?: (result: {
+    outputs: Record<string, unknown> | null;
+    lastRemoteState: string;
+  }) => void;
 }
 
 const DEFAULT_MAX_DURATION_MS = 5 * 60 * 1000;
@@ -83,6 +117,7 @@ export async function startExternalSseProxyFromStream(
 ): Promise<void> {
   const agUi = options?.publishAgUiEvent;
   const persist = options?.persistStreamedText;
+  const onCleanCompletion = options?.onCleanCompletion;
   const now = () => Date.now();
 
   let doneEmitted = false;
@@ -91,6 +126,38 @@ export async function startExternalSseProxyFromStream(
   // and blank-line separator between TEXT_MESSAGE_START sequences. Persisted
   // to the DB only on clean completion.
   let accumulatedText = "";
+  // cinatra#2497 — artifact DATA parts shallow-merged in arrival order. Stays
+  // `null` until the FIRST data part arrives, so "null" is the unambiguous
+  // "this run surfaced no structured declared outputs" signal.
+  let structuredOutputs: Record<string, unknown> | null = null;
+  // cinatra#2497 — the last task state the REMOTE announced. Seeded from the
+  // caller's peeked first event; a clean stream end is not evidence of success.
+  let lastRemoteState = initialStatus;
+
+  /** cinatra#2497 — pick the DATA parts out of an A2A part list. */
+  const dataPartsOf = (
+    parts: ReadonlyArray<unknown> | undefined,
+  ): Array<{ kind: "data"; data: Record<string, unknown> }> =>
+    (Array.isArray(parts) ? parts : []).filter(
+      (p): p is { kind: "data"; data: Record<string, unknown> } => {
+        const part = p as { kind?: unknown; data?: unknown } | null;
+        return (
+          part?.kind === "data" &&
+          !!part.data &&
+          typeof part.data === "object" &&
+          !Array.isArray(part.data)
+        );
+      },
+    );
+
+  /** Shallow-merge in arrival order; last key wins. */
+  const captureDataParts = (
+    parts: ReadonlyArray<{ kind: "data"; data: Record<string, unknown> }>,
+  ): void => {
+    for (const part of parts) {
+      structuredOutputs = { ...(structuredOutputs ?? {}), ...part.data };
+    }
+  };
 
   const emitDone = async (): Promise<void> => {
     if (doneEmitted) return;
@@ -108,6 +175,10 @@ export async function startExternalSseProxyFromStream(
     await Promise.resolve(agUi({ type: "RUN_ERROR", threadId: runId, runId, message, timestamp: now() })).catch(() => undefined);
   };
   const emitAgUiFinished = async (): Promise<void> => {
+    // cinatra#2497: when the caller took the clean-completion hook it owns the
+    // terminal verdict, and therefore the terminal AG-UI event — a clean STREAM
+    // is not yet a successful RUN.
+    if (onCleanCompletion) return;
     if (!agUi || agUiFinished) return;
     agUiFinished = true;
     await Promise.resolve(agUi({ type: "RUN_FINISHED", threadId: runId, runId, status: "completed", timestamp: now() })).catch(() => undefined);
@@ -137,10 +208,9 @@ export async function startExternalSseProxyFromStream(
       const kind = (event as { kind?: string }).kind;
       if (kind === "status-update") {
         const statusEvent = event as { status?: { state?: string } };
-        await publishRunEvent(runId, {
-          type: "status",
-          state: statusEvent.status?.state ?? "unknown",
-        });
+        const state = statusEvent.status?.state ?? "unknown";
+        lastRemoteState = state;
+        await publishRunEvent(runId, { type: "status", state });
       } else if (kind === "artifact-update") {
         const artifactEvent = event as {
           artifact: {
@@ -174,6 +244,11 @@ export async function startExternalSseProxyFromStream(
             accumulatedText += part.text!;
           }
         }
+        // cinatra#2497 — structured declared outputs. Extracted OUTSIDE the
+        // `agUi` gate (the DATA_PART emission below reuses the same list) so a
+        // caller wiring only `onCleanCompletion` still gets them.
+        const dataParts = dataPartsOf(artifactEvent.artifact.parts);
+        if (onCleanCompletion) captureDataParts(dataParts);
         // AG-UI: emit text parts as message chunks so the workspace panel shows output.
         if (agUi) {
           if (textParts.length > 0) {
@@ -188,13 +263,6 @@ export async function startExternalSseProxyFromStream(
           // JSON.stringify inside publishAgUiEvent may throw on exotic payloads
           // (BigInt, circular refs, Date) — catch per-emission and drop silently
           // so the whole run does not fail on one bad frame.
-          const dataParts = artifactEvent.artifact.parts.filter(
-            (p): p is { kind: "data"; data: Record<string, unknown> } =>
-              p.kind === "data" &&
-              !!p.data &&
-              typeof p.data === "object" &&
-              !Array.isArray(p.data),
-          );
           for (let i = 0; i < dataParts.length; i++) {
             await Promise.resolve(
               agUi({
@@ -209,7 +277,27 @@ export async function startExternalSseProxyFromStream(
           }
         }
       } else if (kind === "message" || kind === "task") {
-        // Intentionally skipped; these events are not bridged into local run output.
+        // Intentionally NOT BRIDGED — unchanged. cinatra#2497: a full `task`
+        // frame is nonetheless authoritative for the two signals the
+        // clean-completion hook carries, and some peers send ONLY this frame
+        // (no separate status-update / artifact-update), so both are read off
+        // it: the task status, and the DATA parts of its artifacts. Reading is
+        // not bridging — nothing extra is published to the run channel or AG-UI.
+        if (kind === "task") {
+          const taskEvent = event as {
+            status?: { state?: string };
+            artifacts?: ReadonlyArray<{ parts?: ReadonlyArray<unknown> }>;
+          };
+          const taskState = taskEvent.status?.state;
+          if (typeof taskState === "string" && taskState.length > 0) {
+            lastRemoteState = taskState;
+          }
+          if (onCleanCompletion && Array.isArray(taskEvent.artifacts)) {
+            for (const artifact of taskEvent.artifacts) {
+              captureDataParts(dataPartsOf(artifact?.parts));
+            }
+          }
+        }
       } else {
         console.warn(
           `[external-sse-proxy] unsupported event kind "${kind ?? "<missing>"}", skipping`,
@@ -227,6 +315,16 @@ export async function startExternalSseProxyFromStream(
         await Promise.resolve(persist(accumulatedText)).catch((err) => {
           console.error("[external-sse-proxy] persistStreamedText failed:", err);
         });
+      }
+      // cinatra#2497 — hand the clean-completion signal + merged structured
+      // outputs to the terminal-verdict owner. Swallowed-on-throw by contract:
+      // this is a notification, never terminal-state work.
+      if (onCleanCompletion) {
+        try {
+          onCleanCompletion({ outputs: structuredOutputs, lastRemoteState });
+        } catch (err) {
+          console.error("[external-sse-proxy] onCleanCompletion failed:", err);
+        }
       }
       await emitAgUiFinished();
     }
