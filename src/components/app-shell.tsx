@@ -190,6 +190,193 @@ export function useSetupGateRecovery(
   }, [indeterminate, refresh, delayMs]);
 }
 
+/**
+ * A FRESH, server-side answer to "is setup complete?" (cinatra#2544).
+ *
+ *   `pending`     — not asked yet, or the answer is still in flight.
+ *   `complete`    — the server read the gate and it is complete.
+ *   `incomplete`  — the server read the gate and steps genuinely remain.
+ *   `unavailable` — no usable answer (transport failure, non-2xx, or the
+ *                   server's own gate came back `indeterminate`). Deliberately
+ *                   NOT folded into `incomplete`: that conflation is the whole
+ *                   family of bugs #2503 and this issue belong to.
+ */
+export type SetupGateConfirmation = "pending" | "complete" | "incomplete" | "unavailable";
+
+/**
+ * The fresh-state endpoint the shell reconciles against. Already public in the
+ * auth route guard (src/lib/auth-route-guard.ts) and already derives the SAME
+ * gate the root layout does — this is the reconciliation source the #2544
+ * report points at, not a new surface.
+ */
+export const SETUP_GATE_STATUS_PATH = "/api/app/route-guard-status";
+
+/** Default transport for {@link useSetupRedirectGate}; injected in tests. */
+export async function fetchSetupGateConfirmation(
+  signal: AbortSignal,
+): Promise<Exclude<SetupGateConfirmation, "pending">> {
+  try {
+    const response = await fetch(SETUP_GATE_STATUS_PATH, {
+      signal,
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { accept: "application/json" },
+    });
+    if (!response.ok) return "unavailable";
+    const body: unknown = await response.json();
+    const gate = (body as { setupGate?: unknown } | null)?.setupGate;
+    // Only the two DETERMINATE states are answers. `indeterminate`, a missing
+    // field (an older server), or anything unexpected is "could not find out".
+    return gate === "complete" || gate === "incomplete" ? gate : "unavailable";
+  } catch {
+    return "unavailable";
+  }
+}
+
+/**
+ * Decide whether the shell may act on `connectionReady` (cinatra#2544).
+ *
+ * THE DEFECT. `connectionReady` is a SERVER SNAPSHOT taken during the last full
+ * document load. The App Router does not re-render a root layout on client
+ * (soft) navigation, so the shell keeps that value for the life of the
+ * document. At the end of onboarding it is reliably WRONG: the layout last
+ * rendered while setup was genuinely incomplete, setup then completed, and
+ * every subsequent client navigation still hands the shell `false`.
+ *
+ * That stale `false` IS the loop:
+ *   /chat → shell reads stale false → router.replace("/setup")
+ *         → /setup re-derives FRESH, reads "complete", redirect("/")
+ *         → /    → redirect("/chat")
+ *         → shell reads the same stale false → …forever
+ * Only a full reload re-runs the layout, which is exactly the reported
+ * "it fixes itself after a hard refresh".
+ *
+ * WHY #2503 DID NOT COVER IT. #2503 stopped an ERRORED read from being spelled
+ * "incomplete" and re-derives an `indeterminate` gate once
+ * ({@link useSetupGateRecovery}). Both halves are about a gate that was never
+ * determinate. This snapshot was perfectly correct when taken; it just went
+ * stale — the ordinary end of onboarding, no backend fault anywhere.
+ *
+ * THE RULE. The snapshot is a FIRST-PAINT HINT; it is never the redirect
+ * authority. Before the shell bounces anyone to `/setup` it asks the server for
+ * a fresh verdict, and that verdict decides:
+ *
+ *   pending      → withhold the shell (the existing interstitial), redirect
+ *                  nothing. One round trip, and only on the path that was
+ *                  about to redirect anyway.
+ *   complete     → the snapshot is stale. NEVER redirect; repair the snapshot
+ *                  with a single `router.refresh()` so the layout stops lying
+ *                  to everything downstream.
+ *   incomplete   → a fresh, authoritative "steps remain". Redirect, as before.
+ *   unavailable  → could not find out. Redirect ONCE PER DOCUMENT, then fall
+ *                  open. The single redirect keeps the wizard reachable on a
+ *                  first run whose probe merely hiccuped (the primary flow);
+ *                  refusing the SECOND one is what makes a loop impossible,
+ *                  because a loop needs at least two bounces.
+ *
+ * COST. Nothing is asked on an ordinary navigation: the probe fires only while
+ * the snapshot says "not ready" AND the route is not a setup route — i.e. only
+ * where the old code was already about to redirect. A healthy, set-up instance
+ * makes zero extra requests.
+ *
+ * STALENESS OF THE CONFIRMATION ITSELF. The answer is dropped whenever the
+ * predicate goes false — which includes every visit to `/setup`. Without that
+ * reset the hook would cache "incomplete" from BEFORE the wizard ran and
+ * rebuild the very loop it exists to prevent the moment the user finished.
+ *
+ * NOT COVERED, on purpose: the mirror case (a stale `ready` snapshot on an
+ * instance that has since become incomplete). Detecting it would mean probing
+ * on every navigation, and it does not loop — the app's own per-route guards
+ * still apply, and the next full load re-derives.
+ *
+ * Exported so the behavior is testable without mounting the whole shell.
+ */
+export function useSetupRedirectGate(
+  snapshotSaysIncomplete: boolean,
+  actions: { replaceToSetup: () => void; refresh: () => void },
+  confirm: (
+    signal: AbortSignal,
+  ) => Promise<Exclude<SetupGateConfirmation, "pending">> = fetchSetupGateConfirmation,
+): { confirmation: SetupGateConfirmation; withholdShell: boolean } {
+  const [confirmation, setConfirmation] = useState<SetupGateConfirmation>("pending");
+  // Per-DOCUMENT, never reset: the one-shot that makes an unconfirmable gate
+  // terminate instead of bouncing.
+  const unconfirmedRedirectSpent = useRef(false);
+  // Per-DOCUMENT, never reset: repairing the snapshot once is enough, and an
+  // unguarded refresh against a disagreeing server would be a request loop.
+  const snapshotRepaired = useRef(false);
+
+  const { replaceToSetup, refresh } = actions;
+
+  // Drop the answer the moment the episode ends — the shell went ready, or the
+  // route became a setup route. See STALENESS above: a verdict cached from
+  // BEFORE the wizard ran rebuilds the exact loop this hook exists to prevent.
+  //
+  // Adjusted DURING RENDER, React's own pattern for "reset state when an input
+  // changes", not in an effect: an effect would commit the stale verdict for
+  // one paint first — long enough for the act-on-the-verdict effect below to
+  // fire a redirect off it.
+  const [episode, setEpisode] = useState(snapshotSaysIncomplete);
+  if (episode !== snapshotSaysIncomplete) {
+    setEpisode(snapshotSaysIncomplete);
+    setConfirmation("pending");
+  }
+
+  // Ask, once per "the snapshot wants to redirect" episode.
+  useEffect(() => {
+    if (!snapshotSaysIncomplete) return;
+    if (confirmation !== "pending") return;
+    const controller = new AbortController();
+    let cancelled = false;
+    void confirm(controller.signal).then((result) => {
+      // The state guard, not a ref claimed at call time: under StrictMode the
+      // first pass is cleaned up (aborted) before it can resolve, so a
+      // schedule-time claim would be spent by a request whose answer never
+      // arrives and the second pass would bail forever (the #2503 trap).
+      if (cancelled) return;
+      setConfirmation(result);
+    });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [snapshotSaysIncomplete, confirmation, confirm]);
+
+  // Act on the verdict.
+  useEffect(() => {
+    if (!snapshotSaysIncomplete) return;
+    if (confirmation === "incomplete") {
+      replaceToSetup();
+      return;
+    }
+    if (confirmation === "unavailable" && !unconfirmedRedirectSpent.current) {
+      unconfirmedRedirectSpent.current = true;
+      replaceToSetup();
+      return;
+    }
+    if (confirmation === "complete" && !snapshotRepaired.current) {
+      snapshotRepaired.current = true;
+      refresh();
+    }
+  }, [snapshotSaysIncomplete, confirmation, replaceToSetup, refresh]);
+
+  // The shell is withheld only while a redirect is genuinely expected: the
+  // verdict is still in flight, or it came back as a real "steps remain". A
+  // confirmed `complete` renders the app immediately — waiting on the refresh
+  // would show "Redirecting to setup…" to someone who is NOT being redirected.
+  //
+  // `unavailable` also renders rather than withholding. Its one-shot redirect
+  // may still fire from the effect above (a brief flash of the shell before it
+  // lands on /setup), and that is the deliberate trade: deriving the withhold
+  // from the spent-latch would mean READING A REF DURING RENDER, whose value
+  // React is free to disagree with across a re-render — a much worse property
+  // than a flash on a degraded first run.
+  const withholdShell =
+    snapshotSaysIncomplete && (confirmation === "pending" || confirmation === "incomplete");
+
+  return { confirmation, withholdShell };
+}
+
 export function AppShell({
   children,
   connectionReady,
@@ -307,7 +494,13 @@ export function AppShell({
     pathname === "/configuration/llm/openai" ||
     pathname === "/configuration/apps/openai" ||
     isMcpHandshakePath;
-  const requiresSetupRedirect = !connectionReady && !isSetupPath;
+  // cinatra#2544 — the NAME says what this is: a snapshot-derived SUSPICION,
+  // not a verdict. `connectionReady` is whatever the root layout resolved at
+  // the last full document load, and a root layout is not re-rendered by client
+  // navigation, so after onboarding completes this is reliably a stale `false`.
+  // `useSetupRedirectGate` below confirms it against the server before anyone
+  // is bounced anywhere.
+  const snapshotSaysSetupIncomplete = !connectionReady && !isSetupPath;
   const activeHeader = pageHeaders.find((entry) => entry.match(pathname));
   const hideShellPageHeader = pathname === "/chat" || pathname.startsWith("/chat/");
   const shouldBypassShell = isAuthPath || isSetupWizardPath || isEmbedMode || isEmbedAssistantPath;
@@ -381,14 +574,21 @@ export function AppShell({
     [pathname, chatThreadTitle, pageTitle, crumbContributions],
   );
 
-  useEffect(() => {
-    if (requiresSetupRedirect) {
-      router.replace("/setup");
-    }
-  }, [requiresSetupRedirect, router]);
+  const refreshRoute = useCallback(() => router.refresh(), [router]);
+  const replaceToSetup = useCallback(() => router.replace("/setup"), [router]);
+  // cinatra#2544 — the shell no longer redirects off the layout snapshot. It
+  // confirms with the server first; a stale `false` (the ordinary end of
+  // onboarding) resolves to "complete" and never bounces. See the hook.
+  const setupRedirectActions = useMemo(
+    () => ({ replaceToSetup, refresh: refreshRoute }),
+    [replaceToSetup, refreshRoute],
+  );
+  const { withholdShell: requiresSetupRedirect } = useSetupRedirectGate(
+    snapshotSaysSetupIncomplete,
+    setupRedirectActions,
+  );
 
   // cinatra#2503 — recover from an INDETERMINATE setup gate (see the hook).
-  const refreshRoute = useCallback(() => router.refresh(), [router]);
   useSetupGateRecovery(setupGateIndeterminate, refreshRoute);
 
   useEffect(() => {
@@ -423,11 +623,17 @@ export function AppShell({
   // polling / SSE / per-route mark-read that feed the bell badge.
 
   if (requiresSetupRedirect) {
-    // Show a minimal loading screen instead of a blank page. The useEffect
-    // above fires `router.replace("/setup")` on the next tick. Returning null
+    // Show a minimal loading screen instead of a blank page. Returning null
     // here produces a completely blank/white page during that brief window,
     // which users report as "the entire app disappearing". A visible state is
     // better UX and also makes it easier to diagnose if the redirect fails.
+    //
+    // cinatra#2544 — this now also covers the round trip that CONFIRMS the
+    // redirect (the `pending` verdict). It is deliberately still the same
+    // interstitial: a redirect is what the shell currently expects, and a
+    // second distinct "checking…" screen would flash for one RTT. The window
+    // ends either in the redirect this text promises, or — when the snapshot
+    // turns out to be stale — in the app rendering with no navigation at all.
     return (
       <div
         style={{
