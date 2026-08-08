@@ -393,6 +393,20 @@ describe("failure path — toast + hidden live region, panel stays put", () => {
 // and the handler refuses even if the control is driven anyway.
 // ---------------------------------------------------------------------------
 describe("committability gate — non-committable selections cannot install", () => {
+  /**
+   * The gate's own refusal copy, mirrored from the panel's submit handler. It
+   * is deliberately NOT one of the `failureCopyByCategory` entries: nothing
+   * reached the backend, so no backend category classifies this.
+   */
+  const GATE_REFUSAL_COPY =
+    "Pick who can access this extension before installing — the current selection is not an installable audience.";
+
+  /**
+   * The server-supplied disabled REASON. Legitimate explanatory copy on the
+   * picker OPTION; the contract is that it never becomes failure-body copy.
+   */
+  const DISABLED_REASON = "Requires an active organization.";
+
   /** A panel whose ONLY offered org row is server-disabled. */
   function DisabledOrgPanel({
     installAction,
@@ -410,7 +424,7 @@ describe("committability gate — non-committable selections cannot install", ()
         level: "organization" as const,
         id: ORG_ID,
         disabled: true,
-        reason: "Requires an active organization.",
+        reason: DISABLED_REASON,
       },
     ];
     return (
@@ -462,5 +476,77 @@ describe("committability gate — non-committable selections cannot install", ()
     fireEvent.submit(submit.closest("form")!);
     await waitFor(() => expect(toastError).toHaveBeenCalled());
     expect(installAction).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // S4 acceptance (cinatra#2375, item 5) — the one genuinely NEW combination.
+  //
+  // S1's committability gate landed AFTER S2's error-path tests, so the two
+  // contracts were never proven TOGETHER: the gate assertion above stops at
+  // "a toast fired and the action was refused", while every error-path
+  // assertion above drives a BACKEND failure (a classified `ok:false` result)
+  // rather than a gate refusal. A gate refusal is the one failure the panel
+  // raises entirely on its own — nothing reaches the server — so nothing until
+  // now proved it lands on the SAME accessible surface a backend failure does.
+  //
+  // Driving the refusal through the full S2 error-path contract catches a
+  // regression that reports it by any weaker route: a toast-only path that
+  // never announces, an inline alert redraw of the body, the picker's own
+  // explanatory copy bleeding into the failure surface, focus escaping the
+  // panel, or the selection being dropped.
+  // -------------------------------------------------------------------------
+  it("routes a gate refusal through the full error path — mirrored alert, panel-scoped copy, focus and selection retained", async () => {
+    const installAction = vi.fn(async () => undefined);
+    render(<DisabledOrgPanel installAction={installAction} />);
+    fireEvent.click(screen.getByRole("button", { name: "Install now" }));
+
+    const submit = screen.getByTestId("extension-install-panel-submit") as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    const trigger = screen
+      .getByTestId("extension-install-panel-picker")
+      .querySelector('[role="combobox"]')!;
+    // Record the rendered selection BEFORE the refusal — asserting it is
+    // unchanged afterwards pins retention without re-testing #2372's resolver.
+    const selectionBefore = trigger.textContent;
+
+    fireEvent.submit(submit.closest("form")!);
+
+    // 1. Refused locally — the backend is never reached.
+    await waitFor(() => expect(toastError).toHaveBeenCalledTimes(1));
+    expect(installAction).not.toHaveBeenCalled();
+
+    // 2. The refusal is ANNOUNCED, not just toasted: the hidden live region
+    //    mirrors the toast copy verbatim, exactly as a backend failure does.
+    //    This is the assertion a toast-only regression fails.
+    const message = String(toastError.mock.calls[0][0]);
+    expect(message).toBe(GATE_REFUSAL_COPY);
+    await waitFor(() =>
+      expect(screen.getByTestId("extension-install-panel-error").textContent).toBe(message),
+    );
+    expect(
+      screen.getByTestId("extension-install-panel-error").getAttribute("role"),
+    ).toBe("alert");
+
+    // 3. The picker's own disabled REASON is legitimate explanatory copy on the
+    //    OPTION — it is deliberately NOT banned from the panel at large. What it
+    //    must never do is become the FAILURE copy, so the ban is scoped to the
+    //    two failure surfaces. The failure also must not be redrawn as an inline
+    //    alert inside the panel (the toast + live region are the whole surface).
+    const body = screen.getByTestId("extension-install-panel-body");
+    expect(message).not.toContain(DISABLED_REASON);
+    expect(
+      screen.getByTestId("extension-install-panel-error").textContent,
+    ).not.toContain(DISABLED_REASON);
+    expect(body.querySelector('[data-slot="alert"]')).toBeNull();
+
+    // 4. Focus never leaves the panel — the refusal must not strand the user.
+    expect(body.contains(document.activeElement)).toBe(true);
+
+    // 5. The selection is retained (the refusal is not a reset), and the gate
+    //    stays shut rather than flipping open as a side effect.
+    expect(trigger.textContent).toBe(selectionBefore);
+    expect(
+      (screen.getByTestId("extension-install-panel-submit") as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 });
