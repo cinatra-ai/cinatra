@@ -1,23 +1,15 @@
 {
-  "note": "Workspace phantom-dependency baseline (no-new-rot ratchet). Each entry = a source import of a first-party workspace package NOT declared in the importing package's package.json (resolves only via pnpm hoisting). These are CURRENT tolerated misses; the gate fails on NEW/GROWN entries. Regenerate with `node scripts/audit/workspace-phantom-deps.mjs --write-baseline` — every entry should only ever be REMOVED (declare the dep), never added.",
+  "note": "Workspace phantom-dependency baseline (no-new-rot ratchet). `phantomDeps` = a source import of a first-party workspace package NOT declared in the importing package's package.json (resolves only via pnpm hoisting). `thirdPartyPhantomDeps` = a production-value import of a THIRD-PARTY (npm-registry) package NOT declared in the importing package's package.json, scoped to SYNCED-EXTENSION members only (extensions/<vendor>/<name> — see the gate's file header for the gated-import-universe definition; cinatra#2480). `thirdPartyPhantomDepsNotes` carries the REASON each grandfathered (member, package) pair is tolerated — a manual, version-controlled record; NOT diffed by the gate. These are CURRENT tolerated misses; the gate fails on NEW/GROWN entries. Regenerate the data with `node scripts/audit/workspace-phantom-deps.mjs --write-baseline` — every data entry should only ever be REMOVED (declare the dep), never added; carry `thirdPartyPhantomDepsNotes` forward by hand for anything re-baselined this way.",
   "phantomDeps": {
     "@cinatra-ai/agents": [
       "@cinatra-ai/agent-ui-protocol",
-      "@cinatra-ai/crm-connector",
       "@cinatra-ai/extensions",
-      "@cinatra-ai/gmail-connector",
-      "@cinatra-ai/google-calendar-connector",
-      "@cinatra-ai/notifications",
-      "@cinatra-ai/objects"
+      "@cinatra-ai/notifications"
     ],
     "@cinatra-ai/chat": [
-      "@cinatra-ai/crm-connector",
       "@cinatra-ai/mcp-server",
       "@cinatra-ai/notifications",
       "@cinatra-ai/skills"
-    ],
-    "@cinatra-ai/connectors": [
-      "@cinatra-ai/tailscale-connector"
     ],
     "@cinatra-ai/dashboards": [
       "@cinatra-ai/agents",
@@ -37,9 +29,6 @@
       "@cinatra-ai/mcp-client",
       "@cinatra-ai/mcp-server"
     ],
-    "@cinatra-ai/objects": [
-      "@cinatra-ai/agents"
-    ],
     "@cinatra-ai/permissions": [
       "@cinatra-ai/mcp-client",
       "@cinatra-ai/mcp-server"
@@ -48,55 +37,103 @@
       "@cinatra-ai/agents",
       "@cinatra-ai/extensions",
       "@cinatra-ai/sdk-extensions"
+    ]
+  },
+  "thirdPartyPhantomDeps": {
+    "@cinatra-ai/a2a-server-connector": [
+      "lucide-react",
+      "next"
     ],
-    "@cinatra-ai/workflows": [
-      "@cinatra-ai/mcp-client"
+    "@cinatra-ai/apify-connector": [
+      "server-only"
+    ],
+    "@cinatra-ai/crm-connector": [
+      "lucide-react"
+    ],
+    "@cinatra-ai/drupal-assistant-connector": [
+      "lucide-react",
+      "next",
+      "server-only"
+    ],
+    "@cinatra-ai/drupal-mcp-connector": [
+      "lucide-react",
+      "next",
+      "server-only",
+      "zod"
     ],
     "@cinatra-ai/github-connector": [
-      "@cinatra-ai/connectors"
+      "lucide-react",
+      "next",
+      "zod"
+    ],
+    "@cinatra-ai/gmail-connector": [
+      "lucide-react",
+      "next",
+      "server-only",
+      "zod"
+    ],
+    "@cinatra-ai/google-calendar-connector": [
+      "lucide-react",
+      "next",
+      "zod"
+    ],
+    "@cinatra-ai/linkedin-connector": [
+      "next",
+      "server-only"
+    ],
+    "@cinatra-ai/mcp-client-connector": [
+      "next",
+      "server-only"
     ],
     "@cinatra-ai/nango-connector": [
-      "@cinatra-ai/connectors"
+      "lucide-react",
+      "next",
+      "server-only"
     ],
     "@cinatra-ai/openai-connector": [
-      "@cinatra-ai/connectors",
-      "@cinatra-ai/sdk-ui"
+      "next",
+      "zod"
     ],
-    "@cinatra-ai/blog-idea-artifact": [
-      "@cinatra-ai/sdk-extensions"
+    "@cinatra-ai/resend-connector": [
+      "server-only"
     ],
-    "@cinatra-ai/blog-image-artifact": [
-      "@cinatra-ai/sdk-extensions"
+    "@cinatra-ai/tailscale-connector": [
+      "lucide-react",
+      "next",
+      "server-only"
     ],
-    "@cinatra-ai/blog-post-artifact": [
-      "@cinatra-ai/sdk-extensions"
+    "@cinatra-ai/twenty-connector": [
+      "pg"
     ],
-    "@cinatra-ai/brand-voice-artifact": [
-      "@cinatra-ai/sdk-extensions"
+    "@cinatra-ai/wordpress-assistant-connector": [
+      "lucide-react",
+      "next",
+      "server-only"
     ],
-    "@cinatra-ai/competitive-analysis-artifact": [
-      "@cinatra-ai/sdk-extensions"
-    ],
-    "@cinatra-ai/contract-artifact": [
-      "@cinatra-ai/sdk-extensions"
-    ],
-    "@cinatra-ai/marketing-icp-artifact": [
-      "@cinatra-ai/sdk-extensions"
-    ],
-    "@cinatra-ai/marketing-strategy-artifact": [
-      "@cinatra-ai/sdk-extensions"
-    ],
-    "@cinatra-ai/product-portfolio-artifact": [
-      "@cinatra-ai/sdk-extensions"
-    ],
-    "@cinatra-ai/sales-playbook-artifact": [
-      "@cinatra-ai/sdk-extensions"
-    ],
-    "@cinatra-ai/screenshot-artifact": [
-      "@cinatra-ai/sdk-extensions"
-    ],
-    "@cinatra-ai/slide-deck-artifact": [
-      "@cinatra-ai/sdk-extensions"
+    "@cinatra-ai/wordpress-mcp-connector": [
+      "lucide-react",
+      "next",
+      "server-only",
+      "zod"
     ]
+  },
+  "thirdPartyPhantomDepsNotes": {
+    "@cinatra-ai/drupal-mcp-connector": "next/lucide-react/server-only tracked by drupal-mcp-connector#86 (the declared follow-up to #82/#83/#84 for this exact class). zod tracked by drupal-mcp-connector#83 — already fixed upstream (drupal-mcp-connector#84, merged), but cinatra-dev-extensions.lock.json is still pinned to #82's SHA (44ef1bd), two commits behind #84 on that repo's main; it reappears here only until the pin advances.",
+    "@cinatra-ai/a2a-server-connector": "Surfaced by this gate's adoption scan (cinatra#2480): same next/lucide-react shape as drupal-mcp-connector#86 (a shared settings-page scaffold pattern across the connector fleet), not yet individually tracked — needs its own declare-or-exempt decision.",
+    "@cinatra-ai/apify-connector": "Surfaced by this gate's adoption scan (cinatra#2480): same server-only shape as drupal-mcp-connector#86, not yet individually tracked.",
+    "@cinatra-ai/crm-connector": "Surfaced by this gate's adoption scan (cinatra#2480): same lucide-react shape as drupal-mcp-connector#86, not yet individually tracked.",
+    "@cinatra-ai/drupal-assistant-connector": "Surfaced by this gate's adoption scan (cinatra#2480): same next/lucide-react/server-only shape as drupal-mcp-connector#86, not yet individually tracked.",
+    "@cinatra-ai/github-connector": "Surfaced by this gate's adoption scan (cinatra#2480): same next/lucide-react/zod shape as drupal-mcp-connector#86/#83, not yet individually tracked.",
+    "@cinatra-ai/gmail-connector": "Surfaced by this gate's adoption scan (cinatra#2480): same next/lucide-react/server-only/zod shape as drupal-mcp-connector#86/#83, not yet individually tracked.",
+    "@cinatra-ai/google-calendar-connector": "Surfaced by this gate's adoption scan (cinatra#2480): same next/lucide-react/zod shape as drupal-mcp-connector#86/#83, not yet individually tracked.",
+    "@cinatra-ai/linkedin-connector": "Surfaced by this gate's adoption scan (cinatra#2480): same next/server-only shape as drupal-mcp-connector#86, not yet individually tracked.",
+    "@cinatra-ai/mcp-client-connector": "Surfaced by this gate's adoption scan (cinatra#2480): same next/server-only shape as drupal-mcp-connector#86, not yet individually tracked.",
+    "@cinatra-ai/nango-connector": "Surfaced by this gate's adoption scan (cinatra#2480): same next/lucide-react/server-only shape as drupal-mcp-connector#86, not yet individually tracked.",
+    "@cinatra-ai/openai-connector": "Surfaced by this gate's adoption scan (cinatra#2480): same next/zod shape as drupal-mcp-connector#86/#83, not yet individually tracked.",
+    "@cinatra-ai/resend-connector": "Surfaced by this gate's adoption scan (cinatra#2480): same server-only shape as drupal-mcp-connector#86, not yet individually tracked.",
+    "@cinatra-ai/tailscale-connector": "Surfaced by this gate's adoption scan (cinatra#2480): same next/lucide-react/server-only shape as drupal-mcp-connector#86, not yet individually tracked.",
+    "@cinatra-ai/twenty-connector": "Surfaced by this gate's adoption scan (cinatra#2480): pg imported only by scripts/twenty-bootstrap/cutover-wipe-and-reseed.mjs (an operational bootstrap script, not src/ runtime), not yet individually tracked.",
+    "@cinatra-ai/wordpress-assistant-connector": "Surfaced by this gate's adoption scan (cinatra#2480): same next/lucide-react/server-only shape as drupal-mcp-connector#86, not yet individually tracked.",
+    "@cinatra-ai/wordpress-mcp-connector": "Surfaced by this gate's adoption scan (cinatra#2480): same next/lucide-react/server-only/zod shape as drupal-mcp-connector#86/#83, not yet individually tracked."
   }
 }
