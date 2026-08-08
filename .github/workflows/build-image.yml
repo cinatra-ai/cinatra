@@ -674,6 +674,23 @@ jobs:
           CINATRA_DB_INTEGRATION_TESTS: '1'
         run: pnpm exec vitest run src/lib/__tests__/integration/install-batch-compensation-scope.integration.test.ts
 
+      # cinatra#2536. The instance-level heal is a claim about ROWS: a boot pass
+      # against a DB where the blog packages LOADED but their
+      # `installed_extension` rows are ABSENT must end with a live install row
+      # AND an active `artifact_type_claims` row, the materializer's own
+      # resolution seam must then resolve the binding, and a SECOND pass must
+      # change nothing (the claim registry's partial-unique one-live-claimant
+      # indexes would reject a non-idempotent re-activation). A mock proves none
+      # of that, so this drives the real manifest on disk, the real lifecycle
+      # primitive, the real claim DDL + activation hook and the real bound-type
+      # resolver against this job's service Postgres. Own vitest invocation (own
+      # process) so its SUPABASE_DB_URL/pool lifecycle never touches the steps
+      # above.
+      - name: Blog-pipeline install-record heal DB test (cinatra#2536)
+        env:
+          CINATRA_DB_INTEGRATION_TESTS: '1'
+        run: pnpm exec vitest run src/lib/__tests__/integration/blog-pipeline-install-record-heal.integration.test.ts
+
       # cinatra#2092 (epic #2086 S5). The upload-on-install CRASH WINDOW is a
       # claim about what survives in Postgres between COMMIT and the worker run,
       # so a mock cannot prove it: this drives the REAL catalog-transaction tail

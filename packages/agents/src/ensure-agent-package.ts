@@ -18,20 +18,157 @@ import { isReservedWorkspaceSlug } from "./reserved-workspace-slugs";
 import { readZipFiles, createZipBuffer } from "./zip-helpers";
 import { importAgentTemplateCore } from "./import-agent-core";
 
+// ---------------------------------------------------------------------------
+// "already up to date" REQUIRES a live install record (cinatra#2536).
+//
+// The version-skip guards below compare the loader's manifest version against
+// `agent_templates.package_version`. That comparison says NOTHING about
+// `installed_extension` — a reset/reinstall (or a producer whose artifact was
+// never pulled into the install closure, cinatra#2537) can leave the template
+// row current while the canonical install record is ABSENT. The importer then
+// reports "already up to date" forever, the package loads and is runnable, and
+// every artifact-producing run fails materialization because no install record
+// means no `artifact_type_claims` row.
+//
+// So the skip now ALSO requires the record. An ABSENT record is repaired
+// (idempotently) and the package is RE-IMPORTED at the same version; a
+// deliberately archived record, an unreadable store, or an unverifiable source
+// keeps the skip (never a per-boot re-import loop) and is SURFACED instead of
+// being reported as "up to date".
+//
+// COST: one indexed canonical-store read per version-matched package per boot
+// (the previous skip did zero DB work). That is the price of the guarantee —
+// the whole defect is that the loader asserted an install state it never read
+// — and it is paid on a detached boot scan, never on a request path. The
+// REPAIR write happens at most once per broken package.
+// ---------------------------------------------------------------------------
+
+/** The heal seam — injectable so unit tests drive the decision without a DB. */
+export type InstallRecordHealFn = (input: {
+  packageName: string;
+  kind: "agent";
+  packageDir?: string;
+  version?: string;
+}) => Promise<{ outcome: string; rowId?: string; reason?: string }>;
+
+async function defaultHealInstallRecord(input: {
+  packageName: string;
+  kind: "agent";
+  packageDir?: string;
+  version?: string;
+}): Promise<{ outcome: string; rowId?: string; reason?: string }> {
+  const { healMissingInstallRecord } = await import("@/lib/extension-install-record-heal");
+  return healMissingInstallRecord(input);
+}
+
+type InstallRecordGateVerdict = {
+  /** Re-import at the same version — ONLY after an actual repair. */
+  reImport: boolean;
+  /** Is the package install-active? Gates the "already up to date" line. */
+  recordLive: boolean;
+  outcome: string;
+  reason?: string;
+};
+
+/**
+ * Decide whether a version-matched package may be reported "already up to
+ * date". Returns the heal outcome so the caller can log the TRUTH.
+ *
+ * `reImport` is true ONLY when the repair actually created the missing record —
+ * the one case where re-importing at the same version is both meaningful and
+ * self-limiting (the next boot finds the record and skips again).
+ *
+ * `recordLive` is separate on purpose (codex round 1): a refused/failed repair
+ * must NOT re-import (that would loop every boot) AND must NOT be reported as
+ * "already up to date" (that is the misleading signal this whole issue is
+ * about). Those two are different questions and the caller answers both.
+ */
+async function installRecordGate(
+  packageName: string,
+  packageDir: string | undefined,
+  packageVersion: string | undefined,
+  heal: InstallRecordHealFn,
+): Promise<InstallRecordGateVerdict> {
+  let result: { outcome: string; rowId?: string; reason?: string };
+  try {
+    result = await heal({ packageName, kind: "agent", packageDir, version: packageVersion });
+  } catch (err) {
+    // The heal is non-throwing by contract; a thrown error is still never
+    // allowed to break a boot importer. Keep the skip, report the truth.
+    return {
+      reImport: false,
+      recordLive: false,
+      outcome: "failed",
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+  return {
+    reImport: result.outcome === "repaired",
+    recordLive: result.outcome === "already-live" || result.outcome === "repaired",
+    outcome: result.outcome,
+    reason: result.reason,
+  };
+}
+
+/** One truthful line per non-healthy install-record state. */
+function logInstallRecordState(
+  packageName: string,
+  packageVersion: string | undefined,
+  gate: InstallRecordGateVerdict,
+): void {
+  if (gate.outcome === "already-live") return;
+  const v = `v${packageVersion ?? "unknown"}`;
+  if (gate.outcome === "repaired") {
+    console.info(
+      `[cinatra:extensions:agent] ${packageName} ${v} re-importing at the same version — its canonical ` +
+        `installed_extension record was ABSENT and has been repaired; "already up to date" requires a live ` +
+        `install record (cinatra#2536)`,
+    );
+    return;
+  }
+  console.warn(
+    `[cinatra:extensions:agent] ${packageName} ${v} loads but is NOT install-active — ` +
+      `${gate.reason ?? gate.outcome}. Its artifact_type_claims will not seed, so every artifact-producing ` +
+      `run will fail to materialize until the install record is restored (cinatra#2536).`,
+  );
+}
+
 export async function ensureAgentPackage(opts: {
   zipFileName: string;
   packageName: string;
   packageVersion?: string;
   name?: string;
+  /** Test seam — see `InstallRecordHealFn`. */
+  healInstallRecord?: InstallRecordHealFn;
 }): Promise<{ templateId: string; upserted: boolean; skipped: boolean }> {
   // --- Version-skip guard ---
   // Avoid redundant DB writes on every restart when the version is already current.
   const existing = await readAgentTemplateByPackageName(opts.packageName);
   if (existing && existing.packageVersion === opts.packageVersion) {
-    console.info(
-      `[ensureAgentPackage] ${opts.packageName} v${opts.packageVersion ?? "unknown"} skipped — already up to date`,
+    // …but a version match alone is NOT "already up to date" (cinatra#2536).
+    // This system-ZIP path carries no on-disk package dir, so the repair cannot
+    // PROVE the package's identity and refuses to mint a row — the gate still
+    // runs, so an absent/archived record is SURFACED here instead of being
+    // silently reported as healthy. (The git-file loader below owns the actual
+    // repair; that is the boot path the issue's instance runs.)
+    const gate = await installRecordGate(
+      opts.packageName,
+      undefined,
+      opts.packageVersion,
+      opts.healInstallRecord ?? defaultHealInstallRecord,
     );
-    return { templateId: existing.id, upserted: false, skipped: true };
+    logInstallRecordState(opts.packageName, opts.packageVersion, gate);
+    if (!gate.reImport) {
+      // "already up to date" is claimed ONLY for a package that really is
+      // install-active; a refused/failed record already logged the truth above
+      // and must not be contradicted here (codex round 1).
+      if (gate.recordLive) {
+        console.info(
+          `[ensureAgentPackage] ${opts.packageName} v${opts.packageVersion ?? "unknown"} skipped — already up to date`,
+        );
+      }
+      return { templateId: existing.id, upserted: false, skipped: true };
+    }
   }
 
   // --- Read ZIP from data/downloads/ (server-controlled path) ---
@@ -275,6 +412,8 @@ export async function ensureAgentPackageFromGitFile(opts: {
   // under `extensions/cinatra-ai/`); for any other vendor scope the copyleft gate
   // still fires, so the auto-ack cannot leak to third-party agents.
   licenseAcknowledged?: boolean;
+  /** Test seam — see `InstallRecordHealFn`. */
+  healInstallRecord?: InstallRecordHealFn;
 }): Promise<{ templateId: string; upserted: boolean; skipped: boolean }> {
   const raw = await readFile(opts.oasSourcePath, "utf8");
   const content = JSON.parse(raw) as {
@@ -369,14 +508,36 @@ export async function ensureAgentPackageFromGitFile(opts: {
         ? serializeLifecycleConfig(normalizeLifecycle(sibling?.lifecycle))
         : (existing.lifecycleConfig ?? null);
     if ((existing.lifecycleConfig ?? null) === declaredLifecycleConfig) {
-      console.info(
-        `[cinatra:extensions:agent] ${packageName} v${packageVersion ?? "unknown"} skipped — already up to date (bump packageVersion to force re-import)`,
+      // …and NEITHER is a version+projection match "already up to date" while
+      // the CANONICAL INSTALL RECORD is absent (cinatra#2536 — see the module
+      // note above the gate). The package dir is the agent's own manifest dir
+      // (the layout-derived sibling location), which is what the repair reads
+      // to PROVE the package's identity before it mints a row.
+      const gate = await installRecordGate(
+        packageName,
+        dirname(siblingManifestPath(opts.oasSourcePath)),
+        packageVersion,
+        opts.healInstallRecord ?? defaultHealInstallRecord,
       );
-      return { templateId: existing.id, upserted: false, skipped: true };
+      logInstallRecordState(packageName, packageVersion, gate);
+      if (!gate.reImport) {
+        // Only a genuinely install-active package earns the "already up to
+        // date" line; a refused/failed record already logged the truth and must
+        // not be contradicted by a healthy-sounding one (codex round 1).
+        if (gate.recordLive) {
+          console.info(
+            `[cinatra:extensions:agent] ${packageName} v${packageVersion ?? "unknown"} skipped — already up to date (bump packageVersion to force re-import)`,
+          );
+        }
+        return { templateId: existing.id, upserted: false, skipped: true };
+      }
+      // Repaired: fall through and re-import at the same version. Convergent —
+      // the record now exists, so the next boot takes the skip above.
+    } else {
+      console.info(
+        `[cinatra:extensions:agent] ${packageName} v${packageVersion ?? "unknown"} re-importing at the same version — the installed row's lifecycle_config drifted from the manifest declaration (cinatra#2044)`,
+      );
     }
-    console.info(
-      `[cinatra:extensions:agent] ${packageName} v${packageVersion ?? "unknown"} re-importing at the same version — the installed row's lifecycle_config drifted from the manifest declaration (cinatra#2044)`,
-    );
   }
 
   // --- Downgrade guard — semver.gt check ---

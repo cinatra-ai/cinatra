@@ -58,6 +58,14 @@ export type ResolveBoundArtifactTargetDeps = {
   readExtensionPackAcceptedMimeTypes?: (extension: string) => Promise<string[] | null>;
   /** Registered-type lookup (for the accepts self-registered fallback). */
   resolveRegisteredType?: (typeId: string) => { isArtifact?: { accepts?: { file?: { mimeTypes?: string[] } } } } | null;
+  /** The type ids the pack MANIFEST declares (cinatra#2536 diagnostics). */
+  readExtensionPackDeclaredObjectTypeIds?: (extension: string) => Promise<string[] | null>;
+  /** Install-state explanation for a zero-claim resolution (cinatra#2536). */
+  explainAbsentClaims?: (input: {
+    orgId: string;
+    extension: string;
+    declaredObjectTypeIds?: readonly string[];
+  }) => Promise<string>;
 };
 
 /**
@@ -96,10 +104,31 @@ export function readEffectiveArtifactSafeTypeIdsForExtension(
 export async function readInstalledPackAcceptedMimeTypes(
   extension: string,
 ): Promise<string[] | null> {
+  return (await readInstalledPackManifestFields(extension))?.accepts ?? null;
+}
+
+/**
+ * The object type ids the installed pack's manifest DECLARES (`objectTypes`).
+ * Diagnostics-only (cinatra#2536): it lets a zero-claim failure NAME the type
+ * whose claim is missing instead of blaming the manifest that declares it.
+ * `null` when no readable `kind:"artifact"` manifest is found.
+ */
+export async function readInstalledPackDeclaredObjectTypeIds(
+  extension: string,
+): Promise<string[] | null> {
+  return (await readInstalledPackManifestFields(extension))?.objectTypeIds ?? null;
+}
+
+/** ONE read of the pack manifest yielding every field the callers above need.
+ *  Same discovery order as before: SRI-vetted store records first, then the
+ *  bundled/in-tree extension dir (dev/verify). Reads `package.json` only. */
+async function readInstalledPackManifestFields(
+  extension: string,
+): Promise<{ accepts: string[]; objectTypeIds: string[] } | null> {
   const { readFile } = await import("node:fs/promises");
   const path = await import("node:path");
 
-  const parseAccepts = (raw: string): string[] | null => {
+  const parseAccepts = (raw: string): { accepts: string[]; objectTypeIds: string[] } | null => {
     let pkg: { cinatra?: { kind?: unknown; artifact?: unknown } };
     try {
       pkg = JSON.parse(raw);
@@ -109,7 +138,10 @@ export async function readInstalledPackAcceptedMimeTypes(
     if (pkg?.cinatra?.kind !== "artifact") return null;
     const parsed = parseSemanticArtifactManifest(pkg.cinatra?.artifact);
     if (!parsed.ok) return null;
-    return parsed.manifest.accepts?.file?.mimeTypes ?? [];
+    return {
+      accepts: parsed.manifest.accepts?.file?.mimeTypes ?? [],
+      objectTypeIds: (parsed.manifest.objectTypes ?? []).map((c) => c.type),
+    };
   };
 
   // 1. Store records (production): prefer any readable materialized record for
@@ -187,7 +219,30 @@ export async function resolveBoundArtifactTarget(input: {
     producesObjectTypeId: input.producesObjectTypeId,
     declaredArtifactSafeTypeIds,
   });
-  if (!decision.ok) return { ok: false, error: decision.error };
+  if (!decision.ok) {
+    // DIAGNOSTICS (cinatra#2536). The pure resolver can only see "this
+    // extension contributes ZERO artifact-safe declared types", and reported it
+    // as `declares no artifact-safe object type — … declare a produces/binding
+    // objectTypeId over an artifact-safe claim`: manifest-blaming advice that
+    // is WRONG whenever the manifest declares the type correctly and the type
+    // IS registered. In the field that is the normal case — the real cause is
+    // an incomplete install (no `installed_extension` row, an archived one, or
+    // a live row whose claims never activated), so nothing ever seeded
+    // `artifact_type_claims`.
+    //
+    // But the replacement must not overreach in the other direction (codex
+    // round 2): a pack that GENUINELY declares no object types, or a binding
+    // naming a type its pack never declares, really is a manifest/binding
+    // error and keeps its original copy. `explainZeroClaims` therefore reads
+    // the pack manifest and returns `null` for those, meaning "the pure error
+    // was right". A >1 ambiguity, or an explicit id outside a NON-EMPTY
+    // effective set, never reaches the explainer at all.
+    if (declaredArtifactSafeTypeIds.length === 0) {
+      const explained = await explainZeroClaims(input);
+      if (explained !== null) return { ok: false, error: explained };
+    }
+    return { ok: false, error: decision.error };
+  }
   const objectTypeId = decision.objectTypeId;
 
   // accepts: self-registered bridge artifact type first, else the installed
@@ -209,4 +264,67 @@ export async function resolveBoundArtifactTarget(input: {
     };
   }
   return { ok: true, target: { objectTypeId, acceptedFileMimeTypes } };
+}
+
+/**
+ * Build the cinatra#2536 zero-claim diagnostic: name the declared type(s) off
+ * the pack manifest, then let the install-state explainer say WHAT is missing
+ * and HOW it heals.
+ *
+ * Returns `null` when the ORIGINAL (manifest/binding) error is the truthful
+ * one, so the caller keeps it (codex round 2):
+ *   - the pack manifest declares NO object types at all — the pure resolver's
+ *     "declares no artifact-safe object type" is then literally right;
+ *   - an explicit binding/produces id names a type the pack does NOT declare —
+ *     that is a binding error, not an install problem.
+ * A manifest that could not be READ is not evidence of either, so it keeps the
+ * install diagnosis (an unreadable pack IS an install/store problem).
+ *
+ * FAIL-SOFT by contract — this runs inside the materializer's per-output
+ * failure path, so any reader problem degrades to a still-non-manifest-blaming
+ * message rather than throwing.
+ */
+async function explainZeroClaims(input: {
+  orgId: string;
+  extension: string;
+  bindingObjectTypeId?: string;
+  producesObjectTypeId?: string;
+  deps?: ResolveBoundArtifactTargetDeps;
+}): Promise<string | null> {
+  try {
+    const readDeclared =
+      input.deps?.readExtensionPackDeclaredObjectTypeIds ?? readInstalledPackDeclaredObjectTypeIds;
+    const explain =
+      input.deps?.explainAbsentClaims ??
+      (async (arg: { orgId: string; extension: string; declaredObjectTypeIds?: readonly string[] }) => {
+        const { explainAbsentArtifactSafeClaims } = await import(
+          "@/lib/extension-install-record-heal"
+        );
+        return explainAbsentArtifactSafeClaims(arg);
+      });
+    let declaredObjectTypeIds: string[] | null;
+    try {
+      declaredObjectTypeIds = await readDeclared(input.extension);
+    } catch {
+      declaredObjectTypeIds = null; // unreadable — not evidence about the manifest
+    }
+    if (declaredObjectTypeIds !== null) {
+      // The manifest genuinely declares nothing to claim.
+      if (declaredObjectTypeIds.length === 0) return null;
+      // The binding pins a type this pack never declares.
+      const explicit = input.bindingObjectTypeId ?? input.producesObjectTypeId;
+      if (explicit !== undefined && !declaredObjectTypeIds.includes(explicit)) return null;
+    }
+    return await explain({
+      orgId: input.orgId,
+      extension: input.extension,
+      declaredObjectTypeIds: declaredObjectTypeIds ?? undefined,
+    });
+  } catch (err) {
+    return (
+      `no artifact-safe claim resolved for extension "${input.extension}" in org "${input.orgId}" and ` +
+      `the install state could not be read (${err instanceof Error ? err.message : String(err)}) — ` +
+      `this is an install/activation problem, not a manifest problem.`
+    );
+  }
 }

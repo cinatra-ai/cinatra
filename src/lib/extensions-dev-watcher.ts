@@ -183,6 +183,70 @@ export async function recordDevVersionForLoadedPackage(
   }
 }
 
+// INSTALL-RECORD HEAL for a loaded `kind:"artifact"` package (cinatra#2536).
+//
+// An artifact package that LOADS from the in-tree/bundled extension tree but has
+// NO canonical `installed_extension` row is not install-active, so the boot
+// claim-activation backstop skips it and `artifact_type_claims` never seeds —
+// every artifact-producing agent run then fails materialization with an error
+// that blames the (correct) manifest. Repair the record and converge the claims
+// so the package is actually usable on THIS boot.
+//
+// Idempotent (a healthy package is one read + a claim-diff no-op) and
+// FAIL-SOFT: a heal failure must never break a boot scan or a hot reload. Only
+// invoked by the BOOT scan / watcher call sites, which pass
+// `healInstallRecords` explicitly — never by the fixture-driven unit paths.
+export async function healArtifactInstallRecordForLoadedPackage(
+  res: { kind: string; packageName?: string | null; packageVersion?: string | null },
+  pkgDir: string,
+): Promise<void> {
+  if (res.kind !== "artifact" || !res.packageName) return;
+  try {
+    const { healArtifactInstallRecordAndClaims } = await import(
+      "@/lib/extension-install-record-heal"
+    );
+    const outcome = await healArtifactInstallRecordAndClaims({
+      packageName: res.packageName,
+      packageDir: pkgDir,
+      version: res.packageVersion ?? undefined,
+    });
+    if (outcome.record.outcome === "repaired") {
+      const line =
+        `[cinatra:extensions:artifact] ${res.packageName} — REPAIRED a missing installed_extension ` +
+        `record (row ${outcome.record.rowId}); artifact-type claims: ${outcome.claims}` +
+        (outcome.detail ? ` (${outcome.detail})` : "") +
+        " (cinatra#2536)";
+      // A repair whose claims did NOT converge is only half a fix — the runs
+      // still fail, so it must not read as a success.
+      if (outcome.claims === "converged" || outcome.claims === "not-applicable") console.info(line);
+      else console.warn(line);
+      return;
+    }
+    if (outcome.record.outcome === "already-live") {
+      // An install-active artifact package whose claims never seeded is the
+      // SURFACED condition the issue asks for (item 2) — not a silent state.
+      if (outcome.claims === "failed" || outcome.claims === "skipped") {
+        console.warn(
+          `[cinatra:extensions:artifact] ${res.packageName} is install-active but has NO active ` +
+            `artifact-type claim — ${outcome.detail ?? outcome.claims}. Agent runs bound to it will fail to ` +
+            `materialize until the claim activates (cinatra#2536).`,
+        );
+      }
+      return; // healthy — stay quiet
+    }
+    console.warn(
+      `[cinatra:extensions:artifact] ${res.packageName} loads but is NOT install-active — ` +
+        `${outcome.record.reason ?? outcome.record.outcome}. Its artifact_type_claims will not seed, so ` +
+        `every agent run bound to it will fail to materialize (cinatra#2536).`,
+    );
+  } catch (err) {
+    console.warn(
+      `[cinatra:extensions:artifact] install-record heal skipped (${res.packageName}):`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
 async function loadOnePackage(
   pkgDir: string,
   opts?: { skipAgents?: boolean },
@@ -456,7 +520,16 @@ export const __loadOnePackageForTests = loadOnePackage;
 // fixture extensions/anthropics/skills/ dir mounts correctly.
 export async function loadAllExtensionPackages(
   extensionsRoot: string,
-  opts?: { skipAgents?: boolean },
+  opts?: {
+    skipAgents?: boolean;
+    /**
+     * Repair a loaded artifact package's MISSING canonical install record (+
+     * converge its artifact-type claims) — cinatra#2536. Opt-IN so only the
+     * real boot scan / watcher rescan touch the canonical store; the
+     * fixture-driven loader tests keep their pure filesystem behaviour.
+     */
+    healInstallRecords?: boolean;
+  },
 ): Promise<{ agentChanged: boolean }> {
   let agentChanged = false;
   if (!existsSync(extensionsRoot)) return { agentChanged };
@@ -492,6 +565,12 @@ export async function loadAllExtensionPackages(
       // Record a dev version so the lifecycle UI can render "dev / <sha>" for
       // in-tree edits (fail-soft, dev-only, idempotent — see helper).
       await recordDevVersionForLoadedPackage(res, pkgDir);
+      // Repair a loaded artifact package with NO canonical install record and
+      // converge its claims, so an in-tree artifact type is actually
+      // materializable on this boot (fail-soft, idempotent — see helper).
+      if (opts?.healInstallRecords) {
+        await healArtifactInstallRecordForLoadedPackage(res, pkgDir);
+      }
       // Emit one per-package line for skill + connector kinds,
       // at visual parity with the per-agent
       // `[cinatra:extensions:agent] @cinatra-ai/<name> v<version>` lines
@@ -595,7 +674,12 @@ export async function loadAllSkillPackagesAtBoot(
     // skipAgents: this boot wrapper is SKILL-only by contract (see docstring);
     // agents are handled by instrumentation.node.ts. Suppressing the agent
     // branch here removes the duplicate boot agent block.
-    await loadAllExtensionPackages(extensionsRoot, { skipAgents: true });
+    // healInstallRecords: this IS the boot scan, so it owns the cinatra#2536
+    // repair for every in-tree artifact package it loads.
+    await loadAllExtensionPackages(extensionsRoot, {
+      skipAgents: true,
+      healInstallRecords: true,
+    });
   } catch (err) {
     console.warn(
       "[cinatra:extensions] boot skill load skipped:",
@@ -636,7 +720,9 @@ export function startDevExtensionsWatcher(extensionsRoot: string): void {
       let agentChanged = false;
       let skillChanged = false;
       if (targets.length === 0 || targets.includes("*")) {
-        const res = await loadAllExtensionPackages(extensionsRoot);
+        const res = await loadAllExtensionPackages(extensionsRoot, {
+          healInstallRecords: true,
+        });
         agentChanged = res.agentChanged;
         // A whole-tree rescan may have re-registered skills — treat it as
         // skill-affecting so the explicit catalog rebuild below runs.
@@ -682,6 +768,9 @@ export function startDevExtensionsWatcher(extensionsRoot: string): void {
               `[cinatra:extensions:artifact] ${vendorSlug} changed (artifact type — ` +
                 `object-registry bridge re-ran; ${n} artifact type(s) registered)`,
             );
+            // A newly-added / re-registered artifact package still needs a live
+            // install record for its claims to seed (cinatra#2536). Idempotent.
+            await healArtifactInstallRecordForLoadedPackage(res, pkgDir);
           } else {
             console.info(
               `[cinatra:extensions:unknown] ${vendorSlug} changed (unrecognized extension kind — nothing to reload)`,
