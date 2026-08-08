@@ -148,38 +148,53 @@ export function ExtensionsMarketplaceClient({ cards }: Props) {
           </EmptyHeader>
         </Empty>
       ) : (
-        // auto-rows-fr locks every grid row to equal heights (design spec §IV
-        // "grid-auto-rows: 1fr"); each card stretches (h-full on the card +
-        // h-full on this wrapper) so bodies align across a row.
-        // data-testid attrs: conformance stable-id contract — grid root +
-        // per-card item wrappers (exact-cardinality assertions count VISIBLE
-        // items, so the display:none filter path stays honestly counted).
-        <div
-          data-testid="marketplace-grid"
-          className="grid auto-rows-fr grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
-        >
-          {cards.map((c) => {
-            const visible = matches(c.meta);
-            return (
-              <div
-                key={c.meta.packageName}
-                data-testid="marketplace-grid-item"
-                className="h-full"
-                style={{ display: visible ? undefined : "none" }}
-              >
-                {/* Filter lifecycle (cinatra#2373): a non-matching item's node
-                    is UNMOUNTED — the stable grid-item wrapper stays (so the
-                    exact-cardinality assertions still count VISIBLE items the
-                    same way), but a card filtered away cannot retain an open
-                    install panel, a stale selection, or a focusable control
-                    behind `display:none`. Filtering it back mounts a fresh
-                    node, which is idle by construction. Focus is unaffected:
-                    the only focusable thing during filtering is the filter
-                    control the user is typing in. */}
-                {visible ? c.node : null}
-              </div>
-            );
-          })}
+        // The grid's own containment context (cinatra#2495). The column count
+        // below is measured against THIS element's inline size, not the
+        // viewport — the grid never occupies the viewport (the app-shell
+        // sidebar and the page gutters take a few hundred px off first), so
+        // viewport bands over-counted columns and squeezed every card far
+        // below the drawn one. A wrapper is required because an element cannot
+        // container-query ITSELF: `container-type` establishes the context its
+        // DESCENDANTS resolve against. It is width-identical to the grid (a
+        // stretched block child in a flex column, no padding/border/margin),
+        // so it introduces no layout of its own. Thresholds/counts live in
+        // ./marketplace-grid-columns.ts and are pinned to the class list
+        // below by marketplace-grid-columns.test.ts.
+        <div data-testid="marketplace-grid-container" className="@container/marketplace-grid">
+          {/* auto-rows-fr locks every grid row to equal heights (design spec
+              §IV "grid-auto-rows: 1fr"); each card stretches (h-full on the
+              card + h-full on this wrapper) so bodies align across a row.
+              data-testid attrs: conformance stable-id contract — grid root +
+              per-card item wrappers (exact-cardinality assertions count
+              VISIBLE items, so the display:none filter path stays honestly
+              counted). */}
+          <div
+            data-testid="marketplace-grid"
+            className="grid auto-rows-fr grid-cols-1 gap-4 @min-[640px]/marketplace-grid:grid-cols-2 @min-[1024px]/marketplace-grid:grid-cols-3 @min-[1280px]/marketplace-grid:grid-cols-4"
+          >
+            {cards.map((c) => {
+              const visible = matches(c.meta);
+              return (
+                <div
+                  key={c.meta.packageName}
+                  data-testid="marketplace-grid-item"
+                  className="h-full"
+                  style={{ display: visible ? undefined : "none" }}
+                >
+                  {/* Filter lifecycle (cinatra#2373): a non-matching item's
+                      node is UNMOUNTED — the stable grid-item wrapper stays
+                      (so the exact-cardinality assertions still count VISIBLE
+                      items the same way), but a card filtered away cannot
+                      retain an open install panel, a stale selection, or a
+                      focusable control behind `display:none`. Filtering it
+                      back mounts a fresh node, which is idle by construction.
+                      Focus is unaffected: the only focusable thing during
+                      filtering is the filter control the user is typing in. */}
+                  {visible ? c.node : null}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
