@@ -203,7 +203,7 @@ export async function healArtifactInstallRecordForLoadedPackage(
   if (res.kind !== "artifact" || !res.packageName) return;
   try {
     const { healArtifactInstallRecordAndClaims } = await import(
-      "@/lib/extension-install-record-heal"
+      "@/lib/extension-install-anchor"
     );
     const outcome = await healArtifactInstallRecordAndClaims({
       packageName: res.packageName,

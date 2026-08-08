@@ -298,7 +298,7 @@ async function explainZeroClaims(input: {
       input.deps?.explainAbsentClaims ??
       (async (arg: { orgId: string; extension: string; declaredObjectTypeIds?: readonly string[] }) => {
         const { explainAbsentArtifactSafeClaims } = await import(
-          "@/lib/extension-install-record-heal"
+          "@/lib/extension-install-anchor"
         );
         return explainAbsentArtifactSafeClaims(arg);
       });

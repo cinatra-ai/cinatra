@@ -94,7 +94,7 @@ const { healMissingInstallRecordMock } = vi.hoisted(() => ({
     rowId: "iext_default01",
   })),
 }));
-vi.mock("@/lib/extension-install-record-heal", () => ({
+vi.mock("@/lib/extension-install-anchor", () => ({
   healMissingInstallRecord: healMissingInstallRecordMock,
 }));
 
@@ -284,7 +284,7 @@ describe("cinatra#2536 — a version match alone is not 'already up to date'", (
 });
 
 describe("cinatra#2536 — the DEFAULT wiring (no injected seam) reaches the repair module", () => {
-  it("ensureAgentPackageFromGitFile resolves @/lib/extension-install-record-heal and calls it with the agent's identity", async () => {
+  it("ensureAgentPackageFromGitFile resolves @/lib/extension-install-anchor and calls it with the agent's identity", async () => {
     // Without this the injected-seam cases above would leave the actual
     // `defaultHealInstallRecord` hop unexecuted (codex round 1/2): the importer
     // could resolve nothing at all and every case would still pass. Here the

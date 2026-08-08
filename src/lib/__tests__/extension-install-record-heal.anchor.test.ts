@@ -1,5 +1,7 @@
 /**
- * cinatra#2536 — the install-record repair and its diagnostics.
+ * cinatra#2536 — the install-record repair and its diagnostics
+ * (hosted in `src/lib/extension-install-anchor.ts` — see the section banner
+ * there for why it is not its own module).
  *
  * The repair is what turns "already up to date while the install record is
  * ABSENT" from a permanent broken state into a self-healing one, so its
@@ -12,7 +14,7 @@
  * missing install record must name what is missing and how it heals, and must
  * NOT tell a developer to edit a manifest that is already correct.
  *
- * Run: pnpm exec vitest run src/lib/__tests__/extension-install-record-heal.test.ts
+ * Run: pnpm exec vitest run src/lib/__tests__/extension-install-record-heal.anchor.test.ts
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -23,7 +25,7 @@ import {
   healMissingInstallRecord,
   probeInstallRecord,
   type InstallRecordHealDeps,
-} from "@/lib/extension-install-record-heal";
+} from "@/lib/extension-install-anchor";
 
 const PKG = "@cinatra-ai/blog-post-artifact";
 const DIR = "/extensions/cinatra-ai/blog-post-artifact";
@@ -491,7 +493,7 @@ describe("readInstallRecordRows — live provenance precedence", () => {
         },
       ],
     }));
-    const { readInstallRecordRows: read } = await import("@/lib/extension-install-record-heal");
+    const { readInstallRecordRows: read } = await import("@/lib/extension-install-anchor");
 
     await expect(read(PKG)).resolves.toEqual([
       { id: "iext_1", status: "active", organizationId: null, kind: "artifact", isDefault: true, version: "0.1.4" },

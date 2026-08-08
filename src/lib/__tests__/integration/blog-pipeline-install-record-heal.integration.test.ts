@@ -71,7 +71,7 @@ const TYPE = "@cinatra-ai/blog-post-artifact:post";
 const ORG = `org-${randomUUID().slice(0, 8)}`;
 
 let client: Client;
-let heal: typeof import("@/lib/extension-install-record-heal");
+let heal: typeof import("@/lib/extension-install-anchor");
 let resolver: typeof import("@/lib/artifacts/resolve-bound-artifact-type");
 
 async function installRows(): Promise<Array<Record<string, unknown>>> {
@@ -126,7 +126,7 @@ beforeAll(async () => {
   (globalThis as { __cinatraPostgresSchemaInitialized?: boolean }).__cinatraPostgresSchemaInitialized =
     true;
 
-  heal = await import("@/lib/extension-install-record-heal");
+  heal = await import("@/lib/extension-install-anchor");
   resolver = await import("@/lib/artifacts/resolve-bound-artifact-type");
 
   client = new Client({ connectionString: DB_URL });
@@ -235,10 +235,16 @@ describe.skipIf(!RUN)("cinatra#2536 — boot-import heals the blog pipeline's ab
     // exercise the unique-index loser path. A two-party barrier around the REAL
     // canonical read holds BOTH passes until both have seen zero rows, so both
     // go on to insert and exactly one must lose to Postgres.
-    await client.query(
-      `DELETE FROM "${q(TEST_SCHEMA)}"."installed_extension" WHERE package_name = $1`,
-      [EXT],
-    );
+    // Route the teardown through the canonical primitive, never raw SQL — the
+    // canonical-gate-reach guard confines `installed_extension` writes to the
+    // store, and this test must respect the same invariant it exercises.
+    const primitive = await import("@cinatra-ai/extensions/lifecycle-primitive");
+    for (const row of await installRows()) {
+      await primitive.transitionExtensionLifecycle(row.id as string, "force_delete", {
+        actor: { source: "worker" },
+        reason: "integration fixture reset",
+      });
+    }
     expect(await installRows()).toHaveLength(0);
 
     let arrived = 0;
@@ -350,10 +356,14 @@ describe.skipIf(!RUN)("cinatra#2536 — boot-import heals the blog pipeline's ab
 
   it("an ARCHIVED install record is never resurrected by a later boot pass", async () => {
     const [row] = await installRows();
-    await client.query(
-      `UPDATE "${q(TEST_SCHEMA)}"."installed_extension" SET status = 'archived' WHERE id = $1`,
-      [row!.id],
-    );
+    // The archive goes through the REAL lifecycle primitive — both because the
+    // canonical-gate-reach guard forbids raw writes and because an operator's
+    // archive is exactly what this case must reproduce.
+    const primitive = await import("@cinatra-ai/extensions/lifecycle-primitive");
+    await primitive.transitionExtensionLifecycle(row!.id as string, "archive", {
+      actor: { source: "worker" },
+      reason: "integration fixture — operator archive",
+    });
 
     const outcome = await heal.healArtifactInstallRecordAndClaims({
       packageName: EXT,

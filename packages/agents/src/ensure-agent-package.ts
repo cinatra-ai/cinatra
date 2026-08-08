@@ -57,7 +57,7 @@ async function defaultHealInstallRecord(input: {
   packageDir?: string;
   version?: string;
 }): Promise<{ outcome: string; rowId?: string; reason?: string }> {
-  const { healMissingInstallRecord } = await import("@/lib/extension-install-record-heal");
+  const { healMissingInstallRecord } = await import("@/lib/extension-install-anchor");
   return healMissingInstallRecord(input);
 }
 
