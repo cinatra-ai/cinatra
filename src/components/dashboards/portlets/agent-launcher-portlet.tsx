@@ -10,11 +10,16 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/lib/cinatra-toast";
 import { launchAgentAction } from "@/lib/dashboards/portlet-actions";
+import { buildAgentInstancePath } from "@/lib/agent-url";
 import type { PortletComponentProps } from "./types";
 
 export function AgentLauncherPortlet({ config, inputs, onOutput }: PortletComponentProps) {
   const agentRef = typeof config.agentRef === "string" ? config.agentRef : undefined;
   const agentPackage = typeof config.agentPackage === "string" ? config.agentPackage : undefined;
+  // Same resolution order as launchAgentAction's packageName (agentPackage,
+  // falling back to agentRef) — the canonical run link is built from whichever
+  // identity actually launched the run.
+  const packageName = agentPackage ?? agentRef;
   // Seed the editable JSON from any resolved prefill inputs.
   const [params, setParams] = useState<string>(() => {
     const seed = Object.fromEntries(
@@ -64,8 +69,8 @@ export function AgentLauncherPortlet({ config, inputs, onOutput }: PortletCompon
         <Button type="button" onClick={handleLaunch} disabled={pending}>
           {pending ? "Starting…" : "Run agent"}
         </Button>
-        {runId ? (
-          <Link href={`/agents/runs/${runId}`} className="text-sm text-primary underline">
+        {runId && packageName ? (
+          <Link href={buildAgentInstancePath(packageName, runId)} className="text-sm text-primary underline">
             View run
           </Link>
         ) : null}
