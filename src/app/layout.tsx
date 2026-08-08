@@ -199,8 +199,8 @@ export default async function RootLayout({
         // feed's row-level "Needs action" once one does is E11 conformance
         // (#1561 — badge⇔feed parity), not resolvable in this layout pass.
         const [{ availableNavSources }, { summarizeApprovalsNav }] = await Promise.all([
-          import("@/app/configuration/approvals/sources/nav-registry"),
-          import("@/app/configuration/approvals/nav-summary"),
+          import("@/lib/approvals/sources/nav-registry"),
+          import("@/lib/approvals/nav-summary"),
         ]);
         const viewer = { userId: session.user.id, orgId, isAdmin };
         const summary = await summarizeApprovalsNav(await availableNavSources(viewer), viewer);

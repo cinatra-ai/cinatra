@@ -15,7 +15,7 @@ import { mintRunWriteAuthorityForMcp } from "./org-write/run-authority-mint";
 import { createObjectsModule } from "@cinatra-ai/objects/module";
 import { createArtifactsModule } from "@/lib/artifacts/mcp";
 import { createContextModule } from "@/lib/artifacts/context-mcp";
-import { createApprovalsMcpModule } from "@/app/configuration/approvals/approvals-mcp";
+import { createApprovalsMcpModule } from "@/lib/approvals/approvals-mcp";
 import { createProjectSeamMcpModule } from "@/lib/project-seam-mcp";
 import { createAssistantMcpModule } from "@/lib/assistant-mcp";
 import { createProjectsModule } from "@cinatra-ai/projects/module";

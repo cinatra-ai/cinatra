@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { AppNotification } from "@cinatra-ai/notifications/types";
-import type { UnifiedFeedItem } from "@/app/configuration/approvals/unified-feed";
-import type { ApprovalRow } from "@/app/configuration/approvals/sources/types";
+import type { UnifiedFeedItem } from "@/lib/approvals/unified-feed";
+import type { ApprovalRow } from "@/lib/approvals/sources/types";
 
 import {
   approvalDecideKind,

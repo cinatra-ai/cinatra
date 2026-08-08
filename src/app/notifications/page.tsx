@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 
 import { isPlatformAdmin, requireAuthSession } from "@/lib/auth-session";
-import type { ApprovalViewer } from "@/app/configuration/approvals/sources/types";
+import type { ApprovalViewer } from "@/lib/approvals/sources/types";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { Main } from "@/components/layout/main";

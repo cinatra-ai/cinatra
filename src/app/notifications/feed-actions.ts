@@ -12,7 +12,7 @@
 // ---------------------------------------------------------------------------
 
 import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
-import type { ApprovalViewer } from "@/app/configuration/approvals/sources/types";
+import type { ApprovalViewer } from "@/lib/approvals/sources/types";
 
 import { loadFeedWindow, type FeedWindowResult } from "./feed-window";
 import type { FilterChip } from "./feed-view-model";

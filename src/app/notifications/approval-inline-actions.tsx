@@ -14,10 +14,10 @@
 // complementing E5's pending-only predicate (the row is also gone on next fetch).
 // ---------------------------------------------------------------------------
 
-import { AgentDecisionActions } from "@/app/configuration/approvals/agent-decision-actions";
-import { HostPortGrantDecisionActions } from "@/app/configuration/approvals/host-port-grant-decision-actions";
-import { PromotionDecisionActions } from "@/app/configuration/approvals/promotion-decision-actions";
-import { MarketplaceDecisionActions } from "@/app/configuration/approvals/marketplace-decision-actions";
+import { AgentDecisionActions } from "@/lib/approvals/agent-decision-actions";
+import { HostPortGrantDecisionActions } from "@/lib/approvals/host-port-grant-decision-actions";
+import { PromotionDecisionActions } from "@/lib/approvals/promotion-decision-actions";
+import { MarketplaceDecisionActions } from "@/lib/approvals/marketplace-decision-actions";
 
 import type { ApprovalRowVM } from "./feed-view-model";
 

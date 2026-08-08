@@ -53,7 +53,7 @@ function isPrefixMatch(path: string, url: string | undefined): url is string {
  * of it (prefix match at a path boundary) — this fixes parent highlighting on
  * nested routes (cinatra#581). `siblingUrls` carries the urls of the item's
  * peers so that, among OVERLAPPING links (e.g. "/data" and "/data/types", or
- * "/configuration" and "/configuration/approvals"), only the MOST SPECIFIC
+ * "/configuration" and "/configuration/access-control"), only the MOST SPECIFIC
  * (longest) matching url lights up — the parent no longer over-highlights when
  * a deeper sibling owns the route. An exact match always wins.
  */
@@ -225,7 +225,7 @@ export function NavGroup({ title, items, className }: NavGroupProps & { classNam
   const pathname = usePathname();
 
   // Urls of every leaf link in this group, so an overlapping pair (e.g.
-  // "/configuration" + "/configuration/approvals") resolves to the most
+  // "/configuration" + "/configuration/access-control") resolves to the most
   // specific match rather than lighting up both (cinatra#581).
   const leafUrls = items
     .filter((i): i is NavLink => !i.items && !!i.url)

@@ -31,7 +31,7 @@ import * as errors from "@/lib/object-history/errors";
 // authorization ladders are proven without infrastructure.
 // ---------------------------------------------------------------------------
 
-import type { ApprovalViewer } from "@/app/configuration/approvals/sources/types";
+import type { ApprovalViewer } from "@/lib/approvals/sources/types";
 import { redactChatCaptureText } from "@/lib/chat-capture/redact";
 import {
   verifySessionAuthority,
