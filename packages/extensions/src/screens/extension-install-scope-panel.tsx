@@ -10,7 +10,9 @@
  *
  * Shape contract (issue #2373): this component receives the UNBOUND scoped
  * server action plus `packageName` / `packageVersion` and the SERVER-COMPUTED
- * picker context — the same shape the scoped dialog path receives today.
+ * picker context — the same shape the pre-install popup this replaced used to
+ * receive (that component was deleted in cinatra#2374, once the §II detail
+ * modal — its last consumer — became details-only by owner ruling).
  * Zero-argument BOUND actions stay where they always were: on the direct
  * agent/skill install forms, which have no access target and never mount this.
  *

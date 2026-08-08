@@ -203,7 +203,7 @@ describe("#2333 — unrecoverable copy escalates without any retry claim", () =>
 
   // The value every surface passes as `defaultFailureMessage` — the last-resort
   // copy rendered when the action THROWS and no category exists at all
-  // (marketplace-install-form.tsx, extension-install-scope-dialog.tsx,
+  // (marketplace-install-form.tsx, extension-install-scope-panel.tsx,
   // update-plan-flow.tsx). It is this same string, so the no-retry-claim
   // guarantee covers the no-category paths too.
   it("is the value the surfaces use as defaultFailureMessage", () => {

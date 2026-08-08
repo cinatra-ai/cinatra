@@ -20,11 +20,12 @@ import {
   ExtensionsMarketplaceClient,
   MarketplaceGridLoadingFallback,
 } from "./extensions-marketplace-client";
-// NOTE: the card path no longer mounts ExtensionInstallScopeDialog at all
-// (cinatra#2373) — its Install now swaps the card body to the panel below. The
-// dialog survives ONLY as the §II detail-modal's install flow, which the modal
-// mounts itself from the `installScope` context threaded further down; that
-// path is replaced by the modal's own inline panel in S3.
+// NOTE: there is no pre-install popup on this surface any more. The card path
+// moved to the in-card panel below (cinatra#2373) — Install now swaps the card
+// body — and the §II detail modal, the popup's only other consumer, is
+// details-only by owner ruling (2026-08-04, cinatra#2406). cinatra#2374 deleted
+// the now-unreachable component, so the panel is the single scoped install
+// surface here.
 import {
   CardFaceSwitcher,
   InstallPanelCloseButton,
