@@ -157,18 +157,15 @@ jobs:
       - name: Wait for dev server ready
         run: |
           set -uo pipefail
-          # Turbopack compiles the first route cold, so allow generous slack.
-          for i in $(seq 1 90); do
-            if curl -fsS "http://localhost:3000/api/auth/get-session" >/dev/null 2>&1; then
-              echo "dev server ready after ${i} attempt(s)."
-              exit 0
-            fi
-            sleep 2
-          done
-          echo "::error::dev server did not become ready in time."
-          echo "----- last 100 lines of dev log -----"
-          tail -n 100 "$DEV_SERVER_LOG" || true
-          exit 1
+          # Deadline-bound (wall clock), not attempt-bound: a stuck route map
+          # that fast-404s every probe and a healthy cold Turbopack compile
+          # that blocks tens of seconds inside a single curl both respect the
+          # SAME 300s budget, and every probe's status code lands in the log
+          # (cinatra#2514). Loop lives in scripts/ci/dev-hmr-wait-ready.sh so
+          # it can be exercised outside CI by
+          # scripts/ci/dev-hmr-wait-ready-harness.sh.
+          source scripts/ci/dev-hmr-wait-ready.sh
+          wait_for_dev_server_ready "http://localhost:3000/api/auth/get-session" 300 2 10 "$DEV_SERVER_LOG"
 
       - name: Run warm dev-session HMR smoke (Playwright)
         run: pnpm test:e2e:dev-hmr-smoke
