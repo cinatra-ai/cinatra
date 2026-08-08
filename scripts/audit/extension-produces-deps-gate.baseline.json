@@ -1,0 +1,32 @@
+{
+  "note": "Produced-artifact dependency baseline (no-new-rot ratchet, cinatra#2537). `undeclaredProducesDeps` = a `cinatra.produces`/`consumes` entry whose target extension is NOT declared in the SAME manifest's `cinatra.dependencies` as a required artifact-kind edge — installing the producer therefore never installs the produced artifact and every run fails materialization. `unresolvedProducesTargets` = a produced target that does not resolve to a real artifact extension in the synced catalog (absent / wrong kind / unclaimed objectTypeId) — so declaring it as a dependency would not fix anything. `notes` carries the REASON each grandfathered (package, target) pair is tolerated — a manual, version-controlled record; NOT diffed by the gate. These are CURRENT tolerated misses; the gate fails on NEW/GROWN entries. Regenerate the data with `node scripts/audit/extension-produces-deps-gate.mjs --write-baseline` — every data entry should only ever be REMOVED (fix the producing repo, then bump its pin), never added; carry `notes` forward by hand for anything re-baselined this way.",
+  "undeclaredProducesDeps": {
+    "@cinatra-ai/blog-draft-writer-agent": [
+      "@cinatra-ai/blog-post-artifact"
+    ],
+    "@cinatra-ai/blog-idea-generator-agent": [
+      "@cinatra-ai/blog-idea-artifact"
+    ],
+    "@cinatra-ai/blog-linkedin-publish-agent": [
+      "@cinatra-ai/blog-post-artifact"
+    ],
+    "@cinatra-ai/blog-pipeline-agent": [
+      "@cinatra-ai/blog-post-artifact"
+    ],
+    "@cinatra-ai/media-transcript-agent": [
+      "@cinatra-ai/default-artifact"
+    ]
+  },
+  "unresolvedProducesTargets": {
+    "@cinatra-ai/media-transcript-agent": [
+      "@cinatra-ai/default-artifact"
+    ]
+  },
+  "notes": {
+    "@cinatra-ai/blog-draft-writer-agent :: @cinatra-ai/blog-post-artifact": "cinatra#2537 offender 1/5 — fixed by cinatra-ai/blog-draft-writer-agent#39 (declares the required kind:artifact edge). Drops out of this baseline when the pin in cinatra-dev-extensions.lock.json is bumped past that merge.",
+    "@cinatra-ai/blog-idea-generator-agent :: @cinatra-ai/blog-idea-artifact": "cinatra#2537 offender 2/5 — fixed by cinatra-ai/blog-idea-generator-agent#37. Drops out when the dev-lock pin is bumped.",
+    "@cinatra-ai/blog-linkedin-publish-agent :: @cinatra-ai/blog-post-artifact": "cinatra#2537 offender 3/5 — fixed by cinatra-ai/blog-linkedin-publish-agent#40. Drops out when the dev-lock pin is bumped.",
+    "@cinatra-ai/blog-pipeline-agent :: @cinatra-ai/blog-post-artifact": "cinatra#2537 offender 4/5 — fixed by cinatra-ai/blog-pipeline-agent#47. Drops out when the dev-lock pin is bumped.",
+    "@cinatra-ai/media-transcript-agent :: @cinatra-ai/default-artifact": "cinatra#2537 offender 5/5, and the ONLY entry in `unresolvedProducesTargets`. PREMISE CORRECTION vs the issue's audit table: the declared target `@cinatra-ai/default-artifact` is RETIRED (epic cinatra#1785 wave A5), its floor purged with a DB write guard (migration core__0059), its repo ARCHIVED, and it is absent from both extension locks — so the table's remedy (declare it as a required dependency) is not performable, and doing it would ship a dependency on a package that can never install. cinatra-ai/media-transcript-agent#42 instead re-points BOTH the produces entry and the OAS EndNode artifact binding to `@cinatra-ai/text-artifact` (the live artifact accepting the `text/plain` that binding already emits) and declares it as the required artifact dependency. Both entries drop out when the dev-lock pin is bumped."
+  }
+}
