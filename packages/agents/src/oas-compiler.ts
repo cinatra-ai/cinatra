@@ -986,6 +986,13 @@ export type CompiledAgentOas = {
   // "start-only", gatedSteps is always [] — the runtime cannot use them.
   triggerMode: TriggerMode;
   gatedSteps: GatedStep[];
+  // Declarative artifact-binding presence (cinatra#923 grammar, cinatra#2498
+  // persisted authority): true when THIS compile found at least one
+  // `outputs[].cinatra.artifact` binding. Persisted to
+  // agent_templates.has_artifact_bindings by every install/recompile writer;
+  // read by the run-completion materializer BEFORE any registry call, so a
+  // registry outage only fails runs whose packages actually declare bindings.
+  hasArtifactBindings: boolean;
   // Sibling cinatra.json metadata: per-agent limits,
   // required connection types, and authoring-time defaults. Operator-tunable
   // overrides will land on agent_install_settings DB table in a follow-up.
@@ -1865,6 +1872,14 @@ export async function compileOasAgentJson(opts: {
   // compile with the manifest present). Grammar single-sourced in
   // artifact-binding.ts; registry checks (extension installed, accepts)
   // deliberately stay at run time.
+  //
+  // hasArtifactBindings (cinatra#2498): whether THIS compile found at least
+  // one binding, persisted on the compiled root (like triggerMode/gatedSteps)
+  // and from there into agent_templates.has_artifact_bindings — the locally
+  // persisted authority the run-completion materializer consults BEFORE any
+  // registry read, so a registry outage at run time only fails runs whose
+  // packages actually declare bindings.
+  let hasArtifactBindings = false;
   {
     const bindingResult = collectArtifactBindingsFromOasDocument(parsed, {
       produces: sibling?.produces ?? null,
@@ -1878,6 +1893,7 @@ export async function compileOasAgentJson(opts: {
           bindingResult.errors.join("\n"),
       };
     }
+    hasArtifactBindings = bindingResult.bindings.length > 0;
   }
 
   // 10c. Deterministic `artifact_materialize` passthrough nodes (cinatra#925)
@@ -1958,6 +1974,8 @@ export async function compileOasAgentJson(opts: {
       agentSpecVersion,
       triggerMode,
       gatedSteps,
+      // cinatra#2498 — locally-persisted binding-presence authority.
+      hasArtifactBindings,
       // sibling cinatra.json
       cinatraConfig,
     },

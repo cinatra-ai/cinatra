@@ -28,7 +28,6 @@ import { createLocalAgentTemplateVersion } from "./import-export-actions";
 import {
   readAgentTemplateByPackageName,
   updateAgentTemplate,
-  updateAgentTemplatePackageVersion,
   createAgentVersion,
   type CompiledStep,
   type ApprovalPolicy,
@@ -489,6 +488,19 @@ async function _installAgentFromPackageImpl(
         // a version that DROPS the block clears the column instead of leaving a
         // stale repairCapable behind.
         lifecycleConfig: seed.lifecycleConfig,
+        // cinatra#2498: re-project the OAS compiler's own binding-presence
+        // result on every (re)install, exactly as lifecycleConfig does — a
+        // version that DROPS its last binding must flip the column back to
+        // false, not leave a stale true behind. packageVersion rides the SAME
+        // update (below), not a separate call, so the two land ATOMICALLY:
+        // the run-completion materializer only trusts has_artifact_bindings
+        // when it's read alongside a package_version that still matches the
+        // reading run's own pin (codex round-2 finding) — a window where one
+        // column reflects the new version and the other the old would let a
+        // concurrently-completing run of the OLD version see a package_version
+        // match paired with the NEW version's (wrong) flag.
+        hasArtifactBindings: seed.hasArtifactBindings,
+        packageVersion: extracted.packageVersion,
         agentDependencies:
           Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
         connectorDependencies:
@@ -512,7 +524,6 @@ async function _installAgentFromPackageImpl(
         ownerLevel: input.ownerLevel,
         ownerId: input.ownerId,
       });
-      await updateAgentTemplatePackageVersion(existing.id, extracted.packageVersion);
       await createAgentVersion({
         id: versionId,
         templateId: existing.id,
@@ -594,6 +605,9 @@ async function _installAgentFromPackageImpl(
       // cinatra#2047 D-1 — the compiled manifest LIFECYCLE declaration rides the
       // fresh-install seed so all three install branches persist it identically.
       lifecycleConfig: seed.lifecycleConfig,
+      // cinatra#2498 — same three-branch parity for the binding-presence
+      // authority.
+      hasArtifactBindings: seed.hasArtifactBindings,
       status: input.status ?? "draft",
     };
     let templateId: string;
@@ -630,6 +644,11 @@ async function _installAgentFromPackageImpl(
         // a version that DROPS the block clears the column instead of leaving a
         // stale repairCapable behind.
         lifecycleConfig: seed.lifecycleConfig,
+        // cinatra#2498 — same three-branch parity for the binding-presence
+        // authority AND the same atomic-with-packageVersion requirement (see
+        // the upsert branch above).
+        hasArtifactBindings: seed.hasArtifactBindings,
+        packageVersion: extracted.packageVersion,
         agentDependencies:
           Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
         connectorDependencies:
@@ -637,7 +656,6 @@ async function _installAgentFromPackageImpl(
         hitlScreens: seed.hitlScreens ?? undefined,
         status: input.status ?? raceExisting.status,
       });
-      await updateAgentTemplatePackageVersion(raceExisting.id, extracted.packageVersion);
       await createAgentVersion({ id: versionId, templateId: raceExisting.id, contentHash, snapshot });
       templateId = raceExisting.id;
     }

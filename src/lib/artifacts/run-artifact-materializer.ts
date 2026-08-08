@@ -63,6 +63,21 @@ import {
 // resolves only when the remote peer really is a published cinatra package —
 // see that function for the full rationale.
 //
+// Registry-outage narrowing (cinatra#2498): #2486 fails closed on a wholesale
+// binding-resolution failure (registry unreachable) because it cannot prove
+// the run owed no artifact. That fail-closed posture used to cover EVERY run,
+// including ones whose packages declare no bindings at all. This module now
+// consults `agent_templates.has_artifact_bindings` — the locally-persisted
+// fact the OAS compiler derives at install/recompile time — BEFORE ever
+// calling the registry; a locally-provable `false` returns `[]` straight
+// away, so a registry outage only fails runs whose packages actually declare
+// a binding (or predate the column, where the prior fail-closed behavior is
+// preserved exactly). It runs BEFORE the wholesale-failure classification
+// above, and BOTH terminal branches inherit it through this one function: an
+// external-A2A run whose pinned template provably owes nothing now completes
+// cleanly during an outage instead of failing on `unavailable`, and every path
+// the flag cannot prove keeps #2497's classification untouched.
+//
 // The declarative path requires NO `skills.authoring` on the extension
 // (`authorArtifact` stays the LLM-judgment path); title and MIME come from
 // the binding — never prompt-invented.
@@ -278,6 +293,72 @@ async function resolveTemplatePackageName(
   return typeof row?.package_name === "string" && row.package_name.length > 0
     ? row.package_name
     : null;
+}
+
+/**
+ * cinatra#2498 — the run-completion terminal edge's read of the
+ * locally-persisted binding-presence authority
+ * (`agent_templates.has_artifact_bindings`), alongside the package name a
+ * registry read still needs when that authority does not rule the registry
+ * out. Kept separate from `resolveTemplatePackageName` (used by
+ * `loadRunDerivationContext` and `materializeToolArtifact`, neither of which
+ * benefits from the flag: the derivation job's own settlement already treats
+ * "no binding" as a legitimate outcome, and the mid-flow tool call always
+ * needs live produces data regardless) so this materializer's own terminal
+ * gate stays the only caller that special-cases `false`.
+ *
+ * VERSION-PINNED, not template-scoped (codex round-1 finding). `agent_templates`
+ * is a MUTABLE row a reinstall/recompile overwrites in place, but a run is
+ * PINNED to the `packageVersion` it was created against. Trusting the
+ * template's CURRENT `has_artifact_bindings` unconditionally would let an
+ * in-flight run silently under-materialize the moment a concurrent reinstall
+ * moves the template on to a different version: v1 declares a binding
+ * (`true`), a run starts pinned to v1, a reinstall to v2 (no binding) flips
+ * the row to `false` before the v1 run completes, and the v1 run would wrongly
+ * skip a binding it still owes. So the flag is trusted ONLY when the row's
+ * CURRENT `package_version` still equals `forPackageVersion` — otherwise the
+ * template has moved on since the run started and the flag describes a
+ * different version, so this returns `null` (unknown) and the caller falls
+ * through to the registry, exactly as it did before this column existed. An
+ * unpinned run (`forPackageVersion === null`, the floating dist-tag case)
+ * always falls through too — mirrors `loadRunPackageBindings`'s own "never
+ * cache an unpinned lookup" rule (the floating tag can move, so nothing
+ * associated with "the template's current row" is safe to trust for it).
+ */
+async function resolveTemplatePackageAndBindingsFlag(
+  templateId: string,
+  forPackageVersion: string | null,
+): Promise<{
+  packageName: string | null;
+  hasArtifactBindings: boolean | null;
+}> {
+  ensurePostgresSchema();
+  const s = postgresSchema.replaceAll('"', '""');
+  const res = await pool().query(
+    `SELECT package_name, package_version, has_artifact_bindings FROM "${s}"."agent_templates" WHERE id = $1 LIMIT 1`,
+    [templateId],
+  );
+  const row = res.rows[0] as
+    | {
+        package_name?: string | null;
+        package_version?: string | null;
+        has_artifact_bindings?: boolean | null;
+      }
+    | undefined;
+  const versionPinMatches =
+    forPackageVersion !== null &&
+    typeof row?.package_version === "string" &&
+    row.package_version === forPackageVersion;
+  return {
+    packageName:
+      typeof row?.package_name === "string" && row.package_name.length > 0
+        ? row.package_name
+        : null,
+    hasArtifactBindings:
+      versionPinMatches && typeof row?.has_artifact_bindings === "boolean"
+        ? row.has_artifact_bindings
+        : null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -537,6 +618,25 @@ export async function writeClaimedArtifact(input: {
  * run. Never throws; returns one outcome per binding (plus one synthetic
  * failed outcome per binding-collection error). Empty array when the run's
  * package declares no bindings.
+ *
+ * cinatra#2498 — the registry read below (`loadRunPackageBindings`) is the
+ * ONLY way a registry outage can reach this function; its wholesale-failure
+ * catch turns that outage into a synthetic `(binding-resolution)` failure
+ * that fails the run (materialization-honesty gate, cinatra#2486). Before
+ * that read, this function first consults the locally-persisted
+ * `agent_templates.has_artifact_bindings` authority (compiled at
+ * install/recompile time — see oas-compiler.ts step 10b). When it is
+ * PROVABLY `false`, the run owes no artifact regardless of registry
+ * reachability, so the function returns `[]` WITHOUT ever calling the
+ * registry — a registry outage can no longer fail a binding-less run. `true`
+ * and `null` (unknown — a legacy row with no backfill, cinatra#2498
+ * acceptance item 3) both cannot be locally proven safe and fall through to
+ * the registry read, preserving the exact pre-#2498 fail-closed behavior. The
+ * flag is trusted ONLY when it still describes THIS run's pinned
+ * `packageVersion` (`resolveTemplatePackageAndBindingsFlag`'s version-pin
+ * guard) — a template row is mutable and a concurrent reinstall can move it
+ * to a different version while this run is still in flight, so a flag that no
+ * longer matches the pin is treated as unknown, never as a stale `false`.
  */
 export async function materializeRunArtifacts(input: {
   runId: string;
@@ -561,8 +661,22 @@ export async function materializeRunArtifacts(input: {
   // itself failed) — evidence-free by construction.
   let resolvedPackageName: string | null = null;
   try {
-    const packageName = await resolveTemplatePackageName(input.templateId);
+    const { packageName, hasArtifactBindings } = await resolveTemplatePackageAndBindingsFlag(
+      input.templateId,
+      input.packageVersion,
+    );
     if (packageName === null) return [];
+    // Locally-provable "no bindings" — skip the registry entirely. This is
+    // the ONLY branch that short-circuits; `true` and `null` both still need
+    // the registry (to resolve the actual binding grammar, or because we
+    // cannot prove the run owes nothing) and keep the existing posture below.
+    // Deliberately BEFORE the `resolvedPackageName` hoist: this branch can
+    // never reach the catch's classifier (cinatra#2497), because it never
+    // performs a read that can fail. Ordering it first is the whole point of
+    // cinatra#2498 — a template provably owing no binding at THIS run's pin
+    // must not touch the registry at all, so no outage, 404 or probe can even
+    // be observed for it. Every other path keeps #2497's classification.
+    if (hasArtifactBindings === false) return [];
     resolvedPackageName = packageName;
     const loaded = await loadRunPackageBindings({
       packageName,

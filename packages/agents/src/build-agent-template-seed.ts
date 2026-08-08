@@ -98,6 +98,14 @@ export type AgentTemplateInstallSeed = {
    * not part of the agent's source identity.
    */
   lifecycleConfig: string | null;
+  /**
+   * Whether the compiled OAS document declares at least one
+   * `outputs[].cinatra.artifact` binding (cinatra#2498), persisted on
+   * `agent_templates.has_artifact_bindings` — the locally-persisted authority
+   * the run-completion materializer consults BEFORE any registry read, so a
+   * registry outage only fails runs whose packages actually declare bindings.
+   */
+  hasArtifactBindings: boolean;
   /** Deterministic snapshot persisted to the agent_versions row. */
   snapshot: Record<string, unknown>;
   /** sha256(JSON.stringify(snapshot)) — full hex, matches the prior install flow. */
@@ -279,6 +287,10 @@ export async function buildAgentTemplateInstallSeed(input: {
     lgGraphId,
     executionProvider: manifestProvider,
     lifecycleConfig,
+    // cinatra#2498 — the OAS compiler's own binding-collection result (step
+    // 10b), threaded straight through so a fresh registry install persists
+    // the SAME locally-derived fact a recompile would.
+    hasArtifactBindings: compiled.hasArtifactBindings,
     snapshot,
     contentHash,
   };

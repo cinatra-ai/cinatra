@@ -173,6 +173,21 @@ export const agentTemplates = cinatraSchema.table("agent_templates", {
   // used by other "JSON-as-text" columns in this table (compiledPlan, hitlScreens,
   // agentDependencies). Nullable; default null.
   gatedSteps:        text("gated_steps"),
+  // hasArtifactBindings: the locally-persisted binding-presence authority
+  // (cinatra#2498). Populated by the OAS compiler (oas-compiler.ts step 10b)
+  // at BOTH install (buildAgentTemplateInstallSeed) and recompile
+  // (agent_source_compile) time — true when the compiled OAS document
+  // declares at least one `outputs[].cinatra.artifact` binding, false when it
+  // declares none. The run-completion materializer
+  // (src/lib/artifacts/run-artifact-materializer.ts) reads this column FIRST:
+  // false short-circuits before any registry read, so a registry outage can
+  // never fail a binding-less run's completion. NULLABLE, three-valued ON
+  // PURPOSE — null means "unknown" (a legacy row compiled before this column
+  // existed; no backfill, see cinatra#2498) and is treated exactly like the
+  // pre-#2498 posture: fall through to the registry read, fail closed on an
+  // outage. A two-valued column with a default would silently claim "no
+  // bindings" for every pre-existing row.
+  hasArtifactBindings: boolean("has_artifact_bindings"),
   // lifecycleConfig: the agent-manifest LIFECYCLE declarations (cinatra#2038,
   // epic #2037 S0) compiled onto the template trigger-style (like trigger_mode /
   // gated_steps): requestedSkips / producedTypes / repairCapable as JSON-as-text.

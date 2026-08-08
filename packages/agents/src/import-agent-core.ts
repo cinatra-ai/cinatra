@@ -264,6 +264,10 @@ export async function importAgentTemplateCore(
           // `undefined` (manifest-less ZIP) leaves the column untouched;
           // an explicit null clears a dropped block. See the derivation above.
           lifecycleConfig: manifestLifecycleConfig,
+          // cinatra#2498: re-project the OAS compiler's own binding-presence
+          // result on re-import, exactly as installAgentFromPackage's upsert
+          // branch does.
+          hasArtifactBindings: compiled.hasArtifactBindings,
         });
 
         const snapshotObj = {
@@ -342,6 +346,9 @@ export async function importAgentTemplateCore(
       // same column value a registry install does (createAgentTemplate
       // normalizes undefined to NULL — there is no prior value to preserve).
       lifecycleConfig: manifestLifecycleConfig,
+      // cinatra#2498: the OAS compiler's own binding-presence result rides
+      // the fresh create too, for the same reason.
+      hasArtifactBindings: compiled.hasArtifactBindings,
     });
 
     const snapshotObj = {
