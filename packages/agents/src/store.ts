@@ -108,6 +108,7 @@ import {
   enforceRunAccess,
   DEFAULT_AGENT_AUTH_POLICY,
   resolveEffectivePolicy,
+  withDeterminateInstallScope,
 } from "./auth-policy";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import {
@@ -115,6 +116,15 @@ import {
   deserializeRun,
   deriveRunOboCeilingJson,
 } from "./agent-run-serde";
+// cinatra#2485 C — the shared run-scope guard rides the run-serde slice; it is
+// re-exported here so `./store` importers (incl. the host enqueue chokepoint)
+// reach it through the surface they already depend on.
+export {
+  assertAgentRunScopeAuthorized,
+  assertAgentRunDispatchAuthorized,
+  readRunScopeRef,
+} from "./agent-run-serde";
+export type { AgentRunScopeStage, RunScopeRef } from "./agent-run-serde";
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -413,13 +423,10 @@ export type CreateAgentRunInput = {
   delegatedActorSnapshot?: string | null;
   dependentInstallId?: string | null; // SERVER-ONLY trusted dispatch id (cinatra#1392 Gap 2) — never from client input
   humanPresent?: boolean | null; // cinatra#2067 presence discriminator; true only from interactive UI/chat run-start callers
-  // cinatra#2485 C — the REQUESTING actor, for the install-scope run gate
-  // (`assertActorWithinAgentTemplateScope`). SERVER-ONLY and never client-
-  // supplied: every caller passes the actor it already verified (session /
-  // MCP frame / A2A peer). Omitting it is safe but NOT a bypass — the
-  // creation perimeter then authorizes the run against the persisted `runBy`
-  // resolved LIVE, falling back to the template's installation principal for a
-  // genuinely autonomous run, and refuses when neither exists.
+  // cinatra#2485 C — the REQUESTING actor for the install-scope run gate.
+  // SERVER-ONLY, never client-supplied. Omitting it is not a bypass: the
+  // perimeter then authorizes the persisted `runBy` (resolved LIVE), and
+  // refuses when there is no principal at all.
   scopeActor?: ActorContext | null;
 };
 
@@ -695,29 +702,11 @@ export async function createAgentTemplate(
 async function _createAgentTemplateImpl(
   input: CreateAgentTemplateInput,
 ): Promise<AgentTemplateRecord> {
-  // cinatra#2485 C — every template must be WRITTEN with a determinate install
-  // scope, because that scope is now the only thing that authorizes a run.
-  //
-  // A template anchored to an organization but given no narrower owner anchor
-  // IS an organization-scoped template; stamping that at write time is the
-  // same defaulting the canonical install row already applies
-  // (`install-package-with-dependencies`: `orgId ? "organization" : …`). Doing
-  // it HERE, at the writer, rather than in the evaluator keeps the read path
-  // strictly fail-closed: a legacy row that really carries no anchor still
-  // denies, and nothing is guessed at authorization time.
-  //
-  // This NARROWS: such a template used to be returned (and runnable) for any
-  // authenticated actor in any org; now it is runnable by its own org. A
-  // template created with NO org anchor at all (e.g. a registry fork) stays
-  // scope-less and is refused at run start — the correct fail-closed outcome
-  // for a row with no tenancy.
-  const scoped: CreateAgentTemplateInput =
-    input.orgId && input.ownerLevel === undefined && input.ownerId === undefined
-      ? { ...input, ownerLevel: "organization", ownerId: input.orgId }
-      : input;
+  // cinatra#2485 C — stamp a determinate install scope at WRITE time (see
+  // `withDeterminateInstallScope`); the read path stays fail-closed.
   const [row] = await db
     .insert(agentTemplates)
-    .values(serializeTemplate(scoped))
+    .values(serializeTemplate(withDeterminateInstallScope(input)))
     .returning();
   const record = deserializeTemplate(row);
 
@@ -886,17 +875,11 @@ function applyAgentTemplateVisibility(
   record: AgentTemplateRecord,
   options?: AgentTemplateVisibilityOptions,
 ): AgentTemplateRecord | null {
-  // DISCOVERY gate ONLY — never a run-authorization gate (cinatra#2485 C).
-  //
-  // A published template is DISCOVERABLE by everyone; that is deliberately
-  // unchanged (the marketplace/agent list, the A2A AgentCard, and the MCP tool
-  // list all stay browsable). It is NOT runnable by everyone: an agent
-  // published org-wide is runnable BY THAT ORG, and a team-/project-/personal-
-  // scoped agent only inside its scope. RUN authorization is enforced
-  // separately at the three layers of `./agent-template-scope-guard` — the
-  // creation perimeter, the dispatch guard, and the worker's fire-time
-  // recheck — so nothing downstream may read "returned by this reader" as
-  // "this actor may run it".
+  // DISCOVERY gate ONLY — never a run-authorization gate (cinatra#2485 C). A
+  // published template stays browsable to everyone; it is NOT runnable by
+  // everyone. RUN authorization is the shared run-scope guard's job
+  // (`./agent-run-serde`, three layers), so nothing downstream may read
+  // "returned by this reader" as "this actor may run it".
   if (record.status === "published") return record;
   // Non-published (draft/archived) require an explicit opt-in.
   if (!options?.includeNonPublished) return null;
@@ -1575,21 +1558,12 @@ export async function createAgentRun(
   // run can never create another run even if its own authority is forwarded.
   authority: OrgWriteAuthority | undefined,
 ): Promise<AgentRunRecord> {
-  // cinatra#2485 C (layer 1): install-scope IS the run-authorization gate, at
-  // the CANONICAL creation perimeter. Every run-creating path in the instance
-  // funnels through this function and `createAgentRunPendingInput`, including
-  // the ones that never enqueue (the host content-editor override dispatch),
-  // so this is the one place a creation-side guard cannot be walked around.
+  // cinatra#2485 C (layer 1) — the CANONICAL creation perimeter for the
+  // install-scope run gate; see the guard's own contract in ./agent-run-serde.
   // Asserted BEFORE any derivation or insert, so an out-of-scope actor's run
-  // never exists — there is no row to leak, resume, or repair into a dispatch.
-  //
-  // DYNAMICALLY imported (the same posture `run-transition.ts` uses): `store.ts`
-  // is reachable from every locked route, and a static edge to the guard's
-  // module would grow each route's first-party graph against the route-graph
-  // ratchet for a module only ever needed on a run WRITE.
-  const { assertAgentRunScopeAuthorized } = await import(
-    "./agent-template-scope-guard"
-  );
+  // never exists. Imported dynamically: `store.ts` is reachable from every
+  // locked route, and this is only ever needed on a run WRITE.
+  const { assertAgentRunScopeAuthorized } = await import("./agent-run-serde");
   await assertAgentRunScopeAuthorized({
     stage: "create",
     templateId: input.templateId,
@@ -3182,13 +3156,9 @@ export async function createAgentRunPendingInput(
   authority: OrgWriteAuthority | undefined,
 ): Promise<AgentRunRecord> {
   const id = randomUUID();
-  // cinatra#2485 C (layer 1): the SAME install-scope gate the `createAgentRun`
-  // perimeter applies — a `pending_input` run is a run, and the interactive
-  // Run button dispatches it later without re-entering `createAgentRun`.
-  // Dynamically imported for the same route-graph reason as above.
-  const { assertAgentRunScopeAuthorized } = await import(
-    "./agent-template-scope-guard"
-  );
+  // cinatra#2485 C (layer 1): the SAME gate — a `pending_input` run is a run,
+  // and the Run button dispatches it later without re-entering `createAgentRun`.
+  const { assertAgentRunScopeAuthorized } = await import("./agent-run-serde");
   await assertAgentRunScopeAuthorized({
     stage: "create",
     templateId: input.templateId,

@@ -45,9 +45,9 @@ describe("layer 1: creation perimeter", () => {
   it("reaches the guard by DYNAMIC import — store.ts is on every locked route", () => {
     // A static edge would pull the guard (and its own graph) into every locked
     // route's first-party module budget for something only a run WRITE needs.
-    expect(store).not.toMatch(/^import .*agent-template-scope-guard/m);
+    expect(store).not.toMatch(/^import .*agent-run-serde/m);
     expect(
-      (store.match(/await import\(\s*"\.\/agent-template-scope-guard"\s*\)/g) ?? [])
+      (store.match(/await import\(\s*"\.\/agent-run-serde"\s*\)/g) ?? [])
         .length,
     ).toBe(2);
   });
@@ -78,18 +78,18 @@ describe("layer 1: creation perimeter", () => {
   });
 
   it("stamps a determinate scope at TEMPLATE-WRITE time, never guesses one at read time", () => {
-    // The evaluator must stay fail-closed on a scope-less row, so the
-    // org-anchored default belongs at the writer. An org-anchored template with
-    // no narrower owner is org-scoped; one with no org anchor at all stays
-    // scope-less and is refused at run start.
+    // The rule must stay fail-closed on a scope-less row, so the org-anchored
+    // default belongs at the WRITER. An org-anchored template with no narrower
+    // owner is org-scoped; one with no org anchor at all stays scope-less and
+    // is refused at run start.
     const body = store.slice(store.indexOf("async function _createAgentTemplateImpl("));
-    expect(body).toMatch(
-      /input\.orgId && input\.ownerLevel === undefined && input\.ownerId === undefined/,
-    );
-    expect(body).toMatch(/ownerLevel: "organization", ownerId: input\.orgId/);
-    // …and the evaluator still refuses an unknown level (no read-time coercion).
-    const evaluator = read("packages/agents/src/agent-template-scope.ts");
-    expect(evaluator).toMatch(/reason: "unknown_scope"/);
+    expect(body).toContain("withDeterminateInstallScope(input)");
+    const policy = read("packages/agents/src/auth-policy.ts");
+    const helper = policy.slice(policy.indexOf("export function withDeterminateInstallScope"));
+    expect(helper).toMatch(/if \(!input\.orgId\) return input;/);
+    expect(helper).toMatch(/ownerLevel: "organization", ownerId: input\.orgId/);
+    // …and the rule still refuses an unknown level (no read-time coercion).
+    expect(policy).toMatch(/reason: "unknown_scope"/);
   });
 
   it("keeps the scope actor a SERVER-ONLY input, never parsed from a tool payload", () => {
@@ -213,6 +213,9 @@ describe("layer 2: shared dispatch guard", () => {
     expect(guardAt).toBeLessThan(src.indexOf("client.sendTask("));
     // The refusal must not distinguish itself from the run-access denial.
     expect(src.slice(guardAt, guardAt + 1200)).toContain('"Run access denied."');
+    // Recognized by CODE, not `instanceof` — a refusal must survive a bundle /
+    // module-mock boundary.
+    expect(src).toContain('AGENT_TEMPLATE_SCOPE_DENIED');
   });
 
   it("requires the DISPATCHING admin — not just the run owner — on releaseTriggerNow", () => {
@@ -252,7 +255,7 @@ describe("layer 3: worker fire-time recheck", () => {
   it("lands a refusal terminally rather than re-delaying the job forever", () => {
     const window = body.slice(body.indexOf('stage: "execute"'));
     const refusal = window.slice(0, window.indexOf("Version pinning"));
-    expect(refusal).toContain("AgentTemplateScopeError");
+    expect(refusal).toContain("isScopeDenial(err)");
     expect(refusal).toMatch(/transitionRunStatus\(runId, "queued", "failed"/);
     expect(refusal).not.toContain("OrgArchivedFreezeError");
   });
@@ -352,7 +355,7 @@ describe("paths that carry an explicit actor thread it into the perimeter", () =
   });
 
   it("re-resolves every HUMAN principal live instead of trusting the supplied axes", () => {
-    const guard = read("packages/agents/src/agent-template-scope-guard.ts");
+    const guard = read("packages/agents/src/agent-run-serde.ts");
     expect(guard).toContain("resolveOrgRoleForUser");
     expect(guard).toMatch(/principalType === "HumanUser"[\s\S]{0,120}pushHuman/);
   });
@@ -383,7 +386,7 @@ describe("published-reader audit", () => {
       store.indexOf("export async function updateAgentTemplate("),
     );
     expect(gate).toMatch(/DISCOVERY gate ONLY/);
-    expect(gate).toMatch(/agent-template-scope-guard/);
+    expect(gate).toMatch(/shared run-scope guard/);
   });
 
   it.each([
@@ -414,18 +417,27 @@ describe("published-reader audit", () => {
     expect(guard).toContain("readPublishedAgentTemplates");
   });
 
-  it("the evaluator never reads publication status — publication is not authority", () => {
-    const evaluator = read("packages/agents/src/agent-template-scope.ts");
-    expect(evaluator).not.toMatch(/\bstatus\b\s*===\s*"published"/);
-    expect(evaluator).not.toMatch(/record\.status|template\.status/);
-  });
-
-  it("the evaluator is purpose-built, not a reuse of the extension-access evaluator", () => {
-    const evaluator = read("packages/agents/src/agent-template-scope.ts");
-    const code = evaluator
+  /** The install-scope RULE's own source region inside the agent auth-policy
+   *  module (the file also owns the unrelated per-run policy evaluation). */
+  function scopeRuleSource(): string {
+    const src = read("packages/agents/src/auth-policy.ts");
+    const start = src.indexOf("export const AGENT_TEMPLATE_SCOPE_LEVELS");
+    expect(start).toBeGreaterThan(-1);
+    return src
+      .slice(start)
       .split("\n")
       .filter((l) => !l.trimStart().startsWith("//") && !l.trimStart().startsWith("*"))
       .join("\n");
+  }
+
+  it("the rule never reads publication status — publication is not authority", () => {
+    const code = scopeRuleSource();
+    expect(code).not.toMatch(/\bstatus\b\s*===\s*"published"/);
+    expect(code).not.toMatch(/record\.status|template\.status/);
+  });
+
+  it("the rule is purpose-built, not a reuse of the extension-access evaluator", () => {
+    const code = scopeRuleSource();
     expect(code).not.toMatch(/from\s+"[^"]*enforce-extension-access"/);
     expect(code).not.toContain("evaluateExtensionAccess(");
     // No universal platform-admin grant anywhere in the rule.

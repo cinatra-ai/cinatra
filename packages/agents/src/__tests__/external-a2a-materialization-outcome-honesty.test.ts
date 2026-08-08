@@ -54,6 +54,9 @@ vi.mock("@/lib/artifacts/run-artifact-materializer", () => ({
 }));
 
 const storeMock = vi.hoisted(() => ({
+  // cinatra#2485 C: the shared run-scope guard rides `./store`'s surface.
+  assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
+  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
   readAgentRunById: vi.fn(),
   readAgentTemplateById: vi.fn(async () => null as unknown),
   readAgentTemplates: vi.fn(async () => []),
@@ -91,20 +94,12 @@ vi.mock("../store", () => storeMock);
 // four-level rule), `agent-run-scope-guard.test.ts` (the per-path matrix +
 // fire-time recheck) and `agent-run-scope-enforcement-wiring.test.ts` (that all
 // three layers actually call it).
-vi.mock("../agent-template-scope-guard", () => ({
+vi.mock("../agent-run-serde", async (orig) => ({
+  ...(await orig<typeof import("../agent-run-serde")>()),
   assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
   assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
 }));
 
-// cinatra#2485 C: the shared dispatch guard inside `enqueueAgentRun` reads the
-// agent_runs / agent_templates rows straight from the DB (this suite has no
-// live Postgres and mocks the persistence hub). The gate's own behavior is
-// proven in `agent-template-scope.test.ts`, `agent-run-scope-guard.test.ts` and
-// `agent-run-scope-enforcement-wiring.test.ts`.
-vi.mock("@cinatra-ai/agents/agent-template-scope-guard", () => ({
-  assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
-  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
-}));
 
 
 vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));

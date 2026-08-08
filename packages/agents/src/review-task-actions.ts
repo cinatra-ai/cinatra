@@ -251,7 +251,7 @@ export async function approveReviewTaskInternal(
     // no partial write behind.
     {
       const { assertAgentRunDispatchAuthorized } = await import(
-        "./agent-template-scope-guard"
+        "./agent-run-serde"
       );
       await assertAgentRunDispatchAuthorized({
         runId,
@@ -499,7 +499,7 @@ export async function approveReviewTaskInternal(
     // step of the resume.
     {
       const { assertAgentRunDispatchAuthorized } = await import(
-        "./agent-template-scope-guard"
+        "./agent-run-serde"
       );
       await assertAgentRunDispatchAuthorized({
         runId: run.id,

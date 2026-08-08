@@ -1,5 +1,12 @@
 import "server-only";
 import { mintAgentRunExecutionAuthority } from "@/lib/org-write/agent-run-authority-mint";
+/** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
+ *  the CODE, not `instanceof`, so a refusal is recognized across bundle /
+ *  module-mock boundaries (the site-level pattern `project-dispatch.ts` uses
+ *  for OBO_CEILING_DISJOINT_CODE). */
+const AGENT_TEMPLATE_SCOPE_DENIED_CODE = "AGENT_TEMPLATE_SCOPE_DENIED";
+const isScopeDenial = (err: unknown): err is { reason: string } =>
+  (err as { code?: string } | null)?.code === AGENT_TEMPLATE_SCOPE_DENIED_CODE;
 
 // ---------------------------------------------------------------------------
 // Artifact-review RESUME-DELIVERY worker (cinatra#1796, epic #1620 S13).
@@ -217,13 +224,12 @@ export async function deliverArtifactReviewResumeIntent(
   // transient faults.
   {
     const { assertAgentRunDispatchAuthorized } = await import(
-      "./agent-template-scope-guard"
+      "./agent-run-serde"
     );
-    const { AgentTemplateScopeError } = await import("./agent-template-scope");
     try {
       await assertAgentRunDispatchAuthorized({ runId: run.id, stage: "dispatch" });
     } catch (err) {
-      if (err instanceof AgentTemplateScopeError) {
+      if (isScopeDenial(err)) {
         console.warn(
           `[artifact-review-resume] gate=${gateId} run=${run.id} refused — the agent's ` +
             `scope no longer authorizes this run (${err.reason}); not resuming`,
@@ -352,5 +358,4 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
       );
     }
   }
-  return summary;
-}
+  return summary;}

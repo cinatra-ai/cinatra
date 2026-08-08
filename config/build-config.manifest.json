@@ -79,8 +79,6 @@
     { "alias": "@cinatra-ai/agents/install-target-picker", "target": "./packages/agents/src/install-target-picker.ts" },
     { "alias": "@cinatra-ai/agents/llm-provider-policy", "target": "./packages/agents/src/llm-provider-policy.ts" },
     { "alias": "@cinatra-ai/agents/store", "target": "./packages/agents/src/store.ts" },
-    { "alias": "@cinatra-ai/agents/agent-template-scope", "target": "./packages/agents/src/agent-template-scope.ts" },
-    { "alias": "@cinatra-ai/agents/agent-template-scope-guard", "target": "./packages/agents/src/agent-template-scope-guard.ts" },
     { "alias": "@cinatra-ai/agents/artifact-review-gate-store", "target": "./packages/agents/src/artifact-review-gate-store.ts" },
     { "alias": "@cinatra-ai/agents/lifecycle-verification-store", "target": "./packages/agents/src/lifecycle-verification-store.ts" },
     { "alias": "@cinatra-ai/agents/lifecycle-policy-store", "target": "./packages/agents/src/lifecycle-policy-store.ts" },

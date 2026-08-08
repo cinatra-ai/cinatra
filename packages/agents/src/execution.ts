@@ -51,6 +51,13 @@ import {
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
 } from "./agent-builder-ids";
+/** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
+ *  the CODE, not `instanceof`, so a refusal is recognized across bundle /
+ *  module-mock boundaries (the site-level pattern `project-dispatch.ts` uses
+ *  for OBO_CEILING_DISJOINT_CODE). */
+const AGENT_TEMPLATE_SCOPE_DENIED_CODE = "AGENT_TEMPLATE_SCOPE_DENIED";
+const isScopeDenial = (err: unknown): err is { reason: string } =>
+  (err as { code?: string } | null)?.code === AGENT_TEMPLATE_SCOPE_DENIED_CODE;
 
 // ---------------------------------------------------------------------------
 // Artifact-review gate SEAM (cinatra#1796) — a boot-injected slot, NOT a static
@@ -2068,7 +2075,7 @@ async function runAgentBuilderExecutionJobInner(
   // ---------------------------------------------------------------------------
   try {
     const { assertAgentRunScopeAuthorized } = await import(
-      "./agent-template-scope-guard"
+      "./agent-run-serde"
     );
     await assertAgentRunScopeAuthorized({
       stage: "execute",
@@ -2078,8 +2085,7 @@ async function runAgentBuilderExecutionJobInner(
       runBy: run.runBy,
     });
   } catch (err) {
-    const { AgentTemplateScopeError } = await import("./agent-template-scope");
-    if (err instanceof AgentTemplateScopeError) {
+    if (isScopeDenial(err)) {
       console.warn(
         "[agent-builder] fire-time scope recheck refused run",
         runId,
@@ -2915,5 +2921,4 @@ async function runAgentBuilderExecutionJobInner(
   // the WayFlow body did not return — this should be unreachable.
   throw new Error(
     `Unreachable: WayFlow dispatch did not return for runId=${runId}`,
-  );
-}
+  );}

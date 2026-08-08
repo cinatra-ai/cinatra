@@ -123,6 +123,13 @@ import {
   partitionRunnableAgentPackages,
 } from "../runtime-install-gate";
 import { assertNotReservedAgentPackageName } from "../reserved-workspace-slugs";
+/** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
+ *  the CODE, not `instanceof`, so a refusal is recognized across bundle /
+ *  module-mock boundaries (the site-level pattern `project-dispatch.ts` uses
+ *  for OBO_CEILING_DISJOINT_CODE). */
+const AGENT_TEMPLATE_SCOPE_DENIED_CODE = "AGENT_TEMPLATE_SCOPE_DENIED";
+const isScopeDenial = (err: unknown): err is { reason: string } =>
+  (err as { code?: string } | null)?.code === AGENT_TEMPLATE_SCOPE_DENIED_CODE;
 
 // sibling-file credential scan. Walks the package dir for
 // non-OAS text files and reuses detectCredentialPattern. Lockfile-aware,
@@ -2065,9 +2072,8 @@ async function handleAgentBuilderRunResume(
     // writeHitlPrompt / sendTask, the first irreversible steps of the resume.
     {
       const { assertAgentRunDispatchAuthorized } = await import(
-        "../agent-template-scope-guard"
+        "../agent-run-serde"
       );
-      const { AgentTemplateScopeError } = await import("../agent-template-scope");
       try {
         await assertAgentRunDispatchAuthorized({
           runId: run.id,
@@ -2075,7 +2081,7 @@ async function handleAgentBuilderRunResume(
           actingUserId: actor.userId,
         });
       } catch (err) {
-        if (err instanceof AgentTemplateScopeError) {
+        if (isScopeDenial(err)) {
           // Same opaque text the run-access gate uses — never reveal which
           // scope tier refused, or that the run exists at all.
           return { error: "Run access denied." };
@@ -6214,6 +6220,5 @@ export function createAgentsPrimitiveHandlers() {
         };
       });
     },
-  } as const;
-}
+  } as const;}
 

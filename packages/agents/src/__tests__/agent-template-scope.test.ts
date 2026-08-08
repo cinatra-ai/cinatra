@@ -22,7 +22,7 @@ import {
   evaluateActorWithinAgentTemplateScope,
   normalizeAgentTemplateScopeLevel,
   type AgentTemplateScopeRef,
-} from "../agent-template-scope";
+} from "../auth-policy";
 
 const ORG = "org-alpha";
 const OTHER_ORG = "org-beta";

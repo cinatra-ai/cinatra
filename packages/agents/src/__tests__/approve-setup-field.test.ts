@@ -76,7 +76,8 @@ const dbMock = vi.hoisted(() => {
 // The gate's own behavior is proven in `agent-template-scope.test.ts`,
 // `agent-run-scope-guard.test.ts` and `agent-run-scope-enforcement-wiring.test.ts`
 // (which pins that THIS call site keeps its assertion).
-vi.mock("../agent-template-scope-guard", () => ({
+vi.mock("../agent-run-serde", async (orig) => ({
+  ...(await orig<typeof import("../agent-run-serde")>()),
   assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
   assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
 }));

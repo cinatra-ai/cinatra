@@ -299,7 +299,7 @@ export async function enqueueAgentRun(
   // relax this — it softens missing-CONFIGURATION, never authorization.
   {
     const { assertAgentRunDispatchAuthorized } = await import(
-      "@cinatra-ai/agents/agent-template-scope-guard"
+      "@cinatra-ai/agents/store"
     );
     await assertAgentRunDispatchAuthorized({
       runId: record.runId,

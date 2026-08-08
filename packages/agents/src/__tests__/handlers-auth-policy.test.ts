@@ -115,7 +115,8 @@ vi.mock("../store", () => storeMock);
 // mocks the persistence hub, so it mocks the gate too. The gate's own behavior
 // lives in `agent-template-scope.test.ts` / `agent-run-scope-guard.test.ts`, and
 // its presence at this call site in `agent-run-scope-enforcement-wiring.test.ts`.
-vi.mock("../agent-template-scope-guard", () => ({
+vi.mock("../agent-run-serde", async (orig) => ({
+  ...(await orig<typeof import("../agent-run-serde")>()),
   assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
   assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
 }));

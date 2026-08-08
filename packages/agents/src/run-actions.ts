@@ -51,6 +51,13 @@ import {
   maybeHoldRunForRecommendation,
   readRecommendationParkForRun,
 } from "./recommendation-hold";
+/** Stable code carried by AgentTemplateScopeError (cinatra#2485 C) — branch on
+ *  the CODE, not `instanceof`, so a refusal is recognized across bundle /
+ *  module-mock boundaries (the site-level pattern `project-dispatch.ts` uses
+ *  for OBO_CEILING_DISJOINT_CODE). */
+const AGENT_TEMPLATE_SCOPE_DENIED_CODE = "AGENT_TEMPLATE_SCOPE_DENIED";
+const isScopeDenial = (err: unknown): err is { reason: string } =>
+  (err as { code?: string } | null)?.code === AGENT_TEMPLATE_SCOPE_DENIED_CODE;
 
 export type TriggerAgentRunArgs = {
   runId: string;
@@ -554,7 +561,7 @@ export async function releaseTriggerNow(
   // monotonic gate write that no later refusal can undo.
   try {
     const { assertAgentRunDispatchAuthorized } = await import(
-      "./agent-template-scope-guard"
+      "./agent-run-serde"
     );
     await assertAgentRunDispatchAuthorized({
       runId: args.runId,
@@ -562,8 +569,7 @@ export async function releaseTriggerNow(
       actingUserId: userId,
     });
   } catch (err) {
-    const { AgentTemplateScopeError } = await import("./agent-template-scope");
-    if (err instanceof AgentTemplateScopeError) {
+    if (isScopeDenial(err)) {
       return { ok: false, error: "forbidden — this agent's scope does not include you" };
     }
     throw err;

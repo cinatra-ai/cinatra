@@ -10,16 +10,6 @@ vi.mock("@/lib/background-jobs", () => ({
   BACKGROUND_JOB_NAMES: { AGENT_BUILDER_EXECUTION: "AGENT_BUILDER_EXECUTION" },
   enqueueBackgroundJob: (...a: unknown[]) => enqueueBackgroundJob(...(a as [])),
 }));
-vi.mock("@cinatra-ai/agents/agent-template-scope-guard", () => ({
-  // cinatra#2485 C: `enqueueAgentRun` is the shared DISPATCH guard's home, and
-  // the guard reads the agent_runs / agent_templates rows straight from the DB
-  // (no live Postgres here). These suites prove the connector / LLM preflight
-  // behavior; the gate's own behavior is proven in packages/agents'
-  // `agent-template-scope.test.ts` + `agent-run-scope-guard.test.ts`, and its
-  // presence at this exact call site in `agent-run-scope-enforcement-wiring.test.ts`.
-  assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
-  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
-}));
 
 const requireConnectorAuthority = vi.fn();
 vi.mock("@/lib/connector-authority", () => ({
@@ -34,6 +24,9 @@ vi.mock("@/lib/connector-policy", () => ({
 const readAgentRunById = vi.fn();
 vi.mock("@cinatra-ai/agents/store", () => ({
   readAgentRunById: (...a: unknown[]) => readAgentRunById(...(a as [])),
+  // cinatra#2485 C: the shared run-scope guard rides `./store`'s surface.
+  assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
+  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
 }));
 
 const buildActorContextFromRun = vi.fn();

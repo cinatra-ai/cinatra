@@ -66,7 +66,8 @@ vi.mock("../store", () => storeMock);
 // four-level rule), `agent-run-scope-guard.test.ts` (the per-path matrix +
 // fire-time recheck) and `agent-run-scope-enforcement-wiring.test.ts` (that all
 // three layers actually call it).
-vi.mock("../agent-template-scope-guard", () => ({
+vi.mock("../agent-run-serde", async (orig) => ({
+  ...(await orig<typeof import("../agent-run-serde")>()),
   assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
   assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
 }));

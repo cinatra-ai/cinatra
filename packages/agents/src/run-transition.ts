@@ -267,7 +267,7 @@ export async function transitionRunStatus(
   // strand in-flight runs forever.
   if (to === "queued") {
     const { assertAgentRunDispatchAuthorized } = await import(
-      "./agent-template-scope-guard"
+      "./agent-run-serde"
     );
     await assertAgentRunDispatchAuthorized({ runId, stage: "dispatch" });
   }

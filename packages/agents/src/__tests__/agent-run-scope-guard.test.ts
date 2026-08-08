@@ -122,8 +122,8 @@ vi.mock("@/lib/authz/build-actor-context-from-run", () => ({
 const {
   assertAgentRunScopeAuthorized,
   assertAgentRunDispatchAuthorized,
-} = await import("../agent-template-scope-guard");
-const { AgentTemplateScopeError } = await import("../agent-template-scope");
+} = await import("../agent-run-serde");
+const { AgentTemplateScopeError } = await import("../auth-policy");
 
 function seedTemplate(overrides: Record<string, unknown> = {}) {
   shared.templateRows = [
