@@ -139,6 +139,18 @@ export default defineConfig({
       "@cinatra-ai/skills/store": path.join(__dirname, "../../packages/skills/src/skills-store.ts"),
       // aliases for promotion-action.test.ts
       "@cinatra-ai/agents/verdaccio/client": path.join(__dirname, "../../packages/agents/src/verdaccio/client.ts"),
+      // cinatra#2494: marketplace-card-model.test.ts value-imports the pure
+      // carryManifestDisplayName/carryManifestVendor helpers from the REAL
+      // module (not a vi.mock like promotion-action.test.ts above) to prove
+      // the card renders the EXACT value the fixed publisher rebuild carries.
+      // That drags in verdaccio/client.ts's oas-compiler → agent-runtime-mount
+      // transitive chain, which needs @/lib/extension-data-root to resolve.
+      // Real source (pure path-resolution logic); its own @/lib/database
+      // dependency already resolves to the stub aliased below.
+      "@/lib/extension-data-root": path.join(
+        __dirname,
+        "../../src/lib/extension-data-root.ts",
+      ),
       "@cinatra-ai/agents/verdaccio/publish-metadata": path.join(__dirname, "../../packages/agents/src/verdaccio/publish-metadata.ts"),
       "@cinatra-ai/extensions/actions": path.join(__dirname, "src/actions.ts"),
       "@/lib/authz": path.join(__dirname, "../../src/lib/authz/index.ts"),

@@ -225,6 +225,53 @@ export const cinatraAgentPackageMetadataSchema = z.object({
   // ONLY producer of the inline data URI any surface renders. Nothing downstream
   // of this schema turns the string into markup.
   logo: z.string().min(1).optional(),
+  // The agent's SELF-DECLARED card identity — `displayName` (human name) and
+  // `vendor` (`{key,name}`) — the sibling keys #1570/#1605 admit cross-kind
+  // and #2469 named but deliberately scoped out of its own mandate
+  // (cinatra#2494: "worth its own issue"). Optional for back-compat with
+  // every already-published package.
+  //
+  // Load-bearing for the SAME reason `logo` above is: this schema is a plain
+  // `z.object`, so Zod's default STRIP behavior silently removes an
+  // undeclared key on parse. Declaring these two here keeps the publish-side
+  // carry (`verdaccio/client.ts` `carryManifestDisplayName` /
+  // `carryManifestVendor`) from being erased again the moment the manifest is
+  // parsed.
+  //
+  // Carried UNVALIDATED beyond shape — ownership/uniqueness is the
+  // marketplace publish gate's job (see
+  // `@cinatra-ai/sdk-extensions/artifact-contract`'s `vendor`/`displayName`
+  // doc comment, the SAME cross-kind PRESENTATION reasoning this schema
+  // mirrors), not this contract's.
+  //
+  // FAIL-SOFT, deliberately UNLIKE `logo` above (codex round-0, cinatra#2494):
+  // `logo` is a build-time contract the generator enforces fail-closed, so a
+  // malformed carried value must surface loudly. `displayName`/`vendor` are
+  // soft presentation hints the generator's own resolvers
+  // (`resolveDisplayName`/`resolveVendor`) silently degrade to absent for
+  // anything malformed — never a build error. A STRICT sub-schema here would
+  // contradict that: it would make `parseAgentPackageManifestForInstall`
+  // (called at every agent install) REJECT THE WHOLE MANIFEST for a
+  // malformed value in an otherwise-optional, install-irrelevant field —
+  // install-time is not a context that can act on the "fix your declaration"
+  // signal the WRITE side gives an author. `.catch(undefined)` makes a
+  // malformed value degrade to absent, matching `carryManifestDisplayName` /
+  // `carryManifestVendor`'s own fail-soft posture exactly, rather than
+  // failing the whole parse. `.trim().length > 0` (not bare `.min(1)`,
+  // which a whitespace-only string satisfies) mirrors the carry functions'
+  // own blank check.
+  displayName: z
+    .string()
+    .refine((v) => v.trim().length > 0)
+    .optional()
+    .catch(undefined),
+  vendor: z
+    .object({
+      key: z.string().refine((v) => v.trim().length > 0),
+      name: z.string().refine((v) => v.trim().length > 0),
+    })
+    .optional()
+    .catch(undefined),
   // `produces: SemanticArtifactRef[]` declarations are the ONLY path for typed
   // agent output (cinatra#1788, epic #1785): each entry names a REQUIRED
   // artifact-kind dependency (`extension`) and OPTIONALLY the exact
