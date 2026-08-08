@@ -88,6 +88,7 @@ import { applyAttachmentEnvelope } from "./attachment-envelope-payload";
 // #817 context-selector envelope synthesis are shared with
 // agentic-run-panel so both surfaces submit byte-identical payloads.
 import {
+  hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
@@ -96,6 +97,7 @@ import {
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
+import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import { statusBadgeVariant } from "./run-surface-status";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { fieldRendererRegistry } from "./field-renderer-registry";
@@ -457,7 +459,18 @@ function HitlApprovalCard({
     templateId,
     xRenderer: interruptContext.xRenderer,
   };
-  const entry = fieldRendererRegistry.resolve("hitl-field", fieldSchema, context);
+  // RENDERER SELECTION stays on the placeholder key (cinatra#2541). Which
+  // renderer a gate resolves to is decided by its `x-renderer` id (and, for the
+  // host's heuristic kinds, by the schema + context) — never by the interrupt's
+  // field name. Feeding the real name in here would let a field-name heuristic
+  // (e.g. the gmail-sender whitelist) start CHANGING which component renders a
+  // gate, which is a different behaviour change than fixing a label. Only the
+  // rendered field IDENTITY below carries the real name.
+  const entry = fieldRendererRegistry.resolve(
+    HITL_PLACEHOLDER_FIELD_NAME,
+    fieldSchema,
+    context,
+  );
   const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
   void _xr;
 
@@ -681,7 +694,15 @@ function HitlApprovalCard({
             // pre-fills the next field. fieldName is undefined for non-setup
             // interrupts, so those keep the existing xRenderer-keyed identity.
             key={`${interruptContext.xRenderer}::${interruptContext.fieldName ?? ""}`}
-            fieldName="hitl-field"
+            // The gate's REAL field identity (cinatra#2541). `fieldName` is what
+            // the renderer labels itself from (resolveFieldLabel) and ids its
+            // input with, so the hardcoded placeholder that used to sit here
+            // labelled every per-field setup gate "Hitl Field". The interrupt's
+            // own field key was already right here — it keys the remount above
+            // and selects the value below. Never re-hardcode the literal: route
+            // through hitlRendererFieldName, which falls back to the placeholder
+            // only for interrupts that genuinely carry no field name.
+            fieldName={hitlRendererFieldName(interruptContext.fieldName)}
             schema={renderSchema}
             // An OBJECT-typed setup field gets its OWN value, not the whole
             // values envelope (cinatra#2484) — see setupFieldRendererValue.
@@ -1144,7 +1165,11 @@ function ReadOnlyHitlReplay(props: {
       templateId: props.templateId,
       xRenderer: props.xRenderer,
     };
-    const entry = fieldRendererRegistry.resolve("hitl-field", fieldSchema, ctx);
+    const entry = fieldRendererRegistry.resolve(
+      HITL_PLACEHOLDER_FIELD_NAME,
+      fieldSchema,
+      ctx,
+    );
     const RendererComponent = entry?.renderer;
     if (RendererComponent) {
       const { "x-renderer": _xr, ...renderSchema } = fieldSchema;
@@ -1154,7 +1179,15 @@ function ReadOnlyHitlReplay(props: {
           <CardContent className="flex flex-col gap-4 p-6">
             <fieldset disabled>
               <RendererComponent
-                fieldName="hitl-field"
+                // Read-only replay of an ALREADY-SUBMITTED gate: this surface
+                // reads a persisted `{submittedValues, schemaSnapshot}` row and
+                // no field name is captured on it, so unlike the live gate above
+                // there is no real identity to pass (cinatra#2541). The
+                // placeholder is therefore correct here — and
+                // `resolveFieldLabel`'s placeholder guard keeps it from
+                // surfacing as "Hitl Field": the label falls back to the
+                // snapshot's schema title, then to a neutral label.
+                fieldName={HITL_PLACEHOLDER_FIELD_NAME}
                 schema={renderSchema}
                 value={props.submittedValues}
                 disabled={true}

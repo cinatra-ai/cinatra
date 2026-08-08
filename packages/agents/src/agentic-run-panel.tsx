@@ -37,6 +37,7 @@ import { approveReviewTask } from "./hitl-actions";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   buildChatGateSubmitPayload,
+  hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
@@ -65,7 +66,7 @@ import {
   getRunRecommendationHoldStateAction,
   type RunRecommendationHoldState,
 } from "./run-recommendation-actions";
-import { resolveFieldLabel } from "./humanize-field-name";
+import { HITL_PLACEHOLDER_FIELD_NAME, resolveFieldLabel } from "./humanize-field-name";
 
 // Client-safe serialized form of AgentRunMessageRecord — Date becomes ISO string
 export type SerializedAgentRunMessage = {
@@ -798,7 +799,15 @@ export function AgenticRunPanel({
       templateId,
       xRenderer: effectiveHitlContext.xRenderer,
     };
-    const entry = fieldRendererRegistry.resolve("hitl-field", fieldSchema, context);
+    // RENDERER SELECTION stays on the placeholder key (cinatra#2541) — which
+    // component renders a gate is decided by its `x-renderer` id, never by the
+    // interrupt's field name. Only the rendered field IDENTITY below carries
+    // the real name.
+    const entry = fieldRendererRegistry.resolve(
+      HITL_PLACEHOLDER_FIELD_NAME,
+      fieldSchema,
+      context,
+    );
     // Strip "x-renderer" before passing to the renderer so renderers that
     // internally call fieldRendererRegistry.resolve (e.g. SchemaFieldRenderer)
     // don't re-match themselves and enter an infinite recursion loop.
@@ -1153,14 +1162,35 @@ export function AgenticRunPanel({
                 return (
                   <>
                     <RendererComponent
-                      key={effectiveHitlContext.xRenderer}
-                      fieldName="hitl-field"
+                      // Keyed by xRenderer AND fieldName — the identity the
+                      // orchestrator stepper already uses (#810), adopted here
+                      // in cinatra#2541 because this surface now passes a
+                      // fieldName that CHANGES between gates. Sequential
+                      // per-field setup gates share one xRenderer and arrive
+                      // with no RUN_STARTED/RESUME frame between them, so an
+                      // xRenderer-only key would mutate `fieldName` on a LIVE
+                      // renderer instance: field 1's typed text (SchemaFieldRenderer's
+                      // localValue, which a non-string next value does not clear)
+                      // would pre-fill field 2 under field 2's label. fieldName is
+                      // undefined for mid-run gates, so those keep their existing
+                      // xRenderer-keyed identity exactly.
+                      key={`${effectiveHitlContext.xRenderer}::${effectiveHitlContext.fieldName ?? ""}`}
+                      // The gate's REAL field identity (cinatra#2541) — the same
+                      // seam the orchestrator stepper regressed at, with the
+                      // same consequence: `fieldName` is what the renderer
+                      // labels itself from, so the hardcoded placeholder made a
+                      // per-field setup gate read "Hitl Field" instead of its
+                      // own name. Falls back to the placeholder only for
+                      // interrupts that carry no field name (mid-run gates).
+                      fieldName={hitlRendererFieldName(effectiveHitlContext.fieldName)}
                       schema={hitlRendererEntry.fieldSchema}
                       // An OBJECT-typed setup field gets its OWN value, not the
-                      // whole currentValues envelope (cinatra#2484): the
-                      // placeholder fieldName="hitl-field" leaves the renderer
-                      // no way to find its own slot, and any heuristic it
-                      // applies to the envelope mis-seeds on a name collision.
+                      // whole currentValues envelope (cinatra#2484). The
+                      // unwrapping stays at the CALLER even now that the renderer
+                      // is told its field name: `value` is resolved here, before
+                      // the renderer sees it, and a renderer that re-derived its
+                      // own slot from the envelope would still mis-seed on a
+                      // sub-key name collision.
                       value={setupFieldRendererValue(
                         { ...effectiveHitlContext.currentValues, ...bufferedHitlValue },
                         effectiveHitlContext.fieldName,

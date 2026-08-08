@@ -399,16 +399,21 @@ async function advanceSchemaFieldFallback(
   const entries = Object.entries(action);
   if (entries.length === 0) return;
   for (const [field, value] of entries) {
-    // Setup-loop fallback renderer ALWAYS uses fixed fieldName="hitl-field"
-    // in the DOM (orchestrator-stepper-panel.tsx:541) — the property's actual
-    // name (e.g. "url") is conveyed via the schema title/placeholder but the
-    // element id is always `field-hitl-field`. So the helper's `action`
-    // object key is documentation-only; the SELECTOR is fixed.
+    // The setup-loop gate ids its input by the interrupt's REAL field name
+    // (cinatra#2541) — `#field-url` for a `url` input — so the `action` key is
+    // the selector, not documentation. The `#field-hitl-field` fallback below
+    // covers gates that genuinely carry no field name (before #2541 EVERY gate
+    // rendered under that fixed id, so this also keeps the helper working
+    // against an older build).
     //
     // Each gate renders one field at a time — we click Continue between gates
     // when the action has multiple keys (rare; usually one key per gate).
-    void field; // key is documentation-only
-    const input = page.locator(`#field-hitl-field`).first();
+    // One locator, one wait budget: exactly one of the two ids is ever mounted.
+    // Attribute form (not `#field-…`) so a schema key containing a
+    // CSS-special character cannot corrupt the selector.
+    const input = page
+      .locator(`[id="field-${field}"], [id="field-hitl-field"]`)
+      .first();
     await expect(input).toBeVisible({ timeout: 30_000 });
     await input.fill(String(value));
     // Submit button: "Continue" or "Submit" depending on the field type. The

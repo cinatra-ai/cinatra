@@ -5,7 +5,13 @@
  * Pure-logic tests. No DB, no React, no server-only.
  */
 import { describe, it, expect } from "vitest";
-import { humanizeFieldName, resolveFieldLabel } from "../humanize-field-name";
+import {
+  GENERIC_FIELD_LABEL,
+  HITL_PLACEHOLDER_FIELD_NAME,
+  humanizeFieldName,
+  isInternalPlaceholderFieldName,
+  resolveFieldLabel,
+} from "../humanize-field-name";
 
 describe("humanizeFieldName", () => {
   it("splits camelCase into title case", () => {
@@ -83,5 +89,61 @@ describe("resolveFieldLabel", () => {
     expect(
       resolveFieldLabel("companyUrl", "Company Website", "The company website")
     ).toBe("Company Website");
+  });
+});
+
+/**
+ * cinatra#2541 — the internal `hitl-field` wiring token must never be humanized
+ * into a user-facing label. It is a renderer-plumbing placeholder (a DOM id and
+ * a registry key), not a field name, and humanizing it produced the nonsense
+ * "Hitl Field" label the issue reports.
+ *
+ * This is the LAST line of defence, not the fix: the panels now pass the
+ * interrupt's real field name (see hitl-gate-submit.hitlRendererFieldName and
+ * orchestrator-stepper-hitl-field-label.test.tsx). This guard covers the
+ * surfaces that genuinely have no field identity to pass.
+ */
+describe("resolveFieldLabel — internal placeholder guard (cinatra#2541)", () => {
+  it("recognizes the HITL wiring token as an internal placeholder", () => {
+    expect(isInternalPlaceholderFieldName(HITL_PLACEHOLDER_FIELD_NAME)).toBe(true);
+    expect(isInternalPlaceholderFieldName("Hitl-Field")).toBe(true);
+    expect(isInternalPlaceholderFieldName("  hitl-field ")).toBe(true);
+    // A real field that merely resembles it is NOT a placeholder.
+    expect(isInternalPlaceholderFieldName("hitlFieldNotes")).toBe(false);
+    expect(isInternalPlaceholderFieldName("idea")).toBe(false);
+  });
+
+  it("never humanizes the placeholder into 'Hitl Field'", () => {
+    const label = resolveFieldLabel(HITL_PLACEHOLDER_FIELD_NAME);
+    expect(label).toBe(GENERIC_FIELD_LABEL);
+    expect(label).not.toBe("Hitl Field");
+    expect(humanizeFieldName(HITL_PLACEHOLDER_FIELD_NAME)).toBe("Hitl Field");
+  });
+
+  it("still prefers a real schema title over the neutral label", () => {
+    expect(resolveFieldLabel(HITL_PLACEHOLDER_FIELD_NAME, "Blog idea")).toBe(
+      "Blog idea"
+    );
+  });
+
+  it("still prefers a description over the neutral label", () => {
+    expect(
+      resolveFieldLabel(HITL_PLACEHOLDER_FIELD_NAME, undefined, "What should we write about?")
+    ).toBe("What should we write about?");
+  });
+
+  it("treats a title that IS the placeholder token as absent", () => {
+    expect(resolveFieldLabel("idea", HITL_PLACEHOLDER_FIELD_NAME)).toBe("Idea");
+    expect(
+      resolveFieldLabel(HITL_PLACEHOLDER_FIELD_NAME, HITL_PLACEHOLDER_FIELD_NAME)
+    ).toBe(GENERIC_FIELD_LABEL);
+  });
+
+  it("leaves every real field name humanized exactly as before", () => {
+    expect(resolveFieldLabel("idea")).toBe("Idea");
+    expect(resolveFieldLabel("blogPostUrl")).toBe("Blog Post URL");
+    expect(resolveFieldLabel("referenceContent", "referenceContent")).toBe(
+      "Reference Content"
+    );
   });
 });

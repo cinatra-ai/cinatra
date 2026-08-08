@@ -18,6 +18,7 @@
 
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
+import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
 import { wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
 
 // ---------------------------------------------------------------------------
@@ -138,9 +139,11 @@ export function wrapPrimitiveSetupPayload(
  *
  * The two Setup surfaces disagree about what `value` means. The grouped form
  * passes `field.value` — the field's OWN value. The per-field panels pass the
- * whole `currentValues` ENVELOPE (every input of the run) to every field, under
- * the placeholder `fieldName="hitl-field"`, so the renderer cannot recover which
- * slot is its own.
+ * whole `currentValues` ENVELOPE (every input of the run) to every field, so the
+ * renderer cannot tell which slot is its own from `value` alone. (Since
+ * cinatra#2541 the per-field panels DO pass the real `fieldName`, but that
+ * changes nothing here: `value` is still resolved at the caller — see below —
+ * and no renderer indexes the envelope itself.)
  *
  * For an OBJECT-typed field that ambiguity is a correctness bug, not a cosmetic
  * one: the renderer has to seed sub-fields from the field's own object, and any
@@ -163,6 +166,36 @@ export function setupFieldRendererValue(
   const isObjectTyped = (fieldSchema as { type?: string } | undefined)?.type === "object";
   if (!isObjectTyped || !fieldName) return envelope;
   return envelope[fieldName];
+}
+
+/**
+ * The `fieldName` prop for a single-field HITL gate's renderer (cinatra#2541).
+ *
+ * THE SEAM THIS ISSUE REGRESSED AT. Both single-field HITL surfaces used to
+ * hand the renderer the literal `"hitl-field"` while the interrupt's REAL field
+ * key sat one line away (it already keyed the React remount and selected the
+ * renderer's value). `fieldName` is the renderer's whole field identity — it
+ * drives the DOM id AND, through `resolveFieldLabel`, the visible label — so
+ * the placeholder made every per-field setup gate render "Hitl Field" instead
+ * of "Idea".
+ *
+ * #817 and #1162 both landed on this label: #817 removed the raw `hitl-field`
+ * string from the context-selection gate by resolving that gate to its real
+ * renderer, and #1162 made the humanizer run even when the OAS emits
+ * `title === fieldName`. Neither could reach THIS surface, because both fixed
+ * what happens to a field name AFTER it is passed — and the bug is what gets
+ * passed. Route every renderer call site through this helper so the identity is
+ * decided in ONE named place instead of being re-typed at each JSX prop.
+ *
+ * Returns the interrupt's field name when it has one, and the internal
+ * placeholder only when it genuinely does not (mid-run gates and output
+ * renderers carry no `fieldName` — see `InterruptContext.fieldName`). In that
+ * case `resolveFieldLabel`'s placeholder guard keeps the token out of the UI.
+ */
+export function hitlRendererFieldName(fieldName: string | undefined): string {
+  return fieldName !== undefined && fieldName.trim() !== ""
+    ? fieldName
+    : HITL_PLACEHOLDER_FIELD_NAME;
 }
 
 // ---------------------------------------------------------------------------
