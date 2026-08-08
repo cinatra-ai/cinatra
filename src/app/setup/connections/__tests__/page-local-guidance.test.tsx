@@ -78,8 +78,15 @@ function secretKeyIsRequired(html: string): boolean {
  */
 function secretKeyHelpText(html: string): string {
   const after = html.split(/<input[^>]*name="secretKey"[^>]*>/)[1] ?? "";
-  const span = after.match(/<span[^>]*>([\s\S]*?)<\/span>/)?.[1] ?? "";
-  return span.replace(/<[^>]+>/g, "");
+  let text = after.match(/<span[^>]*>([\s\S]*?)<\/span>/)?.[1] ?? "";
+  // Strip to a fixpoint: a single pass can re-expose a tag assembled from the
+  // removed fragments, which is also what CodeQL's multi-character-sanitization
+  // rule flags.
+  for (let prev = ""; prev !== text; ) {
+    prev = text;
+    text = text.replace(/<[^>]+>/g, "");
+  }
+  return text;
 }
 
 beforeEach(() => {
