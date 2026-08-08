@@ -13,6 +13,13 @@ import { shadowUpsertObject, shadowDeleteObject } from "@/lib/objects-dual-write
 // project mode. Used by readAgentRunsByTemplateRaw + readAgentRuns to
 // append the `WHERE agent_runs.project_id = $projectId` clause.
 import { sealedRoomFilterValue } from "@/lib/sealed-room";
+import type { ActorContext } from "@/lib/authz/actor-context";
+// cinatra#2485 C, layer 1 — the install-scope run gate at the CANONICAL
+// creation perimeter. Every run-creating path in the instance funnels through
+// `createAgentRun` / `createAgentRunPendingInput`, including the ones that
+// never enqueue (host content-editor override dispatch), so this is the one
+// place a creation-side guard cannot be walked around.
+import { assertAgentRunScopeAuthorized } from "./agent-template-scope-guard";
 import { db, agentBuilderPool } from "./db";
 // The force-delete run pre-clean lives in its own vertical slice; the
 // teardown run-id cap it defines is shared with `purgeAgentTemplateAtomic`.
@@ -412,6 +419,14 @@ export type CreateAgentRunInput = {
   delegatedActorSnapshot?: string | null;
   dependentInstallId?: string | null; // SERVER-ONLY trusted dispatch id (cinatra#1392 Gap 2) — never from client input
   humanPresent?: boolean | null; // cinatra#2067 presence discriminator; true only from interactive UI/chat run-start callers
+  // cinatra#2485 C — the REQUESTING actor, for the install-scope run gate
+  // (`assertActorWithinAgentTemplateScope`). SERVER-ONLY and never client-
+  // supplied: every caller passes the actor it already verified (session /
+  // MCP frame / A2A peer). Omitting it is safe but NOT a bypass — the
+  // creation perimeter then authorizes the run against the persisted `runBy`
+  // resolved LIVE, falling back to the template's installation principal for a
+  // genuinely autonomous run, and refuses when neither exists.
+  scopeActor?: ActorContext | null;
 };
 
 // ---------------------------------------------------------------------------
@@ -857,7 +872,17 @@ function applyAgentTemplateVisibility(
   record: AgentTemplateRecord,
   options?: AgentTemplateVisibilityOptions,
 ): AgentTemplateRecord | null {
-  // Published templates are visible to everyone.
+  // DISCOVERY gate ONLY — never a run-authorization gate (cinatra#2485 C).
+  //
+  // A published template is DISCOVERABLE by everyone; that is deliberately
+  // unchanged (the marketplace/agent list, the A2A AgentCard, and the MCP tool
+  // list all stay browsable). It is NOT runnable by everyone: an agent
+  // published org-wide is runnable BY THAT ORG, and a team-/project-/personal-
+  // scoped agent only inside its scope. RUN authorization is enforced
+  // separately at the three layers of `./agent-template-scope-guard` — the
+  // creation perimeter, the dispatch guard, and the worker's fire-time
+  // recheck — so nothing downstream may read "returned by this reader" as
+  // "this actor may run it".
   if (record.status === "published") return record;
   // Non-published (draft/archived) require an explicit opt-in.
   if (!options?.includeNonPublished) return null;
@@ -1536,6 +1561,17 @@ export async function createAgentRun(
   // run can never create another run even if its own authority is forwarded.
   authority: OrgWriteAuthority | undefined,
 ): Promise<AgentRunRecord> {
+  // cinatra#2485 C (layer 1): install-scope IS the run-authorization gate.
+  // Asserted BEFORE any derivation or insert, so an out-of-scope actor's run
+  // never exists — there is no row to leak, resume, or repair into a dispatch.
+  await assertAgentRunScopeAuthorized({
+    stage: "create",
+    templateId: input.templateId,
+    orgId: input.orgId,
+    runId: input.id,
+    runBy: input.runBy ?? null,
+    actor: input.scopeActor ?? null,
+  });
   const oboCeilingJson = await deriveRunOboCeilingJson({
     templateId: input.templateId,
     orgId: input.orgId,
@@ -3112,12 +3148,25 @@ export async function createAgentRunPendingInput(
     // path / server action). Set NULL for non-project invocations.
     projectId?: string | null;
     humanPresent?: boolean | null; // cinatra#2067 presence discriminator (interactive callers pass true)
+    // cinatra#2485 C — see CreateAgentRunInput.scopeActor. Same contract.
+    scopeActor?: ActorContext | null;
   },
   // cinatra#1940 P3 (Decision 2): see createAgentRun's authority param doc —
   // same REQUIRED-trailing-param, same fail-closed-on-undefined contract.
   authority: OrgWriteAuthority | undefined,
 ): Promise<AgentRunRecord> {
   const id = randomUUID();
+  // cinatra#2485 C (layer 1): the SAME install-scope gate the `createAgentRun`
+  // perimeter applies — a `pending_input` run is a run, and the interactive
+  // Run button dispatches it later without re-entering `createAgentRun`.
+  await assertAgentRunScopeAuthorized({
+    stage: "create",
+    templateId: input.templateId,
+    orgId: input.orgId,
+    runId: id,
+    runBy: input.runBy ?? null,
+    actor: input.scopeActor ?? null,
+  });
   const versionIdToPin = await readLatestAgentVersionIdForTemplate(input.templateId);
   // persist-at-dispatch OBO ceiling — same derivation as createAgentRun, so a
   // pending-input run (incl. the recurring-trigger clone) carries the chain the

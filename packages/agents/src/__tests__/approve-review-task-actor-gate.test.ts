@@ -38,6 +38,16 @@ const dbMock = vi.hoisted(() => {
   }));
   return { update };
 });
+// cinatra#2485 C: the install-scope run gate reads the agent_runs /
+// agent_templates rows straight from the DB (no live Postgres in this suite).
+// The gate's own behavior is proven in `agent-template-scope.test.ts`,
+// `agent-run-scope-guard.test.ts` and `agent-run-scope-enforcement-wiring.test.ts`
+// (which pins that THIS call site keeps its assertion).
+vi.mock("../agent-template-scope-guard", () => ({
+  assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
+  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
+}));
+
 vi.mock("../db", async () => {
   const { wrapTxWithOrgWriteKernel } = await import(
     "@cinatra-ai/org-write-kernel/testing"

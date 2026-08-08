@@ -121,6 +121,11 @@ export {
   // job.moveToDelayed (flat 15-minute re-delay, no gateAttempt counter).
   OrgArchivedFreezeError,
   ORG_ARCHIVED_FREEZE_DELAY_MS,
+  // cinatra#2485 C (fire-time scope recheck) — the UNREADABLE-check park
+  // sentinel, caught by the same dispatcher branch as the archived-org park.
+  // A denial fails the run; an unreadable check parks and retries.
+  ScopeRecheckUnavailableError,
+  SCOPE_RECHECK_UNAVAILABLE_DELAY_MS,
   // The ONE run→immutable-snapshot pin classifier (cinatra#1040 S5/S7). The
   // `/api/llm-bridge` execution-environment seam resolves a run's pinned
   // recipe through THIS function so there is exactly one definition of "this

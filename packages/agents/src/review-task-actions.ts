@@ -239,6 +239,27 @@ export async function approveReviewTaskInternal(
       );
     }
 
+    // cinatra#2485 C — the install-scope run gate, asserted HERE because this
+    // branch is a genuine dispatch that reaches NEITHER layer-2 chokepoint:
+    // `resumeRunFromSetupApproval` flips pending_approval→queued with its own
+    // guarded CAS (not `transitionRunStatus`), and the re-enqueue below uses the
+    // allowlisted raw `enqueueBackgroundJob` (not `enqueueAgentRun`). Both the
+    // APPROVER and the run OWNER must be inside the agent's scope: clearing a
+    // HITL gate drives execution, so an org admin outside the owning
+    // team/project must not be able to start work that scope reserves for its
+    // members. Fail-closed before the inputParams merge — a refusal must leave
+    // no partial write behind.
+    {
+      const { assertAgentRunDispatchAuthorized } = await import(
+        "./agent-template-scope-guard"
+      );
+      await assertAgentRunDispatchAuthorized({
+        runId,
+        stage: "dispatch",
+        actingUserId: actorId,
+      });
+    }
+
     // Build the inputParams JSONB-merge fragment (single-field or grouped
     // variant) up front, so the DB write below stays ONE statement. All
     // validation and the template-allowlist read happen BEFORE the write.
@@ -469,6 +490,22 @@ export async function approveReviewTaskInternal(
       throw new Error(
         `WayFlow approval rejected: run ${run.id} is not pending_approval (status: ${run.status})`,
       );
+    }
+    // cinatra#2485 C — same install-scope gate as the setup- branch above, and
+    // needed for the same reason: clearing this gate resumes the paused flow via
+    // a DIRECT WayFlow `sendTask`, so it touches neither layer-2 chokepoint.
+    // Both the approver and the run owner must be inside the agent's scope.
+    // Asserted before `writeHitlPrompt` / `sendTask` — the first irreversible
+    // step of the resume.
+    {
+      const { assertAgentRunDispatchAuthorized } = await import(
+        "./agent-template-scope-guard"
+      );
+      await assertAgentRunDispatchAuthorized({
+        runId: run.id,
+        stage: "dispatch",
+        actingUserId: actorId,
+      });
     }
     if (!run.a2aContextId) {
       // Defensive: run must have a2aContextId. execution.ts

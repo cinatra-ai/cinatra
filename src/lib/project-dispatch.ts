@@ -611,6 +611,23 @@ export async function dispatchProjectWorker(
     // authority — this tick has no session, so mint the system dispatcher
     // authority scoped to the project's org.
     const dispatchAuthority = mintProjectDispatchAuthority(input.orgId);
+    // cinatra#2485 C: a PM/project delegation carries the ORIGINAL actor —
+    // the human whose seat run is dispatching this work — never a manufactured
+    // system membership. `parentRun` is the live PM tick run, verified above to
+    // be in this org, non-terminal, and the lease holder; resolving its owner
+    // LIVE means a delegation stops the moment that human loses the team /
+    // project / org standing the worker agent's install scope requires. A
+    // seat run with no human owner resolves to a membership-less InternalWorker
+    // actor, which the four-level rule refuses — the correct fail-closed
+    // outcome, not a bypass.
+    const { buildActorContextFromRun } = await import(
+      "@/lib/authz/build-actor-context-from-run"
+    );
+    const delegatingActor = await buildActorContextFromRun({
+      id: parentRun.id,
+      runBy: parentRun.runBy ?? null,
+      orgId: parentRun.orgId,
+    });
     let run;
     try {
       run = await createAgentRun(
@@ -620,6 +637,7 @@ export async function dispatchProjectWorker(
           versionId: latestVersionId,
           inputParams: input.runInput,
           runBy: input.runBy ?? undefined,
+          scopeActor: delegatingActor,
           // Tenant is the project's auth-derived org, never a body id.
           orgId: input.orgId,
           // The cinatra project refinement is the INSTANCE's persisted binding

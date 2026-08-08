@@ -23,6 +23,17 @@ const storeMock = vi.hoisted(() => ({
   readAgentTemplateById: vi.fn(),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#2485 C: the delivery now rechecks the agent's install scope at SEND
+// time (the intent's own authorization is as old as the intent). The gate reads
+// agent_runs / agent_templates straight from the DB; this suite mocks the
+// persistence hub, so it mocks the gate too. Its behavior lives in
+// `agent-template-scope.test.ts` / `agent-run-scope-guard.test.ts`; its presence
+// at THIS call site is pinned by `agent-run-scope-enforcement-wiring.test.ts`.
+vi.mock("../agent-template-scope-guard", () => ({
+  assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
+  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
+}));
+
 
 vi.mock("../wayflow-url", () => ({
   WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,

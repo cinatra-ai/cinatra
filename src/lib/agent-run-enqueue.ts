@@ -284,6 +284,30 @@ export async function enqueueAgentRun(
     ...jobOptions
   } = options;
 
+  // cinatra#2485 C (layer 2): the SHARED DISPATCH GUARD. This is the single
+  // BullMQ chokepoint every producer funnels through (enforced by
+  // `scripts/audit/agent-builder-enqueue-gate.mjs`), so asserting the run's
+  // install scope here covers every non-running→dispatch transition that ends
+  // in an execution job: the Run button, the recommendation-chip release, the
+  // registry action, dev child preview, MCP `agent_run`, the published-agent
+  // MCP tool, the A2A executors, project/PM delegation, scheduled + recurring
+  // fires, and both enqueue repairs.
+  //
+  // Creation-time enforcement is NOT sufficient on its own: a run created
+  // in-scope can sit in `pending_input`/`armed` indefinitely, and the agent's
+  // scope may be re-set in the meantime. `softPreflight` deliberately does NOT
+  // relax this — it softens missing-CONFIGURATION, never authorization.
+  {
+    const { assertAgentRunDispatchAuthorized } = await import(
+      "@cinatra-ai/agents/agent-template-scope-guard"
+    );
+    await assertAgentRunDispatchAuthorized({
+      runId: record.runId,
+      stage: "dispatch",
+      actor: actorContext ?? null,
+    });
+  }
+
   // Connector preflight (cinatra#1056). The gate needs a real actor: with a
   // populated `connectorDependencies` map and NO actor, the connector policy
   // fail-closes on `no_actor` for EVERY dep, which would break every legitimate

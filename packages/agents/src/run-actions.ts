@@ -545,6 +545,30 @@ export async function releaseTriggerNow(
     };
   }
 
+  // cinatra#2485 C: this is the ONE interactive dispatch that starts SOMEONE
+  // ELSE's run, so the shared dispatch guard's default (authorize the run's
+  // owner) is not enough — the releasing admin must ALSO be inside the agent's
+  // install scope. Admin standing counts at ORG scope only; an org admin who is
+  // not in the owning team/project cannot force-start work that scope reserves
+  // for its members. Asserted BEFORE `markTriggerReleased`, which is a
+  // monotonic gate write that no later refusal can undo.
+  try {
+    const { assertAgentRunDispatchAuthorized } = await import(
+      "./agent-template-scope-guard"
+    );
+    await assertAgentRunDispatchAuthorized({
+      runId: args.runId,
+      stage: "dispatch",
+      actingUserId: userId,
+    });
+  } catch (err) {
+    const { AgentTemplateScopeError } = await import("./agent-template-scope");
+    if (err instanceof AgentTemplateScopeError) {
+      return { ok: false, error: "forbidden — this agent's scope does not include you" };
+    }
+    throw err;
+  }
+
   await markTriggerReleased(args.runId);
 
   // Admin (org-role admin, checked above) acts as a member of the run's org.

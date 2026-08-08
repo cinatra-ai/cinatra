@@ -124,7 +124,16 @@ async function buildA2AMount(): Promise<A2AMount> {
       // actorCtx.oboCeiling before calling this contract); re-affirming it
       // explicitly here keeps that guarantee honestly visible at the literal
       // createAgentRun call site the scanner reads, not just one frame up.
-      return createAgentRun({ ...input, parentOboCeiling: input.parentOboCeiling }, authority);
+      // cinatra#2485 C: the PUBLIC A2A executor's run creation carries the
+      // calling peer as the scope actor. A2A DISCOVERY (the AgentCard built
+      // above from the published templates) stays public; INVOCATION is
+      // scope-bound — an external peer whose org/team/project standing does
+      // not satisfy the agent's install scope is refused at the creation
+      // perimeter, even for a published agent it can see on the card.
+      return createAgentRun(
+        { ...input, parentOboCeiling: input.parentOboCeiling, scopeActor: actorCtx ?? null },
+        authority,
+      );
     },
     // Retained for the rare legacy code path inside the a2a package that
     // still calls `enqueueJob` directly. Production never hits this branch

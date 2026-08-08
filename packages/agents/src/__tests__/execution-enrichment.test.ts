@@ -59,6 +59,18 @@ const storeMock = vi.hoisted(() => ({
   updateAgentRunA2AContextId: vi.fn(async () => undefined),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#2485 C: the install-scope run gate reads the agent_templates /
+// agent_runs rows straight from the DB. This suite already mocks the
+// persistence hub (`../store`), so it mocks the gate's persistence too. The
+// gate's own behavior is proven in `agent-template-scope.test.ts` (the
+// four-level rule), `agent-run-scope-guard.test.ts` (the per-path matrix +
+// fire-time recheck) and `agent-run-scope-enforcement-wiring.test.ts` (that all
+// three layers actually call it).
+vi.mock("../agent-template-scope-guard", () => ({
+  assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
+  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
+}));
+
 
 // Trigger gate + skill autosave — never reached in the setup-interrupt paths.
 vi.mock("../trigger-gate", () => ({ isTriggerReleased: vi.fn(async () => true) }));

@@ -383,6 +383,62 @@ export class OrgArchivedFreezeError extends Error {
     this.delayMs = delayMs;
   }
 }
+
+// ---------------------------------------------------------------------------
+// cinatra#2485 C — the fire-time scope recheck could not READ its inputs.
+//
+// A DENIAL is a decision and lands the run `failed`. An UNREADABLE check is
+// not a decision: the membership / template reads are ordinary DB round-trips
+// and a transient fault must never be allowed to look like "out of scope", nor
+// to burn the run's only BullMQ attempt (`attempts` defaults to 1) and strand
+// it `queued` with no job left to retry it. Adding an authorization read to the
+// worker prologue must not make a run LESS likely to survive a DB blip.
+//
+// Handled by the AGENT_BUILDER_EXECUTION catch chain exactly like
+// OrgArchivedFreezeError: `moveToDelayed` + `DelayedError` — no retry consumed,
+// active slot released, the row stays `queued` and its job survives, so the
+// next tick after the fault clears dispatches normally. A short flat re-delay
+// (this is a blip, not an indefinite park like an archived org).
+// ---------------------------------------------------------------------------
+export const SCOPE_RECHECK_UNAVAILABLE_DELAY_MS = 30 * 1000;
+
+/**
+ * How many times a run may park on an unreadable scope recheck before the run
+ * is landed `failed`. BOUNDED on purpose, unlike the archived-org park: an
+ * archive is a real, externally-observable state a run legitimately waits out,
+ * whereas "the check would not read" is either a blip that clears in seconds or
+ * a PERMANENT fault (a bad query, a schema drift, a programming TypeError). An
+ * uncapped park would turn the latter into a run that re-delays every 30s
+ * forever with no terminal disposition and no operator signal. Five parks ≈ 2.5
+ * minutes of transient tolerance, then an honest failure.
+ */
+export const MAX_SCOPE_RECHECK_PARKS = 5;
+
+export class ScopeRecheckUnavailableError extends Error {
+  readonly runId: string;
+  readonly delayMs: number;
+  /** Park ordinal to persist on the job data, so the cap survives the re-delay. */
+  readonly nextAttempt: number;
+  readonly cause: unknown;
+  constructor(args: {
+    runId: string;
+    cause: unknown;
+    nextAttempt: number;
+    delayMs?: number;
+  }) {
+    const delayMs = args.delayMs ?? SCOPE_RECHECK_UNAVAILABLE_DELAY_MS;
+    super(
+      `Scope recheck unreadable — parking run ${args.runId} ` +
+        `(attempt ${args.nextAttempt}/${MAX_SCOPE_RECHECK_PARKS}, retry in ${delayMs}ms): ` +
+        (args.cause instanceof Error ? args.cause.message : String(args.cause)),
+    );
+    this.name = "ScopeRecheckUnavailableError";
+    this.runId = args.runId;
+    this.delayMs = delayMs;
+    this.nextAttempt = args.nextAttempt;
+    this.cause = args.cause;
+  }
+}
 import {
   AgUiAdapter,
   publishAgUiEvent,
@@ -1891,7 +1947,7 @@ export async function assertOrchestratorReady(
 // ---------------------------------------------------------------------------
 
 export async function runAgentBuilderExecutionJob(
-  data: { runId: string; gateAttempt?: number },
+  data: { runId: string; gateAttempt?: number; scopeRecheckPark?: number },
   jobId: string,
 ): Promise<void> {
   const { runId } = data;
@@ -1927,7 +1983,7 @@ export async function runAgentBuilderExecutionJob(
 // ProjectContext frame; the inner contains the job body, unchanged except for
 // the moved run-row read (probeRun above is re-read here for clarity).
 async function runAgentBuilderExecutionJobInner(
-  data: { runId: string; gateAttempt?: number },
+  data: { runId: string; gateAttempt?: number; scopeRecheckPark?: number },
   jobId: string,
 ): Promise<void> {
   const { runId } = data;
@@ -1935,6 +1991,12 @@ async function runAgentBuilderExecutionJobInner(
   // `{ ...job.data, gateAttempt: err.nextAttempt }` via `job.updateData(...)`
   // before calling `job.moveToDelayed(...)`, so each re-queue increments.
   const currentGateAttempt = typeof data.gateAttempt === "number" ? data.gateAttempt : 0;
+  // cinatra#2485 C: how many times this job already parked on an UNREADABLE
+  // fire-time scope recheck. Written back by the dispatcher's re-delay branch
+  // (`job.updateData`), exactly like `gateAttempt` above, so the cap survives
+  // the moveToDelayed round-trip.
+  const currentScopeRecheckPark =
+    typeof data.scopeRecheckPark === "number" ? data.scopeRecheckPark : 0;
 
   // 1. Read run row
   const run = await readAgentRunById(runId);
@@ -1985,6 +2047,82 @@ async function runAgentBuilderExecutionJobInner(
       error: `Template ${run.templateId} not found`,
     }, executionAuthority);
     return;
+  }
+
+  // ---------------------------------------------------------------------------
+  // cinatra#2485 C (layer 3): FIRE-TIME scope recheck, immediately before any
+  // side effect (skill ledger, headless recommendation, dispatch).
+  //
+  // Creation and dispatch both happened in the past — a scheduled or recurring
+  // run can be armed while its owner is authorized and fire hours or days
+  // later, after the agent was re-scoped or the owner lost the team / project /
+  // org membership that authorized it. The guard resolves the run's ORIGINAL
+  // principal LIVE, so this refusal reflects the world at FIRE time, not at
+  // arm time. A refusal is terminal (queued→failed) rather than a re-delay: the
+  // run is not authorized, and re-delaying would spin the queue forever.
+  //
+  // NOT gated behind the queued→running CAS below on purpose — the WayFlow /
+  // agentic / external-A2A branches each own their own transition, and one of
+  // them (`runAgentBuilderAgenticJob`) transitions inside a nested call, so
+  // this is the last shared point before all of them.
+  // ---------------------------------------------------------------------------
+  try {
+    const { assertAgentRunScopeAuthorized } = await import(
+      "./agent-template-scope-guard"
+    );
+    await assertAgentRunScopeAuthorized({
+      stage: "execute",
+      templateId: run.templateId,
+      orgId: run.orgId,
+      runId,
+      runBy: run.runBy,
+    });
+  } catch (err) {
+    const { AgentTemplateScopeError } = await import("./agent-template-scope");
+    if (err instanceof AgentTemplateScopeError) {
+      console.warn(
+        "[agent-builder] fire-time scope recheck refused run",
+        runId,
+        `— ${err.reason}`,
+      );
+      await transitionRunStatus(runId, "queued", "failed", {
+        error: `run refused: the agent's scope no longer authorizes this run (${err.reason})`,
+      }, executionAuthority);
+      return;
+    }
+    // Anything else is an UNREADABLE check, not a denial — park and retry
+    // rather than fail the run or burn its only attempt (see the error's own
+    // note). Never fall through to the dispatch branches: an unverified run
+    // must not execute.
+    //
+    // BOUNDED: a permanent fault (bad query, schema drift, TypeError) would
+    // otherwise re-delay forever. Past the cap the run lands `failed` with the
+    // underlying cause, so the fault is visible and the run has a terminal
+    // disposition instead of an endless 30s loop.
+    const message = err instanceof Error ? err.message : String(err);
+    if (currentScopeRecheckPark >= MAX_SCOPE_RECHECK_PARKS) {
+      console.error(
+        "[agent-builder] fire-time scope recheck still unreadable for run",
+        runId,
+        `after ${MAX_SCOPE_RECHECK_PARKS} parks — failing the run:`,
+        message,
+      );
+      await transitionRunStatus(runId, "queued", "failed", {
+        error: `run refused: the agent's scope could not be verified (${message})`,
+      }, executionAuthority);
+      return;
+    }
+    console.warn(
+      "[agent-builder] fire-time scope recheck unreadable for run",
+      runId,
+      `— parking ${SCOPE_RECHECK_UNAVAILABLE_DELAY_MS}ms:`,
+      message,
+    );
+    throw new ScopeRecheckUnavailableError({
+      runId,
+      cause: err,
+      nextAttempt: currentScopeRecheckPark + 1,
+    });
   }
 
   // ---------------------------------------------------------------------------

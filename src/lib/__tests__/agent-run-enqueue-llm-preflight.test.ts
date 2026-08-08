@@ -8,6 +8,16 @@ vi.mock("@/lib/background-jobs", () => ({
   BACKGROUND_JOB_NAMES: { AGENT_BUILDER_EXECUTION: "AGENT_BUILDER_EXECUTION" },
   enqueueBackgroundJob: (...a: unknown[]) => enqueueBackgroundJob(...(a as [])),
 }));
+vi.mock("@cinatra-ai/agents/agent-template-scope-guard", () => ({
+  // cinatra#2485 C: `enqueueAgentRun` is the shared DISPATCH guard's home, and
+  // the guard reads the agent_runs / agent_templates rows straight from the DB
+  // (no live Postgres here). These suites prove the connector / LLM preflight
+  // behavior; the gate's own behavior is proven in packages/agents'
+  // `agent-template-scope.test.ts` + `agent-run-scope-guard.test.ts`, and its
+  // presence at this exact call site in `agent-run-scope-enforcement-wiring.test.ts`.
+  assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
+  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
+}));
 
 // No connector deps in these tests → the connector preflight path is inert; stub
 // the policy module so it never loads heavy deps.

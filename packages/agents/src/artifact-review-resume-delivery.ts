@@ -68,13 +68,22 @@ export type ResumeDeliveryOutcome =
   | "retryable"
   /** markResumeIntentDelivered lost its lease race (a re-claim already owns the
    *  row) — no re-send, no double-mark. */
-  | "lease-lost";
+  | "lease-lost"
+  /** cinatra#2485 C: the agent's install scope no longer authorizes this run's
+   *  principal, so the resume was NOT sent. TERMINAL for the intent (marked
+   *  delivered): the decision will not change on the next tick, and leaving it
+   *  pending would re-attempt a refused resume forever. */
+  | "refused-out-of-scope";
 
 export interface ResumeSweepSummary {
   attempted: number;
   delivered: number;
   alreadyAdvanced: number;
   retryable: number;
+  /** cinatra#2485 C — intents closed WITHOUT sending because the run fell out
+   *  of the agent's install scope. Counted separately from `failed`: it is a
+   *  decision, not an error. */
+  refusedOutOfScope: number;
   failed: number;
 }
 
@@ -192,6 +201,45 @@ export async function deliverArtifactReviewResumeIntent(
   }
   const wayflowUrl = resolveWayflowUrl(template.packageName);
 
+  // cinatra#2485 C — install-scope recheck at DELIVERY time. This sweeper
+  // resumes a paused run from an intent persisted at gate time, so its
+  // authorization is as old as that intent: a team-scoped run can pause, its
+  // owner lose the owning team, and this delivery resume the run days later.
+  // The resume drives execution through a DIRECT sendTask (no enqueue, no
+  // status transition), so it reaches neither layer-2 chokepoint — the check
+  // has to live here. There is no acting human on a sweeper tick, so the run's
+  // own persisted principal is the subject, resolved LIVE.
+  //
+  // A refusal is TERMINAL for the intent (never retried): the scope decision
+  // will not change on the next tick, and leaving it pending would re-attempt
+  // a refused resume forever. An UNREADABLE check keeps the intent pending for
+  // a later cycle, matching this function's existing "retryable" posture for
+  // transient faults.
+  {
+    const { assertAgentRunDispatchAuthorized } = await import(
+      "./agent-template-scope-guard"
+    );
+    const { AgentTemplateScopeError } = await import("./agent-template-scope");
+    try {
+      await assertAgentRunDispatchAuthorized({ runId: run.id, stage: "dispatch" });
+    } catch (err) {
+      if (err instanceof AgentTemplateScopeError) {
+        console.warn(
+          `[artifact-review-resume] gate=${gateId} run=${run.id} refused — the agent's ` +
+            `scope no longer authorizes this run (${err.reason}); not resuming`,
+        );
+        const ok = await markResumeIntentDelivered(gateId, leaseToken);
+        return ok ? "refused-out-of-scope" : "lease-lost";
+      }
+      console.warn(
+        `[artifact-review-resume] gate=${gateId} run=${run.id} scope check unreadable — ` +
+          `leaving pending for a later cycle: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+      return "retryable";
+    }
+  }
+
   // Deliver the typed decision verbatim as the WayFlow resume message. Dynamic
   // import mirrors review-task-actions.ts (circular-dep avoidance:
   // agents ← @cinatra-ai/a2a ← mcp-server ← agent-builder).
@@ -262,6 +310,7 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
     delivered: 0,
     alreadyAdvanced: 0,
     retryable: 0,
+    refusedOutOfScope: 0,
     failed: 0,
   };
   // The lease must comfortably EXCEED the time to process the WHOLE claimed batch
@@ -293,6 +342,7 @@ export async function sweepArtifactReviewResumeIntents(opts?: {
       const outcome = await deliverArtifactReviewResumeIntent(intent);
       if (outcome === "delivered") summary.delivered += 1;
       else if (outcome === "already-advanced") summary.alreadyAdvanced += 1;
+      else if (outcome === "refused-out-of-scope") summary.refusedOutOfScope += 1;
       else summary.retryable += 1; // "retryable" | "lease-lost" both leave the row for another owner/cycle
     } catch (err) {
       summary.failed += 1;

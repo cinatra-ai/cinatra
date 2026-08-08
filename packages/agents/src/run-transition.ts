@@ -256,6 +256,21 @@ export async function transitionRunStatus(
   // The org (lock + CAS scope) is the authority's org — a wrong-org authority
   // fails closed as `stale_from_status` via the §1d org-scoped CAS.
   if (!authority) throw new AgentRunOrgWriteAuthorityError("missing");
+  // (2b) cinatra#2485 C (layer 2): the SHARED DISPATCH GUARD on every
+  // non-running→dispatch edge. `→queued` is the one edge that hands a parked
+  // run (pending_input / pending_approval / armed / failed-retry) to the
+  // execution plane, so it is where a LATER-SET scope must be honored: the run
+  // may have been created while its actor was in scope and dispatched long
+  // after the agent was re-scoped or the actor was removed from the team /
+  // project / org. Terminal edges are deliberately NOT gated — a descoped run
+  // must still be able to land its own failure, otherwise a scope change would
+  // strand in-flight runs forever.
+  if (to === "queued") {
+    const { assertAgentRunDispatchAuthorized } = await import(
+      "./agent-template-scope-guard"
+    );
+    await assertAgentRunDispatchAuthorized({ runId, stage: "dispatch" });
+  }
   const orgId = authority.orgId;
   const isTerminal = TERMINAL_RUN_STATUSES.has(to);
   // Per-transition capability (§3): terminal edges LAND a run's outputs

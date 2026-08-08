@@ -22,6 +22,8 @@
     "./install-target-picker": "./src/install-target-picker.ts",
     "./llm-provider-policy": "./src/llm-provider-policy.ts",
     "./store": "./src/store.ts",
+  "./agent-template-scope": "./src/agent-template-scope.ts",
+  "./agent-template-scope-guard": "./src/agent-template-scope-guard.ts",
     "./run-wait-notifier": "./src/run-wait-notifier.ts",
     "./test-delivery-send-port": "./src/test-delivery-send-port.ts",
     "./module": "./src/integration/module.ts",

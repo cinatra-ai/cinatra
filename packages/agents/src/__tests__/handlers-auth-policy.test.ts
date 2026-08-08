@@ -109,6 +109,17 @@ const storeMock = vi.hoisted(() => ({
   resolveRunCoOwnerUserIds: vi.fn(async () => []),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#2485 C: the MCP resume path now asserts the agent's install scope
+// before its direct WayFlow sendTask (it reaches neither layer-2 chokepoint).
+// The gate reads agent_runs / agent_templates straight from the DB; this suite
+// mocks the persistence hub, so it mocks the gate too. The gate's own behavior
+// lives in `agent-template-scope.test.ts` / `agent-run-scope-guard.test.ts`, and
+// its presence at this call site in `agent-run-scope-enforcement-wiring.test.ts`.
+vi.mock("../agent-template-scope-guard", () => ({
+  assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
+  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
+}));
+
 
 // ---------------------------------------------------------------------------
 // auth-policy mock — handlers.ts imports enforceRunAccess from "../auth-policy"

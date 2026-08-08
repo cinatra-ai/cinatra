@@ -72,6 +72,16 @@ const storeMock = vi.hoisted(() => ({
   countAgentRunsForTemplates: vi.fn(() => new Map()),
 }));
 vi.mock("../store", () => storeMock);
+// cinatra#2485 C: the shared dispatch guard inside `enqueueAgentRun` reads the
+// agent_runs / agent_templates rows straight from the DB (this suite has no
+// live Postgres and mocks the persistence hub). The gate's own behavior is
+// proven in `agent-template-scope.test.ts`, `agent-run-scope-guard.test.ts` and
+// `agent-run-scope-enforcement-wiring.test.ts`.
+vi.mock("@cinatra-ai/agents/agent-template-scope-guard", () => ({
+  assertAgentRunScopeAuthorized: vi.fn(async () => undefined),
+  assertAgentRunDispatchAuthorized: vi.fn(async () => undefined),
+}));
+
 
 const authPolicyMock = vi.hoisted(() => ({
   enforceRunAccess: vi.fn(async () => undefined),

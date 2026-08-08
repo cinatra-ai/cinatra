@@ -314,6 +314,9 @@ import {
 // type to the narrow union is out of scope here because the change
 // cascades across every handler.
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
+// cinatra#2485 C — the scope-actor shape threaded into the guarded creation
+// perimeter (type-only; erased at build).
+import type { ActorContext } from "@/lib/authz/actor-context";
 // Advisory dispatch deferred. The earlier in-process
 // invocation via invokePrimitive + createInProcessPrimitiveTransport is no
 // longer wired (agent_run queues asynchronously and cannot return helper
@@ -1032,23 +1035,34 @@ async function handleAgentBuilderRun(
   // grants pulled between instantiate and start). HumanUser only —
   // synthetic/system actors fall back to live-session derivation per
   // the legacy worker path.
+  // The MCP/chat frame's verified identity, in ActorContext shape. Used for
+  // BOTH the delegated-actor snapshot below AND — cinatra#2485 C — as the
+  // explicit scope actor threaded into the guarded creation perimeter. The
+  // frame carries the resolved membership axes (teamIds / projectGrants /
+  // orgRole), which is exactly what the four-level scope rule evaluates. It is
+  // threaded explicitly rather than left to the perimeter's `runBy` derivation
+  // because `request.actor.userId` may be absent on a non-human MCP frame,
+  // which would otherwise fall through to the installation-principal path.
+  const scopeActorFromFrame = {
+    principalType: "HumanUser" as const,
+    principalId: actor.userId ?? "anonymous",
+    authSource: ((actor.source as string) ?? "mcp") as "mcp",
+    policyVersion: POLICY_VERSION,
+    organizationId,
+    orgRole: (actor as { orgRole?: "org_owner" | "org_admin" | "member" }).orgRole,
+    platformRole: (actor as { platformRole?: "platform_admin" | "member" }).platformRole,
+    teamIds: (actor as { teamIds?: string[] }).teamIds ?? [],
+    projectGrants: (actor as { projectGrants?: unknown[] }).projectGrants as never,
+    projectIds: (actor as { projectIds?: string[] }).projectIds ?? [],
+    roles: (actor as { roles?: string[] }).roles ?? [],
+  };
+
   let delegatedActorSnapshotJson: string | null = null;
   try {
     const { captureDelegatedActorSnapshot } = await import("@/lib/authz/delegated-agent-run");
-    const synth = {
-      principalType: "HumanUser" as const,
-      principalId: actor.userId ?? "anonymous",
-      authSource: ((actor.source as string) ?? "mcp") as "mcp",
-      policyVersion: POLICY_VERSION,
-      organizationId,
-      orgRole: (actor as { orgRole?: "org_owner" | "org_admin" | "member" }).orgRole,
-      platformRole: (actor as { platformRole?: "platform_admin" | "member" }).platformRole,
-      teamIds: (actor as { teamIds?: string[] }).teamIds ?? [],
-      projectGrants: (actor as { projectGrants?: unknown[] }).projectGrants as never,
-      projectIds: (actor as { projectIds?: string[] }).projectIds ?? [],
-      roles: (actor as { roles?: string[] }).roles ?? [],
-    };
-    const snap = captureDelegatedActorSnapshot(synth as unknown as Parameters<typeof captureDelegatedActorSnapshot>[0]);
+    const snap = captureDelegatedActorSnapshot(
+      scopeActorFromFrame as unknown as Parameters<typeof captureDelegatedActorSnapshot>[0],
+    );
     if (snap) delegatedActorSnapshotJson = JSON.stringify(snap);
   } catch (err) {
     // Snapshot capture must never block run creation. Log + continue.
@@ -1077,6 +1091,10 @@ async function handleAgentBuilderRun(
         orgId: organizationId,
         projectId: projectIdForRun,
         delegatedActorSnapshot: delegatedActorSnapshotJson,
+        // cinatra#2485 C — install-scope run gate (see scopeActorFromFrame).
+        scopeActor: request.actor?.userId
+          ? (scopeActorFromFrame as unknown as ActorContext)
+          : null,
       },
       creationAuthority,
     );
@@ -2036,6 +2054,35 @@ async function handleAgentBuilderRunResume(
       return { error: "Run access denied." };
     }
     const resumeAuthority: OrgWriteAuthority = sessionAuthorityFromResolvedRole(run.orgId, resumeRole);
+
+    // cinatra#2485 C — the install-scope run gate. A resume DRIVES execution,
+    // and this handler's WayFlow branch does so through a DIRECT `sendTask`:
+    // it enqueues nothing and transitions nothing, so it reaches neither
+    // layer-2 chokepoint. Without this, a principal authorized on the run by
+    // policy (an org admin, a co-owner) could resume a team-/project-scoped
+    // agent's run from outside that scope. Both the RESUMING principal and the
+    // run owner must be inside the agent's scope; asserted before
+    // writeHitlPrompt / sendTask, the first irreversible steps of the resume.
+    {
+      const { assertAgentRunDispatchAuthorized } = await import(
+        "../agent-template-scope-guard"
+      );
+      const { AgentTemplateScopeError } = await import("../agent-template-scope");
+      try {
+        await assertAgentRunDispatchAuthorized({
+          runId: run.id,
+          stage: "dispatch",
+          actingUserId: actor.userId,
+        });
+      } catch (err) {
+        if (err instanceof AgentTemplateScopeError) {
+          // Same opaque text the run-access gate uses — never reveal which
+          // scope tier refused, or that the run exists at all.
+          return { error: "Run access denied." };
+        }
+        throw err;
+      }
+    }
 
     // Detect explicit hitl response payload in the input. If a typed field
     // (e.g. hitlResponse) is added, branch on its presence here.

@@ -221,6 +221,26 @@ async function invokePublishedAgentTool(
         inputParams,
         orgId,
         parentOboCeiling: ctx?.oboCeiling ?? null,
+        // cinatra#2485 C: PERSIST the requesting human as the run owner. The
+        // scope gate re-runs at dispatch and at fire time, long after this ALS
+        // frame is gone — without a persisted principal the later layers would
+        // fall back to the template's installation principal and authorize a
+        // run the requester may no longer be entitled to. Stamping `runBy`
+        // (the identical rule the A2A executor already applies:
+        // `packages/a2a/src/agent-executor.ts` — HumanUser only, never a
+        // service/worker principal) keeps the ORIGINAL requester attached for
+        // every later re-check, and incidentally gives the run an owner for
+        // HITL / autosave / audit instead of leaving it an orphan.
+        runBy: ctx?.principalType === "HumanUser" ? ctx.principalId : undefined,
+        // cinatra#2485 C: PUBLISHED-AGENT-AS-MCP-TOOL is the sharpest
+        // discoverable-vs-runnable seam in the instance — the tool DEFINITION
+        // is advertised globally (actor-less registration, above), so the
+        // INVOCATION must be scope-bound. This callback creates a run with NO
+        // `runBy`, so without an explicit actor the perimeter would authorize
+        // it as the template's installation principal and every MCP client in
+        // any org could run any published agent. The ALS frame is the same
+        // trust anchor the `orgId` above comes from.
+        scopeActor: ctx ?? null,
       },
       authority,
     );

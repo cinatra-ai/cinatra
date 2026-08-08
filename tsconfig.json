@@ -91,6 +91,8 @@
       "@cinatra-ai/agents/install-target-picker": ["./packages/agents/src/install-target-picker.ts"],
       "@cinatra-ai/agents/llm-provider-policy": ["./packages/agents/src/llm-provider-policy.ts"],
       "@cinatra-ai/agents/store": ["./packages/agents/src/store.ts"],
+      "@cinatra-ai/agents/agent-template-scope": ["./packages/agents/src/agent-template-scope.ts"],
+      "@cinatra-ai/agents/agent-template-scope-guard": ["./packages/agents/src/agent-template-scope-guard.ts"],
       "@cinatra-ai/agents/artifact-review-gate-store": ["./packages/agents/src/artifact-review-gate-store.ts"],
       "@cinatra-ai/agents/lifecycle-verification-store": ["./packages/agents/src/lifecycle-verification-store.ts"],
       "@cinatra-ai/agents/lifecycle-policy-store": ["./packages/agents/src/lifecycle-policy-store.ts"],
