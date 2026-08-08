@@ -5,7 +5,7 @@ import {
   getNangoOAuthCallbackUrl,
   getPrimarySavedNangoConnection,
 } from "@/lib/nango-system";
-import { writeStoredGoogleOAuthSettings } from "./index";
+import { clearGoogleOAuthNangoSyncMarker, writeStoredGoogleOAuthSettings } from "./index";
 
 // ---------------------------------------------------------------------------
 // Google OAuth DISCONNECT surface (org-level + per-user), split out of the
@@ -51,6 +51,9 @@ export async function clearGoogleOAuthConnection() {
   writeStoredGoogleOAuthSettings({
     redirectUri: getNangoOAuthCallbackUrl(),
   });
+  // cinatra#2545 — the client this marker described is gone, so the marker must
+  // not outlive it and degrade the status of a later, unrelated save.
+  clearGoogleOAuthNangoSyncMarker();
   const savedConnection = getPrimarySavedNangoConnection("googleOAuth");
   // Revocation ordering (cinatra#952 W2): soft-delete the identity row FIRST
   // so the per-connection use-gate fails closed on the very next resolution,
