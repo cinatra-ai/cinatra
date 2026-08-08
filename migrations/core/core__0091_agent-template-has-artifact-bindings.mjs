@@ -23,7 +23,7 @@
 // No backfill, no rewrite, no constraint change on existing data: every
 // existing row reads NULL, which means "unknown" — the SAME fail-closed
 // behavior every row had before this column existed (this repo's standing
-// pre-v0.2.0 no-backward-compat convention: the choice to skip a backfill,
+// pre-release no-backward-compat convention: the choice to skip a backfill,
 // recorded here and in the PR body, per cinatra#2498 acceptance item 3). The
 // schema-migration gate classifies this NON-destructive.
 //
