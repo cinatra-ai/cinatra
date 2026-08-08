@@ -2,7 +2,7 @@
 // /notifications v2 — feed view-model (cinatra#1557, E7).
 //
 // Pure, framework-free mapping from E5's `UnifiedFeedItem` (server data layer,
-// `src/app/configuration/approvals/unified-feed.ts`) to a SERIALIZABLE row
+// `src/lib/approvals/unified-feed.ts`) to a SERIALIZABLE row
 // view-model the client feed renders. Kept `server-only`-free so BOTH the
 // server page (initial paint) and `feed-window.ts`'s bounded union-feed walk
 // (cinatra#2380, S2 — the `loadFeedWindow`/`fetchFeedWindow` known-total
@@ -21,14 +21,14 @@
 // carried as `actionable` + `decideKind`. See {@link isApprovalActionable}.
 // ---------------------------------------------------------------------------
 
-import type { UnifiedFeedItem } from "@/app/configuration/approvals/unified-feed";
+import type { UnifiedFeedItem } from "@/lib/approvals/unified-feed";
 import type { AppNotification } from "@cinatra-ai/notifications/types";
-import type { RowEligibility } from "@/app/configuration/approvals/sources/types";
+import type { RowEligibility } from "@/lib/approvals/sources/types";
 import {
   AGENT_SOURCE_ID,
   PROMOTION_SOURCE_ID,
   WORKFLOW_SOURCE_ID,
-} from "@/app/configuration/approvals/sources/source-ids";
+} from "@/lib/approvals/sources/source-ids";
 import {
   collapseByJobId,
   getInProgressItems,

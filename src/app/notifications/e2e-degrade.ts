@@ -30,7 +30,7 @@ import "server-only";
 import type {
   ApprovalEnvelope,
   ApprovalSource,
-} from "@/app/configuration/approvals/sources/types";
+} from "@/lib/approvals/sources/types";
 
 /** True when this request should force a degraded approval half (e2e only). */
 export function isE2EDegradeApprovalsRequested(

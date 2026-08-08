@@ -72,10 +72,10 @@ const nextId = (p: string) => `${p}-${Date.now()}-${uniq++}`;
 let runPostgresQueriesSync: typeof import("@/lib/postgres-sync").runPostgresQueriesSync;
 let getPostgresConnectionString: typeof import("@/lib/postgres-config").getPostgresConnectionString;
 let requestMod: typeof import("@/lib/artifacts/artifact-promotion-request");
-let sourceMod: typeof import("@/app/configuration/approvals/sources/promotion-requests");
+let sourceMod: typeof import("@/lib/approvals/sources/promotion-requests");
 let artifactTypeMod: typeof import("@cinatra-ai/artifacts");
 type ActorContext = import("@/lib/authz/actor-context").ActorContext;
-type ApprovalViewer = import("@/app/configuration/approvals/sources/types").ApprovalViewer;
+type ApprovalViewer = import("@/lib/approvals/sources/types").ApprovalViewer;
 
 const S = () => TEST_SCHEMA;
 
@@ -191,7 +191,7 @@ beforeAll(async () => {
   ({ runPostgresQueriesSync } = await import("@/lib/postgres-sync"));
   ({ getPostgresConnectionString } = await import("@/lib/postgres-config"));
   requestMod = await import("@/lib/artifacts/artifact-promotion-request");
-  sourceMod = await import("@/app/configuration/approvals/sources/promotion-requests");
+  sourceMod = await import("@/lib/approvals/sources/promotion-requests");
   artifactTypeMod = await import("@cinatra-ai/artifacts");
 });
 

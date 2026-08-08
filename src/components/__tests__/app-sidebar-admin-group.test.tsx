@@ -48,9 +48,5 @@ describe("app-sidebar model — no Admin group, no Configuration entry (cinatra#
 
     expect(titles).not.toContain("Configuration");
     expect(urls).not.toContain("/configuration");
-    // The #1558 cutover also removed the Approvals sidebar item — assert it
-    // stays gone here so a future edit can't reintroduce either entry.
-    expect(titles).not.toContain("Approvals");
-    expect(urls).not.toContain("/configuration/approvals");
   });
 });

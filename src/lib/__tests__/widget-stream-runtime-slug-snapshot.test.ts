@@ -120,7 +120,7 @@ describe("fail-closed floor — staleness asymmetry", () => {
     // the approved widget route is now reachable...
     expect(isNext(await guardAppRoute(fakeRequest("/api/agents/acme-editor/stream")))).toBe(true);
     // ...but arbitrary protected routes are unaffected (307)
-    for (const p of ["/dashboards", "/configuration/approvals", "/api/agents/acme-editor/run"]) {
+    for (const p of ["/dashboards", "/configuration/access-control", "/api/agents/acme-editor/run"]) {
       expect(isNext(await guardAppRoute(fakeRequest(p)))).toBe(false);
     }
   });
@@ -140,12 +140,12 @@ describe("fail-closed floor — staleness asymmetry", () => {
     };
     g.__cinatraWidgetStreamRuntimeSlugSnapshot!.paths = new Set([
       "/dashboards",
-      "/configuration/approvals",
+      "/configuration/access-control",
       "/api/agents/acme-editor/stream",
     ]);
     // the reader's structural gate rejects the non-widget paths regardless
     expect(isRuntimeApprovedWidgetStreamPublicPath("/dashboards")).toBe(false);
-    expect(isRuntimeApprovedWidgetStreamPublicPath("/configuration/approvals")).toBe(false);
+    expect(isRuntimeApprovedWidgetStreamPublicPath("/configuration/access-control")).toBe(false);
     expect(isNext(await guardAppRoute(fakeRequest("/dashboards")))).toBe(false);
     // ...but the well-formed widget path that IS in the set is still allowed
     expect(isRuntimeApprovedWidgetStreamPublicPath("/api/agents/acme-editor/stream")).toBe(true);

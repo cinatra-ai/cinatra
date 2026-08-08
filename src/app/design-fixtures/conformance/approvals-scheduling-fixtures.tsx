@@ -7,7 +7,7 @@
 //   approvals-inbox, approvals-your-requests, approvals-marketplace-states,
 //   scheduling-step, scheduling-trigger-tab
 //
-// These surfaces' real screens (src/app/configuration/approvals/**,
+// These surfaces' real screens (src/lib/approvals/**,
 // packages/agents/src/trigger-*.tsx) drive every action — approve / reject /
 // withdraw / retry / schedule / cancel / release — through a server action
 // (decideApprovalRow, setRunTrigger, deleteRunTrigger, releaseTriggerNow) that

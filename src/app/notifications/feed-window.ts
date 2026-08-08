@@ -36,9 +36,9 @@ import {
   loadUnifiedFeedPage,
   type UnifiedFeedCursor,
   type UnifiedFeedItem,
-} from "@/app/configuration/approvals/unified-feed";
-import type { ApprovalViewer } from "@/app/configuration/approvals/sources/types";
-import type { UnifiedFeedDeps } from "@/app/configuration/approvals/unified-feed";
+} from "@/lib/approvals/unified-feed";
+import type { ApprovalViewer } from "@/lib/approvals/sources/types";
+import type { UnifiedFeedDeps } from "@/lib/approvals/unified-feed";
 
 import {
   buildFeedRowVMs,

@@ -16,7 +16,7 @@ import {
   type PromotableObject,
 } from "../artifact-row-promotion";
 import type { ArtifactPromotionRequestRow } from "../artifact-promotion-request-store";
-import type { ApprovalViewer } from "@/app/configuration/approvals/sources/types";
+import type { ApprovalViewer } from "@/lib/approvals/sources/types";
 
 const admin: ApprovalViewer = { userId: "u-admin", orgId: "org-1", isAdmin: true };
 const member: ApprovalViewer = { userId: "u-member", orgId: "org-1", isAdmin: false };

@@ -448,15 +448,15 @@
       "selector": "harness [data-surface-id=\"notifications-vendor-gate\"][data-variant=\"empty\"] (ABSENCE contract: the rendered [data-source-id] set is exactly the non-vendor set; neither vendor-gated source id appears). Real gate: the registered-vendor predicate the marketplace vendor sources gate their rows on.",
       "requires": [
         {
-          "file": "src/app/configuration/approvals/sources/marketplace-shared.ts",
+          "file": "src/lib/approvals/sources/marketplace-shared.ts",
           "literals": ["export function isRegisteredVendor"]
         },
         {
-          "file": "src/app/configuration/approvals/sources/marketplace-vendor-app-status.tsx",
+          "file": "src/lib/approvals/sources/marketplace-vendor-app-status.tsx",
           "literals": ["isRegisteredVendor()"]
         },
         {
-          "file": "src/app/configuration/approvals/sources/marketplace-vendor-app-moderation.tsx",
+          "file": "src/lib/approvals/sources/marketplace-vendor-app-moderation.tsx",
           "literals": ["isRegisteredVendor()"]
         }
       ]

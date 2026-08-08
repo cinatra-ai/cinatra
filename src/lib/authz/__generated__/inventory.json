@@ -249,17 +249,17 @@
     },
     {
       "primitiveName": "approvals_decide",
-      "file": "src/app/configuration/approvals/approvals-mcp.ts",
+      "file": "src/lib/approvals/approvals-mcp.ts",
       "line": 339
     },
     {
       "primitiveName": "approvals_get",
-      "file": "src/app/configuration/approvals/approvals-mcp.ts",
+      "file": "src/lib/approvals/approvals-mcp.ts",
       "line": 334
     },
     {
       "primitiveName": "approvals_list",
-      "file": "src/app/configuration/approvals/approvals-mcp.ts",
+      "file": "src/lib/approvals/approvals-mcp.ts",
       "line": 329
     },
     {

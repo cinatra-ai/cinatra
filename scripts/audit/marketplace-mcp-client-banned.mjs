@@ -159,17 +159,17 @@ export const CURRENT_ALLOWLIST = Object.freeze([
   // + MarketplaceMcpError + the extension_submission_* / vendor_application_*
   // methods and types until the published @cinatra-ai/marketplace-mcp-contract
   // ships. These move to the contract import alongside the rest of the swap.
-  "src/app/configuration/approvals/sources/marketplace-shared.ts",
-  "src/app/configuration/approvals/sources/marketplace-submission-moderation.tsx",
-  "src/app/configuration/approvals/sources/marketplace-vendor-app-moderation.tsx",
-  "src/app/configuration/approvals/sources/marketplace-my-submissions.tsx",
-  "src/app/configuration/approvals/sources/marketplace-vendor-app-status.tsx",
-  "src/app/configuration/approvals/marketplace-decision-helpers.ts",
+  "src/lib/approvals/sources/marketplace-shared.ts",
+  "src/lib/approvals/sources/marketplace-submission-moderation.tsx",
+  "src/lib/approvals/sources/marketplace-vendor-app-moderation.tsx",
+  "src/lib/approvals/sources/marketplace-my-submissions.tsx",
+  "src/lib/approvals/sources/marketplace-vendor-app-status.tsx",
+  "src/lib/approvals/marketplace-decision-helpers.ts",
   // Test mocks mirroring the above vendored imports (test-only, not new
   // production coupling; move to the contract import with the swap).
-  "src/app/configuration/approvals/__tests__/marketplace-decision-helpers.test.ts",
-  "src/app/configuration/approvals/sources/__tests__/marketplace-shared.test.ts",
-  "src/app/configuration/approvals/sources/__tests__/marketplace-sources.test.ts",
+  "src/lib/approvals/__tests__/marketplace-decision-helpers.test.ts",
+  "src/lib/approvals/sources/__tests__/marketplace-shared.test.ts",
+  "src/lib/approvals/sources/__tests__/marketplace-sources.test.ts",
 ]);
 
 /** Files / directories the scanner skips entirely (perf + accuracy).
