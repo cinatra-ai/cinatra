@@ -1485,6 +1485,28 @@ jobs:
       - name: Extension dependency-manifest drift gate
         run: node scripts/audit/extension-deps-gate.mjs
 
+      # Produced-artifact dependency gate (cinatra#2537, no-new-rot ratchet).
+      # A `cinatra.produces` entry (package.json and/or cinatra/oas.json) is NOT
+      # an install edge: unless the same manifest also declares the produced
+      # artifact as a REQUIRED artifact-kind `cinatra.dependencies` entry,
+      # installing the agent never installs the artifact, its object type is
+      # never claimed, and every run fails materialization. This is the
+      # catalog-wide static mirror of the publish/install typed-production
+      # contract (ARTIFACT-CONTRACT-PRODUCES-UNCLAIMED), which cannot see an
+      # already-published offender sitting in a source repo. Baseline
+      # grandfathers the five #2537 offenders (fixed in their own repos; they
+      # drop out when their pins are bumped); the gate fails on NEW ones.
+      - name: Produced-artifact dependency gate
+        env:
+          # Also fail if the committed baseline GREW vs the base branch (blocks
+          # the regenerate-to-pass bypass). Same base ref the other no-new-rot
+          # gates use.
+          EXTENSION_PRODUCES_DEPS_BASE: ${{ steps.base.outputs.base }}
+        run: node scripts/audit/extension-produces-deps-gate.mjs
+
+      - name: Produced-artifact dependency gate tests
+        run: node --test scripts/audit/__tests__/extension-produces-deps-gate.test.mjs
+
       # The `@/` import-ban for extensions. PINNED EMPTY (cinatra#172 — the
       # zero-floor flip for the extension→host direction, on the
       # core-extension-import-ban precedent): ANY current hostInternal/

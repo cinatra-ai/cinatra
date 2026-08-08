@@ -505,6 +505,11 @@ export default defineConfig({
       "scripts/audit/__tests__/sdk-abi-readme-gate.test.mjs",
       "scripts/audit/__tests__/sdk-public-surface-ban.test.mjs",
       "scripts/audit/__tests__/skill-frontmatter-gate.test.mjs",
+      // extension-produces-deps-gate (cinatra#2537) — same convention: a
+      // dependency-free `node --test` companion to the produced-artifact
+      // dependency gate, run by its own step in build-image.yml's
+      // perpetual-loops-invariants job.
+      "scripts/audit/__tests__/extension-produces-deps-gate.test.mjs",
       // exec-compose-scoping-check is the same convention: a dependency-free
       // `node --test` gate (it must run without a pnpm install, like the
       // actions-pin gate above), run by the "Execution-plane compose scoping
