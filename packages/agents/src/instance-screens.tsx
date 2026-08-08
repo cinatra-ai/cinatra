@@ -1,4 +1,5 @@
 import { notFound, redirect } from "next/navigation";
+import Link from "next/link";
 import { inArray } from "drizzle-orm";
 import { Main } from "@/components/layout/main";
 import {
@@ -76,6 +77,41 @@ export function shouldShowPersistentTab(
     !!trigger &&
     (trigger.triggerType === "scheduled" || trigger.triggerType === "recurring")
   );
+}
+
+/** Terminal run statuses — no dispatch left (cinatra#2482). */
+export function isTerminalRunStatus(status: string | null | undefined): boolean {
+  return status === "completed" || status === "failed" || status === "stopped";
+}
+
+/**
+ * Should /trigger say, above the schedule form, that this run is already over?
+ * (cinatra#2482)
+ *
+ * The reported repro ends on this screen with no indication that the run has
+ * finished, so the state has to be stated. Two things must BOTH hold:
+ *
+ *   1. a trigger row already EXISTS — the trigger step is done, so this visit
+ *      is a RE-arm. Without this half the rule fires on the genuine
+ *      setup-success flow (cinatra#580): a run that finished setup is
+ *      `completed` with NO trigger row and is redirected here precisely so the
+ *      user can choose one. (Caught by a live walk, not by review.)
+ *   2. the run is TERMINAL — an immediate re-arm has nothing left to dispatch,
+ *      and `setRunTriggerForActor` refuses exactly that.
+ *
+ * It gates the NOTICE only. The form itself always renders: this standalone
+ * form is the only way to give a finished immediate run a scheduled/recurring
+ * trigger (`shouldShowPersistentTab` routes only scheduled/recurring rows to the
+ * persistent tab), and a recurring trigger clones a fresh run — so arming one
+ * stays meaningful however this run itself ended.
+ *
+ * Exported so the regression test can lock BOTH halves without a DB or session.
+ */
+export function shouldShowFinishedRunNotice(
+  trigger: { triggerType: string } | null,
+  runStatus: string | null | undefined,
+): boolean {
+  return trigger !== null && isTerminalRunStatus(runStatus);
 }
 
 type ScreenProps = {
@@ -553,6 +589,12 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     initialInputParams={(run.inputParams ?? {}) as Record<string, unknown>}
                     noRedirect={template.type === "orchestrator" || template.type === "flow" || !!run.parentRunId}
                     runHasExecuted={runHasExecuted}
+                    // cinatra#2482: the trigger step is already done for this
+                    // run, so the watcher must stop bouncing the run view back
+                    // to /trigger. That bounce is the immediate-trigger loop:
+                    // Continue persists the `immediate` row and routes here,
+                    // and the watcher sent the user straight back.
+                    triggerConfigured={trigger !== null}
                     initialStreamedText={run.streamedText ?? ""}
                   />
                 )
@@ -1032,6 +1074,50 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
           </AgentPanelBody>
         ) : (
           <AgentPanelBody role="narrow">
+          {/*
+            cinatra#2482 — finished-run CONTEXT, above the form rather than
+            instead of it.
+
+            The reported repro ends on this screen with no idea that the run is
+            over, so the state has to be said out loud. It must NOT replace the
+            form though: `shouldShowPersistentTab` sends only scheduled/recurring
+            rows to the persistent tab, so this standalone form is the ONLY way
+            to give a finished immediate run a recurring or scheduled trigger —
+            and a recurring trigger clones a fresh run, so arming one here is
+            meaningful however this run itself ended. Hiding the form would take
+            that away (codex round-B finding).
+
+            "Run right after setup" on an already-triggered finished run is the
+            one thing that cannot work, and `setRunTriggerForActor` now refuses
+            exactly that with a message the form renders inline — no silent
+            success, and no bounce back to the run view.
+          */}
+          {run && shouldShowFinishedRunNotice(trigger, run.status) ? (
+            <div
+              className="soft-panel rounded-card mb-4 flex flex-col items-start gap-2 p-4"
+              data-run-finished-notice=""
+            >
+              <h2 className="text-sm font-semibold text-foreground">
+                This run has already finished
+              </h2>
+              {/* Copy names RECURRING specifically. Codex round 2: only a
+                  recurring trigger clones a fresh run per fire — a one-off
+                  `scheduled` arm on a finished run is a pre-existing no-op
+                  (trigger-release-job skips an unarmed run), so promising that
+                  "a schedule" starts a fresh run would overstate it. */}
+              <p className="text-sm text-muted-foreground">
+                It can&apos;t be run again. You can still give it a recurring
+                schedule below — each recurrence starts a fresh run.
+              </p>
+              <Link
+                href={`/agents/${agentId}/${encodeURIComponent(instanceId)}`}
+                className="text-sm font-medium text-primary underline-offset-4 hover:underline"
+                data-action="open-finished-run"
+              >
+                View this run
+              </Link>
+            </div>
+          ) : null}
           <TriggerScreenClient
             agentId={agentId}
             instanceId={instanceId}

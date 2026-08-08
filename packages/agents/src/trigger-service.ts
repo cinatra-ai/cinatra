@@ -51,6 +51,18 @@ import {
   deleteRunTriggerPmTask,
 } from "@/lib/pm-integration-providers";
 
+/**
+ * Terminal run statuses (cinatra#2482). A run in one of these has no legal edge
+ * back into dispatch, so an IMMEDIATE trigger against it is refused rather than
+ * silently swallowed. Kept local — importing the run-status module here would
+ * pull the store/bullmq chain into every trigger call site.
+ */
+const TERMINAL_RUN_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "failed",
+  "stopped",
+]);
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -257,6 +269,38 @@ export async function setRunTriggerForActor(
     return { ok: false, error: "forbidden" };
   }
 
+  // IMMEDIATE TERMINAL-RUN GATE (cinatra#2482).
+  //
+  // An immediate trigger's entire contract is "dispatch NOW": it opens the gate
+  // and performs the `pending_input → queued` transition below. On a terminal
+  // run that is not a legal edge, and the code below CATCHES `stale_from_status`
+  // and continues — so the call returned `{ ok: true }` having done nothing but
+  // rewrite the trigger row. The /trigger form reads that `ok` as success and
+  // routes back to the run view: browser-back to /trigger, press Continue, land
+  // on the identical finished run. Refuse it, naming the real next action.
+  //
+  // ONE carve-out, and only one: `completed` with NO trigger row is cinatra#580's
+  // genuine setup-success state — setup finished, no trigger chosen yet, the run
+  // view redirects the user to the form precisely so they can choose one.
+  // Refusing there would hard-error the FIRST arm of every such run, i.e. the
+  // feature's main path (codex round-B finding). `failed` and `stopped` get NO
+  // such exemption even without a trigger row: their transition is stale too, so
+  // a first arm there is the same silent no-op (codex round-2 finding).
+  //
+  // Scheduled/recurring are never gated here: their row is a future-fire
+  // schedule, meaningful independently of this run's own outcome.
+  if (args.triggerType === "immediate" && TERMINAL_RUN_STATUSES.has(run.status)) {
+    const isSetupSuccessFirstArm =
+      run.status === "completed" && (await readRunTriggerByRunId(args.runId)) === null;
+    if (!isSetupSuccessFirstArm) {
+      return {
+        ok: false,
+        error:
+          "This run has already finished — it can't be run again. Start a new run instead.",
+      };
+    }
+  }
+
   // CONFIGURATION-NEEDS RUN GATE — IMMEDIATE trigger surface (cinatra #1057
   // ruling (b)): an immediate trigger dispatches NOW (transitions the run to
   // `queued` below), so refuse it fail-closed BEFORE any trigger row or schedule
@@ -339,6 +383,13 @@ export async function setRunTriggerForActor(
   }
 
   // Read existing row first → cancel old schedule → upsert (no orphan jobs).
+  //
+  // Deliberately its OWN read, immediately before the cancel, NOT the gate's
+  // snapshot from the top of this function: the cron/scheduledAt validation
+  // between them is asynchronous, so a concurrent reconfiguration could install
+  // a scheduler after that earlier snapshot and this call would then fail to
+  // cancel it, orphaning the job (codex round-2 finding). The extra round-trip
+  // is the price of the no-orphan guarantee.
   const existing = await readRunTriggerByRunId(args.runId);
   const oldJobSchedulerId = existing?.jobSchedulerId ?? null;
   const oldTriggerType = existing?.triggerType ?? null;

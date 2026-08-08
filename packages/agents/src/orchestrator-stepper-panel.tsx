@@ -72,6 +72,7 @@ import {
 } from "./orchestrator-actions";
 import { startDevChildPreviewRun, buildSubmissionMapByStepIndex, type SubmissionMapEntry, type SubmissionMapEntries } from "./run-actions";
 import { RunRecommendationChipRow } from "./run-recommendation-chip-row";
+import { RunCompletionCard } from "./run-completion-affordances";
 import {
   getRunRecommendationHoldStateAction,
   type RunRecommendationHoldState,
@@ -1807,7 +1808,28 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
       />
     );
   } else if (TERMINAL_STATUSES.has(status)) {
-    stageCard = null;
+    // cinatra#2482: `completed` is the only terminal status still unhandled at
+    // this point (failed / stopped were taken by the branches above), and it
+    // used to render NOTHING — while `activeStep` simultaneously marks every
+    // step complete. That is the immediate-trigger dead end: a frozen "Step 1
+    // completed" with no output and no way forward. The completion card names
+    // the outcome and carries the next action.
+    //
+    // outputHint: "steps" tells the card "your output is behind the step
+    // rail, click a completed step to review it" — a TRUE statement only when
+    // there IS a step rail. When stepperSteps is empty this panel renders no
+    // rail at all (see the `stepperSteps.length === 0` branch below), so that
+    // copy would point at a "select a completed step" affordance that isn't
+    // on the page (coderabbit finding, cinatra#2519). "no-steps" gets the
+    // same step-result evidence without the dead pointer.
+    stageCard =
+      status === "completed" ? (
+        <RunCompletionCard
+          runId={runId}
+          agentId={agentId}
+          outputHint={stepperSteps.length === 0 ? "no-steps" : "steps"}
+        />
+      ) : null;
   }
 
   // Embed mode: render only the stage card. Used by the parent panel's Dev
