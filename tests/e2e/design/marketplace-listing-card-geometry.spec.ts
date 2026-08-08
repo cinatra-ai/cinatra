@@ -33,6 +33,15 @@ import { test, expect, type Locator, type Page } from "@playwright/test";
 import { HARNESS_PATH, SEEDED_HARNESS_PATH } from "./conformance/contract";
 import { CONFORMANCE_CARD_FIXTURES } from "../../../src/app/design-fixtures/conformance/fixture-data";
 import { SEEDED_GRID_CARDS } from "../../../src/app/design-fixtures/conformance/seed-data";
+import {
+  MARKETPLACE_GRID_COLUMN_STEPS,
+  MARKETPLACE_GRID_GAP_PX,
+  SPEC_DRAWN_CARD_WIDTH_PX,
+  SPEC_DRAWN_COLUMNS,
+  SPEC_DRAWN_CONTAINER_WIDTH_PX,
+  marketplaceGridCardWidth,
+  marketplaceGridColumns,
+} from "../../../packages/extensions/src/screens/marketplace-grid-columns";
 
 /**
  * Card root + its CTA/details slots for one conformance card fixture.
@@ -350,3 +359,333 @@ for (const [bp, size] of Object.entries(VIEWPORTS)) {
     }
   });
 }
+
+// ---------------------------------------------------------------------------
+// 5. Container-driven column sizing (cinatra#2495).
+//
+// The grid used to pick its column count from VIEWPORT breakpoints
+// (`sm:2 lg:3 xl:4`) while its actual container is far narrower — the app-shell
+// sidebar and the page gutters take a few hundred px off before the grid gets
+// any width. The counts and their thresholds (640 / 1024 / 1280) are unchanged;
+// what changed is that they are now measured against the grid's own container.
+//
+// Measured on the seeded production-density grid — the REAL
+// ExtensionsMarketplaceClient inside the REAL app shell — at the four viewports
+// cinatra#2488 round 2 measured the squeeze at (216px @800, 260px @1100,
+// 236px @1280, 276px @1440, against the drawn 352px card).
+//
+// Each viewport asserts the FULL deterministic rule rather than a hard-coded
+// pixel: columns = the step table applied to the measured container, card width
+// = that container split into equal tracks minus the gaps (1px tolerance, the
+// same allowance the row assertions above use). The concrete measured numbers
+// are recorded as annotations so the run reports what it actually saw.
+//
+// Anti-false-green: each case first asserts the container-derived count DIFFERS
+// from the viewport-derived one (the same step table applied to the viewport
+// width — i.e. exactly the rule this replaces). Where those two coincide the
+// case could not tell the rules apart, and the assertion would be theatre.
+// ---------------------------------------------------------------------------
+
+/** The four viewports cinatra#2488 round 2 measured the card squeeze at. */
+const MEASURED_VIEWPORTS = [800, 1100, 1280, 1440] as const;
+
+const GRID = '[data-surface-id="extension-listing-grid"][data-variant="populated"]';
+
+/**
+ * The grid's container inline size, the grid's own width, its RENDERED column
+ * count (from the used `grid-template-columns` track list, not from a class
+ * name), and every visible card's width.
+ */
+async function gridGeometry(page: Page) {
+  return page.locator(GRID).evaluate((root) => {
+    const grid = root.querySelector<HTMLElement>('[data-testid="marketplace-grid"]')!;
+    // Resolved by ANCESTRY, not by document order: the container query only
+    // applies if the container element genuinely CONTAINS the grid.
+    const container = grid.closest<HTMLElement>('[data-testid="marketplace-grid-container"]')!;
+    const tracks = getComputedStyle(grid).gridTemplateColumns.trim().split(/\s+/);
+    const cards = [...grid.querySelectorAll<HTMLElement>('[data-testid="marketplace-grid-item"]')]
+      .filter((el) => el.offsetParent !== null)
+      .map((el) => Math.round(el.getBoundingClientRect().width * 100) / 100);
+    return {
+      // FRACTIONAL width, not `clientWidth` — `clientWidth` rounds, so at a
+      // sub-pixel width near a step (639.5 / 1023.5 / 1279.5) it would disagree
+      // with the value the CSS container query actually resolved against. The
+      // container carries no padding or border by design, so its border box IS
+      // the queried inline size.
+      containerWidth: container.getBoundingClientRect().width,
+      gridWidth: grid.getBoundingClientRect().width,
+      columns: tracks.length,
+      cardWidths: cards,
+      containsGrid: container.contains(grid) && container !== grid,
+    };
+  });
+}
+
+/** Pin the grid's CONTAINER to an exact inline size, viewport untouched. */
+async function setContainerWidth(gridRoot: Locator, px: number) {
+  await gridRoot.evaluate((root, width) => {
+    const grid = root.querySelector<HTMLElement>('[data-testid="marketplace-grid"]')!;
+    const container = grid.closest<HTMLElement>('[data-testid="marketplace-grid-container"]')!;
+    container.style.width = `${width}px`;
+  }, px);
+}
+
+/**
+ * Wait until the app shell's sidebar width transition (200ms) has finished, so
+ * a geometry read is of a SETTLED layout rather than a frame mid-animation.
+ * Stability-based, not a fixed sleep: two consecutive animation frames must
+ * report the same container width.
+ */
+async function waitForSettledContainer(page: Page) {
+  // `page.evaluate` (unlike `waitForFunction`) AWAITS a returned promise, so
+  // the rAF loop has to live inside ONE evaluate call: a promise-returning
+  // `waitForFunction` predicate resolves truthy on its first poll (a Promise
+  // object is truthy) and would stop waiting immediately.
+  const settled = await page.evaluate(async () => {
+    const read = () => {
+      const grid = document.querySelector('[data-testid="marketplace-grid"]');
+      const container = grid?.closest('[data-testid="marketplace-grid-container"]');
+      return container ? container.getBoundingClientRect().width : NaN;
+    };
+    const frame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+    let previous = read();
+    // 5s at 60fps, matching the poll budget the callers use elsewhere.
+    for (let i = 0; i < 300; i++) {
+      await frame();
+      const current = read();
+      if (Number.isFinite(current) && current === previous) return true;
+      previous = current;
+    }
+    return false;
+  });
+  expect(settled, "container width never settled").toBe(true);
+}
+
+for (const width of MEASURED_VIEWPORTS) {
+  test(`grid columns derive from the CONTAINER, not the viewport @ ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto(SEEDED_HARNESS_PATH, { waitUntil: "domcontentloaded" });
+    await expect(page.locator(GRID).locator('[data-testid="marketplace-grid"]')).toBeVisible();
+
+    const geometry = await gridGeometry(page);
+    const expectedColumns = marketplaceGridColumns(geometry.containerWidth);
+    const viewportColumns = marketplaceGridColumns(width);
+
+    // The container is genuinely narrower than the viewport (the app shell is
+    // really in frame — this is not a full-bleed fixture route).
+    expect(geometry.containerWidth).toBeLessThan(width);
+    // …and the two rules genuinely disagree here, so what follows discriminates.
+    expect(expectedColumns).not.toBe(viewportColumns);
+
+    // The container really is an ANCESTOR of the grid — otherwise its
+    // container queries would resolve against something else entirely.
+    expect(geometry.containsGrid).toBe(true);
+    // The container wrapper introduces no layout of its own.
+    expect(Math.abs(geometry.gridWidth - geometry.containerWidth)).toBeLessThanOrEqual(1);
+
+    expect(geometry.columns).toBe(expectedColumns);
+
+    const expectedCardWidth = marketplaceGridCardWidth(geometry.containerWidth);
+    expect(geometry.cardWidths.length).toBeGreaterThan(0);
+    for (const cardWidth of geometry.cardWidths) {
+      expect(Math.abs(cardWidth - expectedCardWidth)).toBeLessThanOrEqual(1);
+    }
+
+    // What the REPLACED rule would have produced in this same container: the
+    // viewport's column count, so the same width split more ways.
+    const viewportRuleCardWidth =
+      (geometry.containerWidth - (viewportColumns - 1) * MARKETPLACE_GRID_GAP_PX) / viewportColumns;
+
+    testInfo.annotations.push({
+      type: `container-sizing@${width}`,
+      description:
+        `container ${geometry.containerWidth}px → ${geometry.columns} columns × ` +
+        `${expectedCardWidth.toFixed(2)}px ` +
+        `(viewport rule: ${viewportColumns} columns × ${viewportRuleCardWidth.toFixed(2)}px; ` +
+        `drawn card ${SPEC_DRAWN_CARD_WIDTH_PX}px)`,
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 5b. The causal proof, with the viewport HELD CONSTANT: collapsing the
+//     app-shell sidebar widens the grid's container by (16rem − 3rem) and the
+//     grid re-columns accordingly. Nothing about the viewport changed, so a
+//     viewport-sized grid cannot move here — this is the assertion that pins
+//     WHICH quantity the columns respond to.
+// ---------------------------------------------------------------------------
+test("collapsing the sidebar re-columns the grid at a FIXED viewport", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.goto(SEEDED_HARNESS_PATH, { waitUntil: "domcontentloaded" });
+  await expect(page.locator(GRID).locator('[data-testid="marketplace-grid"]')).toBeVisible();
+
+  const expanded = await gridGeometry(page);
+  expect(expanded.columns).toBe(marketplaceGridColumns(expanded.containerWidth));
+
+  // The top-bar trigger specifically — the shell also renders a SidebarRail
+  // button with the same accessible name, so an accname locator is ambiguous.
+  await page.locator('[data-slot="sidebar-trigger"]').click();
+  // The sidebar width animates over 200ms. Poll on the COLUMN COUNT (the claim)
+  // rather than on the width, then let the transition finish so the final read
+  // is a settled layout: a mid-animation width would report a track count the
+  // container is no longer at.
+  await expect
+    .poll(async () => (await gridGeometry(page)).columns, { timeout: 5_000 })
+    .toBeGreaterThan(expanded.columns);
+  await waitForSettledContainer(page);
+
+  const collapsed = await gridGeometry(page);
+  expect(page.viewportSize()!.width).toBe(1280);
+  expect(collapsed.containerWidth).toBeGreaterThan(expanded.containerWidth);
+  expect(collapsed.columns).toBe(marketplaceGridColumns(collapsed.containerWidth));
+  // The freed sidebar width must actually cross a step for this to prove
+  // anything — if it ever stops crossing one, the case is no longer a proof.
+  expect(collapsed.columns).toBeGreaterThan(expanded.columns);
+
+  testInfo.annotations.push({
+    type: "sidebar-toggle@1280",
+    description:
+      `expanded: container ${expanded.containerWidth}px → ${expanded.columns} columns; ` +
+      `collapsed: container ${collapsed.containerWidth}px → ${collapsed.columns} columns ` +
+      `(viewport 1280px throughout)`,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5c. The pinned drawing's own arrangement, reproduced. Hand the grid the
+//     container width the drawing is laid out at (specs/app-extensions.html §I:
+//     a 1180px `.wrap` less 2 × 48px padding = 1084px, three 1fr tracks with a
+//     14px gap = a 352px card) and the app must answer the DRAWN column count.
+//     Driven by shrinking the container at a fixed viewport — the drawn width
+//     is a CONTAINER width, and under the old rule the same container could
+//     render anything from 1 to 4 columns depending on the window around it.
+// ---------------------------------------------------------------------------
+test("at the drawing's own container width the grid renders the drawn arrangement", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.goto(SEEDED_HARNESS_PATH, { waitUntil: "domcontentloaded" });
+  const grid = page.locator(GRID);
+  await expect(grid.locator('[data-testid="marketplace-grid"]')).toBeVisible();
+
+  await setContainerWidth(grid, SPEC_DRAWN_CONTAINER_WIDTH_PX);
+
+  await expect
+    .poll(async () => (await gridGeometry(page)).containerWidth, { timeout: 5_000 })
+    .toBe(SPEC_DRAWN_CONTAINER_WIDTH_PX);
+
+  const geometry = await gridGeometry(page);
+  expect(geometry.columns).toBe(SPEC_DRAWN_COLUMNS);
+
+  // The drawn card is 352px at the drawing's 14px gap; the app's `gap-4` is
+  // 16px, so each of the three tracks is (16 − 14) × 2 / 3 = 1.33px narrower.
+  // Anything beyond that is a real divergence from the drawing.
+  const gapDelta =
+    ((MARKETPLACE_GRID_GAP_PX - 14) * (SPEC_DRAWN_COLUMNS - 1)) / SPEC_DRAWN_COLUMNS;
+  // Non-vacuous: a regression that hid every card would satisfy the loop below.
+  expect(geometry.cardWidths.length).toBeGreaterThan(0);
+  for (const cardWidth of geometry.cardWidths) {
+    expect(Math.abs(cardWidth - (SPEC_DRAWN_CARD_WIDTH_PX - gapDelta))).toBeLessThanOrEqual(1);
+  }
+
+  await testInfo.attach("2495-drawn-container-width-grid", {
+    body: await grid.screenshot(),
+    contentType: "image/png",
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5d. The cinatra#2488 meta-row wrap allowance is still the safety net, at the
+//     FOUR measured viewports (§4 above samples md/lg/xl). Re-columning changes
+//     every card width, so the clip contract is re-proven at exactly the widths
+//     the container rule now produces: no meta text past the card body's
+//     content edge, and the compat verdict is one of the three FULL labels.
+// ---------------------------------------------------------------------------
+for (const width of MEASURED_VIEWPORTS) {
+  test(`footer meta stays inside the clip box at the container-derived width @ ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.goto(SEEDED_HARNESS_PATH, { waitUntil: "domcontentloaded" });
+    await expect(page.locator(GRID).locator('[data-testid="marketplace-grid"]')).toBeVisible();
+
+    const perCard = await page.locator(GRID).evaluate((root) => {
+      const items = [
+        ...root.querySelectorAll<HTMLElement>('[data-testid="marketplace-grid-item"]'),
+      ].filter((el) => el.offsetParent !== null);
+      return items.map((item) => {
+        const meta = item.querySelector('[data-slot="extension-card-meta"]')!;
+        const body = meta.parentElement!;
+        const bodyRect = body.getBoundingClientRect();
+        const contentRight = bodyRect.right - parseFloat(getComputedStyle(body).paddingRight);
+        const rights = [...meta.querySelectorAll("span")].map(
+          (s) => s.getBoundingClientRect().right,
+        );
+        return {
+          overshoot: Math.max(...rights) - contentRight,
+          metaOverflow: meta.scrollWidth - meta.clientWidth,
+          compatText:
+            meta.querySelector('[data-slot="extension-card-compat"]')?.textContent?.trim() ?? "",
+        };
+      });
+    });
+
+    expect(perCard.length).toBe(SEEDED_GRID_CARDS.length);
+    for (const card of perCard) {
+      expect(card.overshoot).toBeLessThanOrEqual(1);
+      expect(card.metaOverflow).toBeLessThanOrEqual(1);
+      expect(["Compatible", "Incompatible", "Compatibility unknown"]).toContain(card.compatText);
+    }
+
+    testInfo.annotations.push({
+      type: `footer-meta-overshoot@${width}`,
+      description: `max ${Math.max(...perCard.map((c) => c.overshoot)).toFixed(2)}px over ${perCard.length} cards`,
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 5e. Step BOUNDARIES, in a real browser, at a fixed viewport (cinatra#2495).
+//
+// The container thresholds are inclusive minimums (`min-width: N` matches AT
+// N). Only a browser can prove that the CSS agrees with the step table on the
+// exact pixel — a helper-only test would just be the table asserting itself.
+// Each pair is (N − 1, N): the low side must render the PREVIOUS count and the
+// high side the next, which also renders the four-column state no viewport in
+// this suite produces (the app shell never leaves a 1280px container).
+// ---------------------------------------------------------------------------
+test("container step thresholds are inclusive minimums, in the browser", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1600, height: 1400 });
+  await page.goto(SEEDED_HARNESS_PATH, { waitUntil: "domcontentloaded" });
+  const grid = page.locator(GRID);
+  await expect(grid.locator('[data-testid="marketplace-grid"]')).toBeVisible();
+
+  const observed: string[] = [];
+  for (const step of MARKETPLACE_GRID_COLUMN_STEPS) {
+    for (const width of [step.minContainerWidthPx - 1, step.minContainerWidthPx]) {
+      await setContainerWidth(grid, width);
+      await expect
+        .poll(async () => (await gridGeometry(page)).containerWidth, { timeout: 5_000 })
+        .toBe(width);
+
+      const geometry = await gridGeometry(page);
+      expect(geometry.columns).toBe(marketplaceGridColumns(width));
+      const expectedCardWidth = marketplaceGridCardWidth(width);
+      expect(geometry.cardWidths.length).toBeGreaterThan(0);
+      for (const cardWidth of geometry.cardWidths) {
+        expect(Math.abs(cardWidth - expectedCardWidth)).toBeLessThanOrEqual(1);
+      }
+      observed.push(`${width}→${geometry.columns}×${expectedCardWidth.toFixed(2)}px`);
+    }
+  }
+
+  // The top step really did render four columns somewhere above.
+  expect(observed.some((o) => o.includes("→4×"))).toBe(true);
+  testInfo.annotations.push({ type: "container-step-boundaries", description: observed.join(", ") });
+});
