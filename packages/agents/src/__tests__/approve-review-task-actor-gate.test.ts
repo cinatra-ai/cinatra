@@ -68,9 +68,16 @@ const storeMock = vi.hoisted(() => ({
 vi.mock("../store", () => storeMock);
 
 const authPolicyMock = vi.hoisted(() => ({
-  enforceRunAccess: vi.fn(async () => undefined),
+  enforceRunAccess: vi.fn<(...args: unknown[]) => Promise<void>>(),
 }));
-vi.mock("../auth-policy", () => authPolicyMock);
+// Only `enforceRunAccess` is stubbed. `resolveEffectivePolicy` stays REAL so the
+// probe's policy assertion below exercises the production resolution order
+// (run.authPolicy -> template.agentAuthPolicy -> owner-only default) instead of
+// a re-implementation.
+vi.mock("../auth-policy", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../auth-policy")>();
+  return { ...actual, enforceRunAccess: authPolicyMock.enforceRunAccess };
+});
 
 vi.mock("../wayflow-url", () => ({
   WAYFLOW_UNDICI_TIMEOUT_MS: 60_000,
@@ -89,6 +96,7 @@ vi.mock("@/lib/auth-session", async (orig) => ({
 }));
 
 import { approveReviewTaskInternal } from "../review-task-actions";
+import { DEFAULT_AGENT_AUTH_POLICY } from "../auth-policy-types";
 
 const ACTOR = {
   actorType: "a2a" as const,
@@ -177,6 +185,61 @@ describe("approveReviewTaskInternal — actorContext gate", () => {
     );
     expect(dbMock.update).toHaveBeenCalledTimes(1);
     expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledTimes(1);
+  });
+
+  // cinatra#2485 item B made this load-bearing: the UI approve action now
+  // supplies an actorContext too, so this gate is what stands between an
+  // ordinary same-org member and a stranger's run. `enforceRunAccess` SKIPS
+  // policy tightening when `effectivePolicy` is falsy, and the authorization
+  // kernel's `member` role grants BOTH run.resume and run.approveHitl — so a
+  // null policy here would let any org member drive any run's gate.
+  it("setup-*: the probe carries a CONCRETE owner-only policy when neither run nor template declares one", async () => {
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-pol",
+      templateId: "tpl-pol",
+      orgId: "org-1",
+      runBy: "svc-1",
+      authPolicy: null,
+      status: "pending_approval",
+      inputParams: {},
+    });
+    storeMock.readAgentTemplateById.mockResolvedValue({
+      id: "tpl-pol",
+      agentAuthPolicy: null,
+    });
+
+    await approveReviewTaskInternal("setup-run-pol", "svc-1", { name: "x" }, "name", null, ACTOR);
+
+    const probe = authPolicyMock.enforceRunAccess.mock.calls[0]?.[0] as unknown as {
+      effectivePolicy: unknown;
+    };
+    expect(probe.effectivePolicy).toBeTruthy();
+    expect(probe.effectivePolicy).toEqual(DEFAULT_AGENT_AUTH_POLICY);
+  });
+
+  it("setup-*: a run-level policy override wins over the default", async () => {
+    const override = {
+      runListVisibility: ["org"],
+      runDataVisibility: ["org"],
+      runExecuteVisibility: ["org"],
+      allowRunSharing: true,
+    };
+    storeMock.readAgentRunById.mockResolvedValue({
+      id: "run-ov",
+      templateId: "tpl-ov",
+      orgId: "org-1",
+      runBy: "svc-1",
+      authPolicy: override,
+      status: "pending_approval",
+      inputParams: {},
+    });
+
+    await approveReviewTaskInternal("setup-run-ov", "svc-1", { name: "x" }, "name", null, ACTOR);
+
+    const probe = authPolicyMock.enforceRunAccess.mock.calls[0]?.[0] as unknown as {
+      effectivePolicy: unknown;
+    };
+    expect(probe.effectivePolicy).toEqual(override);
   });
 
   it("wayflow-*: denies (propagates throw) before sourceType/sendTask", async () => {

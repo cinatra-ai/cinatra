@@ -9,14 +9,15 @@ import { z } from "zod";
 import {
   requireAuthSession,
   requireAdminSession,
+  requireActorContext,
   buildCanDoOptsFromSession,
   isPlatformAdmin,
   resolveOrgRoleForUser,
 } from "@/lib/auth-session";
 // cinatra#1939 wave 2: rejectReviewTask mints a member SESSION authority for
 // the setup-run→failed transition. Owner ruling 2026-07-26 (ruling 2) DROPPED
-// cross-org run management: an actor cleared by requireAdminSession who is NOT
-// a member of the run's org (a pure platform admin) now fails closed here.
+// cross-org run management: an actor cleared by the HITL run gate who is NOT
+// a member of the run's org now fails closed here.
 import { sessionAuthorityFromResolvedRole, verifySessionAuthority } from "@/lib/org-write/authority";
 import { canDo, AuthzError, logAuditEvent } from "@/lib/authz";
 import type { ResourceRef, OwnerLevel } from "@/lib/authz";
@@ -30,7 +31,13 @@ import { enforceResourceAccess } from "@/lib/authz/enforce-resource-access";
 // kernel's user-owner short-circuit and role parsing fire correctly.
 import { actorFromSession, type ActorRoleHints } from "@/lib/authz/build-actor-context";
 import type { ResourceForAccessCheck } from "@/lib/authz/enforce-resource-access";
-import { countOtherPlatformAdmins } from "@/lib/better-auth-db";
+// cinatra#2485 item B: the HITL approve/reject server actions authorize the
+// ACTOR against the RESOLVED RUN (run.execute + run.approveHitl) instead of
+// demanding a platform-admin session. `resolveEffectivePolicy` is imported
+// alongside so the reject-path probe carries a CONCRETE policy — a null policy
+// makes `enforceRunAccess` skip the policy gate entirely, and the kernel's
+// `member` role grants run.resume/run.approveHitl to every same-org member.
+import { enforceRunAccess, resolveEffectivePolicy } from "./auth-policy";
 // Install-target authorization gates — SHARED with the extension marketplace
 // install action (packages/extensions/src/actions.ts). Moved verbatim to
 // ./install-target-authz so the two paths enforce one rule grid.
@@ -39,7 +46,6 @@ import {
   assertTargetBelongsToActiveOrg,
   readActorRolesForInstall,
 } from "./install-target-authz";
-import { readConnectorConfigFromDatabase } from "@/lib/database";
 import { buildAgentWorkspacePath } from "@/lib/agent-url";
 import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
 import { approveReviewTaskInternal } from "./review-task-actions";
@@ -58,7 +64,7 @@ import {
   readAgentTemplateById,
   readAgentTemplateByPackageName,
   readAgentRunById,
-  readAgentRunByTaskId,
+  readRunCoOwners,
   readAgentVersionsByTemplate,
   readAgentVersionById,
   createAgentTemplate,
@@ -155,84 +161,100 @@ function getActiveOrganizationId(session: SessionWithActiveOrganization): string
   return session.session?.activeOrganizationId ?? undefined;
 }
 
-// Run self-approval config (admin-overridable). Run-side analog of the
-// agent-creation `agent_creation.allowSelfApproval` override (see
-// mcp/agent-creation-request-handlers.ts). Stored under its OWN connector_config
-// key — runs and agent-creation are distinct concerns, so they must not share
-// one toggle. When true, the reviewer self-approval guard in approveReviewTask
-// is disabled instance-wide even on multi-admin instances.
-const RUN_SELF_APPROVAL_CONFIG_KEY = "agent_run";
-type AgentRunConfig = { allowSelfApproval?: boolean };
-function readAllowRunSelfApproval(): boolean {
-  try {
-    const cfg = readConnectorConfigFromDatabase<AgentRunConfig>(RUN_SELF_APPROVAL_CONFIG_KEY, {});
-    return cfg.allowSelfApproval === true;
-  } catch {
-    return false;
-  }
+// ---------------------------------------------------------------------------
+// HITL actor resolution (cinatra#2485 item B)
+//
+// The UI HITL entry points (`approveReviewTask` / `rejectReviewTask`) used to
+// gate on `requireAdminSession()`. That made the per-step HITL wait
+// (setup-input collection and the mid-run WayFlow / artifact-review interrupts)
+// undriveable by the very member who started the run: a non-platform-admin
+// initiator could not submit the required setup input at all, so the run sat in
+// `pending_approval` forever. Advancing a gate on your OWN run is not a
+// platform-administration act — it is part of running the agent.
+//
+// The replacement is ACTOR-AWARE authorization, not "no authorization": the
+// session is turned into a VERIFIED actor context + role hints, and the run
+// itself is the authority (`run.execute` + `run.approveHitl`), exactly as the
+// A2A resume route already does (`review-task-actions.ts` enforceResumeAccess).
+//
+// ⚠️ The trap this helper exists to make unmissable: `approveReviewTaskInternal`
+// SKIPS its run-access gate entirely when `actorContext` is absent
+// (review-task-actions.ts — `if (!actorContext) return;`). Swapping
+// `requireAdminSession()` for `requireAuthSession()` WITHOUT threading an
+// actorContext would therefore hand every authenticated user unauthenticated
+// authority over every run. Both entry points go through this helper and both
+// ALWAYS pass the actorContext through; the regression tests pin that.
+// ---------------------------------------------------------------------------
+type HitlActor = {
+  userId: string;
+  actorContext: ReturnType<typeof actorFromSession>;
+  roleHints: ActorRoleHints;
+};
+
+async function requireHitlActor(): Promise<HitlActor> {
+  const session = await requireAuthSession();
+  // The kernel context resolves the caller's org role, team memberships +
+  // team roles, and project grants in the session lineage. Those axes are what
+  // let a non-admin member reach their own run through `enforceRunAccess`
+  // without a platform-admin standing. Mirrors
+  // `confirmRunSkillSelectionAction` (server-actions.ts), the existing
+  // session-backed run-access call site.
+  const kernel = await requireActorContext();
+  const roleHints: ActorRoleHints = {
+    ...(kernel.platformRole ? { platformRole: kernel.platformRole } : {}),
+    ...(kernel.orgRole ? { orgRole: kernel.orgRole } : {}),
+    ...(kernel.teamRoles ? { teamRoles: kernel.teamRoles } : {}),
+    ...(kernel.teamIds ? { teamIds: kernel.teamIds } : {}),
+    ...(kernel.projectGrants ? { projectGrants: kernel.projectGrants } : {}),
+    // The actor's ACTIVE org, never run.orgId — `enforceRunAccess` only derives
+    // an org role when the caller declares the org it is already acting in, so
+    // sourcing it from the run would weaken the cross-org guard.
+    actorOrganizationId: kernel.organizationId ?? null,
+  };
+  return {
+    userId: session.user.id,
+    actorContext: actorFromSession(session),
+    roleHints,
+  };
 }
 
-// Resolve the agent_run backing a synthetic approval task id so the
-// self-approval guard can read run.runBy. Mirrors the run-resolution the
-// approveReviewTaskInternal branches do for the two supported synthetic
-// prefixes:
-//   - "setup-{runId}"    -> readAgentRunById(runId)
-//   - "wayflow-{taskId}" -> readAgentRunByTaskId(taskId), with the SAME
-//                           Redis reverse-map fallback the resume path uses
-//                           when agent_runs.a2a_task_id is stale.
-// The wayflow- fallback MUST stay identical to the resolution in
-// approveReviewTaskInternal (review-task-actions.ts) — otherwise the SoD guard
-// resolves null on the stale-column race while the downstream helper still
-// recovers and resumes the self-owned run, bypassing the multi-admin
-// separation-of-duties block (#563).
-//
-// The result is a DISCRIMINATED outcome, not a bare run-or-null, because the two
-// prefixes have different fail-safety contracts (this closes the TOCTOU the
-// helper's independent re-resolution creates):
-//   - kind: "resolved"  -> run found; the guard evaluates SoD against run.runBy.
-//   - kind: "not-found" -> the SINGLE-source prefix (setup-) found no row. There
-//       is exactly one resolution (readAgentRunById) shared with the helper, so
-//       the guard and helper cannot disagree; the guard falls through and the
-//       helper raises the canonical not-found error.
-//   - kind: "unresolved-resumable" -> the DUAL-source wayflow- prefix could not
-//       resolve a run from EITHER the a2a_task_id column or the Redis reverse-map
-//       AT CHECK TIME, but the helper re-resolves both sources independently at
-//       USE time and may then recover + resume the run. The guard therefore
-//       cannot prove the resume is SoD-safe, so the caller MUST fail CLOSED.
-type ApprovalRunResolution =
-  | { kind: "resolved"; runBy: string | null }
-  | { kind: "not-found" }
-  | { kind: "unresolved-resumable" };
-
-async function resolveRunForApprovalTask(
-  taskId: string,
-): Promise<ApprovalRunResolution> {
-  if (taskId.startsWith("setup-")) {
-    const run = await readAgentRunById(taskId.slice("setup-".length));
-    return run ? { kind: "resolved", runBy: run.runBy } : { kind: "not-found" };
-  }
-  if (taskId.startsWith("wayflow-")) {
-    const wayflowTaskId = taskId.slice("wayflow-".length);
-    const run = await readAgentRunByTaskId(wayflowTaskId);
-    if (run) return { kind: "resolved", runBy: run.runBy };
-
-    // a2a_task_id column lost the per-gate update race (see
-    // review-task-actions.ts wayflow- branch). Fall back to the authoritative
-    // Redis task->run reverse-map so the SoD guard sees the same run the resume
-    // path would recover. Dynamic import mirrors the resume path's
-    // circular-dep avoidance (review-task-actions <- actions <- index <-
-    // @cinatra-ai/a2a).
-    const { resolveRunIdByWayflowTaskId } = await import("@cinatra-ai/a2a");
-    const fallbackRunId = await resolveRunIdByWayflowTaskId(wayflowTaskId);
-    if (fallbackRunId) {
-      const fallbackRun = await readAgentRunById(fallbackRunId);
-      if (fallbackRun) return { kind: "resolved", runBy: fallbackRun.runBy };
-    }
-    // Both wayflow- sources missed here, but the helper will re-resolve them
-    // independently and could still resume. Fail closed.
-    return { kind: "unresolved-resumable" };
-  }
-  return { kind: "not-found" };
+/**
+ * Authorize a HITL actor against a RESOLVED run: `execute` THEN `approveHitl`,
+ * the exact order and pair `agent_run_resume` and the A2A resume seam use.
+ *
+ * `run === null` is handed to `enforceRunAccess` deliberately — it raises the
+ * kernel's 404-shaped AuthzError, so a MISSING run and a run this actor may not
+ * touch are not distinguished by the DETAIL of the error text (the kernel's
+ * documented contract still separates 404-hidden from 403-forbidden; see the
+ * `enforceRunAccess` header). The point here is ordering: the gate runs BEFORE
+ * this action's own `run <id> not found` message, which would otherwise confirm
+ * a foreign run id's absence to an unauthorized caller.
+ *
+ * The probe carries a CONCRETE effective policy via `resolveEffectivePolicy`
+ * (owner-only `DEFAULT_AGENT_AUTH_POLICY` when neither run nor template
+ * declares one). A bare `?? null` would leave `run.effectivePolicy` falsy and
+ * `enforceRunAccess` then SKIPS the policy gate — and the authorization
+ * kernel's `member` role grants BOTH `run.resume` and `run.approveHitl`, so
+ * every same-org member would be able to drive a stranger's run. Same reasoning
+ * as `confirmRunSkillSelectionAction` (server-actions.ts) and `readAgentRunById`.
+ */
+async function enforceHitlRunAccess(
+  run: Awaited<ReturnType<typeof readAgentRunById>>,
+  actor: HitlActor,
+): Promise<void> {
+  const template = run?.templateId ? await readAgentTemplateById(run.templateId) : null;
+  const coOwnerRows = run ? await readRunCoOwners(run.id) : [];
+  const runForCheck = run
+    ? {
+        id: run.id,
+        runBy: run.runBy,
+        orgId: run.orgId,
+        effectivePolicy: resolveEffectivePolicy(run, template),
+        coOwnerUserIds: coOwnerRows.map((r) => r.userId),
+      }
+    : null;
+  await enforceRunAccess(runForCheck, actor.actorContext, "execute", actor.roleHints);
+  await enforceRunAccess(runForCheck, actor.actorContext, "approveHitl", actor.roleHints);
 }
 
 // approveReviewTask
@@ -244,88 +266,67 @@ export async function approveReviewTask(
   schemaSnapshot?: Record<string, unknown> | null,
 ): Promise<void> {
   "use server";
-  // Core logic lives in approveReviewTaskInternal so the
-  // external /api/a2a/resume route can call it with Bearer JWT auth instead
-  // of requiring an admin session. This server action keeps the admin session
-  // check as the auth layer for UI callers.
+  // Core logic lives in approveReviewTaskInternal so the external
+  // /api/a2a/resume route can call it with Bearer JWT auth. Both entry points
+  // now authorize the SAME way: a verified actor context is threaded in and the
+  // helper enforces run.execute + run.approveHitl against the run it resolves,
+  // BEFORE any state-changing write, on both the setup-* and wayflow-* branches.
   //
-  // `values` is forwarded so setup-field interrupts can
-  // merge into agent_runs.inputParams atomically with the approval status
-  // flip (one CAS UPDATE — see approveReviewTaskInternal, #76).
+  // cinatra#2485 item A: the run-side separation-of-duties self-approval guard
+  // (#563) and its `connector_config.agent_run.allowSelfApproval` escape hatch
+  // are GONE. Install/later-set scope is the run-authorization gate; a member
+  // clearing a gate on a run they started is running the agent, not
+  // rubber-stamping a governance decision. (`agent_creation.allowSelfApproval`
+  // is a DIFFERENT setting on the agent-publication path and is untouched.)
+  //
+  // cinatra#2485 item B: `requireAdminSession()` is GONE from this path. It made
+  // the per-step HITL wait undriveable by a non-admin initiator — the run sat in
+  // pending_approval forever, which together with the SoD guard above was the
+  // observed deadlock.
+  //
+  // `values` is forwarded so setup-field interrupts can merge into
+  // agent_runs.inputParams atomically with the approval status flip (one CAS
+  // UPDATE — see approveReviewTaskInternal, #76).
   //
   // `fieldName` is forwarded so setup paths can bypass the provenance read.
   // Default undefined preserves back-compat for all current callers.
-  const session = await requireAdminSession();
-  const userId = session.user.id;
-
-  // Run-side self-approval guard (issue #563) — the run analog of the
-  // agent-creation decide self-approval guard
-  // (mcp/agent-creation-request-handlers.ts). This is the UI admin approval
-  // path (the operator clicking Continue/Approve on a pending_approval run),
-  // mirroring how the agent-creation guard lives in the admin decide handler —
-  // NOT in the auth-neutral approveReviewTaskInternal helper (the A2A
-  // service-account self-resume path stays unaffected, exactly as the creation
-  // guard leaves the admin-authoring instant-grant path unaffected).
-  //
-  // Separation of duties: an admin who initiated a run must not rubber-stamp
-  // their own run's HITL gate when ANOTHER platform_admin exists who could
-  // review it instead.
-  //
-  // Single-admin exception (issue #563, run-side analog of #382/#392 /
-  // PR #557): on an instance where the approving admin is the ONLY
-  // platform_admin, there is no second reviewer who could ever clear the gate,
-  // so an unconditional guard would be a permanent deadlock — the run sits in
-  // pending_approval forever. When no OTHER platform_admin exists, SoD is
-  // impossible and the sole admin is allowed to approve their own run. The
-  // agent_run.allowSelfApproval connector_config override remains a global
-  // escape hatch for instances that want self-approval even with multiple
-  // admins. countOtherPlatformAdmins fails CLOSED (returns >=1 on a read
-  // error), so an error keeps the guard on.
-  if (!readAllowRunSelfApproval()) {
-    const resolution = await resolveRunForApprovalTask(taskId);
-    if (resolution.kind === "unresolved-resumable") {
-      // Dual-source wayflow- resolution missed at check time, but
-      // approveReviewTaskInternal re-resolves the column AND the Redis
-      // reverse-map independently at use time and could still recover + resume
-      // the run. The guard cannot prove that resume is SoD-safe (it never saw
-      // run.runBy), so allowing it would reopen the multi-admin self-approval
-      // bypass via a TOCTOU window. Fail CLOSED. (#563)
-      throw new Error(
-        "approval rejected: the run for this WayFlow task could not be resolved for the " +
-          "separation-of-duties check; retry once the run's task mapping is consistent.",
-      );
-    }
-    if (resolution.kind === "resolved" && resolution.runBy != null && resolution.runBy === userId) {
-      const otherAdmins = await countOtherPlatformAdmins(userId);
-      if (otherAdmins > 0) {
-        throw new Error(
-          "self-approval is disallowed: another platform admin must approve a run you initiated " +
-            "(set connector_config.agent_run.allowSelfApproval=true to override).",
-        );
-      }
-      // No other admin can review → fall through and allow the self-approval.
-    }
-    // kind === "not-found": single-source (setup-) prefix or unknown prefix
-    // resolved no row. There is no dual-resolution TOCTOU here, so fall through;
-    // approveReviewTaskInternal raises the canonical not-found error.
-  }
+  const actor = await requireHitlActor();
 
   // cinatra#1796 / #2047 row 8: the legacy auditor SoD APPROVAL-RECEIPT mint was
   // REMOVED with the retirement teardown. It wrote an approval-bearing row
   // (auditor_approval_receipts) outside the gate store — the "parallel decision
   // path" row 8 forbids — and its only consumer, /api/auditor/apply, is gone.
   // Approval on this surface is recorded solely by the gate store and its
-  // gate-anchored S4 child (suggestion_decision_ledger). The SoD self-approval
-  // guard itself is unchanged: it lives on the gate, not on the receipt.
+  // gate-anchored S4 child (suggestion_decision_ledger).
 
-  await approveReviewTaskInternal(taskId, userId, values, fieldName, schemaSnapshot);
+  // The trailing actorContext + roleHints are NOT optional here: without them
+  // approveReviewTaskInternal skips its run-access gate and this action would be
+  // an unauthenticated-authority hole for every authenticated user. The run
+  // resolution (including the wayflow- Redis reverse-map fallback) stays inside
+  // the helper, so the gate and the mutation observe ONE resolution — there is
+  // no check-time/use-time window for a second resolver to disagree with.
+  await approveReviewTaskInternal(
+    taskId,
+    actor.userId,
+    values,
+    fieldName,
+    schemaSnapshot,
+    actor.actorContext,
+    actor.roleHints,
+  );
 }
 
 // rejectReviewTask
 
 export async function rejectReviewTask(taskId: string, reason?: string): Promise<void> {
   "use server";
-  const session = await requireAdminSession();
+  // cinatra#2485 item B: same re-authorization as approveReviewTask. Declining a
+  // gate is the other half of driving it, so it carries the SAME authority
+  // (run.execute + run.approveHitl on the resolved run) rather than a
+  // platform-admin session. Unlike the approve path this action owns its own run
+  // resolution + mutation (there is no shared internal helper for reject), so the
+  // gate is applied HERE, before the existence error and before the transition.
+  const actor = await requireHitlActor();
 
   // ---------------------------------------------------------------------------
   // review_tasks table is gone. Real-UUID reject paths are no longer supported.
@@ -334,18 +335,23 @@ export async function rejectReviewTask(taskId: string, reason?: string): Promise
   if (taskId.startsWith("setup-")) {
     const runId = taskId.slice("setup-".length);
     const run = await readAgentRunById(runId);
+    // Gate the resolved run BEFORE the existence-revealing error and before the
+    // status transition. A null run raises the kernel's 404-shaped AuthzError
+    // inside enforceRunAccess, so an unauthorized caller never reaches the
+    // `run <id> not found` message below.
+    await enforceHitlRunAccess(run, actor);
     if (!run) throw new Error(`[rejectReviewTask] run ${runId} not found`);
     // Ground the setup-run→failed transition on the acting principal's member
     // SESSION authority. Owner ruling 2026-07-26 (ruling 2): cross-org run
-    // management is unsupported, so an admin-cleared actor who is NOT a member
+    // management is unsupported, so an authorized actor who is NOT a member
     // of the run's org fails closed here rather than driving the run.
-    const role = await resolveOrgRoleForUser(run.orgId, session.user.id);
+    const role = await resolveOrgRoleForUser(run.orgId, actor.userId);
     if (role === undefined) {
       throw new AuthzError({
         statusCode: 403,
         reason: "forbidden",
         message:
-          `[rejectReviewTask] actor ${session.user.id} is not a member of org ${run.orgId}; ` +
+          `[rejectReviewTask] actor ${actor.userId} is not a member of org ${run.orgId}; ` +
           `cross-org run management is unsupported`,
       });
     }
@@ -359,7 +365,7 @@ export async function rejectReviewTask(taskId: string, reason?: string): Promise
       }
       throw err;
     });
-    console.log(`[rejectReviewTask] setup-path rejected run=${runId} actor=${session.user.id} reason=${reason ?? "(none)"}`);
+    console.log(`[rejectReviewTask] setup-path rejected run=${runId} actor=${actor.userId} reason=${reason ?? "(none)"}`);
     return;
   }
 

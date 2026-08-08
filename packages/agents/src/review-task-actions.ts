@@ -5,7 +5,7 @@ import { sql, type SQL } from "drizzle-orm";
 import { enqueueBackgroundJob, BACKGROUND_JOB_NAMES } from "@/lib/background-jobs";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { agentRuns } from "./schema";
-import { enforceRunAccess, type ActorRoleHints } from "./auth-policy";
+import { enforceRunAccess, resolveEffectivePolicy, type ActorRoleHints } from "./auth-policy";
 import type { AgentAuthPolicy } from "./auth-policy-types";
 import { resolveOrgRoleForUser } from "@/lib/auth-session";
 // cinatra#1939 wave 2 (§2d): the setup + WayFlow resumes below are grounded by
@@ -89,17 +89,19 @@ export function assertSetupValuesMatchDeclaredObjectTypes(
 //     `verifyA2AAccessToken` before calling here).
 //
 // The caller is ALWAYS responsible for verifying that the actor is authorized
-// to approve the task before invoking this function — EXCEPT that callers which
-// only authenticate the caller CLASS and cannot pre-resolve reviewTaskId -> run
-// themselves (the /api/a2a/resume route, authenticated by an A2A Bearer token)
-// MUST pass their verified `actorContext`. When `actorContext` is supplied this
-// helper resolves the run for the reviewTaskId and enforces `run.approveHitl`
-// access BEFORE any state-changing write, on BOTH the setup-* and wayflow-*
-// branches: a caller-class-authenticated principal must not borrow another
-// run's authority by selecting its task id.
-// Callers that already gated the run (the admin-session `approveReviewTask`
-// server action; the MCP agent_run_resume handler, both behind
-// enforceRunAccess) omit `actorContext` and the gate is a no-op.
+// to approve the task before invoking this function — and every caller that
+// cannot pre-resolve reviewTaskId -> run itself MUST pass its verified
+// `actorContext`. When `actorContext` is supplied this helper resolves the run
+// for the reviewTaskId and enforces `run.execute` + `run.approveHitl` access
+// BEFORE any state-changing write, on BOTH the setup-* and wayflow-* branches:
+// a caller-class-authenticated principal must not borrow another run's
+// authority by selecting its task id.
+//
+// ⚠️ Omitting `actorContext` makes the gate a NO-OP. That is only sound for a
+// caller that already enforced run access against the SAME run (the MCP
+// agent_run_resume handler, behind enforceRunAccess). Both of the surfaces that
+// resolve the run HERE — the /api/a2a/resume route and, since cinatra#2485
+// item B, the `approveReviewTask` server action — always supply it.
 //
 // On the setup-* path, the inputParams merge and the status transition back
 // to "queued" are combined into a SINGLE compare-and-swap UPDATE on the
@@ -162,8 +164,10 @@ export async function approveReviewTaskInternal(
   // requires it for every resume. An A2A responder holding only `run.approveHitl`
   // (not `run.resume`) can no longer drive a send. A null run becomes a
   // 404-shaped AuthzError so a caller cannot probe foreign run/task ids via the
-  // error text. No-op when `actorContext` is undefined (the UI path already
-  // authorized via requireAdminSession; a platform_admin bypasses both gates).
+  // error text. No-op when `actorContext` is undefined — see the ⚠️ note on the
+  // parameter: the UI approve path now ALWAYS supplies one (cinatra#2485 B), so
+  // the only remaining omitter is the MCP agent_run_resume handler, which
+  // enforced the same run itself.
   const enforceResumeAccess = async (run: {
     id: string;
     runBy: string | null;
@@ -176,7 +180,17 @@ export async function approveReviewTaskInternal(
     const template = run?.templateId
       ? await readAgentTemplateById(run.templateId)
       : null;
-    const effectivePolicy = run?.authPolicy ?? template?.agentAuthPolicy ?? null;
+    // CONCRETE policy, never a bare `?? null`: `enforceRunAccess` SKIPS the
+    // policy-tightening gate when `effectivePolicy` is falsy, and the
+    // authorization kernel's `member` role grants BOTH `run.resume` and
+    // `run.approveHitl` — so a null policy would let any same-org member drive
+    // a stranger's gate. `resolveEffectivePolicy` falls back to the owner-only
+    // DEFAULT_AGENT_AUTH_POLICY, matching `readAgentRunById` and
+    // `confirmRunSkillSelectionAction`. This became load-bearing when the UI
+    // approve/reject actions started supplying an actorContext (cinatra#2485
+    // item B): before that, the only supplier was the A2A resume route, whose
+    // responder is the run owner.
+    const effectivePolicy = resolveEffectivePolicy(run, template);
     const runForCheck = run
       ? {
           id: run.id,
