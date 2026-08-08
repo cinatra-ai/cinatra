@@ -111,6 +111,22 @@ describe("oas-compiler — artifact output bindings", () => {
     expect(result.ok).toBe(true);
   });
 
+  // cinatra#2498 — the locally-persisted binding-presence authority this
+  // compile step derives, threaded onto CompiledAgentOas.hasArtifactBindings
+  // and from there into agent_templates.has_artifact_bindings by every
+  // install/recompile writer.
+  it("hasArtifactBindings is true when the compile finds a binding, false when it finds none (cinatra#2498)", async () => {
+    const withBinding = await compile(writeFixture({ binding: VALID_BINDING }));
+    expect(withBinding.ok).toBe(true);
+    if (!withBinding.ok) return;
+    expect(withBinding.value.hasArtifactBindings).toBe(true);
+
+    const withoutBinding = await compile(writeFixture({ binding: null }));
+    expect(withoutBinding.ok).toBe(true);
+    if (!withoutBinding.ok) return;
+    expect(withoutBinding.value.hasArtifactBindings).toBe(false);
+  });
+
   it("fails on a malformed binding (XOR violation) with a located error", async () => {
     const result = await compile(
       writeFixture({ binding: { ...VALID_BINDING, mimeFrom: "title" } }),

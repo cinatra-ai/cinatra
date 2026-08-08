@@ -89,6 +89,13 @@ export type LocalAgentTemplateSeed = {
    * `agent_templates.lifecycle_config` with the same value the upsert / race
    * branches write (three-branch parity, exactly like hitlScreens). */
   lifecycleConfig?: string | null;
+  /** Whether the compiled OAS document declares at least one
+   * `outputs[].cinatra.artifact` binding (cinatra#2498) — threaded so a FRESH
+   * registry install / ZIP import seeds `agent_templates.has_artifact_bindings`
+   * with the same value the upsert / race branches write (three-branch
+   * parity, exactly like hitlScreens / lifecycleConfig). Undefined/omitted
+   * normalizes to NULL ("unknown") at the store layer. */
+  hasArtifactBindings?: boolean | null;
   // Install-time owner tier. NULL means a row whose owner tier has not been
   // normalized yet. Threaded from installRegistryPackageAtScope's target
   // through installAgentPackageWithDependencies -> installAgentFromPackage.
@@ -181,6 +188,7 @@ export async function createLocalAgentTemplateVersion(input: {
     lgGraphId: input.seed.lgGraphId ?? null,
     executionProvider: input.seed.executionProvider ?? undefined,
     lifecycleConfig: input.seed.lifecycleConfig ?? null,
+    hasArtifactBindings: input.seed.hasArtifactBindings ?? null,
     status: (input.seed.status as "draft" | "published") ?? "draft",
   });
 

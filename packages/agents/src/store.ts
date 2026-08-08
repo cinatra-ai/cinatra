@@ -200,6 +200,15 @@ export type AgentTemplateRecord = {
   // so legacy fixture objects in tests remain valid; `deserializeTemplate`
   // always populates it.
   lifecycleConfig?: string | null;
+  // The locally-persisted binding-presence authority (cinatra#2498): true when
+  // the compiled OAS document (install or recompile) declared at least one
+  // `outputs[].cinatra.artifact` binding, false when it declared none, null
+  // when unknown (a row compiled before this column existed — no backfill).
+  // Read by the run-completion materializer BEFORE any registry call so a
+  // registry outage only fails runs whose packages actually declare bindings.
+  // OPTIONAL in the type (like `lifecycleConfig`) so legacy fixture objects in
+  // tests remain valid; `deserializeTemplate` always populates it.
+  hasArtifactBindings?: boolean | null;
   // template-level default AgentAuthPolicy. null = use
   // DEFAULT_AGENT_AUTH_POLICY from auth-policy.ts. Persisted as JSON-as-text
   // in agent_templates.agent_auth_policy.
@@ -331,6 +340,9 @@ export type CreateAgentTemplateInput = {
   // The compiled manifest LIFECYCLE declaration as JSON-as-text (cinatra#2047
   // D-1). null clears it; omit to leave the column unchanged.
   lifecycleConfig?: string | null;
+  // The locally-persisted binding-presence authority (cinatra#2498). null
+  // clears it back to "unknown"; omit to leave the column unchanged.
+  hasArtifactBindings?: boolean | null;
   // template-level default policy; pass null or omit to leave unset
   // (resolves to DEFAULT_AGENT_AUTH_POLICY at read time).
   agentAuthPolicy?: AgentAuthPolicy | null;
@@ -499,6 +511,11 @@ function serializeTemplate(input: CreateAgentTemplateInput) {
     // The compiled manifest lifecycle declaration (already JSON-as-text from the
     // install seed / builder). null on create when the manifest declares none.
     lifecycleConfig: input.lifecycleConfig ?? null,
+    // The locally-persisted binding-presence authority (cinatra#2498). null on
+    // create when the caller does not derive it from a compile (e.g. a legacy
+    // fixture) — treated as "unknown", the same fail-closed posture every row
+    // had before this column existed.
+    hasArtifactBindings: input.hasArtifactBindings ?? null,
     // template-level AgentAuthPolicy as JSON-as-text. null = use
     // DEFAULT_AGENT_AUTH_POLICY at read time.
     agentAuthPolicy: input.agentAuthPolicy ? JSON.stringify(input.agentAuthPolicy) : null,
@@ -571,6 +588,9 @@ export function deserializeTemplate(row: typeof agentTemplates.$inferSelect): Ag
     // Compiled manifest lifecycle stays JSON-as-text on the record; the lifecycle
     // readers parse it fail-soft at their own call sites.
     lifecycleConfig: row.lifecycleConfig ?? null,
+    // The locally-persisted binding-presence authority (cinatra#2498). Native
+    // boolean column; null (unknown) passes through unchanged.
+    hasArtifactBindings: row.hasArtifactBindings ?? null,
     // JSON-as-text deserialization. Returns null when column is null.
     // fix: defensive parse — see parseAuthPolicySafe definition above.
     agentAuthPolicy: parseAuthPolicySafe(row.agentAuthPolicy ?? null),
@@ -946,6 +966,12 @@ async function _updateAgentTemplateImpl(
   // re-project the declaration (including CLEARING it when the new version drops
   // the block), exactly as triggerMode does. Omit to leave the column unchanged.
   if (patch.lifecycleConfig !== undefined) updates.lifecycleConfig = patch.lifecycleConfig ?? null;
+  // Locally-persisted binding-presence patch guard (cinatra#2498): a
+  // re-install/recompile must re-project the fact (including CLEARING it back
+  // to "unknown" if a caller explicitly passes null), exactly as
+  // lifecycleConfig does. Omit to leave the column unchanged.
+  if (patch.hasArtifactBindings !== undefined)
+    updates.hasArtifactBindings = patch.hasArtifactBindings ?? null;
   if (patch.gatedSteps !== undefined)
     updates.gatedSteps = patch.gatedSteps ? JSON.stringify(patch.gatedSteps) : null;
   // template-level AgentAuthPolicy patch handler. null clears the

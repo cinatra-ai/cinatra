@@ -320,6 +320,8 @@ describe("CompiledAgentOas type extensions + discriminated-union shape", () => {
             inferredOrManual: "inferred",
           },
         ],
+        // cinatra#2498 — locally-persisted binding-presence authority.
+        hasArtifactBindings: false,
         // Sibling cinatra.json metadata.
         cinatraConfig: null,
       },

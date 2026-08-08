@@ -38,7 +38,6 @@ import {
   bulkStopAgentRuns,
   bulkStopAgentRunsByTemplate,
   readAgentTemplateByPackageName,
-  updateAgentTemplatePackageVersion,
   type AgentTemplateRecord,
   type AgentTemplateVersionRecord,
   writeHitlPrompt,
@@ -3901,9 +3900,6 @@ async function handleAgentBuilderGitCompileAndWrite(
       try {
         const template = await readAgentTemplateByPackageName(agentPackageName);
         if (template) {
-          if (agentPackageVersion) {
-            await updateAgentTemplatePackageVersion(template.id, agentPackageVersion);
-          }
           await updateAgentTemplate(template.id, {
             approvalPolicy: compiled.approvalPolicy as Parameters<typeof updateAgentTemplate>[1]["approvalPolicy"],
             inputSchema: compiled.inputSchema as Parameters<typeof updateAgentTemplate>[1]["inputSchema"],
@@ -3916,6 +3912,33 @@ async function handleAgentBuilderGitCompileAndWrite(
             // read them directly from agent_templates without recompiling.
             triggerMode: compiled.triggerMode,
             gatedSteps: compiled.gatedSteps,
+            // cinatra#2498: re-project the locally-persisted binding-presence
+            // authority on every recompile — a source edit that adds/removes
+            // the last binding must flip agent_templates.has_artifact_bindings
+            // so the run-completion materializer's registry short-circuit
+            // stays accurate. Folded into THIS SAME update as packageVersion
+            // (below) — codex round-2 finding: two separate writes left a
+            // window where a run reading mid-write would see the NEW
+            // package_version paired with the OLD has_artifact_bindings (or
+            // vice versa), defeating the version-pin guard that trusts the
+            // flag exactly when it's read alongside its OWN package_version.
+            // One UPDATE statement moves both columns atomically.
+            //
+            // PAIRED, never independent (codex round-3 finding): unlike
+            // every install path, `agentPackageVersion` here is OPTIONAL — a
+            // dev iterating on local source can recompile without bumping
+            // the version string at all. `packageVersion: undefined` means
+            // "leave the column unchanged" (the store's own patch
+            // convention), so an unpaired write would silently re-point
+            // has_artifact_bindings at whatever package_version the row
+            // ALREADY had — a run pinned to that untouched version would then
+            // trust a flag that was never actually computed FOR it. So this
+            // recompile only ever touches has_artifact_bindings together
+            // with the SAME version write it is confirming; with no version
+            // to confirm against, BOTH are omitted and the column is left
+            // exactly as the last version-paired write set it.
+            packageVersion: agentPackageVersion ?? undefined,
+            hasArtifactBindings: agentPackageVersion ? compiled.hasArtifactBindings : undefined,
           });
         }
       } catch (versionSyncErr) {
