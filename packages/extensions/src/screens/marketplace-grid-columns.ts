@@ -24,8 +24,8 @@
  *
  * THE DRAWN GEOMETRY THIS REPRODUCES
  * ----------------------------------
- * The pinned drawing (cinatra-ai/design `specs/app-extensions.html` §I at
- * commit ca118d4e27154b5a523aaa59609aaa631f70ce26) lays the listing grid out as
+ * The pinned drawing (`specs/app-extensions.html` §I at design-spec commit
+ * ca118d4e27154b5a523aaa59609aaa631f70ce26) lays the listing grid out as
  * `grid-template-columns: 1fr 1fr 1fr; gap: 14px` inside a `.wrap` of
  * `max-width: 1180px; padding: 56px 48px` — a {@link SPEC_DRAWN_CONTAINER_WIDTH_PX}px
  * content box, so each drawn card is (1084 − 2×14) / 3 = 352px.
