@@ -228,12 +228,77 @@ describe("object-typed input WITHOUT json_schema (cinatra#2484 leg a)", () => {
     ).toEqual({ tone: "informative", length: "medium" });
   });
 
-  it("an EMPTY box never submits — not even when `required` is not passed", async () => {
-    // The per-field Setup surface (agentic-run-panel) renders the gate's single
-    // field WITHOUT a `required` prop, so every setup input reads "(optional)".
-    // Keying the empty-guard on `required` would let a blank box submit
-    // `undefined` for a genuinely required object input, which the setup-resume
-    // path cannot serialize. An empty box simply is not an object.
+  // -------------------------------------------------------------------------
+  // An EMPTY box: rejected for a REQUIRED field, OMITTED for an optional one.
+  // Both faces are pinned — the empty-object guard must not make an optional
+  // object input impossible to skip (CodeRabbit, PR #2510).
+  // -------------------------------------------------------------------------
+  it("a REQUIRED object field refuses an empty box and never submits it", async () => {
+    const onChange = vi.fn();
+    render(
+      <SchemaFieldRenderer
+        fieldName="idea"
+        schema={SCHEMALESS_OBJECT_SCHEMA}
+        value={undefined}
+        onChange={onChange}
+        required
+        context={BASE_CONTEXT}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    await waitFor(() => expect(screen.getByText(OBJECT_INPUT_EMPTY_ERROR)).toBeTruthy());
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("an OPTIONAL object field submits an empty box as OMITTED, not as an error", async () => {
+    // `required={false}` is the surface DECLARING the field skippable (the
+    // grouped Setup form passes it for every field). Leaving it blank must
+    // advance — submitting `undefined`, so the key is simply absent from the
+    // payload — rather than trapping the user on an input they need not fill.
+    const onChange = vi.fn();
+    render(
+      <SchemaFieldRenderer
+        fieldName="idea"
+        schema={SCHEMALESS_OBJECT_SCHEMA}
+        value={undefined}
+        onChange={onChange}
+        required={false}
+        context={BASE_CONTEXT}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(onChange).toHaveBeenCalledWith(undefined);
+    expect(screen.queryByText(OBJECT_INPUT_EMPTY_ERROR)).toBeNull();
+  });
+
+  it("the OPTIONAL empty flush pushes undefined so the field is absent from the payload", async () => {
+    const onChange = vi.fn();
+    let flush: (() => Promise<void>) | undefined;
+    render(
+      <SchemaFieldRenderer
+        fieldName="idea"
+        schema={SCHEMALESS_OBJECT_SCHEMA}
+        value={undefined}
+        onChange={onChange}
+        required={false}
+        context={BASE_CONTEXT}
+        hideSubmit
+        registerFlush={(fn) => { flush = fn; }}
+      />,
+    );
+    await waitFor(() => expect(flush).toBeTypeOf("function"));
+    await flush!();
+    expect(onChange).toHaveBeenCalledWith(undefined);
+  });
+
+  it("an UNDECLARED requiredness fails closed — the empty box is still refused", async () => {
+    // Absence of the prop is not a declaration of optionality. The per-field
+    // Setup panels render the gate's single field WITHOUT `required`, and the
+    // setup interrupt loop only ever prompts for REQUIRED fields
+    // (`pendingFields = requiredFields.filter(...)`), so reading that silence as
+    // "optional" would let a blank box submit `undefined` for a genuinely
+    // required input — which the setup-resume path cannot serialize.
     const onChange = vi.fn();
     render(
       <SchemaFieldRenderer
@@ -566,7 +631,11 @@ describe("object sub-field error copy + x-hidden (cinatra#2484, codex round 3)",
         required: ["depth"],
       },
     },
-    required: ["title"],
+    // `details` is REQUIRED here on purpose (PR #2510 review round): a sub-object
+    // the schema declares OPTIONAL and the user leaves blank is now OMITTED
+    // rather than validated, so only a required one can be "incomplete" — which
+    // is the copy this suite exists to pin.
+    required: ["title", "details"],
   };
 
   it("an INCOMPLETE sub-object is not mislabelled 'not a JSON object'", async () => {
@@ -632,5 +701,226 @@ describe("object sub-field error copy + x-hidden (cinatra#2484, codex round 3)",
 
     await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
     expect(onChange.mock.calls[0][0]).toEqual({ title: "t" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #2510 review round — a parent-driven `value` update must reach the
+// rendered sub-fields, and an OPTIONAL object must be skippable.
+// ---------------------------------------------------------------------------
+describe("StructuredObjectField re-syncs when the PARENT changes `value`", () => {
+  function renderStructured(value: unknown, onChange = vi.fn()) {
+    const utils = render(
+      <SchemaFieldRenderer
+        fieldName="idea"
+        schema={DECLARED_OBJECT_SCHEMA}
+        value={value}
+        onChange={onChange}
+        required
+        context={BASE_CONTEXT}
+      />,
+    );
+    const rerenderWith = (next: unknown) =>
+      utils.rerender(
+        <SchemaFieldRenderer
+          fieldName="idea"
+          schema={DECLARED_OBJECT_SCHEMA}
+          value={next}
+          onChange={onChange}
+          required
+          context={BASE_CONTEXT}
+        />,
+      );
+    return { ...utils, rerenderWith, onChange };
+  }
+
+  it("an AI-assist style update to `value` reaches the rendered sub-fields", async () => {
+    // `draft` used to be seeded by the useState initializer ALONE. Both panels
+    // pass `{ ...currentValues, ...bufferedHitlValue }` through
+    // setupFieldRendererValue, and handleApply merges assist suggestions into
+    // bufferedHitlValue — so for an object field the suggestion reached `value`
+    // and stopped there, leaving the sub-fields showing the old draft.
+    const { container, rerenderWith } = renderStructured({ title: "first" });
+    expect((container.querySelector("#field-title") as HTMLInputElement).value).toBe("first");
+
+    rerenderWith({ title: "assisted", summary: "a suggested summary" });
+
+    await waitFor(() =>
+      expect((container.querySelector("#field-title") as HTMLInputElement).value).toBe("assisted"),
+    );
+    expect((container.querySelector("#field-summary") as HTMLInputElement).value).toBe(
+      "a suggested summary",
+    );
+  });
+
+  it("the re-synced draft is what gets SUBMITTED, not the stale initial one", async () => {
+    const onChange = vi.fn();
+    const { rerenderWith } = renderStructured({ title: "first" }, onChange);
+    rerenderWith({ title: "assisted" });
+    await waitFor(() => expect(screen.getByRole("button", { name: /continue/i })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(onChange.mock.calls[0][0]).toEqual({ title: "assisted" });
+  });
+
+  it("an edit to a sub-field the update does not MENTION survives the merge", async () => {
+    // An object has independent slots and a suggestion mentions only some of
+    // them. Replacing the draft wholesale would delete the sub-field the user is
+    // half-way through typing merely because the suggestion said nothing about
+    // it — the panel-side apply handler merges for exactly this reason.
+    const { container, rerenderWith } = renderStructured({ title: "first" });
+    fireEvent.change(container.querySelector("#field-summary")!, {
+      target: { value: "half-typed" },
+    });
+
+    rerenderWith({ title: "assisted" }); // mentions `title` only
+
+    await waitFor(() =>
+      expect((container.querySelector("#field-title") as HTMLInputElement).value).toBe("assisted"),
+    );
+    expect((container.querySelector("#field-summary") as HTMLInputElement).value).toBe("half-typed");
+  });
+
+  it("a parent-driven update drops the markers computed against the REPLACED value", async () => {
+    // The "Required" marks describe the value the parent just replaced. Leaving
+    // them up marks a field the user can see is now filled.
+    const { container, rerenderWith } = renderStructured(undefined);
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    await waitFor(() => expect(screen.getByText(/Fill in the required/i)).toBeTruthy());
+
+    rerenderWith({ title: "assisted" });
+
+    await waitFor(() => expect(screen.queryByText(/Fill in the required/i)).toBeNull());
+    expect((container.querySelector("#field-title") as HTMLInputElement).value).toBe("assisted");
+  });
+
+  it("an in-progress sub-field edit survives a parent re-render that does not change `value`", async () => {
+    // The panels rebuild `value` inline every render, so a fresh object with the
+    // SAME contents arrives constantly. Syncing on identity would wipe the
+    // half-typed sub-field on each of them.
+    const { container, rerenderWith } = renderStructured({ title: "seeded" });
+    fireEvent.change(container.querySelector("#field-summary")!, {
+      target: { value: "half-typed" },
+    });
+    rerenderWith({ title: "seeded" }); // equal contents, new object identity
+    await waitFor(() =>
+      expect((container.querySelector("#field-title") as HTMLInputElement).value).toBe("seeded"),
+    );
+    expect((container.querySelector("#field-summary") as HTMLInputElement).value).toBe("half-typed");
+  });
+});
+
+describe("an OPTIONAL structured object can be skipped entirely (PR #2510 review round)", () => {
+  /** Optional at the top, with a required sub-key — the shape that used to trap. */
+  const OPTIONAL_WITH_REQUIRED_CHILD = {
+    type: "object",
+    title: "idea",
+    properties: {
+      title: { type: "string" },
+      summary: { type: "string" },
+    },
+    required: ["title"],
+  };
+
+  function renderOptional(onChange: (next: unknown) => void, required: boolean) {
+    return render(
+      <SchemaFieldRenderer
+        fieldName="idea"
+        schema={OPTIONAL_WITH_REQUIRED_CHILD}
+        value={undefined}
+        onChange={onChange}
+        required={required}
+        context={BASE_CONTEXT}
+      />,
+    );
+  }
+
+  it("an untouched OPTIONAL object submits as OMITTED instead of demanding its required sub-field", async () => {
+    const onChange = vi.fn();
+    renderOptional(onChange, false);
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(onChange).toHaveBeenCalledWith(undefined);
+    expect(screen.queryByText(/Fill in the required/i)).toBeNull();
+  });
+
+  it("a sub-field typed and then CLEARED omits the same way an untouched one does", async () => {
+    const onChange = vi.fn();
+    const { container } = renderOptional(onChange, false);
+    fireEvent.change(container.querySelector("#field-title")!, { target: { value: "x" } });
+    fireEvent.change(container.querySelector("#field-title")!, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(onChange).toHaveBeenCalledWith(undefined);
+  });
+
+  it("an untouched NESTED object does not make an optional parent unskippable", async () => {
+    // The nested field's own sub-flushes push `""` for each declared string, so
+    // an untouched `details` assembles to `{depth: ""}` — a non-blank value to
+    // any shallow check, which used to pin the optional parent open.
+    const onChange = vi.fn();
+    render(
+      <SchemaFieldRenderer
+        fieldName="idea"
+        schema={{
+          type: "object",
+          title: "idea",
+          properties: {
+            details: {
+              type: "object",
+              properties: { depth: { type: "string" } },
+              required: ["depth"],
+            },
+          },
+          required: ["details"],
+        }}
+        value={undefined}
+        onChange={onChange}
+        required={false}
+        context={BASE_CONTEXT}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(onChange).toHaveBeenCalledWith(undefined);
+  });
+
+  it("a PARTIALLY filled optional object is still validated — omit it or complete it", async () => {
+    const onChange = vi.fn();
+    const { container } = renderOptional(onChange, false);
+    fireEvent.change(container.querySelector("#field-summary")!, {
+      target: { value: "only the optional half" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    await waitFor(() => expect(screen.getByText(/Fill in the required/i)).toBeTruthy());
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("a REQUIRED object still blocks on its missing required sub-field", async () => {
+    const onChange = vi.fn();
+    renderOptional(onChange, true);
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    await waitFor(() => expect(screen.getByText(/Fill in the required/i)).toBeTruthy());
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("the grouped-form flush of an untouched OPTIONAL object pushes undefined", async () => {
+    const onChange = vi.fn();
+    let flush: (() => Promise<void>) | undefined;
+    render(
+      <SchemaFieldRenderer
+        fieldName="idea"
+        schema={OPTIONAL_WITH_REQUIRED_CHILD}
+        value={undefined}
+        onChange={onChange}
+        required={false}
+        context={BASE_CONTEXT}
+        hideSubmit
+        registerFlush={(fn) => { flush = fn; }}
+      />,
+    );
+    await waitFor(() => expect(flush).toBeTypeOf("function"));
+    await flush!();
+    expect(onChange).toHaveBeenCalledWith(undefined);
   });
 });

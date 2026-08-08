@@ -119,6 +119,63 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Is this object field one the SURFACE explicitly declared optional?
+ *
+ * Three states, not two (cinatra#2484 review round). `required === false` is a
+ * DECLARATION — the grouped Setup form passes `required={isRequired}` for every
+ * field and `StructuredObjectField` passes `required={subRequired.includes(key)}`
+ * for every sub-field — and a field declared optional must be omittable: leaving
+ * it empty submits nothing for it rather than blocking the form. `required ===
+ * undefined` is the ABSENCE of a declaration, which is not the same claim: the
+ * per-field Setup panels render the gate's single field without the prop, and
+ * the setup interrupt loop only ever prompts for REQUIRED fields
+ * (`pendingFields = requiredFields.filter(...)` in execution.ts). Treating that
+ * silence as "optional" would let a blank box submit `undefined` for a genuinely
+ * required input, so an undeclared field FAILS CLOSED and keeps the empty-object
+ * rejection.
+ */
+function isDeclaredOptional(required: boolean | undefined): boolean {
+  return required === false;
+}
+
+/**
+ * Blank ALL THE WAY DOWN — the test for "the user gave this object nothing".
+ *
+ * `isBlankSubValue` stops at the top level, and an untouched NESTED object does
+ * not assemble to nothing: its own sub-field flushes push `""` for each declared
+ * string, so a blank `{details: {depth: ""}}` looks non-blank to a shallow check
+ * and an optional parent could not be omitted (codex round, PR #2510). Recursing
+ * through objects and arrays is what makes "untouched" mean the same thing at
+ * every depth. A `0` or `false` leaf is NOT blank — those are answers.
+ */
+function isDeeplyBlankValue(value: unknown): boolean {
+  if (isBlankSubValue(value)) return true;
+  if (Array.isArray(value)) return value.every(isDeeplyBlankValue);
+  if (isPlainObject(value)) return Object.values(value).every(isDeeplyBlankValue);
+  return false;
+}
+
+/**
+ * A stable, order-independent key for "did this value actually change?".
+ *
+ * Used ONLY to decide whether the PARENT replaced an object field's `value`,
+ * never for anything user-visible. Identity comparison is useless here: the
+ * per-field panels build `value` inline
+ * (`setupFieldRendererValue({ ...currentValues, ...bufferedHitlValue }, …)`),
+ * so a fresh object arrives on every parent render and an identity-keyed sync
+ * would wipe the sub-fields the user is in the middle of filling.
+ */
+function valueIdentityKey(value: unknown): string {
+  if (value === undefined || typeof value === "function") return "undefined";
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "undefined";
+  if (Array.isArray(value)) return `[${value.map(valueIdentityKey).join(",")}]`;
+  return `{${Object.entries(value as Record<string, unknown>)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([k, v]) => `${JSON.stringify(k)}:${valueIdentityKey(v)}`)
+    .join(",")}}`;
+}
+
 type ParsedObject =
   | { ok: true; value: Record<string, unknown> }
   | { ok: false; message: string };
@@ -700,18 +757,32 @@ function StructuredObjectField(props: ObjectFieldProps) {
   // declared-key filter is belt-and-braces against a stray extra key, NOT an
   // envelope defence — guessing provenance in the renderer was unsound and the
   // heuristic that tried it is gone.
-  const [draft, setDraft] = useState<Record<string, unknown>>(() => {
-    if (!isPlainObject(value)) return {};
-    return Object.fromEntries(Object.entries(value).filter(([k]) => k in properties));
-  });
+  const deriveDraft = useCallback(
+    (raw: unknown): Record<string, unknown> => {
+      if (!isPlainObject(raw)) return {};
+      return Object.fromEntries(Object.entries(raw).filter(([k]) => k in properties));
+    },
+    [properties],
+  );
+
+  const [draft, setDraft] = useState<Record<string, unknown>>(() => deriveDraft(value));
   const draftRef = useRef(draft);
   const setSub = useCallback((key: string, next: unknown) => {
     draftRef.current = { ...draftRef.current, [key]: next };
     setDraft(draftRef.current);
   }, []);
 
+  // Tracks the last `value` this field synced FROM. See the sync effect below,
+  // which is placed after `clearErrors` so it can drop now-stale markers.
+  const syncedValueKeyRef = useRef<string>(valueIdentityKey(deriveDraft(value)));
+
   const onChangeRef = useRef(onChange);
   useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+  // The flush is registered once; requiredness decides what an UNTOUCHED object
+  // emits and can change without a remount, so read it through a ref rather than
+  // the mount-time closure (mirrors JsonObjectField).
+  const requiredRef = useRef(required);
+  useEffect(() => { requiredRef.current = required; }, [required]);
 
   const subFlushes = useRef<Map<string, () => Promise<void>>>(new Map());
   const registerSubFlush = useCallback(
@@ -729,6 +800,27 @@ function StructuredObjectField(props: ObjectFieldProps) {
   const [showErrors, setShowErrors] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  /**
+   * An object field the surface declared OPTIONAL and the user left entirely
+   * blank is OMITTED — `undefined`, so the key is simply absent from the payload
+   * — instead of being validated (cinatra#2484 review round).
+   *
+   * Without this an optional object carrying its own `required` sub-keys could
+   * not be skipped at all: an untouched field assembles `{}`, `{}` fails the
+   * sub-required check, and the grouped form refuses to advance over a field the
+   * user was never obliged to fill. "Entirely blank" is judged on the assembled
+   * value and RECURSIVELY (`isDeeplyBlankValue`), so a field that was typed into
+   * and then cleared — and an untouched nested object whose own flush pushed
+   * `{depth: ""}` — omit the same way a never-touched one does. Partially filled
+   * stays validated: you either omit the object or complete it.
+   */
+  const omittableEmpty = useCallback(
+    (assembled: Record<string, unknown>) =>
+      isDeclaredOptional(requiredRef.current) &&
+      Object.values(assembled).every(isDeeplyBlankValue),
+    [],
+  );
 
   // Drop blank OPTIONAL sub-values so the run never receives `summary: ""`;
   // blank REQUIRED sub-values are kept so the schema layer sees them missing.
@@ -811,11 +903,84 @@ function StructuredObjectField(props: ObjectFieldProps) {
   useEffect(() => { validateRef.current = validate; }, [validate]);
   const flushRef = useRef(flushSubFields);
   useEffect(() => { flushRef.current = flushSubFields; }, [flushSubFields]);
+  const omittableEmptyRef = useRef(omittableEmpty);
+  useEffect(() => { omittableEmptyRef.current = omittableEmpty; }, [omittableEmpty]);
+
+  /**
+   * Clear every blocking marker — the field turned out to be omitted, or the
+   * parent replaced the value the markers were computed against.
+   *
+   * Each setter preserves the existing reference when it is already empty, so
+   * calling this on a no-op sync cannot cascade a render.
+   */
+  const clearErrors = useCallback(() => {
+    const emptied = (prev: string[]) => (prev.length === 0 ? prev : []);
+    setMissing(emptied);
+    setInvalid(emptied);
+    setIncomplete(emptied);
+    setShowErrors(false);
+  }, []);
+  const clearErrorsRef = useRef(clearErrors);
+  useEffect(() => { clearErrorsRef.current = clearErrors; }, [clearErrors]);
+
+  // Re-sync `draft` when the PARENT replaces `value` (cinatra#2484 review round).
+  //
+  // The initializer above ran ONCE. The string/number/array branches of
+  // SchemaFieldRenderer reconcile through the `value` effect near the top of the
+  // file; this field had no equivalent, so an AI-assist suggestion merged into
+  // `bufferedHitlValue` — which both panels spread into the renderer's `value` —
+  // reached `value` and stopped there, never appearing in the rendered
+  // sub-fields.
+  //
+  // Gated on the VALUE changing, not on the `value` prop's identity: the panels
+  // rebuild that object every render (see `valueIdentityKey`). An in-progress
+  // edit never reaches `value` — sub-fields buffer through `registerFlush` and
+  // `setSub` keeps them local — so "the serialized value actually changed" is
+  // precisely the parent-drove-this signal, and typing is never clobbered.
+  //
+  // The incoming value is MERGED over the draft rather than replacing it, which
+  // is where an object field has to diverge from the scalar branches above. A
+  // scalar has ONE slot, so replacing it is the whole update; an object has
+  // independent slots and a parent update mentions only some of them — the
+  // panel-side apply handler merges suggestions into the buffer for exactly this
+  // reason ("unmentioned keys are preserved; suggestion values override matching
+  // user edits intentionally"). Replacing wholesale would delete a sub-field the
+  // user was half-way through typing merely because the suggestion did not
+  // mention it. Incoming still wins on the keys it does mention, and the result
+  // is re-filtered through `deriveDraft` so a key belonging to a PREVIOUS
+  // field's schema cannot survive a schema change.
+  //
+  // KNOWN LIMIT of value-keyed reconciliation, shared with every other branch of
+  // this component (codex round 2, PR #2510): a parent that re-applies EXACTLY
+  // the value last synced is indistinguishable from an ordinary re-render, so a
+  // local edit made in between wins. The scalar effect above has the same hole
+  // for the same reason — a `value` prop that does not change cannot signal
+  // "apply me again". Closing it needs an explicit revision counter from the
+  // panels (`assistResponseKey` is declared on the props for this, but no caller
+  // passes it today), which is panel plumbing, not a renderer fix.
+  useEffect(() => {
+    const incoming = deriveDraft(value);
+    const key = valueIdentityKey(incoming);
+    if (key === syncedValueKeyRef.current) return;
+    syncedValueKeyRef.current = key;
+    const merged = deriveDraft({ ...draftRef.current, ...incoming });
+    draftRef.current = merged;
+    setDraft(merged);
+    // The markers were computed against the value the parent just replaced, so
+    // they no longer describe what is on screen. Recomputed on the next
+    // Continue/flush.
+    clearErrorsRef.current();
+  }, [value, deriveDraft]);
 
   useEffect(() => {
     if (!registerFlush) return;
     registerFlush(async () => {
       const assembled = await flushRef.current();
+      if (omittableEmptyRef.current(assembled)) {
+        clearErrorsRef.current();
+        onChangeRef.current(undefined);
+        return;
+      }
       const { miss, bad, incomplete } = validateRef.current(assembled);
       setMissing(miss);
       setInvalid(bad);
@@ -831,17 +996,24 @@ function StructuredObjectField(props: ObjectFieldProps) {
 
   const handleContinue = async () => {
     const assembled = await flushRef.current();
-    const { miss, bad, incomplete: inc } = validateRef.current(assembled);
-    setMissing(miss);
-    setInvalid(bad);
-    setIncomplete(inc);
-    const blocked = miss.length > 0 || bad.length > 0 || inc.length > 0;
-    setShowErrors(blocked);
-    if (blocked) return;
+    // A declared-optional field left entirely blank submits NOTHING for itself
+    // rather than being validated — see `omittableEmpty`.
+    const omitted = omittableEmpty(assembled);
+    if (!omitted) {
+      const { miss, bad, incomplete: inc } = validateRef.current(assembled);
+      setMissing(miss);
+      setInvalid(bad);
+      setIncomplete(inc);
+      const blocked = miss.length > 0 || bad.length > 0 || inc.length > 0;
+      setShowErrors(blocked);
+      if (blocked) return;
+    } else {
+      clearErrors();
+    }
     setSubmitting(true);
     setSubmitError(null);
     try {
-      await onChange(assembled);
+      await onChange(omitted ? undefined : assembled);
     } catch (err) {
       setSubmitError(err instanceof Error ? err.message : "Could not submit. Please try again.");
     } finally {
@@ -976,9 +1148,11 @@ function JsonObjectField(props: ObjectFieldProps) {
     registerFlush(async () => {
       const raw = textRef.current;
       if (raw.trim() === "") {
-        // Required + empty pushes "" (rejected by the object schema); optional +
-        // empty pushes undefined so the key is simply absent.
-        onChangeRef.current(requiredRef.current ? "" : undefined);
+        // Declared-optional + empty pushes undefined so the key is simply absent;
+        // anything else pushes "" (rejected by the object schema). Routed through
+        // the same `isDeclaredOptional` decision as the visible Continue so the
+        // two paths cannot drift.
+        onChangeRef.current(isDeclaredOptional(requiredRef.current) ? undefined : "");
         return;
       }
       const result = parseJsonObjectInput(raw);
@@ -990,14 +1164,31 @@ function JsonObjectField(props: ObjectFieldProps) {
   const handleContinue = async () => {
     const raw = textRef.current;
     if (raw.trim() === "") {
-      // An empty box is not an object, so the visible Continue NEVER submits it —
-      // independently of `required`. The per-field Setup surface does not pass
-      // `required` at all (agentic-run-panel renders the gate's single field
-      // without it), so keying this on `required` would let a blank box submit
-      // `undefined` for a genuinely required input — which the setup-resume path
-      // then cannot serialize. Requiredness is not what makes a bare "" invalid
-      // here; the declared `object` type is.
-      setShowRequired(true);
+      // An empty box is not an object — but "not an object" is only a REJECTION
+      // when the field has to carry one (cinatra#2484 review round). A field the
+      // surface declared optional is OMITTED instead: Continue submits
+      // `undefined`, the key is absent from the payload, and the user is not
+      // trapped on an input they were never obliged to fill.
+      //
+      // Absence of a `required` prop is NOT such a declaration — see
+      // `isDeclaredOptional`. The per-field Setup panels pass no `required` and
+      // only ever prompt for REQUIRED fields, so an undeclared field keeps the
+      // rejection rather than submitting `undefined` for an input the
+      // setup-resume path cannot serialize.
+      if (!isDeclaredOptional(required)) {
+        setShowRequired(true);
+        return;
+      }
+      setShowRequired(false);
+      setSubmitting(true);
+      setSubmitError(null);
+      try {
+        await onChange(undefined);
+      } catch (err) {
+        setSubmitError(err instanceof Error ? err.message : "Could not submit. Please try again.");
+      } finally {
+        setSubmitting(false);
+      }
       return;
     }
     const result = parseJsonObjectInput(raw);
