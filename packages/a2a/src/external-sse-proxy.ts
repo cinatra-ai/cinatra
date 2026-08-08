@@ -208,9 +208,13 @@ export async function startExternalSseProxyFromStream(
       const kind = (event as { kind?: string }).kind;
       if (kind === "status-update") {
         const statusEvent = event as { status?: { state?: string } };
-        const state = statusEvent.status?.state ?? "unknown";
-        lastRemoteState = state;
-        await publishRunEvent(runId, { type: "status", state });
+        const state = statusEvent.status?.state;
+        // Same guard as the task branch: a malformed frame must not downgrade
+        // an already-observed terminal state to "unknown".
+        if (typeof state === "string" && state.length > 0) {
+          lastRemoteState = state;
+        }
+        await publishRunEvent(runId, { type: "status", state: state ?? "unknown" });
       } else if (kind === "artifact-update") {
         const artifactEvent = event as {
           artifact: {

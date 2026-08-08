@@ -78,6 +78,28 @@ describe("cinatra#2497 — startExternalSseProxyFromStream onCleanCompletion", (
     expect(seen[0]!.lastRemoteState).toBe("completed");
   });
 
+  it("a malformed status frame after completion does not downgrade the observed state", async () => {
+    const { startExternalSseProxyFromStream } = await import("../external-sse-proxy");
+    const seen: Array<{ outputs: Record<string, unknown> | null; lastRemoteState: string }> = [];
+
+    await startExternalSseProxyFromStream(
+      makeFakeStream([
+        dataArtifact({ title: "kept" }),
+        { kind: "status-update", status: { state: "completed" } },
+        // Malformed frames: state absent / status absent entirely.
+        { kind: "status-update", status: {} },
+        { kind: "status-update" },
+      ]),
+      "submitted",
+      "run-2497-malformed",
+      { onCleanCompletion: (result) => seen.push(result) },
+    );
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.outputs).toEqual({ title: "kept" });
+    expect(seen[0]!.lastRemoteState).toBe("completed");
+  });
+
   it("hands the caller null when the stream carried no data part at all", async () => {
     const { startExternalSseProxyFromStream } = await import("../external-sse-proxy");
     const seen: Array<{ outputs: Record<string, unknown> | null; lastRemoteState: string }> = [];
