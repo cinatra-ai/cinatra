@@ -14,6 +14,7 @@ import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import {
   applyAttachmentEnvelopeUserResponseOnly,
   buildChatGateSubmitPayload,
+  hitlRendererFieldName,
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
@@ -23,6 +24,11 @@ import {
   setupFieldRendererValue,
 } from "../hitl-gate-submit";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "../agent-builder-ids";
+import {
+  GENERIC_FIELD_LABEL,
+  HITL_PLACEHOLDER_FIELD_NAME,
+  resolveFieldLabel,
+} from "../humanize-field-name";
 
 const NOW = "2026-01-02T03:04:05.000Z";
 
@@ -469,5 +475,45 @@ describe("setupFieldRendererValue (cinatra#2484)", () => {
 
   it("yields undefined for an object field with nothing stored yet", () => {
     expect(setupFieldRendererValue({}, "idea", { type: "object" })).toBeUndefined();
+  });
+});
+
+/**
+ * cinatra#2541 — the stepper → field-label handoff.
+ *
+ * `fieldName` is the renderer's whole field identity: the DOM id AND the label
+ * source (`resolveFieldLabel`). Both single-field HITL panels used to hardcode
+ * the internal `hitl-field` placeholder there while the interrupt's real key sat
+ * one line away, so every per-field setup gate labelled itself "Hitl Field".
+ *
+ * The pair of assertions below is the point: the helper returns the REAL name,
+ * and that real name is what makes `resolveFieldLabel` produce a real label.
+ */
+describe("hitlRendererFieldName (cinatra#2541)", () => {
+  it("returns the interrupt's real field name", () => {
+    expect(hitlRendererFieldName("idea")).toBe("idea");
+    expect(hitlRendererFieldName("blogPostUrl")).toBe("blogPostUrl");
+  });
+
+  it("falls back to the placeholder ONLY when the interrupt carries no field name", () => {
+    // Mid-run gates and output renderers carry no `fieldName` — see
+    // InterruptContext.fieldName.
+    expect(hitlRendererFieldName(undefined)).toBe(HITL_PLACEHOLDER_FIELD_NAME);
+    expect(hitlRendererFieldName("")).toBe(HITL_PLACEHOLDER_FIELD_NAME);
+    expect(hitlRendererFieldName("   ")).toBe(HITL_PLACEHOLDER_FIELD_NAME);
+  });
+
+  it("feeds the label path a REAL label for a real field, and never 'Hitl Field'", () => {
+    // Titleless field schema — the exact blog-draft-writer `idea` shape from
+    // the issue.
+    expect(resolveFieldLabel(hitlRendererFieldName("idea"))).toBe("Idea");
+    // OAS emits title === key (the #1162 shape) — still humanized.
+    expect(resolveFieldLabel(hitlRendererFieldName("blogPostUrl"), "blogPostUrl")).toBe(
+      "Blog Post URL",
+    );
+    // No field identity at all — neutral, never the wiring token.
+    expect(resolveFieldLabel(hitlRendererFieldName(undefined))).toBe(
+      GENERIC_FIELD_LABEL,
+    );
   });
 });
