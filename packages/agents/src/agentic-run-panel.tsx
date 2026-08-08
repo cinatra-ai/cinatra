@@ -61,6 +61,7 @@ import { agentUIOverrideRegistry } from "./agent-ui-override-registry";
 import { getFieldRendererContextForAgentBuilderAction, getSkillsForAgentAction, type SkillForChip } from "./server-actions";
 import { HitlSkillChips } from "./hitl-skill-chips";
 import { RunRecommendationChipRow } from "./run-recommendation-chip-row";
+import { RunCompletionCard } from "./run-completion-card";
 import {
   getRunRecommendationHoldStateAction,
   type RunRecommendationHoldState,
@@ -1017,6 +1018,12 @@ export function AgenticRunPanel({
   );
   const approvalActionsRow: ReactNode = renderApprovalActionsRow();
 
+  // cinatra#2482 — the terminal `completed` rendering. Restricted to the
+  // agent-detail surface: the chat mount embeds the run inside a thread that
+  // carries its own continuation, and "Start new run" there would navigate the
+  // user out of the conversation.
+  const showCompletionCard = status === "completed" && surface !== "chat";
+
   return (
     <>
     <section className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4">
@@ -1412,6 +1419,17 @@ export function AgenticRunPanel({
         </div>
       )}
 
+      {/* cinatra#2482 — terminal `completed` state. Without this the panel's
+          only terminal rendering was the "No messages yet." line below, which
+          says nothing about the run being over, offers no output and no next
+          action: the immediate-trigger flow's dead end. Restricted to the
+          agent-detail surface — the chat mount embeds the run inside a thread
+          that carries its own continuation, and "Start new run" there would
+          navigate the user out of the conversation. */}
+      {showCompletionCard && (
+        <RunCompletionCard runId={runId} agentId={agentId} outputHint="transcript" />
+      )}
+
       {messages.length > 0 ? (
         <div className="flex flex-col gap-2 max-h-[480px] overflow-y-auto">
           {messages.map((msg) => (
@@ -1419,9 +1437,14 @@ export function AgenticRunPanel({
           ))}
         </div>
       ) : (
-        <p className="text-sm text-muted-foreground">
-          {status === "queued" ? "Waiting to start..." : "No messages yet."}
-        </p>
+        // Suppressed under the completion card: "No messages yet." next to
+        // "Run finished without output" reads as a run that is still coming,
+        // which is precisely the frozen-in-place impression this fixes.
+        !showCompletionCard && (
+          <p className="text-sm text-muted-foreground">
+            {status === "queued" ? "Waiting to start..." : "No messages yet."}
+          </p>
+        )
       )}
     </section>
     {/* Sticky bottom-of-page AI-assist

@@ -176,7 +176,16 @@ describe("AgenticRunPanel — failed-run recovery (cinatra#2412)", () => {
     expect(screen.queryByTestId("start-new-run-stub")).toBeNull();
   });
 
-  it("renders neither control on a successfully completed run", async () => {
+  // cinatra#2482 amended this case. The FAILURE-recovery block is still
+  // failed-state only — Retry (which needs `failed → pending_input`) must never
+  // appear on a completed run, and that half is unchanged. But "Start new run"
+  // is no longer exclusive to the failure block: a completed run now mounts the
+  // terminal completion card, which carries the same next action precisely
+  // because a finished run with nothing after it was the dead end #2482
+  // reports. The assertion is therefore narrowed to the failure block's own
+  // marker (its guidance copy) rather than to a control the completion card
+  // legitimately shares.
+  it("keeps the FAILURE-recovery block off a successfully completed run", async () => {
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     render(
       <AgenticRunPanel
@@ -189,7 +198,9 @@ describe("AgenticRunPanel — failed-run recovery (cinatra#2412)", () => {
     );
 
     expect(screen.queryByRole("button", { name: /^retry$/i })).toBeNull();
-    expect(screen.queryByTestId("start-new-run-stub")).toBeNull();
+    expect(
+      screen.queryByText(/the run failed before completing\. retry, or start a new run\./i),
+    ).toBeNull();
   });
 
   it("renders neither control while the run is still running", async () => {

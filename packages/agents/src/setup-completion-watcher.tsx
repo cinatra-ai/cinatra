@@ -35,6 +35,23 @@ type SetupCompletionWatcherProps = {
    */
   runHasExecuted?: boolean;
   /**
+   * True when this run already has an `agent_run_triggers` row (cinatra#2482).
+   *
+   * The /trigger redirect below exists to carry a run that finished SETUP into
+   * the trigger step. Once a trigger EXISTS that step is done, so redirecting
+   * back into it is a loop — and for the default "Run right after setup"
+   * (immediate) trigger it is the exact loop this issue reports: Continue
+   * persists the immediate trigger and routes to the run view, whose watcher
+   * immediately bounces back to /trigger, where Continue is the only control.
+   * `runHasExecuted` does not catch it: a run that produced no messages, no
+   * step results and no streamed text reads as "not executed" no matter how
+   * terminal it is.
+   *
+   * Suppresses every redirect path (mount, SSE, polling), exactly like
+   * `runHasExecuted`.
+   */
+  triggerConfigured?: boolean;
+  /**
    * DB-persisted streamed text, forwarded to AgenticRunPanel so an executed
    * external run's output renders even after its AG-UI event log expired
    * (parity with RunScreen). Empty/undefined for internal runs.
@@ -57,6 +74,7 @@ export function SetupCompletionWatcher({
   taskId,
   noRedirect = false,
   runHasExecuted = false,
+  triggerConfigured = false,
   initialStreamedText,
 }: SetupCompletionWatcherProps) {
   const router = useRouter();
@@ -80,6 +98,9 @@ export function SetupCompletionWatcher({
     // (cinatra#831). Only setup-success `completed` (no execution evidence)
     // may still advance to /trigger.
     if (runHasExecuted) return;
+    // cinatra#2482: the trigger step is already done — bouncing back into it is
+    // the immediate-trigger loop.
+    if (triggerConfigured) return;
     const params = initialInputParams ?? {};
     const allFilled = requiredFields.every((f) =>
       Object.prototype.hasOwnProperty.call(params, f),
@@ -111,6 +132,7 @@ export function SetupCompletionWatcher({
     // the redirect decision (cinatra#831) — the run is terminal; there is no
     // setup completion left to watch.
     if (runHasExecuted) return;
+    if (triggerConfigured) return;
     if (!hasSeenInterrupt) return;
     if (streamResult.interruptContext !== null) return;
     if (streamResult.status === "pending_approval") return;
@@ -136,7 +158,7 @@ export function SetupCompletionWatcher({
         }
       })
       .catch(() => {});
-  }, [streamResult.interruptContext, streamResult.status, hasSeenInterrupt, runId, requiredFields, agentId, instanceId, router, noRedirect, runHasExecuted]);
+  }, [streamResult.interruptContext, streamResult.status, hasSeenInterrupt, runId, requiredFields, agentId, instanceId, router, noRedirect, runHasExecuted, triggerConfigured]);
 
   // Polling-based navigation (fallback — covers agUiEnabled=false and any missed SSE events).
   useEffect(() => {
@@ -146,6 +168,7 @@ export function SetupCompletionWatcher({
     // the dead-end scheduler 800ms after the mount guard spared them
     // (cinatra#831). Skip the interval entirely.
     if (runHasExecuted) return;
+    if (triggerConfigured) return;
     const interval = window.setInterval(() => {
       if (hasFiredRef.current) { window.clearInterval(interval); return; }
       fetch(`/api/agents/runs/${encodeURIComponent(runId)}`, { cache: "no-store" })
