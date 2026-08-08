@@ -1,6 +1,6 @@
 /**
  * Source-contract pins for `marketplace-detail-modal.tsx` (cinatra#948) —
- * same venue as `extension-install-scope-dialog.test.tsx` (the repo's
+ * same venue as `marketplace-install-wiring.test.ts` (the repo's
  * component-test convention is static markup only; a DOM-interaction test of
  * the client `load()` catch is not expressible here).
  *
@@ -58,5 +58,63 @@ describe("marketplace-detail-modal source contract (cinatra#948)", () => {
     // …while the price stays pinned to the TOP of the centred header (self-start).
     const price = SOURCE.match(/\{detail\.cost && \([\s\S]{0,200}?\)\}/)?.[0];
     expect(price).toContain("self-start");
+  });
+});
+
+describe("details-only: the modal carries no INSTALL affordance (cinatra#2406 ruling, pinned by #2374)", () => {
+  // The UPDATE side of the details-only ruling is already locked in
+  // update-plan-flow-contract.test.ts ("the modal footer … is gone"). This is
+  // its INSTALL-side twin.
+  //
+  // Design contract — specs/app-extensions.html, version 0.13.2, §II: "The modal is
+  // details-only — it carries no footer and no install/update/restore action
+  // of its own (owner ruling, 2026-08-04); install/update/restore run from the
+  // §I ListingCard and the §III installed card, never from this dialog."
+  //
+  // cinatra#2374 was originally specified as lifting the in-card install panel
+  // into this modal's FOOTER. The owner removed that footer first, so there is
+  // no region to lift into; #2374 deleted the orphaned popup instead and pins
+  // the absence here — for the deleted popup AND for the in-card panel, so a
+  // future slice cannot reintroduce installation on this surface by mounting
+  // the panel that legitimately exists on the card.
+  it("mounts neither the deleted popup nor the in-card install panel", () => {
+    expect(SOURCE).not.toMatch(/<ExtensionInstallScopeDialog/);
+    expect(SOURCE).not.toMatch(/<ExtensionInstallScopePanel/);
+    expect(SOURCE).not.toMatch(
+      /from\s+["']\.\/extension-install-scope-dialog["']/,
+    );
+    expect(SOURCE).not.toMatch(
+      /from\s+["']\.\/extension-install-scope-panel["']/,
+    );
+  });
+
+  it("threads no install action, access target or install-scope context", () => {
+    expect(SOURCE).not.toMatch(/installExtensionPackageFormAction/);
+    expect(SOURCE).not.toMatch(/installScope/);
+    expect(SOURCE).not.toMatch(/accessTarget/);
+  });
+
+  it("renders no install/update/restore CTA", () => {
+    // JSX-shaped: the module comment may still quote the removed CTA copy while
+    // explaining WHY it is gone, but no element may render it.
+    expect(SOURCE).not.toMatch(/>\s*Install now\s*</);
+    expect(SOURCE).not.toMatch(/>\s*Update now\s*</);
+    expect(SOURCE).not.toMatch(/>\s*Restore\s*</);
+  });
+
+  it("mounts none of the known lifecycle-action components, nor a dialog footer", () => {
+    // The CTA-copy assertions above are exact-text and could be sidestepped by
+    // routing through a component instead of literal copy. Name the components
+    // that actually perform an install/update, plus the footer region the owner
+    // removed, so an indirect reintroduction is caught too.
+    for (const mount of [
+      "MarketplaceInstallForm",
+      "InstallPanelOpenButton",
+      "CardFaceSwitcher",
+      "ModalUpdatePlanFlow",
+      "DialogFooter",
+    ]) {
+      expect(SOURCE).not.toMatch(new RegExp(`<${mount}\\b`));
+    }
   });
 });

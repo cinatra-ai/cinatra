@@ -168,9 +168,13 @@ describe("AccessCombobox org row — id-carrying value wiring (AC3)", () => {
   });
 });
 
-describe("install dialogs — org-name lookup keyed by the id-carrying token (AC2/AC5)", () => {
-  const EXT = readFileSync(
-    "packages/extensions/src/screens/extension-install-scope-dialog.tsx",
+describe("install surfaces — org-name lookup keyed by the id-carrying token (AC2/AC5)", () => {
+  // cinatra#2374: the marketplace surface's pre-install popup was deleted (the
+  // §II detail modal it served is details-only by owner ruling, 2026-08-04), so
+  // the extension-side contract is pinned on the in-card install PANEL that
+  // replaced it. The agent-registry dialog is a separate surface and remains.
+  const PANEL = readFileSync(
+    "packages/extensions/src/screens/extension-install-scope-panel.tsx",
     "utf-8",
   );
   const AGENT = readFileSync(
@@ -178,11 +182,11 @@ describe("install dialogs — org-name lookup keyed by the id-carrying token (AC
     "utf-8",
   );
 
-  it("extension install dialog keys orgName on org:${activeOrgId} and passes orgId", () => {
-    expect(EXT).toMatch(/ownerEntityNames\[`org:\$\{activeOrgId\}`\]/);
-    expect(EXT).toMatch(/orgId:\s*activeOrgId/);
-    expect(EXT).not.toMatch(/ownerEntityNames\["org"\]/);
-    expect(EXT).not.toMatch(/\?\?\s*"Organization"/);
+  it("the in-card install panel keys orgName on org:${activeOrgId} and passes orgId", () => {
+    expect(PANEL).toMatch(/ownerEntityNames\[`org:\$\{activeOrgId\}`\]/);
+    expect(PANEL).toMatch(/orgId:\s*activeOrgId/);
+    expect(PANEL).not.toMatch(/ownerEntityNames\["org"\]/);
+    expect(PANEL).not.toMatch(/\?\?\s*"Organization"/);
   });
 
   it("agent install dialog keys orgName on org:${activeOrgId} and passes orgId", () => {
@@ -196,7 +200,7 @@ describe("install dialogs — org-name lookup keyed by the id-carrying token (AC
     // Behavioral: the shared, exported adapter (also backing the approval scope
     // step) returns null for an empty id so a stray value can never reach the
     // server action with a malformed {id:""} target. This is the contract the
-    // two dialog copies mirror below.
+    // agent dialog's remaining private copy mirrors below.
     expect(pickerValueToTarget("org:", "active-org")).toBeNull();
     expect(pickerValueToTarget("team:", "active-org")).toBeNull();
     expect(pickerValueToTarget("project:", "active-org")).toBeNull();
@@ -214,12 +218,24 @@ describe("install dialogs — org-name lookup keyed by the id-carrying token (AC
     });
   });
 
-  it("both install-dialog adapter copies carry the same empty-id guard (AC5 — the value→target adapter surface)", () => {
-    // Each dialog declares a local (unexported) pickerValueToTarget copy; they
-    // must mirror the canonical guard so the id-carrying token contract holds on
-    // EVERY consumer of the access/install surface, not just the exported one.
-    // Source-pinned because the copies are not exported.
-    for (const SRC of [EXT, AGENT]) {
+  it("the marketplace panel uses the SHARED adapter — no private copy left to drift (cinatra#2374)", () => {
+    // The deleted popup carried its own unexported duplicate of these rules.
+    // The panel imports the shared pure module instead, so the marketplace
+    // surface has exactly ONE implementation (behaviourally pinned above and in
+    // packages/extensions/src/screens/__tests__/install-picker-target.test.ts).
+    expect(PANEL).toMatch(/from\s+["']\.\/install-picker-target["']/);
+    expect(PANEL).toMatch(/pickerValueToInstallTarget\(value, activeOrgId\)/);
+    // And it declares no local re-implementation of its own.
+    expect(PANEL).not.toMatch(/function\s+pickerValueToTarget\b/);
+  });
+
+  it("the agent dialog's private adapter copy carries the same empty-id guard (AC5 — the value→target adapter surface)", () => {
+    // The agent-registry dialog still declares a local (unexported)
+    // pickerValueToTarget copy; it must mirror the canonical guard so the
+    // id-carrying token contract holds on EVERY consumer of the access/install
+    // surface, not just the exported one. Source-pinned because it is not
+    // exported.
+    for (const SRC of [AGENT]) {
       expect(SRC).toMatch(/id\s*\?\s*\{\s*level:\s*"organization",\s*id\s*\}\s*:\s*null/);
       expect(SRC).toMatch(/id\s*\?\s*\{\s*level:\s*"team",\s*id\s*\}\s*:\s*null/);
       expect(SRC).toMatch(/id\s*\?\s*\{\s*level:\s*"project",\s*id\s*\}\s*:\s*null/);

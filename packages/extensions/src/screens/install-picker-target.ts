@@ -6,7 +6,7 @@
 // a client component into the graph.
 //
 // Rules are IDENTICAL to the canonical adapter behind the server action
-// (auth-policy-types.ts) and to the popup this panel replaces:
+// (auth-policy-types.ts) and to the popup this panel replaced:
 //   - "owner" is NOT an install target → null.
 //   - "workspace" / "admin" (cinatra#1527) ARE targets and carry the active-org
 //     id as the tenant anchor; the SERVER re-derives that id canonically and
@@ -18,11 +18,12 @@
 // server-side is the authority boundary (installer AUTHORITY), while the value
 // itself names the AUDIENCE the extension is installed for.
 //
-// NOTE: `extension-install-scope-dialog.tsx` still carries its own private copy
-// of these rules for the detail-modal path it serves; that component (and the
-// copy) is removed with the modal's inline panel (S3), at which point this is
-// the single implementation. Deliberately NOT refactored here: the card path
-// is the only consumer this slice owns.
+// This is now the SINGLE implementation on the marketplace surface. The popup
+// that used to carry a private duplicate of these rules was deleted in
+// cinatra#2374, once its last consumer — the §II detail modal's install flow —
+// was removed by owner ruling (2026-08-04, cinatra#2406: the modal is
+// details-only). The agent-registry install dialog is a separate surface and
+// keeps its own copy, pinned by the access-combobox org-token suite.
 // ---------------------------------------------------------------------------
 
 export type InstallTargetLevel =

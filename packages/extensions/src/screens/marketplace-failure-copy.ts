@@ -566,8 +566,8 @@ export function buildMarketplaceFailureCopy(
 /**
  * Append the opaque diagnostic reference (cinatra#1539) to a user-visible
  * failure message, when one is present. Single source of the "(Ref: …)" suffix
- * so EVERY client failure path (the marketplace toast, the access-scope dialog,
- * the update-plan Failed tile) surfaces it identically. The reference is opaque
+ * so EVERY client failure path (the marketplace toast, the in-card install
+ * panel, the update-plan Failed tile) surfaces it identically. The reference is opaque
  * and non-technical; a message with no reference is returned unchanged.
  */
 export function appendDiagnosticReference(message: string, reference?: string): string {

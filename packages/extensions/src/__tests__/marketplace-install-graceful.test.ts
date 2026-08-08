@@ -171,8 +171,11 @@ describe("#2333 — the no-category fallbacks render the real escalation copy", 
   // rendering is unavailable here — see vitest.config.ts).
   it("every consumer's thrown-failure branch renders the handed-down default", () => {
     expect(read("marketplace-install-form.tsx")).toContain("toast.error(defaultFailureMessage)");
-    expect(read("extension-install-scope-dialog.tsx")).toContain(
-      "setErrorMessage(defaultFailureMessage)",
+    // cinatra#2374: the scoped popup was deleted; the in-card install panel is
+    // the scoped surface now, and its thrown-failure branch reports the same
+    // handed-down default (toast + the hidden role="alert" mirror).
+    expect(read("extension-install-scope-panel.tsx")).toContain(
+      "reportFailure(defaultFailureMessage)",
     );
     const updatePlan = read("update-plan-flow.tsx");
     expect(updatePlan).toContain("toast.error(defaultFailureMessage)");
