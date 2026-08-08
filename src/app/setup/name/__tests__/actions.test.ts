@@ -196,6 +196,22 @@ describe("saveInstanceIdentityAction Verdaccio PUT", () => {
     expect(url).toContain("error=namespace-taken");
   });
 
+  // cinatra#2500 — a 401 means the namespace exists on the registry under
+  // DIFFERENT credentials (routinely a stale htpasswd user that survived
+  // `reset --purge-app-data`). It used to fall through to the generic throw and
+  // surface the dead-end "registry-provision-failed" ("see server logs").
+  it("maps a 401 to the actionable registry-user-credential-conflict code, not the opaque one", async () => {
+    mockFetchResponse(401, { error: "unauthorized" });
+    const url = await captureRedirect(() =>
+      saveInstanceIdentityAction(buildValidFormData()),
+    );
+    expect(url).not.toBeNull();
+    expect(url).toContain("error=registry-user-credential-conflict");
+    expect(url).not.toContain("error=registry-provision-failed");
+    // Distinct from the 409 class — the two remedies differ.
+    expect(url).not.toContain("error=namespace-taken");
+  });
+
   it("defers registry provisioning in production when no registry/marketplace env is configured", async () => {
     process.env.CINATRA_RUNTIME_MODE = "production";
 

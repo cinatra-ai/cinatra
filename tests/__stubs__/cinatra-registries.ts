@@ -5,7 +5,13 @@
 //   - createNpmUser (from user-provisioning.ts) — a pure fetch helper
 //   - VerdaccioUserAlreadyRegisteredError (from user-provisioning.ts)
 //   - VerdaccioRegistrationDisabledError (from user-provisioning.ts)
+//   - VerdaccioUserCredentialConflictError (from user-provisioning.ts)
 //   - VerdaccioUnexpectedResponseError (from errors.ts)
+//
+// NOTE: every typed error the action branches on with `instanceof` MUST be
+// re-exported here. A missing one resolves to `undefined` and the branch throws
+// "Right-hand side of 'instanceof' is not an object" — a stub gap that fails
+// every test through that action, not only the one asserting the new class.
 //
 // Tests vi.mock("@/lib/...") for the rest of the wizard-action's dependency
 // graph; this stub keeps the @cinatra-ai/registries entry resolvable without
@@ -15,6 +21,7 @@ export {
   createNpmUser,
   VerdaccioUserAlreadyRegisteredError,
   VerdaccioRegistrationDisabledError,
+  VerdaccioUserCredentialConflictError,
 } from "../../packages/registries/src/verdaccio/user-provisioning";
 export type { CreateNpmUserOptions } from "../../packages/registries/src/verdaccio/user-provisioning";
 

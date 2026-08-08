@@ -73,6 +73,17 @@ export const SETUP_ERROR_MESSAGES = {
     "Registry returned an unexpected response. Operator: see the Verdaccio preflight notes.",
   "registry-provision-failed":
     "Could not provision registry user. Operator: see server logs.",
+  // cinatra#2500 — the 401 class, split out of the opaque
+  // "registry-provision-failed" above. The registry already holds a user for
+  // this namespace under a DIFFERENT password (typically a stale user that
+  // survived `reset --purge-app-data`, which clears the app-side credentials
+  // but not the registry's user store). Both remedies are named because either
+  // one unblocks a first-run operator; the namespace itself is NOT echoed —
+  // this module's protocol is static text only. Says "configured registry",
+  // never "local": self-registration also runs against an explicit
+  // CINATRA_AGENT_REGISTRY_URL, which may well be remote.
+  "registry-user-credential-conflict":
+    "That instance name is already registered on the configured registry under different credentials. Choose a different name, or clear that user from the registry (package storage is unaffected) and try again.",
 } as const;
 
 export type SetupErrorCode = keyof typeof SETUP_ERROR_MESSAGES;

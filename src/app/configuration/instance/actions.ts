@@ -88,6 +88,7 @@ import {
   createNpmUser,
   VerdaccioUserAlreadyRegisteredError,
   VerdaccioRegistrationDisabledError,
+  VerdaccioUserCredentialConflictError,
   VerdaccioUnexpectedResponseError,
   listAgentPackages,
 } from "@cinatra-ai/registries";
@@ -493,6 +494,11 @@ async function provisionAndPersist(
       } catch (e) {
         if (e instanceof VerdaccioUserAlreadyRegisteredError) {
           redirectWithError("namespace-taken");
+        }
+        // cinatra#2500 — 401: the namespace exists on the registry under
+        // different credentials. Actionable, not "see server logs".
+        if (e instanceof VerdaccioUserCredentialConflictError) {
+          redirectWithError("registry-user-credential-conflict");
         }
         if (e instanceof VerdaccioRegistrationDisabledError) {
           redirectWithError("registry-registration-disabled");

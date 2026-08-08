@@ -132,6 +132,8 @@ export {
   createNpmUser,
   VerdaccioUserAlreadyRegisteredError,
   VerdaccioRegistrationDisabledError,
+  // cinatra#2500 — the 401 "namespace exists under other credentials" class.
+  VerdaccioUserCredentialConflictError,
 } from "./verdaccio/user-provisioning";
 export type { CreateNpmUserOptions } from "./verdaccio/user-provisioning";
 
