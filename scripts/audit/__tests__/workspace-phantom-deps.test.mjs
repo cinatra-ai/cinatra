@@ -19,6 +19,8 @@ import {
   diffThirdPartyAgainstBaseline,
   baselineGrowth,
   thirdPartyBaselineGrowth,
+  isClassBootstrap,
+  classGrowth,
 } from "../workspace-phantom-deps.mjs";
 
 const GATE_SCRIPT = fileURLToPath(new URL("../workspace-phantom-deps.mjs", import.meta.url));
@@ -259,6 +261,81 @@ test("thirdPartyBaselineGrowth flags pairs added to the committed baseline vs th
 });
 
 // ---------------------------------------------------------------------------
+// Class-aware growth guard (cinatra#2521): the PR that INTRODUCES a baseline
+// class writes all of its grandfathered entries at once; that one-time write is
+// a class BOOTSTRAP, not baseline growth. Everything after it still fails.
+// ---------------------------------------------------------------------------
+
+test("isClassBootstrap is true only when the class key is entirely ABSENT from the base baseline", () => {
+  const withClass = { phantomDeps: {}, thirdPartyPhantomDeps: { "@cinatra-ai/a-connector": ["zod"] } };
+  assert.equal(isClassBootstrap({ phantomDeps: {} }, "thirdPartyPhantomDeps"), true);
+  assert.equal(isClassBootstrap(withClass, "thirdPartyPhantomDeps"), false);
+  // present-but-EMPTY is NOT absent: the class exists on the base branch.
+  assert.equal(isClassBootstrap({ phantomDeps: {}, thirdPartyPhantomDeps: {} }, "thirdPartyPhantomDeps"), false);
+  // fail-closed on a missing / non-object base baseline (normal growth path).
+  assert.equal(isClassBootstrap(null, "thirdPartyPhantomDeps"), false);
+  assert.equal(isClassBootstrap(undefined, "thirdPartyPhantomDeps"), false);
+  assert.equal(isClassBootstrap([], "thirdPartyPhantomDeps"), false);
+});
+
+test("the bootstrap carve-out is an explicit allowlist — the first-party class is NEVER bootstrap-eligible (codex review, cinatra#2521)", () => {
+  // An absent first-party section is not a legitimate bootstrap (phantomDeps
+  // has existed since the gate landed) — it must keep reporting every
+  // committed pair as growth, byte-identically to the pre-carve-out gate.
+  assert.equal(isClassBootstrap({ note: "…" }, "phantomDeps"), false);
+  assert.equal(isClassBootstrap({}, "phantomDeps"), false);
+  assert.equal(isClassBootstrap({}, "someFutureClass"), false); // not on the allowlist either
+  const committed = { phantomDeps: { "@cinatra-ai/a": ["@cinatra-ai/x", "@cinatra-ai/y"] } };
+  assert.deepEqual(classGrowth({ note: "…" }, committed, "phantomDeps"), {
+    grew: ["@cinatra-ai/a :: @cinatra-ai/x", "@cinatra-ai/a :: @cinatra-ai/y"],
+    bootstrap: null,
+  });
+  assert.deepEqual(baselineGrowth({}, committed), ["@cinatra-ai/a :: @cinatra-ai/x", "@cinatra-ai/a :: @cinatra-ai/y"]);
+  // …and a null / array base baseline stays fail-closed for BOTH classes.
+  assert.deepEqual(baselineGrowth(null, committed), ["@cinatra-ai/a :: @cinatra-ai/x", "@cinatra-ai/a :: @cinatra-ai/y"]);
+  const tp = { thirdPartyPhantomDeps: { "@cinatra-ai/a-connector": ["zod"] } };
+  assert.deepEqual(classGrowth(null, tp, "thirdPartyPhantomDeps"), { grew: ["@cinatra-ai/a-connector :: zod"], bootstrap: null });
+  assert.deepEqual(classGrowth([], tp, "thirdPartyPhantomDeps"), { grew: ["@cinatra-ai/a-connector :: zod"], bootstrap: null });
+});
+
+test("classGrowth reports a bootstrap (entry count, no growth) when the class is absent from the base baseline", () => {
+  const base = { note: "…", phantomDeps: { "@cinatra-ai/a": ["@cinatra-ai/x"] } }; // no third-party class at all
+  const committed = {
+    phantomDeps: { "@cinatra-ai/a": ["@cinatra-ai/x"] },
+    thirdPartyPhantomDeps: { "@cinatra-ai/a-connector": ["next", "zod"], "@cinatra-ai/b-connector": ["pg"] },
+  };
+  assert.deepEqual(classGrowth(base, committed, "thirdPartyPhantomDeps"), { grew: [], bootstrap: 3 });
+  // Nothing to report when neither side has the class.
+  assert.deepEqual(classGrowth(base, { phantomDeps: {} }, "thirdPartyPhantomDeps"), { grew: [], bootstrap: null });
+});
+
+test("classGrowth still fails growth in a class that EXISTS in the base baseline (the ratchet)", () => {
+  const base = { phantomDeps: {}, thirdPartyPhantomDeps: { "@cinatra-ai/a-connector": ["zod"] } };
+  const committed = { phantomDeps: {}, thirdPartyPhantomDeps: { "@cinatra-ai/a-connector": ["next", "zod"] } };
+  assert.deepEqual(classGrowth(base, committed, "thirdPartyPhantomDeps"), {
+    grew: ["@cinatra-ai/a-connector :: next"],
+    bootstrap: null,
+  });
+  // …and an EMPTY-but-present class gives no free pass either.
+  const emptyBase = { phantomDeps: {}, thirdPartyPhantomDeps: {} };
+  assert.deepEqual(classGrowth(emptyBase, committed, "thirdPartyPhantomDeps").grew, [
+    "@cinatra-ai/a-connector :: next",
+    "@cinatra-ai/a-connector :: zod",
+  ]);
+});
+
+test("a third-party class bootstrap does NOT exempt first-party growth in the same PR (first-party behaviour unchanged)", () => {
+  const base = { note: "…", phantomDeps: { "@cinatra-ai/a": ["@cinatra-ai/x"] } };
+  const committed = {
+    phantomDeps: { "@cinatra-ai/a": ["@cinatra-ai/x", "@cinatra-ai/y"] }, // regenerate-to-pass, first-party
+    thirdPartyPhantomDeps: { "@cinatra-ai/a-connector": ["zod"] },        // legitimate bootstrap
+  };
+  assert.deepEqual(baselineGrowth(base, committed), ["@cinatra-ai/a :: @cinatra-ai/y"]);
+  assert.deepEqual(thirdPartyBaselineGrowth(base, committed), []);
+  assert.equal(classGrowth(base, committed, "thirdPartyPhantomDeps").bootstrap, 1);
+});
+
+// ---------------------------------------------------------------------------
 // Integration: red-before / green-after on a real fixture tree, reproducing
 // the drupal-mcp-connector#82/#83 shape — a synced-extension member with a
 // production import of an undeclared third-party package. Drives the actual
@@ -284,13 +361,38 @@ function writeConnectorManifest(connectorDir, deps = {}) {
   );
 }
 
-function runGate(cwd, args = []) {
+function runGate(cwd, args = [], env = {}) {
   try {
-    const stdout = execFileSync("node", [GATE_SCRIPT, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-    return { status: 0, stdout };
+    const stdout = execFileSync("node", [GATE_SCRIPT, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...env } });
+    return { status: 0, stdout, stderr: "" };
   } catch (err) {
     return { status: err.status, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
   }
+}
+
+function writeBaseline(root, baseline) {
+  mkdirSync(join(root, "scripts", "audit"), { recursive: true });
+  writeFileSync(
+    join(root, "scripts", "audit", "workspace-phantom-deps.baseline.json"),
+    JSON.stringify(baseline, null, 2) + "\n",
+  );
+}
+
+/** Turn the fixture into a one-commit git repo so the base-ref growth guard
+ * (`WORKSPACE_PHANTOM_DEPS_BASE`) can `git show <ref>:…baseline.json` a REAL
+ * base-branch baseline. Hooks are pointed at an empty dir (and --no-verify) so
+ * a contributor's global commit hooks can't touch these fixture commits. */
+function commitFixtureBase(root) {
+  const hooks = join(root, ".empty-githooks");
+  mkdirSync(hooks, { recursive: true });
+  const git = (...args) => execFileSync("git", args, { cwd: root, stdio: ["ignore", "ignore", "pipe"] });
+  git("init", "-q", "-b", "main");
+  git("config", "user.email", "phantom-deps-gate-test@example.invalid");
+  git("config", "user.name", "phantom-deps gate test");
+  git("config", "commit.gpgsign", "false");
+  git("config", "core.hooksPath", hooks);
+  git("add", "-A");
+  git("commit", "-q", "--no-verify", "-m", "fixture base");
 }
 
 test("integration: a synced-extension production import of an undeclared third-party package is RED, declaring it turns GREEN (the #82/#83 shape)", () => {
@@ -377,6 +479,122 @@ test("integration: an ALLOWLISTED tool config (vitest.config.ts) is exempt, but 
     assert.equal(result.status, 1, "the non-allowlisted config file's real import must still fail the gate");
     assert.doesNotMatch(result.stderr, /vitest\/config/, "the allowlisted tool config must stay exempt");
     assert.match(result.stderr, /\bstripe\b/, "a same-shaped file NOT on the allowlist must still be scanned");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Integration: the CLASS-AWARE base-ref growth guard, driven through the real
+// CLI against a real one-commit git fixture (so `git show <base>:…baseline.json`
+// resolves an actual base-branch baseline). Reproduces the exact cinatra#2521
+// shape — a gate whose own introducing PR was failed by its growth guard — and
+// pins that the ratchet survives the carve-out.
+// ---------------------------------------------------------------------------
+
+test("integration: the PR that INTRODUCES a baseline class passes the growth guard as a one-time class bootstrap (cinatra#2521)", () => {
+  const { root, connectorDir } = makeFixture();
+  try {
+    writeConnectorManifest(connectorDir);
+    writeFileSync(join(connectorDir, "src", "index.ts"), `export const noop = true;\n`);
+    // BASE commit: the gate exists, but the third-party class does not.
+    writeBaseline(root, { phantomDeps: {} });
+    commitFixtureBase(root);
+
+    // THE PR: the new class's first scan lands and grandfathers its debt.
+    writeFileSync(join(connectorDir, "src", "index.ts"), `import { z } from "zod";\n`);
+    writeBaseline(root, { phantomDeps: {}, thirdPartyPhantomDeps: { "@cinatra-ai/fixture-connector": ["zod"] } });
+
+    const res = runGate(root, [], { WORKSPACE_PHANTOM_DEPS_BASE: "HEAD" });
+    assert.equal(res.status, 0, `the introducing PR must not be failed by its own growth guard; stderr: ${res.stderr}`);
+    assert.match(res.stdout, /third-party class bootstrap: 1 grandfathered entries/);
+    assert.doesNotMatch(res.stderr, /GREW/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("integration: growth in a class that ALREADY exists on the base branch still FAILS the growth guard", () => {
+  const { root, connectorDir } = makeFixture();
+  try {
+    writeConnectorManifest(connectorDir);
+    writeFileSync(join(connectorDir, "src", "index.ts"), `import { z } from "zod";\n`);
+    // BASE commit: the third-party class exists, with one grandfathered entry.
+    writeBaseline(root, { phantomDeps: {}, thirdPartyPhantomDeps: { "@cinatra-ai/fixture-connector": ["zod"] } });
+    commitFixtureBase(root);
+
+    // THE PR: a new undeclared import + a regenerated baseline to absorb it.
+    writeFileSync(join(connectorDir, "src", "index.ts"), `import { z } from "zod";\nimport lucide from "lucide-react";\n`);
+    writeBaseline(root, { phantomDeps: {}, thirdPartyPhantomDeps: { "@cinatra-ai/fixture-connector": ["lucide-react", "zod"] } });
+
+    const res = runGate(root, [], { WORKSPACE_PHANTOM_DEPS_BASE: "HEAD" });
+    assert.equal(res.status, 1, "regenerate-to-pass inside an EXISTING class must still fail");
+    assert.match(res.stderr, /committed baseline GREW/);
+    assert.match(res.stderr, /\+ \[third-party\] @cinatra-ai\/fixture-connector :: lucide-react/);
+    assert.doesNotMatch(res.stdout, /class bootstrap/, "an existing class is never a bootstrap");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("integration: once the introducing PR has merged, a SECOND entry on top of the bootstrapped class FAILS (the self-ratchet)", () => {
+  const { root, connectorDir } = makeFixture();
+  try {
+    // BASE commit = the post-merge state of the bootstrap test above: the class
+    // now EXISTS on main, carrying exactly its grandfathered entry.
+    writeConnectorManifest(connectorDir);
+    writeFileSync(join(connectorDir, "src", "index.ts"), `import { z } from "zod";\n`);
+    writeBaseline(root, { phantomDeps: {}, thirdPartyPhantomDeps: { "@cinatra-ai/fixture-connector": ["zod"] } });
+    commitFixtureBase(root);
+
+    // THE NEXT PR: a second synced extension brings its own undeclared import
+    // and tries to grandfather it into the same (now-existing) class.
+    const secondDir = join(root, "extensions", "vendor", "second-connector");
+    mkdirSync(join(secondDir, "src"), { recursive: true });
+    writeFileSync(join(secondDir, "package.json"), JSON.stringify({ name: "@cinatra-ai/second-connector", version: "0.0.0" }, null, 2));
+    writeFileSync(join(secondDir, "src", "index.ts"), `import { Pool } from "pg";\nexport const p = new Pool();\n`);
+    writeBaseline(root, {
+      phantomDeps: {},
+      thirdPartyPhantomDeps: {
+        "@cinatra-ai/fixture-connector": ["zod"],
+        "@cinatra-ai/second-connector": ["pg"],
+      },
+    });
+
+    const res = runGate(root, [], { WORKSPACE_PHANTOM_DEPS_BASE: "HEAD" });
+    assert.equal(res.status, 1, "the bootstrap is one-time only — the next addition must fail");
+    assert.match(res.stderr, /committed baseline GREW/);
+    assert.match(res.stderr, /\+ \[third-party\] @cinatra-ai\/second-connector :: pg/);
+    assert.doesNotMatch(res.stderr, /fixture-connector :: zod/, "the already-baselined entry is not re-reported as growth");
+    assert.doesNotMatch(res.stdout, /class bootstrap/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("integration: an ABSENT first-party section is NOT a bootstrap — it still FAILS the growth guard (codex review, cinatra#2521)", () => {
+  const root = mkdtempSync(join(tmpdir(), "phantom-deps-fixture-"));
+  try {
+    writeFileSync(join(root, "pnpm-workspace.yaml"), ["packages:", '  - "packages/*"', ""].join("\n"));
+    for (const name of ["lib-a", "lib-b"]) {
+      mkdirSync(join(root, "packages", name, "src"), { recursive: true });
+      writeFileSync(join(root, "packages", name, "package.json"), JSON.stringify({ name: `@cinatra-ai/${name}`, version: "0.0.0" }, null, 2));
+      writeFileSync(join(root, "packages", name, "src", "index.ts"), `export const ${name.replace("-", "_")} = true;\n`);
+    }
+    // BASE commit: a baseline FILE that exists but carries no first-party
+    // section at all (corrupted, or a deliberate delete-and-re-add).
+    writeBaseline(root, { note: "…" });
+    commitFixtureBase(root);
+
+    // THE PR: a new undeclared first-party import, grandfathered in one write.
+    writeFileSync(join(root, "packages", "lib-b", "src", "index.ts"), `import { lib_a } from "@cinatra-ai/lib-a";\nexport const x = lib_a;\n`);
+    writeBaseline(root, { phantomDeps: { "@cinatra-ai/lib-b": ["@cinatra-ai/lib-a"] } });
+
+    const res = runGate(root, [], { WORKSPACE_PHANTOM_DEPS_BASE: "HEAD" });
+    assert.equal(res.status, 1, "the first-party class is not bootstrap-eligible — this must still fail");
+    assert.match(res.stderr, /committed baseline GREW/);
+    assert.match(res.stderr, /\+ @cinatra-ai\/lib-b :: @cinatra-ai\/lib-a/);
+    assert.doesNotMatch(res.stdout, /class bootstrap/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

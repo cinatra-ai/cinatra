@@ -85,6 +85,17 @@
  * data (it should only ever SHRINK) with `--write-baseline`; keep the notes
  * for anything real that gets re-baselined this way.
  *
+ * The base-ref growth guard (`WORKSPACE_PHANTOM_DEPS_BASE`, which blocks the
+ * regenerate-to-pass bypass) is CLASS-AWARE: a bootstrap-eligible class
+ * entirely ABSENT from the base-branch baseline is being introduced by this PR,
+ * and its one-time grandfathered write is reported ("class bootstrap: N
+ * grandfathered entries") rather than read as baseline growth. Growth in a
+ * class that ALREADY exists on the base branch fails unchanged — so once an
+ * introducing PR merges, the class exists on main and the ratchet applies to it
+ * from the next commit on. The first-party class is NOT bootstrap-eligible, so
+ * its guard is untouched. See `BOOTSTRAPPABLE_CLASSES` / `classGrowth` for the
+ * exact rule and its accepted residuals.
+ *
  * Exit codes: 0 = clean (no new phantom deps), 1 = findings, 2 = scanner error.
  */
 import { readFileSync, writeFileSync, readdirSync, existsSync, statSync } from "node:fs";
@@ -281,18 +292,82 @@ function growthOfMaps(baseMap, committedMap) {
   return grew.sort();
 }
 
-/** Base-ref ratchet: (pkg, dep) pairs in the COMMITTED baseline that are ABSENT
- * from the BASE-branch baseline — i.e. a regenerate-to-pass bypass that added
- * new tolerated misses in the same PR. Mirrors the sibling no-new-rot gates so
- * the baseline can only ever SHRINK. */
+function countPairs(map) {
+  return Object.values(map ?? {}).reduce((n, a) => n + (Array.isArray(a) ? a.length : 0), 0);
+}
+
+// The ONLY baseline classes whose one-time introduction is bootstrap-exempt
+// from the growth guard (see `classGrowth`). Deliberately an EXPLICIT
+// allowlist, not "any absent class": the first-party `phantomDeps` section has
+// existed in the committed baseline since this gate landed, so an absent
+// first-party section is never a legitimate bootstrap — it is a corrupted
+// baseline or a delete-and-re-add laundering attempt, and both must keep
+// failing closed EXACTLY as they did before this carve-out existed (codex
+// review, cinatra#2521). A future new class is added to this line in the same
+// PR that introduces it — one explicit, reviewable token.
+const BOOTSTRAPPABLE_CLASSES = new Set(["thirdPartyPhantomDeps"]);
+
+/** True iff `key` names a bootstrap-ELIGIBLE baseline CLASS (top-level section,
+ * per BOOTSTRAPPABLE_CLASSES) that is ENTIRELY ABSENT from the base-branch
+ * baseline object — the section key does not exist at all. An EMPTY-but-PRESENT
+ * section (`"thirdPartyPhantomDeps": {}`) is NOT absent: the class already
+ * exists on the base branch, so anything added to it is ordinary growth. A
+ * missing / non-object base baseline is NOT a bootstrap either (fail-closed: it
+ * takes the normal growth path, which reports every committed pair). */
+export function isClassBootstrap(baseBaseline, key) {
+  if (!BOOTSTRAPPABLE_CLASSES.has(key)) return false;
+  if (!baseBaseline || typeof baseBaseline !== "object" || Array.isArray(baseBaseline)) return false;
+  return !(key in baseBaseline);
+}
+
+/** Base-ref ratchet for ONE baseline class. Returns
+ * `{ grew: string[], bootstrap: number|null }`.
+ *
+ * `grew` = (pkg, dep) pairs in the COMMITTED baseline that are ABSENT from the
+ * BASE-branch baseline — i.e. a regenerate-to-pass bypass that added new
+ * tolerated misses in the same PR. Mirrors the sibling no-new-rot gates so the
+ * baseline can only ever SHRINK.
+ *
+ * CLASS BOOTSTRAP (the one carve-out): when a bootstrap-ELIGIBLE class
+ * (BOOTSTRAPPABLE_CLASSES) is entirely absent from the base baseline
+ * (`isClassBootstrap`), the PR that INTRODUCES the class
+ * necessarily writes all of its grandfathered entries in one go. Reading that
+ * one-time write as "the baseline GREW" makes the growth guard fail on the very
+ * PR that adds the class — which is exactly what happened to the third-party
+ * class (cinatra#2480/#2521). That single write is therefore exempt and
+ * REPORTED (`bootstrap` = its entry count) instead of failed. The ratchet is
+ * not weakened: the moment such a PR merges, the class EXISTS on the base
+ * branch, so every later addition to it takes the normal `grew` path and fails.
+ * `bootstrap` is null when the class is not a bootstrap, and also when the
+ * committed baseline has no such section either (nothing to report).
+ *
+ * Residual, accepted: deleting an ELIGIBLE class from the baseline on the base
+ * branch and re-bootstrapping it in a follow-up PR would re-open the carve-out
+ * once — that takes two merged PRs, the first of which is a visible
+ * whole-section deletion of the version-controlled exemption record. Renaming
+ * the class key, or adding a class to BOOTSTRAPPABLE_CLASSES, has the same
+ * shape and, like any gate bypass, requires editing this gate itself. */
+export function classGrowth(baseBaseline, committedBaseline, key) {
+  const committedMap = committedBaseline?.[key];
+  if (isClassBootstrap(baseBaseline, key)) {
+    return { grew: [], bootstrap: committedMap ? countPairs(committedMap) : null };
+  }
+  return { grew: growthOfMaps(baseBaseline?.[key], committedMap), bootstrap: null };
+}
+
+/** Base-ref ratchet growth for the FIRST-PARTY (`phantomDeps`) baseline
+ * section. Byte-identical to its pre-carve-out behaviour for EVERY input:
+ * `phantomDeps` is not in BOOTSTRAPPABLE_CLASSES, so it can never take the
+ * bootstrap branch — an absent first-party section still reports every
+ * committed pair as growth. */
 export function baselineGrowth(baseBaseline, committedBaseline) {
-  return growthOfMaps(baseBaseline?.phantomDeps, committedBaseline?.phantomDeps);
+  return classGrowth(baseBaseline, committedBaseline, "phantomDeps").grew;
 }
 
 /** Same as baselineGrowth, for the THIRD-PARTY (`thirdPartyPhantomDeps`)
  * baseline section. */
 export function thirdPartyBaselineGrowth(baseBaseline, committedBaseline) {
-  return growthOfMaps(baseBaseline?.thirdPartyPhantomDeps, committedBaseline?.thirdPartyPhantomDeps);
+  return classGrowth(baseBaseline, committedBaseline, "thirdPartyPhantomDeps").grew;
 }
 
 // ---------------------------------------------------------------------------
@@ -482,8 +557,19 @@ function main() {
     }
     if (baseText) {
       const baseJson = JSON.parse(baseText);
-      const grew = baselineGrowth(baseJson, baseline);
-      const grewThirdParty = thirdPartyBaselineGrowth(baseJson, baseline);
+      // Class-aware: a class ENTIRELY ABSENT from the base baseline is being
+      // bootstrapped by this PR — its one-time grandfathered write is reported,
+      // not failed (see classGrowth). Growth in a class that already exists on
+      // the base branch fails exactly as before.
+      const firstParty = classGrowth(baseJson, baseline, "phantomDeps");
+      const thirdParty = classGrowth(baseJson, baseline, "thirdPartyPhantomDeps");
+      for (const [label, res] of [["first-party", firstParty], ["third-party", thirdParty]]) {
+        if (res.bootstrap !== null) {
+          console.log(`[workspace-phantom-deps] ${label} class bootstrap: ${res.bootstrap} grandfathered entries (class absent from ${baseRef}; the one-time introducing write is exempt from the growth guard — every later addition to it fails).`);
+        }
+      }
+      const grew = firstParty.grew;
+      const grewThirdParty = thirdParty.grew;
       if (grew.length || grewThirdParty.length) {
         console.error(`[workspace-phantom-deps] FAIL — committed baseline GREW vs ${baseRef} (regenerate-to-pass bypass):`);
         grew.forEach((e) => console.error("  + " + e));
