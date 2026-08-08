@@ -1551,15 +1551,9 @@ END $$`,
             FOREIGN KEY (granted_by) REFERENCES public."user"(id);
         END IF;
       END $$;` },
-    // trigger_mode + gated_steps on agent_templates (read by execution.ts and the Trigger tab UI).
+    // trigger_mode + gated_steps on agent_templates (read by execution.ts and the Trigger tab UI). has_artifact_bindings (cinatra#2498) is the locally-persisted binding-presence authority the run-completion materializer consults BEFORE any registry read, so a registry outage only fails a run whose package declares bindings; NULLABLE — null (legacy, no backfill) reads exactly like the pre-#2498 fail-closed posture. Full rationale on the column in packages/agents/src/schema.ts; operator-upgrade twin in migrations/core/core__0091.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS trigger_mode text` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS gated_steps text` },
-    // has_artifact_bindings on agent_templates (cinatra#2498): the locally-
-    // persisted binding-presence authority the run-completion materializer
-    // consults BEFORE any registry read, so a registry outage only fails a
-    // run whose package declares bindings. NULLABLE — null (legacy/no
-    // backfill) reads exactly like the pre-#2498 fail-closed posture. The
-    // operator-upgrade twin ships in migrations/core/core__0091.
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."agent_templates" ADD COLUMN IF NOT EXISTS has_artifact_bindings boolean` },
     // external_mcp_servers table for the external MCP server registry
     // scope values: 'global' | 'org' | 'team' | 'user'
