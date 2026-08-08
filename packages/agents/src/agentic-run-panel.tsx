@@ -40,6 +40,7 @@ import {
   isAlreadyResolvedError,
   isGroupedSetupRenderer,
   isSetupGateTaskId,
+  setupFieldRendererValue,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
@@ -1149,7 +1150,16 @@ export function AgenticRunPanel({
                       key={effectiveHitlContext.xRenderer}
                       fieldName="hitl-field"
                       schema={hitlRendererEntry.fieldSchema}
-                      value={{ ...effectiveHitlContext.currentValues, ...bufferedHitlValue }}
+                      // An OBJECT-typed setup field gets its OWN value, not the
+                      // whole currentValues envelope (cinatra#2484): the
+                      // placeholder fieldName="hitl-field" leaves the renderer
+                      // no way to find its own slot, and any heuristic it
+                      // applies to the envelope mis-seeds on a name collision.
+                      value={setupFieldRendererValue(
+                        { ...effectiveHitlContext.currentValues, ...bufferedHitlValue },
+                        effectiveHitlContext.fieldName,
+                        hitlRendererEntry.fieldSchema,
+                      )}
                       hideSubmit={hideSetupSubmitInChat}
                       onChange={isMidRunHitl ? async (next: unknown) => {
                         // Compute nextBuffered synchronously, pass to performGateSubmit
@@ -1180,9 +1190,16 @@ export function AgenticRunPanel({
                         // know which inputParams slot to fill; passing a raw
                         // primitive with fieldName=undefined silently no-ops
                         // and re-emits the same gate forever.
+                        // An object-typed setup input emits the whole object —
+                        // it still belongs under `fieldName` (cinatra#2484).
                         const { payload, payloadFieldName } = wrapPrimitiveSetupPayload(
                           effectiveHitlContext.fieldName,
                           next,
+                          {
+                            objectTypedField:
+                              (hitlRendererEntry.fieldSchema as { type?: string } | undefined)
+                                ?.type === "object",
+                          },
                         );
                         await performGateSubmit({
                           reviewTaskId: effectiveHitlContext.reviewTaskId,

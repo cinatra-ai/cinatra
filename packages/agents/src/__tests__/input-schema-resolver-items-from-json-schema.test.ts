@@ -118,3 +118,104 @@ describe("input-schema-resolver — array `items` extraction", () => {
     expect((resolved!.properties.flag as Record<string, unknown>).items).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#2484 — the same nesting lift for OBJECT sub-shape.
+//
+// An `object`-typed StartNode input declares `{title, summary, outline}` under
+// `json_schema.properties` (+ `json_schema.required`), exactly as an array
+// declares `json_schema.items`. Without the lift the resolved property is a
+// bare `{type:"object"}`, the Setup form has no sub-fields to build, and it
+// degrades to ONE free-text box that accepts a bare sentence — the run then
+// starts with a type-violating `input_params`.
+// ---------------------------------------------------------------------------
+describe("input-schema-resolver — object `properties` extraction (cinatra#2484)", () => {
+  it("reads `properties`/`required` from nested `json_schema` (agentspec convention)", () => {
+    const oas = buildOasWithStartInputs(
+      [
+        {
+          title: "idea",
+          type: "object",
+          json_schema: {
+            properties: {
+              title: { type: "string" },
+              summary: { type: "string" },
+              outline: { type: "array", items: { type: "string" } },
+            },
+            required: ["title"],
+          },
+        },
+      ],
+      ["idea"],
+    );
+    const resolved = __testOnly.deriveFullSchemaFromOas(oas);
+    expect(resolved).not.toBeNull();
+    const prop = resolved!.properties.idea as Record<string, unknown>;
+    expect(prop.type).toBe("object");
+    expect(prop.properties).toEqual({
+      title: { type: "string" },
+      summary: { type: "string" },
+      outline: { type: "array", items: { type: "string" } },
+    });
+    expect(prop.required).toEqual(["title"]);
+  });
+
+  it("reads `properties` from top level (canonical JSON Schema shape)", () => {
+    const oas = buildOasWithStartInputs(
+      [
+        {
+          title: "idea",
+          type: "object",
+          properties: { title: { type: "string" } },
+          required: ["title"],
+        },
+      ],
+      ["idea"],
+    );
+    const resolved = __testOnly.deriveFullSchemaFromOas(oas);
+    const prop = resolved!.properties.idea as Record<string, unknown>;
+    expect(prop.properties).toEqual({ title: { type: "string" } });
+    expect(prop.required).toEqual(["title"]);
+  });
+
+  it("prefers top-level `properties` over nested `json_schema.properties`", () => {
+    const oas = buildOasWithStartInputs(
+      [
+        {
+          title: "idea",
+          type: "object",
+          properties: { top: { type: "string" } },
+          json_schema: { properties: { nested: { type: "string" } } },
+        },
+      ],
+      ["idea"],
+    );
+    const resolved = __testOnly.deriveFullSchemaFromOas(oas);
+    const prop = resolved!.properties.idea as Record<string, unknown>;
+    expect(prop.properties).toEqual({ top: { type: "string" } });
+  });
+
+  it("leaves a SCHEMA-LESS object input as a bare {type:'object'} (blog-draft-writer@0.1.2)", () => {
+    // The installed pin declares no json_schema at all. The resolver must not
+    // fabricate sub-properties — the renderer's validation leg owns this case.
+    const oas = buildOasWithStartInputs([{ title: "idea", type: "object" }], ["idea"]);
+    const resolved = __testOnly.deriveFullSchemaFromOas(oas);
+    const prop = resolved!.properties.idea as Record<string, unknown>;
+    expect(prop.type).toBe("object");
+    expect(prop.properties).toBeUndefined();
+    expect(prop.required).toBeUndefined();
+  });
+
+  it("never injects `properties` into a NON-object input (no false positive)", () => {
+    const oas = buildOasWithStartInputs(
+      [
+        { title: "plain", type: "string", json_schema: { properties: { a: { type: "string" } } } },
+        { title: "tags", type: "array", json_schema: { items: { type: "string" }, properties: {} } },
+      ],
+      ["plain"],
+    );
+    const resolved = __testOnly.deriveFullSchemaFromOas(oas);
+    expect((resolved!.properties.plain as Record<string, unknown>).properties).toBeUndefined();
+    expect((resolved!.properties.tags as Record<string, unknown>).properties).toBeUndefined();
+  });
+});

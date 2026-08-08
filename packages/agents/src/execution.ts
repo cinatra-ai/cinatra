@@ -23,7 +23,12 @@ import {
 } from "./wayflow-url";
 import { runSkillAutosaveOnRunCompletion } from "./skill-autosave";
 import { isTriggerReleased } from "./trigger-gate";
-import { resolveTemplateInputSchema } from "./input-schema-resolver";
+// cinatra#2484: the declared-type guard rides the resolver module — same
+// import, no extra first-party module in the locked routes' reachable graph.
+import {
+  resolveTemplateInputSchema,
+  assertValuesMatchDeclaredObjectTypes,
+} from "./input-schema-resolver";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import { snapshotSkillsAtRunStart } from "@/lib/agent-run-skills-used";
 // cinatra#1939 wave 2 (§2b): the worker + WayFlow state handler drive a run's
@@ -1918,6 +1923,39 @@ async function runAgentBuilderExecutionJobInner(
   const inputSchema = await resolveTemplateInputSchema(template);
   const properties = inputSchema.properties;
   const requiredFields = inputSchema.required;
+
+  // cinatra#2484 — DECLARED-TYPE gate on whatever is already in inputParams.
+  //
+  // The Setup form is only ONE door into inputParams. A run can also be created
+  // with inputs pre-supplied (the `agent_run` MCP tool, chat extraction, the
+  // API), and the pendingFields filter below tests key PRESENCE only — so a
+  // pre-supplied `{"idea": "a bare sentence"}` for an object-typed input is
+  // treated as "already answered", skips the gate entirely, and dispatches the
+  // type-violating value. That is the exact failure this issue is about, just
+  // through a different door: the run then dies downstream, far from the cause.
+  //
+  // Assert BEFORE the pending-field computation so a violating value fails loud
+  // here, naming the input, rather than becoming a mystery mid-run failure. The
+  // setup-resume path (review-task-actions) runs the same shared assertion on
+  // the way in, so both chokepoints agree.
+  //
+  // Land the run FAILED with the message rather than letting the throw escape.
+  // A bare throw here is swallowed by the job runner WITHOUT any run-status
+  // transition, leaving the run parked at "queued" forever — which is the exact
+  // silent-failure shape the artifact-materialization honesty fix removed, just
+  // relocated. Mirrors the pre-dispatch failure handling directly above.
+  try {
+    assertValuesMatchDeclaredObjectTypes(
+      properties,
+      (run.inputParams ?? {}) as Record<string, unknown>,
+      "Run cannot start",
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[agent-builder] run ${runId} rejected before dispatch: ${message}`);
+    await transitionRunStatus(runId, "queued", "failed", { error: message }, executionAuthority);
+    return;
+  }
 
   // Concurrent dispatch guard is provided by the early-exit at the top of this
   // function (run.status !== "queued" → return). A run that is already

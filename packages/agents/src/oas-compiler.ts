@@ -1601,7 +1601,16 @@ export async function compileOasAgentJson(opts: {
   const startRef = (parsed.start_node as { $component_ref: string }).$component_ref;
   const startNode = localRefs[startRef] as
     | {
-        inputs?: Array<{ title: string; type: string; format?: string; description?: string; items?: unknown; json_schema?: { items?: unknown } }>;
+        inputs?: Array<{
+          title: string;
+          type: string;
+          format?: string;
+          description?: string;
+          items?: unknown;
+          properties?: Record<string, unknown>;
+          required?: string[];
+          json_schema?: { items?: unknown; properties?: Record<string, unknown>; required?: string[] };
+        }>;
         metadata?: {
           cinatra?: {
             required?: string[];
@@ -1637,6 +1646,26 @@ export async function compileOasAgentJson(opts: {
     if (format) propShape.format = format;
     if (description) propShape.description = description;
     if (items) propShape.items = items;
+    // An OBJECT-typed input carries its sub-shape under `json_schema.properties`
+    // (+ `json_schema.required`) — the same agentspec nesting as
+    // `json_schema.items` for arrays. Without this lift the compiled
+    // `inputSchema` declares a bare `{type:"object"}`, the Setup form has no
+    // sub-fields to build and degrades to ONE free-text box that happily
+    // accepts a bare string (cinatra#2484). Lifting the properties is what lets
+    // the schema-field renderer build real sub-fields and emit a real object.
+    const subProperties = prop.properties ?? prop.json_schema?.properties;
+    const subRequired = prop.required ?? prop.json_schema?.required;
+    // `!Array.isArray` matters: `typeof [] === "object"`, and lifting an array
+    // as `properties` would produce a schema whose sub-fields are index keys.
+    if (
+      type === "object" &&
+      subProperties &&
+      typeof subProperties === "object" &&
+      !Array.isArray(subProperties)
+    ) {
+      propShape.properties = subProperties;
+      if (Array.isArray(subRequired)) propShape.required = subRequired;
+    }
     if (startRenderers[title]) propShape["x-renderer"] = startRenderers[title];
     if (startDataSources[title]) propShape["x-data-source"] = startDataSources[title];
     if (startHidden.includes(title)) propShape["x-hidden"] = true;

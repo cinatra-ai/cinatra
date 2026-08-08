@@ -83,10 +83,29 @@ export function isAlreadyResolvedError(message: string): boolean {
  * the same gate to repeat forever. When the interrupt carried a
  * `fieldName` and the value is primitive, wrap as `{ [fieldName]: value }`
  * and pass fieldName so the single-field path in the handler runs.
+ *
+ * OBJECT-typed setup inputs (cinatra#2484) need the same wrap even though their
+ * value is NOT primitive: the object IS the field's value (`{title, summary,
+ * outline}` for `idea`), so it must land at `inputParams.idea`, not be spread
+ * across the top level — where the grouped path's allowlist would then reject
+ * `title`/`summary`/`outline` as keys not declared in inputSchema. The caller
+ * opts in via `objectTypedField` (read from the interrupt's own field schema);
+ * WITHOUT that flag behaviour is byte-identical to before, so every other
+ * renderer that emits a multi-key object for a single-field gate keeps routing
+ * to the grouped merge.
+ *
+ * The wrap is UNCONDITIONAL under the flag — deliberately no "looks already
+ * wrapped" shortcut. The object-typed renderers emit the field's VALUE, never a
+ * `{ [fieldName]: value }` envelope, so there is nothing to detect; and a value
+ * cannot be told apart from an envelope by shape. An input `idea` whose declared
+ * sub-properties happen to include one named `idea` would produce exactly the
+ * `{idea: …}` shape a shortcut would mistake for an envelope — silently storing
+ * the sub-value one level too shallow.
  */
 export function wrapPrimitiveSetupPayload(
   fieldName: string | undefined,
   next: unknown,
+  opts?: { objectTypedField?: boolean },
 ): { payload: unknown; payloadFieldName: string | undefined } {
   const isPrimitive =
     next === null ||
@@ -98,7 +117,52 @@ export function wrapPrimitiveSetupPayload(
   if (fieldName && isPrimitive) {
     return { payload: { [fieldName]: next }, payloadFieldName: fieldName };
   }
+  if (
+    fieldName &&
+    opts?.objectTypedField === true &&
+    next !== null &&
+    typeof next === "object" &&
+    !Array.isArray(next)
+  ) {
+    return {
+      payload: { [fieldName]: next as Record<string, unknown> },
+      payloadFieldName: fieldName,
+    };
+  }
   return { payload: next, payloadFieldName: undefined };
+}
+
+/**
+ * The `value` prop for a per-field setup gate's renderer (cinatra#2484, codex
+ * round 2).
+ *
+ * The two Setup surfaces disagree about what `value` means. The grouped form
+ * passes `field.value` — the field's OWN value. The per-field panels pass the
+ * whole `currentValues` ENVELOPE (every input of the run) to every field, under
+ * the placeholder `fieldName="hitl-field"`, so the renderer cannot recover which
+ * slot is its own.
+ *
+ * For an OBJECT-typed field that ambiguity is a correctness bug, not a cosmetic
+ * one: the renderer has to seed sub-fields from the field's own object, and any
+ * heuristic it applies to an envelope is wrong in some case — filtering the
+ * envelope by declared sub-keys seeds an object's `title` from an UNRELATED run
+ * input that merely shares the name. Resolve it at the CALLER, which is the only
+ * place that actually knows both the envelope and the real field name, so the
+ * renderer's `value` is unambiguously the field's own value on every surface.
+ *
+ * Scoped to object-typed fields ON PURPOSE. Unwrapping for every type would also
+ * start pre-filling string/number/array gates from previously-submitted values —
+ * a behaviour change the per-field surface deliberately avoids (see the
+ * fieldName-keyed remount comment in orchestrator-stepper-panel).
+ */
+export function setupFieldRendererValue(
+  envelope: Record<string, unknown>,
+  fieldName: string | undefined,
+  fieldSchema: unknown,
+): unknown {
+  const isObjectTyped = (fieldSchema as { type?: string } | undefined)?.type === "object";
+  if (!isObjectTyped || !fieldName) return envelope;
+  return envelope[fieldName];
 }
 
 // ---------------------------------------------------------------------------

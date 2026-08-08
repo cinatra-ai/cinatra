@@ -20,6 +20,7 @@ import {
   liftRendererApprovalNote,
   withContextSelectorEnvelope,
   wrapPrimitiveSetupPayload,
+  setupFieldRendererValue,
 } from "../hitl-gate-submit";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "../agent-builder-ids";
 
@@ -110,6 +111,58 @@ describe("wrapPrimitiveSetupPayload", () => {
       payload: "bare",
       payloadFieldName: undefined,
     });
+  });
+
+  // cinatra#2484 — an object-TYPED setup input emits a real object whose keys
+  // are the object's OWN sub-properties (`{title, summary, outline}` for
+  // `idea`). Without the opt-in that object would take the grouped branch and
+  // its sub-keys would be checked against inputSchema.properties — where
+  // `title`/`summary`/`outline` are not declared — and rejected as unknown keys.
+  it("wraps an OBJECT under fieldName when the interrupt's field is object-typed", () => {
+    const idea = { title: "Human purpose", outline: ["a", "b"] };
+    expect(
+      wrapPrimitiveSetupPayload("idea", idea, { objectTypedField: true }),
+    ).toEqual({
+      payload: { idea },
+      payloadFieldName: "idea",
+    });
+  });
+
+  // codex round 1: a value cannot be told apart from an envelope by shape, so
+  // the wrap under the flag is UNCONDITIONAL. An object input whose declared
+  // sub-properties happen to include one named after the input itself produces
+  // exactly the `{idea: …}` shape a "looks already wrapped" shortcut would
+  // mistake for an envelope — and would then store the SUB-value at
+  // inputParams.idea, one level too shallow.
+  it("wraps unconditionally — a sub-property named after the field is NOT an envelope", () => {
+    const collides = { idea: "the sub-property happens to be called idea", title: "t" };
+    expect(
+      wrapPrimitiveSetupPayload("idea", collides, { objectTypedField: true }),
+    ).toEqual({ payload: { idea: collides }, payloadFieldName: "idea" });
+
+    const singleKeyCollision = { idea: { nested: true } };
+    expect(
+      wrapPrimitiveSetupPayload("idea", singleKeyCollision, { objectTypedField: true }),
+    ).toEqual({ payload: { idea: singleKeyCollision }, payloadFieldName: "idea" });
+  });
+
+  it("leaves every other renderer's multi-key object on the grouped branch (opt-in only)", () => {
+    const obj = { a: 1, b: 2 };
+    // No flag → byte-identical to the pre-#2484 behaviour asserted above.
+    expect(wrapPrimitiveSetupPayload("field", obj)).toEqual({
+      payload: obj,
+      payloadFieldName: undefined,
+    });
+    expect(wrapPrimitiveSetupPayload("field", obj, { objectTypedField: false })).toEqual({
+      payload: obj,
+      payloadFieldName: undefined,
+    });
+  });
+
+  it("keeps ARRAY values on the primitive branch even when the flag is set", () => {
+    expect(
+      wrapPrimitiveSetupPayload("urls", ["a"], { objectTypedField: true }),
+    ).toEqual({ payload: { urls: ["a"] }, payloadFieldName: "urls" });
   });
 });
 
@@ -378,5 +431,43 @@ describe("applyAttachmentEnvelopeUserResponseOnly", () => {
     );
     const envelope = JSON.parse(out.userResponse as string) as { text: string };
     expect(envelope.text).toBe("[Approved by operator]");
+  });
+});
+
+/**
+ * cinatra#2484 (codex round 2) — the per-field panels hand EVERY field the whole
+ * `currentValues` envelope under the placeholder `fieldName="hitl-field"`, so
+ * the renderer cannot recover its own slot. For an object-typed field that is a
+ * correctness bug (sub-fields seed from unrelated run inputs that merely share a
+ * name), and no renderer-side heuristic fixes it. The caller resolves it.
+ */
+describe("setupFieldRendererValue (cinatra#2484)", () => {
+  const ENVELOPE = {
+    title: "an unrelated run input",
+    idea: { title: "the real sub-value" },
+    tone: "informative",
+  };
+
+  it("unwraps the field's own value for an OBJECT-typed field", () => {
+    expect(
+      setupFieldRendererValue(ENVELOPE, "idea", { type: "object" }),
+    ).toEqual({ title: "the real sub-value" });
+  });
+
+  it("passes the envelope THROUGH for non-object fields — no behaviour change", () => {
+    // Unwrapping for every type would start pre-filling string/number/array
+    // gates from previously-submitted values, which the per-field surface
+    // deliberately avoids.
+    expect(setupFieldRendererValue(ENVELOPE, "tone", { type: "string" })).toBe(ENVELOPE);
+    expect(setupFieldRendererValue(ENVELOPE, "tone", { type: "array" })).toBe(ENVELOPE);
+    expect(setupFieldRendererValue(ENVELOPE, "tone", undefined)).toBe(ENVELOPE);
+  });
+
+  it("passes the envelope through when there is no fieldName (grouped gate)", () => {
+    expect(setupFieldRendererValue(ENVELOPE, undefined, { type: "object" })).toBe(ENVELOPE);
+  });
+
+  it("yields undefined for an object field with nothing stored yet", () => {
+    expect(setupFieldRendererValue({}, "idea", { type: "object" })).toBeUndefined();
   });
 });
