@@ -8,9 +8,11 @@
  *     rendering the org's identity + member/team counts as portlets (#702)
  *     and a "+ New dashboard" / select toolbar.
  *   - The access model + management (settings, members & invitations, danger
- *     zone) live on `/organizations/[id]/settings`, linked from the header —
- *     the button is visible to EVERY member (the settings page itself splits
- *     read-only vs manage, exactly as the retired tabs did).
+ *     zone) live on `/organizations/[id]/settings`, reached from this page's
+ *     **Settings tab** (cinatra#2474 PR1: the entity-page tablist replaces the
+ *     former top-right settings button). The tab is rendered for EVERY member,
+ *     outside any capability branch — the settings page itself splits read-only
+ *     vs manage, exactly as the retired tabs did.
  *
  * Authz (fail closed): the redirect gate uses the session SecurityContext, then
  * the org identity + counts are only read AFTER `readUserIsOrgMember` confirms
@@ -20,15 +22,13 @@
  * path. A non-member (or a deleted org) is a 404, never a widened surface.
  */
 import "server-only";
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { eq } from "drizzle-orm";
-import { Settings } from "lucide-react";
 
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
-import { Button } from "@/components/ui/button";
+import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 import { LifecycleBadge } from "@/components/lifecycle-badge";
 import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
 import { CrumbContributions } from "@/components/crumb-contributions";
@@ -160,22 +160,21 @@ export async function OrganizationDetailDashboardPage({
         ]}
       />
       <PageHeader
+        label="Organization"
         title={orgName || "Organization"}
         description="Dashboards for this organization."
         divider={false}
-        actions={
-          <div className="flex items-center gap-2">
-            {isArchived ? <LifecycleBadge status="archived" /> : null}
-            <Button asChild variant="outline">
-              <Link href={`/organizations/${encodeURIComponent(id)}/settings`}>
-                <Settings data-icon="inline-start" aria-hidden="true" />
-                Organization settings
-              </Link>
-            </Button>
-          </div>
-        }
+        actions={isArchived ? <LifecycleBadge status="archived" /> : undefined}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
+        {/* The entity-page tablist (cinatra#2474 PR1, spec §IX): this landing IS
+            the Dashboards tab; Settings is the second entry. Rendered for every
+            member — the settings page owns the read-only/manage split. */}
+        <EntityScopeTabs
+          dashboardsHref={`/organizations/${encodeURIComponent(id)}`}
+          settingsHref={`/organizations/${encodeURIComponent(id)}/settings`}
+          active="dashboards"
+        />
         {/* cinatra#1942 V4 — "Archived — read-only" banner.
             Reads `archivedAt` directly, never the activation gate. The copy
             deliberately claims read-only for the ORG's settings/membership

@@ -31,10 +31,15 @@ describe("org detail is tabless; management lives on /settings (#1734)", () => {
     ).toBe(false);
   });
 
-  it("links to settings from the header — outside any capability branch", () => {
-    expect(DETAIL).toContain("/settings`}");
-    expect(DETAIL).toContain("Organization settings");
-    // The gate isn't even imported here anymore, so the link cannot be
+  it("reaches settings from the tablist — outside any capability branch", () => {
+    // cinatra#2474 PR1 — the reach-settings affordance moved from a top-right
+    // header button to the entity-page tablist's Settings entry. The #1734
+    // invariant it carries is unchanged: settings stays reachable from the
+    // landing for read-only members too.
+    expect(DETAIL).toContain("<EntityScopeTabs");
+    expect(DETAIL).toContain("settingsHref={`/organizations/${encodeURIComponent(id)}/settings`}");
+    expect(DETAIL).not.toContain("Organization settings");
+    // The gate isn't even imported here anymore, so the tab cannot be
     // capability-gated; capabilities are the settings screen's concern.
     expect(DETAIL).not.toContain("resolveOrganizationManageCapabilities");
     expect(DETAIL).not.toContain("countOrganizationDeleteBlockers");

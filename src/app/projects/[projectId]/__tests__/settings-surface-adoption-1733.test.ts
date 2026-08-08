@@ -34,10 +34,15 @@ describe("detail page: no tablist, no Permissions tab (#1733)", () => {
     ).toBe(false);
   });
 
-  it("renders the dashboards surface directly and links to settings from the header", () => {
+  it("renders the dashboards surface directly and reaches settings from the tablist", () => {
     expect(DETAIL_SOURCE).toContain("<ProjectDashboardsTab");
-    expect(DETAIL_SOURCE).toContain("/settings`}");
-    expect(DETAIL_SOURCE).toContain("Project settings");
+    // cinatra#2474 PR1 — the reach-settings affordance moved from a top-right
+    // header button to the entity-page tablist's Settings entry. The #1733
+    // invariant it carries is unchanged: settings stays reachable from the
+    // landing, outside any capability branch.
+    expect(DETAIL_SOURCE).toContain("<EntityScopeTabs");
+    expect(DETAIL_SOURCE).toContain("settingsHref={`/projects/${encodeURIComponent(project.id)}/settings`}");
+    expect(DETAIL_SOURCE).not.toContain("Project settings");
   });
 
   it("no longer builds the permissions payload (loading moved to /settings)", () => {
