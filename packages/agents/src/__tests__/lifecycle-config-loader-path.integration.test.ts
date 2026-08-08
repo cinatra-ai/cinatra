@@ -439,6 +439,35 @@ describe.skipIf(!HAS_DB)(
       // and the NULL column survives forever. Reproduced exactly — take the row
       // the first case installed and put the column back to its pre-fix value.
       expect(wordpressTemplateId).toBeTruthy();
+      // "ALREADY-INSTALLED" now means what it says (cinatra#2536): the loader's
+      // skip ALSO requires a live canonical `installed_extension` record, so a
+      // fixture with only an `agent_templates` row would drift on the INSTALL
+      // RECORD too and this case would stop isolating the lifecycle_config
+      // projection it is about. Seed the record through the canonical primitive
+      // so the ONLY drift under test is the NULL column below.
+      const { installExtensionManifest } = await import(
+        "@cinatra-ai/extensions/lifecycle-primitive"
+      );
+      const { randomUUID } = await import("node:crypto");
+      await installExtensionManifest(
+        {
+          id: `iext_${randomUUID().slice(0, 12)}`,
+          packageName: WORDPRESS_AGENT_PACKAGE,
+          ownerLevel: "platform",
+          ownerId: null,
+          organizationId: null,
+          kind: "agent",
+          source: {
+            type: "local",
+            path: "fixture:lifecycle-config-loader-path",
+            resolvedCommitOrTreeHash: "fixture",
+          },
+          requiredInProd: false,
+          dependencies: [],
+          manifestHash: null,
+        },
+        { actor: { source: "worker" }, reason: "integration fixture — already-installed premise" },
+      );
       await pool(
         `UPDATE "${q(TEST_SCHEMA)}"."agent_templates" SET lifecycle_config = NULL WHERE id = $1`,
         [wordpressTemplateId],
