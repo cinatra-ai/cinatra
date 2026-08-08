@@ -381,7 +381,130 @@ function oasConnectorCandidates(extDir, catalog) {
     .sort((a, b) => a.packageName.localeCompare(b.packageName));
 }
 
-function listExtensions() {
+/**
+ * Strip a trailing `@<version-range>` from an extension SPEC, keeping the scope
+ * `@`: `"@cinatra-ai/x@^0.1.0"` -> `"@cinatra-ai/x"`. `cinatra.extensions` (the
+ * prod acquisition set) carries ranges; `cinatra.devExtensions` /
+ * `cinatra.systemExtensions` carry bare names. Whitespace-tolerant, like the
+ * canonical required-extension entry parser.
+ */
+function stripVersionRange(spec) {
+  const trimmed = spec.trim();
+  const at = trimmed.lastIndexOf("@");
+  return (at > 0 ? trimmed.slice(0, at) : trimmed).trim();
+}
+
+/**
+ * The extension universe the HOST DECLARES in its root package.json — the union
+ * of the dev clone-back set (`cinatra.devExtensions`), the prod acquisition set
+ * (`cinatra.extensions`), the locked system set (`cinatra.systemExtensions`) and
+ * the vendored bundles (`cinatra.vendoredSkillBundles[].packageName`).
+ *
+ * Why the scan needs it (cinatra#2543): `extensions/` is gitignored and populated
+ * by a clone-back step (`cinatra instance setup` / `syncCinatraDevExtensions`)
+ * that clones-or-fast-forwards every DECLARED entry and NEVER prunes a directory
+ * that has left the declaration. When an extension is RETIRED (cinatra#1034;
+ * #2041 AC-4; #1796 / #2047 row 8 — four agent packages across those three
+ * retirements) its host wiring is deleted, INCLUDING its `cinatra.fieldRenderers`
+ * KIND, which leaves KNOWN_FIELD_RENDERER_KINDS together with the host component
+ * it named. But every workspace that had cloned it keeps the checkout on disk.
+ * The raw disk scan then fed that retired package into the manifest generator's
+ * fail-closed declaration gates, so a stale directory failed manifest generation
+ * — and therefore `cinatra install`, which regenerates the maps — with a message
+ * naming the KIND VOCABULARY instead of the stale checkout.
+ *
+ * The declared universe is the correct scope: an undeclared on-disk directory is
+ * not workspace-linked, not lock-pinned and not acquired in prod — it is
+ * workspace rot, not part of the host. Widening the kind vocabulary instead would
+ * resurrect retired identities (and break the exact-zero retirement ratchet);
+ * deriving the vocabulary from on-disk declarations would let any package invent
+ * a kind the host ships no component for. Neither is the defect.
+ *
+ * TOLERANT by design (shape-checking is the CALLER's posture decision — the
+ * manifest generator validates the declaration shapes fail-closed before using
+ * this).
+ */
+export function readDeclaredExtensionUniverse(rootPkg) {
+  const cin = (rootPkg && typeof rootPkg === "object" && rootPkg.cinatra) || {};
+  const names = new Set();
+  const add = (spec) => {
+    if (typeof spec !== "string" || spec.trim().length === 0) return;
+    const name = stripVersionRange(spec);
+    if (name.length > 0) names.add(name);
+  };
+  if (cin.devExtensions && typeof cin.devExtensions === "object" && !Array.isArray(cin.devExtensions)) {
+    Object.keys(cin.devExtensions).forEach(add);
+  }
+  if (Array.isArray(cin.extensions)) cin.extensions.forEach(add);
+  if (Array.isArray(cin.systemExtensions)) cin.systemExtensions.forEach(add);
+  if (Array.isArray(cin.vendoredSkillBundles)) {
+    for (const b of cin.vendoredSkillBundles) {
+      if (b && typeof b === "object" && !Array.isArray(b)) add(b.packageName);
+    }
+  }
+  return names;
+}
+
+/**
+ * FAIL-CLOSED shape check for the root package.json declaration fields that
+ * decide which on-disk packages become generated data (cinatra#2543). The reader
+ * itself is deliberately tolerant (it is also used from the disk scan, which must
+ * not throw on a malformed field); the DISK SCAN is where a malformed declaration
+ * has to be loud, because "malformed" would otherwise read as "declares nothing"
+ * and silently shrink the scanned universe — for the manifest generator AND for
+ * the audit gates that call `buildInventory()` directly.
+ *
+ * `cinatra.systemExtensions` is additionally validated (non-empty array) by the
+ * manifest generator — it is the locked set, a stricter rule than these.
+ */
+export function assertDeclarationShapes(rootPkg) {
+  const cin = (rootPkg && typeof rootPkg === "object" && rootPkg.cinatra) || {};
+  const problems = [];
+  const isPlain = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+  if (cin.devExtensions !== undefined && !isPlain(cin.devExtensions)) {
+    problems.push("cinatra.devExtensions must be an object mapping package name -> repo url");
+  }
+  if (cin.extensions !== undefined && !Array.isArray(cin.extensions)) {
+    problems.push("cinatra.extensions must be an array of package specs");
+  } else if (Array.isArray(cin.extensions)) {
+    for (const [i, e] of cin.extensions.entries()) {
+      if (typeof e !== "string" || e.trim().length === 0) {
+        problems.push(`cinatra.extensions[${i}] must be a non-empty string spec`);
+      }
+    }
+  }
+  if (cin.systemExtensions !== undefined && !Array.isArray(cin.systemExtensions)) {
+    problems.push("cinatra.systemExtensions must be an array of package names");
+  } else if (Array.isArray(cin.systemExtensions)) {
+    for (const [i, e] of cin.systemExtensions.entries()) {
+      if (typeof e !== "string" || e.trim().length === 0) {
+        problems.push(`cinatra.systemExtensions[${i}] must be a non-empty package name`);
+      }
+    }
+  }
+  if (cin.vendoredSkillBundles !== undefined && !Array.isArray(cin.vendoredSkillBundles)) {
+    problems.push("cinatra.vendoredSkillBundles must be an array");
+  } else if (Array.isArray(cin.vendoredSkillBundles)) {
+    for (const [i, b] of cin.vendoredSkillBundles.entries()) {
+      if (!isPlain(b) || typeof b.packageName !== "string" || b.packageName.trim().length === 0) {
+        problems.push(`cinatra.vendoredSkillBundles[${i}] must be an object with a non-empty packageName`);
+      }
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(
+      `[extension-inventory] malformed root package.json extension declarations (they decide which on-disk packages become generated data):\n  - ${problems.join("\n  - ")}`,
+    );
+  }
+  if (readDeclaredExtensionUniverse(rootPkg).size === 0) {
+    throw new Error(
+      "[extension-inventory] root package.json declares no extension universe (cinatra.devExtensions / .extensions / .systemExtensions / .vendoredSkillBundles are all empty) — refusing to classify the on-disk tree",
+    );
+  }
+}
+
+/** Raw disk scan: every `extensions/<scope>/<slug>/` that carries a package.json. */
+function scanExtensionDirs() {
   const out = [];
   // extensions/ is cloned back before gate jobs; guard the scan so
   // a consumer running without the tree returns empty rather than ENOENT-crashing
@@ -399,6 +522,51 @@ function listExtensions() {
     }
   }
   return out;
+}
+
+/**
+ * Split the disk scan into the host's DECLARED universe and the stale clone-back
+ * leftovers (cinatra#2543). Partitioning here — BEFORE the deep per-package parse
+ * in `buildInventory` — keeps a stale package out of `allNames` / `nameToKind` /
+ * the cross-extension import scan as well as out of the generated maps.
+ *
+ * A manifest whose `name` cannot be READ stays in the declared partition
+ * DELIBERATELY: we cannot classify what we cannot read, and a corrupt package.json
+ * in the extension tree must stay the loud failure it is today rather than
+ * silently presence-dropping a package the host may well declare.
+ */
+function partitionExtensionDirs() {
+  let rootPkg;
+  try {
+    rootPkg = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8"));
+  } catch (e) {
+    throw new Error(
+      `[extension-inventory] cannot read the root package.json at ${REPO_ROOT} — it declares the extension universe the on-disk tree is scoped to: ${e.message}`,
+    );
+  }
+  // FAIL-CLOSED here, not in the caller: the audit gates and the inventory CLI
+  // call buildInventory() DIRECTLY, so a malformed declaration would silently
+  // shrink THEIR scan scope too, not just the generated maps.
+  assertDeclarationShapes(rootPkg);
+  const universe = readDeclaredExtensionUniverse(rootPkg);
+  const declared = [];
+  const undeclared = [];
+  for (const e of scanExtensionDirs()) {
+    let name = null;
+    try {
+      const raw = readJson(e.pkgPath).name;
+      if (typeof raw === "string" && raw.length > 0) name = raw;
+    } catch {
+      /* unreadable manifest — see the doc comment: keep it in `declared` */
+    }
+    if (name === null || universe.has(name)) declared.push(e);
+    else undeclared.push({ ...e, name });
+  }
+  return { declared, undeclared };
+}
+
+function listExtensions() {
+  return partitionExtensionDirs().declared;
 }
 
 // ---------------------------------------------------------------------------
@@ -523,7 +691,7 @@ export function dependencyRoleProblem(dep) {
 // ---------------------------------------------------------------------------
 export async function buildInventory() {
   const catalog = await loadConnectorCatalog();
-  const raw = listExtensions();
+  const { declared: raw, undeclared: undeclaredExtensionDirs } = partitionExtensionDirs();
   const allNames = new Set(
     raw.map((e) => {
       try {
@@ -697,6 +865,12 @@ export async function buildInventory() {
     note: "Extension inventory + candidate dependency graph. The graph is the CANDIDATE source for the later manifest backfill; not yet canonical cinatra.dependencies. No timestamp on purpose (avoids a gated-artifact time-bomb).",
     summary,
     extensions,
+    // Stale clone-back leftovers (cinatra#2543): on-disk `extensions/<scope>/<slug>/`
+    // package directories the host does NOT declare. Empty in the canonical
+    // cloned-back universe; the manifest generator reports them to the operator.
+    undeclaredExtensionDirs: undeclaredExtensionDirs
+      .map((e) => ({ packageName: e.name, dir: relative(REPO_ROOT, e.dir) }))
+      .sort((a, b) => a.packageName.localeCompare(b.packageName)),
     dependencyGraph: graph,
     candidateEdges,
     extractionOrder: order,
@@ -754,7 +928,12 @@ function stable(obj) {
 
 async function main() {
   const args = process.argv.slice(2);
-  const inv = await buildInventory();
+  // The stale-checkout DIAGNOSTIC (cinatra#2543) is deliberately kept OUT of the
+  // persisted/byte-compared artifact: it varies with the operator's local tree,
+  // so serializing it would make `--check` report drift for a directory the scan
+  // already excluded. Programmatic consumers still read it off `inv`.
+  const inv = { ...(await buildInventory()) };
+  delete inv.undeclaredExtensionDirs;
   const graphDoc = {
     generatedBy: "scripts/extensions/inventory.mjs",
     note: inv.note,

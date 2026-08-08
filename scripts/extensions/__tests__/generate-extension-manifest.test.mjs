@@ -3,6 +3,8 @@ import {
   buildManifest,
   checkParity,
   readPresentExtensionNames,
+  readDeclaredExtensionUniverse,
+  assertDeclarationShapes,
   checkExitCode,
   resolveDisplayName,
   resolveVendor,
@@ -425,15 +427,29 @@ describe("manifest generator", () => {
     expect(problems).toEqual([]);
   });
 
-  it("readPresentExtensionNames reads package names from disk (pure presence probe)", () => {
+  it("readPresentExtensionNames reads package names from disk, scoped to the declared universe", () => {
     const root = mkdtempSync(path.join(tmpdir(), "present-names-"));
     try {
+      writeFileSync(
+        path.join(root, "package.json"),
+        JSON.stringify({
+          cinatra: { devExtensions: { "@some-scope/alpha-connector": "https://example.invalid/a.git" } },
+        }),
+      );
       mkdirSync(path.join(root, "extensions", "some-scope", "alpha-connector"), { recursive: true });
       writeFileSync(
         path.join(root, "extensions", "some-scope", "alpha-connector", "package.json"),
         JSON.stringify({ name: "@some-scope/alpha-connector" }),
       );
       mkdirSync(path.join(root, "extensions", "some-scope", "not-a-package"), { recursive: true });
+      // A stale clone-back leftover (cinatra#2543): on disk, NOT declared. It
+      // contributes no manifest record, so it must not count as present either
+      // — otherwise a catalog descriptor for it becomes a hard parity break.
+      mkdirSync(path.join(root, "extensions", "some-scope", "retired-agent"), { recursive: true });
+      writeFileSync(
+        path.join(root, "extensions", "some-scope", "retired-agent", "package.json"),
+        JSON.stringify({ name: "@some-scope/retired-agent" }),
+      );
       const present = readPresentExtensionNames(root);
       expect([...present]).toEqual(["@some-scope/alpha-connector"]);
       expect(readPresentExtensionNames(path.join(root, "nope")).size).toBe(0);
@@ -1258,5 +1274,98 @@ describe("the generator emits `logo` for EVERY scanned kind, not only connectors
     // tree actually contains non-connector kinds.
     expect(kinds.has("connector")).toBe(true);
     expect([...kinds].some((k) => k !== "connector")).toBe(true);
+  });
+});
+
+describe("the generator scopes the on-disk tree to the DECLARED extension universe (cinatra#2543)", () => {
+  // `extensions/` is gitignored and populated by a clone-back step that
+  // clones-or-fast-forwards every DECLARED entry and never PRUNES a directory
+  // that left the declaration. A RETIRED extension's checkout therefore survives
+  // in every workspace that once had it — and before this fix the raw disk scan
+  // fed it to the fail-closed declaration gates, so a stale directory failed
+  // manifest generation (and therefore `cinatra install`, which regenerates the
+  // maps) naming the kind VOCABULARY instead of the stale checkout.
+
+  it("collects the union of devExtensions, extensions (range-stripped), systemExtensions and vendored bundles", () => {
+    const universe = readDeclaredExtensionUniverse({
+      cinatra: {
+        devExtensions: { "@scope/dev-only": "https://example.invalid/d.git" },
+        extensions: ["@scope/acquired@^0.1.0", "@scope/dev-only@^2.0.0-rc.1"],
+        systemExtensions: ["@scope/locked"],
+        vendoredSkillBundles: [{ packageName: "@vendor/bundle" }, { notAPackage: true }, null],
+      },
+    });
+    expect([...universe].sort()).toEqual([
+      "@scope/acquired",
+      "@scope/dev-only",
+      "@scope/locked",
+      "@vendor/bundle",
+    ]);
+  });
+
+  it("tolerates a missing/malformed cinatra block instead of throwing (the caller decides the posture)", () => {
+    expect(readDeclaredExtensionUniverse(undefined).size).toBe(0);
+    expect(readDeclaredExtensionUniverse({}).size).toBe(0);
+    expect(
+      readDeclaredExtensionUniverse({ cinatra: { devExtensions: null, extensions: "nope", systemExtensions: 7 } }).size,
+    ).toBe(0);
+  });
+
+  it("keeps the scope + version-range split straight, whitespace-tolerantly", () => {
+    const universe = readDeclaredExtensionUniverse({
+      cinatra: { extensions: ["plain-pkg@1.2.3", "@scope/bare", "plain-pkg2", "  @scope/padded@^1.0.0  "] },
+    });
+    expect([...universe].sort()).toEqual(["@scope/bare", "@scope/padded", "plain-pkg", "plain-pkg2"]);
+  });
+
+  it("assertDeclarationShapes is the FAIL-CLOSED posture: a malformed declaration must not read as 'declares nothing'", () => {
+    const ok = {
+      cinatra: { devExtensions: { "@scope/a": "https://example.invalid/a.git" }, systemExtensions: ["@scope/a"] },
+    };
+    expect(() => assertDeclarationShapes(ok)).not.toThrow();
+    expect(() => assertDeclarationShapes({ cinatra: { ...ok.cinatra, devExtensions: ["@scope/a"] } })).toThrow(
+      /cinatra\.devExtensions must be an object/,
+    );
+    expect(() => assertDeclarationShapes({ cinatra: { ...ok.cinatra, extensions: "nope" } })).toThrow(
+      /cinatra\.extensions must be an array/,
+    );
+    expect(() => assertDeclarationShapes({ cinatra: { ...ok.cinatra, extensions: ["@scope/a@^1", ""] } })).toThrow(
+      /cinatra\.extensions\[1\]/,
+    );
+    expect(() => assertDeclarationShapes({ cinatra: { ...ok.cinatra, systemExtensions: ["@scope/a", 7] } })).toThrow(
+      /cinatra\.systemExtensions\[1\]/,
+    );
+    expect(() => assertDeclarationShapes({ cinatra: { ...ok.cinatra, systemExtensions: "@scope/a" } })).toThrow(
+      /cinatra\.systemExtensions must be an array/,
+    );
+    expect(() => assertDeclarationShapes({ cinatra: { ...ok.cinatra, vendoredSkillBundles: [{}] } })).toThrow(
+      /vendoredSkillBundles\[0\]/,
+    );
+    // An empty universe would silently drop EVERY on-disk package.
+    expect(() => assertDeclarationShapes({ cinatra: {} })).toThrow(/declares no extension universe/);
+  });
+
+  it("the live root package.json passes the shape gate (the gate is not vacuous)", async () => {
+    const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+    const { readFileSync } = await import("node:fs");
+    const rootPkg = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+    expect(() => assertDeclarationShapes(rootPkg)).not.toThrow();
+  });
+
+  it("the live tree's declared universe covers every extension the manifest emits a record for", async () => {
+    // The invariant the fix rests on: after filtering, every generated record is
+    // a package the host actually declares. Derived from the live tree, so a
+    // future filter regression (or a declaration deleted without its record)
+    // fails here rather than at install time.
+    const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+    const { readFileSync } = await import("node:fs");
+    const rootPkg = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+    const universe = readDeclaredExtensionUniverse(rootPkg);
+    expect(universe.size).toBeGreaterThan(0);
+    const { records } = await buildManifest();
+    expect(records.length).toBeGreaterThan(0);
+    for (const r of records) {
+      expect(universe.has(r.packageName), r.packageName).toBe(true);
+    }
   });
 });
