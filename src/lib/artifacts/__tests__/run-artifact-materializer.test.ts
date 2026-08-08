@@ -639,6 +639,84 @@ describe("materializeRunArtifacts", () => {
     expect(getPublishedExtensionSummaryMock).not.toHaveBeenCalled();
   });
 
+  // cinatra#2498 — the locally-persisted binding-presence authority. The test
+  // above ("degrades a wholesale package-fetch failure...") already pins the
+  // UNKNOWN case (no has_artifact_bindings column value in the row fixture,
+  // matching a legacy/no-backfill row): the registry is still consulted and a
+  // reachability failure still fails the run — the pre-#2498 posture,
+  // unchanged. These pin the NEW directions the local authority adds —
+  // including the version-pin guard a codex round-1 review caught: the flag
+  // is TEMPLATE-scoped (mutable, overwritten on every reinstall) but a run is
+  // PINNED to the packageVersion it was created against, so the flag is only
+  // trusted when the row's CURRENT package_version still equals the run's pin.
+  describe("cinatra#2498 — locally-persisted binding-presence authority", () => {
+    it("a run whose package is locally known to declare NO bindings survives a registry outage (never calls the registry)", async () => {
+      poolQueryMock.mockResolvedValue({
+        rows: [
+          { package_name: "@test/agent", package_version: "1.2.3", has_artifact_bindings: false },
+        ],
+      });
+      getAgentPackageMock.mockRejectedValue(new Error("registry unreachable"));
+      const outcomes = await materializeRunArtifacts(BASE_INPUT);
+      expect(outcomes).toEqual([]);
+      expect(getAgentPackageMock).not.toHaveBeenCalled();
+      // The short-circuit runs BEFORE #2497's wholesale-failure classifier, so
+      // the name-level absence probe is never reached either: this run has no
+      // registry interaction of any kind to classify.
+      expect(getPublishedExtensionSummaryMock).not.toHaveBeenCalled();
+    });
+
+    it("a run whose package is locally known to declare bindings still fails closed on a registry outage", async () => {
+      poolQueryMock.mockResolvedValue({
+        rows: [
+          { package_name: "@test/agent", package_version: "1.2.3", has_artifact_bindings: true },
+        ],
+      });
+      getAgentPackageMock.mockRejectedValue(new Error("registry unreachable"));
+      const outcomes = await materializeRunArtifacts(BASE_INPUT);
+      expect(outcomes).toEqual([
+        expect.objectContaining({
+          ok: false,
+          outputId: "(binding-resolution)",
+          error: expect.stringContaining("registry unreachable"),
+        }),
+      ]);
+      expect(getAgentPackageMock).toHaveBeenCalled();
+    });
+
+    it("a STALE false (template reinstalled to a different version since this run was pinned) does NOT short-circuit — falls through to the registry", async () => {
+      // BASE_INPUT is pinned to packageVersion "1.2.3"; the template row now
+      // reflects a DIFFERENT installed version ("2.0.0") whose compile found
+      // no bindings. Trusting that false for the 1.2.3-pinned run would be
+      // exactly the silent under-materialization codex flagged: 1.2.3 may
+      // still declare a binding this run owes.
+      poolQueryMock.mockResolvedValue({
+        rows: [
+          { package_name: "@test/agent", package_version: "2.0.0", has_artifact_bindings: false },
+        ],
+      });
+      const outcomes = await materializeRunArtifacts(BASE_INPUT);
+      // Falls through to the (default-mocked, successful) registry path and
+      // materializes normally — proving the stale flag was NOT trusted.
+      expect(getAgentPackageMock).toHaveBeenCalled();
+      expect(outcomes.some((o) => o.ok)).toBe(true);
+    });
+
+    it("an UNPINNED run (no packageVersion) never trusts the template's current flag — always falls through", async () => {
+      poolQueryMock.mockResolvedValue({
+        rows: [
+          { package_name: "@test/agent", package_version: "1.2.3", has_artifact_bindings: false },
+        ],
+      });
+      getAgentPackageMock.mockRejectedValue(new Error("registry unreachable"));
+      const outcomes = await materializeRunArtifacts({ ...BASE_INPUT, packageVersion: null });
+      expect(getAgentPackageMock).toHaveBeenCalled();
+      expect(outcomes).toEqual([
+        expect.objectContaining({ ok: false, outputId: "(binding-resolution)" }),
+      ]);
+    });
+  });
+
   it("continues past a failing binding to materialize the rest", async () => {
     const pkg = packageFixture();
     const endNode = (

@@ -455,6 +455,45 @@ describe("cinatra#2497 — external-A2A completion is honest about artifact mate
     expect(agUiEventTypes()).toContain("RUN_ERROR");
   });
 
+  it("forwards the run's OWN template + version pin, so cinatra#2498's short-circuit reaches this path", async () => {
+    // cinatra#2498 narrows the outage above: a template the host can locally
+    // PROVE declares no binding at the run's pinned version never reads the
+    // registry at all, so it cannot produce the `unavailable` outcome this path
+    // (correctly) treats as fatal. That short-circuit lives inside the
+    // materializer and is pinned there
+    // (src/lib/artifacts/__tests__/run-artifact-materializer.test.ts — "a run
+    // whose package is locally known to declare NO bindings survives a registry
+    // outage (never calls the registry)"). What THIS path owes it is the pair of
+    // inputs its version-pin guard consults: the run's own `templateId` and its
+    // pinned `packageVersion`, forwarded unchanged. Pinned here so a future
+    // refactor cannot quietly pass the TEMPLATE's version (or drop the pin) and
+    // silently disable the narrowing for every external run — the two halves
+    // compose into: a provably binding-less pinned template completes cleanly
+    // through external A2A while the registry is down.
+    storeMock.readAgentRunById.mockResolvedValue({
+      ...makeRun(),
+      packageVersion: "1.2.3",
+    } as unknown as AgentRunRecord);
+    // What the short-circuit returns for that run — no registry read happened,
+    // so there is no wholesale outcome for this path to weigh at all.
+    materializeRunArtifactsSpy.mockResolvedValue([]);
+
+    await runAgentBuilderExecutionJob({ runId: "run-ext-1" }, "job-ext-1");
+
+    expect(materializeRunArtifactsSpy).toHaveBeenCalledTimes(1);
+    expect(materializeRunArtifactsSpy.mock.calls[0]![0]).toMatchObject({
+      templateId: "tmpl-ext-1",
+      packageVersion: "1.2.3",
+    });
+    const [, from, to, meta] = lastTransition();
+    expect(from).toBe("running");
+    expect(to).toBe("completed");
+    // Byte-identical to the pre-#2497 terminal write: nothing was owed.
+    expect(meta).toBeUndefined();
+    expect(agUiEventTypes()).toContain("RUN_FINISHED");
+    expect(agUiEventTypes()).not.toContain("RUN_ERROR");
+  });
+
   it.each([
     "failed",
     "canceled",
