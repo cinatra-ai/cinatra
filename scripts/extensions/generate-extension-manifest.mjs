@@ -47,7 +47,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, realpa
 import { join, relative, dirname, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
-import { buildInventory } from "./inventory.mjs";
+import { buildInventory, readDeclaredExtensionUniverse, assertDeclarationShapes } from "./inventory.mjs";
 import { GENERATED_MANIFEST_FILES } from "./generated-manifest-files.mjs";
 import { CONNECTOR_DESCRIPTORS } from "../../packages/connectors-catalog/src/descriptors.mjs";
 import {
@@ -1610,6 +1610,13 @@ export function agentRendererComponentHostResolvable(tsconfigText, specifier, ex
   return stringTargets.includes(stripDot(expectedTargetPosix));
 }
 
+// The declared-universe reader + the fail-closed declaration-shape check live in
+// inventory.mjs: the partition runs there, BEFORE the deep per-package parse, so
+// the audit gates that call buildInventory() directly get the same scope and the
+// same fail-closed posture. Re-exported here for the generator's own presence
+// probe and its tests.
+export { readDeclaredExtensionUniverse, assertDeclarationShapes };
+
 export async function buildManifest() {
   const inv = await buildInventory();
   // Generator-owned presence classification (cinatra#7): `"required"` =
@@ -1631,6 +1638,25 @@ export async function buildManifest() {
   }
   const systemSet = new Set(declaredSystem);
   const resolutionOf = (packageName) => (systemSet.has(packageName) ? "required" : "guardedOptional");
+  // DECLARED-UNIVERSE scope (cinatra#2543): the gitignored `extensions/` tree is
+  // populated by a clone-back step that never prunes, so it can carry a stale
+  // checkout of a RETIRED extension. `buildInventory` already partitioned those
+  // out (see readDeclaredExtensionUniverse in inventory.mjs) — they never reach
+  // the fail-closed declaration gates below. Report them so the operator sees
+  // WHAT to delete instead of an error naming the kind vocabulary.
+  //
+  // The declaration SHAPES are validated fail-closed inside the partition
+  // (inventory.mjs) — a malformed declaration must not read as "declares
+  // nothing" and silently shrink the emitted universe.
+  if (inv.undeclaredExtensionDirs.length > 0) {
+    const n = inv.undeclaredExtensionDirs.length;
+    console.log(
+      `[extension-manifest] note: ${n} on-disk extension director${n === 1 ? "y is" : "ies are"} NOT declared in root package.json (cinatra.devExtensions / .extensions / .systemExtensions / .vendoredSkillBundles) — skipped as stale clone-back leftovers, they contribute nothing to the generated maps. Delete them to silence this note:`,
+    );
+    for (const e of inv.undeclaredExtensionDirs) {
+      console.log(`  - ${e.packageName} (${e.dir})`);
+    }
+  }
   const records = inv.extensions.map((x) => {
     const flags = entryFlags(x);
     const cin = readCinatraManifest(x.dir);
@@ -3447,13 +3473,23 @@ function emitAgentBindings(fieldRendererBindings, roleBindings) {
 // Parity (the catalog safety net)
 // ---------------------------------------------------------------------------
 
-/** Package names with an on-disk extension directory (any scope/kind). The
- * presence probe for presence-aware parity — independent of the inventory so
- * it stays a pure disk fact. */
+/** Package names with an on-disk extension directory (any scope/kind), scoped to
+ * the host's DECLARED extension universe. The presence probe for presence-aware
+ * parity — independent of the inventory so it stays a disk fact.
+ *
+ * The declared-universe scope must match `buildManifest`'s (cinatra#2543): an
+ * undeclared stale checkout contributes no manifest RECORD, so counting it as
+ * "present" here would turn a catalog descriptor for it into a hard parity break
+ * — the same stale directory failing the build through a second door. */
 export function readPresentExtensionNames(repoRoot = REPO_ROOT) {
   const present = new Set();
   const extRoot = join(repoRoot, "extensions");
   if (!existsSync(extRoot)) return present;
+  // Fail-LOUD on an unreadable root manifest: degrading to "nothing is present"
+  // would make presence-aware parity skip every descriptor and pass vacuously.
+  const declared = readDeclaredExtensionUniverse(
+    JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")),
+  );
   for (const scope of readdirSync(extRoot)) {
     const scopeDir = join(extRoot, scope);
     let entries;
@@ -3461,7 +3497,7 @@ export function readPresentExtensionNames(repoRoot = REPO_ROOT) {
     for (const dir of entries) {
       try {
         const name = JSON.parse(readFileSync(join(scopeDir, dir, "package.json"), "utf8")).name;
-        if (typeof name === "string" && name.length > 0) present.add(name);
+        if (typeof name === "string" && name.length > 0 && declared.has(name)) present.add(name);
       } catch { /* not a package dir */ }
     }
   }
