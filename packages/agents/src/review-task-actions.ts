@@ -32,8 +32,12 @@ import { resumeRunFromSetupApproval } from "./resume-run-from-setup-approval";
 // the run. It needs the SAME effective schema the setup loop rendered from —
 // the DB row's `inputSchema` is stale-empty for a whole class of installed
 // templates, and the resolver is what fills it from the mounted OAS.
-import { resolveTemplateInputSchema } from "./input-schema-resolver";
-import { assertValuesMatchDeclaredObjectTypes } from "./setup-input-type-guard";
+// The shared declared-type guard rides that SAME module (no separate leaf —
+// it would add a first-party module to every locked dev-perf route's graph).
+import {
+  resolveTemplateInputSchema,
+  assertValuesMatchDeclaredObjectTypes,
+} from "./input-schema-resolver";
 import {
   WAYFLOW_A2A_TIMEOUT_MS,
   createWayflowFetch,
@@ -58,7 +62,7 @@ const RESERVED_APPROVAL_ENVELOPE_KEYS = new Set<string>([
  *
  * Thin binding over the shared leaf guard: the SAME assertion runs at run
  * CREATION (execution.ts, before dispatch) so the invariant does not depend on
- * which door the value came through. See `./setup-input-type-guard` for the
+ * which door the value came through. See `./input-schema-resolver` for the
  * scoping rationale (object-typed only, recursive over declared sub-shapes,
  * `undefined` = absence).
  */

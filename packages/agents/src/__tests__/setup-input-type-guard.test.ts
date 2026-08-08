@@ -8,6 +8,13 @@
  * `{"idea": "a bare sentence"}` would skip the gate and dispatch. Both server
  * chokepoints call THIS assertion, so the invariant holds regardless of door.
  *
+ * The guard lives in `../input-schema-resolver` (not a leaf file of its own):
+ * it validates against the `properties` map that module resolves, both callers
+ * already import it from there, and a separate module would add one more
+ * first-party module to every LOCKED dev-perf route's reachable graph. This
+ * file keeps its behaviour-named filename — it tests the setup-input type
+ * guard, wherever the guard is housed.
+ *
  *   pnpm --filter @cinatra-ai/agents exec vitest run \
  *     src/__tests__/setup-input-type-guard.test.ts
  */
@@ -18,7 +25,7 @@ import { describe, it, expect } from "vitest";
 import {
   assertValuesMatchDeclaredObjectTypes,
   describeJsonType,
-} from "../setup-input-type-guard";
+} from "../input-schema-resolver";
 
 /** blog-draft-writer@0.1.2 — `idea` object-typed, no declared sub-shape. */
 const SCHEMALESS: Record<string, Record<string, unknown>> = {

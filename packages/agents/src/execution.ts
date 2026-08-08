@@ -23,8 +23,12 @@ import {
 } from "./wayflow-url";
 import { runSkillAutosaveOnRunCompletion } from "./skill-autosave";
 import { isTriggerReleased } from "./trigger-gate";
-import { resolveTemplateInputSchema } from "./input-schema-resolver";
-import { assertValuesMatchDeclaredObjectTypes } from "./setup-input-type-guard";
+// cinatra#2484: the declared-type guard rides the resolver module — same
+// import, no extra first-party module in the locked routes' reachable graph.
+import {
+  resolveTemplateInputSchema,
+  assertValuesMatchDeclaredObjectTypes,
+} from "./input-schema-resolver";
 import { getAssignedSkillIdsForAgent } from "@/lib/agents-store";
 import { snapshotSkillsAtRunStart } from "@/lib/agent-run-skills-used";
 // cinatra#1939 wave 2 (§2b): the worker + WayFlow state handler drive a run's
