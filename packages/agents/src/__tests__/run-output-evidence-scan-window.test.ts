@@ -26,7 +26,7 @@
  *
  * Run:
  *   cd packages/agents && pnpm exec vitest run \
- *     src/__tests__/run-output-actions-scan-window.test.ts
+ *     src/__tests__/run-output-evidence-scan-window.test.ts
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -74,7 +74,7 @@ vi.mock("../store", () => store);
 vi.mock("@/lib/objects-store", () => objectsStore);
 vi.mock("@/lib/artifacts/artifact-service", () => artifactService);
 
-import { readRunOutputEvidence } from "../run-output-actions";
+import { readRunOutputEvidence } from "../run-actions";
 
 /** `count` non-artifact rows, then the artifacts — the buried-output case. */
 function producedRows(nonArtifactCount: number, artifactIds: string[]): ProducedRow[] {

@@ -72,7 +72,7 @@ import {
 } from "./orchestrator-actions";
 import { startDevChildPreviewRun, buildSubmissionMapByStepIndex, type SubmissionMapEntry, type SubmissionMapEntries } from "./run-actions";
 import { RunRecommendationChipRow } from "./run-recommendation-chip-row";
-import { RunCompletionCard } from "./run-completion-card";
+import { RunCompletionCard } from "./run-completion-affordances";
 import {
   getRunRecommendationHoldStateAction,
   type RunRecommendationHoldState,

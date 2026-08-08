@@ -24,7 +24,6 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { Button } from "@/components/ui/button";
 
 vi.mock("lucide-react", () => {
   const StubIcon: React.FC = () => null;
@@ -59,16 +58,13 @@ vi.mock("../a2a-actions", () => ({
   sendAgentBuilderMessage: vi.fn(async () => ({})),
 }));
 
-vi.mock("../run-actions", () => ({
-  resetAgentRun: vi.fn(async () => ({ ok: true })),
-}));
-
-vi.mock("../start-new-run-button", () => ({
-  StartNewRunButton: ({ agentId }: { agentId: string }) => (
-    <Button type="button" data-testid="start-new-run-stub">
-      start new run for {agentId}
-    </Button>
-  ),
+// The card's "Start new run" is the REAL StartNewRunButton: the route-graph
+// ratchet fold put both in run-completion-affordances.tsx, so stubbing the
+// button would stub out the card under test. Its router is mocked instead, and
+// the evidence read + the button's own action both come from the mocked
+// ../run-actions below.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
 }));
 
 type EvidenceResult =
@@ -81,7 +77,9 @@ const readRunOutputEvidenceMock = vi.fn(
     return { ok: true, outputs: [], hasTranscript: false, hasStepResults: false };
   },
 );
-vi.mock("../run-output-actions", () => ({
+vi.mock("../run-actions", () => ({
+  resetAgentRun: vi.fn(async () => ({ ok: true })),
+  createAndTriggerRun: vi.fn(async () => ({ ok: true, runId: "run-next" })),
   readRunOutputEvidence: (args: { runId: string }) => readRunOutputEvidenceMock(args),
 }));
 
@@ -114,7 +112,7 @@ describe("AgenticRunPanel — terminal completed state (cinatra#2482)", () => {
     );
     expect(screen.queryByText(/no messages yet/i)).toBeNull();
     expect(screen.queryByText(/run finished without output/i)).not.toBeNull();
-    expect(screen.queryByTestId("start-new-run-stub")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /start new run/i })).not.toBeNull();
   });
 
   it("links a produced output from the finished run", async () => {

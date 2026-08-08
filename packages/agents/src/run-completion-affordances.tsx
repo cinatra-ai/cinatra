@@ -1,29 +1,20 @@
 "use client";
 /**
- * RunCompletionCard — the terminal `completed` state of a run (cinatra#2482).
+ * Run-completion affordances — what a run offers once it has nothing left to do
+ * (cinatra#2412 `StartNewRunButton`, cinatra#2482 `RunCompletionCard`).
  *
- * Before this card, a `completed` run rendered NOTHING actionable on the
- * canonical run view. The immediate-trigger flow ("Run right after setup" →
- * Continue) therefore dead-ended: the stepper showed every step complete (a
- * `completed` run marks them all so), the right pane was empty, and there was
- * no output, no explanation and no next action.
- *
- * The card answers the issue's three acceptance states for a run that is no
- * longer progressing:
- *
- *   - it produced outputs   → link each one (the artifact detail route)
- *   - its output is inline  → say where, so an empty right pane is not read as
- *                             "nothing happened"
- *   - it produced nothing   → say THAT plainly, and offer the next action
- *
- * Evidence is read at mount (`readRunOutputEvidence`) rather than threaded from
- * the server render, because a run usually completes while the user is watching
- * — an SSR snapshot taken while it was `queued` would report "no output" for a
- * run that went on to produce some.
+ * The two used to live in separate modules (`start-new-run-button.tsx` and
+ * `run-completion-card.tsx`). They are merged here because the route-graph
+ * ratchet locks the reachable first-party module count of five routes that
+ * already carry this component through the run panels, and the card is the only
+ * caller that composes the button beyond the failure block: the card IS the
+ * terminal state, the button IS its next action. One module, one concern.
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -31,12 +22,64 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { StartNewRunButton } from "./start-new-run-button";
-import { readRunOutputEvidence } from "./run-output-actions";
+import { toast } from "@/lib/cinatra-toast";
+import { createAndTriggerRun, readRunOutputEvidence } from "./run-actions";
 import {
   resolveRunTerminalOutcome,
   type RunOutputEvidence,
-} from "./run-terminal-outcome";
+} from "./run-status";
+
+export type StartNewRunButtonProps = {
+  agentId: string;
+};
+
+export function StartNewRunButton({ agentId }: StartNewRunButtonProps) {
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
+
+  const handleClick = () => {
+    startTransition(async () => {
+      const result = await createAndTriggerRun({ templateSlug: agentId });
+      if (result.ok) {
+        router.push(`/agents/${agentId}/${encodeURIComponent(result.runId)}`);
+      } else {
+        toast.error(result.error ?? "Could not create a new run.");
+      }
+    });
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <Button onClick={handleClick} disabled={isPending}>
+        {isPending ? "Starting…" : "Start new run"}
+      </Button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// RunCompletionCard — the terminal `completed` state of a run (cinatra#2482)
+// ---------------------------------------------------------------------------
+//
+// Before this card, a `completed` run rendered NOTHING actionable on the
+// canonical run view. The immediate-trigger flow ("Run right after setup" →
+// Continue) therefore dead-ended: the stepper showed every step complete (a
+// `completed` run marks them all so), the right pane was empty, and there was
+// no output, no explanation and no next action.
+//
+// The card answers the issue's three acceptance states for a run that is no
+// longer progressing:
+//
+//   - it produced outputs   → link each one (the artifact detail route)
+//   - its output is inline  → say where, so an empty right pane is not read as
+//                             "nothing happened"
+//   - it produced nothing   → say THAT plainly, and offer the next action
+//
+// Evidence is read at mount (`readRunOutputEvidence`) rather than threaded from
+// the server render, because a run usually completes while the user is watching
+// — an SSR snapshot taken while it was `queued` would report "no output" for a
+// run that went on to produce some.
+// ---------------------------------------------------------------------------
 
 /**
  * Where the host panel renders a completed run's own output, so the card can

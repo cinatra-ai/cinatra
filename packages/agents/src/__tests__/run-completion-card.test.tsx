@@ -24,16 +24,17 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { Button } from "@/components/ui/button";
 
-// StartNewRunButton owns its own router + server-action wiring; stub it to a
-// marker so this suite asserts purely on "is the next action mounted".
-vi.mock("../start-new-run-button", () => ({
-  StartNewRunButton: ({ agentId }: { agentId: string }) => (
-    <Button type="button" data-testid="start-new-run-stub">
-      start new run for {agentId}
-    </Button>
-  ),
+// StartNewRunButton now lives in the SAME module as the card (the route-graph
+// ratchet fold), so it can no longer be stubbed out from under it — the REAL
+// button renders and this suite asserts on its real label. Its own wiring is
+// mocked instead: the router it pushes through and the run-actions module both
+// sides of the fold now share.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
+}));
+vi.mock("@/lib/cinatra-toast", () => ({
+  toast: { error: vi.fn(), success: vi.fn(), message: vi.fn() },
 }));
 
 type EvidenceResult =
@@ -46,8 +47,9 @@ const readRunOutputEvidenceMock = vi.fn(
     return { ok: true, outputs: [], hasTranscript: false, hasStepResults: false };
   },
 );
-vi.mock("../run-output-actions", () => ({
+vi.mock("../run-actions", () => ({
   readRunOutputEvidence: (args: { runId: string }) => readRunOutputEvidenceMock(args),
+  createAndTriggerRun: vi.fn(async () => ({ ok: true, runId: "run-next" })),
 }));
 
 afterEach(() => {
@@ -57,7 +59,7 @@ afterEach(() => {
 
 describe("RunCompletionCard (cinatra#2482)", () => {
   it("links every produced output to the artifact detail route", async () => {
-    const { RunCompletionCard } = await import("../run-completion-card");
+    const { RunCompletionCard } = await import("../run-completion-affordances");
     render(
       <RunCompletionCard
         runId="run-2482"
@@ -84,7 +86,7 @@ describe("RunCompletionCard (cinatra#2482)", () => {
   });
 
   it("points at the transcript when the only evidence is messages", async () => {
-    const { RunCompletionCard } = await import("../run-completion-card");
+    const { RunCompletionCard } = await import("../run-completion-affordances");
     render(
       <RunCompletionCard
         runId="run-2482"
@@ -99,7 +101,7 @@ describe("RunCompletionCard (cinatra#2482)", () => {
   });
 
   it("points at the step rail when the host panel keeps output behind the steps", async () => {
-    const { RunCompletionCard } = await import("../run-completion-card");
+    const { RunCompletionCard } = await import("../run-completion-affordances");
     render(
       <RunCompletionCard
         runId="run-2482"
@@ -115,7 +117,7 @@ describe("RunCompletionCard (cinatra#2482)", () => {
   });
 
   it("states the terminal empty outcome explicitly and offers the next action", async () => {
-    const { RunCompletionCard } = await import("../run-completion-card");
+    const { RunCompletionCard } = await import("../run-completion-affordances");
     render(
       <RunCompletionCard
         runId="run-2482"
@@ -130,11 +132,11 @@ describe("RunCompletionCard (cinatra#2482)", () => {
     expect(
       screen.queryByText(/produced no output — nothing was returned and nothing was saved/i),
     ).not.toBeNull();
-    expect(screen.queryByTestId("start-new-run-stub")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /start new run/i })).not.toBeNull();
   });
 
   it("omits the next action rather than mounting it broken when no agentId is known", async () => {
-    const { RunCompletionCard } = await import("../run-completion-card");
+    const { RunCompletionCard } = await import("../run-completion-affordances");
     render(
       <RunCompletionCard
         runId="run-2482"
@@ -144,7 +146,7 @@ describe("RunCompletionCard (cinatra#2482)", () => {
     );
 
     expect(screen.queryByText(/run finished without output/i)).not.toBeNull();
-    expect(screen.queryByTestId("start-new-run-stub")).toBeNull();
+    expect(screen.queryByRole("button", { name: /start new run/i })).toBeNull();
   });
 
   it("reads evidence at mount so a run that finishes under the user's eyes is judged fresh", async () => {
@@ -154,7 +156,7 @@ describe("RunCompletionCard (cinatra#2482)", () => {
       hasTranscript: false,
       hasStepResults: false,
     });
-    const { RunCompletionCard } = await import("../run-completion-card");
+    const { RunCompletionCard } = await import("../run-completion-affordances");
     render(
       <RunCompletionCard
         runId="run-2482"
@@ -173,7 +175,7 @@ describe("RunCompletionCard (cinatra#2482)", () => {
 
   it("degrades to the conservative branch when the evidence read fails", async () => {
     readRunOutputEvidenceMock.mockRejectedValueOnce(new Error("boom"));
-    const { RunCompletionCard } = await import("../run-completion-card");
+    const { RunCompletionCard } = await import("../run-completion-affordances");
     render(
       <RunCompletionCard
         runId="run-2482"
@@ -202,7 +204,7 @@ describe("RunCompletionCard (cinatra#2482)", () => {
   // artifact: the card must neither claim the run produced nothing nor point at
   // a transcript it has no evidence for.
   it("stays neutral when the run saved rows that cannot be linked", async () => {
-    const { RunCompletionCard } = await import("../run-completion-card");
+    const { RunCompletionCard } = await import("../run-completion-affordances");
     render(
       <RunCompletionCard
         runId="run-2482"
@@ -233,7 +235,7 @@ describe("RunCompletionCard (cinatra#2482)", () => {
       hasTranscript: false,
       hasStepResults: false,
     });
-    const { RunCompletionCard } = await import("../run-completion-card");
+    const { RunCompletionCard } = await import("../run-completion-affordances");
     const { rerender } = render(
       <RunCompletionCard runId="run-first" agentId="cinatra-ai/a" outputHint="steps" />,
     );
@@ -256,7 +258,7 @@ describe("RunCompletionCard (cinatra#2482)", () => {
   });
 
   it("synchronizes when initialEvidence itself changes", async () => {
-    const { RunCompletionCard } = await import("../run-completion-card");
+    const { RunCompletionCard } = await import("../run-completion-affordances");
     const { rerender } = render(
       <RunCompletionCard
         runId="run-2482"
@@ -283,7 +285,7 @@ describe("RunCompletionCard (cinatra#2482)", () => {
 
   it("degrades to the conservative branch when the read is refused", async () => {
     readRunOutputEvidenceMock.mockResolvedValueOnce({ ok: false, error: "run not found" });
-    const { RunCompletionCard } = await import("../run-completion-card");
+    const { RunCompletionCard } = await import("../run-completion-affordances");
     render(
       <RunCompletionCard runId="run-2482" outputHint="transcript" />,
     );

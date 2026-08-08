@@ -25,7 +25,6 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { Button } from "@/components/ui/button";
 
 vi.mock("lucide-react", () => {
   const StubIcon: React.FC = () => null;
@@ -63,6 +62,8 @@ vi.mock("../orchestrator-actions", () => ({
 vi.mock("../run-actions", () => ({
   startDevChildPreviewRun: vi.fn(async () => ({ ok: false })),
   buildSubmissionMapByStepIndex: vi.fn(async () => []),
+  createAndTriggerRun: vi.fn(async () => ({ ok: true, runId: "run-next" })),
+  readRunOutputEvidence: (args: { runId: string }) => readRunOutputEvidenceMock(args),
 }));
 
 vi.mock("../run-recommendation-actions", () => ({
@@ -94,14 +95,10 @@ vi.mock("../use-runtime-field-renderer-bindings", () => ({
   useRuntimeFieldRendererBindings: () => ({ bindings: {}, loading: false }),
 }));
 
-vi.mock("../start-new-run-button", () => ({
-  StartNewRunButton: ({ agentId }: { agentId: string }) => (
-    <Button type="button" data-testid="start-new-run-stub">
-      start new run for {agentId}
-    </Button>
-  ),
-}));
-
+// The card's "Start new run" is the REAL StartNewRunButton: the route-graph
+// ratchet fold put both in run-completion-affordances.tsx, so stubbing the
+// button would stub out the card under test. Its router is already mocked
+// above, and its action rides the mocked ../run-actions.
 type EvidenceResult =
   | { ok: true; outputs: { id: string; type: string; title: string }[]; hasTranscript: boolean; hasStepResults: boolean }
   | { ok: false; error: string };
@@ -112,9 +109,6 @@ const readRunOutputEvidenceMock = vi.fn(
     return { ok: true, outputs: [], hasTranscript: false, hasStepResults: false };
   },
 );
-vi.mock("../run-output-actions", () => ({
-  readRunOutputEvidence: (args: { runId: string }) => readRunOutputEvidenceMock(args),
-}));
 
 afterEach(() => {
   cleanup();
@@ -151,7 +145,7 @@ describe("OrchestratorStepperPanel — terminal completed stage card (cinatra#24
       expect(document.querySelector("[data-run-completion]")).not.toBeNull(),
     );
     expect(screen.queryByText(/run finished without output/i)).not.toBeNull();
-    expect(screen.queryByTestId("start-new-run-stub")).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /start new run/i })).not.toBeNull();
   });
 
   it("links a produced output from the finished run", async () => {

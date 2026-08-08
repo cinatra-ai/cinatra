@@ -24,7 +24,7 @@ import {
   deriveProducedOutputTitle,
   resolveRunTerminalOutcome,
   type RunOutputEvidence,
-} from "../run-terminal-outcome";
+} from "../run-status";
 
 const EMPTY: RunOutputEvidence = {
   outputs: [],

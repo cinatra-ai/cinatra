@@ -453,8 +453,8 @@ export {
   type ResetAgentRunArgs,
   type ResetAgentRunResult,
 } from "./run-actions";
-export { StartNewRunButton } from "./start-new-run-button";
-export type { StartNewRunButtonProps } from "./start-new-run-button";
+export { StartNewRunButton } from "./run-completion-affordances";
+export type { StartNewRunButtonProps } from "./run-completion-affordances";
 export { getFieldRendererContextForAgentBuilderAction } from "./server-actions";
 export {
   sendAgentBuilderMessage,

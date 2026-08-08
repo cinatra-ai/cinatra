@@ -90,16 +90,25 @@ vi.mock("../a2a-actions", () => ({
   sendAgentBuilderMessage: vi.fn(async () => ({})),
 }));
 
-// StartNewRunButton is a fully separate, already-self-contained component
-// (its own router + server-action wiring) — stub it to a distinct marker so
-// this suite asserts purely on "is it mounted", the exact concern cinatra#2412
-// raised ("a repo-wide grep finds zero call sites"). Uses the shadcn <Button>
-// wrapper (not a raw <button>) per the design-system lint gate.
-vi.mock("../start-new-run-button", () => ({
+// StartNewRunButton is self-contained (its own router + server-action wiring)
+// — stub it to a distinct marker so this suite asserts purely on "is it
+// mounted", the exact concern cinatra#2412 raised ("a repo-wide grep finds zero
+// call sites"). Uses the shadcn <Button> wrapper (not a raw <button>) per the
+// design-system lint gate.
+//
+// cinatra#2482 route-graph fold: the button now shares
+// run-completion-affordances.tsx with RunCompletionCard, so the module stub has
+// to carry the card too — the panel imports both from here. The card gets its
+// own marker; this suite never asserts on its internals (the completion-card
+// and completed-terminal suites do).
+vi.mock("../run-completion-affordances", () => ({
   StartNewRunButton: ({ agentId }: { agentId: string }) => (
     <Button type="button" data-testid="start-new-run-stub">
       start new run for {agentId}
     </Button>
+  ),
+  RunCompletionCard: ({ runId }: { runId: string }) => (
+    <div data-testid="run-completion-card-stub">completion card for {runId}</div>
   ),
 }));
 

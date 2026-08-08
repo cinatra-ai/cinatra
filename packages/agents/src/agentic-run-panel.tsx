@@ -13,7 +13,7 @@ import {
 } from "./agent-error-display";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { StartNewRunButton } from "./start-new-run-button";
+import { StartNewRunButton, RunCompletionCard } from "./run-completion-affordances";
 import { resetAgentRun } from "./run-actions";
 import { HitlConversationPanel, type HitlConversationEntry } from "./hitl-conversation-panel";
 import type { AgentRunMessageBody } from "./store";
@@ -61,7 +61,6 @@ import { agentUIOverrideRegistry } from "./agent-ui-override-registry";
 import { getFieldRendererContextForAgentBuilderAction, getSkillsForAgentAction, type SkillForChip } from "./server-actions";
 import { HitlSkillChips } from "./hitl-skill-chips";
 import { RunRecommendationChipRow } from "./run-recommendation-chip-row";
-import { RunCompletionCard } from "./run-completion-card";
 import {
   getRunRecommendationHoldStateAction,
   type RunRecommendationHoldState,
