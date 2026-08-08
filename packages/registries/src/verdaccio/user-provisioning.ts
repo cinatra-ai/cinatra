@@ -134,6 +134,8 @@ export async function createNpmUser(opts: CreateNpmUserOptions): Promise<{ token
   // case stops being an opaque "see server logs". No body read: the status is
   // the whole discriminator, so the submitted password can never be reflected.
   if (response.status === 401) {
+    // Discard the unread body so undici releases the connection promptly.
+    await response.body?.cancel().catch(() => {});
     throw new VerdaccioUserCredentialConflictError();
   }
 
