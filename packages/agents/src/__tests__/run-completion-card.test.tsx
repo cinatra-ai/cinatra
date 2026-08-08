@@ -116,6 +116,31 @@ describe("RunCompletionCard (cinatra#2482)", () => {
     ).not.toBeNull();
   });
 
+  // coderabbit finding, cinatra#2519: outputHint="steps" says "select a
+  // completed step to review it" — true only when the host actually rendered
+  // a step rail. OrchestratorStepperPanel passes "no-steps" instead when
+  // stepperSteps is empty (see orchestrator-stepper-panel-completed-terminal
+  // .test.tsx for the host-level coverage of that branch selection).
+  it("does not point at a step rail under outputHint=no-steps", async () => {
+    const { RunCompletionCard } = await import("../run-completion-affordances");
+    render(
+      <RunCompletionCard
+        runId="run-2482"
+        agentId="cinatra-ai/blog-draft-writer-agent"
+        outputHint="no-steps"
+        initialEvidence={{ outputs: [], hasTranscript: false, hasStepResults: true }}
+      />,
+    );
+
+    expect(
+      screen.queryByText(/select a completed step to review it/i),
+    ).toBeNull();
+    expect(
+      screen.queryByText(/no step list here to select from/i),
+    ).not.toBeNull();
+    expect(screen.queryByText(/produced no output/i)).toBeNull();
+  });
+
   it("states the terminal empty outcome explicitly and offers the next action", async () => {
     const { RunCompletionCard } = await import("../run-completion-affordances");
     render(

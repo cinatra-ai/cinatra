@@ -67,6 +67,31 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }),
 }));
 
+// agUiEnabled is false in every baseProps() call in this suite, so the panel's
+// resolveStreamFirst() always falls back to the poll path and never reads
+// this hook's status/error/interruptContext — but the module still imports
+// real EventSource/browser wiring, so mock it at module scope (mirrors the
+// sibling agentic-run-panel.*.test.tsx harnesses) rather than let the suite
+// depend on whatever real stream state happens to be reachable in jsdom.
+vi.mock("../use-ag-ui-run-stream", () => ({
+  useAgUiRunStream: vi.fn(() => ({
+    status: "queued",
+    error: null,
+    presentationHint: null,
+    isLive: false,
+    interruptContext: null,
+    streamedText: "",
+    dataPartFrames: [],
+  })),
+}));
+
+// Same reasoning: the completed-terminal card doesn't route through
+// agentUIOverrideRegistry, but the module is imported unconditionally —
+// mock it so the suite never depends on real registry state.
+vi.mock("../agent-ui-override-registry", () => ({
+  agentUIOverrideRegistry: { resolve: () => null },
+}));
+
 type EvidenceResult =
   | { ok: true; outputs: { id: string; type: string; title: string }[]; hasTranscript: boolean; hasStepResults: boolean }
   | { ok: false; error: string };

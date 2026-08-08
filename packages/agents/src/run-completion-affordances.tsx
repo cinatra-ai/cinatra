@@ -87,8 +87,14 @@ export function StartNewRunButton({ agentId }: StartNewRunButtonProps) {
  *   - `transcript` — AgenticRunPanel renders the message thread below the card.
  *   - `steps`      — OrchestratorStepperPanel keeps it behind the step rail
  *                    (click a completed step to replay it).
+ *   - `no-steps`   — same step-result evidence as `steps`, but the host has no
+ *                    step rail to point at (`stepperSteps.length === 0`, e.g.
+ *                    an immediate-trigger run with no declared steps). Naming
+ *                    a "select a completed step" affordance that doesn't exist
+ *                    on the page is a dead pointer — coderabbit finding on
+ *                    cinatra#2519 (orchestrator-stepper-panel.tsx:1819).
  */
-export type RunOutputHint = "transcript" | "steps";
+export type RunOutputHint = "transcript" | "steps" | "no-steps";
 
 export type RunCompletionCardProps = {
   runId: string;
@@ -176,7 +182,9 @@ export function RunCompletionCard({
         ? "This run finished. Its output could not be loaded here — reload the page to try again."
         : outputHint === "transcript"
           ? "This run finished. Its output is in the run transcript below."
-          : "This run finished. Its output is recorded on the run's steps — select a completed step to review it.";
+          : outputHint === "steps"
+            ? "This run finished. Its output is recorded on the run's steps — select a completed step to review it."
+            : "This run finished. Its output was recorded during the run, but there is no step list here to select from.";
 
   return (
     <Card data-run-completion={producedNothing ? "no-output" : "with-output"}>

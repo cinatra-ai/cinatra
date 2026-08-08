@@ -1814,9 +1814,21 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     // step complete. That is the immediate-trigger dead end: a frozen "Step 1
     // completed" with no output and no way forward. The completion card names
     // the outcome and carries the next action.
+    //
+    // outputHint: "steps" tells the card "your output is behind the step
+    // rail, click a completed step to review it" — a TRUE statement only when
+    // there IS a step rail. When stepperSteps is empty this panel renders no
+    // rail at all (see the `stepperSteps.length === 0` branch below), so that
+    // copy would point at a "select a completed step" affordance that isn't
+    // on the page (coderabbit finding, cinatra#2519). "no-steps" gets the
+    // same step-result evidence without the dead pointer.
     stageCard =
       status === "completed" ? (
-        <RunCompletionCard runId={runId} agentId={agentId} outputHint="steps" />
+        <RunCompletionCard
+          runId={runId}
+          agentId={agentId}
+          outputHint={stepperSteps.length === 0 ? "no-steps" : "steps"}
+        />
       ) : null;
   }
 

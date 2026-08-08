@@ -194,4 +194,32 @@ describe("OrchestratorStepperPanel — terminal completed stage card (cinatra#24
     expect(document.querySelector("[data-run-completion]")).toBeNull();
     expect(readRunOutputEvidenceMock).not.toHaveBeenCalled();
   });
+
+  it("does not point at a step rail that isn't rendered — zero stepperSteps with step-result evidence (coderabbit finding, cinatra#2519)", async () => {
+    // hasStepResults: true with no linked outputs takes the "steps" branch of
+    // resolveRunTerminalOutcome (outputRenderedBelow), which is exactly the
+    // shape that used to render "select a completed step to review it" —
+    // stepperSteps is empty here, so no step rail exists on the page to
+    // select from.
+    readRunOutputEvidenceMock.mockResolvedValueOnce({
+      ok: true,
+      outputs: [],
+      hasTranscript: false,
+      hasStepResults: true,
+    });
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(<OrchestratorStepperPanel {...baseProps({ stepperSteps: [] })} />);
+
+    // The card mounts on the FIRST render (status is statically "completed"),
+    // before the mocked evidence read resolves — waiting only for
+    // data-run-completion would race the still-indeterminate copy. Wait for
+    // the settled "no step list" text itself so the assertion below can never
+    // observe the transient "could not be loaded here" state instead.
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/no step list here to select from/i),
+      ).not.toBeNull(),
+    );
+    expect(screen.queryByText(/select a completed step/i)).toBeNull();
+  });
 });
