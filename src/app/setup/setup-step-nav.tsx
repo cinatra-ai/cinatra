@@ -11,8 +11,8 @@ type SetupStepNavProps = {
 
 // whitespace-nowrap (#2483 review): a pill label must never break across
 // lines. The rail is a max-content row — when it outgrows the wizard column
-// it scrolls horizontally (see the nav's overflow-x-auto) instead of
-// wrapping labels.
+// the CONNECTORS give way (see connectorWidthClass) instead of the labels, and
+// only if that is not enough does the nav scroll (overflow-x-auto).
 const PILL_BASE =
   "flex h-8 shrink-0 items-center gap-2 whitespace-nowrap rounded-full px-3 text-xs font-semibold uppercase tracking-wide";
 const PILL_READY =
@@ -24,10 +24,56 @@ const PILL_ACTIVE =
 const PILL_INACTIVE =
   "border border-line bg-surface-strong text-muted-foreground";
 
+// cinatra#2505 — the connector rule is the rail's only spare space, so a rail
+// denser than the accepted four-step drawing spends it.
+//
+// MEASURED on the running wizard (Chromium, the acceptance suite's 1440×1100
+// desktop viewport; every number below is off the live rail, not estimated):
+//
+//   wizard column (max-w-2xl)                            672.00px
+//   four-step sessionless rail                           446.72px   fits
+//   five-step authenticated rail, three steps checked    690.03px   +18.03px
+//
+// The fifth pill is the CONDITIONAL Connections step, which joins the rail
+// whenever Nango is not connected (src/lib/setup-wizard.ts), and each completed
+// step widens its own pill by the check glyph (+22.00px measured). At five
+// pills the row ran past the scrollport and the trailing Model pill was cut
+// off — reported in cinatra#2505 and flagged in #2476's proof rather than
+// passed silently.
+//
+// The fit strategy is the issue's "tighter pill spacing", applied ONLY to the
+// denser rail: the 40px rule halves to 20px once a fifth step is present. Not a
+// new drawing — the same rule, the same pills, the same order, on a rail that
+// has one more thing to say. Concretely:
+//
+//   five-step rail, three checks   690.03 − 4×20 = 610.03px   (61.97px spare)
+//   five-step rail, four checks    712.03 − 4×20 = 632.03px   (39.97px spare)
+//
+// The four-step rail is deliberately untouched — it is the layout the #2477
+// review accepted and #2483 shipped, and it never needed the space.
+//
+// Why a step-count rule rather than a CSS-elastic one: the rail is
+// `ol > li > [connector, pill]` inside a `w-max` row, and a flex item's
+// content-based minimum size freezes a definite-width child — a `min-width` on
+// the connector does NOT let it give way (measured: identical 40px connectors
+// and an identically clipped Model pill). Making it elastic requires
+// `min-width: 0` on the `li`, which ALSO destroys the row's honest minimum: the
+// rigid pills would then overlap each other instead of the nav scrolling.
+// Clipping is bad; overlapping is worse. A shorter rule keeps every existing
+// invariant — pills never shrink, labels never wrap, and a rail that still
+// cannot fit (a sixth step, some future longer label) degrades to exactly
+// today's horizontal scroll rather than to overlapping text.
+const DENSE_RAIL_STEP_COUNT = 5;
+const connectorWidthClass = (stepCount: number) =>
+  stepCount >= DENSE_RAIL_STEP_COUNT ? "w-5" : "w-10";
+
 export function SetupStepNav({ steps }: SetupStepNavProps) {
   const pathname = usePathname();
   const anyReady = steps.some((s) => s.ready);
   const firstIncompleteIndex = steps.findIndex((s) => !s.ready);
+  // Read once per render from the rail's OWN length, not from a route or a
+  // feature flag: whatever puts a fifth pill on the rail, the rail fits.
+  const connectorWidth = connectorWidthClass(steps.length);
 
   return (
     <nav aria-label="Setup progress" className="mb-8 overflow-x-auto">
@@ -81,7 +127,7 @@ export function SetupStepNav({ steps }: SetupStepNavProps) {
               {index > 0 ? (
                 <div
                   aria-hidden="true"
-                  className={cn("h-0.5 w-10", step.ready ? "bg-success" : "bg-line")}
+                  className={cn("h-0.5", connectorWidth, step.ready ? "bg-success" : "bg-line")}
                 />
               ) : null}
               {isNavigable ? (

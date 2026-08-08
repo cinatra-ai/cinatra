@@ -536,10 +536,19 @@ export const CONDITIONAL_STEP_TITLE = "Connections";
 
 /** Assert the universal step rail: present on EVERY setup page (including the
  *  sessionless account page), carrying all four unconditional steps in order,
- *  with no label wrapping.
+ *  with no label wrapping AND with every pill fully inside the rail.
  *
  *  `exact: true` additionally forbids the conditional Connections pill — the
- *  contract for the SESSIONLESS chrome specifically. */
+ *  contract for the SESSIONLESS chrome specifically.
+ *
+ *  cinatra#2505 — the fit assertion below applies to EVERY rail this helper
+ *  sees, so it covers the five-step AUTHENTICATED case (Connections present)
+ *  that previously ran past the wizard column and clipped the trailing Model
+ *  pill. It is a strictly ADDED constraint: the four-step sessionless rail
+ *  satisfied it before this issue and still does (measured 446.72px of content
+ *  in a 672px scrollport), so nothing the #2477/#2483 acceptance pinned is
+ *  loosened here. No new viewport is introduced — this reads the rail at the
+ *  Playwright project's configured desktop viewport, whatever that is. */
 export async function expectUniversalStepRail(
   page: Page,
   options: { exact?: boolean } = {},
@@ -571,6 +580,40 @@ export async function expectUniversalStepRail(
     .evaluateAll((els) => els.map((el) => getComputedStyle(el).whiteSpace));
   expect(whiteSpace).toHaveLength(titles.length);
   for (const ws of whiteSpace) expect(ws).toBe("nowrap");
+
+  // FITS — cinatra#2505. Two independent reads, because either one alone can
+  // pass on a broken rail:
+  //   • the row must not overflow the nav's scrollport at all
+  //     (scrollWidth > clientWidth is content the operator can only reach by
+  //     scrolling a progress indicator, which is what #2505 reported); and
+  //   • every pill's box must sit inside that scrollport. A rail that HAS been
+  //     scrolled has scrollWidth > clientWidth too, but would hide a LEADING
+  //     pill instead of the trailing one — the geometry check catches both
+  //     ends, and catches a clip that arrives by any other route.
+  const fit = await rail.evaluate((nav) => {
+    const navBox = nav.getBoundingClientRect();
+    return {
+      overflowPx: nav.scrollWidth - nav.clientWidth,
+      outside: Array.from(nav.querySelectorAll("li")).flatMap((li) => {
+        const pill = li.lastElementChild;
+        if (!pill) return [];
+        const box = pill.getBoundingClientRect();
+        // Half a pixel of tolerance: sub-pixel layout rounds either way and a
+        // 0.2px difference is not a clipped pill.
+        return box.left < navBox.left - 0.5 || box.right > navBox.right + 0.5
+          ? [(pill.textContent ?? "").trim()]
+          : [];
+      }),
+    };
+  });
+  expect(
+    fit.outside,
+    "every step pill must be fully visible inside the rail (cinatra#2505)",
+  ).toEqual([]);
+  expect(
+    fit.overflowPx,
+    "the step rail must not overflow the wizard column (cinatra#2505)",
+  ).toBeLessThanOrEqual(0);
 }
 
 /** Assert a right-aligned Continue carrying the forward arrow — the shared

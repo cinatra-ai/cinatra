@@ -85,6 +85,66 @@ describe("SetupStepNav — the sign-up pill (cinatra#2477)", () => {
     expect(html).toMatch(/<ol[^>]*class="[^"]*w-max/);
   });
 
+  it("#2505: a five-step rail halves its connector rule so the trailing pill is not clipped", async () => {
+    const { usePathname } = await import("next/navigation");
+    (usePathname as unknown as ReturnType<typeof vi.fn>).mockReturnValue("/setup/model");
+
+    const { SetupStepNav } = await import("../setup-step-nav");
+    const fiveSteps = [
+      ...STEPS.slice(0, 3),
+      { id: "connections", title: "Connections", href: "/setup/connections", ready: false },
+      STEPS[3],
+    ];
+    const html = renderToStaticMarkup(<SetupStepNav steps={fiveSteps} />);
+
+    // Four connectors (one before every pill but the first), each HALVED.
+    // Measured: the five-step rail wants 690.03px in a 672px column; four
+    // 20px rules instead of four 40px ones bring it to 610.03px.
+    const connectorClasses = [...html.matchAll(/class="([^"]*h-0\.5[^"]*)"/g)].map((m) => m[1]);
+    expect(connectorClasses).toHaveLength(4);
+    for (const cls of connectorClasses) {
+      expect(cls).toContain("w-5");
+      expect(cls).not.toContain("w-10");
+    }
+
+    // The space comes from DECORATION only. Pills stay rigid and unwrapped, so
+    // nothing a reader has to read is ever compressed — the #2483 contract.
+    const pillClasses = [...html.matchAll(/class="([^"]*rounded-full[^"]*)"/g)].map((m) => m[1]);
+    expect(pillClasses).toHaveLength(5);
+    for (const cls of pillClasses) {
+      expect(cls).toContain("shrink-0");
+      expect(cls).toContain("whitespace-nowrap");
+    }
+    // And the scroll fallback survives: a rail that STILL cannot fit degrades
+    // to today's horizontal scroll, never to overlapping pills.
+    expect(html).toMatch(/<nav[^>]*class="[^"]*overflow-x-auto/);
+    expect(html).toMatch(/<ol[^>]*class="[^"]*w-max/);
+  });
+
+  // Scope of this test, stated exactly: it pins the four-step rail's connector
+  // WIDTH and row classes. The stronger claim — that the rendered four-step
+  // rail is unchanged pixel-for-pixel — is proven on the PR by the live
+  // before/after capture, whose PNGs hash identically.
+  it("#2505 leaves the ACCEPTED four-step rail alone — full-width connectors, unchanged row", async () => {
+    const { usePathname } = await import("next/navigation");
+    (usePathname as unknown as ReturnType<typeof vi.fn>).mockReturnValue("/setup/account");
+
+    const { SetupStepNav } = await import("../setup-step-nav");
+    const html = renderToStaticMarkup(
+      <SetupStepNav steps={STEPS.map((s) => ({ ...s, ready: false }))} />,
+    );
+
+    // Three connectors, each still the accepted 40px: the four-step rail
+    // measured 446.72px in a 672px column and never needed the space.
+    const connectorClasses = [...html.matchAll(/class="([^"]*h-0\.5[^"]*)"/g)].map((m) => m[1]);
+    expect(connectorClasses).toHaveLength(3);
+    for (const cls of connectorClasses) {
+      expect(cls).toContain("w-10");
+      expect(cls).not.toContain("w-5");
+    }
+    expect(html).toMatch(/<ol[^>]*class="[^"]*w-max/);
+  });
+
   it("renders an all-incomplete rail (the sessionless static forecast) with no links at all", async () => {
     const { usePathname } = await import("next/navigation");
     (usePathname as unknown as ReturnType<typeof vi.fn>).mockReturnValue("/setup/account");
