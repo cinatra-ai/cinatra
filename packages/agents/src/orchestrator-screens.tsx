@@ -53,7 +53,7 @@ import { OrchestratorLedgerSchema } from "./orchestrator-execution";
 import { buildSubAgentNodes } from "./orchestrator-readiness";
 import type { SubAgentNodeData } from "./orchestrator-readiness";
 import { OrchestratorRunPanel } from "./orchestrator-run-panel";
-import { AgentPageLayout } from "./agent-page-layout";
+import { AgentPageLayout, AgentPanelBody } from "./agent-page-layout";
 
 function buildExtensionHeaderLink(packageName: string | null | undefined) {
   if (!packageName) return null;
@@ -254,19 +254,31 @@ export async function OrchestratorRunScreen({
         extensionIdentifier={extensionHeaderLink?.extensionIdentifier}
         extensionHref={extensionHeaderLink?.extensionHref}
       >
-        <OrchestratorHITLPanel
-          agentId={agentId}
-          instanceId={instanceId}
-          inputParams={run.inputParams}
-        />
-        <ReadinessAlertsSection nodes={nodes} />
-        <OrchestratorRunPanel
-          orchestratorRunId={run.id}
-          orchestratorStatus={run.status}
-          nodes={nodes}
-          agentId={agentId}
-          instanceId={instanceId}
-        />
+        {/*
+          Declared body role (Application Design — Agents §III, row "The run
+          view, wherever it is hosted" / §IV): live run progress is monitoring
+          output, so it fills the FRAME — and it is the frame, not the body,
+          that responds when a panel marks itself as wide output. §IV: a run
+          view "is not given a wider base width for being a run view", which is
+          why this screen no longer opens at max-w-7xl.
+        */}
+        {/* `flex flex-col gap-6` reproduces the spacing these three panels got
+            as direct children of the layout's content column. */}
+        <AgentPanelBody role="frame" className="flex flex-col gap-6">
+          <OrchestratorHITLPanel
+            agentId={agentId}
+            instanceId={instanceId}
+            inputParams={run.inputParams}
+          />
+          <ReadinessAlertsSection nodes={nodes} />
+          <OrchestratorRunPanel
+            orchestratorRunId={run.id}
+            orchestratorStatus={run.status}
+            nodes={nodes}
+            agentId={agentId}
+            instanceId={instanceId}
+          />
+        </AgentPanelBody>
       </AgentPageLayout>
     </Main>
   );

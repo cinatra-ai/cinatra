@@ -45,31 +45,75 @@ export function getAutoRunNumber(runName: string, templateName: string): number 
 }
 
 /**
- * Per-tab base content width (cinatra#1161 — owner decision: option 1, per-tab
- * widths). The design system uses a GRADED content-width scale, not one
- * universal width (Application Design system, §VII "Content widths"):
+ * The two widths of the single-agent detail view — Application Design — Agents
+ * §II "The two widths" (design spec `specs/app-agents.html`). That page
+ * supersedes the per-tab width table this shell used to carry (cinatra#1161 →
+ * cinatra#2487): tab identity never assigns a width, so there is no per-tab
+ * lookup to maintain here.
  *
- *   run     → Full   max-w-7xl (1280px) — run-detail is an entity-detail + data-output
- *                    surface; §VII Full covers "dashboards, lists, tables, settings,
- *                    entity detail". Matches PageContent (every other surface).
- *   setup   → Medium max-w-2xl (672px)  — §VII Medium is literally "the /setup ·
- *                    onboarding column".
- *   trigger → Narrow max-w-xl  (576px)  — a single-column schedule/control form;
- *                    §VII Narrow is "single-column forms and control stacks".
- *   permissions / overview → Wide max-w-3xl (768px) — UNCHANGED from the prior
- *                    single-shell default; these tabs are outside the #1161 ruling.
+ *   Frame      Wide   max-w-3xl (48rem / 768px) — the container: title row, tab
+ *                     strip, etched rule, and the body's outer bound. Centred on
+ *                     the stage and CONSTANT on every tab (§I). The only thing
+ *                     that ever changes it is the conditional widen in §IV.
+ *   Body inset Narrow max-w-xl  (36rem / 576px) — a panel authored as a single
+ *                     column of form fields or controls, flush-left inside the
+ *                     frame (never re-centred, never applied to the frame).
  *
- * The output-HITL widen (`data-hitl-output`) is preserved on EVERY tab below so
- * wide approval output still gets room (symmetric, centred) regardless of the
- * per-tab base width — the run/HITL surface keeps the existing widen behaviour.
+ * §II: "Wide and Narrow are the whole base vocabulary of this surface" — the
+ * intermediate steps (max-w-2xl, max-w-md) and the full-width step (max-w-7xl)
+ * are NOT agent-frame widths, and neither is a bespoke arbitrary value.
  */
-export const TAB_CONTENT_MAX_WIDTH: Record<AgentInstanceNavProps["activeTab"], string> = {
-  run: "max-w-7xl",
-  setup: "max-w-2xl",
-  trigger: "max-w-xl",
-  permissions: "max-w-3xl",
-  overview: "max-w-3xl",
-};
+export const AGENT_FRAME_MAX_WIDTH = "max-w-3xl";
+export const AGENT_BODY_INSET_MAX_WIDTH = "max-w-xl";
+
+/**
+ * The body role a panel DECLARES — Application Design — Agents §III: "The body
+ * role is declared, not inferred. A panel states which of the two roles it is;
+ * nothing measures the rendered result and picks a width from it."
+ *
+ *   "narrow" — authored as a single column of form fields or controls.
+ *   "frame"  — everything else, including any panel that mixes a form with a
+ *              listing, a table, or monitoring output.
+ *
+ * The declaration belongs to the PANEL, not to the tab hosting it: the Setup
+ * tab shows a configuration form before a run and live run progress after it,
+ * and takes each panel's declared role in turn while the frame stays constant.
+ */
+export type AgentPanelBodyRole = "frame" | "narrow";
+
+/**
+ * Wraps one panel of an agent tab's body at its declared role (§II / §III).
+ *
+ * A Narrow body is flush-left — it starts at the frame's left edge and caps at
+ * 576px, with the leftover space on the right. §II: "Centring the inset inside
+ * the frame would make the body's left edge disagree with the title row and the
+ * first tab above it, which is the same visual break the constant frame exists
+ * to prevent." Hence `w-full` + a max-width and deliberately NO `mx-auto`.
+ */
+export function AgentPanelBody({
+  role,
+  className,
+  children,
+}: {
+  role: AgentPanelBodyRole;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      data-panel-body={role}
+      className={[
+        "w-full",
+        role === "narrow" ? AGENT_BODY_INSET_MAX_WIDTH : null,
+        className ?? null,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      {children}
+    </div>
+  );
+}
 
 export function AgentPageLayout({
   agentId,
@@ -117,7 +161,6 @@ export function AgentPageLayout({
     ]);
   }, [pathname, crumbEpoch, agentId, instanceId, crumbLabel]);
   const autoRunNumber = getAutoRunNumber(runName, templateName);
-  const contentMaxWidth = TAB_CONTENT_MAX_WIDTH[activeTab];
 
   // Listen for cross-component name updates from HitlApprovalCard:
   //   "cinatra:agent:name-set"  — auto-generated or confirmed name; update displayed value
@@ -155,21 +198,28 @@ export function AgentPageLayout({
   return (
     <>
       {/*
-        Outer width-controlling shell. The base max-width is chosen PER TAB from
-        the design system's graded content-width scale (TAB_CONTENT_MAX_WIDTH,
-        §VII — cinatra#1161): run → Full (7xl), setup → Medium (2xl), trigger →
-        Narrow (xl), permissions/overview → Wide (3xl). When ANY descendant
-        carries `data-hitl-output="true"` (set by HitlApprovalCard for `:output`
-        / `-output` renderers), the shell widens symmetrically regardless of tab
-        — `mx-auto` keeps it centered, `w-fit` keeps the box only as wide as its
-        content needs, and the `min-w-[min(48rem,100%)]` floor prevents the title
-        row + tab nav from reflowing narrower than the 768px reading shell on
-        wide viewports.
+        The frame — Application Design — Agents §I "one container, every tab".
+        Title row, tab strip, etched rule and the selected tab's body all live in
+        this one width-controlled container, and its base width is CONSTANT at
+        Wide (768px) on every tab: "selecting a different tab changes the body
+        and nothing else — the frame keeps its width, the title row keeps its
+        position, the tab strip keeps its left edge, and the etched rule keeps
+        its right edge."
+
+        The one sanctioned exception is the §IV conditional widen, and it is
+        caused by CONTENT, not by tab identity: when any descendant carries
+        `data-hitl-output="true"` (set by HitlApprovalCard for `:output` /
+        `-output` renderers) the frame takes its expanded state — `w-fit` makes
+        it fit its output, `mx-auto` keeps it centred, the `min(100%,1400px)`
+        monitor ceiling bounds it above and the `min(48rem,100%)` floor holds it
+        out at the Frame width so a narrow burst of marked output can never drag
+        the title row and tab strip inward (§IV, "the floor is part of the widen").
+        Remove the marked output and the frame returns to Wide.
       */}
       <div
         data-active-tab={activeTab}
         className={[
-          `mx-auto w-full ${contentMaxWidth} px-5 sm:px-8 lg:px-0`,
+          `mx-auto w-full ${AGENT_FRAME_MAX_WIDTH} px-5 sm:px-8 lg:px-0`,
           "transition-[max-width] duration-200 ease-out",
           "[&:has([data-hitl-output='true'])]:max-w-[min(100%,1400px)]",
           "[&:has([data-hitl-output='true'])]:w-fit",
@@ -232,7 +282,6 @@ export function AgentPageLayout({
             agentId={agentId}
             instanceId={instanceId}
             activeTab={activeTab}
-            includeSetupTab
             showTriggerTab={showTriggerTab}
           />
         </div>

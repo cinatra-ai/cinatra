@@ -50,7 +50,7 @@ import { RunAgentButton } from "./run-dialog";
 import { createAndTriggerRunWithContext, buildSubmissionMapByStepIndex, type SubmissionMapEntries } from "./run-actions";
 import { SetupCompletionWatcher } from "./setup-completion-watcher";
 import { type SerializedAgentRunMessage } from "./agentic-run-panel";
-import { AgentPageLayout } from "./agent-page-layout";
+import { AgentPageLayout, AgentPanelBody } from "./agent-page-layout";
 import { OrchestratorStepperPanel } from "./orchestrator-stepper-panel";
 import { TriggerScreenClient } from "./trigger-screen-client";
 import { estimateRunDuration } from "./trigger-duration-estimate";
@@ -267,7 +267,10 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // Trigger gate: if no trigger row exists, replace workspace content
   // with the first-step trigger form.
   const trigger = run ? await readRunTriggerByRunId(run.id) : null;
-  const showTriggerTab = trigger !== null && (trigger.triggerType === "scheduled" || trigger.triggerType === "recurring");
+  // cinatra#2487: ONE predicate for the strip on every route (was an inline
+  // duplicate of shouldShowPersistentTab here, `!!run` on /trigger, and nothing
+  // at all on /permissions — so the strip's contents changed between tabs).
+  const showTriggerTab = shouldShowPersistentTab(trigger);
 
   // `completed` is ambiguous (cinatra#831): genuine setup-success awaiting
   // trigger configuration (the /trigger redirect flow, cinatra#580) vs a
@@ -479,6 +482,13 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
           // Canonical run view (cinatra#2066, C1): the merged step rail on the
           // LEFT (owner ruling 2026-07-25), the run detail on the RIGHT — one
           // contract for both template classes.
+          //
+          // Declared body role (Application Design — Agents §III, row "Setup —
+          // hosting live run progress"): this is monitoring output, not a form,
+          // so it takes the FRAME width. Same tab as the configuration form,
+          // different panel — which is exactly why the width is declared here
+          // and not looked up from `activeTab`.
+          <AgentPanelBody role="frame">
           <div className="flex items-start gap-6" data-run-detail-contract="" data-conformance-id="run-surface">
             {run.status !== "pending_input" && rail.entries.length > 0 && (
               <RunStepRailPanel
@@ -549,10 +559,15 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
               )}
             </div>
           </div>
+          </AgentPanelBody>
         ) : (
-          <div className="soft-panel rounded-card p-6">
-            <p className="text-sm text-muted-foreground">No run selected.</p>
-          </div>
+          // An empty-state notice is neither a form nor a control stack, so it
+          // takes the frame width (Application Design — Agents §III).
+          <AgentPanelBody role="frame">
+            <div className="soft-panel rounded-card p-6">
+              <p className="text-sm text-muted-foreground">No run selected.</p>
+            </div>
+          </AgentPanelBody>
         )}
       </AgentPageLayout>
     </Main>
@@ -606,14 +621,16 @@ export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
           extensionIdentifier={extensionHeaderLink?.extensionIdentifier}
           extensionHref={extensionHeaderLink?.extensionHref}
         >
-          <div className="soft-panel rounded-card p-6 flex flex-col gap-2">
-            <h2 className="text-base font-semibold text-foreground">
-              No run selected
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              Start a run to view or configure its access policy.
-            </p>
-          </div>
+          <AgentPanelBody role="frame">
+            <div className="soft-panel rounded-card p-6 flex flex-col gap-2">
+              <h2 className="text-base font-semibold text-foreground">
+                No run selected
+              </h2>
+              <p className="text-sm text-muted-foreground">
+                Start a run to view or configure its access policy.
+              </p>
+            </div>
+          </AgentPanelBody>
         </AgentPageLayout>
       </Main>
     );
@@ -799,6 +816,12 @@ export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
         teamName: teamForReason?.name,
       });
 
+  // cinatra#2487: the strip is part of the constant frame, so /permissions must
+  // resolve the Trigger tab with the SAME predicate the other routes use —
+  // previously it passed nothing, so switching Setup → Permissions dropped the
+  // Trigger tab and shifted the strip and the etched rule's start point.
+  const permissionsTrigger = await readRunTriggerByRunId(run.id);
+
   return (
     <Main className="min-h-screen">
       <AgentPageLayout
@@ -809,6 +832,7 @@ export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
         initialRunName={run.title ?? ""}
         runId={run.id}
         isPublished={template.status === "published"}
+        showTriggerTab={shouldShowPersistentTab(permissionsTrigger)}
         extensionIdentifier={extensionHeaderLink?.extensionIdentifier}
         extensionHref={extensionHeaderLink?.extensionHref}
       >
@@ -817,6 +841,16 @@ export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
             {scopeReason}
           </p>
         )}
+        {/*
+          Declared body role (Application Design — Agents §III, row
+          "Permissions — the access / ownership controls"): "Narrow where the
+          controls are authored as one column; FRAME WIDTH where the panel
+          presents rows with per-row controls." PermissionsForm's Ownership
+          section is exactly the latter — a <ul> of owner/co-owner rows each
+          carrying its own remove control (permissions-form.tsx) — so this panel
+          takes the frame width, which is also what it renders at today.
+        */}
+        <AgentPanelBody role="frame">
         <ExtensionPermissionsClient
           kind="agent_run"
           resourceId={run.id}
@@ -833,6 +867,7 @@ export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
             return removeRunOwner(run.id);
           }}
         />
+        </AgentPanelBody>
       </AgentPageLayout>
     </Main>
   );
@@ -948,11 +983,32 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
         initialRunName={run?.title ?? ""}
         runId={run?.id ?? null}
         isPublished={template.status === "published"}
-        showTriggerTab={!!run}
+        // cinatra#2487: the SAME predicate as the other routes (was `!!run`,
+        // which put a Trigger tab in the strip on /trigger that /setup and
+        // /permissions did not show for the same run — a strip that changed
+        // between tabs, i.e. the defect this issue exists to remove).
+        //
+        // Consequence, deliberate: while a run is in the TRANSIENT first-step
+        // trigger form (no persistent scheduled/recurring trigger row yet) the
+        // strip carries no Trigger tab, so no tab renders selected. That form is
+        // a step in the run-start flow rather than a persistent tab, and the
+        // documented product rule for the tab is unchanged: it appears only for
+        // a scheduled/recurring trigger. Hoisting that transient step out of the
+        // tab frame entirely is the cleaner end state and is left as follow-up.
+        showTriggerTab={showPersistentTab}
         extensionIdentifier={extensionHeaderLink?.extensionIdentifier}
         extensionHref={extensionHeaderLink?.extensionHref}
       >
+        {/*
+          Declared body role (Application Design — Agents §III, row "Trigger —
+          the schedule form"): "A single-column schedule / control stack. Narrow
+          is §VII's stated home for exactly this shape." Both trigger panels —
+          the first-step schedule form and the configured-trigger summary +
+          controls — are that shape, so both declare Narrow. Narrow is an inset:
+          it sits flush-left INSIDE the frame and never resizes the frame.
+        */}
         {showPersistentTab && trigger && run ? (
+          <AgentPanelBody role="narrow">
           <TriggerTabClient
             agentId={agentId}
             runId={run.id}
@@ -973,7 +1029,9 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
             }}
             gatedSteps={gatedSteps}
           />
+          </AgentPanelBody>
         ) : (
+          <AgentPanelBody role="narrow">
           <TriggerScreenClient
             agentId={agentId}
             instanceId={instanceId}
@@ -985,6 +1043,7 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
             setupComplete={setupComplete}
             durationEstimate={durationEstimate}
           />
+          </AgentPanelBody>
         )}
       </AgentPageLayout>
     </Main>
