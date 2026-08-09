@@ -478,9 +478,11 @@ export {
   buildRecommendationHoldRetirement,
   declaresLifecycleInteraction,
   deriveRecommendationHoldInterrupt,
+  deriveRecommendationHoldSnapshot,
   readRecommendationHoldFromEvent,
   recommendationHoldThreadId,
   type RecommendationHoldRefPayload,
+  type RecommendationHoldSnapshot,
 } from "./recommendation-hold";
 // Run name lives on agent_runs.title; field validation happens at the
 // dispatcher's setup loop using the inputSchema directly.

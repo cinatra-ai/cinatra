@@ -52,8 +52,10 @@ import {
   RECOMMENDATION_HOLD_RENDERER_ID,
   buildRecommendationHoldInterrupt,
   buildRecommendationHoldResume,
+  buildRecommendationHoldRetirement,
   decodeRecommendationHoldRef,
   deriveRecommendationHoldInterrupt,
+  deriveRecommendationHoldSnapshot,
   encodeRecommendationHoldRef,
   maybeHoldRunForRecommendation,
   readRecommendationHoldFromEvent,
@@ -342,6 +344,45 @@ describe("deriveRecommendationHoldInterrupt — the PARK is the authority", () =
     expect(
       await deriveRecommendationHoldInterrupt({ runId: "run-1", threadId: "tpl-1" }),
     ).toBeNull();
+  });
+
+  it("distinguishes NOT-HELD from COULD-NOT-FIND-OUT", async () => {
+    // Load-bearing: a surface may retire a card on "not_held", never on
+    // "unknown" — reporting an unreadable park as "the hold is over" would drop
+    // the card of a run that is still waiting.
+    readContinuationParksForRun.mockResolvedValue([]);
+    expect(
+      await deriveRecommendationHoldSnapshot({ runId: "run-1", threadId: "tpl-1" }),
+    ).toEqual({ status: "not_held" });
+
+    readContinuationParksForRun.mockRejectedValue(new Error("store down"));
+    expect(
+      await deriveRecommendationHoldSnapshot({ runId: "run-1", threadId: "tpl-1" }),
+    ).toEqual({ status: "unknown" });
+
+    // A hold we cannot EXPRESS (no app secret ⇒ no ref) is equally "unknown",
+    // never "not held".
+    readContinuationParksForRun.mockResolvedValue([
+      { id: "park-1", checkpoint: "recommendation", status: "parked" },
+    ]);
+    delete process.env.BETTER_AUTH_SECRET;
+    expect(
+      await deriveRecommendationHoldSnapshot({ runId: "run-1", threadId: "tpl-1" }),
+    ).toEqual({ status: "unknown" });
+  });
+
+  it("a RETIREMENT is a synthesized-frame-only claim — a log frame naming it identifies nothing", async () => {
+    const retirement = buildRecommendationHoldRetirement({
+      runId: "run-1",
+      threadId: "tpl-1",
+    })!;
+    expect(isAgUiEvent(retirement)).toBe(true);
+    expect(readLifecycleInterruptInteraction(retirement)).toMatchObject({
+      kind: "recommendation_hold",
+    });
+    // It is deliberately NOT resolvable to a hold instance: only the route may
+    // mint it, and the stale-hold filter must never treat one as an identity.
+    expect(readRecommendationHoldFromEvent(retirement, "run-1")).toBeNull();
   });
 });
 

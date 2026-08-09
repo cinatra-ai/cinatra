@@ -13,7 +13,7 @@ const requireAuthSession = vi.fn();
 const isPlatformAdmin = vi.fn();
 const readAgentRunById = vi.fn();
 const subscribeToAgUiEventsWithId = vi.fn();
-const deriveRecommendationHoldInterrupt = vi.fn();
+const deriveRecommendationHoldSnapshot = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: () => requireAuthSession(),
@@ -23,8 +23,9 @@ const readRecommendationHoldFromEvent = vi.fn();
 
 vi.mock("@cinatra-ai/agents", () => ({
   readAgentRunById: (...a: unknown[]) => readAgentRunById(...a),
-  deriveRecommendationHoldInterrupt: (...a: unknown[]) =>
-    deriveRecommendationHoldInterrupt(...a),
+  deriveRecommendationHoldSnapshot: (...a: unknown[]) =>
+    deriveRecommendationHoldSnapshot(...a),
+  buildRecommendationHoldRetirement: () => null,
   readRecommendationHoldFromEvent: (...a: unknown[]) =>
     readRecommendationHoldFromEvent(...a),
   recommendationHoldThreadId: (run: { id: string; templateId?: string | null }) =>
@@ -55,7 +56,7 @@ describe("GET /api/agents/runs/[runId]/stream", () => {
     });
     // Default: the run is NOT held, so the S4 snapshot adds no frame and the
     // pre-existing assertions below read exactly what they always did.
-    deriveRecommendationHoldInterrupt.mockResolvedValue(null);
+    deriveRecommendationHoldSnapshot.mockResolvedValue({ status: "unknown" });
     readRecommendationHoldFromEvent.mockReturnValue(null);
   });
   afterEach(() => vi.clearAllMocks());

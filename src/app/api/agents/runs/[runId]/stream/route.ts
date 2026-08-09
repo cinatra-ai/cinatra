@@ -6,7 +6,7 @@ import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import {
   buildRecommendationHoldRetirement,
   declaresLifecycleInteraction,
-  deriveRecommendationHoldInterrupt,
+  deriveRecommendationHoldSnapshot,
   readAgentRunById,
   readRecommendationHoldFromEvent,
   recommendationHoldThreadId,
@@ -118,25 +118,21 @@ export async function GET(request: Request, context: RouteContext) {
   // review-task gates, which is exactly the confusion the discriminator exists
   // to prevent.
   const holdThreadId = recommendationHoldThreadId(run);
-  /** The run's CURRENT hold id, or null. Re-read whenever a frame disagrees. */
-  let liveHoldId: string | null = null;
-  const deriveHold = async (): Promise<{
-    event: Awaited<ReturnType<typeof deriveRecommendationHoldInterrupt>>;
-    holdId: string | null;
-  }> => {
-    const event = await deriveRecommendationHoldInterrupt({
+  const deriveHold = () =>
+    deriveRecommendationHoldSnapshot({
       runId: decodedRunId,
       threadId: holdThreadId,
-    }).catch(() => null);
-    const holdId = event
-      ? (readRecommendationHoldFromEvent(event, decodedRunId)?.holdId ?? null)
-      : null;
-    return { event, holdId };
-  };
+    }).catch(() => ({ status: "unknown" }) as const);
+
+  /** What the park last told us. `unknown` never authorizes anything. */
+  let live: Awaited<ReturnType<typeof deriveHold>> = { status: "unknown" };
 
   /**
    * Should this log frame reach the client? `true` for everything that is not a
    * lifecycle frame — the ordinary wire is untouched.
+   *
+   * Both arms FAIL CLOSED on `unknown`: an unreadable park cannot authorize
+   * showing a hold, and it cannot authorize retiring one either.
    */
   const forwardHoldFrame = async (event: unknown): Promise<boolean> => {
     if (!declaresLifecycleInteraction(event)) return true;
@@ -145,26 +141,25 @@ export async function GET(request: Request, context: RouteContext) {
     const type = (event as { type?: unknown }).type;
     if (type === "RESUME") {
       // A retirement ALWAYS re-reads the park. "Is this hold over?" is exactly
-      // the transition the cached value cannot answer: the cache was taken
-      // before the frame, and a RESUME naming the hold we last saw live is the
-      // single most likely case of the park having moved since.
+      // the transition a cached value cannot answer — and a RESUME naming the
+      // hold we last saw live is the likeliest case of the park having moved
+      // since we looked.
       //
       // A lifecycle RESUME is a "no interaction is live" signal — a client
       // cannot tell WHICH hold it names, the ref being opaque to it — so it is
       // forwarded only when the park says the run has NO live hold at all.
       // While the run is waiting (on this hold or a later one) a replayed
       // retirement would clear a card the run is still behind.
-      liveHoldId = (await deriveHold()).holdId;
-      return liveHoldId === null;
+      live = await deriveHold();
+      return live.status === "not_held";
     }
-    // Re-read the park whenever an ANNOUNCEMENT disagrees with what we last
-    // knew: a hold minted while this stream was open is legitimately newer than
-    // the snapshot.
-    if (claimed.holdId !== liveHoldId) {
-      liveHoldId = (await deriveHold()).holdId;
+    // Re-read whenever an ANNOUNCEMENT disagrees with what we last knew: a hold
+    // minted while this stream was open is legitimately newer than the snapshot.
+    if (live.status !== "held" || live.holdId !== claimed.holdId) {
+      live = await deriveHold();
     }
     // An announcement is forwarded only while it IS the live hold.
-    return liveHoldId === claimed.holdId;
+    return live.status === "held" && live.holdId === claimed.holdId;
   };
 
   // Unify abort sources (client disconnect + internal) into one controller.
@@ -211,20 +206,27 @@ export async function GET(request: Request, context: RouteContext) {
         // a log entry, so it must never become the client's resume cursor. It
         // goes out first so any newer log frame supersedes it rather than the
         // reverse.
-        const snapshot = await deriveHold();
-        liveHoldId = snapshot.holdId;
+        live = await deriveHold();
         // "NOT HELD" IS ALSO AN ANSWER, and it has to be SAID. An EventSource
         // reconnects on its own, so a client can come back holding a card for a
         // hold that ended while it was away — and if the retirement was lost
         // (the publish is best-effort) or filtered as history, silence would
         // leave that card up forever. So every (re)connect carries the current
         // answer: the hold, or an explicit retirement.
+        //
+        // `unknown` says NOTHING. A park we could not read must not be reported
+        // as "not held" — that would retire the card of a run that is still
+        // waiting. The client keeps what it has and its own authorized refetch
+        // remains the truth.
         const snapshotFrame =
-          snapshot.event ??
-          buildRecommendationHoldRetirement({
-            runId: decodedRunId,
-            threadId: holdThreadId,
-          });
+          live.status === "held"
+            ? live.event
+            : live.status === "not_held"
+              ? buildRecommendationHoldRetirement({
+                  runId: decodedRunId,
+                  threadId: holdThreadId,
+                })
+              : null;
         if (snapshotFrame) {
           controller.enqueue(
             encoder.encode(`data: ${JSON.stringify(snapshotFrame)}\n\n`),

@@ -329,21 +329,45 @@ export function readRecommendationHoldFromEvent(
  * Best-effort by contract: any read failure answers `null` (no card), never an
  * exception into the stream.
  */
+export type RecommendationHoldSnapshot =
+  /** The run IS held, by this hold, right now. */
+  | { status: "held"; event: InterruptEvent; holdId: string }
+  /** The run is definitively NOT held. */
+  | { status: "not_held" }
+  /**
+   * The park could not be read, or the hold could not be expressed (no app
+   * secret). DELIBERATELY its own answer: "I could not find out" must never be
+   * reported as "not held", because a surface would then retire a card for a
+   * run that is still waiting. Every consumer treats it as "change nothing".
+   */
+  | { status: "unknown" };
+
+export async function deriveRecommendationHoldSnapshot(input: {
+  runId: string;
+  threadId: string;
+}): Promise<RecommendationHoldSnapshot> {
+  let park: ParkRow | null;
+  try {
+    park = await readRecommendationParkForRun(input.runId);
+  } catch {
+    return { status: "unknown" };
+  }
+  if (!park || park.status !== "parked") return { status: "not_held" };
+  const event = buildRecommendationHoldInterrupt({
+    runId: input.runId,
+    threadId: input.threadId,
+    holdId: park.id,
+  });
+  return event ? { status: "held", event, holdId: park.id } : { status: "unknown" };
+}
+
+/** The held-or-nothing projection of the snapshot above. */
 export async function deriveRecommendationHoldInterrupt(input: {
   runId: string;
   threadId: string;
 }): Promise<InterruptEvent | null> {
-  try {
-    const park = await readRecommendationParkForRun(input.runId);
-    if (!park || park.status !== "parked") return null;
-    return buildRecommendationHoldInterrupt({
-      runId: input.runId,
-      threadId: input.threadId,
-      holdId: park.id,
-    });
-  } catch {
-    return null;
-  }
+  const snapshot = await deriveRecommendationHoldSnapshot(input);
+  return snapshot.status === "held" ? snapshot.event : null;
 }
 
 /**

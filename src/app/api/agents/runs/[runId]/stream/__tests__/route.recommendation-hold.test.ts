@@ -18,7 +18,7 @@ const requireAuthSession = vi.fn();
 const isPlatformAdmin = vi.fn();
 const readAgentRunById = vi.fn();
 const subscribeToAgUiEventsWithId = vi.fn();
-const deriveRecommendationHoldInterrupt = vi.fn();
+const deriveRecommendationHoldSnapshot = vi.fn();
 const readRecommendationHoldFromEvent = vi.fn();
 const declaresLifecycleInteraction = vi.fn();
 const buildRecommendationHoldRetirement = vi.fn();
@@ -29,8 +29,8 @@ vi.mock("@/lib/auth-session", () => ({
 }));
 vi.mock("@cinatra-ai/agents", () => ({
   readAgentRunById: (...a: unknown[]) => readAgentRunById(...a),
-  deriveRecommendationHoldInterrupt: (...a: unknown[]) =>
-    deriveRecommendationHoldInterrupt(...a),
+  deriveRecommendationHoldSnapshot: (...a: unknown[]) =>
+    deriveRecommendationHoldSnapshot(...a),
   readRecommendationHoldFromEvent: (...a: unknown[]) =>
     readRecommendationHoldFromEvent(...a),
   declaresLifecycleInteraction: (...a: unknown[]) => declaresLifecycleInteraction(...a),
@@ -109,6 +109,11 @@ function decodeHoldFrame(event: unknown, runId: string) {
 
 const HELD_RUN = { id: "run-1", templateId: "tpl-1", status: "pending_input" };
 
+const held = (holdId: string) =>
+  ({ status: "held", event: holdFrame(holdId), holdId }) as const;
+const NOT_HELD = { status: "not_held" } as const;
+const UNKNOWN = { status: "unknown" } as const;
+
 describe("the hold's live-state snapshot on the SSE route", () => {
   beforeEach(() => {
     isPlatformAdmin.mockReturnValue(false);
@@ -120,7 +125,7 @@ describe("the hold's live-state snapshot on the SSE route", () => {
     subscribeToAgUiEventsWithId.mockImplementation(async function* () {
       /* no log events unless a test provides them */
     });
-    deriveRecommendationHoldInterrupt.mockResolvedValue(null);
+    deriveRecommendationHoldSnapshot.mockResolvedValue(NOT_HELD);
     readRecommendationHoldFromEvent.mockImplementation(decodeHoldFrame);
     declaresLifecycleInteraction.mockImplementation(declaresReal);
     buildRecommendationHoldRetirement.mockReturnValue(holdResumeFrame("none"));
@@ -128,7 +133,7 @@ describe("the hold's live-state snapshot on the SSE route", () => {
   afterEach(() => vi.clearAllMocks());
 
   it("emits the CURRENT hold as the first frame for a late joiner", async () => {
-    deriveRecommendationHoldInterrupt.mockResolvedValue(holdFrame("park-current"));
+    deriveRecommendationHoldSnapshot.mockResolvedValue(held("park-current"));
 
     const frames = await drain(await GET(streamReq(), ctx("run-1")));
 
@@ -138,7 +143,7 @@ describe("the hold's live-state snapshot on the SSE route", () => {
       interaction: { kind: "recommendation_hold" },
     });
     // Derived from the run's CURRENT state, with the run's own thread identity.
-    expect(deriveRecommendationHoldInterrupt).toHaveBeenCalledWith({
+    expect(deriveRecommendationHoldSnapshot).toHaveBeenCalledWith({
       runId: "run-1",
       threadId: "tpl-1",
     });
@@ -148,7 +153,7 @@ describe("the hold's live-state snapshot on the SSE route", () => {
     // An EventSource reconnects on its own; a client can come back showing a
     // card for a hold that ended while it was away. Every (re)connect therefore
     // carries the current answer, and "no hold" is an answer.
-    deriveRecommendationHoldInterrupt.mockResolvedValue(null);
+    deriveRecommendationHoldSnapshot.mockResolvedValue(NOT_HELD);
     const frames = await drain(await GET(streamReq(), ctx("run-1")));
     expect(frames).toHaveLength(1);
     expect(frames[0]).toMatchObject({
@@ -158,7 +163,7 @@ describe("the hold's live-state snapshot on the SSE route", () => {
   });
 
   it("reconstructs the hold on a Last-Event-ID RECONNECT too", async () => {
-    deriveRecommendationHoldInterrupt.mockResolvedValue(holdFrame("park-current"));
+    deriveRecommendationHoldSnapshot.mockResolvedValue(held("park-current"));
     const frames = await drain(
       await GET(streamReq({ "last-event-id": "17-0" }), ctx("run-1")),
     );
@@ -171,7 +176,7 @@ describe("the hold's live-state snapshot on the SSE route", () => {
   });
 
   it("the synthesized frame carries NO SSE id — it must not become the cursor", async () => {
-    deriveRecommendationHoldInterrupt.mockResolvedValue(holdFrame("park-current"));
+    deriveRecommendationHoldSnapshot.mockResolvedValue(held("park-current"));
     const res = await GET(streamReq(), ctx("run-1"));
     const raw = await new Response(res.body).text();
     const firstChunk = raw.split("\n\n")[0];
@@ -179,8 +184,11 @@ describe("the hold's live-state snapshot on the SSE route", () => {
     expect(firstChunk).not.toContain("id: ");
   });
 
-  it("a failing snapshot degrades to no card, never to a stream error", async () => {
-    deriveRecommendationHoldInterrupt.mockRejectedValue(new Error("park store down"));
+  it("an UNREADABLE park says NOTHING — never 'not held'", async () => {
+    // "I could not find out" must not be reported as "the hold is over": that
+    // would retire the card of a run that is still waiting. Silence leaves the
+    // client's own authorized refetch as the truth.
+    deriveRecommendationHoldSnapshot.mockResolvedValue(UNKNOWN);
     const res = await GET(streamReq(), ctx("run-1"));
     expect(res.status).toBe(200);
     expect(await drain(res)).toHaveLength(0);
@@ -204,7 +212,7 @@ describe("the stale-hold filter over replayed history", () => {
   it("DROPS a decided hold replayed out of the log (a re-parked run shows only its current hold)", async () => {
     // The run is parked AGAIN under park-2; the log still carries park-1's
     // announcement from the first hold.
-    deriveRecommendationHoldInterrupt.mockResolvedValue(holdFrame("park-2"));
+    deriveRecommendationHoldSnapshot.mockResolvedValue(held("park-2"));
     subscribeToAgUiEventsWithId.mockImplementation(async function* () {
       yield { id: "1-0", event: holdFrame("park-1") };
       yield { id: "2-0", event: holdFrame("park-2") };
@@ -220,31 +228,34 @@ describe("the stale-hold filter over replayed history", () => {
   });
 
   it("DROPS every hold frame when the run is no longer held at all", async () => {
-    deriveRecommendationHoldInterrupt.mockResolvedValue(null);
+    deriveRecommendationHoldSnapshot.mockResolvedValue(NOT_HELD);
     subscribeToAgUiEventsWithId.mockImplementation(async function* () {
       yield { id: "1-0", event: holdFrame("park-1") };
     });
 
-    expect(await drain(await GET(streamReq(), ctx("run-1")))).toHaveLength(0);
+    const frames = await drain(await GET(streamReq(), ctx("run-1")));
+    // The retirement snapshot only — the replayed announcement is dropped.
+    expect(frames.map((f) => f.type)).toEqual(["RESUME"]);
   });
 
   it("FORWARDS a hold minted while the stream was already open", async () => {
     // Open on an unheld run, then the park appears mid-stream: the route
     // re-reads the park and finds the new hold confirmed.
-    deriveRecommendationHoldInterrupt
-      .mockResolvedValueOnce(null) // at open: not held
-      .mockResolvedValue(holdFrame("park-new")); // on the re-check
+    deriveRecommendationHoldSnapshot
+      .mockResolvedValueOnce(NOT_HELD) // at open: not held
+      .mockResolvedValue(held("park-new")); // on the re-check
     subscribeToAgUiEventsWithId.mockImplementation(async function* () {
       yield { id: "1-0", event: holdFrame("park-new") };
     });
 
     const frames = await drain(await GET(streamReq(), ctx("run-1")));
-    expect(frames).toHaveLength(1);
-    expect(frames[0]).toMatchObject({ interaction: { ref: "ref-park-new" } });
+    // The retirement snapshot, then the newly-minted hold.
+    expect(frames.map((f) => f.type)).toEqual(["RESUME", "INTERRUPT"]);
+    expect(frames[1]).toMatchObject({ interaction: { ref: "ref-park-new" } });
   });
 
   it("leaves ORDINARY interrupts and every other event untouched", async () => {
-    deriveRecommendationHoldInterrupt.mockResolvedValue(null);
+    deriveRecommendationHoldSnapshot.mockResolvedValue(NOT_HELD);
     subscribeToAgUiEventsWithId.mockImplementation(async function* () {
       yield {
         id: "1-0",
@@ -264,6 +275,7 @@ describe("the stale-hold filter over replayed history", () => {
 
     const frames = await drain(await GET(streamReq(), ctx("run-1")));
     expect(frames.map((f) => f.type)).toEqual([
+      "RESUME", // the retirement snapshot
       "INTERRUPT",
       "TEXT_MESSAGE_CONTENT",
       "RUN_FINISHED",
@@ -291,19 +303,20 @@ describe("a lifecycle RESUME retires exactly the hold it names", () => {
   afterEach(() => vi.clearAllMocks());
 
   it("FORWARDS the resume of a hold the park agrees is over", async () => {
-    deriveRecommendationHoldInterrupt.mockResolvedValue(null); // not held now
+    deriveRecommendationHoldSnapshot.mockResolvedValue(NOT_HELD); // not held now
     subscribeToAgUiEventsWithId.mockImplementation(async function* () {
       yield { id: "1-0", event: holdResumeFrame("park-1") };
     });
 
     const frames = await drain(await GET(streamReq(), ctx("run-1")));
-    expect(frames.map((f) => f.type)).toEqual(["RESUME"]);
+    // The retirement snapshot, then the log's own retirement.
+    expect(frames.map((f) => f.type)).toEqual(["RESUME", "RESUME"]);
   });
 
   it("DROPS a stale resume while the run is waiting on a DIFFERENT hold", async () => {
     // park-2 is live; park-1's resume is history. Forwarding it would clear the
     // card of a hold the run is still waiting on.
-    deriveRecommendationHoldInterrupt.mockResolvedValue(holdFrame("park-2"));
+    deriveRecommendationHoldSnapshot.mockResolvedValue(held("park-2"));
     subscribeToAgUiEventsWithId.mockImplementation(async function* () {
       yield { id: "1-0", event: holdResumeFrame("park-1") };
     });
@@ -313,7 +326,7 @@ describe("a lifecycle RESUME retires exactly the hold it names", () => {
   });
 
   it("DROPS the resume of the hold that is still live (a duplicate/early frame)", async () => {
-    deriveRecommendationHoldInterrupt.mockResolvedValue(holdFrame("park-1"));
+    deriveRecommendationHoldSnapshot.mockResolvedValue(held("park-1"));
     subscribeToAgUiEventsWithId.mockImplementation(async function* () {
       yield { id: "1-0", event: holdResumeFrame("park-1") };
     });
@@ -323,12 +336,12 @@ describe("a lifecycle RESUME retires exactly the hold it names", () => {
   });
 
   it("leaves an ORDINARY resume alone", async () => {
-    deriveRecommendationHoldInterrupt.mockResolvedValue(null);
+    deriveRecommendationHoldSnapshot.mockResolvedValue(NOT_HELD);
     subscribeToAgUiEventsWithId.mockImplementation(async function* () {
       yield { id: "1-0", event: { type: "RESUME", threadId: "tpl-1", runId: "run-1" } };
     });
     const frames = await drain(await GET(streamReq(), ctx("run-1")));
-    expect(frames.map((f) => f.type)).toEqual(["RESUME"]);
+    expect(frames.map((f) => f.type)).toEqual(["RESUME", "RESUME"]);
   });
 });
 
@@ -342,7 +355,7 @@ describe("presence gates, validity permits", () => {
     readAgentRunById.mockResolvedValue({ ...HELD_RUN, status: "pending_approval" });
     declaresLifecycleInteraction.mockImplementation(declaresReal);
     buildRecommendationHoldRetirement.mockReturnValue(holdResumeFrame("none"));
-    deriveRecommendationHoldInterrupt.mockResolvedValue(null);
+    deriveRecommendationHoldSnapshot.mockResolvedValue(NOT_HELD);
   });
   afterEach(() => vi.clearAllMocks());
 
@@ -355,6 +368,8 @@ describe("presence gates, validity permits", () => {
       yield { id: "2-0", event: holdResumeFrame("park-1") };
     });
 
-    expect(await drain(await GET(streamReq(), ctx("run-1")))).toHaveLength(0);
+    const frames = await drain(await GET(streamReq(), ctx("run-1")));
+    // The retirement snapshot only — both undecodable frames are dropped.
+    expect(frames.map((f) => f.type)).toEqual(["RESUME"]);
   });
 });
