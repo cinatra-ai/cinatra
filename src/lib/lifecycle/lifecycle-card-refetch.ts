@@ -3,7 +3,7 @@ import "server-only";
 // ---------------------------------------------------------------------------
 // The AUTHORITATIVE REFETCH contract for lifecycle cards (cinatra#2565,
 // epic #2564 S1). Design: design@6c20871b4108176c1d0193f19ecd2947f6c6355f
-// `specs/app-lifecycle-cards.html` v0.1.0 §IV.
+// `specs/app-lifecycle-cards.html` at that commit §IV.
 //
 // A lifecycle DATA_PART carries an opaque ref and nothing else, so EVERY fact a
 // card shows has to come from here: given a ref and the reader, resolve the

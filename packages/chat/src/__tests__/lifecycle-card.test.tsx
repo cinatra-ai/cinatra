@@ -2,7 +2,7 @@
 //
 // The lifecycle card shell + its authoritative-refetch seam (cinatra#2565,
 // epic #2564 S1). Design: design@6c20871b4108176c1d0193f19ecd2947f6c6355f
-// `specs/app-lifecycle-cards.html` v0.1.0 §IV/§IX.
+// `specs/app-lifecycle-cards.html` at that commit §IV/§IX.
 //
 // The properties under test are the ones a later slice must not be able to
 // weaken by accident: no host means no card, an unauthorized ref draws no DOM

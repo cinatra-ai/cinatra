@@ -1,7 +1,7 @@
 // The lifecycle CARD registry — spec conformance + wire invariants
 // (cinatra#2565, epic #2564 S1).
 // Design: design@6c20871b4108176c1d0193f19ecd2947f6c6355f
-// `specs/app-lifecycle-cards.html` v0.1.0.
+// `specs/app-lifecycle-cards.html` at that commit.
 
 import { describe, expect, it } from "vitest";
 

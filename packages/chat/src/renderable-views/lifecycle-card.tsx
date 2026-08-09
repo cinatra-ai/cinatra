@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // The lifecycle CARD stub + its authoritative-refetch seam (cinatra#2565,
 // epic #2564 S1). Design: design@6c20871b4108176c1d0193f19ecd2947f6c6355f
-// `specs/app-lifecycle-cards.html` v0.1.0.
+// `specs/app-lifecycle-cards.html` at that commit.
 //
 // This is the ONE component the card registry dispatches every lifecycle
 // viewType to. It is deliberately a SHELL: S1 owns the wire, the producer bind

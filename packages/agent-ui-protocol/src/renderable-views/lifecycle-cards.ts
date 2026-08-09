@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Lifecycle CARDS — the one-card-per-interaction registry (cinatra#2565, epic
 // #2564 S1). Design: design@6c20871b4108176c1d0193f19ecd2947f6c6355f
-// `specs/app-lifecycle-cards.html` v0.1.0 (§IV states, §IX presence matrix).
+// `specs/app-lifecycle-cards.html` at that commit (§IV states, §IX presence matrix).
 //
 // The epic's structural rule is ONE card per interaction kind, rendered on every
 // host that shows that interaction. This module is the REGISTRY that makes the
