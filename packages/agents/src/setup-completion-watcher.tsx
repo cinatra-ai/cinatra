@@ -177,7 +177,13 @@ export function SetupCompletionWatcher({
           // Only redirect on genuine setup-success. `failed`/`stopped` are NOT
           // setup completion — redirecting on them navigates the user away from
           // a failed run and discards the visible error (cinatra#580).
-          if (data.status !== "completed") return;
+          //
+          // cinatra#2523: `pending_trigger` is now the state a setup-success run
+          // ends in — setup done, awaiting the trigger choice — so it is the
+          // primary hand-off signal here. `completed` stays accepted: it is still
+          // what a run that executed straight through reads as, and the mount/SSE
+          // paths above have always advanced on it.
+          if (data.status !== "completed" && data.status !== "pending_trigger") return;
           const params = data.inputParams ?? {};
           const allFilled = requiredFields.every((f) =>
             Object.prototype.hasOwnProperty.call(params, f),

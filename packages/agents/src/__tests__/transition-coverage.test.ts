@@ -98,8 +98,36 @@ describe("transition-coverage", () => {
     ]) {
       expect(__LEGAL_TRANSITIONS__.has(edge)).toBe(true);
     }
-    // pending_trigger is still NOT directly dispatchable (no ->queued/->running).
-    expect(__LEGAL_TRANSITIONS__.has("pending_trigger->queued")).toBe(false);
+    // pending_trigger is still never RUNNING — it is a waiting state, and the
+    // dispatch below always goes through `queued` so the worker's own
+    // queued->running CAS stays the single door into execution.
     expect(__LEGAL_TRANSITIONS__.has("pending_trigger->running")).toBe(false);
+  });
+
+  // cinatra#2523 (owner ruling 2026-08-09, remedy (c)). The setup -> trigger
+  // hand-off gave `pending_trigger` its first PRODUCER (execution.ts ends a
+  // finished setup there instead of running the agent before the user has
+  // chosen when), and the trigger form's "Run now" its first legal dispatch
+  // edge. Until then `pending_trigger` was write-only in the table:
+  // `pending_trigger->armed` had no reachable source state, and the immediate
+  // branch faked a transition out of a terminal status and swallowed the
+  // refusal.
+  it("pending_trigger is both reachable from setup and dispatchable (cinatra#2523)", () => {
+    expect(__LEGAL_TRANSITIONS__.has("queued->pending_trigger")).toBe(true);
+    expect(__LEGAL_TRANSITIONS__.has("pending_trigger->queued")).toBe(true);
+  });
+
+  // The finality rule is untouched by that pair: no terminal status gains an
+  // edge back into the lifecycle. This is the regression pin for the carve-out
+  // cinatra#2523 removed rather than widened.
+  it("no terminal status has ANY outbound edge except the documented failed->pending_input reset", () => {
+    const terminalEdges = [...__LEGAL_TRANSITIONS__].filter((edge) =>
+      ["completed", "failed", "stopped"].includes(edge.split("->")[0] as string),
+    );
+    expect(terminalEdges.sort()).toEqual(["failed->pending_input", "stopped->queued"]);
+    for (const from of ["completed", "failed", "stopped"]) {
+      expect(__LEGAL_TRANSITIONS__.has(`${from}->pending_trigger`)).toBe(false);
+    }
+    expect(__LEGAL_TRANSITIONS__.has("completed->queued")).toBe(false);
   });
 });

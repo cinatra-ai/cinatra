@@ -195,7 +195,10 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     // Re-enqueued for setup loop to re-evaluate remaining fields.
     expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
       "agent-builder-execution",
-      { runId: "run-s1" },
+      // cinatra#2523: the setup form's own resume leg is MARKED, so execution.ts
+      // can tell it apart from every other producer and hand a finished setup to
+      // the trigger step instead of running the agent before the user has chosen when.
+      { runId: "run-s1", resumedFromSetup: true },
       { jobId: "resume-setup-run-s1" },
     );
   });
@@ -375,7 +378,10 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
 
     expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
       "agent-builder-execution",
-      { runId: "run-s2" },
+      // cinatra#2523: the setup form's own resume leg is MARKED, so execution.ts
+      // can tell it apart from every other producer and hand a finished setup to
+      // the trigger step instead of running the agent before the user has chosen when.
+      { runId: "run-s2", resumedFromSetup: true },
       { jobId: "resume-setup-run-s2" },
     );
   });
@@ -449,7 +455,10 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     expect(statusWrite).toBeDefined();
     expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
       "agent-builder-execution",
-      { runId: "run-s6" },
+      // cinatra#2523: the setup form's own resume leg is MARKED, so execution.ts
+      // can tell it apart from every other producer and hand a finished setup to
+      // the trigger step instead of running the agent before the user has chosen when.
+      { runId: "run-s6", resumedFromSetup: true },
       { jobId: "resume-setup-run-s6" },
     );
   });
@@ -494,7 +503,10 @@ describe("approveReviewTaskInternal — setup-* synthetic path", () => {
     expect(statusWrite).toBeDefined();
     expect(bgJobs.enqueueBackgroundJob).toHaveBeenCalledWith(
       "agent-builder-execution",
-      { runId: "run-554a" },
+      // cinatra#2523: the setup form's own resume leg is MARKED, so execution.ts
+      // can tell it apart from every other producer and hand a finished setup to
+      // the trigger step instead of running the agent before the user has chosen when.
+      { runId: "run-554a", resumedFromSetup: true },
       { jobId: "resume-setup-run-554a" },
     );
   });

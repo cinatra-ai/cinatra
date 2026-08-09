@@ -456,7 +456,11 @@ export async function approveReviewTaskInternal(
 
     await enqueueBackgroundJob(
       BACKGROUND_JOB_NAMES.AGENT_BUILDER_EXECUTION,
-      { runId },
+      // cinatra#2523: this is the SETUP form's own resume leg. The flag tells
+      // execution.ts that, once the last required field is in, this run owes the
+      // trigger step before it may dispatch — so it hands off to
+      // `pending_trigger` instead of running before the user has chosen when.
+      { runId, resumedFromSetup: true },
       { jobId: `resume-${reviewTaskId}` },
     );
     console.log(

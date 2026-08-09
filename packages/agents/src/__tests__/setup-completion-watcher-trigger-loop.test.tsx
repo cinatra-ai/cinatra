@@ -140,6 +140,50 @@ describe("SetupCompletionWatcher — /trigger redirect loop (cinatra#2482)", () 
     },
   );
 
+  // cinatra#2523 (owner ruling 2026-08-09, remedy (c)): setup now ENDS on
+  // `pending_trigger` rather than running the agent before the user has chosen
+  // when. The user-visible setup-completion experience must read EXACTLY as
+  // before — the watcher still carries them to the trigger form — so the two
+  // paths that can deliver a setup-success run are both pinned here.
+  it("carries the new setup-success state (pending_trigger) to the trigger form on mount (cinatra#2523)", async () => {
+    liveStatus = "pending_trigger";
+    const { SetupCompletionWatcher } = await import("../setup-completion-watcher");
+    render(<SetupCompletionWatcher {...baseProps({ initialStatus: "pending_trigger" })} />);
+
+    await waitFor(() => expect(routerPush).toHaveBeenCalledTimes(1));
+    expect(routerPush).toHaveBeenCalledWith(
+      "/agents/cinatra-ai/blog-draft-writer-agent/run-2482/trigger",
+    );
+  });
+
+  it("carries it through the POLLING fallback too — a run that reaches pending_trigger while watched (cinatra#2523)", async () => {
+    // Mounted mid-setup (the watcher's mount guard defers to the live stream),
+    // then the run finishes setup and lands on the hand-off state.
+    liveStatus = "pending_trigger";
+    const { SetupCompletionWatcher } = await import("../setup-completion-watcher");
+    render(<SetupCompletionWatcher {...baseProps({ initialStatus: "pending_approval" })} />);
+
+    await waitFor(
+      () =>
+        expect(routerPush).toHaveBeenCalledWith(
+          "/agents/cinatra-ai/blog-draft-writer-agent/run-2482/trigger",
+        ),
+      { timeout: 3000 },
+    );
+  });
+
+  it.each(["queued", "running"])(
+    "still does NOT redirect from the poll on an in-flight %s run (the poll was not widened)",
+    async (status) => {
+      liveStatus = status;
+      const { SetupCompletionWatcher } = await import("../setup-completion-watcher");
+      render(<SetupCompletionWatcher {...baseProps({ initialStatus: "pending_approval" })} />);
+
+      await new Promise((r) => setTimeout(r, 1200));
+      expect(routerPush).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps the pre-existing runHasExecuted guard (cinatra#831)", async () => {
     const { SetupCompletionWatcher } = await import("../setup-completion-watcher");
     render(<SetupCompletionWatcher {...baseProps({ runHasExecuted: true })} />);

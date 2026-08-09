@@ -109,6 +109,21 @@ export const LEGAL_TRANSITIONS = new Set<`${AgentRunStatus}->${AgentRunStatus}`>
   // cinatra#1940 P1 (Decision 5): terminal edges from the form-open state.
   "pending_trigger->stopped",         // cancel/bulk-stop from the form-open state (single CAS, no pending_input detour)
   "pending_trigger->failed",          // defensive — arming/template failure while the form is open (mirrors armed->failed)
+  // cinatra#2523 (owner ruling 2026-08-09, remedy (c)) — the setup -> trigger
+  // hand-off becomes a REAL pair of edges.
+  //
+  // Before this, a run whose setup form was submitted fell straight through to
+  // dispatch. On an agent with no gated steps (`gatedSteps: []` — every agent
+  // whose steps carry no side-effect risk class) the trigger gate does not
+  // apply, so the run EXECUTED and landed `completed` before the user ever
+  // reached the trigger form; "Run right after setup" then had nothing left to
+  // dispatch and the refusal was swallowed. `pending_trigger` already MEANS
+  // "the trigger step is open, awaiting the user's choice" — it simply had no
+  // producer, which is why `pending_trigger->armed` sat unreachable. These two
+  // edges give it one, and give the immediate choice a legal dispatch edge, so
+  // no caller has to fake a transition out of a terminal status.
+  "queued->pending_trigger",          // execution.ts: setup finished, no trigger chosen yet
+  "pending_trigger->queued",          // trigger-service.ts: the user chose "Run now"
   // TriggerWaitNode pause/resume in-flight WayFlow run.
   // Distinct lifecycle from `armed` (clone-on-tick); `waiting_trigger` resumes
   // the same a2aContextId.
