@@ -231,3 +231,122 @@ describe("resolveConfigurationNeedsForAgents — keyed map for the card grid", (
     expect(map["@cinatra-ai/list-curator-agent"].needs[0].displayName).toBe("LinkedIn OAuth");
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#2539 — the probe fan-out is the amplifier, so it is pinned here.
+//
+// `resolveConnectorBadgeState` is a live readiness probe (a DB read, and for
+// most connectors a call to the connection broker). It used to be awaited
+// inside a nested loop: one probe per (agent × required connector edge), each
+// waiting for the previous one, with the dedup set scoped to a SINGLE agent —
+// so N agents sharing one connector produced N sequential probes of the same
+// connector. On the extensions catalog that is the per-row retry storm the
+// issue measured. The result is a property of the CONNECTOR and the viewer, so
+// one pass must probe each distinct connector exactly once, concurrently.
+// ---------------------------------------------------------------------------
+describe("resolveConfigurationNeedsForAgents — bounded probe fan-out (cinatra#2539)", () => {
+  it("probes each distinct connector ONCE across all agents, not once per agent", async () => {
+    connectedPackageIds.clear();
+    resolveConnectorBadgeState.mockClear();
+
+    // Twelve agents, all requiring the SAME two connectors: 24 probes before,
+    // 2 after.
+    const agents = Array.from({ length: 12 }, (_, i) => ({
+      packageName: `@cinatra-ai/agent-${i}`,
+      kind: "agent" as ExtensionKind,
+      dependencies: [
+        dep({ packageName: "@cinatra-ai/linkedin-connector" }),
+        dep({ packageName: "@cinatra-ai/apollo-connector" }),
+      ],
+    }));
+
+    const map = await resolveConfigurationNeedsForAgents(agents, { userId: null });
+
+    expect(resolveConnectorBadgeState).toHaveBeenCalledTimes(2);
+    expect(
+      new Set(resolveConnectorBadgeState.mock.calls.map((c) => c[0])),
+    ).toEqual(
+      new Set(["@cinatra-ai/linkedin-connector", "@cinatra-ai/apollo-connector"]),
+    );
+    // Every agent still gets its full needs list, in the summarizer's own
+    // package-name order (unchanged by the batching).
+    expect(Object.keys(map)).toHaveLength(12);
+    for (const a of agents) {
+      expect(map[a.packageName].needs.map((n) => n.packageName)).toEqual([
+        "@cinatra-ai/apollo-connector",
+        "@cinatra-ai/linkedin-connector",
+      ]);
+    }
+  });
+
+  it("issues the probes concurrently instead of one after another", async () => {
+    connectedPackageIds.clear();
+    resolveConnectorBadgeState.mockClear();
+
+    let inFlight = 0;
+    let peakInFlight = 0;
+    resolveConnectorBadgeState.mockImplementation(async (packageId: string) => {
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      inFlight -= 1;
+      return { connected: connectedPackageIds.has(packageId) };
+    });
+
+    const startedAt = Date.now();
+    await resolveConfigurationNeedsForAgents(
+      [
+        {
+          packageName: "@cinatra-ai/a",
+          kind: "agent",
+          dependencies: [
+            dep({ packageName: "@cinatra-ai/linkedin-connector" }),
+            dep({ packageName: "@cinatra-ai/apollo-connector" }),
+          ],
+        },
+        {
+          packageName: "@cinatra-ai/b",
+          kind: "agent",
+          dependencies: [dep({ packageName: "@cinatra-ai/mystery-connector" })],
+        },
+      ],
+      { userId: null },
+    );
+    const elapsed = Date.now() - startedAt;
+
+    expect(peakInFlight).toBeGreaterThan(1);
+    // Three 15 ms probes serialized would be ~45 ms; concurrently they are ~15 ms.
+    expect(elapsed).toBeLessThan(45);
+
+    resolveConnectorBadgeState.mockImplementation(async (packageId: string) => ({
+      connected: connectedPackageIds.has(packageId),
+    }));
+  });
+
+  it("never probes for a non-agent root even when agents in the same batch do", async () => {
+    connectedPackageIds.clear();
+    resolveConnectorBadgeState.mockClear();
+
+    await resolveConfigurationNeedsForAgents(
+      [
+        {
+          packageName: "@cinatra-ai/some-connector",
+          kind: "connector",
+          dependencies: [dep({ packageName: "@cinatra-ai/apollo-connector" })],
+        },
+        {
+          packageName: "@cinatra-ai/an-agent",
+          kind: "agent",
+          dependencies: [dep({ packageName: "@cinatra-ai/linkedin-connector" })],
+        },
+      ],
+      { userId: null },
+    );
+
+    expect(resolveConnectorBadgeState).toHaveBeenCalledTimes(1);
+    expect(resolveConnectorBadgeState).toHaveBeenCalledWith(
+      "@cinatra-ai/linkedin-connector",
+      { userId: null },
+    );
+  });
+});

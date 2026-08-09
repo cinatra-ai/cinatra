@@ -29,7 +29,11 @@ import {
 } from "@cinatra-ai/extension-types";
 import type { ExtensionDiscoveryScope } from "@cinatra-ai/extension-types";
 import type { AgentTemplateRecord } from "@cinatra-ai/agents";
-import { listExtensionPackages } from "@cinatra-ai/registries";
+import {
+  listExtensionPackages,
+  CATALOG_PACKUMENT_TIMEOUT_MS,
+  CATALOG_HYDRATION_BUDGET_MS,
+} from "@cinatra-ai/registries";
 import type { AgentPackageSummary } from "@cinatra-ai/registries";
 import {
   discoverActiveExtensionCapabilities,
@@ -40,6 +44,7 @@ import {
 import { listInstalledExtensions } from "../canonical-store";
 import type { ExtensionKind, InstalledExtension } from "../canonical-types";
 import { sourceVersion } from "../lifecycle-ui";
+import { isRegistryUnreachable } from "./registry-failure-class";
 import { resolveInstalledVendorName } from "./installed-vendor";
 import { resolveInstalledDisplayName } from "./installed-display-name";
 // §VI source indicator (cinatra#1572) — the pure provenance classifier + the
@@ -392,34 +397,94 @@ export async function loadInstalledCardRows(
   // by a fresh server process.
   registerAllObjectTypes();
 
-  const [
-    available,
-    discoveredActive,
-    discoveredArchived,
-    activeManifests,
-    archivedManifests,
-    canonicalRows,
-  ] = await Promise.all([
-    // Kind-authoritative registry page (packument-level metadata for ALL
-    // kinds) — the display hydration + update-detection source.
-    listExtensionPackages(
-      { query: opts.query, limit: 200, viewerScope: vendorScope },
-      verdaccioConfig,
-    ),
-    // Active = canonical dispatcher across ALL kinds: installed_extension
-    // (active|locked) gate ∩ each kind's visibility reader facet.
-    discoverActiveExtensionCapabilities({ actor, scope }),
-    // Archived twin: archived candidate manifests ∩ each kind's listArchived
-    // reader facet — the same actor-scoped per-kind visibility.
-    discoverArchivedExtensionCapabilities({ actor, scope }),
-    // Coarse manifest reads for the runtime-only-connector union below (the
-    // union re-applies the shared owner-scope gate before rendering).
-    readActiveManifestsFromStore({ kind: "connector" }),
-    readArchivedManifestsFromStore({ kind: "connector" }),
-    // Canonical rows ANNOTATE the discovered (already visibility-filtered)
-    // rows with lifecycle status / requiredInProd / installed version.
-    listInstalledExtensions(),
-  ]);
+  // Kind-authoritative registry page (packument-level metadata for ALL kinds) —
+  // the display hydration + update-detection source. Started FIRST so it
+  // overlaps the canonical read below.
+  //
+  // FAIL-SOFT (cinatra#2539): the registry is an OPTIONAL hydration source —
+  // every field it contributes (catalog title, description, author, published
+  // version) already has a native-descriptor / static-manifest / package-name
+  // fallback. Before this catch, a registry that was down or unreachable
+  // rejected this promise, rejected the whole `Promise.all`, and took the
+  // ENTIRE installed-extension catalog with it: an operator whose local
+  // Verdaccio was not running could not see the extensions they had installed.
+  // A registry failure now degrades to "no registry hydration" and the rows
+  // still render.
+  const availableOutcome_ = listExtensionPackages(
+    {
+      query: opts.query,
+      limit: 200,
+      viewerScope: vendorScope,
+      // This is a PAGE RENDER, so it opts into the lossy bounds (they are not
+      // defaults — a search tool that must not drop a matching package leaves
+      // them off and keeps the answer-completely-or-throw contract).
+      fetchTimeoutMs: CATALOG_PACKUMENT_TIMEOUT_MS,
+      hydrationBudgetMs: CATALOG_HYDRATION_BUDGET_MS,
+    },
+    verdaccioConfig,
+  ).then(
+    // Settled into a NON-REJECTING outcome the moment the promise is created.
+    // The decision (degrade vs rethrow) is made below, at the point of use —
+    // but the handler must be attached HERE: this promise is started before the
+    // canonical read is awaited, so a handler attached later would leave a
+    // window in which a fast registry rejection is an unhandled rejection, and
+    // would lose the registry error entirely if the canonical read rejected.
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+
+  // Canonical rows ANNOTATE the discovered (already visibility-filtered) rows
+  // with lifecycle status / requiredInProd / installed version.
+  //
+  // ONE read, threaded (cinatra#2539). `installed_extension` is the SAME input
+  // for the two discovery dispatchers and the two coarse connector-manifest
+  // reads below, so this page used to issue FIVE identical full-table reads per
+  // render (one here, one per manifest read, one inside each dispatcher) —
+  // measured at ~1.3 s each on a 89-row instance, ~6.8 s of duplicated database
+  // work for a single page. The snapshot is read once and passed down; each
+  // reader applies its kind filter in memory, which is what the SQL predicate
+  // did.
+  const canonicalRows = await listInstalledExtensions();
+
+  const [availableOutcome, discoveredActive, discoveredArchived, activeManifests, archivedManifests] =
+    await Promise.all([
+      availableOutcome_,
+      // Active = canonical dispatcher across ALL kinds: installed_extension
+      // (active|locked) gate ∩ each kind's visibility reader facet.
+      discoverActiveExtensionCapabilities({ actor, scope, canonicalRows }),
+      // Archived twin: archived candidate manifests ∩ each kind's listArchived
+      // reader facet — the same actor-scoped per-kind visibility.
+      discoverArchivedExtensionCapabilities({ actor, scope, canonicalRows }),
+      // Coarse manifest reads for the runtime-only-connector union below (the
+      // union re-applies the shared owner-scope gate before rendering).
+      readActiveManifestsFromStore({ kind: "connector", canonicalRows }),
+      readArchivedManifestsFromStore({ kind: "connector", canonicalRows }),
+    ]);
+
+  // FAIL-SOFT, narrowly (cinatra#2539). The registry is an OPTIONAL hydration
+  // source: every field it contributes has a native-descriptor /
+  // static-manifest / package-name fallback. Before this, a registry that was
+  // down or unreachable rejected the whole `Promise.all` and took the ENTIRE
+  // installed-extension catalog with it — an operator whose local Verdaccio was
+  // not running could not see the extensions they had installed.
+  //
+  // Only the UNREACHABLE class degrades. A registry that answers 401/403/404,
+  // or any failure shape this code does not positively recognise, still
+  // propagates: see `isRegistryUnreachable`.
+  let available: AgentPackageSummary[];
+  if (availableOutcome.ok) {
+    available = availableOutcome.value;
+  } else {
+    if (!isRegistryUnreachable(availableOutcome.error)) throw availableOutcome.error;
+    console.warn(
+      "[installed-rows] registry unreachable — rendering rows without registry hydration " +
+        "(titles/descriptions/versions fall back to the native descriptors):",
+      availableOutcome.error instanceof Error
+        ? availableOutcome.error.message
+        : availableOutcome.error,
+    );
+    available = [];
+  }
 
   // Fail loud, never silent: an unmigrated kind means live/archived manifests
   // exist for it but no reader facet resolved — i.e. the `@/lib/extensions`

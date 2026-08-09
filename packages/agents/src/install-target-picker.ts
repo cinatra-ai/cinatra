@@ -39,7 +39,7 @@ import {
   betterAuthOrganizations,
 } from "@/lib/better-auth-db";
 import {
-  readProjectCoOwners,
+  readCoOwnersForProjects,
   projects as projectsTable,
   projectsDb,
 } from "@/lib/projects-store";
@@ -162,12 +162,19 @@ export async function buildInstallTargetPickerContext(args: {
       )
       .orderBy(projectsTable.name);
 
+    // ONE co-owner read for ALL projects (cinatra#2539): this used to be one
+    // awaited round trip per project inside the loop, so the picker's cost grew
+    // linearly with the workspace's project count on every surface that renders
+    // it (the marketplace page renders it before its first card). A single `IN`
+    // query keeps that at one round trip regardless of project count — and
+    // unlike a per-project fan-out it cannot burst the connection pool. Row
+    // order and per-project grouping are unchanged.
+    const coOwnersByProject = await readCoOwnersForProjects(rows.map((row) => row.id));
     for (const row of rows) {
       // ownerUserIds union: project owner (when user-owned) + co-owners.
       const ownerUserIds: string[] = [];
       if (row.ownerLevel === "user") ownerUserIds.push(row.ownerId);
-      const coOwners = await readProjectCoOwners(row.id);
-      for (const co of coOwners) ownerUserIds.push(co.userId);
+      for (const co of coOwnersByProject.get(row.id) ?? []) ownerUserIds.push(co.userId);
       projectsForPicker.push({
         id: row.id,
         name: row.name,

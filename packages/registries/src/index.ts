@@ -103,6 +103,16 @@ export type { PublishedExtensionSummary } from "./verdaccio/client";
 // surface via extensions_search.
 export { listExtensionPackages } from "./verdaccio/client";
 
+// cinatra#2539 — the OPT-IN bounds a PAGE RENDER passes to
+// `listExtensionPackages`, plus the error a cut-short read reports. Not
+// defaults: bounding the catalog read is lossy, so only a caller that prefers a
+// bounded partial answer to a slow complete one opts in.
+export {
+  CATALOG_PACKUMENT_TIMEOUT_MS,
+  CATALOG_HYDRATION_BUDGET_MS,
+  RegistryCatalogBudgetExceededError,
+} from "./verdaccio/client";
+
 // Registry-scoped '//<host>/:_authToken' credential entry for pacote /
 // npm-registry-fetch option objects. The ONLY auth shape that fetch layer
 // honors — a flat `token` option is silently ignored (#179). Re-exported so
