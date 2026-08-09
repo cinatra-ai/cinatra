@@ -79,12 +79,14 @@ test("first visit takes the two-hop to /setup/account and renders the step chrom
   await expect(page.getByText("Create the first account")).toBeVisible();
 
   // #2477 finding 1 — the SESSIONLESS chrome carries the SAME universal rail
-  // every other setup page does: Account is step 1 of four, not a lone pill
-  // and not a step that appears only after sign-up. EXACTLY four here: the
-  // conditional Connections step is withheld from the sessionless forecast on
-  // purpose (deciding whether it applies is a status read this branch must
-  // never perform).
-  await expectUniversalStepRail(page, { exact: true });
+  // every other setup page does: Account is step 1 of five, not a lone pill
+  // and not a step that appears only after sign-up.
+  //
+  // cinatra#2502 (owner, 2026-08-08) — that now includes SECRETS. The step is
+  // unconditional, so drawing its pill here performs no readiness read and
+  // discloses nothing: a pill that is always drawn says nothing about the
+  // instance behind it. The rail stays a forecast (asserted just below).
+  await expectUniversalStepRail(page);
 
   // The sessionless rail is STATIC by construction: an unauthenticated
   // visitor triggers no readiness read, so nothing is disclosed as complete
@@ -140,7 +142,7 @@ test("the name step live-derives the namespace and tells the truth", async () =>
   await captureStateShots(page, "02-name-step-derived");
 
   await page.click('#instance-name-form button[type="submit"]');
-  await page.waitForURL(/\/setup\/(model|connections)/, { timeout: 60_000 });
+  await page.waitForURL(/\/setup\/(model|secrets)/, { timeout: 60_000 });
 });
 
 test("the LLM Provider step offers exactly two logo'd cards, name-only, with no verification UI", async () => {

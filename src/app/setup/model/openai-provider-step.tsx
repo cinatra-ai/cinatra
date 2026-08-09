@@ -73,8 +73,12 @@ export async function SetupOpenAIProviderStep({ keyReopened }: { keyReopened?: b
   // reopened the key flow (fingerprint mismatch: re-entry is the remedy).
   const showKeyForm = !isConnected || keyReopened === true;
 
+  // CARDLESS (cinatra#2502 item A, design spec `specs/app-setup.html` §I): the
+  // key field sits directly on the wizard column like every other step's
+  // fields. Rule #8 keeps white for what the operator touches — the <Input>
+  // below and the selectable provider cards — not for the section around them.
   return (
-    <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
+    <section>
       <p className="text-base font-semibold text-foreground">OpenAI API key</p>
       {showKeyForm ? (
         <>

@@ -8,9 +8,9 @@
 // section it rendered was the last consumer of the host's
 // `@/lib/nango-settings-section` re-export facade, and the canonical,
 // mode-independent destination for connection-service configuration is
-// `/setup/connections` (see the connections-deeplink-guard test). Both
+// `/setup/secrets` (see the connections-deeplink-guard test). Both
 // legacy values still resolve: they fall back to "mode", flagged so the
-// Mode tab can surface the pointer to /setup/connections.
+// Mode tab can surface the pointer to /setup/secrets.
 
 export const CONNECTIONS_TAB_VALUE = "connections";
 export const LEGACY_CONNECTIONS_TAB_VALUE = "credentials";
@@ -18,7 +18,7 @@ export const LEGACY_CONNECTIONS_TAB_VALUE = "credentials";
 export type EnvTab = { value: string; label: string };
 
 /** The Environment tab set. The retired "Connections" tab is never
- *  offered — connection-service configuration lives on /setup/connections. */
+ *  offered — connection-service configuration lives on /setup/secrets. */
 export function buildTabs(): EnvTab[] {
   return [
     { value: "mode", label: "Mode" },
@@ -39,7 +39,7 @@ export type ResolvedEnvTab = {
 /**
  * Resolve the requested `?tab=` value against the live tab set:
  *   - `?tab=connections|credentials` (retired tab) → falls back to `mode`,
- *     flagged so the Mode tab can point at /setup/connections
+ *     flagged so the Mode tab can point at /setup/secrets
  *   - any unknown value → `mode`, unflagged
  */
 export function resolveEnvTab(rawTab: string, tabs: EnvTab[]): ResolvedEnvTab {

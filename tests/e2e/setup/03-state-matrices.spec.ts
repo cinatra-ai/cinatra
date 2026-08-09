@@ -60,7 +60,7 @@ test.beforeAll(async ({ }, testInfo) => {
   await expect(display).toBeVisible();
   await fillStable(display, `Lane 2392 Matrices ${Date.now()}`);
   await page.click('#instance-name-form button[type="submit"]');
-  await page.waitForURL(/\/setup\/(model|connections)/, { timeout: 60_000 });
+  await page.waitForURL(/\/setup\/(model|secrets)/, { timeout: 60_000 });
   await context.storageState({ path: STATE_PATH });
   await browser.close();
 });

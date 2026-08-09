@@ -31,11 +31,13 @@ vi.mock("next/link", () => ({
     React.createElement("a", { href, ...rest }, children),
 }));
 
-const STEPS = [
-  { id: "sign-up", title: "Account", href: "/setup/account", ready: true },
-  { id: "key", title: "Key", href: "/setup/key", ready: true },
-  { id: "name", title: "Name", href: "/setup/name", ready: false },
-  { id: "ai", title: "Model", href: "/setup/model", ready: false },
+import type { SetupWizardStep } from "@/lib/setup-wizard";
+
+const STEPS: SetupWizardStep[] = [
+  { id: "sign-up", title: "Account", href: "/setup/account", status: "done" },
+  { id: "key", title: "Key", href: "/setup/key", status: "done" },
+  { id: "name", title: "Name", href: "/setup/name", status: "upcoming" },
+  { id: "ai", title: "Model", href: "/setup/model", status: "upcoming" },
 ];
 
 beforeEach(() => {
@@ -67,7 +69,7 @@ describe("SetupStepNav — the sign-up pill (cinatra#2477)", () => {
     const { SetupStepNav } = await import("../setup-step-nav");
     const fiveSteps = [
       ...STEPS.slice(0, 3),
-      { id: "connections", title: "Connections", href: "/setup/connections", ready: false },
+      { id: "secrets", title: "Secrets", href: "/setup/secrets", status: "upcoming" as const },
       STEPS[3],
     ];
     const html = renderToStaticMarkup(<SetupStepNav steps={fiveSteps} />);
@@ -92,7 +94,7 @@ describe("SetupStepNav — the sign-up pill (cinatra#2477)", () => {
     const { SetupStepNav } = await import("../setup-step-nav");
     const fiveSteps = [
       ...STEPS.slice(0, 3),
-      { id: "connections", title: "Connections", href: "/setup/connections", ready: false },
+      { id: "secrets", title: "Secrets", href: "/setup/secrets", status: "upcoming" as const },
       STEPS[3],
     ];
     const html = renderToStaticMarkup(<SetupStepNav steps={fiveSteps} />);
@@ -131,7 +133,7 @@ describe("SetupStepNav — the sign-up pill (cinatra#2477)", () => {
 
     const { SetupStepNav } = await import("../setup-step-nav");
     const html = renderToStaticMarkup(
-      <SetupStepNav steps={STEPS.map((s) => ({ ...s, ready: false }))} />,
+      <SetupStepNav steps={STEPS.map((s) => ({ ...s, status: "upcoming" as const }))} />,
     );
 
     // Three connectors, each still the accepted 40px: the four-step rail
@@ -151,7 +153,7 @@ describe("SetupStepNav — the sign-up pill (cinatra#2477)", () => {
 
     const { SetupStepNav } = await import("../setup-step-nav");
     const html = renderToStaticMarkup(
-      <SetupStepNav steps={STEPS.map((s) => ({ ...s, ready: false }))} />,
+      <SetupStepNav steps={STEPS.map((s) => ({ ...s, status: "upcoming" as const }))} />,
     );
 
     expect(html).not.toMatch(/<a /);

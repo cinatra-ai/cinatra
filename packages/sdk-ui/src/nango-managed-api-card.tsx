@@ -65,10 +65,13 @@ export function NangoManagedApiCard(props: NangoManagedApiCardProps) {
 
     if (!connectionServiceReady) {
       // The Environment "Connections" tab is dev-only, so it is NOT a valid
-      // target in production (cinatra#66). /setup/connections is the
-      // canonical, mode-independent connection-service setup page — the
-      // setup wizard surfaces it whenever the service is not connected.
-      router.push("/setup/connections");
+      // target in production (cinatra#66). /setup/secrets is the canonical,
+      // mode-independent connection-service setup page — the setup wizard
+      // surfaces it whenever the service is not connected. (cinatra#2502
+      // renamed the step and moved the route; the old path still 308s, but a
+      // CTA that rides a compatibility redirect is one deploy away from a
+      // dead link and it names the step by a word the wizard no longer uses.)
+      router.push("/setup/secrets");
       return;
     }
 

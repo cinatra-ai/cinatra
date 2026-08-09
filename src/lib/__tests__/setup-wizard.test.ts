@@ -33,8 +33,13 @@ vi.mock("@cinatra-ai/openai-connector", () => ({
   isOpenAIConnectionReady: () => false,
   getConfiguredOpenAIConnection: async () => undefined,
 }));
+// cinatra#2502 — the SECRETS step is now unconditional, so the nango status
+// drives only its STATE (done vs upcoming), never its presence. Stateful so
+// both sides of that are exercised; default "connected" keeps every pre-existing
+// case in this file reading exactly as it did.
+const nangoState = { status: "connected" as string };
 vi.mock("@/lib/nango-system", () => ({
-  getNangoStatus: () => ({ status: "connected" }),
+  getNangoStatus: () => ({ status: nangoState.status }),
 }));
 // S3 (cinatra#2388): the AI step reads the provider-commit machine's FRESH
 // derivation. Stubbed at that seam so the wizard's step/gate logic is
@@ -76,6 +81,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   hasUsersState.value = true;
   readinessState.ready = false;
+  nangoState.status = "connected";
   // Default: set a valid 64-char hex key so CINATRA_ENCRYPTION_KEY tests
   // don't bleed onto unrelated tests.
   process.env.CINATRA_ENCRYPTION_KEY =
@@ -93,23 +99,23 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe("getSetupWizardSteps - key is step 1, after the ever-present sign-up step", () => {
-  it("returns key as steps[1] with ready=false when CINATRA_ENCRYPTION_KEY is unset", async () => {
+  it("returns key as steps[1] with status upcoming when CINATRA_ENCRYPTION_KEY is unset", async () => {
     delete process.env.CINATRA_ENCRYPTION_KEY;
     vi.mocked(readInstanceIdentity).mockReturnValueOnce(null);
     const steps = await getSetupWizardSteps();
     expect(steps[1]?.id).toBe("key");
     expect(steps[1]?.href).toBe("/setup/key");
-    expect(steps[1]?.ready).toBe(false);
+    expect(steps[1]?.status).toBe("upcoming");
   });
 
-  it("returns key step as ready=true when CINATRA_ENCRYPTION_KEY is a 64-char hex", async () => {
+  it("returns key step as status done when CINATRA_ENCRYPTION_KEY is a 64-char hex", async () => {
     process.env.CINATRA_ENCRYPTION_KEY =
       "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     vi.mocked(readInstanceIdentity).mockReturnValueOnce(null);
     const steps = await getSetupWizardSteps();
     const keyStep = steps.find((s) => s.id === "key");
     expect(keyStep).toBeDefined();
-    expect(keyStep?.ready).toBe(true);
+    expect(keyStep?.status).toBe("done");
   });
 });
 
@@ -138,7 +144,7 @@ describe("getSetupWizardSteps - name step is index 2 after sign-up and key", () 
     const steps = await getSetupWizardSteps();
     expect(steps[2]?.id).toBe("name");
     expect(steps[2]?.href).toBe("/setup/name");
-    expect(steps[2]?.ready).toBe(false);
+    expect(steps[2]?.status).toBe("upcoming");
   });
 
   it("marks the name step as ready when identity is configured", async () => {
@@ -146,7 +152,7 @@ describe("getSetupWizardSteps - name step is index 2 after sign-up and key", () 
     const steps = await getSetupWizardSteps();
     const nameStep = steps.find((s) => s.id === "name");
     expect(nameStep).toBeDefined();
-    expect(nameStep?.ready).toBe(true);
+    expect(nameStep?.status).toBe("done");
   });
 });
 
@@ -189,14 +195,14 @@ describe("getSetupWizardSteps - the AI step follows the commit machine's derivat
     vi.mocked(readInstanceIdentity).mockReturnValue(SAMPLE_IDENTITY);
     readinessState.ready = false;
     const steps = await getSetupWizardSteps();
-    expect(steps.find((s) => s.id === "ai")?.ready).toBe(false);
+    expect(steps.find((s) => s.id === "ai")?.status).toBe("upcoming");
   });
 
   it("the ai step IS ready with a valid receipt — no OpenAI-specific read involved", async () => {
     vi.mocked(readInstanceIdentity).mockReturnValue(SAMPLE_IDENTITY);
     readinessState.ready = true;
     const steps = await getSetupWizardSteps();
-    expect(steps.find((s) => s.id === "ai")?.ready).toBe(true);
+    expect(steps.find((s) => s.id === "ai")?.status).toBe("done");
   });
 
   it("a valid receipt completes the wizard (every other gate satisfied)", async () => {
@@ -218,18 +224,18 @@ describe("getSetupWizardSteps - the sign-up step (cinatra#2477)", () => {
     const steps = await getSetupWizardSteps();
     expect(steps[0]?.id).toBe("sign-up");
     expect(steps[0]?.href).toBe("/setup/account");
-    expect(steps[0]?.ready).toBe(false);
+    expect(steps[0]?.status).toBe("upcoming");
     expect(steps[1]?.id).toBe("key");
   });
 
-  it("stays PRESENT as steps[0] with ready:true once at least one user exists (cinatra#2477 — no longer retires)", async () => {
+  it("stays PRESENT as steps[0] with status done once at least one user exists (cinatra#2477 — no longer retires)", async () => {
     hasUsersState.value = true;
     vi.mocked(readInstanceIdentity).mockReturnValueOnce(null);
     const steps = await getSetupWizardSteps();
     expect(steps[0]).toMatchObject({
       id: "sign-up",
       href: "/setup/account",
-      ready: true,
+      status: "done",
     });
     expect(steps[1]?.id).toBe("key");
   });
@@ -266,5 +272,99 @@ describe("isSetupWizardComplete - fresh derivation, no stale-true window (cinatr
     // derivation flips, and the wizard must flip WITH it, instantly.
     readinessState.ready = false;
     await expect(isSetupWizardComplete()).resolves.toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2502 — the SECRETS step and the three-state model.
+//
+// Pinned against the design spec `specs/app-setup.html`
+// revision 0.3.0 (§III the three states, §VII the Secrets step). The spec's own test
+// for "always visible" is a single observable — the rail carries exactly one
+// Secrets pill, in every state — so that is what these assert.
+// ---------------------------------------------------------------------------
+
+describe("getSetupWizardSteps — the Secrets step is unconditional (§VII)", () => {
+  it('is named "Secrets", routed at /setup/secrets, and sits between Name and Model', async () => {
+    (readInstanceIdentity as ReturnType<typeof vi.fn>).mockReturnValue(SAMPLE_IDENTITY);
+    const steps = await getSetupWizardSteps();
+    const secrets = steps.find((s) => s.id === "secrets");
+    expect(secrets?.title).toBe("Secrets");
+    expect(secrets?.href).toBe("/setup/secrets");
+    expect(steps.map((s) => s.title)).toEqual(["Account", "Key", "Name", "Secrets", "Model"]);
+  });
+
+  it("draws EXACTLY ONE Secrets pill whether the connection service is connected or not — only its state moves", async () => {
+    (readInstanceIdentity as ReturnType<typeof vi.fn>).mockReturnValue(SAMPLE_IDENTITY);
+
+    nangoState.status = "connected";
+    const connected = await getSetupWizardSteps();
+    expect(connected.filter((s) => s.title === "Secrets")).toHaveLength(1);
+    expect(connected.find((s) => s.id === "secrets")?.status).toBe("done");
+
+    nangoState.status = "not_connected";
+    const disconnected = await getSetupWizardSteps();
+    expect(disconnected.filter((s) => s.title === "Secrets")).toHaveLength(1);
+    expect(disconnected.find((s) => s.id === "secrets")?.status).toBe("upcoming");
+  });
+
+  it("stays on the rail once passed — the pre-#2502 list DROPPED it, which is what erased the operator's record", async () => {
+    (readInstanceIdentity as ReturnType<typeof vi.fn>).mockReturnValue(SAMPLE_IDENTITY);
+    readinessState.ready = true;
+    nangoState.status = "connected";
+    const steps = await getSetupWizardSteps();
+    // Everything passed: the step that is furthest along must STILL be listed.
+    expect(steps.find((s) => s.id === "secrets")).toBeDefined();
+    expect(steps.find((s) => s.id === "secrets")?.status).toBe("done");
+  });
+
+  it("still GATES completion: an unconnected connection service blocks the wizard", async () => {
+    (readInstanceIdentity as ReturnType<typeof vi.fn>).mockReturnValue(SAMPLE_IDENTITY);
+    readinessState.ready = true;
+    nangoState.status = "not_connected";
+    // The step is present-but-not-done rather than absent, and the gate must
+    // read that the same way it read "present and not ready" before.
+    await expect(isSetupWizardComplete()).resolves.toBe(false);
+  });
+});
+
+describe("resolveSetupStepState — §III precedence: done → current → upcoming", () => {
+  it("DONE WINS over current: a passed step the operator navigated back to stays done", async () => {
+    const { resolveSetupStepState } = await import("@/lib/setup-wizard");
+    expect(resolveSetupStepState({ status: "done" }, true)).toBe("done");
+    expect(resolveSetupStepState({ status: "done" }, false)).toBe("done");
+  });
+
+  it("an unpassed step is current on screen and upcoming everywhere else", async () => {
+    const { resolveSetupStepState } = await import("@/lib/setup-wizard");
+    expect(resolveSetupStepState({ status: "upcoming" }, true)).toBe("current");
+    expect(resolveSetupStepState({ status: "upcoming" }, false)).toBe("upcoming");
+  });
+
+  it("resolves to one of EXACTLY three states — there is no fourth", async () => {
+    const { resolveSetupStepState } = await import("@/lib/setup-wizard");
+    const produced = new Set(
+      (["done", "upcoming"] as const).flatMap((status) =>
+        [true, false].map((onScreen) => resolveSetupStepState({ status }, onScreen)),
+      ),
+    );
+    expect([...produced].sort()).toEqual(["current", "done", "upcoming"]);
+  });
+});
+
+describe("getFirstIncompleteStep — reads the status model", () => {
+  it("skips passed steps and returns the first unpassed one", async () => {
+    (readInstanceIdentity as ReturnType<typeof vi.fn>).mockReturnValue(SAMPLE_IDENTITY);
+    readinessState.ready = false;
+    nangoState.status = "connected";
+    const steps = await getSetupWizardSteps();
+    expect(getFirstIncompleteStep(steps)?.id).toBe("ai");
+  });
+
+  it("returns the Secrets step when the connection service is the frontier", async () => {
+    (readInstanceIdentity as ReturnType<typeof vi.fn>).mockReturnValue(SAMPLE_IDENTITY);
+    nangoState.status = "not_connected";
+    const steps = await getSetupWizardSteps();
+    expect(getFirstIncompleteStep(steps)?.href).toBe("/setup/secrets");
   });
 });

@@ -118,7 +118,7 @@ test.beforeAll(async ({ browser }, testInfo) => {
   await expect(display).toBeVisible();
   await fillStable(display, `Lane 2544 SoftNav ${Date.now()}`);
   await page.click('#instance-name-form button[type="submit"]');
-  await page.waitForURL(/\/setup\/(model|connections)/, { timeout: 60_000 });
+  await page.waitForURL(/\/setup\/(model|secrets)/, { timeout: 60_000 });
 
   await page.goto("/setup/model?stay=1");
   await page.getByTestId("setup-provider-openai").click();

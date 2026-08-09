@@ -444,7 +444,7 @@ describe("auth-route-guard - cinatra#2386 /setup/account (first-account bootstra
     )?.[1];
     expect(publicExactPathsBlock).toBeDefined();
     expect(publicExactPathsBlock ?? "").not.toMatch(/"\/setup"\s*,/);
-    for (const p of ["/setup", "/setup/key", "/setup/name", "/setup/model", "/setup/connections", "/setup/complete"]) {
+    for (const p of ["/setup", "/setup/key", "/setup/name", "/setup/model", "/setup/secrets", "/setup/complete"]) {
       const res = await guardAppRoute(fakeRequest(p));
       expect(res.status, `${p} must stay guarded`).toBe(307);
       expect(res.headers.get("location")).toContain("/sign-in");

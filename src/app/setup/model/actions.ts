@@ -148,9 +148,12 @@ function connectionServiceReady(): boolean {
   }
 }
 
-const CONNECTIONS_STEP_FIX_FORWARD =
-  " Finish the Connections step first — the key is stored through the connection " +
-  "service, which is not configured yet. Complete Connections, then come back and " +
+// cinatra#2502 — the step this names is now called "Secrets" (route
+// /setup/secrets). A fix-forward that names a step the rail does not show is
+// worse than no fix-forward at all, so the copy moves with the label.
+const SECRETS_STEP_FIX_FORWARD =
+  " Finish the Secrets step first — the key is stored through the connection " +
+  "service, which is not configured yet. Complete Secrets, then come back and " +
   "save the key.";
 
 /**
@@ -222,7 +225,7 @@ export async function saveSetupAnthropicConnectionAction(
     // by matching the connector's error string.
     return connectionServiceReady()
       ? saved
-      : { ...saved, sanitizedMessage: saved.sanitizedMessage + CONNECTIONS_STEP_FIX_FORWARD };
+      : { ...saved, sanitizedMessage: saved.sanitizedMessage + SECRETS_STEP_FIX_FORWARD };
   }
 
   try {

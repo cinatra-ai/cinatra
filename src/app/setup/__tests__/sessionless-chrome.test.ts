@@ -6,8 +6,9 @@
  * middleware-level pin). Its parent layout (src/app/setup/layout.tsx) must:
  *   - render a STATIC full-rail progress chrome for that visitor — sign-up as
  *     step 1 followed by the wizard's unconditional steps, every entry
- *     ready:false (cinatra#2477: the signup page carries the same step
- *     indicator as every other setup page),
+ *     `status: "upcoming"` (cinatra#2477: the signup page carries the same
+ *     step indicator as every other setup page; cinatra#2502: Secrets is one
+ *     of those unconditional steps, so it is on this rail too),
  *   - WITHOUT ever calling getSetupWizardSteps() — the readiness reader
  *     (readSetupReadinessState / getNangoStatus / readInstanceIdentity are
  *     all real DB reads) must never run for an unauthenticated caller.
@@ -67,17 +68,27 @@ describe("SetupLayout — sessionless branch (no session)", () => {
     expect(getSetupWizardSteps).not.toHaveBeenCalled();
 
     // cinatra#2477 — the FULL static rail: the wizard's unconditional steps
-    // with sign-up as step 1. Every entry is ready:false (nothing disclosed,
-    // nothing navigable); the conditional Connections step is absent because
-    // whether it applies is itself a status read this branch must never do.
+    // with sign-up as step 1. Every entry is `status: "upcoming"` (nothing
+    // disclosed, nothing navigable).
+    //
+    // cinatra#2502 (owner, 2026-08-08) — SECRETS IS ON IT. "Always visible,
+    // never hidden by state" covers the signed-out first screen: the step is
+    // unconditional now, so drawing its pill performs no readiness read and
+    // discloses nothing about the instance behind it.
     const steps = findStepsProp(ui);
     expect(steps).toBeDefined();
     expect(steps).toEqual([
-      { id: "sign-up", title: "Account", href: "/setup/account", ready: false },
-      { id: "key", title: "Key", href: "/setup/key", ready: false },
-      { id: "name", title: "Name", href: "/setup/name", ready: false },
-      { id: "ai", title: "Model", href: "/setup/model", ready: false },
+      { id: "sign-up", title: "Account", href: "/setup/account", status: "upcoming" },
+      { id: "key", title: "Key", href: "/setup/key", status: "upcoming" },
+      { id: "name", title: "Name", href: "/setup/name", status: "upcoming" },
+      { id: "secrets", title: "Secrets", href: "/setup/secrets", status: "upcoming" },
+      { id: "ai", title: "Model", href: "/setup/model", status: "upcoming" },
     ]);
+    // …and it is a FORECAST, not a status: no step may arrive pre-passed, or
+    // the sessionless screen would be reporting progress it never read.
+    expect(
+      (steps ?? []).every((s) => (s as { status: string }).status === "upcoming"),
+    ).toBe(true);
   });
 });
 
@@ -86,8 +97,8 @@ describe("SetupLayout — authenticated branch (session present)", () => {
     const { getAuthSession } = await import("@/lib/auth-session");
     const { getSetupWizardSteps } = await import("@/lib/setup-wizard");
     const liveSteps = [
-      { id: "key", title: "Key", href: "/setup/key", ready: true },
-      { id: "name", title: "Name", href: "/setup/name", ready: false },
+      { id: "key", title: "Key", href: "/setup/key", status: "done" },
+      { id: "name", title: "Name", href: "/setup/name", status: "upcoming" },
     ];
     (getAuthSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       user: { id: "user-1" },

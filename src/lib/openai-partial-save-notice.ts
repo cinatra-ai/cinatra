@@ -34,4 +34,7 @@ export const OPENAI_PARTIAL_SAVE_NOTICE_CODE = "openai-connection-service-not-sy
  * response torn, and the connector's remote cleanup is best-effort and bounded).
  */
 export const OPENAI_PARTIAL_SAVE_NOTICE_MESSAGE =
-  "The OpenAI key was saved and works, but it was not copied to the connection service and the remote state could not be confirmed. Finish the Connections step (or fix the connection service), then save the key again.";
+  // cinatra#2502 — the wizard step named here is "Secrets" (route
+  // /setup/secrets). Naming the step by its old label would send the operator
+  // hunting for a pill the rail no longer draws.
+  "The OpenAI key was saved and works, but it was not copied to the connection service and the remote state could not be confirmed. Finish the Secrets step (or fix the connection service), then save the key again.";

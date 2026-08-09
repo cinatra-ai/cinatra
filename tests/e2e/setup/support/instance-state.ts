@@ -26,6 +26,9 @@ export { waitForHydration };
  *  fails compilation here instead of silently timing out in every spec. */
 export const SETUP_ACCOUNT_PATH = "/setup/account";
 export const SETUP_MODEL_PATH = "/setup/model";
+/** cinatra#2502 — the credential step, renamed "Connections" → "Secrets" with
+ *  its route. `/setup/connections` 308s here (next.config.ts). */
+export const SETUP_SECRETS_PATH = "/setup/secrets";
 
 function readEnvLocal(): Record<string, string> {
   try {
@@ -538,36 +541,33 @@ export async function signUpThroughSetupForm(page: Page, account: FirstAccount):
 
 // --- the universal step rail (#2477, shipped in #2483) ---------------------
 
-/** The four unconditional wizard steps, in rail order. The Connections step is
- *  conditional (Nango-dependent) and deliberately absent from the SESSIONLESS
- *  forecast rail — see src/app/setup/layout.tsx. */
-export const UNIVERSAL_STEP_TITLES = ["Account", "Key", "Name", "Model"] as const;
-
-/** The one CONDITIONAL step. It joins the live (authenticated) rail whenever
- *  Nango is not connected, and is deliberately absent from the sessionless
- *  forecast rail — whether it applies is itself a status read the sessionless
- *  branch must never perform (src/app/setup/layout.tsx). */
-export const CONDITIONAL_STEP_TITLE = "Connections";
+/** The wizard's five steps, in rail order.
+ *
+ *  cinatra#2502 — there is no longer a CONDITIONAL step. Secrets used to join
+ *  the live rail only while Nango was unconnected (and was withheld from the
+ *  sessionless forecast entirely); it is now unconditional on every rail, in
+ *  every state, including the pre-sign-up screen. Design spec
+ *  `specs/app-setup.html` revision 0.3.0 §VII states the rule as one testable
+ *  observable: the rail carries exactly one Secrets pill, in every state. */
+export const UNIVERSAL_STEP_TITLES = ["Account", "Key", "Name", "Secrets", "Model"] as const;
 
 /** Assert the universal step rail: present on EVERY setup page (including the
- *  sessionless account page), carrying all four unconditional steps in order,
- *  with no label wrapping AND with every pill fully inside the rail.
+ *  sessionless account page), carrying all five steps in order, with no label
+ *  wrapping AND with every pill fully inside the rail.
  *
- *  `exact: true` additionally forbids the conditional Connections pill — the
- *  contract for the SESSIONLESS chrome specifically.
+ *  cinatra#2502 — the list is now the SAME on every rail, so there is no
+ *  `exact` variant any more: a rail that is missing a pill (or carries a
+ *  sixth) fails everywhere, which is exactly the always-visible rule.
  *
  *  cinatra#2505 — the fit assertion below applies to EVERY rail this helper
- *  sees, so it covers the five-step AUTHENTICATED case (Connections present)
- *  that previously ran past the wizard column and clipped the trailing Model
- *  pill. It is a strictly ADDED constraint: the four-step sessionless rail
- *  satisfied it before this issue and still does (measured 446.72px of content
- *  in a 672px scrollport), so nothing the #2477/#2483 acceptance pinned is
- *  loosened here. No new viewport is introduced — this reads the rail at the
- *  Playwright project's configured desktop viewport, whatever that is. */
-export async function expectUniversalStepRail(
-  page: Page,
-  options: { exact?: boolean } = {},
-): Promise<void> {
+ *  sees, so it covers the five-step case that previously ran past the wizard
+ *  column and clipped the trailing Model pill. Since cinatra#2502 made the
+ *  Secrets step unconditional, EVERY rail is that five-step case — including
+ *  the sessionless forecast, which used to be a four-step rail with 91px of
+ *  slack. The dense connector rule (§V) is what buys the room back, and this
+ *  assertion is what proves it did. No new viewport is introduced — this reads
+ *  the rail at the Playwright project's configured desktop viewport. */
+export async function expectUniversalStepRail(page: Page): Promise<void> {
   const rail = page.getByRole("navigation", { name: "Setup progress" });
   await expect(rail).toBeVisible();
   const pills = rail.locator("li");
@@ -575,18 +575,11 @@ export async function expectUniversalStepRail(
   // and allInnerTexts() reports the RENDERED casing.
   const titles = (await pills.allInnerTexts()).map((t) => t.trim().toLowerCase());
   const universal = UNIVERSAL_STEP_TITLES.map((t) => t.toLowerCase());
-  if (options.exact) {
-    expect(titles).toEqual(universal);
-  } else {
-    // All four unconditional steps, in order — a step that "retires" from the
-    // rail was the #2477 finding. The ONLY tolerated variation is a SINGLE
-    // Connections pill in its own position: between Name and Model, where
-    // src/lib/setup-wizard.ts pushes it. A duplicate, or Connections anywhere
-    // else, fails.
-    const withConnections = [...universal];
-    withConnections.splice(universal.indexOf("model"), 0, CONDITIONAL_STEP_TITLE.toLowerCase());
-    expect([universal, withConnections]).toContainEqual(titles);
-  }
+  // Every step, in order, on every rail — a step that "retires" from the rail
+  // was the #2477 finding and, for Secrets specifically, the #2502 one. An
+  // exact comparison also catches the two failures §VII names together: a
+  // MISSING Secrets pill and a DUPLICATE one.
+  expect(titles).toEqual(universal);
   // NO-WRAP, read off the COMPUTED style rather than the box: every pill
   // already carries a fixed `h-8`, so a height check cannot tell a wrapped
   // label from an unwrapped one — it would pass either way.
@@ -701,14 +694,27 @@ export async function expectNoCardChrome(page: Page, anchorSelectors: string[]):
     // tokens would let a regression that wraps the fields in <Card> pass.
     const CARDY = /(^|\s)(rounded-card|bg-surface-strong|rounded-xl|bg-card)(\s|$)/;
     const CONTROL = new Set(["INPUT", "TEXTAREA", "SELECT", "BUTTON", "PRE", "CODE"]);
+    // A composite CONTROL is still a control, not a card. `<InputGroup>`
+    // (src/components/ui/input-group.tsx) renders a <div data-slot="input-group">
+    // that carries `bg-surface-strong` because it IS the white input surface the
+    // operator types into — the addon sits inside it and the real <input> is
+    // transparent. Rule #8 reserves white for exactly that. Matching it as card
+    // chrome fails any step that uses an input group (cinatra#2502: the Secrets
+    // step's Server URL field) while nothing is actually wrapped in a card.
+    const CONTROL_SLOTS = new Set([
+      "input-group",
+      "input-group-addon",
+      "input-group-control",
+    ]);
     const found: string[] = [];
     for (const selector of selectors) {
       for (const el of Array.from(document.querySelectorAll(selector))) {
         let node = el.parentElement;
         while (node && node.tagName !== "MAIN") {
           const cls = node.getAttribute("class") ?? "";
-          const isCard = node.getAttribute("data-slot") === "card" || CARDY.test(cls);
-          if (!CONTROL.has(node.tagName) && isCard) {
+          const slot = node.getAttribute("data-slot");
+          const isCard = slot === "card" || CARDY.test(cls);
+          if (!CONTROL.has(node.tagName) && !CONTROL_SLOTS.has(slot ?? "") && isCard) {
             found.push(`${selector} < ${node.tagName.toLowerCase()}.${cls.slice(0, 100)}`);
           }
           node = node.parentElement;
