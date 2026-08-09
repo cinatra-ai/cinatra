@@ -390,7 +390,7 @@
     {
       "packageName": "@cinatra-ai/tailscale-connector",
       "repo": "cinatra-ai/tailscale-connector",
-      "resolvedSha": "c866f9a561f3b2027eb71685c52f9575d16eb6d2"
+      "resolvedSha": "9061f2c3c3fee63fd77d12cb21a62a825892f490"
     },
     {
       "packageName": "@cinatra-ai/twenty-connector",
