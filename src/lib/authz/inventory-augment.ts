@@ -141,6 +141,14 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   artifact_representation_get:      { resourceType: "artifact", action: "read",   status: "enforced" },
   artifact_representation_latest:   { resourceType: "artifact", action: "read",   status: "enforced" },
   artifact_representation_list:     { resourceType: "artifact", action: "list",   status: "enforced" },
+  // The conversational PULL for lifecycle state (cinatra#2567, epic #2564 S3).
+  // Classified on `agent_run`, NOT `artifact`: the authority for both is the
+  // producing RUN's read access (`enforceReviewRunAccess(…, "read")`, the same
+  // ladder the review surface and the card refetch use), never the artifact's.
+  // Both are strictly read-only and return opaque refs, never rows — the card
+  // behind a ref re-resolves its own state server-side on every render.
+  artifact_review_gate_render:      { resourceType: "agent_run", action: "read",   status: "enforced" },
+  artifact_review_gates_list:       { resourceType: "agent_run", action: "list",   status: "enforced" },
   // artifact_source_* — admin-only ARTIFACT EXTENSION PACKAGE authoring (SDK-P5).
   // DISTINCT from artifact_authoring_emit (an artifact INSTANCE emit,
   // artifact::create). There is no dedicated artifact_extension resourceType (cf.
@@ -479,6 +487,13 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   // ───── twenty (connector_instance) ─────
   twenty_instances_list: { resourceType: "connector_instance", action: "list", status: "enforced" },
   twenty_status:         { resourceType: "connector_instance", action: "read", status: "enforced" },
+
+  // ───── verification (agent_run) ─────
+  // The verification reading for a reviewed artifact, rendered into a
+  // conversation as an advisory lifecycle card (cinatra#2567, epic #2564 S3).
+  // Same authority as its review sibling above: the producing RUN's read
+  // access. Read-only and ref-only; the card carries no decision axis at all.
+  verification_record_render: { resourceType: "agent_run", action: "read", status: "enforced" },
 
   // ───── wordpress (connector_instance) ─────
   wordpress_content_editor_run:    { resourceType: "connector_instance", action: "execute", status: "enforced" },

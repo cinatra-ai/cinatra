@@ -741,3 +741,72 @@ export async function readOrgReviewGateVolume(input: {
     rollupTruncated: totalOpen > gates.length,
   };
 }
+
+// ---------------------------------------------------------------------------
+// The narrow OPEN-GATE CANDIDATE listing (cinatra#2567, epic #2564 S3)
+// ---------------------------------------------------------------------------
+
+/** The ONLY two fields a lifecycle card ref addresses. Deliberately nothing else. */
+export interface OpenReviewGateCandidate {
+  runId: string;
+  reviewTaskId: string;
+}
+
+/** Hard ceiling on one candidate page — the caller's `limit` is clamped to it. */
+export const OPEN_GATE_CANDIDATE_MAX = 25;
+
+/**
+ * The org's OLDEST open review gates, as bare (runId, reviewTaskId) pairs.
+ *
+ * A NARROW SIBLING of `readOrgReviewGateVolume`, and separate from it on
+ * purpose. That reader answers the admin console's question — how much is open,
+ * aged how, split across which axes — and pays for it: it scans up to
+ * `GATE_VOLUME_SCAN_CAP` gate rows, joins every linked produced event, and
+ * computes rollups. A conversational pull needs none of that. It needs a few
+ * candidate rows to run an access check against, and an LLM can ask for them
+ * repeatedly, so the work has to be proportional to what is returned: ONE
+ * indexed, LIMITed select over the gate table, two columns, no joins, no
+ * aggregates.
+ *
+ * Returns NO gate content — not the gate id, not the pinned targets, not the
+ * artifact type. Authorization is the caller's job (the `listReviewGatesForRun`
+ * precedent): these rows are candidates, and the caller must enforce run READ
+ * access on each before disclosing anything derived from it.
+ *
+ * ORG-SCOPED BY CONSTRUCTION: `orgId` is a required equality predicate on the
+ * gate table's own indexed column, so no caller can widen it.
+ *
+ * KNOWN INDEX GAP, stated rather than hidden: the gate table carries an index
+ * on `org_id` alone, so the `status` filter and the `created_at` ordering are
+ * resolved after it — Postgres may sort an org's whole pending set before
+ * applying the LIMIT. That access path is PRE-EXISTING and this query is the
+ * cheapest user of it: `readOrgReviewGateVolume` already runs the same
+ * predicate and the same ordering on the same table with an eighty-times
+ * larger row cap plus joins and aggregates. A composite `(org_id, status,
+ * created_at, id)` index would make both proportional and is the right fix; it
+ * needs a migration, which this slice does not author.
+ */
+export async function listOpenReviewGateCandidates(input: {
+  orgId: string;
+  limit?: number;
+}): Promise<OpenReviewGateCandidate[]> {
+  const limit = Math.max(1, Math.min(input.limit ?? OPEN_GATE_CANDIDATE_MAX, OPEN_GATE_CANDIDATE_MAX));
+  const rows = await db
+    .select({
+      runId: artifactReviewGates.runId,
+      reviewTaskId: artifactReviewGates.reviewTaskId,
+    })
+    .from(artifactReviewGates)
+    .where(
+      and(
+        eq(artifactReviewGates.orgId, input.orgId),
+        eq(artifactReviewGates.status, "pending"),
+      ),
+    )
+    // Oldest first — the backlog HEAD is the part a person acts on, and it is
+    // the same order the reviews page lists, so the two never disagree about
+    // which gates are "the ones waiting longest".
+    .orderBy(asc(artifactReviewGates.createdAt), asc(artifactReviewGates.id))
+    .limit(limit);
+  return rows.map((r) => ({ runId: r.runId, reviewTaskId: r.reviewTaskId }));
+}

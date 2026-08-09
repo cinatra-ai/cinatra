@@ -45,11 +45,17 @@ import {
 import { MAX_REPAIR_CYCLES, type RepairFinding } from "@/lib/lifecycle/lifecycle-repair";
 import { verificationReopenReviewTaskId } from "@/lib/lifecycle/lifecycle-orchestration";
 
-/** A pinned target — the exact reviewed / repaired revision. */
-export interface VerificationTargetRef {
-  artifactId: string;
-  representationRevisionId: string;
-}
+// The record READ lives in its own leaf (cinatra#2567) so a caller that only
+// asks "is there a verification reading for this gate?" — the lifecycle card
+// refetch does, from the MCP surface — does not pull this write lane's graph
+// with it. Re-exported here so every existing caller keeps its import and there
+// is still exactly one implementation.
+export {
+  readVerificationRecordForGate,
+  type VerificationRecordRead,
+  type VerificationTargetRef,
+} from "./lifecycle-verification-read-store";
+import type { VerificationTargetRef } from "./lifecycle-verification-read-store";
 
 /** Projects a pinned revision to a flat field map {path -> value}. Injectable so
  * the store is unit-provable against real pg without the representation store, and
@@ -372,34 +378,5 @@ export async function triggerVerificationForLandedRepair(input: {
   }
 }
 
-/** Read a gate's verification record (the "Core analysis" the run rail opens). */
-export async function readVerificationRecordForGate(gateId: string): Promise<
-  | {
-      id: string;
-      gateId: string;
-      reviewedTarget: VerificationTargetRef;
-      repairedTarget: VerificationTargetRef;
-      scopeManifest: VerificationScopeManifest;
-      fieldDiff: { field: string; before?: string; after?: string }[];
-      outcome: string;
-      createdAt: Date;
-    }
-  | null
-> {
-  const [r] = await db
-    .select()
-    .from(artifactVerificationRecords)
-    .where(eq(artifactVerificationRecords.gateId, gateId))
-    .limit(1);
-  if (!r) return null;
-  return {
-    id: r.id,
-    gateId: r.gateId,
-    reviewedTarget: { artifactId: r.reviewedArtifactId, representationRevisionId: r.reviewedRepresentationRevisionId },
-    repairedTarget: { artifactId: r.repairedArtifactId, representationRevisionId: r.repairedRepresentationRevisionId },
-    scopeManifest: (r.scopeManifest as VerificationScopeManifest) ?? { paths: [] },
-    fieldDiff: (r.fieldDiff as { field: string; before?: string; after?: string }[]) ?? [],
-    outcome: r.outcome,
-    createdAt: r.createdAt,
-  };
-}
+// `readVerificationRecordForGate` is re-exported at the top of this file from
+// `./lifecycle-verification-read-store` — the leaf it moved to (cinatra#2567).

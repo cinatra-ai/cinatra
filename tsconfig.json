@@ -93,6 +93,7 @@
       "@cinatra-ai/agents/store": ["./packages/agents/src/store.ts"],
       "@cinatra-ai/agents/artifact-review-gate-store": ["./packages/agents/src/artifact-review-gate-store.ts"],
       "@cinatra-ai/agents/lifecycle-verification-store": ["./packages/agents/src/lifecycle-verification-store.ts"],
+      "@cinatra-ai/agents/lifecycle-verification-read-store": ["./packages/agents/src/lifecycle-verification-read-store.ts"],
       "@cinatra-ai/agents/lifecycle-policy-store": ["./packages/agents/src/lifecycle-policy-store.ts"],
       "@cinatra-ai/agents/lifecycle-review-changes-requested": ["./packages/agents/src/lifecycle-review-changes-requested-store.ts"],
       "@cinatra-ai/agents/mcp-handlers": ["./packages/agents/src/mcp/handlers.ts"],

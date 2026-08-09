@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
 import { isDelegatedChatMcpToolAllowed } from "../delegated-chat-tool-policy";
 
 // Regression table for the delegated chat MCP tool policy.
@@ -213,6 +214,66 @@ describe("isDelegatedChatMcpToolAllowed", () => {
       "agent_creation_request_decide",
     ]) {
       expect(isDelegatedChatMcpToolAllowed(name), name).toBe(false);
+    }
+  });
+
+  it("allows the read-only lifecycle PULL primitives (cinatra#2567, epic #2564 S3)", () => {
+    // Refs in, one card out. The list re-checks run READ access per row before
+    // it mints a ref; each render re-resolves the card's state server-side. No
+    // gate content ever rides the tool result, so nothing about a review lands
+    // in the persisted, LLM-visible transcript.
+    for (const name of [
+      "artifact_review_gates_list",
+      "artifact_review_gate_render",
+      "verification_record_render",
+    ]) {
+      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(true);
+    }
+  });
+
+  it("denies the lifecycle DECISION class by construction, not just by omission (cinatra#2567)", () => {
+    // The allowlist alone already denies these. The verb backstop is what makes
+    // adding one to ALLOWED_EXACT insufficient to expose it — a review is
+    // resolved on a rendered decision surface by a person, never by the model.
+    for (const name of [
+      "artifact_review_gate_decide",
+      "artifact_review_gate_approve",
+      "artifact_review_gate_reject",
+      "artifact_review_gate_resume",
+      "recommendation_hold_confirm",
+      "trigger_schedule_arm",
+      "verification_record_approve",
+    ]) {
+      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(false);
+    }
+  });
+
+  it("keeps the allowlist and the verb backstop CONSISTENT — every allowed name still passes", () => {
+    // The two halves of this policy can silently disagree: a new denied verb
+    // token would shadow an allowlisted read and the tool would vanish from
+    // chat with no failing test anywhere near it. Read the sets straight out of
+    // the source so the check covers every entry, not a hand-copied sample.
+    const source = readFileSync(
+      new URL("../delegated-chat-tool-policy.ts", import.meta.url),
+      "utf8",
+    );
+    const setEntries = (setName: string): string[] => {
+      const block = new RegExp(
+        `${setName}\\s*=\\s*new Set<string>\\(\\[(.*?)\\n\\]\\);`,
+        "s",
+      ).exec(source);
+      if (!block) throw new Error(`could not read ${setName} from the policy source`);
+      const withoutComments = block[1]
+        .split("\n")
+        .filter((line) => !line.trim().startsWith("//"))
+        .join("\n");
+      return [...withoutComments.matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1]);
+    };
+    const allowed = [...setEntries("ALLOWED_EXACT"), ...setEntries("ALLOWED_PROPOSAL_OVERRIDE")];
+    // Sanity: the extraction found the real sets, not an empty match.
+    expect(allowed.length).toBeGreaterThan(50);
+    for (const name of allowed) {
+      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(true);
     }
   });
 });
