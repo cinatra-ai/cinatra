@@ -347,7 +347,8 @@ describe("openai-connection-store — legacy plaintext row", () => {
 });
 
 // =============================================================================
-// Body logging — default OFF, and the preference is never silently frozen
+// Body logging — default OFF everywhere ("dev-off" ruling), and the
+// preference is never silently frozen
 // =============================================================================
 
 describe("openai-connection-store — request/response body logging", () => {
@@ -361,20 +362,24 @@ describe("openai-connection-store — request/response body logging", () => {
     expect(storedRow().loggingEnabled).toBeUndefined();
   });
 
-  it("defaults ON in development only", async () => {
+  it("DEFAULT CONFIG does not enable body logging in development either (\"dev-off\" ruling)", async () => {
+    // Before the ruling, an unset preference resolved ON in development for
+    // local-debugging convenience. The owner ruled that convenience default
+    // out — an operator must opt in explicitly even on a dev box.
     runtimeMode.development = true;
     const { updateOpenAIConnection, readOpenAIConnection } = await store();
 
     await updateOpenAIConnection({ apiKey: FAKE_API_KEY });
 
-    expect(readOpenAIConnection()?.loggingEnabled).toBe(true);
+    expect(readOpenAIConnection()?.loggingEnabled).toBe(false);
     expect(storedRow().loggingEnabled).toBeUndefined();
   });
 
-  it("a dev-mode save does NOT freeze `true` into a row that later runs in production", async () => {
+  it("an unexpressed preference stays OFF across a runtime-mode change (dev, then prod)", async () => {
     runtimeMode.development = true;
     const { updateOpenAIConnection, readOpenAIConnection } = await store();
     await updateOpenAIConnection({ apiKey: FAKE_API_KEY });
+    expect(readOpenAIConnection()?.loggingEnabled).toBe(false);
 
     // Same row, promoted to a production deployment.
     runtimeMode.development = false;

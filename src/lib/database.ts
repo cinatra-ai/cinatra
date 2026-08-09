@@ -310,8 +310,8 @@ export function readOpenAIConnectionFromDatabase() {
   // `.loggingEnabled` keep working. cinatra#2581: the at-rest `apiKey` is SEALED,
   // so the accessor unseals it and upgrades a legacy plaintext row in place —
   // this is the RUNTIME credential path, so the migration must run here too, not
-  // only on a settings surface. An UNSET body-logging preference now follows the
-  // runtime mode instead of a hard `true`.
+  // only on a settings surface. An UNSET body-logging preference resolves OFF
+  // regardless of runtime mode ("dev-off" ruling) instead of a hard `true`.
   const stored = readUnsealedOpenAIConnectionRow();
   return {
     defaultModel: stored?.defaultModel ?? DEFAULT_OPENAI_MODEL_ID,
@@ -319,7 +319,7 @@ export function readOpenAIConnectionFromDatabase() {
     projectId: stored?.projectId,
     organizationId: stored?.organizationId,
     serviceTier: (stored?.serviceTier as OpenAIServiceTier | undefined) ?? getDefaultOpenAIServiceTier(),
-    loggingEnabled: resolveOpenAIBodyLoggingDefault(stored?.loggingEnabled, isAppDevelopmentMode()),
+    loggingEnabled: resolveOpenAIBodyLoggingDefault(stored?.loggingEnabled),
     promptCachingEnabled: stored?.promptCachingEnabled,
     lastValidatedAt: stored?.lastValidatedAt,
     availableModels: stored?.availableModels ?? [],
