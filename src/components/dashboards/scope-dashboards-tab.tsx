@@ -32,6 +32,8 @@ import Link from "next/link";
 import { LayoutDashboard, Plus } from "lucide-react";
 import { toast } from "@/lib/cinatra-toast";
 
+import type { ListingScopeKind } from "@cinatra-ai/dashboards/entity-links";
+
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AddToScopePicker } from "./add-to-scope-picker";
@@ -41,6 +43,14 @@ import {
   type ScopeDashboardsTabData,
   type ScopeDashboardTabRow,
 } from "./scope-dashboards-contract";
+
+/** The heading noun per scope kind (cinatra#2474 PR2 — the entity's own name is
+ *  the hosting landing's h1, so the panel heading names the KIND). */
+const SCOPE_NOUN: Record<ListingScopeKind, string> = {
+  team: "team",
+  organization: "organization",
+  project: "project",
+};
 
 export function ScopeDashboardsTab({
   data,
@@ -76,15 +86,26 @@ export function ScopeDashboardsTab({
       data-state={hasRows ? "kind:artifact" : "empty"}
       className="flex flex-col gap-3"
     >
-      {/* Dashboards tab content: the scope subtitle + the manager-only Add
-          affordance (§IX.2). On a narrow viewport this row STACKS (flex-col) so
-          the Add affordance drops beneath the subtitle (spec §X responsive); at
-          ≥sm it is an inline row with Add pushed to the right. */}
+      {/* Dashboards tab content: the collection panel's heading + the
+          manager-only Add affordance (§IX.2). On a narrow viewport this row
+          STACKS (flex-col) so the Add affordance drops beneath the heading (spec
+          §X responsive); at ≥sm it is an inline row with Add pushed to the right.
+
+          cinatra#2474 PR2 — the scope lede is now this panel's HEADING, and it
+          names the scope KIND, not the entity. The collection used to own a
+          whole route, where "The dashboards in Organization: ACME" was the only
+          lede on the page; folded onto the entity landing it sits under a
+          PageHeader that already carries the entity name as the h1 and its own
+          description above the tablist, so repeating the entity name here was a
+          second, near-identical lede (the placement observation recorded on the
+          PR1 proof, #2547). Promoting it to a kind-named h2 gives the panel the
+          title it needs to read as a distinct section beneath the per-user
+          shell, and puts the scope lede BELOW the tablist where §IX's own
+          illustration places it. */}
       <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
-        <p className="min-w-0 flex-1 text-sm leading-normal text-muted-foreground">
-          The dashboards in{" "}
-          <b className="font-semibold text-foreground">{data.scopeLabel}</b>.
-        </p>
+        <h2 className="min-w-0 flex-1 text-sm font-semibold leading-normal text-foreground">
+          Dashboards in this {SCOPE_NOUN[data.scopeKind]}
+        </h2>
         {/* scope-dashboards-write-access: the Add affordance is rendered ONLY for
             a scope manager (actorMayWriteScope) — suppression, not a disabled
             control. */}

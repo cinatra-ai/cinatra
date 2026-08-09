@@ -44,7 +44,9 @@ import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { EntityScopeTabs } from "@/components/entity-scope-tabs";
+import { ScopeDashboardsSection } from "@/components/dashboards/scope-dashboards-section";
 import {
+  getActorContext,
   isPlatformAdmin,
   requireAuthSession,
   resolveOrgRoleForUser,
@@ -167,6 +169,13 @@ export async function TeamDetailDashboardPage({
   });
   if (!team.is_member && !canManage) redirect("/not-authorized");
 
+  // The #1897 scope collection folded onto this landing (cinatra#2474 PR2). The
+  // actor drives the §IX.2 write gate inside the section (`actorMayWriteScope`:
+  // team admin, or an org owner/admin of the team's org, tenant-fenced) — the
+  // gate above is the READ population (§IX.2: a member without write authority
+  // still sees every row and opens any of them, with no Add and no Remove).
+  const actor = await getActorContext();
+
   // ── Dashboards tab wiring (#700/#701/#702) ──────────────────────────────────
   // User-owned team-detail dashboards. Ensure the non-removable Overview BEFORE
   // listing (the shell never seeds it), then bind the ref into the server
@@ -235,6 +244,23 @@ export async function TeamDetailDashboardPage({
           overviewPortlets={overviewConfig.portlets}
           initialData={initialData}
         />
+        {/* The scope's own dashboards collection (#1897 §IX), folded onto this
+            landing by cinatra#2474 PR2 — formerly the separate
+            `/teams/[teamId]/dashboards` route, which PR2 deletes outright (no
+            redirect, no shim). Same #1897 service, list, picker, Remove and
+            promotion recourse; only the mount point moved. The per-user shell
+            above is untouched. */}
+        {actor ? (
+          <ScopeDashboardsSection
+            actor={actor}
+            scope={{
+              kind: "team",
+              scopeId: team.id,
+              orgId: team.organizationId,
+            }}
+            scopeLabel={`Team: ${team.name}`}
+          />
+        ) : null}
       </PageContent>
     </Main>
   );

@@ -88,7 +88,7 @@ export async function getScopeDashboardsTabData(input: {
     ...listed.map((r) => projectRow(r, canManage)).sort(byName),
   ];
 
-  return { scopeLabel: input.scopeLabel, rows, canManage };
+  return { scopeLabel: input.scopeLabel, scopeKind: input.scope.kind, rows, canManage };
 }
 
 function projectRow(

@@ -32,6 +32,7 @@ import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
 import { LifecycleBadge } from "@/components/lifecycle-badge";
 import type { PortletInstanceProp } from "@/components/dashboards/portlet-host";
+import { ScopeDashboardsSection } from "@/components/dashboards/scope-dashboards-section";
 
 import {
   ProjectDashboardsTab,
@@ -322,6 +323,31 @@ export default async function ProjectDetailPage({ params }: Props) {
           initialData={dashboardsInitial}
           overviewPortlets={overviewPortlets}
         />
+        {/* The scope's own dashboards collection (#1897 §IX), folded onto this
+            landing by cinatra#2474 PR2 — formerly the separate
+            `/projects/[projectId]/dashboards` route, which PR2 deletes outright
+            (no redirect, no shim). Same #1897 service, list, picker, Remove;
+            a PROJECT scope carries NO promotion recourse (a project is a
+            resource refinement, not a visibility tier — the contract yields a
+            null recourse there, §IX.1). The sealed-room grant gate above is the
+            READ population; Add/Remove stay gated to a project admin/owner
+            (§IX.2), re-authorized server-side on every mutation.
+
+            Guarded on `organizationId`: the listing scope is tenant-anchored
+            (`dashboard_entity_links.organization_id`), and the retired route
+            404'd a project without one. A landing must not 404 for that, so the
+            panel is simply absent — never mounted against a forged tenant. */}
+        {project.organizationId ? (
+          <ScopeDashboardsSection
+            actor={actor}
+            scope={{
+              kind: "project",
+              scopeId: project.id,
+              orgId: project.organizationId,
+            }}
+            scopeLabel={`Project: ${project.name}`}
+          />
+        ) : null}
       </PageContent>
     </Main>
   );

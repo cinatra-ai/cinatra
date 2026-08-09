@@ -1,0 +1,402 @@
+{
+  "issue": "cinatra#2474 PR2",
+  "specPin": "specs/app-artifacts.html §IX @ design@60cf789ec9b6d6455148a086cacc6ae43f447cef",
+  "base": "http://localhost:3477",
+  "ranAt": "2026-08-09T11:22:13.605Z",
+  "passed": 35,
+  "failed": 0,
+  "captures": 11,
+  "results": [
+    {
+      "id": "A1",
+      "assert": "§IX — the ORG landing mounts the scope collection panel (the fold; it used to be its own route)",
+      "result": "PASS",
+      "observed": {
+        "heading": "Dashboards in this organization",
+        "state": "kind:artifact"
+      }
+    },
+    {
+      "id": "A2",
+      "assert": "#2474 PR2 — the panel heading names the scope KIND, as an h2 below the tablist",
+      "result": "PASS",
+      "observed": {
+        "heading": "Dashboards in this organization",
+        "tag": "h2"
+      }
+    },
+    {
+      "id": "A3",
+      "assert": "#2547 observation — the duplicate page-level scope lede is gone",
+      "result": "PASS",
+      "observed": {
+        "oldLedeStillPresent": false
+      }
+    },
+    {
+      "id": "A4",
+      "assert": "§IX — the tab lists BOTH a homed row and a secondary listing",
+      "result": "PASS",
+      "observed": {
+        "rows": [
+          "Pipeline health — Q3",
+          "Revenue attribution"
+        ]
+      }
+    },
+    {
+      "id": "A5",
+      "assert": "§IX — Remove appears ONLY on the removable secondary listing, never on a homed row",
+      "result": "PASS",
+      "observed": {
+        "homedRemove": false,
+        "listedRemove": true
+      }
+    },
+    {
+      "id": "A6",
+      "assert": "§IX — no Home/Listed relation badge and no per-row type label (removability reads from Remove alone)",
+      "result": "PASS",
+      "observed": {
+        "texts": [
+          "Pipeline health — Q3 updated about 1 hour ago Open",
+          "Revenue attribution updated about 2 hours ago Remove Open"
+        ]
+      }
+    },
+    {
+      "id": "A7",
+      "assert": "§IX — every row carries a glyph, a name, an updated-time meta line and an Open affordance",
+      "result": "PASS",
+      "observed": {
+        "rows": [
+          {
+            "name": "Pipeline health — Q3",
+            "meta": "updated about 1 hour ago",
+            "remove": false,
+            "open": "/organizations/org-acme/dashboards/dash-homed",
+            "glyph": true,
+            "text": "Pipeline health — Q3 updated about 1 hour ago Open"
+          },
+          {
+            "name": "Revenue attribution",
+            "meta": "updated about 2 hours ago",
+            "remove": true,
+            "open": "/teams/team-platform/dashboards/dash-listed",
+            "glyph": true,
+            "text": "Revenue attribution updated about 2 hours ago Remove Open"
+          }
+        ]
+      }
+    },
+    {
+      "id": "A8",
+      "assert": "§VIII/§IX — Open targets the dashboard's CANONICAL surface (the nested route PR2 deliberately did NOT delete)",
+      "result": "PASS",
+      "observed": {
+        "homed": "/organizations/org-acme/dashboards/dash-homed",
+        "listed": "/teams/team-platform/dashboards/dash-listed"
+      }
+    },
+    {
+      "id": "A9",
+      "assert": "§IX.2 — a scope MANAGER sees the Add affordance, inside the write-access conformance node",
+      "result": "PASS",
+      "observed": {
+        "add": true,
+        "node": true
+      }
+    },
+    {
+      "id": "A10",
+      "assert": "#2474 — the per-user shell + non-removable Overview are untouched, and the panel sits BELOW them",
+      "result": "PASS",
+      "observed": {
+        "shell": true,
+        "after": true
+      }
+    },
+    {
+      "id": "A11",
+      "assert": "render→spec — exactly ONE collection panel on the surface",
+      "result": "PASS",
+      "observed": {
+        "count": 1
+      }
+    },
+    {
+      "id": "A12",
+      "assert": "render→spec — nothing on the page links to a retired /<scope>/<id>/dashboards collection route",
+      "result": "PASS",
+      "observed": {
+        "links": []
+      }
+    },
+    {
+      "id": "A13",
+      "assert": "PR1 invariant preserved — the landing still opens on Dashboards|Settings with Dashboards active",
+      "result": "PASS",
+      "observed": {
+        "tabs": [
+          {
+            "label": "Dashboards",
+            "active": true,
+            "href": "/organizations/org-acme"
+          },
+          {
+            "label": "Settings",
+            "active": false,
+            "href": "/organizations/org-acme/settings"
+          }
+        ]
+      }
+    },
+    {
+      "id": "B1",
+      "assert": "§IX — the TEAM landing mounts the collection panel, kind-named",
+      "result": "PASS",
+      "observed": {
+        "heading": "Dashboards in this team"
+      }
+    },
+    {
+      "id": "B2",
+      "assert": "§IX — the team's homed dashboard lists on its own scope with NO Remove (it is homed here)",
+      "result": "PASS",
+      "observed": {
+        "rows": [
+          {
+            "name": "Revenue attribution",
+            "meta": "updated about 2 hours ago",
+            "remove": false,
+            "open": "/teams/team-platform/dashboards/dash-listed",
+            "glyph": true,
+            "text": "Revenue attribution updated about 2 hours ago Open"
+          }
+        ]
+      }
+    },
+    {
+      "id": "B3",
+      "assert": "§IX.2 — a team admin sees Add",
+      "result": "PASS",
+      "observed": {
+        "add": true
+      }
+    },
+    {
+      "id": "B4",
+      "assert": "PR1 invariant — tablist intact, Dashboards active",
+      "result": "PASS",
+      "observed": {
+        "tabs": [
+          {
+            "label": "Dashboards",
+            "active": true,
+            "href": "/teams/team-platform"
+          },
+          {
+            "label": "Settings",
+            "active": false,
+            "href": "/teams/team-platform/settings"
+          }
+        ]
+      }
+    },
+    {
+      "id": "B5",
+      "assert": "render→spec — no link to the retired collection route",
+      "result": "PASS",
+      "observed": {
+        "links": []
+      }
+    },
+    {
+      "id": "C1",
+      "assert": "§IX — the PROJECT landing mounts the collection panel, kind-named",
+      "result": "PASS",
+      "observed": {
+        "heading": "Dashboards in this project"
+      }
+    },
+    {
+      "id": "C2",
+      "assert": "§IX.2 — a project admin sees Add",
+      "result": "PASS",
+      "observed": {
+        "add": true
+      }
+    },
+    {
+      "id": "C3",
+      "assert": "#2474 — the project's per-user shell + Overview survive above the panel",
+      "result": "PASS",
+      "observed": {
+        "shell": true,
+        "after": true
+      }
+    },
+    {
+      "id": "C4",
+      "assert": "render→spec — no link to the retired collection route",
+      "result": "PASS",
+      "observed": {
+        "links": []
+      }
+    },
+    {
+      "id": "D1",
+      "assert": "§IX — a PERSONAL scope is not an add-to-scope target: no collection panel",
+      "result": "PASS",
+      "observed": {
+        "panel": false,
+        "tabs": [
+          "Dashboards"
+        ]
+      }
+    },
+    {
+      "id": "D2",
+      "assert": "#1904 — personal keeps its Dashboards-only tablist",
+      "result": "PASS",
+      "observed": {
+        "tabs": [
+          "Dashboards"
+        ]
+      }
+    },
+    {
+      "id": "E1",
+      "assert": "#2474 AC — the three collection routes are GONE: 404 for an authenticated actor, and NOT a redirect",
+      "result": "PASS",
+      "observed": {
+        "/organizations/org-acme/dashboards": 404,
+        "/teams/team-platform/dashboards": 404,
+        "/projects/proj-brand/dashboards": 404
+      }
+    },
+    {
+      "id": "E2",
+      "assert": "the CANONICAL-HOME nested routes still serve 200 (the surface every Open targets)",
+      "result": "PASS",
+      "observed": {
+        "/organizations/org-acme/dashboards/dash-homed": 200,
+        "/teams/team-platform/dashboards/dash-listed": 200
+      }
+    },
+    {
+      "id": "F1",
+      "assert": "§IX.1 — the add-to-scope picker still opens from the folded panel, titled with the entity-named scope label",
+      "result": "PASS",
+      "observed": {
+        "open": true,
+        "title": "Add a dashboard to Organization: ACME Group",
+        "picker": true
+      }
+    },
+    {
+      "id": "G1",
+      "assert": "the intermediate 'Dashboards' breadcrumb on a canonical dashboard URL is NOT a link to the deleted route",
+      "result": "PASS",
+      "observed": {
+        "deadLinks": [],
+        "crumbTexts": [
+          {
+            "tag": "LI",
+            "text": "Dashboards",
+            "href": null
+          },
+          {
+            "tag": "SPAN",
+            "text": "Dashboards",
+            "href": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "H-org",
+      "assert": "§IX.2 — a member WITHOUT write authority still sees the org collection and every row, with Add and Remove SUPPRESSED (not disabled)",
+      "result": "PASS",
+      "observed": {
+        "panel": true,
+        "add": false,
+        "writeNode": false,
+        "removes": 0,
+        "rows": 2,
+        "disabledControls": 0
+      }
+    },
+    {
+      "id": "H-team",
+      "assert": "§IX.2 — a member WITHOUT write authority still sees the team collection and every row, with Add and Remove SUPPRESSED (not disabled)",
+      "result": "PASS",
+      "observed": {
+        "panel": true,
+        "add": false,
+        "writeNode": false,
+        "removes": 0,
+        "rows": 1,
+        "disabledControls": 0
+      }
+    },
+    {
+      "id": "H-project",
+      "assert": "§IX.2 — a member WITHOUT write authority still sees the project collection and every row, with Add and Remove SUPPRESSED (not disabled)",
+      "result": "PASS",
+      "observed": {
+        "panel": true,
+        "add": false,
+        "writeNode": false,
+        "removes": 0,
+        "rows": 0,
+        "disabledControls": 0
+      }
+    },
+    {
+      "id": "I1",
+      "assert": "§X theme axis — the collection panel renders in dark with themed tokens",
+      "result": "PASS",
+      "observed": {
+        "panel": true,
+        "headingColor": "lab(98.1434 -0.369519 -1.05966)",
+        "bg": "lab(1.76974 1.32743 -9.28855)"
+      }
+    },
+    {
+      "id": "I2",
+      "assert": "§X responsive — at 390px the Add affordance DROPS BENEATH the panel heading (geometry probed)",
+      "result": "PASS",
+      "observed": {
+        "headingBottom": 615.578125,
+        "addTop": 625.578125,
+        "stacked": true,
+        "docOverflow": 0,
+        "panelWidth": 318,
+        "viewport": 390
+      }
+    },
+    {
+      "id": "I3",
+      "assert": "§X responsive — no horizontal page overflow at 390px; the panel shrinks to the viewport",
+      "result": "PASS",
+      "observed": {
+        "headingBottom": 615.578125,
+        "addTop": 625.578125,
+        "stacked": true,
+        "docOverflow": 0,
+        "panelWidth": 318,
+        "viewport": 390
+      }
+    },
+    {
+      "id": "J1",
+      "assert": "no console errors and no page errors across the battery",
+      "result": "PASS",
+      "observed": {
+        "consoleErrors": [],
+        "pageErrors": []
+      }
+    }
+  ]
+}
