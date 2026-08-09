@@ -1,0 +1,6 @@
+obo token minted (len) 449 role platform_admin
+initialize: 200 OK
+tools visible: 76
+lifecycle tools: ["artifact_authoring_emit","artifact_review_gates_list","artifact_review_gate_render","verification_record_render"]
+artifact_review_gates_list -> 200 {"content":[{"type":"text","text":"{\"refs\":[]}"}],"structuredContent":{"refs":[]}}
+DB gates for org: []
