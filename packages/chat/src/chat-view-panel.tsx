@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ChatThreadPanel } from "./chat-thread-panel";
@@ -26,7 +26,22 @@ export function ChatViewPanel() {
   const [activePanel, setActivePanel] = useState<"threads" | "teams" | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
-  const [threadsFetched, setThreadsFetched] = useState(false);
+  // cinatra#2548 — THREE distinct states, never two. The old boolean
+  // `threadsFetched` flipped only inside `.then()`, so a rejected fetch left it
+  // false forever and the panel sat on "Loading…" for the rest of the session.
+  // "loaded-but-empty" is the thread panel's own concern ("No threads yet");
+  // this flag only tracks the fetch.
+  const [threadsStatus, setThreadsStatus] =
+    useState<"pending" | "ready" | "error">("pending");
+  // One fetch per mount, as before — the effect below is not a subscription and
+  // must not refire on every open. A ref (not state) so claiming the fetch
+  // costs no render.
+  const threadsRequested = useRef(false);
+  // Last-request-wins. Retry is a button: two fast clicks can start two fetches
+  // before React commits the interim render, and without this an older
+  // rejection could overwrite a newer success (or older rows a newer list).
+  // Only the newest request is allowed to settle the state.
+  const threadsRequestId = useRef(0);
   const [teams, setTeams] = useState<TeamSummary[]>([]);
   const [teamsLoaded, setTeamsLoaded] = useState(false);
 
@@ -71,16 +86,33 @@ export function ChatViewPanel() {
     return () => document.removeEventListener("mousedown", handleDocMouseDown);
   }, [activePanel]);
 
-  // Fetch threads the first time the threads panel opens.
-  // Mount ChatThreadPanel only after the fetch resolves so initialThreads is populated.
-  useEffect(() => {
-    if (activePanel === "threads" && !threadsFetched) {
-      void fetchChatThreads().then((result) => {
+  // Load threads. Mount ChatThreadPanel only after the fetch resolves so
+  // initialThreads is populated. A rejection lands in "error" — the panel then
+  // offers a retry instead of pretending it is still loading (cinatra#2548).
+  // Shared by the first open and the retry control, so both paths settle the
+  // same way.
+  const loadThreads = useCallback(() => {
+    const requestId = ++threadsRequestId.current;
+    const isCurrent = () => threadsRequestId.current === requestId;
+    void fetchChatThreads()
+      .then((result) => {
+        if (!isCurrent()) return;
         setThreads(result);
-        setThreadsFetched(true);
+        setThreadsStatus("ready");
+      })
+      .catch((err) => {
+        console.error("[chat] failed to load chat threads:", err);
+        if (!isCurrent()) return;
+        setThreadsStatus("error");
       });
-    }
-  }, [activePanel, threadsFetched]);
+  }, []);
+
+  // Fetch threads the first time the threads panel opens.
+  useEffect(() => {
+    if (activePanel !== "threads" || threadsRequested.current) return;
+    threadsRequested.current = true;
+    loadThreads();
+  }, [activePanel, loadThreads]);
 
   useEffect(() => {
     function handleThreadsChanged(e: Event) {
@@ -127,10 +159,29 @@ export function ChatViewPanel() {
 
       {activePanel === "threads" && (
         <div className="min-h-0 flex-1 overflow-hidden">
-          {threadsFetched
-            ? <ChatThreadPanel initialThreads={threads} embedded />
-            : <p className="px-3 py-4 text-xs text-muted-foreground">Loading…</p>
-          }
+          {threadsStatus === "ready" ? (
+            <ChatThreadPanel initialThreads={threads} embedded />
+          ) : threadsStatus === "error" ? (
+            <div className="px-3 py-4">
+              <p className="text-xs text-muted-foreground">
+                Couldn&apos;t load your threads.
+              </p>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setThreadsStatus("pending");
+                  loadThreads();
+                }}
+                className="mt-1 h-7 px-2 text-xs text-foreground"
+              >
+                Try again
+              </Button>
+            </div>
+          ) : (
+            <p className="px-3 py-4 text-xs text-muted-foreground">Loading…</p>
+          )}
         </div>
       )}
 

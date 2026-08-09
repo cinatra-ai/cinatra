@@ -46,6 +46,22 @@ interface PageHeaderProps {
    */
   tone?: PageHeaderTone;
   /**
+   * Cross-axis alignment of the title block against the `actions` slot.
+   *
+   *  - "start" (default) — top-aligned, the layout every action-bearing page
+   *    uses: a button row lines up with the first line of a title that may
+   *    wrap, above a description.
+   *  - "center" — level, for a header whose actions slot holds a single
+   *    fixed-height MARK rather than controls (the setup wizard's BrandMark).
+   *    Top-aligning a 30px mark against the display-face title left the mark
+   *    visibly lower than the title text (cinatra#2528).
+   *
+   * "center" also drops the two nudges that only make sense top-aligned: the
+   * actions' `pt-1`, and the title's `-mt-2` optical lift (which pulls the h1
+   * out of its own box and would re-introduce the offset it is meant to fix).
+   */
+  align?: "start" | "center";
+  /**
    * Render an etched paired-line `<Separator major>` beneath the header
    * block as a section-rule divider. Default ON (owner directive
    * 2026-05-20 — every page chrome carries the section rule beneath its
@@ -87,9 +103,11 @@ export function PageHeader({
   actions,
   size = "lg",
   tone = "ink",
+  align = "start",
   divider = true,
   className,
 }: PageHeaderProps) {
+  const centered = align === "center";
   return (
     <header
       className={cn(
@@ -97,7 +115,12 @@ export function PageHeader({
         className
       )}
     >
-      <div className="flex items-start justify-between gap-4">
+      <div
+        className={cn(
+          "flex justify-between gap-4",
+          centered ? "items-center" : "items-start"
+        )}
+      >
         <div>
           {label && (
             <p className="font-mono text-xs uppercase tracking-page-label text-muted-foreground">
@@ -107,7 +130,7 @@ export function PageHeader({
           <h1
             className={cn(
               pageTitleVariants({ size }),
-              size === "lg" && !label && "-mt-2",
+              size === "lg" && !label && !centered && "-mt-2",
               tone === "mustard" && "text-brand-mustard",
               tone === "ink" && "text-foreground",
               label && "mt-2"
@@ -120,7 +143,14 @@ export function PageHeader({
           )}
         </div>
         {actions && (
-          <div className="flex shrink-0 items-center gap-3 pt-1">{actions}</div>
+          <div
+            className={cn(
+              "flex shrink-0 items-center gap-3",
+              !centered && "pt-1"
+            )}
+          >
+            {actions}
+          </div>
         )}
       </div>
       {divider && <PageHeaderRule />}

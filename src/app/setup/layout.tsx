@@ -60,7 +60,10 @@ export default async function SetupLayout({ children }: { children: React.ReactN
         <SearchParamToast toasts={SETUP_FLASH_TOASTS} />
       </Suspense>
       <div className="w-full max-w-2xl">
-        <PageHeader title="Setup" actions={<BrandMark size={30} />} />
+        {/* align="center" — the actions slot here is the fixed-height brand
+            MARK, not a control row. Top-aligned it sat visibly lower than the
+            "Setup" title (cinatra#2528). */}
+        <PageHeader title="Setup" actions={<BrandMark size={30} />} align="center" />
 
         <SetupStepNav steps={steps} />
 

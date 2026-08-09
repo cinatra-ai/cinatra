@@ -33,7 +33,16 @@ export function TunnelTabContent({ isDevMode }: { isDevMode: boolean }) {
   // the node under exactly this hostname, so picking + saving it now is
   // safe). `null` only when Tailscale isn't connected (no tailnet) — or
   // when the connector is absent (degraded mode of the capability read).
-  const { connected: tailscaleConnected, funnelUrlPreview: tailscaleUrl } = getDevTunnelStatus();
+  // `funnelUrlPreviewReason` (cinatra#2534) is the connector's own code for a
+  // MISSING preview — the flyout used to attribute every null preview to an
+  // unresolved tailnet and tell the operator to reconnect, which is a dead end
+  // for the identity cases. `null` when nothing was reported; the notice seam
+  // then renders a cause-agnostic explanation rather than guessing.
+  const {
+    connected: tailscaleConnected,
+    funnelUrlPreview: tailscaleUrl,
+    funnelUrlPreviewReason: tailscaleUrlReason,
+  } = getDevTunnelStatus();
 
   // `null` only when the slug has left the connector CATALOG (renamed or
   // retired) — the helper resolves from the catalog descriptor, so an
@@ -54,8 +63,10 @@ export function TunnelTabContent({ isDevMode }: { isDevMode: boolean }) {
             external reachability.
             {tailscaleConnected ? (
               <>
-                {" "}Tailscale is connected — click the field below to pick
-                its Funnel URL
+                {" "}Tailscale is connected —{" "}
+                {tailscaleUrl
+                  ? "click the field below to pick its Funnel URL"
+                  : "click the field below to see why no Funnel URL is available for this instance"}
                 {tailscaleSetupHref ? (
                   <>
                     , or{" "}
@@ -116,6 +127,7 @@ export function TunnelTabContent({ isDevMode }: { isDevMode: boolean }) {
           initialUrl={publicBaseUrl ?? ""}
           tailscaleConnected={tailscaleConnected}
           tailscaleUrl={tailscaleUrl}
+          tailscaleUrlReason={tailscaleUrlReason}
         />
       </Card>
     </div>

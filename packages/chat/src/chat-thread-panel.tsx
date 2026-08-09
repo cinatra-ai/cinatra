@@ -136,7 +136,7 @@ export function ChatThreadPanel({ initialThreads = [], embedded = false }: { ini
         </div>
         <div className="flex-1 overflow-y-auto px-2 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {sortedThreads.length === 0 ? (
-            <p className="px-1 py-6 text-center text-xs text-muted-foreground">No conversations yet</p>
+            <p className="px-1 py-6 text-center text-xs text-muted-foreground">No threads yet</p>
           ) : (
             sortedThreads.map((thread) => (
               <Fragment key={thread.id}>
@@ -256,7 +256,7 @@ export function ChatThreadPanel({ initialThreads = [], embedded = false }: { ini
 
       <ScrollArea className="-mx-3 h-full p-3">
         {sortedThreads.length === 0 ? (
-          <p className="px-1 py-6 text-center text-xs text-muted-foreground">No conversations yet</p>
+          <p className="px-1 py-6 text-center text-xs text-muted-foreground">No threads yet</p>
         ) : (
           sortedThreads.map((thread) => (
             <Fragment key={thread.id}>
