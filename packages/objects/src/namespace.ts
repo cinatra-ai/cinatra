@@ -96,3 +96,24 @@ export function isTombstonedObjectTypeId(id: string): boolean {
     TOMBSTONED_OBJECT_TYPE_ID_PREFIXES.some((prefix) => id.startsWith(prefix))
   );
 }
+
+// ---------------------------------------------------------------------------
+// Retired generic host object type (cinatra#2592).
+// ---------------------------------------------------------------------------
+
+/**
+ * The retired generic host object type id. Owner ruling 2026-07-18 (epic
+ * #1785, "types exist only by installation") reversed #1787's lossless
+ * generic-object fallback: a save that resolves to this id is REFUSED at the
+ * write boundary, never persisted (`packages/objects/src/mcp/handlers.ts`).
+ * The type stays REGISTERED for READ back-compat (`objects_list { type:
+ * "@cinatra-ai/objects:object", runId }` and any surviving historical row),
+ * so it is not deregistered — but it must never be OFFERED as a forward
+ * outcome: the classifier catalog (`packages/objects/src/classifier/index.ts`)
+ * excludes it from the registered-type list a model is shown, and the write
+ * path refuses it explicitly even at high confidence. Declared once, here, so
+ * the two surfaces read the SAME id and cannot silently diverge (the mismatch
+ * cinatra#2592 fixed: the classifier prompt used to promise this id as a safe
+ * fallback the write path already rejected).
+ */
+export const GENERIC_OBJECT_TYPE_ID = "@cinatra-ai/objects:object" as const;

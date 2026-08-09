@@ -5,6 +5,7 @@ import {
   parseStructuredJson,
 } from "@cinatra-ai/llm";
 import { objectTypeRegistry } from "../registry";
+import { GENERIC_OBJECT_TYPE_ID } from "../namespace";
 import { buildClassifierOutputSchema, type ClassifierOutput } from "./schema";
 import { buildClassifierSystemPrompt, summarizeZodSchema } from "./prompt";
 
@@ -103,7 +104,17 @@ export async function classifyObject(
   // types exist only as explicit installed-extension definitions, so a dynamic
   // candidate could never be saved anyway — the write path fail-closes on
   // dynamic/tombstoned/unregistered ids (packages/objects/src/mcp/handlers.ts).
-  const staticTypes = objectTypeRegistry.list();
+  //
+  // GENERIC_OBJECT_TYPE_ID is excluded here (cinatra#2592): it stays
+  // REGISTERED for READ back-compat (register-types.ts), but the write path
+  // REFUSES a save that resolves to it (same file) — offering it to the model
+  // as a candidate would steer the classifier at an outcome the write path
+  // always rejects. Every other handler-refused class (dynamic/tombstoned ids)
+  // can never enter this static registry in the first place (registry.ts's
+  // tombstone guard), so no further filtering is needed here.
+  const staticTypes = objectTypeRegistry
+    .list()
+    .filter((t) => t.type !== GENERIC_OBJECT_TYPE_ID);
   const catalog = staticTypes.map((t) => ({
     type: t.type,
     category: t.category,
