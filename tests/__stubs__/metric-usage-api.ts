@@ -13,11 +13,13 @@
 // personal-skill-resolution, path-traversal, cinatra-llm-routing) which do
 // NOT exercise the media branch.
 
+export type LlmUsageOperation = "generate" | "stream" | "batch" | "validate";
+
 export type LlmUsageEvent = {
   source: "llm";
   provider: "openai" | "anthropic" | "gemini";
   model: string;
-  operation: "generate" | "stream";
+  operation: LlmUsageOperation;
   agentLabel: string | null;
   skillLabel: string | null;
   inputTokens: number;

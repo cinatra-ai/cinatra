@@ -3,7 +3,6 @@ import "server-only";
 import * as path from "node:path";
 import { existsSync, realpathSync, readdirSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import {
@@ -16,7 +15,6 @@ import {
   buildLlmMcpServerTool,
   PreferredProviderUnavailableError,
   type LlmTool,
-  type LlmResponse,
 } from "@cinatra-ai/llm";
 import { resolveAgentRuntimeMountDir } from "@cinatra-ai/agents/agent-runtime-mount";
 import {
@@ -103,7 +101,14 @@ import { resolveRunExecutionBinding } from "@/lib/execution/resolve-run-executio
 // executes on L0.
 import { resolveRunEnvironmentSources } from "@/lib/execution/resolve-run-environment-sources";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
-import { emitUsageEvent } from "@cinatra-ai/metric-usage-api";
+// cinatra#2578: every adapter is metered at its mint point, so this route no
+// longer builds a usage row by hand — it PUBLISHES the attribution the transport
+// seam cannot see (the calling agent, and the provider the dispatcher requested
+// vs resolved) and the seam emits the row with the complete usage the provider
+// reported. The hand-built row this replaces hardcoded the cache and reasoning
+// counters to zero and fabricated a zero-token row when the provider reported no
+// usage at all.
+import { withUsageAttribution } from "@cinatra-ai/llm/usage-metering";
 import {
   resolveCinatraLlmDispatch,
   inferMimeTypeFromUrlOrHeader,
@@ -1031,33 +1036,20 @@ export async function POST(req: Request): Promise<Response> {
       .filter((s) => s && s.length > 0)
       .join("\n\n");
 
-    // Emit usage event helper: uses the verified LlmUsageEvent shape from
-    // packages/metric-usage-api/src/types.ts.
-    // NO agentRunId/agentId/tokensIn/tokensOut/kind fields.
     const dispatchPreferredModel = dispatch.preferredModel;
     const dispatchRequestedProvider = dispatch.requestedProvider;
-    const emitMediaUsage = (result: LlmResponse): void => {
-      try {
-        emitUsageEvent({
-          source: "llm",
-          provider: "gemini",
-          model: dispatchPreferredModel ?? "gemini-2.5-flash",
-          operation: "generate",
-          agentLabel: body.agent_id ?? null,
-          skillLabel: null,
-          inputTokens: result.usage?.inputTokens ?? 0,
-          outputTokens: result.usage?.outputTokens ?? 0,
-          cachedInputTokens: 0,
-          reasoningOutputTokens: 0,
-          idempotencyKey: randomUUID(),
-          occurredAt: new Date().toISOString(),
-          requestedProvider: dispatchRequestedProvider ?? "gemini",
-          effectiveProvider: "gemini",
-        });
-      } catch (err) {
-        console.warn("[llm-bridge] emitUsageEvent failed (media branch)", err);
-      }
-    };
+    // What the metering seam cannot infer for this branch: which agent is
+    // spending, and that the dispatcher asked for gemini and got it.
+    const mediaUsageAttribution = {
+      agentLabel: body.agent_id ?? "media-transcript-agent",
+      skillLabel: null,
+      // Passed through UNCHANGED. A caller that set `capabilityRequired`
+      // without `preferredProvider` expressed no preference, and defaulting the
+      // column to "gemini" would record one — inflating the requested-vs-
+      // effective honor rate the column exists to measure.
+      requestedProvider: dispatchRequestedProvider,
+      effectiveProvider: "gemini",
+    } as const;
 
     // Host-allowlist only: do not trust `kind === "youtube"` by itself.
     // Uses `isYouTubeUrlStrict` from `_url-validation.ts`, whose explicit
@@ -1079,13 +1071,14 @@ export async function POST(req: Request): Promise<Response> {
           { status: 503 },
         );
       }
-      const result = await adapter.generate({
-        system: combinedSystem,
-        prompt: body.media.url,
-        model: dispatchPreferredModel,
-        maxSteps: 1,
-      });
-      emitMediaUsage(result);
+      const result = await withUsageAttribution(mediaUsageAttribution, () =>
+        adapter.generate({
+          system: combinedSystem,
+          prompt: body.media!.url,
+          model: dispatchPreferredModel,
+          maxSteps: 1,
+        }),
+      );
       return NextResponse.json({ text: result.text ?? "" });
     }
 
@@ -1199,14 +1192,15 @@ export async function POST(req: Request): Promise<Response> {
     try {
       // uploadResult.id is the Gemini File resource path "files/abc";
       // the Gemini SDK accepts this resource-path form as a fileUri.
-      const result = await adapter.generateFromMediaFile({
-        system: combinedSystem,
-        mediaFileUri: fileRef.id,
-        mimeType,
-        model: dispatchPreferredModel,
-        logLabel: body.agent_id ?? "media-transcript-agent",
-      });
-      emitMediaUsage(result);
+      const result = await withUsageAttribution(mediaUsageAttribution, () =>
+        adapter.generateFromMediaFile!({
+          system: combinedSystem,
+          mediaFileUri: fileRef.id,
+          mimeType,
+          model: dispatchPreferredModel,
+          logLabel: body.agent_id ?? "media-transcript-agent",
+        }),
+      );
       return NextResponse.json({ text: result.text ?? "" });
     } finally {
       if (adapter.deleteFile) {

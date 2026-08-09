@@ -424,7 +424,6 @@ export type {
 // Backward-compatible wrapper functions
 // ---------------------------------------------------------------------------
 
-import { randomUUID } from "node:crypto";
 import type { ExtensionToolboxBuildContext } from "@cinatra-ai/sdk-extensions";
 import type { LlmProvider, LlmCapabilityRequirement, LlmProviderAdapter, LlmFileReference, GenerateInput, LlmTool, LlmUsageData, LlmResponse, LlmMcpServerTool, OrchestrateGenerateInput, OrchestrateStreamInput, OrchestrateUploadFileInput, OrchestrateFileInputGenerateInput, LlmAttachmentRef, SandboxExecutor, SandboxEnvironmentMount } from "./types";
 // `OpenAIConnectionConfig` is defined+exported above (host-local structural type;
@@ -473,7 +472,21 @@ import type {
   ExecutionSession,
   ExecutionAvailability,
 } from "./execution-plane";
-import { emitUsageEvent } from "@cinatra-ai/metric-usage-api";
+// cinatra#2578 — the usage ledger's choke point. Emission itself lives in
+// `./usage-metering` and is applied to every adapter at the mint point
+// (`resolveProviderAdapter`); the entry points below no longer emit by hand,
+// they only publish the attribution the transport seam cannot see.
+import {
+  emitLlmUsage,
+  getUsageAttribution,
+  withUsageAttribution,
+} from "./usage-metering";
+export {
+  withUsageAttribution,
+  isMeteredAdapter,
+  meterLlmProviderAdapter,
+} from "./usage-metering";
+export type { UsageAttribution } from "./usage-metering";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import { withActorContext, getActorContext } from "./actor-context";
 import {
@@ -516,64 +529,11 @@ function requireActorFrame<T>(
 // Usage emission helpers
 // ---------------------------------------------------------------------------
 
-function emitLlmUsage(params: {
-  provider: LlmProvider;
-  model: string | undefined;
-  operation: "generate" | "stream";
-  logLabel: string | undefined;
-  skillLabel: string | null;
-  usage: LlmUsageData;
-  idempotencyKey: string;
-  requestedProvider?: string | null;
-  effectiveProvider?: string | null;
-}): void {
-  emitUsageEvent({
-    source: "llm",
-    provider: params.provider,
-    model: params.model ?? "unknown",
-    operation: params.operation,
-    agentLabel: params.logLabel ?? null,
-    skillLabel: params.skillLabel,
-    inputTokens: params.usage.inputTokens,
-    outputTokens: params.usage.outputTokens,
-    cachedInputTokens: params.usage.cachedInputTokens,
-    reasoningOutputTokens: params.usage.reasoningOutputTokens,
-    cacheReadInputTokens: params.usage.cacheReadInputTokens,
-    cacheCreationInputTokens: params.usage.cacheCreationInputTokens,
-    idempotencyKey: params.idempotencyKey,
-    occurredAt: new Date().toISOString(),
-    requestedProvider: params.requestedProvider ?? null,
-    effectiveProvider: params.effectiveProvider ?? null,
-  });
-}
-
-/**
- * Creates an onUsageData callback that emits a usage event.
- * Pass this into StreamInput.onUsageData to automatically capture streaming usage.
- */
-export function createStreamUsageEmitter(params: {
-  provider: LlmProvider;
-  model: string | undefined;
-  logLabel: string | undefined;
-  skillLabel?: string | null;
-}): (usage: LlmUsageData) => void {
-  const idempotencyKey = randomUUID();
-  return (usage) => {
-    emitLlmUsage({
-      provider: params.provider,
-      model: params.model,
-      operation: "stream",
-      logLabel: params.logLabel,
-      skillLabel: params.skillLabel ?? null,
-      usage,
-      idempotencyKey,
-    });
-  };
-}
-
-// NOTE: Streaming calls (adapter.stream()) capture usage via the onUsageData callback
-// on StreamInput. Use createStreamUsageEmitter() to create a callback that automatically
-// emits usage events. The generate()-based wrappers below handle emission automatically.
+// The emitter itself now lives in `./usage-metering` (imported above) and is
+// applied to EVERY adapter at the mint point. The entry points in this file
+// therefore no longer emit next to their adapter calls — that convention is
+// exactly what let Batch, the admin test-key probe and most chat steps escape
+// the ledger (cinatra#2578).
 
 /**
  * The provider the platform resolved for a request, plus the MODEL that
@@ -1026,7 +986,6 @@ export async function runDeterministicLlmTask(input: DeterministicLlmExecutionIn
 }
 
 async function runDeterministicLlmTaskImpl(input: DeterministicLlmExecutionInput) {
-  const idempotencyKey = randomUUID();
   const adapter = await getAdapter(input.provider);
   // Explicit MCP injection. Behavior preserved: when input.declaredToolboxIds
   // is undefined, the always-inject set is applied; Gemini short-circuits to
@@ -1092,18 +1051,7 @@ async function runDeterministicLlmTaskImpl(input: DeterministicLlmExecutionInput
       : {}),
   });
 
-  if (response.usage) {
-    emitLlmUsage({
-      provider: input.provider,
-      model: response.model ?? input.model,
-      operation: "generate",
-      logLabel: input.logLabel,
-      skillLabel: null,
-      usage: response.usage,
-      idempotencyKey,
-    });
-  }
-
+  // Usage is emitted by the metering proxy around `adapter` (cinatra#2578).
   return response;
 }
 
@@ -1275,8 +1223,16 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
     .filter(Boolean)
     .join("\n\n");
 
-  const idempotencyKey = randomUUID();
-  const response = await adapter.generate({
+  // The metering proxy emits the usage row; this frame publishes the pieces of
+  // attribution it cannot see (the delivered skill, and the requested/effective
+  // provider the dispatcher resolved). cinatra#2578.
+  const response = await withUsageAttribution(
+    {
+      skillLabel: injectedSkillMembers(input.injectedSkills)[0]?.skillId ?? null,
+      requestedProvider: input.telemetryRequestedProvider ?? null,
+      effectiveProvider: input.telemetryEffectiveProvider ?? null,
+    },
+    () => adapter.generate({
     system,
     prompt: input.user,
     model: input.model,
@@ -1300,21 +1256,8 @@ async function runSkillAwareDeterministicLlmTaskImpl(input: SkillAwareDeterminis
     ...(resolved.resolvedAttachments
       ? { resolvedAttachments: resolved.resolvedAttachments }
       : {}),
-  });
-
-  if (response.usage) {
-    emitLlmUsage({
-      provider: input.provider,
-      model: response.model ?? input.model,
-      operation: "generate",
-      logLabel: input.logLabel,
-      skillLabel: injectedSkillMembers(input.injectedSkills)[0]?.skillId ?? null,
-      usage: response.usage,
-      idempotencyKey,
-      requestedProvider: input.telemetryRequestedProvider ?? null,
-      effectiveProvider: input.telemetryEffectiveProvider ?? null,
-    });
-  }
+    }),
+  );
 
   // Surface the rank-and-truncate decision on the response so the general-path
   // caller (llm-bridge) can return it visibly. Absent on every non-truncating
@@ -1393,7 +1336,6 @@ export async function generate(input: OrchestrateGenerateInput): Promise<LlmResp
 }
 
 async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise<LlmResponse> {
-  const idempotencyKey = randomUUID();
   let adapter: LlmProviderAdapter;
   if (input.provider) {
     adapter = await getAdapter(input.provider);
@@ -1454,38 +1396,30 @@ async function orchestrateGenerateImpl(input: OrchestrateGenerateInput): Promise
     model: input.model ?? adapter.defaultModel,
     system: input.system,
   });
-  const response = await adapter.generate({
-    ...adapterInput,
-    // Byte-identical when no cue (passthrough): keep the exact resolved system
-    // (which may be undefined) rather than coercing it to "".
-    system: exec.systemCue
-      ? [resolvedAtt.system, exec.systemCue].filter(Boolean).join("\n\n")
-      : resolvedAtt.system,
-    tools: exec.tools,
-    maxSteps: exec.maxSteps,
-    // cinatra#2339 — see runDeterministicLlmTaskImpl. This entry point may
-    // resolve the adapter from the implicit-global default, so `input.provider`
-    // can be absent entirely; `adapter.provider` is always right.
-    outputSchema: sanitizeOutputSchemaForProvider(
-      adapter.provider,
-      adapterInput.outputSchema,
-    ),
-    ...(resolvedAtt.resolvedAttachments
-      ? { resolvedAttachments: resolvedAtt.resolvedAttachments }
-      : {}),
-  });
-  if (response.usage) {
-    emitLlmUsage({
-      provider: adapter.provider,
-      model: response.model ?? input.model,
-      operation: "generate",
-      logLabel: input.logLabel,
-      skillLabel: input.skillLabel ?? null,
-      usage: response.usage,
-      idempotencyKey,
-    });
-  }
-  return response;
+  // Usage is emitted by the metering proxy (cinatra#2578); the frame carries the
+  // skill attribution the transport seam cannot see.
+  return withUsageAttribution({ skillLabel: input.skillLabel ?? null }, () =>
+    adapter.generate({
+      ...adapterInput,
+      // Byte-identical when no cue (passthrough): keep the exact resolved system
+      // (which may be undefined) rather than coercing it to "".
+      system: exec.systemCue
+        ? [resolvedAtt.system, exec.systemCue].filter(Boolean).join("\n\n")
+        : resolvedAtt.system,
+      tools: exec.tools,
+      maxSteps: exec.maxSteps,
+      // cinatra#2339 — see runDeterministicLlmTaskImpl. This entry point may
+      // resolve the adapter from the implicit-global default, so `input.provider`
+      // can be absent entirely; `adapter.provider` is always right.
+      outputSchema: sanitizeOutputSchemaForProvider(
+        adapter.provider,
+        adapterInput.outputSchema,
+      ),
+      ...(resolvedAtt.resolvedAttachments
+        ? { resolvedAttachments: resolvedAtt.resolvedAttachments }
+        : {}),
+    }),
+  );
 }
 
 /**
@@ -1543,12 +1477,6 @@ async function orchestrateStreamImpl(input: OrchestrateStreamInput): Promise<voi
     requestedMaxSteps: undefined,
     outputSchema: undefined,
   });
-  const emitter = createStreamUsageEmitter({
-    provider: adapter.provider,
-    model: input.model ?? adapter.defaultModel,
-    logLabel: input.logLabel,
-    skillLabel: input.skillLabel ?? null,
-  });
   // Strip the resolver inputs so they never reach the adapter; ALSO
   // runtime-strip `resolvedAttachments` (the public type already Omits it, but
   // a cast could smuggle one — the resolver-bypass invariant must hold at
@@ -1605,20 +1533,22 @@ async function orchestrateStreamImpl(input: OrchestrateStreamInput): Promise<voi
   const { messages: _smuggledMessages, ...restNoMessages } = rest as typeof rest & {
     messages?: unknown;
   };
-  return adapter.stream({
-    ...restNoMessages,
-    // Byte-identical when no cue (passthrough): preserve the exact resolved
-    // system (which may be undefined) rather than coercing it to "".
-    system: exec.systemCue
-      ? [streamResolve.system, exec.systemCue].filter(Boolean).join("\n\n")
-      : streamResolve.system,
-    messages: streamResolve.messages,
-    tools: exec.tools,
-    onUsageData: (usage) => {
-      emitter(usage);
-      onUsageData?.(usage);
-    },
-  });
+  // The metering proxy wraps `onUsageData` and emits ONE row PER usage report —
+  // which is what makes a multi-step chat turn countable at all (cinatra#2578).
+  // The caller's own `onUsageData` is preserved and still called.
+  return withUsageAttribution({ skillLabel: input.skillLabel ?? null }, () =>
+    adapter.stream({
+      ...restNoMessages,
+      // Byte-identical when no cue (passthrough): preserve the exact resolved
+      // system (which may be undefined) rather than coercing it to "".
+      system: exec.systemCue
+        ? [streamResolve.system, exec.systemCue].filter(Boolean).join("\n\n")
+        : streamResolve.system,
+      messages: streamResolve.messages,
+      tools: exec.tools,
+      ...(onUsageData ? { onUsageData } : {}),
+    }),
+  );
 }
 
 /**
@@ -1666,7 +1596,6 @@ export async function deleteFile(fileRef: LlmFileReference): Promise<void> {
 export async function generateWithFileInput(
   input: OrchestrateFileInputGenerateInput,
 ): Promise<LlmResponse> {
-  const idempotencyKey = randomUUID();
   let adapter: LlmProviderAdapter;
   if (input.provider) {
     adapter = await getAdapter(input.provider);
@@ -1682,28 +1611,19 @@ export async function generateWithFileInput(
     );
   }
   const { provider: _provider, ...adapterInput } = input;
-  const response = await adapter.generateWithFileInput({
-    ...adapterInput,
-    // cinatra#2339 — the fourth and last schema-capable adapter method
-    // (`StreamInput` carries no `outputSchema`). Keyed off the RESOLVED
-    // provider because `input.provider` is optional on this entry point.
-    outputSchema: sanitizeOutputSchemaForProvider(
-      adapter.provider,
-      adapterInput.outputSchema,
-    ),
-  });
-  if (response.usage) {
-    emitLlmUsage({
-      provider: adapter.provider,
-      model: response.model ?? input.model,
-      operation: "generate",
-      logLabel: input.logLabel,
-      skillLabel: input.skillLabel ?? null,
-      usage: response.usage,
-      idempotencyKey,
-    });
-  }
-  return response;
+  // Usage is emitted by the metering proxy (cinatra#2578).
+  return withUsageAttribution({ skillLabel: input.skillLabel ?? null }, () =>
+    adapter.generateWithFileInput!({
+      ...adapterInput,
+      // cinatra#2339 — the fourth and last schema-capable adapter method
+      // (`StreamInput` carries no `outputSchema`). Keyed off the RESOLVED
+      // provider because `input.provider` is optional on this entry point.
+      outputSchema: sanitizeOutputSchemaForProvider(
+        adapter.provider,
+        adapterInput.outputSchema,
+      ),
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1964,8 +1884,22 @@ export async function orchestrateDownloadBatchOutcomesV2(
   input: OrchestrateBatchV2ByIdInput,
 ): Promise<LlmBatchV2Outcome[]> {
   const { adapter, v2 } = await requireBatchSurface(input.provider);
-  if (v2) return v2.download(input.batchId);
+  const outcomes = v2
+    ? await v2.download(input.batchId)
+    : await downloadV1BatchOutcomes(adapter, input);
+  recordBatchOutcomeUsage({
+    provider: input.provider,
+    batchId: input.batchId,
+    fallbackModel: adapter.defaultModel,
+    outcomes,
+  });
+  return outcomes;
+}
 
+async function downloadV1BatchOutcomes(
+  adapter: LlmProviderAdapter,
+  input: OrchestrateBatchV2ByIdInput,
+): Promise<LlmBatchV2Outcome[]> {
   const raw = await adapter.retrieveBatch!(input.batchId);
   const state = v1ResultToState(raw);
   if (state.status === "failed") {
@@ -1983,6 +1917,50 @@ export async function orchestrateDownloadBatchOutcomesV2(
     fileIds.map((fileId) => adapter.downloadBatchResults!(fileId)),
   );
   return pages.flat().map(v1OutputLineToOutcome);
+}
+
+/**
+ * Fold a downloaded batch's per-request usage into the ledger (cinatra#2578).
+ *
+ * WHY HERE. A batch's tokens are billed by the provider but are reported only on
+ * the RESULT rows — no adapter `generate()` ever happens, so the metering proxy
+ * cannot see them. This is the one place both batch branches (native v2 and the
+ * v1 bridge) converge with outcomes in hand, which makes it the batch surface's
+ * choke point. Skill/agent install fires these batches, so before this they were
+ * pure invisible spend.
+ *
+ * IDEMPOTENCY IS DERIVED, NOT RANDOM. Callers poll `download` until a batch ends
+ * and may download the same ended batch more than once (retries, a restarted
+ * worker). `batch:{provider}:{batchId}:{customId}` addresses the one billed
+ * request exactly, so a re-download re-emits the same keys and the ledger's
+ * unique index collapses them instead of doubling the reported spend.
+ *
+ * The `"batch"` operation is not decoration: `metric-cost-api` reads it to apply
+ * the provider's asynchronous-batch rate (half the synchronous card on both
+ * providers that offer the surface), so a batch row is priced at what a batch
+ * actually costs rather than at the interactive rate.
+ */
+function recordBatchOutcomeUsage(params: {
+  provider: LlmProvider;
+  batchId: string;
+  fallbackModel: string;
+  outcomes: LlmBatchV2Outcome[];
+}): void {
+  const attribution = getUsageAttribution();
+  for (const outcome of params.outcomes) {
+    if (outcome.status !== "succeeded" || !outcome.usage) continue;
+    emitLlmUsage({
+      provider: params.provider,
+      model: outcome.model ?? params.fallbackModel,
+      operation: "batch",
+      logLabel: attribution?.agentLabel ?? null,
+      skillLabel: attribution?.skillLabel ?? null,
+      usage: outcome.usage,
+      idempotencyKey: `batch:${params.provider}:${params.batchId}:${outcome.customId}`,
+      requestedProvider: attribution?.requestedProvider ?? null,
+      effectiveProvider: attribution?.effectiveProvider ?? null,
+    });
+  }
 }
 
 /**

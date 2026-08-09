@@ -17,6 +17,9 @@ import type { LlmProvider, LlmProviderAdapter, LlmMcpServerTool } from "./types"
 // silent fallback to deleted in-core code; a registered-but-malformed surface
 // makes `getLlmProviderAdapterSurface` THROW (fail closed).
 import { getLlmProviderAdapterSurface } from "@/lib/llm-provider-surfaces";
+// cinatra#2578: usage metering is applied HERE, at the one place an adapter is
+// minted, so no call site can obtain an unmetered adapter.
+import { meterLlmProviderAdapter } from "./usage-metering";
 import {
   readDefaultLlmProviderFromDatabase,
   readDefaultImageProviderFromDatabase,
@@ -255,10 +258,19 @@ export async function resolveProviderAdapter(provider: LlmProvider): Promise<Llm
   // is NO silent fallback. A registered-but-malformed surface makes
   // `getLlmProviderAdapterSurface` THROW (fail closed), so a broken adapter can
   // never silently downgrade.
+  //
+  // USAGE METERING (cinatra#2578). `surface.createAdapter()` is the ONLY call
+  // to a connector's adapter factory in the repo, which makes this function the
+  // single mint point for every adapter any caller can hold. Wrapping the result
+  // in `meterLlmProviderAdapter` therefore makes the `usage_events` ledger
+  // STRUCTURAL rather than a per-call-site convention: a new caller that resolves
+  // an adapter and calls `generate()`/`stream()` is counted automatically, and
+  // there is no code path by which it could be counted only sometimes.
   const surface = getLlmProviderAdapterSurface(provider);
   if (!surface) return null;
   const adapter = await surface.createAdapter();
-  return (adapter ?? null) as LlmProviderAdapter | null;
+  if (!adapter) return null;
+  return meterLlmProviderAdapter(adapter as LlmProviderAdapter);
 }
 
 /**

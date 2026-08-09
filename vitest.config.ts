@@ -237,6 +237,20 @@ export default defineConfig({
           "packages/llm/src/structured-json.ts",
         ),
       },
+      // cinatra#2578: the usage-metering seam (the attribution frame + the
+      // metering proxy). Dependency-light — node:async_hooks + node:crypto, the
+      // metric-usage-api bus (itself stubbed above) and type-only imports.
+      // Route modules import it through this leaf rather than the barrel, so a
+      // route test does not have to widen its `@cinatra-ai/llm` mock factory to
+      // keep loading. Like the leaves above it must be aliased BEFORE the bare
+      // entry.
+      {
+        find: "@cinatra-ai/llm/usage-metering",
+        replacement: path.join(
+          __dirname,
+          "packages/llm/src/usage-metering.ts",
+        ),
+      },
       {
         find: "@cinatra-ai/llm",
         replacement: path.join(

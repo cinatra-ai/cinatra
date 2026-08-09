@@ -29,6 +29,10 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as path from "node:path";
+// The REAL metering seam (cinatra#2578) — resolved through its own leaf subpath,
+// so the wholesale `@cinatra-ai/llm` mock below does not shadow it.
+import { meterLlmProviderAdapter } from "@cinatra-ai/llm/usage-metering";
+import type { LlmProviderAdapter } from "@cinatra-ai/sdk-extensions/llm-provider-adapter-contract";
 
 type LlmProviderId = "openai" | "anthropic" | "gemini";
 
@@ -47,6 +51,9 @@ const {
 } = vi.hoisted(() => {
   const adapter = {
     provider: "gemini" as const,
+    // cinatra#2578: the metering proxy falls back to this when neither the
+    // response nor the request names a model.
+    defaultModel: "gemini-2.5-flash" as const,
     uploadFile: vi.fn(async (_input: unknown) => ({
       id: "files/abc123",
       provider: "gemini" as const,
@@ -82,8 +89,12 @@ const {
       text: "ok",
       artifacts: [],
     })),
-    resolveProviderAdapterMock: vi.fn(async (provider: LlmProviderId) =>
-      provider === "gemini" ? adapter : { provider },
+    // Return type widened to `unknown`: production resolves this through
+    // `resolveProviderAdapter`, which answers with the METERED adapter, and the
+    // beforeEach below wraps the mock in the real proxy (cinatra#2578).
+    resolveProviderAdapterMock: vi.fn(
+      async (provider: LlmProviderId): Promise<unknown> =>
+        provider === "gemini" ? adapter : { provider },
     ),
     resolveConfiguredLlmRuntimeMock: vi.fn(async () => ({
       runtime: { provider: "openai" },
@@ -326,8 +337,16 @@ beforeEach(async () => {
       reasoningOutputTokens: 0,
     },
   });
-  resolveProviderAdapterMock.mockImplementation(async (provider: LlmProviderId) =>
-    provider === "gemini" ? adapterMock : { provider },
+  // cinatra#2578: production resolves adapters through
+  // `resolveProviderAdapter`, which returns the METERED adapter. Wrapping the
+  // mock in the REAL metering proxy here is what makes the usage assertions
+  // below assertions about the shipped emitter rather than about a hand-rolled
+  // row this route no longer builds.
+  resolveProviderAdapterMock.mockImplementation(
+    async (provider: LlmProviderId): Promise<unknown> =>
+      provider === "gemini"
+        ? meterLlmProviderAdapter(adapterMock as unknown as LlmProviderAdapter)
+        : { provider },
   );
   resolveConfiguredLlmRuntimeMock.mockResolvedValue({
     runtime: { provider: "openai" },

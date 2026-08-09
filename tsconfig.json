@@ -352,6 +352,7 @@
       "@cinatra-ai/llm/execution-plane": ["./packages/llm/src/execution-plane/index.ts"],
       "@cinatra-ai/llm/mcp-materializer": ["./packages/llm/src/mcp-materializer.ts"],
       "@cinatra-ai/llm/structured-json": ["./packages/llm/src/structured-json.ts"],
+      "@cinatra-ai/llm/usage-metering": ["./packages/llm/src/usage-metering.ts"],
       "@cinatra-ai/execution-plane": ["./packages/execution-plane/src/index.ts"],
       "@cinatra-ai/execution-plane/environment/promotion": ["./packages/execution-plane/src/environment/promotion.ts"],
       "@cinatra-ai/execution-plane/voucher": ["./packages/execution-plane/src/authz/voucher.ts"],
