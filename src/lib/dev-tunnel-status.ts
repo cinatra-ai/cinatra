@@ -24,13 +24,17 @@ export type DevTunnelStatus = {
    * A null preview has several distinct causes (unresolved tailnet, no
    * sanctioned dev identity, conflicting identity signals) and only the first
    * is fixed by reconnecting the connector — so the surface must not guess.
-   * The connector computes the code today but only logs it, and the capability
-   * contract exposes no getter for it. Rather than widen that contract, this
-   * reads an OPTIONAL getter off the same provider: a capability impl is
-   * `unknown` by contract and already structurally probed, so an impl that
-   * grows the getter is picked up with no host change, and one that never does
-   * degrades to `null` (which the surface renders as an explicitly
-   * cause-agnostic notice).
+   * The `dev-tunnel-status` capability contract exposes no getter for the code,
+   * and rather than widen that contract this reads an OPTIONAL getter off the
+   * same provider: a capability impl is `unknown` by contract and already
+   * structurally probed, so an impl that grows the getter is picked up with no
+   * host change, and one that never does degrades to `null` (which the surface
+   * renders as an explicitly cause-agnostic notice).
+   *
+   * The tailscale connector reports it since its #65 (pinned here from
+   * 9061f2c3): `getFunnelUrlPreviewReason` returns the identity code it had
+   * previously only logged. It still returns `null` for the unresolved-tailnet
+   * cause, which has no minted code — that one keeps the cause-agnostic copy.
    */
   funnelUrlPreviewReason: string | null;
 };

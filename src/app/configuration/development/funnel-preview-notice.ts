@@ -22,16 +22,19 @@
 // ---------------------------------------------------------------------------
 // Reason plumbing — what is live today
 // ---------------------------------------------------------------------------
-// The connector already COMPUTES the precise reason but only console.warn()s
-// it; the `dev-tunnel-status` capability it registers currently exposes just
-// `getFunnelUrlPreview()`. The host reads an OPTIONAL reason getter off the
-// same provider (see @/lib/dev-tunnel-status), so when the connector starts
-// reporting its code this surface shows the exact copy with no further host
-// change. Until then the reason arrives as `null` and the "unknown" branch
-// renders — which no longer asserts a cause it cannot know, and no longer
-// recommends a remediation that may not apply. That honest fallback is the
-// user-visible fix; the precise branches are pinned by tests so the connector
-// half can land without re-litigating the copy.
+// The connector had always COMPUTED the precise reason and only console.warn()d
+// it. The `dev-tunnel-status` capability CONTRACT still declares only
+// `getConnectionStatus()` / `getFunnelUrlPreview()`; rather than widen it, the
+// host reads an OPTIONAL reason getter off the same provider impl (see
+// @/lib/dev-tunnel-status). The tailscale connector's registered impl carries
+// that getter since its #65, pinned here from 9061f2c3, so the identity
+// branches below are LIVE on a real instance (proven end to end in
+// evidence/2534-pin).
+//
+// The "unknown" branch is not dead: the connector reports no code for the
+// unresolved-tailnet cause (none is minted), and a provider that never grows
+// the getter degrades to `null`. That branch asserts no cause it cannot know
+// and recommends no remediation that may not apply.
 
 /** Reason codes the connector defines (its published constants). */
 export const FUNNEL_PREVIEW_UNREGISTERED_IDENTITY = "tailscale.unregistered_dev_identity";
