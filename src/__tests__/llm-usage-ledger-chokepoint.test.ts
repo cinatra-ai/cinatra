@@ -93,8 +93,9 @@ const DIRECT_PROVIDER_CALLERS: Registered[] = [
   {
     file: "src/app/configuration/mcp/llm-access/test/route.ts",
     why:
-      "Admin MCP-access probe. Hand-rolled fetch predates the adapter seam; it is " +
-      "INSTRUMENTED — every probe emits an operation:\"validate\" row (cinatra#2578).",
+      "Admin key-validation probe. Since the cinatra#2579 rewrite it runs NO " +
+      "inference — a catalog read (connector surface preferred, bodyless models " +
+      "fallback) that publishes its own usage event at its own seam.",
   },
   {
     file: "packages/llm/src/tools/anthropic-custom-skills-client.ts",
@@ -125,12 +126,6 @@ const EMIT_LLM_USAGE_CALLERS: Registered[] = [
       "Batch outcome accounting. A batch's tokens arrive on the RESULT rows, not " +
       "from an adapter call, so no proxy invocation exists to meter.",
   },
-  {
-    file: "src/app/configuration/mcp/llm-access/test/route.ts",
-    why:
-      "The admin MCP-access probe reaches the provider with a raw fetch, so no " +
-      "adapter — and therefore no proxy — is involved.",
-  },
 ];
 
 const USAGE_EVENT_PUBLISHERS: Registered[] = [
@@ -141,6 +136,12 @@ const USAGE_EVENT_PUBLISHERS: Registered[] = [
   {
     file: "packages/llm/src/usage-metering.ts",
     why: "The seam. The single producer of every source:\"llm\" row.",
+  },
+  {
+    file: "src/app/configuration/mcp/llm-access/test/route.ts",
+    why:
+      "The cinatra#2579 validation rewrite: a catalog read with no adapter in " +
+      "play publishes its one operation:\"validate\" row directly.",
   },
   {
     file: "src/lib/extension-host-context.ts",
@@ -232,9 +233,11 @@ describe("no module reaches a provider inference API outside the seam", () => {
       (file) => file.rel === "src/app/configuration/mcp/llm-access/test/route.ts",
     );
     expect(probe).toBeDefined();
-    expect(probe!.text).toContain("emitLlmUsage");
-    // All three provider round trips in that route are recorded.
-    expect(probe!.text.match(/recordProbeUsage\(\{/g) ?? []).toHaveLength(3);
+    // The #2579 rewrite publishes exactly one usage event per validation, at
+    // its own seam, through the bus emitter it imports directly.
+    expect(probe!.text).toContain('import { emitUsageEvent } from "@cinatra-ai/metric-usage-api"');
+    expect(probe!.text.match(/^\s*emitUsageEvent\(\{/gm) ?? []).toHaveLength(1);
+    expect(probe!.text).not.toContain("emitLlmUsage");
   });
 
   it("every registered exception states a reason", () => {
