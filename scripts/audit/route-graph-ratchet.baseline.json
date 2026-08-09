@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 1673,
     "/api/mcp": 1669,
-    "/chat": 1747,
+    "/chat": 1748,
     "/api/a2a": 1674,
     "/api/llm-bridge": 1684
   },
@@ -27,10 +27,10 @@
       "pr": 2588
     },
     "/chat": {
-      "from": 1746,
-      "to": 1747,
-      "reason": "cinatra#2578 usage-ledger choke point: ONE new first-party module, packages/llm/src/usage-metering.ts, reached by every locked route through the PRE-EXISTING route -> @cinatra-ai/llm barrel edge they all already carry (no new cross-package edge); +1 per locked route, uniformly. The module is the seam that makes the LLM spend ledger structural: resolveProviderAdapter \u2014 the single place a connector adapter is minted \u2014 now returns a metering proxy, so every provider call is recorded no matter which call site made it. Before this, every usage_events row came from a hand-written emit next to an adapter call, and any path that reached a provider some other way was billed and invisible (measured: ~36 gpt-5.5 requests, 1 ledger row). The +1 cannot be narrowed away: the seam must be importable by both packages/llm/src/index.ts and the two route modules that reach a provider without an adapter, so it has to be its own leaf. Folding it into an already-counted module (registry.ts, telemetry.ts) would merge unrelated concerns purely to avoid the counter. Counts measured with the companion extension repos cloned pinned.",
-      "pr": 2588
+      "from": 1747,
+      "to": 1748,
+      "reason": "cinatra#2593 whole-response action bar Slack-mode parity: ONE new first-party module, packages/chat/src/response-action-bar.tsx, reached through the PRE-EXISTING chat-messages-view.tsx import edge (no new cross-package edge; only /chat carries this route since chat-messages-view.tsx is dynamically imported solely from chat-page.tsx). Extracted the Copy-response/Try-again row out of chat-messages-view.tsx's inline JSX into its own module specifically so it is unit-testable in isolation with a real render (mounted-component test, batch doctrine): chat-messages-view.tsx's own transitive import graph (chat-undo-action-chip.tsx -> undo-actions.ts -> @/lib/object-history -> @/lib/database) makes the file itself unmountable in vitest, which is why no existing test imports it directly. Folding the component back inline would avoid the +1 but forfeit that isolated test coverage for the fix. Counts measured against CI's own route-graph-ratchet run (companion extension repos cloned pinned) since this worktree lacks the extension-repo checkouts a bare local --write-baseline needs.",
+      "pr": 2601
     },
     "/sign-in": {
       "from": 1672,
