@@ -128,6 +128,12 @@ function toRow(r: AgentCreationRequestRow, opts?: { decidableOwn?: boolean }): A
     // MCP get/decide round-trip preserves the edit-after-view guard exactly as
     // the inline UI does by capturing raw.snapshotHash at render.
     version: r.snapshotHash,
+    // PUBLIC mirror of raw.decidableOwn (cinatra#2599) — this source's OWN
+    // rowRenderer below keeps reading `raw.decidableOwn`; other renderers of
+    // this row (the /notifications feed) read this public field instead,
+    // since `raw` is adapter-private and dropped at the server→client VM
+    // boundary (feed-view-model.ts).
+    decidableOwn: opts?.decidableOwn === true,
     raw,
   };
 }

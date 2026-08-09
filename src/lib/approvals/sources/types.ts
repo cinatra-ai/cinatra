@@ -84,6 +84,15 @@ export interface ApprovalRow {
   /** ADAPTER-PRIVATE: only the owning source's rowRenderer may read it; nothing
    *  else may depend on its shape (e.g. the agent source stashes the CAS token). */
   raw?: unknown;
+  /** PUBLIC (cinatra#2599): for a `mine`-direction row, true when the source has
+   *  determined the viewer may decide their OWN pending request (e.g. the
+   *  agent-creation single-admin self-approval exception, or a connector's
+   *  `allowSelfApproval`). Distinct from {@link eligibility} (a remote per-decision
+   *  DENY hint on an already-actionable row) — this is the GRANT signal that makes
+   *  a `mine` row actionable in the first place. Any renderer of the row (not just
+   *  the owning source's own `rowRenderer`) may read it; the decide primitive stays
+   *  the authoritative re-check regardless of what this flag says. */
+  decidableOwn?: boolean;
 }
 
 export interface ApprovalEnvelope {
