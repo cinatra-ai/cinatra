@@ -40,6 +40,7 @@ vi.mock("@/lib/external-mcp-toolbox-loader.server", () => ({
 
 import { getLlmProviderAdapterSurface } from "@/lib/llm-provider-surfaces";
 import { resolveProviderAdapter } from "./registry";
+import { isMeteredAdapter } from "./usage-metering";
 import type { LlmProviderAdapter } from "./types";
 
 function surface(createAdapter: () => Promise<LlmProviderAdapter | null>) {
@@ -53,15 +54,25 @@ beforeEach(() => {
 
 describe("resolveProviderAdapter — llm-provider-adapter surface (S4 switch-over)", () => {
   it("resolves the adapter through the connector-registered surface", async () => {
-    // Deliberate partial stub — this test proves reference identity + null
-    // authority, not adapter shape; cast to the firmed ABI type (S4.0).
+    // Deliberate partial stub — this test proves the surface is the source of
+    // the adapter + null authority, not adapter shape; cast to the firmed ABI
+    // type (S4.0).
     const adapter = { provider: "openai", via: "surface" } as unknown as LlmProviderAdapter;
     const createAdapter = vi.fn(async () => adapter);
     vi.mocked(getLlmProviderAdapterSurface).mockReturnValue(surface(createAdapter));
 
     const result = await resolveProviderAdapter("openai");
 
-    expect(result).toBe(adapter);
+    // cinatra#2578: the resolved adapter is the connector's, wrapped in the
+    // usage-metering proxy. The wrapper is TRANSPARENT — every member reads
+    // through to the connector's object — so what the surface supplied is still
+    // what a caller sees; only reference identity changes, and that change is
+    // exactly what makes the ledger structural.
+    expect(result).not.toBeNull();
+    expect(isMeteredAdapter(result)).toBe(true);
+    expect(result).toEqual(adapter);
+    expect(result!.provider).toBe("openai");
+    expect((result as unknown as { via: string }).via).toBe("surface");
     expect(createAdapter).toHaveBeenCalledTimes(1);
   });
 

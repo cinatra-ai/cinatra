@@ -11,7 +11,8 @@
     "./attachment-capability": "./src/attachments/capability-registry.ts",
     "./openai-model-capabilities": "./src/providers/openai-model-capabilities.ts",
     "./scripted-test-provider": "./src/scripted-test-provider.ts",
-    "./structured-json": "./src/structured-json.ts"
+    "./structured-json": "./src/structured-json.ts",
+    "./usage-metering": "./src/usage-metering.ts"
   },
   "scripts": {
     "test": "vitest run"

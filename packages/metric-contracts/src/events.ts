@@ -7,11 +7,22 @@
 // metric package — so the producer/consumer dependency points one way and the
 // metric-usage-api <-> metric-cost-api cycle is broken.
 
+/**
+ * How the provider request that produced this usage was issued.
+ *
+ * `batch` and `validate` are additive (cinatra#2578): the OpenAI Batch surface
+ * and the admin "test key" MCP-access probe are real, billed provider requests
+ * that the ledger previously did not carry at all. Recording them under their
+ * own operation keeps them countable AND distinguishable from interactive spend
+ * rather than mislabelling them as `generate`.
+ */
+export type LlmUsageOperation = "generate" | "stream" | "batch" | "validate";
+
 export type LlmUsageEvent = {
   source: "llm";
   provider: "openai" | "anthropic" | "gemini";
   model: string;
-  operation: "generate" | "stream";
+  operation: LlmUsageOperation;
   agentLabel: string | null;
   skillLabel: string | null;
   inputTokens: number;

@@ -104,6 +104,13 @@ import { resolveRunExecutionBinding } from "@/lib/execution/resolve-run-executio
 import { resolveRunEnvironmentSources } from "@/lib/execution/resolve-run-environment-sources";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import { emitUsageEvent } from "@cinatra-ai/metric-usage-api";
+// cinatra#2578: every adapter is metered at its mint point, so a call site that
+// emits its OWN richer row must say so or the call would be counted twice. The
+// media branch below is the only such caller in the repo — it knows the
+// dispatch's requested/effective provider, which the transport seam does not.
+// The allowlist of files permitted to use this opt-out is pinned by
+// src/__tests__/llm-usage-ledger-chokepoint.test.ts.
+import { withCallerEmittedUsage } from "@cinatra-ai/llm/usage-metering";
 import {
   resolveCinatraLlmDispatch,
   inferMimeTypeFromUrlOrHeader,
@@ -1079,12 +1086,14 @@ export async function POST(req: Request): Promise<Response> {
           { status: 503 },
         );
       }
-      const result = await adapter.generate({
-        system: combinedSystem,
-        prompt: body.media.url,
-        model: dispatchPreferredModel,
-        maxSteps: 1,
-      });
+      const result = await withCallerEmittedUsage(() =>
+        adapter.generate({
+          system: combinedSystem,
+          prompt: body.media!.url,
+          model: dispatchPreferredModel,
+          maxSteps: 1,
+        }),
+      );
       emitMediaUsage(result);
       return NextResponse.json({ text: result.text ?? "" });
     }
@@ -1199,13 +1208,15 @@ export async function POST(req: Request): Promise<Response> {
     try {
       // uploadResult.id is the Gemini File resource path "files/abc";
       // the Gemini SDK accepts this resource-path form as a fileUri.
-      const result = await adapter.generateFromMediaFile({
-        system: combinedSystem,
-        mediaFileUri: fileRef.id,
-        mimeType,
-        model: dispatchPreferredModel,
-        logLabel: body.agent_id ?? "media-transcript-agent",
-      });
+      const result = await withCallerEmittedUsage(() =>
+        adapter.generateFromMediaFile!({
+          system: combinedSystem,
+          mediaFileUri: fileRef.id,
+          mimeType,
+          model: dispatchPreferredModel,
+          logLabel: body.agent_id ?? "media-transcript-agent",
+        }),
+      );
       emitMediaUsage(result);
       return NextResponse.json({ text: result.text ?? "" });
     } finally {
