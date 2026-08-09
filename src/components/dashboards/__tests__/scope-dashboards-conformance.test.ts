@@ -104,14 +104,19 @@ describe("§IX conformance id: scope-dashboards-tab (the scope's Dashboards tab)
     expect(TAB).not.toMatch(/pickArtifactRenderer/);
   });
 
-  it("responsive (§X): the subtitle+Add row STACKS on a narrow viewport so Add drops beneath the subtitle, and is an inline row at ≥sm (render → spec)", () => {
+  it("responsive (§X): the heading+Add row STACKS on a narrow viewport so Add drops beneath the heading, and is an inline row at ≥sm (render → spec)", () => {
     // §X: the "Add dashboard affordance drops beneath the tab strip". The
-    // subtitle+Add row must be a column at narrow width (Add beneath the
-    // subtitle) and a row only at ≥sm — NOT a bare `flex flex-wrap` (which keeps
-    // Add inline-right because the flex-1 subtitle shrinks, never wrapping — the
+    // heading+Add row must be a column at narrow width (Add beneath the
+    // heading) and a row only at ≥sm — NOT a bare `flex flex-wrap` (which keeps
+    // Add inline-right because the flex-1 heading shrinks, never wrapping — the
     // walk's finding).
-    const header = TAB.match(/<div className="flex[^"]*">\s*<p className="min-w-0 flex-1/);
-    expect(header, "subtitle+Add row container not found").not.toBeNull();
+    //
+    // The leading element is an `<h2>` since cinatra#2474 PR2 folded the
+    // collection onto the entity landing: the scope lede became this panel's
+    // heading (it used to be a `<p>` lede on a route of its own, where nothing
+    // else on the page named the scope). The responsive invariant is unchanged.
+    const header = TAB.match(/<div className="flex[^"]*">\s*<h2 className="min-w-0 flex-1/);
+    expect(header, "heading+Add row container not found").not.toBeNull();
     const headerClasses = header![0];
     expect(headerClasses).toContain("flex-col");
     expect(headerClasses).toMatch(/sm:flex-row/);

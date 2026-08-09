@@ -148,6 +148,21 @@ export function isPagelessContainerCrumb(segments: string[], i: number): boolean
   ) {
     return true;
   }
+  // `/{organizations,teams}/<id>/dashboards` became a pure routing container
+  // when cinatra#2474 PR2 folded the scope-collection page onto the entity
+  // landing and DELETED the route (no redirect, no shim). Only the
+  // `[dashboardId]` canonical-home child lives under it now, so the
+  // intermediate "Dashboards" crumb on a nested dashboard URL (#1738) would
+  // link to a 404. It renders as a plain label instead — deliberately NOT
+  // relinked at the entity landing, which is already the immediately preceding
+  // crumb (two adjacent crumbs pointing at one href is worse than one label).
+  if (
+    (segments[0] === "organizations" || segments[0] === "teams") &&
+    depth === 3 &&
+    segments[2] === "dashboards"
+  ) {
+    return true;
+  }
   return false;
 }
 

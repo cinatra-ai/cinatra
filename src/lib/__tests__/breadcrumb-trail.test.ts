@@ -375,10 +375,13 @@ describe("buildBreadcrumbTrail — crumb contributions (#1737)", () => {
       "Dashboards",
       "Team Agent Operations",
     ]);
-    // The Dashboards segment is a real, navigable address (its page redirects
-    // to the team detail — never a 404 crumb).
-    expect(resolved[2].href).toBe(`/teams/${TEAM_ID}/dashboards`);
-    expect(resolved[2].nonNavigable).toBeFalsy();
+    // The Dashboards segment is a PLAIN LABEL, not a link. cinatra#2474 PR2
+    // folded the scope-collection page onto the entity landing and deleted the
+    // `/teams/[teamId]/dashboards` route outright (no redirect, no shim), so
+    // only the `[dashboardId]` canonical-home child remains under that segment —
+    // linking the crumb would 404. It is not relinked at the team landing
+    // either: that landing is already the crumb immediately before it.
+    expect(resolved[2].nonNavigable).toBe(true);
 
     // Without contributions the id floor still holds at both id positions.
     const unresolved = buildBreadcrumbTrail(

@@ -22,10 +22,28 @@ const h = vi.hoisted(() => {
     isMember: vi.fn(),
     listTeams: vi.fn(),
     getAuthSession: vi.fn(),
+    getActorContext: vi.fn(),
+    scopeSection: vi.fn(),
   };
 });
 
-vi.mock("@/lib/auth-session", () => ({ getAuthSession: h.getAuthSession }));
+vi.mock("@/lib/auth-session", () => ({
+  getAuthSession: h.getAuthSession,
+  // cinatra#2474 PR2 — the screen now resolves the actor for the folded #1897
+  // scope-collection panel (and fences it to the ACTIVE org).
+  getActorContext: h.getActorContext,
+}));
+// The collection panel is a server component with its own I/O graph (the #1897
+// service → objects store → artifact promotion). This screen's test is about the
+// screen, so the panel is stubbed; its own behaviour is covered by
+// `src/components/dashboards/__tests__/scope-dashboards-section-error-containment.test.ts`
+// and the §IX conformance suite.
+vi.mock("@/components/dashboards/scope-dashboards-section", () => ({
+  ScopeDashboardsSection: (props: { scope: { orgId: string } }) => {
+    h.scopeSection(props);
+    return <div data-testid="scope-dashboards-panel" />;
+  },
+}));
 vi.mock("@/lib/better-auth-db", () => ({
   betterAuthDb: { select: h.select },
   betterAuthMembers: { id: "m.id", userId: "m.userId", role: "m.role", organizationId: "m.orgId" },
@@ -72,8 +90,14 @@ const ARCHIVED_ORG_ROW = {
 };
 const MEMBER_ROWS: unknown[] = [];
 
-function primeSession(userId = "u1") {
+function primeSession(userId = "u1", activeOrgId: string | undefined = "org-1") {
   h.getAuthSession.mockResolvedValue({ user: { id: userId } });
+  // The actor's `organizationId` IS the session's active org — the axis the
+  // folded collection panel is fenced on (cinatra#2474 PR2).
+  h.getActorContext.mockResolvedValue({
+    principalId: userId,
+    organizationId: activeOrgId,
+  });
 }
 
 async function renderScreen(): Promise<string> {
@@ -88,7 +112,53 @@ beforeEach(() => {
   h.isMember.mockReset();
   h.listTeams.mockReset();
   h.getAuthSession.mockReset();
+  h.getActorContext.mockReset();
+  h.scopeSection.mockReset();
   h.state.queue = [];
+});
+
+describe("the folded #1897 collection panel is fenced to the ACTIVE org (cinatra#2474 PR2)", () => {
+  // The retired `/organizations/[id]/dashboards` route refused any request whose
+  // target org was not the session's ACTIVE org. This landing admits a member of
+  // ANY of their orgs, so the panel must re-apply that fence or folding the
+  // collection here would widen the read (codex convergence on the PR2 diff).
+  test("active org matches the target: the panel renders, scoped to THIS org", async () => {
+    primeSession("u1", "org-1");
+    h.isMember.mockResolvedValue(true);
+    h.state.queue = [[ACTIVE_ORG_ROW], MEMBER_ROWS];
+    h.listTeams.mockResolvedValue([]);
+
+    const html = await renderScreen();
+    expect(html).toContain('data-testid="scope-dashboards-panel"');
+    expect(h.scopeSection).toHaveBeenCalledTimes(1);
+    expect(h.scopeSection.mock.calls[0]?.[0]).toMatchObject({
+      scope: { kind: "organization", scopeId: "org-1", orgId: "org-1" },
+    });
+  });
+
+  test("member of this org but ACTIVE elsewhere: the panel is suppressed, the landing still renders", async () => {
+    primeSession("u1", "org-2");
+    h.isMember.mockResolvedValue(true);
+    h.state.queue = [[ACTIVE_ORG_ROW], MEMBER_ROWS];
+    h.listTeams.mockResolvedValue([]);
+
+    const html = await renderScreen();
+    expect(html).not.toContain('data-testid="scope-dashboards-panel"');
+    expect(h.scopeSection).not.toHaveBeenCalled();
+    // Suppression only — the landing itself stays reachable for every member.
+    expect(html).toContain('data-testid="org-dashboards"');
+  });
+
+  test("no resolvable actor: the panel is suppressed (fail-closed)", async () => {
+    h.getAuthSession.mockResolvedValue({ user: { id: "u1" } });
+    h.getActorContext.mockResolvedValue(undefined);
+    h.isMember.mockResolvedValue(true);
+    h.state.queue = [[ACTIVE_ORG_ROW], MEMBER_ROWS];
+    h.listTeams.mockResolvedValue([]);
+
+    const html = await renderScreen();
+    expect(html).not.toContain('data-testid="scope-dashboards-panel"');
+  });
 });
 
 describe("org detail screen — archived read-only posture (cinatra#1942 V4)", () => {

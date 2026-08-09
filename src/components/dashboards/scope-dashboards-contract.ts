@@ -8,6 +8,7 @@
  * actor — only these already-authorized view models and thunks — so it can
  * neither read nor forge the write gate.
  */
+import type { ListingScopeKind } from "@cinatra-ai/dashboards/entity-links";
 
 /** One row on a scope's Dashboards tab — a homed dashboard OR a secondary
  *  listing. Already projected + authorized server-side. */
@@ -30,8 +31,13 @@ export type ScopeDashboardTabRow = {
 
 /** The tab's data + whether the viewer manages the scope (§IX.2 write gate). */
 export type ScopeDashboardsTabData = {
-  /** The scope's entity-named label, e.g. "Team: Growth". */
+  /** The scope's entity-named label, e.g. "Team: Growth". Titles the
+   *  add-to-scope picker ("Add a dashboard to Team: Growth", §IX.1). */
   readonly scopeLabel: string;
+  /** The scope kind — names the collection panel's heading noun ("Dashboards in
+   *  this team") now that the collection is folded onto the entity landing
+   *  (cinatra#2474 PR2), where the entity's own name is already the h1. */
+  readonly scopeKind: ListingScopeKind;
   readonly rows: readonly ScopeDashboardTabRow[];
   /** actorMayWriteScope — gates the Add affordance + every Remove (§IX.2). A
    *  non-manager gets a read-only tab: every row, open-able, but no Add/Remove. */

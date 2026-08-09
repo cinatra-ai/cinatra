@@ -30,7 +30,12 @@ import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 import { LifecycleBadge } from "@/components/lifecycle-badge";
-import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
+import { ScopeDashboardsSection } from "@/components/dashboards/scope-dashboards-section";
+import {
+  getActorContext,
+  getAuthSession,
+  signInRedirectTarget,
+} from "@/lib/auth-session";
 import { CrumbContributions } from "@/components/crumb-contributions";
 import {
   betterAuthDb,
@@ -133,6 +138,25 @@ export async function OrganizationDetailDashboardPage({
     teamCount: accessModel.teamCount,
   });
 
+  // The #1897 scope collection folded onto this landing (cinatra#2474 PR2).
+  //
+  // ACTIVE-TENANT FENCE — this is the retired route's own gate, preserved
+  // exactly. `/organizations/[id]/dashboards` refused any request where the
+  // target org was not the session's ACTIVE org (`activeOrgId !== id ||
+  // actor.organizationId !== id -> redirect`). This landing is deliberately
+  // wider than that: `readUserIsOrgMember` above admits a member of ANY of their
+  // orgs, active or not. So the panel must re-apply the fence, or folding the
+  // collection here would WIDEN the read — a member of orgs A and B, active in
+  // A, visiting /organizations/B would newly read B's collection
+  // (`getScopeDashboardsTabData` authorizes nothing itself; it reads whatever
+  // `scope.orgId` it is handed), and a platform admin in that position could
+  // even mutate it (platform_admin bypasses both the predicate's and the server
+  // actions' tenant fences). #2474 is presentation-only — no read may widen.
+  // Suppressing the panel, rather than redirecting, keeps the landing itself
+  // reachable for every member exactly as PR1 left it (codex convergence).
+  const actor = await getActorContext();
+  const actorIsActiveInThisOrg = actor?.organizationId === id;
+
   // Bind the generic entity-dashboards actions with this surface's
   // server-derived ref (Next-encrypted across the boundary; the client shell
   // never authors the owner axis).
@@ -197,6 +221,23 @@ export async function OrganizationDetailDashboardPage({
           dataSource={dataSource}
           overviewPortlets={overviewConfig.portlets}
         />
+        {/* The scope's own dashboards collection (#1897 §IX), folded onto this
+            landing by cinatra#2474 PR2 — it used to live on the separate
+            `/organizations/[id]/dashboards` route, which PR2 deletes outright
+            (no redirect, no shim). Homed + secondary-listed rows, the
+            add-to-scope picker, Remove and the promotion recourse all keep the
+            #1897 service and components; only the mount point moved. The
+            per-user shell above (its dropdown and the non-removable Overview) is
+            untouched — a secondary listing is deliberately NOT unioned into that
+            per-user list (#2474's converged model fact), which is exactly why it
+            renders as its own panel here. */}
+        {actor && actorIsActiveInThisOrg ? (
+          <ScopeDashboardsSection
+            actor={actor}
+            scope={{ kind: "organization", scopeId: id, orgId: id }}
+            scopeLabel={`Organization: ${orgName || id}`}
+          />
+        ) : null}
       </PageContent>
     </Main>
   );

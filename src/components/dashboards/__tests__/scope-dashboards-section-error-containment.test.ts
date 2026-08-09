@@ -55,6 +55,7 @@ describe("ScopeDashboardsSection — failure containment (§IX/§X error frame)"
   it("returns the real tab when the service resolves", async () => {
     vi.mocked(getScopeDashboardsTabData).mockResolvedValueOnce({
       scopeLabel: "Team: Growth",
+      scopeKind: "team",
       rows: [],
       canManage: true,
     });

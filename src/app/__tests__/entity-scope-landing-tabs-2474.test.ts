@@ -21,10 +21,31 @@
  * button, light + dark) are proven by the live Playwright walk recorded on the
  * PR.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import path from "node:path";
 import { describe, it, expect } from "vitest";
 
 const read = (p: string) => readFileSync(p, "utf-8");
+
+/** Strip comments so a "nothing links here" check tests the CODE, not the prose
+ *  explaining the retirement (this very file's own comments name the route). */
+const stripComments = (s: string) =>
+  s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+
+/** Every .ts/.tsx source file under the given roots (no node_modules). */
+function sourceFilesUnder(...roots: string[]): string[] {
+  const out: string[] = [];
+  const walk = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.name === "node_modules" || e.name === ".next") continue;
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (/\.tsx?$/.test(e.name)) out.push(p);
+    }
+  };
+  for (const r of roots) if (existsSync(r)) walk(r);
+  return out;
+}
 
 const ORG_LANDING = "packages/dashboards/src/screens/organization-detail-dashboard.tsx";
 const TEAM_LANDING = "packages/dashboards/src/screens/team-detail-dashboard.tsx";
@@ -113,46 +134,61 @@ describe("scope Settings pages point Dashboards at the BARE landing (#2474 PR1)"
   }
 });
 
-describe("no tablist anywhere still targets the retired collection route (#2474 PR1)", () => {
-  // The `/<scope>/<id>/dashboards` collection routes survive PR1 (PR2 folds
-  // them onto the landing and DELETES them), but they must not keep pointing
-  // their own Dashboards tab at themselves — the canonical Dashboards surface
-  // is the bare landing from here on, so someone who arrives on a retired route
-  // via an old link can still get back to it.
-  //
-  // Guarded by `existsSync` on purpose: PR2 removes these files, and their
-  // absence is the STRONGER form of this invariant — it must not turn the suite
-  // red.
-  /** [file, the retired self-target, the bare landing href it must carry] */
-  const LEGACY: ReadonlyArray<readonly [string, string, string]> = [
-    [
-      "src/app/organizations/[id]/dashboards/page.tsx",
-      "/organizations/${encodeURIComponent(org.id)}/dashboards`}",
-      "dashboardsHref={`/organizations/${encodeURIComponent(org.id)}`}",
-    ],
-    [
-      "src/app/teams/[teamId]/dashboards/page.tsx",
-      "/teams/${encodeURIComponent(team.id)}/dashboards`}",
-      "dashboardsHref={`/teams/${encodeURIComponent(team.id)}`}",
-    ],
-    [
-      "src/app/projects/[projectId]/dashboards/page.tsx",
-      "/projects/${encodeURIComponent(project.id)}/dashboards`}",
-      "dashboardsHref={`/projects/${encodeURIComponent(project.id)}`}",
-    ],
-  ];
+describe("the `/<scope>/<id>/dashboards` collection routes are GONE (#2474 PR2)", () => {
+  // PR1 repointed every tablist away from these routes and left them reachable;
+  // PR2 folds their content onto the landing and DELETES them outright — no
+  // redirect, no shim (#2474's "no backward-compat" constraint). Their ABSENCE
+  // is the invariant now, which is why PR1 wrote its version of this group
+  // `existsSync`-guarded: this is the stronger form it was waiting for.
+  const RETIRED_COLLECTION_ROUTES = [
+    "src/app/organizations/[id]/dashboards/page.tsx",
+    "src/app/teams/[teamId]/dashboards/page.tsx",
+    "src/app/projects/[projectId]/dashboards/page.tsx",
+  ] as const;
 
-  for (const [file, selfTarget, bareHref] of LEGACY) {
-    it(`${file} — gone, or its Dashboards tab points at the landing`, () => {
-      if (!existsSync(file)) return; // PR2 landed: the route is deleted outright.
-      const src = read(file);
-      expect(src).toContain("<EntityScopeTabs");
-      // Assert the expected href POSITIVELY, not merely the absence of the old
-      // one — a third, wrong URL would satisfy a negative-only check.
-      expect(src).toContain(bareHref);
-      expect(src).not.toContain(`dashboardsHref={\`${selfTarget}`);
+  for (const file of RETIRED_COLLECTION_ROUTES) {
+    it(`${file} — deleted, not redirected`, () => {
+      expect(existsSync(file)).toBe(false);
     });
   }
+
+  it("a project has no `dashboards` route segment left at all", () => {
+    // Org/team keep their `[dashboardId]` CANONICAL-HOME child (below); a
+    // project-anchored dashboard has no nested canonical route
+    // (`canonicalDashboardPath` falls back to `/dashboards/<id>`), so the whole
+    // segment goes.
+    expect(existsSync("src/app/projects/[projectId]/dashboards")).toBe(false);
+  });
+
+  it("the `[dashboardId]` CANONICAL-HOME children survive the deletion", () => {
+    // The one thing PR2 must NOT delete. `/<scope>/<id>/dashboards/<dashboardId>`
+    // is the canonical home of a scope-anchored dashboard — the exact target
+    // `canonicalDashboardPath` mints, and where every collection row's Open
+    // affordance navigates (§VIII/§IX: the tab points, never renders inline).
+    // Deleting the whole `dashboards` directory would have retired the
+    // collection AND the surface its rows link to. (Also locked, from the other
+    // direction, by `src/app/dashboards/__tests__/directory-retired-2058.test.ts`.)
+    expect(
+      existsSync("src/app/organizations/[id]/dashboards/[dashboardId]/page.tsx"),
+    ).toBe(true);
+    expect(
+      existsSync("src/app/teams/[teamId]/dashboards/[dashboardId]/page.tsx"),
+    ).toBe(true);
+  });
+
+  it("no source still mints a link to a retired scope-collection route", () => {
+    // A collection link ENDS at `/dashboards`; a canonical-home link continues
+    // with `/${dashboardId}`. So the pattern requires the segment to be closed
+    // by the template literal's own backtick — which matches the retired
+    // collection URL and never the surviving detail URL.
+    const offenders = sourceFilesUnder("src", "packages/dashboards/src").filter(
+      (f) =>
+        /\/(?:organizations|teams|projects)\/\$\{[^}]*\}\/dashboards`/.test(
+          stripComments(read(f)),
+        ),
+    );
+    expect(offenders).toEqual([]);
+  });
 });
 
 describe("personal keeps its Dashboards-only tablist (#2474 PR1 leaves it alone)", () => {
@@ -160,5 +196,74 @@ describe("personal keeps its Dashboards-only tablist (#2474 PR1 leaves it alone)
     const src = read(PERSONAL_LANDING);
     expect(src).toContain('<EntityScopeTabs dashboardsHref="/personal" active="dashboards" />');
     expect(src).not.toContain("settingsHref");
+  });
+});
+
+describe("the #1897 scope collection is mounted on the landing (#2474 PR2)", () => {
+  /** [landing file, the scope kind it must mount, the scope-id expression] */
+  const MOUNTS: ReadonlyArray<readonly [string, string, string]> = [
+    [ORG_LANDING, 'kind: "organization"', "scopeId: id"],
+    [TEAM_LANDING, 'kind: "team"', "scopeId: team.id"],
+    [PROJECT_LANDING, 'kind: "project"', "scopeId: project.id"],
+  ];
+
+  for (const [file, kind, scopeId] of MOUNTS) {
+    it(`${file} — mounts ScopeDashboardsSection for its own scope`, () => {
+      const src = read(file);
+      expect(src).toContain("<ScopeDashboardsSection");
+      expect(src).toContain(
+        'from "@/components/dashboards/scope-dashboards-section"',
+      );
+      // The scope is SERVER-derived on the landing and passed whole — the panel
+      // never receives a client-authored owner axis.
+      expect(src).toContain(kind);
+      expect(src).toContain(scopeId);
+    });
+
+    it(`${file} — keeps the per-user shell + Overview untouched above the panel`, () => {
+      const src = read(file);
+      // #2474's constraint: the collection is folded onto the landing WITHOUT
+      // unioning secondary listings into the per-user dropdown. The per-user
+      // shell must still be mounted, and the panel must come AFTER it.
+      const shell = /<(OrganizationDashboards|TeamDetailDashboards|ProjectDashboardsTab)\b/.exec(
+        src,
+      );
+      expect(shell).not.toBeNull();
+      expect(src.indexOf("<ScopeDashboardsSection")).toBeGreaterThan(
+        shell!.index,
+      );
+    });
+  }
+
+  it("personal gets NO scope collection (not an add-to-scope target, §IX)", () => {
+    // §IX: "a personal user scope and the whole-workspace scope are not
+    // add-to-scope targets — they carry no Add". `dashboard_entity_links` admits
+    // only team/org/project, so there is nothing to mount.
+    expect(read(PERSONAL_LANDING)).not.toContain("ScopeDashboardsSection");
+  });
+});
+
+describe("the collection panel's heading names the scope KIND, not the entity (#2474 PR2)", () => {
+  const TAB = "src/components/dashboards/scope-dashboards-tab.tsx";
+
+  it("renders a heading element, not a second page lede", () => {
+    const src = read(TAB);
+    // Folded onto a landing whose PageHeader already carries the entity name as
+    // the h1 and its own description above the tablist, the collection's old
+    // "The dashboards in <Entity>." lede was a second, near-identical lede (the
+    // placement observation recorded on the PR1 proof, #2547). It is now the
+    // panel's heading, below the tablist where §IX's illustration puts it.
+    expect(src).toContain("<h2");
+    expect(src).toContain("Dashboards in this {SCOPE_NOUN[data.scopeKind]}");
+    expect(stripComments(src)).not.toContain("The dashboards in");
+  });
+
+  it("keeps the entity-named label for the add-to-scope picker title (§IX.1)", () => {
+    // §IX.1's picker is titled "Add a dashboard to Team: Growth" — that one DOES
+    // name the entity, because the dialog has no surrounding page header.
+    expect(read(TAB)).toContain("scopeLabel={data.scopeLabel}");
+    expect(read("src/components/dashboards/add-to-scope-picker.tsx")).toContain(
+      "Add a dashboard to {scopeLabel}",
+    );
   });
 });
