@@ -154,14 +154,19 @@ export function approvalDecideKind(sourceId: string): ApprovalDecideKind {
  *     (`undefined`) leave the row actionable; action-time enforcement at the
  *     source stays authoritative.
  * A `mine`-direction row (an approval the viewer requested and awaits others on)
- * is never actionable here — it renders its status pill with no decide action.
+ * is not actionable here UNLESS the source itself computed `decidableOwn`
+ * (cinatra#2599) — e.g. the agent-creation single-admin self-approval
+ * exception, where the "others" the row would otherwise await don't exist.
+ * That is a GRANT signal only the owning source can compute; everything else
+ * below (decide-kind / denied eligibility) still gates the row same as inbox.
  */
 export function isApprovalActionable(
   sourceId: string,
   direction: "inbox" | "mine",
   eligibility?: RowEligibility,
+  decidableOwn?: boolean,
 ): boolean {
-  if (direction !== "inbox") return false;
+  if (direction !== "inbox" && !decidableOwn) return false;
   if (sourceId === WORKFLOW_SOURCE_ID) return false;
   if (approvalDecideKind(sourceId) === "none") return false;
   if (
@@ -187,7 +192,7 @@ export function buildFeedRowVMs(items: UnifiedFeedItem[]): FeedRowVM[] {
       });
     } else if (item.kind === "approval" && item.approval) {
       const { row, direction } = item.approval;
-      const actionable = isApprovalActionable(row.sourceId, direction, row.eligibility);
+      const actionable = isApprovalActionable(row.sourceId, direction, row.eligibility, row.decidableOwn);
       out.push({
         key: `approval:${item.sourceKey}:${item.id}`,
         kind: "approval",

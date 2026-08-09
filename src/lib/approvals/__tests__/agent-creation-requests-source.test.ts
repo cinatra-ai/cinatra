@@ -91,9 +91,19 @@ function mkRow(over: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
-/** Read the adapter-private decidableOwn flag stashed on a row's raw payload. */
+/**
+ * Read the adapter-private decidableOwn flag stashed on a row's raw payload.
+ * cinatra#2599 also mirrors this onto the PUBLIC `row.decidableOwn` field (the
+ * /notifications feed reads that one, since `raw` is dropped at the
+ * server→client VM boundary and stays adapter-private) — every call site
+ * below exercises the real `toRow()` output, so asserting BOTH stay in sync
+ * here proves the public mirror actually reflects what the source computed,
+ * not a value a downstream test fabricated.
+ */
 function decidableOwn(row: ApprovalRow): boolean {
-  return Boolean((row.raw as { decidableOwn?: boolean } | undefined)?.decidableOwn);
+  const privateFlag = Boolean((row.raw as { decidableOwn?: boolean } | undefined)?.decidableOwn);
+  expect(row.decidableOwn).toBe(privateFlag);
+  return privateFlag;
 }
 
 beforeEach(() => {
