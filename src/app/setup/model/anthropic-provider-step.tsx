@@ -92,7 +92,11 @@ export async function SetupAnthropicProviderStep({ keyReopened }: { keyReopened?
     !isConnected || keyReopened === true || !isAnthropicUploadOptInStanding();
 
   return (
-    <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
+    // CARDLESS (cinatra#2502 item A, design spec `specs/app-setup.html` §I) —
+    // the same migration as the OpenAI section: the key field and the consent
+    // control sit directly on the wizard column, and white stays reserved for
+    // the elements the operator actually touches.
+    <section>
       <p className="text-base font-semibold text-foreground">Anthropic API key</p>
       {showKeyForm ? (
         <>

@@ -664,6 +664,18 @@ const nextConfig: NextConfig = {
         permanent: true,
       },
       // connector-mcp-rename-allowlist-end
+      // cinatra#2502: the setup wizard's credential step was renamed
+      // "Connections" → "Secrets" (the old label reused an established, distinct
+      // Cinatra concept) and its route moved with the label, because a route
+      // that spells a step differently from its own name gives one step two
+      // names. A permanent 308 keeps any bookmark, in-flight redirect or
+      // operator note pointing at /setup/connections landing on the step rather
+      // than on a 404.
+      {
+        source: "/setup/connections",
+        destination: "/setup/secrets",
+        permanent: true,
+      },
     ];
   },
 };

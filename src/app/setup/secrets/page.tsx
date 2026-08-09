@@ -1,4 +1,16 @@
-// Deeplink: Initial setup Connections step (Nango under the hood); navigated to from setup orchestration, not from app chrome.
+// Deeplink: Initial setup SECRETS step (Nango under the hood); navigated to
+// from setup orchestration, not from app chrome.
+//
+// cinatra#2502 — the step is called "Secrets" and is addressed at
+// /setup/secrets. The old label reused "Connections", which is an established,
+// distinct Cinatra concept (Nango/connector connections), so one word named two
+// things. The route and the label are the same word on purpose: a route that
+// spells the step differently from its label gives one step two names and the
+// operator has to learn both. The old connections path 308s here — the
+// redirect is declared in next.config.ts, which is the ONE place that may name
+// it (the deep-link guard in
+// src/app/configuration/environment/__tests__/connections-deeplink-guard.test.ts
+// fails any other source that routes at it).
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { ArrowRight, LinkIcon } from "lucide-react";
@@ -8,17 +20,37 @@ import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { FieldGroup, Field, FieldLabel } from "@/components/ui/field";
 
-export const metadata: Metadata = { title: "Setup: Connections" };
+export const metadata: Metadata = { title: "Setup: Secrets" };
 import { getNangoSettings, getNangoSettingsEnvManaged, getNangoStatus } from "@/lib/nango-system";
 import { getSetupWizardSteps, getFirstIncompleteStep } from "@/lib/setup-wizard";
+
+type SetupSecretsPageProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
 
 // Flash outcomes surface via the shell-bypass setup layout's <SearchParamToast>
 // (codes-only). The former inline ?error/?saved <Alert>s duplicated that wizard
 // toast and are retired here.
-export default async function SetupNangoPage() {
+export default async function SetupSecretsPage({ searchParams }: SetupSecretsPageProps) {
+  const resolvedSearchParams = await (searchParams ??
+    Promise.resolve({} as Record<string, string | string[] | undefined>));
+  // THE DELIBERATE-NAVIGATION MARKER (design spec `specs/app-setup.html` §IV,
+  // and the same `?stay=1` contract /setup/key, /setup/name and /setup/model
+  // already honour). A rail link carries it on its destination so the step it
+  // lands on knows the operator ASKED for it and does not forward them on.
+  //
+  // cinatra#2502 made this load-bearing here for the first time: before this
+  // issue the Secrets step could never be `done` (it left the rail the moment
+  // it was satisfied), so its pill was never a revisit link and an
+  // unconditional forward was harmless. Now the pill IS a link — and without
+  // this read, clicking it would bounce the operator straight back to wherever
+  // the wizard's frontier is, which is exactly the silent bounce §IV names.
+  const stayRaw = resolvedSearchParams.stay;
+  const stay = (Array.isArray(stayRaw) ? stayRaw[0] : stayRaw) === "1";
+
   const nangoStatus = getNangoStatus();
 
-  if (nangoStatus.status === "connected") {
+  if (nangoStatus.status === "connected" && !stay) {
     const steps = await getSetupWizardSteps();
     const next = getFirstIncompleteStep(steps);
     redirect(next?.href ?? "/");
@@ -40,12 +72,21 @@ export default async function SetupNangoPage() {
   // a rotate-or-keep, not a first-time entry.
   const hasSavedSecretKey = envManaged.secretKey || Boolean(settings.secretKey);
 
+  // CARDLESS (cinatra#2502 item A, design spec `specs/app-setup.html` §I):
+  // the step's fields sit directly on the wizard column. Rule #8 — white
+  // `--surface-strong` is reserved for the elements the operator actually
+  // touches (the two inputs below), not for the container around them. The
+  // elevated white card this step used to wrap itself in spent the interactive
+  // surface on presentation and flattened the distinction the eye is trained
+  // on; `name` and `key` were migrated by #2477/#2483 and this step was left
+  // behind, which is the white background the owner reported.
   return (
-    <section className="rounded-card border border-line bg-surface-strong p-6 shadow-sm">
+    <section>
       <div>
-        <h2 className="text-2xl font-semibold tracking-tight">Connections</h2>
+        <h2 className="text-2xl font-semibold tracking-tight">Secrets</h2>
         <p className="mt-3 max-w-[64ch] text-sm leading-[1.55] text-pretty text-muted-foreground">
-          Cinatra uses Nango to store and manage external API credentials and OAuth connections. Configure the connection to your Nango instance.
+          Cinatra hands its secrets to Nango, which stores and manages external API credentials
+          and OAuth connections. Point this instance at the Nango it should use.
         </p>
       </div>
 

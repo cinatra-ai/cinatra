@@ -84,7 +84,7 @@ test("name step completes for the anthropic walk", async () => {
   await expectUniversalStepRail(page);
   await fillStable(display, `Lane 2392 Anthropic ${Date.now()}`);
   await page.click('#instance-name-form button[type="submit"]');
-  await page.waitForURL(/\/setup\/(model|connections)/, { timeout: 60_000 });
+  await page.waitForURL(/\/setup\/(model|secrets)/, { timeout: 60_000 });
 });
 
 test("the Anthropic card carries the key form, helper link, and EXPLICIT consent", async () => {

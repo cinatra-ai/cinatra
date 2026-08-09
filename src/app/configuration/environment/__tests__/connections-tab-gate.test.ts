@@ -2,7 +2,7 @@
 // legacy `?tab=connections|credentials` continuity fallback. The tab's inline
 // Nango settings section was the last consumer of the host's
 // `@/lib/nango-settings-section` re-export facade; connection-service
-// configuration lives on /setup/connections in BOTH runtime modes. A
+// configuration lives on /setup/secrets in BOTH runtime modes. A
 // regression where the tab set re-grows the retired value, or where the
 // legacy URLs silently land users on a blank state instead of the flagged
 // Mode fallback, would otherwise only be caught at admin UAT.

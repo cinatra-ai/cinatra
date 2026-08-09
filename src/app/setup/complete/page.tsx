@@ -13,8 +13,15 @@ export default async function SetupCompletePage() {
     redirect("/setup");
   }
 
+  // CARDLESS (cinatra#2502 item A, design spec `specs/app-setup.html` §I).
+  // The issue asked whether the TERMINAL step intentionally keeps its card;
+  // the spec answers it — "every step renders into that same column with the
+  // same bound, FROM THE FIRST STEP TO THE TERMINAL ONE", and the step body is
+  // cardless. The success mark below keeps its tinted disc: that is a glyph
+  // treatment, not container chrome, and it is drawn on the success tint
+  // rather than on white.
   return (
-    <section className="rounded-card border border-line bg-surface-strong p-8 shadow-sm text-center">
+    <section className="text-center">
       <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-success/30 bg-success/10">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-7 w-7 text-success">
           <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />

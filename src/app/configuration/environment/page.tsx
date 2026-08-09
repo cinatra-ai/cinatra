@@ -94,7 +94,7 @@ function ModeTabContent({
   /** Set to "connections" or "credentials" when the user arrived with
    *  that tab in the URL and the page redirected them here because the
    *  Connections tab is retired (cinatra#35) — connection-service
-   *  configuration lives on /setup/connections. `null` for normal Mode
+   *  configuration lives on /setup/secrets. `null` for normal Mode
    *  visits. */
   connectionsRedirectFromTab?: string | null;
 } = {}) {
@@ -112,9 +112,9 @@ function ModeTabContent({
         // Explicit-redirect notice for users who arrive via a stale
         // `?tab=connections|credentials` URL (a bookmark / external link, or
         // a "configure connection service" CTA from an extension pinned to a
-        // pre-cinatra#66 sdk-ui — current CTAs point at /setup/connections).
+        // pre-cinatra#66 sdk-ui — current CTAs point at /setup/secrets).
         // The Connections tab is retired (cinatra#35): the connection
-        // service is configured on /setup/connections (or via env vars), and
+        // service is configured on /setup/secrets (or via env vars), and
         // credentials live on the per-connector setup pages.
         <Alert variant="default" className="rounded-panel">
           <AlertTitle>The Connections tab moved</AlertTitle>
@@ -122,8 +122,11 @@ function ModeTabContent({
             You followed a link to <code className="font-mono text-xs">?tab={connectionsRedirectFromTab}</code>,
             but the Connections tab has been retired. To configure the
             connection service, use{" "}
-            <Link href="/setup/connections" className="underline underline-offset-4">
-              Setup &gt; Connections
+            {/* cinatra#2502 — the wizard step is named "Secrets"; a link
+                labelled with the step's old name sends the operator looking
+                for a pill the rail no longer draws. */}
+            <Link href="/setup/secrets" className="underline underline-offset-4">
+              Setup &gt; Secrets
             </Link>{" "}
             (or set the corresponding environment variables). Per-connector
             credentials live on each connector&apos;s setup page.

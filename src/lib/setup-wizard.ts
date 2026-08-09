@@ -47,12 +47,24 @@ import { readInstanceIdentity } from "@/lib/instance-identity-store";
 // until the first Better Auth user is created).
 import { hasAnyBetterAuthUsers } from "@/lib/auth";
 
-export type SetupWizardStep = {
-  id: string;
-  title: string;
-  href: string;
-  ready: boolean;
-};
+// cinatra#2502 — the step-state MODEL (the three states and their precedence
+// rule) lives in `@/lib/setup-step-state`, a module with no imports at all, and
+// is re-exported here so server callers keep one import site.
+//
+// It cannot live in THIS module: the step rail is a client component (it reads
+// `usePathname()` to know which step is on screen) and needs the resolver as a
+// value, while this module's transitive graph — the provider-commit machine,
+// the Nango status reader, the instance-identity store — reaches
+// `import "server-only"`. Importing the resolver from here compiled that whole
+// graph into the client bundle and every setup page 500'd; the browser proof
+// for this issue caught it.
+export {
+  resolveSetupStepState,
+  type SetupStepState,
+  type SetupStepStatus,
+  type SetupWizardStep,
+} from "@/lib/setup-step-state";
+import type { SetupWizardStep } from "@/lib/setup-step-state";
 
 async function computeSetupWizardSteps(): Promise<SetupWizardStep[]> {
   const hasUsers = await hasAnyBetterAuthUsers();
@@ -78,7 +90,7 @@ async function computeSetupWizardSteps(): Promise<SetupWizardStep[]> {
     id: "sign-up",
     title: "Account",
     href: "/setup/account",
-    ready: hasUsers,
+    status: hasUsers ? "done" : "upcoming",
   });
 
   // The key step follows sign-up. The
@@ -89,26 +101,39 @@ async function computeSetupWizardSteps(): Promise<SetupWizardStep[]> {
     id: "key",
     title: "Key",
     href: "/setup/key",
-    ready: encryptionKeyOk,
+    status: encryptionKeyOk ? "done" : "upcoming",
   });
 
   // The name step follows the key step. The identity row's presence is the
-  // `ready` signal.
+  // passed signal.
   steps.push({
     id: "name",
     title: "Name",
     href: "/setup/name",
-    ready: identity !== null,
+    status: identity !== null ? "done" : "upcoming",
   });
 
-  if (nangoStatus.status !== "connected") {
-    steps.push({
-      id: "connections",
-      title: "Connections",
-      href: "/setup/connections",
-      ready: false,
-    });
-  }
+  // cinatra#2502 — the SECRETS step (was "Connections"; the owner renamed it on
+  // 2026-08-08 because "connections" is an established, distinct Cinatra
+  // concept). Two rules from `specs/app-setup.html` §VII apply here and both
+  // are about PRESENCE, not progress:
+  //
+  //   • it is pushed UNCONDITIONALLY. Before this issue the step was appended
+  //     only while Nango was not connected, so it vanished from the rail the
+  //     moment it was satisfied — the operator lost the record of work they had
+  //     just done, and the rail reshaped itself underneath them mid-flow. The
+  //     spec's testable observable is "the rail carries exactly one Secrets
+  //     pill, in every state"; a conditional push cannot satisfy it.
+  //   • what CHANGES is its state, never its presence: connected ⇒ done
+  //     (checked, uniformly — the owner's 2026-08-07 decision removed the
+  //     partial/skipped state, so an operator who left the optional Server URL
+  //     blank still passes checked), otherwise upcoming.
+  steps.push({
+    id: "secrets",
+    title: "Secrets",
+    href: "/setup/secrets",
+    status: nangoStatus.status === "connected" ? "done" : "upcoming",
+  });
 
   // S4 (cinatra#2389), relabeled "Model" + route /setup/model in the #2477
   // owner review: the step is the choice of the LLM that drives the Cinatra
@@ -118,7 +143,7 @@ async function computeSetupWizardSteps(): Promise<SetupWizardStep[]> {
     id: "ai",
     title: "Model",
     href: "/setup/model",
-    ready: aiReady,
+    status: aiReady ? "done" : "upcoming",
   });
 
   return steps;
@@ -138,33 +163,40 @@ async function computeSetupWizardSteps(): Promise<SetupWizardStep[]> {
 export const getSetupWizardSteps = cache(computeSetupWizardSteps);
 
 export function getFirstIncompleteStep(steps: SetupWizardStep[]): SetupWizardStep | null {
-  return steps.find((step) => !step.ready) ?? null;
+  return steps.find((step) => step.status !== "done") ?? null;
 }
 
 // Setup is complete when:
 // 0. The first account exists (the sign-up step reads ready — cinatra#2477)
 // 1. CINATRA_ENCRYPTION_KEY is set, which gates all setup
 // 2. Instance name (namespace) is configured, which gates registry access
-// 3. Nango is connected, which gates OAuth connections
+// 3. Nango is connected, which gates OAuth connections (the "secrets" step)
 // 4. The AI step's commit machine reads ready: a committed provider (the
 //    lock) + a fresh matching credential fingerprint + the live
 //    provider-specific readiness inputs (S4, cinatra#2389 — no receipt)
+//
+// cinatra#2502 — the gate reads the SAME conditions it always did. The secrets
+// step used to be checked only when present, and it was present only while
+// Nango was unconnected, so "absent" implicitly meant "satisfied". It is now
+// always present and carries `status: "done"` when connected, which is the same
+// predicate written where it can be seen.
 function isStepsComplete(steps: SetupWizardStep[]): boolean {
   // The sign-up step is always present (cinatra#2477); it blocks completion
-  // until the first account exists (`ready: hasUsers`). In practice an
-  // authenticated caller implies a user exists, so this never blocks a real
-  // session — but the gate stays honest without relying on that invariant.
+  // until the first account exists (`status: hasUsers ? "done" : "upcoming"`).
+  // In practice an authenticated caller implies a user exists, so this never
+  // blocks a real session — but the gate stays honest without relying on that
+  // invariant.
   const signUpStep = steps.find((s) => s.id === "sign-up");
-  if (signUpStep && !signUpStep.ready) return false;
+  if (signUpStep && signUpStep.status !== "done") return false;
   // The key must be ready as a hard precondition.
   const keyStep = steps.find((s) => s.id === "key");
-  if (keyStep && !keyStep.ready) return false;
+  if (keyStep && keyStep.status !== "done") return false;
   const nameStep = steps.find((s) => s.id === "name");
-  if (nameStep && !nameStep.ready) return false;
-  const nangoStep = steps.find((s) => s.id === "connections");
-  if (nangoStep && !nangoStep.ready) return false;
+  if (nameStep && nameStep.status !== "done") return false;
+  const secretsStep = steps.find((s) => s.id === "secrets");
+  if (secretsStep && secretsStep.status !== "done") return false;
   const aiStep = steps.find((s) => s.id === "ai");
-  if (aiStep && !aiStep.ready) return false;
+  if (aiStep && aiStep.status !== "done") return false;
   return true;
 }
 

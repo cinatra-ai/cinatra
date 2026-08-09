@@ -264,7 +264,7 @@ describe("S5 — saveSetupAnthropicConnectionAction: typed, consent-aware", () =
     expect(lastFailureRecord()).toBeUndefined();
   });
 
-  it("an UNCONFIGURED connection service keeps its fix-forward naming the Connections step (decided from the LIVE nango status)", async () => {
+  it("an UNCONFIGURED connection service keeps its fix-forward naming the Secrets step (decided from the LIVE nango status)", async () => {
     isNangoConfigured.mockReturnValue(false);
     saveSetupProviderConnection.mockResolvedValueOnce({
       ok: false,
@@ -274,7 +274,7 @@ describe("S5 — saveSetupAnthropicConnectionAction: typed, consent-aware", () =
 
     const result = await saveSetupAnthropicConnectionAction(null, consentedKeyForm("sk-ant-live"));
     expect(result.ok).toBe(false);
-    expect(result.sanitizedMessage).toContain("Connections");
+    expect(result.sanitizedMessage).toContain("Secrets");
   });
 
   it("a FAILED consent transaction is a typed failure — the opt-in is all-or-nothing, and the sanitized copy blocks nothing else", async () => {

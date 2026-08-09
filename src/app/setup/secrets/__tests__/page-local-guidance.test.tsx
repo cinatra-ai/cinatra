@@ -1,5 +1,5 @@
 /**
- * cinatra#2501 — the Connections step must not dead-end a LOCAL install.
+ * cinatra#2501 — the Secrets step (cinatra#2502 rename) must not dead-end a LOCAL install.
  *
  * Two defects, both pure copy/predicate on the server component:
  *  1. With `NANGO_SERVER_URL` set, the Server URL helper claimed "Leave blank
@@ -53,7 +53,7 @@ type Scenario = {
   settings?: { secretKey?: string; serverUrl?: string };
 };
 
-async function renderConnectionsPage(scenario: Scenario = {}): Promise<string> {
+async function renderSecretsPage(scenario: Scenario = {}): Promise<string> {
   getNangoStatus.mockReturnValue({ status: "not_connected", detail: "" });
   getNangoSettings.mockReturnValue(scenario.settings ?? {});
   getNangoSettingsEnvManaged.mockReturnValue({
@@ -61,7 +61,7 @@ async function renderConnectionsPage(scenario: Scenario = {}): Promise<string> {
     serverUrl: scenario.envManaged?.serverUrl ?? false,
   });
   const { default: SetupNangoPage } = await import("../page");
-  return renderToStaticMarkup((await SetupNangoPage()) as ReactElement);
+  return renderToStaticMarkup((await SetupNangoPage({})) as ReactElement);
 }
 
 /** The one `required` attribute on the page belongs to the secret-key input. */
@@ -95,7 +95,7 @@ beforeEach(() => {
 
 describe("Server URL helper (cinatra#2501)", () => {
   it("does NOT claim blank means hosted when the URL is env-managed", async () => {
-    const html = await renderConnectionsPage({ envManaged: { serverUrl: true } });
+    const html = await renderSecretsPage({ envManaged: { serverUrl: true } });
     expect(html).not.toContain("Leave blank to use the default hosted service");
     expect(html).toContain("NANGO_SERVER_URL");
     expect(html).toContain("leave blank to keep it");
@@ -106,7 +106,7 @@ describe("Server URL helper (cinatra#2501)", () => {
   });
 
   it("keeps the default-service wording when there is no env override", async () => {
-    const html = await renderConnectionsPage({ envManaged: { serverUrl: false } });
+    const html = await renderSecretsPage({ envManaged: { serverUrl: false } });
     expect(html).toContain("Leave blank to use the default hosted service");
     expect(html).not.toContain("NANGO_SERVER_URL");
   });
@@ -116,7 +116,7 @@ describe("Secret key guidance (cinatra#2501)", () => {
   // The old page offered NOTHING here — the field was required with no help
   // text at all. It now names both sources of a REAL key.
   it("names the dashboard source and the local server's seeded key", async () => {
-    const html = await renderConnectionsPage();
+    const html = await renderSecretsPage();
     expect(html).toContain("Environment Settings → Secret Key");
     expect(html).toContain("_nango_environments");
   });
@@ -124,7 +124,7 @@ describe("Secret key guidance (cinatra#2501)", () => {
   it("says the same thing whether or not the server URL is env-managed", async () => {
     // Env-management says nothing about WHICH Nango is targeted (an env var can
     // point at the hosted service), so it must not steer the key guidance.
-    const envManagedHtml = await renderConnectionsPage({ envManaged: { serverUrl: true } });
+    const envManagedHtml = await renderSecretsPage({ envManaged: { serverUrl: true } });
     expect(envManagedHtml).toContain("Environment Settings → Secret Key");
     expect(envManagedHtml).toContain("_nango_environments");
   });
@@ -135,7 +135,7 @@ describe("Secret key guidance (cinatra#2501)", () => {
     // explicitly). A placeholder would complete the wizard and then 401 on
     // every Nango call — a falsely-configured install, worse than the dead end.
     for (const scenario of [{}, { envManaged: { serverUrl: true } }]) {
-      const help = secretKeyHelpText(await renderConnectionsPage(scenario));
+      const help = secretKeyHelpText(await renderSecretsPage(scenario));
       expect(help).not.toMatch(/any value/i);
       expect(help).not.toMatch(/placeholder/i);
       expect(help).not.toMatch(/ignore[sd]?\b/i);
@@ -144,7 +144,7 @@ describe("Secret key guidance (cinatra#2501)", () => {
   });
 
   it("keeps the rotate-or-keep wording when a key is already saved", async () => {
-    const html = await renderConnectionsPage({
+    const html = await renderSecretsPage({
       envManaged: { serverUrl: true },
       settings: { secretKey: "already-saved" },
     });
@@ -158,21 +158,21 @@ describe("Secret key requirement is intentionally unchanged (cinatra#2501)", () 
     // Making it optional here would produce a SILENT dead end: a blank submit
     // saves nothing, getNangoStatus() stays "not_connected", and the wizard
     // routes straight back to this step.
-    const html = await renderConnectionsPage({ envManaged: { serverUrl: true } });
+    const html = await renderSecretsPage({ envManaged: { serverUrl: true } });
     expect(secretKeyIsRequired(html)).toBe(true);
   });
 
   it("stays required with no server URL override and no key on file", async () => {
-    expect(secretKeyIsRequired(await renderConnectionsPage())).toBe(true);
+    expect(secretKeyIsRequired(await renderSecretsPage())).toBe(true);
   });
 
   it("is NOT required once an env override supplies the key", async () => {
-    const html = await renderConnectionsPage({ envManaged: { secretKey: true } });
+    const html = await renderSecretsPage({ envManaged: { secretKey: true } });
     expect(secretKeyIsRequired(html)).toBe(false);
   });
 
   it("is NOT required once a key is saved in settings", async () => {
-    const html = await renderConnectionsPage({ settings: { secretKey: "saved" } });
+    const html = await renderSecretsPage({ settings: { secretKey: "saved" } });
     expect(secretKeyIsRequired(html)).toBe(false);
   });
 });

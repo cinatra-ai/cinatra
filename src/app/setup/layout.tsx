@@ -21,16 +21,28 @@ import { SETUP_FLASH_TOASTS } from "./setup-flash";
 // step rail (the account step is step 1 of it), not a lone "Account" pill, so the
 // signup page carries the same indicator as every other setup page. The list
 // is a hardcoded forecast of the wizard's unconditional steps: every entry is
-// `ready: false` (nothing is disclosed, nothing is clickable — SetupStepNav
-// renders an all-incomplete rail as plain pills). The conditional Connections
-// step is deliberately absent: whether it applies is itself a status read the
-// sessionless branch must never perform; the live rail adds it after sign-up
-// when it is relevant.
+// `status: "upcoming"` (nothing is disclosed, nothing is clickable — the rail
+// renders an all-unpassed list as plain pills, and §IV's return link has
+// nothing to offer when no step is done).
+//
+// cinatra#2502 (owner, 2026-08-08) — SECRETS IS ON THIS RAIL. "Always visible,
+// never hidden by state" covers the signed-out first screen too: a step that
+// appears only once there is a session is exactly the conditional presence the
+// requirement removes. It was previously left out on the grounds that its
+// applicability was itself a status read — but that reasoning only held while
+// the step WAS conditional. It is now unconditional (src/lib/setup-wizard.ts),
+// so drawing it here reads nothing and discloses nothing: a pill that is always
+// drawn says nothing about the instance behind it.
+//
+// The rail stays a FORECAST, not a status — no step is done, no checkmark, no
+// green connector, nothing clickable. Only the PRESENCE of the entry is
+// unconditional; its state is not.
 const SESSIONLESS_SETUP_STEPS: SetupWizardStep[] = [
-  { id: "sign-up", title: "Account", href: "/setup/account", ready: false },
-  { id: "key", title: "Key", href: "/setup/key", ready: false },
-  { id: "name", title: "Name", href: "/setup/name", ready: false },
-  { id: "ai", title: "Model", href: "/setup/model", ready: false },
+  { id: "sign-up", title: "Account", href: "/setup/account", status: "upcoming" },
+  { id: "key", title: "Key", href: "/setup/key", status: "upcoming" },
+  { id: "name", title: "Name", href: "/setup/name", status: "upcoming" },
+  { id: "secrets", title: "Secrets", href: "/setup/secrets", status: "upcoming" },
+  { id: "ai", title: "Model", href: "/setup/model", status: "upcoming" },
 ];
 
 export default async function SetupLayout({ children }: { children: React.ReactNode }) {
