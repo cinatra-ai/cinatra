@@ -47,6 +47,7 @@ vi.mock("../store", () => ({
   readAgentTemplateById: (...a: unknown[]) => readAgentTemplateById(...a),
 }));
 vi.mock("../recommendation-hold", () => ({
+  RECOMMENDATION_DECISION_REFUSAL: "This run's skill selection cannot be decided from here.",
   decodeRecommendationHoldRef: (...a: unknown[]) => decodeRecommendationHoldRef(...a),
   encodeRecommendationHoldRef: (...a: unknown[]) => encodeRecommendationHoldRef(...a),
   readRecommendationParkForRun: (...a: unknown[]) => readRecommendationParkForRun(...a),
@@ -68,10 +69,12 @@ vi.mock("../server-actions", () => ({
 }));
 
 import {
-  RECOMMENDATION_DECISION_REFUSAL,
   confirmRunRecommendationAction,
   skipRunRecommendationAction,
 } from "../run-recommendation-actions";
+// The refusal string lives with the hold, not with the `"use server"` actions —
+// a server-action module may export async functions only.
+import { RECOMMENDATION_DECISION_REFUSAL } from "../recommendation-hold";
 
 const USER = "user-1";
 const RUN = {

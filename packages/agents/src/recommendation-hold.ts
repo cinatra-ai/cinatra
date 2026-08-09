@@ -92,6 +92,28 @@ export type MaybeHoldResult =
 // `deriveRunHitlContext`, which reads the run's CURRENT state rather than
 // trusting what the log happens to contain.
 
+/**
+ * The ONE refusal these decisions give when the caller may not act (cinatra#2568, the S1
+ * generic-refusal contract).
+ *
+ * The previous per-branch strings — "unauthorized", "run not found",
+ * "forbidden", "selection not authorized" — were an ENUMERATION ORACLE: a
+ * caller holding a guessed run id could tell "no such run" from "exists, not
+ * yours" from "yours, wrong tier", and read a run's existence and ownership off
+ * a decision endpoint. The AUTHORIZATION DECISIONS ARE UNCHANGED by this
+ * constant; only what a refused caller learns is. Retryable, self-referential
+ * failures (the hold could not be released; a connector/LLM preflight the
+ * caller can fix) keep their own actionable messages — those describe the
+ * CALLER'S OWN next step and enumerate nothing about anyone else's rows.
+ *
+ * Lives HERE rather than beside the actions that use it: that module is a
+ * `"use server"` file, and Next allows a server-action module to export async
+ * FUNCTIONS only — a constant export there fails the production build (and only
+ * the production build; typecheck and vitest are both happy with it).
+ */
+export const RECOMMENDATION_DECISION_REFUSAL =
+  "This run's skill selection cannot be decided from here.";
+
 /** The `xRenderer` the typed hold interrupt declares. */
 export const RECOMMENDATION_HOLD_RENDERER_ID =
   LIFECYCLE_INTERRUPT_RENDERER_IDS.recommendation_hold;

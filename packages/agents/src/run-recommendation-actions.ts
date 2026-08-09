@@ -40,6 +40,7 @@ import {
 import { readAgentRunById, readAgentTemplateById } from "./store";
 import { getRunRecommendations } from "./recommendation-interception";
 import {
+  RECOMMENDATION_DECISION_REFUSAL,
   decodeRecommendationHoldRef,
   encodeRecommendationHoldRef,
   publishRecommendationHoldResume,
@@ -55,23 +56,6 @@ import type { RecommendedSkillForChip } from "./server-actions";
 export type RunRecommendationDecisionResult =
   | { ok: true; dispatched: boolean }
   | { ok: false; error: string; code?: string; settingsHref?: string };
-
-/**
- * The ONE refusal these decisions give when the caller may not act (cinatra#2568,
- * the S1 generic-refusal contract).
- *
- * The previous per-branch strings — "unauthorized", "run not found",
- * "forbidden", "selection not authorized" — were an ENUMERATION ORACLE: a
- * caller holding a guessed run id could tell "no such run" from "exists, not
- * yours" from "yours, wrong tier", and read a run's existence and ownership off
- * a decision endpoint. The AUTHORIZATION DECISIONS ARE UNCHANGED by this
- * constant; only what a refused caller learns is. Retryable, self-referential
- * failures (the hold could not be released; a connector/LLM preflight the
- * caller can fix) keep their own actionable messages — those describe the
- * CALLER'S OWN next step and enumerate nothing about anyone else's rows.
- */
-export const RECOMMENDATION_DECISION_REFUSAL =
-  "This run's skill selection cannot be decided from here.";
 
 export type RunRecommendationHoldState =
   | { state: "none" }
