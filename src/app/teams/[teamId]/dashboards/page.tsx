@@ -71,7 +71,7 @@ export default async function TeamScopeDashboardsPage({ params }: Props) {
       <PageHeader label="Team" title={team.name} divider={false} />
       <PageContent className="flex flex-col gap-5 pb-8">
         <EntityScopeTabs
-          dashboardsHref={`/teams/${encodeURIComponent(team.id)}/dashboards`}
+          dashboardsHref={`/teams/${encodeURIComponent(team.id)}`}
           settingsHref={`/teams/${encodeURIComponent(team.id)}/settings`}
           active="dashboards"
         />

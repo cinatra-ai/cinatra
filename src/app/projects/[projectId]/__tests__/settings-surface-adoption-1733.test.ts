@@ -2,13 +2,22 @@
  * cinatra#1733 — one project-management surface (the #1693 teams ruling).
  * Source-text locks (the project-subnav-adoption precedent, which this
  * replaces):
- *   - the detail page renders NO tablist and NO Permissions tab — management
- *     lives on /settings (mirror of team-detail-dashboards' pin)
- *   - the detail page header links to the settings page
+ *   - the detail page renders NO legacy permissions/management tablist and NO
+ *     Permissions tab — management lives on /settings (mirror of
+ *     team-detail-dashboards' pin)
+ *   - the detail page reaches the settings page (since cinatra#2474 PR1 through
+ *     the entity-page tablist's Settings entry; before that, a header button —
+ *     the invariant is the reachability, not the affordance's shape)
  *   - the settings page hosts the permissions client with NO ProjectSubnav
  *     (component deleted) and pins the "Settings" crumb leaf
  *   - guest mutations revalidate the SETTINGS path, not the dead
  *     permissions one (all three call sites)
+ *
+ * NOTE: the surviving "no tablist" pin is specifically about the retired
+ * PERMISSIONS tablist (`ProjectDetailTabs` / a raw `TabsListRow` with a
+ * `value="permissions"` trigger). The #2474 entity-page tablist is a different
+ * surface — a two-entry route-link nav over Dashboards/Settings — and its
+ * presence is asserted below.
  */
 import { readFileSync } from "node:fs";
 import { existsSync } from "node:fs";
@@ -24,8 +33,8 @@ const GUEST_ACTIONS_SOURCE = readFileSync(
   "utf-8",
 );
 
-describe("detail page: no tablist, no Permissions tab (#1733)", () => {
-  it("drops the tab surface entirely — ProjectDetailTabs is gone", () => {
+describe("detail page: no legacy permissions tablist, no Permissions tab (#1733)", () => {
+  it("drops the legacy tab surface entirely — ProjectDetailTabs is gone", () => {
     expect(DETAIL_SOURCE).not.toContain("ProjectDetailTabs");
     expect(DETAIL_SOURCE).not.toContain("TabsListRow");
     expect(DETAIL_SOURCE).not.toContain('value="permissions"');
@@ -34,10 +43,15 @@ describe("detail page: no tablist, no Permissions tab (#1733)", () => {
     ).toBe(false);
   });
 
-  it("renders the dashboards surface directly and links to settings from the header", () => {
+  it("renders the dashboards surface directly and reaches settings from the tablist", () => {
     expect(DETAIL_SOURCE).toContain("<ProjectDashboardsTab");
-    expect(DETAIL_SOURCE).toContain("/settings`}");
-    expect(DETAIL_SOURCE).toContain("Project settings");
+    // cinatra#2474 PR1 — the reach-settings affordance moved from a top-right
+    // header button to the entity-page tablist's Settings entry. The #1733
+    // invariant it carries is unchanged: settings stays reachable from the
+    // landing, outside any capability branch.
+    expect(DETAIL_SOURCE).toContain("<EntityScopeTabs");
+    expect(DETAIL_SOURCE).toContain("settingsHref={`/projects/${encodeURIComponent(project.id)}/settings`}");
+    expect(DETAIL_SOURCE).not.toContain("Project settings");
   });
 
   it("no longer builds the permissions payload (loading moved to /settings)", () => {

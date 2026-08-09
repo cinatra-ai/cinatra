@@ -37,15 +37,13 @@
  * server-side.
  */
 import "server-only";
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { sql } from "drizzle-orm";
-import { Settings } from "lucide-react";
 
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
-import { Button } from "@/components/ui/button";
+import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 import {
   isPlatformAdmin,
   requireAuthSession,
@@ -218,19 +216,20 @@ export async function TeamDetailDashboardPage({
         entries={[{ prefix: `/teams/${encodeURIComponent(team.id)}`, label: team.name }]}
       />
       <PageHeader
+        label="Team"
         title={team.name}
         description={`Team in ${team.org_name}`}
         divider={false}
-        actions={
-          <Button asChild variant="outline">
-            <Link href={`/teams/${encodeURIComponent(team.id)}/settings`}>
-              <Settings data-icon="inline-start" aria-hidden="true" />
-              Team settings
-            </Link>
-          </Button>
-        }
       />
       <PageContent className="flex flex-col gap-6 pb-8">
+        {/* The entity-page tablist (cinatra#2474 PR1, spec §IX): this landing IS
+            the Dashboards tab; Settings is the second entry. Rendered for every
+            member — the settings page owns the read-only/manage split. */}
+        <EntityScopeTabs
+          dashboardsHref={`/teams/${encodeURIComponent(team.id)}`}
+          settingsHref={`/teams/${encodeURIComponent(team.id)}/settings`}
+          active="dashboards"
+        />
         <TeamDetailDashboards
           dataSource={dataSource}
           overviewPortlets={overviewConfig.portlets}

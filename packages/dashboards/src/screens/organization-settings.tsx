@@ -206,9 +206,10 @@ export async function OrganizationSettingsPage({
       />
       <PageContent className="flex flex-col gap-6 pb-8">
         {/* The entity-page tablist: this Settings pane is the second tab (spec
-            §IX); Dashboards is the first, at the sibling scope route. */}
+            §IX); Dashboards is the first, and since cinatra#2474 PR1 it is the
+            scope's BARE landing route — not a `/dashboards` sibling. */}
         <EntityScopeTabs
-          dashboardsHref={`/organizations/${encodeURIComponent(id)}/dashboards`}
+          dashboardsHref={`/organizations/${encodeURIComponent(id)}`}
           settingsHref={`/organizations/${encodeURIComponent(id)}/settings`}
           active="settings"
         />

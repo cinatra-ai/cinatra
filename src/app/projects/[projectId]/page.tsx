@@ -1,9 +1,7 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { format } from "date-fns";
 import { eq, sql } from "drizzle-orm";
-import { Settings } from "lucide-react";
 
 import * as authSession from "@/lib/auth-session";
 const { getActorContext, requireActorContext } = authSession;
@@ -30,7 +28,7 @@ import type { DashboardEntityRef } from "@cinatra-ai/dashboards/entity-identity"
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
-import { Button } from "@/components/ui/button";
+import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
 import { LifecycleBadge } from "@/components/lifecycle-badge";
 import type { PortletInstanceProp } from "@/components/dashboards/portlet-host";
@@ -81,11 +79,13 @@ type Props = {
 // Project is NEVER an ownership tier — there is no promotion path between
 // tiers. Access is N:M via `project_access`. The detail page is a Dashboards
 // surface:
-//   1. PageHeader with ScopeBadge for owner level, an Archived badge when
-//      `projects.archived_at IS NOT NULL`, and a "Project settings" button —
-//      management (ownership, access grants, guest grants) lives on
-//      `/projects/[projectId]/settings` (#1733, the #1693 teams ruling: one
-//      settings surface, no Permissions tab).
+//   1. PageHeader with the "Project" scope label, ScopeBadge for owner level,
+//      and an Archived badge when `projects.archived_at IS NOT NULL`, followed
+//      by the entity-page tablist (cinatra#2474 PR1, spec §IX) — this page IS
+//      the Dashboards tab, Settings is the second entry (the former top-right
+//      settings button is gone). Management (ownership, access
+//      grants, guest grants) lives on `/projects/[projectId]/settings` (#1733,
+//      the #1693 teams ruling: one settings surface, no Permissions tab).
 //   2. The reusable entity Dashboards shell (#701) whose non-removable
 //      "Overview" default renders this project's CURRENT info as render-only
 //      portlets (#702): metadata (name / slug / id / owner / organization /
@@ -279,6 +279,7 @@ export default async function ProjectDetailPage({ params }: Props) {
         ]}
       />
       <PageHeader
+        label="Project"
         title={project.name}
         description="Bounded work context where agents run, project-specific capabilities are reused, data is created, approvals happen, and outputs accumulate."
         actions={
@@ -293,17 +294,19 @@ export default async function ProjectDetailPage({ params }: Props) {
                   : `Ownership: ${ownerLevel}`
               }
             />
-            <Button asChild variant="outline">
-              <Link href={`/projects/${encodeURIComponent(project.id)}/settings`}>
-                <Settings data-icon="inline-start" aria-hidden="true" />
-                Project settings
-              </Link>
-            </Button>
           </div>
         }
         divider={false}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
+        {/* The entity-page tablist (cinatra#2474 PR1, spec §IX): this landing IS
+            the Dashboards tab; Settings is the second entry. Rendered for every
+            reader — the settings page owns the read-only/manage split. */}
+        <EntityScopeTabs
+          dashboardsHref={`/projects/${encodeURIComponent(project.id)}`}
+          settingsHref={`/projects/${encodeURIComponent(project.id)}/settings`}
+          active="dashboards"
+        />
         {isArchived && (
           <div className="soft-panel border-line bg-surface-muted px-4 py-3 text-xs text-muted-foreground">
             This project was archived

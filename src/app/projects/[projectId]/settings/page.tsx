@@ -33,7 +33,9 @@ import { listGuestRows, type GuestRow } from "../permissions/guest-actions";
 // the permissions surface). Hosts everything the former Permissions tab
 // showed: ownership (owner + co-owners), N:M project-access grants, and the
 // admin-only external guest grants. The former standalone /permissions route
-// redirects here; the detail page links here via a header button.
+// redirects here; the project landing reaches this page through the
+// entity-page tablist's Settings entry (cinatra#2474 PR1 — it replaced the
+// landing's top-right settings button).
 // ---------------------------------------------------------------------------
 
 // Gate-repeating metadata (cinatra#1737, the dashboards pattern): repeats the
@@ -216,9 +218,10 @@ export default async function ProjectSettingsPage({ params }: Props) {
       />
       <PageContent className="flex flex-col gap-6 pb-8">
         {/* The entity-page tablist: this Settings pane is the second tab (spec
-            §IX); Dashboards is the first, at the sibling scope route. */}
+            §IX); Dashboards is the first, and since cinatra#2474 PR1 it is the
+            scope's BARE landing route — not a `/dashboards` sibling. */}
         <EntityScopeTabs
-          dashboardsHref={`/projects/${encodeURIComponent(project.id)}/dashboards`}
+          dashboardsHref={`/projects/${encodeURIComponent(project.id)}`}
           settingsHref={`/projects/${encodeURIComponent(project.id)}/settings`}
           active="settings"
         />

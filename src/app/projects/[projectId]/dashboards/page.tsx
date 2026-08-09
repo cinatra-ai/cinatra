@@ -71,7 +71,7 @@ export default async function ProjectScopeDashboardsPage({ params }: Props) {
       <PageHeader label="Project" title={project.name} divider={false} />
       <PageContent className="flex flex-col gap-5 pb-8">
         <EntityScopeTabs
-          dashboardsHref={`/projects/${encodeURIComponent(project.id)}/dashboards`}
+          dashboardsHref={`/projects/${encodeURIComponent(project.id)}`}
           settingsHref={`/projects/${encodeURIComponent(project.id)}/settings`}
           active="dashboards"
         />
