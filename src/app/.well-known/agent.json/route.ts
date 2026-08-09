@@ -59,7 +59,7 @@ export async function GET(request: Request): Promise<Response> {
   );
   const templates: AgentTemplateRecord[] = filterTemplatesToLiveManifest(
     publishedTemplates,
-    await readLiveAgentPackageNames(),
+    await readLiveAgentPackageNames(publishedTemplates),
   );
 
   // Load version history per template.

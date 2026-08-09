@@ -36,6 +36,14 @@ export function filterTemplatesToLiveManifest<T extends { packageName?: string |
   return templates.filter((t) => t.packageName != null && livePackageNames.has(t.packageName));
 }
 
+/** A candidate published template's identity for the run-availability
+ *  narrowing below — exactly the fields {@link resolveAgentRunAvailabilityMap}
+ *  keys and fences on. */
+export type LiveAgentPackageQueryItem = {
+  packageName?: string | null;
+  packageVersion?: string | null;
+};
+
 /**
  * The set of agent package names that may be ADVERTISED and RUN, or `null` when
  * the gate read fails (fail-open signal).
@@ -49,6 +57,19 @@ export function filterTemplatesToLiveManifest<T extends { packageName?: string |
  *      `agent_list`, `agent_run`, the interactive run-start and project dispatch
  *      all refuse it. One verdict, every surface.
  *
+ * `publishedItems` are the CALLER's published templates' `{packageName,
+ * packageVersion}` pairs — round 3: the canonical manifest carries no version,
+ * but the availability layer's dependency arm is only safe to evaluate when it
+ * is fenced against the version that would actually run (see the SCOPE/version
+ * fence notes on `resolveAgentRunAvailability`). Passing bare names (the
+ * pre-round-3 shape) left the fence permanently open: an active published agent
+ * at a NEWER version than its bundled catalog record had the catalog's stale
+ * edges applied unconditionally. Threading each template's own packageVersion
+ * lets the shared narrowing fence a mismatch (`state: "runnable"`, arm
+ * skipped) and mark `versionAmbiguous` when the caller holds several templates
+ * for one package at different versions — identical to every other consumer
+ * (`assertAgentPackageRunnable`, `partitionRunnableAgentPackages`).
+ *
  * Fail-OPEN at BOTH steps and independently: a manifest read failure returns
  * `null` (the callers keep every published template, the pre-gate behaviour),
  * and an availability failure returns the manifest set unnarrowed — a degraded
@@ -57,11 +78,13 @@ export function filterTemplatesToLiveManifest<T extends { packageName?: string |
  * Shared by both A2A surfaces and (via `setLiveAgentManifestProvider`) by the
  * dynamic published-agent MCP tool registration, so all three gate identically.
  */
-export async function readLiveAgentPackageNames(): Promise<Set<string> | null> {
-  let packageNames: string[];
+export async function readLiveAgentPackageNames(
+  publishedItems: ReadonlyArray<LiveAgentPackageQueryItem>,
+): Promise<Set<string> | null> {
+  let liveManifestNames: Set<string>;
   try {
     const manifests = await readActiveManifestsFromStore({ kind: "agent" });
-    packageNames = manifests.map((m) => m.packageName);
+    liveManifestNames = new Set(manifests.map((m) => m.packageName));
   } catch {
     return null;
   }
@@ -69,17 +92,22 @@ export async function readLiveAgentPackageNames(): Promise<Set<string> | null> {
     // Dynamic import: this module is loaded by the public `/.well-known` route
     // and the A2A mount, and the gate pulls the canonical store + the generated
     // catalog behind it — kept off their static graph, as the agents package
-    // does for the same reason. The manifest carries no version, so the
-    // availability layer evaluates the catalog's edges unfenced (its own
-    // version fence applies wherever a caller does know the version).
+    // does for the same reason.
     const { resolveAgentRunAvailabilityMap } = await import(
       "@cinatra-ai/agents/runtime-install-gate"
     );
-    const availability = await resolveAgentRunAvailabilityMap(
-      packageNames.map((packageName) => ({ packageName })),
-    );
+    const versionedItems = publishedItems
+      .filter(
+        (item): item is { packageName: string; packageVersion?: string | null } =>
+          typeof item.packageName === "string" && item.packageName.length > 0,
+      )
+      .map(({ packageName, packageVersion }) => ({
+        packageName,
+        packageVersion: packageVersion ?? null,
+      }));
+    const availability = await resolveAgentRunAvailabilityMap(versionedItems);
     return new Set(
-      packageNames.filter(
+      [...liveManifestNames].filter(
         (name) => (availability.get(name)?.state ?? "runnable") === "runnable",
       ),
     );
@@ -88,6 +116,6 @@ export async function readLiveAgentPackageNames(): Promise<Set<string> | null> {
       "[a2a-manifest-gate] run-availability narrowing skipped (fail-open to the manifest set):",
       err instanceof Error ? err.message : err,
     );
-    return new Set(packageNames);
+    return liveManifestNames;
   }
 }

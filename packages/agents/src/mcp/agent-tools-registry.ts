@@ -73,8 +73,16 @@ const MAX_WAIT_MS = 60 * 1_000;
 // ---------------------------------------------------------------------------
 
 /** Returns the set of agent package names with an `active|locked` canonical
- *  manifest, or `null` to signal "gate unavailable → register all". */
-export type LiveAgentManifestProvider = () => Promise<Set<string> | null>;
+ *  manifest AND a `runnable` availability verdict, or `null` to signal "gate
+ *  unavailable → register all". `items` are the candidate published templates'
+ *  `{packageName, packageVersion}` pairs — cinatra#2605 round 3: the provider
+ *  narrows run-availability against THESE version pairs (not just the bare
+ *  package names) so a published agent at a newer version than its bundled
+ *  catalog record is not wrongly evaluated against the catalog's stale
+ *  dependency edges. */
+export type LiveAgentManifestProvider = (
+  items: ReadonlyArray<{ packageName?: string | null; packageVersion?: string | null }>,
+) => Promise<Set<string> | null>;
 
 const LIVE_AGENT_MANIFEST_PROVIDER_SLOT = Symbol.for(
   "cinatra.agents.liveAgentManifestProvider.v1",
@@ -121,12 +129,20 @@ export async function registerPublishedAgentTools(
 
   // Resolve the canonical-manifest gate. A null result (no provider wired, or a
   // provider that failed) leaves the gate inert → register every published
-  // template (pre-gate behavior).
+  // template (pre-gate behavior). The candidate set mirrors the visibility
+  // policy applied below (public + grandfathered-null only) so a private
+  // template sharing a packageName with a public one at a DIFFERENT version
+  // never taints the public template's versionAmbiguous verdict.
   let liveAgentPackages: Set<string> | null = null;
   const provider = opts?.getLiveAgentPackageNames ?? providerHolder().provider;
   if (provider) {
     try {
-      liveAgentPackages = await provider();
+      liveAgentPackages = await provider(
+        templates.filter(isAgentPubliclyDiscoverable).map((t) => ({
+          packageName: t.packageName,
+          packageVersion: t.packageVersion,
+        })),
+      );
     } catch {
       // Gate read failed — fail OPEN to the pre-gate behavior; never crash or
       // silently drop the entire agent tool surface on a transient gate error.
