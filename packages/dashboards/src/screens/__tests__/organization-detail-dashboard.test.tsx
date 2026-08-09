@@ -24,6 +24,13 @@ const h = vi.hoisted(() => {
     getAuthSession: vi.fn(),
     getActorContext: vi.fn(),
     scopeSection: vi.fn(),
+    buildScopeReferenceSource: vi.fn(
+      (actor: unknown, scope: unknown): unknown => {
+        void actor;
+        void scope;
+        return null;
+      },
+    ),
   };
 });
 
@@ -43,6 +50,15 @@ vi.mock("@/components/dashboards/scope-dashboards-section", () => ({
     h.scopeSection(props);
     return <div data-testid="scope-dashboards-panel" />;
   },
+}));
+// The §IX.1 add-to-scope binder (cinatra#2474 PR3) reaches the same #1897
+// service graph the panel does (scope actions → service → objects store →
+// artifact promotion). Stub it for the same reason; who it returns `null` for is
+// covered by `src/components/dashboards/__tests__/scope-dashboards-conformance.test.ts`
+// and the popup's behavioural test.
+vi.mock("@/components/dashboards/scope-reference-binding", () => ({
+  buildScopeReferenceSource: (actor: unknown, scope: unknown) =>
+    h.buildScopeReferenceSource(actor, scope),
 }));
 vi.mock("@/lib/better-auth-db", () => ({
   betterAuthDb: { select: h.select },
@@ -114,6 +130,8 @@ beforeEach(() => {
   h.getAuthSession.mockReset();
   h.getActorContext.mockReset();
   h.scopeSection.mockReset();
+  h.buildScopeReferenceSource.mockReset();
+  h.buildScopeReferenceSource.mockReturnValue(null);
   h.state.queue = [];
 });
 
@@ -145,8 +163,27 @@ describe("the folded #1897 collection panel is fenced to the ACTIVE org (cinatra
     const html = await renderScreen();
     expect(html).not.toContain('data-testid="scope-dashboards-panel"');
     expect(h.scopeSection).not.toHaveBeenCalled();
+    // cinatra#2474 PR3 — the unified popup's add source rides the SAME fence.
+    // An add path into a merely-member org would widen exactly what this fence
+    // closes, so the binder is not even consulted.
+    expect(h.buildScopeReferenceSource).not.toHaveBeenCalled();
     // Suppression only — the landing itself stays reachable for every member.
     expect(html).toContain('data-testid="org-dashboards"');
+  });
+
+  test("active org matches: the §IX.1 add source IS built, for THIS org's scope (cinatra#2474 PR3)", async () => {
+    primeSession("u1", "org-1");
+    h.isMember.mockResolvedValue(true);
+    h.state.queue = [[ACTIVE_ORG_ROW], MEMBER_ROWS];
+    h.listTeams.mockResolvedValue([]);
+
+    await renderScreen();
+    expect(h.buildScopeReferenceSource).toHaveBeenCalledTimes(1);
+    expect(h.buildScopeReferenceSource.mock.calls[0]?.[1]).toMatchObject({
+      kind: "organization",
+      scopeId: "org-1",
+      orgId: "org-1",
+    });
   });
 
   test("no resolvable actor: the panel is suppressed (fail-closed)", async () => {
