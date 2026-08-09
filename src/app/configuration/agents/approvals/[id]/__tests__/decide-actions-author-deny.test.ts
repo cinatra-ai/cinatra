@@ -16,7 +16,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const getAuthSession = vi.fn();
-const decideHandler = vi.fn(async (_req: unknown) => ({}) as { error?: string });
+const decideHandler = vi.fn(
+  async (_req: unknown) =>
+    ({ structuredContent: { agentTemplateId: "tpl-1" } }) as {
+      error?: string;
+      structuredContent?: { agentTemplateId?: string | null };
+    },
+);
 const retryHandler = vi.fn(async (_req: unknown) => ({}) as { error?: string });
 
 const redirect = vi.fn((url: string) => {
@@ -46,6 +52,18 @@ vi.mock("@cinatra-ai/agents/mcp-handlers", () => ({
     agent_creation_request_decide: (req: unknown) => decideHandler(req as never),
     agent_creation_request_retry_publish: (req: unknown) => retryHandler(req as never),
   }),
+}));
+
+// cinatra#2597: the decide actions now reach the primitive through the SHARED
+// agent-creation decide helper, which authorizes the #1327 access target and
+// persists it. Both seams are lazy-imported; stub them so the admin control
+// below exercises the ADMIN GATE, not the install-access machinery.
+vi.mock("@cinatra-ai/agents/install-target-authz", () => ({
+  assertTargetBelongsToActiveOrg: vi.fn(async () => ({})),
+  assertCanInstallAtTarget: vi.fn(async () => {}),
+}));
+vi.mock("@cinatra-ai/extensions/install-access-contract", () => ({
+  setExtensionInstallAccess: vi.fn(async () => {}),
 }));
 
 import {
@@ -106,7 +124,16 @@ describe("author-decide-DENY: a non-admin AUTHOR is rejected server-side (#1552 
 describe("admin control: the decide gate admits an admin (#1552 AC6)", () => {
   it("approveAgentCreationRequest runs the decide primitive as platform_admin and redirects approved", async () => {
     getAuthSession.mockResolvedValue(ADMIN_SESSION);
-    await expect(approveAgentCreationRequest(decideForm())).rejects.toMatchObject({
+    // cinatra#2597: an approve now carries the #1327 access scope the decision
+    // form collects. Without it the approve is refused BEFORE the primitive, so
+    // this positive control supplies one — the gate under test is the ADMIN
+    // gate, and the scope-less refusal has its own tests in
+    // ./approve-access-scope.test.ts.
+    await expect(
+      approveAgentCreationRequest(
+        decideForm({ accessTargetLevel: "organization", accessTargetId: "org-1" }),
+      ),
+    ).rejects.toMatchObject({
       __redirectTo: "/configuration/agents/approvals/req-1?status=approved",
     });
     expect(decideHandler).toHaveBeenCalledTimes(1);

@@ -55,13 +55,43 @@ const betterAuthDbMock = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/better-auth-db", () => betterAuthDbMock);
 
+// The instance's operator-vendor segment. cinatra#2597: the REAL
+// `agent_source_write_files` rewrites `package.json#name` UNCONDITIONALLY to
+// `@<resolveInstanceVendorSegment()>/<packageSlug>`, and `agent_source_publish`
+// reads the canonical name back off that same package.json — so the published
+// identity is ALWAYS instance-scoped, whatever the author proposed. The mock
+// below reproduces that rewrite instead of hiding it.
+const INSTANCE_NS = "@instance-ns";
+
 // Mock the handlers.ts circular target (materializeAndPublish lazy-imports it).
 const innerHandlersMock = vi.hoisted(() => ({
   createAgentBuilderPrimitiveHandlers: vi.fn(() => ({
     agent_source_write: vi.fn(async () => ({ written: true })),
     agent_source_write_files: vi.fn(async () => ({ written: true })),
     agent_source_compile: vi.fn(async () => ({ compiled: true })),
-    agent_source_publish: vi.fn(async () => ({ published: true })),
+    // cinatra#2597 — this used to return a bare `{ published: true }` with NO
+    // packageName, which meant the namespace rewrite simply did not exist in
+    // the test world. It now returns the namespace-rewritten canonical name the
+    // real primitive returns. Every test that relies on THIS default uses
+    // packageSlug "test-agent" (SAMPLE_INPUT), so the rewritten name is fixed;
+    // the controlled-pair tests below install their own handler map and derive
+    // it from the slug.
+    //
+    // The return type is annotated with every field OPTIONAL beyond `published`
+    // so a per-test handler map that returns a narrower object stays assignable
+    // to this mock — the real primitive can also return `{ error }` instead.
+    agent_source_publish: vi.fn(
+      async (): Promise<{
+        published?: boolean;
+        packageName?: string;
+        packageVersion?: string;
+        error?: string;
+      }> => ({
+        published: true,
+        packageName: "@instance-ns/test-agent",
+        packageVersion: "0.1.0",
+      }),
+    ),
   })),
 }));
 vi.mock("../mcp/handlers", () => innerHandlersMock);
@@ -69,10 +99,26 @@ vi.mock("../mcp/handlers", () => innerHandlersMock);
 // Mock the store import for the slug-collision check AND the post-publish
 // template-id lookup (cinatra#1327 — approveAndPublishCreationRequest resolves
 // the published template's id so the app layer can persist the access scope).
-const storeReadMock = vi.hoisted(() => ({
-  readAgentTemplates: vi.fn(async () => ({ items: [], total: 0 })),
-  readAgentTemplateByPackageName: vi.fn(async () => ({ id: "tmpl-1" })),
-}));
+//
+// cinatra#2597 — `readAgentTemplateByPackageName` used to resolve `{ id:
+// "tmpl-1" }` for ANY key, so a lookup on the WRONG key still "found" a
+// template and the mis-keying was invisible. The real store fn is an
+// exact-match query with no alias resolution (store.ts), so the mock is now
+// backed by a Map: only a row that was actually registered under that exact
+// packageName resolves, and everything else is null.
+// `orgId` is carried because the approve path refuses to scope a template that
+// belongs to a DIFFERENT organization (package_name is globally unique, so a
+// collision would otherwise hand back a foreign row's id).
+const storeReadMock = vi.hoisted(() => {
+  const templateRowsByPackageName = new Map<string, { id: string; orgId?: string | null }>();
+  return {
+    templateRowsByPackageName,
+    readAgentTemplates: vi.fn(async () => ({ items: [], total: 0 })),
+    readAgentTemplateByPackageName: vi.fn(
+      async (packageName: string) => templateRowsByPackageName.get(packageName) ?? null,
+    ),
+  };
+});
 vi.mock("../store", () => storeReadMock);
 
 // Mock the lazily-imported notifications server surface (issue #79 emits).
@@ -149,6 +195,9 @@ describe("agent_creation_request handlers", () => {
     notificationsMock.createNotificationForRecipient.mockResolvedValue([]);
     dbMock.readConnectorConfigFromDatabase.mockReturnValue({ allowSelfApproval: false });
     storeReadMock.readAgentTemplates.mockResolvedValue({ items: [], total: 0 });
+    // cinatra#2597 — no template row exists until a test registers one under an
+    // EXACT packageName. `vi.clearAllMocks()` does not touch a Map.
+    storeReadMock.templateRowsByPackageName.clear();
     betterAuthDbMock.countOtherPlatformAdmins.mockResolvedValue(1);
   });
 
@@ -443,11 +492,12 @@ describe("agent_creation_request handlers", () => {
         id: "req-1", status: "approved", packageName: "@test/test-agent", packageSlug: "test-agent",
         packageVersion: "0.1.0", proposalSnapshot: SAMPLE_INPUT,
       });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      storeReadMock.readAgentTemplates.mockResolvedValue({
-        items: [{ packageName: "@test/test-agent" }],
-        total: 1,
-      } as any);
+      // cinatra#2597 — the gate is an EXACT lookup now, not a paginated scan, so
+      // the fixture registers the colliding row by its exact key.
+      storeReadMock.templateRowsByPackageName.set("@test/test-agent", {
+        id: "tmpl-existing",
+        orgId: "org-1",
+      });
       const out = (await handleAgentCreationRequestDecide(
         req("agent_creation_request_decide",
           { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash", accessTarget: { level: "organization", id: "org-1" } },
@@ -455,6 +505,292 @@ describe("agent_creation_request handlers", () => {
       )) as { error?: string };
       expect(out.error).toMatch(/package-name collision/i);
       expect(storeMock.markAgentCreationRequestPublished).not.toHaveBeenCalled();
+    });
+
+    it("a collision-check READ FAILURE refuses the publish (fail-closed, not fail-open)", async () => {
+      // cinatra#2597 — this gate used to swallow read errors ("the downstream
+      // write will fail anyway"). It cannot: on a missed collision the publish
+      // ADOPTS the existing row via upsert and stamps the approving org onto it,
+      // which would also defeat the post-publish ownership guard. A gate that
+      // cannot read must refuse. The row stays `approved` for retry_publish.
+      storeMock.readAgentCreationRequestById.mockReturnValue({
+        id: "req-1", authorId: "user-author", status: "proposed", snapshotHash: "fakehash",
+        packageName: "@test/test-agent", packageSlug: "test-agent", packageVersion: "0.1.0",
+        proposalSnapshot: SAMPLE_INPUT,
+      });
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({
+        id: "req-1", status: "approved", packageName: "@test/test-agent", packageSlug: "test-agent",
+        packageVersion: "0.1.0", proposalSnapshot: SAMPLE_INPUT,
+      });
+      storeReadMock.readAgentTemplateByPackageName.mockRejectedValueOnce(new Error("db unreachable"));
+      const out = (await handleAgentCreationRequestDecide(
+        req("agent_creation_request_decide",
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash", accessTarget: { level: "organization", id: "org-1" } },
+          ADMIN),
+      )) as { error?: string };
+      expect(out.error).toMatch(/collision check failed/i);
+      expect(storeMock.markAgentCreationRequestPublished).not.toHaveBeenCalled();
+    });
+
+    it("the collision gate is UNBOUNDED — it catches a row a 50-row page would miss", async () => {
+      // cinatra#2597 — the old gate called `readAgentTemplates()` with no
+      // options, which pages at a default limit of 50, so on any instance with
+      // more than 50 templates it silently stopped covering the table. A missed
+      // collision let publish ADOPT the existing row. `readAgentTemplates` is
+      // left returning an empty page here precisely to prove the gate no longer
+      // depends on it.
+      storeReadMock.readAgentTemplates.mockResolvedValue({ items: [], total: 5000 });
+      storeReadMock.templateRowsByPackageName.set("@test/test-agent", {
+        id: "tmpl-row-9999",
+        orgId: "org-other",
+      });
+      storeMock.readAgentCreationRequestById.mockReturnValue({
+        id: "req-1", authorId: "user-author", status: "proposed", snapshotHash: "fakehash",
+        packageName: "@test/test-agent", packageSlug: "test-agent", packageVersion: "0.1.0",
+        proposalSnapshot: SAMPLE_INPUT,
+      });
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({
+        id: "req-1", status: "approved", packageName: "@test/test-agent", packageSlug: "test-agent",
+        packageVersion: "0.1.0", proposalSnapshot: SAMPLE_INPUT,
+      });
+      const out = (await handleAgentCreationRequestDecide(
+        req("agent_creation_request_decide",
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash", accessTarget: { level: "organization", id: "org-1" } },
+          ADMIN),
+      )) as { error?: string };
+      expect(out.error).toMatch(/package-name collision/i);
+      expect(storeMock.markAgentCreationRequestPublished).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // cinatra#2597 — POST-PUBLISH TEMPLATE RESOLUTION (the access-scope key).
+  //
+  // The approve envelope's `agentTemplateId` is the ONLY key the app layer has
+  // to write the requested access scope (decision-helpers.ts →
+  // setExtensionInstallAccess). Resolve it wrong and the agent publishes at its
+  // restrictive default with the reviewer's chosen scope silently dropped —
+  // which is exactly what the live UAT on PR #2602 caught.
+  //
+  // The controlled pair below is the whole point: the ONLY difference between
+  // the two arms is whether the author's proposed scope happens to match the
+  // instance vendor. Both must land the template id. Before the fix only the
+  // matching arm did, and that arm passed by coincidence (the namespace rewrite
+  // was a no-op there), not because the lookup was right.
+  //
+  // Each arm models publish faithfully: the real `agent_source_publish` CREATES
+  // the agent_templates row (via installAgentFromPackage) keyed by the canonical
+  // post-rewrite name, so the mock registers the row as a publish side effect
+  // rather than pre-seeding it (pre-seeding would trip the collision check).
+  // -------------------------------------------------------------------------
+  describe("approve → agentTemplateId resolution (cinatra#2597)", () => {
+    const PROPOSED_SLUG = "test-agent";
+    const CANONICAL = `${INSTANCE_NS}/${PROPOSED_SLUG}`;
+
+    /** How many `readAgentTemplateByPackageName` calls had happened when publish
+     *  ran. The PRE-publish collision gates legitimately look names up too
+     *  (including the proposed one), so assertions about the POST-publish
+     *  resolution must ignore everything before this index. */
+    let lookupsBeforePublish = 0;
+    /** The lookup keys used AFTER publish — i.e. by the resolution under test. */
+    const lookupsAfterPublish = () =>
+      storeReadMock.readAgentTemplateByPackageName.mock.calls
+        .slice(lookupsBeforePublish)
+        .map((c) => c[0]);
+
+    /** Wire the store rows for a proposal under `proposedName`, and make the
+     *  publish primitive behave like the real one: rewrite the package name to
+     *  the instance vendor segment, create the template row under THAT name, and
+     *  return it. */
+    function arrangeApprove(proposedName: string) {
+      const row = {
+        id: "req-1", authorId: "user-author", status: "proposed", snapshotHash: "fakehash",
+        packageName: proposedName, packageSlug: PROPOSED_SLUG, packageVersion: "0.1.0",
+        proposalSnapshot: { ...SAMPLE_INPUT, packageName: proposedName },
+      };
+      storeMock.readAgentCreationRequestById.mockReturnValue(row);
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({ ...row, status: "approved" });
+      storeMock.markAgentCreationRequestPublished.mockReturnValue({ id: "req-1", status: "published" });
+      const handlerMap = {
+        agent_source_write: vi.fn(async () => ({ written: true })),
+        agent_source_write_files: vi.fn(async () => ({
+          written: true,
+          nameNormalized: proposedName === CANONICAL ? null : { from: proposedName, to: CANONICAL },
+        })),
+        agent_source_compile: vi.fn(async () => ({ compiled: true })),
+        // Return type kept wide (every field but `published` optional) so a
+        // per-case `mockImplementation` can return a narrower shape — e.g. a
+        // publish result carrying no packageName at all.
+        agent_source_publish: vi.fn(
+          async (): Promise<{
+            published?: boolean;
+            packageName?: string;
+            packageVersion?: string;
+            error?: string;
+          }> => {
+            lookupsBeforePublish = storeReadMock.readAgentTemplateByPackageName.mock.calls.length;
+            // The publish is what materializes the agent_templates row, keyed by
+            // the CANONICAL (instance-scoped) name — never the proposed one —
+            // and owned by the publishing (approving) org.
+            storeReadMock.templateRowsByPackageName.set(CANONICAL, {
+              id: "tmpl-published",
+              orgId: "org-1",
+            });
+            return { published: true, packageName: CANONICAL, packageVersion: "0.1.0" };
+          },
+        ),
+      };
+      innerHandlersMock.createAgentBuilderPrimitiveHandlers.mockReturnValue(handlerMap);
+      return handlerMap;
+    }
+
+    async function approveScopedToTeam() {
+      return (await handleAgentCreationRequestDecide(
+        req("agent_creation_request_decide",
+          {
+            id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash",
+            accessTarget: { level: "team", id: "team-7" },
+          },
+          ADMIN),
+      )) as { error?: string; structuredContent?: { agentTemplateId?: string | null } };
+    }
+
+    it("NON-matching proposed namespace still resolves the template id (the regressed arm)", async () => {
+      // The author proposed `@uat236/test-agent`; write_files rewrote it to
+      // `@instance-ns/test-agent`, so the row exists ONLY under the canonical
+      // name. Keying the lookup on the proposed name found nothing — the scope
+      // was dropped. This is the DEFAULT case, not an edge case.
+      arrangeApprove("@uat236/test-agent");
+      const out = await approveScopedToTeam();
+      expect(out.error).toBeUndefined();
+      expect(out.structuredContent?.agentTemplateId).toBe("tmpl-published");
+    });
+
+    it("MATCHING proposed namespace resolves the template id (the arm that passed by coincidence)", async () => {
+      // Identical flow, identical assertions — the ONLY difference is that the
+      // rewrite is a no-op here. It must not be the only arm that works.
+      arrangeApprove(CANONICAL);
+      const out = await approveScopedToTeam();
+      expect(out.error).toBeUndefined();
+      expect(out.structuredContent?.agentTemplateId).toBe("tmpl-published");
+    });
+
+    it("NEVER falls back to the proposed name — a foreign row under it is not resolved", async () => {
+      // Cross-tenant fail-closed guard. `readAgentTemplateByPackageName` filters
+      // on package_name ALONE (no org predicate), so a proposed-name fallback
+      // could resolve a template owned by a DIFFERENT organization and apply
+      // this reviewer's scope to somebody else's agent. Here the canonical key
+      // has no row and the PROPOSED key does — the answer must still be null.
+      const proposed = "@someoneelse/test-agent";
+      const handlerMap = arrangeApprove(proposed);
+      handlerMap.agent_source_publish.mockImplementation(async () => {
+        lookupsBeforePublish = storeReadMock.readAgentTemplateByPackageName.mock.calls.length;
+        // A pre-existing, unrelated row sitting under the proposed name.
+        storeReadMock.templateRowsByPackageName.set(proposed, { id: "tmpl-OTHER-ORG" });
+        return { published: true, packageName: CANONICAL, packageVersion: "0.1.0" };
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const out = await approveScopedToTeam();
+        expect(out.structuredContent?.agentTemplateId).toBeNull();
+        expect(out.structuredContent?.agentTemplateId).not.toBe("tmpl-OTHER-ORG");
+        // The resolution must never consult the proposed name. (The PRE-publish
+        // collision gates do look it up — that is their job — so only the
+        // post-publish lookups are inspected here.)
+        expect(lookupsAfterPublish()).not.toContain(proposed);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("refuses a CANONICAL row owned by another org (cross-tenant fail-closed)", async () => {
+      // `package_name` is globally UNIQUE. If a foreign org already owned the
+      // canonical name, publish would have adopted its row (upsert by package
+      // name; an `alreadyPublished` result can skip the sync altogether) and the
+      // lookup would hand back a FOREIGN template id. Applying the reviewer's
+      // scope to it would be a cross-tenant access grant, so it fails closed.
+      const handlerMap = arrangeApprove("@uat236/test-agent");
+      handlerMap.agent_source_publish.mockImplementation(async () => {
+        lookupsBeforePublish = storeReadMock.readAgentTemplateByPackageName.mock.calls.length;
+        storeReadMock.templateRowsByPackageName.set(CANONICAL, {
+          id: "tmpl-FOREIGN",
+          orgId: "org-someone-else",
+        });
+        return { published: true, packageName: CANONICAL, packageVersion: "0.1.0" };
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const out = await approveScopedToTeam();
+        expect(out.structuredContent?.agentTemplateId).toBeNull();
+        expect(out.structuredContent?.agentTemplateId).not.toBe("tmpl-FOREIGN");
+        const warned = warn.mock.calls.map((c) => c.join(" ")).join("\n");
+        expect(warned).toContain("org-someone-else");
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("refuses a canonical row with NO owning org (fail-closed)", async () => {
+      const handlerMap = arrangeApprove("@uat236/test-agent");
+      handlerMap.agent_source_publish.mockImplementation(async () => {
+        lookupsBeforePublish = storeReadMock.readAgentTemplateByPackageName.mock.calls.length;
+        storeReadMock.templateRowsByPackageName.set(CANONICAL, { id: "tmpl-orgless", orgId: null });
+        return { published: true, packageName: CANONICAL, packageVersion: "0.1.0" };
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const out = await approveScopedToTeam();
+        expect(out.structuredContent?.agentTemplateId).toBeNull();
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("resolves to null when publish returns no packageName (fail-closed)", async () => {
+      const handlerMap = arrangeApprove("@uat236/test-agent");
+      handlerMap.agent_source_publish.mockImplementation(async () => {
+        lookupsBeforePublish = storeReadMock.readAgentTemplateByPackageName.mock.calls.length;
+        storeReadMock.templateRowsByPackageName.set(CANONICAL, { id: "tmpl-published" });
+        return { published: true };
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const out = await approveScopedToTeam();
+        // No authoritative identity → no id, and no lookup at all afterwards
+        // (in particular, no guessing from the proposal).
+        expect(out.structuredContent?.agentTemplateId).toBeNull();
+        expect(lookupsAfterPublish()).toEqual([]);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("resolves to null — never a wrong id — when NO row matches either key", async () => {
+      // Fail-closed. A wrong id here would write the reviewer's access scope
+      // onto SOMEONE ELSE'S agent, which is worse than not writing it at all.
+      const handlerMap = arrangeApprove("@uat236/test-agent");
+      handlerMap.agent_source_publish.mockImplementation(async () => ({
+        published: true, packageName: CANONICAL, packageVersion: "0.1.0",
+      }));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const out = await approveScopedToTeam();
+        expect(out.structuredContent?.agentTemplateId).toBeNull();
+        // Both keys tried are named in the warning so an operator can see which
+        // identity the row actually landed under.
+        const warned = warn.mock.calls.map((c) => c.join(" ")).join("\n");
+        expect(warned).toContain(CANONICAL);
+        expect(warned).toContain("@uat236/test-agent");
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it("resolves using the PUBLISHED name, and ONLY that name", async () => {
+      arrangeApprove("@uat236/test-agent");
+      await approveScopedToTeam();
+      // Exactly one post-publish lookup, on the canonical name.
+      expect(lookupsAfterPublish()).toEqual([CANONICAL]);
     });
   });
 
