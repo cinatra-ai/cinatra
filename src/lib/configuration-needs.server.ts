@@ -86,41 +86,123 @@ export async function resolveAgentConfigurationNeeds(
   target: AgentConfigurationTarget,
   ctx: ConnectorReadinessContext,
 ): Promise<ConfigurationNeedsSummary> {
-  // Scope gate — never probe for a non-agent root.
-  if (target.kind !== "agent") {
-    return summarizeConfigurationNeeds({ rootKind: target.kind, connectors: [] });
-  }
+  const [summary] = await resolveConfigurationNeedsBatch([target], ctx);
+  return summary!;
+}
 
-  const rows: ConnectorReadinessRow[] = [];
-  const seen = new Set<string>();
+/**
+ * A probe cache for ONE resolution pass (cinatra#2539).
+ *
+ * `resolveConnectorBadgeState` is a live readiness probe — a database read, and
+ * for most connectors a call out to the connection broker. Its result is a
+ * property of the CONNECTOR and the viewer, not of the agent that happens to
+ * depend on it, so within a single pass a given `packageId` is probed exactly
+ * once and every agent that requires it reads the same answer. Keyed on the
+ * promise so concurrent requesters share the in-flight probe rather than
+ * starting a second one.
+ */
+type ProbeCache = Map<string, Promise<{ connected: boolean }>>;
 
-  for (const dep of target.dependencies) {
-    if (!isRequiredEdge(dep)) continue; // optional/peer never gates the agent
+/**
+ * How many connector readiness probes may be in flight at once (cinatra#2539).
+ * Enough to keep the page's probes overlapping; small enough that a catalog
+ * full of distinct connectors cannot burst the database / connection broker.
+ */
+const PROBE_CONCURRENCY = 8;
 
-    const slug = slugFromPackageName(dep.packageName);
-    const descriptor = getConnectorDescriptorBySlug(slug);
-    if (!descriptor) continue; // not a catalog connector — no setup surface
-    if (seen.has(descriptor.packageId)) continue;
-    seen.add(descriptor.packageId);
+function probeOnce(
+  cache: ProbeCache,
+  packageId: string,
+  ctx: ConnectorReadinessContext,
+): Promise<{ connected: boolean }> {
+  const inFlight = cache.get(packageId);
+  if (inFlight) return inFlight;
+  const started = resolveConnectorBadgeState(packageId, ctx);
+  cache.set(packageId, started);
+  return started;
+}
 
-    // Each connector's OWN probe result (per-connector-authoritative). The probe
-    // keys on the catalog packageId — the SAME key the /connectors grid uses.
-    const readiness = await resolveConnectorBadgeState(descriptor.packageId, ctx);
-    rows.push({
-      packageName: dep.packageName,
-      // The connector's HUMAN-READABLE manifest name (the SAME `displayName` the
-      // /connectors card grid and setup header render) is the primary label —
-      // never the bare package name (cinatra #1234). Fall back to the slug only
-      // if a future descriptor ever omitted it.
-      displayName: descriptor.displayName || slug,
-      slug,
-      connected: readiness.connected,
-      settingsHref: getConnectorSetupHref(slug),
-      required: true,
-    });
-  }
+/**
+ * Resolve the summaries for a batch of roots against ONE shared probe cache,
+ * with the probes issued concurrently (cinatra#2539).
+ *
+ * Behaviour is identical to the previous serialized shape — the same connectors
+ * are probed, each row carries the same fields, and the declared dependency
+ * order is preserved — but a page rendering N agents that share M connectors
+ * now performs `|distinct connectors|` probes in parallel instead of `N × M`
+ * probes one after another. `resolveConnectorBadgeState` already degrades a
+ * throwing probe to not-connected, so no probe can reject this batch.
+ */
+async function resolveConfigurationNeedsBatch(
+  targets: readonly AgentConfigurationTarget[],
+  ctx: ConnectorReadinessContext,
+): Promise<ConfigurationNeedsSummary[]> {
+  const cache: ProbeCache = new Map();
 
-  return summarizeConfigurationNeeds({ rootKind: target.kind, connectors: rows });
+  // Plan first (pure): which descriptor each root's required edges resolve to,
+  // in declared order, deduped WITHIN the root exactly as before.
+  const plans = targets.map((target) => {
+    if (target.kind !== "agent") return { target, edges: [] as const };
+    const seen = new Set<string>();
+    const edges: { packageName: string; slug: string; packageId: string; displayName: string }[] = [];
+    for (const dep of target.dependencies) {
+      if (!isRequiredEdge(dep)) continue; // optional/peer never gates the agent
+      const slug = slugFromPackageName(dep.packageName);
+      const descriptor = getConnectorDescriptorBySlug(slug);
+      if (!descriptor) continue; // not a catalog connector — no setup surface
+      if (seen.has(descriptor.packageId)) continue;
+      seen.add(descriptor.packageId);
+      edges.push({
+        packageName: dep.packageName,
+        slug,
+        packageId: descriptor.packageId,
+        // The connector's HUMAN-READABLE manifest name (the SAME `displayName`
+        // the /connectors card grid and setup header render) is the primary
+        // label — never the bare package name (cinatra #1234). Fall back to the
+        // slug only if a future descriptor ever omitted it.
+        displayName: descriptor.displayName || slug,
+      });
+    }
+    return { target, edges };
+  });
+
+  // Probe every distinct connector ONCE, at BOUNDED concurrency. Unbounded
+  // would trade one amplifier for another: these probes hit the database and
+  // the connection broker, and a catalog with many distinct connectors would
+  // burst that many simultaneous calls. A small window keeps the fan-out
+  // parallel without becoming a thundering herd.
+  const distinctPackageIds = [
+    ...new Set(plans.flatMap(({ edges }) => edges.map((edge) => edge.packageId))),
+  ];
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(PROBE_CONCURRENCY, distinctPackageIds.length) },
+    async () => {
+      while (next < distinctPackageIds.length) {
+        const packageId = distinctPackageIds[next++]!;
+        await probeOnce(cache, packageId, ctx);
+      }
+    },
+  );
+  await Promise.all(workers);
+
+  return Promise.all(
+    plans.map(async ({ target, edges }) => {
+      const rows: ConnectorReadinessRow[] = [];
+      for (const edge of edges) {
+        const readiness = await probeOnce(cache, edge.packageId, ctx);
+        rows.push({
+          packageName: edge.packageName,
+          displayName: edge.displayName,
+          slug: edge.slug,
+          connected: readiness.connected,
+          settingsHref: getConnectorSetupHref(edge.slug),
+          required: true,
+        });
+      }
+      return summarizeConfigurationNeeds({ rootKind: target.kind, connectors: rows });
+    }),
+  );
 }
 
 /** An installed extension row the screen wants a configuration summary for. */
@@ -138,10 +220,12 @@ export async function resolveConfigurationNeedsForAgents(
   ctx: ConnectorReadinessContext,
 ): Promise<Record<string, ConfigurationNeedsSummary>> {
   const out: Record<string, ConfigurationNeedsSummary> = {};
-  for (const target of targets) {
-    if (target.kind !== "agent") continue;
-    const summary = await resolveAgentConfigurationNeeds(target, ctx);
+  // Non-agent roots are dropped before the batch so they are never probed.
+  const agents = targets.filter((target) => target.kind === "agent");
+  const summaries = await resolveConfigurationNeedsBatch(agents, ctx);
+  agents.forEach((target, index) => {
+    const summary = summaries[index]!;
     if (summary.needs.length > 0) out[target.packageName] = summary;
-  }
+  });
   return out;
 }

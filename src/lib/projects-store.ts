@@ -111,4 +111,4 @@ export const projectsDb: ReturnType<typeof createProjectsDb> = new Proxy(
 // dedicated DAO modules so unit tests can mock them granularly when needed.
 // ---------------------------------------------------------------------------
 export { readProjectById } from "./projects-store-dao";
-export { readProjectCoOwners } from "./project-co-owners-store";
+export { readProjectCoOwners, readCoOwnersForProjects } from "./project-co-owners-store";

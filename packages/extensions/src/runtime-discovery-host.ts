@@ -23,7 +23,7 @@ import type {
   ActiveExtensionManifest,
   ExtensionDiscoveryScope,
 } from "@cinatra-ai/extension-types";
-import type { ExtensionKind } from "./canonical-types";
+import type { ExtensionKind, InstalledExtension } from "./canonical-types";
 import { EXTENSION_KINDS } from "./canonical-types";
 import { listInstalledExtensions } from "./canonical-store";
 import { extensionRegistry } from "./index";
@@ -35,6 +35,31 @@ import {
 
 function isExtensionKind(kind: string | undefined): kind is ExtensionKind {
   return kind !== undefined && (EXTENSION_KINDS as readonly string[]).includes(kind);
+}
+
+/**
+ * OPTIONAL pre-read canonical rows (cinatra#2539).
+ *
+ * The `installed_extension` table is the SAME input for every reader below, so
+ * a caller that renders several of them in one request (the installed-extension
+ * catalog reads six) used to issue the identical full-table read once per
+ * reader. `rows` lets that caller read the table ONCE and thread the result
+ * through; the kind filter is then applied in memory, which is exactly what the
+ * SQL `WHERE kind = …` did. Omitting `rows` keeps the original behaviour (each
+ * reader does its own read), so every existing call site is unchanged.
+ *
+ * The rows MUST be an unfiltered snapshot (`listInstalledExtensions()` with no
+ * filters). Passing a pre-filtered set would silently narrow every reader that
+ * shares it — the loader below is the only caller allowed to build it.
+ */
+export type CanonicalRowsSnapshot = readonly InstalledExtension[];
+
+async function resolveCanonicalRows(
+  kind: ExtensionKind | undefined,
+  rows: CanonicalRowsSnapshot | undefined,
+): Promise<InstalledExtension[]> {
+  if (!rows) return listInstalledExtensions({ kind });
+  return kind ? rows.filter((row) => row.kind === kind) : [...rows];
 }
 
 /**
@@ -55,11 +80,13 @@ function isExtensionKind(kind: string | undefined): kind is ExtensionKind {
  */
 export async function readActiveManifestsFromStore(input: {
   kind?: string;
+  /** Pre-read canonical snapshot — see {@link CanonicalRowsSnapshot}. */
+  canonicalRows?: CanonicalRowsSnapshot;
 }): Promise<ActiveExtensionManifest[]> {
   // An unknown/invalid kind filter yields nothing rather than an unfiltered scan.
   if (input.kind !== undefined && !isExtensionKind(input.kind)) return [];
   const kind = input.kind as ExtensionKind | undefined;
-  const rows = await listInstalledExtensions({ kind });
+  const rows = await resolveCanonicalRows(kind, input.canonicalRows);
 
   // De-dupe by DISTINCT install identity (kind, packageName, ownerLevel,
   // ownerId, organizationId) — NOT just (kind, packageName). Owner-aware reader
@@ -104,11 +131,14 @@ export async function discoverActiveExtensionCapabilities(input: {
   kind?: string;
   actor: Actor;
   scope: ExtensionDiscoveryScope;
+  /** Pre-read canonical snapshot — see {@link CanonicalRowsSnapshot}. */
+  canonicalRows?: CanonicalRowsSnapshot;
 }): Promise<DiscoveredCapabilities> {
   return discoverActiveCapabilities(
     { kind: input.kind, actor: input.actor, scope: input.scope },
     {
-      readActiveManifests: (i) => readActiveManifestsFromStore({ kind: i.kind }),
+      readActiveManifests: (i) =>
+        readActiveManifestsFromStore({ kind: i.kind, canonicalRows: input.canonicalRows }),
       resolveHandler: (k) => extensionRegistry.tryResolve(k),
     },
   );
@@ -127,10 +157,12 @@ export async function discoverActiveExtensionCapabilities(input: {
  */
 export async function readArchivedManifestsFromStore(input: {
   kind?: string;
+  /** Pre-read canonical snapshot — see {@link CanonicalRowsSnapshot}. */
+  canonicalRows?: CanonicalRowsSnapshot;
 }): Promise<ActiveExtensionManifest[]> {
   if (input.kind !== undefined && !isExtensionKind(input.kind)) return [];
   const kind = input.kind as ExtensionKind | undefined;
-  const rows = await listInstalledExtensions({ kind });
+  const rows = await resolveCanonicalRows(kind, input.canonicalRows);
 
   const identityKey = (row: { kind: string; packageName: string; ownerLevel: string; ownerId: string | null; organizationId: string | null }) =>
     `${row.kind}::${row.packageName}::${row.ownerLevel}::${row.ownerId ?? ""}::${row.organizationId ?? ""}`;
@@ -174,11 +206,14 @@ export async function discoverArchivedExtensionCapabilities(input: {
   kind?: string;
   actor: Actor;
   scope: ExtensionDiscoveryScope;
+  /** Pre-read canonical snapshot — see {@link CanonicalRowsSnapshot}. */
+  canonicalRows?: CanonicalRowsSnapshot;
 }): Promise<DiscoveredCapabilities> {
   return discoverArchivedCapabilities(
     { kind: input.kind, actor: input.actor, scope: input.scope },
     {
-      readArchivedManifests: (i) => readArchivedManifestsFromStore({ kind: i.kind }),
+      readArchivedManifests: (i) =>
+        readArchivedManifestsFromStore({ kind: i.kind, canonicalRows: input.canonicalRows }),
       resolveHandler: (k) => extensionRegistry.tryResolve(k),
     },
   );

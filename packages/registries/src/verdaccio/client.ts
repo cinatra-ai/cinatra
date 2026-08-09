@@ -782,6 +782,97 @@ export async function getAgentPackage(
  * checks WITHOUT extracting the tarball (which yields an agent-shaped result
  * unsuitable for non-agent kinds).
  */
+/**
+ * Per-packument registry timeout RECOMMENDED for a page render (cinatra#2539).
+ *
+ * `npm-registry-fetch` defaults to a 5-minute timeout. That belongs to an
+ * install, not to a page render that issues one packument per package in the
+ * registry: a single hung socket then owns the render for five minutes. A
+ * catalog packument is a small metadata document on a registry the instance is
+ * already configured against, so a few seconds is generous; exceeding it means
+ * the registry is unhealthy and the row is better rendered unhydrated.
+ *
+ * NOT a default of `listExtensionPackages` — bounding is OPT-IN, because the
+ * bound is lossy and only a caller knows whether a partial answer is better
+ * than a slow one. A page render says yes; a search tool that must not silently
+ * drop a matching package says no.
+ */
+export const CATALOG_PACKUMENT_TIMEOUT_MS = 8_000;
+
+/**
+ * Whole-call wall-clock budget RECOMMENDED for a page render (cinatra#2539).
+ * The per-request timeout alone does not bound the total, because the
+ * underlying agent caps concurrent sockets and the remaining requests queue
+ * behind it. This is the number that keeps a catalog render bounded no matter
+ * how many packages the registry holds. Opt-in, for the reason above.
+ */
+export const CATALOG_HYDRATION_BUDGET_MS = 12_000;
+
+/** Raised when a catalog read is cut short by its caller-supplied budget. */
+export class RegistryCatalogBudgetExceededError extends Error {
+  constructor(budgetMs: number) {
+    super(`registry catalog read exceeded its ${budgetMs}ms budget`);
+    this.name = "RegistryCatalogBudgetExceededError";
+  }
+}
+
+/**
+ * `Promise.allSettled` with a shared wall-clock budget (cinatra#2539).
+ *
+ * Every promise is settled-or-abandoned; an abandoned one is reported as
+ * `rejected` with a budget reason. Each input promise is given its own handler
+ * BEFORE the race, so a rejection that lands after the budget expired is
+ * already handled and can never surface as an unhandled rejection.
+ *
+ * `budgetMs === null` means NO budget (plain `allSettled`). A NUMBER always
+ * means a real deadline — including `0`, which is an ALREADY-EXHAUSTED budget
+ * and abandons everything on the next turn. Those two must not share a
+ * representation: a budgeted call whose earlier phase consumed the whole
+ * allowance would otherwise silently become unlimited, which is the exact
+ * failure mode the budget exists to prevent.
+ *
+ * The returned array is a SNAPSHOT taken at the moment the budget expired: an
+ * abandoned promise settling later cannot mutate what the caller was handed.
+ * Cancelling the abandoned work is the caller's job (see the abort controller
+ * in `listExtensionPackages`) — this helper only stops waiting.
+ */
+export async function settleWithinBudget<T>(
+  promises: Promise<T>[],
+  budgetMs: number | null,
+): Promise<PromiseSettledResult<T>[]> {
+  const settled: PromiseSettledResult<T>[] = promises.map(() => ({
+    status: "rejected",
+    reason: new RegistryCatalogBudgetExceededError(budgetMs ?? 0),
+  }));
+  const tracked = promises.map((promise, index) =>
+    promise.then(
+      (value) => {
+        settled[index] = { status: "fulfilled", value };
+      },
+      (reason: unknown) => {
+        settled[index] = { status: "rejected", reason };
+      },
+    ),
+  );
+  if (budgetMs === null) {
+    await Promise.all(tracked);
+    return settled.slice();
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, Math.max(0, budgetMs));
+    // Never hold the process open just to observe the deadline.
+    (timer as unknown as { unref?: () => void }).unref?.();
+  });
+  try {
+    await Promise.race([Promise.all(tracked), deadline]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  // Copy: a late settlement must not rewrite the answer already returned.
+  return settled.slice();
+}
+
 export interface PublishedExtensionSummary {
   kind: "agent" | "skill" | "connector" | "artifact" | "workflow" | null;
   resolvedVersion: string | null;
@@ -789,13 +880,34 @@ export interface PublishedExtensionSummary {
 }
 
 export async function getPublishedExtensionSummary(
-  input: { packageName: string; packageVersion?: string },
+  input: {
+    packageName: string;
+    packageVersion?: string;
+    /**
+     * Per-request registry timeout in ms (cinatra#2539). `npm-registry-fetch`
+     * defaults to FIVE MINUTES, which is a sane ceiling for an interactive
+     * `npm install` and a catastrophic one for a page render that fans this
+     * call out over a whole catalog. A caller rendering a page passes a short
+     * bound; omitting it keeps the npm default for install/publish paths.
+     */
+    fetchTimeoutMs?: number;
+    /**
+     * Cancellation for the underlying registry request (cinatra#2539). A caller
+     * that stops WAITING for this read must also be able to stop the read, or
+     * the abandoned sockets pile up across renders.
+     */
+    signal?: AbortSignal;
+  },
   config?: VerdaccioConfig,
 ): Promise<PublishedExtensionSummary> {
   const resolvedConfig = ensureConfig(config, "getPublishedExtensionSummary");
   const packument = (await pacote.packument(
     input.packageName,
-    pacoteOptions(resolvedConfig, { fullMetadata: true }),
+    pacoteOptions(resolvedConfig, {
+      fullMetadata: true,
+      ...(input.fetchTimeoutMs === undefined ? {} : { timeout: input.fetchTimeoutMs }),
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    }),
   )) as RegistryPackument;
   const versions = packument.versions ?? {};
   let resolvedVersion: string | undefined;
@@ -945,13 +1057,75 @@ export async function listExtensionPackages(
      * first 20 sorted entries are all foreign-private.
      */
     viewerScope?: string;
+    /**
+     * Per-packument registry timeout in ms (cinatra#2539). OMITTED by default,
+     * which keeps the npm 5-minute default — pass
+     * {@link CATALOG_PACKUMENT_TIMEOUT_MS} from a page render, where one
+     * unresponsive packument must not own the response for minutes.
+     */
+    fetchTimeoutMs?: number;
+    /**
+     * Overall wall-clock budget in ms covering BOTH the registry enumeration
+     * and the packument fan-out (cinatra#2539). `0`/omitted = no budget, which
+     * is the historical behaviour: this call answers completely or throws.
+     *
+     * With a budget, whatever has resolved when it expires is returned and the
+     * rest degrade to "not hydrated" — exactly like the per-package failures
+     * this function has always tolerated — and every still-open request is
+     * ABORTED. Lossy by construction, so it is opt-in: a page render wants a
+     * bounded partial answer; a search tool that must not silently drop a
+     * matching package does not. Pass {@link CATALOG_HYDRATION_BUDGET_MS} for
+     * the page-render case.
+     */
+    hydrationBudgetMs?: number;
   } = {},
   config?: VerdaccioConfig,
 ): Promise<AgentPackageSummary[]> {
   const resolvedConfig = ensureConfig(config, "listExtensionPackages");
+
+  // ONE deadline covering the WHOLE call (cinatra#2539) — the enumeration below
+  // included. Bounding only the packument fan-out would leave a blackholed
+  // `/-/all` able to hold the caller open forever, which is the same defect in a
+  // different request. The controller is what actually CANCELS: when the
+  // deadline fires, every open registry request is aborted rather than left to
+  // finish into a result nobody is waiting for.
+  const budgetMs = options.hydrationBudgetMs ?? 0;
+  const budgetStartedAt = Date.now();
+  const abort = new AbortController();
+  let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+  if (budgetMs > 0) {
+    budgetTimer = setTimeout(
+      () => abort.abort(new RegistryCatalogBudgetExceededError(budgetMs)),
+      budgetMs,
+    );
+    (budgetTimer as unknown as { unref?: () => void }).unref?.();
+  }
+  try {
+    return await listExtensionPackagesWithin(
+      options,
+      resolvedConfig,
+      abort.signal,
+      // `null` = this call has no budget. A NUMBER = the allowance still left,
+      // which may legitimately be 0 once `/-/all` has consumed it all.
+      budgetMs > 0 ? () => budgetMs - (Date.now() - budgetStartedAt) : () => null,
+    );
+  } finally {
+    if (budgetTimer) clearTimeout(budgetTimer);
+    // Cancel anything still in flight now that the answer has been produced.
+    abort.abort();
+  }
+}
+
+async function listExtensionPackagesWithin(
+  options: Parameters<typeof listExtensionPackages>[0] & object,
+  resolvedConfig: VerdaccioConfig,
+  signal: AbortSignal,
+  remainingBudgetMs: () => number | null,
+): Promise<AgentPackageSummary[]> {
   const allPackages = await registryJson<Record<string, unknown>>(
     resolvedConfig,
     "/-/all",
+    { signal },
   );
 
   // Scope filter: `allowedScopes: undefined` (or omitted) means NO scope
@@ -979,14 +1153,32 @@ export async function listExtensionPackages(
   // caller asking for `limit: 20` always sees up to 20 visible rows even
   // when the first N alphabetical packages are all foreign-private.
 
-  const results = await Promise.allSettled(
+  // Bounded packument fan-out (cinatra#2539). This loop reads ONE FULL
+  // packument per package in the registry — the `limit` slice happens AFTER
+  // the visibility filter below, so it does not bound the network work. With an
+  // unresponsive registry the previous shape could therefore hold a page render
+  // for `packageNames.length / maxSockets × 5 min`. Two bounds, both degrading
+  // to the SAME "unhydrated package" outcome the `allSettled` already produced
+  // for a per-package failure:
+  //   1. a short per-request timeout, and
+  //   2. one shared wall-clock budget across the whole fan-out.
+  const fetchTimeoutMs = options.fetchTimeoutMs;
+  const results = await settleWithinBudget(
     packageNames.map((packageName) =>
-      getPublishedExtensionSummary({ packageName }, resolvedConfig).then((summary) => ({
-        packageName,
-        summary,
-      })),
+      getPublishedExtensionSummary(
+        { packageName, ...(fetchTimeoutMs === undefined ? {} : { fetchTimeoutMs }), signal },
+        resolvedConfig,
+      ).then((summary) => ({ packageName, summary })),
     ),
+    remainingBudgetMs(),
   );
+  const unhydrated = results.filter((r) => r.status !== "fulfilled").length;
+  if (unhydrated > 0) {
+    console.warn(
+      `[registries] extension catalog: ${unhydrated}/${packageNames.length} packages were not ` +
+        "hydrated within the registry budget — their rows render from their local descriptors.",
+    );
+  }
   const summaries = results.flatMap((result) => {
     if (result.status !== "fulfilled") return [];
     const { packageName, summary } = result.value;

@@ -1,5 +1,5 @@
 import "server-only";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import { projectCoOwners, projects, projectsDb } from "@/lib/projects-store";
 
 // ---------------------------------------------------------------------------
@@ -29,6 +29,39 @@ export async function readProjectCoOwners(projectId: string): Promise<ProjectCoO
     grantedBy: r.grantedBy,
     grantedAt: r.grantedAt,
   }));
+}
+
+/**
+ * Co-owners for MANY projects in ONE query, grouped by project (cinatra#2539).
+ *
+ * The install-target picker needs the co-owner set of every project it offers.
+ * Calling {@link readProjectCoOwners} per project made the picker cost one
+ * database round trip per project — on every surface that renders it. This is
+ * the same read with an `IN` predicate; a project with no co-owners is absent
+ * from the map, so callers use `?? []` exactly as they would for an empty read.
+ */
+export async function readCoOwnersForProjects(
+  projectIds: readonly string[],
+): Promise<Map<string, ProjectCoOwner[]>> {
+  const byProject = new Map<string, ProjectCoOwner[]>();
+  if (projectIds.length === 0) return byProject;
+  const rows = await projectsDb
+    .select()
+    .from(projectCoOwners)
+    .where(inArray(projectCoOwners.projectId, [...new Set(projectIds)]))
+    .orderBy(asc(projectCoOwners.grantedAt));
+  for (const r of rows) {
+    const entry: ProjectCoOwner = {
+      projectId: r.projectId,
+      userId: r.userId,
+      grantedBy: r.grantedBy,
+      grantedAt: r.grantedAt,
+    };
+    const bucket = byProject.get(r.projectId);
+    if (bucket) bucket.push(entry);
+    else byProject.set(r.projectId, [entry]);
+  }
+  return byProject;
 }
 
 export async function addProjectCoOwner(
