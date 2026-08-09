@@ -339,10 +339,13 @@ async function releaseAndDispatch(runId: string): Promise<RunRecommendationDecis
   // (this tab, another tab, an external AG-UI client) drops the card at the same
   // moment, instead of the losing tab sitting on a decided hold until its next
   // poll tick.
+  // Guarded here as well as inside the publisher: the decision's outcome is the
+  // park release and the dispatch, and neither may be lost to a transport
+  // failure on an announcement.
   await publishRecommendationHoldResume({
     runId,
     threadId: recommendationHoldThreadId(run),
-  });
+  }).catch(() => {});
 
   // A held run is pending_input; if it already advanced (a concurrent decision
   // won the dispatch race), report success without re-dispatching.
