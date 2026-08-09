@@ -47,7 +47,14 @@ vi.mock("@cinatra-ai/mcp-server/credentials", () => ({
   getMcpPublicBaseUrl: () => ({ publicBaseUrl: null, publicBaseUrlSource: "unknown" }),
 }));
 
-const getDevTunnelStatus = vi.fn<() => { connected: boolean; funnelUrlPreview: string | null }>();
+const getDevTunnelStatus = vi.fn<
+  () => {
+    connected: boolean;
+    funnelUrlPreview: string | null;
+    // cinatra#2534 — the connector-reported reason for a MISSING preview.
+    funnelUrlPreviewReason: string | null;
+  }
+>();
 vi.mock("@/lib/dev-tunnel-status", () => ({
   getDevTunnelStatus: () => getDevTunnelStatus(),
 }));
@@ -113,6 +120,7 @@ function renderTunnelTab(overrides: {
   getDevTunnelStatus.mockReturnValue({
     connected: overrides.connected,
     funnelUrlPreview: overrides.connected ? "https://dev-instance.example.ts.net" : null,
+    funnelUrlPreviewReason: null,
   });
   const container = document.createElement("div");
   container.innerHTML = renderToStaticMarkup(

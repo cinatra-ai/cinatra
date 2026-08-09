@@ -9,6 +9,7 @@ import { CardContent, CardFooter } from "@/components/ui/card";
 import { Field, FieldDescription } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { setMcpPublicBaseUrlAction } from "./actions";
+import { selectFunnelPreviewNotice } from "./funnel-preview-notice";
 
 type Props = {
   initialUrl: string;
@@ -20,9 +21,20 @@ type Props = {
    * provisioned yet.
    */
   tailscaleUrl: string | null;
+  /**
+   * Connector-reported reason code for a MISSING Funnel URL preview, or
+   * `null` when none was reported (cinatra#2534). Drives which explanation
+   * the flyout shows instead of the old one-size-fits-all sentence.
+   */
+  tailscaleUrlReason?: string | null;
 };
 
-export function PublicBaseUrlForm({ initialUrl, tailscaleConnected, tailscaleUrl }: Props) {
+export function PublicBaseUrlForm({
+  initialUrl,
+  tailscaleConnected,
+  tailscaleUrl,
+  tailscaleUrlReason = null,
+}: Props) {
   const [url, setUrl] = useState(initialUrl);
   const [savedUrl, setSavedUrl] = useState(initialUrl);
   const [isPending, startTransition] = useTransition();
@@ -73,6 +85,12 @@ export function PublicBaseUrlForm({ initialUrl, tailscaleConnected, tailscaleUrl
   }
 
   const showFlyout = flyoutOpen && tailscaleConnected;
+  // `null` whenever a preview exists — the flyout renders the pickable option
+  // in that case and the notice has nothing to say (cinatra#2534).
+  const previewNotice = selectFunnelPreviewNotice({
+    funnelUrlPreview: tailscaleUrl,
+    reason: tailscaleUrlReason,
+  });
 
   return (
     <>
@@ -124,12 +142,14 @@ export function PublicBaseUrlForm({ initialUrl, tailscaleConnected, tailscaleUrl
                     </span>
                   </Button>
                 ) : (
-                  <div className="flex items-center gap-2 px-3 py-2 text-sm text-muted-foreground">
-                    <TailscaleLogo className="h-4 w-4 shrink-0" />
-                    <span className="text-xs">
+                  <div
+                    className="flex items-start gap-2 px-3 py-2 text-sm text-muted-foreground"
+                    data-funnel-preview-state={previewNotice?.state}
+                  >
+                    <TailscaleLogo className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span className="text-xs leading-5">
                       <span className="font-semibold">TAILSCALE: </span>
-                      tailnet not resolved yet — reconnect the Tailscale
-                      connector to refresh.
+                      {previewNotice?.message}
                     </span>
                   </div>
                 )}
@@ -140,7 +160,9 @@ export function PublicBaseUrlForm({ initialUrl, tailscaleConnected, tailscaleUrl
             Must start with https:// (or http:// for local proxies) and
             point at this dev server. Leave empty to disable external
             reachability.
-            {tailscaleConnected
+            {/* Only promise a pick when there IS one — with no preview the
+                flyout explains why instead (cinatra#2534). */}
+            {tailscaleConnected && tailscaleUrl
               ? " Click the field to pick the Tailscale Funnel URL."
               : null}
           </FieldDescription>

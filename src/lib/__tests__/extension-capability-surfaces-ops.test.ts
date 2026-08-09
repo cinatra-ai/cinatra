@@ -171,7 +171,11 @@ describe("crm-connector serverEntry activation through the REAL loader surfaces"
 
 describe("getDevTunnelStatus (dev-tunnel-status)", () => {
   it("degrades to not-connected with an empty registry (connector absent)", () => {
-    expect(getDevTunnelStatus()).toEqual({ connected: false, funnelUrlPreview: null });
+    expect(getDevTunnelStatus()).toEqual({
+      connected: false,
+      funnelUrlPreview: null,
+      funnelUrlPreviewReason: null,
+    });
   });
 
   it("passes through the registered provider's reads", () => {
@@ -185,6 +189,7 @@ describe("getDevTunnelStatus (dev-tunnel-status)", () => {
     expect(getDevTunnelStatus()).toEqual({
       connected: true,
       funnelUrlPreview: "https://my-clone.t.ts.net",
+      funnelUrlPreviewReason: null,
     });
   });
 
@@ -199,7 +204,93 @@ describe("getDevTunnelStatus (dev-tunnel-status)", () => {
         getFunnelUrlPreview: () => null,
       },
     });
-    expect(getDevTunnelStatus()).toEqual({ connected: false, funnelUrlPreview: null });
+    expect(getDevTunnelStatus()).toEqual({
+      connected: false,
+      funnelUrlPreview: null,
+      funnelUrlPreviewReason: null,
+    });
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  // cinatra#2534 — a null preview has several distinct causes and only one of
+  // them is fixed by reconnecting the connector, so the tunnel surface must be
+  // told WHICH. The reason getter is OPTIONAL on the provider (the capability
+  // contract does not carry it): an impl that has it is read, one that does not
+  // degrades to `null`, and a misbehaving one can never break the status read.
+  it("reads the optional reason for a MISSING preview", () => {
+    registerCapabilityProvider("dev-tunnel-status", {
+      packageName: "@v/tailscale-connector",
+      impl: {
+        getConnectionStatus: () => ({ connected: true }),
+        getFunnelUrlPreview: () => null,
+        getFunnelUrlPreviewReason: () => "tailscale.unregistered_dev_identity",
+      },
+    });
+    expect(getDevTunnelStatus()).toEqual({
+      connected: true,
+      funnelUrlPreview: null,
+      funnelUrlPreviewReason: "tailscale.unregistered_dev_identity",
+    });
+  });
+
+  it("ignores a reason when a preview EXISTS (no stale cause on a working URL)", () => {
+    registerCapabilityProvider("dev-tunnel-status", {
+      packageName: "@v/tailscale-connector",
+      impl: {
+        getConnectionStatus: () => ({ connected: true }),
+        getFunnelUrlPreview: () => "https://my-clone.t.ts.net",
+        getFunnelUrlPreviewReason: () => "tailscale.unregistered_dev_identity",
+      },
+    });
+    expect(getDevTunnelStatus().funnelUrlPreviewReason).toBeNull();
+  });
+
+  it("a THROWING reason accessor cannot collapse the status read", () => {
+    // The reason may be exposed through a getter (or a Proxy trap). If reading
+    // the property escaped into the status read's own catch, an advisory
+    // failure would downgrade a healthy connected status to "not connected".
+    const impl = {
+      getConnectionStatus: () => ({ connected: true }),
+      getFunnelUrlPreview: () => null,
+    };
+    Object.defineProperty(impl, "getFunnelUrlPreviewReason", {
+      get() {
+        throw new Error("boom");
+      },
+    });
+    registerCapabilityProvider("dev-tunnel-status", {
+      packageName: "@v/tailscale-connector",
+      impl,
+    });
+    expect(getDevTunnelStatus()).toEqual({
+      connected: true,
+      funnelUrlPreview: null,
+      funnelUrlPreviewReason: null,
+    });
+  });
+
+  it("degrades the reason to null when the provider misbehaves", () => {
+    for (const getFunnelUrlPreviewReason of [
+      undefined,
+      () => {
+        throw new Error("boom");
+      },
+      () => 42,
+      () => "",
+    ]) {
+      registerCapabilityProvider("dev-tunnel-status", {
+        packageName: "@v/tailscale-connector",
+        impl: {
+          getConnectionStatus: () => ({ connected: true }),
+          getFunnelUrlPreview: () => null,
+          getFunnelUrlPreviewReason,
+        },
+      });
+      expect(getDevTunnelStatus()).toEqual({
+        connected: true,
+        funnelUrlPreview: null,
+        funnelUrlPreviewReason: null,
+      });
+    }
   });
 });

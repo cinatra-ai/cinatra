@@ -17,6 +17,27 @@ import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registr
 export type DevTunnelStatus = {
   connected: boolean;
   funnelUrlPreview: string | null;
+  /**
+   * Why the preview is missing, as a connector-reported code (cinatra#2534).
+   * `null` when a preview exists, or when the provider does not report one.
+   *
+   * A null preview has several distinct causes (unresolved tailnet, no
+   * sanctioned dev identity, conflicting identity signals) and only the first
+   * is fixed by reconnecting the connector — so the surface must not guess.
+   * The connector computes the code today but only logs it, and the capability
+   * contract exposes no getter for it. Rather than widen that contract, this
+   * reads an OPTIONAL getter off the same provider: a capability impl is
+   * `unknown` by contract and already structurally probed, so an impl that
+   * grows the getter is picked up with no host change, and one that never does
+   * degrades to `null` (which the surface renders as an explicitly
+   * cause-agnostic notice).
+   */
+  funnelUrlPreviewReason: string | null;
+};
+
+/** The optional reason getter — see `funnelUrlPreviewReason` above. */
+type DevTunnelReasonReader = {
+  getFunnelUrlPreviewReason?: () => unknown;
 };
 
 // Structural guard: a capability impl is `unknown` by contract.
@@ -29,23 +50,48 @@ function isDevTunnelStatusProvider(impl: unknown): impl is DevTunnelStatusProvid
   );
 }
 
+/**
+ * Read the optional reason getter. Absent, non-callable, throwing, or
+ * returning anything but a non-empty string → `null` (no reason reported).
+ * A reason is advisory copy selection; it must never break the status read.
+ */
+function readPreviewReason(impl: DevTunnelStatusProvider): string | null {
+  try {
+    // The property READ is inside the try too: an impl may expose the reason
+    // through a getter (or a Proxy trap) that throws, and that must not escape
+    // into the caller's catch — which would turn a healthy connected status
+    // into "not connected" over a purely advisory read.
+    const reader = (impl as DevTunnelStatusProvider & DevTunnelReasonReader)
+      .getFunnelUrlPreviewReason;
+    if (typeof reader !== "function") return null;
+    const value = reader.call(impl);
+    return typeof value === "string" && value.length > 0 ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The dev-tunnel status for the development/tunnel surface (degrades, never throws). */
 export function getDevTunnelStatus(): DevTunnelStatus {
   const match = resolveCapabilityProviders(DEV_TUNNEL_STATUS_CAPABILITY).find((p) =>
     isDevTunnelStatusProvider(p.impl),
   );
-  if (!match) return { connected: false, funnelUrlPreview: null };
+  if (!match) {
+    return { connected: false, funnelUrlPreview: null, funnelUrlPreviewReason: null };
+  }
   const impl = match.impl;
   try {
+    const funnelUrlPreview = impl.getFunnelUrlPreview();
     return {
       connected: impl.getConnectionStatus().connected === true,
-      funnelUrlPreview: impl.getFunnelUrlPreview(),
+      funnelUrlPreview,
+      funnelUrlPreviewReason: funnelUrlPreview ? null : readPreviewReason(impl),
     };
   } catch (err) {
     console.warn(
       `[dev-tunnel-status] ${match.packageName} status read failed: ` +
         `${err instanceof Error ? err.message : String(err)}`,
     );
-    return { connected: false, funnelUrlPreview: null };
+    return { connected: false, funnelUrlPreview: null, funnelUrlPreviewReason: null };
   }
 }
