@@ -260,10 +260,63 @@ describe("the collection panel's heading names the scope KIND, not the entity (#
 
   it("keeps the entity-named label for the add-to-scope picker title (§IX.1)", () => {
     // §IX.1's picker is titled "Add a dashboard to Team: Growth" — that one DOES
-    // name the entity, because the dialog has no surrounding page header.
-    expect(read(TAB)).toContain("scopeLabel={data.scopeLabel}");
-    expect(read("src/components/dashboards/add-to-scope-picker.tsx")).toContain(
-      "Add a dashboard to {scopeLabel}",
+    // name the entity, because the dialog has no surrounding page header. Since
+    // cinatra#2474 PR3 the picker is a SECTION of the one toolbar-launched
+    // popup, so the popup carries that title and each landing supplies the
+    // entity-named label alongside the add-to-scope source.
+    expect(
+      read("src/components/dashboards/add-dashboard-dialog.tsx"),
+    ).toContain("`Add a dashboard to ${scopeLabel}`");
+    for (const [file] of LANDINGS) {
+      expect(read(file)).toContain("scopeLabel={scopeLabel}");
+    }
+  });
+});
+
+describe("the unified Add-dashboard popup is wired from every shared landing (#2474 PR3)", () => {
+  /** [landing file, the entity-named label expression it must build] */
+  const PROVIDERS: ReadonlyArray<readonly [string, string]> = [
+    [ORG_LANDING, "`Organization: ${orgName || id}`"],
+    [TEAM_LANDING, "`Team: ${team.name}`"],
+    [PROJECT_LANDING, "`Project: ${project.name}`"],
+  ];
+
+  for (const [file, label] of PROVIDERS) {
+    it(`${file} — wraps its shell in ScopeAddSourcesProvider with the §IX.1 source`, () => {
+      const src = read(file);
+      expect(src).toContain("<ScopeAddSourcesProvider");
+      expect(src).toContain(
+        'from "@/components/dashboards/scope-add-sources"',
+      );
+      // The source is built by the ONE server-side binder, which returns null
+      // unless `actorMayWriteScope` holds (§IX.2 suppression at the source).
+      expect(src).toContain("buildScopeReferenceSource");
+      expect(src).toContain(
+        'from "@/components/dashboards/scope-reference-binding"',
+      );
+      expect(src).toContain(`const scopeLabel = ${label}`);
+    });
+
+    it(`${file} — the provider wraps the SHELL, so the toolbar can reach it`, () => {
+      const src = read(file);
+      const shell = /<(OrganizationDashboards|TeamDetailDashboards|ProjectDashboardsTab)\b/.exec(
+        src,
+      );
+      expect(shell).not.toBeNull();
+      expect(src.indexOf("<ScopeAddSourcesProvider")).toBeLessThan(shell!.index);
+    });
+  }
+
+  it("the org landing keeps its ACTIVE-TENANT fence on the add source too (#2474 PR2's read-widening guard)", () => {
+    // PR2 suppressed the collection panel unless the actor's ACTIVE org is this
+    // org. An add path into a merely-member org would widen exactly what that
+    // fence closed, so the source rides the same condition.
+    expect(read(ORG_LANDING)).toContain(
+      "actor && actorIsActiveInThisOrg\n      ? buildScopeReferenceSource(actor, scope)",
     );
+  });
+
+  it("personal gets NO add-to-scope source (not an add-to-scope target, §IX)", () => {
+    expect(read(PERSONAL_LANDING)).not.toContain("ScopeAddSourcesProvider");
   });
 });

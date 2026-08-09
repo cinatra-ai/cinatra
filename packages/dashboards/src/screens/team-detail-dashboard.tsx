@@ -45,6 +45,8 @@ import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 import { ScopeDashboardsSection } from "@/components/dashboards/scope-dashboards-section";
+import { ScopeAddSourcesProvider } from "@/components/dashboards/scope-add-sources";
+import { buildScopeReferenceSource } from "@/components/dashboards/scope-reference-binding";
 import {
   getActorContext,
   isPlatformAdmin,
@@ -175,6 +177,18 @@ export async function TeamDetailDashboardPage({
   // gate above is the READ population (§IX.2: a member without write authority
   // still sees every row and opens any of them, with no Add and no Remove).
   const actor = await getActorContext();
+  const scope = {
+    kind: "team",
+    scopeId: team.id,
+    orgId: team.organizationId,
+  } as const;
+
+  // The §IX.1 add-to-scope source for the unified Add-dashboard popup
+  // (cinatra#2474 PR3) — `null` for anyone who may not write this scope, so a
+  // read-only member gets no scope-level Add affordance and no handle to the
+  // add actions (§IX.2 suppression, applied before anything reaches the browser).
+  const scopeReference = actor ? buildScopeReferenceSource(actor, scope) : null;
+  const scopeLabel = `Team: ${team.name}`;
 
   // ── Dashboards tab wiring (#700/#701/#702) ──────────────────────────────────
   // User-owned team-detail dashboards. Ensure the non-removable Overview BEFORE
@@ -239,28 +253,27 @@ export async function TeamDetailDashboardPage({
           settingsHref={`/teams/${encodeURIComponent(team.id)}/settings`}
           active="dashboards"
         />
-        <TeamDetailDashboards
-          dataSource={dataSource}
-          overviewPortlets={overviewConfig.portlets}
-          initialData={initialData}
-        />
+        {/* The unified Add-dashboard popup's sources (cinatra#2474 PR3) — the
+            popup is launched from the toolbar INSIDE the shell, so the provider
+            wraps the shell. Server-bound actions and a label cross, never the
+            actor or the scope's owner axis. */}
+        <ScopeAddSourcesProvider
+          scopeLabel={scopeLabel}
+          reference={scopeReference}
+        >
+          <TeamDetailDashboards
+            dataSource={dataSource}
+            overviewPortlets={overviewConfig.portlets}
+            initialData={initialData}
+          />
+        </ScopeAddSourcesProvider>
         {/* The scope's own dashboards collection (#1897 §IX), folded onto this
             landing by cinatra#2474 PR2 — formerly the separate
             `/teams/[teamId]/dashboards` route, which PR2 deletes outright (no
             redirect, no shim). Same #1897 service, list, picker, Remove and
             promotion recourse; only the mount point moved. The per-user shell
             above is untouched. */}
-        {actor ? (
-          <ScopeDashboardsSection
-            actor={actor}
-            scope={{
-              kind: "team",
-              scopeId: team.id,
-              orgId: team.organizationId,
-            }}
-            scopeLabel={`Team: ${team.name}`}
-          />
-        ) : null}
+        {actor ? <ScopeDashboardsSection actor={actor} scope={scope} /> : null}
       </PageContent>
     </Main>
   );

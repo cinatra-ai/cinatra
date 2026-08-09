@@ -6,8 +6,11 @@
  * exactly:
  *
  *   - conformance id `scope-dashboards-tab` (field name=identity.displayName;
- *     actions open-add-picker, open-dashboard, remove-listing; the closed
- *     data-state set empty / error / loading / kind:artifact);
+ *     actions open-dashboard, remove-listing here — the third tab action,
+ *     open-add-picker, moved with the Add affordance to the Dashboards tab's
+ *     TOOLBAR when cinatra#2474 PR3 consolidated every add path into the one
+ *     `<AddDashboardDialog>`; the surface is unchanged, the trigger's component
+ *     is not; the closed data-state set empty / error / loading / kind:artifact);
  *   - a plain row anatomy — a leading dashboard glyph, the name, the updated
  *     time, an Open affordance. NO per-row "Dashboards" type label (every row is
  *     a dashboard) and NO Home / Listed relation badge, no `home:` provenance —
@@ -19,27 +22,30 @@
  *   - `scope-dashboards-write-access` (field manage-controls=
  *     collectionAdd.actorMayWriteScope): Add + Remove appear ONLY to a scope
  *     manager — a member without write authority sees the tab and every row and
- *     opens any of them, with no Add and no Remove (suppression, §IX.2).
+ *     opens any of them, with no Add and no Remove (suppression, §IX.2). Remove
+ *     carries that annotation HERE; Add carries it on the toolbar button that
+ *     now launches the unified popup.
  *
  * The entity h1 + kind label + the underline tablist (Dashboards · Settings)
- * live on the hosting entity page; this component renders the Dashboards tab
- * CONTENT (subtitle + Add + list). The add-to-scope picker (§IX.1) lives in
- * `<AddToScopePicker>`.
+ * live on the hosting entity page; this component renders the Dashboards tab's
+ * collection panel (heading + list). The §IX.1 add-to-scope picker is now one
+ * section of `<AddDashboardDialog>` (`<ScopeReferenceSection>`), launched from
+ * the tab's toolbar — cinatra#2474 PR3's consolidation, so a scope has exactly
+ * ONE add-a-dashboard entry point instead of two competing ones.
  */
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { LayoutDashboard, Plus } from "lucide-react";
+import { LayoutDashboard } from "lucide-react";
 import { toast } from "@/lib/cinatra-toast";
 
 import type { ListingScopeKind } from "@cinatra-ai/dashboards/entity-links";
 
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AddToScopePicker } from "./add-to-scope-picker";
 import {
   SCOPE_LISTING_REASON_COPY,
-  type ScopeDashboardsDataSource,
+  type ScopeListingRemovalSource,
   type ScopeDashboardsTabData,
   type ScopeDashboardTabRow,
 } from "./scope-dashboards-contract";
@@ -54,27 +60,36 @@ const SCOPE_NOUN: Record<ListingScopeKind, string> = {
 
 export function ScopeDashboardsTab({
   data,
-  dataSource,
+  removal,
 }: {
   data: ScopeDashboardsTabData;
-  dataSource: ScopeDashboardsDataSource;
+  /** Remove ALONE — the §IX.1 add actions are handed to the popup, and only to
+   *  a manager, so a read-only member's browser never receives them. */
+  removal: ScopeListingRemovalSource;
 }) {
   const router = useRouter();
-  const [pickerOpen, setPickerOpen] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
   const onRemove = (dashboardId: string) => {
     setRemovingId(dashboardId);
-    void dataSource.removeListing(dashboardId).then((res) => {
-      setRemovingId(null);
-      if (res.ok) {
-        toast.success("Listing removed");
-        startTransition(() => router.refresh());
-      } else {
-        toast.error(SCOPE_LISTING_REASON_COPY[res.reason]);
-      }
-    });
+    void removal
+      .removeListing(dashboardId)
+      .then((res) => {
+        setRemovingId(null);
+        if (res.ok) {
+          toast.success("Listing removed");
+          startTransition(() => router.refresh());
+        } else {
+          toast.error(SCOPE_LISTING_REASON_COPY[res.reason]);
+        }
+      })
+      // A rejected action must clear the row's busy state too, or Remove stays
+      // "Removing…" with no way back (codex convergence).
+      .catch(() => {
+        setRemovingId(null);
+        toast.error("Couldn’t remove that listing. Try again.");
+      });
   };
 
   const hasRows = data.rows.length > 0;
@@ -86,12 +101,9 @@ export function ScopeDashboardsTab({
       data-state={hasRows ? "kind:artifact" : "empty"}
       className="flex flex-col gap-3"
     >
-      {/* Dashboards tab content: the collection panel's heading + the
-          manager-only Add affordance (§IX.2). On a narrow viewport this row
-          STACKS (flex-col) so the Add affordance drops beneath the heading (spec
-          §X responsive); at ≥sm it is an inline row with Add pushed to the right.
+      {/* The collection panel's heading.
 
-          cinatra#2474 PR2 — the scope lede is now this panel's HEADING, and it
+          cinatra#2474 PR2 — the scope lede is this panel's HEADING, and it
           names the scope KIND, not the entity. The collection used to own a
           whole route, where "The dashboards in Organization: ACME" was the only
           lede on the page; folded onto the entity landing it sits under a
@@ -101,30 +113,19 @@ export function ScopeDashboardsTab({
           PR1 proof, #2547). Promoting it to a kind-named h2 gives the panel the
           title it needs to read as a distinct section beneath the per-user
           shell, and puts the scope lede BELOW the tablist where §IX's own
-          illustration places it. */}
+          illustration places it.
+
+          cinatra#2474 PR3 — the Add affordance that used to sit at the right of
+          this row has moved to the tab's TOOLBAR, where it launches the one
+          unified `<AddDashboardDialog>` (Create · Reference-existing · the
+          installed-catalog slot). A scope had two competing add entry points
+          once the collection was folded onto the landing; it has one now. The
+          row keeps its responsive shape so the heading behaves identically at
+          every width. */}
       <div className="flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:items-center">
         <h2 className="min-w-0 flex-1 text-sm font-semibold leading-normal text-foreground">
           Dashboards in this {SCOPE_NOUN[data.scopeKind]}
         </h2>
-        {/* scope-dashboards-write-access: the Add affordance is rendered ONLY for
-            a scope manager (actorMayWriteScope) — suppression, not a disabled
-            control. */}
-        {data.canManage ? (
-          <div
-            data-conformance-id="scope-dashboards-write-access"
-            data-field="manage-controls=collectionAdd.actorMayWriteScope"
-          >
-            <Button
-              type="button"
-              size="sm"
-              data-action="open-add-picker -> add-picker-open"
-              onClick={() => setPickerOpen(true)}
-            >
-              <Plus data-icon="inline-start" aria-hidden />
-              Add dashboard
-            </Button>
-          </div>
-        ) : null}
       </div>
 
       {/* The row list. Empty vs populated is the SSR state; loading / error
@@ -143,15 +144,6 @@ export function ScopeDashboardsTab({
       ) : (
         <EmptyState canManage={data.canManage} />
       )}
-
-      {pickerOpen ? (
-        <AddToScopePicker
-          scopeLabel={data.scopeLabel}
-          dataSource={dataSource}
-          onClose={() => setPickerOpen(false)}
-          onAdded={() => startTransition(() => router.refresh())}
-        />
-      ) : null}
     </section>
   );
 }
@@ -181,18 +173,29 @@ function ScopeRow({
       </div>
       {/* Removability is read from the presence of Remove ALONE (spec §IX):
           it renders only on a removable secondary listing (`row.canRemove` —
-          listed AND manager) and never on a homed row. No Home / Listed badge. */}
+          listed AND manager) and never on a homed row. No Home / Listed badge.
+
+          scope-dashboards-write-access: Remove is the §IX.2 manage control this
+          panel still owns (the Add half moved to the toolbar with PR3's unified
+          popup) — suppressed for a non-manager, never rendered disabled. The
+          `disabled` below is the in-flight busy guard, not the permission gate. */}
       {row.canRemove ? (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={removing}
-          data-action="remove-listing -> listing-removed"
-          onClick={() => onRemove(row.dashboardId)}
+        <span
+          data-conformance-id="scope-dashboards-write-access"
+          data-field="manage-controls=collectionAdd.actorMayWriteScope"
+          className="contents"
         >
-          {removing ? "Removing…" : "Remove"}
-        </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={removing}
+            data-action="remove-listing -> listing-removed"
+            onClick={() => onRemove(row.dashboardId)}
+          >
+            {removing ? "Removing…" : "Remove"}
+          </Button>
+        </span>
       ) : null}
       {/* Open navigates to the dashboard's CANONICAL surface (never inline). */}
       <Button asChild variant="outline" size="sm" className="flex-none">

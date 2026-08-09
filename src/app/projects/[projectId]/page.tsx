@@ -33,6 +33,8 @@ import { ScopeBadge, type ScopeLevel } from "@/components/scope-badge";
 import { LifecycleBadge } from "@/components/lifecycle-badge";
 import type { PortletInstanceProp } from "@/components/dashboards/portlet-host";
 import { ScopeDashboardsSection } from "@/components/dashboards/scope-dashboards-section";
+import { ScopeAddSourcesProvider } from "@/components/dashboards/scope-add-sources";
+import { buildScopeReferenceSource } from "@/components/dashboards/scope-reference-binding";
 
 import {
   ProjectDashboardsTab,
@@ -271,6 +273,21 @@ export default async function ProjectDetailPage({ params }: Props) {
     dashboardsInitial = undefined;
   }
 
+  // The §IX.1 add-to-scope source for the unified Add-dashboard popup
+  // (cinatra#2474 PR3). `null` for anyone who may not write this project's
+  // collection (a project admin/owner grant, §IX.2) — suppression at the source,
+  // so a read-only member's browser never receives the add actions. Guarded on
+  // `organizationId` for the same reason the panel is: the listing scope is
+  // tenant-anchored, and a project without one has no scope to add to.
+  const scopeReference = project.organizationId
+    ? buildScopeReferenceSource(actor, {
+        kind: "project",
+        scopeId: project.id,
+        orgId: project.organizationId,
+      })
+    : null;
+  const scopeLabel = `Project: ${project.name}`;
+
   return (
     <Main className="min-h-screen">
       {/* Post-gate crumb publisher (cinatra#1737). */}
@@ -318,11 +335,20 @@ export default async function ProjectDetailPage({ params }: Props) {
           </div>
         )}
 
-        <ProjectDashboardsTab
-          dataSource={dataSource}
-          initialData={dashboardsInitial}
-          overviewPortlets={overviewPortlets}
-        />
+        {/* The unified Add-dashboard popup's sources (cinatra#2474 PR3) — the
+            popup is launched from the toolbar INSIDE the shell, so the provider
+            wraps the shell. Server-bound actions and a label cross, never the
+            actor or the scope's owner axis. */}
+        <ScopeAddSourcesProvider
+          scopeLabel={scopeLabel}
+          reference={scopeReference}
+        >
+          <ProjectDashboardsTab
+            dataSource={dataSource}
+            initialData={dashboardsInitial}
+            overviewPortlets={overviewPortlets}
+          />
+        </ScopeAddSourcesProvider>
         {/* The scope's own dashboards collection (#1897 §IX), folded onto this
             landing by cinatra#2474 PR2 — formerly the separate
             `/projects/[projectId]/dashboards` route, which PR2 deletes outright
@@ -345,7 +371,6 @@ export default async function ProjectDetailPage({ params }: Props) {
               scopeId: project.id,
               orgId: project.organizationId,
             }}
-            scopeLabel={`Project: ${project.name}`}
           />
         ) : null}
       </PageContent>

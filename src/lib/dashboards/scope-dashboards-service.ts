@@ -75,7 +75,6 @@ function updatedRel(updatedAt: Date | string | null): string {
 export async function getScopeDashboardsTabData(input: {
   actor: ActorContext;
   scope: ListingScope;
-  scopeLabel: string;
 }): Promise<ScopeDashboardsTabData> {
   const canManage = actorMayWriteScope(input.actor, input.scope);
   const [homed, listed] = await Promise.all([
@@ -88,7 +87,7 @@ export async function getScopeDashboardsTabData(input: {
     ...listed.map((r) => projectRow(r, canManage)).sort(byName),
   ];
 
-  return { scopeLabel: input.scopeLabel, scopeKind: input.scope.kind, rows, canManage };
+  return { scopeKind: input.scope.kind, rows, canManage };
 }
 
 function projectRow(

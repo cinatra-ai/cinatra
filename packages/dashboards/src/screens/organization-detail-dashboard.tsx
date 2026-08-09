@@ -31,6 +31,8 @@ import { PageHeader } from "@/components/page-header";
 import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 import { LifecycleBadge } from "@/components/lifecycle-badge";
 import { ScopeDashboardsSection } from "@/components/dashboards/scope-dashboards-section";
+import { ScopeAddSourcesProvider } from "@/components/dashboards/scope-add-sources";
+import { buildScopeReferenceSource } from "@/components/dashboards/scope-reference-binding";
 import {
   getActorContext,
   getAuthSession,
@@ -156,6 +158,17 @@ export async function OrganizationDetailDashboardPage({
   // reachable for every member exactly as PR1 left it (codex convergence).
   const actor = await getActorContext();
   const actorIsActiveInThisOrg = actor?.organizationId === id;
+  const scope = { kind: "organization", scopeId: id, orgId: id } as const;
+
+  // The §IX.1 add-to-scope source for the unified Add-dashboard popup
+  // (cinatra#2474 PR3). It is `null` for anyone who may not write this scope
+  // (§IX.2 suppression), and it rides the SAME active-tenant fence as the panel:
+  // an org the actor is merely a member of must not gain an add path either.
+  const scopeReference =
+    actor && actorIsActiveInThisOrg
+      ? buildScopeReferenceSource(actor, scope)
+      : null;
+  const scopeLabel = `Organization: ${orgName || id}`;
 
   // Bind the generic entity-dashboards actions with this surface's
   // server-derived ref (Next-encrypted across the boundary; the client shell
@@ -217,10 +230,19 @@ export async function OrganizationDetailDashboardPage({
           </div>
         ) : null}
 
-        <OrganizationDashboards
-          dataSource={dataSource}
-          overviewPortlets={overviewConfig.portlets}
-        />
+        {/* The unified Add-dashboard popup's sources (cinatra#2474 PR3). The
+            popup is launched from the dashboards toolbar INSIDE the shell, so
+            the provider wraps the shell; what crosses is server-bound actions
+            and a label, never the actor or the scope's owner axis. */}
+        <ScopeAddSourcesProvider
+          scopeLabel={scopeLabel}
+          reference={scopeReference}
+        >
+          <OrganizationDashboards
+            dataSource={dataSource}
+            overviewPortlets={overviewConfig.portlets}
+          />
+        </ScopeAddSourcesProvider>
         {/* The scope's own dashboards collection (#1897 §IX), folded onto this
             landing by cinatra#2474 PR2 — it used to live on the separate
             `/organizations/[id]/dashboards` route, which PR2 deletes outright
@@ -232,11 +254,7 @@ export async function OrganizationDetailDashboardPage({
             per-user list (#2474's converged model fact), which is exactly why it
             renders as its own panel here. */}
         {actor && actorIsActiveInThisOrg ? (
-          <ScopeDashboardsSection
-            actor={actor}
-            scope={{ kind: "organization", scopeId: id, orgId: id }}
-            scopeLabel={`Organization: ${orgName || id}`}
-          />
+          <ScopeDashboardsSection actor={actor} scope={scope} />
         ) : null}
       </PageContent>
     </Main>

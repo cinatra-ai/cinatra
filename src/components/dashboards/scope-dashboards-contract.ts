@@ -29,11 +29,13 @@ export type ScopeDashboardTabRow = {
   readonly canRemove: boolean;
 };
 
-/** The tab's data + whether the viewer manages the scope (§IX.2 write gate). */
+/** The tab's data + whether the viewer manages the scope (§IX.2 write gate).
+ *
+ *  It carries NO entity-named label since cinatra#2474 PR3: the only thing that
+ *  needed one was the add-to-scope picker's title ("Add a dashboard to Team:
+ *  Growth", §IX.1), and the picker is now a section of the toolbar-launched
+ *  popup, which the landing labels directly. */
 export type ScopeDashboardsTabData = {
-  /** The scope's entity-named label, e.g. "Team: Growth". Titles the
-   *  add-to-scope picker ("Add a dashboard to Team: Growth", §IX.1). */
-  readonly scopeLabel: string;
   /** The scope kind — names the collection panel's heading noun ("Dashboards in
    *  this team") now that the collection is folded onto the entity landing
    *  (cinatra#2474 PR2), where the entity's own name is already the h1. */
@@ -97,20 +99,40 @@ export type AddPickerLoadState =
 
 /**
  * The server-action surface the hosting scope page binds (with its server-derived
- * scope + tenant) and hands to the client tab. The client drives these; each
+ * scope + tenant) and hands to the client. The client drives these; each
  * re-authorizes server-side (the render gate cannot protect a later invocation).
+ *
+ * SPLIT BY AFFORDANCE (cinatra#2474 PR3). The collection now has two distinct
+ * client surfaces with two distinct populations, so they get two distinct action
+ * bundles rather than one four-action object handed to both:
+ *
+ *   - the ADD flow (§IX.1) lives in the unified Add-dashboard dialog and is
+ *     reachable only by a scope manager, so only a manager's browser is handed
+ *     `listCandidates` / `addListing` / `requestPromotion`;
+ *   - the LISTING PANEL (§IX) renders for every member and needs `removeListing`
+ *     alone (per-row, and only on a removable listing).
+ *
+ * The server re-authorizes either way — this is capability MINIMIZATION, not the
+ * authorization itself (codex convergence): a read-only member never receives a
+ * handle to an action they may not take.
  */
-export type ScopeDashboardsDataSource = {
+
+/** The §IX.1 add-to-scope actions — handed ONLY to a scope manager. */
+export type ScopeReferenceSource = {
   /** The add-picker pool (already dispositioned). Returns null on a load error. */
   readonly listCandidates: () => Promise<
     readonly AddPickerCandidateView[] | null
   >;
   /** Add a secondary listing (re-authorizes the three-gate contract). */
   readonly addListing: (dashboardId: string) => Promise<ScopeListingMutation>;
-  /** Remove a secondary listing (re-authorizes the scope-write gate). */
-  readonly removeListing: (dashboardId: string) => Promise<ScopeListingMutation>;
   /** Offer the #1437 promotion request for a scope-invisible candidate. */
   readonly requestPromotion: (
     dashboardId: string,
   ) => Promise<ScopeListingMutation>;
+};
+
+/** The listing panel's only mutation (§IX row Remove; §IX.2 manager-only). */
+export type ScopeListingRemovalSource = {
+  /** Remove a secondary listing (re-authorizes the scope-write gate). */
+  readonly removeListing: (dashboardId: string) => Promise<ScopeListingMutation>;
 };

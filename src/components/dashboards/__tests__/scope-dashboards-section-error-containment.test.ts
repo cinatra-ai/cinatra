@@ -1,8 +1,8 @@
 /**
  * cinatra#1897 B4 — failure containment for the scope Dashboards section.
  *
- * When the tab's server read (`getScopeDashboardsTabData` — Home/Listed rows +
- * the entity-name labels) fails, the surface must degrade to the DESIGNED error
+ * When the panel's server read (`getScopeDashboardsTabData` — Home/Listed rows +
+ * the write gate) fails, the surface must degrade to the DESIGNED error
  * frame (§IX/§X data-state "error": "Couldn't load this scope's dashboards")
  * instead of bubbling an unhandled Next 500 up through the route. This proves the
  * async server component catches a service throw and returns
@@ -44,26 +44,21 @@ describe("ScopeDashboardsSection — failure containment (§IX/§X error frame)"
       // ANY(array) binding.
       new Error("DrizzleQueryError: malformed array literal"),
     );
-    const el = (await ScopeDashboardsSection({
-      actor,
-      scope,
-      scopeLabel: "Team: Growth",
-    })) as { type: unknown };
+    const el = (await ScopeDashboardsSection({ actor, scope })) as {
+      type: unknown;
+    };
     expect(el.type).toBe(ScopeDashboardsTabError);
   });
 
   it("returns the real tab when the service resolves", async () => {
     vi.mocked(getScopeDashboardsTabData).mockResolvedValueOnce({
-      scopeLabel: "Team: Growth",
       scopeKind: "team",
       rows: [],
       canManage: true,
     });
-    const el = (await ScopeDashboardsSection({
-      actor,
-      scope,
-      scopeLabel: "Team: Growth",
-    })) as { type: unknown };
+    const el = (await ScopeDashboardsSection({ actor, scope })) as {
+      type: unknown;
+    };
     expect(el.type).toBe(ScopeDashboardsTab);
   });
 });
