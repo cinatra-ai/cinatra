@@ -268,7 +268,52 @@ function schemaIdent(): string {
 //     SAME thread converge on exactly one slug via the `title_slug IS NULL`
 //     guard);
 //   - a rename never re-slugs (the guard + no-op keep the URL stable).
+//
+// cinatra#2562 (codex rounds 2-3): a title-slug must NEVER be UUID-shaped.
+// That shape is reserved for a thread's pre-slug id-addressed URL — the /chat
+// route guard (chat-route-resolver.ts) resolves a UUID-shaped trailing
+// segment as an id FIRST, before ever trying a title-slug match. Without the
+// exclusion below, `slugifyTitle` could mint a UUID-shaped slug from an
+// ordinary title (e.g. a thread literally titled with UUID-like text), and
+// that slug could collide with a DIFFERENT thread's real id in the same
+// container. TWO independent layers close this, going forward AND for any
+// pre-existing data:
+//   1. GOING FORWARD: both allocator call sites below reject a UUID-shaped
+//      candidate exactly like a container collision (retry the next suffixed
+//      candidate, including the `nonUuidUniqueTail`-guarded last resort — see
+//      below), so no title_slug this allocator mints is EVER UUID-shaped.
+//   2. FOR ANY thread already carrying a UUID-shaped title_slug (impossible
+//      to mint going forward, but not provably absent from data written
+//      before this fix): the route guard's id-first ordering means an actual
+//      id-owner thread, if one exists in the same container, always wins that
+//      URL — the legacy slug-owning thread simply stays reachable by every
+//      OTHER means (the sidebar, its own current title-slug once re-derived,
+//      etc.) except that one specific segment. No thread's CONTENT ever
+//      becomes reachable by another actor from this — thread reads are
+//      tenant-scoped independently of route resolution (assistant-thread-http.ts).
 // ---------------------------------------------------------------------------
+
+/** Canonical UUID shape (the `id` column's Postgres type, and the shape a
+ *  title-slug must never take — see the allocator note above). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The `uniqueTail` passed to `allocateByAttempt`'s GUARANTEED-unique last
+ * resort (`slugWithUniqueTail`, packages/chat/src/thread-slug.ts) — used only
+ * after every random-suffix candidate collides. `slugWithUniqueTail` strips
+ * non-alnum chars from its input and takes the first 12, so passing a thread's
+ * raw (hex-only) id verbatim could — for a title that ALSO slugifies to an
+ * exact 23-char `xxxxxxxx-xxxx-xxxx-xxxx` hex/hyphen prefix — complete into a
+ * UUID-shaped 5th group, defeating the exclusion above for this one
+ * always-mintable last resort (a codex round-3 finding on cinatra#2562).
+ * Prefixing with a fixed NON-HEX marker (`z`, outside `[0-9a-f]`) guarantees
+ * the derived tail can never be pure hex, so no `uniqueTail`-derived candidate
+ * can ever match {@link UUID_RE} — while staying just as unique as the raw id
+ * it is 1:1 derived from.
+ */
+function nonUuidUniqueTail(rawId: string): string {
+  return `z${rawId}`;
+}
 
 /** True when a sync-runner error is a container slug-uniqueness violation (the
  *  index the allocator retries against). The sync worker surfaces the pg error
@@ -334,6 +379,9 @@ export function createAssistantThread(input: CreateAssistantThreadInput): Assist
   allocateByAttempt(
     slugifyTitle(input.title),
     (candidate) => {
+      // cinatra#2562: a title-slug must never be UUID-shaped (reserved for the
+      // pre-slug id URL) — reject exactly like a container collision.
+      if (UUID_RE.test(candidate)) return false;
       try {
         created = insertWithSlug(candidate);
         return true;
@@ -342,7 +390,7 @@ export function createAssistantThread(input: CreateAssistantThreadInput): Assist
         throw err;
       }
     },
-    { uniqueTail: id },
+    { uniqueTail: nonUuidUniqueTail(id) },
   );
   if (!created) throw new Error("createAssistantThread: slug allocation returned no row");
   return created;
@@ -374,6 +422,9 @@ export function ensureThreadSlug(
   allocateByAttempt(
     base,
     (candidate) => {
+      // cinatra#2562: a title-slug must never be UUID-shaped (reserved for the
+      // pre-slug id URL) — reject exactly like a container collision.
+      if (UUID_RE.test(candidate)) return false;
       let res;
       try {
         [res] = runPostgresQueriesSync({
@@ -402,7 +453,7 @@ export function ensureThreadSlug(
       minted = getAssistantThread(threadId)?.titleSlug ?? null;
       return true;
     },
-    { uniqueTail: threadId },
+    { uniqueTail: nonUuidUniqueTail(threadId) },
   );
   return minted;
 }
@@ -459,6 +510,35 @@ export function getAssistantThreadBySlug(
   });
   const row = res?.rows?.[0] as Record<string, unknown> | undefined;
   return row ? mapAssistantThreadRow(row) : null;
+}
+
+/**
+ * Resolve a thread by its durable id, scoped to the EXACT container
+ * (assistantPackage, instanceId) — the /chat route guard's pre-slug fallback
+ * (cinatra#2562): a thread is addressable by id before its title-slug mints,
+ * so `pushChatUrl` builds `/chat/<vendor>/<slug>/[<instance>/]<id>` in that
+ * window, and the guard tries this lookup FIRST (before the slug lookup —
+ * see the allocator note above on why id-first is safe: no stored title_slug
+ * is ever UUID-shaped, so this only ever matches a real id). Container-scoped
+ * so an id belonging to a different assistant/instance never resolves as
+ * though this route addressed it — mirrors {@link getAssistantThreadBySlug}'s
+ * scoping. Returns null for a non-UUID-shaped value (checked before touching
+ * the database — a non-UUID param would otherwise throw a Postgres "invalid
+ * input syntax for type uuid" error), an absent thread, or a container
+ * mismatch. No authorization beyond the container match — the caller applies
+ * the actor's audience/thread-access policy exactly like the slug lookup.
+ */
+export function getAssistantThreadByIdInContainer(
+  assistantPackage: string | null,
+  instanceId: string | null,
+  threadId: string,
+): AssistantThread | null {
+  if (!UUID_RE.test(threadId)) return null;
+  const thread = getAssistantThread(threadId);
+  if (!thread) return null;
+  if ((thread.assistantPackage ?? null) !== (assistantPackage ?? null)) return null;
+  if ((thread.instanceId ?? null) !== (instanceId ?? null)) return null;
+  return thread;
 }
 
 /** List an org's threads, most-recently-updated first (uses the org index). */

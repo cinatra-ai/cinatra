@@ -16,7 +16,22 @@
 //      (live org-membership + per-instance connector authority, fail-closed), so
 //      actor A can never resolve actor B's instance;
 //   5. THREAD resolution — a `<titleSlug>` must name a real thread in that
-//      exact container, else `not-found`.
+//      exact container, else `not-found`. cinatra#2562: a thread is
+//      addressable before its title-slug mints (the client's `pushChatUrl`
+//      pre-slug shape reuses this SAME trailing segment for the thread's
+//      stable id), so the segment is tried as a container-scoped ID FIRST,
+//      falling back to a title-slug match. ID-first (not slug-first) is
+//      deliberate: `slugifyTitle` can — for data written before this fix —
+//      have minted a UUID-shaped slug from a thread literally titled as
+//      another thread's id; trying the id first means the id owner always
+//      wins that segment rather than an accidental/legacy same-shaped slug
+//      (the allocator, assistant-thread-store.ts, additionally EXCLUDES a
+//      UUID-shaped candidate at mint time going forward, so this is a
+//      belt-and-braces pair, not a single point of correctness). Trying the
+//      id first costs nothing for the overwhelmingly common non-UUID-shaped
+//      slug — the id lookup rejects a non-UUID string before ever touching
+//      the database — see chat-route-resolver.test.ts's "id-precedence
+//      closes the slug/id namespace collision" case.
 //
 // The guard LOGIC is dependency-injected (registry read / instance auth / thread
 // lookup are the DATA sources), so the whole decision is unit-testable without a
@@ -64,11 +79,24 @@ export type ChatRouteResolverDeps = {
   /** True when the CURRENT actor is authorized to `use` this instance of the
    *  connector kind (the actor-scoped listAuthorizedInstances authority). */
   authorizeInstance(kind: RemoteConnectorKind, instanceId: string): Promise<boolean>;
-  /** The durable thread id for a container-scoped title-slug, or null. */
+  /** The durable thread id for a container-scoped title-slug, or null. Tried
+   *  only after {@link resolveThreadIdById} misses (id takes precedence —
+   *  see the module header). */
   resolveThreadIdBySlug(
     packageName: string,
     instanceId: string | null,
     titleSlug: string,
+  ): Promise<string | null>;
+  /** The durable thread id for a container-scoped thread id — cinatra#2562's
+   *  pre-slug fallback, tried FIRST (before the slug lookup): the trailing
+   *  segment may be a thread's stable id, addressed before its title-slug
+   *  minted. Returns null for a non-UUID-shaped / non-matching / out-of-container
+   *  value — cheaply, without a slug/id namespace collision (a thread titled
+   *  literally as another thread's id can never shadow it). */
+  resolveThreadIdById(
+    packageName: string,
+    instanceId: string | null,
+    threadId: string,
   ): Promise<string | null>;
 };
 
@@ -132,14 +160,26 @@ export async function resolveChatRoute(
     if (!authorized) return NOT_FOUND; // not the actor's instance → 404-hide
   }
 
-  // 5. Thread resolution (titleSlug routes only).
+  // 5. Thread resolution (titleSlug routes only). ID FIRST (cinatra#2562):
+  // closes a slug/id namespace collision — a thread titled literally as
+  // another thread's id (slugifyTitle permits a UUID-shaped slug) must never
+  // shadow that thread's pre-slug URL. Free for the common non-UUID-shaped
+  // segment: the id lookup rejects the format before touching the database.
   let threadId: string | null = null;
   if (route.titleSlug != null) {
-    threadId = await deps.resolveThreadIdBySlug(
+    threadId = await deps.resolveThreadIdById(
       canonicalPackageName,
       route.instance ?? null,
       route.titleSlug,
     );
+    if (!threadId) {
+      // No thread owns this segment as its id — fall back to a title-slug match.
+      threadId = await deps.resolveThreadIdBySlug(
+        canonicalPackageName,
+        route.instance ?? null,
+        route.titleSlug,
+      );
+    }
     if (!threadId) return NOT_FOUND; // no such thread in this container → 404-hide
   }
 
@@ -201,11 +241,22 @@ async function resolveThreadIdBySlugForContainer(
   return getAssistantThreadBySlug(packageName, instanceId, titleSlug)?.id ?? null;
 }
 
+/** Container-scoped thread id → thread id (cinatra#2562's pre-slug fallback). */
+async function resolveThreadIdByIdForContainer(
+  packageName: string,
+  instanceId: string | null,
+  threadId: string,
+): Promise<string | null> {
+  const { getAssistantThreadByIdInContainer } = await import("@/lib/assistant-thread-store");
+  return getAssistantThreadByIdInContainer(packageName, instanceId, threadId)?.id ?? null;
+}
+
 /** The production deps (used by the /chat server component). */
 export const DEFAULT_CHAT_ROUTE_RESOLVER_DEPS: ChatRouteResolverDeps = {
   readVisibleRegistry: readVisibleRegistryForCurrentActor,
   authorizeInstance: authorizeInstanceForCurrentActor,
   resolveThreadIdBySlug: resolveThreadIdBySlugForContainer,
+  resolveThreadIdById: resolveThreadIdByIdForContainer,
 };
 
 /** Resolve using the production deps — the entry the /chat route calls. */

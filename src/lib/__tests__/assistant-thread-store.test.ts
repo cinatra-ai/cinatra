@@ -32,6 +32,8 @@ import {
   bindAssistantThread,
   readAssistantThreadBinding,
   threadBindingOf,
+  getAssistantThreadByIdInContainer,
+  ensureThreadSlug,
 } from "../assistant-thread-store";
 import type { AssistantThread, AssistantTurn } from "../assistant-thread-store";
 
@@ -615,5 +617,191 @@ describe("thread binding (AC#4)", () => {
       "inst-7",
       null,
     ]);
+  });
+});
+
+// cinatra#2562: the /chat route guard's pre-slug fallback — a thread is
+// addressable by its stable id, scoped to the EXACT container, before its
+// title-slug mints.
+describe("getAssistantThreadByIdInContainer (cinatra#2562)", () => {
+  beforeEach(() => runPostgresQueriesSync.mockReset());
+
+  const UUID = "11111111-1111-1111-1111-111111111111";
+  const row = (over: Record<string, unknown> = {}) => ({
+    id: UUID,
+    assistant_user_id: null,
+    owner_user_id: "u1",
+    org_id: "org1",
+    title: "Weekly sync",
+    context_id: null,
+    assistant_package: "@cinatra-ai/cinatra-assistant",
+    instance_id: null,
+    title_slug: null,
+    created_at: "2026-07-10T10:00:00.000Z",
+    updated_at: "2026-07-10T10:00:00.000Z",
+    ...over,
+  });
+
+  it("returns null for a non-UUID-shaped value WITHOUT hitting the DB", () => {
+    const t = getAssistantThreadByIdInContainer("@cinatra-ai/cinatra-assistant", null, "not-a-uuid");
+    expect(t).toBeNull();
+    expect(runPostgresQueriesSync).not.toHaveBeenCalled();
+  });
+
+  it("returns the thread when the id resolves inside the EXACT container", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [row()] }]);
+    const t = getAssistantThreadByIdInContainer("@cinatra-ai/cinatra-assistant", null, UUID);
+    expect(t?.id).toBe(UUID);
+  });
+
+  it("returns null when the thread belongs to a DIFFERENT assistant package", () => {
+    runPostgresQueriesSync.mockReturnValue([
+      { rows: [row({ assistant_package: "@cinatra-ai/wordpress-assistant" })] },
+    ]);
+    const t = getAssistantThreadByIdInContainer("@cinatra-ai/cinatra-assistant", null, UUID);
+    expect(t).toBeNull();
+  });
+
+  it("returns null when the thread belongs to a DIFFERENT instance", () => {
+    runPostgresQueriesSync.mockReturnValue([
+      { rows: [row({ assistant_package: "@cinatra-ai/wordpress-assistant", instance_id: "site-9" })] },
+    ]);
+    const t = getAssistantThreadByIdInContainer("@cinatra-ai/wordpress-assistant", "site-A", UUID);
+    expect(t).toBeNull();
+  });
+
+  it("returns null when no thread carries the id", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [] }]);
+    const t = getAssistantThreadByIdInContainer("@cinatra-ai/cinatra-assistant", null, UUID);
+    expect(t).toBeNull();
+  });
+
+  it("matches an unbound (null/null) container exactly", () => {
+    runPostgresQueriesSync.mockReturnValue([
+      { rows: [row({ assistant_package: null, instance_id: null })] },
+    ]);
+    expect(getAssistantThreadByIdInContainer(null, null, UUID)?.id).toBe(UUID);
+  });
+});
+
+// cinatra#2562 codex round-2 finding: the id/slug namespace collision is
+// closed at the SOURCE — no title-slug the allocator mints is ever
+// UUID-shaped, so a UUID-shaped route segment can only ever mean an id.
+describe("title-slug allocator excludes UUID-shaped candidates (cinatra#2562)", () => {
+  beforeEach(() => runPostgresQueriesSync.mockReset());
+
+  const UUID_TITLE = "33333333-3333-3333-3333-333333333333";
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  it("createAssistantThread skips a UUID-shaped slug candidate — the mint retries a suffixed one instead", () => {
+    // slugifyTitle(UUID_TITLE) is already all-lowercase-hex-and-hyphens, so it
+    // normalizes to the SAME string — the bare candidate IS UUID-shaped and
+    // must be rejected before any INSERT is attempted for it.
+    runPostgresQueriesSync.mockReturnValue([
+      {
+        rows: [
+          {
+            id: "th1",
+            owner_user_id: "u1",
+            title: UUID_TITLE,
+            title_slug: "placeholder",
+            created_at: "2026-07-10T10:00:00.000Z",
+            updated_at: "2026-07-10T10:00:00.000Z",
+          },
+        ],
+      },
+    ]);
+    createAssistantThread({ id: "th1", ownerUserId: "u1", title: UUID_TITLE });
+
+    // Exactly ONE insert attempt reached the database — the bare UUID-shaped
+    // candidate was rejected pre-DB, so the FIRST (and only) real attempt is
+    // already the suffixed candidate.
+    expect(runPostgresQueriesSync).toHaveBeenCalledTimes(1);
+    const q = runPostgresQueriesSync.mock.calls[0][0].queries[0];
+    const mintedSlug = q.values[9] as string; // [...title, contextId, assistantPackage, instanceId, titleSlug]
+    expect(mintedSlug).not.toBe(UUID_TITLE);
+    expect(mintedSlug).not.toMatch(UUID_RE);
+  });
+
+  it("ensureThreadSlug skips a UUID-shaped slug candidate too", () => {
+    runPostgresQueriesSync
+      .mockReturnValueOnce([
+        {
+          rows: [
+            {
+              id: "th1",
+              title: UUID_TITLE,
+              title_slug: null,
+              created_at: "2026-07-10T10:00:00.000Z",
+              updated_at: "2026-07-10T10:00:00.000Z",
+            },
+          ],
+        },
+      ]) // the internal `existing = getAssistantThread(threadId)` read
+      .mockReturnValueOnce([{ rowCount: 1, rows: [{ title_slug: "placeholder" }] }]); // the first REAL update attempt (suffixed)
+
+    const slug = ensureThreadSlug("th1", UUID_TITLE);
+
+    expect(slug).not.toBe(UUID_TITLE);
+    expect(slug).not.toMatch(UUID_RE);
+    // Two DB calls total: the existing-thread read, then the ONE update
+    // attempt — confirms the bare UUID-shaped candidate never reached the DB.
+    expect(runPostgresQueriesSync).toHaveBeenCalledTimes(2);
+    const updateValues = runPostgresQueriesSync.mock.calls[1][0].queries[0].values as unknown[];
+    expect(updateValues[0]).not.toBe(UUID_TITLE);
+  });
+
+  // codex round-3: the GUARANTEED-unique `uniqueTail` last resort (tried once
+  // every random-suffix candidate has collided) derives its tail from the
+  // thread's own hex-only id — for a title that ALSO happens to slugify to an
+  // exact `xxxxxxxx-xxxx-xxxx-xxxx` (23-char) hex/hyphen prefix, appending
+  // that raw hex tail would complete a full UUID-shaped 5th group. The
+  // allocator call sites prefix the tail with a non-hex marker (`z`) for
+  // exactly this reason — proven here by forcing FULL exhaustion (every
+  // bare + random-suffix candidate collides) so the fallback is what
+  // actually mints.
+  it("the GUARANTEED-unique fallback candidate is never UUID-shaped even under full exhaustion", () => {
+    // Neither UUID-shaped alone (only 4 hyphen-groups) — the bare candidate is
+    // NOT rejected by the allocator's UUID guard, so every one of the 50
+    // in-loop attempts genuinely reaches the (mocked-colliding) database.
+    const PATHOLOGICAL_TITLE = "aaaaaaaa-bbbb-cccc-dddd";
+    const THREAD_ID = "11111111-1111-1111-1111-111111111111";
+    const collisionErr = new Error(
+      'duplicate key value violates unique constraint "assistant_threads_container_slug_uniq"',
+    );
+    let calls = 0;
+    runPostgresQueriesSync.mockImplementation(() => {
+      calls += 1;
+      // allocateByAttempt's for-loop makes maxTries+1 attempts before
+      // breaking (the `tries++ >= maxTries` check compares the PRE-increment
+      // value, so it runs one iteration past the nominal budget) — 51 attempts
+      // for the default maxTries=50 — then the ONE uniqueTail fallback
+      // attempt (call #52) succeeds.
+      if (calls <= 51) throw collisionErr;
+      return [
+        {
+          rows: [
+            {
+              id: THREAD_ID,
+              owner_user_id: "u1",
+              title: PATHOLOGICAL_TITLE,
+              title_slug: "placeholder",
+              created_at: "2026-07-10T10:00:00.000Z",
+              updated_at: "2026-07-10T10:00:00.000Z",
+            },
+          ],
+        },
+      ];
+    });
+
+    const t = createAssistantThread({ id: THREAD_ID, ownerUserId: "u1", title: PATHOLOGICAL_TITLE });
+
+    expect(t.id).toBe(THREAD_ID); // did NOT throw ThreadSlugExhaustedError
+    expect(calls).toBe(52);
+    const mintedSlug = runPostgresQueriesSync.mock.calls[51][0].queries[0].values[9] as string;
+    // Without the non-hex marker this would be exactly
+    // "aaaaaaaa-bbbb-cccc-dddd-111111111111" — a full UUID shape.
+    expect(mintedSlug).not.toMatch(UUID_RE);
+    expect(mintedSlug).toBe("aaaaaaaa-bbbb-cccc-dddd-z11111111111");
   });
 });
