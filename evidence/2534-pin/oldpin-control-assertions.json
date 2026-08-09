@@ -1,0 +1,11 @@
+{
+  "expect": "unknown",
+  "finalUrl": "http://localhost:3534/configuration/development?tab=tunnel",
+  "state": "unknown",
+  "text": "TAILSCALE: No Funnel URL is available for this instance. The tailnet may not be resolved yet, or this instance may have no sanctioned Tailscale identity — reconnecting the connector does not help in the second case. Paste an externally reachable HTTPS URL below — for example a Funnel you already run on this host.",
+  "stateIsUnknown": true,
+  "saysCauseAgnostic": true,
+  "preciseIdentityCopyAbsent": true,
+  "oldBlanketCopyAbsent": true,
+  "consoleErrors": []
+}
