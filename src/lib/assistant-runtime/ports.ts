@@ -288,3 +288,358 @@ export function classifyAssistantRuntimeError(
     message: sanitizeAssistantErrorText(messageOf(err)) || "Chat request failed.",
   };
 }
+
+// ---------------------------------------------------------------------------
+// Per-turn no-progress guard (cinatra#2580).
+//
+// It lives in THIS pure module, beside the error classifier and for the same
+// reason: `ports.ts` is already in every locked route's import graph via the
+// runtime, so the guard adds no route-graph pressure (the no-new-rot ratchet).
+// A module of its own measured +1 module on /chat, /api/a2a, /api/llm-bridge,
+// /api/mcp and /sign-in.
+//
+// THE COST SHAPE THIS EXISTS FOR — measured, not assumed. A chat turn is an
+// agentic loop: the provider adapter re-sends the WHOLE request envelope
+// (instructions + the full Cinatra MCP tool catalogue + every accumulated
+// output item) on EVERY step. One live chat call measured 43,061 input tokens,
+// and a single user message drove the loop to `chat-step-14` — 14 chained
+// full-context calls for one question. The loop ran to that depth because the
+// Cinatra MCP tools were unreachable: the model kept re-issuing the SAME call,
+// got NOTHING back, and each of those rounds cost another full ~43k envelope.
+// Nothing in the loop noticed it had stopped making progress.
+//
+// THE SIGNAL IT KEYS ON is the structurally supported one, not a heuristic. A
+// hosted-MCP call that fails surfaces to the runtime as an EMPTY result: the
+// adapter passes `mcp_call.output ?? ""`, so a dead tunnel produces literally
+// NO CONTENT — an empty (or whitespace-only) string. That is the shape the
+// measured 14-step turn had.
+//
+// A STEP counts toward a stop only when ALL of these hold:
+//
+//   1. the step produced at least one tool result, and EVERY one of them was
+//      EMPTY OR WHITESPACE-ONLY — not one carried content;
+//   2. all of those empty results came from ONE call identity (same MCP
+//      server, same tool name, same arguments);
+//   3. that identity is the same as the previous counted step's;
+//   4. the step emitted no user-visible text.
+//
+// `repeatLimit` such steps in a row end the turn. Counting per STEP, not per
+// tool result, is deliberate: a step may contain several parallel calls, and a
+// step is the unit that is actually billed.
+//
+// WHY THIS PREDICATE AND NOT A LOOSER ONE — each alternative was tried and
+// rejected because it cuts turns that would have succeeded:
+//
+//   · "N steps without text" — a legitimate research turn (list → get → get →
+//     get → answer) emits no text for many steps.
+//   · "N tool calls total" — a per-turn budget cuts a legitimate long turn.
+//     That is a real behavior change this slice refuses to make.
+//   · "N identical results" — a poll loop is the counter-example:
+//     `agent_run_get` can legitimately return exactly `{"status":"running"}`
+//     several times and flip on the next call. Any result WITH content is
+//     information the model may still be acting on, so it resets the streak.
+//   · "N identical error envelopes" — an `{"error": …}` payload is not
+//     equivalent to no payload. It can carry usable data alongside the error
+//     (`{"error":"2 records failed","items":[…]}`), and a transient error that
+//     recovers on the next call is ordinary. Classifying it would stop
+//     recoverable turns, so error TEXT is treated as a payload like any other.
+//
+// WHAT BEHAVIOR THIS DOES CHANGE — stated plainly, because "no behavior
+// change" would be a lie. Exactly one class of turn ends differently: a turn
+// in which one call identity has returned NOTHING on `repeatLimit` consecutive
+// steps, with no text produced. Before, it ran on toward the 24-round ceiling
+// and then answered from an empty hand (the model confabulates that the
+// platform has no such data) or hit the 120s wall. Now it stops and NAMES the
+// unresponsive tool.
+//
+// The residual, disclosed: nobody can prove the NEXT call would also have
+// returned nothing, so a tool that was dead for four consecutive billed rounds
+// and would have answered on the fifth is stopped. That is the trade this
+// change makes, at a threshold chosen so the turn has already paid four full
+// ~43k-token rounds to learn nothing. Every turn carrying ANY progress
+// signal — text, a result with content in it, a different call — is untouched,
+// which the runtime tests pin.
+//
+// PURE + PROVIDER-AGNOSTIC on purpose: it reads only the `{name, arguments}` /
+// `{name, result}` callback shapes every shipped adapter already emits, so it
+// holds for OpenAI, Anthropic and Gemini alike and is unit-testable with no
+// provider, no network and no live call.
+//
+// FAIL OPEN, ALWAYS. Every case the guard cannot read with certainty — a
+// result it cannot join to its call, an argument object it cannot serialize, a
+// step mixing several call identities — resets the streak rather than counting
+// it. A guard that under-fires costs money; a guard that over-fires costs the
+// user their answer.
+// ---------------------------------------------------------------------------
+
+/** Stable machine-readable code for a turn the guard stopped. */
+export const TURN_STOPPED_NO_PROGRESS_CODE = "turn_stopped_no_progress";
+
+/**
+ * How many CONSECUTIVE all-empty provider steps off one call identity end the
+ * turn.
+ *
+ * Four, not two: a transient tool failure the model retries can legitimately
+ * come back empty twice, and occasionally a third time, before the surface
+ * recovers. Four is where the turn has already paid four full-context rounds
+ * for no tool content at all — the point at which continuing is a worse bet
+ * for the user than stopping and naming the tool. It is a threshold, not a
+ * proof: see the residual disclosed in the module header.
+ */
+export const DEFAULT_NO_PROGRESS_REPEAT_LIMIT = 4;
+
+export type TurnCostGuardOptions = {
+  /** Consecutive all-empty steps off one call identity. Default 4. */
+  repeatLimit?: number;
+};
+
+export type TurnCostGuardVerdict = {
+  /** The tool whose call returned nothing on every counted step. */
+  toolName: string;
+  /** How many consecutive provider steps returned nothing. */
+  repeats: number;
+};
+
+/** The subset of an adapter's tool-call callback the guard reads. */
+export type TurnCostGuardToolCall = {
+  id?: string;
+  name: string;
+  arguments?: unknown;
+  serverLabel?: string;
+};
+
+/** The subset of an adapter's tool-result callback the guard reads. */
+export type TurnCostGuardToolResult = {
+  id?: string;
+  name: string;
+  result: string;
+  serverLabel?: string;
+};
+
+export type TurnCostGuard = {
+  /** Record a tool call so its arguments can be joined to its result by id. */
+  observeToolCall(call: TurnCostGuardToolCall): void;
+  /** Record a tool result. Never trips the guard on its own — see observeStepEnd. */
+  observeToolResult(result: TurnCostGuardToolResult): void;
+  /** Record user-visible assistant text — real progress for this step. */
+  observeTextDelta(delta: string): void;
+  /** Close a provider step: the ONLY place the streak advances or trips. */
+  observeStepEnd(): void;
+  /** The verdict, or null while the turn is still making progress. */
+  verdict(): TurnCostGuardVerdict | null;
+  /** Completed provider steps so far — the unit of full-context cost. */
+  readonly steps: number;
+};
+
+/**
+ * A tool result carries no content — empty, or whitespace only. This is the
+ * dead hosted-MCP signature: the adapter passes `mcp_call.output ?? ""`, so a
+ * failed hosted call arrives as the empty string. Whitespace-only is folded in
+ * deliberately (it is equally devoid of information), and every comment and
+ * test in this module says "empty or whitespace-only" rather than "empty" so
+ * the documented predicate matches the implemented one exactly.
+ */
+function isEmptyResult(result: string): boolean {
+  return result.trim() === "";
+}
+
+/**
+ * A content fingerprint: two independent 32-bit FNV-1a-style hashes plus the
+ * UTF-16 code-unit length. Hashing rather than retaining, because arguments
+ * can be large and the guard must not hold turn-scoped copies of them.
+ *
+ * The honest bound: this is not identity. Two different serialized argument
+ * strings that agree on both hashes AND their length would be read as the same
+ * call, which could let a streak accumulate across two distinct dead calls and
+ * stop the turn one class of case earlier than intended. That case still
+ * requires every counted step to have returned no content, so the outcome is
+ * "stopped a turn that was already getting nothing", never "stopped a turn
+ * that was getting answers".
+ */
+function fingerprint(text: string): string {
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193);
+    h2 = Math.imul(h2 ^ c, 0x85ebca6b);
+  }
+  return `${(h1 >>> 0).toString(36)}.${(h2 >>> 0).toString(36)}.${text.length}`;
+}
+
+/**
+ * Order-stable fingerprint of a tool-argument value, or `null` when the value
+ * cannot be serialized at all (a cycle, a BigInt). `null` is the fail-open
+ * signal: the caller resets the streak rather than guessing that two
+ * unserializable argument objects were equal.
+ *
+ * The replacer sorts object keys at every depth (including objects nested in
+ * arrays) so the same call emitted with a different key order fingerprints the
+ * same; array ORDER is left intact, because a reordered array is a different
+ * call.
+ */
+function fingerprintArgs(args: unknown): string | null {
+  if (args === undefined) return fingerprint("");
+  try {
+    const json = JSON.stringify(args, (_key, value) => {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        const record = value as Record<string, unknown>;
+        return Object.keys(record)
+          .sort()
+          .reduce<Record<string, unknown>>((acc, key) => {
+            acc[key] = record[key];
+            return acc;
+          }, {});
+      }
+      return value;
+    });
+    // `JSON.stringify` returns undefined for a bare undefined/function value.
+    return typeof json === "string" ? fingerprint(json) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function createTurnCostGuard(
+  options: TurnCostGuardOptions = {},
+): TurnCostGuard {
+  const repeatLimit = Math.max(2, options.repeatLimit ?? DEFAULT_NO_PROGRESS_REPEAT_LIMIT);
+
+  // Arguments arrive on `onToolCall`, results on `onToolResult`, and the call
+  // id is the ONLY unambiguous join between them. Every shipped adapter echoes
+  // the id it announced (`tc.callId` for function tools, `mc.id` for native
+  // MCP calls). A result whose id is missing or unknown fails open rather than
+  // being guessed at by tool name, which would conflate concurrent same-name
+  // calls carrying different arguments.
+  const argsByCallId = new Map<string, string | null>();
+
+  // Per-step accumulators, reset at every `observeStepEnd`.
+  let stepEmptyKeys = new Set<string>();
+  let stepEmptyToolName = "";
+  let stepSawPayload = false;
+  let stepSawText = false;
+  let stepUnjoinable = false;
+
+  let streakKey: string | null = null;
+  let streakToolName = "";
+  let streakCount = 0;
+  let tripped: TurnCostGuardVerdict | null = null;
+  let steps = 0;
+
+  function resetStep() {
+    stepEmptyKeys = new Set<string>();
+    stepEmptyToolName = "";
+    stepSawPayload = false;
+    stepSawText = false;
+    stepUnjoinable = false;
+    // Every shipped adapter executes a step's tool calls inside that step, so
+    // a call still open at the boundary never gets a result. Dropping them
+    // here keeps the map bounded by ONE step's fan-out and keeps a stale
+    // identity from ever being joined to a later step's result.
+    argsByCallId.clear();
+  }
+
+  function breakStreak() {
+    streakKey = null;
+    streakToolName = "";
+    streakCount = 0;
+  }
+
+  return {
+    observeToolCall(call) {
+      // No id ⇒ no join ⇒ the result fails open; nothing to record.
+      if (!call.id) return;
+      argsByCallId.set(call.id, fingerprintArgs(call.arguments));
+    },
+
+    observeToolResult(result) {
+      if (tripped) return;
+
+      // Retire the call's entry on EVERY result, payload or not — the map must
+      // never outlive the round-trip it was opened for.
+      const argsFingerprint = result.id ? argsByCallId.get(result.id) : undefined;
+      if (result.id) argsByCallId.delete(result.id);
+
+      // Any content at all is information the model may be acting on.
+      if (!isEmptyResult(result.result)) {
+        stepSawPayload = true;
+        return;
+      }
+
+      if (argsFingerprint === undefined || argsFingerprint === null) {
+        // Cannot prove which call this empty result belongs to.
+        stepUnjoinable = true;
+        return;
+      }
+
+      // `serverLabel` is part of the identity: two MCP servers may both expose
+      // a `search` tool, and one being dead says nothing about the other.
+      stepEmptyKeys.add(`${result.serverLabel ?? ""}|${result.name}|${argsFingerprint}`);
+      stepEmptyToolName = result.name;
+    },
+
+    observeTextDelta(delta) {
+      // A user-visible token is something the model could only say after
+      // reading the tool output.
+      if (delta.length > 0) stepSawText = true;
+    },
+
+    observeStepEnd() {
+      steps += 1;
+      if (tripped) {
+        resetStep();
+        return;
+      }
+
+      // A step counts toward a stop only if it was ENTIRELY empty, joinable,
+      // silent, and attributable to exactly one call identity. Anything else
+      // is progress or uncertainty — both break the streak.
+      const countable =
+        !stepSawText &&
+        !stepSawPayload &&
+        !stepUnjoinable &&
+        stepEmptyKeys.size === 1;
+
+      if (!countable) {
+        breakStreak();
+        resetStep();
+        return;
+      }
+
+      const key = [...stepEmptyKeys][0];
+      if (key === streakKey) {
+        streakCount += 1;
+      } else {
+        streakKey = key;
+        streakToolName = stepEmptyToolName;
+        streakCount = 1;
+      }
+      if (streakCount >= repeatLimit) {
+        tripped = { toolName: streakToolName, repeats: streakCount };
+      }
+      resetStep();
+    },
+
+    verdict() {
+      return tripped;
+    },
+
+    get steps() {
+      return steps;
+    },
+  };
+}
+
+/**
+ * User-facing copy for a stopped turn. Names the repeating tool (already
+ * rendered in the chat's tool-call chips, so not new exposure) and points at
+ * the cause this predicate actually indicates: a tool surface that is not
+ * answering.
+ */
+export function noProgressMessage(verdict: TurnCostGuardVerdict): string {
+  return (
+    `The assistant stopped this turn: the "${verdict.toolName}" tool returned nothing ` +
+    `${verdict.repeats} times in a row, so the turn was making no progress. That usually ` +
+    "means the tool is unavailable — check the connection for that tool and try again."
+  );
+}

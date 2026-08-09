@@ -107,6 +107,15 @@ import { buildAttachmentResolverPorts } from "@/lib/artifacts/attachment-resolve
 import {
   classifyAssistantRuntimeError,
   isAllowedByList,
+  // cinatra#2580 — the per-turn no-progress guard. The agentic loop re-sends the
+  // WHOLE request envelope on every step, so a turn that keeps re-issuing one
+  // dead tool call bills a full ~43k-token context per round until the ceiling.
+  // The guard ends such a turn once one call identity has returned nothing on
+  // four consecutive billed steps (the full predicate and its disclosed trade
+  // live beside the implementation in ./ports).
+  createTurnCostGuard,
+  noProgressMessage,
+  TURN_STOPPED_NO_PROGRESS_CODE,
   type AssistantRuntimeConfig,
 } from "./ports";
 import {
@@ -1235,6 +1244,106 @@ export async function runAssistantTurn(
   let providerStepStarted = false;
   let providerResponded = false;
 
+  // cinatra#2580 — per-turn no-progress guard. Purely observational until it
+  // trips: it reads the SAME callbacks the sink already receives and adds NO
+  // FIELD to the request envelope, so a turn that makes progress sends the
+  // same system prompt, tools, messages and step budget as before. (`signal`
+  // is still an `AbortSignal` — a third source was added to the composition,
+  // which nothing on the provider side can observe.)
+  //
+  // On a trip it aborts through the EXISTING `signal` seam rather than a new
+  // adapter contract — `AbortSignal.any` already composes the caller's signal
+  // with the 120s ceiling, so the guard is a third source on that same wire and
+  // every shipped adapter already honours it.
+  const turnCostGuard = createTurnCostGuard();
+  const noProgressAbort = new AbortController();
+  // A private sentinel carried as the abort REASON, so this runtime's own
+  // abort is identifiable by reference wherever it resurfaces. It is what lets
+  // the terminal frame tell "the adapter reported the stop we caused" (nothing
+  // to add) apart from "the adapter reported something else" (report both).
+  // Named `AbortError` because that is what an abort reason is expected to
+  // look like where it propagates through `AbortSignal.any`.
+  const noProgressAbortReason = new Error("assistant turn stopped: no progress");
+  noProgressAbortReason.name = "AbortError";
+  // Set the instant the guard decides to stop, so the exits below can report
+  // the real reason instead of the abort the stop itself raises.
+  let noProgressStop: ReturnType<typeof turnCostGuard.verdict> = null;
+  // The sink treats the FIRST terminal frame as final, so the stopped-turn
+  // frame is emitted exactly once no matter which of the three exits
+  // (onError / a resolved stream / a throw) the abort surfaces through. Set
+  // AFTER the send returns: a send that throws has not delivered anything, and
+  // recording it as delivered would lose the turn's only terminal frame.
+  let terminalErrorSent = false;
+  const sendTerminalError = (message: string, code: string) => {
+    send("error", { message, code });
+    terminalErrorSent = true;
+  };
+  const sendNoProgressTerminal = (verdict: NonNullable<typeof noProgressStop>) => {
+    if (terminalErrorSent) return;
+    sendTerminalError(noProgressMessage(verdict), TURN_STOPPED_NO_PROGRESS_CODE);
+  };
+  /**
+   * Whether a thrown value IS the abort this runtime raised — the sentinel by
+   * identity, or an adapter error that chained it as `cause`.
+   *
+   * Nothing else qualifies. A bare `AbortError` of unknown provenance is NOT
+   * assumed to be ours: after the verdict our controller is always aborted, so
+   * "it is an AbortError and we aborted" would accept every abort-shaped
+   * failure regardless of where it came from.
+   *
+   * Attribution is not needed to REPORT the stop, only to decide whether the
+   * adapter's own error still has something to say — see the terminal frame,
+   * which carries both.
+   */
+  const isNoProgressAbort = (error: unknown) => {
+    if (error === noProgressAbortReason) return true;
+    if (typeof error !== "object" || error === null) return false;
+    let cause: unknown = (error as { cause?: unknown }).cause;
+    // Walk a short chain: an adapter may wrap the reason once or twice.
+    for (let depth = 0; depth < 4 && cause != null; depth++) {
+      if (cause === noProgressAbortReason) return true;
+      cause = (cause as { cause?: unknown }).cause;
+    }
+    return false;
+  };
+  /**
+   * The stopped-turn frame. The runtime's decision to stop IS the primary
+   * fact, so it always leads and always carries the stop's stable code. An
+   * error the adapter reported that is NOT provably the stop's own abort is
+   * appended verbatim (classified + sanitized) rather than dropped — a genuine
+   * adapter failure landing in the same window must never be hidden behind a
+   * cost message.
+   */
+  const sendNoProgressWith = (
+    verdict: NonNullable<typeof noProgressStop>,
+    error: unknown,
+  ) => {
+    if (terminalErrorSent) return;
+    const underlying = isNoProgressAbort(error)
+      ? null
+      : classifyAssistantRuntimeError(error);
+    sendTerminalError(
+      underlying
+        ? `${noProgressMessage(verdict)} The provider also reported: ${underlying.message}`
+        : noProgressMessage(verdict),
+      TURN_STOPPED_NO_PROGRESS_CODE,
+    );
+  };
+  const stopTurnIfStalled = () => {
+    if (noProgressStop) return;
+    const verdict = turnCostGuard.verdict();
+    if (!verdict) return;
+    noProgressStop = verdict;
+    console.warn(
+      // Evaluated at a step boundary, so `steps` is the exact number of
+      // full-context rounds this turn paid for before stopping.
+      `[assistant-runtime] no-progress stop after ${turnCostGuard.steps} provider step(s): ` +
+        `"${verdict.toolName}" returned nothing on ${verdict.repeats} consecutive steps ` +
+        "— aborting the turn instead of re-billing another full-context step (cinatra#2580)",
+    );
+    noProgressAbort.abort(noProgressAbortReason);
+  };
+
   try {
     await stream({
       provider: adapter.provider,
@@ -1284,10 +1393,13 @@ export async function runAssistantTurn(
       skipMcpInjection: true,
       maxSteps: runtimeConfig.maxToolRounds,
       // Abort on the 120s ceiling OR the caller's signal (client disconnect,
-      // #503) so a torn-down stream stops LLM/MCP work promptly.
+      // #503) OR the no-progress guard (cinatra#2580) so a torn-down or stalled
+      // stream stops LLM/MCP work promptly. The guard's controller never
+      // aborts on a progressing turn, so the composed signal behaves exactly as
+      // the previous two-source one on every path that used to complete.
       signal: signal
-        ? AbortSignal.any([signal, AbortSignal.timeout(120_000)])
-        : AbortSignal.timeout(120_000),
+        ? AbortSignal.any([signal, AbortSignal.timeout(120_000), noProgressAbort.signal])
+        : AbortSignal.any([AbortSignal.timeout(120_000), noProgressAbort.signal]),
       logLabel: "chat",
       onTextDelta: (delta) => {
         // cinatra#2240 — provider engagement: this can only fire once the
@@ -1296,12 +1408,21 @@ export async function runAssistantTurn(
         // Accumulated for the end-of-turn execution-provenance verdict
         // (cinatra#2175); the sink emission itself is unchanged.
         assistantTurnText += delta;
+        // cinatra#2580 — user-visible text is progress; it clears the guard's
+        // repeat streak. Fed BEFORE the sink so the guard can never be behind
+        // what the user already saw.
+        turnCostGuard.observeTextDelta(delta);
         send("text", { content: delta });
       },
       onToolCall: (call) => {
         // cinatra#2240 — provider engagement: this can only fire once the
         // request carrying these skills actually reached the provider.
         providerResponded = true;
+        // cinatra#2580 — the guard joins arguments to results by call id, so it
+        // must see EVERY call, including the hidden ones the sink suppresses (a
+        // hidden tool spinning on a dead surface costs exactly as much as a
+        // visible one).
+        turnCostGuard.observeToolCall(call);
         if (isHiddenTool(call.name)) return;
         send("tool_call", {
           id: call.id,
@@ -1314,6 +1435,11 @@ export async function runAssistantTurn(
         // cinatra#2240 — provider engagement: this can only fire once the
         // request carrying these skills actually reached the provider.
         providerResponded = true;
+        // cinatra#2580 — same reasoning as onToolCall: feed the guard for every
+        // result, hidden or not. The verdict is NOT taken here — a single step
+        // can carry several parallel calls, and the streak advances per STEP
+        // (the billed unit), never per result.
+        turnCostGuard.observeToolResult(result);
         if (isHiddenTool(result.name)) return;
         send("tool_result", {
           id: result.id,
@@ -1334,6 +1460,11 @@ export async function runAssistantTurn(
         // cinatra#2240 — provider engagement: this can only fire once the
         // request carrying these skills actually reached the provider.
         providerResponded = true;
+        // cinatra#2580 — the step boundary is where the streak advances and
+        // where a stop is decided, so the abort lands after a completed step
+        // and BEFORE the adapter opens the next step's full-context request.
+        turnCostGuard.observeStepEnd();
+        stopTurnIfStalled();
         send("thinking_end", { round: step });
       },
       onCitations: (citations) => {
@@ -1362,11 +1493,21 @@ export async function runAssistantTurn(
         // if we only evaluated after the stream — so the verdict is taken here,
         // on the text accumulated so far, before the terminal goes out.
         markUnverifiedExecutionClaim();
+        // cinatra#2580 — once the guard has stopped the turn, the stop is what
+        // the user needs to read: the raw abort classifies to a bare
+        // "aborted" with no cause, while the guard's reason names the
+        // unresponsive tool and the remedy. Anything the adapter reported that
+        // is NOT that abort rides along in the same frame rather than being
+        // dropped. Emitted through the SAME terminal vocabulary as before.
+        if (noProgressStop) {
+          sendNoProgressWith(noProgressStop, error);
+          return;
+        }
         // S5 (cinatra#2390): classify — provider stream failures (including
         // skill-delivery rejections surfaced mid-iteration) carry a stable
         // code + sanitized actionable copy, never the raw provider message.
         const classified = classifyAssistantRuntimeError(error);
-        send("error", { message: classified.message, code: classified.code });
+        sendTerminalError(classified.message, classified.code);
       },
     });
 
@@ -1377,12 +1518,31 @@ export async function runAssistantTurn(
     // only reachable status while the plane is dark) emits nothing.
     markUnverifiedExecutionClaim();
 
+    // cinatra#2580 — a stopped turn is never `done`. Two adapter behaviors
+    // both land here: one that reported the abort through `onError` and then
+    // resolved (its terminal frame is already out — emit nothing more, but
+    // still do NOT append `done`), and one that honoured the abort by simply
+    // BREAKING its step loop and resolving silently (no frame yet — emit the
+    // reason so the user is not left with a truncated answer and no
+    // explanation).
+    if (noProgressStop) {
+      sendNoProgressTerminal(noProgressStop);
+      return;
+    }
+
     send("done", {});
   } catch (error) {
     // Same verdict before the terminal error frame: the partial text is
     // persisted either way, so an unbacked claim inside it must be marked
     // either way.
     markUnverifiedExecutionClaim();
+    // cinatra#2580 — same rule as `onError`: the stop leads, and a throw that
+    // is not provably the stop's own abort (adapter teardown, a sink write)
+    // is carried in the same frame instead of being swallowed.
+    if (noProgressStop) {
+      sendNoProgressWith(noProgressStop, error);
+      return;
+    }
     // S5 (cinatra#2390): classified runtime recovery — a throw anywhere in
     // the turn (skill delivery BEFORE the stream handler included: not-yet-
     // synced skills, an MCP-mode remnant) becomes a stable code + sanitized
