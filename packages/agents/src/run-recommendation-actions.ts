@@ -342,10 +342,14 @@ async function releaseAndDispatch(runId: string): Promise<RunRecommendationDecis
   // Guarded here as well as inside the publisher: the decision's outcome is the
   // park release and the dispatch, and neither may be lost to a transport
   // failure on an announcement.
-  await publishRecommendationHoldResume({
-    runId,
-    threadId: recommendationHoldThreadId(run),
-  }).catch(() => {});
+  try {
+    await publishRecommendationHoldResume({
+      runId,
+      threadId: recommendationHoldThreadId(run),
+    });
+  } catch {
+    /* announced or not, the decision's outcome stands */
+  }
 
   // A held run is pending_input; if it already advanced (a concurrent decision
   // won the dispatch race), report success without re-dispatching.
