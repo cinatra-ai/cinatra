@@ -109,7 +109,17 @@ async function getInstallOpsPool(): Promise<import("pg").Pool> {
     throw new Error("SUPABASE_DB_URL is required for @/lib/extension-install-ops");
   }
   const { Pool } = await import("pg");
-  const pool = new Pool({ connectionString });
+  // `connectionTimeoutMillis` (cinatra#2554): this pool is on the BOOT PATH — the
+  // awaited `install-op-boot-cleanup` phase lists/compensates unfinalized install
+  // ops through it, before the server serves anything. Without a connect timeout
+  // an unreachable/blackholed Postgres leaves `pool.connect()` pending FOREVER, so
+  // the boot phase never resolves and the process hangs with no output. Bounding
+  // connection acquisition turns that into a normal phase failure the phase policy
+  // already handles. 30 s matches the repo's existing sync-query ceiling
+  // (POSTGRES_SYNC_TIMEOUT_MS). NOTE: this bounds acquiring a connection only — a
+  // statement blocked on a lock after connecting is what the startup deadline in
+  // src/lib/boot/boot-stall-watchdog.ts narrates.
+  const pool = new Pool({ connectionString, connectionTimeoutMillis: 30_000 });
   if (!pool.listenerCount("error")) {
     pool.on("error", (err) => {
       // eslint-disable-next-line no-console

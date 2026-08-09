@@ -99,6 +99,12 @@ vi.mock("@/lib/boot/phases/dev-boot", () => ({
 import { runBoot } from "@/lib/boot/boot-orchestrator";
 import { beginBoot, markBootReady } from "@/lib/boot/boot-state";
 import {
+  armBootStallWatchdog,
+  BOOT_STALL_DEADLINE_MS,
+  BOOT_STALL_REPEAT_MS,
+  type BootStallWatchdog,
+} from "@/lib/boot/boot-stall-watchdog";
+import {
   startDetachedDevAgentsScanPhase,
   startDetachedDevAutoSetupPhase,
 } from "@/lib/boot/phases/dev-boot";
@@ -249,5 +255,138 @@ describe("runBoot orchestration", () => {
     );
     // markBootReady not reached when a fatal phase aborts boot.
     expect(markBootReady).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #2554 — the startup deadline, wired through the REAL orchestrator.
+//
+// boot-stall-watchdog.test.ts pins the watchdog's own dev-exit / prod-repeat
+// behavior. These pin the wiring: that the orchestrator actually marks each
+// phase at its await boundary (so the diagnostic can name a REAL phase name),
+// and that the deadline is disarmed on both the ready and the abort path.
+// ---------------------------------------------------------------------------
+describe("runBoot startup deadline wiring (#2554)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  function fakeWatchdog() {
+    const marks: string[] = [];
+    const watchdog: BootStallWatchdog = {
+      phaseStarted: (name) => marks.push(`start:${name}`),
+      phaseFinished: (name) => marks.push(`finish:${name}`),
+      disarm: vi.fn(),
+    };
+    return { watchdog, marks };
+  }
+
+  it("marks every awaited phase started/finished and disarms once boot is ready", async () => {
+    const { watchdog, marks } = fakeWatchdog();
+    const runPhase = vi.fn(async () => undefined as never);
+
+    await runBoot({
+      isDevMode: () => false,
+      runPhase,
+      armStallWatchdog: () => watchdog,
+    });
+
+    // Every awaited phase is bracketed by a marker pair, in order.
+    expect(marks.slice(0, 4)).toEqual([
+      "start:core-x",
+      "finish:core-x",
+      "start:schema-version-precondition",
+      "finish:schema-version-precondition",
+    ]);
+    expect(marks).toContain("start:agent-marker-backfill");
+    expect(marks.length).toBe(runPhase.mock.calls.length * 2);
+    expect(watchdog.disarm).toHaveBeenCalledTimes(1);
+  });
+
+  it("disarms the deadline even when a fatal phase aborts boot", async () => {
+    const { watchdog, marks } = fakeWatchdog();
+    const runPhase = vi.fn(async (phase: { name: string }) => {
+      if (phase.name === "ext-x") throw new Error("required activation missing");
+      return undefined as never;
+    });
+
+    await expect(
+      runBoot({ isDevMode: () => false, runPhase, armStallWatchdog: () => watchdog }),
+    ).rejects.toThrow("required activation missing");
+
+    // The failing phase is still closed out, and the deadline is stopped.
+    expect(marks).toContain("start:ext-x");
+    expect(marks).toContain("finish:ext-x");
+    expect(watchdog.disarm).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands the watchdog the STRICT boot-mode predicate: an unset CINATRA_RUNTIME_MODE is NOT dev", async () => {
+    // Load-bearing: the dev arm EXITS the process. The repo-wide
+    // isAppDevelopmentMode() helper treats an UNSET var as development, so if the
+    // deadline ever adopted it, a production process with the var unset would
+    // exit itself on a transient stall. runBoot must keep passing its own strict
+    // `CINATRA_RUNTIME_MODE === "development"` predicate.
+    const prior = process.env.CINATRA_RUNTIME_MODE;
+    try {
+      const { watchdog } = fakeWatchdog();
+      const seen: boolean[] = [];
+      const armStallWatchdog = (deps: { isDevMode: () => boolean }) => {
+        seen.push(deps.isDevMode());
+        return watchdog;
+      };
+      const runPhase = vi.fn(async () => undefined as never);
+
+      delete process.env.CINATRA_RUNTIME_MODE;
+      await runBoot({ runPhase, armStallWatchdog });
+
+      process.env.CINATRA_RUNTIME_MODE = "production";
+      await runBoot({ runPhase, armStallWatchdog });
+
+      process.env.CINATRA_RUNTIME_MODE = "development";
+      await runBoot({ runPhase, armStallWatchdog });
+
+      expect(seen).toEqual([false, false, true]);
+    } finally {
+      if (prior === undefined) delete process.env.CINATRA_RUNTIME_MODE;
+      else process.env.CINATRA_RUNTIME_MODE = prior;
+    }
+  });
+
+  it("names the REAL in-flight phase when a boot phase hangs past the deadline", async () => {
+    vi.useFakeTimers();
+    const logged: string[] = [];
+    const exit = vi.fn();
+
+    // "ext-x" never resolves — the exact shape of the #2554 stall.
+    const runPhase = vi.fn(async (phase: { name: string }) => {
+      if (phase.name === "ext-x") return new Promise<never>(() => {});
+      return undefined as never;
+    });
+
+    const booting = runBoot({
+      isDevMode: () => false,
+      runPhase,
+      armStallWatchdog: (deps) =>
+        armBootStallWatchdog({
+          ...deps,
+          logError: (message) => logged.push(message),
+          exit,
+        }),
+    });
+    // Surface the hang as a pending promise rather than an unhandled rejection.
+    void booting.catch(() => {});
+
+    await vi.advanceTimersByTimeAsync(BOOT_STALL_DEADLINE_MS);
+
+    expect(logged.length).toBeGreaterThan(0);
+    expect(logged[0]).toContain("ext-x");
+    expect(exit).not.toHaveBeenCalled(); // prod: keep waiting
+    expect(markBootReady).not.toHaveBeenCalled();
+
+    const afterDeadline = logged.length;
+    await vi.advanceTimersByTimeAsync(BOOT_STALL_REPEAT_MS);
+    expect(logged.length).toBe(afterDeadline + 1);
   });
 });
