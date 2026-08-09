@@ -2,11 +2,19 @@ import { defineConfig } from "vitest/config";
 import * as path from "node:path";
 
 const serverOnlyStub = path.join(__dirname, "tests/__stubs__/server-only.ts");
+// cinatra#2582: the breakdown's pure row formatters are exported from the table
+// COMPONENT (they cannot live in the server-only store, and a new leaf module
+// would grow every locked dev-perf route's reachable graph). Importing them
+// therefore pulls the host UI barrel, which this sandbox cannot resolve — map it
+// to a render-free stand-in so the formatters stay directly testable.
+const uiTableStub = path.join(__dirname, "tests/__stubs__/ui-table.tsx");
 
 export default defineConfig({
   resolve: {
     alias: {
       "server-only": serverOnlyStub,
+      "@/components/ui/table": uiTableStub,
+      "@/components/ui/paginated-table": uiTableStub,
     },
   },
   test: {

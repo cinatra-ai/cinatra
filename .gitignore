@@ -34,6 +34,13 @@ docker/wayflow/.wayflow.env
 # from .env.local by scripts/gen-nango-env.mjs on every `npm run services`.
 docker/nango/.nango.env
 
+# Same pattern for the Graphiti knowledge-graph indexer (cinatra#2582): the
+# OpenAI key it runs with, resolved from the app's STORED provider configuration
+# by scripts/gen-graphiti-env.mjs on every `npm run services`. The glob also
+# covers the writer's `.tmp-<pid>` sibling, so an interrupted atomic replace can
+# never leave a committable plaintext credential behind.
+docker/graphiti/.graphiti.env*
+
 # Same pattern for the Plane MCP bridge (cinatra#1238): the minted dev/demo Plane
 # PAT + workspace slug the bridge holds, written by scripts/fixtures/provision-plane.mjs.
 # The `.env*` glob above does NOT match this basename, so it is listed explicitly.

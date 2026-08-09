@@ -513,6 +513,24 @@ services:
     image: zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2@sha256:c9e0efd3f0bcdb4125eceed08958aea94fe2d85a90c20dfdaadaaf8304e1c4d6
     ports:
       - "8000:8000"
+    # PROVIDER KEY (cinatra#2582) — sourced from a NARROW, generated file, NOT
+    # inlined as `environment: OPENAI_API_KEY: "${OPENAI_API_KEY:-}"`. That
+    # interpolation reads the *shell* env, and the app's OpenAI key does not live
+    # there: it lives in the app database, configured in-app. So every normal
+    # install started this container with an EMPTY key, it logged "No LLM client
+    # configured - entity extraction will be limited", and — because extraction
+    # runs BEFORE the Neo4j write — every episode was accepted and then dropped.
+    # The graph was silently empty. And an empty `environment:` value OVERRIDES
+    # an `env_file:` value on the same key (the nango/wayflow precedent above),
+    # so the three provider keys must NOT appear in `environment:` below.
+    # `scripts/gen-graphiti-env.mjs` (run by `npm run services`) resolves the key
+    # from the app's stored provider configuration and writes
+    # docker/graphiti/.graphiti.env with ONLY those three keys;
+    # `required: false` keeps a fresh checkout bootable, and a keyless bring-up
+    # is a reported state ("knowledge-graph indexing OFF"), not a silent one.
+    env_file:
+      - path: ./docker/graphiti/.graphiti.env
+        required: false
     environment:
       # knowledge-graph-mcp uses pydantic-settings with __ as nested delimiter.
       # DATABASE__PROVIDER=neo4j switches from the bundled FalkorDB to our Neo4j service.
@@ -520,12 +538,6 @@ services:
       DATABASE__PROVIDERS__NEO4J__URI: bolt://neo4j:7687
       DATABASE__PROVIDERS__NEO4J__USERNAME: neo4j
       DATABASE__PROVIDERS__NEO4J__PASSWORD: ${NEO4J_PASSWORD:-cinatra-local}
-      # OpenAI key required for entity extraction and embeddings.
-      # Pass both the nested pydantic-settings key AND the raw env var —
-      # graphiti_core's internal initialization reads OPENAI_API_KEY directly.
-      LLM__PROVIDERS__OPENAI__API_KEY: ${OPENAI_API_KEY:-}
-      EMBEDDER__PROVIDERS__OPENAI__API_KEY: ${OPENAI_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       SEMAPHORE_LIMIT: "10"
     depends_on:
       neo4j:

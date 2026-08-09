@@ -48,6 +48,29 @@ export function startUsageEventSubscriber(): void {
           costUsd: costUsd?.toFixed(8) ?? null,
           idempotencyKey: event.idempotencyKey,
         });
+      } else if (event.source === "graphiti") {
+        // cinatra#2582. One episode handed to the knowledge-graph indexer, whose
+        // per-episode OpenAI fan-out is billed on the injected key and is NOT
+        // reported back by the wrapper. Persisted with `cost_usd` NULL — the
+        // dashboard's own "unknown cost" counter is the honest surface for it.
+        // Zeroing the token columns is a schema NOT-NULL requirement, not a
+        // claim: the dollars live in the NULL cost, never in a made-up estimate.
+        await insertUsageEvent({
+          id: randomUUID(),
+          occurredAt: new Date(event.occurredAt),
+          source: "graphiti",
+          provider: event.provider,
+          model: null,
+          operation: event.operation,
+          agentLabel: null,
+          inputTokens: 0,
+          outputTokens: 0,
+          cachedInputTokens: 0,
+          reasoningOutputTokens: 0,
+          creditsConsumed: 0,
+          costUsd: null,
+          idempotencyKey: event.idempotencyKey,
+        });
       } else if (event.source === "apollo") {
         const costUsd = computeApolloCostUsd({
           operation: event.operation,

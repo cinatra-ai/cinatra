@@ -46,11 +46,14 @@ const SONNER_ALIAS = "./node_modules/sonner";
 // ---------------------------------------------------------------------------
 const REQUIRED_ENV: string[] = [
   // NOTE: OPENAI_API_KEY is intentionally NOT required here. The Next.js app
-  // never reads it (provider config is in-app via /setup/ai; the var only powers
-  // the Graphiti objects container, which gets it from docker-compose's
-  // `${OPENAI_API_KEY:-}` and tolerates it being unset). Requiring it at app
-  // boot crashed fresh `make setup && make dev` (the copied .env.example ships
-  // it empty) for no functional reason. See .env.example for when to set it.
+  // never reads it as a provider credential (provider config is in-app via
+  // /setup/ai). Since cinatra#2582 the Graphiti knowledge-graph container is
+  // handed the key resolved from that stored configuration at bring-up
+  // (scripts/gen-graphiti-env.mjs), with this env var as the fallback source;
+  // a keyless install is a REPORTED state ("knowledge-graph indexing OFF"), and
+  // object save/list degrade gracefully to Postgres. Requiring it at app boot
+  // crashed fresh `make setup && make dev` (the copied .env.example ships it
+  // empty) for no functional reason. See .env.example for when to set it.
   //
   // Required at build time too: `next build` page-data collection imports
   // DB-backed modules. The Dockerfile / CI build step supplies a placeholder

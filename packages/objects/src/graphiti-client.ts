@@ -1,7 +1,11 @@
 import "server-only";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import type { VersionNegotiationOptions } from "@modelcontextprotocol/client";
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
+// The usage-event bus leaf (NOT @cinatra-ai/metric-usage-api, whose entry also
+// re-exports an MCP module). cinatra#2582: this module is a registered usage
+// publisher — see src/__tests__/llm-usage-ledger-chokepoint.test.ts.
+import { emitUsageEvent } from "@cinatra-ai/metric-contracts";
 // undici fetch is used instead of global fetch to bypass Next.js's patched fetch,
 // which would propagate the request-lifecycle AbortSignal and abort long-lived SSE connections.
 import { fetch as undiciFetch } from "undici";
@@ -170,13 +174,128 @@ export function identityHashToUuid(identityHash: string, groupId: string): strin
 }
 
 // ---------------------------------------------------------------------------
+// Knowledge-graph provider-key state (cinatra#2582).
+//
+// Whether the indexer can index at all depends on a fact this package cannot
+// read: does the app's stored provider configuration hold an OpenAI key (the key
+// the bring-up materializes into the container)? Extraction runs BEFORE the
+// Neo4j write, so with no key an episode is accepted and then never stored —
+// the silent-empty-graph behaviour the issue reports.
+//
+// The host binds a probe at boot (`src/lib/register-objects-provider.ts`). Three
+// answers, and what each does here:
+//
+//   absent      → say so ONCE per process on the projection path (a keyless
+//                 install should be able to see why its graph is empty) and emit
+//                 NO usage row: there is no provider fan-out to bill.
+//   configured  → emit.
+//   unknown     → emit. "Unknown" means the question could not be answered (no
+//                 probe bound, an unreadable configuration), and the defect this
+//                 metering exists to fix is spend that is INVISIBLE — an
+//                 unattributed row beats a dropped one.
+//
+// NOTE the vocabulary: `configured` is what the APP holds, not proof of what
+// the running container was started with (the pinned wrapper reports no
+// readiness). A key saved after the container started is configured and not yet
+// in use, which is why nothing here claims "indexing is on".
+// ---------------------------------------------------------------------------
+
+export type KnowledgeGraphProviderKeyState = {
+  providerKey: "configured" | "absent" | "unknown";
+  /** Operator-facing explanation. NEVER carries a key or any part of one. */
+  reason: string;
+};
+
+const UNKNOWN_PROVIDER_KEY_STATE: KnowledgeGraphProviderKeyState = {
+  providerKey: "unknown",
+  reason: "no knowledge-graph indexing probe is bound in this process",
+};
+
+let indexingProbe: (() => KnowledgeGraphProviderKeyState) | null = null;
+let warnedIndexingOff = false;
+
+/**
+ * Bind the host's indexing-state probe. Idempotent; the host calls it at boot.
+ * The probe must be cheap (the host caches its own read) and must never return
+ * the key itself.
+ */
+export function setKnowledgeGraphIndexingProbe(
+  probe: (() => KnowledgeGraphProviderKeyState) | null,
+): void {
+  indexingProbe = probe;
+}
+
+/** Resolve the current state. A throwing probe degrades to `unknown`. */
+export function readKnowledgeGraphProviderKeyState(): KnowledgeGraphProviderKeyState {
+  if (!indexingProbe) return UNKNOWN_PROVIDER_KEY_STATE;
+  try {
+    return indexingProbe();
+  } catch (err) {
+    return {
+      providerKey: "unknown",
+      reason: `provider-key probe failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/** Test seam: the once-per-process warning latch. */
+export function __resetKnowledgeGraphIndexingWarningForTests(): void {
+  warnedIndexingOff = false;
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 export async function addEpisode(input: AddEpisodeInput): Promise<AddEpisodeResult> {
   // Tool is named "add_memory" in knowledge-graph-mcp 1.0.x (not "add_episode")
   const raw = await callMcp("add_memory", input as Record<string, unknown>);
+  // Metered on the CALL succeeding, not on the acknowledgement parsing. The
+  // hand-over is what causes the provider fan-out; an acknowledgement whose
+  // SHAPE we fail to recognize is still an episode Graphiti accepted and billed,
+  // and dropping its row would put the spend back where this change found it.
+  recordEpisodeUsage();
   return addEpisodeResultSchema.parse(raw);
+}
+
+/**
+ * Put ONE `usage_events` row on the bus per episode actually handed over
+ * (cinatra#2582 / the Graphiti line item of cinatra#2578).
+ *
+ * Emitted after the call returns, so a failed hand-over never books spend.
+ * The row is counted and UNPRICED — see `GraphitiUsageEvent` for why inventing
+ * a token count would be worse than admitting we do not have one.
+ *
+ * Never throws: metering must not break the projection path (the bus emitter
+ * swallows too, this is the second belt).
+ */
+function recordEpisodeUsage(): void {
+  try {
+    const state = readKnowledgeGraphProviderKeyState();
+    if (state.providerKey === "absent") {
+      if (!warnedIndexingOff) {
+        warnedIndexingOff = true;
+        console.warn(
+          "[graphiti] knowledge-graph indexing is OFF — no provider key in the app's stored " +
+            `configuration (${state.reason}). Episodes are accepted by the indexer and then ` +
+            "dropped: extraction runs before the graph write, so the graph stays empty. " +
+            "Configure an OpenAI provider key, then re-run the bring-up so the indexer " +
+            "container picks it up.",
+        );
+      }
+      return;
+    }
+    emitUsageEvent({
+      source: "graphiti",
+      provider: "openai",
+      operation: "episode",
+      model: null,
+      idempotencyKey: `graphiti:episode:${randomUUID()}`,
+      occurredAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn("[graphiti] usage metering failed (episode still sent):", err);
+  }
 }
 
 export async function searchNodes(input: SearchNodesInput): Promise<SearchNodesResult> {

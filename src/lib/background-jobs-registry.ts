@@ -713,7 +713,7 @@ export async function runRecurringLoop(args: {
   job: Job;
   /** Canonical loop jobId. Any other id runs once and does NOT reschedule. */
   loopJobId: string;
-  /** Delay until the next cycle, in milliseconds. */
+  /** Base delay until the next cycle, in milliseconds. */
   delayMs: number;
   /** Human label for the cycle-failed / re-delay-failed log lines. */
   label: string;
@@ -759,6 +759,130 @@ export async function runRecurringLoop(args: {
   // processor, throw DelayedError so the worker acknowledges the move and does
   // NOT also try to complete/fail the (now-delayed) job.
   throw new DelayedError();
+}
+
+// ---------------------------------------------------------------------------
+// GRAPHITI_PROJECTION_REPAIR idle backoff (cinatra#2582).
+//
+// The projection cycle ran every 30s unconditionally — 4,248 runs on the
+// reported install, each one a set of queries against an empty outbox, and on a
+// keyed instance the continuous driver of Graphiti's OpenAI fan-out. It now
+// backs off while the outbox is idle and snaps back the moment work appears.
+//
+// WHAT BACKS OFF, AND WHY IT IS THE PROJECTION CYCLE RATHER THAN THE LOOP.
+// The ruling attaches a hard constraint: the same loop drains the
+// binding-reconcile queue and re-runs `ensureCrmSyncRegistrations`, and a
+// backoff must keep those live. Two designs satisfy the words; only one of them
+// costs those duties NOTHING:
+//
+//   - relaxing the LOOP's re-delay would push reconcile latency out with it, up
+//     to the ceiling — work arriving just after a cycle would wait minutes;
+//   - splitting them into a SECOND perpetual loop keeps both cadences, but every
+//     perpetual-loop incident this repo has had (the ~450-job storm, the warning
+//     burst, the HSETNX silent drop — see the perpetual-system-loops gate) came
+//     from adding or re-seeding a loop.
+//
+// So the loop keeps waking every 30s and keeps doing its reconcile + CRM duties
+// on EVERY wake — their latency is byte-for-byte unchanged — and the PROJECTION
+// CYCLE is what gets skipped while idle. That removes the repeated outbox/epoch/
+// journal queries and the episode fan-out they drive, which is the cost the
+// issue reports, at zero cost to the two duties the constraint protects.
+//
+// The knobs are exported so the tests assert the real numbers, not copies.
+// ---------------------------------------------------------------------------
+
+/** The loop's own cadence. Unchanged, deliberately — see above. */
+export const GRAPHITI_REPAIR_BASE_DELAY_MS = 30_000;
+/**
+ * Ceiling on how many loop cycles the projection work may skip: 10 × 30s = the
+ * longest an idle instance defers a projection cycle.
+ */
+export const GRAPHITI_PROJECTION_MAX_INTERVAL_CYCLES = 10;
+/**
+ * Consecutive idle projection cycles tolerated at full cadence before skipping
+ * anything. At the loop's cadence that is two minutes of a provably empty
+ * outbox, so a merely quiet instance never leaves the 30s projection cadence.
+ */
+export const GRAPHITI_REPAIR_IDLE_GRACE_CYCLES = 4;
+
+/** Shape of the binding-reconcile drain result this loop reads. */
+type BindingReconcileDrainCounts = { processed: number; failed: number };
+/** Shape of the projection-cycle result this loop reads. */
+type ProjectionCycleCounts = {
+  processed: number;
+  failed: number;
+  epochBumps: number;
+  journalsAdvanced: number;
+  journalsOpen: number;
+};
+
+/**
+ * Did this cycle do NOTHING? Pure.
+ *
+ * Deliberately covers the reconcile drain as well as the projection cycle: the
+ * loop's non-projection duties are part of "is there work", which is what keeps
+ * the backoff from starving them. `journalsOpen` counts too — an open rebuild
+ * journal is outstanding work even in a cycle that advanced none of it.
+ */
+export function isGraphitiRepairCycleIdle(
+  drain: BindingReconcileDrainCounts,
+  cycle: ProjectionCycleCounts,
+): boolean {
+  return (
+    drain.processed === 0 &&
+    drain.failed === 0 &&
+    cycle.processed === 0 &&
+    cycle.failed === 0 &&
+    cycle.epochBumps === 0 &&
+    cycle.journalsAdvanced === 0 &&
+    cycle.journalsOpen === 0
+  );
+}
+
+/**
+ * How many loop cycles apart the projection work should run, given the
+ * consecutive-idle streak. Pure.
+ *
+ * streak <= grace → 1 (every cycle, the original behaviour); then doubling
+ * (2, 4, 8) to the 10-cycle ceiling. A streak of 0 (work found) is always 1.
+ */
+export function graphitiProjectionIntervalCycles(idleStreak: number): number {
+  if (!Number.isFinite(idleStreak) || idleStreak <= GRAPHITI_REPAIR_IDLE_GRACE_CYCLES) {
+    return 1;
+  }
+  const steps = Math.floor(idleStreak) - GRAPHITI_REPAIR_IDLE_GRACE_CYCLES;
+  return Math.min(GRAPHITI_PROJECTION_MAX_INTERVAL_CYCLES, 2 ** Math.min(steps, 4));
+}
+
+// Process-local backoff state. Process-local is correct: one worker holds the
+// canonical loop job at a time, and a restart simply resumes at full cadence —
+// the safe direction.
+let graphitiProjectionIdleStreak = 0;
+let graphitiProjectionCyclesSinceRun = 0;
+let graphitiProjectionLastIntervalCycles = 1;
+
+/**
+ * Should this cycle run the projection work? Pure — the caller owns the state.
+ *
+ * `reconciledWork` forces a run: the reconcile drain happens FIRST precisely so
+ * freshly reconciled bindings project in the SAME cycle (the pre-existing
+ * contract), and reconcile activity is also the best available signal that the
+ * instance stopped being idle.
+ */
+export function shouldRunGraphitiProjectionCycle(args: {
+  idleStreak: number;
+  cyclesSinceRun: number;
+  reconciledWork: boolean;
+}): boolean {
+  if (args.reconciledWork) return true;
+  return args.cyclesSinceRun >= graphitiProjectionIntervalCycles(args.idleStreak);
+}
+
+/** Test seam: reset the backoff state between cases. */
+export function __resetGraphitiRepairBackoffForTests(): void {
+  graphitiProjectionIdleStreak = 0;
+  graphitiProjectionCyclesSinceRun = 0;
+  graphitiProjectionLastIntervalCycles = 1;
 }
 
 /**
@@ -1039,11 +1163,10 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
       // degraded mode for an absent connector; rows that DID route through a
       // registered adapter keep the per-entry retry/failure semantics). Never
       // a worker crash either way.
-      const THIRTY_SECONDS_MS = 30_000;
       await runRecurringLoop({
         job,
         loopJobId: GRAPHITI_PROJECTION_REPAIR_LOOP_JOB_ID,
-        delayMs: THIRTY_SECONDS_MS,
+        delayMs: GRAPHITI_REPAIR_BASE_DELAY_MS,
         label: "graphiti-projection-repair",
         run: async () => {
           // No cycle-level try/catch here (cinatra#849): runRecurringLoop reports
@@ -1074,6 +1197,23 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
             console.log("[graphiti-projection-repair] binding-reconcile drain:", drain);
           }
 
+          // Idle backoff (cinatra#2582) — the SKIP decision, taken AFTER the two
+          // duties above have already run this cycle. Skipping defers only the
+          // projection work; reconcile + CRM registration keep their unchanged
+          // 30s cadence, which is how the ruling's constraint is met absolutely
+          // rather than merely bounded. See the knobs' block comment.
+          const reconciledWork = drain.processed > 0 || drain.failed > 0;
+          graphitiProjectionCyclesSinceRun += 1;
+          if (
+            !shouldRunGraphitiProjectionCycle({
+              idleStreak: graphitiProjectionIdleStreak,
+              cyclesSinceRun: graphitiProjectionCyclesSinceRun,
+              reconciledWork,
+            })
+          ) {
+            return;
+          }
+
           // Full projection cycle (#1427): batch pending claim-set changes
           // into projection-policy epoch bumps, advance open epoch-fenced
           // rebuild journals, then drain the outbox (stale-epoch fencing
@@ -1083,6 +1223,12 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
             "@cinatra-ai/objects/graphiti-rebuild"
           );
           const result = await processGraphitiProjectionCycle({ batchSize: 20, maxAttempts: 5 });
+          // Counter reset happens ONLY on a completed cycle. Resetting before
+          // the await would make a THROW from a backed-off cycle serve as its
+          // own skip: the streak stays high, the counter is zeroed, and the
+          // retry waits the full backed-off gap. A failing instance must be
+          // retried on the very next cycle.
+          graphitiProjectionCyclesSinceRun = 0;
           if (
             result.processed > 0 ||
             result.failed > 0 ||
@@ -1091,6 +1237,22 @@ export const BACKGROUND_JOB_REGISTRY: Record<BackgroundJobName, JobHandler> = {
             result.journalsOpen > 0
           ) {
             console.log("[graphiti-projection-repair] cycle:", result);
+          }
+
+          // Idle accounting for the NEXT decision. A cycle that threw never gets
+          // here, so a failing instance is never backed off — it keeps being
+          // visited every 30s.
+          const idle = isGraphitiRepairCycleIdle(drain, result);
+          graphitiProjectionIdleStreak = idle ? graphitiProjectionIdleStreak + 1 : 0;
+          const intervalCycles = graphitiProjectionIntervalCycles(graphitiProjectionIdleStreak);
+          if (intervalCycles !== graphitiProjectionLastIntervalCycles) {
+            console.log(
+              `[graphiti-projection-repair] projection cadence every ` +
+                `${graphitiProjectionLastIntervalCycles} -> ${intervalCycles} loop cycle(s) ` +
+                `(${idle ? `${graphitiProjectionIdleStreak} idle cycles` : "work found"}); ` +
+                "binding-reconcile + CRM registration remain on every cycle",
+            );
+            graphitiProjectionLastIntervalCycles = intervalCycles;
           }
         },
       });

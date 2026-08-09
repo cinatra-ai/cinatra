@@ -26,8 +26,26 @@ import { setObjectsProvider } from "@cinatra-ai/sdk-extensions";
 import type { ObjectSyncAdapter, ObjectTypeDefinition } from "@cinatra-ai/sdk-extensions";
 import { objectTypeRegistry } from "@cinatra-ai/objects/registry";
 import { objectSyncAdapterRegistry } from "@cinatra-ai/objects/sync-adapters/registry";
-import { addEpisode, identityHashToUuid } from "@cinatra-ai/objects/graphiti-client";
+import {
+  addEpisode,
+  identityHashToUuid,
+  setKnowledgeGraphIndexingProbe,
+} from "@cinatra-ai/objects/graphiti-client";
 import { createObjectsPrimitiveHandlers } from "@cinatra-ai/objects/mcp-handlers";
+import { readKnowledgeGraphProviderKeyState } from "@/lib/knowledge-graph-indexing";
+
+// ---------------------------------------------------------------------------
+// Knowledge-graph indexing probe (cinatra#2582).
+//
+// The objects package cannot see the app's stored provider configuration, so it
+// cannot tell "the indexer has a key" from "the indexer is silently dropping
+// every episode". The host answers that question here — the same boot module
+// that binds the objects provider, so the projector worker (ctx-less, same
+// process) gets the binding too.
+//
+// Presence only: the probe never returns, logs or otherwise surfaces the key.
+// ---------------------------------------------------------------------------
+setKnowledgeGraphIndexingProbe(() => readKnowledgeGraphProviderKeyState());
 
 /**
  * Build the deterministic group id for an org's CRM episodes. Byte-identical to
