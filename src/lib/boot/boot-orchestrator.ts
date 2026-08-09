@@ -14,10 +14,21 @@
 // block 2 (dev-auto-setup) fires LAST (the trailing statement). Both are started
 // WITHOUT awaiting so the dev server still starts serving ~18s sooner.
 //
+// STARTUP DEADLINE (cinatra#2554): the sequence runs under an `unref()`ed 180 s
+// deadline. Every phase below is AWAITED before anything is served, so a phase
+// that blocks forever used to present as a completely silent hang. The watchdog
+// records a phase marker at each await boundary and, on the deadline, logs a loud
+// diagnostic NAMING the in-flight phase — then exits non-zero in dev, or repeats
+// the diagnostic every 60 s and keeps waiting in prod. See boot-stall-watchdog.ts.
+//
 // Deliberately NOT importing "server-only": vitest unit tests import this module.
 
 import { beginBoot, markBootReady } from "@/lib/boot/boot-state";
 import { runBootPhase, type BootPhase } from "@/lib/boot/boot-phase";
+import {
+  armBootStallWatchdog,
+  type BootStallWatchdog,
+} from "@/lib/boot/boot-stall-watchdog";
 import { coreBootPhases } from "@/lib/boot/phases/core-boot";
 import { schemaVersionPreconditionPhases } from "@/lib/boot/phases/schema-version-precondition";
 import { extensionActivationPhases } from "@/lib/boot/phases/extension-activation";
@@ -51,6 +62,8 @@ export type RunBootDeps = {
   runPhase?: typeof runBootPhase;
   startDetachedAgentsScan?: typeof startDetachedDevAgentsScanPhase;
   startDetachedAutoSetup?: typeof startDetachedDevAutoSetupPhase;
+  /** The #2554 startup deadline. Injectable so the fake-timer guard can drive it. */
+  armStallWatchdog?: typeof armBootStallWatchdog;
 };
 
 function inDevMode(): boolean {
@@ -58,11 +71,31 @@ function inDevMode(): boolean {
 }
 
 /**
- * Run the full boot sequence. Mirrors the original `register()` body order
+ * Run the full boot sequence under the #2554 bounded startup deadline.
+ *
+ * The deadline is armed BEFORE the first phase and disarmed once boot reaches
+ * ready — or aborts. Its whole job is to make a stalled boot LOUD: every awaited
+ * phase runs before anything is served, so a phase that blocks forever used to
+ * present as a silent hang with no output at all. See boot-stall-watchdog.ts.
+ */
+export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
+  const { isDevMode = inDevMode, armStallWatchdog = armBootStallWatchdog } = deps;
+
+  const watchdog = armStallWatchdog({ isDevMode });
+  try {
+    await runBootSequence(deps, watchdog);
+  } finally {
+    // Ready OR aborted — either way the deadline has nothing left to narrate.
+    watchdog.disarm();
+  }
+}
+
+/**
+ * The ordered boot sequence. Mirrors the original `register()` body order
  * exactly. Each phase is recorded in the boot-state surface; a `fatal` phase that
  * throws aborts boot (the throw propagates out of `register()` as before).
  */
-export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
+async function runBootSequence(deps: RunBootDeps, watchdog: BootStallWatchdog): Promise<void> {
   const {
     isDevMode = inDevMode,
     runPhase = runBootPhase,
@@ -75,7 +108,15 @@ export async function runBoot(deps: RunBootDeps = {}): Promise<void> {
 
   const run = async (phases: BootPhase[]): Promise<void> => {
     for (const phase of phases) {
-      await runPhase(phase);
+      // #2554 phase markers: plain strings recorded at the EXISTING await
+      // boundary so the startup deadline can NAME the phase still in flight.
+      // Pure bookkeeping — no behavioral change to the phase or its policy.
+      watchdog.phaseStarted(phase.name);
+      try {
+        await runPhase(phase);
+      } finally {
+        watchdog.phaseFinished(phase.name);
+      }
     }
   };
 
