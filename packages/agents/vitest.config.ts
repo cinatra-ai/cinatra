@@ -235,6 +235,13 @@ export default defineConfig({
         root,
         "packages/agent-ui-protocol/src/server.ts",
       ),
+      // cinatra#2566 — the lifecycle-card registry (kinds, states, presence
+      // matrix) the review card and its runtime read. Subpath alias, so it MUST
+      // stay above the bare-package entry below.
+      "@cinatra-ai/agent-ui-protocol/renderable-views": path.join(
+        root,
+        "packages/agent-ui-protocol/src/renderable-views/index.ts",
+      ),
       "@cinatra-ai/agent-ui-protocol": path.join(
         root,
         "packages/agent-ui-protocol/src/index.ts",

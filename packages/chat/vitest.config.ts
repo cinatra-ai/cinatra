@@ -64,6 +64,18 @@ export default defineConfig({
         root,
         "packages/agent-ui-protocol/src/index.ts",
       ),
+      // cinatra#2566 — the lifecycle-card runtime and the ONE review renderer
+      // live in the agents package (the run card must reach them too, and chat
+      // depends on agents, never the other way round). Subpath aliases, so they
+      // MUST stay above the bare-package entry below.
+      "@cinatra-ai/agents/lifecycle-card-runtime": path.join(
+        root,
+        "packages/agents/src/lifecycle-card-runtime.tsx",
+      ),
+      "@cinatra-ai/agents/review-gate-card": path.join(
+        root,
+        "packages/agents/src/review-gate-card.tsx",
+      ),
       "@cinatra-ai/agents": path.join(
         root,
         "packages/agents/src/index.ts",

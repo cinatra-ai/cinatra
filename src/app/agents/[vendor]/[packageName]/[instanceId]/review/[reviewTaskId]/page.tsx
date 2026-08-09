@@ -27,9 +27,8 @@
  * renderer, no edit affordance, no client-supplied renderer id.
  */
 import "server-only";
-import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { ClipboardCheck, Lock } from "lucide-react";
+import { Lock } from "lucide-react";
 
 import { readAgentRunById, readAgentTemplateById } from "@cinatra-ai/agents/store";
 import { buildRunStepperSteps, type RunStepperPolicyStep } from "@cinatra-ai/agents/run-stepper-steps";
@@ -50,16 +49,16 @@ import {
   loadReviewGateSurface,
 } from "@/app/artifacts/[id]/review-gate-ports";
 import type { ReviewDisposition } from "@/lib/artifacts/artifact-review-decision";
-import {
-  pinnedCaptureKey,
-  type ReviewSubmitOutcome,
-} from "@/lib/artifacts/review-surface-model";
+import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
+
+import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
+import { ReviewGateCard } from "@cinatra-ai/agents/review-gate-card";
+import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 
 import { resolveReviewActorContext } from "./review-actor";
 import { submitReviewDecisionAction } from "./actions";
-import { ReviewTargetPanel } from "./review-target-panel";
-import { ReviewDecisionBar } from "./review-decision-bar";
-import { ReviewGateBlocked, ReviewGateLoading } from "./review-gate-states";
+import { ReviewGateBlocked } from "./review-gate-states";
 import { ReviewRunSteps, type ReviewRunStep } from "./review-run-steps";
 import { ReviewPromptWindow } from "./review-prompt-window";
 import { VerificationView } from "./verification-view";
@@ -204,53 +203,45 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
     return submitReviewDecisionAction(runId, reviewTaskId, input.disposition, input.comment);
   }
 
+  // The gate's card ref — the same authenticated-encrypted ticket the run card
+  // and a chat transcript address the card with. Minted per request here (rather
+  // than read off the gate) because the page reaches the gate by route params and
+  // has no envelope to read.
+  const gateCardRef = encodeLifecycleGateRef({ runId, reviewTaskId });
+
   return (
     <ReviewShell>
       <div className="flex items-start gap-6">
         {/* owner ruling (2) — the agent run STEPS on the left as run context. */}
         <ReviewRunSteps steps={steps} activeStep={activeStep} />
 
-        {/* The gate/target detail + decision on the right. */}
+        {/* The gate REGION on the right (cinatra#2566, epic #2564 S2). The page's
+            own composition — gate header, the stacked target panels, the decision
+            bar — is GONE from here and lives in `ReviewGateCard`, the one renderer
+            the chat thread and the run card mount too. The page keeps its deeper
+            chrome (the run step rail beside it, the prompt window below, the
+            verification view) and supplies two things the card cannot derive: the
+            server-minted ref that addresses this gate, and the ROUTE-BOUND decision
+            action it has always used, so the page's decision transport is exactly
+            what it was before the move.
+
+            When the ref cannot be minted (no instance auth secret), the page falls
+            back to nothing rather than to a second composition — there is only one
+            drawing of a review, and an instance that cannot mint refs is a
+            configuration fault to fix, not a reason to fork the surface. */}
         <div className="flex min-w-0 flex-1 flex-col gap-4">
-          {/* §I/§II — the gate header: what is under review + the producing agent's
-              one-line summary when present. */}
-          <div className="flex flex-wrap items-center gap-2.5">
-            <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-mustard-ink">
-              <ClipboardCheck aria-hidden="true" className="size-4" />
-            </span>
-            <span className="font-sans text-sm font-bold text-foreground">Review requested</span>
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-logo/40 bg-logo/15 px-2.5 py-0.5 text-xs font-semibold text-mustard-ink">
-              <span className="size-[7px] rounded-full bg-logo" aria-hidden="true" />
-              Awaiting your decision
-            </span>
-          </div>
-          {surface.agentSummary ? (
-            <p className="max-w-[66ch] text-xs leading-relaxed text-muted-foreground">
-              <span className="font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground">
-                Agent summary
-              </span>{" "}
-              {surface.agentSummary}
-            </p>
-          ) : null}
-
-          {/* §II/§III — the review target(s), stacked as sibling panels under one
-              decision (the decision is all-or-nothing across the whole gate). */}
-          <div className="grid gap-3">
-            {surface.targets.map((prepared) => (
-              <Suspense
-                key={`${prepared.target.artifactId}:${prepared.target.representationRevisionId}`}
-                fallback={<ReviewGateLoading />}
-              >
-                <ReviewTargetPanel
-                  prepared={prepared}
-                  capturePair={surface.pinnedCapturePairs[pinnedCaptureKey(prepared.target)] ?? null}
-                />
-              </Suspense>
-            ))}
-          </div>
-
-          {/* §IV/§V — the single decision bar governing every target under the gate. */}
-          <ReviewDecisionBar permissions={surface.permissions} submitAction={submitAction} />
+          <LifecycleCardSurfaceProvider host="page_gate_region">
+            {gateCardRef ? (
+              <ReviewGateCard
+                view={{
+                  viewType: "artifact_review_gate",
+                  schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+                  ref: gateCardRef,
+                }}
+                submitAction={submitAction}
+              />
+            ) : null}
+          </LifecycleCardSurfaceProvider>
         </div>
       </div>
 
