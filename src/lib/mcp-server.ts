@@ -16,6 +16,7 @@ import { createObjectsModule } from "@cinatra-ai/objects/module";
 import { createArtifactsModule } from "@/lib/artifacts/mcp";
 import { createContextModule } from "@/lib/artifacts/context-mcp";
 import { createApprovalsMcpModule } from "@/lib/approvals/approvals-mcp";
+import { createLifecyclePullMcpModule } from "@/lib/lifecycle/lifecycle-pull-mcp";
 import { createProjectSeamMcpModule } from "@/lib/project-seam-mcp";
 import { createAssistantMcpModule } from "@/lib/assistant-mcp";
 import { createProjectsModule } from "@cinatra-ai/projects/module";
@@ -105,6 +106,15 @@ const postConnectorPlatformModules = [
   // federates agent creation requests and (once they join the registry) the
   // marketplace sources. Agent-adjacent slot.
   createApprovalsMcpModule(),
+  // The conversational PULL for lifecycle state (cinatra#2567, epic #2564 S3):
+  // artifact_review_gates_list / artifact_review_gate_render /
+  // verification_record_render — read-only primitives that mint S1's
+  // producer-bound card refs. Registered in the approvals-adjacent slot because
+  // it is the same question ("what is waiting for me?") asked from a
+  // conversation instead of a page. No decide/mutate primitive exists here or
+  // anywhere on the lifecycle surface; both delegated tool policies reject that
+  // class by construction (structural test in src/lib/lifecycle/__tests__).
+  createLifecyclePullMcpModule(),
   // Project-manager pilot host tool seam (cinatra#1033 W3 / #1032 D3):
   // project_instantiate / project_tick_context / project_dispatch_worker as
   // run-token-authenticated MCP tools offered to the PM seat's own agent run.

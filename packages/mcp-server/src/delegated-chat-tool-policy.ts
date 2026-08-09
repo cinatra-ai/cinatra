@@ -94,6 +94,24 @@ const ALLOWED_EXACT = new Set<string>([
   "artifact_representation_get",
   "artifact_representation_latest",
 
+  // cinatra#2567 (epic #2564 S3) — the CONVERSATIONAL PULL for lifecycle
+  // state. All three are strictly read-only and return OPAQUE REFS, never rows:
+  // `artifact_review_gates_list` answers with refs for the open review gates
+  // the caller may read (per-row run READ access re-checked before a ref is
+  // minted), and the two `*_render` primitives turn one ref into one lifecycle
+  // CARD whose state the server resolves on every render. Nothing about a gate
+  // rides the tool result, and every denial answers one fixed sentence with no
+  // ids or counts.
+  //
+  // They add NO mutation reach. The matching decide/mutate primitives do not
+  // exist on any surface — a review is still resolved only on a rendered
+  // decision surface, exactly like `agent_run_resume` and `approvals_decide`
+  // above — and the decision-verb backstop below now denies that whole class
+  // even if a future edit put such a name on this allowlist.
+  "artifact_review_gates_list",
+  "artifact_review_gate_render",
+  "verification_record_render",
+
   // Read-only cost + usage observability. The
   // user asks the chat "how much has this org spent on LLM this week?" —
   // today that requires manual cube-discovery hops. These 10 primitives
@@ -280,6 +298,26 @@ const DENIED_VERB_TOKENS = new Set<string>([
   // stay on the rendered approval surface. Defense-in-depth; these tools are also
   // deny-by-default (never on the allowlist).
   "decide",
+  // cinatra#2567 (epic #2564 S3) — the rest of the LIFECYCLE DECISION class,
+  // for the same reason `decide` is here. The epic's structural rule is that
+  // the model may PRESENT a lifecycle interaction and may never resolve one:
+  // approving, rejecting, resuming a held run, confirming a proposal or arming
+  // a schedule are all decisions a human makes on a rendered surface. No such
+  // primitive exists today on any surface, so these tokens deny nothing that
+  // works — they make the class unreachable BY CONSTRUCTION rather than by the
+  // allowlist alone, so adding one to ALLOWED_EXACT is not enough to expose it.
+  // Whole-token matching keeps the read surface intact: `approvals_list`
+  // (token "approvals") and `artifact_review_gates_list` are unaffected, and
+  // the only existing primitive carrying one of these exact tokens is
+  // `agent_run_resume`, already denied. Like every entry here the tokens are
+  // GLOBAL, not lifecycle-scoped: a future unrelated read that happens to
+  // contain one as a whole token needs an explicit ALLOWED_PROPOSAL_OVERRIDE
+  // entry, exactly as `agent_run_stop` needed one for "stop".
+  "approve",
+  "reject",
+  "resume",
+  "confirm",
+  "arm",
 ]);
 
 // Family prefixes that must never be reachable from chat regardless of verb.

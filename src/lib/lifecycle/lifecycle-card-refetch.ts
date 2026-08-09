@@ -34,7 +34,10 @@ import {
   readReviewGate,
   readReviewGateState,
 } from "@cinatra-ai/agents/artifact-review-gate-store";
-import { readVerificationRecordForGate } from "@cinatra-ai/agents/lifecycle-verification-store";
+// The READ leaf, not the verification write store (cinatra#2567): this resolver
+// only asks whether a reading exists, and reaching it through the write store
+// dragged the whole verification lane onto every graph the MCP surface carries.
+import { readVerificationRecordForGate } from "@cinatra-ai/agents/lifecycle-verification-read-store";
 import type {
   LifecycleCardState,
   LifecycleDataPartViewType,

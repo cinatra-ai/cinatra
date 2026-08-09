@@ -23,7 +23,7 @@ vi.mock("@cinatra-ai/agents/artifact-review-gate-store", () => ({
   readReviewGate: (...args: unknown[]) => readReviewGate(...args),
 }));
 
-vi.mock("@cinatra-ai/agents/lifecycle-verification-store", () => ({
+vi.mock("@cinatra-ai/agents/lifecycle-verification-read-store", () => ({
   readVerificationRecordForGate: (...args: unknown[]) =>
     readVerificationRecordForGate(...args),
 }));

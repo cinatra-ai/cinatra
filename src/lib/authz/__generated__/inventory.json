@@ -313,6 +313,16 @@
       "line": 351
     },
     {
+      "primitiveName": "artifact_review_gate_render",
+      "file": "src/lib/lifecycle/lifecycle-pull-mcp.ts",
+      "line": 384
+    },
+    {
+      "primitiveName": "artifact_review_gates_list",
+      "file": "src/lib/lifecycle/lifecycle-pull-mcp.ts",
+      "line": 376
+    },
+    {
       "primitiveName": "artifact_source_compile",
       "file": "packages/agents/src/mcp/schemas.ts",
       "line": 543
@@ -1231,6 +1241,11 @@
       "primitiveName": "twenty_status",
       "file": "extensions/cinatra-ai/twenty-connector/src/mcp/module.ts",
       "line": 22
+    },
+    {
+      "primitiveName": "verification_record_render",
+      "file": "src/lib/lifecycle/lifecycle-pull-mcp.ts",
+      "line": 393
     },
     {
       "primitiveName": "wordpress_site_tool_call",
