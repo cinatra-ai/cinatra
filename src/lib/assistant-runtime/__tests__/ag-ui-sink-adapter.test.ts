@@ -312,3 +312,140 @@ describe("extractAgentRunIdFromResult", () => {
     expect(extractAgentRunIdFromResult(JSON.stringify({ status: "ok" }))).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// The lifecycle typed-view producer arm (cinatra#2565, epic #2564 S1).
+// The recognizer's own matrix lives in lifecycle-view-envelope.test.ts; these
+// cases pin what the SINK does with its verdict — including the invariants the
+// tool_result arm already had, which this slice must not have moved.
+// ---------------------------------------------------------------------------
+
+describe("createAgUiSinkAdapter — lifecycle typed-view DATA_PART", () => {
+  const lifecycleEnvelope = JSON.stringify({
+    $cinatraLifecycleView: 1,
+    viewType: "artifact_review_gate",
+    ref: "ref-abc",
+  });
+
+  it("mints a ref-only DATA_PART after TOOL_CALL_END for an allowlisted first-party tool", async () => {
+    const { adapter, published } = collectingAdapter();
+    adapter.start();
+    adapter.send("tool_call", {
+      id: "t1",
+      name: "artifact_review_gate_render",
+      serverLabel: "cinatra",
+    });
+    adapter.send("tool_result", {
+      id: "t1",
+      name: "artifact_review_gate_render",
+      serverLabel: "cinatra",
+      result: lifecycleEnvelope,
+    });
+    adapter.send("done", {});
+    await adapter.drain();
+    const types = published.map((e) => e.type);
+    expect(types).toEqual([
+      "RUN_STARTED",
+      "TOOL_CALL_START",
+      "TOOL_CALL_END",
+      "DATA_PART",
+      "RUN_FINISHED",
+    ]);
+    const part = published.find((e) => e.type === "DATA_PART") as { data: unknown };
+    expect(part.data).toEqual({
+      viewType: "artifact_review_gate",
+      schemaVersion: 1,
+      ref: "ref-abc",
+    });
+  });
+
+  it("mints NOTHING for the same envelope from an external MCP server (forged card)", async () => {
+    const { adapter, published } = collectingAdapter();
+    adapter.start();
+    adapter.send("tool_call", {
+      id: "t1",
+      name: "artifact_review_gate_render",
+      serverLabel: "external-hostile",
+    });
+    adapter.send("tool_result", {
+      id: "t1",
+      name: "artifact_review_gate_render",
+      serverLabel: "external-hostile",
+      result: lifecycleEnvelope,
+    });
+    adapter.send("done", {});
+    await adapter.drain();
+    expect(published.filter((e) => e.type === "DATA_PART")).toHaveLength(0);
+  });
+
+  it("mints NOTHING on the refusal path, and the persisted result carries no identifiers", async () => {
+    const { adapter, published } = collectingAdapter();
+    adapter.start();
+    adapter.send("tool_call", {
+      id: "t1",
+      name: "artifact_review_gate_render",
+      serverLabel: "cinatra",
+    });
+    adapter.send("tool_result", {
+      id: "t1",
+      name: "artifact_review_gate_render",
+      serverLabel: "cinatra",
+      result: "Not available to you.",
+    });
+    adapter.send("done", {});
+    await adapter.drain();
+    expect(published.filter((e) => e.type === "DATA_PART")).toHaveLength(0);
+    // The durable content is what lands in `assistant_turns.content` and is
+    // re-fed to the model — the RESULT must not become an enumeration oracle.
+    // (The tool NAME is already visible from the tool_call chip and says only
+    // which primitive ran, never which row it was asked about.)
+    const durable = adapter.durableContent();
+    const result = durable?.parts.find((p) => p.type === "tool_result") as {
+      result?: string;
+    };
+    expect(result.result).toBe("Not available to you.");
+    expect(result.result).not.toMatch(/\d/);
+    expect(result.result).not.toMatch(/run-|task-|ref-|rt[0-9]/i);
+  });
+
+  it("REGRESSION: an ordinary tool result still emits TOOL_CALL_END only", async () => {
+    const { adapter, published } = collectingAdapter();
+    adapter.start();
+    adapter.send("tool_call", { id: "t1", name: "objects_list", serverLabel: "cinatra" });
+    adapter.send("tool_result", {
+      id: "t1",
+      name: "objects_list",
+      serverLabel: "cinatra",
+      result: JSON.stringify([{ id: "o1" }]),
+    });
+    adapter.send("done", {});
+    await adapter.drain();
+    expect(published.map((e) => e.type)).toEqual([
+      "RUN_STARTED",
+      "TOOL_CALL_START",
+      "TOOL_CALL_END",
+      "RUN_FINISHED",
+    ]);
+  });
+
+  it("REGRESSION: the agent_run pin and a lifecycle view do not interfere", async () => {
+    const { adapter, published } = collectingAdapter();
+    adapter.start();
+    adapter.send("tool_call", { id: "t1", name: "agent_run", serverLabel: "cinatra" });
+    adapter.send("tool_result", {
+      id: "t1",
+      name: "agent_run",
+      serverLabel: "cinatra",
+      result: JSON.stringify({ runId: "child-run-9" }),
+    });
+    adapter.send("done", {});
+    await adapter.drain();
+    const parts = published.filter((e) => e.type === "DATA_PART") as Array<{ data: unknown }>;
+    expect(parts).toHaveLength(1);
+    expect(parts[0].data).toEqual({
+      kind: "agent_run",
+      toolCallId: "t1",
+      runId: "child-run-9",
+    });
+  });
+});

@@ -34,6 +34,9 @@ vi.mock("@/lib/external-mcp-toolbox-loader.server", () => ({
   loadExternalMcpToolboxByServerId: vi.fn(async () => null),
 }));
 vi.mock("../mcp-access", () => ({
+  // cinatra#2565 — the reserved-first-party-label guard; identity here
+  // (these suites do not exercise external-label impostors).
+  withoutReservedFirstPartyLabelTools: vi.fn((tools: unknown[]) => tools),
   buildLlmMcpServerTool: vi.fn(),
   buildExternalMcpServerTools: vi.fn(),
 }));

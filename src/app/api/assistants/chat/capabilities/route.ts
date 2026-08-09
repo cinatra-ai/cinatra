@@ -7,6 +7,7 @@ import {
   buildAssistantStreamCapabilities,
   negotiateStreamContract,
 } from "@cinatra-ai/agent-ui-protocol/stream";
+import { lifecycleViewTypesForHost } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
 import { resolveAssistantWidgetBinding } from "@/lib/assistant-widget-handles";
 import {
@@ -38,12 +39,15 @@ import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
 //
 // The advertisement is STATIC contract metadata only (nothing instance-specific
 // — no auth config, no package names, no extension internals), so admitting a
-// verified broker caller is NOT a capability oracle beyond what the endpoint it
-// replaces already exposed; it is the same static shape either auth mode sees.
-// `renderableViews` is empty: the Cinatra assistant runtime emits no registered
-// renderable view yet (its DATA_PARTs are the structural `agent_run` /
-// `citations` payloads the reducer consumes) — the entry is ADVISORY by
-// contract and never gates rendering.
+// verified broker caller is NOT a capability oracle: it is a fixed shape per
+// SURFACE CLASS, and the class is decided by the auth branch, never by anything
+// the caller says about itself.
+//
+// `renderableViews` is SURFACE-SCOPED as of cinatra#2565: the session branch
+// advertises the lifecycle view types §IX places on the chat thread, the widget
+// branch advertises none until S8d. The entry stays ADVISORY by contract — it
+// never gates rendering, which is why the widget's real gate is the absent host
+// declaration on the embed side, not this list.
 //
 // AUTH advertised = ["session", "token-broker"]: the surface genuinely accepts
 // BOTH (the turn endpoint `route.ts` landed the broker branch in S5). Adding
@@ -67,15 +71,31 @@ const USER_TOKEN_HEADER = "X-Cinatra-Widget-User-Token";
 const WIDGET_ORIGIN_HEADER = "X-Cinatra-Widget-Origin";
 const WIDGET_ASSISTANT_HEADER = "X-Cinatra-Widget-Assistant";
 
-function chatSurfaceCapabilities() {
+// cinatra#2565 (epic #2564 S1) — SURFACE-SCOPED advertisement. The two auth
+// branches no longer advertise the same view set: a cookie session is a
+// first-party host and may render the lifecycle cards §IX places on the chat
+// thread; the broker-authenticated widget advertises NONE of them until S8d
+// (#2576) lands its policy, its read scope and its decide-time confirmation.
+// Fail-closed by construction — the widget list is built from the presence
+// matrix AND gated a second time by an enablement flag that is `false` here, so
+// enabling the surface is a deliberate edit rather than a matrix side effect.
+const WIDGET_LIFECYCLE_VIEWS_ENABLED = false;
+
+function chatSurfaceCapabilities(surface: "session" | "widget") {
+  const lifecycleViews =
+    surface === "session"
+      ? lifecycleViewTypesForHost("chat_thread")
+      : WIDGET_LIFECYCLE_VIEWS_ENABLED
+        ? lifecycleViewTypesForHost("site_widget")
+        : [];
   return buildAssistantStreamCapabilities({
     auth: ["session", "token-broker"],
-    renderableViews: [],
+    renderableViews: lifecycleViews,
   });
 }
 
-const advertisementResponse = () =>
-  Response.json(chatSurfaceCapabilities(), {
+const advertisementResponse = (surface: "session" | "widget") =>
+  Response.json(chatSurfaceCapabilities(surface), {
     headers: { "Cache-Control": "no-store" },
   });
 
@@ -98,7 +118,7 @@ export async function GET(request: Request) {
   if (!session?.user?.id) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
-  return advertisementResponse();
+  return advertisementResponse("session");
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +204,7 @@ async function serveBrokerAdvertisement(request: Request, citToken: string): Pro
     siteOrigin: verifiedOrigin,
   });
 
-  return advertisementResponse();
+  return advertisementResponse("widget");
 }
 
 const clientHelloSchema = z.object({
@@ -207,6 +227,6 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  const negotiation = negotiateStreamContract(parsed.data, chatSurfaceCapabilities());
+  const negotiation = negotiateStreamContract(parsed.data, chatSurfaceCapabilities("session"));
   return Response.json(negotiation, { headers: { "Cache-Control": "no-store" } });
 }

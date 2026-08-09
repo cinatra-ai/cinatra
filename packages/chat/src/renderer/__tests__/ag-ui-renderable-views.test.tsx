@@ -24,6 +24,8 @@ import {
   CHANGE_HISTORY_SCHEMA_VERSION,
   CITATION_GROUP_SCHEMA_VERSION,
   CONTENT_CHANGE_PROPOSAL_SCHEMA_VERSION,
+  LIFECYCLE_VIEW_SCHEMA_VERSION,
+  isLifecycleDataPartViewType,
   type KnownRenderableViewType,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { ConversationTurn, RenderableViewParts } from "../ag-ui-interactive";
@@ -65,6 +67,22 @@ const MINIMAL_VALID_VIEWS = {
     schemaVersion: CHANGE_HISTORY_SCHEMA_VERSION,
     entries: [{ runId: "run-1", label: "Edited the intro", undoable: true }],
   },
+  // Lifecycle cards (cinatra#2565) — the whole payload is an opaque ref.
+  artifact_review_gate: {
+    viewType: "artifact_review_gate",
+    schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+    ref: "ref-abc",
+  },
+  verification_summary: {
+    viewType: "verification_summary",
+    schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+    ref: "ref-abc",
+  },
+  trigger_schedule_proposal: {
+    viewType: "trigger_schedule_proposal",
+    schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+    ref: "ref-abc",
+  },
 } satisfies Record<KnownRenderableViewType, Record<string, unknown>>;
 
 /** Fold a full turn whose only payload of interest is the given DATA_PARTs. */
@@ -82,6 +100,13 @@ function turnWith(...parts: AgUiEvent[]) {
 describe("ConversationTurn — registered-inventory dispatch (S4 #1220)", () => {
   it("renders the registered card for EVERY registered viewType folded off the wire", () => {
     for (const viewType of KNOWN_RENDERABLE_VIEW_TYPES) {
+      // cinatra#2565 — a LIFECYCLE view is host-gated and refetch-gated by
+      // design: it draws nothing until a host declares itself AND the server
+      // re-authorizes the ref. `ConversationTurn` declares no host, so the
+      // observable dispatch contract here is "reached the registered card, so
+      // no fallback" rather than "drew a card". The positive render path is
+      // covered in packages/chat/src/__tests__/lifecycle-card.test.tsx.
+      if (isLifecycleDataPartViewType(viewType)) continue;
       const state = turnWith(dataPart(MINIMAL_VALID_VIEWS[viewType]));
       const { container, unmount } = render(<ConversationTurn state={state} />);
       expect(
@@ -89,6 +114,19 @@ describe("ConversationTurn — registered-inventory dispatch (S4 #1220)", () => 
         `registered view "${viewType}" must dispatch to its card`,
       ).toBeTruthy();
       expect(container.querySelector('[data-view-type="__fallback__"]')).toBeNull();
+      unmount();
+    }
+  });
+
+  it("a LIFECYCLE view reaches its registered card (no fallback) and draws nothing without a host", () => {
+    for (const viewType of KNOWN_RENDERABLE_VIEW_TYPES) {
+      if (!isLifecycleDataPartViewType(viewType)) continue;
+      const state = turnWith(dataPart(MINIMAL_VALID_VIEWS[viewType]));
+      const { container, unmount } = render(<ConversationTurn state={state} />);
+      expect(container.querySelector('[data-view-type="__fallback__"]')).toBeNull();
+      expect(container.querySelector("[data-lifecycle-card]")).toBeNull();
+      // The turn's own prose is unaffected — an absent card is not a broken turn.
+      expect(container.textContent).toContain("Here you go.");
       unmount();
     }
   });

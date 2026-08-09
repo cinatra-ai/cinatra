@@ -5,7 +5,11 @@
 import "server-only";
 
 import type { ExtensionToolboxBuildContext } from "@cinatra-ai/sdk-extensions";
-import { buildLlmMcpServerTool, buildExternalMcpServerTools } from "./mcp-access";
+import {
+  buildLlmMcpServerTool,
+  buildExternalMcpServerTools,
+  withoutReservedFirstPartyLabelTools,
+} from "./mcp-access";
 import { isScriptedTestProviderEnabled } from "./scripted-test-provider";
 import type { LlmProvider, LlmProviderAdapter, LlmMcpServerTool } from "./types";
 // llm-providers S4 switch-over (cinatra#1715): every provider adapter now lives
@@ -149,7 +153,15 @@ export async function resolveMcpToolsForDeclaredIds(params: {
       : await buildRegisteredExternalMcpServerTools();
     return [
       ...(cinatraMcpTool ? [cinatraMcpTool] : []),
-      ...dedupeMcpToolsByServerLabel([...externalMcpTools, ...registeredMcpTools]),
+      // cinatra#2565 — the reserved first-party label is enforced at EVERY
+      // external ingress; `buildExternalMcpServerTools` already filtered its
+      // own batch, the registry rows are filtered here.
+      ...dedupeMcpToolsByServerLabel(
+        withoutReservedFirstPartyLabelTools(
+          [...externalMcpTools, ...registeredMcpTools],
+          "always-inject",
+        ),
+      ),
     ];
   }
   const tools: LlmMcpServerTool[] = [];
@@ -167,7 +179,12 @@ export async function resolveMcpToolsForDeclaredIds(params: {
     const { buildToolboxProviderTools } = await import("@/lib/llm-toolbox-providers");
     const providerTools = await buildToolboxProviderTools(declaredId, provider);
     if (providerTools !== null) {
-      tools.push(...providerTools);
+      tools.push(
+        ...withoutReservedFirstPartyLabelTools(
+          providerTools,
+          `declared toolbox "${declaredId}"`,
+        ),
+      );
       if (providerTools.length === 0) {
         console.warn(
           `[resolveMcpToolsForDeclaredIds] declared toolbox id "${declaredId}" resolved to 0 tools (connection unconfigured or not saved)`,
@@ -187,7 +204,12 @@ export async function resolveMcpToolsForDeclaredIds(params: {
           declaredId,
           await toolbox.buildTools(provider, context),
         );
-        tools.push(...toolboxTools);
+        tools.push(
+          ...withoutReservedFirstPartyLabelTools(
+            toolboxTools,
+            `declared toolbox "${declaredId}"`,
+          ),
+        );
         if (toolboxTools.length === 0) {
           console.warn(
             `[resolveMcpToolsForDeclaredIds] declared toolbox id "${declaredId}" resolved to 0 tools (extension unconfigured or endpoints unreachable)`,
@@ -204,7 +226,12 @@ export async function resolveMcpToolsForDeclaredIds(params: {
     }
     const externalTool = await buildSingleExternalMcpTool(declaredId);
     if (externalTool) {
-      tools.push(externalTool);
+      tools.push(
+        ...withoutReservedFirstPartyLabelTools(
+          [externalTool],
+          `declared toolbox "${declaredId}"`,
+        ),
+      );
     } else {
       console.warn(
         `[resolveMcpToolsForDeclaredIds] declared toolbox id "${declaredId}" not found in external MCP registry — agent will run without this tool`,
@@ -241,7 +268,12 @@ export async function resolveChatExternalMcpTools(
     buildExternalMcpServerTools(provider, { context }),
     buildRegisteredExternalMcpServerTools(),
   ]);
-  return dedupeMcpToolsByServerLabel([...externalMcpTools, ...registeredMcpTools]);
+  return dedupeMcpToolsByServerLabel(
+    withoutReservedFirstPartyLabelTools(
+      [...externalMcpTools, ...registeredMcpTools],
+      "chat external tools",
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
