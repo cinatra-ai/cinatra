@@ -14,7 +14,9 @@ import Link from "next/link";
 
 export type ErrorSegment =
   | { kind: "text"; value: string }
-  | { kind: "link"; value: string; href: string };
+  // `external: false` = an IN-APP route (cinatra#2526): rendered as a
+  // same-tab next/link, never `target="_blank"`.
+  | { kind: "link"; value: string; href: string; external: boolean };
 
 // Trailing sentence punctuation must stay out of the href so "…api-keys."
 // doesn't linkify the period. A backward char-walk (not a `/[…]+$/` regex) keeps
@@ -24,21 +26,50 @@ const TRAILING_PUNCT_CHARS = new Set([
   ".", ",", ";", ":", "!", "?", "'", '"', ")", "]",
 ]);
 
+// One pass, two alternatives — ORDER MATTERS.
+//
+//   1. an absolute provider URL (as before), and
+//   2. cinatra#2526 — an IN-APP absolute route, e.g.
+//      "/configuration/development?tab=tunnel". Operator-facing strings name
+//      the exact page that fixes the problem; rendered as dead text the user
+//      has to retype it by hand.
+//
+// The URL alternative is listed first and `matchAll` advances past the whole
+// match, so the path INSIDE a matched URL is never rescanned as an app route.
+//
+// Deliberately conservative, because this runs over arbitrary provider prose:
+//   - `(?<![\w@/])` — the slash must open a token, so "N/A", "and/or", "24/7"
+//     and an email local-part never linkify.
+//   - `\/[a-z]` — a route starts with a lowercase letter, so "/2" or "/ " is
+//     not a route.
+//   - the query class excludes "." so a sentence-ending period after
+//     "?tab=tunnel" stays text (the punct-walk below covers the path case).
+// No nested quantifier shares a prefix (each repeat must start with "/", which
+// the inner class excludes), so this stays linear — no ReDoS.
+const LINKIFY_RE =
+  /https?:\/\/\S+|(?<![\w@/])\/[a-z][a-z0-9\-]*(?:\/[a-zA-Z0-9\-._~%]+)*(?:\?[a-zA-Z0-9\-._~%=&+]*)?/g;
+
 export function linkifyErrorText(text: string): ErrorSegment[] {
   const segments: ErrorSegment[] = [];
-  const re = /https?:\/\/\S+/g;
   let last = 0;
-  for (const match of text.matchAll(re)) {
+  for (const match of text.matchAll(LINKIFY_RE)) {
     const raw = match[0];
     const start = match.index ?? 0;
     let end = raw.length;
     while (end > 0 && TRAILING_PUNCT_CHARS.has(raw[end - 1])) end--;
-    const url = raw.slice(0, end);
+    const href = raw.slice(0, end);
     const trail = raw.slice(end);
     if (start > last) {
       segments.push({ kind: "text", value: text.slice(last, start) });
     }
-    if (url) segments.push({ kind: "link", value: url, href: url });
+    if (href) {
+      segments.push({
+        kind: "link",
+        value: href,
+        href,
+        external: !href.startsWith("/"),
+      });
+    }
     if (trail) segments.push({ kind: "text", value: trail });
     last = start + raw.length;
   }
@@ -84,8 +115,11 @@ export function FriendlyErrorBody({ error }: { error: string }) {
             <Link
               key={i}
               href={seg.href}
-              target="_blank"
-              rel="noreferrer noopener"
+              // An in-app route navigates in place; only a provider URL opens
+              // a new tab (cinatra#2526).
+              {...(seg.external
+                ? { target: "_blank", rel: "noreferrer noopener" }
+                : {})}
               className="underline underline-offset-2"
             >
               {seg.value}
