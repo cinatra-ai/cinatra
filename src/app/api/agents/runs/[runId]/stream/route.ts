@@ -3,7 +3,15 @@ import "server-only";
 import { isPlatformAdmin, requireAuthSession } from "@/lib/auth-session";
 import { AuthzError } from "@/lib/authz";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
-import { readAgentRunById, type ActorRoleHints } from "@cinatra-ai/agents";
+import {
+  buildRecommendationHoldRetirement,
+  declaresLifecycleInteraction,
+  deriveRecommendationHoldSnapshot,
+  readAgentRunById,
+  readRecommendationHoldFromEvent,
+  recommendationHoldThreadId,
+  type ActorRoleHints,
+} from "@cinatra-ai/agents";
 import { subscribeToAgUiEventsWithId } from "@cinatra-ai/agent-ui-protocol/server";
 
 // ---------------------------------------------------------------------------
@@ -91,6 +99,69 @@ export async function GET(request: Request, context: RouteContext) {
     explicitFromId ??
     (run.status === "pending_approval" ? "0-0" : undefined);
 
+  // ---------------------------------------------------------------------
+  // The recommendation hold's LIVE-STATE SNAPSHOT + STALE-HOLD FILTER
+  // (cinatra#2568, epic #2564 S4).
+  //
+  // The event log is durable and a run can be parked, decided, dispatched and
+  // parked AGAIN, so its log can carry several hold announcements of which at
+  // most one is live. Every fresh subscriber replays that whole log (the
+  // reader treats an absent `fromId` as "from the start"), so without a filter
+  // a late joiner would be handed every hold the run ever had. The PARK is the
+  // authority: the run's CURRENT hold is SYNTHESIZED from it, and a hold frame
+  // out of the log is forwarded only when the park still confirms it.
+  //
+  // PRESENCE GATES, VALIDITY PERMITS. Any frame that DECLARES a lifecycle
+  // interaction is subject to this policy — including one whose ref cannot be
+  // decoded (minted under a rotated secret, forward-versioned, forged).
+  // Forwarding those unfiltered would deliver them to clients as ordinary
+  // review-task gates, which is exactly the confusion the discriminator exists
+  // to prevent.
+  const holdThreadId = recommendationHoldThreadId(run);
+  const deriveHold = () =>
+    deriveRecommendationHoldSnapshot({
+      runId: decodedRunId,
+      threadId: holdThreadId,
+    }).catch(() => ({ status: "unknown" }) as const);
+
+  /** What the park last told us. `unknown` never authorizes anything. */
+  let live: Awaited<ReturnType<typeof deriveHold>> = { status: "unknown" };
+
+  /**
+   * Should this log frame reach the client? `true` for everything that is not a
+   * lifecycle frame — the ordinary wire is untouched.
+   *
+   * Both arms FAIL CLOSED on `unknown`: an unreadable park cannot authorize
+   * showing a hold, and it cannot authorize retiring one either.
+   */
+  const forwardHoldFrame = async (event: unknown): Promise<boolean> => {
+    if (!declaresLifecycleInteraction(event)) return true;
+    const claimed = readRecommendationHoldFromEvent(event, decodedRunId);
+    if (!claimed) return false; // undecodable / foreign / another run's
+    const type = (event as { type?: unknown }).type;
+    if (type === "RESUME") {
+      // A retirement ALWAYS re-reads the park. "Is this hold over?" is exactly
+      // the transition a cached value cannot answer — and a RESUME naming the
+      // hold we last saw live is the likeliest case of the park having moved
+      // since we looked.
+      //
+      // A lifecycle RESUME is a "no interaction is live" signal — a client
+      // cannot tell WHICH hold it names, the ref being opaque to it — so it is
+      // forwarded only when the park says the run has NO live hold at all.
+      // While the run is waiting (on this hold or a later one) a replayed
+      // retirement would clear a card the run is still behind.
+      live = await deriveHold();
+      return live.status === "not_held";
+    }
+    // Re-read whenever an ANNOUNCEMENT disagrees with what we last knew: a hold
+    // minted while this stream was open is legitimately newer than the snapshot.
+    if (live.status !== "held" || live.holdId !== claimed.holdId) {
+      live = await deriveHold();
+    }
+    // An announcement is forwarded only while it IS the live hold.
+    return live.status === "held" && live.holdId === claimed.holdId;
+  };
+
   // Unify abort sources (client disconnect + internal) into one controller.
   const abortController = new AbortController();
   request.signal.addEventListener("abort", () => abortController.abort(), {
@@ -124,12 +195,50 @@ export async function GET(request: Request, context: RouteContext) {
       abortController.signal.addEventListener("abort", onAbort, { once: true });
 
       try {
+        // Derived HERE — as late as the stream allows, and never before the
+        // response has begun — so the window between reading the park and
+        // announcing it is as small as it can be. Anything that happens after
+        // it still reaches the client: the log replay carries the paired frames,
+        // and the card's own authorized refetch is what actually decides what is
+        // drawn (a snapshot-restored shell renders nothing without it).
+        //
+        // Deliberately NOT given an SSE `id:` — it is a synthesized frame, not
+        // a log entry, so it must never become the client's resume cursor. It
+        // goes out first so any newer log frame supersedes it rather than the
+        // reverse.
+        live = await deriveHold();
+        // "NOT HELD" IS ALSO AN ANSWER, and it has to be SAID. An EventSource
+        // reconnects on its own, so a client can come back holding a card for a
+        // hold that ended while it was away — and if the retirement was lost
+        // (the publish is best-effort) or filtered as history, silence would
+        // leave that card up forever. So every (re)connect carries the current
+        // answer: the hold, or an explicit retirement.
+        //
+        // `unknown` says NOTHING. A park we could not read must not be reported
+        // as "not held" — that would retire the card of a run that is still
+        // waiting. The client keeps what it has and its own authorized refetch
+        // remains the truth.
+        const snapshotFrame =
+          live.status === "held"
+            ? live.event
+            : live.status === "not_held"
+              ? buildRecommendationHoldRetirement({
+                  runId: decodedRunId,
+                  threadId: holdThreadId,
+                })
+              : null;
+        if (snapshotFrame) {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(snapshotFrame)}\n\n`),
+          );
+        }
         const gen = subscribeToAgUiEventsWithId(decodedRunId, {
           signal: abortController.signal,
           fromId,
         });
         for await (const { id, event } of gen) {
           if (closed) break;
+          if (!(await forwardHoldFrame(event))) continue;
           // SSE id: field enables browser EventSource auto-resume via
           // Last-Event-ID on reconnect. Redis Streams native IDs are
           // `<digits>-<digits>` — always safe per WHATWG SSE spec (no

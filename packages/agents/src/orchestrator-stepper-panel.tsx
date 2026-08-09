@@ -1290,6 +1290,7 @@ function DevPreviewRecommendationRow({
       }
       promptText={recHold.state === "held" ? recHold.promptText : undefined}
       initialRecommendations={recHold.state === "held" ? recHold.recommendations : undefined}
+      holdRef={recHold.state === "held" ? recHold.holdRef : undefined}
       decision={
         recHold.state === "held"
           ? { kind: "pending" }

@@ -213,6 +213,24 @@ export default defineConfig({
       // Mirror tsconfig.json path map for workspace packages used transitively by tests in this package.
       // Subpath aliases must come BEFORE the bare-package alias so vite's
       // prefix matcher prefers the more specific one.
+      // The lifecycle-card registry is imported by its DEEP specifier on
+      // purpose (cinatra#2568): the `renderable-views` barrel would drag the
+      // whole zod view-schema chain into the four locked routes that reach
+      // this package's pre-dispatch path. Vite matches `alias` by prefix and
+      // runs it before tsconfigPaths, so without this entry the bare-package
+      // alias below would rewrite the deep specifier to `…/src/index.ts/…`.
+      "@cinatra-ai/agent-ui-protocol/renderable-views/lifecycle-cards": path.join(
+        root,
+        "packages/agent-ui-protocol/src/renderable-views/lifecycle-cards.ts",
+      ),
+      "@cinatra-ai/agent-ui-protocol/renderable-views": path.join(
+        root,
+        "packages/agent-ui-protocol/src/renderable-views/index.ts",
+      ),
+      "@cinatra-ai/agent-ui-protocol/stream": path.join(
+        root,
+        "packages/agent-ui-protocol/src/stream.ts",
+      ),
       "@cinatra-ai/agent-ui-protocol/server": path.join(
         root,
         "packages/agent-ui-protocol/src/server.ts",

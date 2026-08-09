@@ -490,6 +490,34 @@ export function AgenticRunPanel({
     initialStreamedText, // hydrate from DB on page load for external runs
   });
 
+  // THE HOLD ON THE WIRE DRIVES THE ROW (cinatra#2568). The 4-second poll above
+  // stops as soon as it sees a non-held state, so a hold that appears AFTER its
+  // first tick — a re-triggered run, a park that lands a moment after this
+  // panel mounted — stayed invisible until a reload. The typed hold interrupt
+  // and its paired RESUME are exactly the events that change the answer, so
+  // refetch the AUTHORITATIVE state when one arrives. The wire only says
+  // "something changed"; the actor-scoped action still decides what this viewer
+  // may see. (The poll itself is retired when the row becomes the registry
+  // card — the issue orders that last, after replay and routing exist.)
+  const holdWireRef = streamResult.lifecycleInterrupt?.ref ?? null;
+  const lastHoldWireRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!runId || !streamEnabled) return;
+    if (lastHoldWireRef.current === holdWireRef) return;
+    lastHoldWireRef.current = holdWireRef;
+    let cancelled = false;
+    getRunRecommendationHoldStateAction({ runId })
+      .then((s) => {
+        if (!cancelled) setRecHold(s);
+      })
+      .catch(() => {
+        /* the poll remains the fallback */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [runId, streamEnabled, holdWireRef]);
+
   // Effective status and error:
   // SSE wins when stream is enabled and has delivered a value; otherwise fall back to poll.
   const status = resolveStreamFirst(streamEnabled, streamResult.status, pollStatus);
@@ -1080,6 +1108,7 @@ export function AgenticRunPanel({
           }
           promptText={recHold.state === "held" ? recHold.promptText : undefined}
           initialRecommendations={recHold.state === "held" ? recHold.recommendations : undefined}
+          holdRef={recHold.state === "held" ? recHold.holdRef : undefined}
           decision={
             recHold.state === "held"
               ? { kind: "pending" }

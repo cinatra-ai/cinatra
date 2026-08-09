@@ -40,7 +40,12 @@ import {
 import { readAgentRunById, readAgentTemplateById } from "./store";
 import { getRunRecommendations } from "./recommendation-interception";
 import {
+  RECOMMENDATION_DECISION_REFUSAL,
+  decodeRecommendationHoldRef,
+  encodeRecommendationHoldRef,
+  publishRecommendationHoldResume,
   readRecommendationParkForRun,
+  recommendationHoldThreadId,
   releaseRecommendationParkForRun,
   resolveRecommendationCandidateSkillIds,
 } from "./recommendation-hold";
@@ -54,7 +59,20 @@ export type RunRecommendationDecisionResult =
 
 export type RunRecommendationHoldState =
   | { state: "none" }
-  | { state: "held"; agentPackageName: string; promptText: string; recommendations: RecommendedSkillForChip[] }
+  | {
+      state: "held";
+      agentPackageName: string;
+      promptText: string;
+      recommendations: RecommendedSkillForChip[];
+      /**
+       * OPAQUE handle to THIS hold instance (cinatra#2568). The row hands it
+       * back on confirm/skip so the decision is bound to the hold it was taken
+       * against — see `assertDecisionMatchesLiveHold`. Empty when no ref can be
+       * minted (no app secret): the decision then falls back to the pre-#2568
+       * run-scoped behaviour rather than becoming un-decidable.
+       */
+      holdRef: string;
+    }
   | { state: "confirmed"; skillNames: string[] }
   | { state: "skipped" };
 
@@ -155,6 +173,7 @@ export async function getRunRecommendationHoldStateAction(input: {
     state: "held",
     agentPackageName: packageName,
     promptText,
+    holdRef: encodeRecommendationHoldRef({ runId: input.runId, holdId: park.id }) ?? "",
     recommendations: recs.map((r) => ({
       skillId: r.skillId,
       skillRevisionId: r.skillRevisionId,
@@ -165,6 +184,59 @@ export async function getRunRecommendationHoldStateAction(input: {
       scoredFeatures: r.scoredFeatures,
     })),
   };
+}
+
+/**
+ * THE HOLD-INSTANCE BINDING (cinatra#2568). Resolves the hold a decision is
+ * bound to, BEFORE the decision writes anything.
+ *
+ * WHAT IT GUARANTEES: a decision taken against hold H is applied to hold H or to
+ * nothing. Without it these actions were only run-scoped — a decision submitted
+ * after the run had been dispatched and PARKED AGAIN as H' would write its
+ * selection (or its skip evidence) and then release H', applying a choice the
+ * human made for a different candidate set. A stale tab, a slow network or a
+ * double-decided run is enough. The check therefore runs FIRST, so a decision
+ * aimed at a hold the run has moved past leaves no trace on the run at all.
+ *
+ * WHAT IT DOES NOT GUARANTEE, stated plainly: it is a read-and-compare, not an
+ * atomic claim, so two decisions racing on the SAME live hold both write their
+ * decision — exactly as they did before this slice. What IS exactly-once is the
+ * DISPATCH: the park sweep is a `status='parked'` conditional update, so only
+ * one of them transitions the park and only one run is dispatched. Making the
+ * write itself exclusive means claiming the park before writing, which trades
+ * this race for a worse one (a claimed park whose decision write then fails
+ * leaves an un-dispatched run with no live hold and no row to decide) — so it
+ * belongs with the park store's own transaction, not here.
+ *
+ * IDEMPOTENT RETRY IS NOT A STALE DECISION. A decision whose response was lost
+ * and is retried names a hold that is now RELEASED — and that is still THIS
+ * run's hold, so it is accepted and the downstream path is idempotent (the
+ * release is a no-op, the dispatch is guarded by the run's own status). Only a
+ * decision naming a hold that is not the run's current park at all is refused.
+ *
+ * The refusal is the same generic one an unauthorized caller gets, so "your
+ * hold is stale" and "you may not decide this run" are indistinguishable.
+ *
+ * FAIL-CLOSED for a named decision: an unreadable park refuses. A caller that
+ * names NO hold keeps the pre-#2568 run-scoped behaviour, because a deployment
+ * that cannot mint refs (no app secret) must still be able to decide its runs.
+ */
+async function resolveDecisionHold(
+  runId: string,
+  holdRef: string | undefined,
+): Promise<{ ok: true; holdId: string | null } | { ok: false }> {
+  const park = await readRecommendationParkForRun(runId).catch(() => null);
+  if (!holdRef) return { ok: true, holdId: park?.id ?? null };
+  const claimed = decodeRecommendationHoldRef(holdRef);
+  const matches =
+    claimed !== null &&
+    claimed.runId === runId &&
+    park !== null &&
+    // Deliberately NOT `park.status === "parked"`: the run's current park being
+    // the claimed hold is the binding. A released one means "already decided",
+    // which is a RETRY, not a stale decision.
+    park.id === claimed.holdId;
+  return matches ? { ok: true, holdId: claimed!.holdId } : { ok: false };
 }
 
 /**
@@ -182,10 +254,18 @@ export async function confirmRunRecommendationAction(input: {
   declaredProducedTypes?: string[];
   targetArtifactKind?: string;
   forcedRevisions?: Record<string, string>;
+  /** The hold this decision was taken against (cinatra#2568) — see the CAS below. */
+  holdRef?: string;
 }): Promise<RunRecommendationDecisionResult> {
   const session = await requireAuthSession().catch(() => null);
-  if (!session?.user?.id) return { ok: false, error: "unauthorized" };
-  if (!input.runId) return { ok: false, error: "run not found" };
+  if (!session?.user?.id) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
+  if (!input.runId) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
+
+  // 0. The hold-instance CAS — BEFORE any write. A decision aimed at a hold the
+  //    run has moved past must not mutate the run's selection on its way to
+  //    being refused.
+  const bound = await resolveDecisionHold(input.runId, input.holdRef);
+  if (!bound.ok) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 
   // 1. Write the authoritative per-run selection (does its own execute-tier
   //    run authorization + assigned-set bounding).
@@ -198,10 +278,10 @@ export async function confirmRunRecommendationAction(input: {
     targetArtifactKind: input.targetArtifactKind,
     forcedRevisions: input.forcedRevisions,
   });
-  if (!written.ok) return { ok: false, error: "selection not authorized" };
+  if (!written.ok) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 
-  // 2 + 3. Release the hold and dispatch.
-  return releaseAndDispatch(input.runId);
+  // 2 + 3. Release the hold and dispatch — bound to the hold resolved above.
+  return releaseAndDispatch(input.runId, bound.holdId, input.holdRef !== undefined);
 }
 
 /**
@@ -212,18 +292,25 @@ export async function confirmRunRecommendationAction(input: {
  */
 export async function skipRunRecommendationAction(input: {
   runId: string;
+  /** The hold this decision was taken against (cinatra#2568) — see the CAS below. */
+  holdRef?: string;
 }): Promise<RunRecommendationDecisionResult> {
   const session = await requireAuthSession().catch(() => null);
   const userId = session?.user?.id ?? null;
-  if (!userId) return { ok: false, error: "unauthorized" };
-  if (!input.runId) return { ok: false, error: "run not found" };
+  if (!userId) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
+  if (!input.runId) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
+
+  // The hold-instance CAS runs BEFORE the durable skip evidence is written —
+  // a stale decision must leave no trace on the run it was not aimed at.
+  const bound = await resolveDecisionHold(input.runId, input.holdRef);
+  if (!bound.ok) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 
   const run = await readAgentRunById(input.runId).catch(() => null);
-  if (!run) return { ok: false, error: "run not found" };
+  if (!run) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
   // Ownership check — the same gate `triggerAgentRun` (the dispatch, below)
   // enforces. A run with no owner (runBy null) is triggerable by any session,
   // matching the existing trigger semantics.
-  if (run.runBy && run.runBy !== userId) return { ok: false, error: "forbidden" };
+  if (run.runBy && run.runBy !== userId) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 
   // Persist durable skip evidence: mark every recommended candidate `user_skipped`.
   // Best-effort — a telemetry write must never block the dispatch.
@@ -271,7 +358,7 @@ export async function skipRunRecommendationAction(input: {
     );
   }
 
-  return releaseAndDispatch(input.runId);
+  return releaseAndDispatch(input.runId, bound.holdId, input.holdRef !== undefined);
 }
 
 /**
@@ -289,13 +376,36 @@ export async function skipRunRecommendationAction(input: {
  * explicit, retryable error instead of a false success. The verification read
  * FAILS CLOSED: an unreadable park is treated as still-held, because "I could
  * not confirm the release" must never become "dispatched".
+ *
+ * RESUME rides EXACTLY that verification (cinatra#2568). The typed hold
+ * interrupt is only retired once the park is confirmed no longer live — never
+ * optimistically on "the action was called", and never on the fail-closed
+ * branches above. So the wire can under-report a hold's end (the next subscribe
+ * re-derives from the park and finds it released) but can never claim a run was
+ * freed while it is still waiting. Emitted BEFORE the dispatch attempt because
+ * the hold is over either way: a preflight failure surfaces as its own
+ * actionable error on a run that is genuinely no longer held.
  */
-async function releaseAndDispatch(runId: string): Promise<RunRecommendationDecisionResult> {
+async function releaseAndDispatch(
+  runId: string,
+  /** The hold this decision resolved to (`resolveDecisionHold`), if any. */
+  boundHoldId: string | null,
+  /** Whether the caller NAMED that hold — only then is the release instance-bound. */
+  holdNamed: boolean,
+): Promise<RunRecommendationDecisionResult> {
   const HOLD_STILL_LIVE = {
     ok: false as const,
     error: "could not release the run-start recommendation hold — please retry",
   };
-  await releaseRecommendationParkForRun(runId).catch(() => false);
+
+  // The release carries the CAS through: it sweeps the hold this decision was
+  // bound to, or nothing. A concurrent release-and-repark between the check and
+  // here therefore ends as an honest retryable error (the verification below
+  // finds the NEW park still live) instead of releasing a hold nobody decided.
+  await releaseRecommendationParkForRun(
+    runId,
+    holdNamed && boundHoldId ? boundHoldId : undefined,
+  ).catch(() => false);
   let parkAfterRelease: Awaited<ReturnType<typeof readRecommendationParkForRun>>;
   try {
     parkAfterRelease = await readRecommendationParkForRun(runId);
@@ -305,7 +415,29 @@ async function releaseAndDispatch(runId: string): Promise<RunRecommendationDecis
   if (parkAfterRelease?.status === "parked") return HOLD_STILL_LIVE;
 
   const run = await readAgentRunById(runId).catch(() => null);
-  if (!run) return { ok: false, error: "run not found" };
+  if (!run) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
+
+  // The hold is verifiably over — retire it on the wire so every live surface
+  // (this tab, another tab, an external AG-UI client) drops the card at the same
+  // moment, instead of the losing tab sitting on a decided hold until its next
+  // poll tick. BOUND to the hold instance that was actually released, so it can
+  // never clear the card of a hold the run is waiting on now.
+  //
+  // Guarded here as well as inside the publisher: the decision's outcome is the
+  // park release and the dispatch, and neither may be lost to a transport
+  // failure on an announcement.
+  const releasedHoldId = boundHoldId ?? parkAfterRelease?.id ?? null;
+  if (releasedHoldId) {
+    try {
+      await publishRecommendationHoldResume({
+        runId,
+        threadId: recommendationHoldThreadId(run),
+        holdId: releasedHoldId,
+      });
+    } catch {
+      /* announced or not, the decision's outcome stands */
+    }
+  }
 
   // A held run is pending_input; if it already advanced (a concurrent decision
   // won the dispatch race), report success without re-dispatching.

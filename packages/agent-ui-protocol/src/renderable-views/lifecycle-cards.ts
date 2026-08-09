@@ -74,6 +74,11 @@ export const LIFECYCLE_DATA_PART_VIEW_TYPES = LIFECYCLE_CARD_KINDS.filter(
   (kind) => LIFECYCLE_CARD_CARRIAGE[kind] === "data_part",
 ) as ReadonlyArray<LifecycleDataPartViewType>;
 
+/** The kinds that ride an `INTERRUPT` — the run is BLOCKED on the answer. */
+export const LIFECYCLE_INTERRUPT_KINDS = LIFECYCLE_CARD_KINDS.filter(
+  (kind) => LIFECYCLE_CARD_CARRIAGE[kind] === "interrupt",
+) as ReadonlyArray<LifecycleInterruptKind>;
+
 /** A lifecycle kind carried as a `DATA_PART` renderable view. */
 export type LifecycleDataPartViewType = {
   [K in LifecycleCardKind]: (typeof LIFECYCLE_CARD_CARRIAGE)[K] extends "data_part"
@@ -87,6 +92,22 @@ export function isLifecycleDataPartViewType(
   return (
     value !== undefined &&
     (LIFECYCLE_DATA_PART_VIEW_TYPES as readonly string[]).includes(value)
+  );
+}
+
+/** A lifecycle kind carried as a typed `INTERRUPT` (the run waits on it). */
+export type LifecycleInterruptKind = {
+  [K in LifecycleCardKind]: (typeof LIFECYCLE_CARD_CARRIAGE)[K] extends "interrupt"
+    ? K
+    : never;
+}[LifecycleCardKind];
+
+export function isLifecycleInterruptKind(
+  value: string | undefined,
+): value is LifecycleInterruptKind {
+  return (
+    value !== undefined &&
+    (LIFECYCLE_INTERRUPT_KINDS as readonly string[]).includes(value)
   );
 }
 
@@ -303,6 +324,140 @@ export const triggerScheduleProposalViewSchema = lifecycleViewSchema(
 export type TriggerScheduleProposalView = z.infer<
   typeof triggerScheduleProposalViewSchema
 >;
+
+// ---------------------------------------------------------------------------
+// The typed INTERRUPT discriminator (cinatra#2568, epic #2564 S4)
+// ---------------------------------------------------------------------------
+//
+// `recommendation_hold` is the one kind whose carriage is `interrupt`: the run
+// is genuinely BLOCKED on the answer, so it arrives as an `INTERRUPT` rather
+// than a fire-and-forget `DATA_PART`. S1 DECLARED the kind and its carriage so
+// this slice fills a named seam; what lands here is the discriminator that
+// makes a lifecycle interrupt distinguishable from an ordinary review-task
+// gate ON THE WIRE, by a consumer that holds nothing but the event.
+//
+// WHY A DISCRIMINATOR AND NOT A NEW EVENT TYPE. Every existing consumer of
+// `INTERRUPT` — the run panel, the poll-side HITL derivation, external AG-UI
+// clients — treats an interrupt as "a review task is waiting for approval" and
+// submits it to the review-task approve path. A hold is NOT a review task and
+// must never reach that path. A new top-level event would have been invisible
+// to every one of them (silently dropped by the `default:` arm of their
+// switch); an ADDITIVE OPTIONAL field on the event they already handle is
+// visible, and the routing rule is checkable: an interrupt carrying this field
+// routes by `kind`, one without it keeps EXACTLY today's behaviour.
+//
+// HANDSHAKE-COMPATIBLE, by construction:
+//   - the field is OPTIONAL, so every already-published event stays valid and
+//     `isAgUiEvent` keeps accepting both shapes;
+//   - no contract version moves (§8 of CONTRACT.md: additive optional fields do
+//     not bump the contract), so no negotiated stream re-negotiates;
+//   - a consumer that does not know the field ignores it. It then renders the
+//     interrupt with its generic fallback rather than crashing — which is why
+//     the payload carries NO decision affordance and NO content: an unaware
+//     client can draw nothing harmful from it.
+//
+// REFS ONLY, exactly as the `DATA_PART` payloads above. The interaction
+// addresses the interaction instance and carries no state — not the candidate
+// skills, not the run's status, not who may decide. The card resolves the
+// authoritative state server-side against the reader. That keeps ONE rule for
+// the whole epic ("the wire payload is a ref, never content") instead of one
+// rule per carriage, and it is what lets the live-state snapshot below be the
+// only authority on what a hold currently is.
+
+/** Current schema version of the typed-interrupt discriminator. Deliberately
+ * the SAME version line as the view payloads — they version together. */
+export const LIFECYCLE_INTERACTION_SCHEMA_VERSION = LIFECYCLE_VIEW_SCHEMA_VERSION;
+
+/**
+ * The `xRenderer` an interrupt-carried lifecycle interaction declares.
+ *
+ * `INTERRUPT` requires a non-empty renderer id (`isAgUiEvent`), and legacy
+ * consumers dispatch on it. A namespaced, otherwise-unregistered id means an
+ * unaware client finds no renderer and falls back — it can never mistake the
+ * hold for one of the registered approval forms.
+ */
+export const LIFECYCLE_INTERRUPT_RENDERER_IDS = {
+  recommendation_hold: "@cinatra-ai/lifecycle:recommendation-hold",
+} as const satisfies Record<LifecycleInterruptKind, string>;
+
+/**
+ * The discriminator carried on a lifecycle `INTERRUPT`. `.strict()` for the
+ * same reason the view payloads are: "no content rides the wire" has to be a
+ * structural property, not a review convention.
+ */
+export const lifecycleInterruptInteractionSchema = z
+  .object({
+    kind: z.enum(
+      LIFECYCLE_INTERRUPT_KINDS as unknown as [
+        LifecycleInterruptKind,
+        ...LifecycleInterruptKind[],
+      ],
+    ),
+    schemaVersion: z.literal(LIFECYCLE_INTERACTION_SCHEMA_VERSION),
+    ref: z.string().min(1).max(LIFECYCLE_VIEW_REF_MAX_LENGTH),
+  })
+  .strict();
+
+export type LifecycleInterruptInteraction = z.infer<
+  typeof lifecycleInterruptInteractionSchema
+>;
+
+/**
+ * The ONE parse seam for a typed lifecycle interrupt. Given any untrusted
+ * event-shaped value, returns the validated interaction or `null`.
+ *
+ * Every consumer that has to tell a lifecycle interrupt from an ordinary gate
+ * goes through here — the client stream hook (routing), the SSE route (live-
+ * state authority), and the poll-side HITL derivation (which must NOT mistake a
+ * hold for the run's approval gate). NEVER throws: an adversarial payload, a
+ * forward version, a wrong kind all answer `null`, and the caller then treats
+ * the event as exactly what it was before this field existed.
+ */
+/**
+ * Does this event DECLARE a lifecycle interaction, whatever it is?
+ *
+ * The weaker question, and the one every "is this an ordinary review-task
+ * gate?" consumer must ask. PRESENCE GATES, VALIDATION ONLY PERMITS: an event
+ * that declares an interaction is never treated as a review task, even when the
+ * declaration is malformed, forward-versioned or forged — otherwise a payload
+ * this build cannot parse would fail OPEN into the approval path and draw an
+ * approval floor for something that has none. Rendering the interaction still
+ * requires `readLifecycleInterruptInteraction` to succeed; an unparseable one
+ * draws nothing at all.
+ */
+export function declaresLifecycleInteraction(event: unknown): boolean {
+  try {
+    if (typeof event !== "object" || event === null || Array.isArray(event)) {
+      return false;
+    }
+    const interaction = (event as { interaction?: unknown }).interaction;
+    return (
+      typeof interaction === "object" &&
+      interaction !== null &&
+      !Array.isArray(interaction)
+    );
+  } catch {
+    // A throwing getter is a hostile shape; treat it as a declaration so it
+    // cannot slip into the review-task path.
+    return true;
+  }
+}
+
+export function readLifecycleInterruptInteraction(
+  event: unknown,
+): LifecycleInterruptInteraction | null {
+  try {
+    if (typeof event !== "object" || event === null || Array.isArray(event)) {
+      return null;
+    }
+    const candidate = (event as { interaction?: unknown }).interaction;
+    if (candidate === undefined) return null;
+    const parsed = lifecycleInterruptInteractionSchema.safeParse(candidate);
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null;
+  }
+}
 
 type _AssertBase = ArtifactReviewGateView extends RenderableViewBase
   ? VerificationSummaryView extends RenderableViewBase

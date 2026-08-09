@@ -78,10 +78,22 @@ export function isAgUiEvent(value: unknown): value is AgUiEvent {
         isRecord(value.schema) &&
         isNonEmptyString(value.xRenderer) &&
         isRecord(value.values) &&
-        isNonEmptyString(value.reviewTaskId)
+        isNonEmptyString(value.reviewTaskId) &&
+        // The typed lifecycle-interaction discriminator (cinatra#2568) is
+        // OPTIONAL — that is what makes it handshake-compatible, so ABSENT must
+        // stay valid. When present it has to be an object; its `kind` /
+        // `schemaVersion` / `ref` semantics belong to
+        // `lifecycleInterruptInteractionSchema`, not to this envelope check
+        // (same division as `DATA_PART`'s payload).
+        (value.interaction === undefined || isRecord(value.interaction))
       );
     case "RESUME":
-      return isNonEmptyString(value.threadId) && isNonEmptyString(value.runId);
+      return (
+        isNonEmptyString(value.threadId) &&
+        isNonEmptyString(value.runId) &&
+        // Optional pairing discriminator (cinatra#2568) — see the INTERRUPT arm.
+        (value.interaction === undefined || isRecord(value.interaction))
+      );
     case "DATA_PART":
       return isRecord(value.data);
     default: {

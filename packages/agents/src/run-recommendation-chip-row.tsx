@@ -58,6 +58,15 @@ type Props = {
   promptText?: string;
   /** Server-prefetched candidates (run view). Omit to fetch on mount (chat). */
   initialRecommendations?: RecommendedSkillForChip[];
+  /**
+   * OPAQUE handle to the hold this row is showing (cinatra#2568). Handed back on
+   * confirm/skip so the decision binds to the hold it was taken against: a run
+   * that was decided, dispatched and held AGAIN refuses a decision meant for the
+   * previous hold instead of applying it to the new one. Absent on surfaces that
+   * do not (yet) carry it — the action then keeps its pre-#2568 run-scoped
+   * behaviour.
+   */
+  holdRef?: string;
   decision: RunRecommendationDecision;
   /** Compact styling for the inline chat mount. */
   variant?: "panel" | "inline";
@@ -68,6 +77,7 @@ export function RunRecommendationChipRow({
   agentPackageName,
   promptText,
   initialRecommendations,
+  holdRef,
   decision,
   variant = "panel",
 }: Props) {
@@ -161,6 +171,7 @@ export function RunRecommendationChipRow({
         confirmedSkillIds,
         promptText,
         forcedRevisions: Object.keys(forcedRevisions).length ? forcedRevisions : undefined,
+        ...(holdRef ? { holdRef } : {}),
       });
       if (!res.ok) {
         setError(res.error || "Could not confirm the skill selection.");
@@ -173,7 +184,10 @@ export function RunRecommendationChipRow({
   const onSkip = () => {
     setError(null);
     startTransition(async () => {
-      const res = await skipRunRecommendationAction({ runId });
+      const res = await skipRunRecommendationAction({
+        runId,
+        ...(holdRef ? { holdRef } : {}),
+      });
       if (!res.ok) {
         setError(res.error || "Could not skip.");
         return;

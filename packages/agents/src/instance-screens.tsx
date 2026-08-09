@@ -24,6 +24,7 @@ import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
 import { buildRunStepRail, type RailMessage } from "./run-step-rail";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import {
+  encodeRecommendationHoldRef,
   readRecommendationParkForRun,
   resolveRecommendationCandidateSkillIds,
 } from "./recommendation-hold";
@@ -423,6 +424,12 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
   // plain run-scoped read behind the access door already cleared above.
   const recommendationPark = run ? await readRecommendationParkForRun(run.id) : null;
   const recommendationHeld = recommendationPark?.status === "parked";
+  // The hold instance this row is showing (cinatra#2568) — handed back on
+  // confirm/skip so a decision cannot be applied to a LATER hold of the same run.
+  const recommendationHoldRef =
+    run && recommendationHeld && recommendationPark
+      ? (encodeRecommendationHoldRef({ runId: run.id, holdId: recommendationPark.id }) ?? undefined)
+      : undefined;
   let recommendationDecision: RunRecommendationDecision | null = null;
   let initialRecommendations: RecommendedSkillForChip[] = [];
   if (run && recommendationPark) {
@@ -551,6 +558,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                       }
                     })()}
                     initialRecommendations={initialRecommendations}
+                    holdRef={recommendationHoldRef}
                     decision={recommendationDecision}
                   />
                 </div>

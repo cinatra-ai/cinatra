@@ -32,6 +32,17 @@ import "server-only";
 // pending_input run (exactly today's abandoned-setup behavior).
 // ---------------------------------------------------------------------------
 
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
+
+import {
+  LIFECYCLE_INTERACTION_SCHEMA_VERSION,
+  LIFECYCLE_INTERRUPT_RENDERER_IDS,
+  LIFECYCLE_VIEW_REF_MAX_LENGTH,
+  declaresLifecycleInteraction,
+  readLifecycleInterruptInteraction,
+} from "@cinatra-ai/agent-ui-protocol/renderable-views/lifecycle-cards";
+import type { InterruptEvent, ResumeEvent } from "@cinatra-ai/agent-ui-protocol";
+
 import { evaluatePolicy } from "@/lib/lifecycle/lifecycle-policy";
 import { evaluateThenPark } from "@/lib/lifecycle/lifecycle-continuation";
 import { isRecommendationChipRowHoldActive } from "@/lib/lifecycle/lifecycle-activation";
@@ -61,6 +72,384 @@ export function recommendationHoldEventId(runId: string): string {
 export type MaybeHoldResult =
   | { held: false; reason: string }
   | { held: true; parkId: string; reason: string };
+
+// ---------------------------------------------------------------------------
+// The hold on the RUN WIRE (cinatra#2568, epic #2564 S4)
+// ---------------------------------------------------------------------------
+//
+// S1 declared `recommendation_hold` as the one lifecycle kind whose carriage is
+// `interrupt` — the run is genuinely BLOCKED on the answer. This section fills
+// that named seam: the typed INTERRUPT the hold mints, the opaque ref that
+// addresses THIS hold instance, and the LIVE-STATE SNAPSHOT a late joiner is
+// reconstructed from.
+//
+// WHY A SNAPSHOT AND NOT A REPLAY. The event log is durable and a run can
+// re-enter `pending_input` and be parked AGAIN, so its log can hold several
+// hold interrupts of which at most one is live. Replaying history would
+// resurrect a decided hold — the exact stale-gate failure cinatra#809 fixed for
+// terminal runs. So the park table stays the ONLY authority on "is this run
+// held, and by which hold": the wire announces, the park decides. Same shape as
+// `deriveRunHitlContext`, which reads the run's CURRENT state rather than
+// trusting what the log happens to contain.
+
+/**
+ * The ONE refusal these decisions give when the caller may not act (cinatra#2568, the S1
+ * generic-refusal contract).
+ *
+ * The previous per-branch strings — "unauthorized", "run not found",
+ * "forbidden", "selection not authorized" — were an ENUMERATION ORACLE: a
+ * caller holding a guessed run id could tell "no such run" from "exists, not
+ * yours" from "yours, wrong tier", and read a run's existence and ownership off
+ * a decision endpoint. The AUTHORIZATION DECISIONS ARE UNCHANGED by this
+ * constant; only what a refused caller learns is. Retryable, self-referential
+ * failures (the hold could not be released; a connector/LLM preflight the
+ * caller can fix) keep their own actionable messages — those describe the
+ * CALLER'S OWN next step and enumerate nothing about anyone else's rows.
+ *
+ * Lives HERE rather than beside the actions that use it: that module is a
+ * `"use server"` file, and Next allows a server-action module to export async
+ * FUNCTIONS only — a constant export there fails the production build (and only
+ * the production build; typecheck and vitest are both happy with it).
+ */
+export const RECOMMENDATION_DECISION_REFUSAL =
+  "This run's skill selection cannot be decided from here.";
+
+/** The `xRenderer` the typed hold interrupt declares. */
+export const RECOMMENDATION_HOLD_RENDERER_ID =
+  LIFECYCLE_INTERRUPT_RENDERER_IDS.recommendation_hold;
+
+/** What a hold ref addresses: the run, and the hold INSTANCE within it. */
+export type RecommendationHoldRefPayload = { runId: string; holdId: string };
+
+// The ref codec. Authenticated-encrypted (AES-256-GCM) under a key derived from
+// the app secret, mirroring the S1 lifecycle-card ref: opaque means opaque, so
+// a consumer holding the event learns nothing from it, and a tampered ref does
+// not decode. It is NOT a capability — the card's refetch re-authorizes the
+// reader from scratch, so forging one buys an `absent`.
+//
+// DOMAIN-SEPARATED from the S1 gate ref by its key label AND its plaintext
+// field names (`p` for the park, where the gate ref uses `g`): a gate ref can
+// never be replayed as a hold ref, or the reverse, even though both are minted
+// by the same instance.
+const HOLD_REF_KEY_INFO = "cinatra:lifecycle-hold-ref:v1";
+const HOLD_REF_FIELD_MAX = 128;
+const HOLD_REF_IV_BYTES = 12;
+const HOLD_REF_TAG_BYTES = 16;
+
+function holdRefKey(): Buffer | null {
+  const secret = process.env.BETTER_AUTH_SECRET;
+  if (!secret) return null;
+  return createHmac("sha256", secret).update(HOLD_REF_KEY_INFO).digest();
+}
+
+/**
+ * Encode a hold ref. `null` when the ids do not fit the bounds or no key is
+ * available — a producer that cannot express its ref refuses rather than
+ * emitting one that would be dropped downstream.
+ */
+export function encodeRecommendationHoldRef(
+  payload: RecommendationHoldRefPayload,
+): string | null {
+  const { runId, holdId } = payload;
+  if (typeof runId !== "string" || runId.length === 0 || runId.length > HOLD_REF_FIELD_MAX) {
+    return null;
+  }
+  if (typeof holdId !== "string" || holdId.length === 0 || holdId.length > HOLD_REF_FIELD_MAX) {
+    return null;
+  }
+  const key = holdRefKey();
+  if (!key) return null;
+  try {
+    const iv = randomBytes(HOLD_REF_IV_BYTES);
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
+    const body = Buffer.concat([
+      cipher.update(JSON.stringify({ r: runId, p: holdId }), "utf8"),
+      cipher.final(),
+    ]);
+    const ref = Buffer.concat([iv, body, cipher.getAuthTag()]).toString("base64url");
+    return ref.length <= LIFECYCLE_VIEW_REF_MAX_LENGTH ? ref : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Decode a hold ref. `null` for anything that is not one of ours. */
+export function decodeRecommendationHoldRef(
+  ref: string,
+): RecommendationHoldRefPayload | null {
+  if (typeof ref !== "string" || ref.length === 0 || ref.length > LIFECYCLE_VIEW_REF_MAX_LENGTH) {
+    return null;
+  }
+  if (!/^[A-Za-z0-9_-]+$/.test(ref)) return null;
+  const key = holdRefKey();
+  if (!key) return null;
+  try {
+    const raw = Buffer.from(ref, "base64url");
+    if (raw.length <= HOLD_REF_IV_BYTES + HOLD_REF_TAG_BYTES) return null;
+    const iv = raw.subarray(0, HOLD_REF_IV_BYTES);
+    const tag = raw.subarray(raw.length - HOLD_REF_TAG_BYTES);
+    const body = raw.subarray(HOLD_REF_IV_BYTES, raw.length - HOLD_REF_TAG_BYTES);
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    const json = Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8");
+    const parsed: unknown = JSON.parse(json);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    const { r, p } = parsed as { r?: unknown; p?: unknown };
+    if (typeof r !== "string" || r.length === 0 || r.length > HOLD_REF_FIELD_MAX) return null;
+    if (typeof p !== "string" || p.length === 0 || p.length > HOLD_REF_FIELD_MAX) return null;
+    return { runId: r, holdId: p };
+  } catch {
+    // Wrong key, tampered bytes, non-JSON plaintext, or a ref of another domain
+    // (an S1 gate ref decrypts to `{r,g}` and fails the `p` check) — all "not
+    // one of ours".
+    return null;
+  }
+}
+
+/**
+ * Build the typed hold INTERRUPT. Pure — no I/O, so the SSE route can synthesize
+ * the same frame the producer published and a test can assert one shape.
+ *
+ * `values` and `schema` are deliberately EMPTY: the wire payload is the ref and
+ * nothing else. `reviewTaskId` is the hold's stable per-run gate identity, the
+ * same synthetic-identity convention `deriveRunHitlContext` already uses
+ * (`wayflow-…`, `setup-…`) — it names WHICH question the run is paused on and
+ * is not a review-task row. The `interaction` discriminator is what stops any
+ * consumer from treating it as one.
+ *
+ * Returns `null` when no ref can be minted (no app secret / oversized ids): an
+ * interrupt without a resolvable ref would render a card that can never refetch,
+ * so nothing is emitted at all.
+ */
+export function buildRecommendationHoldInterrupt(input: {
+  runId: string;
+  threadId: string;
+  holdId: string;
+}): InterruptEvent | null {
+  const ref = encodeRecommendationHoldRef({
+    runId: input.runId,
+    holdId: input.holdId,
+  });
+  if (!ref) return null;
+  return {
+    type: "INTERRUPT",
+    threadId: input.threadId,
+    runId: input.runId,
+    schema: {},
+    xRenderer: RECOMMENDATION_HOLD_RENDERER_ID,
+    values: {},
+    reviewTaskId: recommendationHoldEventId(input.runId),
+    interaction: {
+      kind: "recommendation_hold",
+      schemaVersion: LIFECYCLE_INTERACTION_SCHEMA_VERSION,
+      ref,
+    },
+    timestamp: Date.now(),
+  };
+}
+
+/**
+ * The reserved hold id a RETIREMENT names: "this run has no live hold".
+ *
+ * A client cannot tell WHICH hold a lifecycle RESUME names — the ref is opaque
+ * to it — so the wire meaning of one is simply "no lifecycle interaction is
+ * live on this run". The SSE route needs to be able to SAY that at stream open:
+ * a reconnecting client may be showing a hold that ended while it was
+ * disconnected, and "not held" expressed as SILENCE would leave that card up
+ * forever. Park ids are uuids, so this value can never collide with one; a log
+ * frame naming it is rejected outright (see `readRecommendationHoldFromEvent`)
+ * because only a synthesized snapshot may claim it.
+ */
+export const RECOMMENDATION_HOLD_NONE = "none";
+
+/**
+ * The paired RESUME. Emitted ONLY after a decision's release is VERIFIED, and
+ * BOUND to the hold instance it retires: a RESUME for hold H must never clear a
+ * card showing hold H'. Returns `null` when no ref can be minted, for the same
+ * reason the interrupt does — an unpaired RESUME would be a blunt "clear
+ * whatever you are showing", which is the failure this pairing exists to stop.
+ */
+export function buildRecommendationHoldResume(input: {
+  runId: string;
+  threadId: string;
+  holdId: string;
+}): ResumeEvent | null {
+  const ref = encodeRecommendationHoldRef({
+    runId: input.runId,
+    holdId: input.holdId,
+  });
+  if (!ref) return null;
+  return {
+    type: "RESUME",
+    threadId: input.threadId,
+    runId: input.runId,
+    reviewTaskId: recommendationHoldEventId(input.runId),
+    interaction: {
+      kind: "recommendation_hold",
+      schemaVersion: LIFECYCLE_INTERACTION_SCHEMA_VERSION,
+      ref,
+    },
+    timestamp: Date.now(),
+  };
+}
+
+/**
+ * The synthesized "this run is not held" frame. Not a decision record and never
+ * published to the log — the SSE route emits it at stream open so a client that
+ * reconnected while a hold ended converges instead of sitting on a stale card.
+ */
+export function buildRecommendationHoldRetirement(input: {
+  runId: string;
+  threadId: string;
+}): ResumeEvent | null {
+  return buildRecommendationHoldResume({
+    ...input,
+    holdId: RECOMMENDATION_HOLD_NONE,
+  });
+}
+
+/**
+ * Does this frame CLAIM to be a lifecycle interaction? Re-exported so the run's
+ * SSE route can gate on presence before it gates on validity — an
+ * `INTERRUPT`/`RESUME` that declares an interaction is subject to the hold
+ * policy even when its ref cannot be decoded (a frame minted under a rotated
+ * secret, a forward version, a forged payload). Forwarding such a frame
+ * unfiltered would let it reach clients as an ordinary review-task gate.
+ */
+export { declaresLifecycleInteraction };
+
+/**
+ * Read the hold identity off an event, if it IS a typed hold frame for this run
+ * (`INTERRUPT` announcing one, or `RESUME` retiring one). `null` for every other
+ * event — an ordinary gate, a forged/foreign ref, or a hold ref minted for a
+ * DIFFERENT run (which a cross-run replay would be).
+ */
+export function readRecommendationHoldFromEvent(
+  event: unknown,
+  expectedRunId: string,
+): RecommendationHoldRefPayload | null {
+  const interaction = readLifecycleInterruptInteraction(event);
+  if (!interaction || interaction.kind !== "recommendation_hold") return null;
+  const payload = decodeRecommendationHoldRef(interaction.ref);
+  if (!payload || payload.runId !== expectedRunId) return null;
+  // The retirement sentinel is a SYNTHESIZED-frame-only claim. A log frame that
+  // names it is not a hold this run ever had, so it identifies nothing.
+  if (payload.holdId === RECOMMENDATION_HOLD_NONE) return null;
+  return payload;
+}
+
+/**
+ * The LIVE-STATE SNAPSHOT: the typed hold interrupt for a run's CURRENT hold, or
+ * `null` when the run is not held right now.
+ *
+ * This is the one authority a late joiner (a fresh SSE subscribe, a reload, a
+ * reconnect mid-hold) is reconstructed from. It reads the park table, never the
+ * event log, so a run that was held, decided, and parked again shows its CURRENT
+ * hold only — and a run whose hold was released shows none, however many hold
+ * frames its log still carries.
+ *
+ * Best-effort by contract: any read failure answers `null` (no card), never an
+ * exception into the stream.
+ */
+export type RecommendationHoldSnapshot =
+  /** The run IS held, by this hold, right now. */
+  | { status: "held"; event: InterruptEvent; holdId: string }
+  /** The run is definitively NOT held. */
+  | { status: "not_held" }
+  /**
+   * The park could not be read, or the hold could not be expressed (no app
+   * secret). DELIBERATELY its own answer: "I could not find out" must never be
+   * reported as "not held", because a surface would then retire a card for a
+   * run that is still waiting. Every consumer treats it as "change nothing".
+   */
+  | { status: "unknown" };
+
+export async function deriveRecommendationHoldSnapshot(input: {
+  runId: string;
+  threadId: string;
+}): Promise<RecommendationHoldSnapshot> {
+  let park: ParkRow | null;
+  try {
+    park = await readRecommendationParkForRun(input.runId);
+  } catch {
+    return { status: "unknown" };
+  }
+  if (!park || park.status !== "parked") return { status: "not_held" };
+  const event = buildRecommendationHoldInterrupt({
+    runId: input.runId,
+    threadId: input.threadId,
+    holdId: park.id,
+  });
+  return event ? { status: "held", event, holdId: park.id } : { status: "unknown" };
+}
+
+/** The held-or-nothing projection of the snapshot above. */
+export async function deriveRecommendationHoldInterrupt(input: {
+  runId: string;
+  threadId: string;
+}): Promise<InterruptEvent | null> {
+  const snapshot = await deriveRecommendationHoldSnapshot(input);
+  return snapshot.status === "held" ? snapshot.event : null;
+}
+
+/**
+ * Announce a newly-created hold on the run wire. Fire-and-forget and swallowed
+ * on failure: the park is the source of truth and the snapshot above
+ * reconstructs the card on the next subscribe, so a Redis hiccup must never
+ * fail a run (the module's best-effort contract).
+ */
+export async function publishRecommendationHoldInterrupt(input: {
+  runId: string;
+  threadId: string;
+  holdId: string;
+}): Promise<void> {
+  try {
+    const event = buildRecommendationHoldInterrupt(input);
+    if (!event) return;
+    await publishHoldEvent(input.runId, event);
+  } catch {
+    /* best-effort — the park, not the wire, holds the run */
+  }
+}
+
+/**
+ * Announce that the hold is over. The caller must have VERIFIED the release
+ * first: a RESUME on a still-parked run would clear the card while the run is
+ * still waiting, which is precisely the false-success this program refuses.
+ */
+export async function publishRecommendationHoldResume(input: {
+  runId: string;
+  threadId: string;
+  holdId: string;
+}): Promise<void> {
+  try {
+    const event = buildRecommendationHoldResume(input);
+    if (!event) return;
+    await publishHoldEvent(input.runId, event);
+  } catch {
+    /* best-effort — see above */
+  }
+}
+
+/**
+ * The AG-UI publish, reached through a DYNAMIC import on purpose.
+ *
+ * This module is on the pre-dispatch path of every human-present run and is
+ * imported by surfaces (the run screens, the trigger service) that have no
+ * business pulling the Redis publish/subscribe transport into their graph just
+ * to evaluate a policy. The wire is needed only when a hold actually changes
+ * state, which is rare — so the transport is loaded at that moment and not at
+ * module load. The `buildRecommendationHoldInterrupt` / `derive…` seams above
+ * stay pure and transport-free, which is also what lets them be tested without
+ * a Redis stub.
+ */
+async function publishHoldEvent(
+  runId: string,
+  event: InterruptEvent | ResumeEvent,
+): Promise<void> {
+  const { publishAgUiEvent } = await import("@cinatra-ai/agent-ui-protocol/server");
+  await publishAgUiEvent(runId, event);
+}
 
 /** The run projection the candidate resolver needs to derive the run's own
  * actor. A structural subset of `AgentRunRecord`, so every caller can pass its
@@ -203,6 +592,12 @@ export async function maybeHoldRunForRecommendation(input: {
   run: Pick<AgentRunRecord, "id" | "orgId" | "humanPresent" | "inputParams" | "runBy"> & {
     sourceType?: string | null;
     dependentInstallId?: string | null;
+    /** Thread identity for the run's AG-UI frames — the same value the
+     * execution adapter uses (`new AgUiAdapter(runId, run.templateId, …)`), so
+     * the hold's interrupt sits on the same thread as the run's own events.
+     * Optional so every existing caller keeps compiling; falls back to the run
+     * id, which is what a single-run thread degenerates to anyway. */
+    templateId?: string | null;
   };
   template: Pick<AgentTemplateRecord, "packageName"> & {
     lifecycleConfig?: string | null;
@@ -313,7 +708,26 @@ export async function maybeHoldRunForRecommendation(input: {
     // (fail-open to normal dispatch).
     return { held: false, reason: parked.reason };
   }
+  // Announce the NEW hold on the run wire (cinatra#2568). Only here — the
+  // already-parked branch above returns early, so a retried run-start never
+  // re-announces a hold the human is already looking at. Awaited so a test can
+  // observe it, but internally swallowed: the park holds the run, the wire only
+  // tells the surfaces about it.
+  await publishRecommendationHoldInterrupt({
+    runId: run.id,
+    threadId: recommendationHoldThreadId(run),
+    holdId: parked.parkId,
+  });
   return { held: true, parkId: parked.parkId, reason: outcome.reason };
+}
+
+/** The thread identity a run's AG-UI frames carry. Mirrors the execution
+ * adapter's `new AgUiAdapter(runId, run.templateId, …)`. */
+export function recommendationHoldThreadId(run: {
+  id: string;
+  templateId?: string | null;
+}): string {
+  return run.templateId && run.templateId.length > 0 ? run.templateId : run.id;
 }
 
 /** The run's recommendation park (parked or released), or null if none. The
@@ -330,9 +744,21 @@ export async function readRecommendationParkForRun(runId: string): Promise<ParkR
  * best-effort: a no-op when no park exists or it is already released. Returns
  * whether a live park was released.
  */
-export async function releaseRecommendationParkForRun(runId: string): Promise<boolean> {
+export async function releaseRecommendationParkForRun(
+  runId: string,
+  /**
+   * INSTANCE BINDING (cinatra#2568). When given, the live park must BE this
+   * hold or nothing is released. Without it this helper releases whichever park
+   * is live at the moment it reads — so a decision taken against hold H,
+   * arriving after the run was dispatched and parked again as H', would release
+   * H'. The sweep itself is by park id, so what actually gets released is
+   * always the row this call identified, never "whatever is live now".
+   */
+  expectedHoldId?: string,
+): Promise<boolean> {
   const park = await readRecommendationParkForRun(runId);
   if (!park || park.status !== "parked") return false;
+  if (expectedHoldId !== undefined && park.id !== expectedHoldId) return false;
   const { released } = await sweepParks({ releasedParkIds: [park.id] });
   return released > 0;
 }
