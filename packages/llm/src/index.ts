@@ -1957,6 +1957,8 @@ function recordBatchOutcomeUsage(params: {
       skillLabel: attribution?.skillLabel ?? null,
       usage: outcome.usage,
       idempotencyKey: `batch:${params.provider}:${params.batchId}:${outcome.customId}`,
+      requestedProvider: attribution?.requestedProvider ?? null,
+      effectiveProvider: attribution?.effectiveProvider ?? null,
     });
   }
 }

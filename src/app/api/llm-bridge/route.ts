@@ -1043,7 +1043,11 @@ export async function POST(req: Request): Promise<Response> {
     const mediaUsageAttribution = {
       agentLabel: body.agent_id ?? "media-transcript-agent",
       skillLabel: null,
-      requestedProvider: dispatchRequestedProvider ?? "gemini",
+      // Passed through UNCHANGED. A caller that set `capabilityRequired`
+      // without `preferredProvider` expressed no preference, and defaulting the
+      // column to "gemini" would record one — inflating the requested-vs-
+      // effective honor rate the column exists to measure.
+      requestedProvider: dispatchRequestedProvider,
       effectiveProvider: "gemini",
     } as const;
 

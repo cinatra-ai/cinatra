@@ -178,10 +178,18 @@ describe("the adapter mint point is the only place an adapter is created", () =>
     // detaches the factory (`const { createAdapter } = surface`) — not the ABI's
     // own member DECLARATION in the SDK contract, which is a type, not a call.
     // Covers a plain call, an optional call, bracket access with either quote
-    // style, and a destructuring that detaches the factory. It does NOT match
-    // the ABI's own member DECLARATION in the SDK contract, which is a type.
+    // style, a destructuring, and a PROPERTY-ALIAS extraction
+    // (`const factory = surface.createAdapter`) — detaching the factory reaches
+    // the same raw adapter without ever writing `createAdapter(`. It does NOT
+    // match the ABI's own member DECLARATION in the SDK contract, which is a
+    // type, nor a `typeof x.createAdapter === "function"` presence probe.
+    //
+    // Text matching, not an AST: it is deliberately conservative and would miss
+    // a computed name built at runtime. That is acceptable because the value it
+    // protects is reviewability — a reader of a diff that reaches the factory
+    // any of these ways sees this test go red.
     const INVOKES_ADAPTER_FACTORY =
-      /\.\s*createAdapter\s*(\?\.)?\s*\(|\?\.\s*createAdapter\s*\(|\[\s*["'`]createAdapter["'`]\s*\]\s*\(|\{[^{}]*\bcreateAdapter\b[^{}]*\}\s*=/;
+      /\.\s*createAdapter\s*(\?\.)?\s*\(|\?\.\s*createAdapter\s*\(|\[\s*["'`]createAdapter["'`]\s*\]\s*\(|\{[^{}]*\bcreateAdapter\b[^{}]*\}\s*=|=\s*[\w.$]+\??\.\s*createAdapter\s*[;,\n]/;
     expect(filesMatching(INVOKES_ADAPTER_FACTORY)).toEqual([ADAPTER_MINT_POINT]);
   });
 

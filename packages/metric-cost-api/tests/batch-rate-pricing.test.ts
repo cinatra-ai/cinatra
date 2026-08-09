@@ -101,7 +101,9 @@ describe("computeLlmCostUsd — rateMultiplier", () => {
       outputTokens: 0,
       cachedInputTokens: 0,
     });
-    for (const bad of [0, -1, Number.NaN]) {
+    // Infinity is a positive number and would otherwise price the row at
+    // Infinity, so the guard is `Number.isFinite`, not `> 0`.
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(
         await computeLlmCostUsd({
           model: PRICED_MODEL,

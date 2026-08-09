@@ -143,9 +143,11 @@ export async function computeLlmCostUsd(params: {
 
   // Applied to the TOTAL: every provider that discounts batch discounts both
   // legs, so scaling once here keeps the cache terms consistent with the rest.
+  // `Number.isFinite` and not `> 0` alone: Infinity is a positive number and
+  // would price the row at Infinity.
   const multiplier =
-    typeof params.rateMultiplier === "number" && params.rateMultiplier > 0
-      ? params.rateMultiplier
+    Number.isFinite(params.rateMultiplier) && (params.rateMultiplier as number) > 0
+      ? (params.rateMultiplier as number)
       : 1;
   return (inputCost + outputCost) * multiplier;
 }

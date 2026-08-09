@@ -89,7 +89,7 @@ vi.mock("../tools/skills", () => ({
   buildMcpTools: vi.fn(),
 }));
 
-import { orchestrateDownloadBatchOutcomesV2 } from "../index";
+import { orchestrateDownloadBatchOutcomesV2, withUsageAttribution } from "../index";
 
 const USAGE = {
   inputTokens: 120,
@@ -182,6 +182,30 @@ describe("batch outcomes reach the usage ledger — native v2 branch", () => {
 
     expect(rows()).toHaveLength(2);
     expect(new Set(rows().map((row) => row.idempotencyKey)).size).toBe(1);
+  });
+
+  it("carries the caller's whole attribution frame, provider telemetry included", async () => {
+    h.v2.download.mockResolvedValue([
+      { customId: "row-1", status: "succeeded", text: "a", model: "gpt-batch", usage: USAGE },
+    ]);
+
+    await withUsageAttribution(
+      {
+        agentLabel: "skill-matcher",
+        skillLabel: "skill-7",
+        requestedProvider: "openai",
+        effectiveProvider: "openai",
+      },
+      () =>
+        orchestrateDownloadBatchOutcomesV2({ provider: "openai", batchId: "batch_1" }),
+    );
+
+    expect(rows()[0]).toMatchObject({
+      agentLabel: "skill-matcher",
+      skillLabel: "skill-7",
+      requestedProvider: "openai",
+      effectiveProvider: "openai",
+    });
   });
 
   it("hands the caller the outcome list unchanged", async () => {
