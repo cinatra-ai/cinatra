@@ -4,6 +4,7 @@ import { isPlatformAdmin, requireAuthSession } from "@/lib/auth-session";
 import { AuthzError } from "@/lib/authz";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import {
+  buildRecommendationHoldRetirement,
   declaresLifecycleInteraction,
   deriveRecommendationHoldInterrupt,
   readAgentRunById,
@@ -142,19 +143,25 @@ export async function GET(request: Request, context: RouteContext) {
     const claimed = readRecommendationHoldFromEvent(event, decodedRunId);
     if (!claimed) return false; // undecodable / foreign / another run's
     const type = (event as { type?: unknown }).type;
-    // Re-read the park whenever the frame disagrees with what we last knew: a
-    // hold minted (or retired) while this stream was open is legitimately
-    // newer than the snapshot.
+    if (type === "RESUME") {
+      // A retirement ALWAYS re-reads the park. "Is this hold over?" is exactly
+      // the transition the cached value cannot answer: the cache was taken
+      // before the frame, and a RESUME naming the hold we last saw live is the
+      // single most likely case of the park having moved since.
+      //
+      // A lifecycle RESUME is a "no interaction is live" signal — a client
+      // cannot tell WHICH hold it names, the ref being opaque to it — so it is
+      // forwarded only when the park says the run has NO live hold at all.
+      // While the run is waiting (on this hold or a later one) a replayed
+      // retirement would clear a card the run is still behind.
+      liveHoldId = (await deriveHold()).holdId;
+      return liveHoldId === null;
+    }
+    // Re-read the park whenever an ANNOUNCEMENT disagrees with what we last
+    // knew: a hold minted while this stream was open is legitimately newer than
+    // the snapshot.
     if (claimed.holdId !== liveHoldId) {
       liveHoldId = (await deriveHold()).holdId;
-    }
-    if (type === "RESUME") {
-      // A lifecycle RESUME is a "this interaction is over" signal, and a client
-      // cannot tell WHICH hold it names (the ref is opaque to it). So it is
-      // forwarded only when the run has NO live hold at all: while the park
-      // says the run is waiting — on this hold or on a later one — a replayed
-      // retirement would clear a card the run is still behind.
-      return liveHoldId === null;
     }
     // An announcement is forwarded only while it IS the live hold.
     return liveHoldId === claimed.holdId;
@@ -206,9 +213,21 @@ export async function GET(request: Request, context: RouteContext) {
         // reverse.
         const snapshot = await deriveHold();
         liveHoldId = snapshot.holdId;
-        if (snapshot.event) {
+        // "NOT HELD" IS ALSO AN ANSWER, and it has to be SAID. An EventSource
+        // reconnects on its own, so a client can come back holding a card for a
+        // hold that ended while it was away — and if the retirement was lost
+        // (the publish is best-effort) or filtered as history, silence would
+        // leave that card up forever. So every (re)connect carries the current
+        // answer: the hold, or an explicit retirement.
+        const snapshotFrame =
+          snapshot.event ??
+          buildRecommendationHoldRetirement({
+            runId: decodedRunId,
+            threadId: holdThreadId,
+          });
+        if (snapshotFrame) {
           controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify(snapshot.event)}\n\n`),
+            encoder.encode(`data: ${JSON.stringify(snapshotFrame)}\n\n`),
           );
         }
         const gen = subscribeToAgUiEventsWithId(decodedRunId, {

@@ -475,6 +475,7 @@ export { deriveRunHitlContext, type HitlContext } from "./hitl-context";
 // stale-hold discriminator the SSE route filters replayed history with. The
 // PARK is the authority — these two are how the wire is kept honest about it.
 export {
+  buildRecommendationHoldRetirement,
   declaresLifecycleInteraction,
   deriveRecommendationHoldInterrupt,
   readRecommendationHoldFromEvent,

@@ -243,16 +243,19 @@ describe("the refusal is ONE non-enumerating answer", () => {
 
 describe("the hold-instance CAS — a decision binds to the hold it was taken against", () => {
   beforeEach(() => {
-    // The run is HELD by park-1 right now (the pre-release read).
+    // The run is HELD by park-1 when the decision arrives (the CAS read), and
+    // verifiably released afterwards.
     readRecommendationParkForRun
       .mockResolvedValueOnce({ id: "park-1", checkpoint: "recommendation", status: "parked" })
       .mockResolvedValue({ id: "park-1", checkpoint: "recommendation", status: "released" });
   });
 
-  it("accepts a decision naming the CURRENT hold", async () => {
+  it("accepts a decision naming the CURRENT hold and releases THAT hold", async () => {
     const res = await skipRunRecommendationAction({ runId: "run-1", holdRef: "ref-park-1" });
     expect(res).toEqual({ ok: true, dispatched: true });
-    expect(releaseRecommendationParkForRun).toHaveBeenCalledWith("run-1");
+    // Instance-bound: the sweep names the park the decision resolved to, never
+    // "whichever park is live when the helper happens to read".
+    expect(releaseRecommendationParkForRun).toHaveBeenCalledWith("run-1", "park-1");
   });
 
   it("REFUSES a decision naming a hold the run has moved past (re-parked run)", async () => {
@@ -272,6 +275,8 @@ describe("the hold-instance CAS — a decision binds to the hold it was taken ag
     expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();
     expect(triggerAgentRun).not.toHaveBeenCalled();
     expect(publishRecommendationHoldResume).not.toHaveBeenCalled();
+    // AND it left no trace on the run it was not aimed at.
+    expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
   });
 
   it("REFUSES a decision naming a hold that is no longer live at all", async () => {
@@ -307,6 +312,9 @@ describe("the hold-instance CAS — a decision binds to the hold it was taken ag
     });
     const res = await confirmRunRecommendationAction({ ...CONFIRM_INPUT, holdRef: "ref-park-1" });
     expect(res).toEqual({ ok: false, error: RECOMMENDATION_DECISION_REFUSAL });
+    // The CAS runs BEFORE the write: a refused decision must not have mutated
+    // the run's authoritative selection on its way to being refused.
+    expect(confirmRunSkillSelectionAction).not.toHaveBeenCalled();
     expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();
   });
 

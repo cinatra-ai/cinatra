@@ -21,6 +21,7 @@ const subscribeToAgUiEventsWithId = vi.fn();
 const deriveRecommendationHoldInterrupt = vi.fn();
 const readRecommendationHoldFromEvent = vi.fn();
 const declaresLifecycleInteraction = vi.fn();
+const buildRecommendationHoldRetirement = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: () => requireAuthSession(),
@@ -33,6 +34,8 @@ vi.mock("@cinatra-ai/agents", () => ({
   readRecommendationHoldFromEvent: (...a: unknown[]) =>
     readRecommendationHoldFromEvent(...a),
   declaresLifecycleInteraction: (...a: unknown[]) => declaresLifecycleInteraction(...a),
+  buildRecommendationHoldRetirement: (...a: unknown[]) =>
+    buildRecommendationHoldRetirement(...a),
   recommendationHoldThreadId: (run: { id: string; templateId?: string | null }) =>
     run.templateId && run.templateId.length > 0 ? run.templateId : run.id,
 }));
@@ -120,6 +123,7 @@ describe("the hold's live-state snapshot on the SSE route", () => {
     deriveRecommendationHoldInterrupt.mockResolvedValue(null);
     readRecommendationHoldFromEvent.mockImplementation(decodeHoldFrame);
     declaresLifecycleInteraction.mockImplementation(declaresReal);
+    buildRecommendationHoldRetirement.mockReturnValue(holdResumeFrame("none"));
   });
   afterEach(() => vi.clearAllMocks());
 
@@ -140,10 +144,17 @@ describe("the hold's live-state snapshot on the SSE route", () => {
     });
   });
 
-  it("emits NO hold frame when the run is not held", async () => {
+  it("says NOT HELD explicitly — silence would strand a reconnecting client", async () => {
+    // An EventSource reconnects on its own; a client can come back showing a
+    // card for a hold that ended while it was away. Every (re)connect therefore
+    // carries the current answer, and "no hold" is an answer.
     deriveRecommendationHoldInterrupt.mockResolvedValue(null);
     const frames = await drain(await GET(streamReq(), ctx("run-1")));
-    expect(frames).toHaveLength(0);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({
+      type: "RESUME",
+      interaction: { kind: "recommendation_hold" },
+    });
   });
 
   it("reconstructs the hold on a Last-Event-ID RECONNECT too", async () => {
@@ -186,6 +197,7 @@ describe("the stale-hold filter over replayed history", () => {
     readAgentRunById.mockResolvedValue({ ...HELD_RUN, status: "pending_approval" });
     readRecommendationHoldFromEvent.mockImplementation(decodeHoldFrame);
     declaresLifecycleInteraction.mockImplementation(declaresReal);
+    buildRecommendationHoldRetirement.mockReturnValue(holdResumeFrame("none"));
   });
   afterEach(() => vi.clearAllMocks());
 
@@ -274,6 +286,7 @@ describe("a lifecycle RESUME retires exactly the hold it names", () => {
     readAgentRunById.mockResolvedValue({ ...HELD_RUN });
     readRecommendationHoldFromEvent.mockImplementation(decodeHoldFrame);
     declaresLifecycleInteraction.mockImplementation(declaresReal);
+    buildRecommendationHoldRetirement.mockReturnValue(holdResumeFrame("none"));
   });
   afterEach(() => vi.clearAllMocks());
 
@@ -328,6 +341,7 @@ describe("presence gates, validity permits", () => {
     });
     readAgentRunById.mockResolvedValue({ ...HELD_RUN, status: "pending_approval" });
     declaresLifecycleInteraction.mockImplementation(declaresReal);
+    buildRecommendationHoldRetirement.mockReturnValue(holdResumeFrame("none"));
     deriveRecommendationHoldInterrupt.mockResolvedValue(null);
   });
   afterEach(() => vi.clearAllMocks());

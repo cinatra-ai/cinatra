@@ -227,6 +227,20 @@ export function buildRecommendationHoldInterrupt(input: {
 }
 
 /**
+ * The reserved hold id a RETIREMENT names: "this run has no live hold".
+ *
+ * A client cannot tell WHICH hold a lifecycle RESUME names — the ref is opaque
+ * to it — so the wire meaning of one is simply "no lifecycle interaction is
+ * live on this run". The SSE route needs to be able to SAY that at stream open:
+ * a reconnecting client may be showing a hold that ended while it was
+ * disconnected, and "not held" expressed as SILENCE would leave that card up
+ * forever. Park ids are uuids, so this value can never collide with one; a log
+ * frame naming it is rejected outright (see `readRecommendationHoldFromEvent`)
+ * because only a synthesized snapshot may claim it.
+ */
+export const RECOMMENDATION_HOLD_NONE = "none";
+
+/**
  * The paired RESUME. Emitted ONLY after a decision's release is VERIFIED, and
  * BOUND to the hold instance it retires: a RESUME for hold H must never clear a
  * card showing hold H'. Returns `null` when no ref can be minted, for the same
@@ -258,6 +272,21 @@ export function buildRecommendationHoldResume(input: {
 }
 
 /**
+ * The synthesized "this run is not held" frame. Not a decision record and never
+ * published to the log — the SSE route emits it at stream open so a client that
+ * reconnected while a hold ended converges instead of sitting on a stale card.
+ */
+export function buildRecommendationHoldRetirement(input: {
+  runId: string;
+  threadId: string;
+}): ResumeEvent | null {
+  return buildRecommendationHoldResume({
+    ...input,
+    holdId: RECOMMENDATION_HOLD_NONE,
+  });
+}
+
+/**
  * Does this frame CLAIM to be a lifecycle interaction? Re-exported so the run's
  * SSE route can gate on presence before it gates on validity — an
  * `INTERRUPT`/`RESUME` that declares an interaction is subject to the hold
@@ -281,6 +310,9 @@ export function readRecommendationHoldFromEvent(
   if (!interaction || interaction.kind !== "recommendation_hold") return null;
   const payload = decodeRecommendationHoldRef(interaction.ref);
   if (!payload || payload.runId !== expectedRunId) return null;
+  // The retirement sentinel is a SYNTHESIZED-frame-only claim. A log frame that
+  // names it is not a hold this run ever had, so it identifies nothing.
+  if (payload.holdId === RECOMMENDATION_HOLD_NONE) return null;
   return payload;
 }
 
@@ -666,9 +698,21 @@ export async function readRecommendationParkForRun(runId: string): Promise<ParkR
  * best-effort: a no-op when no park exists or it is already released. Returns
  * whether a live park was released.
  */
-export async function releaseRecommendationParkForRun(runId: string): Promise<boolean> {
+export async function releaseRecommendationParkForRun(
+  runId: string,
+  /**
+   * INSTANCE BINDING (cinatra#2568). When given, the live park must BE this
+   * hold or nothing is released. Without it this helper releases whichever park
+   * is live at the moment it reads — so a decision taken against hold H,
+   * arriving after the run was dispatched and parked again as H', would release
+   * H'. The sweep itself is by park id, so what actually gets released is
+   * always the row this call identified, never "whatever is live now".
+   */
+  expectedHoldId?: string,
+): Promise<boolean> {
   const park = await readRecommendationParkForRun(runId);
   if (!park || park.status !== "parked") return false;
+  if (expectedHoldId !== undefined && park.id !== expectedHoldId) return false;
   const { released } = await sweepParks({ releasedParkIds: [park.id] });
   return released > 0;
 }

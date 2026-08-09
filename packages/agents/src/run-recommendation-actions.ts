@@ -203,6 +203,41 @@ export async function getRunRecommendationHoldStateAction(input: {
 }
 
 /**
+ * THE HOLD-INSTANCE CAS (cinatra#2568). Resolves the hold a decision is bound
+ * to, BEFORE the decision writes anything.
+ *
+ * Without it these actions are only run-scoped: a decision taken against hold H,
+ * submitted after the run was dispatched and PARKED AGAIN as H', would write its
+ * selection (or its skip evidence) against H' and then release H' — applying a
+ * choice the human made for a different candidate set. A stale tab, a slow
+ * network or a double-decided run is enough. So the check runs FIRST: a decision
+ * that names a hold the run has moved past changes nothing at all.
+ *
+ * Returns the hold id to bind the release to, or `refused` — and the refusal is
+ * the same generic one an unauthorized caller gets, so "your hold is stale" and
+ * "you may not decide this run" are indistinguishable from outside.
+ *
+ * Backwards-compatible on purpose: a caller that names NO hold keeps the
+ * pre-#2568 run-scoped behaviour, because a deployment that cannot mint refs
+ * (no app secret) must still be able to decide its runs.
+ */
+async function resolveDecisionHold(
+  runId: string,
+  holdRef: string | undefined,
+): Promise<{ ok: true; holdId: string | null } | { ok: false }> {
+  const park = await readRecommendationParkForRun(runId).catch(() => null);
+  if (!holdRef) return { ok: true, holdId: park?.status === "parked" ? park.id : (park?.id ?? null) };
+  const claimed = decodeRecommendationHoldRef(holdRef);
+  const matches =
+    claimed !== null &&
+    claimed.runId === runId &&
+    park !== null &&
+    park.status === "parked" &&
+    park.id === claimed.holdId;
+  return matches ? { ok: true, holdId: claimed!.holdId } : { ok: false };
+}
+
+/**
  * CONFIRM / ADJUST: persist the human's confirmed selection set (execute-tier
  * authorized by `confirmRunSkillSelectionAction`), then release the run-start
  * hold and dispatch. `confirmedSkillIds` is the FULL kept set — a plain confirm
@@ -224,6 +259,12 @@ export async function confirmRunRecommendationAction(input: {
   if (!session?.user?.id) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
   if (!input.runId) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 
+  // 0. The hold-instance CAS — BEFORE any write. A decision aimed at a hold the
+  //    run has moved past must not mutate the run's selection on its way to
+  //    being refused.
+  const bound = await resolveDecisionHold(input.runId, input.holdRef);
+  if (!bound.ok) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
+
   // 1. Write the authoritative per-run selection (does its own execute-tier
   //    run authorization + assigned-set bounding).
   const written = await confirmRunSkillSelectionAction({
@@ -237,8 +278,8 @@ export async function confirmRunRecommendationAction(input: {
   });
   if (!written.ok) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 
-  // 2 + 3. Release the hold and dispatch.
-  return releaseAndDispatch(input.runId, input.holdRef);
+  // 2 + 3. Release the hold and dispatch — bound to the hold resolved above.
+  return releaseAndDispatch(input.runId, bound.holdId, input.holdRef !== undefined);
 }
 
 /**
@@ -256,6 +297,11 @@ export async function skipRunRecommendationAction(input: {
   const userId = session?.user?.id ?? null;
   if (!userId) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
   if (!input.runId) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
+
+  // The hold-instance CAS runs BEFORE the durable skip evidence is written —
+  // a stale decision must leave no trace on the run it was not aimed at.
+  const bound = await resolveDecisionHold(input.runId, input.holdRef);
+  if (!bound.ok) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 
   const run = await readAgentRunById(input.runId).catch(() => null);
   if (!run) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
@@ -310,7 +356,7 @@ export async function skipRunRecommendationAction(input: {
     );
   }
 
-  return releaseAndDispatch(input.runId, input.holdRef);
+  return releaseAndDispatch(input.runId, bound.holdId, input.holdRef !== undefined);
 }
 
 /**
@@ -340,43 +386,24 @@ export async function skipRunRecommendationAction(input: {
  */
 async function releaseAndDispatch(
   runId: string,
-  holdRef?: string,
+  /** The hold this decision resolved to (`resolveDecisionHold`), if any. */
+  boundHoldId: string | null,
+  /** Whether the caller NAMED that hold — only then is the release instance-bound. */
+  holdNamed: boolean,
 ): Promise<RunRecommendationDecisionResult> {
   const HOLD_STILL_LIVE = {
     ok: false as const,
     error: "could not release the run-start recommendation hold — please retry",
   };
 
-  // THE HOLD-INSTANCE CAS (cinatra#2568). Read the live hold BEFORE releasing
-  // anything, and — when the caller named the hold it decided against — require
-  // them to be the same hold.
-  //
-  // Without it these actions are only run-scoped: a decision taken against hold
-  // H, submitted after the run was dispatched and PARKED AGAIN as H', would
-  // release H' and dispatch the run with a selection the human made for a
-  // different candidate set. A stale tab, a slow network or a double-decided
-  // run is enough. Naming the hold makes the race an honest refusal instead of
-  // a silently-wrong dispatch.
-  //
-  // Backwards-compatible on purpose: a caller that names no hold keeps the
-  // pre-#2568 run-scoped behaviour (the surfaces that do name one get the
-  // guarantee; a deployment with no app secret mints no refs and must still be
-  // able to decide its runs).
-  const parkBefore = await readRecommendationParkForRun(runId).catch(() => null);
-  if (holdRef) {
-    const claimed = decodeRecommendationHoldRef(holdRef);
-    const matches =
-      claimed !== null &&
-      claimed.runId === runId &&
-      parkBefore !== null &&
-      parkBefore.status === "parked" &&
-      parkBefore.id === claimed.holdId;
-    // Generic refusal: "the hold you decided is not the one this run is waiting
-    // on" and "you may not decide this run" must read identically.
-    if (!matches) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
-  }
-
-  await releaseRecommendationParkForRun(runId).catch(() => false);
+  // The release carries the CAS through: it sweeps the hold this decision was
+  // bound to, or nothing. A concurrent release-and-repark between the check and
+  // here therefore ends as an honest retryable error (the verification below
+  // finds the NEW park still live) instead of releasing a hold nobody decided.
+  await releaseRecommendationParkForRun(
+    runId,
+    holdNamed && boundHoldId ? boundHoldId : undefined,
+  ).catch(() => false);
   let parkAfterRelease: Awaited<ReturnType<typeof readRecommendationParkForRun>>;
   try {
     parkAfterRelease = await readRecommendationParkForRun(runId);
@@ -397,7 +424,7 @@ async function releaseAndDispatch(
   // Guarded here as well as inside the publisher: the decision's outcome is the
   // park release and the dispatch, and neither may be lost to a transport
   // failure on an announcement.
-  const releasedHoldId = parkBefore?.id ?? parkAfterRelease?.id ?? null;
+  const releasedHoldId = boundHoldId ?? parkAfterRelease?.id ?? null;
   if (releasedHoldId) {
     try {
       await publishRecommendationHoldResume({
