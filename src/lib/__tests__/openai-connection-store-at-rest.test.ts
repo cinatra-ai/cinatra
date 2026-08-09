@@ -1,16 +1,18 @@
 // cinatra#2581 — end-to-end behaviour of the openai-connection STORE over an
 // in-memory `cinatra.metadata` KV.
 //
-// The at-rest transform is unit-tested in `openai-connection-at-rest.test.ts`;
+// The at-rest transform is unit-tested in `openai-connection-at-rest.test.ts`
+// against `@/lib/connector-config-secret-fields`;
 // this file proves the STORE actually applies it on every path an operator can
 // reach — save, disconnect, logging toggle, prompt-caching toggle — and that the
 // default configuration never turns on OpenAI request/response body logging.
 //
-// `@/lib/database-metadata` is mocked because the real sync-bridge module talks
-// to Postgres. The mock is a faithful KV: the same JSON round-trip the metadata
-// row performs, so what the assertions inspect is exactly what would be
-// persisted. Everything above it — the shared at-rest accessor
-// (`openai-connection-row`) and the store — is the REAL code.
+// Only `@/lib/database-metadata`'s LIVE Postgres binding is stubbed — the
+// accessors it re-exports are the real ones from
+// `@/lib/connector-config-secret-fields`, bound here to an in-memory KV port that
+// performs the same JSON round-trip the metadata row does. So the seal, the
+// migration and the merge-and-swap under test are all real code, and what the
+// assertions inspect is exactly what would be persisted.
 //
 // SECRETS: obviously-fake placeholder keys only; assertions are on SHAPE.
 
@@ -29,38 +31,56 @@ const VALID_KEY_HEX =
 
 const kv = new Map<string, string>();
 
+/**
+ * Fires ONCE, immediately after the write path has observed the row's raw bytes
+ * and before it persists — the exact instant a competing writer would land. This
+ * is how the race tests below prove the merge-and-swap is atomic rather than
+ * merely "reads fresh".
+ */
+const raceHook = vi.hoisted(() => ({ injectAfterReadRaw: null as null | (() => void) }));
+
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 
-vi.mock("@/lib/database-metadata", () => ({
-  safeParseJson: <T,>(raw: string, fallback: T): T => {
-    try {
-      return JSON.parse(raw) as T;
-    } catch {
-      return fallback;
-    }
-  },
-  readMetadataValueInternal: <T,>(key: string, fallback: T): T => {
-    const raw = kv.get(key);
-    return raw === undefined ? fallback : (JSON.parse(raw) as T);
-  },
-  writeMetadataValueInternal: (key: string, value: unknown) => {
-    kv.set(key, JSON.stringify(value));
-  },
-  // INSERT ... ON CONFLICT DO NOTHING — never clobbers a racing creator.
-  writeMetadataValueIfAbsentInternal: (key: string, value: unknown) => {
-    if (!kv.has(key)) kv.set(key, JSON.stringify(value));
-  },
-  readRawMetadataStringInternal: (key: string) => kv.get(key) ?? null,
-  compareAndSwapMetadataValueInternal: (
-    key: string,
-    newValue: string,
-    expectedRaw: string,
-  ) => {
-    if (kv.get(key) !== expectedRaw) return false;
-    kv.set(key, newValue);
-    return true;
-  },
-}));
+// The store's at-rest accessors are the REAL implementations from
+// `@/lib/connector-config-secret-fields`, bound here to an in-memory port instead
+// of Postgres. Only the LIVE binding module is stubbed — the seal, the migration
+// and the merge-and-swap under test are all real code.
+vi.mock("@/lib/database-metadata", async () => {
+  const real = await import("@/lib/connector-config-secret-fields");
+  const port: import("@/lib/connector-config-secret-fields").OpenAIConnectionMetadataPort = {
+    readValue: <T,>(key: string, fallback: T): T => {
+      const raw = kv.get(key);
+      return raw === undefined ? fallback : (JSON.parse(raw) as T);
+    },
+    readRaw: (key: string) => {
+      const observed = kv.get(key) ?? null;
+      const inject = raceHook.injectAfterReadRaw;
+      if (inject) {
+        raceHook.injectAfterReadRaw = null;
+        inject();
+      }
+      return observed;
+    },
+    // INSERT ... ON CONFLICT DO NOTHING — never clobbers a racing creator.
+    insertIfAbsent: (key: string, value: unknown) => {
+      if (!kv.has(key)) kv.set(key, JSON.stringify(value));
+    },
+    compareAndSwap: (key: string, newValue: string, expectedRaw: string) => {
+      if (kv.get(key) !== expectedRaw) return false;
+      kv.set(key, newValue);
+      return true;
+    },
+  };
+  return {
+    readUnsealedOpenAIConnectionRow: () => real.readUnsealedOpenAIConnectionRowVia(port),
+    readRawOpenAIConnectionRow: () => real.readRawOpenAIConnectionRowVia(port),
+    writeSealedOpenAIConnectionRow: (
+      next: unknown,
+      options?: { preserveExistingSecret?: boolean },
+    ) => real.writeSealedOpenAIConnectionRowVia(port, next, options),
+    upgradeLegacyOpenAIConnectionRow: () => real.upgradeLegacyOpenAIConnectionRowVia(port),
+  };
+});
 
 const runtimeMode = vi.hoisted(() => ({ development: false }));
 vi.mock("@/lib/runtime-mode", () => ({
@@ -71,6 +91,7 @@ const ORIGINAL_KEY = process.env.CINATRA_ENCRYPTION_KEY;
 
 beforeEach(() => {
   kv.clear();
+  raceHook.injectAfterReadRaw = null;
   runtimeMode.development = false;
   process.env.CINATRA_ENCRYPTION_KEY = VALID_KEY_HEX;
 });
@@ -199,26 +220,16 @@ describe("openai-connection-store — a settings save cannot resurrect a key", (
     const { updateOpenAIConnection, updateOpenAIPromptCaching, readOpenAIConnection } =
       await store();
     await updateOpenAIConnection({ apiKey: FAKE_API_KEY });
-    const metadata = await import("@/lib/database-metadata");
 
-    let injected = false;
-    vi.spyOn(metadata, "readRawMetadataStringInternal").mockImplementation(
-      (key: string) => {
-        const observed = kv.get(key) ?? null;
-        if (!injected && key === "openai_connection") {
-          injected = true;
-          // Another request disconnects OpenAI right here.
-          const row = JSON.parse(observed ?? "{}") as Record<string, unknown>;
-          delete row.apiKey;
-          kv.set(key, JSON.stringify(row));
-        }
-        return observed;
-      },
-    );
+    raceHook.injectAfterReadRaw = () => {
+      // Another request disconnects OpenAI right here.
+      const row = JSON.parse(kv.get("openai_connection") ?? "{}") as Record<string, unknown>;
+      delete row.apiKey;
+      kv.set("openai_connection", JSON.stringify(row));
+    };
 
     await updateOpenAIPromptCaching(true);
 
-    vi.restoreAllMocks();
     expect(storedRow().apiKey).toBeUndefined();
     expect(readOpenAIConnection()?.apiKey).toBeUndefined();
     expect(storedRow().promptCachingEnabled).toBe(true);
@@ -232,26 +243,16 @@ describe("openai-connection-store — a settings save cannot resurrect a key", (
       await store();
     vi.spyOn(console, "warn").mockImplementation(() => {});
     await updateOpenAILoggingEnabled(true);
-    const metadata = await import("@/lib/database-metadata");
 
-    let injected = false;
-    vi.spyOn(metadata, "readRawMetadataStringInternal").mockImplementation(
-      (key: string) => {
-        const observed = kv.get(key) ?? null;
-        if (!injected && key === "openai_connection") {
-          injected = true;
-          // Another request explicitly disables body logging right here.
-          const row = JSON.parse(observed ?? "{}") as Record<string, unknown>;
-          row.loggingEnabled = false;
-          kv.set(key, JSON.stringify(row));
-        }
-        return observed;
-      },
-    );
+    raceHook.injectAfterReadRaw = () => {
+      // Another request explicitly disables body logging right here.
+      const row = JSON.parse(kv.get("openai_connection") ?? "{}") as Record<string, unknown>;
+      row.loggingEnabled = false;
+      kv.set("openai_connection", JSON.stringify(row));
+    };
 
     await updateOpenAIPromptCaching(true);
 
-    vi.restoreAllMocks();
     // Both survive: the opt-out is respected AND the caching toggle applied.
     expect(storedRow().loggingEnabled).toBe(false);
     expect(storedRow().promptCachingEnabled).toBe(true);
@@ -310,7 +311,7 @@ describe("openai-connection-store — legacy plaintext row", () => {
     // accessor. Without the migration here, an instance that uses OpenAI but
     // never opens a settings page would keep its key in plaintext forever.
     kv.set("openai_connection", JSON.stringify({ apiKey: FAKE_API_KEY }));
-    const { readUnsealedOpenAIConnectionRow } = await import("@/lib/openai-connection-row");
+    const { readUnsealedOpenAIConnectionRow } = await import("@/lib/database-metadata");
 
     expect(readUnsealedOpenAIConnectionRow()?.apiKey).toBe(FAKE_API_KEY);
 
@@ -322,15 +323,10 @@ describe("openai-connection-store — legacy plaintext row", () => {
 
   it("the migration CAS does not clobber a write that landed under it", async () => {
     kv.set("openai_connection", JSON.stringify({ apiKey: FAKE_API_KEY }));
-    const { upgradeLegacyOpenAIConnectionRow } = await import("@/lib/openai-connection-row");
+    const { upgradeLegacyOpenAIConnectionRow } = await import("@/lib/database-metadata");
     // A concurrent writer replaces the row between the snapshot and the swap.
     const rotated = JSON.stringify({ apiKey: OTHER_FAKE_API_KEY });
-    const metadata = await import("@/lib/database-metadata");
-    vi.spyOn(metadata, "readRawMetadataStringInternal").mockImplementation((key: string) => {
-      const observed = kv.get(key) ?? null;
-      kv.set("openai_connection", rotated);
-      return observed;
-    });
+    raceHook.injectAfterReadRaw = () => kv.set("openai_connection", rotated);
 
     upgradeLegacyOpenAIConnectionRow();
 

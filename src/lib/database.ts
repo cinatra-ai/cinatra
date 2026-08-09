@@ -44,10 +44,9 @@ import {
   hasSecretFields,
   prepareSealedWrite,
   unsealSecretFields,
+  // cinatra#2581: body-logging default for the `openai_connection` row.
+  resolveOpenAIBodyLoggingDefault,
 } from "@/lib/connector-config-secret-fields";
-// cinatra#2581: at-rest seal + body-logging default for the `openai_connection` row.
-import { resolveOpenAIBodyLoggingDefault } from "@/lib/openai-connection-at-rest";
-import { readUnsealedOpenAIConnectionRow } from "@/lib/openai-connection-row";
 import {
   buildBumpSkillCatalogGenerationQuery,
   buildCatalogWriteLeaseGuardQuery,
@@ -56,6 +55,8 @@ import {
   deleteMetadataValueInternal,
   readMetadataValueInternal,
   readRawMetadataStringInternal,
+  // cinatra#2581: the shared at-rest accessor (unseals + migrates the row).
+  readUnsealedOpenAIConnectionRow,
   readSkillCatalogGenerationTokenInternal,
   readSkillCatalogRowsFencedInternal,
   safeParseJson,

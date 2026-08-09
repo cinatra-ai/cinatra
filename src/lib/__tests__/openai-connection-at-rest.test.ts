@@ -14,14 +14,14 @@
 //
 // `@/lib/database` is an ASYNC module (its graph reaches `import()`-loaded
 // externals via drizzle-store → pg), so it can never be imported from a unit
-// test; the at-rest logic it and the store call lives entirely in
-// `openai-connection-at-rest` and is exercised directly here — the same shape
-// as `connector-config-secret-at-rest.test.ts`.
+// test; the pure at-rest transforms live in `@/lib/connector-config-secret-fields`
+// (no Postgres dependency) and are exercised directly here — the same shape as
+// the connector-config half in `connector-config-secret-at-rest.test.ts`.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { isSealed } from "@/lib/connector-config-secret-fields";
 import {
+  isSealed,
   OPENAI_CONNECTION_METADATA_KEY,
   OPENAI_CONNECTION_SECRET_FIELD,
   prepareSealedOpenAIConnectionWrite,
@@ -29,7 +29,7 @@ import {
   resolveOpenAIBodyLoggingDefault,
   sealOpenAIConnectionSecrets,
   unsealOpenAIConnectionSecrets,
-} from "@/lib/openai-connection-at-rest";
+} from "@/lib/connector-config-secret-fields";
 
 // Obviously-fake placeholders — never a real credential.
 const FAKE_API_KEY = "sk-FAKE-openai-key-for-tests-0000";

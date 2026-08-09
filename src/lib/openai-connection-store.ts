@@ -6,7 +6,7 @@
 // store cache so either read path stays coherent.
 //
 // AT REST (cinatra#2581): the `apiKey` is SEALED before it is persisted and
-// unsealed on read — see `@/lib/openai-connection-at-rest` for the codec, the
+// unsealed on read — see `@/lib/connector-config-secret-fields` for the codec, the
 // AAD binding, the fail-closed posture and the migration shape. The same module
 // owns the body-logging default, which now mirrors the openai-connector policy
 // (explicit operator preference, else development-mode) instead of the hard
@@ -17,11 +17,11 @@ import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy"
 import {
   resolveOpenAIBodyLoggingDefault,
   type StoredOpenAIConnectionRow,
-} from "@/lib/openai-connection-at-rest";
+} from "@/lib/connector-config-secret-fields";
 import {
   readUnsealedOpenAIConnectionRow,
   writeSealedOpenAIConnectionRow,
-} from "@/lib/openai-connection-row";
+} from "@/lib/database-metadata";
 import { isAppDevelopmentMode } from "@/lib/runtime-mode";
 import type { OpenAIServiceTier } from "@/lib/types";
 
