@@ -23,6 +23,33 @@ import type { ApprovalViewer, DecideInput, DecideResult } from "./sources/types"
 type Refusal = Extract<DecideResult, { ok: false }>;
 
 /**
+ * Fail-closed coercion of the two form fields an approval surface carries for
+ * the cinatra#1327 access scope (`accessTargetLevel` / `accessTargetId`) into
+ * the `{ level, id }` target the agent-creation approve requires.
+ *
+ * ONE source of truth for BOTH surfaces that decide an agent-creation request —
+ * the inbox row dialog (./actions.ts `decideApprovalRow`) and the approvals
+ * DETAIL page (/configuration/agents/approvals/[id]) — so a malformed level can
+ * never be accepted on one surface and refused on the other. Anything that is
+ * not one of the three SELECTABLE levels carrying a non-empty id yields
+ * `undefined`, which the approve path then refuses (fail-closed): a half-valid
+ * target never reaches the primitive. "user"/"workspace"/"owner"/"admin" are
+ * deliberately NOT selectable (parity with the install-at-scope schema).
+ */
+export function coerceApprovalAccessTarget(
+  level: string,
+  id: string,
+): DecideInput["accessTarget"] {
+  const lvl = level.trim();
+  const targetId = id.trim();
+  if (!targetId) return undefined;
+  if (lvl === "organization" || lvl === "team" || lvl === "project") {
+    return { level: lvl, id: targetId };
+  }
+  return undefined;
+}
+
+/**
  * Pure classifier for the agent-creation-request decide primitive, which
  * flattens every outcome to a `{ error: string }` message. Each KNOWN refusal
  * maps to a stable `code` + `kind`; an UNRECOGNISED message is treated as

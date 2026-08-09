@@ -54,6 +54,7 @@ const ORG_SCOPE = { level: "organization" as const, id: "org-1" };
 
 import {
   classifyAgentDecideError,
+  coerceApprovalAccessTarget,
   decideAgentCreationRequest,
 } from "../decision-helpers";
 import type { ApprovalViewer } from "../sources/types";
@@ -334,5 +335,38 @@ describe("decideAgentCreationRequest — delegates to the audited primitive", ()
       admin,
     );
     expect(r).toMatchObject({ ok: false, kind: "transient", code: "access_persist_failed" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2597 — the ONE form-field coercion both approval surfaces use (the
+// inbox row dialog and the approvals DETAIL page). Fail-closed: anything that
+// is not one of the three SELECTABLE levels with a non-empty id yields
+// `undefined`, which the approve path then refuses. A surface-local copy of
+// this rule is exactly how the two surfaces would drift.
+// ---------------------------------------------------------------------------
+describe("coerceApprovalAccessTarget", () => {
+  it("accepts the three selectable levels", () => {
+    expect(coerceApprovalAccessTarget("organization", "o1")).toEqual({
+      level: "organization",
+      id: "o1",
+    });
+    expect(coerceApprovalAccessTarget("team", "t1")).toEqual({ level: "team", id: "t1" });
+    expect(coerceApprovalAccessTarget("project", "p1")).toEqual({ level: "project", id: "p1" });
+  });
+
+  it("trims surrounding whitespace on both fields", () => {
+    expect(coerceApprovalAccessTarget("  team  ", "  t1  ")).toEqual({ level: "team", id: "t1" });
+  });
+
+  it("returns undefined for a NON-selectable level", () => {
+    for (const level of ["workspace", "user", "owner", "admin", "ORGANIZATION", "Team", ""]) {
+      expect(coerceApprovalAccessTarget(level, "x1")).toBeUndefined();
+    }
+  });
+
+  it("returns undefined for a missing / blank id, never a half-valid target", () => {
+    expect(coerceApprovalAccessTarget("organization", "")).toBeUndefined();
+    expect(coerceApprovalAccessTarget("organization", "   ")).toBeUndefined();
   });
 });

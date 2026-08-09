@@ -11,6 +11,7 @@ import { buildInstallTargetPickerContext } from "@cinatra-ai/agents/install-targ
 import type { InstallTarget } from "@cinatra-ai/agents/install-targets";
 
 import { approvalSourceRegistry } from "./sources/registry";
+import { coerceApprovalAccessTarget } from "./decision-helpers";
 import type { ApprovalViewer } from "./sources/types";
 
 // ---------------------------------------------------------------------------
@@ -38,18 +39,14 @@ export async function decideApprovalRow(
   const expectedVersion = String(formData.get("expectedVersion") ?? "").trim();
 
   // Approval-time access scope (cinatra#1327). The agent-creation source's
-  // approve REQUIRES it; other sources ignore it. Only accept the three
-  // selectable levels — a malformed level yields no accessTarget, which the
-  // agent source then refuses (fail-closed).
-  const accessTargetLevel = String(formData.get("accessTargetLevel") ?? "").trim();
-  const accessTargetId = String(formData.get("accessTargetId") ?? "").trim();
-  const accessTarget =
-    accessTargetId &&
-    (accessTargetLevel === "organization" ||
-      accessTargetLevel === "team" ||
-      accessTargetLevel === "project")
-      ? { level: accessTargetLevel as "organization" | "team" | "project", id: accessTargetId }
-      : undefined;
+  // approve REQUIRES it; other sources ignore it. Only the three selectable
+  // levels are accepted — a malformed level yields no accessTarget, which the
+  // agent source then refuses (fail-closed). Shared with the approvals DETAIL
+  // page's approve action so both surfaces coerce identically (cinatra#2597).
+  const accessTarget = coerceApprovalAccessTarget(
+    String(formData.get("accessTargetLevel") ?? ""),
+    String(formData.get("accessTargetId") ?? ""),
+  );
 
   const session = await getAuthSession();
   const userId = session?.user?.id ?? null;

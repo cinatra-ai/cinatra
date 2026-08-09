@@ -354,3 +354,87 @@ export function canSubmitApprovalScope(
 ): boolean {
   return pickerValueToTarget(value, activeOrgId) !== null;
 }
+
+// ---------------------------------------------------------------------------
+// Approval scope-picker model (cinatra#1327, shared by cinatra#2597).
+//
+// TWO surfaces decide an agent-creation request: the inbox row dialog
+// (src/lib/approvals/agent-decision-actions.tsx) and the approvals DETAIL page
+// (src/app/configuration/agents/approvals/[id]/decision-form.tsx). Both must
+// offer the SAME rows the marketplace install dialog offers — otherwise the two
+// approve surfaces drift on which scopes exist, which are disabled, and whether
+// the reviewer can grant access at all. This PURE mapper turns the
+// server-computed install-target context into the AccessCombobox (installMode)
+// props both surfaces bind to, so that question is answered in ONE
+// unit-testable place.
+//
+// Co-located HERE (an already-reachable, client-safe, dependency-free module)
+// rather than in a standalone file for the same reason pickerValueToTarget is:
+// a new module would enlarge the reachable first-party graph of the hot agent
+// routes (route-graph ratchet).
+// ---------------------------------------------------------------------------
+
+/**
+ * The structural slice of an `InstallTarget` row this mapper reads. Declared
+ * structurally instead of importing `./install-targets` so this client-safe
+ * module keeps its zero-dependency shape.
+ */
+export type ApprovalScopeTargetRow = {
+  value: string;
+  label: string;
+  level: string;
+  id: string;
+  disabled: boolean;
+  reason?: string;
+};
+
+export type ApprovalScopePickerModel = {
+  /** `AccessCombobox` (single/installMode) `availableScopes` prop. */
+  availableScopes: {
+    teams: { id: string; name: string }[];
+    projects: { id: string; name: string }[];
+    orgName: string;
+    orgId: string;
+    workspaceExposed: false;
+  };
+  disabledScopes: string[];
+  disabledReasons: Record<string, string>;
+  /**
+   * No grantable scope at all — the reviewer holds no org-admin / team-admin /
+   * project-ownership standing anywhere, so they cannot grant access and
+   * therefore cannot approve. Install-dialog empty-state parity; derived from
+   * the server's `defaultValue === null` (the server picks the default from the
+   * ENABLED rows, so a null default means none are grantable).
+   */
+  noInstallableScope: boolean;
+};
+
+export function approvalScopePickerModel(ctx: {
+  installTargets: readonly ApprovalScopeTargetRow[];
+  ownerEntityNames: Record<string, string>;
+  defaultValue: string | null;
+  activeOrgId: string;
+}): ApprovalScopePickerModel {
+  const named = (t: ApprovalScopeTargetRow) => ({
+    id: t.id,
+    name: ctx.ownerEntityNames[t.value] ?? t.label,
+  });
+  const disabled = ctx.installTargets.filter((t) => t.disabled);
+  return {
+    availableScopes: {
+      teams: ctx.installTargets.filter((t) => t.level === "team").map(named),
+      projects: ctx.installTargets.filter((t) => t.level === "project").map(named),
+      // Multi-scope W1: keyed by the id-carrying `org:<id>` token. Fall through
+      // to the empty string so the combobox renders its OWN "Your organization"
+      // fallback only when the org genuinely has no name.
+      orgName: ctx.ownerEntityNames[`org:${ctx.activeOrgId}`] ?? "",
+      orgId: ctx.activeOrgId,
+      workspaceExposed: false,
+    },
+    disabledScopes: disabled.map((t) => t.value),
+    disabledReasons: Object.fromEntries(
+      disabled.map((t) => [t.value, t.reason ?? "Not available"]),
+    ),
+    noInstallableScope: ctx.defaultValue === null,
+  };
+}

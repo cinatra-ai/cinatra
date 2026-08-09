@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { AccessCombobox, resolveFlatAccessOption } from "@/components/access-combobox";
 import {
+  approvalScopePickerModel,
   pickerValueToTarget,
   canSubmitApprovalScope,
 } from "@cinatra-ai/agents/auth-policy-types";
@@ -121,34 +122,20 @@ export function AgentDecisionActions({
     if (next) void loadScopeContext();
   };
 
-  // null → no installable scope (parity with the install dialog's empty-state:
-  // the admin lacks authority to grant access anywhere → cannot approve).
-  const noInstallableScope = scopeCtx !== null && scopeCtx.defaultValue === null;
   const approveTarget = scopeCtx
     ? pickerValueToTarget(scopeValue, scopeCtx.activeOrgId)
     : null;
 
   // AccessCombobox props derived from the server-computed installTargets (same
-  // shape the install dialog builds). Workspace is gated off via installMode.
-  const availableScopes = scopeCtx
-    ? {
-        teams: scopeCtx.installTargets
-          .filter((t) => t.level === "team")
-          .map((t) => ({ id: t.id, name: scopeCtx.ownerEntityNames[t.value] ?? t.label })),
-        projects: scopeCtx.installTargets
-          .filter((t) => t.level === "project")
-          .map((t) => ({ id: t.id, name: scopeCtx.ownerEntityNames[t.value] ?? t.label })),
-        // Multi-scope W1: keyed by the id-carrying `org:<id>` token. Fall
-        // through to the empty string so the combobox renders its own "Your
-        // organization" fallback ONLY when the org genuinely has no name.
-        orgName: scopeCtx.ownerEntityNames[`org:${scopeCtx.activeOrgId}`] ?? "",
-        orgId: scopeCtx.activeOrgId,
-        workspaceExposed: false,
-      }
-    : null;
-  const disabledScopes = scopeCtx
-    ? scopeCtx.installTargets.filter((t) => t.disabled).map((t) => t.value)
-    : [];
+  // shape the install dialog builds), through the SHARED pure model the
+  // approvals DETAIL page also binds to (cinatra#2597) — so the two approval
+  // surfaces can never offer different scopes. Workspace is gated off via
+  // installMode. `noInstallableScope` → the admin lacks authority to grant
+  // access anywhere → cannot approve (install-dialog empty-state parity).
+  const picker = scopeCtx ? approvalScopePickerModel(scopeCtx) : null;
+  const noInstallableScope = picker?.noInstallableScope ?? false;
+  const availableScopes = picker?.availableScopes ?? null;
+  const disabledScopes = picker?.disabledScopes ?? [];
 
   // Committability (cinatra#2372): the SAME model-layer gate the two install
   // dialogs read, so every single-mode consumer inherits it — the structural
@@ -167,13 +154,7 @@ export function AgentDecisionActions({
     !noInstallableScope &&
     canSubmitApprovalScope(scopeValue, scopeCtx.activeOrgId) &&
     (selectedScopeOption?.committable ?? false);
-  const disabledReasons: Record<string, string> = scopeCtx
-    ? Object.fromEntries(
-        scopeCtx.installTargets
-          .filter((t) => t.disabled)
-          .map((t) => [t.value, t.reason ?? "Not available"]),
-      )
-    : {};
+  const disabledReasons: Record<string, string> = picker?.disabledReasons ?? {};
 
   return (
     <div className="flex flex-col items-end gap-1.5">
