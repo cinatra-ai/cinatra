@@ -3,7 +3,7 @@
   "routes": {
     "/sign-in": 1673,
     "/api/mcp": 1669,
-    "/chat": 1749,
+    "/chat": 1750,
     "/api/a2a": 1674,
     "/api/llm-bridge": 1684
   },
@@ -27,10 +27,10 @@
       "pr": 2588
     },
     "/chat": {
-      "from": 1747,
-      "to": 1749,
-      "reason": "cinatra#2565 (epic #2564 S1) lifecycle cards: TWO new first-party modules become reachable from /chat, and both have to be their own leaf. (1) packages/agent-ui-protocol/src/renderable-views/lifecycle-cards.ts \u2014 the card registry the whole epic keys on: the four interaction kinds, the states the ratified design spec fixes, the per-host presence matrix, and the three ref-only wire schemas. It is pulled in by the schema-registry index, which /chat already reaches through the renderable-views barrel; folding it into that index would merge a design-bound registry into a dispatch table purely to avoid the counter. (2) packages/chat/src/renderable-views/lifecycle-card.tsx \u2014 the card component the registry dispatches to, plus its authoritative-refetch hook; a registry entry needs a component, and S2 (#2566) replaces this file's body with the drawn ReviewGateCard, so cramming it into registry.tsx would only have to be undone. No new cross-package EDGE is added \u2014 both ride import paths /chat already carries \u2014 and no other locked route grew (+0 on /sign-in, /api/mcp, /api/a2a, /api/llm-bridge). Counts measured with the companion extension repos cloned pinned, exactly as CI measures them.",
-      "pr": 2604
+      "from": 1749,
+      "to": 1750,
+      "reason": "cinatra#2593 whole-response action bar Slack-mode parity: ONE new first-party module, packages/chat/src/response-action-bar.tsx, reached through the PRE-EXISTING chat-messages-view.tsx import edge (no new cross-package edge; only /chat carries this route since chat-messages-view.tsx is dynamically imported solely from chat-page.tsx). Extracted the Copy-response/Try-again row out of chat-messages-view.tsx's inline JSX into its own module specifically so it is unit-testable in isolation with a real render (mounted-component test, batch doctrine): chat-messages-view.tsx's own transitive import graph (chat-undo-action-chip.tsx -> undo-actions.ts -> @/lib/object-history -> @/lib/database) makes the file itself unmountable in vitest, which is why no existing test imports it directly. Folding the component back inline would avoid the +1 but forfeit that isolated test coverage for the fix. Counts measured against CI's own route-graph-ratchet run (companion extension repos cloned pinned) since this worktree lacks the extension-repo checkouts a bare local --write-baseline needs.",
+      "pr": 2601
     },
     "/sign-in": {
       "from": 1672,
