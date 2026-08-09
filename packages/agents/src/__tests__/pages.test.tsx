@@ -195,6 +195,43 @@ describe("NewAgentPage merged discovery table", () => {
     expect(source).toMatch(/rows=\{rows\}/);
   });
 
+
+  // cinatra#2605 — the picker must not OFFER what cannot RUN. The derivation
+  // consults the live install + required-dependency reality (the shared gate's
+  // availability layer), archived rows still disappear, and a card that cannot
+  // run carries a truthful CTA instead of a Run link.
+  it("derives each row's run availability from the shared gate (cinatra#2605)", () => {
+    const source = readSource();
+    expect(source).toMatch(/resolveAgentRunAvailabilityMap\s*\(/);
+    // The version is threaded so the catalog's dependency edges only speak for
+    // the build they describe.
+    expect(source).toMatch(/packageVersion:\s*t\.packageVersion/);
+    // Archived still disappears from the picker (the #659 behaviour).
+    expect(source).toMatch(/state\s*!==\s*"archived"/);
+  });
+
+  it("builds a truthful CTA for an agent that cannot run (cinatra#2605)", () => {
+    const source = readSource();
+    expect(source).toMatch(/function buildUnavailableAction/);
+    // Not installed → Install; a missing required dependency → a DETAILS
+    // destination, never an install promise the target page cannot keep.
+    expect(source).toMatch(/ctaLabel: detailHref \? "Install"/);
+    expect(source).toMatch(/ctaLabel: "View requirements"/);
+    expect(source).toMatch(/ctaAriaLabel/);
+  });
+
+  it("the card branches its primary action on the unavailable verdict (cinatra#2605)", () => {
+    // The RENDERED contract (CTA href/accessible name, no Run link, no play
+    // glyph) is asserted against real markup in
+    // src/components/extensions/agent-all-card.test.tsx; this guard only pins
+    // that the branch is wired from the row model at all.
+    const card = readAgentCardSource();
+    expect(card).toMatch(/row\.unavailable\s*\?/);
+    expect(card).toMatch(/aria-label=\{row\.unavailable\.ctaAriaLabel\}/);
+    // Run stays the primary action for a runnable row.
+    expect(card).toMatch(/href=\{row\.runHref\}/);
+  });
+
   // Page-shell contract (CLAUDE.md — non-negotiable)
   it("wraps NewAgentPage in the required Main/PageHeader/PageContent shell", () => {
     const source = readSource();

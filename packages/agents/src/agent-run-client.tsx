@@ -69,6 +69,23 @@ export type AgentRunRowModel = {
    * no More-details action.
    */
   detailHref: string | null;
+  /**
+   * Set when the agent CANNOT run (cinatra#2605): it is a bundled opt-in package
+   * with no canonical install row, or a required dependency of its is not
+   * installed. The card then renders this action in the primary slot INSTEAD of
+   * Run — the run affordance is the lie the issue is about. `null`/absent for a
+   * runnable agent. Derived server-side (NewAgentPage) so the card carries no
+   * lifecycle policy of its own.
+   */
+  unavailable?: {
+    /** One plain sentence naming why no run is offered. */
+    reason: string;
+    /** Visible button label — never promises more than the target can do. */
+    ctaLabel: string;
+    ctaHref: string;
+    /** Full accessible name (the visible label alone is not self-explanatory). */
+    ctaAriaLabel: string;
+  } | null;
 };
 
 export function AgentRunClient({ rows }: { rows: AgentRunRowModel[] }) {

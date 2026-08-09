@@ -19,6 +19,7 @@ import type { ActorRoleHints } from "./auth-policy";
 import { enqueueAgentRun, enqueueDepsForTemplate } from "@/lib/agent-run-enqueue";
 import type { AgentTemplateRecord } from "./store";
 import { asActionablePreflightError } from "./actionable-preflight-error";
+import { assertAgentPackageRunnable } from "./runtime-install-gate";
 import {
   readAgentRunById,
   readAgentRunMessages,
@@ -270,6 +271,18 @@ async function createAndTriggerRunCore(
   orgId: string,
   template: AgentTemplateRecord,
 ): Promise<CreatePendingRunResult> {
+  // RUNTIME-LIFECYCLE + PROVISIONING GATE (cinatra#659, cinatra#2605). This is
+  // the run-start the /agents card's Run link lands on, so it must apply the
+  // SAME verdict the card was built from — otherwise a bookmark or a typed
+  // /agents/<package>/new URL starts exactly the run the picker refused to
+  // offer. Same shared gate, same refusal texts, same fail-open semantics as
+  // `agent_run`; ADDITIVE — the session/tenancy authority below is unchanged.
+  const notRunnable = await assertAgentPackageRunnable(
+    template.packageName,
+    template.packageName ?? template.name,
+    { packageVersion: template.packageVersion ?? null },
+  );
+  if (notRunnable) return { ok: false, error: notRunnable.error };
   // orgId is resolved by the caller (do NOT re-resolve session inside this
   // helper) and threaded through to createAgentRunPendingInput.
   // cinatra#1940 P3 (Decision 2): mint the member session authority ONCE, up

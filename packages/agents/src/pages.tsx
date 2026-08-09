@@ -9,6 +9,7 @@ import { Main } from "@/components/layout/main";
 import { Button } from "@/components/ui/button";
 import { AgentBuilderRunScreen, AgentBuilderImportScreen } from "./screens";
 import { AgentRunClient, type AgentRunRowModel } from "./agent-run-client";
+import type { AgentRunAvailability } from "./runtime-install-gate";
 import { AgentsTabNav } from "@/components/agents-tab-nav";
 
 // ---------------------------------------------------------------------------
@@ -49,30 +50,75 @@ function agentDetailHref(packageName: string): string | null {
     : null;
 }
 
+/**
+ * The truthful action for an agent the picker may NOT offer a Run for
+ * (cinatra#2605). The picker keeps the card — hiding it would delete the only
+ * discovery path for the ~24 bundled opt-in agents — but the primary action
+ * stops promising a run that cannot start, and points at what is actually
+ * missing:
+ *
+ *   • not-installed → "Install", targeting the agent's OWN marketplace listing,
+ *     the one detail route that carries install controls for an agent;
+ *   • missing required dependency → "View requirements", targeting the same
+ *     listing (a DETAILS destination, so the label never promises an install
+ *     the target page cannot perform — the missing package may be a connector /
+ *     artifact / skill whose detail route is details-only).
+ *
+ * Returns `null` for a runnable agent (the card renders Run, unchanged).
+ */
+function buildUnavailableAction(
+  name: string,
+  availability: AgentRunAvailability,
+  detailHref: string | null,
+): AgentRunRowModel["unavailable"] {
+  if (availability.state === "runnable" || availability.state === "archived") return null;
+  const marketplaceHref = detailHref ?? "/configuration/marketplace";
+  if (availability.state === "not-installed") {
+    return {
+      reason: "This agent is not installed yet.",
+      ctaLabel: detailHref ? "Install" : "Browse marketplace",
+      ctaHref: marketplaceHref,
+      ctaAriaLabel: `Install ${name}`,
+    };
+  }
+  const missing = availability.missing
+    .map((m) => m.displayName ?? m.packageName)
+    .join(", ");
+  return {
+    reason: `This agent cannot run: ${missing} ${availability.missing.length === 1 ? "is" : "are"} not installed.`,
+    ctaLabel: "View requirements",
+    ctaHref: marketplaceHref,
+    ctaAriaLabel: `${name} cannot run — ${missing} not installed. View requirements`,
+  };
+}
+
 export async function NewAgentPage() {
   const allTemplates = await readInstalledAgentTemplates();
-  // RUNTIME-LIFECYCLE GATE (cinatra#659): `readInstalledAgentTemplates` filters
-  // by the agent-builder `status` (active|published) only — NOT the canonical
-  // `installed_extension` source of truth. Intersect the LOCAL (non-external)
-  // templates against the runtime install state so a disabled/uninstalled
-  // (archived) agent disappears from the run picker without a rebuild. CG-1: a
-  // template with NO canonical row (legacy/bundled/ungoverned) and a `null`
-  // packageName stay listed (the bundled floor). External A2A templates are
-  // governed by their own connector lifecycle, not an agent install row, so they
-  // bypass this gate (the runnable set only includes scanned agent packages).
-  // Fail-OPEN on a store outage (keep all).
-  const { resolveRunnableAgentPackageNames } = await import("./runtime-install-gate");
-  const runnable = await resolveRunnableAgentPackageNames(
+  // RUNTIME-LIFECYCLE + PROVISIONING GATE (cinatra#659, cinatra#2605):
+  // `readInstalledAgentTemplates` filters by the agent-builder `status`
+  // (active|published) only — NOT the canonical `installed_extension` source of
+  // truth. Resolve each LOCAL (non-external) template's run AVAILABILITY against
+  // the live install + required-dependency reality:
+  //   • archived                     → the row DISAPPEARS (unchanged #659);
+  //   • not-installed / missing dep  → the row STAYS but offers no Run — it
+  //     cannot succeed, so the card carries the truthful CTA built below;
+  //   • runnable                     → Run, as before.
+  // CG-1: a template with NO canonical row that the catalog does not govern —
+  // and a `null` packageName — stays runnable (the bundled/ungoverned floor).
+  // External A2A templates are governed by their own connector lifecycle, not an
+  // agent install row, so they bypass this gate. Fail-OPEN on a store outage
+  // (every input reads runnable).
+  const { resolveAgentRunAvailabilityMap } = await import("./runtime-install-gate");
+  const availability = await resolveAgentRunAvailabilityMap(
     allTemplates
       .filter((t) => t.sourceType !== "external")
-      .map((t) => t.packageName ?? null),
+      .map((t) => ({ packageName: t.packageName ?? null, packageVersion: t.packageVersion ?? null })),
   );
-  const lifecycleVisible = allTemplates.filter(
-    (t) =>
-      t.sourceType === "external" ||
-      t.packageName == null ||
-      runnable.has(t.packageName),
-  );
+  const availabilityOf = (t: (typeof allTemplates)[number]) =>
+    t.sourceType === "external" || t.packageName == null
+      ? ({ state: "runnable" } as const)
+      : (availability.get(t.packageName) ?? ({ state: "runnable" } as const));
+  const lifecycleVisible = allTemplates.filter((t) => availabilityOf(t).state !== "archived");
   const visibleTemplates = selectHitlRunVisibleTemplates(lifecycleVisible);
 
   const rows: AgentRunRowModel[] = visibleTemplates.map<AgentRunRowModel>((t) => {
@@ -102,6 +148,9 @@ export async function NewAgentPage() {
         // External A2A agents have no marketplace listing → no More-details.
         packageName: null,
         detailHref: null,
+        // External A2A agents carry no agent install row (their connector's
+        // lifecycle governs them) → never gated by the provisioning layer.
+        unavailable: null,
       };
     }
     // detailHref (and thus the §V modal + its loader key packageName) exists
@@ -118,6 +167,7 @@ export async function NewAgentPage() {
       runHref: t.packageName ? buildAgentWorkspacePath(t.packageName) : "#",
       packageName: detailHref ? (t.packageName ?? null) : null,
       detailHref,
+      unavailable: buildUnavailableAction(t.name, availabilityOf(t), detailHref),
     };
   });
 

@@ -884,8 +884,10 @@ async function handleAgentBuilderRun(
   // Resolved templateId is what every downstream code path expects.
   const resolvedTemplateId = template.id;
 
-  // RUNTIME-LIFECYCLE GATE (cinatra#659): fail-CLOSED on a runtime-archived package (refusal text + CG-1/fail-open semantics live in the shared gate).
-  const notRunnable = await assertAgentPackageRunnable(template.packageName, identifierForError);
+  // RUNTIME-LIFECYCLE + PROVISIONING GATE (cinatra#659, cinatra#2605): fail-CLOSED on a runtime-archived package, on a bundled opt-in package that was never installed, and on an unmet required-dependency closure (refusal texts + CG-1/fail-open semantics live in the shared gate). The version fences the catalog's dependency edges against an upgraded install.
+  const notRunnable = await assertAgentPackageRunnable(template.packageName, identifierForError, {
+    packageVersion: template.packageVersion ?? null,
+  });
   if (notRunnable) return notRunnable;
   // #1057(b) config-needs run gate: fail-closed until required connectors are configured (src/lib/agent-run-readiness).
   const actor = request.actor as PrimitiveActorContext;
