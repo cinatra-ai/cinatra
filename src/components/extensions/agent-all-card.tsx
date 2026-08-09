@@ -45,6 +45,18 @@ export type AgentAllCardRow = {
   packageName: string | null;
   /** Full-page marketplace-detail route; null for A2A/unscoped (in lockstep). */
   detailHref: string | null;
+  /**
+   * Set when this agent CANNOT run (cinatra#2605) — not installed, or a required
+   * dependency is not installed. The primary action slot then carries this
+   * truthful CTA instead of Run. Derived server-side; this card renders it and
+   * decides nothing.
+   */
+  unavailable?: {
+    reason: string;
+    ctaLabel: string;
+    ctaHref: string;
+    ctaAriaLabel: string;
+  } | null;
 };
 
 export function AgentAllCard({
@@ -89,18 +101,36 @@ export function AgentAllCard({
       accentInert={!hasDetail}
       actions={
         <>
-          <Button asChild size="sm">
-            <Link href={row.runHref}>
-              {/* Solid play icon (fill="currentColor", no outline) — fill-current
-                  fills the lucide glyph in place of the settings gear. */}
-              <Play
-                data-icon="inline-start"
-                aria-hidden="true"
-                className="fill-current"
-              />
-              Run
-            </Link>
-          </Button>
+          {row.unavailable ? (
+            /* cinatra#2605 — the agent cannot run (not installed, or a required
+               dependency is not installed), so the primary slot carries the
+               recourse instead of a Run that would fail. No play icon (it would
+               still read as "start a run"); the accessible name carries the full
+               reason because the short visible label cannot. */
+            <Button asChild size="sm" variant="outline">
+              <Link
+                href={row.unavailable.ctaHref}
+                aria-label={row.unavailable.ctaAriaLabel}
+                title={row.unavailable.reason}
+                data-slot="agent-card-unavailable-action"
+              >
+                {row.unavailable.ctaLabel}
+              </Link>
+            </Button>
+          ) : (
+            <Button asChild size="sm">
+              <Link href={row.runHref}>
+                {/* Solid play icon (fill="currentColor", no outline) — fill-current
+                    fills the lucide glyph in place of the settings gear. */}
+                <Play
+                  data-icon="inline-start"
+                  aria-hidden="true"
+                  className="fill-current"
+                />
+                Run
+              </Link>
+            </Button>
+          )}
           {/* "More details" opens the §V detail modal IN PLACE (owner ruling,
               2026-07-06) — the SAME <MarketplaceDetailModal> the Installed-
               extensions card uses, details-only (no footer/install CTA). Its

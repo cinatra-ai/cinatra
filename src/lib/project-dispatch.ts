@@ -58,13 +58,12 @@ import {
   TERMINAL_RUN_STATUSES,
   type AgentRunStatus,
 } from "@cinatra-ai/agents";
-import { isAgentRuntimeRunnable } from "@cinatra-ai/agents/runtime-install-gate";
+import { resolveAgentRunAvailabilityMap } from "@cinatra-ai/agents/runtime-install-gate";
 import {
   beginDispatchAttempt,
   settleDispatchAttempt,
   type DispatchAttemptRecord,
 } from "@cinatra-ai/agents/project-dispatch-ledger-store";
-import { readEffectiveStatusByPackageNames } from "@cinatra-ai/extensions/canonical-store";
 // cinatra#1940 P3 (Decision 2): the creation perimeter is now guarded — this
 // PM-tick dynamic dispatch has no session, so it mints the SYSTEM
 // `agent-run-dispatch` authority (a caller the design's caller matrix did not
@@ -211,24 +210,27 @@ export type ProjectWorkerDispatchInput = {
 };
 
 /**
- * Runtime-lifecycle gate (cinatra#659) — verbatim from
- * src/lib/workflow-agent-executor.ts: fail-CLOSED on a runtime archive,
- * CG-1 bundled floor (null package allowed), fail-OPEN on a canonical-store
- * outage (the tenancy gate is the real authz boundary).
+ * Runtime-lifecycle + PROVISIONING gate (cinatra#659, cinatra#2605).
+ *
+ * This used to re-implement the #659 decision locally (a status read plus
+ * `isAgentRuntimeRunnable`). It now DELEGATES to the shared gate's
+ * `resolveRunnableAgentPackageNames` so this dispatch surface cannot drift from
+ * `/agents`, `agent_list` and `agent_run`: an agent that is runtime-archived, a
+ * bundled opt-in package that was never installed, or one whose required
+ * direct required dependency is not installed is refused here too. Semantics kept:
+ * CG-1 bundled floor (a null package is allowed), and fail-OPEN on a
+ * canonical-store outage (the tenancy gate is the real authz boundary) —
+ * both now live inside the shared gate.
  */
-async function agentTemplateRuntimeRunnable(packageName: string | null | undefined): Promise<boolean> {
+async function agentTemplateRuntimeRunnable(
+  packageName: string | null | undefined,
+  packageVersion?: string | null,
+): Promise<boolean> {
   if (packageName == null) return true; // CG-1: untracked legacy/bundled template
-  let status: "active" | "archived" | undefined;
-  try {
-    status = (await readEffectiveStatusByPackageNames([packageName])).get(packageName);
-  } catch (err) {
-    console.warn(
-      `[project-dispatch] effective-status read failed for "${packageName}" — treating as runnable (fail-open):`,
-      err instanceof Error ? err.message : err,
-    );
-    return true;
-  }
-  return isAgentRuntimeRunnable({ packageName, effectiveStatus: status });
+  const availability = await resolveAgentRunAvailabilityMap([
+    { packageName, packageVersion: packageVersion ?? null },
+  ]);
+  return (availability.get(packageName)?.state ?? "runnable") === "runnable";
 }
 
 /** Best-effort 'failed' settle inside the never-throw boundary: a settle
@@ -561,8 +563,10 @@ export async function dispatchProjectWorker(
       };
     }
 
-    // Runtime-lifecycle gate (cinatra#659), fail-CLOSED on runtime archive.
-    if (!(await agentTemplateRuntimeRunnable(template.packageName))) {
+    // Runtime-lifecycle + provisioning gate (cinatra#659, cinatra#2605):
+    // fail-CLOSED on a runtime archive, on a never-installed opt-in package, and
+    // on an unmet DIRECT required dependency.
+    if (!(await agentTemplateRuntimeRunnable(template.packageName, template.packageVersion))) {
       await settleFailed(`AGENT_NOT_INSTALLED: ${template.id}`);
       return {
         status: "failed",

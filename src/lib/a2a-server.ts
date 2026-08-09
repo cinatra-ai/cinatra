@@ -78,7 +78,7 @@ async function buildA2AMount(): Promise<A2AMount> {
   // agents are excluded from discovery (public + grandfathered-null only), then
   // gated by the canonical lifecycle manifest.
   const published = (await readPublishedAgentTemplates()).filter(isAgentPubliclyDiscoverable);
-  const templates = filterTemplatesToLiveManifest(published, await readLiveAgentPackageNames());
+  const templates = filterTemplatesToLiveManifest(published, await readLiveAgentPackageNames(published));
   const versionsByTemplateId: Record<string, AgentTemplateVersionRecord[]> = {};
   for (const t of templates) {
     const page = await readAgentTemplateVersions(t.id, { limit: 100 });

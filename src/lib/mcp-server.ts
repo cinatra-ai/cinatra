@@ -39,8 +39,8 @@ import { createTriggerModule } from "@cinatra-ai/trigger/module";
 import { createChatModule } from "@cinatra-ai/chat/module";
 import { createAgentsModule } from "@cinatra-ai/agents/module";
 import { createExtensionsModule } from "@cinatra-ai/extensions/mcp-module";
-import { readActiveManifestsFromStore } from "@cinatra-ai/extensions/runtime-discovery-host";
 import { setLiveAgentManifestProvider } from "@cinatra-ai/agents";
+import { readLiveAgentPackageNames } from "@/lib/a2a-manifest-gate";
 import { auth } from "@/lib/auth";
 import { getAuthSession } from "@/lib/auth-session";
 import { readConnectorConfigFromDatabase, writeConnectorConfigToDatabase } from "@/lib/database";
@@ -185,10 +185,13 @@ export async function registerAllCapabilities(
   // is reflected on the next tools/list without a restart. This is the LIFECYCLE
   // gate; the visibility policy (exclude PRIVATE agents) is applied
   // separately inside registerPublishedAgentTools via isAgentPubliclyDiscoverable.
-  setLiveAgentManifestProvider(async () => {
-    const manifests = await readActiveManifestsFromStore({ kind: "agent" });
-    return new Set(manifests.map((m) => m.packageName));
-  });
+  // cinatra#2605: the SHARED reader (src/lib/a2a-manifest-gate) is now the one
+  // place that answers "which agent packages may be advertised and run" — the
+  // live-manifest condition AND the run-availability verdict every other surface
+  // applies. This provider used to duplicate the manifest half inline, which is
+  // exactly how a published-agent MCP tool could keep advertising an agent that
+  // `agent_run` refuses. Same fail-open contract (null = keep everything).
+  setLiveAgentManifestProvider(readLiveAgentPackageNames);
 
   // Record the tool names the platform + manifest-discovered modules register
   // so the extension replay below can skip any name already claimed (dedup — the vendored server's
