@@ -694,7 +694,8 @@ export function buildMcpTools(input: {
   serverUrl: string;
   headers?: Record<string, string>;
   authorization?: string;
-  serverLabel?: string;
+  /** REQUIRED — see `createMcpServerTool` (the reserved first-party label). */
+  serverLabel: string;
   allowedTools?: string[] | null;
 }): LlmTool[] {
   return [createMcpServerTool(input)];
@@ -800,12 +801,20 @@ export function createMcpServerTool(input: {
   serverUrl: string;
   headers?: Record<string, string>;
   authorization?: string;
-  serverLabel?: string;
+  /**
+   * REQUIRED (cinatra#2565). This used to default to `"cinatra"`, which is now
+   * the RESERVED first-party self-MCP label and a trust signal: the lifecycle
+   * typed-view producer only mints a card for a result carrying it. A helper
+   * that hands that label to an arbitrary server URL by omission is a latent
+   * card-forging trap, so the label must be stated. The first-party self-MCP
+   * tool is built by `buildCinatraMcpServerTool`, not through here.
+   */
+  serverLabel: string;
   allowedTools?: string[] | null;
 }): LlmMcpServerTool {
   return {
     type: "mcp",
-    serverLabel: input.serverLabel ?? "cinatra",
+    serverLabel: input.serverLabel,
     serverUrl: input.serverUrl,
     headers: input.headers,
     authorization: input.authorization,

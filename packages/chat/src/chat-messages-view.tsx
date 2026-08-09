@@ -43,7 +43,11 @@ import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
 import { highlightCodeAsync, type ThemeName } from "./syntax-highlight";
 import { renderMarkdown, detectCharts, detectMermaidBlocks } from "./markdown-render";
 import { MermaidBlock } from "./mermaid-block";
-import { RenderableViewFallback } from "./renderable-views";
+import {
+  LifecycleCardSurfaceProvider,
+  RenderableViewCard,
+  RenderableViewFallback,
+} from "./renderable-views";
 import { buildChartView } from "@cinatra-ai/agent-ui-protocol/renderable-views/chart";
 import { FriendlyErrorBody } from "./chat-error-display"; // friendly error card (#534)
 import { InlineAgentRunCard } from "./inline-agent-run-card";
@@ -774,6 +778,25 @@ function MessageChartEmbeds({
   });
 }
 
+/**
+ * The renderable views this turn carried on the wire (cinatra#2565).
+ *
+ * `/chat` used to DROP the reducer's `dataParts` in its projection, so a typed
+ * DATA_PART the embed's shared renderer already drew was invisible here. The
+ * projection now keeps them and this mount dispatches each one through the SAME
+ * `RenderableViewCard` the embed uses — one registry, one validation path, one
+ * fallback. An unknown or invalid payload renders the neutral fallback rather
+ * than crashing the transcript; a lifecycle card renders nothing until its
+ * authoritative refetch succeeds.
+ */
+function MessageRenderableViews({ message }: { message: UiMessage }) {
+  const views = message.dataParts ?? [];
+  if (views.length === 0) return null;
+  return views.map((view, i) => (
+    <RenderableViewCard key={`view-${message.id}-${i}`} data={view} />
+  ));
+}
+
 function MessageCitations({ message }: { message: UiMessage }) {
   if (!message.citations || message.citations.length === 0) return null;
   return (
@@ -977,7 +1000,12 @@ export function ChatMessagesView({
   }, []);
 
   return (
-    /* gap-8 (was gap-5): action row clears next turn's header on same-side turns (#504) */
+    /* cinatra#2565 — `/chat` DECLARES itself as a lifecycle-card host. The
+       declaration is opt-in with no default: a surface that has not been
+       reviewed for lifecycle cards (the site widget, whose enablement is S8d's)
+       renders none, rather than inheriting them silently. */
+    <LifecycleCardSurfaceProvider host="chat_thread">
+    {/* gap-8 (was gap-5): action row clears next turn's header on same-side turns (#504) */}
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4">
       {messages.map((message) => {
         const isUser = message.role === "user";
@@ -1144,6 +1172,7 @@ export function ChatMessagesView({
                         />
                         <MessageMermaidEmbeds message={message} />
                         <MessageChartEmbeds message={message} chatViews={chatViews} />
+                        <MessageRenderableViews message={message} />
                         <MessageCitations message={message} />
                         {isStreaming(message.id) && shouldShowLiveProgressStatus(message) && (
                           <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />
@@ -1171,6 +1200,7 @@ export function ChatMessagesView({
                         />
                         <MessageMermaidEmbeds message={message} />
                         <MessageChartEmbeds message={message} chatViews={chatViews} />
+                        <MessageRenderableViews message={message} />
                         <MessageCitations message={message} />
                         {isStreaming(message.id) && shouldShowLiveProgressStatus(message) && (
                           <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />
@@ -1273,6 +1303,7 @@ export function ChatMessagesView({
                     />
                     <MessageMermaidEmbeds message={message} />
                     <MessageChartEmbeds message={message} chatViews={chatViews} />
+                    <MessageRenderableViews message={message} />
                     <MessageCitations message={message} />
                     {isStreaming(message.id) && shouldShowLiveProgressStatus(message) && (
                       <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />
@@ -1303,6 +1334,7 @@ export function ChatMessagesView({
                     />
                     <MessageMermaidEmbeds message={message} />
                     <MessageChartEmbeds message={message} chatViews={chatViews} />
+                    <MessageRenderableViews message={message} />
                     {message.role === "assistant" && <MessageCitations message={message} />}
                     {isStreaming(message.id) && shouldShowLiveProgressStatus(message) && (
                       <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />
@@ -1393,5 +1425,6 @@ export function ChatMessagesView({
           text is on screen. Renders nothing when the viewer has no cards. */}
       <PendingToolConfirmationCards pollSignal={pendingConfirmationSignal} />
     </div>
+    </LifecycleCardSurfaceProvider>
   );
 }

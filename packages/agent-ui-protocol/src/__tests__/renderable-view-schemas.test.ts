@@ -49,6 +49,23 @@ const VALID: Record<string, Record<string, unknown>> = {
     schemaVersion: 1,
     entries: [{ runId: "run_1", label: "Edited title", undoable: true }],
   },
+  // Lifecycle cards (cinatra#2565, epic #2564 S1) — the canonical payload IS
+  // the whole payload: a versioned, bounded, opaque ref and nothing else.
+  artifact_review_gate: {
+    viewType: "artifact_review_gate",
+    schemaVersion: 1,
+    ref: "cmVmLWFiYw",
+  },
+  verification_summary: {
+    viewType: "verification_summary",
+    schemaVersion: 1,
+    ref: "cmVmLWFiYw",
+  },
+  trigger_schedule_proposal: {
+    viewType: "trigger_schedule_proposal",
+    schemaVersion: 1,
+    ref: "cmVmLWFiYw",
+  },
 };
 
 describe("registry integrity", () => {
@@ -63,12 +80,18 @@ describe("registry integrity", () => {
     }
   });
 
-  it("covers exactly the four S4 views", () => {
+  it("covers exactly the four S4 views plus the three S1 lifecycle cards", () => {
     expect([...KNOWN_RENDERABLE_VIEW_TYPES].sort()).toEqual([
       "artifact_preview",
+      // cinatra#2565 — the DATA_PART-carried lifecycle kinds. The fourth
+      // interaction kind, `recommendation_hold`, is carried as a typed
+      // INTERRUPT (S4) and is deliberately NOT a registered view.
+      "artifact_review_gate",
       "change_history",
       "citation_group",
       "content_change_proposal",
+      "trigger_schedule_proposal",
+      "verification_summary",
     ]);
   });
 });

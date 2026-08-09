@@ -70,6 +70,9 @@ vi.mock("@/lib/llm-provider-surfaces", () => ({
 // MCP-related stubs — mirror entry-point-actor-context.test.ts so importing
 // ./index does not pull DB / Nango calls at module load.
 vi.mock("../mcp-access", () => ({
+  // cinatra#2565 — the reserved-first-party-label guard; identity here
+  // (these suites do not exercise external-label impostors).
+  withoutReservedFirstPartyLabelTools: vi.fn((tools: unknown[]) => tools),
   buildLlmMcpServerTool: vi.fn(async () => null),
   buildExternalMcpServerTools: vi.fn(async () => []),
   getLlmMcpCredentials: vi.fn(),

@@ -65,6 +65,7 @@ export type ChatThread = {
 
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import type { AssistantMessagePart } from "./assistant-parts";
+import type { HitlInterruptSlice } from "./renderer/ag-ui-reducer";
 
 export type UiToolCall = {
   id: string;
@@ -100,6 +101,21 @@ export type UiMessage = {
   // Older persisted messages without `parts` fall back to the flat layout.
   parts?: AssistantMessagePart[];
   citations?: UiCitation[];
+  // Structured `DATA_PART` payloads the AG-UI reducer carried through (i.e. the
+  // ones it did not consume itself — never `agent_run` / `citations`), kept on
+  // the projected turn so `/chat` can dispatch them to the renderable-view
+  // registry (cinatra#2565). Persisted verbatim in the thread JSON: a lifecycle
+  // card's payload is a bounded opaque REF, so a reload re-renders the card from
+  // the durable ref and re-resolves the CURRENT state server-side. Older
+  // messages without the field replay byte-identically.
+  dataParts?: Record<string, unknown>[];
+  // The open HITL interrupt slice for this turn, carried through rather than
+  // dropped (cinatra#2565). `/chat` does not yet RENDER a typed interrupt — the
+  // recommendation hold's typed-interrupt renderer lands with S4 (#2568) — but
+  // the projection must stop discarding it, or that slice would have to re-add
+  // a parallel wire. The reducer clears it on RESUME and on either terminal, so
+  // a persisted turn effectively never carries one.
+  interrupt?: HitlInterruptSlice | null;
   error?: string;
   errorRaw?: string;
   liveStatus?: string;

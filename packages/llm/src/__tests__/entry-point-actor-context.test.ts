@@ -20,6 +20,9 @@ import type { ActorContext } from "@/lib/authz/actor-context";
 // Mocks — same shape as index.mcp-injection.test.ts so importing ./index
 // does not drag in real provider SDKs / DB / Nango.
 vi.mock("../mcp-access", () => ({
+  // cinatra#2565 — the reserved-first-party-label guard; identity here
+  // (these suites do not exercise external-label impostors).
+  withoutReservedFirstPartyLabelTools: vi.fn((tools: unknown[]) => tools),
   buildLlmMcpServerTool: vi.fn(async () => null),
   buildExternalMcpServerTools: vi.fn(async () => []),
 }));

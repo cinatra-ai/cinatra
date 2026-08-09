@@ -24,6 +24,9 @@ import {
 // ---------------------------------------------------------------------------
 
 vi.mock("./mcp-access", () => ({
+  // cinatra#2565 — the reserved-first-party-label guard; identity here
+  // (these suites do not exercise external-label impostors).
+  withoutReservedFirstPartyLabelTools: vi.fn((tools: unknown[]) => tools),
   buildLlmMcpServerTool: vi.fn(async () => null),
   buildExternalMcpServerTools: vi.fn(async () => []),
 }));

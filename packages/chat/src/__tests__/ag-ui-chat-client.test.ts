@@ -410,6 +410,87 @@ describe("projectConversationMessage", () => {
     expect("parts" in msg).toBe(false);
     expect(msg.content).toBe("Hello");
   });
+
+  // -------------------------------------------------------------------------
+  // cinatra#2565 — the projection KEEPS `dataParts` + the interrupt slice.
+  // Both used to be dropped here, which is why `/chat` could not draw a
+  // renderable view the embed already drew off the same wire.
+  // -------------------------------------------------------------------------
+
+  it("REGRESSION: a turn carrying neither keeps the exact legacy shape", () => {
+    const msg = projectConversationMessage(finishedState, { assistantId: "a1" });
+    expect("dataParts" in msg).toBe(false);
+    expect("interrupt" in msg).toBe(false);
+  });
+
+  it("carries a lifecycle DATA_PART through to the projected turn", () => {
+    const view = {
+      viewType: "artifact_review_gate",
+      schemaVersion: 1,
+      ref: "ref-abc",
+    };
+    const state = reduceAgUiEvents([
+      ...turnFrames().map((f) => f.event),
+      { type: "DATA_PART", data: view } as AgUiEvent,
+    ]);
+    const msg = projectConversationMessage(state, { assistantId: "a1" });
+    expect(msg.dataParts).toEqual([view]);
+    // Slack mode reveals adjuncts too (it already reveals citations).
+    const slack = projectConversationMessage(state, { assistantId: "a1", slackMode: true });
+    expect(slack.dataParts).toEqual([view]);
+  });
+
+  it("REGRESSION: the reducer's own DATA_PART kinds are still consumed, never projected", () => {
+    const state = reduceAgUiEvents([
+      { type: "RUN_STARTED", threadId: "t", runId: "r" } as AgUiEvent,
+      { type: "TOOL_CALL_START", toolCallId: "tc1", toolCallName: "agent_run" } as AgUiEvent,
+      { type: "TOOL_CALL_END", toolCallId: "tc1" } as AgUiEvent,
+      {
+        type: "DATA_PART",
+        data: { kind: "agent_run", toolCallId: "tc1", runId: "child" },
+      } as AgUiEvent,
+      { type: "DATA_PART", data: { kind: "citations", citations: [] } } as AgUiEvent,
+      { type: "RUN_FINISHED", threadId: "t", runId: "r", status: "completed" } as AgUiEvent,
+    ]);
+    const msg = projectConversationMessage(state, { assistantId: "a1" });
+    expect("dataParts" in msg).toBe(false);
+  });
+
+  it("carries an OPEN interrupt slice, and drops it once the reducer clears it", () => {
+    const open = reduceAgUiEvents([
+      { type: "RUN_STARTED", threadId: "t", runId: "r" } as AgUiEvent,
+      {
+        type: "INTERRUPT",
+        threadId: "t",
+        runId: "r",
+        reviewTaskId: "rt1",
+        xRenderer: "form",
+        schema: {},
+        values: {},
+      } as unknown as AgUiEvent,
+    ]);
+    expect(open.interrupt).not.toBeNull();
+    const openMsg = projectConversationMessage(open, { assistantId: "a1" });
+    expect(openMsg.interrupt).toEqual(open.interrupt);
+
+    const resumed = reduceAgUiEvents([
+      { type: "RUN_STARTED", threadId: "t", runId: "r" } as AgUiEvent,
+      {
+        type: "INTERRUPT",
+        threadId: "t",
+        runId: "r",
+        reviewTaskId: "rt1",
+        xRenderer: "form",
+        schema: {},
+        values: {},
+      } as unknown as AgUiEvent,
+      { type: "RESUME", threadId: "t", runId: "r" } as unknown as AgUiEvent,
+    ]);
+    expect(resumed.interrupt).toBeNull();
+    expect("interrupt" in projectConversationMessage(resumed, { assistantId: "a1" })).toBe(
+      false,
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------

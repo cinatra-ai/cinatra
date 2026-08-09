@@ -89,13 +89,19 @@ beforeEach(() => {
 });
 
 describe("GET — advertised capabilities shape", () => {
-  it("advertises BOTH session and token-broker, renderableViews empty (session caller)", async () => {
+  it("advertises BOTH session and token-broker; the SESSION branch advertises the lifecycle views", async () => {
     getAuthSession.mockResolvedValue({ user: { id: "u1" } });
     const res = await GET(new Request("https://app.test/api/assistants/chat/capabilities"));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.auth).toEqual(["session", "token-broker"]);
-    expect(body.renderableViews).toEqual([]);
+    // cinatra#2565 — surface-scoped: a first-party host may render the
+    // lifecycle cards §IX places on the chat thread.
+    expect([...body.renderableViews].sort()).toEqual([
+      "artifact_review_gate",
+      "trigger_schedule_proposal",
+      "verification_summary",
+    ]);
     expect(body.transport).toBe("sse");
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
@@ -121,6 +127,28 @@ describe("GET — broker-auth advertisement (Lane A)", () => {
       "assistant_chat_capabilities_broker_advertised",
       expect.objectContaining({ agentSlug: "wordpress-content-editor" }),
     );
+  });
+
+  it("cinatra#2565: the WIDGET branch advertises NO lifecycle view until S8d", async () => {
+    primeHappyBroker();
+    const res = await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.renderableViews).toEqual([]);
+  });
+
+  it("cinatra#2565: the two auth branches DIFFER in what they advertise", async () => {
+    getAuthSession.mockResolvedValue({ user: { id: "u1" } });
+    const sessionBody = await (
+      await GET(new Request("https://app.test/api/assistants/chat/capabilities"))
+    ).json();
+    vi.clearAllMocks();
+    primeHappyBroker();
+    const widgetBody = await (
+      await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" }))
+    ).json();
+    expect(sessionBody.renderableViews).not.toEqual(widgetBody.renderableViews);
+    expect(widgetBody.renderableViews).toEqual([]);
   });
 
   it("401s when the cwu_ user token is missing (no anonymous broker read)", async () => {

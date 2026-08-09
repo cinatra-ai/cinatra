@@ -35,6 +35,12 @@ import {
   changeHistoryViewSchema,
   CHANGE_HISTORY_SCHEMA_VERSION,
 } from "./change-history";
+import {
+  artifactReviewGateViewSchema,
+  verificationSummaryViewSchema,
+  triggerScheduleProposalViewSchema,
+  LIFECYCLE_VIEW_SCHEMA_VERSION,
+} from "./lifecycle-cards";
 
 // Re-export the S1 seam (types + pure guards) so the `/renderable-views`
 // subpath is the single self-contained entry S4 consumers import — WITHOUT
@@ -51,6 +57,9 @@ export * from "./content-change-proposal";
 export * from "./artifact-preview";
 export * from "./citation-group";
 export * from "./change-history";
+// The lifecycle CARD registry (cinatra#2565): the interaction kinds, the states
+// §IV fixes, the §IX presence matrix, and the three ref-only DATA_PART payloads.
+export * from "./lifecycle-cards";
 
 /**
  * The registered renderable-view schemas keyed by `viewType`. The key MUST
@@ -73,6 +82,21 @@ export const RENDERABLE_VIEW_SCHEMAS = {
   change_history: {
     schema: changeHistoryViewSchema,
     version: CHANGE_HISTORY_SCHEMA_VERSION,
+  },
+  // ── lifecycle cards (cinatra#2565, epic #2564 S1) ──
+  // Ref-only, `.strict()` payloads: the card resolves its authoritative state
+  // server-side from the ref, so nothing about the gate rides the wire.
+  artifact_review_gate: {
+    schema: artifactReviewGateViewSchema,
+    version: LIFECYCLE_VIEW_SCHEMA_VERSION,
+  },
+  verification_summary: {
+    schema: verificationSummaryViewSchema,
+    version: LIFECYCLE_VIEW_SCHEMA_VERSION,
+  },
+  trigger_schedule_proposal: {
+    schema: triggerScheduleProposalViewSchema,
+    version: LIFECYCLE_VIEW_SCHEMA_VERSION,
   },
 } as const satisfies Record<
   string,

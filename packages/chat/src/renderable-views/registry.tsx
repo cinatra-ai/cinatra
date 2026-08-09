@@ -29,6 +29,7 @@ import { ContentChangeProposalCard, type ApplyIntentRef } from "./content-change
 import { ArtifactPreviewCard } from "./artifact-preview-card";
 import { CitationGroupCard } from "./citation-group-card";
 import { ChangeHistoryCard } from "./change-history-card";
+import { LifecycleCard } from "./lifecycle-card";
 
 type ComponentFor<K extends KnownRenderableViewType> = (props: {
   view: Extract<ParsedRenderableView, { viewType: K }>;
@@ -38,7 +39,11 @@ type ComponentFor<K extends KnownRenderableViewType> = (props: {
   // display-only cards accept-and-ignore it (structurally assignable). This keeps
   // the artifact-ui presentation-identity-keying boundary intact.
   onApplyIntent?: (ref: ApplyIntentRef) => void;
-}) => ReactElement;
+  // `null` is a legitimate render (cinatra#2565): §IV's `absent` state is "no
+  // card DOM at all", and a card that has not yet re-authorized itself must
+  // draw nothing rather than a placeholder. A card that renders nothing is a
+  // deliberate outcome here, not a missing implementation.
+}) => ReactElement | null;
 
 /** Component per registered `viewType`. Keys MUST match the schema registry. */
 const RENDERABLE_VIEW_COMPONENTS: {
@@ -48,6 +53,14 @@ const RENDERABLE_VIEW_COMPONENTS: {
   artifact_preview: ArtifactPreviewCard,
   citation_group: CitationGroupCard,
   change_history: ChangeHistoryCard,
+  // ── lifecycle cards (cinatra#2565, epic #2564 S1) ──
+  // ONE component per interaction kind, per the epic's structural rule. The
+  // three entries share the S1 shell because none of them is drawn yet; S2
+  // (#2566) swaps `artifact_review_gate` for the real `ReviewGateCard` by
+  // replacing this line, not by adding a second dispatch path.
+  artifact_review_gate: LifecycleCard,
+  verification_summary: LifecycleCard,
+  trigger_schedule_proposal: LifecycleCard,
 };
 
 /**

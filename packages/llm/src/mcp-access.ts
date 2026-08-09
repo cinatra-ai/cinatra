@@ -497,17 +497,76 @@ async function buildToolboxToolsForSlug(
 }
 
 /**
+ * The FIRST-PARTY server label (`buildCinatraMcpServerTool`). Reserved: no
+ * external MCP server may present it.
+ *
+ * cinatra#2565 — the label is now a TRUST SIGNAL, not just a display string.
+ * The lifecycle typed-view producer accepts a card-minting envelope only from
+ * the (serverLabel === "cinatra", allowlisted tool) tuple, and a provider echoes
+ * back whatever label its server was injected with. The cinatra self-MCP tool is
+ * PREPENDED by the caller and so never entered this collision pass — meaning an
+ * external toolbox that named itself "cinatra" would have been injected
+ * ALONGSIDE the real one and could impersonate it on the way back. Reserving the
+ * label closes that at the injection boundary, where it belongs, rather than
+ * asking every consumer of a serverLabel to re-derive trust.
+ */
+const RESERVED_FIRST_PARTY_SERVER_LABEL = "cinatra";
+
+/**
+ * Drop every tool claiming the reserved first-party label, loudly.
+ *
+ * Applied at EVERY external-tool ingress (this module's always-inject pass and
+ * both of `registry.ts`'s assembly paths) rather than at one of them: the
+ * declared-toolbox-id path assembles its tools without this module's collision
+ * pass, so a guard living only here would leave that door open. The real
+ * self-MCP tool is added by its own resolver and never flows through here.
+ *
+ * The comparison is on the NORMALIZED label so variants ("Cinatra", "cinatra-",
+ * " CINATRA ") are dropped too — deliberately BROADER than the exact-match
+ * acceptance the lifecycle producer performs, so the two can never disagree in
+ * the direction that admits an impostor.
+ */
+export function withoutReservedFirstPartyLabelTools(
+  tools: readonly LlmMcpServerTool[],
+  where: string,
+): LlmMcpServerTool[] {
+  const kept: LlmMcpServerTool[] = [];
+  for (const tool of tools) {
+    if (
+      normalizeMcpServerName(tool.serverLabel) === RESERVED_FIRST_PARTY_SERVER_LABEL
+    ) {
+      console.warn(
+        `[mcp-access] external-MCP server "${tool.serverLabel}" (${where}) DROPPED — ` +
+          `"${RESERVED_FIRST_PARTY_SERVER_LABEL}" is the reserved first-party self-MCP label; ` +
+          `the rest of the batch injects.`,
+      );
+      continue;
+    }
+    kept.push(tool);
+  }
+  return kept;
+}
+
+/**
  * Collision scope is PER ENTRY (cinatra#2015 S0 — was exact-label first-wins
  * with no detection): duplicate NORMALIZED labels keep exactly one tool — the
  * first managed one if any, else the first seen — and every suppressed entry
  * is audit-warned individually. One colliding row never drops the batch.
+ *
+ * An entry claiming the RESERVED first-party label is dropped outright (loudly)
+ * before collisions are considered — it can never win, and it can never be the
+ * incumbent another entry loses to.
  */
 function resolveInjectionCollisions(
   tagged: readonly TaggedMcpServerTool[],
 ): LlmMcpServerTool[] {
+  const admissible = tagged.filter(
+    (entry) =>
+      withoutReservedFirstPartyLabelTools([entry.tool], entry.origin).length === 1,
+  );
   const winners = new Map<string, TaggedMcpServerTool>();
   const suppressed: Array<{ loser: TaggedMcpServerTool; winner: TaggedMcpServerTool }> = [];
-  for (const entry of tagged) {
+  for (const entry of admissible) {
     const key = normalizeMcpServerName(entry.tool.serverLabel);
     const incumbent = winners.get(key);
     if (!incumbent) {
@@ -528,7 +587,7 @@ function resolveInjectionCollisions(
     );
   }
   const out: LlmMcpServerTool[] = [];
-  for (const entry of tagged) {
+  for (const entry of admissible) {
     if (winners.get(normalizeMcpServerName(entry.tool.serverLabel)) === entry) {
       out.push(entry.tool);
     }

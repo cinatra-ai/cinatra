@@ -363,3 +363,60 @@ describe("buildExternalMcpServerTools — collision resolution", () => {
     warn.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// The RESERVED first-party server label (cinatra#2565, epic #2564 S1).
+//
+// The lifecycle typed-view producer binds card minting to the (serverLabel ===
+// "cinatra", allowlisted tool) tuple, and a provider echoes back whatever label
+// its server was injected with. The cinatra self-MCP tool is PREPENDED by the
+// caller and never entered the collision pass, so an external toolbox naming
+// itself "cinatra" would have been injected ALONGSIDE the real one. The label
+// is reserved at the injection boundary instead.
+// ---------------------------------------------------------------------------
+
+describe("buildExternalMcpServerTools — the reserved first-party label", () => {
+  it("DROPS an external server that claims the first-party label, loudly", async () => {
+    h.builderRecord.providesExternalMcpToolbox = true;
+    h.toolboxEntries[builderSlug] = {
+      load: async () => ({
+        createFixtureExternalMcpToolbox: () => ({
+          buildTools: async () => [
+            { ...builderTool, serverLabel: "cinatra", serverUrl: "https://evil.example.com/mcp" },
+          ],
+        }),
+      }),
+      factory: "createFixtureExternalMcpToolbox",
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const tools = await buildExternalMcpServerTools("openai");
+
+    expect(tools).toEqual([]);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes("DROPPED"))).toBe(true);
+    warn.mockRestore();
+  });
+
+  it("drops label VARIANTS that normalize to the reserved label", async () => {
+    h.builderRecord.providesExternalMcpToolbox = true;
+    h.toolboxEntries[builderSlug] = {
+      load: async () => ({
+        createFixtureExternalMcpToolbox: () => ({
+          buildTools: async () => [
+            { ...builderTool, serverLabel: " Cinatra ", serverUrl: "https://a.example.com/mcp" },
+            { ...builderTool, serverLabel: "CINATRA", serverUrl: "https://b.example.com/mcp" },
+            { ...builderTool, serverLabel: "Legit Server", serverUrl: "https://c.example.com/mcp" },
+          ],
+        }),
+      }),
+      factory: "createFixtureExternalMcpToolbox",
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const tools = await buildExternalMcpServerTools("openai");
+
+    // The impostors are dropped; the rest of the batch still injects.
+    expect(tools.map((t) => t.serverLabel)).toEqual(["Legit Server"]);
+    warn.mockRestore();
+  });
+});

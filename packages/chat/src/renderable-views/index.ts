@@ -18,6 +18,13 @@ export type { ApplyIntentRef } from "./content-change-proposal-card";
 export { ArtifactPreviewCard } from "./artifact-preview-card";
 export { CitationGroupCard } from "./citation-group-card";
 export { ChangeHistoryCard } from "./change-history-card";
+export {
+  LifecycleCard,
+  LifecycleCardSurfaceProvider,
+  useLifecycleCardHost,
+  useLifecycleCardState,
+  LIFECYCLE_VIEW_RESOLVE_PATH,
+} from "./lifecycle-card";
 
 export {
   validRenderableViewFixtures,

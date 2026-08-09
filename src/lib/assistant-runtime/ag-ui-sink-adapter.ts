@@ -26,6 +26,11 @@
 //                     (NEVER from TOOL_CALL_END — the reducer contract).
 //   thinking_start/ → dropped: AG-UI has no thinking frames. The tool-round
 //   thinking_end      paragraph separator keys on TOOL_CALL_END client-side.
+//                     A tool_result carrying the RESERVED lifecycle-view
+//                     envelope from the allowlisted cinatra self-MCP (server,
+//                     tool) tuple additionally emits a `DATA_PART { viewType,
+//                     schemaVersion, ref }` — an opaque ref, never content
+//                     (cinatra#2565; see ./lifecycle-view-envelope).
 //   citations       → DATA_PART { kind: "citations", citations }
 //   error           → seal open text, RUN_ERROR (terminal)
 //   done            → seal open text, RUN_FINISHED (terminal)
@@ -54,6 +59,10 @@
 // ---------------------------------------------------------------------------
 
 import type { AgUiEvent } from "@cinatra-ai/agent-ui-protocol";
+import {
+  recognizeLifecycleViewEnvelope,
+  type LifecycleViewDataPart,
+} from "./lifecycle-view-envelope";
 
 export type AgUiPublish = (event: AgUiEvent) => Promise<void>;
 
@@ -273,6 +282,24 @@ export function createAgUiSinkAdapter(params: {
               timestamp: Date.now(),
             });
           }
+        }
+        // LIFECYCLE TYPED-VIEW PRODUCER (cinatra#2565): a reserved, versioned
+        // envelope from the ALLOWLISTED cinatra self-MCP (server, tool) tuple
+        // becomes a renderable-view DATA_PART carrying an opaque ref only. The
+        // recognizer is producer-bound and never throws — an external MCP
+        // server (or a model echoing an envelope through one) mints nothing.
+        const lifecycleView: LifecycleViewDataPart | null =
+          recognizeLifecycleViewEnvelope({
+            serverLabel: d.serverLabel,
+            toolName: d.name,
+            result: d.result,
+          });
+        if (lifecycleView) {
+          emit({
+            type: "DATA_PART",
+            data: { ...lifecycleView },
+            timestamp: Date.now(),
+          });
         }
         return;
       }

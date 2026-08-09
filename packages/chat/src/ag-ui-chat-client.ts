@@ -468,6 +468,16 @@ export function projectConversationMessage(
   opts: ProjectConversationMessageOptions,
 ): UiMessage {
   const m = state.message;
+  // cinatra#2565 — the reducer has always carried `dataParts` + `interrupt`;
+  // this projection used to DROP both, which is why `/chat` could not show a
+  // renderable view the embed's shared renderer already drew off the same wire.
+  // Both are projected here under the SAME field-presence discipline as every
+  // other optional key (absent until populated), so a turn that carries neither
+  // serializes byte-identically to before.
+  const carried = {
+    ...(state.dataParts.length > 0 ? { dataParts: state.dataParts } : {}),
+    ...(state.interrupt ? { interrupt: state.interrupt } : {}),
+  };
   if (opts.slackMode) {
     return {
       id: opts.assistantId,
@@ -477,6 +487,10 @@ export function projectConversationMessage(
       // Slack layout parity: thoughtGroups + flat content, never `parts`.
       ...(m.thoughtGroups.length > 0 ? { thoughtGroups: m.thoughtGroups } : {}),
       ...(m.citations.length > 0 ? { citations: m.citations } : {}),
+      // Carried in Slack mode too: a renderable view is an ADJUNCT (like
+      // citations, which Slack already reveals), not part of the pinned
+      // `parts` layout the Slack branch deliberately omits.
+      ...carried,
       ...(m.error ? { error: m.error } : {}),
     };
   }
@@ -488,6 +502,7 @@ export function projectConversationMessage(
     thoughtGroups: m.thoughtGroups,
     ...(opts.authorUserId ? { authorUserId: opts.authorUserId } : {}),
     ...(m.citations.length > 0 ? { citations: m.citations } : {}),
+    ...carried,
     ...(m.error ? { error: m.error, errorRaw: m.errorRaw } : {}),
     ...(m.liveStatus !== undefined ? { liveStatus: m.liveStatus } : {}),
   };
