@@ -144,6 +144,15 @@ const ALLOWLISTED_FILES = new Set([
   // asserts the exact literal, so it is allowlisted too.
   "src/lib/closed-registration-gate.ts",
   "src/lib/__tests__/closed-registration-gate.test.ts",
+  // cinatra#2534 (dev-lock pin → tailscale-connector 9061f2c3): the connector's
+  // token how-to test pins the literal EXTERNAL vendor URL operators visit to
+  // mint a key — `login.tailscale.com/admin/settings/keys`, Tailscale's own
+  // admin console. Same external-vendor-dashboard rationale as the Drupal and
+  // WordPress entries above; the gate's docblock already calls vendor
+  // dashboards unrelated. The file lives in the materialized companion tree,
+  // which the gate walks, so it needs a name here rather than a code change in
+  // a repo this one only pins.
+  "extensions/cinatra-ai/tailscale-connector/src/__tests__/tailscale-token-howto-dedup.test.ts",
 ]);
 
 function shouldSkipDir(name) {
