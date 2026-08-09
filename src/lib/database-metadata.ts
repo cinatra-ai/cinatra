@@ -10,6 +10,15 @@ import {
   buildSelectJsonRowsQuery,
   buildWriteMetadataQuery,
 } from "@/lib/drizzle-store";
+import {
+  readRawOpenAIConnectionRowVia,
+  readUnsealedOpenAIConnectionRowVia,
+  upgradeLegacyOpenAIConnectionRowVia,
+  writeSealedOpenAIConnectionRowVia,
+  type OpenAIConnectionMetadataPort,
+  type OpenAIConnectionRowUpdater,
+  type StoredOpenAIConnectionRow,
+} from "@/lib/connector-config-secret-fields";
 
 // ---------------------------------------------------------------------------
 // Core-store key/value metadata primitives (extracted from database.ts, #303).
@@ -318,4 +327,55 @@ export function systemGlobalSkillIdsFromCatalog(skills: readonly unknown[]): str
     .filter((skill) => isGlobalSystemSkillRow(skill))
     .map((skill) => String((skill as { id?: string }).id ?? ""))
     .filter(Boolean);
+}
+
+// ---------------------------------------------------------------------------
+// `openai_connection` at-rest accessors (cinatra#2581) — LIVE Postgres binding.
+//
+// The accessors themselves live in `@/lib/connector-config-secret-fields`, beside
+// the seal/unseal transforms they orchestrate and free of any Postgres
+// dependency (so they are unit-testable directly). Here they are bound to the
+// real metadata primitives above and re-exported, which is what every caller
+// uses:
+//
+//   - `@/lib/database#readOpenAIConnectionFromDatabase` — the RUNTIME path,
+//     published to `@cinatra-ai/openai-connector` as `readRowFromDatabase` and hit
+//     on every LLM call.
+//   - `@/lib/openai-connection-store` — the CONFIGURATION path.
+//
+// Both go through the SAME accessor, so the seal can never be applied on one path
+// and forgotten on another, and both perform the lazy plaintext→sealed migration.
+// Without that, an instance that uses OpenAI but never opens a settings surface
+// would keep its key in plaintext indefinitely.
+// ---------------------------------------------------------------------------
+
+const LIVE_OPENAI_CONNECTION_PORT: OpenAIConnectionMetadataPort = {
+  readValue: (key, fallback) => readMetadataValueInternal(key, fallback),
+  readRaw: (key) => readRawMetadataStringInternal(key),
+  insertIfAbsent: (key, value) => writeMetadataValueIfAbsentInternal(key, value),
+  compareAndSwap: (key, newValue, expectedRaw) =>
+    compareAndSwapMetadataValueInternal(key, newValue, expectedRaw),
+};
+
+/** Row with the `apiKey` unsealed; upgrades a legacy plaintext row in place. */
+export function readUnsealedOpenAIConnectionRow(): StoredOpenAIConnectionRow | null {
+  return readUnsealedOpenAIConnectionRowVia(LIVE_OPENAI_CONNECTION_PORT);
+}
+
+/** RAW row (sealed blob verbatim) — never hand this to a caller as config. */
+export function readRawOpenAIConnectionRow(): StoredOpenAIConnectionRow | null {
+  return readRawOpenAIConnectionRowVia(LIVE_OPENAI_CONNECTION_PORT);
+}
+
+/** Persist the row with the `apiKey` sealed, via an atomic merge-and-swap. */
+export function writeSealedOpenAIConnectionRow(
+  next: unknown | OpenAIConnectionRowUpdater,
+  options?: { preserveExistingSecret?: boolean },
+): void {
+  writeSealedOpenAIConnectionRowVia(LIVE_OPENAI_CONNECTION_PORT, next, options);
+}
+
+/** Best-effort compare-and-swap upgrade of a legacy plaintext row. */
+export function upgradeLegacyOpenAIConnectionRow(): void {
+  upgradeLegacyOpenAIConnectionRowVia(LIVE_OPENAI_CONNECTION_PORT);
 }

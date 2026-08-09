@@ -44,6 +44,8 @@ import {
   hasSecretFields,
   prepareSealedWrite,
   unsealSecretFields,
+  // cinatra#2581: body-logging default for the `openai_connection` row.
+  resolveOpenAIBodyLoggingDefault,
 } from "@/lib/connector-config-secret-fields";
 import {
   buildBumpSkillCatalogGenerationQuery,
@@ -53,6 +55,8 @@ import {
   deleteMetadataValueInternal,
   readMetadataValueInternal,
   readRawMetadataStringInternal,
+  // cinatra#2581: the shared at-rest accessor (unseals + migrates the row).
+  readUnsealedOpenAIConnectionRow,
   readSkillCatalogGenerationTokenInternal,
   readSkillCatalogRowsFencedInternal,
   safeParseJson,
@@ -300,28 +304,22 @@ export function replaceStartupOverrides(store: StartupOverrideStore) {
 //   - campaign-types / drafts / overrides   → owned by @cinatra/campaigns (TODO)
 
 export function readOpenAIConnectionFromDatabase() {
-  // Reads the `openai_connection` metadata row directly, matching the write
-  // path in src/lib/openai-connection-store.ts. Returns a populated connection
-  // shape with defaults so legacy consumers that destructure
-  // `.loggingEnabled` keep working.
-  const stored = readMetadataValueInternal<Partial<{
-    apiKey: string;
-    projectId: string;
-    organizationId: string;
-    defaultModel: string;
-    serviceTier: OpenAIServiceTier;
-    loggingEnabled: boolean;
-    promptCachingEnabled: boolean;
-    lastValidatedAt: string;
-    availableModels: string[];
-  }> | null>("openai_connection", null);
+  // Reads the `openai_connection` metadata row through the shared at-rest
+  // accessor, matching the write path in src/lib/openai-connection-store.ts.
+  // Returns a populated shape with defaults so legacy consumers that destructure
+  // `.loggingEnabled` keep working. cinatra#2581: the at-rest `apiKey` is SEALED,
+  // so the accessor unseals it and upgrades a legacy plaintext row in place —
+  // this is the RUNTIME credential path, so the migration must run here too, not
+  // only on a settings surface. An UNSET body-logging preference now follows the
+  // runtime mode instead of a hard `true`.
+  const stored = readUnsealedOpenAIConnectionRow();
   return {
     defaultModel: stored?.defaultModel ?? DEFAULT_OPENAI_MODEL_ID,
-    apiKey: stored?.apiKey,
+    apiKey: typeof stored?.apiKey === "string" ? stored.apiKey : undefined,
     projectId: stored?.projectId,
     organizationId: stored?.organizationId,
-    serviceTier: stored?.serviceTier ?? getDefaultOpenAIServiceTier(),
-    loggingEnabled: stored?.loggingEnabled ?? true,
+    serviceTier: (stored?.serviceTier as OpenAIServiceTier | undefined) ?? getDefaultOpenAIServiceTier(),
+    loggingEnabled: resolveOpenAIBodyLoggingDefault(stored?.loggingEnabled, isAppDevelopmentMode()),
     promptCachingEnabled: stored?.promptCachingEnabled,
     lastValidatedAt: stored?.lastValidatedAt,
     availableModels: stored?.availableModels ?? [],

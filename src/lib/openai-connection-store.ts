@@ -4,13 +4,24 @@
 // The row is also read by `readCampaignStoreFromDatabase` in campaign-store.ts.
 // While both consumers coexist, every write invalidates the in-process campaign
 // store cache so either read path stays coherent.
+//
+// AT REST (cinatra#2581): the `apiKey` is SEALED before it is persisted and
+// unsealed on read — see `@/lib/connector-config-secret-fields` for the codec, the
+// AAD binding, the fail-closed posture and the migration shape. The same module
+// owns the body-logging default, which now mirrors the openai-connector policy
+// (explicit operator preference, else development-mode) instead of the hard
+// `true` that put prompt/completion bodies on local disk in production.
 
 import { revalidatePath } from "next/cache";
 import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy";
 import {
-  readMetadataValueFromDatabase,
-  writeMetadataValueToDatabase,
-} from "@/lib/database";
+  resolveOpenAIBodyLoggingDefault,
+  type StoredOpenAIConnectionRow,
+} from "@/lib/connector-config-secret-fields";
+import {
+  readUnsealedOpenAIConnectionRow,
+  writeSealedOpenAIConnectionRow,
+} from "@/lib/database-metadata";
 import { isAppDevelopmentMode } from "@/lib/runtime-mode";
 import type { OpenAIServiceTier } from "@/lib/types";
 
@@ -34,8 +45,6 @@ export type OpenAIConnection = {
 // Helpers
 // -----------------------------------------------------------------------------
 
-const METADATA_KEY = "openai_connection";
-
 function getDefaultOpenAIServiceTier(): OpenAIServiceTier {
   return (isAppDevelopmentMode() ? "flex" : "default") as OpenAIServiceTier;
 }
@@ -45,7 +54,14 @@ function defaultConnection(): OpenAIConnection {
     defaultModel: DEFAULT_OPENAI_MODEL_ID,
     serviceTier: getDefaultOpenAIServiceTier(),
     availableModels: [],
-    loggingEnabled: true,
+    // `loggingEnabled` is deliberately left UNSET (cinatra#2581 — it used to be
+    // a hard `true`). A factory-reset row must not freeze a body-logging
+    // preference the operator never expressed, and the hard `true` destroyed the
+    // "never chosen" signal the openai-connector's own policy depends on, which
+    // is what put prompt/completion bodies on local disk in production. Reads
+    // materialize the runtime-mode default via `resolveOpenAIBodyLoggingDefault`;
+    // only an explicit operator choice (updateOpenAILoggingEnabled, or an
+    // explicit `input.loggingEnabled`) is ever persisted.
   };
 }
 
@@ -82,7 +98,8 @@ function invalidateCampaignStoreCache() {
  * distinguish between "never configured" and "configured with defaults".
  */
 export function readOpenAIConnection(): OpenAIConnection | null {
-  const raw = readMetadataValueFromDatabase<OpenAIConnection | null>(METADATA_KEY, null);
+  // The shared accessor unseals the `apiKey` and upgrades a legacy plaintext row.
+  const raw = readUnsealedOpenAIConnectionRow() as OpenAIConnection | null;
   if (!raw) {
     return null;
   }
@@ -93,7 +110,7 @@ export function readOpenAIConnection(): OpenAIConnection | null {
     projectId: raw.projectId,
     organizationId: raw.organizationId,
     serviceTier: raw.serviceTier ?? getDefaultOpenAIServiceTier(),
-    loggingEnabled: raw.loggingEnabled ?? true,
+    loggingEnabled: resolveOpenAIBodyLoggingDefault(raw.loggingEnabled, isAppDevelopmentMode()),
     promptCachingEnabled: raw.promptCachingEnabled ?? isAppDevelopmentMode(),
     lastValidatedAt: raw.lastValidatedAt,
     availableModels: raw.availableModels ?? [],
@@ -101,11 +118,81 @@ export function readOpenAIConnection(): OpenAIConnection | null {
 }
 
 /**
+ * The NON-SECRET fields of a raw stored row, for the mutations that rebuild it.
+ *
+ * Takes the row rather than reading it, because every mutation runs this INSIDE
+ * the write's merge-and-swap attempt (see `writeSealedOpenAIConnectionRow`): a
+ * mutation that derived its payload from a snapshot taken earlier would clobber
+ * whatever changed in between — including an explicit `loggingEnabled: false`
+ * opt-out, the very setting this work exists to protect.
+ *
+ * It also never decrypts, so no mutation carries a decrypted `apiKey` in its
+ * write payload. If one did, a save that raced an operator disconnecting or
+ * rotating the key would re-seal that stale plaintext and RESURRECT the removed
+ * credential.
+ *
+ * `loggingEnabled` is returned UNMATERIALIZED (`undefined` when the operator has
+ * never chosen). `readOpenAIConnection` materializes the runtime-mode default for
+ * its callers; persisting that materialized boolean from an unrelated save would
+ * freeze a preference nobody expressed — and carry a dev-mode `true` into a
+ * production deployment.
+ */
+function nonSecretFieldsOf(
+  raw: StoredOpenAIConnectionRow | null,
+): Omit<OpenAIConnection, "apiKey"> {
+  return {
+    defaultModel: raw?.defaultModel ?? DEFAULT_OPENAI_MODEL_ID,
+    projectId: raw?.projectId,
+    organizationId: raw?.organizationId,
+    serviceTier:
+      (raw?.serviceTier as OpenAIServiceTier | undefined) ?? getDefaultOpenAIServiceTier(),
+    loggingEnabled: raw?.loggingEnabled,
+    promptCachingEnabled: raw?.promptCachingEnabled ?? isAppDevelopmentMode(),
+    lastValidatedAt: raw?.lastValidatedAt,
+    availableModels: raw?.availableModels ?? [],
+  };
+}
+
+/**
  * Overwrite the persisted OpenAI connection. Passing `null` resets to the
  * default shape (equivalent to a factory-reset).
+ *
+ * The `apiKey` is SEALED before it is persisted. A write that carries NO key
+ * preserves the blob stored at WRITE time (never a caller's stale snapshot), so
+ * an unrelated settings save cannot resurrect a key that was disconnected or
+ * rotated in between. Throws FAIL-CLOSED (never persisting plaintext) if
+ * `CINATRA_ENCRYPTION_KEY` is missing or invalid — a booted instance always has
+ * it (required-env preflight; auto-generated in dev).
  */
-export function writeOpenAIConnection(connection: OpenAIConnection | null): void {
-  writeMetadataValueToDatabase(METADATA_KEY, connection ?? defaultConnection());
+export function writeOpenAIConnection(
+  connection: OpenAIConnection | null,
+  options?: { clearSecret?: boolean },
+): void {
+  // A factory-reset (null) ALWAYS drops the stored key — `clearSecret: false`
+  // must not be able to turn a reset into a preserve.
+  const preserveExistingSecret = connection !== null && options?.clearSecret !== true;
+  writeSealedOpenAIConnectionRow(connection ?? defaultConnection(), {
+    preserveExistingSecret,
+  });
+  invalidateCampaignStoreCache();
+}
+
+/**
+ * ATOMIC read-modify-write of the row.
+ *
+ * `apply` is re-run against the CURRENT stored row on every merge-and-swap
+ * attempt, so a concurrent change to ANY field is re-read and carried forward
+ * rather than clobbered by a stale snapshot. Every mutation below goes through
+ * here — a plain read-then-write would let an unrelated toggle silently undo an
+ * explicit body-logging opt-out.
+ */
+function mutateOpenAIConnection(
+  apply: (current: Omit<OpenAIConnection, "apiKey">) => OpenAIConnection,
+  options?: { clearSecret?: boolean },
+): void {
+  writeSealedOpenAIConnectionRow((raw) => apply(nonSecretFieldsOf(raw)), {
+    preserveExistingSecret: options?.clearSecret !== true,
+  });
   invalidateCampaignStoreCache();
 }
 
@@ -123,21 +210,23 @@ export async function updateOpenAIConnection(input: {
   promptCachingEnabled?: boolean;
   availableModels?: string[];
 }): Promise<void> {
-  const current = readOpenAIConnection() ?? defaultConnection();
-  const next: OpenAIConnection = {
+  mutateOpenAIConnection((current) => ({
     ...current,
-    apiKey: input.apiKey ?? current.apiKey,
+    // ONLY an explicitly supplied key is written. When this save carries none the
+    // write path preserves the blob stored AT WRITE TIME, so a settings save can
+    // never resurrect a key that was disconnected or rotated in the meantime.
+    apiKey: input.apiKey,
     projectId: input.projectId ?? current.projectId,
     organizationId: input.organizationId ?? current.organizationId,
     defaultModel: input.defaultModel ?? current.defaultModel ?? DEFAULT_OPENAI_MODEL_ID,
     serviceTier: input.serviceTier ?? current.serviceTier ?? getDefaultOpenAIServiceTier(),
-    loggingEnabled: input.loggingEnabled ?? current.loggingEnabled ?? true,
+    // Only an EXPLICIT choice is persisted (see nonSecretFieldsOf).
+    loggingEnabled: input.loggingEnabled ?? current.loggingEnabled,
     promptCachingEnabled:
       input.promptCachingEnabled ?? current.promptCachingEnabled ?? isAppDevelopmentMode(),
     availableModels: input.availableModels ?? current.availableModels ?? [],
     lastValidatedAt: nowIso(),
-  };
-  writeOpenAIConnection(next);
+  }));
   revalidatePath("/agents");
   revalidatePath("/configuration/llm");
   revalidatePath("/configuration/llm/initial-setup");
@@ -146,15 +235,18 @@ export async function updateOpenAIConnection(input: {
 }
 
 export async function clearOpenAIConnection(): Promise<void> {
-  const current = readOpenAIConnection() ?? defaultConnection();
-  const next: OpenAIConnection = {
-    defaultModel: current.defaultModel ?? DEFAULT_OPENAI_MODEL_ID,
-    serviceTier: current.serviceTier ?? getDefaultOpenAIServiceTier(),
-    loggingEnabled: current.loggingEnabled ?? true,
-    promptCachingEnabled: current.promptCachingEnabled ?? isAppDevelopmentMode(),
-    availableModels: [],
-  };
-  writeOpenAIConnection(next);
+  // `clearSecret` is REQUIRED here: this is the disconnect path, so the stored
+  // sealed key must be dropped rather than preserved by the absent-field merge.
+  mutateOpenAIConnection(
+    (current) => ({
+      defaultModel: current.defaultModel ?? DEFAULT_OPENAI_MODEL_ID,
+      serviceTier: current.serviceTier ?? getDefaultOpenAIServiceTier(),
+      loggingEnabled: current.loggingEnabled,
+      promptCachingEnabled: current.promptCachingEnabled ?? isAppDevelopmentMode(),
+      availableModels: [],
+    }),
+    { clearSecret: true },
+  );
   revalidatePath("/agents");
   revalidatePath("/configuration/llm");
   revalidatePath("/configuration/llm/initial-setup");
@@ -162,9 +254,24 @@ export async function clearOpenAIConnection(): Promise<void> {
   revalidatePath("/configuration/apps/openai");
 }
 
+/**
+ * Persist the operator's EXPLICIT body-logging choice.
+ *
+ * Turning this ON makes `@cinatra-ai/openai-connector` write full OpenAI request
+ * and response bodies — prompts and completions, including whatever the operator
+ * pasted into them — to a local server log file. That is a deliberate debugging
+ * affordance, so enabling it emits a loud warning; the API key itself travels in
+ * headers and is never part of a logged body.
+ */
 export async function updateOpenAILoggingEnabled(loggingEnabled: boolean): Promise<void> {
-  const current = readOpenAIConnection() ?? defaultConnection();
-  const next: OpenAIConnection = {
+  if (loggingEnabled) {
+    console.warn(
+      "[openai-connection] FULL request/response body logging ENABLED — OpenAI " +
+        "prompts and completions will be written to a local server log file. " +
+        "Leave this off unless you are actively debugging.",
+    );
+  }
+  mutateOpenAIConnection((current) => ({
     ...current,
     defaultModel: current.defaultModel ?? DEFAULT_OPENAI_MODEL_ID,
     serviceTier: current.serviceTier ?? getDefaultOpenAIServiceTier(),
@@ -172,23 +279,22 @@ export async function updateOpenAILoggingEnabled(loggingEnabled: boolean): Promi
     promptCachingEnabled: current.promptCachingEnabled ?? isAppDevelopmentMode(),
     availableModels: current.availableModels ?? [],
     lastValidatedAt: current.lastValidatedAt,
-  };
-  writeOpenAIConnection(next);
+  }));
   revalidatePath("/configuration");
   revalidatePath("/configuration/development");
 }
 
 export async function updateOpenAIPromptCaching(enabled: boolean): Promise<void> {
-  const current = readOpenAIConnection() ?? defaultConnection();
-  const next: OpenAIConnection = {
+  mutateOpenAIConnection((current) => ({
     ...current,
     defaultModel: current.defaultModel ?? DEFAULT_OPENAI_MODEL_ID,
     serviceTier: current.serviceTier ?? getDefaultOpenAIServiceTier(),
-    loggingEnabled: current.loggingEnabled ?? true,
+    // Unrelated toggle — carries the CURRENT body-logging preference forward
+    // (never freezing an unexpressed one, never undoing an explicit opt-out).
+    loggingEnabled: current.loggingEnabled,
     promptCachingEnabled: enabled,
     availableModels: current.availableModels ?? [],
     lastValidatedAt: current.lastValidatedAt,
-  };
-  writeOpenAIConnection(next);
+  }));
   revalidatePath("/configuration/llm");
 }
