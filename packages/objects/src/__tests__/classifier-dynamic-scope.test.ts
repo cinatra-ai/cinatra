@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildClassifierOutputSchema } from "../classifier/schema";
+import { buildClassifierOutputSchema, CLASSIFIER_UNMATCHED_TYPE_ID } from "../classifier/schema";
 import { isDynamicObjectTypeId } from "../namespace";
 
 // The namespace helper still classifies BOTH dynamic prefixes as dynamic (used
@@ -28,9 +28,15 @@ describe("dynamic-type id scope", () => {
 
 // Acceptance criterion 4 (cinatra#1787): schema-level rejection — no code path
 // can propose a NEW `@dynamic/types:*` id; READ of existing rows is untouched.
+//
+// cinatra#2592: the schema's UNMATCHED branch is `isNewType: true` — which
+// requires the fixed CLASSIFIER_UNMATCHED_TYPE_ID sentinel, never a real type
+// id and never the retired generic `@cinatra-ai/objects:object` id (excluded
+// from the catalog entirely at the call site, ../classifier/index.ts). A
+// MATCHED result (`isNewType: false`) is what validates a `type` against
+// `knownTypeIds`.
 describe("buildClassifierOutputSchema — no-mint policy", () => {
   const schema = buildClassifierOutputSchema([
-    "@cinatra-ai/objects:object", // the generic fallback id is a registered host type
     "@cinatra-ai/entity-accounts:account",
     // An EXISTING dynamic row rides the catalog (ACTIVE dynamic types are part
     // of knownTypeIds at the call site) so already-minted ids keep classifying.
@@ -38,25 +44,65 @@ describe("buildClassifierOutputSchema — no-mint policy", () => {
   ]);
 
   it("REJECTS a NEW dynamic id under the reserved scope (the classifier never mints)", () => {
-    expect(schema.safeParse({ ...base, type: "@dynamic/types:brand-audit" }).success).toBe(false);
+    expect(
+      schema.safeParse({ ...base, isNewType: false, type: "@dynamic/types:brand-audit" }).success,
+    ).toBe(false);
   });
 
   it("REJECTS a never-seen legacy-prefixed id (re-mint attempt)", () => {
-    expect(schema.safeParse({ ...base, type: "@cinatra-ai/dynamic:brand-new-idea" }).success).toBe(false);
-  });
-
-  it("accepts an EXISTING dynamic id already in the catalog (READ back-compat untouched)", () => {
-    expect(schema.safeParse({ ...base, type: "@cinatra-ai/dynamic:existing-row" }).success).toBe(true);
-  });
-
-  it("accepts the generic fallback id (an unmatched payload comes back as the generic type)", () => {
     expect(
-      schema.safeParse({ ...base, type: "@cinatra-ai/objects:object" }).success,
+      schema.safeParse({ ...base, isNewType: false, type: "@cinatra-ai/dynamic:brand-new-idea" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("accepts an EXISTING dynamic id already in the catalog as a MATCHED result (READ back-compat untouched)", () => {
+    expect(
+      schema.safeParse({ ...base, isNewType: false, type: "@cinatra-ai/dynamic:existing-row" })
+        .success,
     ).toBe(true);
   });
 
+  it("REJECTS the retired generic id even when isNewType is false (it never rides knownTypeIds)", () => {
+    expect(
+      schema.safeParse({ ...base, isNewType: false, type: "@cinatra-ai/objects:object" }).success,
+    ).toBe(false);
+  });
+
+  it("REJECTS the retired generic id as an unmatched-branch value too (not the sentinel)", () => {
+    expect(
+      schema.safeParse({ ...base, isNewType: true, type: "@cinatra-ai/objects:object" }).success,
+    ).toBe(false);
+  });
+
+  it("accepts the unmatched sentinel only when isNewType is true", () => {
+    expect(
+      schema.safeParse({ ...base, isNewType: true, type: CLASSIFIER_UNMATCHED_TYPE_ID }).success,
+    ).toBe(true);
+    expect(
+      schema.safeParse({ ...base, isNewType: false, type: CLASSIFIER_UNMATCHED_TYPE_ID }).success,
+    ).toBe(false);
+  });
+
+  it("REJECTS isNewType: true paired with a real, catalog-known type id (not the sentinel)", () => {
+    // A model that claims "no match" (isNewType: true) but still names a real
+    // registered id instead of the sentinel is model drift, not a valid
+    // unmatched outcome — the branch is keyed on isNewType, not on whether the
+    // value happens to be a known id.
+    expect(
+      schema.safeParse({
+        ...base,
+        isNewType: true,
+        type: "@cinatra-ai/entity-accounts:account",
+      }).success,
+    ).toBe(false);
+  });
+
   it("still accepts registered static ids and rejects bare names", () => {
-    expect(schema.safeParse({ ...base, type: "@cinatra-ai/entity-accounts:account" }).success).toBe(true);
-    expect(schema.safeParse({ ...base, type: "account" }).success).toBe(false);
+    expect(
+      schema.safeParse({ ...base, isNewType: false, type: "@cinatra-ai/entity-accounts:account" })
+        .success,
+    ).toBe(true);
+    expect(schema.safeParse({ ...base, isNewType: false, type: "account" }).success).toBe(false);
   });
 });

@@ -45,6 +45,7 @@ import {
   isDynamicObjectTypeId,
   isTombstonedObjectTypeId,
   OBJECT_TYPE_NAMESPACE_RE,
+  GENERIC_OBJECT_TYPE_ID,
 } from "../namespace";
 import {
   objectTypeRegistry,
@@ -797,14 +798,13 @@ function enforceMemoryConceptEnvelope(
 // refuse.
 // ---------------------------------------------------------------------------
 
-/**
- * The retired generic host object type. Under the dependency model it is dead
- * in every form: no save may ever land here again (the #1792 purge removes the
- * historical rows). Kept as a literal on purpose (same route-graph-budget
- * reasoning as MEMORY_CONCEPT_TYPE_ID above) so the fail-closed guard can
- * reject it by id without importing the register-types module.
- */
-const GENERIC_OBJECT_TYPE_ID = "@cinatra-ai/objects:object" as const;
+// The retired generic host object type. Under the dependency model it is dead
+// in every form: no save may ever land here again (the #1792 purge removes the
+// historical rows). `GENERIC_OBJECT_TYPE_ID` is imported from `../namespace`
+// (a dependency-free leaf, same route-graph-budget reasoning as
+// MEMORY_CONCEPT_TYPE_ID above) — the SINGLE canonical declaration the
+// classifier catalog (`../classifier/index.ts`) also reads, so the two
+// surfaces can never diverge again (cinatra#2592).
 
 /** Stable machine-readable code for the fail-closed write rejection. Surfaced
  *  on the run's tool result via PrimitiveInvocationError.code — bump/extend the

@@ -11,6 +11,7 @@ import { z } from "zod";
 // `@/lib/blog-project-store`, so keeping blog registration out of this package
 // avoids a `packages/objects` -> host `src/lib` layer inversion.
 import { objectTypeRegistry } from "../registry";
+import { GENERIC_OBJECT_TYPE_ID } from "../namespace";
 import {
   CONNECTOR_REF_ARTIFACT_TYPE,
   CONNECTOR_REF_SNAPSHOT_ORIGIN_KIND,
@@ -26,12 +27,13 @@ import {
 } from "./generic-renderers";
 
 /**
- * Generic default object type. Registered alongside the per-package static
- * types so any object saved during an agent run gains stable identity via the
- * shared `cinatraAgentRunId` dedup key (injected by the objects layer from
- * `actorExt.runId`). The classifier may choose this type for ambiguous shapes;
- * it is also the natural target for "everything I just saved" reads via
- * `objects_list { type: "@cinatra-ai/objects:object", runId: ... }`.
+ * Generic default object type. Registered for READ back-compat only — it is
+ * the natural target for "everything I just saved" reads via `objects_list
+ * { type: "@cinatra-ai/objects:object", runId: ... }` and for any surviving
+ * historical row. The classifier NEVER offers this id as a forward outcome
+ * (its catalog excludes it, cinatra#2592) and the write path REFUSES a save
+ * that resolves to it (owner ruling 2026-07-18, epic #1785) — there is no
+ * lossless generic fallback save any more (#1787 reversed).
  *
  * Returning `null` from `identityKey` when `cinatraAgentRunId` is absent
  * preserves the existing random-UUID-per-save behavior. There is no risk of
@@ -39,7 +41,7 @@ import {
  */
 function registerGenericObjectType(): void {
   objectTypeRegistry.register({
-    type: "@cinatra-ai/objects:object",
+    type: GENERIC_OBJECT_TYPE_ID,
     category: "report", // broadest category; specialised types override
     schema: z.record(z.string(), z.unknown()),
     lifecycle: {
