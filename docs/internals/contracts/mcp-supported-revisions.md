@@ -112,9 +112,12 @@ built-in stateless fallback (`createLegacyStatelessFallback` in
 2025-era response would come back as `text/event-stream` instead of
 `application/json`, and the option exposes no way to re-enable JSON framing on
 that leg (`responseMode` governs the MODERN leg only). That would change the wire
-format for every existing caller, including the in-repo Anthropic
-function-tools probe at `src/app/configuration/mcp/llm-access/test/route.ts`,
-which POSTs `tools/list` and calls `.json()` on the result. The **accepted set**
+format for every existing caller. (The in-repo Anthropic function-tools probe at
+`src/app/configuration/mcp/llm-access/test/route.ts` — which POSTed `tools/list`
+and called `.json()` on the result — was the worked example here until
+cinatra#2579 replaced that handler with a tool-free key-validation probe; the
+argument stands unchanged for the external callers, which cinatra does not
+control.) The **accepted set**
 is row A's exactly; the **framing** existing callers see is unchanged. This is the
 user-land `isLegacyRequest()` composition upstream documents, and which the
 `legacy` option's own docs name as the way to keep an existing legacy wiring
