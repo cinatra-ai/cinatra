@@ -7,7 +7,7 @@ import {
 } from "@/components/ui/table";
 import { PaginatedTable } from "@/components/ui/paginated-table";
 import type { CostByProviderRow, LegacyCostEntry } from "../store";
-import { formatUsd, describeUnit, describeModel } from "./cost-row-format";
+import { formatUsd, describeUnit, describeModel } from "../store";
 
 type CostByProviderTableProps = {
   data: CostByProviderRow[];
