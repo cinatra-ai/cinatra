@@ -709,21 +709,49 @@ export function AgenticRunPanel({
     pendingAttachmentsRef.current = [];
   }, [currentReviewTaskId]);
   // React-idiomatic "derived state reset" pattern: when the tracked xRenderer
-  // string changes, reset the buffer DURING render (no extra render cycle).
-  // React guarantees that calling a setState during render with a DIFFERENT
-  // value reuses the same render — it is the documented way to mirror prop-
-  // change resets without a useEffect re-render race. See React docs:
-  // "Storing information from previous renders".
+  // string changes, reset conversation state DURING render (no extra render
+  // cycle). React guarantees that calling a setState during render with a
+  // DIFFERENT value reuses the same render — it is the documented way to
+  // mirror prop-change resets without a useEffect re-render race. See React
+  // docs: "Storing information from previous renders".
   const [prevXRenderer, setPrevXRenderer] = useState<string | null>(null);
   if (
     currentXRenderer !== null &&
     currentXRenderer !== prevXRenderer
   ) {
     setPrevXRenderer(currentXRenderer);
-    setBufferedHitlValue({});
     setConversation([]);
     // The conversation overlay close on renderer transition is driven by
     // HitlConversationPanel via its `resetSignal={currentXRenderer}` prop.
+  }
+
+  // The HITL suggestion buffer (`bufferedHitlValue`) is keyed by BOTH
+  // xRenderer AND fieldName (cinatra#2557), matching the orchestrator
+  // stepper's fieldName-inclusive `bufferKey` (orchestrator-stepper-panel.tsx).
+  //
+  // An xRenderer-only reset (the previous behavior) never fired on a
+  // field-to-field advance within the SAME renderer type: sequential per-field
+  // setup gates all reuse one xRenderer (e.g. schema-field-fallback), so a
+  // SUGGESTION applied via `onApply` (handleApply) for field 1 survived into
+  // field 2's `value` prop (currentValues + bufferedHitlValue merge) — a
+  // suggestion buffered for "brief" silently rode along under field 2's
+  // ("audience") gate. Typed-input carryover through the renderer's own local
+  // state was already fixed by the composite React `key` (cinatra#2541/#2556);
+  // this is the analogous fix for the panel-level buffer.
+  //
+  // The key collapses to `${xRenderer}::` for mid-run gates (no fieldName),
+  // so those keep resetting on xRenderer change alone — unchanged from today.
+  const bufferedHitlValueKey =
+    currentXRenderer !== null
+      ? `${currentXRenderer}::${effectiveHitlContext?.fieldName ?? ""}`
+      : null;
+  const [prevBufferedHitlValueKey, setPrevBufferedHitlValueKey] = useState<string | null>(null);
+  if (
+    bufferedHitlValueKey !== null &&
+    bufferedHitlValueKey !== prevBufferedHitlValueKey
+  ) {
+    setPrevBufferedHitlValueKey(bufferedHitlValueKey);
+    setBufferedHitlValue({});
   }
 
   useEffect(() => {
