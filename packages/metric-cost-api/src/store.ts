@@ -27,6 +27,14 @@ export type CostSummaryRow = {
 
 export type CostByProviderRow = {
   provider: string;
+  /**
+   * Which producer the rows came from — "llm", "apollo", "graphiti"
+   * (cinatra#2582). Carried so the breakdown can say what a row COUNTS: a
+   * graphiti row counts episodes handed to the knowledge-graph indexer, each of
+   * which fans out to an unknown number of provider requests, and its cost is
+   * unknown rather than zero.
+   */
+  source: string;
   model: string | null;
   totalCost: number | null;
   totalInput: number;
@@ -97,6 +105,7 @@ export async function readCostByProvider({ days }: { days: number }): Promise<Co
   const rows = await db.execute(sql`
     SELECT
       provider,
+      source,
       model,
       SUM(cost_usd)::float AS "totalCost",
       SUM(input_tokens)::int AS "totalInput",
@@ -104,7 +113,7 @@ export async function readCostByProvider({ days }: { days: number }): Promise<Co
       COUNT(*)::int AS "callCount"
     FROM ${usageEvents}
     WHERE occurred_at >= now() - interval '1 day' * ${safeDays}
-    GROUP BY provider, model
+    GROUP BY provider, source, model
     ORDER BY SUM(cost_usd) DESC NULLS LAST
   `);
   return rows.rows as CostByProviderRow[];

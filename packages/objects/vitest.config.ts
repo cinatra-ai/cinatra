@@ -9,6 +9,10 @@ export default defineConfig({
       // Workspace package aliases for tests
       // Leaf-subpath alias must be listed BEFORE the barrel alias so vite's
       // alias resolver picks the more-specific match first.
+      // cinatra#2582: graphiti-client publishes its per-episode usage row on the
+      // shared bus. Point at the real leaf (dependency-free — node:events + types)
+      // so every test that loads the client resolves it without a stub.
+      "@cinatra-ai/metric-contracts": path.join(root, "packages/metric-contracts/src/index.ts"),
       "@cinatra-ai/objects/classifier-signals": path.join(__dirname, "src/classifier-signals.ts"),
       "@cinatra-ai/objects": path.join(__dirname, "src/index.ts"),
       "@cinatra-ai/objects/renderer-types": path.join(__dirname, "src/renderer-types.ts"),

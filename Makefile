@@ -30,7 +30,13 @@ check:
 	node scripts/check-services.mjs
 
 # Start infrastructure and the app.
+# The knowledge-graph provider key is resolved from the app's stored
+# configuration into docker/graphiti/.graphiti.env FIRST (cinatra#2582), so the
+# indexer container starts with the key the operator actually configured instead
+# of the empty shell interpolation it used to get. Non-fatal: a keyless or
+# not-yet-reachable database reports "indexing OFF" and the bring-up continues.
 dev:
+	-npm run --silent gen:graphiti-env
 	docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 	pnpm dev
 

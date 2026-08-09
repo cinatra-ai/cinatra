@@ -10,15 +10,23 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-const { addEpisodeMock, identityHashToUuidMock, registerTypeMock, registerAdapterMock, objectsSaveMock } = vi.hoisted(
-  () => ({
-    addEpisodeMock: vi.fn(),
-    identityHashToUuidMock: vi.fn((id: string, group: string) => `uuid:${id}:${group}`),
-    registerTypeMock: vi.fn(),
-    registerAdapterMock: vi.fn(),
-    objectsSaveMock: vi.fn(),
-  }),
-);
+const {
+  addEpisodeMock,
+  identityHashToUuidMock,
+  registerTypeMock,
+  registerAdapterMock,
+  objectsSaveMock,
+  setIndexingProbeMock,
+  readIndexingStateMock,
+} = vi.hoisted(() => ({
+  addEpisodeMock: vi.fn(),
+  identityHashToUuidMock: vi.fn((id: string, group: string) => `uuid:${id}:${group}`),
+  registerTypeMock: vi.fn(),
+  registerAdapterMock: vi.fn(),
+  objectsSaveMock: vi.fn(),
+  setIndexingProbeMock: vi.fn(),
+  readIndexingStateMock: vi.fn(() => ({ providerKey: "configured" as const, reason: "stored config" })),
+}));
 
 vi.mock("@cinatra-ai/objects/registry", () => ({ objectTypeRegistry: { register: registerTypeMock } }));
 vi.mock("@cinatra-ai/objects/sync-adapters/registry", () => ({
@@ -27,6 +35,10 @@ vi.mock("@cinatra-ai/objects/sync-adapters/registry", () => ({
 vi.mock("@cinatra-ai/objects/graphiti-client", () => ({
   addEpisode: addEpisodeMock,
   identityHashToUuid: identityHashToUuidMock,
+  setKnowledgeGraphIndexingProbe: setIndexingProbeMock,
+}));
+vi.mock("@/lib/knowledge-graph-indexing", () => ({
+  readKnowledgeGraphProviderKeyState: readIndexingStateMock,
 }));
 vi.mock("@cinatra-ai/objects/mcp-handlers", () => ({
   createObjectsPrimitiveHandlers: () => ({ objects_save: objectsSaveMock }),
@@ -54,6 +66,27 @@ describe("getObjectsProviderOrNull (build-time-safe boot-registration accessor)"
     expect(getObjectsProviderOrNull()).toBeNull();
     setObjectsProvider(provider);
     expect(getObjectsProviderOrNull()).toBe(provider);
+  });
+});
+
+describe("knowledge-graph indexing probe binding (cinatra#2582)", () => {
+  it("binds the host's indexing answer into the objects seam at import", () => {
+    // The objects package cannot see the app's stored provider configuration,
+    // so without this binding the episode seam cannot tell "the indexer has a
+    // key" from "every episode is being silently dropped".
+    expect(setIndexingProbeMock).toHaveBeenCalledTimes(1);
+    const probe = setIndexingProbeMock.mock.calls[0]![0] as () => unknown;
+    expect(typeof probe).toBe("function");
+  });
+
+  it("delegates to the host resolver and answers with PRESENCE only", () => {
+    const probe = setIndexingProbeMock.mock.calls[0]![0] as () => Record<string, unknown>;
+    readIndexingStateMock.mockClear();
+    const state = probe();
+    expect(readIndexingStateMock).toHaveBeenCalledTimes(1);
+    expect(state).toEqual({ providerKey: "configured", reason: "stored config" });
+    // The probe hands the seam a state, never a credential.
+    expect(Object.keys(state)).toEqual(["providerKey", "reason"]);
   });
 });
 

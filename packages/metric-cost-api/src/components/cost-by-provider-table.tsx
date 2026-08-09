@@ -7,16 +7,12 @@ import {
 } from "@/components/ui/table";
 import { PaginatedTable } from "@/components/ui/paginated-table";
 import type { CostByProviderRow, LegacyCostEntry } from "../store";
+import { formatUsd, describeUnit, describeModel } from "./cost-row-format";
 
 type CostByProviderTableProps = {
   data: CostByProviderRow[];
   legacyCosts: LegacyCostEntry[];
 };
-
-function formatUsd(v: number | null): string {
-  if (v === null || v === undefined) return "$0.00";
-  return `$${v.toFixed(4)}`;
-}
 
 function frequencySuffix(frequency: string): string {
   if (frequency === "monthly") return "/mo";
@@ -64,9 +60,9 @@ export function CostByProviderTable({ data, legacyCosts }: CostByProviderTablePr
           {data.map((row, i) => (
             <TableRow key={i} className="border-b border-line/50 text-foreground">
               <TableCell className="py-2 pr-4">{row.provider}</TableCell>
-              <TableCell className="py-2 pr-4">{row.model ?? "(unknown)"}</TableCell>
+              <TableCell className="py-2 pr-4">{describeModel(row.source, row.model)}</TableCell>
               <TableCell className="py-2 pr-4 text-right">{formatUsd(row.totalCost)}</TableCell>
-              <TableCell className="py-2 pr-4 text-right">{row.callCount}</TableCell>
+              <TableCell className="py-2 pr-4 text-right">{describeUnit(row.source, row.callCount)}</TableCell>
               <TableCell className="py-2 pr-4 text-right">{row.totalInput?.toLocaleString()}</TableCell>
               <TableCell className="py-2 text-right">{row.totalOutput?.toLocaleString()}</TableCell>
             </TableRow>

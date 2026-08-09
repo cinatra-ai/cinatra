@@ -8,6 +8,7 @@ export type {
   LlmUsageEvent,
   LlmUsageOperation,
   ApolloUsageEvent,
+  GraphitiUsageEvent,
 } from "@cinatra-ai/metric-contracts";
 export { emitUsageEvent, onUsageEvent } from "@cinatra-ai/metric-contracts";
 

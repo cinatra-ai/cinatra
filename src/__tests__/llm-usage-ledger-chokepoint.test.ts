@@ -22,9 +22,15 @@
  *      the single producer and double-counting is structurally impossible.
  *
  * KNOWN OPEN PATHS are registered too, with the issue that owns them, so this
- * file is an honest inventory rather than a claim of completeness. Graphiti's
- * per-episode OpenAI fan-out is uncounted and is DEFERRED pending the owner's
- * analysis — see cinatra#2582. It is recorded here, not fixed here.
+ * file is an honest inventory rather than a claim of completeness.
+ *
+ * cinatra#2582 moved Graphiti out of that inventory: the episode hand-over seam
+ * now publishes one `source:"graphiti"` row per episode, so the fan-out is no
+ * longer invisible. It is NOT priced — the pinned wrapper reports no token usage
+ * and offers no usage surface to poll — so the path is registered in
+ * COUNTED_BUT_UNPRICED against the issue that owns closing that gap. "Counted"
+ * and "priced" are tracked separately here on purpose: collapsing them is how a
+ * $0 row starts reading as "free".
  */
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -150,20 +156,43 @@ const USAGE_EVENT_PUBLISHERS: Registered[] = [
       "outside this repo and cannot reach the seam. It forwards their event " +
       "verbatim; it never builds one.",
   },
+  {
+    file: "packages/objects/src/graphiti-client.ts",
+    why:
+      "cinatra#2582: the episode hand-over seam. Graphiti's per-episode OpenAI " +
+      "fan-out happens in another container with no adapter call here to meter, " +
+      "so this module publishes one source:\"graphiti\" row per episode sent. It " +
+      "never builds a source:\"llm\" row, so the seam's single-producer invariant " +
+      "is untouched.",
+  },
 ];
 
 /**
  * Paths that reach a provider and are still NOT in the ledger. Recorded, not
  * hidden: each names the issue that owns it.
+ *
+ * EMPTY IS A LEGITIMATE STATE and does not mean "complete" — the honest
+ * inventory of what the ledger still cannot say now lives in
+ * {@link COUNTED_BUT_UNPRICED} as well.
  */
-const KNOWN_OPEN_PATHS: Registered[] = [
+const KNOWN_OPEN_PATHS: Registered[] = [];
+
+/**
+ * Paths whose rows REACH `usage_events` but carry no dollars — counted, not
+ * priced. Registered so "the row exists" is never mistaken for "the spend is
+ * measured", with the issue that owns closing the gap.
+ */
+const COUNTED_BUT_UNPRICED: Registered[] = [
   {
     file: "packages/objects/src/graphiti-client.ts",
     why:
-      "Graphiti runs in its own container on its own key and fans out many OpenAI " +
-      "calls per episode (extraction, dedup, summaries, embeddings). None reach " +
-      "usage_events. DEFERRED pending the owner's analysis — not touched by this change.",
-    knownOpenIssue: 2582,
+      "cinatra#2582 makes every episode hand-over countable, but the pinned " +
+      "knowledge-graph-mcp wrapper reports NO token usage back and exposes no " +
+      "usage surface to poll, so the row lands with cost_usd NULL (the " +
+      "dashboard's own \"unknown cost\" counter). Real dollar attribution needs " +
+      "a substrate that reports its provider usage — cinatra#2591 — which is " +
+      "why the Graphiti line item of cinatra#2578 stays open.",
+    knownOpenIssue: 2578,
   },
 ];
 
@@ -295,7 +324,6 @@ describe("the seam has no bypass", () => {
 
 describe("known-open paths are recorded, not hidden", () => {
   it("names the issue that owns each still-uncounted path", () => {
-    expect(KNOWN_OPEN_PATHS.length).toBeGreaterThan(0);
     for (const entry of KNOWN_OPEN_PATHS) {
       expect(
         entry.knownOpenIssue,
@@ -305,17 +333,47 @@ describe("known-open paths are recorded, not hidden", () => {
     }
   });
 
-  it("Graphiti's fan-out is registered as open against cinatra#2582", () => {
-    const graphiti = KNOWN_OPEN_PATHS.find((entry) =>
-      entry.file.includes("graphiti"),
+  it("Graphiti's fan-out is COUNTED now, and its pricing gap is registered", () => {
+    // cinatra#2582 moved this path out of the uncounted inventory: every
+    // episode hand-over now publishes a usage event. What it could NOT close is
+    // the price — the wrapper reports no tokens — so the path moves to the
+    // counted-but-unpriced register rather than disappearing.
+    expect(KNOWN_OPEN_PATHS.some((entry) => entry.file.includes("graphiti"))).toBe(false);
+
+    const unpriced = COUNTED_BUT_UNPRICED.find((entry) => entry.file.includes("graphiti"));
+    expect(unpriced).toBeDefined();
+    expect(unpriced!.knownOpenIssue).toBe(2578);
+
+    // …and it is a registered publisher, so the move is real and not just a
+    // deleted line: the file must actually emit.
+    expect(registeredFiles(USAGE_EVENT_PUBLISHERS)).toContain(
+      "packages/objects/src/graphiti-client.ts",
     );
-    expect(graphiti).toBeDefined();
-    expect(graphiti!.knownOpenIssue).toBe(2582);
+    const client = SOURCE_FILES.find(
+      (file) => file.rel === "packages/objects/src/graphiti-client.ts",
+    );
+    expect(client).toBeDefined();
+    expect(client!.text).toContain(
+      'import { emitUsageEvent } from "@cinatra-ai/metric-contracts"',
+    );
+    expect(client!.text).toMatch(/emitUsageEvent\(\{\s*\n\s*source: "graphiti"/);
+    // The single-producer invariant it must NOT break.
+    expect(client!.text).not.toMatch(/source:\s*"llm"/);
+  });
+
+  it("every counted-but-unpriced path names the issue that owns its pricing gap", () => {
+    for (const entry of COUNTED_BUT_UNPRICED) {
+      expect(
+        entry.knownOpenIssue,
+        `${entry.file} must name the issue that owns its pricing gap`,
+      ).toBeTypeOf("number");
+      expect(entry.why.length).toBeGreaterThan(20);
+    }
   });
 
   it("a known-open path is NOT silently counted as an allowed direct caller", () => {
-    // If Graphiti's path is ever instrumented it must move OUT of this list
-    // rather than accumulate in both — that move is the signal the gap closed.
+    // A path that gets instrumented must move OUT of this list rather than
+    // accumulate in both — that move is the signal the gap closed.
     const openFiles = new Set(registeredFiles(KNOWN_OPEN_PATHS));
     for (const allowed of registeredFiles(DIRECT_PROVIDER_CALLERS)) {
       expect(openFiles.has(allowed)).toBe(false);

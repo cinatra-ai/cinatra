@@ -118,7 +118,8 @@ export function CostSummaryCards({ summary, legacyCosts }: CostSummaryCardsProps
       ))}
       {summary.nullCostCount > 0 && (
         <p className="col-span-full text-xs text-muted-foreground">
-          {summary.nullCostCount} event(s) have unknown cost (missing model pricing).
+          {summary.nullCostCount} event(s) have unknown cost (no rate card for the model, or a
+          provider that does not report its usage back).
         </p>
       )}
     </div>

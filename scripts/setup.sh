@@ -428,6 +428,24 @@ if [ "$LOAD_SEED" = "1" ]; then
   pnpm seed || warn "Sample data load reported an issue. Re-run with: pnpm seed"
 fi
 
+# ── Knowledge-graph provider key (cinatra#2582) ───────────────────────────────
+
+# The Graphiti container needs an OpenAI key as a static env var at container
+# startup, and the app keeps that key in the DATABASE, not the shell env. Compose
+# used to interpolate `${OPENAI_API_KEY:-}`, which resolved EMPTY on a normal
+# install: Graphiti then dropped every episode (extraction runs before the graph
+# write) and the graph stayed silently empty.
+#
+# Run the generator HERE, after the database exists, so an install that already
+# has a stored key (a re-run, a restored backup) materializes it into
+# docker/graphiti/.graphiti.env and the recreate below picks it up. On a FRESH
+# install there is no key yet and this reports "indexing OFF" — the honest
+# state, not an error; the hint printed at the end says how to turn it on.
+info "Resolving the knowledge-graph provider key..."
+npm run --silent gen:graphiti-env || warn "Could not resolve the knowledge-graph provider key; the indexer starts without one."
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d graphiti >/dev/null 2>&1 \
+  || warn "Could not recreate the graphiti container; run \`npm run kg:refresh\` once it is up."
+
 # ── Service check ─────────────────────────────────────────────────────────────
 
 # Post-setup validation: confirm every supporting service is reachable. This is
@@ -448,4 +466,8 @@ echo "  Stop infra:       docker compose down"
 echo ""
 echo "  The first user to register becomes the admin."
 echo "  After that, you can (re-)load sample data with: pnpm seed"
+echo ""
+echo "  Knowledge graph: after you connect OpenAI in the app (/configuration/llm),"
+echo "  run 'npm run kg:refresh' to hand that key to the indexer container."
+echo "  Until then it runs without a key and indexes nothing (objects still work)."
 echo ""

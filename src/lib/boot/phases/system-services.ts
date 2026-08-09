@@ -112,5 +112,25 @@ export function systemServicesPhases(): BootPhase[] {
         );
       },
     },
+    {
+      name: "knowledge-graph-indexing-note",
+      policy: "retryable",
+      run: async () => {
+        // cinatra#2582. State — once, at start, in the app log — whether the
+        // knowledge-graph indexer can index at all. Before this, a keyless
+        // install had NO signal: the indexer accepted every episode, dropped it
+        // (extraction runs before the graph write), and the graph stayed empty
+        // while the app reported nothing. Presence only; never the key.
+        //
+        // `retryable`: a database that is not ready yet must not fail boot, and
+        // the answer is re-derived on demand by the projection path anyway.
+        const { readKnowledgeGraphProviderKeyState, describeKnowledgeGraphIndexing } =
+          await import("@/lib/knowledge-graph-indexing");
+        const state = readKnowledgeGraphProviderKeyState();
+        const line = `[knowledge-graph] ${describeKnowledgeGraphIndexing(state)}`;
+        if (state.providerKey === "configured") console.log(line);
+        else console.warn(line);
+      },
+    },
   ];
 }
