@@ -201,10 +201,26 @@ describe("the typed hold INTERRUPT — a ref and nothing else", () => {
     ).toBeNull();
   });
 
-  it("the paired RESUME names the same gate identity", () => {
-    const resume = buildRecommendationHoldResume({ runId: "run-1", threadId: "tpl-1" });
+  it("the paired RESUME is BOUND to the hold it retires", () => {
+    const resume = buildRecommendationHoldResume({
+      runId: "run-1",
+      threadId: "tpl-1",
+      holdId: "park-1",
+    })!;
     expect(isAgUiEvent(resume)).toBe(true);
     expect(resume.reviewTaskId).toBe(recommendationHoldEventId("run-1"));
+    // The binding is what stops a decided hold's RESUME clearing a live one.
+    expect(readRecommendationHoldFromEvent(resume, "run-1")).toEqual({
+      runId: "run-1",
+      holdId: "park-1",
+    });
+  });
+
+  it("mints NO resume when no ref can be produced — an unpaired clear is worse", () => {
+    delete process.env.BETTER_AUTH_SECRET;
+    expect(
+      buildRecommendationHoldResume({ runId: "run-1", threadId: "t", holdId: "p" }),
+    ).toBeNull();
   });
 
   it("threads on the run's template, exactly like the execution adapter", () => {

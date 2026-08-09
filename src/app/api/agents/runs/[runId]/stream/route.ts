@@ -4,6 +4,7 @@ import { isPlatformAdmin, requireAuthSession } from "@/lib/auth-session";
 import { AuthzError } from "@/lib/authz";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import {
+  declaresLifecycleInteraction,
   deriveRecommendationHoldInterrupt,
   readAgentRunById,
   readRecommendationHoldFromEvent,
@@ -98,29 +99,64 @@ export async function GET(request: Request, context: RouteContext) {
     (run.status === "pending_approval" ? "0-0" : undefined);
 
   // ---------------------------------------------------------------------
-  // The recommendation hold's LIVE-STATE SNAPSHOT (cinatra#2568, epic #2564
-  // S4). A held run is `pending_input`, so it is NOT covered by the
-  // pending_approval replay above, and it must not be: the log is durable and
-  // a run can be parked, decided, dispatched and parked AGAIN, so replaying
-  // history would resurrect a hold the human already answered — the stale-gate
-  // failure cinatra#809 fixed for terminal runs, in a new place.
+  // The recommendation hold's LIVE-STATE SNAPSHOT + STALE-HOLD FILTER
+  // (cinatra#2568, epic #2564 S4).
   //
-  // So the hold is reconstructed from the PARK, never from the log: derive the
-  // run's CURRENT hold (if any) and emit that one synthesized frame first. A
-  // fresh subscribe, a reload and a Last-Event-ID reconnect all take this path,
-  // which is what makes a late joiner see the hold at all.
+  // The event log is durable and a run can be parked, decided, dispatched and
+  // parked AGAIN, so its log can carry several hold announcements of which at
+  // most one is live. Every fresh subscriber replays that whole log (the
+  // reader treats an absent `fromId` as "from the start"), so without a filter
+  // a late joiner would be handed every hold the run ever had. The PARK is the
+  // authority: the run's CURRENT hold is SYNTHESIZED from it, and a hold frame
+  // out of the log is forwarded only when the park still confirms it.
   //
-  // Deliberately NOT given an SSE `id:` — it is a synthesized frame, not a log
-  // entry, so it must never become the client's resume cursor.
+  // PRESENCE GATES, VALIDITY PERMITS. Any frame that DECLARES a lifecycle
+  // interaction is subject to this policy — including one whose ref cannot be
+  // decoded (minted under a rotated secret, forward-versioned, forged).
+  // Forwarding those unfiltered would deliver them to clients as ordinary
+  // review-task gates, which is exactly the confusion the discriminator exists
+  // to prevent.
   const holdThreadId = recommendationHoldThreadId(run);
-  const holdSnapshot = await deriveRecommendationHoldInterrupt({
-    runId: decodedRunId,
-    threadId: holdThreadId,
-  }).catch(() => null);
-  let liveHoldId =
-    (holdSnapshot &&
-      readRecommendationHoldFromEvent(holdSnapshot, decodedRunId)?.holdId) ||
-    null;
+  /** The run's CURRENT hold id, or null. Re-read whenever a frame disagrees. */
+  let liveHoldId: string | null = null;
+  const deriveHold = async (): Promise<{
+    event: Awaited<ReturnType<typeof deriveRecommendationHoldInterrupt>>;
+    holdId: string | null;
+  }> => {
+    const event = await deriveRecommendationHoldInterrupt({
+      runId: decodedRunId,
+      threadId: holdThreadId,
+    }).catch(() => null);
+    const holdId = event
+      ? (readRecommendationHoldFromEvent(event, decodedRunId)?.holdId ?? null)
+      : null;
+    return { event, holdId };
+  };
+
+  /**
+   * Should this log frame reach the client? `true` for everything that is not a
+   * lifecycle frame — the ordinary wire is untouched.
+   */
+  const forwardHoldFrame = async (event: unknown): Promise<boolean> => {
+    if (!declaresLifecycleInteraction(event)) return true;
+    const claimed = readRecommendationHoldFromEvent(event, decodedRunId);
+    if (!claimed) return false; // undecodable / foreign / another run's
+    const type = (event as { type?: unknown }).type;
+    // Re-read the park whenever the frame disagrees with what we last knew: a
+    // hold minted (or retired) while this stream was open is legitimately
+    // newer than the snapshot.
+    if (claimed.holdId !== liveHoldId) {
+      liveHoldId = (await deriveHold()).holdId;
+    }
+    if (type === "RESUME") {
+      // A RESUME retires exactly its own hold. Forward it only when the park
+      // agrees that hold is over — a replayed RESUME for a decided hold must
+      // never clear the card of the hold the run is waiting on NOW.
+      return liveHoldId !== claimed.holdId;
+    }
+    // An announcement is forwarded only while it IS the live hold.
+    return liveHoldId === claimed.holdId;
+  };
 
   // Unify abort sources (client disconnect + internal) into one controller.
   const abortController = new AbortController();
@@ -155,12 +191,22 @@ export async function GET(request: Request, context: RouteContext) {
       abortController.signal.addEventListener("abort", onAbort, { once: true });
 
       try {
-        // The synthesized hold frame goes out BEFORE any log event, so a client
-        // that also receives a live hold interrupt in the same connection
-        // converges on the newer one rather than the reverse.
-        if (holdSnapshot) {
+        // Derived HERE — as late as the stream allows, and never before the
+        // response has begun — so the window between reading the park and
+        // announcing it is as small as it can be. Anything that happens after
+        // it still reaches the client: the log replay carries the paired frames,
+        // and the card's own authorized refetch is what actually decides what is
+        // drawn (a snapshot-restored shell renders nothing without it).
+        //
+        // Deliberately NOT given an SSE `id:` — it is a synthesized frame, not
+        // a log entry, so it must never become the client's resume cursor. It
+        // goes out first so any newer log frame supersedes it rather than the
+        // reverse.
+        const snapshot = await deriveHold();
+        liveHoldId = snapshot.holdId;
+        if (snapshot.event) {
           controller.enqueue(
-            encoder.encode(`data: ${JSON.stringify(holdSnapshot)}\n\n`),
+            encoder.encode(`data: ${JSON.stringify(snapshot.event)}\n\n`),
           );
         }
         const gen = subscribeToAgUiEventsWithId(decodedRunId, {
@@ -169,34 +215,7 @@ export async function GET(request: Request, context: RouteContext) {
         });
         for await (const { id, event } of gen) {
           if (closed) break;
-          // STALE-HOLD FILTER. A hold interrupt in the log is a historical
-          // announcement; the park is the authority on whether it is still the
-          // run's hold. Forward one only when its hold id IS the live one —
-          // otherwise re-read the park once (a hold minted while this stream
-          // was open is legitimately newer than the snapshot) and drop it if
-          // the park does not confirm. The re-read costs one query per hold
-          // frame that does not match, and a run emits a handful at most.
-          const holdOnEvent = readRecommendationHoldFromEvent(
-            event,
-            decodedRunId,
-          );
-          if (holdOnEvent) {
-            if (holdOnEvent.holdId !== liveHoldId) {
-              const current = await deriveRecommendationHoldInterrupt({
-                runId: decodedRunId,
-                threadId: holdThreadId,
-              }).catch(() => null);
-              const currentHoldId =
-                (current &&
-                  readRecommendationHoldFromEvent(current, decodedRunId)
-                    ?.holdId) ||
-                null;
-              if (!currentHoldId || currentHoldId !== holdOnEvent.holdId) {
-                continue; // decided, superseded, or never this run's — drop it
-              }
-              liveHoldId = currentHoldId;
-            }
-          }
+          if (!(await forwardHoldFrame(event))) continue;
           // SSE id: field enables browser EventSource auto-resume via
           // Last-Event-ID on reconnect. Redis Streams native IDs are
           // `<digits>-<digits>` — always safe per WHATWG SSE spec (no

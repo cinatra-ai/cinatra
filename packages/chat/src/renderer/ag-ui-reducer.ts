@@ -78,11 +78,13 @@ import {
   mergeCitations,
   normalizeCitations,
 } from "./stream-normalizers";
+import { declaresLifecycleInteraction } from "@cinatra-ai/agent-ui-protocol/renderable-views/lifecycle-cards";
 import type { UiCitation, UiThoughtGroup } from "../types";
 import type {
   AgUiEvent,
   DataPartEvent,
   InterruptEvent,
+  ResumeEvent,
   RunErrorEvent,
   StateSnapshotEvent,
   TextMessageContentEvent,
@@ -405,6 +407,14 @@ function reduceInterrupt(
   state: ConversationViewState,
   event: InterruptEvent,
 ): ConversationViewState {
+  // A TYPED LIFECYCLE interrupt is not a review-task gate (cinatra#2568). This
+  // slice is the "a review task awaits your approval" state — it drives the
+  // approval chrome and the host's review-task renderer — so folding a
+  // lifecycle interaction into it would draw an approval floor for something
+  // that has none, and offer its synthetic gate identity to the approve path.
+  // Presence gates: an interaction this build cannot parse is still not a
+  // review task. Lifecycle interactions reach a surface as their own card.
+  if (declaresLifecycleInteraction(event)) return state;
   return {
     ...state,
     interrupt: {
@@ -420,7 +430,13 @@ function reduceInterrupt(
   };
 }
 
-function reduceResume(state: ConversationViewState): ConversationViewState {
+function reduceResume(
+  state: ConversationViewState,
+  event: ResumeEvent,
+): ConversationViewState {
+  // Paired, like the interrupt above: a lifecycle RESUME retires a lifecycle
+  // interaction, never this slice's review-task gate.
+  if (declaresLifecycleInteraction(event)) return state;
   if (!state.interrupt) return state;
   return {
     ...state,
@@ -631,7 +647,7 @@ export function agUiReduce(
     case "INTERRUPT":
       return reduceInterrupt(state, event);
     case "RESUME":
-      return reduceResume(state);
+      return reduceResume(state, event);
     case "DATA_PART":
       return reduceDataPart(state, event);
     case "STATE_SNAPSHOT":

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { PresentationHint } from "./result-renderers";
 import type { DataPartEvent } from "@cinatra-ai/agent-ui-protocol";
 import {
+  declaresLifecycleInteraction,
   readLifecycleInterruptInteraction,
   type LifecycleInterruptInteraction,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views/lifecycle-cards";
@@ -227,8 +228,16 @@ export function useAgUiRunStream(
           //     `pending_input` — it has not been dispatched at all — and
           //     claiming otherwise would both misreport the run and hand the
           //     panel's approval chrome a gate that does not exist.
-          const lifecycle = readLifecycleInterruptInteraction(event);
-          if (lifecycle) {
+          //
+          // PRESENCE GATES, VALIDITY PERMITS. Anything that DECLARES an
+          // interaction leaves the review-task path here, whether or not this
+          // build can parse it. A payload we cannot parse is DROPPED — it draws
+          // no card (there is nothing to resolve) and it must not fall through
+          // to the approval form either, because a forward version or a frame
+          // minted under a rotated secret is still not a review task.
+          if (declaresLifecycleInteraction(event)) {
+            const lifecycle = readLifecycleInterruptInteraction(event);
+            if (!lifecycle) break;
             const reviewTaskId = (event as { reviewTaskId?: unknown }).reviewTaskId;
             setLifecycleInterrupt({
               ...lifecycle,
@@ -267,11 +276,18 @@ export function useAgUiRunStream(
         case "RESUME": {
           // INTERRUPT and RESUME do NOT close the stream — the run continues
           // and the next RUN_STARTED or terminal event drives the status.
-          setInterruptContext(null);
-          // The hold's RESUME is emitted only after its release is VERIFIED
-          // server-side, so clearing here can never drop a card off a run that
-          // is still waiting.
-          setLifecycleInterrupt(null);
+          //
+          // A RESUME RETIRES EXACTLY WHAT IT NAMES. A lifecycle RESUME clears
+          // only the lifecycle slot; an ordinary one clears only the review-task
+          // slot. Clearing both would let an unrelated gate's resume drop a live
+          // hold's card — and the server already refuses to forward a lifecycle
+          // RESUME the park does not agree is over, so a cleared card here means
+          // the run really is no longer held.
+          if (declaresLifecycleInteraction(event)) {
+            setLifecycleInterrupt(null);
+          } else {
+            setInterruptContext(null);
+          }
           break;
         }
 

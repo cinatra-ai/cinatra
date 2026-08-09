@@ -96,6 +96,16 @@ function holdInterrupt(over: Record<string, unknown> = {}) {
   };
 }
 
+function holdResume() {
+  return {
+    type: "RESUME",
+    threadId: "tpl-1",
+    runId: "run-1",
+    reviewTaskId: "recommendation:run-start:run-1",
+    interaction: { kind: "recommendation_hold", schemaVersion: 1, ref: HOLD_REF },
+  };
+}
+
 function reviewGateInterrupt() {
   return {
     type: "INTERRUPT",
@@ -144,11 +154,29 @@ describe("a typed lifecycle interrupt routes AWAY from the review-task path", ()
     ]);
   });
 
-  it("RESUME clears it", () => {
+  it("a LIFECYCLE resume clears it", () => {
+    render(<HookProbe runId="run-1" />);
+    emit(holdInterrupt());
+    emit(holdResume());
+    expect(screen.getByTestId("lifecycle").textContent).toBe("null");
+  });
+
+  it("an ORDINARY resume does NOT clear it — a resume retires what it names", () => {
+    // An unrelated gate finishing must never drop the card of a run that is
+    // still waiting on its skill selection. The server also refuses to forward
+    // a lifecycle resume the park does not agree is over, so the two halves of
+    // the pairing hold from both ends.
     render(<HookProbe runId="run-1" />);
     emit(holdInterrupt());
     emit({ type: "RESUME", threadId: "tpl-1", runId: "run-1" });
-    expect(screen.getByTestId("lifecycle").textContent).toBe("null");
+    expect(screen.getByTestId("lifecycle").textContent).not.toBe("null");
+  });
+
+  it("a LIFECYCLE resume does not clear a live review-task gate", () => {
+    render(<HookProbe runId="run-1" />);
+    emit(reviewGateInterrupt());
+    emit(holdResume());
+    expect(screen.getByTestId("review-gate").textContent).toBe("yes");
   });
 
   it("a (re-)start clears it — a running run is not held", () => {
@@ -174,17 +202,22 @@ describe("a typed lifecycle interrupt routes AWAY from the review-task path", ()
     expect(screen.getByTestId("status").textContent).toBe("failed");
   });
 
-  it("a FORGED discriminator falls back to the review-task path, never routes", () => {
-    // An unknown kind is not a lifecycle interrupt, so it must behave exactly
-    // as it did before the field existed — no silent third behaviour.
-    render(<HookProbe runId="run-1" />);
-    emit(
-      holdInterrupt({
-        interaction: { kind: "totally_made_up", schemaVersion: 1, ref: HOLD_REF },
-      }),
-    );
-    expect(screen.getByTestId("lifecycle").textContent).toBe("null");
-    expect(screen.getByTestId("review-gate").textContent).toBe("yes");
+  it("an UNPARSEABLE declaration is DROPPED, never routed to the approve path", () => {
+    // Presence gates, validity permits: an unknown kind, a forward version or a
+    // frame this build cannot read is still not a review task. It draws no card
+    // (nothing to resolve) and must not become an approval form either.
+    for (const interaction of [
+      { kind: "totally_made_up", schemaVersion: 1, ref: HOLD_REF },
+      { kind: "recommendation_hold", schemaVersion: 99, ref: HOLD_REF },
+      { kind: "recommendation_hold", schemaVersion: 1, ref: "" },
+    ]) {
+      cleanup();
+      render(<HookProbe runId="run-1" />);
+      emit(holdInterrupt({ interaction }));
+      expect(screen.getByTestId("lifecycle").textContent).toBe("null");
+      expect(screen.getByTestId("review-gate").textContent).toBe("no");
+      expect(screen.getByTestId("status").textContent).toBe("pending_input");
+    }
   });
 });
 
@@ -207,7 +240,7 @@ describe("an ordinary review-task interrupt is untouched (regression)", () => {
   it("a hold followed by a real gate leaves BOTH slots correct", () => {
     render(<HookProbe runId="run-1" />);
     emit(holdInterrupt());
-    emit({ type: "RESUME", threadId: "tpl-1", runId: "run-1" });
+    emit(holdResume());
     emit({ type: "RUN_STARTED", threadId: "tpl-1", runId: "run-1" });
     emit(reviewGateInterrupt());
 

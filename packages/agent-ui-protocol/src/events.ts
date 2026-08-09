@@ -160,6 +160,23 @@ export type ResumeEvent = BaseAgUiEvent & {
   runId: string;
   /** reviewTaskId from the paired INTERRUPT event. Optional — not required by the client reducer. */
   reviewTaskId?: string;
+  /**
+   * The typed lifecycle-interaction discriminator of the interaction this
+   * RESUME RETIRES (cinatra#2568) — same shape and same rules as the INTERRUPT
+   * field above.
+   *
+   * PAIRING, not decoration: a RESUME that carries it retires THAT interaction
+   * and nothing else, and a RESUME WITHOUT it retires only an ordinary
+   * review-task gate. Without the pairing, an unrelated gate's RESUME would
+   * clear a live hold's card (and a stale hold's RESUME would clear the current
+   * hold), which is precisely the "the wire says the run was freed while it is
+   * still waiting" failure this program refuses.
+   */
+  interaction?: {
+    kind: string;
+    schemaVersion: number;
+    ref: string;
+  };
 };
 
 /**

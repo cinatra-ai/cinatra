@@ -24,6 +24,7 @@ import {
   LIFECYCLE_INTERRUPT_KINDS,
   LIFECYCLE_INTERRUPT_RENDERER_IDS,
   LIFECYCLE_VIEW_REF_MAX_LENGTH,
+  declaresLifecycleInteraction,
   isLifecycleInterruptKind,
   lifecycleInterruptInteractionSchema,
   readLifecycleInterruptInteraction,
@@ -88,6 +89,18 @@ describe("handshake compatibility — additive and optional", () => {
     expect(isAgUiEvent(interruptEvent({ interaction: holdInteraction() }))).toBe(
       true,
     );
+  });
+
+  it("a RESUME accepts the same optional pairing discriminator", () => {
+    const resume = {
+      type: "RESUME",
+      threadId: "tpl-1",
+      runId: "run-1",
+      reviewTaskId: "recommendation:run-start:run-1",
+    };
+    expect(isAgUiEvent(resume)).toBe(true);
+    expect(isAgUiEvent({ ...resume, interaction: holdInteraction() })).toBe(true);
+    expect(isAgUiEvent({ ...resume, interaction: "nope" })).toBe(false);
   });
 
   it("a non-object `interaction` is rejected by the envelope check", () => {
@@ -183,6 +196,31 @@ describe("readLifecycleInterruptInteraction — the one parse seam", () => {
     expect(readLifecycleInterruptInteraction(null)).toBeNull();
     expect(readLifecycleInterruptInteraction([])).toBeNull();
     expect(readLifecycleInterruptInteraction("INTERRUPT")).toBeNull();
+  });
+
+  it("PRESENCE is a separate, weaker question from VALIDITY", () => {
+    // The rule the whole slice leans on: anything that DECLARES an interaction
+    // leaves the review-task path, even when this build cannot parse it.
+    // Otherwise a forward version or a forged payload fails OPEN into the
+    // approval path and draws a floor for something that has none.
+    const unparseable = interruptEvent({
+      interaction: holdInteraction({ schemaVersion: 99 }),
+    });
+    expect(declaresLifecycleInteraction(unparseable)).toBe(true);
+    expect(readLifecycleInterruptInteraction(unparseable)).toBeNull();
+
+    expect(declaresLifecycleInteraction(interruptEvent())).toBe(false);
+    expect(declaresLifecycleInteraction(interruptEvent({ interaction: "x" }))).toBe(false);
+    expect(declaresLifecycleInteraction(null)).toBe(false);
+  });
+
+  it("a hostile shape counts as a declaration, never as a review task", () => {
+    const hostile = {
+      get interaction() {
+        throw new Error("boom");
+      },
+    };
+    expect(declaresLifecycleInteraction(hostile)).toBe(true);
   });
 
   it("the schema itself is strict about the ref bound", () => {

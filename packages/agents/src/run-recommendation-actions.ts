@@ -40,6 +40,8 @@ import {
 import { readAgentRunById, readAgentTemplateById } from "./store";
 import { getRunRecommendations } from "./recommendation-interception";
 import {
+  decodeRecommendationHoldRef,
+  encodeRecommendationHoldRef,
   publishRecommendationHoldResume,
   readRecommendationParkForRun,
   recommendationHoldThreadId,
@@ -73,7 +75,20 @@ export const RECOMMENDATION_DECISION_REFUSAL =
 
 export type RunRecommendationHoldState =
   | { state: "none" }
-  | { state: "held"; agentPackageName: string; promptText: string; recommendations: RecommendedSkillForChip[] }
+  | {
+      state: "held";
+      agentPackageName: string;
+      promptText: string;
+      recommendations: RecommendedSkillForChip[];
+      /**
+       * OPAQUE handle to THIS hold instance (cinatra#2568). The row hands it
+       * back on confirm/skip so the decision is bound to the hold it was taken
+       * against — see `assertDecisionMatchesLiveHold`. Empty when no ref can be
+       * minted (no app secret): the decision then falls back to the pre-#2568
+       * run-scoped behaviour rather than becoming un-decidable.
+       */
+      holdRef: string;
+    }
   | { state: "confirmed"; skillNames: string[] }
   | { state: "skipped" };
 
@@ -174,6 +189,7 @@ export async function getRunRecommendationHoldStateAction(input: {
     state: "held",
     agentPackageName: packageName,
     promptText,
+    holdRef: encodeRecommendationHoldRef({ runId: input.runId, holdId: park.id }) ?? "",
     recommendations: recs.map((r) => ({
       skillId: r.skillId,
       skillRevisionId: r.skillRevisionId,
@@ -201,6 +217,8 @@ export async function confirmRunRecommendationAction(input: {
   declaredProducedTypes?: string[];
   targetArtifactKind?: string;
   forcedRevisions?: Record<string, string>;
+  /** The hold this decision was taken against (cinatra#2568) — see the CAS below. */
+  holdRef?: string;
 }): Promise<RunRecommendationDecisionResult> {
   const session = await requireAuthSession().catch(() => null);
   if (!session?.user?.id) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
@@ -220,7 +238,7 @@ export async function confirmRunRecommendationAction(input: {
   if (!written.ok) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 
   // 2 + 3. Release the hold and dispatch.
-  return releaseAndDispatch(input.runId);
+  return releaseAndDispatch(input.runId, input.holdRef);
 }
 
 /**
@@ -231,6 +249,8 @@ export async function confirmRunRecommendationAction(input: {
  */
 export async function skipRunRecommendationAction(input: {
   runId: string;
+  /** The hold this decision was taken against (cinatra#2568) — see the CAS below. */
+  holdRef?: string;
 }): Promise<RunRecommendationDecisionResult> {
   const session = await requireAuthSession().catch(() => null);
   const userId = session?.user?.id ?? null;
@@ -290,7 +310,7 @@ export async function skipRunRecommendationAction(input: {
     );
   }
 
-  return releaseAndDispatch(input.runId);
+  return releaseAndDispatch(input.runId, input.holdRef);
 }
 
 /**
@@ -318,11 +338,44 @@ export async function skipRunRecommendationAction(input: {
  * the hold is over either way: a preflight failure surfaces as its own
  * actionable error on a run that is genuinely no longer held.
  */
-async function releaseAndDispatch(runId: string): Promise<RunRecommendationDecisionResult> {
+async function releaseAndDispatch(
+  runId: string,
+  holdRef?: string,
+): Promise<RunRecommendationDecisionResult> {
   const HOLD_STILL_LIVE = {
     ok: false as const,
     error: "could not release the run-start recommendation hold — please retry",
   };
+
+  // THE HOLD-INSTANCE CAS (cinatra#2568). Read the live hold BEFORE releasing
+  // anything, and — when the caller named the hold it decided against — require
+  // them to be the same hold.
+  //
+  // Without it these actions are only run-scoped: a decision taken against hold
+  // H, submitted after the run was dispatched and PARKED AGAIN as H', would
+  // release H' and dispatch the run with a selection the human made for a
+  // different candidate set. A stale tab, a slow network or a double-decided
+  // run is enough. Naming the hold makes the race an honest refusal instead of
+  // a silently-wrong dispatch.
+  //
+  // Backwards-compatible on purpose: a caller that names no hold keeps the
+  // pre-#2568 run-scoped behaviour (the surfaces that do name one get the
+  // guarantee; a deployment with no app secret mints no refs and must still be
+  // able to decide its runs).
+  const parkBefore = await readRecommendationParkForRun(runId).catch(() => null);
+  if (holdRef) {
+    const claimed = decodeRecommendationHoldRef(holdRef);
+    const matches =
+      claimed !== null &&
+      claimed.runId === runId &&
+      parkBefore !== null &&
+      parkBefore.status === "parked" &&
+      parkBefore.id === claimed.holdId;
+    // Generic refusal: "the hold you decided is not the one this run is waiting
+    // on" and "you may not decide this run" must read identically.
+    if (!matches) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
+  }
+
   await releaseRecommendationParkForRun(runId).catch(() => false);
   let parkAfterRelease: Awaited<ReturnType<typeof readRecommendationParkForRun>>;
   try {
@@ -338,17 +391,23 @@ async function releaseAndDispatch(runId: string): Promise<RunRecommendationDecis
   // The hold is verifiably over — retire it on the wire so every live surface
   // (this tab, another tab, an external AG-UI client) drops the card at the same
   // moment, instead of the losing tab sitting on a decided hold until its next
-  // poll tick.
+  // poll tick. BOUND to the hold instance that was actually released, so it can
+  // never clear the card of a hold the run is waiting on now.
+  //
   // Guarded here as well as inside the publisher: the decision's outcome is the
   // park release and the dispatch, and neither may be lost to a transport
   // failure on an announcement.
-  try {
-    await publishRecommendationHoldResume({
-      runId,
-      threadId: recommendationHoldThreadId(run),
-    });
-  } catch {
-    /* announced or not, the decision's outcome stands */
+  const releasedHoldId = parkBefore?.id ?? parkAfterRelease?.id ?? null;
+  if (releasedHoldId) {
+    try {
+      await publishRecommendationHoldResume({
+        runId,
+        threadId: recommendationHoldThreadId(run),
+        holdId: releasedHoldId,
+      });
+    } catch {
+      /* announced or not, the decision's outcome stands */
+    }
   }
 
   // A held run is pending_input; if it already advanced (a concurrent decision

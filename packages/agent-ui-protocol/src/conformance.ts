@@ -88,7 +88,12 @@ export function isAgUiEvent(value: unknown): value is AgUiEvent {
         (value.interaction === undefined || isRecord(value.interaction))
       );
     case "RESUME":
-      return isNonEmptyString(value.threadId) && isNonEmptyString(value.runId);
+      return (
+        isNonEmptyString(value.threadId) &&
+        isNonEmptyString(value.runId) &&
+        // Optional pairing discriminator (cinatra#2568) — see the INTERRUPT arm.
+        (value.interaction === undefined || isRecord(value.interaction))
+      );
     case "DATA_PART":
       return isRecord(value.data);
     default: {

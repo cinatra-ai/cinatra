@@ -29,6 +29,8 @@ const confirmRunSkillSelectionAction = vi.fn();
 const readRunSelectedSkillRevisions = vi.fn();
 const hasRunRecommendationSkip = vi.fn();
 const writeRunRejectedRecommendations = vi.fn();
+const decodeRecommendationHoldRef = vi.fn();
+const encodeRecommendationHoldRef = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: (...a: unknown[]) => requireAuthSession(...a),
@@ -45,6 +47,8 @@ vi.mock("../store", () => ({
   readAgentTemplateById: (...a: unknown[]) => readAgentTemplateById(...a),
 }));
 vi.mock("../recommendation-hold", () => ({
+  decodeRecommendationHoldRef: (...a: unknown[]) => decodeRecommendationHoldRef(...a),
+  encodeRecommendationHoldRef: (...a: unknown[]) => encodeRecommendationHoldRef(...a),
   readRecommendationParkForRun: (...a: unknown[]) => readRecommendationParkForRun(...a),
   releaseRecommendationParkForRun: (...a: unknown[]) => releaseRecommendationParkForRun(...a),
   resolveRecommendationCandidateSkillIds: (...a: unknown[]) =>
@@ -103,6 +107,10 @@ beforeEach(() => {
   confirmRunSkillSelectionAction.mockResolvedValue({ ok: true, written: 2 });
   triggerAgentRun.mockResolvedValue({ ok: true });
   publishRecommendationHoldResume.mockResolvedValue(undefined);
+  encodeRecommendationHoldRef.mockReturnValue("ref-park-1");
+  decodeRecommendationHoldRef.mockImplementation((ref: string) =>
+    ref === "ref-park-1" ? { runId: "run-1", holdId: "park-1" } : null,
+  );
 });
 
 describe("RESUME rides the VERIFIED release, never the call", () => {
@@ -115,6 +123,7 @@ describe("RESUME rides the VERIFIED release, never the call", () => {
     expect(publishRecommendationHoldResume).toHaveBeenCalledWith({
       runId: "run-1",
       threadId: "tpl-1",
+      holdId: "park-1",
     });
     expect(triggerAgentRun).toHaveBeenCalledWith({ runId: "run-1", templateSlug: "tpl-1" });
   });
@@ -229,5 +238,80 @@ describe("the refusal is ONE non-enumerating answer", () => {
       expect(res.error).not.toContain("park");
       expect(res.error).not.toMatch(/not found|forbidden|unauthorized/i);
     }
+  });
+});
+
+describe("the hold-instance CAS — a decision binds to the hold it was taken against", () => {
+  beforeEach(() => {
+    // The run is HELD by park-1 right now (the pre-release read).
+    readRecommendationParkForRun
+      .mockResolvedValueOnce({ id: "park-1", checkpoint: "recommendation", status: "parked" })
+      .mockResolvedValue({ id: "park-1", checkpoint: "recommendation", status: "released" });
+  });
+
+  it("accepts a decision naming the CURRENT hold", async () => {
+    const res = await skipRunRecommendationAction({ runId: "run-1", holdRef: "ref-park-1" });
+    expect(res).toEqual({ ok: true, dispatched: true });
+    expect(releaseRecommendationParkForRun).toHaveBeenCalledWith("run-1");
+  });
+
+  it("REFUSES a decision naming a hold the run has moved past (re-parked run)", async () => {
+    // The card was showing park-1; the run has since been decided, dispatched
+    // and parked AGAIN as park-2. Applying the old decision would dispatch the
+    // run with a selection made for a different candidate set.
+    readRecommendationParkForRun.mockReset();
+    readRecommendationParkForRun.mockResolvedValue({
+      id: "park-2",
+      checkpoint: "recommendation",
+      status: "parked",
+    });
+
+    const res = await skipRunRecommendationAction({ runId: "run-1", holdRef: "ref-park-1" });
+
+    expect(res).toEqual({ ok: false, error: RECOMMENDATION_DECISION_REFUSAL });
+    expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();
+    expect(triggerAgentRun).not.toHaveBeenCalled();
+    expect(publishRecommendationHoldResume).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a decision naming a hold that is no longer live at all", async () => {
+    readRecommendationParkForRun.mockReset();
+    readRecommendationParkForRun.mockResolvedValue({
+      id: "park-1",
+      checkpoint: "recommendation",
+      status: "released",
+    });
+    const res = await skipRunRecommendationAction({ runId: "run-1", holdRef: "ref-park-1" });
+    expect(res).toEqual({ ok: false, error: RECOMMENDATION_DECISION_REFUSAL });
+    expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES an undecodable ref, indistinguishably from an unauthorized caller", async () => {
+    const res = await skipRunRecommendationAction({ runId: "run-1", holdRef: "forged" });
+    expect(res).toEqual({ ok: false, error: RECOMMENDATION_DECISION_REFUSAL });
+    expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a ref minted for ANOTHER run", async () => {
+    decodeRecommendationHoldRef.mockReturnValue({ runId: "run-other", holdId: "park-1" });
+    const res = await skipRunRecommendationAction({ runId: "run-1", holdRef: "ref-park-1" });
+    expect(res).toEqual({ ok: false, error: RECOMMENDATION_DECISION_REFUSAL });
+  });
+
+  it("CONFIRM takes the same CAS before it writes nothing further", async () => {
+    readRecommendationParkForRun.mockReset();
+    readRecommendationParkForRun.mockResolvedValue({
+      id: "park-2",
+      checkpoint: "recommendation",
+      status: "parked",
+    });
+    const res = await confirmRunRecommendationAction({ ...CONFIRM_INPUT, holdRef: "ref-park-1" });
+    expect(res).toEqual({ ok: false, error: RECOMMENDATION_DECISION_REFUSAL });
+    expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();
+  });
+
+  it("a caller that names NO hold keeps the pre-#2568 run-scoped behaviour", async () => {
+    const res = await skipRunRecommendationAction({ runId: "run-1" });
+    expect(res).toEqual({ ok: true, dispatched: true });
   });
 });

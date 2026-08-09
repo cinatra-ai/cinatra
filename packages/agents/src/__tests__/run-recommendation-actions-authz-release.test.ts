@@ -44,6 +44,8 @@ vi.mock("../store", () => ({
   readAgentTemplateById: (...a: unknown[]) => readAgentTemplateById(...a),
 }));
 vi.mock("../recommendation-hold", () => ({
+  decodeRecommendationHoldRef: () => null,
+  encodeRecommendationHoldRef: () => "ref-park-1",
   readRecommendationParkForRun: (...a: unknown[]) => readRecommendationParkForRun(...a),
   releaseRecommendationParkForRun: (...a: unknown[]) => releaseRecommendationParkForRun(...a),
   resolveRecommendationCandidateSkillIds: (...a: unknown[]) =>

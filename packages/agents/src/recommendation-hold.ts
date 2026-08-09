@@ -38,6 +38,7 @@ import {
   LIFECYCLE_INTERACTION_SCHEMA_VERSION,
   LIFECYCLE_INTERRUPT_RENDERER_IDS,
   LIFECYCLE_VIEW_REF_MAX_LENGTH,
+  declaresLifecycleInteraction,
   readLifecycleInterruptInteraction,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views/lifecycle-cards";
 import type { InterruptEvent, ResumeEvent } from "@cinatra-ai/agent-ui-protocol";
@@ -225,24 +226,52 @@ export function buildRecommendationHoldInterrupt(input: {
   };
 }
 
-/** The paired RESUME. Emitted ONLY after a decision's release is VERIFIED. */
+/**
+ * The paired RESUME. Emitted ONLY after a decision's release is VERIFIED, and
+ * BOUND to the hold instance it retires: a RESUME for hold H must never clear a
+ * card showing hold H'. Returns `null` when no ref can be minted, for the same
+ * reason the interrupt does — an unpaired RESUME would be a blunt "clear
+ * whatever you are showing", which is the failure this pairing exists to stop.
+ */
 export function buildRecommendationHoldResume(input: {
   runId: string;
   threadId: string;
-}): ResumeEvent {
+  holdId: string;
+}): ResumeEvent | null {
+  const ref = encodeRecommendationHoldRef({
+    runId: input.runId,
+    holdId: input.holdId,
+  });
+  if (!ref) return null;
   return {
     type: "RESUME",
     threadId: input.threadId,
     runId: input.runId,
     reviewTaskId: recommendationHoldEventId(input.runId),
+    interaction: {
+      kind: "recommendation_hold",
+      schemaVersion: LIFECYCLE_INTERACTION_SCHEMA_VERSION,
+      ref,
+    },
     timestamp: Date.now(),
   };
 }
 
 /**
- * Read the hold identity off an event, if it IS a typed hold interrupt for this
- * run. `null` for every other event — an ordinary gate, a forged/foreign ref, or
- * a hold ref minted for a DIFFERENT run (which a cross-run replay would be).
+ * Does this frame CLAIM to be a lifecycle interaction? Re-exported so the run's
+ * SSE route can gate on presence before it gates on validity — an
+ * `INTERRUPT`/`RESUME` that declares an interaction is subject to the hold
+ * policy even when its ref cannot be decoded (a frame minted under a rotated
+ * secret, a forward version, a forged payload). Forwarding such a frame
+ * unfiltered would let it reach clients as an ordinary review-task gate.
+ */
+export { declaresLifecycleInteraction };
+
+/**
+ * Read the hold identity off an event, if it IS a typed hold frame for this run
+ * (`INTERRUPT` announcing one, or `RESUME` retiring one). `null` for every other
+ * event — an ordinary gate, a forged/foreign ref, or a hold ref minted for a
+ * DIFFERENT run (which a cross-run replay would be).
  */
 export function readRecommendationHoldFromEvent(
   event: unknown,
@@ -313,9 +342,12 @@ export async function publishRecommendationHoldInterrupt(input: {
 export async function publishRecommendationHoldResume(input: {
   runId: string;
   threadId: string;
+  holdId: string;
 }): Promise<void> {
   try {
-    await publishHoldEvent(input.runId, buildRecommendationHoldResume(input));
+    const event = buildRecommendationHoldResume(input);
+    if (!event) return;
+    await publishHoldEvent(input.runId, event);
   } catch {
     /* best-effort — see above */
   }

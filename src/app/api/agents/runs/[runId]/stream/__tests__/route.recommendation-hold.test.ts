@@ -20,6 +20,7 @@ const readAgentRunById = vi.fn();
 const subscribeToAgUiEventsWithId = vi.fn();
 const deriveRecommendationHoldInterrupt = vi.fn();
 const readRecommendationHoldFromEvent = vi.fn();
+const declaresLifecycleInteraction = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: () => requireAuthSession(),
@@ -31,6 +32,7 @@ vi.mock("@cinatra-ai/agents", () => ({
     deriveRecommendationHoldInterrupt(...a),
   readRecommendationHoldFromEvent: (...a: unknown[]) =>
     readRecommendationHoldFromEvent(...a),
+  declaresLifecycleInteraction: (...a: unknown[]) => declaresLifecycleInteraction(...a),
   recommendationHoldThreadId: (run: { id: string; templateId?: string | null }) =>
     run.templateId && run.templateId.length > 0 ? run.templateId : run.id,
 }));
@@ -66,6 +68,16 @@ async function drain(res: Response): Promise<Record<string, unknown>[]> {
     .map((l) => JSON.parse(l.slice("data: ".length)) as Record<string, unknown>);
 }
 
+function holdResumeFrame(holdId: string) {
+  return {
+    type: "RESUME",
+    threadId: "tpl-1",
+    runId: "run-1",
+    reviewTaskId: "recommendation:run-start:run-1",
+    interaction: { kind: "recommendation_hold", schemaVersion: 1, ref: `ref-${holdId}` },
+  };
+}
+
 function holdFrame(holdId: string) {
   return {
     type: "INTERRUPT",
@@ -77,6 +89,12 @@ function holdFrame(holdId: string) {
     reviewTaskId: "recommendation:run-start:run-1",
     interaction: { kind: "recommendation_hold", schemaVersion: 1, ref: `ref-${holdId}` },
   };
+}
+
+/** Stand-in presence check — the real one is a field-presence test. */
+function declaresReal(event: unknown): boolean {
+  const i = (event as { interaction?: unknown }).interaction;
+  return typeof i === "object" && i !== null && !Array.isArray(i);
 }
 
 /** Stand-in decode: the route only needs "which hold does this frame name". */
@@ -101,6 +119,7 @@ describe("the hold's live-state snapshot on the SSE route", () => {
     });
     deriveRecommendationHoldInterrupt.mockResolvedValue(null);
     readRecommendationHoldFromEvent.mockImplementation(decodeHoldFrame);
+    declaresLifecycleInteraction.mockImplementation(declaresReal);
   });
   afterEach(() => vi.clearAllMocks());
 
@@ -166,6 +185,7 @@ describe("the stale-hold filter over replayed history", () => {
     });
     readAgentRunById.mockResolvedValue({ ...HELD_RUN, status: "pending_approval" });
     readRecommendationHoldFromEvent.mockImplementation(decodeHoldFrame);
+    declaresLifecycleInteraction.mockImplementation(declaresReal);
   });
   afterEach(() => vi.clearAllMocks());
 
@@ -241,5 +261,86 @@ describe("the stale-hold filter over replayed history", () => {
       "run-1",
       expect.objectContaining({ fromId: "0-0" }),
     );
+  });
+});
+
+describe("a lifecycle RESUME retires exactly the hold it names", () => {
+  beforeEach(() => {
+    isPlatformAdmin.mockReturnValue(false);
+    requireAuthSession.mockResolvedValue({
+      user: { id: "user-1" },
+      session: { activeOrganizationId: "org-1" },
+    });
+    readAgentRunById.mockResolvedValue({ ...HELD_RUN });
+    readRecommendationHoldFromEvent.mockImplementation(decodeHoldFrame);
+    declaresLifecycleInteraction.mockImplementation(declaresReal);
+  });
+  afterEach(() => vi.clearAllMocks());
+
+  it("FORWARDS the resume of a hold the park agrees is over", async () => {
+    deriveRecommendationHoldInterrupt.mockResolvedValue(null); // not held now
+    subscribeToAgUiEventsWithId.mockImplementation(async function* () {
+      yield { id: "1-0", event: holdResumeFrame("park-1") };
+    });
+
+    const frames = await drain(await GET(streamReq(), ctx("run-1")));
+    expect(frames.map((f) => f.type)).toEqual(["RESUME"]);
+  });
+
+  it("DROPS a stale resume while the run is waiting on a DIFFERENT hold", async () => {
+    // park-2 is live; park-1's resume is history. Forwarding it would clear the
+    // card of a hold the run is still waiting on.
+    deriveRecommendationHoldInterrupt.mockResolvedValue(holdFrame("park-2"));
+    subscribeToAgUiEventsWithId.mockImplementation(async function* () {
+      yield { id: "1-0", event: holdResumeFrame("park-1") };
+    });
+
+    const frames = await drain(await GET(streamReq(), ctx("run-1")));
+    expect(frames.map((f) => f.type)).toEqual(["INTERRUPT"]); // the snapshot only
+  });
+
+  it("DROPS the resume of the hold that is still live (a duplicate/early frame)", async () => {
+    deriveRecommendationHoldInterrupt.mockResolvedValue(holdFrame("park-1"));
+    subscribeToAgUiEventsWithId.mockImplementation(async function* () {
+      yield { id: "1-0", event: holdResumeFrame("park-1") };
+    });
+
+    const frames = await drain(await GET(streamReq(), ctx("run-1")));
+    expect(frames.map((f) => f.type)).toEqual(["INTERRUPT"]);
+  });
+
+  it("leaves an ORDINARY resume alone", async () => {
+    deriveRecommendationHoldInterrupt.mockResolvedValue(null);
+    subscribeToAgUiEventsWithId.mockImplementation(async function* () {
+      yield { id: "1-0", event: { type: "RESUME", threadId: "tpl-1", runId: "run-1" } };
+    });
+    const frames = await drain(await GET(streamReq(), ctx("run-1")));
+    expect(frames.map((f) => f.type)).toEqual(["RESUME"]);
+  });
+});
+
+describe("presence gates, validity permits", () => {
+  beforeEach(() => {
+    isPlatformAdmin.mockReturnValue(false);
+    requireAuthSession.mockResolvedValue({
+      user: { id: "user-1" },
+      session: { activeOrganizationId: "org-1" },
+    });
+    readAgentRunById.mockResolvedValue({ ...HELD_RUN, status: "pending_approval" });
+    declaresLifecycleInteraction.mockImplementation(declaresReal);
+    deriveRecommendationHoldInterrupt.mockResolvedValue(null);
+  });
+  afterEach(() => vi.clearAllMocks());
+
+  it("DROPS a declared lifecycle frame whose ref does not decode (rotated secret / forgery)", async () => {
+    // The frame says "lifecycle interaction" but nothing can be made of it.
+    // Forwarding it would deliver it to clients as an ordinary review gate.
+    readRecommendationHoldFromEvent.mockReturnValue(null);
+    subscribeToAgUiEventsWithId.mockImplementation(async function* () {
+      yield { id: "1-0", event: holdFrame("park-1") };
+      yield { id: "2-0", event: holdResumeFrame("park-1") };
+    });
+
+    expect(await drain(await GET(streamReq(), ctx("run-1")))).toHaveLength(0);
   });
 });

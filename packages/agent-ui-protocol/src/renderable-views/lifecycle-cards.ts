@@ -413,6 +413,36 @@ export type LifecycleInterruptInteraction = z.infer<
  * forward version, a wrong kind all answer `null`, and the caller then treats
  * the event as exactly what it was before this field existed.
  */
+/**
+ * Does this event DECLARE a lifecycle interaction, whatever it is?
+ *
+ * The weaker question, and the one every "is this an ordinary review-task
+ * gate?" consumer must ask. PRESENCE GATES, VALIDATION ONLY PERMITS: an event
+ * that declares an interaction is never treated as a review task, even when the
+ * declaration is malformed, forward-versioned or forged — otherwise a payload
+ * this build cannot parse would fail OPEN into the approval path and draw an
+ * approval floor for something that has none. Rendering the interaction still
+ * requires `readLifecycleInterruptInteraction` to succeed; an unparseable one
+ * draws nothing at all.
+ */
+export function declaresLifecycleInteraction(event: unknown): boolean {
+  try {
+    if (typeof event !== "object" || event === null || Array.isArray(event)) {
+      return false;
+    }
+    const interaction = (event as { interaction?: unknown }).interaction;
+    return (
+      typeof interaction === "object" &&
+      interaction !== null &&
+      !Array.isArray(interaction)
+    );
+  } catch {
+    // A throwing getter is a hostile shape; treat it as a declaration so it
+    // cannot slip into the review-task path.
+    return true;
+  }
+}
+
 export function readLifecycleInterruptInteraction(
   event: unknown,
 ): LifecycleInterruptInteraction | null {
