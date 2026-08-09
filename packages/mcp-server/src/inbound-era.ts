@@ -29,10 +29,13 @@ import {
  * `@modelcontextprotocol/server@2.0.0`) — WITHOUT `enableJsonResponse` — so every
  * 2025-era response comes back as `text/event-stream` instead of
  * `application/json`. That is a wire-format change for every caller we have
- * today, including the in-repo Anthropic function-tools probe at
- * `src/app/configuration/mcp/llm-access/test/route.ts`, which POSTs `tools/list`
- * and calls `.json()` on the result. The option exposes no way to re-enable JSON
- * framing on that leg (`responseMode` governs the MODERN leg only).
+ * today. (The in-repo Anthropic function-tools probe at
+ * `src/app/configuration/mcp/llm-access/test/route.ts` — which POSTed
+ * `tools/list` and called `.json()` on the result — was the worked example
+ * until cinatra#2579 replaced that handler with a tool-free key-validation
+ * probe; the external callers it stood for are unchanged.) The option exposes
+ * no way to re-enable JSON framing on that leg (`responseMode` governs the
+ * MODERN leg only).
  *
  * Row A's ACCEPTED SET is therefore delivered by the upstream-documented
  * user-land composition — `isLegacyRequest()` in front of a `legacy: 'reject'`

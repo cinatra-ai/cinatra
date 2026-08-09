@@ -29,6 +29,14 @@ export const LLM_PRICING: Record<string, ModelPricing> = {
   // Gemini — https://ai.google.dev/gemini-api/docs/pricing
   "gemini-2.5-flash": { inputPerMillion: 0.075, outputPerMillion: 0.30 },
   "gemini-2.5-pro":   { inputPerMillion: 1.25, outputPerMillion: 10.00 },
+  // NON-INFERENCE provider calls the platform makes and COUNTS, but that bill
+  // nothing. Today that is the LLM-access key-validation probe's catalog read
+  // (cinatra#2579), which emits a zero-token usage event so validation is
+  // visible in /analytics/llm. Priced EXPLICITLY at zero: a missing entry
+  // yields cost_usd = NULL, and NULL is this module's "unknown model" signal —
+  // the cost summary surfaces it as "event(s) have unknown cost (missing model
+  // pricing)". A call we know is free must not read as a pricing GAP.
+  "models.list":      { inputPerMillion: 0, outputPerMillion: 0 },
 };
 
 export const APOLLO_PRICING = {
