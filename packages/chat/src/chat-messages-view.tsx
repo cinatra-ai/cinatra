@@ -21,7 +21,7 @@
 
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import Link from "next/link";
-import { RotateCcw, PauseCircle, PlayCircle, Copy, Pencil } from "lucide-react";
+import { PauseCircle, PlayCircle, Copy, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 // cinatra#2020 S5 (PR-4) — destructive-tool confirmation cards, mounted at the
@@ -48,6 +48,7 @@ import { buildChartView } from "@cinatra-ai/agent-ui-protocol/renderable-views/c
 import { FriendlyErrorBody } from "./chat-error-display"; // friendly error card (#534)
 import { InlineAgentRunCard } from "./inline-agent-run-card";
 import { UndoActionChip } from "./chat-undo-action-chip";
+import { ResponseActionBar } from "./response-action-bar";
 import {
   trimIncompleteEmbeds,
   getLiveProgressStatus,
@@ -1175,6 +1176,14 @@ export function ChatMessagesView({
                         {isStreaming(message.id) && shouldShowLiveProgressStatus(message) && (
                           <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />
                         )}
+                        <ResponseActionBar
+                          message={message}
+                          messages={messages}
+                          hasActiveStream={hasActiveStream}
+                          isSlackMode={isSlackMode}
+                          isStreaming={isStreaming}
+                          onEditAndResend={onEditAndResend}
+                        />
                       </>
                     ) : isStreaming(message.id) && shouldShowLiveProgressStatus(message) ? (
                       <ThinkingIndicator label={getLiveProgressStatus(message)} />
@@ -1328,41 +1337,14 @@ export function ChatMessagesView({
                         </div>
                       );
                     })()}
-                    {!isStreaming(message.id) && (
-                      <div className="mt-1 flex gap-0.5">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => void navigator.clipboard.writeText(message.content)}
-                          className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-surface-muted hover:text-muted-foreground"
-                          title="Copy response"
-                        >
-                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5">
-                            <rect x="5.5" y="5.5" width="7" height="7" rx="1" />
-                            <path d="M3.5 10.5V4a1 1 0 0 1 1-1h6.5" />
-                          </svg>
-                        </Button>
-                        {(() => {
-                          const idx = messages.findIndex((m) => m.id === message.id);
-                          const prevUser = idx > 0 ? messages.slice(0, idx).findLast((m) => m.role === "user") : undefined;
-                          if (!prevUser || isSlackMode) return null;
-                          return (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => onEditAndResend(prevUser.id, prevUser.content)}
-                              disabled={hasActiveStream}
-                              className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-surface-muted hover:text-muted-foreground disabled:opacity-50"
-                              title="Try again"
-                            >
-                              <RotateCcw className="h-3.5 w-3.5" />
-                            </Button>
-                          );
-                        })()}
-                      </div>
-                    )}
+                    <ResponseActionBar
+                      message={message}
+                      messages={messages}
+                      hasActiveStream={hasActiveStream}
+                      isSlackMode={isSlackMode}
+                      isStreaming={isStreaming}
+                      onEditAndResend={onEditAndResend}
+                    />
                   </>
                 ) : isStreaming(message.id) && shouldShowLiveProgressStatus(message) ? (
                   <ThinkingIndicator label={getLiveProgressStatus(message)} />
