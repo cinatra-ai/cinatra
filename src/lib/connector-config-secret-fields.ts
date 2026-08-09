@@ -408,14 +408,18 @@ export function unsealSecretFields(connectorId: string, value: unknown): UnsealR
 //  1. SECRET AT REST — `openai_connection.apiKey` was persisted as PLAINTEXT.
 //
 //  2. BODY-LOGGING DEFAULT — the platform hard-coded `loggingEnabled: true`
-//     whenever the stored operator preference was UNSET.
-//     `@cinatra-ai/openai-connector` resolves body logging as
-//     `explicitPreference ?? developmentMode` (its `logging-policy.ts`: "full LLM
-//     request/response bodies must NOT be written to disk by default in
-//     production"), so the platform's `?? true` DESTROYED the unset signal and
-//     forced prompt/completion bodies onto local disk in production. The platform
-//     default now mirrors that connector policy exactly, and the unset preference
-//     is PRESERVED at rest instead of being frozen by unrelated saves.
+//     whenever the stored operator preference was UNSET, which forced
+//     prompt/completion bodies onto local disk by default on every
+//     production instance. The unset preference is PRESERVED at rest instead
+//     of being frozen by unrelated saves.
+//
+//     UPDATE (owner ruling, "dev-off"): an unset preference now resolves OFF
+//     unconditionally — in development as well as production.
+//     `@cinatra-ai/openai-connector`'s own
+//     `resolveLoggingEnabled` (`logging-policy.ts`) carries the identical
+//     rule; this is that policy's platform-side mirror. Development no
+//     longer gets a convenience default-on; an operator must opt in
+//     explicitly even on a dev box.
 //
 // MIGRATION — no migration file, and none is needed: the same metadata KV column
 // stores the JSON either way. A legacy PLAINTEXT row still READS (read-both) and
@@ -473,20 +477,17 @@ export type StoredOpenAIConnectionRow = {
  *
  * This is the platform-side mirror of `@cinatra-ai/openai-connector`'s
  * `resolveLoggingEnabled`: an explicit stored operator preference always wins;
- * when UNSET the default follows the runtime mode — ON in development (local
- * debugging), OFF in production. Before cinatra#2581 the platform substituted a
- * hard `true` here, which is what put prompt/completion bodies on disk by
- * default on every production instance.
+ * when UNSET the default is OFF, regardless of runtime mode (cinatra#2581,
+ * "dev-off" ruling — an unset preference used to default ON in development;
+ * the owner ruled that convenience default out). Before cinatra#2581 the
+ * platform substituted a hard `true` here, which is what put prompt/completion
+ * bodies on disk by default on every production instance.
  *
  * @param explicitPreference the STORED `loggingEnabled` value (`undefined` when
  *   the operator has never chosen).
- * @param developmentMode whether this instance runs in app-development mode.
  */
-export function resolveOpenAIBodyLoggingDefault(
-  explicitPreference: boolean | undefined,
-  developmentMode: boolean,
-): boolean {
-  return explicitPreference ?? developmentMode;
+export function resolveOpenAIBodyLoggingDefault(explicitPreference: boolean | undefined): boolean {
+  return explicitPreference ?? false;
 }
 
 // -----------------------------------------------------------------------------

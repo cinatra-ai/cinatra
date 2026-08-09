@@ -8,9 +8,10 @@
 // AT REST (cinatra#2581): the `apiKey` is SEALED before it is persisted and
 // unsealed on read — see `@/lib/connector-config-secret-fields` for the codec, the
 // AAD binding, the fail-closed posture and the migration shape. The same module
-// owns the body-logging default, which now mirrors the openai-connector policy
-// (explicit operator preference, else development-mode) instead of the hard
-// `true` that put prompt/completion bodies on local disk in production.
+// owns the body-logging default, which mirrors the openai-connector policy
+// (explicit operator preference, else OFF — "dev-off" ruling, cinatra#2581)
+// instead of the hard `true` that put prompt/completion bodies on local disk
+// in production.
 
 import { revalidatePath } from "next/cache";
 import { DEFAULT_OPENAI_MODEL_ID } from "@cinatra-ai/agents/llm-provider-policy";
@@ -59,9 +60,10 @@ function defaultConnection(): OpenAIConnection {
     // preference the operator never expressed, and the hard `true` destroyed the
     // "never chosen" signal the openai-connector's own policy depends on, which
     // is what put prompt/completion bodies on local disk in production. Reads
-    // materialize the runtime-mode default via `resolveOpenAIBodyLoggingDefault`;
-    // only an explicit operator choice (updateOpenAILoggingEnabled, or an
-    // explicit `input.loggingEnabled`) is ever persisted.
+    // materialize the OFF default via `resolveOpenAIBodyLoggingDefault`
+    // ("dev-off" ruling — unset is OFF regardless of runtime mode); only an
+    // explicit operator choice (updateOpenAILoggingEnabled, or an explicit
+    // `input.loggingEnabled`) is ever persisted.
   };
 }
 
@@ -110,7 +112,7 @@ export function readOpenAIConnection(): OpenAIConnection | null {
     projectId: raw.projectId,
     organizationId: raw.organizationId,
     serviceTier: raw.serviceTier ?? getDefaultOpenAIServiceTier(),
-    loggingEnabled: resolveOpenAIBodyLoggingDefault(raw.loggingEnabled, isAppDevelopmentMode()),
+    loggingEnabled: resolveOpenAIBodyLoggingDefault(raw.loggingEnabled),
     promptCachingEnabled: raw.promptCachingEnabled ?? isAppDevelopmentMode(),
     lastValidatedAt: raw.lastValidatedAt,
     availableModels: raw.availableModels ?? [],
@@ -132,10 +134,10 @@ export function readOpenAIConnection(): OpenAIConnection | null {
  * credential.
  *
  * `loggingEnabled` is returned UNMATERIALIZED (`undefined` when the operator has
- * never chosen). `readOpenAIConnection` materializes the runtime-mode default for
- * its callers; persisting that materialized boolean from an unrelated save would
- * freeze a preference nobody expressed — and carry a dev-mode `true` into a
- * production deployment.
+ * never chosen). `readOpenAIConnection` materializes the OFF default
+ * ("dev-off" ruling — unset is OFF regardless of runtime mode) for its
+ * callers; persisting that materialized boolean from an unrelated save would
+ * freeze a preference nobody expressed.
  */
 function nonSecretFieldsOf(
   raw: StoredOpenAIConnectionRow | null,

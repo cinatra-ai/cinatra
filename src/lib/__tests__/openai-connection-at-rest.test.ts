@@ -6,8 +6,9 @@
 //   1. At-rest seal/unseal of `openai_connection.apiKey` — the stored value is
 //      not plaintext, the round-trip works, a legacy plaintext row still reads
 //      and is upgraded by the write path, and every failure mode is fail-closed.
-//   2. The body-logging default policy — an UNSET preference resolves OFF in
-//      production (the defect) and only an EXPLICIT operator choice overrides.
+//   2. The body-logging default policy — an UNSET preference resolves OFF
+//      everywhere (dev and prod — the "dev-off" ruling) and only an EXPLICIT
+//      operator choice overrides.
 //
 // SECRETS: every value here is an obviously-fake placeholder, and the assertions
 // are on SHAPE (sealed vs not, round-trip identity) — no real key material.
@@ -310,25 +311,27 @@ describe("fail-closed posture", () => {
 
 describe("OpenAI request/response body-logging default", () => {
   it("DEFAULTS OFF in production when the operator has never chosen", () => {
-    // This is the defect: the platform substituted a hard `true` here, so every
-    // production instance wrote prompts and completions to a local log file.
-    expect(resolveOpenAIBodyLoggingDefault(undefined, false)).toBe(false);
+    // This is the original defect: the platform substituted a hard `true`
+    // here, so every production instance wrote prompts and completions to a
+    // local log file.
+    expect(resolveOpenAIBodyLoggingDefault(undefined)).toBe(false);
   });
 
-  it("defaults ON in development only", () => {
-    expect(resolveOpenAIBodyLoggingDefault(undefined, true)).toBe(true);
+  it("DEFAULTS OFF in development too (\"dev-off\" ruling)", () => {
+    // An unset preference used to resolve ON in development for local-
+    // debugging convenience. The owner ruled that convenience default out —
+    // an operator must opt in explicitly even on a dev box.
+    expect(resolveOpenAIBodyLoggingDefault(undefined)).toBe(false);
   });
 
-  it("an EXPLICIT operator preference always wins over the mode default", () => {
-    expect(resolveOpenAIBodyLoggingDefault(true, false)).toBe(true);
-    expect(resolveOpenAIBodyLoggingDefault(false, true)).toBe(false);
+  it("an EXPLICIT operator preference always wins over the default", () => {
+    expect(resolveOpenAIBodyLoggingDefault(true)).toBe(true);
+    expect(resolveOpenAIBodyLoggingDefault(false)).toBe(false);
   });
 
-  it("mirrors the openai-connector policy exactly (explicit ?? developmentMode)", () => {
+  it("mirrors the openai-connector policy exactly (explicit ?? false)", () => {
     for (const explicit of [undefined, true, false] as const) {
-      for (const dev of [true, false]) {
-        expect(resolveOpenAIBodyLoggingDefault(explicit, dev)).toBe(explicit ?? dev);
-      }
+      expect(resolveOpenAIBodyLoggingDefault(explicit)).toBe(explicit ?? false);
     }
   });
 });
