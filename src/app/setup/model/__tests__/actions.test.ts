@@ -85,16 +85,28 @@ const readAnthropicMcpMode = vi.fn(() => "function-tools");
 // ACTION's own obligation: that nothing reaches durable state — or the LOGS —
 // unsanitized.
 const sanitizeReadinessMessage = vi.fn((text: string) => `[sanitized]${text.trim().slice(0, 400)}`);
+// The workspace upload opt-in: the SAME authority the step's Anthropic section
+// uses to decide whether to render the consent control, so the fold's "is the
+// consent required?" question has exactly one answer on both sides.
+const isAnthropicUploadOptInStanding = vi.fn(() => false);
 vi.mock("@/lib/setup-readiness-saga", () => ({
   runSetupReadinessSaga: vi.fn(),
   sanitizeReadinessMessage: (text: string) => sanitizeReadinessMessage(text),
   writeAnthropicMcpMode: (mode: string) => writeAnthropicMcpMode(mode),
   clearSetupReadinessReceipt: () => clearSetupReadinessReceipt(),
   readAnthropicMcpMode: () => readAnthropicMcpMode(),
+  isAnthropicUploadOptInStanding: () => isAnthropicUploadOptInStanding(),
 }));
 
+// The real ports object carries the injected `setDefaultProvider` — the ATOMIC
+// SETUP SINK the saga awaits. Kept addressable here so a "successful saga" in
+// these tests actually drives the sink, which is what consumes the claim.
+const capturedPorts: { setDefaultProvider?: (p: string) => Promise<void> } = {};
 vi.mock("@/lib/setup-readiness-ports", () => ({
-  createSetupReadinessPorts: vi.fn(() => ({})),
+  createSetupReadinessPorts: vi.fn((options?: { setDefaultProvider?: (p: string) => Promise<void> }) => {
+    capturedPorts.setDefaultProvider = options?.setDefaultProvider;
+    return {} as Record<string, unknown>;
+  }),
 }));
 
 // S3 (cinatra#2388): the provider-commit machine, stubbed at its seam. The
@@ -120,11 +132,15 @@ vi.mock("@/lib/setup-provider-commit", () => ({
   compensateOwnedSetupCommitment: (arg: unknown) => compensateOwnedSetupCommitment(arg),
 }));
 
+// The LIVE credential read. Controllable because the fold consults it to tell
+// "the operator left the key blank because one is already stored" from "the
+// operator left the key blank and there is nothing to verify".
+const liveFingerprint = vi.fn<() => Promise<Record<string, unknown>>>(async () => ({
+  status: "readable",
+  fingerprint: "cfv1:test",
+}));
 vi.mock("@/lib/llm-credential-fingerprint", () => ({
-  readLiveCredentialFingerprint: async () => ({
-    status: "readable",
-    fingerprint: "cfv1:test",
-  }),
+  readLiveCredentialFingerprint: () => liveFingerprint(),
 }));
 
 vi.mock("@/lib/auth-session", () => ({
@@ -141,11 +157,9 @@ vi.mock("@cinatra-ai/sdk-extensions/llm-provider-contract", () => ({
 }));
 
 import {
-  saveSetupAnthropicConnectionAction,
-  saveSetupOpenAIConnectionAction,
   enableAnthropicNativeSkillDeliveryAction,
   selectSetupProviderAction,
-  completeAiSetupAction,
+  continueSetupModelStepAction,
 } from "@/app/setup/model/actions";
 import { runSetupReadinessSaga } from "@/lib/setup-readiness-saga";
 import {
@@ -164,8 +178,10 @@ async function redirectOf(run: () => Promise<unknown>): Promise<string> {
   throw new Error("the action returned without redirecting");
 }
 
-function keyForm(apiKey: string): FormData {
+/** A submission of the step's ONE form: the hidden provider + the key field. */
+function keyForm(apiKey: string, provider = "anthropic"): FormData {
   const form = new FormData();
+  form.set("provider", provider);
   form.set("apiKey", apiKey);
   return form;
 }
@@ -176,6 +192,17 @@ function lastFailureRecord() {
     (call) => call[0] === SETUP_READINESS_FAILURE_CONFIG_KEY,
   );
   return writes.length ? writes[writes.length - 1][1] : undefined;
+}
+
+/**
+ * Every value the run wrote under the failure key. The fold CLEARS the previous
+ * run's record before it does anything else, so "no durable failure was
+ * recorded" is "every write was the clearing null" — not "nothing was written".
+ */
+function failureRecordWrites() {
+  return writeConnectorConfigToDatabase.mock.calls
+    .filter((call) => call[0] === SETUP_READINESS_FAILURE_CONFIG_KEY)
+    .map((call) => call[1]);
 }
 
 /** Put a standing `native-skills-probe` failure in the store. */
@@ -194,11 +221,39 @@ beforeEach(() => {
   vi.clearAllMocks();
   storedConfig.clear();
   commitMachineState.snapshot = { raw: null, state: { kind: "absent" } };
-  releaseSetupProviderClaim.mockReturnValue(true);
   refreshCommittedCredentialFingerprint.mockReturnValue(true);
   isNangoConfigured.mockReturnValue(true);
   saveAPISettings.mockImplementation(async () => ({}));
   readAnthropicMcpMode.mockReturnValue("function-tools");
+  isAnthropicUploadOptInStanding.mockReturnValue(false);
+  // The fence now runs on EVERY absent-state submission (it covers the
+  // credential write), so it needs a default here rather than per-test — and
+  // an explicit reset, because `clearAllMocks` clears calls but keeps a
+  // `mockReturnValue` an earlier test installed.
+  beginSetupProviderClaim.mockReset();
+  // Modelled as the real primitive behaves: a granted claim LANDS in the store,
+  // so `readSetupProviderCommitState()` reports it. The fold re-asks that store
+  // whether it still owns the fence before every side effect that reaches
+  // outside the request, and a mock that never landed the claim would make
+  // every one of those checks fail for the wrong reason.
+  beginSetupProviderClaim.mockImplementation(() => {
+    commitMachineState.snapshot = {
+      raw: '{"state":"claimed","nonce":"nonce-fold"}',
+      state: { kind: "claim-pending", claim: { nonce: "nonce-fold", actorId: "user_admin" } },
+    };
+    return { ok: true, claim: { nonce: "nonce-fold", priorDefault: "openai" } };
+  });
+  releaseSetupProviderClaim.mockReset();
+  releaseSetupProviderClaim.mockImplementation(() => {
+    commitMachineState.snapshot = { raw: null, state: { kind: "absent" } };
+    return true;
+  });
+  liveFingerprint.mockResolvedValue({ status: "readable", fingerprint: "cfv1:test" });
+  saveSetupProviderConnection.mockResolvedValue({
+    ok: true,
+    code: "saved",
+    sanitizedMessage: null,
+  });
   errorLogArgs = [];
   vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
     errorLogArgs.push(args);
@@ -206,9 +261,14 @@ beforeEach(() => {
 });
 
 // ---------------------------------------------------------------------------
-// S5 (cinatra#2390) — the TYPED setup save actions: `{ok, code,
-// sanitizedMessage}` results, NEVER a redirect, NEVER error text in a URL or
-// in durable state.
+// cinatra#2502 item E — THE SINGLE CONTINUE.
+//
+// One form, one button: save → consent → commit. These arms pin that folding
+// the three mechanisms together did not soften any of them. The SAVE and
+// CONSENT legs keep S5's typed contract (`{ok, code, sanitizedMessage}`, never
+// a redirect, never error text in a URL or in durable state); the COMMIT leg
+// keeps S3's redirect discipline (codes-only flash, `stay=1` on refusal, no
+// `stay=1` on success).
 // ---------------------------------------------------------------------------
 
 function consentedKeyForm(apiKey: string): FormData {
@@ -217,51 +277,102 @@ function consentedKeyForm(apiKey: string): FormData {
   return form;
 }
 
-describe("S5 — saveSetupAnthropicConnectionAction: typed, consent-aware", () => {
-  it("REQUIRES the literal consent input — no checkbox, no save, typed refusal", async () => {
-    const result = await saveSetupAnthropicConnectionAction(null, keyForm("sk-ant-live"));
+/** A Continue that reaches the commit leg — the saga is stubbed to succeed.
+ *  (The fence's default success lives in `beforeEach`; it is taken before the
+ *  credential write now, so every absent-state run needs it.) */
+function sagaSucceeds() {
+  commitSetupProviderClaim.mockResolvedValue({
+    ok: true,
+    commitment: { provider: "openai" },
+    raw: '{"state":"committed"}',
+  } as never);
+  vi.mocked(runSetupReadinessSaga).mockImplementation((async (input: {
+    provider: string;
+  }) => {
+    // The real saga awaits the commit port before it reports success; driving
+    // it here is what lets these arms observe the sink CONSUMING the claim
+    // (after which releasing the nonce would be wrong).
+    await capturedPorts.setDefaultProvider?.(input.provider);
+    return { ok: true, receipt: {} };
+  }) as never);
+}
+
+describe("item E — the consent transaction inside the single Continue", () => {
+  it("REQUIRES the literal consent input — no checkbox, nothing written anywhere, typed refusal", async () => {
+    const result = await continueSetupModelStepAction(null, keyForm("sk-ant-live"));
     expect(result).toMatchObject({ ok: false, code: "consent-required" });
     expect(saveSetupProviderConnection).not.toHaveBeenCalled();
     expect(grantSetupConsentWithWorkspaceOptInInDatabase).not.toHaveBeenCalled();
+    // CONSENT-DECLINED is one honest state: the commit machine is never entered.
+    expect(beginSetupProviderClaim).not.toHaveBeenCalled();
+    expect(vi.mocked(runSetupReadinessSaga)).not.toHaveBeenCalled();
   });
 
-  it("a blank key is a typed refusal before anything is touched", async () => {
-    const result = await saveSetupAnthropicConnectionAction(null, consentedKeyForm("   "));
-    expect(result).toMatchObject({ ok: false, code: "key-missing" });
-    expect(saveSetupProviderConnection).not.toHaveBeenCalled();
+  it("does NOT demand the consent again once the workspace opt-in already stands", async () => {
+    isAnthropicUploadOptInStanding.mockReturnValue(true);
+    sagaSucceeds();
+
+    // No consent field at all — the step does not render one in this state.
+    const url = await redirectOf(() => continueSetupModelStepAction(null, keyForm("sk-ant-live")));
+
+    expect(url).toBe("/setup/model");
+    expect(saveSetupProviderConnection).toHaveBeenCalledWith("anthropic", {
+      apiKey: "sk-ant-live",
+    });
+    // Nothing to re-grant: the transaction is not re-run for a standing opt-in.
+    expect(grantSetupConsentWithWorkspaceOptInInDatabase).not.toHaveBeenCalled();
   });
 
-  it("SUCCESS: saves through the typed writer, then lands the opt-in + bulk grant in ONE transactional call attributed to the acting admin", async () => {
-    const result = await saveSetupAnthropicConnectionAction(null, consentedKeyForm("sk-ant-live"));
+  it("SUCCESS: saves through the typed writer, lands the opt-in + bulk grant in ONE transactional call attributed to the acting admin, THEN commits", async () => {
+    sagaSucceeds();
+
+    const url = await redirectOf(() =>
+      continueSetupModelStepAction(null, consentedKeyForm("sk-ant-live")),
+    );
 
     expect(saveSetupProviderConnection).toHaveBeenCalledWith("anthropic", {
       apiKey: "sk-ant-live",
     });
     // Actor attribution: the admin session's user id, never null-by-default.
     expect(grantSetupConsentWithWorkspaceOptInInDatabase).toHaveBeenCalledWith("user_admin");
-    // The consent lands AFTER the key save succeeded, never before.
-    expect(
+    // ORDER IS THE CONTRACT: the FENCE first (so the credential write is
+    // covered by it), then the key, then the consent, then the saga.
+    expect(beginSetupProviderClaim.mock.invocationCallOrder[0]).toBeLessThan(
       saveSetupProviderConnection.mock.invocationCallOrder[0],
-    ).toBeLessThan(grantSetupConsentWithWorkspaceOptInInDatabase.mock.invocationCallOrder[0]);
-    expect(result).toMatchObject({ ok: true, code: "saved" });
-    // A stale failure record is cleared — parity with the retired action.
+    );
+    expect(saveSetupProviderConnection.mock.invocationCallOrder[0]).toBeLessThan(
+      grantSetupConsentWithWorkspaceOptInInDatabase.mock.invocationCallOrder[0],
+    );
+    expect(grantSetupConsentWithWorkspaceOptInInDatabase.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(runSetupReadinessSaga).mock.invocationCallOrder[0],
+    );
+    // The fence is CONSUMED by the commit, never released behind it.
+    expect(releaseSetupProviderClaim).not.toHaveBeenCalled();
+    // S4: a successful Continue advances — no `stay=1`.
+    expect(url).toBe("/setup/model");
     expect(lastFailureRecord()).toBeNull();
   });
 
-  it("a FAILED key save returns the writer's typed failure and NEVER touches consent or durable state", async () => {
+  it("a FAILED key save returns the writer's typed failure, NEVER touches consent, RELEASES the fence, and never runs the saga", async () => {
+    sagaSucceeds();
     saveSetupProviderConnection.mockResolvedValueOnce({
       ok: false,
       code: "save-failed",
       sanitizedMessage: "[sanitized]Anthropic rejected the key (401).",
     });
 
-    const result = await saveSetupAnthropicConnectionAction(null, consentedKeyForm("sk-ant-bad"));
+    const result = await continueSetupModelStepAction(null, consentedKeyForm("sk-ant-bad"));
 
     expect(result).toMatchObject({ ok: false, code: "save-failed" });
     expect(grantSetupConsentWithWorkspaceOptInInDatabase).not.toHaveBeenCalled();
+    expect(vi.mocked(runSetupReadinessSaga)).not.toHaveBeenCalled();
+    // The fence was taken to cover the write and GIVEN BACK on the refusal —
+    // a held claim would leave the step read-only for the claim's whole TTL.
+    expect(releaseSetupProviderClaim).toHaveBeenCalledWith({ nonce: "nonce-fold" });
     // NOTHING durable: the sanitized message exists only in the typed result
-    // (the toast) — the pre-S5 durable failure record is retired for saves.
-    expect(lastFailureRecord()).toBeUndefined();
+    // (the toast + the inline field error). The only failure-key write this run
+    // makes is clearing the PREVIOUS run's record.
+    expect(failureRecordWrites()).toEqual([null]);
   });
 
   it("an UNCONFIGURED connection service keeps its fix-forward naming the Secrets step (decided from the LIVE nango status)", async () => {
@@ -272,19 +383,26 @@ describe("S5 — saveSetupAnthropicConnectionAction: typed, consent-aware", () =
       sanitizedMessage: "[sanitized]connection service unavailable",
     });
 
-    const result = await saveSetupAnthropicConnectionAction(null, consentedKeyForm("sk-ant-live"));
+    const result = await continueSetupModelStepAction(null, consentedKeyForm("sk-ant-live"));
     expect(result.ok).toBe(false);
     expect(result.sanitizedMessage).toContain("Secrets");
   });
 
-  it("a FAILED consent transaction is a typed failure — the opt-in is all-or-nothing, and the sanitized copy blocks nothing else", async () => {
+  it("a FAILED consent transaction is a typed failure that BLOCKS the commit — saved-but-unconfirmed, never half-advanced", async () => {
+    sagaSucceeds();
     grantSetupConsentWithWorkspaceOptInInDatabase.mockImplementationOnce(() => {
       throw new Error("deadlock detected around authorization: sk-ant-SECRETVALUE01234567890");
     });
 
-    const result = await saveSetupAnthropicConnectionAction(null, consentedKeyForm("sk-ant-live"));
+    const result = await continueSetupModelStepAction(null, consentedKeyForm("sk-ant-live"));
 
     expect(result).toMatchObject({ ok: false, code: "consent-write-failed" });
+    // The key IS stored — that is what makes the state "saved but unconfirmed"…
+    expect(saveSetupProviderConnection).toHaveBeenCalledTimes(1);
+    // …and the provider is emphatically NOT committed: the saga never ran and
+    // the fence went back.
+    expect(vi.mocked(runSetupReadinessSaga)).not.toHaveBeenCalled();
+    expect(releaseSetupProviderClaim).toHaveBeenCalledWith({ nonce: "nonce-fold" });
     // The thrown message went through the sanitizer before joining the copy.
     expect(result.sanitizedMessage).toContain("[sanitized]");
     // The server log too: sanitized strings only, never the raw Error.
@@ -293,48 +411,285 @@ describe("S5 — saveSetupAnthropicConnectionAction: typed, consent-aware", () =
       expect(arg).not.toBeInstanceOf(Error);
       expect(typeof arg).toBe("string");
     }
-    // No success-path cleanup ran — the durable failure key was not touched.
-    expect(lastFailureRecord()).toBeUndefined();
+    // …and the explanation is DURABLE: the typed result is rendered once, but
+    // the operator must still find out why setup stopped after a reload.
+    expect(failureRecordWrites()).toEqual([
+      null,
+      expect.objectContaining({
+        step: "bulk-consent",
+        fixForward: expect.stringContaining("was saved"),
+      }),
+    ]);
   });
 
-  it("NEVER redirects — the typed result is the only channel (no error text can reach a URL)", async () => {
-    for (const form of [
-      keyForm("sk-ant-live"), // consent missing
-      consentedKeyForm("   "), // key missing
-      consentedKeyForm("sk-ant-live"), // success
-    ]) {
-      // A redirect would THROW (RedirectSignal); a clean return proves none.
-      await expect(saveSetupAnthropicConnectionAction(null, form)).resolves.toBeTruthy();
-    }
+  it("NEVER redirects on a save/consent-leg outcome — the typed result is the only channel there", async () => {
+    // A redirect would THROW (RedirectSignal); a clean return proves none.
+    // Consent missing — refused before the writer is reached.
+    await expect(
+      continueSetupModelStepAction(null, keyForm("sk-ant-live")),
+    ).resolves.toMatchObject({ ok: false, code: "consent-required" });
+
+    // Save rejected — the writer answered, the typed failure comes back.
+    saveSetupProviderConnection.mockResolvedValueOnce({
+      ok: false,
+      code: "save-rejected",
+      sanitizedMessage: "The connector did not accept the connection settings.",
+    });
+    await expect(
+      continueSetupModelStepAction(null, consentedKeyForm("sk-ant-live")),
+    ).resolves.toMatchObject({ ok: false, code: "save-rejected" });
   });
 });
 
-describe("S5 — saveSetupOpenAIConnectionAction: typed, no redirect", () => {
-  it("collects the connection fields into the writer's flat values map", async () => {
-    const form = new FormData();
-    form.set("apiKey", "sk-live");
+describe("item E — the credential leg inside the single Continue", () => {
+  it("collects the OpenAI connection fields into the writer's flat values map", async () => {
+    sagaSucceeds();
+    const form = keyForm("sk-live", "openai");
     form.set("projectId", "proj_1");
     form.set("organizationId", "org_1");
 
-    const result = await saveSetupOpenAIConnectionAction(null, form);
+    await redirectOf(() => continueSetupModelStepAction(null, form));
 
     expect(saveSetupProviderConnection).toHaveBeenCalledWith("openai", {
       apiKey: "sk-live",
       projectId: "proj_1",
       organizationId: "org_1",
     });
-    expect(result).toMatchObject({ ok: true, code: "saved" });
   });
 
-  it("returns the writer's typed failure verbatim — no redirect, no durable write", async () => {
+  it("returns the writer's typed failure verbatim and stops — no commit, no durable record", async () => {
+    sagaSucceeds();
     saveSetupProviderConnection.mockResolvedValueOnce({
       ok: false,
       code: "save-rejected",
       sanitizedMessage: "The connector did not accept the connection settings.",
     });
-    const result = await saveSetupOpenAIConnectionAction(null, keyForm("sk-bad"));
+    const result = await continueSetupModelStepAction(null, keyForm("sk-bad", "openai"));
     expect(result).toMatchObject({ ok: false, code: "save-rejected" });
-    expect(writeConnectorConfigToDatabase).not.toHaveBeenCalled();
+    expect(vi.mocked(runSetupReadinessSaga)).not.toHaveBeenCalled();
+    expect(failureRecordWrites()).toEqual([null]);
+  });
+
+  it("a BLANK key with nothing stored is a typed refusal before anything is touched", async () => {
+    liveFingerprint.mockResolvedValue({ status: "absent" });
+    const result = await continueSetupModelStepAction(null, consentedKeyForm("   "));
+    expect(result).toMatchObject({ ok: false, code: "key-missing" });
+    expect(saveSetupProviderConnection).not.toHaveBeenCalled();
+    expect(beginSetupProviderClaim).not.toHaveBeenCalled();
+  });
+
+  it("an UNREADABLE stored credential is refused too — fail closed, and it says so honestly", async () => {
+    liveFingerprint.mockResolvedValue({ status: "unreadable", reason: "connector-unavailable" });
+    const result = await continueSetupModelStepAction(null, consentedKeyForm(""));
+    expect(result).toMatchObject({ ok: false, code: "key-missing" });
+    expect(result.sanitizedMessage).toMatch(/could not read a stored/i);
+    expect(saveSetupProviderConnection).not.toHaveBeenCalled();
+  });
+
+  it("a BLANK key over a READABLE stored credential SKIPS the save and commits — the reopened flow's 'you do not need to re-enter it'", async () => {
+    // The #2504 copy tells the operator exactly this, so a Continue that
+    // refused an empty field would contradict the step's own instructions.
+    isAnthropicUploadOptInStanding.mockReturnValue(true);
+    sagaSucceeds();
+
+    const url = await redirectOf(() => continueSetupModelStepAction(null, keyForm("")));
+
+    expect(saveSetupProviderConnection).not.toHaveBeenCalled();
+    expect(beginSetupProviderClaim).toHaveBeenCalledTimes(1);
+    expect(url).toBe("/setup/model");
+  });
+
+  it("a DEGRADED save still commits, and carries the notice on the success redirect", async () => {
+    isAnthropicUploadOptInStanding.mockReturnValue(true);
+    saveSetupProviderConnection.mockResolvedValueOnce({
+      ok: true,
+      code: "saved-degraded",
+      sanitizedMessage: "the connection-service copy did not complete",
+    });
+    sagaSucceeds();
+
+    const url = await redirectOf(() => continueSetupModelStepAction(null, keyForm("sk-ant-live")));
+
+    // The key works, so setup completes — but the operator still hears about
+    // the incomplete copy, through the codes-only NOTICE channel.
+    expect(url).toBe("/setup/model?notice=setup-connection-service-not-synced");
+    expect(url).not.toContain("stay=1");
+  });
+});
+
+describe("item E — the claim fence guards the credential, not just the commit", () => {
+  it("a PENDING claim refuses BEFORE the credential is touched", async () => {
+    commitMachineState.snapshot = {
+      raw: "{}",
+      state: { kind: "claim-pending", claim: { actorId: "someone" } },
+    };
+
+    const url = await redirectOf(() =>
+      continueSetupModelStepAction(null, consentedKeyForm("sk-ant-live")),
+    );
+
+    expect(url).toBe("/setup/model?stay=1&error=setup-provider-claim-pending");
+    // THE POINT: another admin's run is verifying a specific credential right
+    // now. Writing a new one underneath it would invalidate the fingerprint
+    // that run started with — so the save must not happen at all.
+    expect(saveSetupProviderConnection).not.toHaveBeenCalled();
+    expect(grantSetupConsentWithWorkspaceOptInInDatabase).not.toHaveBeenCalled();
+    // And it does not disturb the in-flight run's failure record either.
+    expect(failureRecordWrites()).toEqual([]);
+  });
+
+  it("the LOCK refuses a different provider BEFORE the credential is touched", async () => {
+    commitMachineState.snapshot = {
+      raw: "{}",
+      state: { kind: "committed", commitment: { provider: "anthropic" } },
+    };
+
+    const url = await redirectOf(() =>
+      continueSetupModelStepAction(null, keyForm("sk-live", "openai")),
+    );
+
+    expect(url).toBe("/setup/model?stay=1&error=setup-provider-locked");
+    expect(saveSetupProviderConnection).not.toHaveBeenCalled();
+    expect(failureRecordWrites()).toEqual([]);
+  });
+
+  it("a claim landing AFTER the pre-flight read still stops the credential write — the fence, not the read, is what decides", async () => {
+    // THE TOCTOU. The pre-flight read is advisory: it can say "absent" and be
+    // stale by the time this run acts. `beginSetupProviderClaim` is the real
+    // fence (insert-if-absent), and the fold takes it BEFORE the save — so the
+    // loser of the race never reaches the writer at all, and cannot change the
+    // credential the winner is verifying.
+    commitMachineState.snapshot = { raw: null, state: { kind: "absent" } };
+    beginSetupProviderClaim.mockReturnValue({ ok: false, refusal: "claim-pending" });
+
+    const url = await redirectOf(() =>
+      continueSetupModelStepAction(null, consentedKeyForm("sk-ant-live")),
+    );
+
+    expect(url).toBe("/setup/model?stay=1&error=setup-provider-claim-pending");
+    expect(saveSetupProviderConnection).not.toHaveBeenCalled();
+    expect(grantSetupConsentWithWorkspaceOptInInDatabase).not.toHaveBeenCalled();
+    expect(vi.mocked(runSetupReadinessSaga)).not.toHaveBeenCalled();
+    // It also lost before it could touch the other run's failure record.
+    expect(failureRecordWrites()).toEqual([]);
+  });
+
+  it("a commitment landing after the pre-flight read reports the LOCK, still without writing a credential", async () => {
+    commitMachineState.snapshot = { raw: null, state: { kind: "absent" } };
+    beginSetupProviderClaim.mockReturnValue({ ok: false, refusal: "committed" });
+
+    const url = await redirectOf(() =>
+      continueSetupModelStepAction(null, consentedKeyForm("sk-ant-live")),
+    );
+
+    expect(url).toBe("/setup/model?stay=1&error=setup-provider-locked");
+    expect(saveSetupProviderConnection).not.toHaveBeenCalled();
+  });
+
+  it("gives the fence back even when the failure-record clear THROWS — the step is never wedged", async () => {
+    // A claim held past an unexpected throw wedges the step read-only for the
+    // claim's whole TTL, which on a first-run instance is the whole product.
+    writeConnectorConfigToDatabase.mockImplementationOnce(() => {
+      throw new Error("config store unavailable");
+    });
+
+    await expect(
+      continueSetupModelStepAction(null, consentedKeyForm("sk-ant-live")),
+    ).rejects.toThrow("config store unavailable");
+
+    expect(beginSetupProviderClaim).toHaveBeenCalledTimes(1);
+    expect(releaseSetupProviderClaim).toHaveBeenCalledWith({ nonce: "nonce-fold" });
+    // …and it threw before it could touch the credential.
+    expect(saveSetupProviderConnection).not.toHaveBeenCalled();
+  });
+
+  it("STOPS if the lease was lost while the (unbounded) credential save ran", async () => {
+    // Holding the nonce is not owning the lease: the claim can expire under a
+    // slow save, or be replaced. Running the consent transaction and the saga's
+    // uploads after that would be acting unfenced — the commit CAS would refuse
+    // later, but the side effects would already have happened.
+    sagaSucceeds();
+    saveSetupProviderConnection.mockImplementationOnce(async () => {
+      commitMachineState.snapshot = { raw: null, state: { kind: "absent" } }; // expired
+      return { ok: true, code: "saved", sanitizedMessage: null };
+    });
+
+    const url = await redirectOf(() =>
+      continueSetupModelStepAction(null, consentedKeyForm("sk-ant-live")),
+    );
+
+    expect(url).toBe("/setup/model?stay=1&error=setup-provider-claim-pending");
+    expect(grantSetupConsentWithWorkspaceOptInInDatabase).not.toHaveBeenCalled();
+    expect(vi.mocked(runSetupReadinessSaga)).not.toHaveBeenCalled();
+  });
+
+  it("writes its durable failure BEFORE giving the fence back — a later run's cleared record is never overwritten", async () => {
+    vi.mocked(runSetupReadinessSaga).mockResolvedValue({
+      ok: false,
+      failure: { step: "credential-validation", message: "no models", compensation: "setup-incomplete" },
+    } as never);
+
+    await redirectOf(() => continueSetupModelStepAction(null, consentedKeyForm("sk-ant-live")));
+
+    const recordWrite = writeConnectorConfigToDatabase.mock.calls.findIndex(
+      (call) => call[0] === SETUP_READINESS_FAILURE_CONFIG_KEY && call[1] !== null,
+    );
+    expect(recordWrite).toBeGreaterThanOrEqual(0);
+    expect(
+      writeConnectorConfigToDatabase.mock.invocationCallOrder[recordWrite],
+    ).toBeLessThan(releaseSetupProviderClaim.mock.invocationCallOrder[0]);
+  });
+
+  it("an unknown provider is a typed refusal — nothing written, nothing redirected", async () => {
+    const form = new FormData();
+    form.set("provider", "gemini");
+    form.set("apiKey", "whatever");
+    const result = await continueSetupModelStepAction(null, form);
+    expect(result).toMatchObject({ ok: false, code: "provider-invalid" });
+    expect(saveSetupProviderConnection).not.toHaveBeenCalled();
+    expect(failureRecordWrites()).toEqual([]);
+  });
+
+  it("clears the PREVIOUS run's failure record before doing anything else — one run, one standing state", async () => {
+    saveSetupProviderConnection.mockResolvedValueOnce({
+      ok: false,
+      code: "save-rejected",
+      sanitizedMessage: "The connector did not accept the connection settings.",
+    });
+
+    await continueSetupModelStepAction(null, consentedKeyForm("sk-ant-bad"));
+
+    // The clear happens before the writer runs, so a step re-render can never
+    // show a stale saga failure next to this run's inline error.
+    const clearOrder = writeConnectorConfigToDatabase.mock.invocationCallOrder[0];
+    expect(clearOrder).toBeLessThan(saveSetupProviderConnection.mock.invocationCallOrder[0]);
+    expect(failureRecordWrites()).toEqual([null]);
+  });
+
+  it("tells the island to refresh ONLY when a now-false alert is still on screen", async () => {
+    const rejected = {
+      ok: false,
+      code: "save-rejected",
+      sanitizedMessage: "The connector did not accept the connection settings.",
+    };
+
+    // Nothing stale behind this run: no refresh advice, so the key the operator
+    // typed survives the failure render.
+    saveSetupProviderConnection.mockResolvedValueOnce(rejected);
+    const first = await continueSetupModelStepAction(null, consentedKeyForm("sk-ant-bad"));
+    expect(first).not.toHaveProperty("clearedStandingFailure", true);
+
+    // A durable record from an EARLIER run WAS standing: this run cleared it,
+    // so the alert it produced is now false and the route must re-render.
+    storedConfig.set(SETUP_READINESS_FAILURE_CONFIG_KEY, {
+      step: "credential-validation",
+      message: "an earlier run failed here",
+      fixForward: null,
+      at: "2026-08-09T10:00:00.000Z",
+    });
+    saveSetupProviderConnection.mockResolvedValueOnce(rejected);
+    const second = await continueSetupModelStepAction(null, consentedKeyForm("sk-ant-bad"));
+    expect(second).toMatchObject({ ok: false, clearedStandingFailure: true });
   });
 });
 
@@ -437,9 +792,17 @@ describe("F2 — enableAnthropicNativeSkillDeliveryAction: the fix-forward is pe
 // S3 (cinatra#2388) — the actions honor the provider-commit machine.
 // ---------------------------------------------------------------------------
 
+/**
+ * A Continue submitted with NO key typed — the ordinary shape once a credential
+ * is already stored (the step then renders the Administration pointer and no
+ * key field at all). The consent input rides along because the Anthropic
+ * section renders it whenever it renders anything, and these arms are about the
+ * COMMIT leg, not about the consent gate.
+ */
 function providerForm(provider: string): FormData {
   const form = new FormData();
   form.set("provider", provider);
+  form.set(ANTHROPIC_SETUP_CONSENT_FIELD, "on");
   return form;
 }
 
@@ -471,13 +834,13 @@ describe("S3 — selectSetupProviderAction refuses switches under the machine", 
   });
 });
 
-describe("S3 — completeAiSetupAction under the machine", () => {
+describe("S3 — the commit leg of the single Continue, under the machine", () => {
   it("refuses Continue while a claim is pending (no saga run, no claim taken)", async () => {
     commitMachineState.snapshot = {
       raw: "{}",
       state: { kind: "claim-pending", claim: { actorId: "someone" } },
     };
-    const url = await redirectOf(() => completeAiSetupAction(providerForm("openai")));
+    const url = await redirectOf(() => continueSetupModelStepAction(null, providerForm("openai")));
     expect(url).toBe("/setup/model?stay=1&error=setup-provider-claim-pending");
     expect(beginSetupProviderClaim).not.toHaveBeenCalled();
     expect(vi.mocked(runSetupReadinessSaga)).not.toHaveBeenCalled();
@@ -488,16 +851,12 @@ describe("S3 — completeAiSetupAction under the machine", () => {
       raw: "{}",
       state: { kind: "committed", commitment: { provider: "anthropic" } },
     };
-    const url = await redirectOf(() => completeAiSetupAction(providerForm("openai")));
+    const url = await redirectOf(() => continueSetupModelStepAction(null, providerForm("openai")));
     expect(url).toBe("/setup/model?stay=1&error=setup-provider-locked");
     expect(vi.mocked(runSetupReadinessSaga)).not.toHaveBeenCalled();
   });
 
   it("absent state: claims, and RELEASES the claim when the saga reports failure", async () => {
-    beginSetupProviderClaim.mockReturnValue({
-      ok: true,
-      claim: { nonce: "nonce-1", priorDefault: "openai" },
-    });
     vi.mocked(runSetupReadinessSaga).mockResolvedValue({
       ok: false,
       failure: {
@@ -506,24 +865,20 @@ describe("S3 — completeAiSetupAction under the machine", () => {
         compensation: "setup-incomplete",
       },
     } as never);
-    const url = await redirectOf(() => completeAiSetupAction(providerForm("openai")));
+    const url = await redirectOf(() => continueSetupModelStepAction(null, providerForm("openai")));
     expect(url).toBe("/setup/model?stay=1&error=setup-readiness-failed");
     expect(beginSetupProviderClaim).toHaveBeenCalledTimes(1);
-    expect(releaseSetupProviderClaim).toHaveBeenCalledWith({ nonce: "nonce-1" });
+    expect(releaseSetupProviderClaim).toHaveBeenCalledWith({ nonce: "nonce-fold" });
   });
 
   it("S5: committing ANTHROPIC migrates the connector's MCP mode to native FIRST (receipt cleared before the flip)", async () => {
     readAnthropicMcpMode.mockReturnValue("function-tools");
-    beginSetupProviderClaim.mockReturnValue({
-      ok: true,
-      claim: { nonce: "nonce-a", priorDefault: "openai" },
-    });
     vi.mocked(runSetupReadinessSaga).mockResolvedValue({
       ok: true,
       receipt: {},
     } as never);
 
-    const url = await redirectOf(() => completeAiSetupAction(providerForm("anthropic")));
+    const url = await redirectOf(() => continueSetupModelStepAction(null, providerForm("anthropic")));
     // S4 (cinatra#2389): a SUCCESSFUL Continue-commit advances (no `stay=1`) —
     // the step's auto-forward carries the operator onward.
     expect(url).toBe("/setup/model");
@@ -534,53 +889,55 @@ describe("S3 — completeAiSetupAction under the machine", () => {
     expect(clearSetupReadinessReceipt.mock.invocationCallOrder[0]).toBeLessThan(
       writeAnthropicMcpMode.mock.invocationCallOrder[0],
     );
-    // And BEFORE the machine is entered, so the readiness fingerprint this run
-    // earns is computed under the mode the commit leaves behind.
+    // …and BEFORE the readiness run, so the fingerprint this run earns is
+    // computed under the mode the commit leaves behind. (cinatra#2502 item E
+    // moved the CLAIM ahead of the credential write, so the mode migration is
+    // no longer the first thing that happens — but the ordering that carries
+    // the meaning, mode-before-fingerprint-before-saga, is unchanged.)
     expect(writeAnthropicMcpMode.mock.invocationCallOrder[0]).toBeLessThan(
-      beginSetupProviderClaim.mock.invocationCallOrder[0],
+      liveFingerprint.mock.invocationCallOrder[liveFingerprint.mock.calls.length - 1],
+    );
+    expect(writeAnthropicMcpMode.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(runSetupReadinessSaga).mock.invocationCallOrder[0],
     );
   });
 
   it("S5: an ALREADY-NATIVE mode is left untouched (idempotent commit, no receipt churn)", async () => {
     readAnthropicMcpMode.mockReturnValue("native");
-    beginSetupProviderClaim.mockReturnValue({
-      ok: true,
-      claim: { nonce: "nonce-b", priorDefault: "openai" },
-    });
     vi.mocked(runSetupReadinessSaga).mockResolvedValue({
       ok: true,
       receipt: {},
     } as never);
 
-    await redirectOf(() => completeAiSetupAction(providerForm("anthropic")));
+    await redirectOf(() => continueSetupModelStepAction(null, providerForm("anthropic")));
     expect(writeAnthropicMcpMode).not.toHaveBeenCalled();
     expect(clearSetupReadinessReceipt).not.toHaveBeenCalled();
   });
 
   it("S5: an OPENAI commit never touches the Anthropic MCP mode", async () => {
-    beginSetupProviderClaim.mockReturnValue({
-      ok: true,
-      claim: { nonce: "nonce-c", priorDefault: "openai" },
-    });
     vi.mocked(runSetupReadinessSaga).mockResolvedValue({
       ok: true,
       receipt: {},
     } as never);
 
-    await redirectOf(() => completeAiSetupAction(providerForm("openai")));
+    await redirectOf(() => continueSetupModelStepAction(null, providerForm("openai")));
     expect(writeAnthropicMcpMode).not.toHaveBeenCalled();
   });
 
-  it("S5: a FAILED mode migration is reported through the codes-only flash and stops before the machine", async () => {
+  it("S5: a FAILED mode migration stops before the saga, releases the fence, and leaves a STANDING explanation", async () => {
+    sagaSucceeds();
     readAnthropicMcpMode.mockReturnValue("function-tools");
     writeAnthropicMcpMode.mockImplementationOnce(() => {
       throw new Error("config store unavailable");
     });
 
-    const url = await redirectOf(() => completeAiSetupAction(providerForm("anthropic")));
+    const url = await redirectOf(() => continueSetupModelStepAction(null, providerForm("anthropic")));
     expect(url).toBe("/setup/model?stay=1&error=setup-mcp-mode-switch-failed");
-    expect(beginSetupProviderClaim).not.toHaveBeenCalled();
     expect(vi.mocked(runSetupReadinessSaga)).not.toHaveBeenCalled();
+    // cinatra#2502 item E: the fence goes back, and the operator is left with
+    // a durable reason on the step rather than a bare flash code.
+    expect(releaseSetupProviderClaim).toHaveBeenCalledWith({ nonce: "nonce-fold" });
+    expect(lastFailureRecord()).toMatchObject({ step: "commit" });
   });
 
   it("committed-same re-verify: NO claim is taken and success refreshes the stored fingerprint", async () => {
@@ -592,7 +949,7 @@ describe("S3 — completeAiSetupAction under the machine", () => {
       ok: true,
       receipt: {},
     } as never);
-    const url = await redirectOf(() => completeAiSetupAction(providerForm("openai")));
+    const url = await redirectOf(() => continueSetupModelStepAction(null, providerForm("openai")));
     // S4 (cinatra#2389): success advances — no `stay=1` on the redirect.
     expect(url).toBe("/setup/model");
     expect(beginSetupProviderClaim).not.toHaveBeenCalled();

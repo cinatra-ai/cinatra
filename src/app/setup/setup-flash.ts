@@ -98,8 +98,26 @@ export type SetupErrorCode = keyof typeof SETUP_ERROR_MESSAGES;
  * true — would otherwise be the only thing the operator sees. Same codes-only
  * protocol: a code maps to a STATIC message here, never to URL-derived text.
  */
+/**
+ * cinatra#2502 item E — the PROVIDER-AGNOSTIC degraded-save notice.
+ *
+ * Folding the key save into the single Continue means a successful-but-degraded
+ * save (the key validated and stored; the connection-service copy did not
+ * complete) is followed immediately by a redirect, so the warning toast the
+ * retired Save button used to raise has nowhere to live. It rides this code on
+ * the SUCCESS redirect instead — the same codes-only protocol, one static
+ * message, and no assumption about which provider was being set up (the
+ * OpenAI-specific code above belongs to the connector's own redirecting admin
+ * path and names OpenAI in its copy).
+ */
+export const SETUP_CONNECTION_DEGRADED_NOTICE_CODE = "setup-connection-service-not-synced";
+
 export const SETUP_NOTICE_MESSAGES = {
   [OPENAI_PARTIAL_SAVE_NOTICE_CODE]: OPENAI_PARTIAL_SAVE_NOTICE_MESSAGE,
+  [SETUP_CONNECTION_DEGRADED_NOTICE_CODE]:
+    "The key was validated and saved, and setup continued — but it was not copied to the " +
+    "connection service. Finish the Secrets step (or fix the connection service), then save " +
+    "the key again in Administration.",
 } as const;
 
 // One <SearchParamToast> config entry per code: the `error` param renders an

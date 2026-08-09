@@ -26,6 +26,14 @@
  * Control flags (tests/e2e/setup/support/instance-state.ts flips these):
  *   phase            — free-text label stamped onto ledger entries
  *   openaiKeyValid   — false => OpenAI answers 401 (key-save failure arm)
+ *   openaiModelsEmpty— true  => GET /v1/models answers 200 with an EMPTY list.
+ *                              A real account state (a key with no model
+ *                              entitlements), and the one arm where the
+ *                              credential is genuinely storable while the
+ *                              readiness saga still refuses to commit — which
+ *                              is how cinatra#2502 item E's
+ *                              "saved-but-unconfirmed" state is reached without
+ *                              a live provider key.
  *   anthropicKeyValid— false => Anthropic answers 401
  *   probeAccept      — false => /v1/messages rejects container.skills (400)
  */
@@ -124,6 +132,16 @@ globalThis.fetch = async function stubbedFetch(input, init) {
       return json({ error: { message: "Incorrect API key provided." } }, 401);
     }
     if (url.pathname === "/v1/models" && method === "GET") {
+      if (ctl.openaiModelsEmpty === true) {
+        record({
+          phase,
+          provider: "openai",
+          method,
+          path: url.pathname,
+          outcome: "200 model-list EMPTY",
+        });
+        return json({ object: "list", data: [] });
+      }
       record({ phase, provider: "openai", method, path: url.pathname, outcome: "200 model-list" });
       return json({
         object: "list",

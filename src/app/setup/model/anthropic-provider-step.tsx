@@ -2,10 +2,13 @@
 // (cinatra#2093 S6, reshaped by cinatra#2390 S5 and cinatra#2389 S4).
 //
 // Deliberately minimal: the key with its how-to-get-a-key helper link, the
-// EXPLICIT skills-upload consent, and nothing else. The card posts through
-// the TYPED save action (`useActionState` island + toasts) — failures surface
-// as toasts carrying the server-sanitized message, never as error text in a
-// URL and never as durable failure records.
+// EXPLICIT skills-upload consent, and nothing else.
+//
+// cinatra#2502 item E: these are FIELDS, not a form of their own — the step's
+// single Continue (<SetupModelStepForm>) submits them, per design spec
+// `specs/app-setup.html` §I. The submission still travels S5's TYPED channel:
+// failures come back as typed results carrying the server-sanitized message,
+// never as error text in a URL and never as durable failure records.
 //
 // A stored connection that reads READY hides the key form behind a one-line
 // Administration pointer (key rotation/replacement happens there) — unless
@@ -28,15 +31,13 @@
 import Link from "next/link";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
+
+import { SetupProviderKeyInput } from "@/app/setup/model/provider-key-input";
 
 import { getLlmProviderSurface } from "@/lib/llm-provider-surfaces";
 import { isAnthropicUploadOptInStanding } from "@/lib/setup-readiness-saga";
-import { saveSetupAnthropicConnectionAction } from "@/app/setup/model/actions";
-import { SetupProviderConnectionForm } from "@/app/setup/model/provider-connection-form";
 import { ANTHROPIC_SETUP_CONSENT_FIELD } from "@/app/setup/model/readiness-state";
 
 /** The Anthropic key-console page the helper links to (pinned by cinatra#2389). */
@@ -88,8 +89,14 @@ export async function SetupAnthropicProviderStep({ keyReopened }: { keyReopened?
   // grantable through the consented key save (S5's one-transaction contract),
   // so hiding the form in that state would leave Continue permanently unable
   // to complete with no control anywhere on the step.
-  const showKeyForm =
-    !isConnected || keyReopened === true || !isAnthropicUploadOptInStanding();
+  const optInStanding = isAnthropicUploadOptInStanding();
+  const showKeyForm = !isConnected || keyReopened === true || !optInStanding;
+  // Native `required` is the CLIENT backstop, and it must agree with the server
+  // rule the fold applies: the consent is demanded exactly while the workspace
+  // opt-in does not already stand. Marking it required over a standing opt-in
+  // would block a Continue the server would have accepted — the reopened-key
+  // flow re-enters a key on an already-consented workspace.
+  const consentRequired = !optInStanding;
 
   return (
     // CARDLESS (cinatra#2502 item A, design spec `specs/app-setup.html` §I) —
@@ -113,53 +120,41 @@ export async function SetupAnthropicProviderStep({ keyReopened }: { keyReopened?
             . Cinatra stores it encrypted and never shows it again.
           </p>
 
-          <SetupProviderConnectionForm
-            action={saveSetupAnthropicConnectionAction}
-            successMessage="Anthropic connection saved and skills-upload consent recorded."
-            className="mt-4 grid gap-4"
-            testId="setup-anthropic-connection-form"
-          >
-            <Field>
-              <FieldLabel>API key</FieldLabel>
-              <Input
-                name="apiKey"
-                type="password"
-                autoComplete="off"
-                data-testid="setup-anthropic-api-key"
-                placeholder={hasApiKey ? "••••••••••••••••" : "sk-ant-..."}
-              />
-            </Field>
+          <Field className="mt-4">
+            <FieldLabel htmlFor="setup-anthropic-api-key">API key</FieldLabel>
+            <SetupProviderKeyInput
+              id="setup-anthropic-api-key"
+              testId="setup-anthropic-api-key"
+              placeholder={hasApiKey ? "••••••••••••••••" : "sk-ant-..."}
+            />
+          </Field>
 
-            {/* The EXPLICIT consent — the upload gate's advisory content, at the
-                act. Native HTML `required` is the client backstop; the server
-                action independently refuses a save without the literal consent
-                input. */}
-            <label className="flex items-start gap-3 rounded-card border border-line p-4 text-sm">
-              <Checkbox
-                name={ANTHROPIC_SETUP_CONSENT_FIELD}
-                required
-                data-testid="setup-anthropic-consent"
-                className="mt-0.5"
-              />
-              <span className="flex flex-col gap-1">
-                <span className="font-medium text-foreground">
-                  Upload my installed skills to my Anthropic workspace
-                </span>
-                <span className="text-muted-foreground">
-                  Anthropic Custom Skills are not ZDR-eligible: setup uploads each installed
-                  skill&apos;s full SKILL.md and its bundled files off this instance to your Anthropic
-                  workspace, where Anthropic retains them. The consent covers your installed
-                  non-personal skill packages, survives skill versions, and stands until you revoke it
-                  in Administration. Personal skills are excluded — they keep their own per-skill
-                  consent.
-                </span>
+          {/* The EXPLICIT consent — the upload gate's advisory content, at the
+              act. Native HTML `required` is the client backstop; the step's
+              Continue action independently refuses to write anything without
+              the literal consent input while the workspace opt-in does not
+              already stand. */}
+          <label className="mt-4 flex items-start gap-3 rounded-card border border-line p-4 text-sm">
+            <Checkbox
+              name={ANTHROPIC_SETUP_CONSENT_FIELD}
+              required={consentRequired}
+              data-testid="setup-anthropic-consent"
+              className="mt-0.5"
+            />
+            <span className="flex flex-col gap-1">
+              <span className="font-medium text-foreground">
+                Upload my installed skills to my Anthropic workspace
               </span>
-            </label>
-
-            <div className="flex justify-end">
-              <Button type="submit">{hasApiKey ? "Change" : "Save"}</Button>
-            </div>
-          </SetupProviderConnectionForm>
+              <span className="text-muted-foreground">
+                Anthropic Custom Skills are not ZDR-eligible: setup uploads each installed
+                skill&apos;s full SKILL.md and its bundled files off this instance to your Anthropic
+                workspace, where Anthropic retains them. The consent covers your installed
+                non-personal skill packages, survives skill versions, and stands until you revoke it
+                in Administration. Personal skills are excluded — they keep their own per-skill
+                consent.
+              </span>
+            </span>
+          </label>
         </>
       ) : (
         // The stored connection is ready: no key field — rotation and

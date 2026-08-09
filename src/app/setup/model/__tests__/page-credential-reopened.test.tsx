@@ -22,6 +22,10 @@ vi.mock("next/navigation", () => ({
   redirect: (url: string) => {
     throw new Error(`NEXT_REDIRECT:${url}`);
   },
+  // cinatra#2502 item E — the step's one form is a client island that refreshes
+  // the route once a result arrives, so a static render of this page now pulls
+  // `useRouter` in.
+  useRouter: () => ({ refresh: () => {} }),
 }));
 vi.mock("@cinatra-ai/sdk-extensions/llm-provider-contract", () => ({
   buildKnownWizardEligibleProviders: () => ["openai", "anthropic"],
@@ -59,7 +63,7 @@ vi.mock("@/app/setup/model/readiness-state", () => ({
 }));
 vi.mock("@/app/setup/model/actions", () => ({
   selectSetupProviderAction: vi.fn(),
-  completeAiSetupAction: vi.fn(),
+  continueSetupModelStepAction: vi.fn(),
   enableAnthropicNativeSkillDeliveryAction: vi.fn(),
 }));
 vi.mock("@/app/setup/model/openai-provider-step", () => ({

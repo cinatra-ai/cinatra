@@ -108,12 +108,16 @@ test("the Anthropic card carries the key form, helper link, and EXPLICIT consent
   await captureStateShots(page, "07-anthropic-form-consent");
 });
 
-test("the consented save without a live key surfaces the TYPED failure channel", async () => {
+test("a consented Continue without a live key surfaces the TYPED failure channel and commits NOTHING", async () => {
   // The connector's writer has Nango verify the credential against the REAL
   // Anthropic API from inside Nango's container — beyond the boundary stub.
   // With no live key in this lane the save FAILS, and what this test records
   // is that the failure rides S5's typed channel: a sanitized toast, nothing
   // in the URL, no durable connection state.
+  //
+  // cinatra#2502 item E — the press under test is now CONTINUE, the step's
+  // one primary action. The save leg refusing has to leave the wizard exactly
+  // where it was: no commitment, no advance, one honest state on the field.
   await page.goto("/setup/model?stay=1");
   await waitForHydration(page, { selectors: ['[data-testid="setup-anthropic-connection-form"]'] });
   const form = page.getByTestId("setup-anthropic-connection-form");
@@ -138,6 +142,15 @@ test("the consented save without a live key surfaces the TYPED failure channel",
   expect(url.pathname).toBe("/setup/model");
   expect([...url.searchParams.entries()]).toEqual([["stay", "1"]]);
   expect(await readMetadataValue("connector_config:anthropic_connection")).toBeNull();
+  // The fold's refusal contract: the same sanitized string is ALSO on the
+  // field (spec §I, "reports failure inline on the field"), and the commit
+  // machine was never entered — nothing is committed and the step did not
+  // advance a millimetre.
+  await expect(page.getByTestId("setup-model-step-error")).toBeVisible();
+  expect(await page.getByTestId("setup-model-step-error").innerText()).not.toContain(
+    ANTHROPIC_TEST_KEY,
+  );
+  expect(await readCommitment()).toBeNull();
   await captureStateShots(page, "08-anthropic-key-save-failure-toast");
 });
 

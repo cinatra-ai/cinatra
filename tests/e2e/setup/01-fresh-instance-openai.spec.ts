@@ -4,10 +4,11 @@
  * One serial narrative over the REAL wizard on a zero-humans instance:
  * first visit lands on /setup/account via the two-hop, the first account is
  * created through the real form, the name step live-derives the namespace,
- * the LLM Provider step offers exactly the two logo'd cards, the OpenAI key
- * saves through the typed toast channel, Continue commits + locks through
- * S3's machine, and the first assistant turn succeeds immediately — with
- * ZERO Anthropic egress measured off the boundary-stub ledger.
+ * the LLM Provider step offers exactly the two logo'd cards, ONE Continue
+ * takes the OpenAI key from an empty field to a committed, locked provider
+ * (cinatra#2502 item E — the separate Save is retired), and the first
+ * assistant turn succeeds immediately — with ZERO Anthropic egress measured
+ * off the boundary-stub ledger.
  *
  * PINNED TO THE POST-#2483 SURFACE (the owner-acceptance polish round):
  *   • the wizard's route segments are /setup/account and /setup/model;
@@ -26,7 +27,7 @@
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import {
   resetFreshInstance,
-  saveProviderKeyUntilStored,
+  continueThroughModelStep,
   waitForHydration,
   seedMcpPublicBaseUrl,
   warmPublicMcpEndpoint,
@@ -191,7 +192,7 @@ test("the Key step's instructions sit directly on the page (no card wrapper)", a
   await captureStateShots(page, "03b-key-step-no-card");
 });
 
-test("the OpenAI key saves via the typed toast channel and Continue commits + locks", async () => {
+test("ONE Continue takes the OpenAI key from empty field to committed provider", async () => {
   await page.goto("/setup/model?stay=1");
   await page.getByTestId("setup-provider-openai").click();
   await page.waitForLoadState("networkidle");
@@ -201,25 +202,24 @@ test("the OpenAI key saves via the typed toast channel and Continue commits + lo
   await expect(form).toBeVisible();
   await waitForHydration(page, { selectors: ['[data-testid="setup-openai-connection-form"]'] });
   await expect(page.locator('a[href="https://platform.openai.com/api-keys"]')).toBeVisible();
+
+  // cinatra#2502 item E — the step advances on a SINGLE primary Continue
+  // (design spec `specs/app-setup.html` §I). The key field is inside that
+  // form, and there is no second button to press first.
+  await expect(form.locator('button[type="submit"]')).toHaveCount(1);
+  await expectRightAlignedContinue(page, form.locator('button[type="submit"]'));
+  expect(await page.locator("body").innerText()).not.toMatch(/^\s*(save|change)\s*$/im);
   await captureStateShots(page, "04-openai-key-form");
 
-  // S5's typed channel: the save lands via the typed action — the URL carries
-  // NOTHING, and the durable saved-connection alert renders above the cards.
-  // (The transient success toast is timing-dependent under a pre-hydration
-  // submit; the ERROR-path toast is asserted in 03-state-matrices.spec.ts.)
-  await saveProviderKeyUntilStored(
+  // ONE submission: the key saves through S5's typed channel, and the same
+  // press drives S3's claim→commit machine. The URL carries NOTHING either way.
+  await continueThroughModelStep(
     page,
     "setup-openai-connection-form",
     'input[name="apiKey"]',
     "sk-e2e-2392-openai-not-a-real-key",
   );
-  await expect(page.getByTestId("setup-connection-saved")).toBeVisible({ timeout: 30_000 });
   expect(page.url()).not.toMatch(/error|message|toast/i);
-  await captureStateShots(page, "05-openai-key-saved");
-
-  // CONTINUE drives S3's claim→commit machine.
-  await page.getByTestId("setup-ai-continue").click();
-  await page.waitForURL(/\/setup\/complete|\/setup\/model/, { timeout: 120_000 });
 
   // The commitment record is the provider lock.
   await expect
@@ -228,8 +228,12 @@ test("the OpenAI key saves via the typed toast channel and Continue commits + lo
   const commitment = await readCommitment();
   expect(commitment?.provenance).toBe("setup");
 
-  // The locked state: the other card renders de-emphasized + non-interactive.
+  // …and the credential the single press stored is what the step now reports.
   await page.goto("/setup/model?stay=1");
+  await expect(page.getByTestId("setup-connection-saved")).toBeVisible({ timeout: 30_000 });
+  await captureStateShots(page, "05-openai-key-saved");
+
+  // The locked state: the other card renders de-emphasized + non-interactive.
   const anthropicCard = page.getByTestId("setup-provider-anthropic");
   await expect(anthropicCard).toBeDisabled();
   await expect(anthropicCard).toContainText(/changeable later in Administration/i);

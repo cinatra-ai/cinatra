@@ -26,6 +26,10 @@
 //
 // Gemini is deliberately NOT offered here (`wizardEligible: false`): it is a
 // perfectly valid global default, but admin-configured after setup.
+//   5. cinatra#2502 item E — ONE PRIMARY ACTION. The separate Save/Change
+//      button is retired: the key field and the Anthropic consent live inside
+//      the Continue form, and one submit saves → consents → commits (design
+//      spec `specs/app-setup.html` §I).
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import Link from "next/link";
@@ -59,9 +63,11 @@ import {
 } from "@/app/setup/model/readiness-state";
 import {
   selectSetupProviderAction,
-  completeAiSetupAction,
+  continueSetupModelStepAction,
   enableAnthropicNativeSkillDeliveryAction,
 } from "@/app/setup/model/actions";
+import { SetupModelStepForm } from "@/app/setup/model/model-step-form";
+import { SETUP_NOTICE_MESSAGES } from "@/app/setup/setup-flash";
 import {
   SetupOpenAIProviderStep,
   isOpenAIConnectionReady,
@@ -179,12 +185,35 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
   // setup-flash.ts) — this page never reads notification text from the URL.
   const steps = await getSetupWizardSteps();
   const nextStep = getFirstIncompleteStep(steps);
+  // cinatra#2502 item E: a DEGRADED-but-successful save rides the codes-only
+  // notice channel on the commit's success redirect. This step immediately
+  // forwards, so the notice has to travel with the forward or the operator
+  // never sees it. Passed through ONLY when it is a code this wizard knows —
+  // an arbitrary `?notice=` from a crafted link is dropped here as well as
+  // ignored by the toast island, so nothing attacker-supplied is ever relayed.
+  const notice = pickSearchParam(resolvedSearchParams.notice);
+  const relayedNotice =
+    notice && Object.hasOwn(SETUP_NOTICE_MESSAGES, notice)
+      ? `?notice=${encodeURIComponent(notice)}`
+      : "";
   if (aiState.ready && !failure && !stay) {
     if (!nextStep || nextStep.id !== "ai") {
-      redirect(nextStep?.href ?? "/setup/complete");
+      redirect(`${nextStep?.href ?? "/setup/complete"}${relayedNotice}`);
     }
   }
   const continueHref = !nextStep || nextStep.id === "ai" ? "/setup/complete" : nextStep.href;
+
+  // The chosen provider's minimal connection section — the key field and, on
+  // Anthropic, the consent control (or the Administration pointer once the
+  // stored connection reads ready). Built once and placed by the branch below:
+  // inside the step's form while there is still something to submit, and
+  // beside the navigation link once there is not.
+  const providerSection =
+    selected === "openai" ? (
+      <SetupOpenAIProviderStep keyReopened={keyReopened} />
+    ) : selected === "anthropic" ? (
+      <SetupAnthropicProviderStep keyReopened={keyReopened} />
+    ) : null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -270,21 +299,21 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
         })}
       </div>
 
-      {/* The chosen provider's minimal connection section. */}
-      {selected === "openai" ? (
-        <SetupOpenAIProviderStep keyReopened={keyReopened} />
-      ) : selected === "anthropic" ? (
-        <SetupAnthropicProviderStep keyReopened={keyReopened} />
-      ) : null}
-
       {/* The REOPENED key flow: the lock stands, the credential no longer
-          matches — the key section above is forced open for re-entry.
+          matches — the key section below is forced open for re-entry.
           cinatra#2504: a commitment made before credential-fingerprint
           capture existed (`credentialFingerprintNeverCaptured`) reads the
           same "not fresh" as a genuine rotation/removal, but the
           rotation/removal copy is FALSE for it — nothing changed, the
           fingerprint simply was never recorded. Render the accurate copy for
-          that case; the rotation copy still renders for an actual mismatch. */}
+          that case; the rotation copy still renders for an actual mismatch.
+
+          cinatra#2502 item E — this alert and the standing-failure one below
+          sit ABOVE the step's form rather than between the key field and
+          Continue. Two reasons, both structural: the fix-forward inside the
+          failure alert is itself a form, and a form inside the step's form
+          would be invalid markup; and an explanation reads better before the
+          field it is about than after it. */}
       {keyReopened ? (
         <Alert variant="destructive" data-testid="setup-credential-reopened">
           <TriangleAlert className="size-4" aria-hidden />
@@ -305,7 +334,7 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
               <AlertDescription>
                 The {PROVIDER_COPY[committedProvider ?? ""]?.label ?? committedProvider} key
                 this instance was set up with was removed, rotated, or can no longer be read.
-                The provider choice stays committed — enter the key above and press Continue
+                The provider choice stays committed — enter the key below and press Continue
                 to re-verify.
               </AlertDescription>
             </>
@@ -343,27 +372,36 @@ export default async function SetupAiPage({ searchParams }: SetupAiPageProps) {
         </Alert>
       ) : null}
 
-      {/* CONTINUE. No Finish/verify card: on an uncommitted (or reopened)
-          step, Continue IS the commit — it drives S3's claim→commit machine
-          and, on success, the step auto-forwards. Once the step reads ready
-          it is a plain navigation. */}
+      {/* THE ONE PRIMARY ACTION (cinatra#2502 item E, spec §I). The chosen
+          provider's key field and — on Anthropic — its consent control live
+          INSIDE this form, and the single Continue submits them: one press
+          saves the credential through S5's typed channel, records the consent
+          in its own transaction, and drives S3's claim→commit machine. There
+          is no separate Save, and no Finish/verify card.
+
+          Once the step reads ready there is nothing left to submit, so
+          Continue degrades to a plain navigation link. */}
       {aiState.ready ? (
-        <div className="flex justify-end">
-          <Button asChild data-testid="setup-ai-continue">
-            <Link href={continueHref}>
-              Continue
-              <ArrowRight className="size-4" />
-            </Link>
-          </Button>
-        </div>
+        <>
+          {providerSection}
+          <div className="flex justify-end">
+            <Button asChild data-testid="setup-ai-continue">
+              <Link href={continueHref}>
+                Continue
+                <ArrowRight className="size-4" />
+              </Link>
+            </Button>
+          </div>
+        </>
       ) : selected ? (
-        <form action={completeAiSetupAction} className="flex justify-end">
+        <SetupModelStepForm
+          action={continueSetupModelStepAction}
+          className="grid gap-4"
+          testId={`setup-${selected}-connection-form`}
+        >
           <Input type="hidden" name="provider" value={selected} />
-          <Button type="submit" data-testid="setup-ai-continue">
-            Continue
-            <ArrowRight className="size-4" />
-          </Button>
-        </form>
+          {providerSection}
+        </SetupModelStepForm>
       ) : null}
     </div>
   );
