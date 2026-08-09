@@ -130,7 +130,23 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 # Cinatra is a large Next app (many workspace packages). Default Node heap
 # (~1.5 GB on a 2-core builder) OOMs during Turbopack compile.
-ENV NODE_OPTIONS="--max-old-space-size=4096"
+#
+# cinatra-cli#210 makes this ceiling a BUILD-ARG with the same 4096 default, so a
+# builder on a memory-constrained host can move it without editing this file.
+# `cinatra instance preview create` (and `install --mode preview`) pass it from
+# CINATRA_PREVIEW_BUILD_MEMORY_MB; a bare `docker build` that passes nothing
+# still gets exactly the value baked here, so this is not a behaviour change.
+#
+# Direction is not obvious and is the reason the knob exists: the V8 heap and
+# Turbopack's NATIVE allocator share the builder's memory, so a native
+# "cannot allocate memory" often wants this LOWER, while "JavaScript heap out of
+# memory" wants it higher.
+#
+# Placed exactly where the ENV was — AFTER the installs and the esbuild bundles —
+# so the ceiling still scopes only to `pnpm build` below and the earlier stages'
+# memory behaviour is untouched.
+ARG NODE_OPTIONS="--max-old-space-size=4096"
+ENV NODE_OPTIONS=${NODE_OPTIONS}
 
 # Next collects page data by importing route modules at build time. A few
 # cinatra modules throw at import if their env var is missing. Set inert
