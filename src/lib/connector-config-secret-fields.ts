@@ -413,9 +413,9 @@ export function unsealSecretFields(connectorId: string, value: unknown): UnsealR
 //     production instance. The unset preference is PRESERVED at rest instead
 //     of being frozen by unrelated saves.
 //
-//     UPDATE (owner ruling, "dev-off", eng#548 entry 306): an unset
-//     preference now resolves OFF unconditionally — in development as well
-//     as production. `@cinatra-ai/openai-connector`'s own
+//     UPDATE (owner ruling, "dev-off"): an unset preference now resolves OFF
+//     unconditionally — in development as well as production.
+//     `@cinatra-ai/openai-connector`'s own
 //     `resolveLoggingEnabled` (`logging-policy.ts`) carries the identical
 //     rule; this is that policy's platform-side mirror. Development no
 //     longer gets a convenience default-on; an operator must opt in
