@@ -14,7 +14,11 @@
  */
 import { describe, it, expect } from "vitest";
 
-import { formatUsd, describeUnit, describeModel } from "../src/store";
+import {
+  formatUsd,
+  describeUnit,
+  describeModel,
+} from "../src/components/cost-by-provider-table";
 
 describe("an unpriced row says so", () => {
   it("renders a NULL cost as unknown, not as zero dollars", () => {
