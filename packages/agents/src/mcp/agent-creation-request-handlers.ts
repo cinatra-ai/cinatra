@@ -564,16 +564,71 @@ async function approveAndPublishCreationRequest(input: {
   // package cannot import @cinatra-ai/extensions (it would create a package
   // cycle — extensions depends on agents), so the persistence is performed one
   // layer up; this envelope hands it the template id + the decision it must
-  // apply. Best-effort lookup: on a miss the caller surfaces a retryable error
-  // (the agent is published but stays at its restrictive default — fail-closed,
-  // never over-broad). `instant_grant_default` needs no scope write.
+  // apply. `instant_grant_default` needs no scope write.
+  //
+  // cinatra#2597 — KEY ON THE PUBLISHED NAME, NOT THE PROPOSED ONE.
+  // `agent_source_write_files` rewrites `package.json#name` UNCONDITIONALLY to
+  // `@<resolveInstanceVendorSegment()>/<packageSlug>` (handlers.ts), and
+  // `agent_source_publish` reads the canonical name back off that same
+  // package.json — so the agent_templates row publish creates is ALWAYS keyed by
+  // the INSTANCE-VENDOR name. Keying this lookup on the AUTHOR's proposed
+  // `cur.packageName` therefore missed for every proposal whose scope differs
+  // from the instance vendor (the DEFAULT case; a matching scope only "worked"
+  // because the rewrite was a no-op). `readAgentTemplateByPackageName` is an
+  // exact-match query (store.ts) with no alias resolution, so the key must be
+  // exactly right.
+  //
+  // The PUBLISHED name is the ONLY key looked up — there is deliberately NO
+  // fallback to the proposed name. `readAgentTemplateByPackageName` filters on
+  // `package_name` ALONE, with no org predicate, so a proposed-name fallback
+  // could resolve a row owned by a DIFFERENT organization and then apply this
+  // reviewer's access scope to somebody else's agent. The pre-publish collision
+  // check does not guard that: it calls `readAgentTemplates()` with no options,
+  // which pages at a default limit of 50 rows, so it cannot prove the proposed
+  // name is unused on any real instance. Writing the scope onto the WRONG agent
+  // is far worse than not writing it at all, so this fails closed — no published
+  // name, or no row under it, yields no id.
+  //
+  // On a miss the caller REFUSES honestly: the agent is published but stays at
+  // its restrictive default (fail-closed, never over-broad), and no retry is
+  // offered because no retry route exists once the row is `published`.
+  //
+  // The resolved row is additionally checked to belong to the APPROVING org.
+  // `package_name` is globally UNIQUE, so if another organization already owned
+  // that exact name the publish would have adopted its row (installAgentFromPackage
+  // upserts, and an `alreadyPublished` result can skip the sync entirely) and this
+  // lookup would hand back a FOREIGN template id — applying this reviewer's access
+  // scope to somebody else's agent. The collision gates above now reject that case
+  // before publishing; this is the defence-in-depth that makes a miss harmless.
+  const publishedPackageName =
+    (result.publishResult as { packageName?: string | null } | undefined)?.packageName ?? null;
   let agentTemplateId: string | null = null;
-  try {
-    const { readAgentTemplateByPackageName } = await import("../store");
-    const tmpl = await readAgentTemplateByPackageName(cur.packageName);
-    agentTemplateId = tmpl?.id ?? null;
-  } catch {
-    agentTemplateId = null;
+  if (publishedPackageName) {
+    try {
+      const { readAgentTemplateByPackageName } = await import("../store");
+      const tmpl = await readAgentTemplateByPackageName(publishedPackageName);
+      // Fail closed on a foreign or org-less row — never scope another org's agent.
+      agentTemplateId = tmpl?.id && tmpl.orgId === orgId ? tmpl.id : null;
+      if (tmpl?.id && tmpl.orgId !== orgId) {
+        console.warn(
+          `[agent_creation_request_approve] refusing to scope agent_template '${tmpl.id}' — ` +
+            `it belongs to org '${tmpl.orgId ?? "<none>"}', not the approving org '${orgId}'.`,
+        );
+      }
+    } catch {
+      agentTemplateId = null;
+    }
+  }
+  if (!agentTemplateId && accessDecision.mode === "scoped") {
+    // Loud, because this is the state in which a scoped approval publishes an
+    // agent WITHOUT applying the requested scope. Name both identities so the
+    // operator can see which one the row was expected under; only the published
+    // name is ever used as a key.
+    console.warn(
+      `[agent_creation_request_approve] agent_template unresolved after publish for request '${cur.id}' — ` +
+        `the requested access scope will NOT be applied. ` +
+        `Looked up published='${publishedPackageName ?? "<none>"}' (proposed was '${cur.packageName}').`,
+    );
   }
   return toEnvelope(published, {
     agentTemplateId,
@@ -759,18 +814,37 @@ async function materializeAndPublish(input: {
   const adminEnvelope = { ...adminActor, platformRole: "platform_admin" } as ActorEnvelope;
 
   // Slug collision check (on-disk + DB).
+  //
+  // cinatra#2597 — EXACT lookup, not a paginated scan. This used to call
+  // `readAgentTemplates()` with no options, which pages at a default limit of 50
+  // rows, so on any instance with more than 50 templates the gate silently
+  // stopped covering most of the table. A missed collision is not cosmetic: the
+  // publish then ADOPTS the existing row (installAgentFromPackage upserts by
+  // package name, and `package_name` is globally UNIQUE), and the approve path
+  // would go on to apply the reviewer's access scope to that row — potentially
+  // another organization's agent. `readAgentTemplateByPackageName` is an
+  // unbounded exact-match query, so the gate is now total.
+  // The read failure is FATAL, not swallowed. This gate used to be best-effort
+  // ("the downstream write will fail anyway"), but that is a fail-OPEN hole now
+  // that a collision means more than a wasted write: publish adopts the existing
+  // row via upsert and stamps the approving org onto it, which would also defeat
+  // the ownership guard on the resolution below. An unreadable gate must refuse.
+  // The request stays `approved`, so `retry_publish` remains the recovery route.
   try {
-    const { readAgentTemplates } = await import("../store");
-    const templates = await readAgentTemplates();
-    if (templates.items.some((t) => t.packageName === request.packageName)) {
+    const { readAgentTemplateByPackageName } = await import("../store");
+    if (await readAgentTemplateByPackageName(request.packageName)) {
       return {
         error:
           `package-name collision: an agent_template already uses packageName '${request.packageName}'. ` +
           `The proposal cannot be published; the author must choose a different name.`,
       };
     }
-  } catch {
-    // non-fatal; downstream write will fail if the slug already exists.
+  } catch (err) {
+    return {
+      error:
+        `package-name collision check failed, so the publish was not attempted: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    };
   }
 
   const oasJsonString = JSON.stringify(request.proposalSnapshot.oas);
@@ -800,10 +874,14 @@ async function materializeAndPublish(input: {
   // EVERY candidate name (input, snapshot's package.json#name, and the
   // normalized value when emitted) against existing agent_templates.
   // No version-bump path here — collisions hard-fail.
+  //
+  // cinatra#2597 — EXACT per-candidate lookups, for the same reason as the
+  // pre-write gate above: the previous paginated `readAgentTemplates()` scan
+  // covered only the first 50 rows. The CANONICAL (post-rewrite) name matters
+  // most here — it is the identity the publish actually claims and the identity
+  // the approve path later resolves the access scope against.
   try {
-    const { readAgentTemplates } = await import("../store");
-    const templates = await readAgentTemplates();
-    const existing = new Set(templates.items.map((t) => t.packageName).filter(Boolean));
+    const { readAgentTemplateByPackageName } = await import("../store");
     const snapshotName =
       (request.proposalSnapshot.packageJson as { name?: string } | undefined)?.name;
     const candidates = new Set<string>([
@@ -812,7 +890,7 @@ async function materializeAndPublish(input: {
       ...(writeFilesRes.nameNormalized?.to ? [writeFilesRes.nameNormalized.to] : []),
     ]);
     for (const candidate of candidates) {
-      if (existing.has(candidate)) {
+      if (await readAgentTemplateByPackageName(candidate)) {
         return {
           error:
             `package-name collision: '${candidate}' already exists as an agent_template. ` +
@@ -821,8 +899,14 @@ async function materializeAndPublish(input: {
         };
       }
     }
-  } catch {
-    // best-effort; the publish handler will surface any downstream error.
+  } catch (err) {
+    // FATAL for the same reason as the pre-write gate above: a gate that cannot
+    // read must not wave the publish through.
+    return {
+      error:
+        `package-name collision check failed, so the publish was not attempted: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    };
   }
 
   const compileRes = (await handlerMap["agent_source_compile"]({

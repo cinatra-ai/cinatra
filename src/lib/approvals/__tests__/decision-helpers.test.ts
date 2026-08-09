@@ -315,26 +315,62 @@ describe("decideAgentCreationRequest — delegates to the audited primitive", ()
     expect(extMock.setExtensionInstallAccess).not.toHaveBeenCalled();
   });
 
-  it("published but no resolvable template id → transient:template_unresolved (fail-closed, not ok)", async () => {
+  it("published but no resolvable template id → refused:template_unresolved (fail-closed, not ok)", async () => {
     // Missing agentTemplateId in the envelope — the agent published but we cannot
-    // key the access write; surface a retryable failure rather than a false ok.
+    // key the access write; surface an honest failure rather than a false ok.
     decideHandler.mockResolvedValue({ id: "abc", status: "approved" });
     const r = await decideAgentCreationRequest(
       { rowId: "abc", action: "approve", expectedVersion: "h", accessTarget: { level: "team", id: "t1" } },
       admin,
     );
-    expect(r).toMatchObject({ ok: false, kind: "transient", code: "template_unresolved" });
+    expect(r).toMatchObject({ ok: false, kind: "refused", code: "template_unresolved" });
     expect(extMock.setExtensionInstallAccess).not.toHaveBeenCalled();
   });
 
-  it("access write throws → transient:access_persist_failed (agent stays restricted, never over-broad)", async () => {
+  it("access write throws → refused:access_persist_failed (agent stays restricted, never over-broad)", async () => {
     decideHandler.mockResolvedValue({ structuredContent: { agentTemplateId: "tmpl-x" } });
     extMock.setExtensionInstallAccess.mockRejectedValueOnce(new Error("db down"));
     const r = await decideAgentCreationRequest(
       { rowId: "abc", action: "approve", expectedVersion: "h", accessTarget: { level: "project", id: "p1" } },
       admin,
     );
-    expect(r).toMatchObject({ ok: false, kind: "transient", code: "access_persist_failed" });
+    expect(r).toMatchObject({ ok: false, kind: "refused", code: "access_persist_failed" });
+  });
+
+  // cinatra#2597 — the honesty contract for BOTH post-publish failures. By the
+  // time either fires, the request row is at `published`, and the only retry
+  // route (`agent_creation_request_retry_publish`) hard-refuses anything that is
+  // not `approved`. So neither may be classed `transient` (retryable) and
+  // neither may offer a retry in its message: that pointed the admin at a button
+  // that provably cannot succeed. The recourse named must be the real one.
+  it.each([
+    [
+      "template_unresolved",
+      () => decideHandler.mockResolvedValue({ id: "abc", status: "approved" }),
+    ],
+    [
+      "access_persist_failed",
+      () => {
+        decideHandler.mockResolvedValue({ structuredContent: { agentTemplateId: "tmpl-x" } });
+        extMock.setExtensionInstallAccess.mockRejectedValueOnce(new Error("db down"));
+      },
+    ],
+  ])("%s is an honest refusal: never transient, never offers a retry", async (code, arrange) => {
+    arrange();
+    const r = (await decideAgentCreationRequest(
+      { rowId: "abc", action: "approve", expectedVersion: "h", accessTarget: { level: "team", id: "t1" } },
+      admin,
+    )) as { ok: false; kind: string; code: string; message: string };
+    expect(r.ok).toBe(false);
+    expect(r.code).toBe(code);
+    expect(r.kind).not.toBe("transient");
+    expect(r.kind).toBe("refused");
+    expect(r.message).not.toMatch(/retry/i);
+    // It must still say the agent published and the scope did NOT apply, and
+    // point at the recourse that actually exists.
+    expect(r.message).toMatch(/published/i);
+    expect(r.message).toMatch(/not applied/i);
+    expect(r.message).toMatch(/permissions/i);
   });
 });
 

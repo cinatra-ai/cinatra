@@ -220,18 +220,26 @@ export async function decideAgentCreationRequest(
   // @cinatra-ai/agents cannot import @cinatra-ai/extensions (a package cycle).
   // Ordering is publish-then-scope (the template row must exist first); until
   // this write lands the agent stays at its restrictive default — FAIL-CLOSED
-  // (never over-broad). A failure is surfaced as a retryable refusal so the
-  // admin re-applies the scope (retry, or the extension's Permissions surface);
-  // it never leaves the agent broadly accessible.
+  // (never over-broad).
+  //
+  // cinatra#2597 — BOTH post-publish failures are `refused`, not `transient`,
+  // and NEITHER offers a retry. By the time either fires the request row is
+  // already at `published`, and the ONLY retry route that exists —
+  // `agent_creation_request_retry_publish` — hard-refuses anything that is not
+  // `approved` ("request is in status 'published'; retry-publish is only valid
+  // for 'approved'"). Offering "Retry" was a false claim, not a wording nit: it
+  // pointed the admin at a button that provably cannot succeed. The real
+  // recourse is the agent's own Permissions page, so that is what the message
+  // says. The agent is published either way and stays restricted.
   if (action === "approve" && input.accessTarget) {
     const agentTemplateId = result?.structuredContent?.agentTemplateId ?? null;
     if (!agentTemplateId) {
       return {
         ok: false,
-        kind: "transient",
+        kind: "refused",
         code: "template_unresolved",
         message:
-          "The agent was published, but its record could not be resolved to apply the access scope. Retry, or set access on the extension's Permissions.",
+          "The agent was published, but its record could not be resolved, so the access scope was not applied. It stays at its restrictive default — set access on the agent's own Permissions page.",
       };
     }
     try {
@@ -250,10 +258,10 @@ export async function decideAgentCreationRequest(
     } catch {
       return {
         ok: false,
-        kind: "transient",
+        kind: "refused",
         code: "access_persist_failed",
         message:
-          "The agent was published, but applying the access scope failed. It stays restricted — retry, or set access on the extension's Permissions.",
+          "The agent was published, but applying the access scope failed, so the scope was not applied. It stays at its restrictive default — set access on the agent's own Permissions page.",
       };
     }
   }
