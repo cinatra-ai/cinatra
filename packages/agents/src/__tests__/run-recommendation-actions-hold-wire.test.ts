@@ -279,13 +279,36 @@ describe("the hold-instance CAS — a decision binds to the hold it was taken ag
     expect(writeRunRejectedRecommendations).not.toHaveBeenCalled();
   });
 
-  it("REFUSES a decision naming a hold that is no longer live at all", async () => {
+  it("ACCEPTS a retry of the SAME hold that is already released — idempotence, not staleness", async () => {
+    // A decision whose response was lost and is retried names a hold that is
+    // now released. That is still this run's hold, so it is not a stale
+    // decision; refusing it would turn an ambiguous transport failure into a
+    // dead end. The downstream path is idempotent on its own.
     readRecommendationParkForRun.mockReset();
     readRecommendationParkForRun.mockResolvedValue({
       id: "park-1",
       checkpoint: "recommendation",
       status: "released",
     });
+    readAgentRunById.mockResolvedValue({ ...RUN, status: "running" });
+
+    const res = await skipRunRecommendationAction({ runId: "run-1", holdRef: "ref-park-1" });
+
+    expect(res).toEqual({ ok: true, dispatched: false });
+    expect(triggerAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a decision naming a hold that is not this run's park at all", async () => {
+    readRecommendationParkForRun.mockReset();
+    readRecommendationParkForRun.mockResolvedValue(null);
+    const res = await skipRunRecommendationAction({ runId: "run-1", holdRef: "ref-park-1" });
+    expect(res).toEqual({ ok: false, error: RECOMMENDATION_DECISION_REFUSAL });
+    expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a named decision when the park cannot be READ (fail-closed)", async () => {
+    readRecommendationParkForRun.mockReset();
+    readRecommendationParkForRun.mockRejectedValue(new Error("park store down"));
     const res = await skipRunRecommendationAction({ runId: "run-1", holdRef: "ref-park-1" });
     expect(res).toEqual({ ok: false, error: RECOMMENDATION_DECISION_REFUSAL });
     expect(releaseRecommendationParkForRun).not.toHaveBeenCalled();

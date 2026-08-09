@@ -203,36 +203,54 @@ export async function getRunRecommendationHoldStateAction(input: {
 }
 
 /**
- * THE HOLD-INSTANCE CAS (cinatra#2568). Resolves the hold a decision is bound
- * to, BEFORE the decision writes anything.
+ * THE HOLD-INSTANCE BINDING (cinatra#2568). Resolves the hold a decision is
+ * bound to, BEFORE the decision writes anything.
  *
- * Without it these actions are only run-scoped: a decision taken against hold H,
- * submitted after the run was dispatched and PARKED AGAIN as H', would write its
- * selection (or its skip evidence) against H' and then release H' — applying a
- * choice the human made for a different candidate set. A stale tab, a slow
- * network or a double-decided run is enough. So the check runs FIRST: a decision
- * that names a hold the run has moved past changes nothing at all.
+ * WHAT IT GUARANTEES: a decision taken against hold H is applied to hold H or to
+ * nothing. Without it these actions were only run-scoped — a decision submitted
+ * after the run had been dispatched and PARKED AGAIN as H' would write its
+ * selection (or its skip evidence) and then release H', applying a choice the
+ * human made for a different candidate set. A stale tab, a slow network or a
+ * double-decided run is enough. The check therefore runs FIRST, so a decision
+ * aimed at a hold the run has moved past leaves no trace on the run at all.
  *
- * Returns the hold id to bind the release to, or `refused` — and the refusal is
- * the same generic one an unauthorized caller gets, so "your hold is stale" and
- * "you may not decide this run" are indistinguishable from outside.
+ * WHAT IT DOES NOT GUARANTEE, stated plainly: it is a read-and-compare, not an
+ * atomic claim, so two decisions racing on the SAME live hold both write their
+ * decision — exactly as they did before this slice. What IS exactly-once is the
+ * DISPATCH: the park sweep is a `status='parked'` conditional update, so only
+ * one of them transitions the park and only one run is dispatched. Making the
+ * write itself exclusive means claiming the park before writing, which trades
+ * this race for a worse one (a claimed park whose decision write then fails
+ * leaves an un-dispatched run with no live hold and no row to decide) — so it
+ * belongs with the park store's own transaction, not here.
  *
- * Backwards-compatible on purpose: a caller that names NO hold keeps the
- * pre-#2568 run-scoped behaviour, because a deployment that cannot mint refs
- * (no app secret) must still be able to decide its runs.
+ * IDEMPOTENT RETRY IS NOT A STALE DECISION. A decision whose response was lost
+ * and is retried names a hold that is now RELEASED — and that is still THIS
+ * run's hold, so it is accepted and the downstream path is idempotent (the
+ * release is a no-op, the dispatch is guarded by the run's own status). Only a
+ * decision naming a hold that is not the run's current park at all is refused.
+ *
+ * The refusal is the same generic one an unauthorized caller gets, so "your
+ * hold is stale" and "you may not decide this run" are indistinguishable.
+ *
+ * FAIL-CLOSED for a named decision: an unreadable park refuses. A caller that
+ * names NO hold keeps the pre-#2568 run-scoped behaviour, because a deployment
+ * that cannot mint refs (no app secret) must still be able to decide its runs.
  */
 async function resolveDecisionHold(
   runId: string,
   holdRef: string | undefined,
 ): Promise<{ ok: true; holdId: string | null } | { ok: false }> {
   const park = await readRecommendationParkForRun(runId).catch(() => null);
-  if (!holdRef) return { ok: true, holdId: park?.status === "parked" ? park.id : (park?.id ?? null) };
+  if (!holdRef) return { ok: true, holdId: park?.id ?? null };
   const claimed = decodeRecommendationHoldRef(holdRef);
   const matches =
     claimed !== null &&
     claimed.runId === runId &&
     park !== null &&
-    park.status === "parked" &&
+    // Deliberately NOT `park.status === "parked"`: the run's current park being
+    // the claimed hold is the binding. A released one means "already decided",
+    // which is a RETRY, not a stale decision.
     park.id === claimed.holdId;
   return matches ? { ok: true, holdId: claimed!.holdId } : { ok: false };
 }
