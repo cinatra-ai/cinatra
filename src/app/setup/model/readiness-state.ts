@@ -12,6 +12,23 @@ import {
 } from "@/lib/database";
 import { buildKnownWizardEligibleProviders } from "@cinatra-ai/sdk-extensions/llm-provider-contract";
 import type { LlmProvider } from "@cinatra-ai/agents/llm-provider-policy";
+import type { SetupConnectionSaveResult } from "@/lib/setup-provider-connection-writer";
+
+/**
+ * What the model step's single Continue hands back when it stops in the TYPED
+ * channel (cinatra#2502 item E). S5's result, plus one bit of render advice.
+ *
+ * `clearedStandingFailure` says a DURABLE readiness-failure record from an
+ * EARLIER run was standing when this run began, and this run cleared it — so
+ * the alert still painted on the operator's screen is now false and the route
+ * has to be refreshed to drop it. It is deliberately not "always refresh": a
+ * refresh re-renders the server component and empties the uncontrolled key
+ * field, which would throw away what the operator just typed for no reason on
+ * the common case (a first attempt with nothing stale behind it).
+ */
+export type SetupModelStepResult = SetupConnectionSaveResult & {
+  clearedStandingFailure?: boolean;
+};
 
 /**
  * The owner's IN-PROGRESS pick. Deliberately distinct from

@@ -39,7 +39,7 @@ import {
   waitForHydration,
   flipStubControl,
   captureStateShots,
-  saveProviderKeyUntilStored,
+  continueThroughModelStep,
   uniqueFirstAccount,
   signUpThroughSetupForm,
 } from "./support/instance-state";
@@ -123,14 +123,13 @@ test.beforeAll(async ({ browser }, testInfo) => {
   await page.goto("/setup/model?stay=1");
   await page.getByTestId("setup-provider-openai").click();
   await waitForHydration(page, { selectors: ['[data-testid="setup-openai-connection-form"]'] });
-  await saveProviderKeyUntilStored(
+  // cinatra#2502 item E — one press: the key saves and the provider commits.
+  await continueThroughModelStep(
     page,
     "setup-openai-connection-form",
     'input[name="apiKey"]',
     "sk-e2e-2544-openai-not-a-real-key",
   );
-  await page.getByTestId("setup-ai-continue").click();
-  await page.waitForURL(/\/setup\/complete|\/setup\/model/, { timeout: 120_000 });
   await expect
     .poll(async () => (await readCommitment())?.provider, { timeout: 60_000 })
     .toBe("openai");

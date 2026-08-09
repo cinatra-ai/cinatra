@@ -13,19 +13,20 @@
 // credential fingerprint no longer matches), in which case the key field is
 // forced open for re-entry.
 //
-// The form posts through the TYPED save action (`useActionState` island +
-// toasts, S5 cinatra#2390) — failures surface as toasts carrying the
-// server-sanitized message, never as error text in a URL.
+// cinatra#2502 item E: this section is no longer a form of its own. It renders
+// the step's key FIELD, and the step's single Continue (<SetupModelStepForm>)
+// is what submits it — design spec `specs/app-setup.html` §I, one primary
+// action per step. The submission still travels S5's TYPED channel
+// (cinatra#2390): failures carry the server-sanitized message back as a typed
+// result, never as error text in a URL.
 
 import Link from "next/link";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Field, FieldLabel } from "@/components/ui/field";
 
-import { saveSetupOpenAIConnectionAction } from "@/app/setup/model/actions";
-import { SetupProviderConnectionForm } from "@/app/setup/model/provider-connection-form";
+import { SetupProviderKeyInput } from "@/app/setup/model/provider-key-input";
+
 import { readOpenAIConnection } from "@/lib/openai-connection-store";
 // Every OpenAI reader resolves through the `llm-provider-surface` capability
 // the openai connector registers at activation (lazy/guarded host-access
@@ -94,25 +95,14 @@ export async function SetupOpenAIProviderStep({ keyReopened }: { keyReopened?: b
             </Link>
             . Cinatra stores it encrypted and never shows it again.
           </p>
-          <SetupProviderConnectionForm
-            action={saveSetupOpenAIConnectionAction}
-            successMessage="OpenAI connection saved."
-            className="mt-4 grid gap-4"
-            testId="setup-openai-connection-form"
-          >
-            <Field>
-              <FieldLabel>API key</FieldLabel>
-              <Input
-                name="apiKey"
-                type="password"
-                autoComplete="off"
-                placeholder={hasApiKey ? "••••••••••••••••" : "sk-..."}
-              />
-            </Field>
-            <div className="flex justify-end">
-              <Button type="submit">{hasApiKey ? "Change" : "Save"}</Button>
-            </div>
-          </SetupProviderConnectionForm>
+          <Field className="mt-4">
+            <FieldLabel htmlFor="setup-openai-api-key">API key</FieldLabel>
+            <SetupProviderKeyInput
+              id="setup-openai-api-key"
+              testId="setup-openai-api-key"
+              placeholder={hasApiKey ? "••••••••••••••••" : "sk-..."}
+            />
+          </Field>
         </>
       ) : (
         // The stored connection is ready: no key field — rotation and

@@ -185,7 +185,7 @@ test.describe("authenticated arms", () => {
     await deleteMetadataKeys(["setup_provider_commit"]);
   });
 
-  test("error channel: a failing save toasts sanitized copy; no error text in any URL", async ({ page }) => {
+  test("error channel: a failing Continue toasts sanitized copy inline; no error text in any URL", async ({ page }) => {
     flipStubControl({ phase: "matrices-key-invalid", openaiKeyValid: false });
     // Uncommitted step, no stored OpenAI row, OpenAI selected — the open key
     // form is the surface under test.
@@ -202,6 +202,8 @@ test.describe("authenticated arms", () => {
     await expect(form).toBeVisible();
     await waitForHydration(page, { selectors: ['[data-testid="setup-openai-connection-form"]'] });
     await fillStable(form.locator('input[name="apiKey"]'), "sk-e2e-2392-definitely-invalid");
+    // cinatra#2502 item E — the form's one submit IS Continue.
+    await expect(form.locator('button[type="submit"]')).toHaveCount(1);
     await form.locator('button[type="submit"]').click();
 
     const toast = page.locator("[data-sonner-toast]").first();
@@ -218,6 +220,9 @@ test.describe("authenticated arms", () => {
     const url = new URL(page.url());
     expect(url.pathname).toBe("/setup/model");
     expect([...url.searchParams.entries()]).toEqual([["stay", "1"]]);
+    // Refused, and REFUSED IS ALL: the fold never reached the commit machine.
+    await expect(page.getByTestId("setup-model-step-error")).toBeVisible();
+    expect(await readCommitment()).toBeNull();
     await captureStateShots(page, "12-key-save-error-toast");
     flipStubControl({ openaiKeyValid: true });
   });

@@ -458,41 +458,49 @@ export async function checkStable(
   throw new Error(`checkStable: checked state did not persist after 6 attempts`);
 }
 
-/** Fill + submit a provider key form until the DURABLE saved-connection alert
- *  renders. A dev-mode rebuild can wipe the filled value in the window between
- *  the persistence check and the submit, so the whole fill→submit→verify
- *  cycle retries as a unit. */
-export async function saveProviderKeyUntilStored(
+/** Enter the provider key and press the step's ONE primary Continue, which
+ *  saves the credential, records any required consent and commits the provider
+ *  in a single submission (cinatra#2502 item E — the separate Save is retired).
+ *
+ *  Resolves once the COMMITMENT exists, which is the only durable evidence the
+ *  whole fold ran: the saved-connection alert this helper used to wait on now
+ *  belongs to a state the successful path passes straight through. A dev-mode
+ *  rebuild can wipe the filled value in the window between the persistence
+ *  check and the submit, so the whole fill→submit→verify cycle retries as a
+ *  unit. */
+export async function continueThroughModelStep(
   page: Page,
   formTestId: string,
   keySelector: string,
   value: string,
 ): Promise<void> {
   for (let attempt = 0; attempt < 4; attempt++) {
+    if (await readCommitment()) return;
     const form = page.getByTestId(formTestId);
-    if (!(await form.isVisible().catch(() => false))) {
-      // Either the save already landed on a previous attempt (the form hid
-      // behind the Administration pointer) or the step simply has not
-      // rendered yet. The DURABLE saved alert is what distinguishes them —
-      // returning on the bare absence of the form would let this helper
-      // succeed without ever storing a connection.
-      await page
-        .getByTestId("setup-connection-saved")
-        .waitFor({ state: "visible", timeout: 15_000 });
-      return;
+    if (await form.isVisible().catch(() => false)) {
+      const key = form.locator(keySelector);
+      // A ready stored connection renders no key field: Continue then commits
+      // the credential that is already there.
+      if (await key.count()) await fillStable(key, value);
+      await form.locator('button[type="submit"]').click();
+    } else {
+      // The step reads ready already — Continue is a plain navigation link.
+      const forward = page.getByTestId("setup-ai-continue");
+      if (await forward.isVisible().catch(() => false)) await forward.click();
     }
-    await fillStable(form.locator(keySelector), value);
-    await form.locator('button[type="submit"]').click();
     try {
-      await page
-        .getByTestId("setup-connection-saved")
-        .waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(async () => Boolean(await readCommitment()), {
+          timeout: 90_000,
+          intervals: [2_000],
+        })
+        .toBe(true);
       return;
     } catch {
-      /* wiped by a rebuild — retry the whole cycle */
+      /* wiped by a rebuild, or the run refused — retry the whole cycle */
     }
   }
-  throw new Error(`saveProviderKeyUntilStored: no saved alert after 4 attempts`);
+  throw new Error(`continueThroughModelStep: no commitment after 4 attempts`);
 }
 
 // --- the real sign-up form -------------------------------------------------
