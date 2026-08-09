@@ -94,11 +94,22 @@ describe("isApprovalActionable — §II eligibility, not raw pendingness", () =>
     expect(isApprovalActionable("agent-creation-requests", "inbox")).toBe(true);
     expect(isApprovalActionable("marketplace-submission-moderation", "inbox")).toBe(true);
   });
-  it("a 'mine' (own request) row is never actionable here", () => {
+  it("a 'mine' (own request) row is not actionable when the source didn't grant decidableOwn", () => {
     expect(isApprovalActionable("agent-creation-requests", "mine")).toBe(false);
     expect(isApprovalActionable("marketplace-my-submissions", "mine")).toBe(false);
     // a promotion request the viewer made awaits others — not actionable in the feed
     expect(isApprovalActionable("promotion-requests", "mine")).toBe(false);
+  });
+  // cinatra#2599 — the admin's own chat-created agent request must NOT read
+  // "Awaiting others / no action for you": the source computes decidableOwn
+  // when the single-admin self-approval exception applies, and the feed must
+  // honor it instead of hard-failing every non-inbox row.
+  it("a 'mine' row IS actionable when the source granted decidableOwn (own-request self-approval)", () => {
+    expect(isApprovalActionable("agent-creation-requests", "mine", undefined, true)).toBe(true);
+  });
+  it("decidableOwn still can't make a no-decide-affordance or workflow-legacy 'mine' row actionable", () => {
+    expect(isApprovalActionable("marketplace-my-submissions", "mine", undefined, true)).toBe(false);
+    expect(isApprovalActionable("workflow-legacy", "mine", undefined, true)).toBe(false);
   });
   it("a promotion inbox row (a request to review) is actionable", () => {
     expect(isApprovalActionable("promotion-requests", "inbox")).toBe(true);
@@ -158,6 +169,45 @@ describe("buildFeedRowVMs", () => {
     const [vm] = buildFeedRowVMs([
       apprItem(row({ sourceId: "marketplace-my-submissions", id: "m-1" }), "mine"),
     ]);
+    if (vm.kind === "approval") {
+      expect(vm.approval.actionable).toBe(false);
+      expect(vm.approval.decideKind).toBe("none");
+    }
+  });
+
+  // cinatra#2599 — the admin's own chat-created agent request: the source
+  // (agent-creation-requests.ts `fetchMine`) sets `decidableOwn` on the row
+  // when the single-admin self-approval exception applies. The feed must
+  // surface it as actionable (Needs action / inline decide), never "Awaiting
+  // others / no action for you".
+  it("maps an admin's own decidableOwn agent-creation request as actionable with decideKind agent", () => {
+    const [vm] = buildFeedRowVMs([
+      apprItem(
+        row({
+          sourceId: "agent-creation-requests",
+          id: "a-own",
+          decidableOwn: true,
+          version: "cas-own",
+          href: "/configuration/agents/approvals/a-own",
+        }),
+        "mine",
+      ),
+    ]);
+    expect(vm.kind).toBe("approval");
+    if (vm.kind === "approval") {
+      expect(vm.approval.actionable).toBe(true);
+      expect(vm.approval.decideKind).toBe("agent");
+      expect(vm.approval.direction).toBe("mine");
+    }
+  });
+
+  // The common case: an own request NOT yet self-decidable (still `mine`,
+  // no `decidableOwn`) stays the plain "awaiting others" read-only row.
+  it("an own agent-creation request without decidableOwn stays non-actionable", () => {
+    const [vm] = buildFeedRowVMs([
+      apprItem(row({ sourceId: "agent-creation-requests", id: "a-not-own" }), "mine"),
+    ]);
+    expect(vm.kind).toBe("approval");
     if (vm.kind === "approval") {
       expect(vm.approval.actionable).toBe(false);
       expect(vm.approval.decideKind).toBe("none");
