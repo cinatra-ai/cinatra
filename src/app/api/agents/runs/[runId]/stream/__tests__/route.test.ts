@@ -13,13 +13,22 @@ const requireAuthSession = vi.fn();
 const isPlatformAdmin = vi.fn();
 const readAgentRunById = vi.fn();
 const subscribeToAgUiEventsWithId = vi.fn();
+const deriveRecommendationHoldInterrupt = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: () => requireAuthSession(),
   isPlatformAdmin: (s: unknown) => isPlatformAdmin(s),
 }));
+const readRecommendationHoldFromEvent = vi.fn();
+
 vi.mock("@cinatra-ai/agents", () => ({
   readAgentRunById: (...a: unknown[]) => readAgentRunById(...a),
+  deriveRecommendationHoldInterrupt: (...a: unknown[]) =>
+    deriveRecommendationHoldInterrupt(...a),
+  readRecommendationHoldFromEvent: (...a: unknown[]) =>
+    readRecommendationHoldFromEvent(...a),
+  recommendationHoldThreadId: (run: { id: string; templateId?: string | null }) =>
+    run.templateId && run.templateId.length > 0 ? run.templateId : run.id,
 }));
 vi.mock("@cinatra-ai/agent-ui-protocol/server", () => ({
   subscribeToAgUiEventsWithId: (...a: unknown[]) => subscribeToAgUiEventsWithId(...a),
@@ -44,6 +53,10 @@ describe("GET /api/agents/runs/[runId]/stream", () => {
     subscribeToAgUiEventsWithId.mockImplementation(async function* () {
       /* no events */
     });
+    // Default: the run is NOT held, so the S4 snapshot adds no frame and the
+    // pre-existing assertions below read exactly what they always did.
+    deriveRecommendationHoldInterrupt.mockResolvedValue(null);
+    readRecommendationHoldFromEvent.mockReturnValue(null);
   });
   afterEach(() => vi.clearAllMocks());
 

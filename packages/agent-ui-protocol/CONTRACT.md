@@ -65,6 +65,44 @@ carries a structured JSON payload and is the extension point for
 assistant-specific renderable views (§5). `isAgUiEvent()` (`conformance.ts`) is
 the structural validator for a single wire event.
 
+### 3.1 Typed lifecycle interactions on `INTERRUPT` (cinatra#2568)
+
+An `INTERRUPT` may carry an **optional** `interaction` discriminator:
+
+```jsonc
+{
+  "type": "INTERRUPT",
+  "threadId": "…", "runId": "…",
+  "schema": {}, "values": {},
+  "xRenderer": "@cinatra-ai/lifecycle:recommendation-hold",
+  "reviewTaskId": "recommendation:run-start:<runId>",
+  "interaction": { "kind": "recommendation_hold", "schemaVersion": 1, "ref": "<opaque>" }
+}
+```
+
+- **Routing rule.** An interrupt WITH `interaction` is **not a review task**; it
+  must not be submitted to the review-task approve path. It routes by `kind` to
+  that interaction's own decision actions. An interrupt WITHOUT it keeps exactly
+  the pre-existing behaviour.
+- **Which kinds.** Only interactions whose carriage is `interrupt` in the
+  lifecycle-card registry (`renderable-views/lifecycle-cards.ts`) — today
+  `recommendation_hold`, where the run is genuinely BLOCKED on the answer.
+  Everything else is a `DATA_PART` renderable view (§5.1).
+- **Refs only.** The payload is an opaque server-minted `ref` and nothing else —
+  no state, no ids, no candidate data. The card resolves the authoritative state
+  server-side against the reader.
+- **Handshake-compatible.** The field is additive and optional, so every
+  previously-published event stays valid, `isAgUiEvent()` accepts both shapes,
+  and the contract version does **not** move (§8). A client that does not know
+  the field ignores it and renders its generic interrupt fallback; because the
+  payload carries no decision affordance, an unaware client can draw nothing
+  harmful from it. Validate with `readLifecycleInterruptInteraction()` — never
+  by hand-reading the keys.
+- **Not replayed blindly.** A run can re-enter its held state, so its log may
+  carry several hold announcements of which at most one is live. The run's SSE
+  route synthesizes the CURRENT interaction from live state at stream open and
+  drops log frames the live state does not confirm.
+
 ## 4. Durable, resumable transport
 
 The wire is **Server-Sent Events over the durable Redis-Streams AG-UI log**. It

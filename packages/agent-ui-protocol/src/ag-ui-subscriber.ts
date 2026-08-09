@@ -5,6 +5,35 @@ import { readRecentRunEventsReverse, readRunEvents } from "@cinatra-ai/a2a";
 import type { AgUiEvent } from "./events";
 
 /**
+ * Does this INTERRUPT declare a typed lifecycle interaction (cinatra#2568)?
+ *
+ * Deliberately a PRESENCE check rather than a call into
+ * `readLifecycleInterruptInteraction`, for two reasons:
+ *
+ *  - SEMANTICS. This module's question is "is this an ordinary review-task
+ *    gate?", and the answer must be NO for anything that declares a lifecycle
+ *    interaction at all — including a malformed or forward-versioned one. The
+ *    strict parser answers a different question ("which interaction is this?")
+ *    and would let a payload it cannot parse fall through into the gate path,
+ *    which is exactly the confusion this guard exists to prevent.
+ *  - GRAPH. The strict parser lives with the zod card registry, which the four
+ *    locked latency-budgeted routes reach through this subscriber but have no
+ *    use for; importing it here would pull the whole renderable-view schema
+ *    chain into all of them.
+ *
+ * The only shared knowledge is the field NAME, which the contract fixes
+ * (CONTRACT.md §3.1).
+ */
+function declaresLifecycleInteraction(event: unknown): boolean {
+  const interaction = (event as { interaction?: unknown }).interaction;
+  return (
+    typeof interaction === "object" &&
+    interaction !== null &&
+    !Array.isArray(interaction)
+  );
+}
+
+/**
  * Snapshot the latest active AG-UI INTERRUPT for a run, walking the Redis
  * Streams log newest-first.
  *
@@ -41,6 +70,17 @@ export async function readLatestAgUiInterrupt(
     if (t === "RUN_FINISHED" || t === "RUN_ERROR") return null;
 
     if (t === "INTERRUPT") {
+      // A TYPED LIFECYCLE interrupt is not a review-task gate (cinatra#2568).
+      // This snapshot feeds `deriveRunHitlContext`, whose whole contract is
+      // "which gate is this run paused on" — and its consumers submit the
+      // answer to the review-task approve path. A run-start recommendation hold
+      // is emitted BEFORE dispatch and outlives its own release in the durable
+      // log, so without this skip a later `pending_approval` run whose real
+      // gate emitted no interrupt (the WayFlow / setup fallback paths) would
+      // pick the HOLD up as its gate and render an approval form for it. Skip
+      // and keep walking: a genuine gate is always NEWER than the pre-dispatch
+      // hold, so continuing can only find the right one.
+      if (declaresLifecycleInteraction(event)) continue;
       const xRenderer =
         typeof (event as { xRenderer?: unknown }).xRenderer === "string"
           ? ((event as { xRenderer: string }).xRenderer)

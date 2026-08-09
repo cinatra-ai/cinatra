@@ -3,7 +3,13 @@ import "server-only";
 import { isPlatformAdmin, requireAuthSession } from "@/lib/auth-session";
 import { AuthzError } from "@/lib/authz";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
-import { readAgentRunById, type ActorRoleHints } from "@cinatra-ai/agents";
+import {
+  deriveRecommendationHoldInterrupt,
+  readAgentRunById,
+  readRecommendationHoldFromEvent,
+  recommendationHoldThreadId,
+  type ActorRoleHints,
+} from "@cinatra-ai/agents";
 import { subscribeToAgUiEventsWithId } from "@cinatra-ai/agent-ui-protocol/server";
 
 // ---------------------------------------------------------------------------
@@ -91,6 +97,31 @@ export async function GET(request: Request, context: RouteContext) {
     explicitFromId ??
     (run.status === "pending_approval" ? "0-0" : undefined);
 
+  // ---------------------------------------------------------------------
+  // The recommendation hold's LIVE-STATE SNAPSHOT (cinatra#2568, epic #2564
+  // S4). A held run is `pending_input`, so it is NOT covered by the
+  // pending_approval replay above, and it must not be: the log is durable and
+  // a run can be parked, decided, dispatched and parked AGAIN, so replaying
+  // history would resurrect a hold the human already answered — the stale-gate
+  // failure cinatra#809 fixed for terminal runs, in a new place.
+  //
+  // So the hold is reconstructed from the PARK, never from the log: derive the
+  // run's CURRENT hold (if any) and emit that one synthesized frame first. A
+  // fresh subscribe, a reload and a Last-Event-ID reconnect all take this path,
+  // which is what makes a late joiner see the hold at all.
+  //
+  // Deliberately NOT given an SSE `id:` — it is a synthesized frame, not a log
+  // entry, so it must never become the client's resume cursor.
+  const holdThreadId = recommendationHoldThreadId(run);
+  const holdSnapshot = await deriveRecommendationHoldInterrupt({
+    runId: decodedRunId,
+    threadId: holdThreadId,
+  }).catch(() => null);
+  let liveHoldId =
+    (holdSnapshot &&
+      readRecommendationHoldFromEvent(holdSnapshot, decodedRunId)?.holdId) ||
+    null;
+
   // Unify abort sources (client disconnect + internal) into one controller.
   const abortController = new AbortController();
   request.signal.addEventListener("abort", () => abortController.abort(), {
@@ -124,12 +155,48 @@ export async function GET(request: Request, context: RouteContext) {
       abortController.signal.addEventListener("abort", onAbort, { once: true });
 
       try {
+        // The synthesized hold frame goes out BEFORE any log event, so a client
+        // that also receives a live hold interrupt in the same connection
+        // converges on the newer one rather than the reverse.
+        if (holdSnapshot) {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(holdSnapshot)}\n\n`),
+          );
+        }
         const gen = subscribeToAgUiEventsWithId(decodedRunId, {
           signal: abortController.signal,
           fromId,
         });
         for await (const { id, event } of gen) {
           if (closed) break;
+          // STALE-HOLD FILTER. A hold interrupt in the log is a historical
+          // announcement; the park is the authority on whether it is still the
+          // run's hold. Forward one only when its hold id IS the live one —
+          // otherwise re-read the park once (a hold minted while this stream
+          // was open is legitimately newer than the snapshot) and drop it if
+          // the park does not confirm. The re-read costs one query per hold
+          // frame that does not match, and a run emits a handful at most.
+          const holdOnEvent = readRecommendationHoldFromEvent(
+            event,
+            decodedRunId,
+          );
+          if (holdOnEvent) {
+            if (holdOnEvent.holdId !== liveHoldId) {
+              const current = await deriveRecommendationHoldInterrupt({
+                runId: decodedRunId,
+                threadId: holdThreadId,
+              }).catch(() => null);
+              const currentHoldId =
+                (current &&
+                  readRecommendationHoldFromEvent(current, decodedRunId)
+                    ?.holdId) ||
+                null;
+              if (!currentHoldId || currentHoldId !== holdOnEvent.holdId) {
+                continue; // decided, superseded, or never this run's — drop it
+              }
+              liveHoldId = currentHoldId;
+            }
+          }
           // SSE id: field enables browser EventSource auto-resume via
           // Last-Event-ID on reconnect. Redis Streams native IDs are
           // `<digits>-<digits>` — always safe per WHATWG SSE spec (no

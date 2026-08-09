@@ -470,6 +470,16 @@ export {
 // Shared pending_approval HITL-context derivation — used by the REST run
 // polling route AND the A2A snapshot path above (single source of truth).
 export { deriveRunHitlContext, type HitlContext } from "./hitl-context";
+// The run-start recommendation hold ON THE WIRE (cinatra#2568, epic #2564 S4):
+// the live-state snapshot a late subscriber is reconstructed from, and the
+// stale-hold discriminator the SSE route filters replayed history with. The
+// PARK is the authority — these two are how the wire is kept honest about it.
+export {
+  deriveRecommendationHoldInterrupt,
+  readRecommendationHoldFromEvent,
+  recommendationHoldThreadId,
+  type RecommendationHoldRefPayload,
+} from "./recommendation-hold";
 // Run name lives on agent_runs.title; field validation happens at the
 // dispatcher's setup loop using the inputSchema directly.
 

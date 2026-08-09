@@ -121,6 +121,37 @@ export type InterruptEvent = BaseAgUiEvent & {
    * paths.
    */
   fieldName?: string;
+  /**
+   * OPTIONAL typed lifecycle-interaction discriminator (cinatra#2568, epic
+   * #2564 S4). Present ONLY on an interrupt that carries a lifecycle
+   * interaction whose declared carriage is `interrupt` — today the run-start
+   * `recommendation_hold`. Absent on every ordinary review-task gate, which is
+   * what keeps the addition handshake-compatible: the event union gains one
+   * optional key, no existing key moves, and no contract version bumps.
+   *
+   * ROUTING RULE: an interrupt carrying this field is NOT a review task and
+   * must never be submitted to the review-task approve path; it routes by
+   * `kind` to that interaction's own decision actions. An interrupt WITHOUT it
+   * keeps exactly today's behaviour.
+   *
+   * `ref` is an OPAQUE, server-minted handle to the interaction instance — it
+   * addresses a row and grants nothing; the card resolves the authoritative
+   * state server-side against the reader. No state, no content, no ids ride
+   * here.
+   *
+   * NOTE: typed structurally rather than by importing
+   * `LifecycleInterruptInteraction` — this module is deliberately plain-types
+   * (no zod, no server-only, no cross-module dependency), the same constraint
+   * that keeps `values`' presentation hint a bare `Record`. The validator is
+   * `lifecycleInterruptInteractionSchema` / `readLifecycleInterruptInteraction`
+   * in `renderable-views/lifecycle-cards.ts`; consumers narrow through it and
+   * never hand-read these fields.
+   */
+  interaction?: {
+    kind: string;
+    schemaVersion: number;
+    ref: string;
+  };
 };
 
 export type ResumeEvent = BaseAgUiEvent & {

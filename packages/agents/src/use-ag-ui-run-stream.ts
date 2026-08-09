@@ -3,6 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { PresentationHint } from "./result-renderers";
 import type { DataPartEvent } from "@cinatra-ai/agent-ui-protocol";
+import {
+  readLifecycleInterruptInteraction,
+  type LifecycleInterruptInteraction,
+} from "@cinatra-ai/agent-ui-protocol/renderable-views/lifecycle-cards";
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "./agent-builder-ids";
 
 // ---------------------------------------------------------------------------
@@ -48,6 +52,27 @@ export type InterruptContext = {
   fieldName?: string;
 };
 
+/**
+ * A TYPED LIFECYCLE interrupt (cinatra#2568, epic #2564 S4) — an interaction the
+ * run is genuinely blocked on that is NOT a review task. Today that is the
+ * run-start `recommendation_hold`.
+ *
+ * Kept in its OWN slot, never folded into `interruptContext`, because that slot
+ * has exactly one meaning to every consumer: "a review task awaits approval",
+ * submitted via `approveReviewTask`. A hold submitted there would approve
+ * nothing and resume nothing — its decisions are
+ * `confirmRunRecommendationAction` / `skipRunRecommendationAction`. Two slots
+ * make the routing rule structural instead of a convention a later edit can
+ * quietly break.
+ *
+ * `ref` is opaque: the card resolves the authoritative state server-side against
+ * the reader. Nothing here is displayable on its own, by design.
+ */
+export type LifecycleInterruptContext = LifecycleInterruptInteraction & {
+  /** The hold's stable per-run gate identity, off the same INTERRUPT event. */
+  reviewTaskId: string;
+};
+
 export type AgUiRunStreamResult = {
   /** Live run status derived from SSE events. Seeded from options.initialStatus — never null. */
   status: string;
@@ -57,8 +82,18 @@ export type AgUiRunStreamResult = {
   presentationHint: PresentationHint | null;
   /** True while status is "running", "queued", or "pending_approval". */
   isLive: boolean;
-  /** Active INTERRUPT context when the run is paused for HITL. Null when no interrupt active. */
+  /**
+   * Active INTERRUPT context when the run is paused for HITL. Null when no
+   * interrupt active. REVIEW-TASK GATES ONLY — a typed lifecycle interrupt
+   * never lands here (see `lifecycleInterrupt`).
+   */
   interruptContext: InterruptContext | null;
+  /**
+   * Active TYPED LIFECYCLE interrupt (the run-start recommendation hold). Null
+   * when none. Cleared by RESUME, by a (re-)start, and by either terminal
+   * event — a hold cannot outlive its run.
+   */
+  lifecycleInterrupt: LifecycleInterruptContext | null;
   /**
    * Accumulated text from AG-UI TEXT_MESSAGE_CONTENT deltas.
    * Empty string until the first TEXT_MESSAGE_CONTENT event with a string delta arrives.
@@ -104,6 +139,8 @@ export function useAgUiRunStream(
   const [error, setError] = useState<string | null>(null);
   const [presentationHint, setPresentationHint] = useState<PresentationHint | null>(null);
   const [interruptContext, setInterruptContext] = useState<InterruptContext | null>(null);
+  const [lifecycleInterrupt, setLifecycleInterrupt] =
+    useState<LifecycleInterruptContext | null>(null);
   const [streamedText, setStreamedText] = useState<string>(initialStreamedText ?? "");
   const [dataPartFrames, setDataPartFrames] = useState<Record<string, unknown>[]>([]);
 
@@ -140,6 +177,7 @@ export function useAgUiRunStream(
     setError(null);
     setPresentationHint(null);
     setInterruptContext(null);
+    setLifecycleInterrupt(null);
 
     const url = `/api/agents/runs/${encodeURIComponent(runId)}/stream`;
     const es = new EventSource(url);
@@ -162,6 +200,9 @@ export function useAgUiRunStream(
           // Clear stale interrupt context when run (re-)starts — covers the setup-loop
           // path which never emits RESUME before dispatching to LangGraph.
           setInterruptContext(null);
+          // A running run is not held: the hold is strictly pre-dispatch, so a
+          // (re-)start is proof its question was answered.
+          setLifecycleInterrupt(null);
           break;
 
         case "STATE_SNAPSHOT":
@@ -174,6 +215,27 @@ export function useAgUiRunStream(
           // its review task can no longer be approved. Re-opening it would
           // both mask the failure and dead-end the user (cinatra#809).
           if (seededFailed) break;
+          // TYPED LIFECYCLE INTERRUPT (cinatra#2568) — the routing fork, and it
+          // comes FIRST so a lifecycle interaction can never fall through into
+          // the review-task slot below.
+          //
+          // Two things deliberately do NOT happen on this arm:
+          //   - `interruptContext` is not set. That slot's consumers submit to
+          //     `approveReviewTask`; a hold's decisions are the recommendation
+          //     confirm/skip actions, which are what actually release the park.
+          //   - the status is NOT moved to `pending_approval`. A held run is
+          //     `pending_input` — it has not been dispatched at all — and
+          //     claiming otherwise would both misreport the run and hand the
+          //     panel's approval chrome a gate that does not exist.
+          const lifecycle = readLifecycleInterruptInteraction(event);
+          if (lifecycle) {
+            const reviewTaskId = (event as { reviewTaskId?: unknown }).reviewTaskId;
+            setLifecycleInterrupt({
+              ...lifecycle,
+              reviewTaskId: typeof reviewTaskId === "string" ? reviewTaskId : "",
+            });
+            break;
+          }
           // Read the 5th INTERRUPT arg (`fieldName`) that the
           // setup-loop sets on `adapter.onInterrupt(schema, xRenderer, values,
           // reviewTaskId, fieldName)` in execution.ts. Without surfacing it
@@ -206,12 +268,17 @@ export function useAgUiRunStream(
           // INTERRUPT and RESUME do NOT close the stream — the run continues
           // and the next RUN_STARTED or terminal event drives the status.
           setInterruptContext(null);
+          // The hold's RESUME is emitted only after its release is VERIFIED
+          // server-side, so clearing here can never drop a card off a run that
+          // is still waiting.
+          setLifecycleInterrupt(null);
           break;
         }
 
         case "RUN_FINISHED": {
           const finishedStatus = event.status === "stopped" ? "stopped" : "completed";
           setStatus(finishedStatus);
+          setLifecycleInterrupt(null);
           es.close();
           esRef.current = null;
           break;
@@ -220,6 +287,7 @@ export function useAgUiRunStream(
         case "RUN_ERROR":
           setStatus("failed");
           setError(typeof event.message === "string" ? event.message : "Unknown error");
+          setLifecycleInterrupt(null);
           es.close();
           esRef.current = null;
           break;
@@ -275,5 +343,14 @@ export function useAgUiRunStream(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId, enabled, initialStreamedText]); // Re-seed on prop change
 
-  return { status, error, presentationHint, isLive, interruptContext, streamedText, dataPartFrames };
+  return {
+    status,
+    error,
+    presentationHint,
+    isLive,
+    interruptContext,
+    lifecycleInterrupt,
+    streamedText,
+    dataPartFrames,
+  };
 }

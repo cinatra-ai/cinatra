@@ -41,6 +41,25 @@ Event types you will encounter on the stream:
 
 Ordering guarantee: `RUN_STARTED` always precedes any `TEXT_MESSAGE_*` or `TOOL_CALL_*` events. `INTERRUPT` always precedes `RUN_FINISHED` when a HITL step is involved. Do not process `DATA_PART` until after `RUN_FINISHED`.
 
+### Typed lifecycle interactions on `INTERRUPT`
+
+An `INTERRUPT` may carry an optional `interaction` object:
+
+```json
+{ "kind": "recommendation_hold", "schemaVersion": 1, "ref": "<opaque>" }
+```
+
+This means the run is blocked on a **lifecycle interaction that is not a review task**. Today the only kind is `recommendation_hold` — the run has not been dispatched at all; it is waiting for a human to confirm or skip the recommended skill set before it starts.
+
+Rules for a client:
+
+- **Do not** submit it through the HITL approve path (`agent_run_resume` / the review-task approve call). That path approves a review task; a hold has none, so the call resolves nothing and the run stays parked. The hold is decided by the recommendation confirm/skip surface.
+- **Do not** treat the run as `pending_approval`. A held run is `pending_input`.
+- Render it as the `recommendation_hold` card, not as a generic approval form. A client that does not implement the card should render its normal interrupt fallback and leave the decision to a first-party surface — the payload deliberately carries no state and no decision affordance.
+- `ref` is opaque and is **not** a capability: it addresses the interaction, grants nothing, and the server re-authorizes every resolve.
+- The field is optional and additive. An `INTERRUPT` without it is an ordinary review-task gate and behaves exactly as it always did; the contract version does not move.
+- Treat the interaction as **live state, not history**. A run can be held more than once, so its event log may contain hold announcements that are no longer current. The run stream re-derives the current interaction at subscribe time and drops the ones live state does not confirm — so trust what the stream gives you now and never replay old `INTERRUPT` frames yourself. A `RESUME` naming the same gate identity means the hold is over.
+
 ## A2UI — Agent-User Interface Protocol
 
 Spec: https://a2ui.org

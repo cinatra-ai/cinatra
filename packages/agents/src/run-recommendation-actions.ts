@@ -40,7 +40,9 @@ import {
 import { readAgentRunById, readAgentTemplateById } from "./store";
 import { getRunRecommendations } from "./recommendation-interception";
 import {
+  publishRecommendationHoldResume,
   readRecommendationParkForRun,
+  recommendationHoldThreadId,
   releaseRecommendationParkForRun,
   resolveRecommendationCandidateSkillIds,
 } from "./recommendation-hold";
@@ -51,6 +53,23 @@ import type { RecommendedSkillForChip } from "./server-actions";
 export type RunRecommendationDecisionResult =
   | { ok: true; dispatched: boolean }
   | { ok: false; error: string; code?: string; settingsHref?: string };
+
+/**
+ * The ONE refusal these decisions give when the caller may not act (cinatra#2568,
+ * the S1 generic-refusal contract).
+ *
+ * The previous per-branch strings — "unauthorized", "run not found",
+ * "forbidden", "selection not authorized" — were an ENUMERATION ORACLE: a
+ * caller holding a guessed run id could tell "no such run" from "exists, not
+ * yours" from "yours, wrong tier", and read a run's existence and ownership off
+ * a decision endpoint. The AUTHORIZATION DECISIONS ARE UNCHANGED by this
+ * constant; only what a refused caller learns is. Retryable, self-referential
+ * failures (the hold could not be released; a connector/LLM preflight the
+ * caller can fix) keep their own actionable messages — those describe the
+ * CALLER'S OWN next step and enumerate nothing about anyone else's rows.
+ */
+export const RECOMMENDATION_DECISION_REFUSAL =
+  "This run's skill selection cannot be decided from here.";
 
 export type RunRecommendationHoldState =
   | { state: "none" }
@@ -184,8 +203,8 @@ export async function confirmRunRecommendationAction(input: {
   forcedRevisions?: Record<string, string>;
 }): Promise<RunRecommendationDecisionResult> {
   const session = await requireAuthSession().catch(() => null);
-  if (!session?.user?.id) return { ok: false, error: "unauthorized" };
-  if (!input.runId) return { ok: false, error: "run not found" };
+  if (!session?.user?.id) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
+  if (!input.runId) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 
   // 1. Write the authoritative per-run selection (does its own execute-tier
   //    run authorization + assigned-set bounding).
@@ -198,7 +217,7 @@ export async function confirmRunRecommendationAction(input: {
     targetArtifactKind: input.targetArtifactKind,
     forcedRevisions: input.forcedRevisions,
   });
-  if (!written.ok) return { ok: false, error: "selection not authorized" };
+  if (!written.ok) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 
   // 2 + 3. Release the hold and dispatch.
   return releaseAndDispatch(input.runId);
@@ -215,15 +234,15 @@ export async function skipRunRecommendationAction(input: {
 }): Promise<RunRecommendationDecisionResult> {
   const session = await requireAuthSession().catch(() => null);
   const userId = session?.user?.id ?? null;
-  if (!userId) return { ok: false, error: "unauthorized" };
-  if (!input.runId) return { ok: false, error: "run not found" };
+  if (!userId) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
+  if (!input.runId) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 
   const run = await readAgentRunById(input.runId).catch(() => null);
-  if (!run) return { ok: false, error: "run not found" };
+  if (!run) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
   // Ownership check — the same gate `triggerAgentRun` (the dispatch, below)
   // enforces. A run with no owner (runBy null) is triggerable by any session,
   // matching the existing trigger semantics.
-  if (run.runBy && run.runBy !== userId) return { ok: false, error: "forbidden" };
+  if (run.runBy && run.runBy !== userId) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
 
   // Persist durable skip evidence: mark every recommended candidate `user_skipped`.
   // Best-effort — a telemetry write must never block the dispatch.
@@ -289,6 +308,15 @@ export async function skipRunRecommendationAction(input: {
  * explicit, retryable error instead of a false success. The verification read
  * FAILS CLOSED: an unreadable park is treated as still-held, because "I could
  * not confirm the release" must never become "dispatched".
+ *
+ * RESUME rides EXACTLY that verification (cinatra#2568). The typed hold
+ * interrupt is only retired once the park is confirmed no longer live — never
+ * optimistically on "the action was called", and never on the fail-closed
+ * branches above. So the wire can under-report a hold's end (the next subscribe
+ * re-derives from the park and finds it released) but can never claim a run was
+ * freed while it is still waiting. Emitted BEFORE the dispatch attempt because
+ * the hold is over either way: a preflight failure surfaces as its own
+ * actionable error on a run that is genuinely no longer held.
  */
 async function releaseAndDispatch(runId: string): Promise<RunRecommendationDecisionResult> {
   const HOLD_STILL_LIVE = {
@@ -305,7 +333,16 @@ async function releaseAndDispatch(runId: string): Promise<RunRecommendationDecis
   if (parkAfterRelease?.status === "parked") return HOLD_STILL_LIVE;
 
   const run = await readAgentRunById(runId).catch(() => null);
-  if (!run) return { ok: false, error: "run not found" };
+  if (!run) return { ok: false, error: RECOMMENDATION_DECISION_REFUSAL };
+
+  // The hold is verifiably over — retire it on the wire so every live surface
+  // (this tab, another tab, an external AG-UI client) drops the card at the same
+  // moment, instead of the losing tab sitting on a decided hold until its next
+  // poll tick.
+  await publishRecommendationHoldResume({
+    runId,
+    threadId: recommendationHoldThreadId(run),
+  });
 
   // A held run is pending_input; if it already advanced (a concurrent decision
   // won the dispatch race), report success without re-dispatching.

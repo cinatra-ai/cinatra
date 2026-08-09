@@ -27,6 +27,7 @@ const confirmRunSkillSelectionAction = vi.fn();
 const readRunSelectedSkillRevisions = vi.fn();
 const hasRunRecommendationSkip = vi.fn();
 const writeRunRejectedRecommendations = vi.fn();
+const publishRecommendationHoldResume = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: (...a: unknown[]) => requireAuthSession(...a),
@@ -47,6 +48,12 @@ vi.mock("../recommendation-hold", () => ({
   releaseRecommendationParkForRun: (...a: unknown[]) => releaseRecommendationParkForRun(...a),
   resolveRecommendationCandidateSkillIds: (...a: unknown[]) =>
     resolveRecommendationCandidateSkillIds(...a),
+  // cinatra#2568 — the wire seam the release now rides. Inert here; the
+  // RESUME-vs-verified-release contract is pinned in
+  // run-recommendation-actions-hold-wire.test.ts.
+  publishRecommendationHoldResume: (...a: unknown[]) => publishRecommendationHoldResume(...a),
+  recommendationHoldThreadId: (run: { id: string; templateId?: string | null }) =>
+    run.templateId && run.templateId.length > 0 ? run.templateId : run.id,
 }));
 vi.mock("../recommendation-interception", () => ({
   getRunRecommendations: (...a: unknown[]) => getRunRecommendations(...a),
