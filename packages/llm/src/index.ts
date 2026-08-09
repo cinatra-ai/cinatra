@@ -424,7 +424,6 @@ export type {
 // Backward-compatible wrapper functions
 // ---------------------------------------------------------------------------
 
-import { randomUUID } from "node:crypto";
 import type { ExtensionToolboxBuildContext } from "@cinatra-ai/sdk-extensions";
 import type { LlmProvider, LlmCapabilityRequirement, LlmProviderAdapter, LlmFileReference, GenerateInput, LlmTool, LlmUsageData, LlmResponse, LlmMcpServerTool, OrchestrateGenerateInput, OrchestrateStreamInput, OrchestrateUploadFileInput, OrchestrateFileInputGenerateInput, LlmAttachmentRef, SandboxExecutor, SandboxEnvironmentMount } from "./types";
 // `OpenAIConnectionConfig` is defined+exported above (host-local structural type;
@@ -480,12 +479,10 @@ import type {
 import {
   emitLlmUsage,
   getUsageAttribution,
-  markMeteredUsageCallback,
   withUsageAttribution,
 } from "./usage-metering";
 export {
   withUsageAttribution,
-  withCallerEmittedUsage,
   isMeteredAdapter,
   meterLlmProviderAdapter,
 } from "./usage-metering";
@@ -537,39 +534,6 @@ function requireActorFrame<T>(
 // therefore no longer emit next to their adapter calls — that convention is
 // exactly what let Batch, the admin test-key probe and most chat steps escape
 // the ledger (cinatra#2578).
-
-/**
- * Creates an onUsageData callback that emits a usage event.
- * Pass this into StreamInput.onUsageData to automatically capture streaming usage.
- *
- * Retained for callers that drive an adapter's `stream()` themselves and want to
- * own emission. The returned callback is MARKED as self-emitting, so the metering
- * proxy passes it through instead of wrapping it — exactly one row per usage
- * report either way.
- *
- * cinatra#2578: the key is now minted PER REPORT. It used to be minted once per
- * emitter, and since `usage_events` de-duplicates on `idempotency_key`, every
- * step of a multi-step streaming turn after the first was silently discarded at
- * the database — the single largest source of the ledger's under-count.
- */
-export function createStreamUsageEmitter(params: {
-  provider: LlmProvider;
-  model: string | undefined;
-  logLabel: string | undefined;
-  skillLabel?: string | null;
-}): (usage: LlmUsageData) => void {
-  return markMeteredUsageCallback((usage: LlmUsageData) => {
-    emitLlmUsage({
-      provider: params.provider,
-      model: params.model,
-      operation: "stream",
-      logLabel: params.logLabel,
-      skillLabel: params.skillLabel ?? null,
-      usage,
-      idempotencyKey: randomUUID(),
-    });
-  });
-}
 
 /**
  * The provider the platform resolved for a request, plus the MODEL that
@@ -1971,13 +1935,10 @@ async function downloadV1BatchOutcomes(
  * request exactly, so a re-download re-emits the same keys and the ledger's
  * unique index collapses them instead of doubling the reported spend.
  *
- * KNOWN LIMITATION, stated rather than papered over: the TOKEN counts recorded
- * here are exact, but the priced `cost_usd` is computed from the synchronous
- * rate card — `metric-cost-api`'s pricing table has no batch tier, and providers
- * discount batch work (OpenAI at 50%). So a batch row's cost is an UPPER BOUND
- * on real batch spend. That is the right direction to be wrong in for a ledger
- * whose defect was invisibility, and adding a batch rate tier is a pricing-table
- * change, not a metering one.
+ * The `"batch"` operation is not decoration: `metric-cost-api` reads it to apply
+ * the provider's asynchronous-batch rate (half the synchronous card on both
+ * providers that offer the surface), so a batch row is priced at what a batch
+ * actually costs rather than at the interactive rate.
  */
 function recordBatchOutcomeUsage(params: {
   provider: LlmProvider;

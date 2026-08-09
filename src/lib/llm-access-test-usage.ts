@@ -44,6 +44,21 @@ function asId(value: unknown): string | null {
 }
 
 /**
+ * A usage block we could not read ANY billable counter out of is not a
+ * zero-token request — it is a shape we do not understand. Recording it would
+ * put a fabricated row in the ledger, which is the failure mode cinatra#2578
+ * exists to remove, only inverted. Answer null and record nothing.
+ */
+function hasMeasuredTokens(usage: LlmUsageData): boolean {
+  return (
+    usage.inputTokens > 0 ||
+    usage.outputTokens > 0 ||
+    (usage.cacheReadInputTokens ?? 0) > 0 ||
+    (usage.cacheCreationInputTokens ?? 0) > 0
+  );
+}
+
+/**
  * OpenAI Responses API (`POST /v1/responses`).
  *
  * `input_tokens` on that surface is the TOTAL prompt, cached portion included —
@@ -61,13 +76,15 @@ export function readOpenAiResponsesUsage(body: unknown): ProbeUsage | null {
   if (!usage) return null;
   const inputDetails = asRecord(usage.input_tokens_details);
   const outputDetails = asRecord(usage.output_tokens_details);
+  const measured: LlmUsageData = {
+    inputTokens: asCount(usage.input_tokens),
+    outputTokens: asCount(usage.output_tokens),
+    cachedInputTokens: asCount(inputDetails?.cached_tokens),
+    reasoningOutputTokens: asCount(outputDetails?.reasoning_tokens),
+  };
+  if (!hasMeasuredTokens(measured)) return null;
   return {
-    usage: {
-      inputTokens: asCount(usage.input_tokens),
-      outputTokens: asCount(usage.output_tokens),
-      cachedInputTokens: asCount(inputDetails?.cached_tokens),
-      reasoningOutputTokens: asCount(outputDetails?.reasoning_tokens),
-    },
+    usage: measured,
     model: asId(root?.model),
     responseId: asId(root?.id),
   };
@@ -90,15 +107,17 @@ export function readAnthropicMessagesUsage(body: unknown): ProbeUsage | null {
   const root = asRecord(body);
   const usage = asRecord(root?.usage);
   if (!usage) return null;
+  const measured: LlmUsageData = {
+    inputTokens: asCount(usage.input_tokens),
+    outputTokens: asCount(usage.output_tokens),
+    cachedInputTokens: 0,
+    reasoningOutputTokens: 0,
+    cacheReadInputTokens: asCount(usage.cache_read_input_tokens),
+    cacheCreationInputTokens: asCount(usage.cache_creation_input_tokens),
+  };
+  if (!hasMeasuredTokens(measured)) return null;
   return {
-    usage: {
-      inputTokens: asCount(usage.input_tokens),
-      outputTokens: asCount(usage.output_tokens),
-      cachedInputTokens: 0,
-      reasoningOutputTokens: 0,
-      cacheReadInputTokens: asCount(usage.cache_read_input_tokens),
-      cacheCreationInputTokens: asCount(usage.cache_creation_input_tokens),
-    },
+    usage: measured,
     model: asId(root?.model),
     responseId: asId(root?.id),
   };

@@ -63,14 +63,23 @@ describe("readOpenAiResponsesUsage", () => {
     expect(readOpenAiResponsesUsage("not json")).toBeNull();
   });
 
-  it("ignores non-numeric / negative counters instead of trusting them", () => {
-    const probe = readOpenAiResponsesUsage({
-      usage: { input_tokens: "many", output_tokens: -4 },
+  it("records NOTHING when no counter is readable — a 0-token row would be a fabrication", () => {
+    // A usage object we cannot read a single billable counter out of is a shape
+    // we do not understand, not a free request.
+    expect(
+      readOpenAiResponsesUsage({ usage: { input_tokens: "many", output_tokens: -4 } }),
+    ).toBeNull();
+    expect(readOpenAiResponsesUsage({ usage: {} })).toBeNull();
+    expect(
+      readAnthropicMessagesUsage({ usage: { input_tokens: null, output_tokens: null } }),
+    ).toBeNull();
+  });
+
+  it("keeps a row whose only measurable counter is a cache read", () => {
+    const probe = readAnthropicMessagesUsage({
+      usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 500 },
     });
-    expect(probe?.usage.inputTokens).toBe(0);
-    expect(probe?.usage.outputTokens).toBe(0);
-    expect(probe?.model).toBeNull();
-    expect(probe?.responseId).toBeNull();
+    expect(probe?.usage.cacheReadInputTokens).toBe(500);
   });
 });
 

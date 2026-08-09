@@ -12,8 +12,8 @@
  *  3. the proxy is transparent — optional adapter members keep their presence
  *     and their behaviour, since core probes them to decide what a provider can
  *     do;
- *  4. the caller-emitted opt-out actually silences the proxy, so the one call
- *     site that emits a richer row is not counted twice.
+ *  4. there is NO opt-out — this module is the only producer of a `source:"llm"`
+ *     row, so double counting is impossible by construction.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -24,12 +24,11 @@ vi.mock("@cinatra-ai/metric-usage-api", () => ({
   emitUsageEvent: emitUsageEventMock,
 }));
 
+import * as metering from "./usage-metering";
 import {
   meterLlmProviderAdapter,
   isMeteredAdapter,
   withUsageAttribution,
-  withCallerEmittedUsage,
-  markMeteredUsageCallback,
 } from "./usage-metering";
 import type {
   LlmProviderAdapter,
@@ -167,6 +166,56 @@ describe("meterLlmProviderAdapter — generate", () => {
     });
   });
 
+  it("lets the attribution frame's agentLabel WIN over the transport logLabel", async () => {
+    // The frame is the caller's precise knowledge ("blog-draft-writer-agent");
+    // `logLabel` is whatever generic label the transport happened to carry.
+    const adapter = meterLlmProviderAdapter(makeAdapter());
+
+    await withUsageAttribution({ agentLabel: "precise-agent" }, () =>
+      adapter.generate({ system: "s", prompt: "p", logLabel: "generic-transport-label" }),
+    );
+
+    expect(emitted()[0]?.agentLabel).toBe("precise-agent");
+  });
+
+  it("falls back to the transport logLabel when the frame names no agent", async () => {
+    const adapter = meterLlmProviderAdapter(makeAdapter());
+    await adapter.generate({ system: "s", prompt: "p", logLabel: "chat-step" });
+    expect(emitted()[0]?.agentLabel).toBe("chat-step");
+  });
+
+  it("an inner frame layers onto an outer one instead of blanking it", async () => {
+    // A caller that only knows the skill must not erase an outer frame's
+    // provider telemetry — the merge drops ABSENT keys, not stated ones.
+    const adapter = meterLlmProviderAdapter(makeAdapter());
+
+    await withUsageAttribution(
+      { requestedProvider: "anthropic", effectiveProvider: "openai" },
+      () =>
+        withUsageAttribution({ skillLabel: "inner-skill" }, () =>
+          adapter.generate({ system: "s", prompt: "p" }),
+        ),
+    );
+
+    expect(emitted()[0]).toMatchObject({
+      skillLabel: "inner-skill",
+      requestedProvider: "anthropic",
+      effectiveProvider: "openai",
+    });
+  });
+
+  it("an explicit null DOES override — it states a fact, it is not an omission", async () => {
+    const adapter = meterLlmProviderAdapter(makeAdapter());
+
+    await withUsageAttribution({ skillLabel: "outer-skill" }, () =>
+      withUsageAttribution({ skillLabel: null }, () =>
+        adapter.generate({ system: "s", prompt: "p" }),
+      ),
+    );
+
+    expect(emitted()[0]?.skillLabel).toBeNull();
+  });
+
   it("returns the adapter's response untouched", async () => {
     const adapter = meterLlmProviderAdapter(makeAdapter());
     const response = await adapter.generate({ system: "s", prompt: "p" });
@@ -256,21 +305,6 @@ describe("meterLlmProviderAdapter — stream", () => {
     expect(emitted()).toHaveLength(1);
   });
 
-  it("defers to an already-metered onUsageData instead of double-counting", async () => {
-    const ownEmitter = markMeteredUsageCallback(vi.fn());
-    const adapter = meterLlmProviderAdapter(
-      makeAdapter({
-        stream: vi.fn(async (input: { onUsageData?: (u: LlmUsageData) => void }) => {
-          input.onUsageData?.(usage(6));
-        }) as unknown as LlmProviderAdapter["stream"],
-      }),
-    );
-
-    await adapter.stream(streamInput({ onUsageData: ownEmitter }));
-
-    expect(ownEmitter).toHaveBeenCalledTimes(1);
-    expect(emitted()).toHaveLength(0);
-  });
 });
 
 describe("meterLlmProviderAdapter — transparency and opt-out", () => {
@@ -306,29 +340,94 @@ describe("meterLlmProviderAdapter — transparency and opt-out", () => {
     expect(emitted()).toHaveLength(0);
   });
 
-  it("stays silent inside withCallerEmittedUsage on both generate and stream", async () => {
+  it("meters a CLASS-based adapter that uses private fields", async () => {
+    // Connector adapters are third-party code and may be classes. A pass-through
+    // member left unbound would run with `this === proxy`, and the private-brand
+    // check on `#calls` throws the moment it is touched — which is why the proxy
+    // binds every pass-through member to the connector object.
+    class ClassAdapter {
+      readonly provider = "openai" as const;
+      readonly defaultModel = "class-model";
+      #calls = 0;
+
+      async generate(): Promise<LlmResponse> {
+        this.#calls += 1;
+        return {
+          text: "ok",
+          status: null,
+          incompleteReason: null,
+          rawBody: "",
+          model: "class-model",
+          usage: usage(11),
+        };
+      }
+
+      async stream(): Promise<void> {}
+
+      async listModels(): Promise<string[]> {
+        this.#calls += 1;
+        return ["class-model"];
+      }
+    }
+
     const adapter = meterLlmProviderAdapter(
-      makeAdapter({
-        stream: vi.fn(async (input: { onUsageData?: (u: LlmUsageData) => void }) => {
-          input.onUsageData?.(usage(8));
-        }) as unknown as LlmProviderAdapter["stream"],
-      }),
+      new ClassAdapter() as unknown as LlmProviderAdapter,
     );
 
-    await withCallerEmittedUsage(() =>
-      adapter.generate({ system: "s", prompt: "p" }),
-    );
-    await withCallerEmittedUsage(() => adapter.stream(streamInput()));
+    await expect(adapter.listModels!()).resolves.toEqual(["class-model"]);
+    await adapter.generate({ system: "s", prompt: "p" });
 
-    expect(emitted()).toHaveLength(0);
+    expect(emitted()).toHaveLength(1);
+    expect(emitted()[0]).toMatchObject({ provider: "openai", inputTokens: 11 });
   });
 
-  it("does not leak the opt-out to a sibling call outside the frame", async () => {
+  it("hands a REFLECTIVE read the same metered member as a normal read", async () => {
+    // Without a getOwnPropertyDescriptor trap this returns the connector's raw,
+    // unmetered function — a hole in "there is no way to obtain an unmetered
+    // adapter".
     const adapter = meterLlmProviderAdapter(makeAdapter());
-    await withCallerEmittedUsage(() =>
-      adapter.generate({ system: "s", prompt: "p" }),
+    const descriptor = Object.getOwnPropertyDescriptor(adapter, "generate");
+
+    expect(descriptor?.value).toBe(adapter.generate);
+    await (descriptor!.value as LlmProviderAdapter["generate"])({
+      system: "s",
+      prompt: "p",
+    });
+    expect(emitted()).toHaveLength(1);
+  });
+
+  it("keeps method identity stable across reads", () => {
+    // A trap that built a fresh closure per read would break any caller that
+    // compares or de-duplicates method references.
+    const adapter = meterLlmProviderAdapter(
+      makeAdapter({ listModels: vi.fn(async () => ["m"]) } as Partial<LlmProviderAdapter>),
     );
-    await adapter.generate({ system: "s", prompt: "p" });
+    expect(adapter.generate).toBe(adapter.generate);
+    expect(adapter.stream).toBe(adapter.stream);
+    expect(adapter.listModels).toBe(adapter.listModels);
+  });
+
+  it("exports no bypass, and an unknown frame key cannot become one", async () => {
+    // The opt-out this seam once carried is gone on purpose: with no way to
+    // silence the proxy, double counting is impossible by construction rather
+    // than by an allowlist someone has to maintain.
+    expect(
+      Object.keys(metering).filter((name) =>
+        /callerEmitted|suppress|optOut|skipUsage/i.test(name),
+      ),
+    ).toEqual([]);
+
+    // Driving the real proxy inside a frame carrying every plausible "off"
+    // switch still records the call.
+    const adapter = meterLlmProviderAdapter(makeAdapter());
+    await withUsageAttribution(
+      {
+        usageEmittedByCaller: true,
+        suppress: true,
+        skipUsage: true,
+      } as unknown as metering.UsageAttribution,
+      () => adapter.generate({ system: "s", prompt: "p" }),
+    );
     expect(emitted()).toHaveLength(1);
   });
 });

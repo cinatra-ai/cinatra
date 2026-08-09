@@ -17,8 +17,9 @@
  *      raw adapter and its spend would vanish.
  *   2. NO MODULE TALKS TO A PROVIDER'S INFERENCE API DIRECTLY, except the files
  *      registered below with a stated reason.
- *   3. THE METERING OPT-OUT STAYS RARE. `withCallerEmittedUsage` silences the
- *      proxy; only the registered files may use it, and each says why.
+ *   3. THERE IS NO OPT-OUT. The metering seam exports no way to silence itself
+ *      and no module hand-builds a `source:"llm"` usage event, so the seam is
+ *      the single producer and double-counting is structurally impossible.
  *
  * KNOWN OPEN PATHS are registered too, with the issue that owns them, so this
  * file is an honest inventory rather than a claim of completeness. Graphiti's
@@ -103,13 +104,50 @@ const DIRECT_PROVIDER_CALLERS: Registered[] = [
   },
 ];
 
-/** Files permitted to silence the metering proxy because they emit their own row. */
-const CALLER_EMITTED_USAGE_SITES: Registered[] = [
+/**
+ * The ONLY modules that may PUBLISH a usage event onto the bus. Anything else
+ * building a row by hand can (and did) hardcode `cachedInputTokens` /
+ * `reasoningOutputTokens` to zero and misprice it.
+ */
+/**
+ * The ONLY modules that may call the seam's `emitLlmUsage`. A caller that
+ * invoked it AROUND an already-metered adapter call would double-count while
+ * every other assertion here still passed, so the set is pinned by name.
+ */
+const EMIT_LLM_USAGE_CALLERS: Registered[] = [
   {
-    file: "src/app/api/llm-bridge/route.ts",
+    file: "packages/llm/src/usage-metering.ts",
+    why: "Defines it; the metering proxy is its primary caller.",
+  },
+  {
+    file: "packages/llm/src/index.ts",
     why:
-      "Media branch emits a RICHER row than the transport seam can build — it knows " +
-      "the dispatch's requested/effective provider and the calling agent id.",
+      "Batch outcome accounting. A batch's tokens arrive on the RESULT rows, not " +
+      "from an adapter call, so no proxy invocation exists to meter.",
+  },
+  {
+    file: "src/app/configuration/mcp/llm-access/test/route.ts",
+    why:
+      "The admin MCP-access probe reaches the provider with a raw fetch, so no " +
+      "adapter — and therefore no proxy — is involved.",
+  },
+];
+
+const USAGE_EVENT_PUBLISHERS: Registered[] = [
+  {
+    file: "packages/metric-contracts/src/bus.ts",
+    why: "Defines the bus emitter itself.",
+  },
+  {
+    file: "packages/llm/src/usage-metering.ts",
+    why: "The seam. The single producer of every source:\"llm\" row.",
+  },
+  {
+    file: "src/lib/extension-host-context.ts",
+    why:
+      "Inverts the telemetry surface for EXTENSION-realm producers, which run " +
+      "outside this repo and cannot reach the seam. It forwards their event " +
+      "verbatim; it never builds one.",
   },
 ];
 
@@ -139,14 +177,22 @@ describe("the adapter mint point is the only place an adapter is created", () =>
     // Matches an INVOCATION (`surface.createAdapter()`) or a destructuring that
     // detaches the factory (`const { createAdapter } = surface`) — not the ABI's
     // own member DECLARATION in the SDK contract, which is a type, not a call.
-    const INVOKES_ADAPTER_FACTORY = /\.createAdapter\s*\(|createAdapter\s*[,}][^=]*}\s*=/;
+    // Covers a plain call, an optional call, bracket access with either quote
+    // style, and a destructuring that detaches the factory. It does NOT match
+    // the ABI's own member DECLARATION in the SDK contract, which is a type.
+    const INVOKES_ADAPTER_FACTORY =
+      /\.\s*createAdapter\s*(\?\.)?\s*\(|\?\.\s*createAdapter\s*\(|\[\s*["'`]createAdapter["'`]\s*\]\s*\(|\{[^{}]*\bcreateAdapter\b[^{}]*\}\s*=/;
     expect(filesMatching(INVOKES_ADAPTER_FACTORY)).toEqual([ADAPTER_MINT_POINT]);
   });
 
-  it("the registry actually applies the metering wrapper", () => {
+  it("the registry feeds the factory's result THROUGH the metering wrapper", () => {
+    // Not merely "the name appears" — an unused import would satisfy that. The
+    // returned value has to be the wrapped one.
     const registry = SOURCE_FILES.find((file) => file.rel === ADAPTER_MINT_POINT);
     expect(registry).toBeDefined();
-    expect(registry!.text).toContain("meterLlmProviderAdapter");
+    expect(registry!.text).toMatch(
+      /return\s+meterLlmProviderAdapter\(\s*adapter\s+as\s+LlmProviderAdapter\s*\)/,
+    );
   });
 });
 
@@ -157,6 +203,20 @@ describe("no module reaches a provider inference API outside the seam", () => {
     expect(filesMatching(PROVIDER_HOSTS)).toEqual(
       registeredFiles(DIRECT_PROVIDER_CALLERS),
     );
+  });
+
+  it("no module imports a provider SDK — a URL-only scan would miss that", () => {
+    // `new OpenAI(...)` reaches the same billed endpoints without ever naming a
+    // host, so the host scan above is not sufficient on its own. Provider SDKs
+    // belong in the connectors, which live outside this repo.
+    // Both quote styles, package SUBPATHS, static import / require / dynamic
+    // `import()` — a single-quote or `openai/resources` import reaches the same
+    // billed endpoints and must not slip past.
+    const SDK = "(?:openai|@anthropic-ai/sdk|@google/genai)(?:/[\\w./-]+)?";
+    const PROVIDER_SDK_IMPORT = new RegExp(
+      `(?:from|import|require)\\s*\\(?\\s*["'\`]${SDK}["'\`]`,
+    );
+    expect(filesMatching(PROVIDER_SDK_IMPORT)).toEqual([]);
   });
 
   it("the admin probe registered above really does emit usage", () => {
@@ -176,24 +236,49 @@ describe("no module reaches a provider inference API outside the seam", () => {
   });
 });
 
-describe("the metering opt-out stays rare and deliberate", () => {
-  it("only the registered files silence the metering proxy", () => {
-    expect(filesMatching(/withCallerEmittedUsage/)).toEqual(
-      [
-        // The seam that defines it.
-        "packages/llm/src/index.ts",
-        "packages/llm/src/usage-metering.ts",
-        ...registeredFiles(CALLER_EMITTED_USAGE_SITES),
-      ].sort(),
+describe("the seam has no bypass", () => {
+  it("exports no way to silence metering", () => {
+    // A name-level guard on purpose: the previous design carried a
+    // `withCallerEmittedUsage` opt-out, and an opt-out is exactly the kind of
+    // affordance that spreads one call site at a time until the ledger is a
+    // convention again.
+    expect(filesMatching(/withCallerEmittedUsage|usageEmittedByCaller/)).toEqual([]);
+  });
+
+  it("only the registered publishers put a usage event on the bus", () => {
+    expect(filesMatching(/\bemitUsageEvent\s*\(/)).toEqual(
+      registeredFiles(USAGE_EVENT_PUBLISHERS),
     );
   });
 
-  it("a caller that opts out still emits its own usage event", () => {
-    for (const entry of CALLER_EMITTED_USAGE_SITES) {
-      const file = SOURCE_FILES.find((candidate) => candidate.rel === entry.file);
-      expect(file, `${entry.file} is registered but missing`).toBeDefined();
-      expect(file!.text).toMatch(/emitUsageEvent|emitLlmUsage/);
-    }
+  it("only the registered callers reach the seam's emitter directly", () => {
+    // Every one of these is a path with NO adapter call to meter. A new entry
+    // that DOES have one would double-count against the proxy.
+    expect(filesMatching(/\bemitLlmUsage\s*\(/)).toEqual(
+      registeredFiles(EMIT_LLM_USAGE_CALLERS),
+    );
+  });
+
+  it("the seam is the only publisher that CONSTRUCTS a source:\"llm\" row", () => {
+    const seam = SOURCE_FILES.find(
+      (file) => file.rel === "packages/llm/src/usage-metering.ts",
+    );
+    expect(seam).toBeDefined();
+    expect(seam!.text).toMatch(/emitUsageEvent\(\{\s*\n\s*source: "llm"/);
+    // The extension-realm forwarder passes an event through, never builds one.
+    const forwarder = SOURCE_FILES.find(
+      (file) => file.rel === "src/lib/extension-host-context.ts",
+    );
+    expect(forwarder!.text).not.toMatch(/source:\s*"llm"/);
+  });
+
+  it("the llm-bridge media branch publishes attribution instead of its own row", () => {
+    const bridge = SOURCE_FILES.find(
+      (file) => file.rel === "src/app/api/llm-bridge/route.ts",
+    );
+    expect(bridge).toBeDefined();
+    expect(bridge!.text).toContain("withUsageAttribution");
+    expect(bridge!.text).not.toContain("emitUsageEvent(");
   });
 });
 

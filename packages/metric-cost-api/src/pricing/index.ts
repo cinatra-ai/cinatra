@@ -71,9 +71,40 @@ async function lookupModelPricingFromDb(model: string): Promise<{
 }
 
 /**
+ * The ASYNCHRONOUS-BATCH rate multiplier, by provider (cinatra#2578).
+ *
+ * The rate card this module prices against is the SYNCHRONOUS one. Both
+ * providers that offer a batch surface bill asynchronous batch work at half the
+ * synchronous rate on input AND output, so pricing a batch row off the plain
+ * card would overstate that spend by ~2x. Since the ledger's whole purpose is to
+ * tell an operator what they actually spend, "invisible" must not be replaced by
+ * "materially wrong in the other direction".
+ *
+ * A provider absent from this table gets 1.0 — no discount is ASSUMED for a
+ * surface whose batch terms we do not know.
+ */
+const BATCH_RATE_MULTIPLIER_BY_PROVIDER: Record<string, number> = {
+  openai: 0.5,
+  anthropic: 0.5,
+};
+
+export function batchRateMultiplier(provider: string): number {
+  return Object.prototype.hasOwnProperty.call(
+    BATCH_RATE_MULTIPLIER_BY_PROVIDER,
+    provider,
+  )
+    ? BATCH_RATE_MULTIPLIER_BY_PROVIDER[provider]
+    : 1;
+}
+
+/**
  * Compute cost for an LLM call. Returns null (not 0) when model has no pricing entry.
  * cost_usd is stored as NULL for unknown models so pricing gaps are detectable.
  * DB lookup takes precedence over hardcoded LLM_PRICING; falls back on DB failure.
+ *
+ * `rateMultiplier` (cinatra#2578) scales the whole computation for a surface
+ * billed off the synchronous card — today only asynchronous batch. Absent ⇒ 1,
+ * so every existing caller is byte-identical.
  */
 export async function computeLlmCostUsd(params: {
   model: string;
@@ -82,6 +113,7 @@ export async function computeLlmCostUsd(params: {
   cachedInputTokens: number;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
+  rateMultiplier?: number;
 }): Promise<number | null> {
   // DB lookup takes precedence when live pricing exists.
   const dbPricing = await lookupModelPricingFromDb(params.model);
@@ -109,7 +141,13 @@ export async function computeLlmCostUsd(params: {
     + cacheCreationCost;
   const outputCost = (params.outputTokens / 1_000_000) * pricing.outputPerMillion;
 
-  return inputCost + outputCost;
+  // Applied to the TOTAL: every provider that discounts batch discounts both
+  // legs, so scaling once here keeps the cache terms consistent with the rest.
+  const multiplier =
+    typeof params.rateMultiplier === "number" && params.rateMultiplier > 0
+      ? params.rateMultiplier
+      : 1;
+  return (inputCost + outputCost) * multiplier;
 }
 
 /**

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { onUsageEvent } from "@cinatra-ai/metric-contracts";
 import type { UsageEvent } from "@cinatra-ai/metric-contracts";
 import { insertUsageEvent } from "./store";
-import { computeLlmCostUsd, computeApolloCostUsd } from "./pricing";
+import { computeLlmCostUsd, computeApolloCostUsd, batchRateMultiplier } from "./pricing";
 
 let started = false;
 
@@ -21,6 +21,13 @@ export function startUsageEventSubscriber(): void {
           cachedInputTokens: event.cachedInputTokens,
           cacheReadInputTokens: event.cacheReadInputTokens,
           cacheCreationInputTokens: event.cacheCreationInputTokens,
+          // cinatra#2578: asynchronous batch work is billed at half the
+          // synchronous rate this module's card carries. Pricing a batch row off
+          // the plain card would overstate that spend ~2x.
+          rateMultiplier:
+            event.operation === "batch"
+              ? batchRateMultiplier(event.provider)
+              : 1,
         });
         await insertUsageEvent({
           id: randomUUID(),

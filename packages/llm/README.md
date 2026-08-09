@@ -27,13 +27,14 @@ Unified LLM orchestration layer for the application. All LLM API calls flow thro
 - `buildLlmMcpServerTool`, `getLlmMcpCredentials`, `getPublicMcpServerUrl` — self-MCP access
 - `writeLlmLogFile`, `setAnthropicLoggingEnabled` — request logging
 - `withActorContext` / `getActorContext` / `getActorContextOrThrow` — ambient actor propagation
-- `createStreamUsageEmitter` — streaming usage emission callback
+- `withUsageAttribution` — publishes skill / requested-provider attribution for the usage row the metering seam emits (cinatra#2578; every adapter resolved through `resolveProviderAdapter` is metered, so callers never emit usage themselves)
 - Types: `LlmProviderAdapter`, `LlmResponse`, `LlmMessage`, `LlmTool`, `LlmUsageData`, and related shapes
 
 ### Sub-entry points
 - `@cinatra-ai/llm/actor-context` — `AsyncLocalStorage` carrier for the triggering actor
 - `@cinatra-ai/llm/anthropic-log-directory` — Anthropic request-log directory constant
 - `@cinatra-ai/llm/anthropic-logging-state` — leaf flag module for Anthropic logging
+- `@cinatra-ai/llm/usage-metering` — the usage-ledger choke point (`withUsageAttribution`, `emitLlmUsage`, `meterLlmProviderAdapter`)
 
 ## Usage
 
