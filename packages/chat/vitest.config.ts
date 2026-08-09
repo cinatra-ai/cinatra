@@ -36,6 +36,13 @@ export default defineConfig({
         "packages/agent-ui-protocol/src/renderable-views/chart.ts",
       ),
       // S4 renderable-view schema registry subpath (mirrors tsconfig.json).
+      // Vite matches aliases by PREFIX, so the deep lifecycle-cards specifier
+      // (cinatra#2568 — imported deeply so the zod view-schema chain stays out
+      // of the locked routes' graphs) must be listed BEFORE the barrel entry.
+      "@cinatra-ai/agent-ui-protocol/renderable-views/lifecycle-cards": path.join(
+        root,
+        "packages/agent-ui-protocol/src/renderable-views/lifecycle-cards.ts",
+      ),
       "@cinatra-ai/agent-ui-protocol/renderable-views": path.join(
         root,
         "packages/agent-ui-protocol/src/renderable-views/index.ts",

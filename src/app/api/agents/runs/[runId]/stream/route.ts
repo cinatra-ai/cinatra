@@ -149,10 +149,12 @@ export async function GET(request: Request, context: RouteContext) {
       liveHoldId = (await deriveHold()).holdId;
     }
     if (type === "RESUME") {
-      // A RESUME retires exactly its own hold. Forward it only when the park
-      // agrees that hold is over — a replayed RESUME for a decided hold must
-      // never clear the card of the hold the run is waiting on NOW.
-      return liveHoldId !== claimed.holdId;
+      // A lifecycle RESUME is a "this interaction is over" signal, and a client
+      // cannot tell WHICH hold it names (the ref is opaque to it). So it is
+      // forwarded only when the run has NO live hold at all: while the park
+      // says the run is waiting — on this hold or on a later one — a replayed
+      // retirement would clear a card the run is still behind.
+      return liveHoldId === null;
     }
     // An announcement is forwarded only while it IS the live hold.
     return liveHoldId === claimed.holdId;
