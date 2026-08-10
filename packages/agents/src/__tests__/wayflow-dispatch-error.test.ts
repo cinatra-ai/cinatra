@@ -18,6 +18,10 @@ describe("describeWayflowDispatchError (#562)", () => {
     expect(out).toContain("Could not reach the agent runtime at");
     expect(out).toContain(URL);
     expect(out).toContain("ECONNREFUSED");
+    // The dev remediation names the exact start command (#2654): a fresh dev
+    // install never starts the profile-gated runtime, so the connectivity
+    // failure must tell the operator how to start it.
+    expect(out).toContain("cinatra instance wayflow start");
     // No longer the bare, undebuggable message.
     expect(out).not.toBe("fetch failed");
   });

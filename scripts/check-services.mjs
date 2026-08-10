@@ -128,10 +128,16 @@ const services = [
     note: "object graph indexer",
   },
   {
+    // Recommended (not optional): agent runs are a headline feature and 100%
+    // of them hard-fail with ECONNREFUSED while this runtime is down. The
+    // profile gate means a default dev bring-up NEVER starts it (#2654), so
+    // this check is where a fresh install learns the exact start command.
+    // Recommended-tier never affects the exit code.
     name: "WayFlow",
-    tier: "optional",
+    tier: "recommended",
     ...hostPort(env.WAYFLOW_BASE_URL, { host: "127.0.0.1", port: 3010 }),
-    note: "agent runtime — needs the `wayflow` compose profile",
+    note: "agent runtime; serves every installed agent",
+    downHint: "agent runs fail until you run `cinatra instance wayflow start`",
   },
   {
     name: "Cinatra app",
@@ -167,9 +173,9 @@ for (const r of results) {
   let status;
   if (r.up) status = green("up");
   else if (r.tier === "app") status = dim("not started — run `make dev`");
-  else if (r.tier === "optional") status = dim("not started — enable the `wayflow` compose profile");
+  else if (r.tier === "optional") status = dim("not started; enable its compose profile");
   else if (r.tier === "required") status = red("DOWN — required");
-  else status = yellow("down — recommended");
+  else status = yellow(r.downHint ? `down — recommended; ${r.downHint}` : "down — recommended");
   console.log(`  ${mark}  ${r.name.padEnd(nameWidth)}  ${dim(addr)}  ${status}  ${dim(r.note)}`);
 }
 

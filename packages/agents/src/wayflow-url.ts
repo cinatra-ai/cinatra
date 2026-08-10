@@ -108,7 +108,10 @@ export function describeWayflowDispatchError(
   return (
     `Could not reach the agent runtime at ${wayflowUrl} — fetch failed${reason}. ` +
     `Check that the WayFlow runtime is running and reachable (e.g. the dev ` +
-    `tunnel/Funnel and WAYFLOW_BASE_URL).`
+    `tunnel/Funnel and WAYFLOW_BASE_URL). On a local dev install the runtime ` +
+    `is profile-gated and does NOT start by default: start it with ` +
+    `\`cinatra instance wayflow start\` (or: \`docker compose --profile wayflow ` +
+    `up -d --build wayflow\` with docker/wayflow/.wayflow.env generated).`
   );
 }
 

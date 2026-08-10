@@ -185,10 +185,24 @@ function main() {
     );
     process.exit(1);
   }
-  if (missing.length > 0) {
+  // The two remaining keys degrade DIFFERENTLY, so name the consequence per
+  // key instead of one blanket "degraded" (proven against the runtime while
+  // verifying #2654): agent_loader.py REFUSES to start on a missing
+  // CINATRA_CONTEXT_ATTEST_KEY (crash-loop, unless
+  // CINATRA_ALLOW_NO_CONTEXT_ATTEST_KEY=1), while a missing OPENAI_API_KEY is
+  // a genuine degraded start.
+  if (missing.includes("CINATRA_CONTEXT_ATTEST_KEY")) {
     console.warn(
-      `[gen-wayflow-env] WARNING: not set in .env.local: ${missing.join(", ")}. ` +
-        "The wayflow container will start without them (degraded).",
+      "[gen-wayflow-env] WARNING: CINATRA_CONTEXT_ATTEST_KEY is not set in .env.local. " +
+        "The wayflow runtime REFUSES to start without it (agent_loader.py fails loud at boot; " +
+        "CINATRA_ALLOW_NO_CONTEXT_ATTEST_KEY=1 bypasses for isolated harnesses). " +
+        "The dev setup mints it into .env.local; re-run `cinatra install` / scripts/setup.sh to backfill.",
+    );
+  }
+  if (missing.includes("OPENAI_API_KEY")) {
+    console.warn(
+      "[gen-wayflow-env] WARNING: OPENAI_API_KEY is not set in .env.local. " +
+        "The wayflow container starts without it (degraded).",
     );
   }
 
