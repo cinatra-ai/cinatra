@@ -31,9 +31,14 @@ import {
   resolveLeafSpecifier,
   normalizeDdlLine,
   schemaNameAliases,
+  mutatedSchemaBindings,
+  schemaBindingRedirects,
+  schemaBindingScopes,
+  unverifiedSchemaScopes,
   stripComments,
   unresolvedLeafSpreads,
   findLocalDdlHelpers,
+  helperBody,
   leafDdlLines,
   IN_SCOPE_FILE,
   MIGRATION_MANIFEST_PATH,
@@ -59,7 +64,7 @@ test("fixture corpus covers the convention's required cases", () => {
   const expects = new Set(corpus.fixtures.map((f) => f.expect));
   assert.ok(expects.has("pass") && expects.has("fail"), "corpus must contain both pass and fail labels");
   const categories = corpus.fixtures.map((f) => f.category).join(" | ");
-  for (const needle of ["destructive, no artifact", "destructive, has artifact", "additive", "out of scope", "spread-in leaf", "BY the relocation", "hidden inside the DDL leaf"]) {
+  for (const needle of ["destructive, no artifact", "destructive, has artifact", "additive", "out of scope", "spread-in leaf", "BY the relocation", "hidden inside the DDL leaf", "binding redirected under unchanged leaf DDL", "provenance leaves the builder"]) {
     assert.ok(categories.includes(needle), `corpus must keep a "${needle}" fixture (have: ${categories})`);
   }
 });
@@ -1358,6 +1363,651 @@ test("schemaNameAliases only binds the ONE schema-escape expression, and drops A
   );
   // A commented-out declaration binds nothing.
   assert.deepEqual([...schemaNameAliases("// const s = schemaName.replaceAll('\"', '\"\"');")], []);
+
+  // The site count the RELOCATION match depends on is exactly what it was before
+  // the tracing verifier landed: the loop-rebinding scan and the
+  // statement-terminated initializer feed the verifier ONLY, so no comparison
+  // the gate already makes is loosened OR tightened. `for (s of …)` still leaves
+  // the alias qualified here — the mutation is caught by the cancellation ban,
+  // not by silently narrowing this set.
+  assert.deepEqual([...schemaNameAliases("const s = schemaName.replaceAll('\"', '\"\"');\nfor (s of v) { void s; }")], ["s"]);
+  // A WRAPPED declaration still does not qualify here (it never did) even though
+  // the verifier now reads it whole.
+  assert.deepEqual([...schemaNameAliases("const s = schemaName\n  .replaceAll('\"', '\"\"');")], []);
+});
+
+// --- The schema-name BINDING detector (codex round 3) -----------------------
+
+/** A one-builder leaf whose DDL interpolates `${s}`, with the binding swapped in. */
+const bindingLeaf = (...bind) =>
+  [
+    "export function gadgetSchemaQueries(schemaName: string): { text: string }[] {",
+    ...bind,
+    "  return [",
+    '    { text: `CREATE TABLE IF NOT EXISTS "${s}"."gadgets" (',
+    "      id text PRIMARY KEY",
+    "    )` },",
+    "  ];",
+    "}",
+  ].join("\n");
+const CLEAN_BIND = "  const s = schemaName.replaceAll('\"', '\"\"');";
+
+test("mutatedSchemaBindings reports a schema name the scope MUTATES or re-binds", () => {
+  // The clean binding — one declaration of the escape over the parameter.
+  assert.deepEqual([...mutatedSchemaBindings(bindingLeaf(CLEAN_BIND))], []);
+
+  // The reproduced laundering shape: a COMPOUND mutation of the alias.
+  assert.deepEqual([...mutatedSchemaBindings(bindingLeaf("  let s = schemaName.replaceAll('\"', '\"\"');", '  s += "_shadow";'))], ["s"]);
+  // A plain reassignment and a second declaration are the same defect.
+  assert.deepEqual([...mutatedSchemaBindings(bindingLeaf("  let s = schemaName.replaceAll('\"', '\"\"');", '  s = "shadow_schema";'))], ["s"]);
+  assert.deepEqual(
+    [...mutatedSchemaBindings(bindingLeaf("  const s = schemaName.replaceAll('\"', '\"\"');", '  const s = "shadow_schema";'))],
+    ["s"],
+  );
+  // The PARAMETER behind the alias counts too — mutating it redirects the alias
+  // that reads it, however untouched the alias's own declaration looks.
+  assert.deepEqual(
+    [...mutatedSchemaBindings(bindingLeaf('  schemaName += "_shadow";', "  const s = schemaName.replaceAll('\"', '\"\"');"))],
+    ["schemaName"],
+  );
+  // A comparison is not a mutation, and a commented-out one binds nothing.
+  assert.deepEqual([...mutatedSchemaBindings(bindingLeaf(CLEAN_BIND, "  if (s !== '' && s >= 'a') return [];"))], []);
+  assert.deepEqual([...mutatedSchemaBindings(bindingLeaf(CLEAN_BIND, '  // s += "_shadow";'))], []);
+
+  // SCOPE-AWARENESS is what keeps an ordinary multi-builder leaf clean: every
+  // exported builder declares its own alias over its own `schemaName` parameter,
+  // and a file-wide site count would read that as ambiguous.
+  const twoBuilders = [bindingLeaf(CLEAN_BIND), bindingLeaf(CLEAN_BIND).replace(/gadget/g, "widget").replace(/gadgets/g, "widgets")].join("\n\n");
+  assert.deepEqual([...mutatedSchemaBindings(twoBuilders)], []);
+  // …and one poisoned builder does not implicate its sibling.
+  const scopes = schemaBindingScopes(twoBuilders);
+  assert.deepEqual([...scopes.keys()], ["gadgetSchemaQueries", "widgetSchemaQueries", "#top"]);
+  // Every real leaf in the repo binds its schema name cleanly — if this fails,
+  // a leaf landed a mutation and its DDL no longer names the schema it reads.
+  const storeSrc = readFileSync(join(REPO_ROOT, IN_SCOPE_FILE), "utf8");
+  for (const p of findDdlLeafModules(storeSrc).keys()) {
+    if (!existsSync(join(REPO_ROOT, p))) continue;
+    assert.deepEqual([...mutatedSchemaBindings(readFileSync(join(REPO_ROOT, p), "utf8"))], [], `leaf ${p} mutates its schema-name binding`);
+  }
+});
+
+test("unverifiedSchemaScopes refuses a schema the gate cannot TRACE to the escape", () => {
+  // What the gate CAN vouch for: the escape written out, and a chain of plain
+  // single-declaration aliases ending in it. The LITERAL-position escape counts
+  // too — `'"${lit}"."t"'::regclass` in a catalogue lookup names the same schema.
+  for (const [bind, expr] of [
+    [CLEAN_BIND, "s"],
+    ["  const raw = schemaName.replaceAll('\"', '\"\"');\n  const s = raw;", "s"],
+    ["", "schemaName.replaceAll('\"', '\"\"')"],
+  ]) {
+    const leaf = bindingLeaf(bind).replace('"${s}"', `"\${${expr}}"`);
+    assert.deepEqual([...unverifiedSchemaScopes(leaf)], [], `${bind} / ${expr}`);
+  }
+
+  {
+    // The LITERAL-position escape names the same schema but doubles the STRING
+    // quote, not the identifier one — so it belongs inside a SQL string literal
+    // (`'"${lit}"."t"'::regclass`, a shipped catalogue lookup) and nowhere else.
+    // A name containing the other quote comes out different (codex round 21).
+    const LIT = "  const s = schemaName.replaceAll(\"'\", \"''\");";
+    const inLiteral = bindingLeaf(LIT).replace(
+      '{ text: `CREATE TABLE IF NOT EXISTS "${s}"."gadgets" (',
+      "{ text: `DO $$ BEGIN IF to_regclass('\"${s}\".\"gadgets\"') IS NULL THEN CREATE TABLE \"x\" (",
+    );
+    assert.deepEqual([...unverifiedSchemaScopes(inLiteral)], []);
+    // …and the same escape at an ordinary IDENTIFIER position does not trace.
+    assert.deepEqual([...unverifiedSchemaScopes(bindingLeaf(LIT))], ["gadgetSchemaQueries"]);
+    // The identifier escape at that literal position does not trace either.
+    assert.deepEqual(
+      [
+        ...unverifiedSchemaScopes(
+          bindingLeaf(CLEAN_BIND).replace(
+            '{ text: `CREATE TABLE IF NOT EXISTS "${s}"."gadgets" (',
+            "{ text: `DO $$ BEGIN IF to_regclass('\"${s}\".\"gadgets\"') IS NULL THEN CREATE TABLE \"x\" (",
+          ),
+        ),
+      ],
+      ["gadgetSchemaQueries"],
+    );
+  }
+
+  // What it CANNOT: provenance that leaves the scope or the grammar it reads.
+  // Each of these is a laundering shape codex round 4 reproduced — a redirect
+  // can be planted where the builder itself never changes.
+  {
+    // A local wrapper is FOLLOWED, not refused — the real `quoteIdent(schemaName)`
+    // shape a shipped leaf uses. One that hands the schema back with nothing but
+    // quoting added vouches for the DDL; one that modifies it does not.
+    // The POSITION decides which shape the wrapper must produce: a quoted
+    // position needs the bare escaped name, an unquoted one needs a complete
+    // quoted identifier. `${bare}` at an unquoted position is an UNQUOTED
+    // identifier, which PostgreSQL case-folds into a different schema
+    // (codex round 20), so the two are not interchangeable.
+    const viaHelper = (body) => [`function pick(x: string) {`, `  ${body}`, "}", bindingLeaf(CLEAN_BIND).replace('"${s}"', '"${pick(s)}"')].join("\n");
+    const viaHelperUnquoted = (body) => [`function pick(x: string) {`, `  ${body}`, "}", bindingLeaf(CLEAN_BIND).replace('"${s}"', "${pick(s)}")].join("\n");
+    assert.deepEqual([...unverifiedSchemaScopes(viaHelper("return x.replaceAll('\"', '\"\"');"))], []);
+    // The RAW parameter is the name BEFORE escaping — a different value for any
+    // name containing the identifier quote, so it satisfies no position
+    // (codex round 22).
+    assert.deepEqual([...unverifiedSchemaScopes(viaHelper("return x;"))], ["gadgetSchemaQueries"]);
+    assert.deepEqual([...unverifiedSchemaScopes(viaHelperUnquoted("return `\"${x.replaceAll('\"', '\"\"')}\"`;"))], []);
+    // …and each at the OTHER position is refused.
+    assert.deepEqual([...unverifiedSchemaScopes(viaHelperUnquoted("return x.replaceAll('\"', '\"\"');"))], ["gadgetSchemaQueries"]);
+    assert.deepEqual([...unverifiedSchemaScopes(viaHelper("return `\"${x.replaceAll('\"', '\"\"')}\"`;"))], ["gadgetSchemaQueries"]);
+    assert.deepEqual([...unverifiedSchemaScopes(viaHelper("return `${x}_shadow`;"))], ["gadgetSchemaQueries"]);
+    assert.deepEqual([...unverifiedSchemaScopes(viaHelper('return x + "_shadow";'))], ["gadgetSchemaQueries"]);
+    assert.deepEqual([...unverifiedSchemaScopes(viaHelper('return other;'))], ["gadgetSchemaQueries"]);
+    // A wrapper whose returns disagree is refused on the strength of the worst.
+    assert.deepEqual([...unverifiedSchemaScopes(viaHelper('if (t) return x;\n  return "shadow_schema";'))], ["gadgetSchemaQueries"]);
+    // The word `return` inside a STRING is not a return, and a wrapper holding a
+    // NESTED function is refused — its returns could belong to either function.
+    assert.deepEqual([...unverifiedSchemaScopes(viaHelper('const note = "return x;";\n  return `${x}_shadow`;'))], ["gadgetSchemaQueries"]);
+    assert.deepEqual([...unverifiedSchemaScopes(viaHelper("const inner = () => { return x; };\n  return `${x}_shadow`;"))], ["gadgetSchemaQueries"]);
+    // A nested callable of ANY shape could own the return the scan reads — a
+    // method head is one, and the keyword scan cannot see it (codex round 17).
+    assert.deepEqual(
+      [...unverifiedSchemaScopes(viaHelper("const holder = {\n    quote() {\n      return x;\n    },\n  };\n  void holder;"))],
+      ["gadgetSchemaQueries"],
+    );
+    // …including a COMPUTED-name method (codex round 19).
+    assert.deepEqual(
+      [...unverifiedSchemaScopes(`const key = "q";\n${viaHelper("const holder = {\n    [key]() {\n      return x;\n    },\n  };\n  void holder;")}`)],
+      ["gadgetSchemaQueries"],
+    );
+    // Following a DECLARED body is only sound while the call reaches it: a
+    // reassignment or a second declaration of the helper's name replaces it
+    // wholesale (codex round 21).
+    const stableHelper = viaHelper("return x.replaceAll('\"', '\"\"');");
+    assert.deepEqual([...unverifiedSchemaScopes(`${stableHelper}\npick = () => "shadow";`)], ["gadgetSchemaQueries"]);
+    assert.deepEqual(
+      [...unverifiedSchemaScopes(`${stableHelper}\nfunction pick(x: string) { return "shadow"; }`)],
+      ["gadgetSchemaQueries"],
+    );
+    // An ASYNC helper returns a promise and a GENERATOR an iterator; interpolating
+    // either stringifies to something that is not a schema name, while the
+    // `return` still reads as the schema (codex round 27).
+    for (const decl of ["async function", "function*"]) {
+      const helper = [
+        `${decl} pick(x: string) {`,
+        "  return x.replaceAll('\"', '\"\"');",
+        "}",
+        bindingLeaf("  const s = pick(schemaName);"),
+      ].join("\n");
+      assert.deepEqual([...unverifiedSchemaScopes(helper)], ["gadgetSchemaQueries"], decl);
+    }
+    // A wrapper the gate vouches for returns UNCONDITIONALLY: one that can fall
+    // through returns `undefined`, and DDL would land in a schema of that name
+    // while the caller's statements never changed (codex round 10).
+    assert.deepEqual([...unverifiedSchemaScopes(viaHelper("if (on) {\n    return x.replaceAll('\"', '\"\"');\n  }"))], ["gadgetSchemaQueries"]);
+    // …including a LABELED break, which jumps past the return without any of the
+    // guarding keywords being the thing that does it (codex round 25).
+    assert.deepEqual(
+      [...unverifiedSchemaScopes(viaHelper("out: {\n    if (on) break out;\n    return x.replaceAll('\"', '\"\"');\n  }"))],
+      ["gadgetSchemaQueries"],
+    );
+    assert.deepEqual(
+      [...unverifiedSchemaScopes(viaHelper("if (on) return x.replaceAll('\"', '\"\"');\n  return x.replaceAll('\"', '\"\"');"))],
+      ["gadgetSchemaQueries"],
+    );
+    // Handing the parameter straight back counts — but only while the wrapper
+    // leaves it alone. A name comparison would wave the mutation through
+    // (codex round 11).
+    assert.deepEqual([...unverifiedSchemaScopes(viaHelperUnquoted('return `"${x.replaceAll(\'"\', \'""\')}"`;'))], []);
+    assert.deepEqual(
+      [...unverifiedSchemaScopes(viaHelperUnquoted('x += "_shadow";\n  return `"${x.replaceAll(\'"\', \'""\')}"`;'))],
+      ["gadgetSchemaQueries"],
+    );
+    assert.deepEqual(
+      [...unverifiedSchemaScopes(viaHelperUnquoted('[x] = ["other"];\n  return `"${x.replaceAll(\'"\', \'""\')}"`;'))],
+      ["gadgetSchemaQueries"],
+    );
+    // Quoting a RAW value is not escaping it either (codex round 22).
+    assert.deepEqual([...unverifiedSchemaScopes(viaHelperUnquoted('return `"${x}"`;'))], ["gadgetSchemaQueries"]);
+    // `return` then a NEWLINE returns undefined — automatic semicolon insertion
+    // ends the statement, so the next line is not the value (codex round 12).
+    assert.deepEqual([...unverifiedSchemaScopes(viaHelperUnquoted("return\n  `\"${x.replaceAll('\"', '\"\"')}\"`;"))], ["gadgetSchemaQueries"]);
+  }
+
+  {
+    // Two functions may share a name; keying scopes by name alone would drop the
+    // earlier one out of the analysis (codex round 11).
+    const dup = [
+      "function pick(x: string) {",
+      '  return `"${x}_shadow"`;',
+      "}",
+      "function pick(x: string) {",
+      '  return `"${x}"`;',
+      "}",
+      bindingLeaf("  const s = pick(schemaName);").replace('"${s}"', "${s}"),
+    ].join("\n");
+    assert.deepEqual([...schemaBindingScopes(dup).keys()], ["pick", "pick#2", "gadgetSchemaQueries", "#top"]);
+    assert.deepEqual([...unverifiedSchemaScopes(dup)], ["gadgetSchemaQueries"]);
+  }
+
+  {
+    // The wrapper must hand back the parameter the ARGUMENT bound to. Returning
+    // a SECOND parameter returns whatever the call site chose — codex round 6's
+    // decisive bypass, and a perfect-looking escape at that.
+    const twoParam = (returned) =>
+      [
+        "function quoteIdent(value: string, fallback: string) {",
+        `  return \`"\${${returned}.replaceAll('"', '""')}"\`;`,
+        "}",
+        bindingLeaf('  const s = quoteIdent(schemaName, "shadow_schema");').replace('"${s}"', "${s}"),
+      ].join("\n");
+    assert.deepEqual([...unverifiedSchemaScopes(twoParam("value"))], []);
+    assert.deepEqual([...unverifiedSchemaScopes(twoParam("fallback"))], ["gadgetSchemaQueries"]);
+  }
+
+  {
+    // A wrapper may interpolate the schema EXACTLY once. `${v}${v}` traces in
+    // every part and still returns a different schema — `corecore` (round 7).
+    const twice = (body) =>
+      [
+        "function quoteIdent(value: string) {",
+        `  return ${body};`,
+        "}",
+        bindingLeaf("  const s = quoteIdent(schemaName);").replace('"${s}"', "${s}"),
+      ].join("\n");
+    assert.deepEqual([...unverifiedSchemaScopes(twice("`\"${value.replaceAll('\"', '\"\"')}\"`"))], []);
+    assert.deepEqual(
+      [...unverifiedSchemaScopes(twice("`${value.replaceAll('\"', '\"\"')}${value.replaceAll('\"', '\"\"')}`"))],
+      ["gadgetSchemaQueries"],
+    );
+  }
+
+  // A DEFAULTED parameter holds what the CALLER passed only while the caller
+  // passes it — omit the argument and the default decides the schema (round 7).
+  assert.deepEqual([...unverifiedSchemaScopes(bindingLeaf(CLEAN_BIND))], []);
+  assert.deepEqual(
+    [...unverifiedSchemaScopes(bindingLeaf(CLEAN_BIND).replace("(schemaName: string)", '(schemaName: string = "shadow_schema")'))],
+    ["gadgetSchemaQueries"],
+  );
+
+  {
+    // A CONCISE arrow wrapper has no `return` statement but is still faithful —
+    // refusing it would red an ordinary refactor.
+    const arrow = (body) =>
+      [`const quote = (x: string) => ${body};`, bindingLeaf("  const s = quote(schemaName);").replace('"${s}"', "${s}")].join("\n");
+    assert.deepEqual([...unverifiedSchemaScopes(arrow("`\"${x.replaceAll('\"', '\"\"')}\"`"))], []);
+    assert.deepEqual([...unverifiedSchemaScopes(arrow("`${x}_shadow`"))], ["gadgetSchemaQueries"]);
+    // The quoting a wrapper may add is EXACTLY one identifier quote each side.
+    // `"""core"""` is the quoted identifier `"core"`, and `" core "` is a schema
+    // whose name has spaces — both trace in every part and neither is the
+    // schema the caller passed (codex round 13).
+    // A wrapper that adds NO quoting hands back the bare escaped name, which
+    // belongs inside quotes — at this UNQUOTED position it is an unquoted
+    // identifier that PostgreSQL case-folds (codex round 20).
+    assert.deepEqual([...unverifiedSchemaScopes(arrow("`${x.replaceAll('\"', '\"\"')}`"))], ["gadgetSchemaQueries"]);
+    const arrowQuotedPosition = (body) =>
+      [`const quote = (x: string) => ${body};`, bindingLeaf("  const s = quote(schemaName);")].join("\n");
+    assert.deepEqual([...unverifiedSchemaScopes(arrowQuotedPosition("`${x.replaceAll('\"', '\"\"')}`"))], []);
+    assert.deepEqual([...unverifiedSchemaScopes(arrow("`\"\"\"${x.replaceAll('\"', '\"\"')}\"\"\"`"))], ["gadgetSchemaQueries"]);
+    assert.deepEqual([...unverifiedSchemaScopes(arrow("`\" ${x.replaceAll('\"', '\"\"')} \"`"))], ["gadgetSchemaQueries"]);
+    assert.deepEqual([...unverifiedSchemaScopes(arrow("`\"pre${x.replaceAll('\"', '\"\"')}\"`"))], ["gadgetSchemaQueries"]);
+    // DROPPING the quotes is the same defect from the other side: the DDL then
+    // writes an UNQUOTED identifier, which PostgreSQL case-folds, so a
+    // mixed-case schema silently becomes a different one (codex round 20).
+    assert.deepEqual([...unverifiedSchemaScopes(arrow("x"))], ["gadgetSchemaQueries"]);
+    assert.deepEqual([...unverifiedSchemaScopes(arrow("x.replaceAll('\"', '\"\"')"))], ["gadgetSchemaQueries"]);
+  }
+
+  {
+    // A schema name ASSEMBLED from parts: only the last piece sits in schema
+    // position, so a redirect parked in the piece before it would never be
+    // looked at. Composed names do not trace (codex round 8).
+    const named = (name) => bindingLeaf(CLEAN_BIND, '  const prefix = "";').replace('"${s}"', name);
+    assert.deepEqual([...unverifiedSchemaScopes(named('"${s}"'))], [], "the plain one still traces");
+    assert.deepEqual([...unverifiedSchemaScopes(named('"${prefix}${s}"'))], ["gadgetSchemaQueries"]);
+    assert.deepEqual([...unverifiedSchemaScopes(named('"pre${s}"'))], ["gadgetSchemaQueries"]);
+    assert.deepEqual([...unverifiedSchemaScopes(named('"${s}suffix"'))], ["gadgetSchemaQueries"]);
+    // A composed name must be SEEN, not merely fall through the no-position
+    // fallback — a sibling statement with a clean position would otherwise hide
+    // it (codex round 9).
+    const alongsideClean = named('"pre${s}"').replace("  ];", '    { text: `CREATE INDEX IF NOT EXISTS i ON "${s}"."other" (id)` },\n  ];');
+    assert.deepEqual([...unverifiedSchemaScopes(alongsideClean)], ["gadgetSchemaQueries"]);
+    // The UNQUOTED name can be part of a token too — literal text or a second
+    // interpolation after the first, before the dot (codex round 10).
+    for (const composed of ["${s}_tail", "pre${s}", "${prefix}${s}"]) {
+      assert.deepEqual([...unverifiedSchemaScopes(named(composed))], ["gadgetSchemaQueries"], composed);
+    }
+    // An UNQUOTED position needs a value that already carries its quotes; the
+    // bare escape belongs inside them (codex round 20).
+    assert.deepEqual([...unverifiedSchemaScopes(named("${s}"))], ["gadgetSchemaQueries"], "the bare escape is not a quoted identifier");
+    const quotedValue = [
+      "function qi(x: string) { return `\"${x.replaceAll('\"', '\"\"')}\"`; }",
+      bindingLeaf("  const s = qi(schemaName);", '  const prefix = "";').replace('"${s}"', "${s}"),
+    ].join("\n");
+    assert.deepEqual([...unverifiedSchemaScopes(quotedValue)], [], "a quoted identifier at an unquoted position traces");
+  }
+
+  {
+    // A scope that WRITES schema-qualified DDL while showing the gate no schema
+    // position has assembled the qualified name out of reach — vouching for it
+    // would be vouching for nothing (codex round 8). A scope with no DDL at all
+    // is not asked the question.
+    const assembled = [
+      "function qi(x: string) { return `\"${x.replaceAll('\"', '\"\"')}\"`; }",
+      "export function gadgetSchemaQueries(schemaName: string): { text: string }[] {",
+      '  const qn = qi(schemaName) + "." + qi("gadgets");',
+      "  return [{ text: `CREATE TABLE IF NOT EXISTS ${qn} (id text PRIMARY KEY)` }];",
+      "}",
+    ].join("\n");
+    assert.deepEqual([...unverifiedSchemaScopes(assembled)], ["gadgetSchemaQueries"]);
+    assert.deepEqual([...unverifiedSchemaScopes("export function helper(a: string) {\n  return a.trim();\n}\n")], []);
+    // …and a builder whose OTHER statement showed a perfectly good position does
+    // not get to hide an opaque target behind it (codex round 18).
+    const mixed = [
+      "function qi(x: string) { return `\"${x.replaceAll('\"', '\"\"')}\"`; }",
+      "export function gadgetSchemaQueries(schemaName: string): { text: string }[] {",
+      "  const s = schemaName.replaceAll('\"', '\"\"');",
+      '  const hidden = qi(schemaName) + "." + qi("other");',
+      "  return [",
+      '    { text: `CREATE TABLE IF NOT EXISTS "${s}"."gadgets" (id text)` },',
+      "    { text: `CREATE INDEX IF NOT EXISTS i ON ${hidden} (id)` },",
+      "  ];",
+      "}",
+    ].join("\n");
+    assert.deepEqual([...unverifiedSchemaScopes(mixed)], ["gadgetSchemaQueries"]);
+    // …in EVERY DDL form the gate recognises, with the optional IF [NOT] EXISTS
+    // in between: `ALTER TABLE IF EXISTS ${t}` used to name `IF` as its target
+    // (codex round 24).
+    for (const stmt of [
+      "ALTER TABLE IF EXISTS ${hidden} ADD COLUMN a text",
+      "DROP VIEW IF EXISTS ${hidden}",
+      "CREATE SEQUENCE ${hidden}",
+    ]) {
+      const withForm = mixed.replace("    { text: `CREATE INDEX IF NOT EXISTS i ON ${hidden} (id)` },", `    { text: \`${stmt}\` },`);
+      assert.deepEqual([...unverifiedSchemaScopes(withForm)], ["gadgetSchemaQueries"], stmt);
+    }
+
+    // Binding the qualified name in a way the gate CAN read keeps it traceable —
+    // the shipped buildEmailCorrelationIndexQueries shape.
+    const bound = [
+      "export function gadgetSchemaQueries(schemaName: string): { text: string }[] {",
+      "  const t = `\"${schemaName.replaceAll('\"', '\"\"')}\".\"gadgets\"`;",
+      "  return [{ text: `CREATE INDEX IF NOT EXISTS gadgets_idx ON ${t} (id)` }];",
+      "}",
+    ].join("\n");
+    assert.deepEqual([...unverifiedSchemaScopes(bound)], []);
+  }
+
+  // A brace inside a STRING argument must not end the interpolation early and
+  // hide the schema position from the scan (codex round 6).
+  assert.deepEqual(
+    [
+      ...unverifiedSchemaScopes(
+        ['function select(x: string) { return "shadow_schema"; }', bindingLeaf("").replace('${s}', '${select("}")}')].join("\n"),
+      ),
+    ],
+    ["gadgetSchemaQueries"],
+  );
+
+  {
+    // A traced alias must be a `const`, declared once. That is the structural
+    // guarantee behind every re-binding form — the ones the scanners model AND
+    // the ones they do not: a `const` cannot be reassigned, destructured into,
+    // rebound by a loop head, or shadowed without a second declaration the site
+    // count sees (codex round 14).
+    assert.deepEqual([...unverifiedSchemaScopes(bindingLeaf(CLEAN_BIND))], []);
+    assert.deepEqual([...unverifiedSchemaScopes(bindingLeaf(CLEAN_BIND.replace("const", "let")))], ["gadgetSchemaQueries"]);
+    assert.deepEqual(
+      [...unverifiedSchemaScopes(bindingLeaf("  const raw = schemaName;", "  const s = raw.replaceAll('\"', '\"\"');"))],
+      [],
+    );
+    assert.deepEqual(
+      [...unverifiedSchemaScopes(bindingLeaf("  let raw = schemaName;", "  const s = raw.replaceAll('\"', '\"\"');"))],
+      ["gadgetSchemaQueries"],
+    );
+    // The forms that rule covers even where the scanners would have missed them.
+    for (const rebind of [
+      '  for ([s] of [["shadow_schema"]]) { break; }',
+      '  for ({ a: s } of [{ a: "shadow_schema" }]) { break; }',
+      '  try { throw "x"; } catch (s) { void s; }',
+    ]) {
+      assert.deepEqual([...unverifiedSchemaScopes(bindingLeaf(CLEAN_BIND, rebind))], ["gadgetSchemaQueries"], rebind);
+    }
+    // An unrelated loop is not a re-binding.
+    assert.deepEqual([...unverifiedSchemaScopes(bindingLeaf(CLEAN_BIND, "  for (const t of []) void t;"))], []);
+
+    // The ROOT parameter can be SHADOWED by binding forms the parenthesised
+    // parameter scan cannot see: a destructured catch, a bare arrow parameter, a
+    // destructured parameter list (codex round 15).
+    for (const shadow of [
+      "  try { throw {}; } catch ({ schemaName }) { void schemaName; }",
+      "  const f = (schemaName) => schemaName;\n  void f;",
+      "  const g = ({ schemaName }) => schemaName;\n  void g;",
+    ]) {
+      assert.deepEqual([...unverifiedSchemaScopes(bindingLeaf(CLEAN_BIND, shadow))], ["gadgetSchemaQueries"], shadow);
+    }
+    // An arrow over an UNRELATED name is ordinary code — a real leaf has one.
+    assert.deepEqual(
+      [...unverifiedSchemaScopes(bindingLeaf(CLEAN_BIND, "  const kinds = [\"a\"].map((k) => `'${k}'`).join(\", \");\n  void kinds;"))],
+      [],
+    );
+    // A `function`/`class` DECLARATION binds its own name, and in a block that
+    // shadows an outer alias of the same name (codex round 23).
+    for (const decl of [
+      "  function schemaName() { return 'shadow'; }",
+      "  {\n    class schemaName {\n      static replaceAll() { return 'shadow'; }\n    }\n  }",
+    ]) {
+      assert.deepEqual([...unverifiedSchemaScopes(bindingLeaf(decl, CLEAN_BIND))], ["gadgetSchemaQueries"], decl);
+    }
+    // A METHOD's parameter list shadows too, and it is matched by SHAPE — a
+    // `name(…) {` head — rather than by the keyword that declared it, so object
+    // methods, class methods, getters and generators are covered without adding
+    // one more entry to an enumeration of syntax (codex round 16).
+    const method = [
+      "export function gadgetSchemaQueries(schemaName: string): { text: string }[] {",
+      "  const emitter = {",
+      "    make(schemaName) {",
+      "      const s = schemaName.replaceAll('\"', '\"\"');",
+      '      return [{ text: `CREATE TABLE IF NOT EXISTS "${s}"."gadgets" (id text)` }];',
+      "    },",
+      "  };",
+      '  return emitter.make("shadow_schema");',
+      "}",
+    ].join("\n");
+    assert.deepEqual([...unverifiedSchemaScopes(method)], ["gadgetSchemaQueries"]);
+    assert.deepEqual([...unverifiedSchemaScopes(`const key = "make";\n${method.replace("make(schemaName)", "[key](schemaName)")}`)], ["gadgetSchemaQueries"]);
+    // …while an ordinary call, an `if` head and a `for` head are not parameter
+    // lists and must not be read as bindings.
+    assert.deepEqual(
+      [...unverifiedSchemaScopes(bindingLeaf(CLEAN_BIND, '  const j = ["a"].join(", ");\n  if (s) { void j; }\n  for (const t of []) { void t; }'))],
+      [],
+    );
+  }
+
+  {
+    // An identifier written with a UNICODE ESCAPE is the same name to JavaScript
+    // and a different one to a source scan, so a re-binding could hide behind it
+    // (codex round 26). The escape inside a STRING is ordinary data.
+    const BS = String.fromCharCode(92);
+    assert.deepEqual([...unverifiedSchemaScopes(bindingLeaf(CLEAN_BIND, `  schem${BS}u0061Name = "other";`))], ["gadgetSchemaQueries"]);
+    assert.deepEqual([...unverifiedSchemaScopes(bindingLeaf(CLEAN_BIND, `  const note = "${BS}u0061";\n  void note;`))], []);
+  }
+
+  // The schema is what the CALLER passed, and the caller passes it FIRST
+  // (`...gadgetSchemaQueries(schemaName),`). A builder that switches its DDL to
+  // a second parameter is naming something else (codex round 12).
+  const twoParams = (used) =>
+    bindingLeaf(`  const s = ${used}.replaceAll('"', '""');`).replace("(schemaName: string)", "(schemaName: string, alternate: string)");
+  assert.deepEqual([...unverifiedSchemaScopes(twoParams("schemaName"))], []);
+  assert.deepEqual([...unverifiedSchemaScopes(twoParams("alternate"))], ["gadgetSchemaQueries"]);
+
+  // The ROOT of the escape must itself be the schema the caller passed in —
+  // codex round 5's decisive bypass, where the escape reads a local constant.
+  assert.deepEqual(
+    [...unverifiedSchemaScopes(bindingLeaf("  const raw = schemaName;", "  const s = raw.replaceAll('\"', '\"\"');"))],
+    [],
+    "a plain alias of the parameter is still the parameter",
+  );
+  assert.deepEqual(
+    [...unverifiedSchemaScopes(bindingLeaf('  const raw = "shadow_schema";', "  const s = raw.replaceAll('\"', '\"\"');"))],
+    ["gadgetSchemaQueries"],
+    "the escape applied to a CONSTANT names a different schema",
+  );
+
+  // A WRAPPED declaration is read to its statement terminator, so reformatting
+  // the binding is not mistaken for a redirect…
+  assert.deepEqual([...unverifiedSchemaScopes(bindingLeaf("  const s = schemaName\n    .replaceAll('\"', '\"\"');"))], []);
+  // …and a wrap that also appends is still caught.
+  assert.deepEqual(
+    [...unverifiedSchemaScopes(bindingLeaf("  const s = schemaName\n    .replaceAll('\"', '\"\"') + \"_shadow\";"))],
+    ["gadgetSchemaQueries"],
+  );
+
+  // The schema position is found by BALANCED-brace scanning, so neither an
+  // unquoted schema name nor a nested template hides one (codex round 5).
+  assert.deepEqual(
+    [...unverifiedSchemaScopes(bindingLeaf('  const s = "shadow_schema";').replace('"${s}"', "${s}"))],
+    ["gadgetSchemaQueries"],
+    "an UNQUOTED schema position is still a schema position",
+  );
+  assert.deepEqual(
+    [...unverifiedSchemaScopes(bindingLeaf(CLEAN_BIND, "  const suffix = `_shadow`;").replace('"${s}"', "\"${`${s}${suffix}`}\""))],
+    ["gadgetSchemaQueries"],
+    "a NESTED template must not slip past the schema-position scan",
+  );
+  // A `for (s of …)` re-binds without an `=`, which the assignment scan alone
+  // never sees.
+  assert.deepEqual(
+    [...mutatedSchemaBindings(bindingLeaf("  let s = schemaName.replaceAll('\"', '\"\"');", '  for (s of ["shadow_schema"]) break;'))],
+    ["s"],
+  );
+  // …but a DECLARED loop variable is a binding of its own, not a mutation.
+  assert.deepEqual([...mutatedSchemaBindings(bindingLeaf(CLEAN_BIND, "  for (const t of []) void t;"))], []);
+  // A PATTERN assignment and an update expression re-bind without the plain
+  // `id =` the assignment scan looks for (codex round 9).
+  for (const mutation of [
+    '  [s] = ["shadow_schema"];',
+    '  ({ s } = { s: "shadow_schema" });',
+    "  s++;",
+    "  --s;",
+    // NESTED patterns too — an enclosing block must not hide them (round 12).
+    "  ({ database: { schema: s } } = config);",
+    '  [[s]] = [["shadow_schema"]];',
+  ]) {
+    assert.deepEqual([...mutatedSchemaBindings(bindingLeaf("  let s = schemaName.replaceAll('\"', '\"\"');", mutation))], ["s"], mutation);
+  }
+  // An object LITERAL on the right of a declaration is not a pattern.
+  assert.deepEqual([...mutatedSchemaBindings(bindingLeaf(CLEAN_BIND, "  const opts = { s: 1 };"))], []);
+
+  // The scope scanner matches BRACES, not a column-0 `}`: a builder whose DDL
+  // template carries a flush-left brace must not be cut in half (which would
+  // strand the `schemaName` parameter its binding traces to).
+  const flushBrace = bindingLeaf(CLEAN_BIND).replace("      id text PRIMARY KEY", "}\n      id text PRIMARY KEY");
+  assert.deepEqual([...unverifiedSchemaScopes(flushBrace)], []);
+  assert.deepEqual([...schemaBindingScopes(flushBrace).keys()], ["gadgetSchemaQueries", "#top"]);
+  for (const [label, bind, expr] of [
+    ["a concatenation", CLEAN_BIND, 's + "_shadow"'],
+    ["a hardcoded constant", '  const s = "shadow_schema";', "s"],
+    ["a parameter default", "", "s"],
+    ["a destructured binding", "  const e = schemaName.replaceAll('\"', '\"\"');\n  const { value: s } = { value: e };", "s"],
+    ["an imported constant", "", "IMPORTED_SCHEMA"],
+  ]) {
+    const leaf = bindingLeaf(bind).replace('"${s}"', `"\${${expr}}"`);
+    assert.deepEqual([...unverifiedSchemaScopes(leaf)], ["gadgetSchemaQueries"], label);
+  }
+
+  // Every real leaf and the store's own executed-DDL region trace cleanly — if
+  // this fails, a leaf started naming a schema the gate cannot follow and its
+  // DDL will be compared verbatim until the binding is made traceable.
+  const storeSrc = readFileSync(join(REPO_ROOT, IN_SCOPE_FILE), "utf8");
+  for (const p of findDdlLeafModules(storeSrc).keys()) {
+    if (!existsSync(join(REPO_ROOT, p))) continue;
+    assert.deepEqual([...unverifiedSchemaScopes(readFileSync(join(REPO_ROOT, p), "utf8"))], [], `leaf ${p}`);
+  }
+  for (const h of findLocalDdlHelpers(storeSrc)) {
+    assert.deepEqual([...unverifiedSchemaScopes(helperBody(storeSrc, h))], [], `local helper ${h.name}`);
+  }
+});
+
+test("leaf: a redirect planted OUTSIDE the builder — the shapes provenance escapes through", () => {
+  // codex round 4: `schemaBindingRedirects` alone follows initializers only
+  // within one scope, so a redirect can sit in a helper the builder calls, in a
+  // parameter default, or behind a destructuring — the builder's own body (and
+  // every DDL line in it) never changes. Refusing to cancel DDL whose schema
+  // cannot be TRACED is what closes all three at once.
+  const store = LEAF_SPREAD_STORE;
+  const readBase = (base) => (p) => (p === IN_SCOPE_FILE ? store : p === LEAF_PATH ? base : null);
+  const leafWith = (head, bind, expr) =>
+    [
+      ...head,
+      "export function gadgetSchemaQueries(schemaName: string): { text: string }[] {",
+      ...bind,
+      "  return [",
+      `    { text: \`CREATE TABLE IF NOT EXISTS "\${${expr}}"."gadgets" (`,
+      "      id text PRIMARY KEY,",
+      "      label text,",
+      "    )` },",
+      "  ];",
+      "}",
+    ].join("\n");
+
+  for (const [label, base, final] of [
+    [
+      "the redirect lives in a helper the builder calls",
+      leafWith(["function pick(x: string) {", "  return x;", "}"], [CLEAN_BIND], "pick(s)"),
+      leafWith(["function pick(x: string) {", "  return `${x}_shadow`;", "}"], [CLEAN_BIND], "pick(s)"),
+    ],
+    [
+      "the redirect lives in a parameter default",
+      leafWith([], [], "s").replace("(schemaName: string)", "(schemaName: string, s = schemaName.replaceAll('\"', '\"\"'))"),
+      leafWith([], [], "s").replace("(schemaName: string)", '(schemaName: string, s = "shadow_schema")'),
+    ],
+    [
+      "the redirect lives in the ROOT the escape reads",
+      leafWith(["function pick(x: string) {", "  return x;", "}"], ["  const raw = pick(schemaName);", "  const s = raw.replaceAll('\"', '\"\"');"], "s"),
+      leafWith(["function pick(x: string) {", "  return `${x}_shadow`;", "}"], ["  const raw = pick(schemaName);", "  const s = raw.replaceAll('\"', '\"\"');"], "s"),
+    ],
+    [
+      "the redirect lives behind a destructuring",
+      leafWith([], ["  const e = schemaName.replaceAll('\"', '\"\"');", "  const { value: s } = { value: e };"], "s"),
+      leafWith([], ["  const e = schemaName.replaceAll('\"', '\"\"');", '  const { value: s } = { value: e + "_shadow" };'], "s"),
+    ],
+  ]) {
+    assert.notEqual(base, final, label);
+    const r = runGate({ diffText: fullReplaceDiff(LEAF_PATH, base, final), readBaseFile: readBase(base) });
+    assert.equal(r.verdict, "fail", `${label}: ${JSON.stringify(r.destructive)}`);
+    assert.ok(r.destructive.some((d) => d.rule === "table-removed-from-ddl"), `${label}: ${JSON.stringify(r.destructive)}`);
+    assert.ok(
+      r.notices.some((n) => n.includes("cannot be traced") && n.includes("gadgetSchemaQueries")),
+      `${label} must say WHY the DDL was compared verbatim: ${r.notices.join(" | ")}`,
+    );
+  }
+});
+
+test("schemaBindingRedirects reports a binding that STOPPED naming the verified schema", () => {
+  const base = bindingLeaf(CLEAN_BIND);
+  const redirect = (...bind) => schemaBindingRedirects(base, bindingLeaf(...bind));
+
+  assert.deepEqual(redirect(CLEAN_BIND), [], "an identical revision is not a redirect");
+  assert.deepEqual(
+    redirect(CLEAN_BIND, '    { text: `CREATE INDEX IF NOT EXISTS gadgets_id_idx ON "${s}"."gadgets" (id)` },'),
+    [],
+    "an ordinary additive edit keeps its cancellation",
+  );
+
+  // Every laundering form names the scope that stopped vouching for its schema.
+  for (const bind of [
+    ["  let s = schemaName.replaceAll('\"', '\"\"');", '  s += "_shadow";'],
+    ["  let s = schemaName.replaceAll('\"', '\"\"');", '  s = "shadow_schema";'],
+    ['  const s = "shadow_schema";'],
+    ["  const raw = schemaName.replaceAll('\"', '\"\"');", '  const s = raw + "_shadow";'],
+    ["  const s = pickSchema(schemaName);"],
+  ]) {
+    const found = redirect(...bind);
+    assert.equal(found.length, 1, JSON.stringify({ bind, found }));
+    assert.equal(found[0].scope, "gadgetSchemaQueries");
+  }
+
+  // A leaf that GAINS a builder is not a redirect — the new scope has no base
+  // revision to have drifted from.
+  assert.deepEqual(
+    schemaBindingRedirects(base, [base, bindingLeaf(CLEAN_BIND).replace(/gadget/g, "widget")].join("\n\n")),
+    [],
+  );
 });
 
 test("stripComments respects escapes, mixed quotes and block comments", () => {
@@ -1603,6 +2253,68 @@ test("leaf relocation: a leaf pointing its DDL at a DIFFERENT schema is NOT a re
   });
   assert.equal(r.verdict, "fail");
   assert.ok(r.destructive.some((d) => d.rule === "table-removed-from-ddl"), JSON.stringify(r.destructive));
+});
+
+test("leaf: MUTATING the schema-name binding under unchanged DDL is a redirect, not a no-op", () => {
+  // The hole codex reproduced against round 3: `s += "_shadow"` drops the alias,
+  // which stops the NORMALIZED relocation match — but every DDL line in the leaf
+  // is untouched TEXT, so it cancelled against the leaf's own base revision
+  // through the exact-text pass and the gate passed with no finding at all,
+  // while every deployed table the builder owns quietly moved schema.
+  const base = leafFile(RELOCATED_DDL);
+  const shadowed = base
+    .replace("  const s = schemaName.replaceAll('\"', '\"\"');", "  let s = schemaName.replaceAll('\"', '\"\"');\n  s += \"_shadow\";");
+  const r = runGate({
+    diffText: fullReplaceDiff(LEAF_PATH, base, shadowed),
+    readBaseFile: (p) => (p === IN_SCOPE_FILE ? LEAF_SPREAD_STORE : p === LEAF_PATH ? base : null),
+  });
+  assert.equal(r.verdict, "fail");
+  assert.ok(
+    r.destructive.some((d) => d.rule === "schema-binding-redirected" && d.line.includes("gadgetSchemaQueries") && d.line.includes("s")),
+    JSON.stringify(r.destructive),
+  );
+  // Verbatim comparison is what makes it a DESTRUCTIVE finding and not just a
+  // notice: the DDL the leaf stops executing against the real schema reds as the
+  // dropped table it is.
+  assert.ok(r.destructive.some((d) => d.rule === "table-removed-from-ddl"), JSON.stringify(r.destructive));
+
+  // The same mutation reached through the PARAMETER the alias reads.
+  const viaParam = base.replace(
+    "  const s = schemaName.replaceAll('\"', '\"\"');",
+    "  schemaName += \"_shadow\";\n  const s = schemaName.replaceAll('\"', '\"\"');",
+  );
+  const p = runGate({
+    diffText: fullReplaceDiff(LEAF_PATH, base, viaParam),
+    readBaseFile: (q) => (q === IN_SCOPE_FILE ? LEAF_SPREAD_STORE : q === LEAF_PATH ? base : null),
+  });
+  assert.equal(p.verdict, "fail");
+  assert.ok(p.destructive.some((d) => d.rule === "schema-binding-redirected"), JSON.stringify(p.destructive));
+});
+
+test("leaf: a redirect in ONE builder leaves its SIBLING builders' cancellation intact", () => {
+  // The ban is scope-precise. A leaf holds several builders; poisoning the whole
+  // FILE would bury the real finding under every sibling table's DDL.
+  const sibling = leafFile(RELOCATED_DDL)
+    .replace(/gadgetSchemaQueries/g, "widgetSchemaQueries")
+    .replace(/gadgets/g, "widgets");
+  const base = `${leafFile(RELOCATED_DDL)}\n${sibling}`;
+  const final = base.replace(
+    "export function gadgetSchemaQueries(schemaName: string): { text: string }[] {\n  const s = schemaName.replaceAll('\"', '\"\"');",
+    "export function gadgetSchemaQueries(schemaName: string): { text: string }[] {\n  let s = schemaName.replaceAll('\"', '\"\"');\n  s += \"_shadow\";",
+  );
+  assert.notEqual(base, final);
+  const store = LEAF_SPREAD_STORE.replace(
+    "    ...gadgetSchemaQueries(schemaName),",
+    "    ...gadgetSchemaQueries(schemaName),\n    ...widgetSchemaQueries(schemaName),",
+  );
+  const r = runGate({
+    diffText: fullReplaceDiff(LEAF_PATH, base, final),
+    readBaseFile: (p) => (p === IN_SCOPE_FILE ? store : p === LEAF_PATH ? base : null),
+  });
+  assert.equal(r.verdict, "fail");
+  const lines = r.destructive.map((d) => d.line).join("\n");
+  assert.match(lines, /"gadgets"/);
+  assert.doesNotMatch(lines, /"widgets"/, "the untouched sibling builder must keep its cancellation");
 });
 
 test("leaf relocation: a DUPLICATE copy of a relocated CREATE cannot launder the table into the new-table carve-out", () => {
