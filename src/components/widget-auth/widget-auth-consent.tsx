@@ -6,6 +6,10 @@ import { useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { WidgetAuthSuccess } from "@/components/widget-auth/widget-auth-success";
+import {
+  WIDGET_CONSENT_GRANTED_SCOPES,
+  WIDGET_EXTENSION_SCOPES,
+} from "@/lib/widget-lifecycle-scope";
 import type { ConsentActionResult } from "@/app/widget-auth/actions";
 
 // cinatra#407 — consent step for the hosted /widget-auth page.
@@ -63,6 +67,24 @@ export function WidgetAuthConsent({
         actions there will follow the permissions granted to you in this Cinatra
         workspace.
       </p>
+      {/*
+        cinatra#2574 — the consent copy is GENERATED from the scope vocabulary
+        (WIDGET_EXTENSION_SCOPES), and the server action records that same
+        constant on the authorization code. A grant therefore cannot reach a
+        token without its sentence having been on this screen.
+      */}
+      {WIDGET_CONSENT_GRANTED_SCOPES.length > 0 ? (
+        <div className="grid gap-2 rounded-md border border-border bg-muted/40 p-3">
+          <p className="text-xs font-medium text-foreground">
+            The assistant will also be allowed to:
+          </p>
+          <ul className="grid list-disc gap-1 pl-4 text-xs leading-5 text-muted-foreground">
+            {WIDGET_CONSENT_GRANTED_SCOPES.map((scope) => (
+              <li key={scope}>{WIDGET_EXTENSION_SCOPES[scope].consentCopy}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {state && !state.ok ? (
         <p className="text-sm text-destructive" role="alert">
           {FAILURE_MESSAGES[state.reason] ?? "Could not complete sign-in."}

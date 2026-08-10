@@ -78,6 +78,7 @@ describe("widget_auth_codes schema-drift guard", () => {
       "agent_slug",
       "instance_id",
       "code_challenge",
+      "granted_scopes",
       "created_at",
       "expires_at",
     ]) {
@@ -92,6 +93,33 @@ describe("widget_auth_codes schema-drift guard", () => {
         t.includes('"widget_auth_codes" (expires_at)'),
     );
     expect(ok).toBe(true);
+  });
+
+  // cinatra#2574 — `granted_scopes` records the consented grant on the code.
+  // CREATE TABLE IF NOT EXISTS never touches an EXISTING table, so an installed
+  // deployment only gains the column through the idempotent ALTER. Without it
+  // the redeem's RETURNING clause names a column that is not there and EVERY
+  // widget login breaks after the upgrade — a boot-order failure the drift guard
+  // is exactly the right place to catch.
+  it("adds granted_scopes to an EXISTING deployment (idempotent ALTER, nullable)", () => {
+    const alters = buildCreateStoreSchemaQueries("drift_test")
+      .map((q) => String(q.text))
+      .filter((t) => t.includes("ALTER TABLE") && t.includes("widget_auth_codes"));
+    expect(
+      alters.some((t) => /ADD COLUMN IF NOT EXISTS granted_scopes text\s*$/.test(t.trim())),
+    ).toBe(true);
+  });
+
+  it("orders the ALTER after the CREATE (a column added to a table that does not exist yet throws)", () => {
+    const texts = buildCreateStoreSchemaQueries("drift_test").map((q) => String(q.text));
+    const createIdx = texts.findIndex((t) =>
+      t.includes('CREATE TABLE IF NOT EXISTS "drift_test"."widget_auth_codes"'),
+    );
+    const alterIdx = texts.findIndex(
+      (t) => t.includes("widget_auth_codes") && t.includes("ADD COLUMN IF NOT EXISTS granted_scopes"),
+    );
+    expect(createIdx).toBeGreaterThanOrEqual(0);
+    expect(alterIdx).toBeGreaterThan(createIdx);
   });
 });
 

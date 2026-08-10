@@ -11,6 +11,11 @@ import {
   issueUserAuthCode,
   loadActiveTransaction,
 } from "@/lib/widget-user-auth";
+import {
+  WIDGET_CONSENT_GRANTED_SCOPES,
+  formatTokenSet,
+  widgetConsentRequestId,
+} from "@/lib/widget-lifecycle-scope";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
 
 // cinatra#407 — consent server action for the hosted /widget-auth page.
@@ -55,10 +60,19 @@ export async function issueWidgetAuthCodeAction(
   const userId = String(session.user.id);
   const sessionId = String(session.session?.id ?? "");
 
-  // CSRF: single-use, bound to (sessionId, txnId). Verify BEFORE the membership
-  // query so a forged consent does no work.
+  // CSRF: single-use, bound to (sessionId, txnId, the DISPLAYED scope set).
+  // Verify BEFORE the membership query so a forged consent does no work.
+  //
+  // cinatra#2574 — the request id carries the scope set this build asks for, so
+  // the token only verifies if the screen the user acted on displayed exactly
+  // that set. A screen from another build fails here rather than authorizing a
+  // grant it never showed.
   if (
-    !consumeConsentCsrfToken({ token: consentCsrf, sessionId, requestId: txnId })
+    !consumeConsentCsrfToken({
+      token: consentCsrf,
+      sessionId,
+      requestId: widgetConsentRequestId(txnId, WIDGET_CONSENT_GRANTED_SCOPES),
+    })
   ) {
     emitWidgetAuthAudit("consent_denied", {
       actor: userId,
@@ -86,7 +100,16 @@ export async function issueWidgetAuthCodeAction(
   }
 
   // Atomic single-use consume of the txn + issue the user code.
-  const issued = issueUserAuthCode({ txnId, userId });
+  //
+  // cinatra#2574 — the granted scope set is the SERVER constant the hosted page
+  // rendered its consent copy from, never a field off the submitted form: what
+  // the user read is what the code records. A widget/CMS backend therefore has
+  // no way to ask for more than the page displayed.
+  const issued = issueUserAuthCode({
+    txnId,
+    userId,
+    grantedScopes: WIDGET_CONSENT_GRANTED_SCOPES,
+  });
   if (!issued.ok) {
     emitWidgetAuthAudit("consent_denied", {
       actor: userId,
@@ -106,6 +129,9 @@ export async function issueWidgetAuthCodeAction(
     agentSlug: txn.agentSlug,
     siteOrigin: txn.siteOrigin,
     instanceId: txn.instanceId,
+    // What was consented to, recorded at the moment of consent (#2574). A scope
+    // list is a capability NAME set, never a secret.
+    grantedScopes: formatTokenSet(WIDGET_CONSENT_GRANTED_SCOPES),
   });
 
   return { ok: true, code: issued.code, state: issued.state, siteOrigin: issued.siteOrigin };

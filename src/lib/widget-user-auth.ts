@@ -15,7 +15,18 @@ import {
   type ValidatedConnectCredential,
 } from "@/lib/widget-stream-auth";
 import { normalizeOriginStrict } from "@/lib/widget-token-broker";
-import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
+import {
+  formatTokenSet,
+  grantedExtensionScopesFromScopeColumn,
+  isKnownWidgetExtensionScope,
+  mintWidgetTokenAudience,
+  mintWidgetTokenScope,
+  normalizeExtensionScopes,
+  tokenAudienceAdmits,
+  tokenSetHas,
+  widgetUserBaseScope,
+  type WidgetExtensionScope,
+} from "@/lib/widget-lifecycle-scope";
 import {
   getPostgresConnectionString,
   postgresSchema,
@@ -116,12 +127,19 @@ function qTable(table: string): string {
 // AGENT-BOUND via its `agent_slug` column + `scope` (`<agentSlug>.user`), only
 // the `aud` moves so `/api/assistants/chat` consumes it. The mint site is
 // unchanged; a legacy-route consume now fails `aud_mismatch` (designed cutover).
-function streamRoutePath(_agentSlug: string): string {
-  return WIDGET_BROKER_ROUTE_PATH;
-}
-
-function userTokenScope(agentSlug: string): string {
-  return `${agentSlug}.user`;
+//
+// cinatra#2574 (epic #2564 S8a) — `scope` and `aud` are now SETS (see
+// widget-lifecycle-scope.ts). The chat route stays in every token's audience and
+// the base `<agentSlug>.user` stays in every token's scope, so a token minted
+// before this slice is byte-compatible at the chat route; a lifecycle grant is
+// an ADDITIONAL member of both sets, present only when the user consented to it.
+// The MINT of both sets now lives in the vocabulary module (mintWidgetTokenScope
+// / mintWidgetTokenAudience) so a grant and the surface it unlocks have exactly
+// one definition between them — which is why the old per-agent `streamRoutePath`
+// helper is gone: it computed the audience a second time, and a second
+// computation is how the two would eventually disagree.
+function userTokenScope(agentSlug: string): string | null {
+  return widgetUserBaseScope(agentSlug);
 }
 
 // ---------------------------------------------------------------------------
@@ -435,8 +453,19 @@ export type IssueCodeResult =
  *
  * The transaction consume is the single-use gate: a second concurrent issue for
  * the same transaction finds consumed_at already set → txn_not_found.
+ *
+ * cinatra#2574 — `grantedScopes` records WHAT THE USER JUST CONSENTED TO on the
+ * code itself, so the grant travels with the authorization rather than being
+ * re-decided at redeem time. Unknown entries are dropped here (a code can only
+ * ever carry a scope this build understands), and the column is nullable: a code
+ * issued before this slice carries none, which is how a pre-extension consent
+ * fails closed on every lifecycle read (AC-1).
  */
-export function issueUserAuthCode(input: { txnId: string; userId: string }): IssueCodeResult {
+export function issueUserAuthCode(input: {
+  txnId: string;
+  userId: string;
+  grantedScopes?: readonly WidgetExtensionScope[];
+}): IssueCodeResult {
   ensurePostgresSchema();
 
   // Atomic single-use consume of the transaction → returns its bound context.
@@ -470,8 +499,8 @@ export function issueUserAuthCode(input: { txnId: string; userId: string }): Iss
         text:
           `INSERT INTO ${qTable(CODE_TABLE)} (` +
           `code_hash, user_id, site_id, client, org_id, site_origin, agent_slug, ` +
-          `instance_id, code_challenge, expires_at, created_at` +
-          `) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now() + make_interval(secs => $10), now())`,
+          `instance_id, code_challenge, granted_scopes, expires_at, created_at` +
+          `) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now() + make_interval(secs => $11), now())`,
         values: [
           codeHash,
           input.userId,
@@ -482,6 +511,7 @@ export function issueUserAuthCode(input: { txnId: string; userId: string }): Iss
           String(txn.agent_slug ?? ""),
           String(txn.instance_id ?? ""),
           String(txn.code_challenge ?? ""),
+          formatTokenSet(normalizeExtensionScopes(input.grantedScopes)),
           CODE_TTL_SECONDS,
         ],
       },
@@ -540,7 +570,7 @@ export function redeemUserAuthCode(input: {
         text:
           `DELETE FROM ${qTable(CODE_TABLE)} WHERE code_hash = $1 AND expires_at > now() ` +
           `RETURNING user_id, site_id, client, org_id, site_origin, agent_slug, ` +
-          `instance_id, code_challenge`,
+          `instance_id, code_challenge, granted_scopes`,
         values: [codeHash],
       },
     ],
@@ -578,8 +608,22 @@ export function redeemUserAuthCode(input: {
   const rawToken = USER_TOKEN_PREFIX + randomBytes(TOKEN_RANDOM_BYTES).toString("base64url");
   const tokenHash = sha256Hex(rawToken);
   const jti = randomUUID();
-  const scope = userTokenScope(agentSlug);
-  const aud = streamRoutePath(agentSlug);
+  // cinatra#2574 — the token inherits EXACTLY the grant the consent recorded on
+  // the code, re-narrowed to the scopes this build knows. The audience set is
+  // DERIVED from that same grant (never stored independently), so a scope and
+  // the surface it unlocks cannot drift apart. A code with no recorded grant —
+  // every code issued before this slice — mints the pre-#2574 pair: the base
+  // scope and the chat audience, and nothing else.
+  const grantedScopes = grantedExtensionScopesFromScopeColumn(
+    String(row.granted_scopes ?? ""),
+  );
+  // An agent slug that cannot be expressed as ONE scope-set member would encode
+  // a scope column meaning something other than what it says (codex round 0,
+  // finding 3), so the mint refuses instead — generically, like every other
+  // redeem failure.
+  const scope = mintWidgetTokenScope(agentSlug, grantedScopes);
+  if (!scope) return { ok: false, reason: "invalid_grant" };
+  const aud = mintWidgetTokenAudience(grantedScopes);
 
   runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
@@ -639,6 +683,12 @@ export type UserTokenClaims = {
   agentSlug: string;
   instanceId: string;
   jti: string;
+  /**
+   * The extension scopes this token actually carries (cinatra#2574) — known
+   * entries only, so a caller can audit what was consented to without re-parsing
+   * the column. Empty for every token minted before the vocabulary existed.
+   */
+  grantedScopes: WidgetExtensionScope[];
 };
 
 export type ConsumeUserTokenResult =
@@ -662,12 +712,23 @@ export type ConsumeUserTokenReason =
  * request Origin == bound siteOrigin, and that the bound connect-site is STILL
  * ACTIVE with the SAME org/origin (instant revoke: revoking/rotating the site,
  * or its org/origin re-binding, kills the token immediately).
+ *
+ * cinatra#2574 — `aud` and `scope` are SETS and both are checked by exact
+ * MEMBERSHIP, never by equality: the presented `routePath` must be in the
+ * token's audience, the base `<agentSlug>.user` must be in its scope, and every
+ * scope in `requiredScopes` must be in its scope too. This is the ONE place the
+ * lifecycle grant is evaluated — a caller asks for the capability it needs and
+ * the single verifier decides, so no surface can grow a second copy of the rule.
+ * A token whose consent predates a required scope fails `scope_mismatch` here
+ * (and, for the lifecycle audience, `aud_mismatch` before it).
  */
 export function consumeUserWidgetToken(input: {
   token: string;
   agentSlug: string;
   routePath: string;
   requestOrigin: string | null;
+  /** Extension scopes the CALLING surface requires. Default: none (chat turn). */
+  requiredScopes?: readonly WidgetExtensionScope[];
 }): ConsumeUserTokenResult {
   if (!input.token || !input.token.startsWith(USER_TOKEN_PREFIX)) {
     return { ok: false, reason: "not_cwu_token" };
@@ -705,11 +766,28 @@ export function consumeUserWidgetToken(input: {
   if (String(row.agent_slug ?? "") !== input.agentSlug) {
     return { ok: false, reason: "agent_mismatch" };
   }
-  if (String(row.aud ?? "") !== input.routePath) {
+  // Audience. Not raw membership: the route must be in the stored set AND be a
+  // route this build can justify from the token's own scopes (the chat route
+  // always; anything else only via a KNOWN scope the token carries). A token
+  // minted before #2574 holds the single chat route and parses as a one-element
+  // set, so the chat branch is unchanged.
+  if (!tokenAudienceAdmits(row.scope, row.aud, input.routePath)) {
     return { ok: false, reason: "aud_mismatch" };
   }
-  if (String(row.scope ?? "") !== userTokenScope(input.agentSlug)) {
+  // Scope: the agent-bound base scope ALWAYS. An unknown entry in the column is
+  // inert — it neither grants anything nor invalidates the entries beside it.
+  const baseScope = userTokenScope(input.agentSlug);
+  if (!baseScope || !tokenSetHas(row.scope, baseScope)) {
     return { ok: false, reason: "scope_mismatch" };
+  }
+  // Required scopes. A capability the CALLER names must be one this build
+  // actually defines — an unrecognized requirement is refused rather than
+  // matched against a raw column, so a stale caller and a tampered row cannot
+  // meet in the middle on a name neither side understands.
+  for (const required of input.requiredScopes ?? []) {
+    if (!isKnownWidgetExtensionScope(required) || !tokenSetHas(row.scope, required)) {
+      return { ok: false, reason: "scope_mismatch" };
+    }
   }
 
   const storedOrigin = normalizeOriginStrict(String(row.site_origin ?? ""));
@@ -752,6 +830,7 @@ export function consumeUserWidgetToken(input: {
       agentSlug: String(row.agent_slug ?? ""),
       instanceId: String(row.instance_id ?? ""),
       jti: String(row.jti ?? ""),
+      grantedScopes: grantedExtensionScopesFromScopeColumn(row.scope),
     },
   };
 }
@@ -764,5 +843,4 @@ export const __testing = {
   CODE_TTL_SECONDS,
   TRANSACTION_TTL_SECONDS,
   userTokenScope,
-  streamRoutePath,
 };

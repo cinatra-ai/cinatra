@@ -80,6 +80,12 @@ import {
   type VerifiedSiteContext,
   __testing,
 } from "@/lib/widget-user-auth";
+import {
+  WIDGET_CONSENT_GRANTED_SCOPES,
+  WIDGET_LIFECYCLE_READ_ROUTE_PATH,
+  WIDGET_LIFECYCLE_READ_SCOPE,
+  type WidgetExtensionScope,
+} from "@/lib/widget-lifecycle-scope";
 
 // ---------------------------------------------------------------------------
 // In-memory store + a focused SQL interpreter for the three tables.
@@ -595,6 +601,300 @@ describe("consumeUserWidgetToken — live binding re-checks (CHILD 3 surface)", 
         requestOrigin: SITE_A.siteOrigin,
       }),
     ).toEqual({ ok: false, reason: "expired" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2574 (epic #2564 S8a) — the LIFECYCLE-READ grant.
+//
+// AC-1 in full: a widget session whose consent predates the scope extension
+// cannot read lifecycle data until the user consents again. The whole
+// create→consent→redeem→verify lifecycle runs against the same in-memory tables
+// the rest of this file uses, so "predates" is a real code with no recorded
+// grant redeemed into a real token, not a hand-written row.
+// ---------------------------------------------------------------------------
+describe("lifecycle-read scope + audience (cinatra#2574)", () => {
+  const CHAT_PATH = "/api/assistants/chat";
+
+  function mintTokenWithConsent(grantedScopes?: readonly WidgetExtensionScope[]) {
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    const issued = issueUserAuthCode({
+      txnId: t.txnId,
+      userId: "user-1",
+      ...(grantedScopes ? { grantedScopes } : {}),
+    });
+    if (!issued.ok) throw new Error("issue");
+    const r = redeemUserAuthCode({
+      code: issued.code,
+      codeVerifier: VERIFIER,
+      site: SITE_A,
+      issuerBaseUrl: "https://cinatra.test",
+    });
+    if (!r.ok) throw new Error("redeem");
+    return r;
+  }
+
+  beforeEach(() => {
+    getActiveConnectSiteByIdMock.mockImplementation((siteId: string) =>
+      siteId === SITE_A.siteId
+        ? {
+            siteId: SITE_A.siteId,
+            client: "wordpress",
+            widgetOrigin: SITE_A.siteOrigin,
+            orgId: SITE_A.orgId,
+            credentialVersion: SITE_A.credentialVersion,
+          }
+        : null,
+    );
+  });
+
+  it("AC-1: a token from a PRE-EXTENSION consent cannot read lifecycle data", () => {
+    // A consent recorded before the grant existed carries no granted_scopes.
+    const minted = mintTokenWithConsent(undefined);
+    // Its scope + audience are byte-identical to the pre-#2574 mint.
+    expect(minted.scope).toBe("wordpress-content-editor.user");
+
+    // The lifecycle audience is not in its audience set...
+    expect(
+      consumeUserWidgetToken({
+        token: minted.token,
+        agentSlug: "wordpress-content-editor",
+        routePath: WIDGET_LIFECYCLE_READ_ROUTE_PATH,
+        requestOrigin: SITE_A.siteOrigin,
+        requiredScopes: [WIDGET_LIFECYCLE_READ_SCOPE],
+      }),
+    ).toEqual({ ok: false, reason: "aud_mismatch" });
+
+    // ...and the scope gate refuses it independently, so neither gate is
+    // load-bearing alone (checked at the chat audience, which it DOES hold).
+    expect(
+      consumeUserWidgetToken({
+        token: minted.token,
+        agentSlug: "wordpress-content-editor",
+        routePath: CHAT_PATH,
+        requestOrigin: SITE_A.siteOrigin,
+        requiredScopes: [WIDGET_LIFECYCLE_READ_SCOPE],
+      }),
+    ).toEqual({ ok: false, reason: "scope_mismatch" });
+  });
+
+  it("AC-1: the SAME session keeps working for chat — the grant is additive, not a cutover", () => {
+    const minted = mintTokenWithConsent(undefined);
+    const r = consumeUserWidgetToken({
+      token: minted.token,
+      agentSlug: "wordpress-content-editor",
+      routePath: CHAT_PATH,
+      requestOrigin: SITE_A.siteOrigin,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.claims.grantedScopes).toEqual([]);
+  });
+
+  it("AC-1: RE-CONSENT mints the grant, and only then does the lifecycle read pass", () => {
+    const minted = mintTokenWithConsent(WIDGET_CONSENT_GRANTED_SCOPES);
+    expect(minted.scope).toBe(
+      `wordpress-content-editor.user ${WIDGET_LIFECYCLE_READ_SCOPE}`,
+    );
+
+    const r = consumeUserWidgetToken({
+      token: minted.token,
+      agentSlug: "wordpress-content-editor",
+      routePath: WIDGET_LIFECYCLE_READ_ROUTE_PATH,
+      requestOrigin: SITE_A.siteOrigin,
+      requiredScopes: [WIDGET_LIFECYCLE_READ_SCOPE],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.claims.grantedScopes).toEqual([WIDGET_LIFECYCLE_READ_SCOPE]);
+
+    // The extended token still takes chat turns — the base scope and the chat
+    // audience are unchanged members of their sets.
+    expect(
+      consumeUserWidgetToken({
+        token: minted.token,
+        agentSlug: "wordpress-content-editor",
+        routePath: CHAT_PATH,
+        requestOrigin: SITE_A.siteOrigin,
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("every other binding still gates the extended token (origin, agent, revoke)", () => {
+    const minted = mintTokenWithConsent(WIDGET_CONSENT_GRANTED_SCOPES);
+    const lifecycleRead = (over: Record<string, unknown>) =>
+      consumeUserWidgetToken({
+        token: minted.token,
+        agentSlug: "wordpress-content-editor",
+        routePath: WIDGET_LIFECYCLE_READ_ROUTE_PATH,
+        requestOrigin: SITE_A.siteOrigin,
+        requiredScopes: [WIDGET_LIFECYCLE_READ_SCOPE],
+        ...over,
+      });
+
+    expect(lifecycleRead({ requestOrigin: "https://evil.test" })).toEqual({
+      ok: false,
+      reason: "origin_mismatch",
+    });
+    expect(lifecycleRead({ agentSlug: "drupal-content-editor" })).toEqual({
+      ok: false,
+      reason: "agent_mismatch",
+    });
+    getActiveConnectSiteByIdMock.mockReturnValue(null);
+    expect(lifecycleRead({})).toEqual({ ok: false, reason: "site_revoked" });
+  });
+
+  it("an UNKNOWN consented scope is dropped at the code — it can never reach a token", () => {
+    const minted = mintTokenWithConsent([
+      "lifecycle.decide-everything",
+    ] as unknown as readonly WidgetExtensionScope[]);
+    expect(minted.scope).toBe("wordpress-content-editor.user");
+    // And it unlocks no audience of its own.
+    expect(
+      consumeUserWidgetToken({
+        token: minted.token,
+        agentSlug: "wordpress-content-editor",
+        routePath: WIDGET_LIFECYCLE_READ_ROUTE_PATH,
+        requestOrigin: SITE_A.siteOrigin,
+      }),
+    ).toEqual({ ok: false, reason: "aud_mismatch" });
+  });
+
+  it("a tampered scope column cannot mint authority the vocabulary does not know", () => {
+    // Simulate a row edited under the app: an unknown scope entry sits beside
+    // the base scope. It is INERT — the base scope still admits a chat turn, the
+    // unknown entry grants nothing, and the required lifecycle scope is absent.
+    const minted = mintTokenWithConsent(undefined);
+    const tokenHash = __testing.sha256Hex(minted.token);
+    const row = tokenStore.get(tokenHash)!;
+    row.scope = "wordpress-content-editor.user superuser";
+
+    expect(
+      consumeUserWidgetToken({
+        token: minted.token,
+        agentSlug: "wordpress-content-editor",
+        routePath: CHAT_PATH,
+        requestOrigin: SITE_A.siteOrigin,
+      }).ok,
+    ).toBe(true);
+    expect(
+      consumeUserWidgetToken({
+        token: minted.token,
+        agentSlug: "wordpress-content-editor",
+        routePath: CHAT_PATH,
+        requestOrigin: SITE_A.siteOrigin,
+        requiredScopes: [WIDGET_LIFECYCLE_READ_SCOPE],
+      }),
+    ).toEqual({ ok: false, reason: "scope_mismatch" });
+  });
+
+  it("the audience is DERIVED from the grant — a stored audience alone buys nothing", () => {
+    // Mint with the grant, then strip the SCOPE from the stored row, leaving the
+    // lifecycle route sitting in the audience column. The consume re-derives the
+    // admissible surfaces from the scopes the token still demonstrably carries
+    // (codex round 0, finding 4), so the orphaned audience entry is refused —
+    // and refused at the AUDIENCE gate, before the scope gate is even reached.
+    const minted = mintTokenWithConsent(WIDGET_CONSENT_GRANTED_SCOPES);
+    const row = tokenStore.get(__testing.sha256Hex(minted.token))!;
+    row.scope = "wordpress-content-editor.user";
+    expect(
+      consumeUserWidgetToken({
+        token: minted.token,
+        agentSlug: "wordpress-content-editor",
+        routePath: WIDGET_LIFECYCLE_READ_ROUTE_PATH,
+        requestOrigin: SITE_A.siteOrigin,
+        requiredScopes: [WIDGET_LIFECYCLE_READ_SCOPE],
+      }),
+    ).toEqual({ ok: false, reason: "aud_mismatch" });
+    // The same token still takes chat turns — the base scope and the chat
+    // audience are untouched.
+    expect(
+      consumeUserWidgetToken({
+        token: minted.token,
+        agentSlug: "wordpress-content-editor",
+        routePath: CHAT_PATH,
+        requestOrigin: SITE_A.siteOrigin,
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("a required scope this build does not define is REFUSED, not matched", () => {
+    // codex round 0, finding 4: `requiredScopes` is only TypeScript-constrained
+    // at the call site. At runtime an unrecognized requirement must fail closed
+    // rather than be compared against a raw column — otherwise a stale caller
+    // and a tampered row could meet on a name neither side understands.
+    const minted = mintTokenWithConsent(WIDGET_CONSENT_GRANTED_SCOPES);
+    const row = tokenStore.get(__testing.sha256Hex(minted.token))!;
+    row.scope = `wordpress-content-editor.user ${WIDGET_LIFECYCLE_READ_SCOPE} future.scope`;
+    expect(
+      consumeUserWidgetToken({
+        token: minted.token,
+        agentSlug: "wordpress-content-editor",
+        routePath: CHAT_PATH,
+        requestOrigin: SITE_A.siteOrigin,
+        requiredScopes: ["future.scope"] as unknown as readonly WidgetExtensionScope[],
+      }),
+    ).toEqual({ ok: false, reason: "scope_mismatch" });
+  });
+
+  it("the schema is ensured BEFORE any statement naming the new column", () => {
+    // codex round 0, finding 6 — this repo's migration mechanism is boot-time
+    // idempotent DDL (`ensurePostgresSchema`, which runs the CREATE ... IF NOT
+    // EXISTS plus the ADD COLUMN IF NOT EXISTS), not a separate migration lane.
+    // The safety of naming `granted_scopes` in an INSERT and in a RETURNING
+    // therefore rests on that call happening FIRST on every entry point. Pin it,
+    // because the failure if it ever stopped is total: every widget login breaks.
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    ensureSchemaMock.mockClear();
+    runPostgresQueriesSyncMock.mockClear();
+    const issued = issueUserAuthCode({
+      txnId: t.txnId,
+      userId: "user-1",
+      grantedScopes: WIDGET_CONSENT_GRANTED_SCOPES,
+    });
+    if (!issued.ok) throw new Error("issue");
+    expect(ensureSchemaMock.mock.invocationCallOrder[0]).toBeLessThan(
+      runPostgresQueriesSyncMock.mock.invocationCallOrder[0]!,
+    );
+
+    ensureSchemaMock.mockClear();
+    runPostgresQueriesSyncMock.mockClear();
+    redeemUserAuthCode({
+      code: issued.code,
+      codeVerifier: VERIFIER,
+      site: SITE_A,
+      issuerBaseUrl: "https://cinatra.test",
+    });
+    expect(ensureSchemaMock.mock.invocationCallOrder[0]).toBeLessThan(
+      runPostgresQueriesSyncMock.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("an agent slug that is not one scope member cannot mint a token at all", () => {
+    // codex round 0, finding 3. The redeem refuses generically rather than
+    // encoding a scope column whose second member is a capability.
+    const t = createAuthTransaction({
+      site: SITE_A,
+      agentSlug: "wordpress lifecycle.read",
+      instancesConfigKey: "wordpress",
+      codeChallenge: CHALLENGE,
+      state: STATE,
+    });
+    expect(t.ok).toBe(true);
+    if (!t.ok) return;
+    const issued = issueUserAuthCode({ txnId: t.txnId, userId: "user-1" });
+    expect(issued.ok).toBe(true);
+    if (!issued.ok) return;
+    expect(
+      redeemUserAuthCode({
+        code: issued.code,
+        codeVerifier: VERIFIER,
+        site: SITE_A,
+        issuerBaseUrl: "https://cinatra.test",
+      }),
+    ).toEqual({ ok: false, reason: "invalid_grant" });
   });
 });
 

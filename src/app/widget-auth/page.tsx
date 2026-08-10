@@ -3,6 +3,10 @@ import type { Metadata } from "next";
 import { getAuthSession, resolveOrgRoleForUser } from "@/lib/auth-session";
 import { issueConsentCsrfToken } from "@/lib/connect-provisioning";
 import { loadActiveTransaction } from "@/lib/widget-user-auth";
+import {
+  WIDGET_CONSENT_GRANTED_SCOPES,
+  widgetConsentRequestId,
+} from "@/lib/widget-lifecycle-scope";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
 import { Main } from "@/components/layout/main";
 import { BrandMark } from "@/components/brand-mark";
@@ -130,10 +134,20 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
     );
   }
 
-  // Member → explicit consent. The consent CSRF is bound to (sessionId, txnId)
-  // and is single-use; the server action re-validates everything before issuing.
+  // Member → explicit consent. The consent CSRF is single-use and bound to
+  // (sessionId, txnId, THE SCOPE SET THIS SCREEN DISPLAYS); the server action
+  // re-validates everything before issuing.
+  //
+  // cinatra#2574 — the scope set rides in the bound request id so a consent
+  // screen can only ever authorize the sentences it showed. A screen rendered
+  // by an older build (or left open across a deploy) verifies against the id it
+  // was signed with and no other, so its submission cannot pick up a grant the
+  // user never read; they see the sign-in fail and start again.
   const sessionId = String(session.session?.id ?? "");
-  const consentCsrf = issueConsentCsrfToken({ sessionId, requestId: txn.txnId });
+  const consentCsrf = issueConsentCsrfToken({
+    sessionId,
+    requestId: widgetConsentRequestId(txn.txnId, WIDGET_CONSENT_GRANTED_SCOPES),
+  });
 
   emitWidgetAuthAudit("page_viewed", {
     actor: userId,

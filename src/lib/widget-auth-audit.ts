@@ -46,7 +46,14 @@ export type WidgetAuthAuditEvent =
   // the static advertisement (this authenticates the capability READ; it does
   // not authorize a run — the turn's own dual-token decision above is the
   // dispatch record). Reason-coded/scrubbed like its siblings; never a secret.
-  | "assistant_chat_capabilities_broker_advertised";
+  | "assistant_chat_capabilities_broker_advertised"
+  // cinatra#2574 (epic #2564 S8a) — the authorization DECISION for a widget
+  // LIFECYCLE READ. Emitted by the one actor-construction seam every widget
+  // lifecycle read goes through: authorized once the `cwu_` proved the
+  // lifecycle grant AND the live org membership held, rejected (reason-coded,
+  // never a secret and never a row identifier) on any fail-closed deny.
+  | "widget_lifecycle_read_authorized"
+  | "widget_lifecycle_read_rejected";
 
 export type WidgetAuthAuditFields = {
   actor?: string | null; // userId (never an email/secret)
@@ -59,6 +66,12 @@ export type WidgetAuthAuditFields = {
   ip?: string | null;
   ua?: string | null;
   reason?: string | null;
+  /**
+   * The extension scopes a consent granted / a token carried (cinatra#2574),
+   * space-delimited. Capability NAMES only — the scope vocabulary is public and
+   * contains no credential, and the scrubber still runs over it.
+   */
+  grantedScopes?: string | null;
 };
 
 // Patterns that must NEVER appear in an audit line (defense-in-depth against a

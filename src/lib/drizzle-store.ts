@@ -4000,6 +4000,13 @@ END $$` },
     // logged-in MEMBER consents; keyed by the sha256 of the plaintext code
     // (which is postMessage'd to the verified opener origin and never stored).
     // Carries the full user binding; redeemed exactly once via DELETE...RETURNING.
+    //
+    // `granted_scopes` (cinatra#2574, epic #2564 S8a) records the extension
+    // scopes the user consented to on the hosted login — a space-delimited set
+    // that the redeem copies into the minted token's `scope`/`aud`. NULLABLE and
+    // added with ADD COLUMN IF NOT EXISTS below so an existing deployment
+    // upgrades in place: every code already in flight carries no grant, which is
+    // exactly the fail-closed answer for a consent that predates the extension.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" (
       code_hash      text PRIMARY KEY,
       user_id        text NOT NULL,
@@ -4010,9 +4017,11 @@ END $$` },
       agent_slug     text NOT NULL,
       instance_id    text NOT NULL,
       code_challenge text NOT NULL,
+      granted_scopes text,
       created_at     timestamptz NOT NULL DEFAULT now(),
       expires_at     timestamptz NOT NULL
     )` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" ADD COLUMN IF NOT EXISTS granted_scopes text` },
     { text: `CREATE INDEX IF NOT EXISTS widget_auth_codes_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" (expires_at)` },
     // Table 3 — opaque short-lived user tokens (cwu_). Browser-held bearer the
     // stream route validates (CHILD 3). Keyed by sha256(rawToken); only the hash
