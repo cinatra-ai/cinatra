@@ -34,7 +34,17 @@
 //
 // The knobs, their accepted values and the measured evidence for each are
 // documented in docs/internals/workflows/constrained-host-builds.md.
+//
+// THE MEMORY FLOOR (cinatra#2633)
+//
+// Because no knob here is a cure, this launcher also carries the one thing that
+// IS actionable: a preflight that measures the memory actually available to the
+// build and says so, loudly, when it is below the documented floor. It WARNS and
+// builds anyway — a builder that is under the floor may still finish (with swap,
+// or on a future smaller tree), and a launcher that refused would be a gate this
+// evidence does not support.
 
+import { readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -43,6 +53,26 @@ import { fileURLToPath } from "node:url";
 
 /** Accepted `CINATRA_BUILD_BUNDLER` values. "" / unset ⇒ the Next default. */
 export const ACCEPTED_BUNDLERS = ["turbopack", "webpack"];
+
+/**
+ * Minimum builder memory, in GiB — the measured floor from cinatra#2633.
+ *
+ * Derived, not chosen — and it is the SMALLEST BOUND TESTED THAT COMPLETED, not
+ * a proven true minimum. Cold builds in memory-capped containers with swap
+ * disabled were reaped at 9 GiB and at 12 GiB (both during compile) and twice at
+ * 16 GiB on this 14-core host (compile survived; the default 13 page-data
+ * workers did not). A build completed at 16 GiB once the worker fan-out was cut
+ * to the 3 a real 4-core builder would use. Nothing between 12 and 16 GiB was
+ * tried, so the true minimum lies somewhere in that interval, and 16 GiB is not
+ * sufficient on its own either — demand also scales with the builder's core
+ * count. Every run, and the headroom argument, is in
+ * docs/internals/workflows/constrained-host-builds.md ("Minimum builder memory").
+ *
+ * Keep this number, the `Dockerfile` build-stage comment and that doc section in
+ * step; a unit test fails if the three ever disagree.
+ */
+export const MINIMUM_BUILDER_MEMORY_GIB = 16;
+export const MINIMUM_BUILDER_MEMORY_BYTES = MINIMUM_BUILDER_MEMORY_GIB * 1024 ** 3;
 
 /**
  * Normalize an env value the way a docker build-arg delivers it: an undeclared
@@ -103,6 +133,158 @@ export function resolveNextArgs(env, forwarded) {
   return ["build", ...resolveBundlerFlags(env).flags, ...forwarded];
 }
 
+// ---------------------------------------------------------------------------
+// Builder-memory preflight (cinatra#2633)
+// ---------------------------------------------------------------------------
+
+/** Read a file, or null when it is absent/unreadable — never throw into a build. */
+function tryRead(readFile, file) {
+  try {
+    const raw = readFile(file);
+    return raw === undefined || raw === null ? null : String(raw);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One cgroup limit value in bytes, or null for "uncapped"/unparseable.
+ *
+ * cgroup v2 spells "no limit" as the literal `max`; cgroup v1 spells it as a
+ * page-counter sentinel around 9.2e18. Both mean uncapped, not "enormous" — and
+ * reading the v1 sentinel as a real number would silently disable this check on
+ * every v1 host.
+ */
+function parseCgroupLimit(text) {
+  if (text === null) return null;
+  const trimmed = text.trim();
+  if (trimmed === "" || trimmed === "max") return null;
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value <= 0 || value > Number.MAX_SAFE_INTEGER) return null;
+  return value;
+}
+
+/** A cgroup-relative path and all of its ancestors, tightest first. */
+function cgroupPathChain(relative) {
+  const parts = String(relative).split("/").filter(Boolean);
+  const chain = [];
+  for (let i = parts.length; i >= 0; i -= 1) chain.push(`/${parts.slice(0, i).join("/")}`);
+  return chain;
+}
+
+/**
+ * The cgroup memory limit that governs THIS process, in bytes, or null when the
+ * build is not capped.
+ *
+ * `os.totalmem()` alone is not enough here, and reporting it alone would be a
+ * lie in the case that matters most: inside a container it reads the HOST's
+ * memory, because it calls sysinfo(2), which is not cgroup-aware. Every build
+ * this repository ships runs in a container (`docker build`, the preview image,
+ * CI), so the cap is usually the real number and the host total is the
+ * flattering one.
+ *
+ * The limit is looked up along the process's own cgroup path, not only at the
+ * cgroupfs root. With docker's default private cgroup namespace the path is `/`
+ * and the two are the same file — but a nested runner or a systemd slice puts
+ * the real cap on an ANCESTOR, and only the tightest limit on the chain binds.
+ * A readable v2 hierarchy is authoritative: never fall through to a v1 file that
+ * may not govern this process at all.
+ *
+ * `readFile` is injected so this is testable without a cgroupfs.
+ */
+export function readCgroupMemoryLimit(readFile = (p) => readFileSync(p, "utf8")) {
+  const procSelf = tryRead(readFile, "/proc/self/cgroup");
+  const lines = procSelf === null ? [] : procSelf.split("\n");
+  const limits = [];
+
+  // cgroup v2: the unified hierarchy is the `0::<path>` line.
+  const v2Line = lines.find((line) => line.startsWith("0::"));
+  let sawV2 = false;
+  for (const relative of v2Line ? cgroupPathChain(v2Line.slice(3)) : ["/"]) {
+    const text = tryRead(readFile, path.posix.join("/sys/fs/cgroup", relative, "memory.max"));
+    if (text === null) continue;
+    sawV2 = true;
+    const value = parseCgroupLimit(text);
+    if (value !== null) limits.push(value);
+  }
+  if (sawV2) return limits.length > 0 ? Math.min(...limits) : null;
+
+  // cgroup v1: the controller list is field 2; the path is everything after it.
+  const v1Line = lines.find((line) => line.split(":")[1]?.split(",").includes("memory"));
+  for (const relative of v1Line ? cgroupPathChain(v1Line.split(":").slice(2).join(":")) : ["/"]) {
+    const value = parseCgroupLimit(
+      tryRead(readFile, path.posix.join("/sys/fs/cgroup/memory", relative, "memory.limit_in_bytes")),
+    );
+    if (value !== null) limits.push(value);
+  }
+  return limits.length > 0 ? Math.min(...limits) : null;
+}
+
+/** Bytes as a one-decimal GiB string — the unit the floor is stated in. */
+export function formatGiB(bytes) {
+  return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+}
+
+/**
+ * What this build actually has: the SMALLER of the machine's memory and the
+ * container cap, plus which of the two it came from (so the warning can name the
+ * thing an operator has to change).
+ *
+ * @returns {{ bytes: number, source: string } | null} null when neither is known.
+ */
+export function resolveBuilderMemory({ totalMemoryBytes, cgroupLimitBytes } = {}) {
+  const usable = (value) => typeof value === "number" && Number.isFinite(value) && value > 0;
+  const total = usable(totalMemoryBytes) ? totalMemoryBytes : null;
+  const cap = usable(cgroupLimitBytes) ? cgroupLimitBytes : null;
+  if (total === null && cap === null) return null;
+  if (cap !== null && (total === null || cap <= total)) {
+    return { bytes: cap, source: "container memory limit" };
+  }
+  return { bytes: total, source: "total system memory" };
+}
+
+/**
+ * The loud, NON-FATAL preflight banner — or null when the builder is at or above
+ * the floor, so a correctly-sized builder's log is untouched.
+ *
+ * Deliberately a warning and never an exit: the floor is the smallest size at
+ * which a build was measured to COMPLETE, not a proof that everything below it
+ * fails. Swap clears it; a smaller tree would too. Turning a measured floor into
+ * a gate would block builds this evidence cannot condemn.
+ */
+export function builderMemoryWarning(memory, floorBytes = MINIMUM_BUILDER_MEMORY_BYTES) {
+  if (!memory || memory.bytes >= floorBytes) return null;
+  const rule = "=".repeat(78);
+  return [
+    "",
+    rule,
+    "  WARNING  this builder is BELOW the measured minimum memory for this build",
+    rule,
+    `  available to the build : ${formatGiB(memory.bytes)}  (${memory.source})`,
+    `  measured floor         : ${formatGiB(floorBytes)}`,
+    "",
+    "  What this means. On the smallest builder where a cold production build of",
+    "  this repository COMPLETED, it held 14.3 GiB of resident memory in ONE",
+    "  process and 15.5 GiB across the whole build process tree. Every measured",
+    "  run below that, with swap disabled, was reaped during compile and reported",
+    "  exit 137 — which names a SIGKILL and never its cause, so it reads like a",
+    "  crash rather than an out-of-memory.",
+    "",
+    "  What to do. Give the build more memory (on Docker Desktop / colima that is",
+    "  the VM's memory setting, not the laptop's RAM); or give it swap, which a",
+    "  bounded build can complete through and which CI adds deliberately; or pull",
+    "  the released image instead of building. CINATRA_BUILD_CPUS bounds the",
+    "  page-data worker fan-out and was decisive in THAT phase on this many-core",
+    "  host, but nothing in this repository was found to make the COMPILE peak fit",
+    "  a small builder. Every measurement is in",
+    "  docs/internals/workflows/constrained-host-builds.md.",
+    "",
+    "  This is a WARNING, not a gate. The build continues.",
+    rule,
+    "",
+  ].join("\n");
+}
+
 function main() {
   let args;
   try {
@@ -115,6 +297,18 @@ function main() {
 
   const summary = buildKnobSummary(process.env);
   if (summary) console.log(summary);
+
+  // Preflight BEFORE anything expensive: an operator who is going to lose this
+  // build to the OOM reaper in ninety seconds should be told in the first line
+  // of output, not left to decode exit 137 afterwards. stderr, so it survives a
+  // log pipeline that keeps only the build's own stdout.
+  const warning = builderMemoryWarning(
+    resolveBuilderMemory({
+      totalMemoryBytes: os.totalmem(),
+      cgroupLimitBytes: readCgroupMemoryLimit(),
+    }),
+  );
+  if (warning) console.error(warning);
 
   // Resolve Next's real JS entry and run it under THIS node, rather than the
   // `node_modules/.bin/next` shim: the shim is a POSIX shell script whose

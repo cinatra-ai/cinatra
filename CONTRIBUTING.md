@@ -49,11 +49,13 @@ pnpm lint           # ESLint
 pnpm build          # production build
 ```
 
-`pnpm build` is memory-hungry. If it dies on your machine, read
+`pnpm build` is memory-hungry: the measured minimum is **16 GiB available to the
+build**, and the build prints a loud warning when it has less. If it dies on your
+machine, read
 [Building cinatra on a memory-constrained host](docs/internals/workflows/constrained-host-builds.md)
-— it documents the `CINATRA_BUILD_BUNDLER` / `CINATRA_BUILD_CPUS` knobs (also
-available as `docker build --build-arg`), the measured numbers, and the honest
-floor below which no setting helps.
+— it documents that floor and the four runs behind it, the `CINATRA_BUILD_BUNDLER`
+/ `CINATRA_BUILD_CPUS` knobs (also available as `docker build --build-arg`), and
+the measured numbers for the settings that do not help.
 
 A pull request should pass `pnpm typecheck` cleanly. Tests are package-local — run them with `pnpm --filter <package> test` where a package has them.
 
