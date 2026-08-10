@@ -20,7 +20,18 @@
     "the non-monotonic fixture).",
     "The gate's classifier test must run every fixture and assert its label.",
     "When the convention gains a new destructive/additive case, add a fixture",
-    "here in the same PR that documents it."
+    "here in the same PR that documents it.",
+    "DDL LEAVES (cinatra#2625): the executed DDL is composed — a leaf module's",
+    "exported builder is spread into buildCreateStoreSchemaQueries — so the",
+    "leaf-relocation-* trio pins BOTH arms of that classification: a faithful",
+    "relocation passes, while a column lost by the relocation and a DROP hidden",
+    "inside the leaf both still fail.",
+    "leaf-alias-shadow-redirect.diff and leaf-schema-provenance-untraceable.diff",
+    "pin the fourth arm: the DDL TEXT is not the schema. A builder that mutates",
+    "the schema-name binding under untouched DDL — or that routes the name through",
+    "anything the gate cannot trace back to the escape — redirects every one of",
+    "those statements at another schema, so its lines lose their cancellation and",
+    "are compared verbatim."
   ],
   "fixtures": [
     {
@@ -94,6 +105,36 @@
       "expect": "pass",
       "category": "additive, no artifact",
       "description": "Adds a nullable agent_templates.icon column (ADD COLUMN IF NOT EXISTS) and a partial index — no data impact, no artifact required."
+    },
+    {
+      "file": "leaf-relocation-faithful.diff",
+      "expect": "pass",
+      "category": "additive (deployed DDL relocated into a spread-in leaf)",
+      "description": "Moves the TRIGGER-family DDL (agent_run_triggers + agent_run_pm_links) out of buildCreateStoreSchemaQueries into the new pure-strings leaf src/lib/trigger-schema.ts, spread back in as `...triggerSchemaQueries(schemaName)` — the file-size-ratchet remedy already used by assistant-thread-schema and a dozen other leaves. Every removed statement arrives in the leaf, so the executed schema is byte-for-byte the same set and no deployed row is touched. The leaf spells the schema name `${s}` where the inline text spelled `${schemaName.replaceAll('\"', '\"\"')}`, which is why the cross-file relocation match compares DDL-normalized text. Before cinatra#2625 the gate saw only the removals and called this a dropped table plus nine dropped columns."
+    },
+    {
+      "file": "leaf-relocation-drops-column.diff",
+      "expect": "fail",
+      "category": "destructive, column dropped BY the relocation",
+      "description": "The same relocation, except agent_run_pm_links.sync_error never arrives in the leaf. The column is gone from the executed DDL, so deployed databases keep the column while fresh installs never get it — a real drop wearing a refactor's clothes. The removal finds no match in the leaf, so it falls through to column-removed-from-ddl exactly as an inline deletion would. This is the fixture that keeps the cinatra#2625 classifier honest: without it, 'relocation is additive' would be a blanket waiver."
+    },
+    {
+      "file": "leaf-relocation-hides-drop-table.diff",
+      "expect": "fail",
+      "category": "destructive, DROP hidden inside the DDL leaf",
+      "description": "A faithful relocation that also smuggles `DROP TABLE IF EXISTS \"${s}\".\"usage_events\"` into the leaf. The leaf's spread-reached export is an in-scope schema region, so its own statements face the same destructive rules as inline ones — moving DDL into a leaf must not become a way to run unreviewed destructive DDL from outside drizzle-store.ts."
+    },
+    {
+      "file": "leaf-alias-shadow-redirect.diff",
+      "expect": "fail",
+      "category": "destructive, schema-name binding redirected under unchanged leaf DDL",
+      "description": "Not one character of DDL changes: widgetStreamMetadataGrantSchemaQueries turns `const q = schemaName.replaceAll('\"', '\"\"')` into a `let` and appends `q += \"_shadow\"`. Every statement that builder returns now executes against a DIFFERENT schema, so deployed databases keep extension_widget_stream_metadata_grant while the DDL stops maintaining it — a dropped table wearing a one-line refactor's clothes. Dropping the alias is not enough on its own (that only stops the NORMALIZED relocation match); the leaf's unchanged text still cancelled against its own untouched other side through the exact-text pass, and the gate passed with no destructive finding at all (codex round 3 on cinatra#2648). A mutated or re-bound schema name now strips that builder's lines of BOTH cancellation passes, so they are compared verbatim and the removals red. The ban is scope-precise: the sibling builders in the same file keep their cancellation."
+    },
+    {
+      "file": "leaf-schema-provenance-untraceable.diff",
+      "expect": "fail",
+      "category": "destructive, schema-name provenance leaves the builder",
+      "description": "The redirect is planted OUTSIDE the DDL entirely: versionIdentitySchemaQueries keeps every statement byte-for-byte and only routes its escaped schema name through a new one-line helper that appends `_shadow`. Watching the BINDING for mutations is not enough — provenance can leave the scope through a helper call, a parameter default or a destructuring, and the builder's own body never changes (codex round 4 on cinatra#2648). The gate therefore refuses to cancel DDL whose schema it cannot TRACE to `schemaName.replaceAll('\"', '\"\"')` (directly, or through a chain of single-declaration aliases; the literal-position `replaceAll(\"'\", \"''\")` escape counts too). Untraceable means compared verbatim, with a notice saying so."
     },
     {
       "file": "out-of-scope-auth-ddl.diff",
