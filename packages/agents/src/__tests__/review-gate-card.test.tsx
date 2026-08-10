@@ -488,3 +488,440 @@ describe("a marked review gate never feeds the field-assist LLM path", () => {
     expect(uses).toBeLessThanOrEqual(6);
   });
 });
+
+// ---------------------------------------------------------------------------
+// §VIII — the suggestion chips (cinatra#2572, epic #2564 S6c)
+// ---------------------------------------------------------------------------
+//
+// The properties a later slice must not be able to weaken: the chips are drawn
+// by THIS component (so page and card cannot diverge), a mark is LOCAL until the
+// one decision carries it, both marks are reversible, a reader who may not
+// decide gets no press target at all, and a decided gate shows what was
+// recorded.
+
+const CHIPS = [
+  { id: "sug-1", label: "subject", op: "replace" as const, message: "Not canonical." },
+  { id: "sug-2", label: "items · 0 · bcc", op: "remove" as const, message: "Every disclosed field is empty." },
+];
+
+/** The decide POST bodies this render produced, in order. */
+function decideBodies(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown>[] {
+  return fetchMock.mock.calls
+    .filter((c) => String(c[0]) === LIFECYCLE_VIEW_DECIDE_PATH)
+    .map((c) => JSON.parse(String((c[1] as RequestInit).body)));
+}
+
+function mockResolveAndDecide(state: LifecycleCardState) {
+  const fetchMock = vi.fn(async (input: unknown) => {
+    const url = String(input);
+    if (url === LIFECYCLE_VIEW_DECIDE_PATH) {
+      return new Response(
+        JSON.stringify({ outcome: { kind: "decided", disposition: "approve", idempotent: false } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    return new Response(JSON.stringify({ state }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  });
+  globalThis.fetch = fetchMock as unknown as typeof fetch;
+  return fetchMock;
+}
+
+function chipFor(container: HTMLElement, label: string): HTMLElement {
+  const el = [...container.querySelectorAll("[data-suggestion-state]")].find((n) =>
+    (n.textContent ?? "").includes(label),
+  );
+  if (!el) throw new Error(`no chip for ${label}`);
+  return el as HTMLElement;
+}
+
+describe("§VIII the chips are drawn by the ONE renderer", () => {
+  it("pending: a chip per surfaced suggestion, at rest, with the spec's anchors", async () => {
+    mockResolve({ state: "pending", canDecide: true, canComment: true, suggestions: CHIPS });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    expect(container.querySelectorAll('[data-conformance-id="suggestion-chip-rest"]')).toHaveLength(2);
+    // The label is the pointer; the mono slot is the transform class.
+    expect(chipFor(container, "subject").textContent).toContain("replace");
+    // The producer's reason is available without printing it into the row.
+    expect(chipFor(container, "subject").getAttribute("title")).toBe("Not canonical.");
+  });
+
+  it("draws the SAME chips on all three first-party hosts (one component, one drawing)", async () => {
+    for (const host of ["chat_thread", "run_card", "page_gate_region"] as const) {
+      mockResolve({ state: "pending", canDecide: true, canComment: true, suggestions: CHIPS });
+      const { container, unmount } = renderOn(host);
+      await waitFor(() =>
+        expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+      );
+      expect(container.querySelectorAll("[data-suggestion-state]")).toHaveLength(2);
+      unmount();
+    }
+  });
+
+  it("a gate with NO suggestions draws no chip row at all", async () => {
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
+    );
+    expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).toBeNull();
+  });
+});
+
+describe("§VIII a mark is LOCAL, and both marks are reversible", () => {
+  it("cycles rest → accepted → dismissed → rest on the ONE drawn control", async () => {
+    const fetchMock = mockResolveAndDecide({
+      state: "pending",
+      canDecide: true,
+      canComment: true,
+      suggestions: CHIPS,
+    });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    const chip = () => chipFor(container, "subject");
+    expect(chip().getAttribute("data-suggestion-state")).toBe("rest");
+    fireEvent.click(chip());
+    await waitFor(() => expect(chip().getAttribute("data-suggestion-state")).toBe("accepted"));
+    expect(chip().getAttribute("data-conformance-id")).toBe("suggestion-chip-accepted");
+    fireEvent.click(chip());
+    await waitFor(() => expect(chip().getAttribute("data-suggestion-state")).toBe("dismissed"));
+    expect(chip().getAttribute("data-conformance-id")).toBe("suggestion-chip-dismissed");
+    fireEvent.click(chip());
+    await waitFor(() => expect(chip().getAttribute("data-suggestion-state")).toBe("rest"));
+
+    // §VIII "the chips carry no submit of their own": four presses, ZERO
+    // requests. Nothing about a mark has left the browser.
+    expect(decideBodies(fetchMock)).toHaveLength(0);
+  });
+});
+
+describe("§VIII the marks ride the ONE decision submit", () => {
+  it("approve carries the partition on the single decide request", async () => {
+    const fetchMock = mockResolveAndDecide({
+      state: "pending",
+      canDecide: true,
+      canComment: true,
+      suggestions: CHIPS,
+    });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    fireEvent.click(chipFor(container, "subject")); // accepted
+    fireEvent.click(chipFor(container, "items · 0 · bcc")); // accepted
+    fireEvent.click(chipFor(container, "items · 0 · bcc")); // dismissed
+    await waitFor(() =>
+      expect(chipFor(container, "items · 0 · bcc").getAttribute("data-suggestion-state")).toBe(
+        "dismissed",
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
+    const body = decideBodies(fetchMock)[0];
+    expect(body.disposition).toBe("approve");
+    expect(body.suggestionDecisions).toEqual({ accepted: ["sug-1"], dismissed: ["sug-2"] });
+  });
+
+  it("a gate with no marks posts NO partition key — the pre-#2571 fingerprint", async () => {
+    const fetchMock = mockResolveAndDecide({
+      state: "pending",
+      canDecide: true,
+      canComment: true,
+      suggestions: CHIPS,
+    });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
+    expect("suggestionDecisions" in decideBodies(fetchMock)[0]).toBe(false);
+  });
+
+  it("the PAGE's route-bound action receives the very same partition", async () => {
+    // The page supplies its own action; the card must hand it the identical
+    // input, or the two surfaces would be two decision shapes again.
+    mockResolve({ state: "pending", canDecide: true, canComment: true, suggestions: CHIPS });
+    const hostAction = vi.fn(
+      async () => ({ kind: "decided", disposition: "approve", idempotent: false }) as const,
+    );
+    const { container } = render(
+      <LifecycleCardSurfaceProvider host="page_gate_region">
+        <ReviewGateCard view={VIEW} submitAction={hostAction} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    fireEvent.click(chipFor(container, "subject"));
+    await waitFor(() =>
+      expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("accepted"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(hostAction).toHaveBeenCalledTimes(1));
+    expect(hostAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        disposition: "approve",
+        suggestionDecisions: { accepted: ["sug-1"], dismissed: [] },
+      }),
+    );
+  });
+
+  it("a COMMENT carries no partition, and the marks survive it (Codex r1, finding 1)", async () => {
+    // S6b refuses a partition on a non-terminal decision — a stream of comments
+    // each "accepting" items on a gate that never resolves is the parallel
+    // approval pathway #2047 row 8 bans. So Comment must not send one, or it
+    // would fail for every reviewer who had marked a chip. The marks are not
+    // lost: a comment leaves the gate open, and they ride the terminal decision.
+    const fetchMock = mockResolveAndDecide({
+      state: "pending",
+      canDecide: true,
+      canComment: true,
+      suggestions: CHIPS,
+    });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    fireEvent.click(chipFor(container, "subject"));
+    await waitFor(() =>
+      expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("accepted"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /comment/i }));
+    await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
+    const body = decideBodies(fetchMock)[0];
+    expect(body.disposition).toBe("comment");
+    expect("suggestionDecisions" in body).toBe(false);
+    // Still marked, still reversible.
+    expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("accepted");
+  });
+
+  it("a surface that CHANGES clears the marks and says so, rather than quietly weakening the decision (Codex r1, finding 2)", async () => {
+    // The snapshot is immutable, so the surfaced set can only change by a row
+    // that stopped verifying or a read that failed. Submitting whatever survived
+    // would land an approve recording NOTHING while the reviewer believes it
+    // recorded their accepts.
+    let surfaced: LifecycleCardState = {
+      state: "pending",
+      canDecide: true,
+      canComment: true,
+      suggestions: CHIPS,
+    };
+    const fetchMock = vi.fn(async (input: unknown) => {
+      const url = String(input);
+      if (url === LIFECYCLE_VIEW_DECIDE_PATH) {
+        return new Response(
+          JSON.stringify({ outcome: { kind: "decided", disposition: "approve", idempotent: false } }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ state: surfaced }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    fireEvent.click(chipFor(container, "items · 0 · bcc"));
+    await waitFor(() =>
+      expect(chipFor(container, "items · 0 · bcc").getAttribute("data-suggestion-state")).toBe(
+        "accepted",
+      ),
+    );
+    // The surface narrows underneath the reader (a re-resolve on window focus).
+    surfaced = { state: "pending", canDecide: true, canComment: true, suggestions: [CHIPS[0]] };
+    fireEvent.focus(window);
+    await waitFor(() => expect(container.querySelectorAll("[data-suggestion-state]")).toHaveLength(1));
+    // The mark is GONE, visibly, with the reason on screen…
+    expect(
+      container.querySelector('[data-conformance-id="suggestion-marks-cleared"]'),
+    ).not.toBeNull();
+    expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("rest");
+    // …and the decision carries nothing, which is now the truth on screen.
+    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    await waitFor(() => expect(decideBodies(fetchMock)).toHaveLength(1));
+    expect("suggestionDecisions" in decideBodies(fetchMock)[0]).toBe(false);
+  });
+
+  it("a surface that VANISHES still tells the reviewer their marks went with it", async () => {
+    // A snapshot that stopped verifying, or a read that failed, draws no chips
+    // at all. The reviewer who had marked something must not simply find an
+    // empty space where the row was.
+    let surfaced: LifecycleCardState = {
+      state: "pending",
+      canDecide: true,
+      canComment: true,
+      suggestions: CHIPS,
+    };
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ state: surfaced }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ) as unknown as typeof fetch;
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    fireEvent.click(chipFor(container, "subject"));
+    await waitFor(() =>
+      expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("accepted"),
+    );
+    surfaced = { state: "pending", canDecide: true, canComment: true };
+    fireEvent.focus(window);
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-conformance-id="suggestion-marks-cleared"]'),
+      ).not.toBeNull(),
+    );
+    expect(container.querySelectorAll("[data-suggestion-state]")).toHaveLength(0);
+    // The floor is still live — a failed decoration never costs the decision.
+    expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false);
+  });
+
+  it("the notice SURVIVES a second surface change — a flap must not wipe the warning (Codex r2)", async () => {
+    // A transient store failure that drops the chips and then restores them is
+    // two surface changes in a row. Recomputing the notice from "were there
+    // marks a moment ago" would answer no on the second one, and the reviewer
+    // would be left looking at chips at rest with nothing to say theirs are
+    // gone.
+    let surfaced: LifecycleCardState = {
+      state: "pending",
+      canDecide: true,
+      canComment: true,
+      suggestions: CHIPS,
+    };
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ state: surfaced }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    ) as unknown as typeof fetch;
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    fireEvent.click(chipFor(container, "subject"));
+    await waitFor(() =>
+      expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("accepted"),
+    );
+    // 1st change — the chips vanish.
+    surfaced = { state: "pending", canDecide: true, canComment: true };
+    fireEvent.focus(window);
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-conformance-id="suggestion-marks-cleared"]'),
+      ).not.toBeNull(),
+    );
+    // 2nd change — they come back, at rest.
+    surfaced = { state: "pending", canDecide: true, canComment: true, suggestions: CHIPS };
+    fireEvent.focus(window);
+    await waitFor(() => expect(container.querySelectorAll("[data-suggestion-state]")).toHaveLength(2));
+    expect(
+      container.querySelector('[data-conformance-id="suggestion-marks-cleared"]'),
+    ).not.toBeNull();
+    // The reviewer acting is what retires the notice.
+    fireEvent.click(chipFor(container, "subject"));
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-marks-cleared"]')).toBeNull(),
+    );
+  });
+
+  it("marks NEVER cross gates, even when two gates mint the same ids (Codex r1, finding 3)", async () => {
+    // A suggestion id derives from (lane, projection digest, op, pointer) and
+    // NOT from the gate, so two gates shown the same text legitimately mint the
+    // same ids. The binding is the REF as well as the id set.
+    mockResolve({ state: "pending", canDecide: true, canComment: true, suggestions: CHIPS });
+    const { container, rerender } = render(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <ReviewGateCard view={VIEW} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    fireEvent.click(chipFor(container, "subject"));
+    await waitFor(() =>
+      expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("accepted"),
+    );
+    // The SAME component instance is pointed at another gate whose snapshot
+    // happens to carry identical suggestion ids.
+    rerender(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <ReviewGateCard view={{ ...VIEW, ref: "ref-a-different-gate" }} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("rest");
+  });
+});
+
+describe("§VIII read-only presentations", () => {
+  it("restricted (respond access, no approve): the chips RENDER with no press target", async () => {
+    mockResolve({
+      state: "restricted",
+      canDecide: false,
+      canComment: true,
+      reason: "Approving or rejecting needs approve access on this run.",
+      suggestions: CHIPS,
+    });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    // Two chips, drawn — a withheld affordance is never a withheld chip.
+    expect(container.querySelectorAll("[data-suggestion-state]")).toHaveLength(2);
+    // …and none of them is a control at all: not a live one, and not a disabled
+    // one either (a disabled button reads as "later"; this is "not yours").
+    expect(
+      [...container.querySelectorAll("[data-suggestion-state]")].every(
+        (n) => n.tagName.toLowerCase() === "span",
+      ),
+    ).toBe(true);
+    expect(container.querySelector('[data-suggestion-chips-mode="read-only"]')).not.toBeNull();
+  });
+
+  it("settled: the RECORDED partition, drawn in the same chips, with no affordance", async () => {
+    mockResolve({
+      state: "settled",
+      suggestions: [
+        { ...CHIPS[0], mark: "accepted" as const },
+        { ...CHIPS[1], mark: "dismissed" as const },
+      ],
+    });
+    const { container } = renderOn("page_gate_region");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).not.toBeNull(),
+    );
+    expect(chipFor(container, "subject").getAttribute("data-conformance-id")).toBe(
+      "suggestion-chip-accepted",
+    );
+    expect(chipFor(container, "items · 0 · bcc").getAttribute("data-conformance-id")).toBe(
+      "suggestion-chip-dismissed",
+    );
+    expect(container.querySelector('[data-suggestion-chips-mode="recorded"]')).not.toBeNull();
+    // §IV still holds: the gate is no longer open.
+    expect(container.querySelector('[data-conformance-id="review-gate-blocked"]')).not.toBeNull();
+  });
+
+  it("a settled gate that surfaced nothing draws only §IV's blocked notice", async () => {
+    mockResolve({ state: "settled" });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="review-gate-blocked"]')).not.toBeNull(),
+    );
+    expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).toBeNull();
+  });
+});
