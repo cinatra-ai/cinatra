@@ -961,10 +961,13 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     // cinatra#2631 — records, on the transaction, what is KNOWN about what was
     // displayed for it: the scope set the hosted SIGN-IN SCREEN showed, or the
     // no-screen sentinel a node writes once it has PROVED none rendered. Either
-    // way the grant taken after the sign-in can be checked against it.
-    // Write-once (it may only replace the unclassified value a transaction is
-    // created with) and NON-CONSUMING: it never touches consumed_at, which is
-    // why it is safe on the page render.
+    // way the grant taken after the sign-in can be checked against it. The same
+    // statement stores the HASH of the single-use nonce that names WHOSE arrival
+    // the record is (rework round 7, finding 1) — one write, two columns, so a
+    // record can never exist without the arrival it belongs to. Write-once (it
+    // may only replace the unclassified value a transaction is created with,
+    // while no nonce is attached) and NON-CONSUMING: it never touches
+    // consumed_at, which is why it is safe on the page render.
     module: "src/lib/widget-user-auth.ts",
     exportName: "recordDisplayedScopesForTransaction",
     capability: "org.settings",

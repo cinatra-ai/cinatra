@@ -49,7 +49,14 @@ const FAILURE_MESSAGES: Record<string, string> = {
   invalid_request: "This sign-in request is invalid. Open the assistant login again.",
 };
 
-export function WidgetAuthGrant({ txnId }: { txnId: string }) {
+// THE NONCE IS CARRIED, NEVER MINTED HERE (cinatra#2631, codex rework round 7,
+// finding 1). It is the server's proof that the arrival redeeming the recorded
+// sign-in screen is the arrival that screen rendered for; this component only
+// hands back what the page handed it, and a wrong or missing value can only
+// cause a refusal. It is a request argument rather than page state because the
+// action re-checks it against the stored hash on the server.
+
+export function WidgetAuthGrant({ txnId, nonce }: { txnId: string; nonce: string }) {
   const [state, setState] = useState<
     { txnId: string; result: WidgetAuthGrantResult } | null
   >(null);
@@ -67,7 +74,7 @@ export function WidgetAuthGrant({ txnId }: { txnId: string }) {
         txnId,
         result: (async () => {
           const { issueWidgetAuthCodeAction } = await import("@/app/widget-auth/actions");
-          return issueWidgetAuthCodeAction(txnId);
+          return issueWidgetAuthCodeAction(txnId, nonce);
         })().catch(
           // A transport failure must not strand the popup on a spinner.
           () => ({ ok: false, reason: "invalid_request" }) as WidgetAuthGrantResult,
@@ -82,7 +89,13 @@ export function WidgetAuthGrant({ txnId }: { txnId: string }) {
     return () => {
       live = false;
     };
-  }, [txnId]);
+    // `nonce` is listed because the effect reads it, but the request stays KEYED
+    // BY THE TRANSACTION: a re-run for the same transaction subscribes to the
+    // request already in flight rather than starting a second one, which is the
+    // property round 1 finding 2 established. The transaction is single-use, so
+    // one request is the whole point — a second nonce for the same transaction
+    // would have nothing left to redeem.
+  }, [txnId, nonce]);
 
   // A result belongs to ONE transaction. Showing the previous transaction's
   // outcome while a new one is in flight would deliver the wrong code — or, on

@@ -1,18 +1,22 @@
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 
 import { getAuthSession, resolveOrgRoleForUser } from "@/lib/auth-session";
 import {
   loadActiveTransaction,
+  mintWidgetScreenNonce,
   recordDisplayedScopesForTransaction,
   sessionRowPredatesTransaction,
+  widgetScreenNonceHash,
   widgetSessionFingerprint,
 } from "@/lib/widget-user-auth";
 import {
   WIDGET_EXTENSION_SCOPES,
   WIDGET_SIGNIN_GRANTED_SCOPES,
-  displayedScopesAgree,
+  screenRecordAdmitsArrival,
   widgetDisplayedScopesToken,
   widgetNoSignInScreenToken,
+  widgetScreenNonceMatches,
 } from "@/lib/widget-lifecycle-scope";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
 import { Main } from "@/components/layout/main";
@@ -57,6 +61,14 @@ export const dynamic = "force-dynamic";
 //                           sign-in grants (redirects back here on login).
 //   • session, non-member → deny card (not a member of the txn's org).
 //   • session, member     → record the grant → postMessage to opener.
+//
+// Whichever of the two recording branches runs, it makes ONE hop first: it
+// writes the record together with the hash of a freshly minted single-use nonce
+// and then redirects the browser to the same page carrying that nonce, so the
+// arrival that redeems the record is provably the arrival it was written for
+// (cinatra#2631, codex rework round 7, finding 1). Every later render of that
+// arrival — a reload, the return from the sign-in — presents it and writes
+// nothing.
 //
 // The page is on the middleware public-path exact allowlist so a SESSIONLESS
 // visitor is NOT 307'd to /sign-in (it must render the login form here); a
@@ -138,7 +150,30 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
   }
 
   const clientLabel = CLIENT_LABELS[txn.client] ?? txn.client;
-  const redirectTo = `/widget-auth?txn=${encodeURIComponent(txn.txnId)}`;
+
+  // THE ARRIVAL'S OWN NONCE (cinatra#2631, codex rework round 7, finding 1).
+  //
+  // The record on the transaction says what was displayed; it did not say to
+  // WHOM. Two people can be walked through one unconsumed transaction during a
+  // rolling deploy — A opens it sessionless on a current node, which records the
+  // current set, and abandons it; B opens the same transaction on a legacy node,
+  // reads the legacy copy, signs in and comes back here — and B would redeem A's
+  // record. So a current node mints a single-use nonce when it writes a record,
+  // stores only its hash beside it, and hands the value to that one browser.
+  //
+  // The URL is the carrier because it is the only one this render controls: a
+  // server component may not set a cookie during a GET. Unlike the displayed set
+  // itself (round 1, finding 1) it is SAFE there — stripping it cannot turn a
+  // mismatch into an admission, because an arrival that presents no nonce is
+  // refused. It is not a claim; it is a secret that is either held or not.
+  const presentedNonce = first(sp.n);
+  const presentedNonceHash = widgetScreenNonceHash(presentedNonce);
+  const arrivalHoldsRecord = widgetScreenNonceMatches(
+    txn.screenNonceHash,
+    presentedNonceHash,
+  );
+  const urlFor = (nonce: string) =>
+    `/widget-auth?txn=${encodeURIComponent(txn.txnId)}&n=${encodeURIComponent(nonce)}`;
 
   const session = await getAuthSession();
 
@@ -158,33 +193,58 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
     // granted — the exact failure the record exists to prevent (codex rework
     // round 2, finding 1). So we refuse to render the screen at all.
     const displayed = widgetDisplayedScopesToken(WIDGET_SIGNIN_GRANTED_SCOPES);
-    const recorded = recordDisplayedScopesForTransaction(txn.txnId, displayed);
-    if (recorded !== displayed) {
+
+    // This arrival already earned this record — a refresh, a back-navigation, or
+    // the hop this render made a moment ago. Nothing to write; the same nonce
+    // carries forward, so re-reading the screen costs nothing and breaks nothing.
+    if (arrivalHoldsRecord && txn.displayedScopes === displayed) {
+      emitWidgetAuthAudit("page_viewed", {
+        siteId: txn.siteId,
+        orgId: txn.orgId,
+        client: txn.client,
+        agentSlug: txn.agentSlug,
+        siteOrigin: txn.siteOrigin,
+        reason: "login",
+      });
+      return (
+        <Shell>
+          <WidgetAuthLogin redirectTo={urlFor(presentedNonce)} />
+          <SignInGrantNotice clientLabel={clientLabel} />
+        </Shell>
+      );
+    }
+
+    const nonce = mintWidgetScreenNonce();
+    const nonceHash = widgetScreenNonceHash(nonce);
+    const recorded = recordDisplayedScopesForTransaction(txn.txnId, displayed, nonceHash);
+    if (
+      recorded?.displayedScopes !== displayed ||
+      recorded?.screenNonceHash !== nonceHash
+    ) {
+      // Either another build recorded a different set (round 2, finding 1), or
+      // this transaction is already accounted for by an arrival that is not this
+      // one. Both mean the same thing to the person in front of us: this window
+      // cannot honestly show them what they would be granting.
       emitWidgetAuthAudit("consent_denied", {
         siteId: txn.siteId,
         orgId: txn.orgId,
         agentSlug: txn.agentSlug,
         siteOrigin: txn.siteOrigin,
-        reason: "stale_signin_screen",
+        reason:
+          recorded?.displayedScopes === displayed
+            ? "screen_nonce_mismatch"
+            : "stale_signin_screen",
       });
       return (
         <ErrorCard message="Cinatra was updated while this window was open. Close this window and open the assistant login again from your site." />
       );
     }
-    emitWidgetAuthAudit("page_viewed", {
-      siteId: txn.siteId,
-      orgId: txn.orgId,
-      client: txn.client,
-      agentSlug: txn.agentSlug,
-      siteOrigin: txn.siteOrigin,
-      reason: "login",
-    });
-    return (
-      <Shell>
-        <WidgetAuthLogin redirectTo={redirectTo} />
-        <SignInGrantNotice clientLabel={clientLabel} />
-      </Shell>
-    );
+    // The record and the nonce are now one stored fact, so the browser is sent
+    // to the URL that carries its half of it. Hopping instead of rendering here
+    // is what keeps the screen REFRESH-SAFE: every later render of this arrival —
+    // a reload, the return from the sign-in — presents the nonce it was minted
+    // with, and takes the branch above instead of trying to record again.
+    redirect(urlFor(nonce));
   }
 
   const userId = String(session.user.id);
@@ -231,20 +291,49 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
   //
   // When the session came AFTER, a sign-in happened during this flow: either
   // this build's screen recorded what it displayed (the ordinary path — the
-  // record is already there and this reads it), or the screen came from a node
-  // that records nothing, in which case the transaction is still unclassified
-  // and the check below refuses. Nothing is assumed on the person's behalf.
+  // record is already there, this arrival is carrying the nonce that screen gave
+  // it, and this reads both), or the screen came from a node that records
+  // nothing, in which case there is no record naming this arrival and the check
+  // below refuses. Nothing is assumed on the person's behalf.
+  //
+  // A NO-SCREEN PROOF MINTS ITS OWN NONCE (round 7, finding 1). This arrival
+  // never passed a sign-in screen, so nothing has handed it one yet; the write
+  // that records the sentinel mints it in the same statement and the browser is
+  // sent to the URL carrying it, exactly like the screen branch above. The
+  // sentinel already names the session, so the nonce adds a second, independent
+  // binding rather than the only one — and it means BOTH kinds of record are
+  // admitted through one rule, with no value that is redeemable by an arrival
+  // that cannot present its own nonce.
   const noScreenToken = widgetNoSignInScreenToken(
     widgetSessionFingerprint(session.session?.id),
   );
-  const noScreenProven =
-    noScreenToken.length > 0 &&
-    sessionRowPredatesTransaction(String(session.session?.id ?? ""), txn.txnId);
-  const displayedForGrant = noScreenProven
-    ? recordDisplayedScopesForTransaction(txn.txnId, noScreenToken)
-    : txn.displayedScopes;
+  let record = { displayedScopes: txn.displayedScopes, screenNonceHash: txn.screenNonceHash };
+  if (!arrivalHoldsRecord) {
+    const noScreenProven =
+      noScreenToken.length > 0 &&
+      sessionRowPredatesTransaction(String(session.session?.id ?? ""), txn.txnId);
+    if (noScreenProven) {
+      const nonce = mintWidgetScreenNonce();
+      const nonceHash = widgetScreenNonceHash(nonce);
+      const recorded = recordDisplayedScopesForTransaction(
+        txn.txnId,
+        noScreenToken,
+        nonceHash,
+      );
+      if (
+        recorded?.displayedScopes === noScreenToken &&
+        recorded?.screenNonceHash === nonceHash
+      ) {
+        redirect(urlFor(nonce));
+      }
+      record = recorded ?? { displayedScopes: null, screenNonceHash: null };
+    }
+  }
   if (
-    !displayedScopesAgree(displayedForGrant, WIDGET_SIGNIN_GRANTED_SCOPES, noScreenToken)
+    !screenRecordAdmitsArrival(record, WIDGET_SIGNIN_GRANTED_SCOPES, {
+      presentedNonceHash,
+      expectedNoScreenToken: noScreenToken,
+    })
   ) {
     emitWidgetAuthAudit("consent_denied", {
       actor: userId,
@@ -252,7 +341,7 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
       siteId: txn.siteId,
       agentSlug: txn.agentSlug,
       siteOrigin: txn.siteOrigin,
-      reason: "stale_signin_screen",
+      reason: arrivalHoldsRecord ? "stale_signin_screen" : "screen_nonce_mismatch",
     });
     return (
       <ErrorCard message="Cinatra was updated while this window was open. Close this window and open the assistant login again from your site." />
@@ -274,7 +363,7 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
 
   return (
     <Shell>
-      <WidgetAuthGrant txnId={txn.txnId} />
+      <WidgetAuthGrant txnId={txn.txnId} nonce={presentedNonce} />
     </Shell>
   );
 }

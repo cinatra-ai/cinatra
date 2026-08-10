@@ -27,6 +27,7 @@ import {
   WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
   widgetUserBaseScope,
   type WidgetExtensionScope,
+  type WidgetScreenRecord,
 } from "@/lib/widget-lifecycle-scope";
 import {
   getPostgresConnectionString,
@@ -415,6 +416,14 @@ export type LoadedTransaction = {
    * recordDisplayedScopesForTransaction.
    */
   displayedScopes: string | null;
+  /**
+   * WHOSE arrival the record above belongs to: the SHA-256 of the single-use
+   * nonce the current node minted when it wrote that record, handed to that one
+   * browser and to nothing else (cinatra#2631, rework round 7, finding 1). Null
+   * on a transaction whose record predates this mechanism — which fails closed
+   * at the grant exactly like the unclassified value.
+   */
+  screenNonceHash: string | null;
 };
 
 /**
@@ -431,7 +440,7 @@ export function loadActiveTransaction(txnId: string): LoadedTransaction | null {
       {
         text:
           `SELECT txn_id, site_id, client, org_id, site_origin, agent_slug, instance_id, ` +
-          `code_challenge, state, displayed_scopes ` +
+          `code_challenge, state, displayed_scopes, screen_nonce_hash ` +
           `FROM ${qTable(TXN_TABLE)} ` +
           `WHERE txn_id = $1 AND consumed_at IS NULL AND expires_at > now() LIMIT 1`,
         values: [txnId],
@@ -453,6 +462,8 @@ export function loadActiveTransaction(txnId: string): LoadedTransaction | null {
     state: String(row.state ?? ""),
     displayedScopes:
       typeof row.displayed_scopes === "string" ? row.displayed_scopes : null,
+    screenNonceHash:
+      typeof row.screen_nonce_hash === "string" ? row.screen_nonce_hash : null,
   };
 }
 
@@ -468,6 +479,17 @@ export function loadActiveTransaction(txnId: string): LoadedTransaction | null {
  * created with, or the pre-column NULL — is the absence of knowledge and fails
  * closed there (cinatra#2631, rework round 3, finding 1).
  *
+ * AND IT RECORDS WHOSE ARRIVAL IT IS (rework round 7, finding 1). What was
+ * displayed is not a property of the TRANSACTION but of the one arrival the
+ * screen rendered for: two people can be walked through the same unconsumed
+ * transaction during a rolling deploy, and the second one must not redeem the
+ * first one's record. So the hash of a single-use nonce is written in THE SAME
+ * STATEMENT as the record, and the plaintext goes to that browser alone (the
+ * sign-in redirect URL). The two columns are therefore one fact: a record can
+ * never exist without the arrival it belongs to, and the write-once guard names
+ * both, so a record left by a node that predates this mechanism can never have a
+ * nonce attached to it afterwards by somebody who did not display it.
+ *
  * cinatra#2631 (codex rework round 1, finding 1). Carrying the displayed set
  * through the sign-in redirect in the URL was not enough: a party that controls
  * the popup's URL can STRIP the marker, and an absent marker used to be
@@ -482,12 +504,15 @@ export function loadActiveTransaction(txnId: string): LoadedTransaction | null {
  * not overwrite that, and a no-screen claim can never overwrite a screen that
  * really rendered.
  *
- * RETURNS THE AUTHORITATIVE STORED VALUE, not the value offered (codex rework
+ * RETURNS THE AUTHORITATIVE STORED RECORD, not the values offered (codex rework
  * round 2, finding 1). A caller that assumed its own write had landed could
  * render one list of sentences while a different one stood recorded — the
  * mismatch the whole mechanism exists to prevent, reintroduced by optimism. The
- * caller compares and refuses to render when they differ. Null means the
- * transaction is no longer there to record anything against.
+ * caller compares BOTH halves and refuses to render when either differs: a
+ * stored set that is not the one it offered means somebody else's screen, and a
+ * stored nonce hash that is not the one it offered means somebody else's
+ * arrival. Null means the transaction is no longer there to record anything
+ * against, or the caller offered no usable arrival.
  *
  * Idempotent and NON-CONSUMING: re-rendering the sign-in screen writes nothing
  * new, and this never touches consumed_at. It is safe on a page render for
@@ -496,10 +521,15 @@ export function loadActiveTransaction(txnId: string): LoadedTransaction | null {
 export function recordDisplayedScopesForTransaction(
   txnId: string,
   displayedScopes: string,
-): string | null {
+  screenNonceHash: string,
+): WidgetScreenRecord | null {
   if (!txnId || typeof txnId !== "string" || typeof displayedScopes !== "string") {
     return null;
   }
+  // A record with no arrival attached is one anybody could redeem, so a caller
+  // that cannot name its own arrival writes nothing at all rather than a record
+  // that is weaker than the one this function promises.
+  if (!/^[a-f0-9]{64}$/.test(String(screenNonceHash ?? ""))) return null;
   ensurePostgresSchema();
   const [, read] = runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
@@ -507,21 +537,55 @@ export function recordDisplayedScopesForTransaction(
     queries: [
       {
         text:
-          `UPDATE ${qTable(TXN_TABLE)} SET displayed_scopes = $2 ` +
+          `UPDATE ${qTable(TXN_TABLE)} SET displayed_scopes = $2, screen_nonce_hash = $4 ` +
           `WHERE txn_id = $1 AND consumed_at IS NULL AND expires_at > now() ` +
-          `AND displayed_scopes = $3`,
-        values: [txnId, displayedScopes, WIDGET_SIGNIN_SCREEN_UNCLASSIFIED],
+          `AND displayed_scopes = $3 AND screen_nonce_hash IS NULL`,
+        values: [txnId, displayedScopes, WIDGET_SIGNIN_SCREEN_UNCLASSIFIED, screenNonceHash],
       },
       {
         text:
-          `SELECT displayed_scopes FROM ${qTable(TXN_TABLE)} ` +
+          `SELECT displayed_scopes, screen_nonce_hash FROM ${qTable(TXN_TABLE)} ` +
           `WHERE txn_id = $1 AND consumed_at IS NULL AND expires_at > now() LIMIT 1`,
         values: [txnId],
       },
     ],
   });
   const row = read?.rows?.[0] as Record<string, unknown> | undefined;
-  return row && typeof row.displayed_scopes === "string" ? row.displayed_scopes : null;
+  if (!row) return null;
+  return {
+    displayedScopes:
+      typeof row.displayed_scopes === "string" ? row.displayed_scopes : null,
+    screenNonceHash:
+      typeof row.screen_nonce_hash === "string" ? row.screen_nonce_hash : null,
+  };
+}
+
+/**
+ * A fresh single-use screen nonce — 32 bytes of CSPRNG entropy, hex. It is the
+ * one thing in this flow that lives only in the browser it was minted for: the
+ * database keeps its {@link widgetScreenNonceHash} and never the value, exactly
+ * as it keeps the authorization code and the `cwu_` token.
+ */
+export function mintWidgetScreenNonce(): string {
+  return randomBytes(32).toString("hex");
+}
+
+/**
+ * The stored form of a screen nonce. Plain SHA-256, unsalted and unstretched by
+ * design and for the same reason the code/token hashes are: the input is 256
+ * bits of server-minted entropy, so there is no dictionary to attack and nothing
+ * a salt would defend. Empty for anything unusable, which every consumer reads
+ * as "no proof".
+ *
+ * NOT NORMALIZED, deliberately. A presented value is accepted only if it is
+ * EXACTLY what was minted — no trimming, no case folding. Normalizing a bearer
+ * secret widens the set of strings that redeem it for no benefit; this one is
+ * either presented as issued or it is not presented at all.
+ */
+export function widgetScreenNonceHash(nonce: unknown): string {
+  const value = typeof nonce === "string" ? nonce : "";
+  if (!/^[a-f0-9]{64}$/.test(value)) return "";
+  return createHash("sha256").update(value).digest("hex");
 }
 
 /**

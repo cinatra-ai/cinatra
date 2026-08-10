@@ -305,6 +305,22 @@ const nextConfig: NextConfig = {
         headers: [{ key: "Referrer-Policy", value: "no-referrer" }],
       },
       {
+        // cinatra#2631 (codex rework round 7): the hosted widget login carries a
+        // single-use SCREEN NONCE in its own query string — the only carrier a
+        // server-component GET has, since it may not set a cookie. Same class of
+        // short-lived URL-borne secret as the Connect authorization code above,
+        // so it gets the same treatment: `no-referrer` so no navigation off this
+        // page can put it in a Referer header (the browser default already
+        // strips the query cross-origin; this covers the same-origin and
+        // dev-loopback hops too), and `no-store` so no shared cache holds a
+        // response minted for one arrival at an authenticated surface.
+        source: "/widget-auth",
+        headers: [
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "Cache-Control", value: "no-store" },
+        ],
+      },
+      {
         // cinatra#2566 (epic #2564 S2): the review-target ISLAND is embedded in
         // a review card as a same-origin iframe, so its response has to say two
         // things for itself.

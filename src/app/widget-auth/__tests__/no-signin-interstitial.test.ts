@@ -196,11 +196,34 @@ describe("the sign-in itself carries the grant", () => {
     );
     expect(signedOut).toContain("recordDisplayedScopesForTransaction");
     expect(signedOut).toContain("widgetDisplayedScopesToken(WIDGET_SIGNIN_GRANTED_SCOPES)");
-    expect(actionSrc).toContain("displayedScopesAgree(");
-    expect(actionSrc).toContain("txn.displayedScopes,");
-    // ...and NOT off the request: the action takes the transaction id alone.
-    expect(actionSrc).toMatch(/issueWidgetAuthCodeAction\(\s*txnId: string,\s*\)/);
+    // The action reads the RECORD off the transaction it loaded, through the one
+    // admission test both ends share.
+    expect(actionSrc).toContain("screenRecordAdmitsArrival(txn,");
+    // ...and the second argument is not a claim about the flow. It is this
+    // arrival's NONCE, which the action immediately hashes and compares against
+    // what the server stored (round 7, finding 1): there is still no request
+    // field naming a scope, a displayed set or a grant.
+    expect(actionSrc).toMatch(
+      /issueWidgetAuthCodeAction\(\s*txnId: string,\s*screenNonce: string,\s*\)/,
+    );
+    expect(actionSrc).toContain("presentedNonceHash: widgetScreenNonceHash(screenNonce)");
+    expect(actionSrc).not.toMatch(/displayedScopes\s*[:=]\s*screenNonce/);
     expect(pageSrc).not.toContain("&s=");
+  });
+
+  it("the URL carries a SECRET, never a statement about what was displayed", () => {
+    // codex rework round 7, finding 1. The one search parameter this page reads
+    // besides the transaction id is the nonce, and it enters the decision only
+    // by being HASHED and compared with a stored value — the shape round 1
+    // established for anything browser-held: strippable, unforgeable, and unable
+    // to turn a mismatch into an admission.
+    expect(pageSrc).toContain("widgetScreenNonceHash(presentedNonce)");
+    expect(pageSrc).toContain("widgetScreenNonceMatches(");
+    // The nonce is MINTED by the server, never adopted from the request.
+    expect(pageSrc).toContain("mintWidgetScreenNonce()");
+    expect(pageSrc).not.toMatch(/screen_nonce_hash|recordDisplayedScopesForTransaction\([^)]*presentedNonce/);
+    // Both recording branches hop so the browser carries what it was given.
+    expect(pageSrc.match(/redirect\(urlFor\(nonce\)\)/g)?.length).toBe(2);
   });
 
   it("the no-screen sentinel is written only where it is PROVED, never at creation", () => {
@@ -210,18 +233,16 @@ describe("the sign-in itself carries the grant", () => {
     // proof that the session already existed when the transaction was created.
     const memberBranch = pageSrc.slice(pageSrc.lastIndexOf("resolveOrgRoleForUser"));
     expect(memberBranch).toContain("sessionRowPredatesTransaction(");
-    expect(memberBranch).toContain(
-      "recordDisplayedScopesForTransaction(txn.txnId, noScreenToken)",
-    );
+    expect(memberBranch).toContain("recordDisplayedScopesForTransaction(");
+    expect(memberBranch).toContain("noScreenToken,");
     expect(memberBranch).toContain("widgetNoSignInScreenToken(");
-    expect(memberBranch).toContain(
-      "displayedScopesAgree(displayedForGrant, WIDGET_SIGNIN_GRANTED_SCOPES, noScreenToken)",
-    );
+    expect(memberBranch).toContain("screenRecordAdmitsArrival(record,");
+    expect(memberBranch).toContain("expectedNoScreenToken: noScreenToken,");
     // ...and the sentinel the ACTION admits is derived from ITS OWN session, so
     // the two ends of the flow name the same arrival or the grant refuses
     // (rework round 5, finding 1).
     expect(actionSrc).toContain(
-      "widgetNoSignInScreenToken(widgetSessionFingerprint(session.session?.id))",
+      "widgetNoSignInScreenToken(\n        widgetSessionFingerprint(session.session?.id),\n      )",
     );
     // The transaction is created carrying the value that asserts NOTHING, and
     // the engine that creates it never builds a sentinel at all.

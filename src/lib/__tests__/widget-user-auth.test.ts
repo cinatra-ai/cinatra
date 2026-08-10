@@ -71,8 +71,10 @@ vi.mock("@/lib/connect-sites-store", () => ({
 import {
   createAuthTransaction,
   loadActiveTransaction,
+  mintWidgetScreenNonce,
   recordDisplayedScopesForTransaction,
   sessionRowPredatesTransaction,
+  widgetScreenNonceHash,
   widgetSessionFingerprint,
   issueUserAuthCode,
   redeemUserAuthCode,
@@ -89,6 +91,7 @@ import {
   WIDGET_LIFECYCLE_READ_ROUTE_PATH,
   WIDGET_LIFECYCLE_READ_SCOPE,
   displayedScopesAgree,
+  screenRecordAdmitsArrival,
   widgetNoSignInScreenToken,
   type WidgetExtensionScope,
 } from "@/lib/widget-lifecycle-scope";
@@ -200,9 +203,9 @@ function exec(sql: string, values: unknown[] = []): { rows: Record<string, unkno
     return { rows: [out] };
   }
 
-  // cinatra#2631 — the write-once record of what was displayed. Interpreted
-  // faithfully, INCLUDING the `displayed_scopes = $3` guard, so the
-  // first-write-wins property is exercised rather than assumed.
+  // cinatra#2631 — the write-once record of what was displayed AND whose arrival
+  // it belongs to. Interpreted faithfully, INCLUDING both halves of the guard,
+  // so the first-write-wins property is exercised rather than assumed.
   if (sql.startsWith("UPDATE") && sql.includes("displayed_scopes = $2")) {
     const r = store.get(String(values[0]));
     if (!r || r.consumed || r.expires_at_ms <= nowMs) return { rows: [] };
@@ -212,7 +215,17 @@ function exec(sql: string, values: unknown[] = []): { rows: Record<string, unkno
     if (sql.includes("displayed_scopes = $3") && r.displayed_scopes !== values[2]) {
       return { rows: [] };
     }
+    // ...and the arrival half (rework round 7, finding 1): a record that already
+    // names an arrival may not have a second one attached to it.
+    if (
+      sql.includes("screen_nonce_hash IS NULL") &&
+      r.screen_nonce_hash !== undefined &&
+      r.screen_nonce_hash !== null
+    ) {
+      return { rows: [] };
+    }
     r.displayed_scopes = values[1];
+    if (sql.includes("screen_nonce_hash = $4")) r.screen_nonce_hash = values[3];
     return { rows: [] };
   }
 
@@ -1217,6 +1230,26 @@ function legacyTxnRow(txnId: string): void {
   const row = txnStore.get(txnId);
   if (!row) throw new Error("no such txn");
   row.displayed_scopes = null;
+  row.screen_nonce_hash = null;
+}
+
+/**
+ * A record left by a node that predates the ARRIVAL binding: the displayed set
+ * is there, the nonce hash is not (rework round 7, finding 1). The other half of
+ * the mixed-version window this mechanism introduces — reached the same way
+ * `legacyTxnRow` is, because no production path can produce it.
+ */
+function recordWithoutArrival(txnId: string, displayedScopes: string): void {
+  const row = txnStore.get(txnId);
+  if (!row) throw new Error("no such txn");
+  row.displayed_scopes = displayedScopes;
+  row.screen_nonce_hash = null;
+}
+
+/** One arrival's nonce, and the hash the transaction stores for it. */
+function arrival(): { nonce: string; hash: string } {
+  const nonce = mintWidgetScreenNonce();
+  return { nonce, hash: widgetScreenNonceHash(nonce) };
 }
 
 describe("the displayed-scope record on the transaction (cinatra#2631)", () => {
@@ -1247,13 +1280,31 @@ describe("the displayed-scope record on the transaction (cinatra#2631)", () => {
     ).toBe(false);
   });
 
-  it("records what the screen displayed and returns the STORED value", () => {
+  it("records what the screen displayed, WHOSE arrival it was, and returns the STORED record", () => {
     const t = newTxn(SITE_A);
     if (!t.ok) throw new Error("txn");
-    expect(recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read")).toBe(
-      "lifecycle.read",
+    const a = arrival();
+    expect(recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", a.hash)).toEqual(
+      { displayedScopes: "lifecycle.read", screenNonceHash: a.hash },
     );
-    expect(loadActiveTransaction(t.txnId)?.displayedScopes).toBe("lifecycle.read");
+    const loaded = loadActiveTransaction(t.txnId);
+    expect(loaded?.displayedScopes).toBe("lifecycle.read");
+    expect(loaded?.screenNonceHash).toBe(a.hash);
+    // The NONCE ITSELF is never stored — only what it hashes to (round 7).
+    expect(JSON.stringify([...txnStore.values()])).not.toContain(a.nonce);
+  });
+
+  it("writes NOTHING for a caller that cannot name its arrival", () => {
+    // A record with no nonce is one any arrival could redeem, which is the hole.
+    // Refusing to write is the only honest answer — there is no weaker record.
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    for (const bad of ["", "not-hex", "abc", "A".repeat(64)]) {
+      expect(recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", bad)).toBeNull();
+    }
+    expect(loadActiveTransaction(t.txnId)?.displayedScopes).toBe(
+      WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
+    );
   });
 
   it("FIRST write wins, and the loser is TOLD it lost", () => {
@@ -1261,11 +1312,31 @@ describe("the displayed-scope record on the transaction (cinatra#2631)", () => {
     // of sentences over a record that says something else (round 2, finding 1).
     const t = newTxn(SITE_A);
     if (!t.ok) throw new Error("txn");
-    recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read");
+    const first = arrival();
+    const second = arrival();
+    recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", first.hash);
     expect(
-      recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read lifecycle.decide"),
-    ).toBe("lifecycle.read");
+      recordDisplayedScopesForTransaction(
+        t.txnId,
+        "lifecycle.read lifecycle.decide",
+        second.hash,
+      ),
+    ).toEqual({ displayedScopes: "lifecycle.read", screenNonceHash: first.hash });
     expect(loadActiveTransaction(t.txnId)?.displayedScopes).toBe("lifecycle.read");
+  });
+
+  it("a SECOND arrival cannot attach itself to a record that already names one", () => {
+    // rework round 7, finding 1 — the write-once guard names BOTH columns, so an
+    // arrival offering the same displayed set as the record still cannot make
+    // that record its own.
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    const a = arrival();
+    const b = arrival();
+    recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", a.hash);
+    expect(
+      recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", b.hash),
+    ).toEqual({ displayedScopes: "lifecycle.read", screenNonceHash: a.hash });
   });
 
   it("persists an EMPTY displayed set as a real value", () => {
@@ -1273,15 +1344,20 @@ describe("the displayed-scope record on the transaction (cinatra#2631)", () => {
     // sentinel would let a later, wider build admit it (round 2, finding 3).
     const t = newTxn(SITE_A);
     if (!t.ok) throw new Error("txn");
-    expect(recordDisplayedScopesForTransaction(t.txnId, "")).toBe("");
+    const a = arrival();
+    expect(recordDisplayedScopesForTransaction(t.txnId, "", a.hash)).toEqual({
+      displayedScopes: "",
+      screenNonceHash: a.hash,
+    });
     expect(loadActiveTransaction(t.txnId)?.displayedScopes).toBe("");
   });
 
   it("never consumes the transaction — the login screen may render twice", () => {
     const t = newTxn(SITE_A);
     if (!t.ok) throw new Error("txn");
-    recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read");
-    recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read");
+    const a = arrival();
+    recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", a.hash);
+    recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", a.hash);
     expect(loadActiveTransaction(t.txnId)).not.toBeNull();
     expect(issueUserAuthCode({ txnId: t.txnId, userId: "user-1" }).ok).toBe(true);
   });
@@ -1290,7 +1366,9 @@ describe("the displayed-scope record on the transaction (cinatra#2631)", () => {
     const t = newTxn(SITE_A);
     if (!t.ok) throw new Error("txn");
     expect(issueUserAuthCode({ txnId: t.txnId, userId: "user-1" }).ok).toBe(true);
-    expect(recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read")).toBeNull();
+    expect(
+      recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", arrival().hash),
+    ).toBeNull();
   });
 
   // -------------------------------------------------------------------------
@@ -1302,25 +1380,41 @@ describe("the displayed-scope record on the transaction (cinatra#2631)", () => {
   it("a proved NO-SCREEN claim can never paint over a screen that really rendered", () => {
     const t = newTxn(SITE_A);
     if (!t.ok) throw new Error("txn");
-    expect(recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read")).toBe(
-      "lifecycle.read",
-    );
+    const screen = arrival();
+    expect(
+      recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", screen.hash),
+    ).toEqual({ displayedScopes: "lifecycle.read", screenNonceHash: screen.hash });
     // The observing node offers the sentinel; the record stands and it is TOLD.
-    expect(recordDisplayedScopesForTransaction(t.txnId, noScreenTokenFor("sess-1"))).toBe(
-      "lifecycle.read",
-    );
+    expect(
+      recordDisplayedScopesForTransaction(
+        t.txnId,
+        noScreenTokenFor("sess-1"),
+        arrival().hash,
+      ),
+    ).toEqual({ displayedScopes: "lifecycle.read", screenNonceHash: screen.hash });
     expect(loadActiveTransaction(t.txnId)?.displayedScopes).toBe("lifecycle.read");
   });
 
   it("a screen rendering later can never paint over a proved NO-SCREEN claim", () => {
     const t = newTxn(SITE_A);
     if (!t.ok) throw new Error("txn");
-    expect(recordDisplayedScopesForTransaction(t.txnId, noScreenTokenFor("sess-1"))).toBe(
-      noScreenTokenFor("sess-1"),
-    );
-    expect(recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read")).toBe(
-      noScreenTokenFor("sess-1"),
-    );
+    const observer = arrival();
+    expect(
+      recordDisplayedScopesForTransaction(
+        t.txnId,
+        noScreenTokenFor("sess-1"),
+        observer.hash,
+      ),
+    ).toEqual({
+      displayedScopes: noScreenTokenFor("sess-1"),
+      screenNonceHash: observer.hash,
+    });
+    expect(
+      recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", arrival().hash),
+    ).toEqual({
+      displayedScopes: noScreenTokenFor("sess-1"),
+      screenNonceHash: observer.hash,
+    });
     expect(loadActiveTransaction(t.txnId)?.displayedScopes).toBe(noScreenTokenFor("sess-1"));
   });
 
@@ -1328,11 +1422,16 @@ describe("the displayed-scope record on the transaction (cinatra#2631)", () => {
     const byScreen = newTxn(SITE_A);
     const byObserver = newTxn(SITE_A);
     if (!byScreen.ok || !byObserver.ok) throw new Error("txn");
-    expect(recordDisplayedScopesForTransaction(byScreen.txnId, "lifecycle.read")).toBe(
-      "lifecycle.read",
-    );
     expect(
-      recordDisplayedScopesForTransaction(byObserver.txnId, noScreenTokenFor("sess-1")),
+      recordDisplayedScopesForTransaction(byScreen.txnId, "lifecycle.read", arrival().hash)
+        ?.displayedScopes,
+    ).toBe("lifecycle.read");
+    expect(
+      recordDisplayedScopesForTransaction(
+        byObserver.txnId,
+        noScreenTokenFor("sess-1"),
+        arrival().hash,
+      )?.displayedScopes,
     ).toBe(noScreenTokenFor("sess-1"));
     // Neither transaction can be returned to "nothing is known" by offering the
     // unclassified value back — that would re-arm the claim for a later writer.
@@ -1340,7 +1439,11 @@ describe("the displayed-scope record on the transaction (cinatra#2631)", () => {
       if (!t.ok) throw new Error("txn");
       const before = loadActiveTransaction(t.txnId)?.displayedScopes;
       expect(
-        recordDisplayedScopesForTransaction(t.txnId, WIDGET_SIGNIN_SCREEN_UNCLASSIFIED),
+        recordDisplayedScopesForTransaction(
+          t.txnId,
+          WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
+          arrival().hash,
+        )?.displayedScopes,
       ).toBe(before);
       expect(loadActiveTransaction(t.txnId)?.displayedScopes).toBe(before);
     }
@@ -1356,13 +1459,95 @@ describe("the displayed-scope record on the transaction (cinatra#2631)", () => {
     if (!t.ok) throw new Error("txn");
     legacyTxnRow(t.txnId);
     expect(loadActiveTransaction(t.txnId)?.displayedScopes).toBeNull();
-    expect(recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read")).toBeNull();
+    // The write matches no row, so what comes back is the row as it stands:
+    // nothing recorded, nobody's arrival. (A null RETURN means the transaction
+    // itself is gone — a different fact, and the caller distinguishes them by
+    // comparing what it offered.)
+    const nothingKnown = { displayedScopes: null, screenNonceHash: null };
     expect(
-      recordDisplayedScopesForTransaction(t.txnId, noScreenTokenFor("sess-1")),
-    ).toBeNull();
+      recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", arrival().hash),
+    ).toEqual(nothingKnown);
+    expect(
+      recordDisplayedScopesForTransaction(
+        t.txnId,
+        noScreenTokenFor("sess-1"),
+        arrival().hash,
+      ),
+    ).toEqual(nothingKnown);
     expect(loadActiveTransaction(t.txnId)?.displayedScopes).toBeNull();
     expect(
+      screenRecordAdmitsArrival(nothingKnown, WIDGET_SIGNIN_GRANTED_SCOPES, {
+        presentedNonceHash: arrival().hash,
+        expectedNoScreenToken: noScreenTokenFor("sess-1"),
+      }),
+    ).toBe(false);
+    expect(
       displayedScopesAgree(null, WIDGET_SIGNIN_GRANTED_SCOPES, noScreenTokenFor("sess-1")),
+    ).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // codex rework round 7, finding 1 — THE RECORD BELONGS TO AN ARRIVAL. The
+  // displayed set says WHAT was shown; the nonce says TO WHOM. Everything below
+  // is about the second question, at the store seam.
+  // -------------------------------------------------------------------------
+  it("a record left WITHOUT an arrival (this mechanism's own mixed-version window) admits nobody", () => {
+    // A node running the build before this one wrote a perfectly good displayed
+    // set and no nonce. It reads exactly like the legacy NULL: not claimable by a
+    // later arrival wanting to attach itself, and not redeemable by anyone.
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    recordWithoutArrival(t.txnId, "lifecycle.read");
+    const loaded = loadActiveTransaction(t.txnId);
+    expect(loaded?.displayedScopes).toBe("lifecycle.read");
+    expect(loaded?.screenNonceHash).toBeNull();
+    expect(
+      screenRecordAdmitsArrival(loaded, WIDGET_SIGNIN_GRANTED_SCOPES, {
+        presentedNonceHash: arrival().hash,
+      }),
+    ).toBe(false);
+    // ...and no later arrival can adopt it, because the write-once guard demands
+    // the unclassified value, which this row no longer carries.
+    expect(
+      recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", arrival().hash)
+        ?.screenNonceHash,
+    ).toBeNull();
+  });
+
+  it("admits the arrival that recorded the set, and only it", () => {
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    const a = arrival();
+    const b = arrival();
+    recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", a.hash);
+    const loaded = loadActiveTransaction(t.txnId);
+    expect(
+      screenRecordAdmitsArrival(loaded, WIDGET_SIGNIN_GRANTED_SCOPES, {
+        presentedNonceHash: widgetScreenNonceHash(a.nonce),
+      }),
+    ).toBe(true);
+    for (const wrong of [b.hash, "", "not-a-hash", a.nonce]) {
+      expect(
+        screenRecordAdmitsArrival(loaded, WIDGET_SIGNIN_GRANTED_SCOPES, {
+          presentedNonceHash: wrong,
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it("the right arrival still cannot redeem the WRONG set", () => {
+    // The two halves are independent: holding the nonce proves who you are, not
+    // that what you read is what this build grants.
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    const a = arrival();
+    recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read lifecycle.decide", a.hash);
+    expect(
+      screenRecordAdmitsArrival(
+        loadActiveTransaction(t.txnId),
+        WIDGET_SIGNIN_GRANTED_SCOPES,
+        { presentedNonceHash: a.hash },
+      ),
     ).toBe(false);
   });
 });

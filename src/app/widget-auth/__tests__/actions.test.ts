@@ -35,6 +35,12 @@ vi.mock("@/lib/widget-user-auth", () => ({
     typeof id === "string" && id.trim()
       ? createHash("sha256").update(id.trim()).digest("hex").slice(0, 32)
       : "",
+  // Likewise REAL: whether the arrival presenting a nonce is the arrival the
+  // record was written for is the property under test (rework round 7).
+  widgetScreenNonceHash: (nonce: unknown) =>
+    typeof nonce === "string" && /^[a-f0-9]{64}$/.test(nonce)
+      ? createHash("sha256").update(nonce).digest("hex")
+      : "",
 }));
 vi.mock("@/lib/widget-auth-audit", () => ({
   emitWidgetAuthAudit: (...a: unknown[]) => emitWidgetAuthAudit(...a),
@@ -51,6 +57,16 @@ import {
 
 const DISPLAYED = widgetDisplayedScopesToken(WIDGET_SIGNIN_GRANTED_SCOPES);
 
+/**
+ * Two ARRIVALS at one transaction (codex rework round 7, finding 1). Each holds
+ * a single-use nonce its browser was given; the transaction stores the HASH of
+ * whichever one recorded what was displayed.
+ */
+const nonceOf = (who: string) => createHash("sha256").update(`nonce:${who}`).digest("hex");
+const hashOf = (nonce: string) => createHash("sha256").update(nonce).digest("hex");
+const NONCE_A = nonceOf("person-A");
+const NONCE_B = nonceOf("person-B");
+
 /** The no-screen sentinel one session would earn. */
 const noScreenFor = (sessionId: string) =>
   widgetNoSignInScreenToken(
@@ -59,6 +75,8 @@ const noScreenFor = (sessionId: string) =>
 
 const TXN = {
   displayedScopes: DISPLAYED,
+  // A's screen recorded the set, so the record is A's.
+  screenNonceHash: hashOf(NONCE_A),
   txnId: "txn-1",
   siteId: "site-1",
   client: "wordpress",
@@ -88,7 +106,7 @@ beforeEach(() => {
 
 describe("one run of the hosted flow records the whole grant", () => {
   it("issues the code with the SERVER constant's scope set — including lifecycle.read", async () => {
-    const r = await issueWidgetAuthCodeAction("txn-1");
+    const r = await issueWidgetAuthCodeAction("txn-1", NONCE_A);
     expect(r.ok).toBe(true);
     expect(issueUserAuthCode).toHaveBeenCalledWith({
       txnId: "txn-1",
@@ -100,17 +118,18 @@ describe("one run of the hosted flow records the whole grant", () => {
 
   it("has no channel through which a caller could ask for a WIDER grant", async () => {
     // cinatra#2631: the consent form is gone, and with it every field a caller
-    // could have smuggled a scope through. The transaction id is the only
-    // argument, and extra arguments are inert.
+    // could have smuggled a scope through. The two arguments are the transaction
+    // id and this arrival's nonce — neither names a scope, and anything else is
+    // inert.
     await (
       issueWidgetAuthCodeAction as unknown as (...a: unknown[]) => Promise<unknown>
-    )("txn-1", { grantedScopes: ["lifecycle.decide", "superuser"] }, "everything");
+    )("txn-1", NONCE_A, { grantedScopes: ["lifecycle.decide", "superuser"] }, "everything");
     const call = issueUserAuthCode.mock.calls[0]?.[0] as { grantedScopes: unknown };
     expect(call.grantedScopes).toEqual(WIDGET_SIGNIN_GRANTED_SCOPES);
   });
 
   it("audits the granted scopes on the code_issued event", async () => {
-    await issueWidgetAuthCodeAction("txn-1");
+    await issueWidgetAuthCodeAction("txn-1", NONCE_A);
     const issued = emitWidgetAuthAudit.mock.calls.find(([e]) => e === "code_issued");
     expect(issued).toBeDefined();
     expect((issued as [string, Record<string, unknown>])[1].grantedScopes).toBe(
@@ -128,7 +147,7 @@ describe("what the sign-in screen displayed is checked against what is recorded"
       ...TXN,
       displayedScopes: `${DISPLAYED} some.other`,
     });
-    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
+    expect(await issueWidgetAuthCodeAction("txn-1", NONCE_A)).toEqual({
       ok: false,
       reason: "stale_screen",
     });
@@ -143,7 +162,7 @@ describe("what the sign-in screen displayed is checked against what is recorded"
     // The other direction of the rollout window: an older build's screen said
     // nothing about lifecycle work, and this build would record it.
     loadActiveTransaction.mockReturnValue({ ...TXN, displayedScopes: "" });
-    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
+    expect(await issueWidgetAuthCodeAction("txn-1", NONCE_A)).toEqual({
       ok: false,
       reason: "stale_screen",
     });
@@ -160,7 +179,7 @@ describe("what the sign-in screen displayed is checked against what is recorded"
       ...TXN,
       displayedScopes: noScreenFor("sess-1"),
     });
-    expect((await issueWidgetAuthCodeAction("txn-1")).ok).toBe(true);
+    expect((await issueWidgetAuthCodeAction("txn-1", NONCE_A)).ok).toBe(true);
   });
 
   it("REFUSES a sentinel earned by SOMEBODY ELSE'S session", async () => {
@@ -173,7 +192,7 @@ describe("what the sign-in screen displayed is checked against what is recorded"
       ...TXN,
       displayedScopes: noScreenFor("sess-somebody-else"),
     });
-    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
+    expect(await issueWidgetAuthCodeAction("txn-1", NONCE_A)).toEqual({
       ok: false,
       reason: "stale_screen",
     });
@@ -186,7 +205,7 @@ describe("what the sign-in screen displayed is checked against what is recorded"
     for (const forged of ["(no-screen)", "(no-screen:)", "(no-screen:deadbeef)"]) {
       vi.clearAllMocks();
       loadActiveTransaction.mockReturnValue({ ...TXN, displayedScopes: forged });
-      expect((await issueWidgetAuthCodeAction("txn-1")).ok).toBe(false);
+      expect((await issueWidgetAuthCodeAction("txn-1", NONCE_A)).ok).toBe(false);
       expect(issueUserAuthCode).not.toHaveBeenCalled();
     }
   });
@@ -197,7 +216,7 @@ describe("what the sign-in screen displayed is checked against what is recorded"
       ...TXN,
       displayedScopes: noScreenFor("sess-1"),
     });
-    expect((await issueWidgetAuthCodeAction("txn-1")).ok).toBe(false);
+    expect((await issueWidgetAuthCodeAction("txn-1", NONCE_A)).ok).toBe(false);
     expect(issueUserAuthCode).not.toHaveBeenCalled();
   });
 
@@ -212,7 +231,7 @@ describe("what the sign-in screen displayed is checked against what is recorded"
       ...TXN,
       displayedScopes: WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
     });
-    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
+    expect(await issueWidgetAuthCodeAction("txn-1", NONCE_A)).toEqual({
       ok: false,
       reason: "stale_screen",
     });
@@ -227,7 +246,7 @@ describe("what the sign-in screen displayed is checked against what is recorded"
     // In-flight across the one deploy that introduces the column: nothing is
     // known about what its screen showed, so nothing is granted.
     loadActiveTransaction.mockReturnValue({ ...TXN, displayedScopes: null });
-    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
+    expect(await issueWidgetAuthCodeAction("txn-1", NONCE_A)).toEqual({
       ok: false,
       reason: "stale_screen",
     });
@@ -240,17 +259,117 @@ describe("what the sign-in screen displayed is checked against what is recorded"
     for (const displayedScopes of [WIDGET_SIGNIN_SCREEN_UNCLASSIFIED, null]) {
       vi.clearAllMocks();
       loadActiveTransaction.mockReturnValue({ ...TXN, displayedScopes });
-      expect((await issueWidgetAuthCodeAction("txn-1")).ok).toBe(false);
+      expect((await issueWidgetAuthCodeAction("txn-1", NONCE_A)).ok).toBe(false);
       expect(resolveOrgRoleForUser).not.toHaveBeenCalled();
       expect(issueUserAuthCode).not.toHaveBeenCalled();
     }
   });
 });
 
+// codex rework round 7, finding 1 — A REAL DISPLAYED SET IS A FACT ABOUT ONE
+// ARRIVAL. The record says what was shown; the nonce says who it was shown to.
+// The `(no-screen)` half of this class was closed in round 5 by naming the
+// session; this is the half where a screen really rendered, for somebody else.
+describe("the record is admitted only to the arrival it was written for", () => {
+  it("REFUSES person B, who never held the nonce person A's screen was given", async () => {
+    // THE EXPLOIT, at the action seam. A opened the transaction sessionless on a
+    // current node — recording the current set — and walked away. B opened the
+    // same unconsumed transaction on a legacy node, read the LEGACY copy, signed
+    // in there, and arrived here. B's browser was never given A's nonce, so the
+    // set A's screen displayed says nothing about what B read.
+    expect(await issueWidgetAuthCodeAction("txn-1", NONCE_B)).toEqual({
+      ok: false,
+      reason: "stale_screen",
+    });
+    expect(issueUserAuthCode).not.toHaveBeenCalled();
+    const denied = emitWidgetAuthAudit.mock.calls.find(([e]) => e === "consent_denied");
+    expect((denied as [string, Record<string, unknown>])[1].reason).toBe(
+      "stale_signin_screen",
+    );
+  });
+
+  it("REFUSES the same B in the OTHER ordering — B's legacy screen came first", async () => {
+    // The legacy node rendered first and recorded nothing, so the transaction was
+    // still unclassified when A's current-node screen recorded and took the
+    // record. B returns holding nothing either way: there is no ordering in which
+    // an arrival that was never handed a nonce can redeem a record.
+    for (const presented of ["", "   ", NONCE_B, "not-a-nonce", hashOf(NONCE_A)]) {
+      vi.clearAllMocks();
+      loadActiveTransaction.mockReturnValue({ ...TXN });
+      expect((await issueWidgetAuthCodeAction("txn-1", presented)).ok).toBe(false);
+      expect(issueUserAuthCode).not.toHaveBeenCalled();
+    }
+  });
+
+  it("ADMITS person A, who presents the nonce their own screen was given", async () => {
+    // The whole flow still works for the person it belongs to — the fix must not
+    // close the ordinary path along with the exploit.
+    expect((await issueWidgetAuthCodeAction("txn-1", NONCE_A)).ok).toBe(true);
+    expect(issueUserAuthCode).toHaveBeenCalled();
+  });
+
+  it("REFUSES a record left with NO arrival at all — this mechanism's own rollout window", async () => {
+    // A node running the build BEFORE this one records a displayed set and no
+    // nonce. That record fails closed exactly like `(unclassified)` and the
+    // pre-column NULL: nothing about it names the person standing here.
+    for (const screenNonceHash of [null, undefined, "", "not-hex"]) {
+      vi.clearAllMocks();
+      loadActiveTransaction.mockReturnValue({ ...TXN, screenNonceHash });
+      expect(await issueWidgetAuthCodeAction("txn-1", NONCE_A)).toEqual({
+        ok: false,
+        reason: "stale_screen",
+      });
+      expect(issueUserAuthCode).not.toHaveBeenCalled();
+    }
+  });
+
+  it("REFUSES a no-screen sentinel presented by an arrival holding the wrong nonce", async () => {
+    // The two bindings are independent. Holding the session the sentinel names is
+    // not the same as holding the nonce the record was written with, and either
+    // one missing is a refusal.
+    loadActiveTransaction.mockReturnValue({
+      ...TXN,
+      displayedScopes: noScreenFor("sess-1"),
+      screenNonceHash: hashOf(NONCE_A),
+    });
+    expect((await issueWidgetAuthCodeAction("txn-1", NONCE_B)).ok).toBe(false);
+    expect((await issueWidgetAuthCodeAction("txn-1", NONCE_A)).ok).toBe(true);
+  });
+
+  it("a correct nonce cannot rescue a set this build would not grant", async () => {
+    // The other independence: being the right arrival says nothing about whether
+    // what you read is what would be recorded.
+    loadActiveTransaction.mockReturnValue({
+      ...TXN,
+      displayedScopes: `${DISPLAYED} some.other`,
+    });
+    expect((await issueWidgetAuthCodeAction("txn-1", NONCE_A)).ok).toBe(false);
+    expect(issueUserAuthCode).not.toHaveBeenCalled();
+  });
+
+  it("the arrival check runs BEFORE the membership check", async () => {
+    // Same ordering property the unknowing states have: a member of the org must
+    // not be granted on a record that was never written for them.
+    await issueWidgetAuthCodeAction("txn-1", NONCE_B);
+    expect(resolveOrgRoleForUser).not.toHaveBeenCalled();
+    expect(issueUserAuthCode).not.toHaveBeenCalled();
+  });
+
+  it("never puts the nonce in the audit trail", async () => {
+    // It is a bearer secret for the length of one transaction; the trail records
+    // that an arrival did not match, never what it presented.
+    await issueWidgetAuthCodeAction("txn-1", NONCE_B);
+    const serialized = JSON.stringify(emitWidgetAuthAudit.mock.calls);
+    expect(serialized).not.toContain(NONCE_B);
+    expect(serialized).not.toContain(NONCE_A);
+    expect(serialized).not.toContain(hashOf(NONCE_A));
+  });
+});
+
 describe("the gates that do not depend on the removed screen still run", () => {
   it("records NOTHING without a session", async () => {
     getAuthSession.mockResolvedValue(null);
-    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
+    expect(await issueWidgetAuthCodeAction("txn-1", NONCE_A)).toEqual({
       ok: false,
       reason: "not_authenticated",
     });
@@ -259,7 +378,7 @@ describe("the gates that do not depend on the removed screen still run", () => {
 
   it("records NOTHING for a consumed or expired transaction (single-use)", async () => {
     loadActiveTransaction.mockReturnValue(null);
-    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
+    expect(await issueWidgetAuthCodeAction("txn-1", NONCE_A)).toEqual({
       ok: false,
       reason: "transaction_expired",
     });
@@ -268,7 +387,7 @@ describe("the gates that do not depend on the removed screen still run", () => {
 
   it("records NOTHING for a non-member of the TRANSACTION's org", async () => {
     resolveOrgRoleForUser.mockResolvedValue(undefined);
-    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
+    expect(await issueWidgetAuthCodeAction("txn-1", NONCE_A)).toEqual({
       ok: false,
       reason: "not_org_member",
     });
@@ -277,7 +396,7 @@ describe("the gates that do not depend on the removed screen still run", () => {
   });
 
   it("refuses an empty transaction id before it does any work", async () => {
-    expect(await issueWidgetAuthCodeAction("")).toEqual({
+    expect(await issueWidgetAuthCodeAction("", NONCE_A)).toEqual({
       ok: false,
       reason: "invalid_request",
     });
@@ -286,7 +405,7 @@ describe("the gates that do not depend on the removed screen still run", () => {
 
   it("reports a losing race on the single-use transaction as expired", async () => {
     issueUserAuthCode.mockReturnValue({ ok: false, reason: "txn_not_found" });
-    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
+    expect(await issueWidgetAuthCodeAction("txn-1", NONCE_A)).toEqual({
       ok: false,
       reason: "transaction_expired",
     });

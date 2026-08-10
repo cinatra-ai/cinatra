@@ -210,6 +210,103 @@ export function widgetDisplayedScopesToken(
 }
 
 /**
+ * The stored shape of a screen nonce: the lowercase SHA-256 hex of the
+ * single-use nonce a current node minted for ONE arrival. The plaintext nonce
+ * never reaches the database; only this hash does, exactly as every other
+ * browser-held secret in the widget login is stored (the authorization code, the
+ * `cwu_` token).
+ */
+const SCREEN_NONCE_HASH_RE = /^[a-f0-9]{64}$/;
+
+/**
+ * Does the nonce this arrival PRESENTED hash to the one stored on the
+ * transaction? (cinatra#2631, rework round 7, finding 1.)
+ *
+ * WHY A NONCE AT ALL. A real displayed-scope record used to be a property of the
+ * TRANSACTION, and it has to be a property of the ARRIVAL that redeems it. The
+ * exploit is one transaction id driven by two people during a rolling deploy:
+ * person A opens it sessionless on a current node — which records the current
+ * scope set — and abandons it; person B opens the same still-unconsumed
+ * transaction on a legacy node, reads the LEGACY copy, signs in there and
+ * returns to a current node, which admitted A's record and granted B a set B
+ * never read. The `(no-screen)` half of that class was already closed by naming
+ * the session (round 5); this closes the half where a screen really did render,
+ * for somebody else.
+ *
+ * THE CARRIER IS THE BROWSER'S OWN FLOW. A current node mints the nonce at the
+ * moment it renders the sign-in screen (or proves no screen will render), stores
+ * only its hash beside the displayed-set record — write-once, in the same
+ * statement, so the record and the arrival it belongs to are one fact — and
+ * hands the plaintext back to that browser in the sign-in redirect URL. It is
+ * the URL and not a cookie because a Next server component may not set one
+ * during a `GET` render, and it is safe there in a way the DISPLAYED SET was not
+ * (round 1, finding 1): stripping this marker cannot turn a mismatch into an
+ * admission, because a missing nonce is REFUSED. It says nothing and proves one
+ * thing.
+ *
+ * FAILS CLOSED ON EVERYTHING. An absent stored hash — a legacy row written
+ * before this mechanism, or a transaction that never earned a record — refuses
+ * exactly like {@link WIDGET_SIGNIN_SCREEN_UNCLASSIFIED}. A malformed value on
+ * either side refuses. The comparison is constant-time over the full hash so the
+ * store cannot be probed a character at a time.
+ */
+export function widgetScreenNonceMatches(
+  storedHash: string | null | undefined,
+  presentedHash: string | null | undefined,
+): boolean {
+  // Compared as stored and as computed — no trimming, no case folding. A stored
+  // value that is not exactly a hash is a corrupted row, and a corrupted row
+  // proves nothing.
+  const stored = typeof storedHash === "string" ? storedHash : "";
+  const presented = typeof presentedHash === "string" ? presentedHash : "";
+  if (!SCREEN_NONCE_HASH_RE.test(stored)) return false;
+  if (!SCREEN_NONCE_HASH_RE.test(presented)) return false;
+  let diff = 0;
+  for (let i = 0; i < stored.length; i += 1) {
+    diff |= stored.charCodeAt(i) ^ presented.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+/**
+ * What a transaction records about the sign-in screen: WHAT was displayed, and
+ * WHOSE arrival it was displayed to. The two travel together because either one
+ * alone admits somebody it should not.
+ */
+export type WidgetScreenRecord = {
+  displayedScopes: string | null;
+  screenNonceHash: string | null;
+};
+
+/**
+ * THE ONE ADMISSION TEST, used by both ends of the flow — the page before it
+ * hands control to the return step, and the server action before it issues the
+ * code. One function so the two can never drift into disagreeing about what a
+ * record means.
+ *
+ * A record is admitted only when BOTH halves hold: this arrival presents the
+ * nonce the record was written with (round 7, finding 1), AND the recorded set
+ * is one this build would grant ({@link displayedScopesAgree}). An arrival that
+ * cannot present the nonce of the arrival that recorded the set is refused, even
+ * when the set itself is exactly right.
+ */
+export function screenRecordAdmitsArrival(
+  record: WidgetScreenRecord | null | undefined,
+  granted: readonly string[],
+  arrival: { presentedNonceHash: string; expectedNoScreenToken?: string },
+): boolean {
+  if (!record) return false;
+  if (!widgetScreenNonceMatches(record.screenNonceHash, arrival.presentedNonceHash)) {
+    return false;
+  }
+  return displayedScopesAgree(
+    record.displayedScopes,
+    granted,
+    arrival.expectedNoScreenToken,
+  );
+}
+
+/**
  * Does what was displayed for this transaction agree with what this build would
  * record, FOR THIS CALLER? Four distinct answers, and the distinctions are the
  * point:
@@ -236,6 +333,12 @@ export function widgetDisplayedScopesToken(
  *
  * `expectedNoScreenToken` is the ONLY channel through which a no-screen claim
  * can be admitted; a caller that omits it (or cannot build one) admits none.
+ *
+ * THIS IS HALF OF THE ADMISSION, never all of it. It answers "is this set one
+ * this build would grant"; it cannot answer "was it displayed to the person
+ * standing here", which is a fact about the ARRIVAL and is carried by the screen
+ * nonce (round 7, finding 1). Call {@link screenRecordAdmitsArrival}, which asks
+ * both — this export stays separate only because the two questions are separate.
  */
 export function displayedScopesAgree(
   displayedToken: string | null | undefined,

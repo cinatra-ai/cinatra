@@ -7,12 +7,13 @@ import {
 import {
   issueUserAuthCode,
   loadActiveTransaction,
+  widgetScreenNonceHash,
   widgetSessionFingerprint,
 } from "@/lib/widget-user-auth";
 import {
   WIDGET_SIGNIN_GRANTED_SCOPES,
-  displayedScopesAgree,
   formatTokenSet,
+  screenRecordAdmitsArrival,
   widgetNoSignInScreenToken,
 } from "@/lib/widget-lifecycle-scope";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
@@ -37,11 +38,15 @@ import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
 // The returned code is rendered into the return step (postMessage to the
 // verified opener origin) — it is NEVER placed in a URL.
 //
-// The only input is the TRANSACTION ID. There is deliberately no form, no scope
-// parameter and no caller-supplied grant of any kind: the recorded set is the
-// server constant below, so a CMS backend, a tampered submission or a replayed
-// request has no channel through which to ask for anything. What the sign-in
-// screen displayed is read off the TRANSACTION, not off the request.
+// The inputs are the TRANSACTION ID and this arrival's SCREEN NONCE, and
+// neither is a grant. There is deliberately no form, no scope parameter and no
+// caller-supplied grant of any kind: the recorded set is the server constant
+// below, so a CMS backend, a tampered submission or a replayed request has no
+// channel through which to ask for anything. What the sign-in screen displayed
+// is read off the TRANSACTION, not off the request; the nonce only decides
+// whether THIS arrival may read it (cinatra#2631, rework round 7, finding 1).
+// It travels as an argument because it is a secret the browser holds, and a
+// wrong or missing one can only ever cause a REFUSAL.
 
 export type WidgetAuthGrantResult =
   | { ok: true; code: string; state: string; siteOrigin: string }
@@ -49,6 +54,7 @@ export type WidgetAuthGrantResult =
 
 export async function issueWidgetAuthCodeAction(
   txnId: string,
+  screenNonce: string,
 ): Promise<WidgetAuthGrantResult> {
   if (!txnId || typeof txnId !== "string") {
     return { ok: false, reason: "invalid_request" };
@@ -96,12 +102,22 @@ export async function issueWidgetAuthCodeAction(
   // are both the ABSENCE of knowledge — nobody accounted for what was displayed,
   // which is what a legacy node's signed-out page leaves behind mid-rollout — so
   // both refuse here.
+  //
+  // AND WHATEVER IS RECORDED, IT MUST BE RECORDED FOR THIS ARRIVAL (round 7,
+  // finding 1). Knowledge about the transaction is not knowledge about the
+  // person redeeming it: two people can be walked through one unconsumed
+  // transaction during a rolling deploy, and the one who read a legacy node's
+  // copy must not redeem the record the other one's screen wrote. So the record
+  // is admitted only to an arrival presenting the nonce it was written with —
+  // a record with no nonce hash at all (one left by a node that predates this)
+  // fails closed exactly like the unclassified value.
   if (
-    !displayedScopesAgree(
-      txn.displayedScopes,
-      WIDGET_SIGNIN_GRANTED_SCOPES,
-      widgetNoSignInScreenToken(widgetSessionFingerprint(session.session?.id)),
-    )
+    !screenRecordAdmitsArrival(txn, WIDGET_SIGNIN_GRANTED_SCOPES, {
+      presentedNonceHash: widgetScreenNonceHash(screenNonce),
+      expectedNoScreenToken: widgetNoSignInScreenToken(
+        widgetSessionFingerprint(session.session?.id),
+      ),
+    })
   ) {
     emitWidgetAuthAudit("consent_denied", {
       actor: userId,

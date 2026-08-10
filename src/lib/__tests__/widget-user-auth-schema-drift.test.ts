@@ -92,6 +92,47 @@ describe("widget_auth_transactions displayed_scopes rollout", () => {
   });
 });
 
+// cinatra#2631 (codex rework round 7, finding 1) — the record on the transaction
+// says WHAT was displayed; this column says WHOSE arrival it was displayed to.
+// The engine's write names it and its SELECT reads it, so the same rollout
+// hazard applies: without the idempotent ALTER an installed deployment would
+// name a column that is not there and every widget login would break.
+describe("widget_auth_transactions screen_nonce_hash rollout", () => {
+  const alters = buildCreateStoreSchemaQueries("drift_test")
+    .map((q) => String(q.text))
+    .filter((t) => t.includes("ALTER TABLE") && t.includes("widget_auth_transactions"));
+
+  it("adds screen_nonce_hash to an EXISTING deployment (idempotent ALTER, nullable)", () => {
+    // NULLABLE is the mixed-version contract, not an oversight: a node running
+    // the previous build writes a displayed set and no nonce, and that record
+    // must fail closed at the grant rather than being redeemable by anyone.
+    expect(
+      alters.some((t) =>
+        /ADD COLUMN IF NOT EXISTS screen_nonce_hash text\s*$/.test(t.trim()),
+      ),
+    ).toBe(true);
+  });
+
+  it("orders the ALTER after the CREATE, and never rewrites the CREATE", () => {
+    const texts = buildCreateStoreSchemaQueries("drift_test").map((q) => String(q.text));
+    const createIdx = texts.findIndex((t) =>
+      t.includes('CREATE TABLE IF NOT EXISTS "drift_test"."widget_auth_transactions"'),
+    );
+    const alterIdx = texts.findIndex(
+      (t) =>
+        t.includes("widget_auth_transactions") &&
+        t.includes("ADD COLUMN IF NOT EXISTS screen_nonce_hash"),
+    );
+    expect(createIdx).toBeGreaterThanOrEqual(0);
+    expect(alterIdx).toBeGreaterThan(createIdx);
+    // Adding it to the deployed CREATE reads to the schema-migration gate as a
+    // drop/retype of the whole table.
+    expect(
+      texts.filter((t) => t.includes("CREATE TABLE") && t.includes("screen_nonce_hash")),
+    ).toEqual([]);
+  });
+});
+
 // cinatra#2631 (codex rework rounds 4 + 6) — the hosted login proves "no sign-in
 // screen rendered" by showing that a session row was already in the database
 // when the transaction row was inserted. Both sides of that comparison must be
