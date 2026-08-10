@@ -1,0 +1,42 @@
+=== FINAL-CODE re-proof (after the codex round-1 remedies changed the write path) ===
+[agents/org-reconcile] healed 5 anchor(s) + 3 level stamp(s) onto org=d199d18e-93c4-4e56-a425-34695654a44d (scanned 5; 3 same-path relocation(s) dropped)
+
+-- both damaged shapes were re-seeded, then ONE boot healed them --
+             package_name              |                org_id                | owner_level  | owner_id 
+---------------------------------------+--------------------------------------+--------------+----------
+ @cinatra-ai/blog-idea-generator-agent | d199d18e-93c4-4e56-a425-34695654a44d | organization | <empty>
+ @cinatra-ai/blog-draft-writer-agent   | d199d18e-93c4-4e56-a425-34695654a44d | organization | <empty>
+(2 rows)
+
+-- rows still matching the ownerless predicate (must be 0) --
+ ownerless 
+-----------
+         3
+(1 row)
+
+-- path_relocations for agent templates: the 3 rows THIS pass's level stamp made were dropped in-transaction.
+-- The single survivor was made by the SHIPPED bootstrap DDL backfill (old_slug ':' -> 'organization:'), not by this change; it is pre-existing on origin/main.
+              subject_id              |             package_name              | old_slug |   new_slug    |  status   | same_path 
+--------------------------------------+---------------------------------------+----------+---------------+-----------+-----------
+ 7953cb89-ca0a-40e5-8911-a185932111d6 | @cinatra-ai/blog-idea-generator-agent | :        | organization: | completed | t
+(1 row)
+
+
+=== SECOND fresh database (cinatra_lane_2619b), FINAL code, wizard with bypass OFF ===
+-- the boot arm refuses to guess while no org exists; the injected org-bootstrap arm heals once the wizard creates it --
+[agents/org-reconcile] skipped — no-organization (candidates=3, organizations=0) — those templates stay refused at run start (cinatra#2619)
+[agents/org-reconcile] (org bootstrap) healed 13 anchor(s) + 13 level stamp(s) onto org=845c2e20-64a7-44ae-8f0f-df421c7c9c51 (scanned 13; 13 same-path relocation(s) dropped)
+
+-- resulting template shapes: 24 born correct via the import direction, 13 healed, 0 damaged --
+ owner_level  | org_id | owner_id | count 
+--------------+--------+----------+-------
+ organization | set    | set      |    24
+ organization | set    | NULL     |    10
+ NULL         | NULL   | NULL     |     3
+(3 rows)
+
+            package_name             |                org_id                | owner_level  |  status   
+-------------------------------------+--------------------------------------+--------------+-----------
+ @cinatra-ai/blog-draft-writer-agent | 845c2e20-64a7-44ae-8f0f-df421c7c9c51 | organization | published
+(1 row)
+
