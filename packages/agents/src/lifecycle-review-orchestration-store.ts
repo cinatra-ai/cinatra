@@ -563,6 +563,35 @@ export async function orchestrateProducedEvent(row: ProducedEventRow): Promise<O
     if (!emitted.idempotent && row.producerRunId) {
       await dispatchAutoGateOpen({ runId, reviewTaskId: plan.reviewTaskId });
     }
+    // cinatra#2570 (epic #2564 S6a) — the auditor's gate-bound SUGGESTION
+    // producer. This is the choke point the successor store was always missing:
+    // a gate has just frozen its targets, so there is exactly one revision to
+    // propose against and exactly one row to bind to. Only on a genuinely NEW
+    // emit — a re-sweep must never re-derive a snapshot against a gate a
+    // reviewer may already be reading.
+    //
+    // Best-effort in the same sense as the core-analysis lane at the
+    // verification write: dynamically imported so the producer's graph stays off
+    // this module's static surface, and every outcome (including a refusal) is a
+    // value the lane returns rather than an exception this sweep could die on.
+    if (!emitted.idempotent) {
+      try {
+        const { produceSuggestionsForNewGate } = await import(
+          "./lifecycle-suggestion-producer-lane"
+        );
+        await produceSuggestionsForNewGate({
+          gateId: emitted.gateId,
+          orgId: row.orgId,
+          target: {
+            artifactId: row.artifactId,
+            representationRevisionId: row.representationRevisionId,
+          },
+        });
+      } catch {
+        // swallowed — a suggestion is an aid to the reviewer, never a condition
+        // of the gate existing.
+      }
+    }
   } catch (err) {
     // A pin-conflict means a DIFFERENT gate already occupies (run, task) — an
     // invariant violation for a deterministic auto-task id. Leave the event
