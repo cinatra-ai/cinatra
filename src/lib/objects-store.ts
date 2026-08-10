@@ -586,6 +586,77 @@ export function compileDataEqualsClause(
   return { clauses, nextIndex: pIdx };
 }
 
+// ---------------------------------------------------------------------------
+// Deterministic graph-node -> canonical-row resolution (cinatra#2591).
+// ---------------------------------------------------------------------------
+//
+// `search_nodes` ranks and returns entity-node UUIDs. This turns them back into
+// canonical object ids by reading the DETERMINISTIC anchor node each projected
+// row is seeded as (`graphiti_anchor_node_uuid`, written by the projector).
+//
+// It replaces a chain of four probes that read an id off whatever the
+// extraction model happened to emit — three of which were already measured
+// inert against the graph, and the fourth of which fired only when the model
+// incidentally produced the row UUID as an entity name. That chain is why
+// recall could answer `no_ids_extracted` for a row that was definitely indexed.
+//
+// AUTHORIZATION IS DELIBERATELY NOT HERE. This is id resolution only: it takes
+// UUIDs the graph already returned and says which rows they name. Every
+// resolved id is then re-fetched through `listObjectsByFilter` with the caller's
+// actor, which applies the ownership filter, the sealed-room project clause and
+// the soft-delete filter in SQL. That is the same shape the Graphiti-extracted
+// ids already flowed through, so the read boundary is unchanged — this only
+// makes the candidate set correct.
+//
+// Returns a Map so the caller can preserve the graph's RANK order (a plain
+// array of rows would lose it; `rows.find()` per uuid would be O(n^2)).
+//
+// ONE NODE CAN NAME SEVERAL ROWS, so the value is a LIST. graphiti resolves a
+// newly-seeded node against existing near-duplicates, so two rows with very
+// similar names in the same lane can legitimately end up sharing one anchor
+// UUID — both rows then store it. Mapping uuid -> single id would silently drop
+// whichever row Postgres happened to return second, making it permanently
+// unrecoverable. Returning both keeps recovery complete; the per-row authz
+// filter downstream is what decides which of them the caller may actually see.
+export function resolveObjectIdsByAnchorNodeUuids(
+  nodeUuids: readonly string[],
+  orgId: string | null,
+): Map<string, string[]> {
+  const resolved = new Map<string, string[]>();
+  const unique = [...new Set(nodeUuids.filter((u) => typeof u === "string" && u.length > 0))];
+  if (unique.length === 0) return resolved;
+
+  ensurePostgresSchema();
+  const schema = postgresSchema.replaceAll('"', '""');
+  const [result] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        // `(org_id = $2 OR $2 IS NULL)` mirrors listObjectsByFilter's own org
+        // clause, so an org-scoped recall can never resolve a UUID onto another
+        // tenant's row even before the actor filter runs.
+        text: `SELECT id, graphiti_anchor_node_uuid
+FROM "${schema}"."objects"
+WHERE graphiti_anchor_node_uuid = ANY($1::text[])
+  AND (org_id = $2 OR $2 IS NULL)
+  AND deleted_at IS NULL`,
+        values: [unique, orgId],
+      },
+    ],
+  });
+
+  for (const row of result?.rows ?? []) {
+    const nodeUuid = (row as { graphiti_anchor_node_uuid?: unknown }).graphiti_anchor_node_uuid;
+    const id = (row as { id?: unknown }).id;
+    if (typeof nodeUuid === "string" && typeof id === "string") {
+      const existing = resolved.get(nodeUuid);
+      if (existing) existing.push(id);
+      else resolved.set(nodeUuid, [id]);
+    }
+  }
+  return resolved;
+}
+
 export function listObjectsByFilter(
   filter: ListObjectsFilter,
   actor?: ActorContext,

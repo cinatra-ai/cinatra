@@ -15,16 +15,23 @@ import type {
   GetEpisodesInput,
   DeleteEpisodeInput,
   ClearGraphInput,
+  AddTripletInput,
+  GetEpisodeEntitiesInput,
   AddEpisodeResult,
   SearchNodesResult,
   GetEpisodesResult,
+  AddTripletResult,
+  GetEpisodeEntitiesResult,
   EpisodeNode,
   EntityNode,
+  EntityEdge,
 } from "./graphiti-types";
 import {
   addEpisodeResultSchema,
   searchNodesResultSchema,
   getEpisodesResultSchema,
+  addTripletResultSchema,
+  getEpisodeEntitiesResultSchema,
   graphitiStatusSchema,
 } from "./graphiti-types";
 
@@ -37,22 +44,41 @@ function getGraphitiUrl(): string {
 // ---------------------------------------------------------------------------
 // Protocol-revision negotiation — EXPLICIT legacy, not defaulted legacy.
 //
-// The peer on this surface is a PINNED image: zepai/knowledge-graph-mcp
-// 1.0.2-graphiti-0.28.2 (digest-pinned in docker-compose.yml). That image was
-// PROBED for the 2026-07-28 revision, and the answer is no: it rejects
-// `server/discover` outright, and it requires the 2025-era session handshake.
-// The measured wire behaviour, against that exact digest:
+// RE-PROBED 2026-08-10 AGAINST THE REPLACEMENT SERVER (cinatra#2591). The peer
+// is no longer zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2 — it is upstream
+// getzep/graphiti's own MCP server, built by docker/graphiti/Dockerfile
+// (upstream 425bf248, graphiti-core 0.29.3, python-mcp 1.29.0). cinatra#2218
+// left a standing FOLLOW-UP CONDITION: flip to `{ mode: "auto" }` when the pin
+// moves to an image that answers `server/discover`. The pin has now moved, so
+// the probe was re-run, and the condition is STILL NOT MET:
+//
+//   POST /mcp {"jsonrpc":"2.0","id":1,"method":"server/discover","params":{}}
+//     -> HTTP 400
+//        {"error":{"code":-32600,"message":"Bad Request: Missing session ID"}}
+//
+//   POST /mcp {"...","method":"initialize","params":{"protocolVersion":"2025-11-25",…}}
+//     -> HTTP 200, negotiated protocolVersion 2025-11-25,
+//        serverInfo {"name":"Graphiti Agent Memory","version":"1.29.0"}
+//
+// The rejection is identical to the old wrapper's because it has the same
+// cause: the server's Streamable-HTTP layer demands an established session
+// before it will route ANY method, and a session only exists after the legacy
+// `initialize`. Upgrading graphiti did not change that — it is a property of
+// the python MCP SDK's transport, not of the graphiti application.
+//
+// So the measured trade-off is unchanged:
 //
 //   { mode: "legacy" } -> era "legacy", negotiated 2025-11-25, 5 HTTP frames
 //   { mode: "auto" }   -> era "legacy", negotiated 2025-11-25, 6 HTTP frames
-//                         (the extra frame is a `server/discover` answered
-//                          400 / -32600 "Missing session ID", then the same
-//                          legacy `initialize` fallback)
+//                         (the extra frame is the `server/discover` above,
+//                          rejected, then the same legacy `initialize`)
 //
-// So `auto` reaches the identical era at the cost of one rejected round trip.
+// `auto` reaches the identical era at the cost of one rejected round trip.
 // This client opens a fresh connection PER CALL, so that cost would be paid
 // per call, not once per process — which is what makes explicit legacy the
-// correct setting here rather than a temporary concession.
+// correct setting here rather than a temporary concession. cinatra#2591 AC3 is
+// therefore answered on its "or its retention justified against the new server"
+// branch: RETAINED, with a fresh measurement rather than an inherited one.
 //
 // The peer's session id is peer-required and stays SDK-managed and
 // transport-private: cinatra never reads, persists, routes, or authorizes on
@@ -71,11 +97,13 @@ function getGraphitiUrl(): string {
 //     string a compile error, and a test asserts the object reaches the
 //     `Client` constructor with `mode === "legacy"`.
 //
-// FOLLOW-UP CONDITION (cinatra#2218): flip to `{ mode: "auto" }` when the
-// graphiti pin moves to an image that answers `server/discover` — re-run the
-// probe at that bump. That flip is the only change required here; nothing else
-// in this module is era-dependent. `graphiti-wire-negotiation.manual.test.ts`
-// is the re-runnable probe.
+// FOLLOW-UP CONDITION (cinatra#2218, re-armed by cinatra#2591): flip to
+// `{ mode: "auto" }` when the peer answers `server/discover` — re-run the probe
+// at every bump of GRAPHITI_UPSTREAM_REF in docker/graphiti/Dockerfile. That
+// flip is the only change required here; nothing else in this module is
+// era-dependent. `graphiti-wire-negotiation.manual.test.ts` is the re-runnable
+// probe, and `scripts/ci/works-after/graphiti.sh` re-asserts the answer on
+// every works-after run so the justification cannot go stale silently.
 // ---------------------------------------------------------------------------
 const GRAPHITI_VERSION_NEGOTIATION: VersionNegotiationOptions = { mode: "legacy" };
 
@@ -298,6 +326,45 @@ function recordEpisodeUsage(): void {
   }
 }
 
+/**
+ * Seed ONE deterministic entity node for a projected row (cinatra#2591).
+ *
+ * This is the mechanism that ends the `no_ids_extracted` class of failure. Row
+ * recovery used to depend on the extraction model INCIDENTALLY emitting the row
+ * UUID as an entity-node name (three of the four recovery probes in
+ * `mcp/handlers.ts` were already measured inert). Here the caller chooses the
+ * node's UUID, so the node identity is a function of the row, not of what a
+ * model happened to say.
+ *
+ * Returns the RESOLVED nodes. Read the UUID back rather than assuming the one
+ * you sent survived: it does in the normal case (measured on the wire
+ * 2026-08-10), but graphiti-core resolves a brand-new node against existing
+ * near-duplicates, and when it merges, the resolved UUID is the truth.
+ *
+ * Deliberately NOT metered as a usage event: the write needs the embedder, not
+ * the LLM, and on the local embedder floor there is no provider fan-out to
+ * bill. The episode hand-over next to it is the metered seam.
+ */
+export async function addTriplet(input: AddTripletInput): Promise<AddTripletResult> {
+  const raw = await callMcp("add_triplet", input as Record<string, unknown>);
+  return addTripletResultSchema.parse(raw);
+}
+
+/**
+ * Forward provenance: which nodes/edges did these episodes produce?
+ *
+ * New in the upstream server (absent from the 1.0.x wrapper). Not on the recall
+ * hot path — recall resolves through the deterministic anchor above — but it is
+ * how an extracted entity is attributed back to the episode, and therefore the
+ * row, that produced it.
+ */
+export async function getEpisodeEntities(
+  input: GetEpisodeEntitiesInput,
+): Promise<GetEpisodeEntitiesResult> {
+  const raw = await callMcp("get_episode_entities", input as Record<string, unknown>);
+  return getEpisodeEntitiesResultSchema.parse(raw);
+}
+
 export async function searchNodes(input: SearchNodesInput): Promise<SearchNodesResult> {
   const raw = await callMcp("search_nodes", input as Record<string, unknown>);
   return searchNodesResultSchema.parse(raw);
@@ -335,4 +402,4 @@ export async function getStatus(): Promise<{ status: "connected" | "not_connecte
 // ---------------------------------------------------------------------------
 // Re-exports for handler mapping helpers
 // ---------------------------------------------------------------------------
-export type { EpisodeNode, EntityNode };
+export type { EpisodeNode, EntityNode, EntityEdge };

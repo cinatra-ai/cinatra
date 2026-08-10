@@ -24,6 +24,10 @@ import path from "node:path";
 
 import {
   GRAPHITI_KEY_NAMES,
+  GRAPHITI_NO_LLM_SENTINEL,
+  LOCAL_EMBEDDER_API_URL,
+  LOCAL_EMBEDDER_DIMENSIONS,
+  LOCAL_EMBEDDER_PLACEHOLDER_KEY,
   buildGraphitiEnv,
   parseDotenv,
   serializeDotenv,
@@ -57,20 +61,53 @@ afterEach(() => {
 
 describe("buildGraphitiEnv (pure)", () => {
   it("carries ONE resolved key under all three names the image reads", () => {
-    const { env, hasKey } = buildGraphitiEnv(FAKE_KEY);
+    const { env, hasKey, embedder } = buildGraphitiEnv(FAKE_KEY);
     expect(hasKey).toBe(true);
-    expect(Object.keys(env).sort()).toEqual([...GRAPHITI_KEY_NAMES].sort());
     for (const name of GRAPHITI_KEY_NAMES) expect(env[name]).toBe(FAKE_KEY);
+    // cinatra#2591: a keyed install embeds on the SAME provider key (the
+    // configured-provider branch of the embedder floor), so no second vendor and
+    // no local service is involved.
+    expect(embedder).toBe("openai");
+    expect(env.EMBEDDER__PROVIDER).toBe("openai");
+    expect(env.EMBEDDER__PROVIDERS__OPENAI__API_URL).toBeUndefined();
+    // The ONLY values in the file are the resolved key plus non-secret
+    // selection metadata — never a second credential.
+    const secretish = Object.entries(env).filter(([, v]) => v === FAKE_KEY).map(([k]) => k);
+    expect(secretish.sort()).toEqual([...GRAPHITI_KEY_NAMES].sort());
   });
 
-  it("produces NO entries at all for a blank key", () => {
-    // Not three empty strings: an empty `environment:`-style value is exactly
-    // the silent behaviour this generator exists to end.
+  it("writes NO credential for a blank key — and still boots the indexer", () => {
+    // Never an empty VALUE: `KEY=` is exactly the silent behaviour this
+    // generator exists to end, and it is what the old compose interpolation did.
+    //
+    // But "no key" can no longer mean "no file content" (cinatra#2591). Measured
+    // against the replacement server: `llm.provider = openai` with a null key
+    // makes CrossEncoderFactory construct AsyncOpenAI(api_key=None), which
+    // raises and takes the whole server down at startup. A keyless install must
+    // not have a crash-looping indexer, so the file carries a NAMED SENTINEL for
+    // the LLM key and points the embedder at the local floor.
     for (const blank of [null, undefined, "", "   "]) {
-      const { env, hasKey } = buildGraphitiEnv(blank);
+      const { env, hasKey, embedder } = buildGraphitiEnv(blank);
       expect(hasKey).toBe(false);
-      expect(Object.keys(env)).toEqual([]);
+      expect(embedder).toBe("local");
+      // No real credential, and no empty value either.
+      expect(env.LLM__PROVIDERS__OPENAI__API_KEY).toBe(GRAPHITI_NO_LLM_SENTINEL);
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+      expect(Object.values(env).every((v) => typeof v === "string" && v.trim() !== "")).toBe(true);
+      // The embedder is the LOCAL service, with the width its baked model emits.
+      expect(env.EMBEDDER__PROVIDERS__OPENAI__API_URL).toBe(LOCAL_EMBEDDER_API_URL);
+      expect(env.EMBEDDER__PROVIDERS__OPENAI__API_KEY).toBe(LOCAL_EMBEDDER_PLACEHOLDER_KEY);
+      expect(env.EMBEDDER__DIMENSIONS).toBe(LOCAL_EMBEDDER_DIMENSIONS);
     }
+  });
+
+  it("does not let the sentinel or the local placeholder read as a materialized key", () => {
+    // The cold-start guard asks "is a key already materialized?" to decide
+    // preserve-vs-rewrite. If either non-credential answered yes, a keyless file
+    // would be preserved forever and a key the operator later configured would
+    // never reach the container.
+    expect(shouldPreserveExisting(serializeDotenv(buildGraphitiEnv(null).env))).toBe(false);
+    expect(shouldPreserveExisting(serializeDotenv(buildGraphitiEnv(FAKE_KEY).env))).toBe(true);
   });
 
   it("trims surrounding whitespace so a stray newline cannot break auth", () => {
@@ -89,7 +126,11 @@ describe("buildGraphitiEnv (pure)", () => {
       const built = buildGraphitiEnv(hostile);
       expect(built.hasKey).toBe(false);
       expect(built.rejected).toBe("control-character");
-      expect(Object.keys(built.env)).toEqual([]);
+      // Degrades to the SAME keyless shape as "no key at all": the boot sentinel
+      // and the local embedder, and no fragment of the hostile value anywhere.
+      expect(built.env.LLM__PROVIDERS__OPENAI__API_KEY).toBe(GRAPHITI_NO_LLM_SENTINEL);
+      expect(Object.values(built.env).join("\n")).not.toContain("INJECTED");
+      expect(Object.values(built.env).join("\n")).not.toContain("sk-fake");
     }
   });
 
@@ -98,9 +139,12 @@ describe("buildGraphitiEnv (pure)", () => {
     expect(parseDotenv(serializeDotenv(env))).toMatchObject(env);
   });
 
-  it("emits a header-only file (no trailing '=' line) when there is no key", () => {
-    const text = serializeDotenv(buildGraphitiEnv(null).env);
-    expect(text).not.toMatch(/^[A-Z0-9_]+=/m);
+  it("never emits an EMPTY value on any line, keyed or keyless", () => {
+    // The invariant that actually matters: `KEY=` (empty) is what silently
+    // disabled extraction. Every line the generator writes has a value.
+    for (const built of [buildGraphitiEnv(null), buildGraphitiEnv(FAKE_KEY)]) {
+      expect(serializeDotenv(built.env)).not.toMatch(/^[A-Z0-9_]+=\s*$/m);
+    }
   });
 });
 
@@ -142,16 +186,21 @@ describe("the materialization seam", () => {
       ...sink,
     });
 
-    expect(result).toMatchObject({ state: "absent" });
+    expect(result).toMatchObject({ state: "absent", embedder: "local" });
     const written = parseDotenv(readFileSync(outPath, "utf8"));
-    for (const name of GRAPHITI_KEY_NAMES) expect(written[name]).toBeUndefined();
+    // No credential reached the file: the bare OPENAI_API_KEY that graphiti_core
+    // reads is absent, and the LLM slot holds the named sentinel.
+    expect(written.OPENAI_API_KEY).toBeUndefined();
+    expect(written.LLM__PROVIDERS__OPENAI__API_KEY).toBe(GRAPHITI_NO_LLM_SENTINEL);
 
     const warning = warns.join("\n");
-    expect(warning).toContain("knowledge-graph indexing OFF");
+    expect(warning).toContain("EXTRACTION is OFF");
     // Says what actually happens, so an operator is not left guessing why the
-    // graph is empty.
+    // graph has no entities — INCLUDING what still works, which since
+    // cinatra#2591 is recall over their own rows on the local embedder.
     expect(warning).toContain("dropped");
-    expect(warning).toContain("Objects still save and list");
+    expect(warning).toContain("deterministic anchor nodes");
+    expect(warning).toContain("LOCAL embedder");
   });
 
   it("does NOT clobber an already-materialized key when it could not ASK", async () => {

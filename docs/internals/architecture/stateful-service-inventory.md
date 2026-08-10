@@ -35,7 +35,8 @@ platform secrets in the platform DB).
 | `cinatra-redis` | `redis` (default) | `redis:8-alpine@sha256:9d317178…` | cache | discard-recreate |
 | `cinatra-verdaccio-storage` | `verdaccio` (default) | `verdaccio/verdaccio:6@sha256:bcd0dc5f…` | package-storage | discard-recreate (re-publish repopulates) |
 | `cinatra-neo4j-data` | `neo4j` (default) | `neo4j:2026.05-community@sha256:6c162e24…` | canonical-data | in-place store-format (one-way; dump first) |
-| — (no volume) | `graphiti` (default) | `zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2@sha256:c9e0efd3…` | derived-index | rebuild (state lives in Neo4j) |
+| — (no volume) | `graphiti` (default) | BUILT — `docker/graphiti/Dockerfile` (upstream `425bf248` + graphiti-core `0.29.3`) | derived-index | rebuild (state lives in Neo4j) |
+| — (no volume) | `kg-embedder` (default) | BUILT — `docker/kg-embedder/Dockerfile` (bge-small-en-v1.5, baked) | stateless | rebuild |
 | `cinatra-wordpress-db` | `wordpress-db` (wordpress) | `mariadb:11.4` | canonical-data | in-place store-format (sequential majors) |
 | `cinatra-wordpress` | `wordpress` (wordpress) | `cinatra-wordpress-dev:6.9-php8.3` | object-store (uploads/plugins tree) | app-managed boot migration |
 | `cinatra-drupal-db` | `drupal-db` (drupal) | `mariadb:11.4` | canonical-data | in-place store-format (sequential majors) |
@@ -105,7 +106,15 @@ operator-chosen overrides.
 - **minio:** in-place roll-forward on the pinned server line; unknown `latest` sources
   are fail-closed until classified.
 - **verdaccio 6:** dev package cache; discard-recreate (re-publish repopulates).
-- **graphiti:** derived; repin + rebuild, paired with the neo4j pin.
+- **graphiti:** derived; repin + rebuild, paired with the neo4j pin. Since cinatra#2591 the
+  "pin" is a pair of BUILD ARGS, not a registry digest: Zep publishes the same upstream source
+  on its own `mcp-v*` cadence and that lagged graphiti-core by four releases with no newer tag,
+  so the service is built from a pinned upstream commit against a pinned graphiti-core release.
+  The works-after graphiti arm builds the same Dockerfile, so the proof binds the shipped bytes.
+- **kg-embedder:** stateless, no volume, NO published port. The vendor-free embedding floor —
+  graphiti's embedder providers are all paid hosted APIs, so without it an install with no
+  OpenAI key cannot rank at all. Weights are baked at build time, so a container start needs
+  no network.
 
 ## Change protocol
 
