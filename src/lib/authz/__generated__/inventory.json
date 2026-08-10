@@ -1083,6 +1083,11 @@
       "line": 42
     },
     {
+      "primitiveName": "schedule_proposal_render",
+      "file": "src/lib/lifecycle/schedule-proposal-mcp.ts",
+      "line": 196
+    },
+    {
       "primitiveName": "skill_source_compile",
       "file": "packages/agents/src/mcp/schemas.ts",
       "line": 608

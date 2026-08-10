@@ -1391,6 +1391,48 @@ END $$`,
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS agent_run_triggers_released_at_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_triggers" (released_at)` },
+    // trigger_schedule_proposal_consumes: the SINGLE-USE consume edge for a
+    // conversational schedule proposal (cinatra#2569, epic #2564 S5). The
+    // proposal token is stateless and replayable by construction; spending it is
+    // not. consume_key is the PK, so a second Confirm carrying the same proposal
+    // loses the insert and its whole transaction — including the run it was about
+    // to create — rolls back; the loser then reads this row and answers with the
+    // ORIGINAL run_id. run_id is NOT NULL because it is written in the SAME
+    // transaction as the run it names.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."trigger_schedule_proposal_consumes" (
+      consume_key text PRIMARY KEY,
+      run_id text NOT NULL REFERENCES "${schemaName.replaceAll('"', '""')}"."agent_runs"(id) ON DELETE CASCADE,
+      org_id text NOT NULL,
+      template_id text NOT NULL,
+      consumed_by text NOT NULL,
+      consumed_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS trigger_schedule_proposal_consumes_run_idx ON "${schemaName.replaceAll('"', '""')}"."trigger_schedule_proposal_consumes" (run_id)` },
+    // trigger_schedule_install_outbox: the schedule-INSTALL intent (cinatra#2569).
+    // A trigger has two halves in two systems — the durable row and the BullMQ
+    // scheduler — so Confirm commits an INTENT and a drain installs in a PINNED
+    // ORDER: ARM the run, THEN expose the schedule. Exposing first would let a
+    // release fire on a not-armed run, where the armed→queued CAS logs and skips
+    // and a one-shot fire is lost. run_id is the PK: one install per run.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."trigger_schedule_install_outbox" (
+      run_id text PRIMARY KEY REFERENCES "${schemaName.replaceAll('"', '""')}"."agent_runs"(id) ON DELETE CASCADE,
+      org_id text NOT NULL,
+      requested_by text NOT NULL,
+      trigger_type text NOT NULL,
+      scheduled_at timestamptz,
+      cron_expression text,
+      timezone text NOT NULL DEFAULT 'UTC',
+      status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','installing','done','failed')),
+      attempts integer NOT NULL DEFAULT 0,
+      max_attempts integer NOT NULL DEFAULT 20,
+      lease_token text,
+      lease_expires_at timestamptz,
+      last_error text,
+      armed_at timestamptz,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS trigger_schedule_install_outbox_status_idx ON "${schemaName.replaceAll('"', '""')}"."trigger_schedule_install_outbox" (status, created_at)` },
     // agent_run_pm_links: schedule↔PM-task sync link table (cinatra#317). One
     // row per schedule-defining trigger mirrored to an external PM provider
     // (Plane). Keyed by run_id (one-to-one with the trigger). A link table, not

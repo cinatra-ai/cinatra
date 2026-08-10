@@ -9,11 +9,12 @@ import {
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { resolveLifecycleCardState } from "@/lib/lifecycle/lifecycle-card-refetch";
 import { attachLifecycleSuggestions } from "@/lib/lifecycle/lifecycle-suggestion-chips";
+import { resolveTriggerScheduleProposalCard } from "@/lib/lifecycle/trigger-schedule-proposal-card";
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
 
 // ---------------------------------------------------------------------------
 // POST /api/lifecycle-views/resolve — the lifecycle card's authoritative
-// refetch (cinatra#2565, epic #2564 S1).
+// refetch (cinatra#2565, epic #2564 S1; extended by #2569 S5).
 //
 // A card posts the opaque ref it was minted with and gets back the state it may
 // draw RIGHT NOW, resolved against the session actor with a per-row access
@@ -31,6 +32,14 @@ import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[
 // `absent` for "there is nothing here" would let anyone holding a ref probe
 // which rows exist. Only a malformed request (400) and no session (401) are
 // distinguishable, and neither depends on the ref.
+//
+// THE OPTIONAL `view` (cinatra#2569). Three of the four interaction kinds draw
+// their content from a row the card can address; the SCHEDULE PROPOSAL cannot,
+// because §VI's "nothing exists until the reader confirms" means there is no
+// row until Confirm. Its body therefore travels with the state, in an ADDITIVE
+// `view` field that is absent for every other kind — S1's response shape for
+// the three existing kinds is byte-unchanged, and a client that ignores `view`
+// behaves exactly as it did.
 // ---------------------------------------------------------------------------
 
 const requestSchema = z
@@ -55,6 +64,25 @@ export async function POST(request: Request): Promise<Response> {
   const parsed = requestSchema.safeParse(raw);
   if (!parsed.success) {
     return Response.json({ error: "Invalid lifecycle view request" }, { status: 400 });
+  }
+
+  // The schedule proposal resolves state AND body in one pass — they must agree,
+  // and resolving twice would both cost a second verify and open a window where
+  // a Confirm landing between the two calls produced a `pending` floor over a
+  // settled body.
+  if (parsed.data.viewType === "trigger_schedule_proposal") {
+    const card = await resolveTriggerScheduleProposalCard({
+      ref: parsed.data.ref,
+      // A principal with no attributable user cannot hold a proposal — the
+      // empty string is never a valid binding, so the resolve answers `absent`.
+      userId: actorCtx.actor.userId ?? "",
+      orgId: actorCtx.orgId,
+      isAdmin: actorCtx.roleHints?.platformRole === "platform_admin",
+    });
+    return Response.json(
+      { state: card.state, view: card.view },
+      { headers: { "Cache-Control": "no-store" } },
+    );
   }
 
   const state = await resolveLifecycleCardState({

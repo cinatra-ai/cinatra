@@ -82,10 +82,15 @@ export type LifecycleViewType = (typeof LIFECYCLE_VIEW_TYPES)[number];
  * per-viewType allowlist rather than one flat set: a tool that may render a
  * verification record must not be able to mint a REVIEW GATE card, even though
  * both are first-party. The named tools are S3's read-only pull primitives
- * (#2567). `trigger_schedule_proposal` has NO producer tool yet — S5 (#2569)
- * owns the proposal token and adds its entry here; until then the viewType is
- * registered on the wire and unmintable, which is the correct fail-closed
- * posture rather than a placeholder that accepts anything.
+ * (#2567) and S5's schedule-proposal producer (#2569).
+ *
+ * `schedule_proposal_render` mints a PROPOSAL, and a proposal writes nothing —
+ * the ref it produces IS the whole proposal (a signed, opaque, expiring token;
+ * see `src/lib/trigger-schedule-proposal-token.ts`). That is what keeps it in
+ * this per-viewType allowlist rather than needing a different kind of entry:
+ * the tool is as read-only as the two `*_render` primitives beside it, and the
+ * ACT of scheduling happens later, in a human session action carrying that
+ * token. A model holding this tool can draw a card and nothing else.
  */
 export const LIFECYCLE_PRODUCER_TOOLS: Record<
   LifecycleViewType,
@@ -93,7 +98,7 @@ export const LIFECYCLE_PRODUCER_TOOLS: Record<
 > = {
   artifact_review_gate: ["artifact_review_gates_list", "artifact_review_gate_render"],
   verification_summary: ["verification_record_render"],
-  trigger_schedule_proposal: [],
+  trigger_schedule_proposal: ["schedule_proposal_render"],
 };
 
 /**

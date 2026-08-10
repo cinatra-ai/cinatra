@@ -65,6 +65,8 @@
     "./project-instance-store": "./src/project-instance-store.ts",
     "./project-template-install-gate": "./src/project-template-install-gate.ts",
     "./trigger-store": "./src/trigger-store.ts",
+  "./trigger-schedule-proposal-service": "./src/trigger-schedule-proposal-service.ts",
+  "./trigger-recurrence": "./src/trigger-recurrence.ts",
     "./integration/register-object-types": "./src/integration/register-object-types.ts",
     "./verdaccio/client": "./src/verdaccio/client.ts",
     "./verdaccio/publish-metadata": "./src/verdaccio/publish-metadata.ts",

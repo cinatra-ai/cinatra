@@ -146,16 +146,30 @@ async function resolveVerificationSummary(
 }
 
 /**
- * The trigger schedule proposal (§VI) has a Confirm/Adjust floor whose
- * single-use proposal token, store and arm-before-expose sequence are S5's
- * (#2569). Until that producer exists there is no row to authorize against, and
- * the honest answer is `absent` — a placeholder that rendered a floor with no
- * proposal behind it would be exactly the "AI arms a schedule" failure the epic
- * forbids. S5 replaces this body; the wire type, the registry entry and this
- * dispatch arm are already in place so it fills a seam rather than adding one.
+ * The trigger schedule proposal (§VI). S1 left this body returning `absent`
+ * because the proposal token did not exist yet; S5 (#2569) supplies it, and the
+ * resolution lives in `trigger-schedule-proposal-card` because §VI's card needs
+ * a typed BODY as well as a state — the option rows before Confirm, the
+ * trigger's chrome after — and this dispatcher's contract is the state alone.
+ *
+ * A proposal ref is not a row address; it is the proposal itself, bound to the
+ * (user, org) pair it was minted for. A reader who is not that pair resolves
+ * `absent` — the same answer a forged ref gets.
  */
-async function resolveTriggerScheduleProposal(): Promise<LifecycleCardState> {
-  return ABSENT;
+async function resolveTriggerScheduleProposal(
+  ref: string,
+  actorCtx: ReviewActorContext,
+): Promise<LifecycleCardState> {
+  const { resolveTriggerScheduleProposalCard } = await import(
+    "./trigger-schedule-proposal-card"
+  );
+  const card = await resolveTriggerScheduleProposalCard({
+    ref,
+    userId: actorCtx.actor.userId ?? "",
+    orgId: actorCtx.orgId,
+    isAdmin: actorCtx.roleHints?.platformRole === "platform_admin",
+  });
+  return card.state;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +198,7 @@ export async function resolveLifecycleCardState(params: {
         return payload ? await resolveVerificationSummary(payload, actorCtx) : ABSENT;
       }
       case "trigger_schedule_proposal":
-        return await resolveTriggerScheduleProposal();
+        return await resolveTriggerScheduleProposal(ref, actorCtx);
     }
   } catch {
     // A store/transport failure must not become an existence signal either.

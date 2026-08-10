@@ -108,13 +108,36 @@ describe("recognizeLifecycleViewEnvelope — the producer bind", () => {
     ).toBeNull();
   });
 
-  it("mints NOTHING for a viewType with no producer tool yet (trigger — S5)", () => {
-    expect(LIFECYCLE_PRODUCER_TOOLS.trigger_schedule_proposal).toEqual([]);
+  it("mints a trigger proposal ONLY through its own producer (S5 filled S1's empty allowlist)", () => {
+    // S1 shipped this allowlist EMPTY — "registered on the wire and unmintable,
+    // the correct fail-closed posture". cinatra#2569 fills exactly that seam,
+    // and this assertion moves with it so the fill is a deliberate edit rather
+    // than a drift nobody notices.
+    expect(LIFECYCLE_PRODUCER_TOOLS.trigger_schedule_proposal).toEqual([
+      "schedule_proposal_render",
+    ]);
+    expect(
+      recognizeLifecycleViewEnvelope({
+        serverLabel: LIFECYCLE_PRODUCER_SERVER_LABEL,
+        toolName: "schedule_proposal_render",
+        result: envelope({ viewType: "trigger_schedule_proposal" }),
+      }),
+    ).not.toBeNull();
+    // …and the per-viewType bind still holds in BOTH directions: a review
+    // renderer cannot mint a proposal, and the proposal producer cannot mint a
+    // review gate.
     expect(
       recognizeLifecycleViewEnvelope({
         serverLabel: LIFECYCLE_PRODUCER_SERVER_LABEL,
         toolName: REVIEW_TOOL,
         result: envelope({ viewType: "trigger_schedule_proposal" }),
+      }),
+    ).toBeNull();
+    expect(
+      recognizeLifecycleViewEnvelope({
+        serverLabel: LIFECYCLE_PRODUCER_SERVER_LABEL,
+        toolName: "schedule_proposal_render",
+        result: envelope(),
       }),
     ).toBeNull();
   });

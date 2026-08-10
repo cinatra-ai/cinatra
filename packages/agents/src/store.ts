@@ -31,7 +31,7 @@ import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 // cinatra#1940 P3 (Decision 2): the creation-perimeter conversion — the two
 // `agent_runs` INSERT sites below now run guarded, the same seam
 // transitionRunStatus already uses.
-import { guardedRunWrite } from "./org-write-run-seam";
+import { guardedRunWrite, type GuardedRunTx } from "./org-write-run-seam";
 // cinatra#1893 (epic #1883 A5): terminal-success-with-derivation-outbox seam
 // (file-size ratchet #1893). Its producer transitionRunStatus now lives in
 // ./run-transition; only the option TYPE is re-exported for `./store` importers.
@@ -3222,6 +3222,30 @@ export async function createAgentRunPendingInput(
     humanPresent?: boolean | null; // cinatra#2067 presence discriminator (interactive callers pass true)
     // cinatra#2485 C — see CreateAgentRunInput.scopeActor. Same contract.
     scopeActor?: ActorContext | null;
+    /**
+     * Extra writes that MUST commit ATOMICALLY WITH THE RUN ROW (cinatra#2569,
+     * epic #2564 S5).
+     *
+     * Runs inside the SAME org-write-guarded transaction as the insert — after
+     * it, before commit — on the tx the guard hands out, so the org locks and
+     * the lifecycle ruling already apply. A THROW rolls the run back with it.
+     *
+     * It exists for exactly one shape of problem: a caller for whom a run
+     * WITHOUT its companion rows is a defect rather than an intermediate state.
+     * The conversational schedule proposal is the case that forced it — Confirm
+     * spends a single-use proposal, creates the run and records the
+     * schedule-install intent, and a crash between any two of those either
+     * strands a run nobody asked for or lets the same proposal create a second.
+     * Sequencing the writes could not fix that; sharing the transaction does.
+     *
+     * NOT a general escape hatch: the callback sees the run id and the
+     * transaction and nothing else, and every caller of it is a store module
+     * whose invariant is atomicity with the run.
+     */
+    withinCreateTx?: (
+      tx: GuardedRunTx,
+      run: { id: string; orgId: string },
+    ) => Promise<void>;
   },
   // cinatra#1940 P3 (Decision 2): see createAgentRun's authority param doc —
   // same REQUIRED-trailing-param, same fail-closed-on-undefined contract.
@@ -3273,6 +3297,13 @@ export async function createAgentRunPendingInput(
         oboCeiling: oboCeilingJson,
         humanPresent: input.humanPresent ?? null, // cinatra#2067 presence discriminator
       });
+      // Companion writes that must live or die with the run (see the option's
+      // doc). Deliberately the LAST thing in the guarded transaction: the run
+      // row exists for it to reference, and anything it throws unwinds the
+      // insert instead of leaving a run its caller never wanted.
+      if (input.withinCreateTx) {
+        await input.withinCreateTx(tx, { id, orgId: input.orgId });
+      }
     },
   );
   // Post-insert re-read stays OUTSIDE the guard — a committed insert cannot

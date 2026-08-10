@@ -1123,3 +1123,86 @@ export async function readRunOutputEvidence(args: {
     unlinkableOutputs,
   };
 }
+
+// ---------------------------------------------------------------------------
+// The schedule proposal floor — Confirm / Adjust (cinatra#2569, epic #2564 S5)
+// Design: design@6c20871b4108176c1d0193f19ecd2947f6c6355f §VI.
+// ---------------------------------------------------------------------------
+//
+// §VI: "Confirm / Adjust is new here, and only here … In the conversation the
+// act is different: nothing exists until the reader confirms."
+//
+// These two are the ONLY entry points that turn a proposal into anything, and
+// they are HUMAN SESSION actions by construction — `requireAuthSession` is the
+// first statement in each, and the acting user and org come from that session,
+// never from an argument. There is no MCP primitive on any surface that reaches
+// them, which is what makes "the AI can present a schedule and can never arm
+// one" a property of the call graph rather than a promise.
+
+export type ConfirmScheduleProposalArgs = { token: string };
+export type ConfirmScheduleProposalResult =
+  | { ok: true; runId: string; alreadyConfirmed: boolean }
+  | { ok: false; error: string };
+
+/**
+ * Confirm a proposed schedule: spend the proposal, create the run and record
+ * the schedule-install intent in ONE transaction, then drain the install.
+ *
+ * Idempotent by the consume edge, not by convention: a double-click, a retried
+ * request and a genuine race all answer with the SAME run — the first one — and
+ * a second run is impossible because the losing transaction rolls its own run
+ * back with the failed consume insert.
+ */
+export async function confirmScheduleProposal(
+  args: ConfirmScheduleProposalArgs,
+): Promise<ConfirmScheduleProposalResult> {
+  const session = await requireAuthSession().catch(() => null);
+  const userId = session?.user?.id ?? null;
+  const orgId = session?.session?.activeOrganizationId ?? null;
+  if (!userId || !orgId) return { ok: false, error: "unauthorized" };
+  const role =
+    (session?.user as { role?: string | null } | null | undefined)?.role ?? null;
+
+  const { confirmTriggerScheduleProposal } = await import(
+    "./trigger-schedule-proposal-service"
+  );
+  return confirmTriggerScheduleProposal({ userId, orgId, role }, args.token);
+}
+
+export type AdjustScheduleProposalArgs = {
+  templateId: string;
+  schedule: import("@/lib/trigger-schedule-proposal-token").ProposalSchedule;
+};
+export type AdjustScheduleProposalResult =
+  | { ok: true; token: string; expiresAt: number }
+  | { ok: false; error: string };
+
+/**
+ * Adjust a proposal — i.e. RE-PROPOSE it.
+ *
+ * §VI draws Adjust as re-opening the same option rows in place, and this action
+ * is what settles them back into a proposal: a NEW token with a NEW consume
+ * identity. It mutates nothing, because there is nothing to mutate, so an
+ * abandoned adjustment leaves no trace and a stale token confirmed afterwards
+ * still creates exactly the one run it describes.
+ */
+export async function adjustScheduleProposal(
+  args: AdjustScheduleProposalArgs,
+): Promise<AdjustScheduleProposalResult> {
+  const session = await requireAuthSession().catch(() => null);
+  const userId = session?.user?.id ?? null;
+  const orgId = session?.session?.activeOrganizationId ?? null;
+  if (!userId || !orgId) return { ok: false, error: "unauthorized" };
+
+  const { adjustTriggerSchedule, PROPOSAL_REFUSALS } = await import(
+    "./trigger-schedule-proposal-service"
+  );
+  const proposed = await adjustTriggerSchedule({
+    templateId: args.templateId,
+    userId,
+    orgId,
+    schedule: args.schedule,
+  });
+  if (!proposed.ok) return { ok: false, error: PROPOSAL_REFUSALS.invalid };
+  return { ok: true, token: proposed.token, expiresAt: proposed.expiresAt };
+}

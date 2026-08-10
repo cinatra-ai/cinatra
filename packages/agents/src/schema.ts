@@ -1196,6 +1196,95 @@ export const agentRunTriggers = cinatraSchema.table("agent_run_triggers", {
 // connector's job via deleteTriggerTask, invoked from the trigger lifecycle).
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// The trigger schedule PROPOSAL tables (cinatra#2569, epic #2564 S5).
+// DDL twin: the two CREATE TABLE statements in buildCreateStoreSchemaQueries
+// (src/lib/drizzle-store.ts), immediately after agent_run_triggers.
+//
+// Both are NEW tables — additive under migrations/README.md, so they ride the
+// idempotent bootstrap DDL and carry no numbered migration artifact.
+// ---------------------------------------------------------------------------
+
+/**
+ * The SINGLE-USE consume edge for a schedule proposal.
+ *
+ * The proposal token is stateless, self-contained and REPLAYABLE by
+ * construction (see `src/lib/trigger-schedule-proposal-token.ts`) — signing
+ * something twice is free. What is not free is spending it twice, and that is
+ * this table: `consume_key` is the PRIMARY KEY, so the SECOND Confirm carrying
+ * the same proposal loses the insert and the whole transaction — INCLUDING the
+ * run it was about to create — rolls back. The loser then reads this row and
+ * answers with the ORIGINAL `run_id`.
+ *
+ * `run_id` is NOT NULL because it is written in the SAME transaction as the run
+ * it names: a consume row without a run cannot exist, so "the proposal was
+ * spent" and "the run exists" are the same fact and can never disagree.
+ */
+export const triggerScheduleProposalConsumes = cinatraSchema.table(
+  "trigger_schedule_proposal_consumes",
+  {
+    /** sha256 of the proposal's per-mint nonce — never the token itself. */
+    consumeKey: text("consume_key").primaryKey(),
+    runId:      text("run_id").notNull().references(() => agentRuns.id, { onDelete: "cascade" }),
+    orgId:      text("org_id").notNull(),
+    templateId: text("template_id").notNull(),
+    consumedBy: text("consumed_by").notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    runIdx: index("trigger_schedule_proposal_consumes_run_idx").on(t.runId),
+  }),
+);
+
+export type TriggerScheduleProposalConsumeRow =
+  typeof triggerScheduleProposalConsumes.$inferSelect;
+
+/**
+ * The schedule-INSTALL outbox intent.
+ *
+ * A trigger has TWO halves: the durable row, and the BullMQ scheduler that
+ * makes it fire. They live in different systems, so they cannot be written
+ * atomically — and the failure that matters is the one where the schedule
+ * becomes visible before the run is armed, because a release firing on a
+ * not-armed run logs and skips, and a one-shot fire is then lost forever.
+ *
+ * So Confirm commits an INTENT instead of installing anything, and a drain
+ * performs the install in a PINNED ORDER — arm the run, THEN expose the
+ * schedule — with at-least-once retry. `run_id` is the PK: one install per run,
+ * so a re-driven Confirm or a crashed drain can never queue a second.
+ */
+export const triggerScheduleInstallOutbox = cinatraSchema.table(
+  "trigger_schedule_install_outbox",
+  {
+    runId:          text("run_id").primaryKey().references(() => agentRuns.id, { onDelete: "cascade" }),
+    orgId:          text("org_id").notNull(),
+    /** The acting human, re-minted as org-write authority by the drain. */
+    requestedBy:    text("requested_by").notNull(),
+    triggerType:    text("trigger_type").notNull(),
+    scheduledAt:    timestamp("scheduled_at", { withTimezone: true }),
+    cronExpression: text("cron_expression"),
+    timezone:       text("timezone").notNull().default("UTC"),
+    /** pending | installing | done | failed */
+    status:         text("status").notNull().default("pending"),
+    attempts:       integer("attempts").notNull().default(0),
+    maxAttempts:    integer("max_attempts").notNull().default(20),
+    leaseToken:     text("lease_token"),
+    leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+    lastError:      text("last_error"),
+    /** Stamped by the drain the moment the run is ARMED — i.e. the moment a
+     *  fire can no longer be lost. The step the whole ordering exists for. */
+    armedAt:        timestamp("armed_at", { withTimezone: true }),
+    createdAt:      timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt:      timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    statusIdx: index("trigger_schedule_install_outbox_status_idx").on(t.status, t.createdAt),
+  }),
+);
+
+export type TriggerScheduleInstallOutboxRow =
+  typeof triggerScheduleInstallOutbox.$inferSelect;
+
 export const agentRunPmLinks = cinatraSchema.table("agent_run_pm_links", {
   runId:         text("run_id").primaryKey().references(() => agentRuns.id, { onDelete: "cascade" }),
   provider:      text("provider").notNull(), // PM provider id, e.g. 'plane'

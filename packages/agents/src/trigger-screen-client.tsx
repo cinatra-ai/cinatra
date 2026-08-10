@@ -24,6 +24,15 @@ import { format } from "date-fns";
 import { HitlConversationPanel, type HitlConversationEntry } from "./hitl-conversation-panel";
 import { setRunTrigger } from "./run-actions";
 import type { DurationEstimate } from "./trigger-duration-estimate";
+import {
+  buildCron,
+  parseCronToRecurring,
+  WEEKDAY_LABELS,
+  MONTH_LABELS,
+  NTH_LABELS,
+  type RecurringConfig,
+  type RecurringFrequency,
+} from "./trigger-recurrence";
 
 // -----------------------------------------------------------------------------
 // Schema
@@ -54,113 +63,12 @@ export type TriggerScreenFormValues = FormValues;
 // -----------------------------------------------------------------------------
 // Recurring config → cron
 // -----------------------------------------------------------------------------
-
-type RecurringFrequency = "daily" | "weekly" | "monthly" | "quarterly" | "yearly";
-
-type RecurringConfig = {
-  frequency: RecurringFrequency;
-  interval: number;          // days/weeks/months; always 1 for quarterly/yearly
-  weekdays: number[];        // 0=Sun–6=Sat for weekly
-  dayOfMonth: number;        // 1–31 when monthlyMode === "date"
-  monthlyMode: "date" | "weekday";
-  nthWeek: 1 | 2 | 3 | 4;  // for monthlyMode === "weekday"
-  monthlyWeekday: number;    // 0=Sun–6=Sat for monthlyMode === "weekday"
-  quarterAnchor: "start" | "end"; // quarterly: start=Jan/Apr/Jul/Oct, end=Mar/Jun/Sep/Dec
-  yearlyMonth: number;       // 1–12 for yearly
-  hour: number;
-  minute: number;
-};
-
-const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const MONTH_LABELS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-const NTH_LABELS = ["1st", "2nd", "3rd", "4th"] as const;
-const Q_START_MONTHS = "1,4,7,10";
-const Q_END_MONTHS   = "3,6,9,12";
-
-function buildCron(c: RecurringConfig): string {
-  const m = c.minute;
-  const h = c.hour;
-
-  function nthWeekdayCron(months: string): string {
-    const start = (c.nthWeek - 1) * 7 + 1;
-    const end   = c.nthWeek * 7;
-    return `${m} ${h} ${start}-${end} ${months} ${c.monthlyWeekday}`;
-  }
-  function dateCron(months: string): string {
-    return `${m} ${h} ${c.dayOfMonth} ${months} *`;
-  }
-
-  switch (c.frequency) {
-    case "daily":
-      return c.interval === 1 ? `${m} ${h} * * *` : `${m} ${h} */${c.interval} * *`;
-    case "weekly": {
-      const days = c.weekdays.length > 0 ? [...c.weekdays].sort((a, b) => a - b).join(",") : "1";
-      return `${m} ${h} * * ${days}`;
-    }
-    case "monthly":
-      return c.monthlyMode === "weekday"
-        ? nthWeekdayCron("*")
-        : (c.interval === 1 ? `${m} ${h} ${c.dayOfMonth} * *` : `${m} ${h} ${c.dayOfMonth} */${c.interval} *`);
-    case "quarterly": {
-      const months = c.quarterAnchor === "end" ? Q_END_MONTHS : Q_START_MONTHS;
-      return c.monthlyMode === "weekday" ? nthWeekdayCron(months) : dateCron(months);
-    }
-    case "yearly": {
-      const mo = c.yearlyMonth;
-      return c.monthlyMode === "weekday" ? nthWeekdayCron(String(mo)) : dateCron(String(mo));
-    }
-  }
-}
-
-function parseCronToRecurring(cron: string): Partial<RecurringConfig> | null {
-  const parts = cron.trim().split(/\s+/);
-  if (parts.length !== 5) return null;
-  const [minStr, hrStr, domStr, monthStr, dowStr] = parts;
-  const minute = parseInt(minStr, 10);
-  const hour   = parseInt(hrStr, 10);
-  if (isNaN(minute) || isNaN(hour)) return null;
-
-  const rangeMatch = /^(\d+)-(\d+)$/.exec(domStr);
-  const nthWeekFromRange = (start: number): 1|2|3|4 => Math.min(4, Math.ceil(start / 7)) as 1|2|3|4;
-
-  // Quarterly Nth-weekday: "1-7 1,4,7,10 1"
-  if (rangeMatch && (monthStr === Q_START_MONTHS || monthStr === Q_END_MONTHS)) {
-    const nthWeek = nthWeekFromRange(parseInt(rangeMatch[1], 10));
-    return { frequency: "quarterly", quarterAnchor: monthStr === Q_END_MONTHS ? "end" : "start", monthlyMode: "weekday", nthWeek, monthlyWeekday: parseInt(dowStr, 10) || 0, hour, minute, weekdays: [], dayOfMonth: 1 };
-  }
-  // Quarterly date: "1 1,4,7,10 *"
-  if (domStr !== "*" && (monthStr === Q_START_MONTHS || monthStr === Q_END_MONTHS) && dowStr === "*") {
-    return { frequency: "quarterly", quarterAnchor: monthStr === Q_END_MONTHS ? "end" : "start", monthlyMode: "date", dayOfMonth: parseInt(domStr, 10) || 1, hour, minute, weekdays: [] };
-  }
-  // Yearly Nth-weekday: "1-7 6 0"
-  const singleMonth = /^\d+$/.test(monthStr) ? parseInt(monthStr, 10) : NaN;
-  if (rangeMatch && !isNaN(singleMonth) && dowStr !== "*") {
-    const nthWeek = nthWeekFromRange(parseInt(rangeMatch[1], 10));
-    return { frequency: "yearly", yearlyMonth: singleMonth, monthlyMode: "weekday", nthWeek, monthlyWeekday: parseInt(dowStr, 10) || 0, hour, minute, weekdays: [], dayOfMonth: 1 };
-  }
-  // Yearly date: "25 12 *"
-  if (domStr !== "*" && !isNaN(singleMonth) && dowStr === "*") {
-    return { frequency: "yearly", yearlyMonth: singleMonth, monthlyMode: "date", dayOfMonth: parseInt(domStr, 10) || 1, hour, minute, weekdays: [] };
-  }
-  // Monthly Nth-weekday: "1-7 * 0"
-  if (rangeMatch && monthStr === "*" && dowStr !== "*") {
-    const nthWeek = nthWeekFromRange(parseInt(rangeMatch[1], 10));
-    return { frequency: "monthly", monthlyMode: "weekday", nthWeek, monthlyWeekday: parseInt(dowStr, 10) || 0, hour, minute, weekdays: [], dayOfMonth: 1 };
-  }
-  // Monthly date: "3 * *" or "3 */2 *"
-  if (domStr !== "*" && dowStr === "*") {
-    const mMatch = /^\*\/(\d+)$/.exec(monthStr);
-    return { frequency: "monthly", monthlyMode: "date", interval: mMatch ? parseInt(mMatch[1], 10) : 1, dayOfMonth: parseInt(domStr, 10) || 1, hour, minute, weekdays: [] };
-  }
-  // Weekly
-  if (monthStr === "*" && dowStr !== "*") {
-    return { frequency: "weekly", interval: 1, hour, minute, weekdays: dowStr.split(",").map(Number).filter((n) => !isNaN(n)) };
-  }
-  // Daily
-  const dMatch = /^\*\/(\d+)$/.exec(domStr);
-  return { frequency: "daily", interval: dMatch ? parseInt(dMatch[1], 10) : 1, hour, minute, weekdays: [] };
-}
-
+//
+// The selection vocabulary and its cron translation live in `trigger-recurrence`
+// (cinatra#2569): the conversational schedule PROPOSAL is minted server-side and
+// confirmed later, so the server has to be able to turn exactly these selections
+// into exactly the cron this form would have produced. Same functions, one
+// module — the form and the proposal cannot drift apart.
 // -----------------------------------------------------------------------------
 // Helpers
 // -----------------------------------------------------------------------------
