@@ -21,7 +21,12 @@
  *     (`onSave` fires on edit-mode exit when the config changed).
  *   - Edit-mode controls — Grid/Rows layout toggle (only when more than one
  *     mode is allowed), "Add text" and "Add portlet" via the context's
- *     `handleAddText` / `handleAddPortlet`.
+ *     `handleAddText` / `handleAddPortlet`, and — on an entity Dashboards tab —
+ *     Rename / Delete for the selected dashboard via
+ *     `<EntityDashboardEditControls>` (owner review on cinatra#2474 PR5, PR
+ *     #2638). This bar is the FIRST of the two the owner sees after pressing
+ *     "Edit dashboard"; the second is drizzle-cube's filter bar, mounted
+ *     beneath by `<DashboardFilterBarSlot>`.
  *
  * Deliberately NOT reproduced from the bundled toolbar:
  *   - The colour-palette dropdown: drizzle-cube `0.6.4` does not export
@@ -60,6 +65,7 @@ import {
   type DashboardPageAnchor,
 } from "./dashboard-page-anchor";
 import { useEntityDashboards } from "./entity-dashboards-context";
+import { EntityDashboardEditControls } from "./entity-dashboard-edit-controls";
 import { EntityDashboardsToolbarControls } from "./entity-dashboard-toolbar-controls";
 
 export type DashboardPageAction = {
@@ -225,6 +231,10 @@ export function CinatraDashboardToolbar() {
               Add portlet
             </ToolbarButton>
           </ToolbarGroup>
+          {/* Rename / Delete for the SELECTED entity dashboard. Renders its own
+              separator + group, and nothing at all outside an entity Dashboards
+              tab or for a default/read-only dashboard. */}
+          <EntityDashboardEditControls />
         </>
       )}
 
