@@ -1,0 +1,34 @@
+INTELLIGENCE
+Chat
+Assistants
+Agents
+MANAGEMENT
+Personal
+Projects
+Teams
+Organizations
+INFORMATION
+Artifacts
+Analytics
+TOOLS
+Skills
+Connectors
+SF
+S2 Fixture Reviewer
+s2-fixture-uat@local.test
+Toggle Sidebar
+Agents
+f16f2989…
+Review
+Toggle theme
+5
+
+AGENT RUN
+
+Review
+
+Approve, reject, or comment on what an agent produced — before the run continues.
+
+This review is no longer open
+
+The gate was already d

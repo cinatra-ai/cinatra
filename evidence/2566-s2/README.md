@@ -1,100 +1,113 @@
-# cinatra#2566 / PR #2612 — S2 blocker resolution (lane TRIPLE-245)
+# cinatra#2566 / PR #2612 — the S2 card battery, on a REAL minted gate
 
-Head under proof: `389ee0509890bd762549074aa67fff095d2377f4`.
+Head under proof: the rebase of `feat/chat-hitl-s2-review-gate-card` onto
+`origin/main` @ `c4ba2150e` (S1 + S3 + S4 + the picker verdict all merged).
+Spec pin: **design@`6c20871b4108176c1d0193f19ecd2947f6c6355f`**
+(`specs/app-lifecycle-cards.html`) §II, §III, §IV, §IX.
 
-**The design-surface battery at design@`6c20871b4108176c1d0193f19ecd2947f6c6355f`
-STILL DID NOT RUN.** What this record settles is the prior lane's open question
-(PR comment `issuecomment-5234007696`): whether `artifact_review_gates_list`
-returning `{"refs":[]}` was a fixture gap or a defect in the S3 listing path.
+**The prior lane's blocker is CLOSED.** It named the cause correctly — a FIXTURE
+GAP, not a defect in the S3 listing path — and this lane built the missing piece:
+`tests/fixtures/review-gate-agent/`, a deterministic no-LLM agent whose single
+`InputMessageNode` gate declares
+`metadata.cinatra.artifactReview.targetsInput`. The run executor's marked-gate
+branch now has a credential-free producer.
 
-## Verdict: FIXTURE GAP, with a named mechanism. Not a defect in the listing path.
+## The gate is real, and so is everything downstream
 
-The listing filters every candidate row through
-`enforceReviewRunAccess(gate.run_id, actor, "read", roleHints)`
-(`src/lib/lifecycle/lifecycle-pull-mcp.ts` `handleReviewGatesList`). That helper
-fetches the run with `readAgentRunById` and hands the result to
-`enforceRunAccess`, whose FIRST statement is:
-
-```ts
-// packages/agents/src/auth-policy.ts:1027
-if (!run) {
-  throw new AuthzError({ statusCode: 404, reason: "hidden", message: "Not found." });
-}
+```
+[artifact-review-gate] run=ab353fb5-… task=92e207f3-… pinned review targets
+  + routed to /agents/cinatra-review-fixture/marked-review-gate/ab353fb5-…/review/wayflow-92e207f3-…
 ```
 
-So a gate whose `run_id` does not resolve to an `agent_runs` row contributes no
-ref — by construction, for every caller. A SQL-seeded gate satisfies the
-candidate query (`listOpenReviewGateCandidates` filters on `org_id` +
-`status='pending'` only) and then fails this ladder unless a REAL run row exists
-that the actor may read.
+Five gates were minted this way. Nothing is SQL-seeded except the run row and the
+BullMQ job — the same bypass, with the same stated reason, that
+`tests/e2e/agents-run/seed.ts` already uses. The artifacts are real uploads
+through `POST /api/artifacts/upload`; the identity is a real Better Auth sign-up;
+the WayFlow runtime really executes the flow and really pauses `input-required`;
+`emitArtifactReviewGate` really pins the targets; and both decision transports
+really release the paused run (`agent_runs.status → completed`).
 
-**The two surfaces agree.** `/agents/reviews` (`src/app/agents/reviews/page.tsx:85`)
-applies the identical `enforceReviewRunAccess(row.runId, …)` filter, so the chat
-pull is not narrower than the shipped review page. There is no divergence to
-call a defect.
+## Per-item verdicts
 
-**The orchestration corollary, stated plainly:** when a produced event has no
-producing run, `sweepReviewOrchestration` emits the gate against
-`orphanRunId(eventId)` (`lifecycle-review-orchestration-store.ts`). Such a gate
-can never be listed or rendered by anyone. That is a real, code-level property of
-the shipped system — worth a separate look — but it is NOT a defect in S2/S3.
+### §II — the card in the thread, per host frame
 
-## What was driven on the real running app
+| # | Item | Verdict | Evidence |
+|---|---|---|---|
+| II-1 | The card renders in the **chat thread** (host `chat_thread`) | **PASS** | 2 island frames + 4 `POST /api/lifecycle-views/resolve` in one transcript; `s2-05-chat-thread-and-run-card.png` |
+| II-2 | The card renders in the **run card** (host `run_card`, the inline `AgenticRunPanel`) | **PASS** | the second island frame in the same transcript, with the 8 `/api/agents/runs/<id>` polls only the run panel issues |
+| II-3 | The card renders in the **page gate region** (host `page_gate_region`) | **PASS** | `s2-02-review-page-gate-region.png`; 1 island frame, 1 floor |
+| II-4 | The decision floor: Comment / Reject / Approve over the rationale field | **PASS** | `review-page-text.txt` — "DECISION RATIONALE (optional on approve, expected on reject)" then Comment, Reject, Approve |
+| II-5 | Several targets, **ONE** floor | **PASS** | a 2-target gate renders 2 stacked target panels inside the island and exactly **1** Approve button on the page |
 
-Real dev server on this head, port 3151, dedicated schema on the verify Postgres
-(5634), 111/111 extensions pinned, boot log confirming
-`[artifact-review-gate] gate seam bound to the #2009 store at boot` and
-`[lifecycle-review-orchestration] S1 activation ACTIVE`.
+### §III — what the target shows
 
-Nothing below is SQL-seeded. Identity provisioning (a platform-admin flip and one
-membership row) is the only direct write; every lifecycle act is the shipped path.
+| # | Item | Verdict | Evidence |
+|---|---|---|---|
+| III-1 | Target panel names its **pinned revision** | **PASS** | `island-text.txt` — "revision c4d9d011-ae9… · pinned", "revision 40f5f009-471… · pinned" |
+| III-2 | The **tier ladder** is named on the panel | **PASS (build-time tier only)** | both targets resolve `build-time · detail`. The **runtime** tier and the **metadata floor** were NOT exercised — no installed extension on this instance resolves a runtime renderer for an uploaded artifact, and every target here typed cleanly, so neither lower rung could be reached without fabricating a broken target |
+| III-3 | Provenance line (package · revision · scope · mime · updated) | **PASS** | `@cinatra-ai/json-artifact:artifact · revision … · pinned · user · private · application/json · updated …` |
+| III-4 | The island carries **no decision chrome** | **PASS** | no Approve / Reject / "Decision rationale" anywhere inside the frame |
+| III-5 | Honest-gap lines (pinned capture pair, focused composer — drawn nowhere, not invented) | **PASS (by absence)** | neither is drawn on any host; the spec records both as undrawn |
 
-1. Real Better Auth sign-up + sign-in; real org through the shipped
-   `/api/auth/organization/create` + `set-active`.
-2. Real artifact through `POST /api/artifacts/upload` → the app's own
-   `createSemanticArtifact` transaction wrote the `ArtifactProduced` event
-   (`produced-outbox.csv`).
-3. The app's OWN 30s `sweepReviewOrchestration` drained it to `processed` with a
-   NULL `continuation_address` — **no gate, correctly**: the review core default
-   fires on `origin_kind='agent_produced'`, and an upload is `user_provided` +
-   `destination_class='none'` → skip.
+### §IV — the reachable states
 
-## Why no gate could be minted here
+| # | State | Verdict | Evidence |
+|---|---|---|---|
+| IV-1 | `pending` | **PASS** | resolve → `{"state":"pending","canDecide":true,"canComment":true}` |
+| IV-2 | `settled` — "This review is no longer open" + Refresh, no stale decision | **PASS** | `s2-06-settled-no-longer-open.png`; Approve buttons = 0 |
+| IV-3 | `absent` (**reader**) — no card DOM | **PASS at the network layer; NOT ISOLATED in the DOM** | a non-owner org member and a non-member both get `200 {"state":"absent"}` — byte-identical to a forged ref — and the decide entry answers them the single uniform refusal. The **page-level** DOM assertion could not isolate the card: a non-owner also cannot read the THREAD that carries it, so "no card" there is over-determined |
+| IV-4 | `absent` (**surface**) — no card DOM, and **no resolve at all** | **PASS** | the widget surface issues **0** `/api/lifecycle-views/resolve` and draws 0 island frames, against the reader-absence which DOES issue one. The two branches are distinguishable exactly as the PR claims, and only by the observer's own network log |
+| IV-5 | `restricted` — may view, may not decide | **NOT REACHED** | run access is owner-first and an `AgentAuthPolicy` can only TIGHTEN, never grant, so a non-owner never gets run READ without approve on this instance. Covered by the shipped unit tests, not by this walk |
+| IV-6 | `loading` | **NOT ISOLATED** | the skeleton is sub-frame on a warm dev server; no capture attempts to claim it |
 
-The only credential-free agent-produced path is `artifact_authoring_emit`, and it
-refuses on this instance: no installed artifact extension resolves an authoring
-skill (`hasAuthoringSkill:false` for both authorable extensions —
-`@cinatra-ai/text-artifact`, `@cinatra-ai/json-artifact`). Only
-`blog-idea-artifact` and `marketing-icp-artifact` declare a `role:"authoring"`
-edge, and neither is installed for the actor's org (`agent_list` → 0 items).
+### §IX — the presence matrix
 
-No shipped extension and no e2e fixture declares the
-`metadata.cinatra.artifactReview.targetsInput` marker, so the run-executor's
-marked-gate path has **no shipped producer** either. A real artifact-review gate
-therefore requires a credentialed agent run producing an artifact — unavailable
-in this lane (no usable LLM provider key on this host).
+| # | Item | Verdict | Evidence |
+|---|---|---|---|
+| IX-1 | Chat thread — Yes | **PASS** | above |
+| IX-2 | Run card — Yes | **PASS** | above |
+| IX-3 | Page gate region (the review island) — Yes | **PASS** | above |
+| IX-4 | Site widget — **NO card** | **PASS** | exactly three `LifecycleCardSurfaceProvider` declarations exist in the tree (`chat_thread`, `run_card`, `page_gate_region`); `site_widget` appears only in a comment, and the widget surface renders no renderable views at all. Network-confirmed: 0 resolves |
 
-## Items that DID land, on the real /api/mcp under a real chat-OBO actor
+### Decisions through BOTH transports
 
-Token minted in the app's own shape (`src/lib/chat-mcp-actor-token.ts`: HS256,
-`aud=<origin>/api/mcp`, `iss=<origin>/api/auth`). Raw IO in `refusal-io.txt` /
-`tool-io-list.txt`.
+| # | Transport | Verdict | Evidence |
+|---|---|---|---|
+| T-1 | **Card** — `POST /api/lifecycle-views/decide` with the opaque ref | **PASS** | `decide-card-transport-io.txt`: approve → `{"kind":"decided","disposition":"approve","idempotent":false}`; resolve → `settled`; same-disposition retry → `idempotent:true`; a DIFFERENT disposition → `{"kind":"blocked","reason":"no-longer-pending"}`; run `f1794de0` → **completed** |
+| T-2 | **Page** — the route-bound server action, clicked in a real browser | **PASS** | `s2-07/08-page-transport-*.png`: Approve on the page gate region → gate `82a3f328` `resolved/approve` → run `f16f2989` → **completed** → the card re-resolves to "This review is no longer open" |
+| T-3 | A forged ref and a garbage ref are answered identically | **PASS** | both `200` with the one uniform refusal sentence; no status or body oracle |
 
-| Item | Result | Observed |
-|---|---|---|
-| All three S3 pull primitives reachable under the chat-OBO actor | **PASS** | 76 tools; `artifact_review_gates_list`, `artifact_review_gate_render`, `verification_record_render` all enumerate |
-| §IX — NO decision through the pull | **PASS** | zero primitives matching decide/approve/reject/resume/comment/schedule/respond visible to the chat-delegated perimeter |
-| §IV — identifier-free refusal, undecodable ref | **PASS** | both render primitives answer exactly `Not available to you.` |
-| §IV — identifier-free refusal, well-formed unknown ref | **PASS** | byte-identical sentence; indistinguishable from the above |
-| An empty list is NOT a refusal | **PASS** | `{"refs":[]}`, a plain non-minting result |
-| The documented transport boundary (schema rejection is the caller's own arguments) | **PASS** | `limit:99` → `Input validation error … limit: Too big: expected number to be <=10` |
+## Findings this walk produced
 
-## Still owed — every card item
+1. **`Cache-Control: no-store` is NOT what the island serves.** `next.config.ts`
+   sets it for `/lifecycle/review-island`, and the PR states it as fact — but the
+   response carries `cache-control: no-cache, must-revalidate`. The other three
+   headers from the same block DO survive (`content-security-policy:
+   frame-ancestors 'self'`, `x-frame-options: SAMEORIGIN`, `referrer-policy:
+   same-origin`), so the block is applied; Next's own dynamic-page cache header
+   wins on that one key. Measured on the dev surface — a released-image re-check
+   is owed before calling it settled, but the mechanism is not dev-specific.
+2. **The run-DETAIL page of a flow agent draws no card.** `/agents/<v>/<p>/<runId>`
+   renders `instance-screens.tsx` → `OrchestratorStepperPanel`, which has no
+   review-gate branch at all and falls through to "Waiting for input — no renderer
+   configured for this step." The card's run-card host is `AgenticRunPanel` (the
+   inline card in a transcript), which is where the deleted redirect card lived —
+   so this is **pre-existing, not an S2 regression** — but a reviewer who opens the
+   run page sees only the step rail's "Review" link.
+3. **`widgetLifecycleViewsEnabled` does not exist.** The presence-matrix comment
+   names it as the capability-site gate that keeps the widget fail-closed. The
+   tree contains no such symbol. The widget IS fail-closed — by never declaring a
+   host — but the comment points at a guard that was never written.
 
-§II the card in the thread per host frame; §III target panel + tier ladder +
-honest-gap lines + ONE decision floor; §IV every reachable state including the
-two DISTINCT absences network-asserted; §IX the presence matrix across chat
-thread / run card / review island (and NO widget); decisions through BOTH
-transports. All need a minted card, so **none of them ran**.
+## Reproducing
 
-**Do not merge on this record.** The design-surface proof is still unpaid.
+```sh
+node scripts/ci/sync-dev-extensions.mjs --pinned   # extensions on disk
+pnpm auth:migrate                                  # fresh DB only
+# stage the fixture + boot the WayFlow runtime over it, then:
+#   stageReviewGateFixture(repoRoot)
+#   seedMarkedReviewGateRun({ userId, orgId, targets })
+#   waitForMarkedReviewGate(runId)
+```
+See `tests/fixtures/review-gate-agent/README.md` and
+`tests/e2e/agents-run/review-gate-fixture.ts`.

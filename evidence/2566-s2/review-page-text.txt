@@ -1,0 +1,45 @@
+INTELLIGENCE
+Chat
+Assistants
+Agents
+MANAGEMENT
+Personal
+Projects
+Teams
+Organizations
+INFORMATION
+Artifacts
+Analytics
+TOOLS
+Skills
+Connectors
+SF
+S2 Fixture Reviewer
+s2-fixture-uat@local.test
+Toggle Sidebar
+Agents
+ab353fb5…
+Review
+Toggle theme
+8
+
+AGENT RUN
+
+Review
+
+Approve, reject, or comment on what an agent produced — before the run continues.
+
+review_gate
+2
+Review
+Review requested
+Awaiting your decision
+Expand
+DECISION RATIONALE (optional on approve, expected on reject)
+Comment
+Reject
+Approve
+Ask Cinatra to suggest edits to the fields above…
+Command Palette
+
+Search for a command to run...
