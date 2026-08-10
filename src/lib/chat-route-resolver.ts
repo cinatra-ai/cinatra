@@ -33,12 +33,35 @@
 //      the database — see chat-route-resolver.test.ts's "id-precedence
 //      closes the slug/id namespace collision" case.
 //
+//      cinatra#2642 — the UNBOUND thread. `assistant_package IS NULL` is the
+//      documented "unbound (implicit-@cinatra)" state, and the CLIENT already
+//      addresses such a thread at `thread.assistantPackage ??
+//      DEFAULT_ASSISTANT_PACKAGE`. The two container-scoped lookups above,
+//      however, resolve ONLY the exact package, so an unbound row was
+//      out-of-container for its own URL and 404'd. Two LAST-RESORT lookups
+//      close that read-side gap, and BOTH are gated on the route being the
+//      IMPLICIT-DEFAULT one (canonical package == DEFAULT_ASSISTANT_PACKAGE,
+//      no instance) and on the actor OWNING the row. The resulting order is:
+//
+//        exact-container id → unbound id → exact-container slug → unbound slug
+//
+//      Unbound-id sits BEFORE the slug lookup so #2589's id-precedence rule is
+//      preserved for unbound rows too; unbound-slug sits LAST so an EXPLICIT
+//      binding always beats the implicit alias. The unbound deps take NO
+//      package/instance parameter at all — a thread can never be resolved into
+//      a container the caller merely names — and the guard, not just the
+//      production dep, enforces the implicit-default gate. The production dep
+//      additionally performs a BEST-EFFORT, idempotent repair that makes the
+//      implicit binding explicit; resolution NEVER depends on that write
+//      succeeding (see assistant-thread-store.ts's implicit-default section).
+//
 // The guard LOGIC is dependency-injected (registry read / instance auth / thread
 // lookup are the DATA sources), so the whole decision is unit-testable without a
 // session, a DB, or the network. The DEFAULT deps lazily import the heavy host
 // modules so this file stays a light leaf for the test path.
 
 import {
+  DEFAULT_ASSISTANT_PACKAGE,
   disambiguateRest,
   splitChatSegments,
   vendorSlugToPackageName,
@@ -98,6 +121,24 @@ export type ChatRouteResolverDeps = {
     instanceId: string | null,
     threadId: string,
   ): Promise<string | null>;
+  /** The durable thread id for an UNBOUND thread the CURRENT ACTOR OWNS,
+   *  addressed by its stable id in the IMPLICIT-DEFAULT container
+   *  (cinatra#2642). Consulted ONLY on the implicit-default route (the guard
+   *  checks that before calling — see step 5), and takes NO package/instance
+   *  parameter BY DESIGN: no caller can name the container a thread resolves
+   *  into. Returns null for a non-UUID-shaped value, an absent row, a BOUND
+   *  row, a team row, an ownerless row, another actor's row, or an org
+   *  mismatch.
+   *
+   *  OPTIONAL: omitting it disables ONLY this last-resort lookup, which fails
+   *  MORE closed (exactly the pre-#2642 behaviour) — never more open. That
+   *  keeps every existing injected-dep caller (and the #2589 suite) valid
+   *  unchanged; the PRODUCTION deps always supply it, pinned by a test. */
+  resolveUnboundThreadIdById?(threadId: string): Promise<string | null>;
+  /** The title-slug twin of {@link resolveUnboundThreadIdById} — tried LAST, so
+   *  an EXPLICITLY bound thread owning the same slug in the default container
+   *  always wins the segment (cinatra#2642). Optional on the same terms. */
+  resolveUnboundThreadIdBySlug?(titleSlug: string): Promise<string | null>;
 };
 
 const NOT_FOUND: ChatRouteResolution = { kind: "not-found" };
@@ -167,11 +208,27 @@ export async function resolveChatRoute(
   // segment: the id lookup rejects the format before touching the database.
   let threadId: string | null = null;
   if (route.titleSlug != null) {
+    // The IMPLICIT-DEFAULT container (cinatra#2642): the ONE container an
+    // UNBOUND thread already lives in for the client's own URL builder
+    // (`thread.assistantPackage ?? DEFAULT_ASSISTANT_PACKAGE`). Gated HERE, in
+    // the pure guard — not only inside the production dep — so no injected
+    // dep set can bypass the rule.
+    const implicitDefaultRoute =
+      route.instance == null &&
+      canonicalPackageName.toLowerCase() === DEFAULT_ASSISTANT_PACKAGE.toLowerCase();
+
     threadId = await deps.resolveThreadIdById(
       canonicalPackageName,
       route.instance ?? null,
       route.titleSlug,
     );
+    if (!threadId && implicitDefaultRoute) {
+      // An UNBOUND thread the actor OWNS, addressed by its id. BEFORE the slug
+      // lookup so #2589's id-precedence rule survives intact: a (legacy)
+      // UUID-shaped title_slug in this container must never shadow the thread
+      // whose actual id that segment is.
+      threadId = (await deps.resolveUnboundThreadIdById?.(route.titleSlug)) ?? null;
+    }
     if (!threadId) {
       // No thread owns this segment as its id — fall back to a title-slug match.
       threadId = await deps.resolveThreadIdBySlug(
@@ -179,6 +236,11 @@ export async function resolveChatRoute(
         route.instance ?? null,
         route.titleSlug,
       );
+    }
+    if (!threadId && implicitDefaultRoute) {
+      // LAST: an UNBOUND thread the actor OWNS, addressed by its title_slug.
+      // Last by design — an EXPLICIT binding always beats the implicit alias.
+      threadId = (await deps.resolveUnboundThreadIdBySlug?.(route.titleSlug)) ?? null;
     }
     if (!threadId) return NOT_FOUND; // no such thread in this container → 404-hide
   }
@@ -251,12 +313,65 @@ async function resolveThreadIdByIdForContainer(
   return getAssistantThreadByIdInContainer(packageName, instanceId, threadId)?.id ?? null;
 }
 
+/** The CURRENT actor for an implicit-default unbound lookup (cinatra#2642):
+ *  transport-derived only (the session), NEVER route/tool input. Null when
+ *  there is no session or no user id — the lookups then refuse outright. */
+async function currentUnboundThreadActor(): Promise<{
+  userId: string;
+  orgId: string | null;
+} | null> {
+  const { getAuthSession } = await import("@/lib/auth-session");
+  const session = await getAuthSession();
+  const userId = session?.user?.id ?? "";
+  if (!userId) return null;
+  return { userId, orgId: session?.session?.activeOrganizationId ?? null };
+}
+
+/** Resolve an UNBOUND thread the actor OWNS by id, in the implicit-default
+ *  container, and make its implicit binding EXPLICIT (cinatra#2642).
+ *
+ *  The repair is BEST-EFFORT and NOT load-bearing: the id above already
+ *  resolved read-only, so a refused or raced repair changes nothing about this
+ *  request. That is what makes it safe on a GET render — a prefetched/retried
+ *  render just re-normalizes a row into the container it already logically
+ *  belongs to (idempotent, and it never bumps `updated_at`). */
+async function resolveUnboundThreadIdByIdForCurrentActor(
+  threadId: string,
+): Promise<string | null> {
+  const actor = await currentUnboundThreadActor();
+  if (!actor) return null;
+  const { getOwnedUnboundAssistantThreadById, repairImplicitDefaultThreadBinding } = await import(
+    "@/lib/assistant-thread-store"
+  );
+  const thread = getOwnedUnboundAssistantThreadById(threadId, actor);
+  if (!thread) return null;
+  repairImplicitDefaultThreadBinding(thread.id, actor);
+  return thread.id;
+}
+
+/** The title-slug twin of {@link resolveUnboundThreadIdByIdForCurrentActor}. */
+async function resolveUnboundThreadIdBySlugForCurrentActor(
+  titleSlug: string,
+): Promise<string | null> {
+  const actor = await currentUnboundThreadActor();
+  if (!actor) return null;
+  const { getOwnedUnboundAssistantThreadBySlug, repairImplicitDefaultThreadBinding } = await import(
+    "@/lib/assistant-thread-store"
+  );
+  const thread = getOwnedUnboundAssistantThreadBySlug(titleSlug, actor);
+  if (!thread) return null;
+  repairImplicitDefaultThreadBinding(thread.id, actor);
+  return thread.id;
+}
+
 /** The production deps (used by the /chat server component). */
 export const DEFAULT_CHAT_ROUTE_RESOLVER_DEPS: ChatRouteResolverDeps = {
   readVisibleRegistry: readVisibleRegistryForCurrentActor,
   authorizeInstance: authorizeInstanceForCurrentActor,
   resolveThreadIdBySlug: resolveThreadIdBySlugForContainer,
   resolveThreadIdById: resolveThreadIdByIdForContainer,
+  resolveUnboundThreadIdById: resolveUnboundThreadIdByIdForCurrentActor,
+  resolveUnboundThreadIdBySlug: resolveUnboundThreadIdBySlugForCurrentActor,
 };
 
 /** Resolve using the production deps — the entry the /chat route calls. */

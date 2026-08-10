@@ -208,7 +208,7 @@ describe("newly registered stores — writer-set lockstep", () => {
       "src/lib/artifacts/semantic-assertion-store.ts": 7,
       "src/lib/connect-sites-store.ts": 6,
       "src/lib/widget-user-auth.ts": 10,
-      "src/lib/assistant-thread-store.ts": 8,
+      "src/lib/assistant-thread-store.ts": 9,
       "src/lib/assistant-thread-dormant-content-purge.ts": 1,
     });
   });
@@ -269,6 +269,7 @@ describe("newly registered stores — writer-set lockstep", () => {
       "bindAssistantThread",
       "createAssistantThread",
       "ensureThreadSlug",
+      "repairImplicitDefaultThreadBinding",
       "setAssistantThreadPauseParticipant",
       "touchAssistantThread",
       "updateAssistantTurn",
