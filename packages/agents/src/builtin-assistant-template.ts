@@ -6,6 +6,15 @@
 // store.ts from growing further). Behavior-preserving: the constants + the two
 // functions are re-exported from ./store, so every existing importer is
 // unchanged.
+//
+// cinatra#2633 promoted this file to a PUBLIC package subpath
+// (`@cinatra-ai/agents/builtin-assistant-template`) so a caller that needs only
+// these symbols does not have to pull the package barrel — and the whole graph
+// behind it — into its compiled module graph. The barrel it now bypasses opens
+// with `import "server-only"`, so the same poison pill is declared here: a
+// public server-side subpath must fail a client-component import as loudly as
+// the barrel did, not silently ship this DB code to the browser.
+import "server-only";
 
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "./db";

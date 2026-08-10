@@ -35,7 +35,11 @@ vi.mock("@/lib/assistant-users", () => ({
   BUILT_IN_WORDPRESS_ASSISTANT_USERNAME: "wordpress",
   BUILT_IN_DRUPAL_ASSISTANT_USERNAME: "drupal",
 }));
-vi.mock("@cinatra-ai/agents", () => ({
+// Mirrors the specifier the module under test actually imports (cinatra#2633
+// narrowed it from the `@cinatra-ai/agents` barrel to this leaf). `vi.mock`
+// keys on the exact specifier, so mocking the barrel here would silently load
+// the real module instead.
+vi.mock("@cinatra-ai/agents/builtin-assistant-template", () => ({
   upsertBuiltInAssistantAgentTemplate: mocks.upsertBuiltInAssistantAgentTemplate,
   BUILT_IN_WORDPRESS_ASSISTANT_TEMPLATE_ID: "agt_builtin_wordpress_assistant",
   BUILT_IN_WORDPRESS_ASSISTANT_PACKAGE_NAME: "@cinatra-ai/wordpress-assistant",
