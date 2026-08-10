@@ -48,6 +48,8 @@
     "./cms-snapshot-readback-store": "./src/cms-snapshot-readback-store.ts",
     "./artifact-review-gate-seam": "./src/artifact-review-gate-seam.ts",
     "./artifact-review-resume-delivery": "./src/artifact-review-resume-delivery.ts",
+    "./suggestion-decision-store": "./src/suggestion-decision-store.ts",
+    "./suggestion-application-delivery": "./src/suggestion-application-delivery.ts",
     "./lifecycle-review-orchestration": "./src/lifecycle-review-orchestration-store.ts",
     "./lifecycle-continuation-park-store": "./src/lifecycle-continuation-park-store.ts",
     "./lifecycle-policy-store": "./src/lifecycle-policy-store.ts",

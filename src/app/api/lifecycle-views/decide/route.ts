@@ -5,6 +5,10 @@ import { z } from "zod";
 import { LIFECYCLE_VIEW_REF_MAX_LENGTH } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { enforceReviewRunAccess } from "@cinatra-ai/agents/artifact-review-gate-store";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
+import {
+  MAX_SUGGESTION_ID_CHARS,
+  MAX_SUGGESTION_PARTITION_IDS,
+} from "@/lib/artifacts/artifact-review-decision";
 import { submitReviewDecisionAction } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/actions";
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
 
@@ -43,6 +47,14 @@ import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[
 // a tightening, never a relaxation: nothing that could be decided through the
 // page becomes undecidable here.
 //
+// SUGGESTION DECISIONS RIDE THE SAME BODY (cinatra#2571, epic #2564 S6b). A card
+// that shows suggestion chips sends the accepted/dismissed partition WITH the one
+// terminal decision; there is no per-item endpoint here or anywhere (#2047 row 8).
+// This route bounds its SHAPE and forwards it — the decision core validates it
+// against the gate's pinned snapshot before the CAS and folds it into the
+// fingerprint, so a forged or replayed id is refused by the same code that
+// refuses a substituted target, and answers with the same uniform block.
+//
 // A DENIAL IS A UNIFORM `not-permitted` OUTCOME AT 200. The decision helper's own
 // refusal shape is returned verbatim: an unauthorized caller and a caller naming
 // a gate that no longer exists must be indistinguishable, so neither a status
@@ -57,6 +69,20 @@ const requestSchema = z
     // The rationale (§IV) — optional on approve, expected on reject, and the
     // substance of a comment. Bounded so a card cannot post an essay.
     comment: z.string().max(10_000).nullable().optional(),
+    // The reviewer's per-item SUGGESTION choices (cinatra#2571, epic #2564 S6b),
+    // carried ON the one terminal decision — there is deliberately no per-item
+    // endpoint (#2047 row 8). Bounded here on SHAPE only: which ids are legitimate
+    // is decided against the gate's PINNED snapshot inside the decision core, not
+    // by this schema, and a card that sends more ids than a snapshot can hold is
+    // rejected before any store is touched.
+    suggestionDecisions: z
+      .object({
+        accepted: z.array(z.string().min(1).max(MAX_SUGGESTION_ID_CHARS)).max(MAX_SUGGESTION_PARTITION_IDS).optional(),
+        dismissed: z.array(z.string().min(1).max(MAX_SUGGESTION_ID_CHARS)).max(MAX_SUGGESTION_PARTITION_IDS).optional(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
   })
   .strict();
 
@@ -106,6 +132,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   const comment = parsed.data.comment ?? null;
+  const partition = parsed.data.suggestionDecisions ?? null;
   const outcome = await submitReviewDecisionAction(
     payload.runId,
     payload.reviewTaskId,
@@ -115,6 +142,12 @@ export async function POST(request: Request): Promise<Response> {
     // check inside. Resolving twice would let the two decisions be taken against
     // two separate reads of the same actor's role/team/project hints.
     actorCtx,
+    // Forwarded UNVALIDATED beyond its shape: the ONE decision path normalizes it
+    // and checks it against the gate's pinned snapshot before the CAS. This route
+    // deciding which suggestions are real would be a second place that knows.
+    partition
+      ? { accepted: partition.accepted ?? [], dismissed: partition.dismissed ?? [] }
+      : null,
   );
 
   return Response.json({ outcome }, { headers: { "Cache-Control": "no-store" } });

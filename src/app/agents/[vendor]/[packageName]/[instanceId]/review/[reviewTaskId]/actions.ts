@@ -5,6 +5,7 @@ import {
   type ArtifactReviewDecision,
   type ReviewDisposition,
   type ReviewRunAccessOp,
+  type SuggestionDecisionPartition,
 } from "@/lib/artifacts/artifact-review-decision";
 import {
   submitReviewDecision,
@@ -61,6 +62,18 @@ export async function submitReviewDecisionAction(
    * as it always has.
    */
   resolvedActorCtx?: ReviewActorContext,
+  /**
+   * The reviewer's per-item SUGGESTION choices (cinatra#2571, epic #2564 S6b).
+   *
+   * Passed through untouched to the #1807 core, which normalizes it, refuses it
+   * on a non-terminal decision, validates it `⊆` the gate's pinned snapshot
+   * BEFORE the CAS, folds it into the decision fingerprint, and commits the
+   * ledger + application intent inside the CAS transaction. Deliberately the LAST
+   * parameter: this helper is the ONE decision entry, and adding the partition
+   * here rather than minting a per-item action is what keeps it that way (#2047
+   * row 8). Omitted by every caller that surfaces no suggestions.
+   */
+  suggestionDecisions?: SuggestionDecisionPartition | null,
 ): Promise<ReviewSubmitOutcome> {
   const actorCtx = resolvedActorCtx ?? (await resolveReviewActorContext());
   if (!actorCtx) {
@@ -80,6 +93,21 @@ export async function submitReviewDecisionAction(
       kind: "not-permitted",
       message:
         "You do not have the run access this decision needs — a terminal decision requires approve access, a comment requires respond access.",
+    };
+  }
+
+  // A suggestion partition is TERMINAL-ONLY (cinatra#2571). The #1807 core refuses
+  // it on a comment, but the `changes_requested` branch below short-circuits
+  // BEFORE the core — so without this guard a partition sent with a comment on a
+  // lifecycle gate would be silently dropped rather than refused. No entry to this
+  // helper may swallow per-item choices.
+  const carriesSuggestions =
+    !!suggestionDecisions &&
+    (suggestionDecisions.accepted.length > 0 || suggestionDecisions.dismissed.length > 0);
+  if (carriesSuggestions && disposition === "comment") {
+    return {
+      kind: "error",
+      message: "Suggestion decisions require a terminal disposition (approve or reject).",
     };
   }
 
@@ -125,6 +153,7 @@ export async function submitReviewDecisionAction(
     disposition,
     comment,
     reviewedTargets: pinnedTargets,
+    suggestionDecisions: suggestionDecisions ?? null,
   };
 
   const result = await submitReviewDecision({ decision, actorCtx });

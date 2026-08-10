@@ -112,6 +112,8 @@ function makeDecidePorts(opts?: {
         packageName: "@cinatra-ai/default-artifact",
         digest: null,
       },
+    // cinatra#2571 — this suite decides gates that surface no suggestions.
+    readSurfacedSuggestions: async () => null,
     commit: (plan) => gateStore.commitReviewDecision(plan),
   };
 }
@@ -457,6 +459,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
       ],
       dispositionOps: [],
       resumeIntent: { kind: "approve", userResponse: "{}" },
+      suggestionPlan: null,
     };
     await expect(gateStore.commitReviewDecision(badPlan)).rejects.toBeTruthy();
 
@@ -666,6 +669,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
         auditRows: [auditRow],
         dispositionOps: [],
         resumeIntent: null,
+        suggestionPlan: null,
       }),
     ).rejects.toThrow(/terminal is derived/);
 
@@ -682,6 +686,7 @@ describe.skipIf(!HAS_DB)("cinatra#1796 — artifact-review gate store (real stor
         auditRows: [auditRow],
         dispositionOps: [],
         resumeIntent: null,
+        suggestionPlan: null,
       }),
     ).rejects.toThrow(/disagrees with the plan disposition/);
 

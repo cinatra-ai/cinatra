@@ -18,13 +18,16 @@
  * writer would have passed CI unnoticed. This script is that counterpart.
  *
  * WHAT IT BANS: direct DML (INSERT / UPDATE / DELETE / TRUNCATE / COPY-INTO)
- * against the four review-decision tables, from any module outside the
- * allowlist below:
+ * against the review-decision tables, from any module outside the allowlist
+ * below:
  *
  *   artifact_review_gates          the decision row itself (open / CAS resolve)
  *   artifact_review_audit          the immutable per-revision decision record
  *   artifact_review_dispositions   the durable reject -> tombstone disposition
  *   artifact_review_resume_outbox  the terminal resume intent (effect release)
+ *   suggestion_decision_ledger     the per-item accept/dismiss the reviewer
+ *                                  attested (cinatra#2571)
+ *   suggestion_application_outbox  the intent that releases the accepted work
  *
  * WHAT IT ALLOWS:
  *   - READS (SELECT / EXPLAIN) from anywhere — the decision record is meant to
@@ -41,14 +44,14 @@
  * real write):
  *
  *   1. Drizzle builder DML — `.insert(<sym>)` / `.update(<sym>)` /
- *      `.delete(<sym>)` where <sym> is one of the four exported table symbols,
+ *      `.delete(<sym>)` where <sym> is one of the exported table symbols,
  *      optionally namespace-qualified (`schema.artifactReviewGates`) and
  *      optionally renamed at import (`import { artifactReviewGates as g }` —
  *      the local alias is resolved per file, so renaming the symbol does not
  *      evade the guard). Whitespace and newlines between the call and the
  *      symbol are tolerated, so a prettier-wrapped multi-line builder is caught.
  *
- *   2. Raw SQL DML — a write verb whose TARGET is one of the four snake_case
+ *   2. Raw SQL DML — a write verb whose TARGET is one of the snake_case
  *      table identifiers, in bare, quoted, or schema-qualified form (including
  *      the repo's `"${schema}"."artifact_review_gates"` interpolation shape).
  *      Anchoring on the verb's target (rather than "verb somewhere on the same
@@ -165,6 +168,19 @@ export const WRITER_ALLOWLIST = new Set([
   "packages/agents/src/lifecycle-review-orchestration-store.ts",
 
   // ---------------------------------------------------------------------
+  // The APPLICATION arm of the same decision (cinatra#2571, epic #2564 S6b).
+  // The suggestion ledger + the application-intent outbox are WRITTEN by the
+  // gate store above, inside the gate-CAS transaction, because the reviewer's
+  // per-item choices are part of the decision that CAS resolves. This module
+  // owns only what happens AFTER: the lease drain, the `applied_at` stamp that
+  // records an accepted suggestion actually landed, and the dead-letter
+  // transition. It cannot create a decision — it has no INSERT into the ledger
+  // and no path that changes a recorded `decision`, `decided_by` or
+  // `decision_fingerprint`. Allowlisted as the decision's delivery arm, exactly
+  // as the resume drain is allowlisted inside the gate store.
+  "packages/agents/src/suggestion-decision-store.ts",
+
+  // ---------------------------------------------------------------------
   // Self. `scripts/` is already covered by ROOT_ALLOWLIST, so this entry is
   // belt-and-braces — it is here because a guard that names the pattern it
   // bans should say so in its own allowlist, exactly like the sibling
@@ -184,20 +200,32 @@ export const WRITER_ALLOWLIST = new Set([
  */
 export const ROOT_ALLOWLIST = ["migrations/", "src/lib/migrations/", "scripts/", "docs/"];
 
-/** The four review-decision tables, snake_case (raw-SQL form). */
+/** The review-decision tables, snake_case (raw-SQL form).
+ *
+ * cinatra#2571 (epic #2564 S6b) extends the protected set from four to six. The
+ * two additions are decision record in exactly the sense this guard defends:
+ * `suggestion_decision_ledger` is what a reviewer's per-item accept/dismiss
+ * ATTESTS, and `suggestion_application_outbox` is the intent that RELEASES the
+ * accepted work. A second writer over either would be the per-item approval path
+ * #2047 row 8 bans — which is why the issue asks for a structural test and not a
+ * review convention. */
 export const REVIEW_DECISION_TABLES = [
   "artifact_review_gates",
   "artifact_review_audit",
   "artifact_review_dispositions",
   "artifact_review_resume_outbox",
+  "suggestion_decision_ledger",
+  "suggestion_application_outbox",
 ];
 
-/** The same four tables as their exported Drizzle symbols. */
+/** The same tables as their exported Drizzle symbols. */
 export const REVIEW_DECISION_SYMBOLS = [
   "artifactReviewGates",
   "artifactReviewAudit",
   "artifactReviewDispositions",
   "artifactReviewResumeOutbox",
+  "suggestionDecisionLedger",
+  "suggestionApplicationOutbox",
 ];
 
 // Raw-SQL write verbs. DDL (CREATE / ALTER / DROP) is deliberately absent:
@@ -268,7 +296,7 @@ function drizzlePattern(symbols) {
 }
 
 /**
- * Resolve the LOCAL names of the four table symbols inside one module.
+ * Resolve the LOCAL names of the protected table symbols inside one module.
  *
  * Covers the two rebindings that stay visible in a single file:
  *   - an import rename — `import { artifactReviewGates as gates }`
