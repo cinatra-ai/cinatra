@@ -167,14 +167,49 @@ describe("the suggestion decision has exactly ONE path", () => {
       .map((f) => f.path)
       .sort();
     expect(carriers).toEqual([
+      // ---- THE TWO SERVER ENTRIES, and the one core behind both -------------
       // The gate-scoped decision entry: bounds the SHAPE and forwards.
       "src/app/api/lifecycle-views/decide/route.ts",
+      // The review PAGE's route-bound action (cinatra#2572, epic #2564 S6c).
+      // The SECOND entry, and the one S6b already described: it closes over the
+      // route's own gate and forwards into the helper below. It is not a second
+      // PATH — it re-implements no validation, and the partition it forwards is
+      // normalized, membership-checked and fingerprinted by the same core.
+      "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/page.tsx",
       // The ONE decision helper both entries call.
       "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/actions.ts",
       // The pure core that normalizes it, validates it and folds it into the
       // fingerprint. The partition contract is co-located there on purpose.
       "src/lib/artifacts/artifact-review-decision.ts",
+      // ---- THE CLIENT PRODUCERS (cinatra#2572) ------------------------------
+      // These accept nothing off the wire: they BUILD a partition out of the
+      // reader's local marks and hand it to the one submit the floor already
+      // owns (§VIII "the chips carry no submit of their own"). They are pinned
+      // for the same reason the entries are — a third one would mean a second
+      // place that decides what a mark means.
+      "packages/agents/src/review-decision-bar.tsx",
+      "packages/agents/src/review-gate-card.tsx",
     ].sort());
+  });
+
+  it("the client producers reach exactly ONE endpoint — the gate-scoped entry", () => {
+    // The pin above says which modules may carry a partition; this says where
+    // they may send it. A per-item request would show up here as a second URL,
+    // and that is the #2047 row-8 failure the whole shape exists to prevent.
+    const producers = files.filter((f) =>
+      ["packages/agents/src/review-decision-bar.tsx", "packages/agents/src/review-gate-card.tsx"].includes(
+        f.path,
+      ),
+    );
+    expect(producers).toHaveLength(2);
+    const targets = producers
+      .flatMap((f) => [...f.source.matchAll(/fetch\(\s*([A-Za-z_$][\w$]*)/g)].map((m) => m[1]))
+      .sort();
+    expect(targets).toEqual(["LIFECYCLE_VIEW_DECIDE_PATH"]);
+    // ...and neither of them names a suggestion store, a ledger or an outbox.
+    for (const f of producers) {
+      expect(f.source).not.toMatch(/suggestionDecisionLedger|suggestionApplicationOutbox/);
+    }
   });
 
   it("the per-item ledger INSERT lives only in the module that owns the gate CAS", () => {
