@@ -13,6 +13,7 @@ import {
 import {
   WIDGET_EXTENSION_SCOPES,
   WIDGET_SIGNIN_GRANTED_SCOPES,
+  WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
   screenRecordAdmitsArrival,
   widgetDisplayedScopesToken,
   widgetNoSignInScreenToken,
@@ -62,13 +63,14 @@ export const dynamic = "force-dynamic";
 //   • session, non-member → deny card (not a member of the txn's org).
 //   • session, member     → record the grant → postMessage to opener.
 //
-// Whichever of the two recording branches runs, it makes ONE hop first: it
-// writes the record together with the hash of a freshly minted single-use nonce
-// and then redirects the browser to the same page carrying that nonce, so the
-// arrival that redeems the record is provably the arrival it was written for
-// (cinatra#2631, codex rework round 7, finding 1). Every later render of that
-// arrival — a reload, the return from the sign-in — presents it and writes
-// nothing.
+// An arrival at an unclaimed transaction makes ONE hop before anything is
+// written: it is redirected to the same page carrying a freshly minted
+// single-use nonce, and the request that presents that nonce is the one that
+// records — so the arrival which redeems the record is provably the arrival it
+// was written for (cinatra#2631, codex rework round 7, finding 1), and a hop
+// that never lands costs nothing (round 8, finding 2). Every later render of
+// that arrival — a reload, the return from the sign-in — presents the same nonce
+// and writes nothing.
 //
 // The page is on the middleware public-path exact allowlist so a SESSIONLESS
 // visitor is NOT 307'd to /sign-in (it must render the login form here); a
@@ -175,6 +177,27 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
   const urlFor = (nonce: string) =>
     `/widget-auth?txn=${encodeURIComponent(txn.txnId)}&n=${encodeURIComponent(nonce)}`;
 
+  // NOTHING IS RECORDED FOR AN ARRIVAL THAT HAS NOT GOT ITS NONCE YET (codex
+  // rework round 8, finding 2). The hop comes FIRST and writes nothing: an
+  // arrival with no nonce at a transaction nobody has claimed is sent to the URL
+  // carrying a freshly minted one, and the record is written by the request that
+  // presents it — the same request that renders. So a 307 that never arrives
+  // (a dropped connection, a cancelled navigation, a reload that races it)
+  // leaves the transaction exactly as it was, and reloading recovers. Writing
+  // before the hop would have burned the write-once record on a nonce the
+  // browser never received, dead-ending a person who did nothing wrong.
+  //
+  // It terminates: the hop happens only when no usable nonce is presented, and
+  // it always produces one. An arrival that presents nothing at a transaction
+  // somebody else has already claimed does not hop at all — it is refused where
+  // it stands.
+  const txnUnclaimed =
+    txn.displayedScopes === WIDGET_SIGNIN_SCREEN_UNCLASSIFIED &&
+    txn.screenNonceHash === null;
+  if (!arrivalHoldsRecord && presentedNonceHash.length === 0 && txnUnclaimed) {
+    redirect(urlFor(mintWidgetScreenNonce()));
+  }
+
   const session = await getAuthSession();
 
   // No session → render the login-only view. After credential login Better Auth
@@ -194,33 +217,25 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
     // round 2, finding 1). So we refuse to render the screen at all.
     const displayed = widgetDisplayedScopesToken(WIDGET_SIGNIN_GRANTED_SCOPES);
 
-    // This arrival already earned this record — a refresh, a back-navigation, or
-    // the hop this render made a moment ago. Nothing to write; the same nonce
-    // carries forward, so re-reading the screen costs nothing and breaks nothing.
-    if (arrivalHoldsRecord && txn.displayedScopes === displayed) {
-      emitWidgetAuthAudit("page_viewed", {
-        siteId: txn.siteId,
-        orgId: txn.orgId,
-        client: txn.client,
-        agentSlug: txn.agentSlug,
-        siteOrigin: txn.siteOrigin,
-        reason: "login",
-      });
-      return (
-        <Shell>
-          <WidgetAuthLogin redirectTo={urlFor(presentedNonce)} />
-          <SignInGrantNotice clientLabel={clientLabel} />
-        </Shell>
-      );
-    }
+    // This arrival already holds this record — a reload, a back-navigation, the
+    // second and every later render after the one that wrote it. Nothing to
+    // write; the same nonce carries forward, which is what makes the screen
+    // REFRESH-SAFE.
+    const alreadyRecorded = arrivalHoldsRecord && txn.displayedScopes === displayed;
 
-    const nonce = mintWidgetScreenNonce();
-    const nonceHash = widgetScreenNonceHash(nonce);
-    const recorded = recordDisplayedScopesForTransaction(txn.txnId, displayed, nonceHash);
-    if (
-      recorded?.displayedScopes !== displayed ||
-      recorded?.screenNonceHash !== nonceHash
-    ) {
+    // ...or this is the arrival the hop sent here, and the record is written NOW,
+    // on the request that also renders the screen it describes. The write is
+    // still first-write-wins; losing that race means somebody else's screen owns
+    // this transaction.
+    const recorded =
+      !alreadyRecorded && txnUnclaimed && presentedNonceHash.length > 0
+        ? recordDisplayedScopesForTransaction(txn.txnId, displayed, presentedNonceHash)
+        : null;
+    const justRecorded =
+      recorded?.displayedScopes === displayed &&
+      recorded?.screenNonceHash === presentedNonceHash;
+
+    if (!alreadyRecorded && !justRecorded) {
       // Either another build recorded a different set (round 2, finding 1), or
       // this transaction is already accounted for by an arrival that is not this
       // one. Both mean the same thing to the person in front of us: this window
@@ -231,7 +246,7 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
         agentSlug: txn.agentSlug,
         siteOrigin: txn.siteOrigin,
         reason:
-          recorded?.displayedScopes === displayed
+          (recorded ?? txn).displayedScopes === displayed
             ? "screen_nonce_mismatch"
             : "stale_signin_screen",
       });
@@ -239,12 +254,22 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
         <ErrorCard message="Cinatra was updated while this window was open. Close this window and open the assistant login again from your site." />
       );
     }
-    // The record and the nonce are now one stored fact, so the browser is sent
-    // to the URL that carries its half of it. Hopping instead of rendering here
-    // is what keeps the screen REFRESH-SAFE: every later render of this arrival —
-    // a reload, the return from the sign-in — presents the nonce it was minted
-    // with, and takes the branch above instead of trying to record again.
-    redirect(urlFor(nonce));
+    emitWidgetAuthAudit("page_viewed", {
+      siteId: txn.siteId,
+      orgId: txn.orgId,
+      client: txn.client,
+      agentSlug: txn.agentSlug,
+      siteOrigin: txn.siteOrigin,
+      reason: "login",
+    });
+    return (
+      <Shell>
+        {/* The sign-in returns to the URL this arrival is already on, so the
+            nonce survives the credential round trip. */}
+        <WidgetAuthLogin redirectTo={urlFor(presentedNonce)} />
+        <SignInGrantNotice clientLabel={clientLabel} />
+      </Shell>
+    );
   }
 
   const userId = String(session.user.id);
@@ -296,37 +321,27 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
   // nothing, in which case there is no record naming this arrival and the check
   // below refuses. Nothing is assumed on the person's behalf.
   //
-  // A NO-SCREEN PROOF MINTS ITS OWN NONCE (round 7, finding 1). This arrival
-  // never passed a sign-in screen, so nothing has handed it one yet; the write
-  // that records the sentinel mints it in the same statement and the browser is
-  // sent to the URL carrying it, exactly like the screen branch above. The
-  // sentinel already names the session, so the nonce adds a second, independent
-  // binding rather than the only one — and it means BOTH kinds of record are
-  // admitted through one rule, with no value that is redeemable by an arrival
-  // that cannot present its own nonce.
+  // A NO-SCREEN PROOF IS RECORDED FOR AN ARRIVAL TOO (round 7, finding 1). This
+  // arrival never passed a sign-in screen, so the hop above is what handed it a
+  // nonce; the write that records the sentinel stores that nonce's hash in the
+  // same statement. The sentinel already names the session, so the nonce is a
+  // second, independent binding rather than the only one — and it means BOTH
+  // kinds of record are admitted through one rule, with no value that is
+  // redeemable by an arrival which cannot present its own nonce.
   const noScreenToken = widgetNoSignInScreenToken(
     widgetSessionFingerprint(session.session?.id),
   );
   let record = { displayedScopes: txn.displayedScopes, screenNonceHash: txn.screenNonceHash };
-  if (!arrivalHoldsRecord) {
+  if (!arrivalHoldsRecord && txnUnclaimed && presentedNonceHash.length > 0) {
     const noScreenProven =
       noScreenToken.length > 0 &&
       sessionRowPredatesTransaction(String(session.session?.id ?? ""), txn.txnId);
     if (noScreenProven) {
-      const nonce = mintWidgetScreenNonce();
-      const nonceHash = widgetScreenNonceHash(nonce);
-      const recorded = recordDisplayedScopesForTransaction(
+      record = recordDisplayedScopesForTransaction(
         txn.txnId,
         noScreenToken,
-        nonceHash,
-      );
-      if (
-        recorded?.displayedScopes === noScreenToken &&
-        recorded?.screenNonceHash === nonceHash
-      ) {
-        redirect(urlFor(nonce));
-      }
-      record = recorded ?? { displayedScopes: null, screenNonceHash: null };
+        presentedNonceHash,
+      ) ?? { displayedScopes: null, screenNonceHash: null };
     }
   }
   if (

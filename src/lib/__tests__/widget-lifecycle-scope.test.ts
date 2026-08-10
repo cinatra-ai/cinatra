@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
 import {
+  WIDGET_DISPLAYED_SCREEN_PREFIX,
   WIDGET_NO_SIGNIN_SCREEN_PREFIX,
   WIDGET_SIGNIN_GRANTED_SCOPES,
   WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
@@ -242,7 +243,32 @@ describe("the displayed-scope token", () => {
     expect(widgetDisplayedScopesToken(["a", "b"])).not.toBe(
       widgetDisplayedScopesToken(["a"]),
     );
-    expect(widgetDisplayedScopesToken([])).toBe("");
+    // An empty screen is a REAL record, not an empty string: it is written in
+    // the same `(screen:...)` form as any other (round 8, finding 1).
+    expect(widgetDisplayedScopesToken([])).toBe(`${WIDGET_DISPLAYED_SCREEN_PREFIX})`);
+  });
+
+  it("is written in a form a build without the ARRIVAL binding REFUSES", () => {
+    // codex rework round 8, finding 1. The record is only as good as the reader
+    // enforcing the nonce that names whose arrival it was. A build that knows
+    // `displayed_scopes` but not `screen_nonce_hash` compares for exact equality
+    // against a BARE token set — so writing the record wrapped means that build
+    // refuses everything this one writes, and the one deploy that closes the
+    // round-7 exploit cannot reopen it on the nodes still running the old code.
+    const record = widgetDisplayedScopesToken(WIDGET_SIGNIN_GRANTED_SCOPES);
+    const bare = formatTokenSet([...WIDGET_SIGNIN_GRANTED_SCOPES].sort());
+    expect(record).toBe(`${WIDGET_DISPLAYED_SCREEN_PREFIX}${bare})`);
+    expect(record).not.toBe(bare);
+    // ...and the mirror: a BARE record, written by such a build, is refused HERE,
+    // so the window fails closed in both directions.
+    expect(displayedScopesAgree(bare, WIDGET_SIGNIN_GRANTED_SCOPES)).toBe(false);
+    // The two wrappers are distinct and neither is a prefix of the other, so a
+    // displayed set can never read as a no-screen claim or the reverse.
+    expect(isNoSignInScreenToken(record)).toBe(false);
+    expect(record.startsWith(WIDGET_NO_SIGNIN_SCREEN_PREFIX)).toBe(false);
+    expect(
+      widgetNoSignInScreenToken("a".repeat(32)).startsWith(WIDGET_DISPLAYED_SCREEN_PREFIX),
+    ).toBe(false);
   });
 
   it("agrees only with the same set", () => {
@@ -317,8 +343,11 @@ describe("the displayed-scope token", () => {
     // add-a-grant direction, and it must fail closed.
     expect(displayedScopesAgree("", WIDGET_SIGNIN_GRANTED_SCOPES)).toBe(false);
     expect(displayedScopesAgree("   ", WIDGET_SIGNIN_GRANTED_SCOPES)).toBe(false);
-    // ...and when this build grants nothing extra either, they agree.
-    expect(displayedScopesAgree("", [])).toBe(true);
+    // ...and when this build grants nothing extra either, they agree — but only
+    // through the RECORD form. A bare empty string is what a build without the
+    // arrival binding would have written, and it is refused (round 8, finding 1).
+    expect(displayedScopesAgree(widgetDisplayedScopesToken([]), [])).toBe(true);
+    expect(displayedScopesAgree("", [])).toBe(false);
   });
 
   it("REFUSES the UNCLASSIFIED value — created saying nothing, and still saying nothing", () => {

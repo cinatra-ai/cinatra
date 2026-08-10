@@ -92,6 +92,7 @@ import {
   WIDGET_LIFECYCLE_READ_SCOPE,
   displayedScopesAgree,
   screenRecordAdmitsArrival,
+  widgetDisplayedScopesToken,
   widgetNoSignInScreenToken,
   type WidgetExtensionScope,
 } from "@/lib/widget-lifecycle-scope";
@@ -1519,7 +1520,11 @@ describe("the displayed-scope record on the transaction (cinatra#2631)", () => {
     if (!t.ok) throw new Error("txn");
     const a = arrival();
     const b = arrival();
-    recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", a.hash);
+    recordDisplayedScopesForTransaction(
+      t.txnId,
+      widgetDisplayedScopesToken(WIDGET_SIGNIN_GRANTED_SCOPES),
+      a.hash,
+    );
     const loaded = loadActiveTransaction(t.txnId);
     expect(
       screenRecordAdmitsArrival(loaded, WIDGET_SIGNIN_GRANTED_SCOPES, {

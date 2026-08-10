@@ -219,11 +219,17 @@ describe("the sign-in itself carries the grant", () => {
     // to turn a mismatch into an admission.
     expect(pageSrc).toContain("widgetScreenNonceHash(presentedNonce)");
     expect(pageSrc).toContain("widgetScreenNonceMatches(");
-    // The nonce is MINTED by the server, never adopted from the request.
-    expect(pageSrc).toContain("mintWidgetScreenNonce()");
-    expect(pageSrc).not.toMatch(/screen_nonce_hash|recordDisplayedScopesForTransaction\([^)]*presentedNonce/);
-    // Both recording branches hop so the browser carries what it was given.
-    expect(pageSrc.match(/redirect\(urlFor\(nonce\)\)/g)?.length).toBe(2);
+    // The nonce is MINTED by the server on the hop, never invented by the page
+    // out of anything the request said.
+    expect(pageSrc).toContain("redirect(urlFor(mintWidgetScreenNonce()))");
+    // What is ever STORED is the hash, never the value the request carried.
+    expect(pageSrc).not.toMatch(/recordDisplayedScopesForTransaction\([^)]*presentedNonce[^H]/);
+    // The hop is the ONLY redirect, and it happens before anything is written
+    // (round 8, finding 2) — so a 307 that never lands leaves the transaction
+    // claimable rather than burning its write-once record.
+    expect(pageSrc.match(/^\s*redirect\(/gm)?.length).toBe(1);
+    const beforeHop = pageSrc.slice(0, pageSrc.indexOf("redirect(urlFor("));
+    expect(beforeHop).not.toContain("recordDisplayedScopesForTransaction(");
   });
 
   it("the no-screen sentinel is written only where it is PROVED, never at creation", () => {

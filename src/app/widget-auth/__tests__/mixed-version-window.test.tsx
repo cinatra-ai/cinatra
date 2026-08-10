@@ -200,6 +200,29 @@ async function visit(
 }
 
 /**
+ * A browser, not a request: it follows the ONE hop the page makes to hand an
+ * arrival its nonce. The hop writes nothing (round 8, finding 2) — the request
+ * that PRESENTS the nonce is the one that records — so almost every scenario
+ * here is two requests, and `nonce` is what this arrival ended up holding.
+ */
+async function browse(
+  searchParams: Record<string, string | string[] | undefined> = { txn: "txn-1" },
+): Promise<Outcome & { nonce: string; hopped: boolean }> {
+  const first = await visit(searchParams);
+  if (!first.redirectedTo) {
+    const carried = searchParams.n;
+    return {
+      ...first,
+      hopped: false,
+      nonce: typeof carried === "string" ? carried : "",
+    };
+  }
+  const nonce = nonceIn(first.redirectedTo);
+  const second = await visit({ ...searchParams, txn: "txn-1", n: nonce });
+  return { ...second, nonce, hopped: true };
+}
+
+/**
  * Every component name, text node and string prop in an element tree. The tree
  * is inspected rather than rendered to markup because component IDENTITY is half
  * of what is under test (the return step is a stub — what matters is whether the
@@ -232,7 +255,7 @@ function flatten(node: unknown, out: string[] = []): string[] {
 }
 
 const textOf = (outcome: Outcome) => flatten(outcome.tree).join("\n");
-const shows = async (what: string) => textOf(await visit()).includes(what);
+const shows = async (what: string) => textOf(await browse()).includes(what);
 
 /** The nonce a URL the page redirected to carries. */
 function nonceIn(url: string | null): string {
@@ -262,12 +285,15 @@ describe("an OLD node rendered the signed-out page — nothing is granted", () =
   });
 
   it("does NOT stamp the no-screen sentinel — a screen DID render, elsewhere", async () => {
-    await visit();
+    await browse();
+    // The write is ATTEMPTED (this arrival got a nonce from the hop) and REFUSED
+    // by the proof: the session postdates the transaction, so nothing about this
+    // person says no screen rendered.
     expect(recordDisplayedScopesForTransaction).not.toHaveBeenCalled();
   });
 
   it("audits the refusal", async () => {
-    await visit();
+    await browse();
     const denied = emitWidgetAuthAudit.mock.calls.find(([e]) => e === "consent_denied");
     expect(denied).toBeDefined();
     expect((denied as [string, Record<string, unknown>])[1].reason).toBe(
@@ -277,7 +303,7 @@ describe("an OLD node rendered the signed-out page — nothing is granted", () =
 
   it("leaves the transaction unclassified, so the ACTION would refuse it too", async () => {
     const row = liveTransaction(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
-    await visit();
+    await browse();
     expect(row.displayedScopes).toBe(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
     expect(row.screenNonceHash).toBeNull();
   });
@@ -289,10 +315,17 @@ describe("a session that ALREADY EXISTED — the sentinel is written, and earned
     sessionRowPredatesTransaction.mockReturnValue(PRE_EXISTING);
   });
 
-  it("stamps the no-screen sentinel with its own nonce and hops to carry it", async () => {
+  it("hops FIRST, writes nothing, then stamps the sentinel for the arrival that came back", async () => {
     const row = liveTransaction(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
-    const first = await visit();
-    expect(first.redirectedTo).toBe(`/widget-auth?txn=txn-1&n=${minted[0]}`);
+
+    // 1. The hop hands out a nonce and touches nothing (round 8, finding 2).
+    const hop = await visit();
+    expect(hop.redirectedTo).toBe(`/widget-auth?txn=txn-1&n=${minted[0]}`);
+    expect(recordDisplayedScopesForTransaction).not.toHaveBeenCalled();
+    expect(row.displayedScopes).toBe(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
+
+    // 2. The arrival that presents it records the sentinel AND goes straight on.
+    const back = await visit({ txn: "txn-1", n: minted[0] });
     expect(recordDisplayedScopesForTransaction).toHaveBeenCalledWith(
       "txn-1",
       noScreenFor("sess-1"),
@@ -300,11 +333,22 @@ describe("a session that ALREADY EXISTED — the sentinel is written, and earned
     );
     expect(row.displayedScopes).toBe(noScreenFor("sess-1"));
     expect(row.screenNonceHash).toBe(realNonceHash(minted[0]));
-
-    // ...and the arrival that comes back carrying it goes to the return step.
-    const second = await visit({ txn: "txn-1", n: minted[0] });
-    expect(textOf(second)).toContain("<WidgetAuthGrant>");
+    expect(textOf(back)).toContain("<WidgetAuthGrant>");
     expect(recordDisplayedScopesForTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("a hop that never reaches the browser costs NOTHING", async () => {
+    // codex rework round 8, finding 2. The connection drops, the navigation is
+    // cancelled, the person reloads before the 307 lands — whatever the cause,
+    // the transaction was never touched, so the next try simply works.
+    const row = liveTransaction(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
+    for (let i = 0; i < 3; i += 1) {
+      const lost = await visit();
+      expect(lost.redirectedTo).not.toBeNull();
+      expect(row.displayedScopes).toBe(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
+      expect(row.screenNonceHash).toBeNull();
+    }
+    expect(textOf(await browse())).toContain("<WidgetAuthGrant>");
   });
 
   it("stamps nothing for a LEGACY transaction, and refuses it", async () => {
@@ -321,6 +365,15 @@ describe("a session that ALREADY EXISTED — the sentinel is written, and earned
     resolveOrgRoleForUser.mockResolvedValue(undefined);
     expect(await shows("not a member of the organization")).toBe(true);
     expect(recordDisplayedScopesForTransaction).not.toHaveBeenCalled();
+  });
+
+  it("does not hop a transaction somebody else has already claimed", async () => {
+    // No nonce and nothing to earn: the refusal happens where the arrival
+    // stands, not after a pointless round trip.
+    liveTransaction(noScreenFor("sess-other"), realNonceHash(FOREIGN_NONCE));
+    const outcome = await visit();
+    expect(outcome.redirectedTo).toBeNull();
+    expect(textOf(outcome)).toContain("Cinatra was updated while this window was open");
   });
 });
 
@@ -355,13 +408,19 @@ describe("a sentinel stamped by someone else stands for nobody", () => {
 });
 
 describe("this build rendered the sign-in screen — the ordinary path", () => {
-  it("records what it is about to display, hops to carry the nonce, then admits the return", async () => {
+  it("hops, then records what it is about to display, then admits the return", async () => {
     const row = liveTransaction(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
 
-    // 1. Signed out: this build's screen records its displayed set together with
-    //    the nonce that names this arrival, then sends the browser to the URL
-    //    carrying it. Nothing is rendered on that hop.
-    const first = await visit();
+    // 1. Signed out and holding nothing: the browser is sent to a URL carrying a
+    //    freshly minted nonce, and the transaction is NOT touched.
+    const hop = await visit();
+    expect(nonceIn(hop.redirectedTo)).toBe(minted[0]);
+    expect(recordDisplayedScopesForTransaction).not.toHaveBeenCalled();
+    expect(row.displayedScopes).toBe(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
+
+    // 2. The request that PRESENTS the nonce records the displayed set with it
+    //    and renders the screen it describes, in one request.
+    const screen = await visit({ txn: "txn-1", n: minted[0] });
     expect(recordDisplayedScopesForTransaction).toHaveBeenCalledWith(
       "txn-1",
       DISPLAYED,
@@ -369,13 +428,7 @@ describe("this build rendered the sign-in screen — the ordinary path", () => {
     );
     expect(row.displayedScopes).toBe(DISPLAYED);
     expect(row.screenNonceHash).toBe(realNonceHash(minted[0]));
-    expect(nonceIn(first.redirectedTo)).toBe(minted[0]);
-
-    // 2. The screen itself renders on the arrival that carries the nonce, and
-    //    writes nothing more.
-    const screen = await visit({ txn: "txn-1", n: minted[0] });
     expect(textOf(screen)).toContain("<WidgetAuthLogin>");
-    expect(recordDisplayedScopesForTransaction).toHaveBeenCalledTimes(1);
 
     // 3. The person signs in there, so the session row is NEWER than the
     //    transaction — and the record already says what they read, to them.
@@ -383,14 +436,15 @@ describe("this build rendered the sign-in screen — the ordinary path", () => {
     const returned = await visit({ txn: "txn-1", n: minted[0] });
     expect(textOf(returned)).toContain("<WidgetAuthGrant>");
     expect(row.displayedScopes).toBe(DISPLAYED);
+    expect(recordDisplayedScopesForTransaction).toHaveBeenCalledTimes(1);
   });
 
   it("is REFRESH-SAFE: re-reading the screen writes nothing and keeps working", async () => {
-    // The hop is what buys this. Without a nonce in the URL, a plain reload would
+    // The nonce in the URL is what buys this. Without it a plain reload would
     // mint a second nonce, lose the write-once race against its own earlier one
     // and dead-end a person who did nothing wrong.
     liveTransaction(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
-    const nonce = nonceIn((await visit()).redirectedTo);
+    const { nonce } = await browse();
     for (let i = 0; i < 3; i += 1) {
       const again = await visit({ txn: "txn-1", n: nonce });
       expect(again.redirectedTo).toBeNull();
@@ -399,9 +453,22 @@ describe("this build rendered the sign-in screen — the ordinary path", () => {
     expect(recordDisplayedScopesForTransaction).toHaveBeenCalledTimes(1);
   });
 
+  it("a hop that never reaches the browser costs NOTHING", async () => {
+    // codex rework round 8, finding 2. Nothing is written until the nonce is in
+    // the browser's hands, so a lost 307 leaves the transaction claimable and the
+    // next attempt simply works.
+    const row = liveTransaction(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
+    for (let i = 0; i < 3; i += 1) {
+      expect((await visit()).redirectedTo).not.toBeNull();
+    }
+    expect(row.displayedScopes).toBe(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
+    expect(recordDisplayedScopesForTransaction).not.toHaveBeenCalled();
+    expect(textOf(await browse())).toContain("<WidgetAuthLogin>");
+  });
+
   it("hands the return step the nonce it was carrying", async () => {
     liveTransaction(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
-    const nonce = nonceIn((await visit()).redirectedTo);
+    const { nonce } = await browse();
     getAuthSession.mockResolvedValue(SESSION);
     // The grant component is a stub here, so read the prop off the element.
     const outcome = await visit({ txn: "txn-1", n: nonce });
@@ -443,15 +510,19 @@ describe("one transaction driven by two people", () => {
   async function personBReturns(presented?: string): Promise<Outcome> {
     getAuthSession.mockResolvedValue(OTHER_SESSION);
     sessionRowPredatesTransaction.mockReturnValue(MINTED_DURING); // B just signed in
-    return visit(presented ? { txn: "txn-1", n: presented } : { txn: "txn-1" });
+    // B is a BROWSER: if the page hands B a nonce of its own, B follows and
+    // presents it, which is the strongest thing B can honestly do.
+    return presented === undefined
+      ? browse()
+      : browse({ txn: "txn-1", n: presented });
   }
 
   it("ORDERING 1 — A's screen recorded first, then B signed in on the legacy node", async () => {
     const row = liveTransaction(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
 
-    // A opens it sessionless on a current node. The set is recorded, the nonce
-    // is minted, and A walks away without signing in.
-    const aNonce = nonceIn((await visit()).redirectedTo);
+    // A opens it sessionless on a current node. The set is recorded against the
+    // nonce A was handed, and A walks away without signing in.
+    const { nonce: aNonce } = await browse();
     expect(row.displayedScopes).toBe(DISPLAYED);
     expect(aNonce).toBe(minted[0]);
 
@@ -473,7 +544,7 @@ describe("one transaction driven by two people", () => {
     expect(row.displayedScopes).toBe(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
 
     getAuthSession.mockResolvedValue(null);
-    const aNonce = nonceIn((await visit()).redirectedTo);
+    const { nonce: aNonce } = await browse();
     expect(row.screenNonceHash).toBe(realNonceHash(aNonce));
 
     const outcomeAfterA = await personBReturns();
@@ -483,7 +554,7 @@ describe("one transaction driven by two people", () => {
 
   it("B cannot guess, replay a hash, or strip their way in", async () => {
     liveTransaction(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
-    const aNonce = nonceIn((await visit()).redirectedTo);
+    const { nonce: aNonce } = await browse();
     for (const presented of [
       FOREIGN_NONCE, // invented
       realNonceHash(aNonce), // the STORED value, replayed as if it were the nonce
@@ -501,10 +572,10 @@ describe("one transaction driven by two people", () => {
     // sentinel — but the record is write-once and already belongs to A, so there
     // is nothing for B's proof to write and nothing that names B.
     const row = liveTransaction(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
-    await visit(); // A records
+    await browse(); // A records
     getAuthSession.mockResolvedValue(OTHER_SESSION);
     sessionRowPredatesTransaction.mockReturnValue(PRE_EXISTING);
-    const outcome = await visit();
+    const outcome = await browse();
     expect(textOf(outcome)).not.toContain("<WidgetAuthGrant>");
     expect(row.displayedScopes).toBe(DISPLAYED);
   });
@@ -512,7 +583,7 @@ describe("one transaction driven by two people", () => {
   it("and A — the person who actually read the screen — is still let through", async () => {
     // The exploit closes without closing the flow: the discriminator is real.
     liveTransaction(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
-    const aNonce = nonceIn((await visit()).redirectedTo);
+    const { nonce: aNonce } = await browse();
     getAuthSession.mockResolvedValue(SESSION);
     sessionRowPredatesTransaction.mockReturnValue(MINTED_DURING);
     expect(textOf(await visit({ txn: "txn-1", n: aNonce }))).toContain(
@@ -527,7 +598,7 @@ describe("one transaction driven by two people", () => {
     const row = liveTransaction(DISPLAYED, null);
     getAuthSession.mockResolvedValue(SESSION);
     sessionRowPredatesTransaction.mockReturnValue(PRE_EXISTING);
-    const outcome = await visit();
+    const outcome = await browse();
     expect(textOf(outcome)).not.toContain("<WidgetAuthGrant>");
     expect(row.screenNonceHash).toBeNull();
   });
@@ -538,7 +609,7 @@ describe("the proof cannot be forged from the browser", () => {
     liveTransaction(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED);
     getAuthSession.mockResolvedValue(SESSION);
     sessionRowPredatesTransaction.mockReturnValue(PRE_EXISTING);
-    await visit();
+    await browse();
     expect(sessionRowPredatesTransaction).toHaveBeenCalledWith("sess-1", "txn-1");
   });
 
@@ -557,7 +628,7 @@ describe("the proof cannot be forged from the browser", () => {
     // try to SAY about the flow stays inert.
     liveTransaction(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED, realNonceHash(FOREIGN_NONCE));
     getAuthSession.mockResolvedValue(SESSION);
-    const outcome = await visit({
+    const outcome = await browse({
       txn: "txn-1",
       n: `${FOREIGN_NONCE.slice(0, 63)}0`,
       displayed: DISPLAYED,

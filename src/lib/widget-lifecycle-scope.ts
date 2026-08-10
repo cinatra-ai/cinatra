@@ -181,8 +181,32 @@ export function isNoSignInScreenToken(value: unknown): boolean {
 }
 
 /**
+ * The wrapper every displayed-set record is written inside — `(screen:<set>)`,
+ * the mirror of `(no-screen:<fp>)`.
+ *
+ * IT IS THE CROSS-VERSION FAIL-CLOSED (codex rework round 8, finding 1). A
+ * record is only as good as its ARRIVAL binding, and that binding is enforced by
+ * the build doing the reading. A build that knows `displayed_scopes` but not
+ * `screen_nonce_hash` would read a bare `lifecycle.read` written here, find it
+ * agreeable, and admit whoever turned up — the round-7 exploit, reopened by the
+ * one deploy that closes it. So the record this build writes is one that build
+ * does NOT recognize: it compares for exact equality against its own bare token,
+ * and `(screen:lifecycle.read)` is not that. Both directions of this change's
+ * own rollout therefore refuse — a nonce-unaware node cannot redeem a record
+ * written here, and a bare record written there carries no arrival and is
+ * refused here — which is the same discipline `(unclassified)` and the
+ * pre-column NULL already carry.
+ *
+ * Deliberately outside the atom grammar, like its two siblings, so it can never
+ * collide with a set member; and distinct from `(no-screen:` so neither prefix
+ * is a prefix of the other.
+ */
+export const WIDGET_DISPLAYED_SCREEN_PREFIX = "(screen:";
+
+/**
  * The token a hosted SIGN-IN SCREEN carries forward describing the scope set it
- * DISPLAYED — the canonical (sorted, deduplicated) set, nothing more.
+ * DISPLAYED — the canonical (sorted, deduplicated) set, wrapped in
+ * {@link WIDGET_DISPLAYED_SCREEN_PREFIX}.
  *
  * cinatra#2631 (codex rework round 0, finding 1). Removing the consent screen
  * did NOT remove the gap the screen's signed CSRF binding used to close; it
@@ -206,7 +230,7 @@ export function widgetDisplayedScopesToken(
   displayedScopes: readonly string[],
 ): string {
   const canonical = [...displayedScopes].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return formatTokenSet(canonical);
+  return `${WIDGET_DISPLAYED_SCREEN_PREFIX}${formatTokenSet(canonical)})`;
 }
 
 /**
@@ -327,9 +351,12 @@ export function screenRecordAdmitsArrival(
  *     entirely (round 2, finding 2). In-flight transactions across the one
  *     deploy that introduces this fail closed and the person opens the assistant
  *     login again.
- *   • anything else — a real displayed set, compared exactly. The EMPTY STRING is
- *     one of these: a screen that rendered and named no extra grants. If this
- *     build would record one, they disagree.
+ *   • anything else — compared EXACTLY against the `(screen:<set>)` record this
+ *     build writes. A screen that named no extra grants is `(screen:)`, a real
+ *     value and not one of the two absences (round 2, finding 3). A BARE set —
+ *     the form a build that does not enforce the arrival binding wrote — is not
+ *     equal to it and is refused, which is what keeps this change's own rollout
+ *     closed in both directions (round 8, finding 1).
  *
  * `expectedNoScreenToken` is the ONLY channel through which a no-screen claim
  * can be admitted; a caller that omits it (or cannot build one) admits none.
