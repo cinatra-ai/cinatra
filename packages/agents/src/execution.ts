@@ -470,6 +470,11 @@ import { getOrAddWayflowRendererGateIndex, rememberWayflowGateTask, rememberLate
 // enums resolve registration-driven.
 import { resolveEmailSendProviders } from "@/lib/email-send-providers";
 import { mintRunToken } from "@/lib/agent-run-token";
+// cinatra#2566 — the lifecycle card REF CODEC only (node:crypto + the app
+// secret). Deliberately NOT the refetch resolver: importing that here would pull
+// the review-gate + verification store graph into the run executor to mint one
+// string.
+import { encodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { buildWayflowInitialMessagePayload } from "./wayflow-dispatch-payload";
 
 /** EnrichmentContext for a run owner — injects the email-send provider source. */
@@ -1437,17 +1442,28 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
           ? buildReviewRunBasePath(reviewPackageName, runId)
           : `/agents/unknown/unknown/${encodeURIComponent(runId)}`;
         const reviewSurfaceUrl = `${reviewRunBase}/review/${encodeURIComponent(reviewTaskId)}`;
-        // Route: emit the display-only redirect interrupt (the review-surface
-        // link) — NOT the legacy reviewer envelope. The card carries no approve
-        // affordance, so the paused run stays in pending_approval and the human's
-        // typed decision is taken on the review surface, then delivered to this
-        // paused run by the resume-delivery worker.
+        // cinatra#2566 (epic #2564 S2) — the gate's LIFECYCLE CARD REF. The run
+        // card draws the review with the same `ReviewGateCard` the chat thread
+        // and the review page mount, and a card is only ever addressed by a
+        // server-minted, authenticated-encrypted ref. Minting it HERE, at gate
+        // emission, is what lets the run panel show the card without ever
+        // assembling a handle out of ids a client happens to hold. `null` when
+        // the instance has no auth secret (the codec fails closed) — the panel
+        // then draws no card and the review page is unaffected.
+        const lifecycleCardRef = encodeLifecycleGateRef({ runId, reviewTaskId });
+        // Route: emit the marked review interrupt. It still carries NO approve
+        // affordance of its own — the paused run stays in pending_approval and
+        // the decision travels through the one decision core, then reaches this
+        // paused run via the resume-delivery worker. What changed in S2 is only
+        // WHERE the human may take it: the card renders in place instead of
+        // sending them away.
         adapter.onInterrupt(
           { type: "object" },
           ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
           {
             reviewSurfaceUrl,
             reviewTaskId,
+            lifecycleCardRef,
             targetCount: Array.isArray(rawTargets) ? rawTargets.length : null,
             agentSummary: historyText ?? "",
           },

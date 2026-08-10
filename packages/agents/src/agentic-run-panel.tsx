@@ -23,10 +23,11 @@ import {
   AlertCircle,
   ArrowRight,
   CalendarClock,
-  ClipboardCheck,
   Clock,
 } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
+import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
+import { LIFECYCLE_VIEW_SCHEMA_VERSION, ReviewGateCard } from "./review-gate-card";
 import { toast } from "@/lib/cinatra-toast";
 import { approveReviewTask } from "./hitl-actions";
 // Shared gate-submit payload builders (cinatra#853) — the WayFlow
@@ -240,73 +241,18 @@ function ThreadRow({ message }: { message: SerializedAgentRunMessage }) {
 }
 
 /**
- * Inline artifact-review REDIRECT card (cinatra#1796, epic #1620 S13). Rendered
- * IN-PANEL (deliberately not a separate registered renderer module — that would
- * add a new node to the run executor's locked route graph and trip the route-
- * graph ratchet) when a MARKED gate routes the human to the generic artifact-
- * review surface. Display-only: a link to the pinned review surface, with NO
- * approve/continue affordance, so the legacy in-panel approve path can never
- * double-resume a marked gate — the typed decision is taken on the review
- * surface and delivered by the resume-delivery worker.
+ * Strip the lifecycle card ref out of a gate's values before they travel
+ * anywhere an LLM can read (cinatra#2566, epic #2564 S2). The ref is an opaque
+ * ticket the server minted for a card to address its gate with; it is never a
+ * field, never content, and never something a model should see.
  */
-function ArtifactReviewRedirectCard({ values }: { values: Record<string, unknown> }) {
-  const reviewUrl =
-    typeof values.reviewSurfaceUrl === "string" && values.reviewSurfaceUrl.length > 0
-      ? values.reviewSurfaceUrl
-      : null;
-  const agentSummary =
-    typeof values.agentSummary === "string" && values.agentSummary.length > 0
-      ? values.agentSummary
-      : null;
-  const targetCount =
-    typeof values.targetCount === "number" && Number.isFinite(values.targetCount)
-      ? (values.targetCount as number)
-      : null;
-  const countLabel =
-    targetCount === null
-      ? "an artifact this run produced"
-      : targetCount === 1
-        ? "1 artifact this run produced"
-        : `${targetCount} artifacts this run produced`;
-  return (
-    <div
-      data-conformance-id="artifact-review-redirect"
-      className="flex flex-col gap-3 rounded-control border border-line bg-surface-strong px-4 py-4"
-    >
-      <div className="flex flex-wrap items-center gap-2.5">
-        <span className="grid size-[30px] flex-none place-items-center rounded-lg bg-mustard-ink/15 text-mustard-ink">
-          <ClipboardCheck aria-hidden="true" className="size-4" />
-        </span>
-        <span className="font-sans text-sm font-bold text-foreground">Review requested</span>
-      </div>
-      <p className="max-w-[66ch] text-xs leading-relaxed text-muted-foreground">
-        This run paused for you to review {countLabel}. Continue on the review surface to approve
-        or reject before the run proceeds.
-      </p>
-      {agentSummary ? (
-        <p className="max-w-[66ch] text-xs leading-relaxed text-muted-foreground">
-          <span className="font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground">
-            Agent summary
-          </span>{" "}
-          {agentSummary}
-        </p>
-      ) : null}
-      {reviewUrl ? (
-        <div>
-          <Button asChild size="sm" className="gap-1.5" data-action="open-review-surface">
-            <Link href={reviewUrl}>
-              Continue to review
-              <ArrowRight aria-hidden="true" className="size-3.5" />
-            </Link>
-          </Button>
-        </div>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          The review surface link is unavailable — refresh the run to retry.
-        </p>
-      )}
-    </div>
-  );
+function withoutLifecycleCardRef(
+  values: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!("lifecycleCardRef" in values)) return values;
+  const { lifecycleCardRef: _ref, ...rest } = values;
+  void _ref;
+  return rest;
 }
 
 export function AgenticRunPanel({
@@ -725,6 +671,17 @@ export function AgenticRunPanel({
 
   const currentXRenderer = effectiveHitlContext?.xRenderer ?? null;
 
+  // cinatra#2566 — the SERVER-MINTED opaque ref a marked review gate carries.
+  // It is the only handle the run card has on the gate: the run panel never
+  // assembles one from ids it happens to hold, because a card ref is minted (and
+  // authenticated-encrypted) at gate emission and every surface that draws a
+  // card must be addressing the same server-issued ticket.
+  const reviewGateCardRef =
+    typeof effectiveHitlContext?.currentValues?.lifecycleCardRef === "string" &&
+    effectiveHitlContext.currentValues.lifecycleCardRef.length > 0
+      ? (effectiveHitlContext.currentValues.lifecycleCardRef as string)
+      : null;
+
   // Gate-scoped attachment ref lifetime. Clear `pendingAttachmentsRef` whenever
   // the active gate changes (xRenderer transition) or the gate goes away
   // (effectiveHitlContext === null). This covers failure paths the success-clear
@@ -911,6 +868,11 @@ export function AgenticRunPanel({
     }
     const xRenderer = effectiveHitlContext?.xRenderer;
     if (!templateId || !xRenderer) return;
+    // Defence in depth for the same rule (cinatra#2566): even if some future
+    // caller reaches this handler for a marked review gate, the assist request
+    // never leaves. The panel above is already hidden for that gate; this is the
+    // guard that does not depend on a visibility prop staying correct.
+    if (xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID) return;
     const userId = ++convIdRef.current;
     setConversation(prev => [...prev, { id: userId, role: "user", content: prompt }]);
     // HitlConversationPanel's internal handleSubmit clears the PromptField and
@@ -925,7 +887,15 @@ export function AgenticRunPanel({
           body: JSON.stringify({
             prompt,
             xRenderer,
-            currentValue: { ...effectiveHitlContext.currentValues, ...bufferedHitlValue },
+            // The gate's LIFECYCLE CARD REF is stripped before anything is sent
+            // (cinatra#2566). It is an opaque server-minted ticket, it is not a
+            // field a human edits, and the assist route serializes this object
+            // into an LLM prompt — so it has no business here even for a gate
+            // kind that is otherwise assistable.
+            currentValue: withoutLifecycleCardRef({
+              ...effectiveHitlContext.currentValues,
+              ...bufferedHitlValue,
+            }),
             schemaProperties: Object.keys(
               (effectiveHitlContext.inputSchema as { properties?: Record<string, unknown> })?.properties ?? {},
             ),
@@ -1122,17 +1092,38 @@ export function AgenticRunPanel({
 
       {isPendingApproval &&
       effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID ? (
-        // cinatra#1796 — a MARKED artifact-review gate. Render the display-only
-        // redirect card INLINE (not via a separate renderer module, which would
-        // grow the run executor's locked route graph). No approve/continue
-        // affordance, so the legacy in-panel approve path can never double-resume
-        // a marked gate — the typed decision is taken on the review surface.
-        <>
-          <Separator />
-          <ArtifactReviewRedirectCard
-            values={effectiveHitlContext.currentValues ?? {}}
-          />
-        </>
+        // cinatra#2566 (epic #2564 S2) — a MARKED artifact-review gate. The
+        // display-only REDIRECT card that used to sit here ("continue on the
+        // review surface") is DELETED: the run card is one of §IX's first-party
+        // hosts, so it mounts the SAME `ReviewGateCard` the chat thread and the
+        // review page's gate region mount, and the reviewer decides in place.
+        //
+        // The card is addressed by the SERVER-MINTED opaque ref the gate carries
+        // (`lifecycleCardRef`). Without one — a gate emitted before this slice,
+        // or an instance whose auth secret rotated — there is nothing safe to
+        // address, so the panel renders nothing here rather than inventing a
+        // client-side handle to the gate. The run rail and the review page are
+        // unaffected in that case.
+        //
+        // The composer descriptor stays NULL for this gate (see below): the card
+        // owns the decision, and re-publishing a submittable descriptor would be
+        // the second resume path cinatra#1796 closed. Binding the composer to a
+        // FOCUSED card is a separate, deliberate step (#2566's composer-focus
+        // deliverable) and is not smuggled in here.
+        reviewGateCardRef ? (
+          <>
+            <Separator />
+            <LifecycleCardSurfaceProvider host="run_card">
+              <ReviewGateCard
+                view={{
+                  viewType: "artifact_review_gate",
+                  schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+                  ref: reviewGateCardRef,
+                }}
+              />
+            </LifecycleCardSurfaceProvider>
+          </>
+        ) : null
       ) : isPendingApproval && effectiveHitlContext?.xRenderer ? (
         // Inline HITL bubble.
         <>
@@ -1539,7 +1530,21 @@ export function AgenticRunPanel({
         preserves the renderer-change reset. */}
     <HitlConversationPanel
       portalTarget={portalTarget}
-      visible={surface !== "chat" && isPendingApproval && !!effectiveHitlContext?.xRenderer && !!templateId && !!portalTarget}
+      // cinatra#2566 (epic #2564 S2): a MARKED review gate is excluded. The
+      // field-assist panel exists to help a human fill a gate's FIELDS; a review
+      // gate has none — it has a target to read and one decision to take, and the
+      // card owns both. Leaving it visible also fed the gate's interrupt values,
+      // including its opaque card ref, into an LLM prompt (the assist route
+      // serializes `currentValue`), which is exactly the "a ref never reaches an
+      // LLM-visible payload" rule the wire slice established.
+      visible={
+        surface !== "chat" &&
+        isPendingApproval &&
+        !!effectiveHitlContext?.xRenderer &&
+        effectiveHitlContext.xRenderer !== ARTIFACT_REVIEW_REDIRECT_RENDERER_ID &&
+        !!templateId &&
+        !!portalTarget
+      }
       conversation={conversation}
       promptPending={promptPending}
       storageKey={`cinatra_hitl_assist_${templateId}_${effectiveHitlContext?.xRenderer ?? ""}`}

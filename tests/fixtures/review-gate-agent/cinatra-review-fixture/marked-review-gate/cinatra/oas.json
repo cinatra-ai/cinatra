@@ -1,0 +1,175 @@
+{
+  "component_type": "Flow",
+  "id": "marked-review-gate-marked-review-gate",
+  "name": "marked-review-gate",
+  "description": "Deterministic no-LLM flow whose single HITL gate carries the artifact-review marker.",
+  "metadata": {
+    "cinatra": {
+      "packageName": "@cinatra-review-fixture/marked-review-gate",
+      "packageVersion": "0.0.0",
+      "description": "Pauses on a MARKED artifact-review gate whose targets are the run's own pinned inputs.",
+      "type": "flow"
+    }
+  },
+  "inputs": [
+    {
+      "description": "The immutable review targets this run pins at its gate.",
+      "title": "review_targets",
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  ],
+  "outputs": [
+    {
+      "description": "The reviewer's typed response.",
+      "title": "userResponse",
+      "type": "string"
+    }
+  ],
+  "start_node": {
+    "$component_ref": "marked-review-gate-start"
+  },
+  "nodes": [
+    {
+      "$component_ref": "marked-review-gate-start"
+    },
+    {
+      "$component_ref": "marked-review-gate-gate"
+    },
+    {
+      "$component_ref": "marked-review-gate-end"
+    }
+  ],
+  "control_flow_connections": [
+    {
+      "component_type": "ControlFlowEdge",
+      "id": "marked-review-gate-start->gate",
+      "name": "start->gate",
+      "description": "",
+      "metadata": {},
+      "from_node": {
+        "$component_ref": "marked-review-gate-start"
+      },
+      "from_branch": null,
+      "to_node": {
+        "$component_ref": "marked-review-gate-gate"
+      }
+    },
+    {
+      "component_type": "ControlFlowEdge",
+      "id": "marked-review-gate-gate->end",
+      "name": "gate->end",
+      "description": "",
+      "metadata": {},
+      "from_node": {
+        "$component_ref": "marked-review-gate-gate"
+      },
+      "from_branch": null,
+      "to_node": {
+        "$component_ref": "marked-review-gate-end"
+      }
+    }
+  ],
+  "data_flow_connections": [
+    {
+      "component_type": "DataFlowEdge",
+      "id": "marked-review-gate-response:gate->end",
+      "name": "response:gate->end",
+      "description": "",
+      "metadata": {},
+      "source_node": {
+        "$component_ref": "marked-review-gate-gate"
+      },
+      "source_output": "userResponse",
+      "destination_node": {
+        "$component_ref": "marked-review-gate-end"
+      },
+      "destination_input": "userResponse"
+    }
+  ],
+  "$referenced_components": {
+    "marked-review-gate-start": {
+      "component_type": "StartNode",
+      "id": "marked-review-gate-start",
+      "name": "start",
+      "description": null,
+      "metadata": {},
+      "inputs": [
+        {
+          "description": "The immutable review targets this run pins at its gate.",
+          "title": "review_targets",
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      ],
+      "outputs": [
+        {
+          "description": "The immutable review targets this run pins at its gate.",
+          "title": "review_targets",
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      ],
+      "branches": [
+        "next"
+      ]
+    },
+    "marked-review-gate-gate": {
+      "component_type": "InputMessageNode",
+      "id": "marked-review-gate-gate",
+      "name": "review_gate",
+      "description": null,
+      "metadata": {
+        "cinatra": {
+          "riskClass": "read_only",
+          "requiresApproval": true,
+          "description": "Review the pinned targets",
+          "artifactReview": {
+            "targetsInput": "review_targets"
+          }
+        }
+      },
+      "inputs": [],
+      "outputs": [
+        {
+          "description": "The reviewer's typed response.",
+          "title": "userResponse",
+          "type": "string"
+        }
+      ],
+      "branches": [
+        "next"
+      ]
+    },
+    "marked-review-gate-end": {
+      "component_type": "EndNode",
+      "id": "marked-review-gate-end",
+      "name": "end",
+      "description": null,
+      "metadata": {},
+      "inputs": [
+        {
+          "description": "The reviewer's typed response.",
+          "title": "userResponse",
+          "type": "string"
+        }
+      ],
+      "outputs": [
+        {
+          "description": "The reviewer's typed response.",
+          "title": "userResponse",
+          "type": "string"
+        }
+      ],
+      "branches": [],
+      "branch_name": "next"
+    }
+  },
+  "agentspec_version": "26.1.0"
+}

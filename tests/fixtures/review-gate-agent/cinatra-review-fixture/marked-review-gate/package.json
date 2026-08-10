@@ -1,0 +1,7 @@
+{
+  "name": "@cinatra-review-fixture/marked-review-gate",
+  "version": "0.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "Deterministic no-LLM agent fixture that declares metadata.cinatra.artifactReview.targetsInput on its InputMessageNode gate, so the run-executor's MARKED artifact-review gate path (packages/agents/src/execution.ts, cinatra#1796) has a credential-free producer for the e2e harness. Not a marketplace extension; never published. StartNode -> marked InputMessageNode gate -> EndNode; the review targets ride the run's own inputParams, so no LLM, no connector and no secret is involved."
+}

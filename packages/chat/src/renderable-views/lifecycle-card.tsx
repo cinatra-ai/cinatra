@@ -3,11 +3,13 @@
 // epic #2564 S1). Design: design@6c20871b4108176c1d0193f19ecd2947f6c6355f
 // `specs/app-lifecycle-cards.html` at that commit.
 //
-// This is the ONE component the card registry dispatches every lifecycle
-// viewType to. It is deliberately a SHELL: S1 owns the wire, the producer bind
-// and the state contract; the drawn card (target panel, capture pair, decision
-// floor) is S2's (#2566). What is fully implemented here is the part every
-// later slice depends on and none of them should re-invent:
+// The SHELL the card registry dispatches the not-yet-drawn lifecycle viewTypes
+// to. S2 (#2566) took the review gate: `artifact_review_gate` now dispatches to
+// `ReviewGateCard`, and this shell holds the two kinds whose own slices draw
+// them — the schedule proposal (S5) and the verification card (§VII). S1 owns
+// the wire, the producer bind and the state contract, and what is implemented
+// here is the part every later slice depends on and none of them should
+// re-invent:
 //
 //  1. THE PAYLOAD IS A REF. The DATA_PART carries `{ viewType, schemaVersion,
 //     ref }` and nothing else. Nothing about the gate — not its subject, not
@@ -34,145 +36,32 @@
 //     consulted per (kind, host).
 // ---------------------------------------------------------------------------
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-  type ReactElement,
-  type ReactNode,
-} from "react";
+import { type ReactElement } from "react";
 
 import {
   LIFECYCLE_CARD_PRESENCE,
-  lifecycleCardStateSchema,
-  type LifecycleCardHost,
   type LifecycleCardState,
   type LifecycleDataPartViewType,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
+// The host declaration + the authoritative-refetch hook MOVED to
+// `@cinatra-ai/agents/lifecycle-card-runtime` (cinatra#2566, epic #2564 S2) and
+// are re-exported here unchanged. They had to sit at a package the RUN CARD can
+// reach too — `@cinatra-ai/chat` depends on `@cinatra-ai/agents`, never the other
+// way round — and there must stay exactly ONE of each. Every S1 import path
+// still resolves.
+import {
+  LIFECYCLE_VIEW_RESOLVE_PATH,
+  LifecycleCardSurfaceProvider,
+  useLifecycleCardHost,
+  useLifecycleCardState,
+} from "@cinatra-ai/agents/lifecycle-card-runtime";
 
-/** The server route that re-authorizes a ref and answers with the card state. */
-export const LIFECYCLE_VIEW_RESOLVE_PATH = "/api/lifecycle-views/resolve";
-
-// ---------------------------------------------------------------------------
-// Host declaration — absent means "no host", which means no card.
-// ---------------------------------------------------------------------------
-
-const LifecycleCardSurfaceContext = createContext<LifecycleCardHost | null>(null);
-
-/**
- * Declare the host a subtree renders lifecycle cards on. A host opts IN; there
- * is no default. S8d turns the widget on by wrapping the embed transcript in
- * `<LifecycleCardSurfaceProvider host="site_widget">` — until then the embed
- * declares nothing and renders no lifecycle card DOM at all.
- */
-export function LifecycleCardSurfaceProvider({
-  host,
-  children,
-}: {
-  host: LifecycleCardHost;
-  children: ReactNode;
-}): ReactElement {
-  return (
-    <LifecycleCardSurfaceContext.Provider value={host}>
-      {children}
-    </LifecycleCardSurfaceContext.Provider>
-  );
-}
-
-export function useLifecycleCardHost(): LifecycleCardHost | null {
-  return useContext(LifecycleCardSurfaceContext);
-}
-
-// ---------------------------------------------------------------------------
-// The refetch hook
-// ---------------------------------------------------------------------------
-
-/**
- * Resolve the authoritative state for one lifecycle ref. Returns `null` until
- * the first resolve completes — the caller renders nothing while it is null.
- *
- * A failed request (offline, 5xx, a body that does not validate) leaves the
- * state null rather than inventing one: an unresolvable card is silent, never
- * optimistic. A denial is not an error — the server answers `absent` with a
- * 200, so a reader who may not see the item is indistinguishable from one
- * looking at an item that does not exist.
- */
-export function useLifecycleCardState(params: {
-  viewType: LifecycleDataPartViewType;
-  ref: string;
-  enabled: boolean;
-}): LifecycleCardState | null {
-  const { viewType, ref, enabled } = params;
-  // State is stored WITH the identity it was resolved for, and read back only
-  // when that identity still matches. A passive reset effect is not enough: on
-  // the render where `ref` changes, the effect has not run yet, so the previous
-  // card's authorized state would paint for one frame under the NEW ref.
-  const identity = `${viewType}\u0000${ref}\u0000${enabled ? "1" : "0"}`;
-  const [resolved, setResolved] = useState<{
-    identity: string;
-    state: LifecycleCardState;
-  } | null>(null);
-  // Monotonic request id. Mount and focus can overlap, and a slow earlier
-  // answer must never overwrite a fresher one — otherwise a card could settle
-  // on a state the server has already superseded, which is precisely the stale
-  // decision the refetch exists to prevent.
-  const latestRequestRef = useRef(0);
-
-  const resolve = useCallback(
-    async (signal: AbortSignal): Promise<void> => {
-      const requestId = ++latestRequestRef.current;
-      // The identity is CLOSURE-CAPTURED, not read at commit time: a response
-      // must be stamped with the identity its request was ISSUED for. Reading a
-      // ref at commit time would let a slow request for the old ref be filed
-      // under the new one during the window before the effect cleanup aborts it.
-      const requestIdentity = identity;
-      try {
-        const response = await fetch(LIFECYCLE_VIEW_RESOLVE_PATH, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ viewType, ref }),
-          credentials: "same-origin",
-          signal,
-        });
-        if (!response.ok) return;
-        const body: unknown = await response.json();
-        const parsed = lifecycleCardStateSchema.safeParse(
-          (body as { state?: unknown } | null)?.state,
-        );
-        if (!parsed.success) return;
-        if (signal.aborted || requestId !== latestRequestRef.current) return;
-        setResolved({ identity: requestIdentity, state: parsed.data });
-      } catch {
-        // Aborted or transport-failed — stay silent (see the doc above).
-      }
-    },
-    [viewType, ref, identity],
-  );
-
-  // Mount + focus load, mirroring `PendingToolConfirmationCards` — the chat
-  // surface's established self-healing refresh shape. A failed REFRESH of the
-  // SAME identity deliberately keeps the last authorized answer (the sibling
-  // cards' documented posture); a CHANGED identity drops it via the read guard
-  // below, with no frame in between.
-  useEffect(() => {
-    if (!enabled) return;
-    const controller = new AbortController();
-    void resolve(controller.signal);
-    // Focus is the cheap stand-in for "the user came back to this tab after
-    // deciding elsewhere" — the page-vs-card race the epic cares about.
-    const onFocus = () => void resolve(controller.signal);
-    window.addEventListener("focus", onFocus);
-    return () => {
-      controller.abort();
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [enabled, resolve]);
-
-  return resolved !== null && resolved.identity === identity ? resolved.state : null;
-}
+export {
+  LIFECYCLE_VIEW_RESOLVE_PATH,
+  LifecycleCardSurfaceProvider,
+  useLifecycleCardHost,
+  useLifecycleCardState,
+};
 
 // ---------------------------------------------------------------------------
 // The shell
@@ -186,9 +75,9 @@ const CARD_TITLES: Record<LifecycleDataPartViewType, string> = {
 
 /**
  * The one-line summary per state. Deliberately identifier-free: the shell says
- * what the reader can do, never what the item is. S2 replaces the body of the
- * review card with the drawn target + floor; these lines stay the floor of the
- * never-blank ladder for a card whose renderer is not built.
+ * what the reader can do, never what the item is. These lines are the floor of
+ * the never-blank ladder for a card whose renderer is not built yet; the review
+ * card left them behind in S2 when it gained its drawn target + floor.
  */
 function stateLine(state: LifecycleCardState): string | null {
   switch (state.state) {

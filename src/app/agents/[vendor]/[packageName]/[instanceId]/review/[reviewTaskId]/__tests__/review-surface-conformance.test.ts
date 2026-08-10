@@ -32,8 +32,6 @@ const routeFile = (rel: string) => read(path.join(ROUTE, rel));
 const MODEL = read(path.join(SRC_ROOT, "lib", "artifacts", "review-surface-model.ts"));
 const PAGE = routeFile("page.tsx");
 const TARGET_PANEL = routeFile("review-target-panel.tsx");
-const DECISION_BAR = routeFile("review-decision-bar.tsx");
-const GATE_STATES = routeFile("review-gate-states.tsx");
 const ACTIONS = routeFile("actions.ts");
 
 // ── Run-embedded render sites (design@5e5c53aff §I–III) ──────────────────────
@@ -48,8 +46,28 @@ const RUN_CHIP_ROW = readRepo("packages/agents/src/run-recommendation-chip-row.t
 const RUN_GATE_NOTIFICATION = readRepo("src/lib/agent-run-wait-notifications.ts");
 const REVIEW_PROMPT_WINDOW = routeFile("review-prompt-window.tsx");
 
+// cinatra#2566 (epic #2564 S2) — the decision bar, the gate states, and the
+// gate-region COMPOSITION (header + target stack + one floor) moved out of this
+// route so that ONE renderer can draw the review on the chat thread and the run
+// card too. Nothing about the chrome changed; only where it is read from. The
+// route-local files are now re-export shims, so this suite follows the source to
+// its new home rather than asserting against a two-line re-export.
+const REVIEW_GATE_CARD = readRepo("packages/agents/src/review-gate-card.tsx");
+const DECISION_BAR = readRepo("packages/agents/src/review-decision-bar.tsx");
+const GATE_STATES = readRepo("packages/agents/src/review-gate-states.tsx");
+const TARGET_ISLAND = read(
+  path.join(SRC_ROOT, "app", "lifecycle", "review-island", "page.tsx"),
+);
+
 /** Every source file that renders route chrome — the render→spec corpus. */
-const CHROME_SOURCES = [PAGE, TARGET_PANEL, DECISION_BAR, GATE_STATES];
+const CHROME_SOURCES = [
+  PAGE,
+  TARGET_PANEL,
+  DECISION_BAR,
+  GATE_STATES,
+  REVIEW_GATE_CARD,
+  TARGET_ISLAND,
+];
 
 /** Strip line + block comments so a NEGATIVE assertion ("no edit affordance")
  * matches real CODE, never an explanatory docstring that names the thing it
@@ -81,7 +99,20 @@ const SPEC_IDS = Object.keys(SPEC_CONFORMANCE);
 
 /** Host-standard anchors the spec DEFERS by name rather than annotating — the
  * "standard not-authorized panel" (§V). Allowed in render→spec, documented. */
-const HOST_STANDARD_IDS = new Set(["review-not-authorized"]);
+const HOST_STANDARD_IDS = new Set([
+  "review-not-authorized",
+  // cinatra#2566 (epic #2564 S2) — anchors fixed by the LATER ratified spec
+  // `specs/app-lifecycle-cards.html` @ design@6c20871b4108176c1d0193f19ecd2947f6c6355f,
+  // not by design@5e5c53aff. They are the card the review is now drawn as (§II)
+  // and the island that carries §III's ladder onto a client-rendered host. They
+  // are listed here — rather than added to SPEC_CONFORMANCE — because this
+  // suite's closed set is, by construction, the OLDER spec's; the newer spec's
+  // own conformance is pinned in the S2 card suite.
+  "review-gate-card",
+  "review-target-island",
+  "review-target-island-body",
+  "review-target-island-empty",
+]);
 
 function conformanceIdsIn(src: string): string[] {
   return [...src.matchAll(/data-conformance-id="([^"]+)"/g)].map((m) => m[1]);
@@ -126,10 +157,13 @@ describe("§I — one type-agnostic surface (G1-clean: no concrete type / render
   });
 
   it("the gate header presents 'Review requested' + the agent summary WHEN present (§I/§II)", () => {
-    expect(PAGE).toMatch(/Review requested/);
-    expect(PAGE).toMatch(/Awaiting your decision/);
-    expect(PAGE).toMatch(/surface\.agentSummary \?/);
-    expect(PAGE).toMatch(/Agent summary/);
+    // cinatra#2566: the header is the CARD's, and the agent summary rides with
+    // the targets in the island — one drawing, three hosts. The page still owns
+    // the surrounding review document; it no longer composes the gate itself.
+    expect(REVIEW_GATE_CARD).toMatch(/Review requested/);
+    expect(REVIEW_GATE_CARD).toMatch(/Awaiting your decision/);
+    expect(TARGET_ISLAND).toMatch(/surface\.agentSummary \?/);
+    expect(TARGET_ISLAND).toMatch(/Agent summary/);
   });
 });
 
@@ -231,8 +265,9 @@ describe("§V — permission, loading & blocked states", () => {
     expect(GATE_STATES).toMatch(/data-conformance-id="review-gate-blocked"/);
     expect(GATE_STATES).toMatch(/router\.refresh\(\)/);
     expect(GATE_STATES).toMatch(/data-action="refresh-gate -> live-gate"/);
-    // The page streams each target behind the loading skeleton.
-    expect(PAGE).toMatch(/Suspense[\s\S]*?fallback=\{<ReviewGateLoading/);
+    // cinatra#2566: the targets stream behind the SAME skeleton, now inside the
+    // island that renders them for every host.
+    expect(TARGET_ISLAND).toMatch(/Suspense[\s\S]*?fallback=\{<ReviewGateLoading/);
   });
 });
 

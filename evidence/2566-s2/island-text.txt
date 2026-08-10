@@ -1,0 +1,26 @@
+Login loop on SSO
+Json Artifact
+
+@cinatra-ai/json-artifact:artifact · revision c4d9d011-ae9… · pinned · user · private · application/json · updated 2026-08-09T23:50:26.841Z
+
+Json Artifact
+build-time · detail
+
+Login loop on SSO
+
+Download
+▾
+{
+subject: "Login loop on SSO"
+priority: "high"
+}
+Q3 re-engagement email
+Text Artifact
+
+@cinatra-ai/text-artifact:artifact · revision 40f5f009-471… · pinned · user · private · text/plain · updated 2026-08-09T23:51:40.655Z
+
+Text Artifact
+build-time · detail
+Command Palette
+
+Search for a command to run...

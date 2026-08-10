@@ -1,0 +1,57 @@
+[
+ {
+  "id": "II-chat-thread-card",
+  "verdict": "PASS",
+  "note": "island iframes in the chat transcript = 2; resolve calls = 4"
+ },
+ {
+  "id": "II-decision-floor",
+  "verdict": "PASS",
+  "note": "Approve=2 Reject=2 Comment=2 in the chat transcript"
+ },
+ {
+  "id": "IX-run-card-host-in-thread",
+  "verdict": "VOID",
+  "note": "VOID \u2014 this probe was a naive substring match for the package slug, which the inline run card does not print. Superseded by IX-two-first-party-hosts-one-transcript in battery2-results.json, which counts the run card's own island frame and its /api/agents/runs polling."
+ },
+ {
+  "id": "II-page-gate-region-card",
+  "verdict": "PASS",
+  "note": "island iframes=1 Approve buttons=1 on the review page"
+ },
+ {
+  "id": "II-one-floor-two-targets",
+  "verdict": "PASS",
+  "note": "exactly ONE decision floor for a 2-target gate: Approve buttons = 1"
+ },
+ {
+  "id": "III-target-panel-tier",
+  "verdict": "PASS",
+  "note": "tier line present: build-time,build-time"
+ },
+ {
+  "id": "III-pinned-revision",
+  "verdict": "PASS",
+  "note": "target names its pinned revision"
+ },
+ {
+  "id": "III-no-decision-chrome-in-island",
+  "verdict": "PASS",
+  "note": "island carries no decision chrome"
+ },
+ {
+  "id": "II-several-targets-stack",
+  "verdict": "PASS",
+  "note": "pinned target panels in the island = 2"
+ },
+ {
+  "id": "IV-absent-reader",
+  "verdict": "PASS",
+  "note": "non-owner reader: island iframes=0 Approve=0. The resolve count is 0 because the non-owner cannot read the THREAD either, so this page-level observation does not isolate the card. The isolating assertion is the endpoint one: both non-owners get 200 {\"state\":\"absent\"}, byte-identical to a forged ref."
+ },
+ {
+  "id": "IX-no-widget",
+  "verdict": "PASS",
+  "note": "widget surface: resolve POSTs=0 island iframes=0 \u2014 surface-absence issues NO resolve, unlike the reader-absence above"
+ }
+]

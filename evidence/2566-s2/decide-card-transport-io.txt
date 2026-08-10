@@ -1,0 +1,8 @@
+== CARD TRANSPORT: gate c32a4525-0846-4047-b023-c2133f4b2920
+pre-resolve: {"status":200,"body":"{\"state\":{\"state\":\"pending\",\"canDecide\":true,\"canComment\":true}}"}
+decide approve: {"status":200,"body":"{\"outcome\":{\"kind\":\"decided\",\"disposition\":\"approve\",\"idempotent\":false}}"}
+post-resolve: {"status":200,"body":"{\"state\":{\"state\":\"settled\"}}"}
+idempotent re-decide (same disposition): {"status":200,"body":"{\"outcome\":{\"kind\":\"decided\",\"disposition\":\"approve\",\"idempotent\":true}}"}
+conflicting re-decide (reject): {"status":200,"body":"{\"outcome\":{\"kind\":\"blocked\",\"reason\":\"no-longer-pending\"}}"}
+forged ref decide: {"status":200,"body":"{\"outcome\":{\"kind\":\"not-permitted\",\"message\":\"You do not have the run access this decision needs — a terminal decision requires approve access, a comment requires respond access.\"}}"}
+garbage ref decide: {"status":200,"body":"{\"outcome\":{\"kind\":\"not-permitted\",\"message\":\"You do not have the run access this decision needs — a terminal decision requires approve access, a comment requires respond access.\"}}"}

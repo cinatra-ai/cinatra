@@ -16,6 +16,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+// cinatra#2566: the registry now dispatches `artifact_review_gate` to the DRAWN
+// `ReviewGateCard`, whose shipped decision chrome uses the app router. jsdom has
+// none mounted, so the seam is stubbed for the dispatch case below.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
+}));
+
 import {
   LifecycleCard,
   LifecycleCardSurfaceProvider,
@@ -249,6 +256,9 @@ describe("the resolved states (§IV)", () => {
 
 describe("registry dispatch", () => {
   it("RenderableViewCard routes a lifecycle payload to the lifecycle card", async () => {
+    // S2 (#2566) swapped the review entry for the drawn `ReviewGateCard`; the
+    // marker asserted below is the one every lifecycle card carries, so the
+    // dispatch contract this test pins is unchanged by that swap.
     mockResolve({ state: "pending", canDecide: true, canComment: true });
     const { container } = render(
       <LifecycleCardSurfaceProvider host="chat_thread">

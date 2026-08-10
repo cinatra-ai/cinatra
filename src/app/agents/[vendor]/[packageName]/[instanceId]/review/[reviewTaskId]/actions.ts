@@ -11,6 +11,7 @@ import {
   readReviewGatePinnedTargets,
   enforceReviewDecisionAccess,
   submitReviewSurfaceChangesRequested,
+  type ReviewActorContext,
 } from "@/app/artifacts/[id]/review-gate-ports";
 import {
   mapSubmitResultToOutcome,
@@ -48,8 +49,20 @@ export async function submitReviewDecisionAction(
   reviewTaskId: string,
   disposition: ReviewDisposition,
   comment: string | null,
+  /**
+   * The ALREADY-RESOLVED reviewing context (cinatra#2566, epic #2564 S2).
+   *
+   * A caller that has itself resolved the actor — the gate-scoped decision entry,
+   * which must enforce run READ before this helper's decision-op check — passes
+   * it in so BOTH checks run against ONE context. Resolving twice re-reads the
+   * role/team/project hints, and two authorization decisions taken against two
+   * reads of the same actor is a seam nothing should have to reason about.
+   * Omitted by the review page's route-bound action, which resolves here exactly
+   * as it always has.
+   */
+  resolvedActorCtx?: ReviewActorContext,
 ): Promise<ReviewSubmitOutcome> {
-  const actorCtx = await resolveReviewActorContext();
+  const actorCtx = resolvedActorCtx ?? (await resolveReviewActorContext());
   if (!actorCtx) {
     return {
       kind: "not-permitted",

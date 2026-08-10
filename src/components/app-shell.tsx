@@ -450,6 +450,14 @@ export function AppShell({
   // shell keeps the page dataless before its bootstrap (identical posture to the
   // other bypassed public pages).
   const isEmbedAssistantPath = pathname === "/embed/assistant";
+  // cinatra#2566 (epic #2564 S2) — the review-target ISLAND is a same-origin,
+  // authenticated, display-only document embedded INSIDE a review card (in a
+  // chat turn, a run card, or the review page's gate region). It must render
+  // CHROMELESS for the same reason the embed page does: it is a fragment, not a
+  // page, and a sidebar/topbar inside a card's iframe would be nonsense. It is
+  // NOT public — the shell bypass is presentation only; the island's own session
+  // + per-row access checks are what authorize it.
+  const isReviewIslandPath = pathname === "/lifecycle/review-island";
   const [isEmbedMode] = useState(() => {
     if (typeof window !== "undefined") {
       return new URLSearchParams(window.location.search).get("embed") === "1";
@@ -503,7 +511,8 @@ export function AppShell({
   const snapshotSaysSetupIncomplete = !connectionReady && !isSetupPath;
   const activeHeader = pageHeaders.find((entry) => entry.match(pathname));
   const hideShellPageHeader = pathname === "/chat" || pathname.startsWith("/chat/");
-  const shouldBypassShell = isAuthPath || isSetupWizardPath || isEmbedMode || isEmbedAssistantPath;
+  const shouldBypassShell =
+    isAuthPath || isSetupWizardPath || isEmbedMode || isEmbedAssistantPath || isReviewIslandPath;
 
   useEffect(() => {
     const onScroll = () => setScrollOffset(document.body.scrollTop || document.documentElement.scrollTop);

@@ -253,10 +253,18 @@ export const LIFECYCLE_CARD_PRESENCE = {
 } as const satisfies Record<LifecycleCardKind, Record<LifecycleCardHost, boolean>>;
 
 /**
- * The lifecycle view types a HOST may render, in registry order. The widget
- * branch is deliberately gated a second time by S8d's enablement — this table
- * says what the widget may EVENTUALLY advertise, `widgetLifecycleViewsEnabled`
- * at the capability site says whether it does yet (fail-closed until S8d).
+ * The lifecycle view types a HOST may render, in registry order. This table
+ * says what the widget may EVENTUALLY show once §IX's row for it is true; it
+ * does not say whether the widget shows anything TODAY, and it is not the
+ * widget's fail-closed gate. That gate is `LifecycleCardSurfaceProvider`
+ * (`packages/agents/src/lifecycle-card-runtime.tsx`): a host opts IN by
+ * wrapping its subtree in the provider, and no widget embed does — with no
+ * host declared, a card renders no DOM at all, whatever this function
+ * returns. (The chat capabilities route separately carries its own advisory
+ * `WIDGET_LIFECYCLE_VIEWS_ENABLED` flag on ITS advertisement —
+ * `src/app/api/assistants/chat/capabilities/route.ts` — which is not this
+ * table's concern and is not load-bearing for rendering either.) S8d is the
+ * one that wires the provider in.
  */
 export function lifecycleViewTypesForHost(
   host: LifecycleCardHost,

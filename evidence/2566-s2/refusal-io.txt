@@ -1,0 +1,8 @@
+A) decision-verb primitives visible to the chat-delegated actor: []
+B) artifact_review_gate_render <- undecodable ref: "Not available to you."
+B) verification_record_render <- undecodable ref: "Not available to you."
+B) artifact_review_gate_render <- well-formed unknown ref: "Not available to you."
+B) verification_record_render <- well-formed unknown ref: "Not available to you."
+C) empty list result: "{\"refs\":[]}"
+C2) list limit=3: "{\"refs\":[]}"
+C3) list limit=99 (out of schema bound): "Input validation error: Invalid arguments for tool artifact_review_gates_list: limit: Too big: expected number to be <=10"

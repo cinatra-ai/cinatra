@@ -304,6 +304,41 @@ const nextConfig: NextConfig = {
         source: "/connect/authorize",
         headers: [{ key: "Referrer-Policy", value: "no-referrer" }],
       },
+      {
+        // cinatra#2566 (epic #2564 S2): the review-target ISLAND is embedded in
+        // a review card as a same-origin iframe, so its response has to say two
+        // things for itself.
+        //
+        // `frame-ancestors 'self'` — only this origin may frame it. The island
+        // renders an authenticated reader's pinned review target; a third-party
+        // site must never be able to put it in a frame it controls, whatever a
+        // user's session happens to be. The header is fixed rather than
+        // per-request because the answer never varies: the island is a
+        // first-party fragment and has no legitimate cross-origin embedder.
+        // `X-Frame-Options` rides along for user agents that predate CSP2.
+        //
+        // `Cache-Control: no-store` — the document is reader-scoped. A shared
+        // cache holding it would be a way for the next reader on the same proxy
+        // to see a target their own access check would have refused. That
+        // MECHANISM — not this exact route — is verified: a minimal
+        // reproduction using this same headers() configuration on
+        // next@16.2.10 shows the production Next.js server (`next build &&
+        // next start`) serves a next.config.ts-configured Cache-Control
+        // header unmodified for a force-dynamic App Router page. This route
+        // was not independently curled in production, and a released
+        // image's own proxy/deployment layer was not checked either.
+        // `next dev` is NOT a faithful witness for this header on ANY App
+        // Router page: it forces `Cache-Control: no-cache, must-revalidate`
+        // unconditionally in dev, with no config able to opt out (see the
+        // longer note in src/app/lifecycle/review-island/page.tsx).
+        source: "/lifecycle/review-island",
+        headers: [
+          { key: "Content-Security-Policy", value: "frame-ancestors 'self'" },
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "Cache-Control", value: "no-store" },
+          { key: "Referrer-Policy", value: "same-origin" },
+        ],
+      },
     ];
   },
   async redirects() {

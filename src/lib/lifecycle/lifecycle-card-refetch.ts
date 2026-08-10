@@ -27,8 +27,11 @@ import "server-only";
 // leak gate existence to anyone holding a ref.
 // ---------------------------------------------------------------------------
 
-import { createCipheriv, createDecipheriv, createHmac, randomBytes } from "node:crypto";
-
+import {
+  decodeLifecycleGateRef,
+  encodeLifecycleGateRef,
+  type LifecycleGateRefPayload,
+} from "@/lib/lifecycle/lifecycle-card-ref";
 import {
   enforceReviewRunAccess,
   readReviewGate,
@@ -57,116 +60,17 @@ export const LIFECYCLE_RESTRICTED_REASON =
   "Approving or rejecting needs approve access on this run.";
 
 // ---------------------------------------------------------------------------
-// The ref codec — genuinely opaque, stateless, fail-closed
+// The ref codec now lives in `@/lib/lifecycle/lifecycle-card-ref` (cinatra#2566)
+// so the gate-emission path can MINT a ref without importing this resolver's
+// store graph. Re-exported here unchanged: S1's import surface is preserved and
+// there is still exactly ONE codec.
 // ---------------------------------------------------------------------------
-//
-// "Opaque" has to mean opaque, not "base64", or the ref stops being a ticket
-// and becomes a disclosure: a lifecycle envelope is persisted in
-// `assistant_turns.content` and re-fed to the model, so a reversible ref would
-// hand the model (and every later reader of the transcript) run and gate
-// identifiers it never asked for and cannot otherwise see through a card.
-//
-// So the payload is AUTHENTICATED-ENCRYPTED (AES-256-GCM) under a key derived
-// from the app secret, exactly as the chat/agent-run MCP actor tokens are
-// keyed. That keeps the resolve STATELESS — no new table, no new row lifecycle
-// — while making the ref unreadable and untamperable off the wire.
-//
-// The ref is still NOT a capability. Decrypting it proves only that the server
-// minted it; the resolver re-authorizes the reader from scratch, so a replayed
-// ref for a gate the reader lost access to answers `absent`.
-//
-// FAIL-CLOSED on key trouble: a missing secret or a rotated key yields `null`
-// (no ref minted / no state resolved → `absent`). A rotated secret therefore
-// retires the cards in old transcripts rather than resurrecting them wrongly;
-// the run and review pages are unaffected.
 
-/**
- * What a gate-scoped ref addresses. Both the review gate and the verification
- * summary hang off a run's gate, so they share one payload shape (and one
- * access check — the run's).
- */
-export type LifecycleGateRefPayload = { runId: string; reviewTaskId: string };
-
-// Bounds keep an encoded ref inside LIFECYCLE_VIEW_REF_MAX_LENGTH (512), which
-// in turn keeps the producer envelope inside the runtime's tool-result cap.
-const REF_FIELD_MAX = 128;
-const REF_MAX = 512;
-const IV_BYTES = 12;
-const TAG_BYTES = 16;
-/** Key-derivation label — changing it rotates every ref by construction. */
-const REF_KEY_INFO = "cinatra:lifecycle-card-ref:v1";
-
-function refKey(): Buffer | null {
-  const secret = process.env.BETTER_AUTH_SECRET;
-  if (!secret) return null;
-  return createHmac("sha256", secret).update(REF_KEY_INFO).digest();
-}
-
-/**
- * Encode a gate-scoped ref. Returns `null` when the ids do not fit the bounds
- * or no key is available — a producer that cannot express its ref must refuse
- * rather than emit one that would be dropped downstream.
- */
-export function encodeLifecycleGateRef(
-  payload: LifecycleGateRefPayload,
-): string | null {
-  const { runId, reviewTaskId } = payload;
-  if (typeof runId !== "string" || runId.length === 0 || runId.length > REF_FIELD_MAX) {
-    return null;
-  }
-  if (
-    typeof reviewTaskId !== "string" ||
-    reviewTaskId.length === 0 ||
-    reviewTaskId.length > REF_FIELD_MAX
-  ) {
-    return null;
-  }
-  const key = refKey();
-  if (!key) return null;
-  try {
-    const iv = randomBytes(IV_BYTES);
-    const cipher = createCipheriv("aes-256-gcm", key, iv);
-    const body = Buffer.concat([
-      cipher.update(JSON.stringify({ r: runId, g: reviewTaskId }), "utf8"),
-      cipher.final(),
-    ]);
-    const ref = Buffer.concat([iv, body, cipher.getAuthTag()]).toString("base64url");
-    return ref.length <= REF_MAX ? ref : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Decode a gate-scoped ref. `null` for anything that is not one of ours. */
-export function decodeLifecycleGateRef(
-  ref: string,
-): LifecycleGateRefPayload | null {
-  if (typeof ref !== "string" || ref.length === 0 || ref.length > REF_MAX) return null;
-  if (!/^[A-Za-z0-9_-]+$/.test(ref)) return null;
-  const key = refKey();
-  if (!key) return null;
-  try {
-    const raw = Buffer.from(ref, "base64url");
-    if (raw.length <= IV_BYTES + TAG_BYTES) return null;
-    const iv = raw.subarray(0, IV_BYTES);
-    const tag = raw.subarray(raw.length - TAG_BYTES);
-    const body = raw.subarray(IV_BYTES, raw.length - TAG_BYTES);
-    const decipher = createDecipheriv("aes-256-gcm", key, iv);
-    decipher.setAuthTag(tag);
-    const json = Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8");
-    const parsed: unknown = JSON.parse(json);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return null;
-    }
-    const { r, g } = parsed as { r?: unknown; g?: unknown };
-    if (typeof r !== "string" || r.length === 0 || r.length > REF_FIELD_MAX) return null;
-    if (typeof g !== "string" || g.length === 0 || g.length > REF_FIELD_MAX) return null;
-    return { runId: r, reviewTaskId: g };
-  } catch {
-    // Wrong key, tampered bytes, non-JSON plaintext — all "not one of ours".
-    return null;
-  }
-}
+export {
+  decodeLifecycleGateRef,
+  encodeLifecycleGateRef,
+  type LifecycleGateRefPayload,
+};
 
 // ---------------------------------------------------------------------------
 // The per-kind resolvers
