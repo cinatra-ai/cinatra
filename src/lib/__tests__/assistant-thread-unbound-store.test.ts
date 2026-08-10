@@ -23,7 +23,9 @@ vi.mock("@/lib/postgres-schema-init", () => ({
   ensurePostgresSchema: () => undefined,
 }));
 
+import { DEFAULT_ASSISTANT_PACKAGE } from "@cinatra-ai/chat/chat-path-codec";
 import {
+  IMPLICIT_DEFAULT_ASSISTANT_PACKAGE,
   getOwnedUnboundAssistantThreadById,
   getOwnedUnboundAssistantThreadBySlug,
   isImplicitDefaultThreadEligible,
@@ -79,6 +81,12 @@ function threadRow(t: AssistantThread): Record<string, unknown> {
 
 beforeEach(() => {
   runPostgresQueriesSync.mockReset();
+});
+
+describe("IMPLICIT_DEFAULT_ASSISTANT_PACKAGE", () => {
+  it("is pinned equal to the codec's DEFAULT_ASSISTANT_PACKAGE (the local copy exists only to keep this store off the codec's import edge — see the store)", () => {
+    expect(IMPLICIT_DEFAULT_ASSISTANT_PACKAGE).toBe(DEFAULT_ASSISTANT_PACKAGE);
+  });
 });
 
 describe("isUnboundAssistantThread", () => {

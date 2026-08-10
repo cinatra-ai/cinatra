@@ -29,12 +29,6 @@ import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 // atomic mint below drives it against the `assistant_threads_container_slug_uniq`
 // unique index.
 import { allocateByAttempt, slugifyTitle } from "@cinatra-ai/chat/thread-slug";
-// The canonical DEFAULT assistant package — the IMPLICIT container an UNBOUND
-// thread lives in (cinatra#2642). Same zero-dep pure leaf family as thread-slug
-// (no React, no server imports), so this store stays a sync leaf. Imported as a
-// CONSTANT, never as a parameter: the implicit-default repair below can only
-// ever write this one package.
-import { DEFAULT_ASSISTANT_PACKAGE } from "@cinatra-ai/chat/chat-path-codec";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -576,6 +570,19 @@ export function getAssistantThreadByIdInContainer(
 // implicit alias.
 // ---------------------------------------------------------------------------
 
+/** The canonical DEFAULT assistant package — the IMPLICIT container an UNBOUND
+ *  thread lives in. Held as a CONSTANT, never taken as a parameter: the repair
+ *  below can only ever write this one package.
+ *
+ *  Kept LOCAL (not imported from `@cinatra-ai/chat/chat-path-codec`, which
+ *  declares the same value) for the SAME reason that module keeps its own copy
+ *  of the builtin package rather than importing the host schema: an import here
+ *  would add a cross-package edge to every route that reaches this store — four
+ *  locked routes grow by exactly one module and the route-graph ratchet fails.
+ *  Pinned equal to the codec's `DEFAULT_ASSISTANT_PACKAGE` by a unit test
+ *  (assistant-thread-unbound-store.test.ts), so the two can never drift. */
+export const IMPLICIT_DEFAULT_ASSISTANT_PACKAGE = "@cinatra-ai/cinatra-assistant";
+
 /** The transport-verified actor an implicit-default lookup is scoped to. NEVER
  *  built from route/tool input — the caller derives it from the session. */
 export type UnboundThreadActor = {
@@ -693,7 +700,7 @@ export function getOwnedUnboundAssistantThreadBySlug(
  * prefetched or retried render performs an IDEMPOTENT normalization of a row
  * into the container it already logically belongs to, and nothing else.
  *
- * - Takes NO destination package: it writes {@link DEFAULT_ASSISTANT_PACKAGE}
+ * - Takes NO destination package: it writes {@link IMPLICIT_DEFAULT_ASSISTANT_PACKAGE}
  *   and a NULL instance, or nothing.
  * - The full eligibility predicate is RE-ASSERTED in the UPDATE's WHERE clause,
  *   so the write can never outrun a concurrent ownership/binding change (no
@@ -747,7 +754,7 @@ export function repairImplicitDefaultThreadBinding(
                    AND COALESCE(team_id, '') = ''
                    AND owner_user_id = $3
                    AND (COALESCE(org_id, '') = '' OR org_id = $4)`,
-          values: [DEFAULT_ASSISTANT_PACKAGE, threadId, actor.userId, actor.orgId],
+          values: [IMPLICIT_DEFAULT_ASSISTANT_PACKAGE, threadId, actor.userId, actor.orgId],
         },
       ],
     });
