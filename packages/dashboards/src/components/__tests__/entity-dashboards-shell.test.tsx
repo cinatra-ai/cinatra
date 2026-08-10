@@ -12,8 +12,11 @@
 //      leaves the list + selection consistent.
 //   2. Toolbar render — the shell's context drives the REAL
 //      `<CinatraDashboardToolbar>`, proving the dashboard-select + "+ New
-//      dashboard" render INSIDE the standard toolbar and that the Overview
-//      default is reflected as non-removable (no Rename/Delete).
+//      dashboard" render INSIDE the standard toolbar, and that the toolbar
+//      carries NO three-dot overflow control in any selection state (owner
+//      review on cinatra#2474 PR5, PR #2638 — the manage menu that used to hold
+//      Rename / Delete is gone; the context callbacks it drove are still wired
+//      and still exercised by layer 1).
 //
 //   pnpm --filter @cinatra-ai/dashboards exec vitest run \
 //     src/components/__tests__/entity-dashboards-shell.test.tsx
@@ -514,6 +517,28 @@ function renderShellWithToolbar(ds: EntityDashboardsDataSource) {
   );
 }
 
+/**
+ * The owner's first requested change on PR #2638: "remove the three dots inside
+ * the toolbar". Encoded as a property rather than a selector for one icon —
+ * EVERY control in the dashboard toolbar says what it is in words, so a wordless
+ * overflow button cannot come back under a different icon or a different label.
+ */
+function expectNoOverflowControl(toolbar: HTMLElement) {
+  expect(toolbar).not.toBeNull();
+  // No manage/overflow menu by name…
+  expect(within(toolbar).queryByRole("button", { name: /^Manage / })).toBeNull();
+  // …no ellipsis glyph…
+  expect(
+    toolbar.querySelector(
+      '[class*="ellipsis" i], [class*="more-horizontal" i], [class*="more-vertical" i]',
+    ),
+  ).toBeNull();
+  // …and no wordless button at all, which is the shape a three-dot control has.
+  for (const button of toolbar.querySelectorAll("button")) {
+    expect(button.textContent?.trim() ?? "").not.toBe("");
+  }
+}
+
 describe("EntityDashboardsShell — controls render in the toolbar", () => {
   test("renders the select + New dashboard inside the standard toolbar", async () => {
     renderShellWithToolbar(makeDataSource());
@@ -541,17 +566,24 @@ describe("EntityDashboardsShell — controls render in the toolbar", () => {
     ).toBeTruthy();
   });
 
-  test("Overview is reflected as non-removable: no manage (rename/delete) affordance", async () => {
+  test("the toolbar carries NO three-dot overflow control — Overview selected", async () => {
     renderShellWithToolbar(makeDataSource());
     await screen.findByTestId("rendered");
-    // Selected = Overview (isDefault) ⇒ no manage menu.
-    expect(screen.queryByRole("button", { name: /^Manage / })).toBeNull();
+
+    const toolbar = document.querySelector<HTMLElement>(
+      "[data-cinatra-dashboard-toolbar]",
+    ) as HTMLElement;
+    expectNoOverflowControl(toolbar);
   });
 
-  test("a writable non-default dashboard exposes the manage (rename/delete) menu", async () => {
-    // A list with no Overview default lands the initial selection on the
-    // writable non-default row, so the manage affordance shows without driving
-    // the Radix menu (kept out of jsdom for determinism).
+  test("the toolbar carries NO three-dot overflow control — a writable non-default dashboard selected", async () => {
+    // This is the case that USED to raise the overflow (Rename / Delete): a
+    // list with no Overview default lands the initial selection on the writable
+    // non-default row. The owner asked for the three dots to go from the
+    // toolbar (review on PR #2638), so nothing renders here now — which also
+    // means Rename and Delete have no UI entry point; the context callbacks
+    // stay wired (exercised directly in layer 1 above) and the server actions
+    // are untouched.
     const ds = makeDataSource({
       listDashboards: vi.fn(async () => ({
         dashboards: [SALES],
@@ -562,7 +594,18 @@ describe("EntityDashboardsShell — controls render in the toolbar", () => {
     await waitFor(() =>
       expect(screen.getByTestId("rendered").getAttribute("data-id")).toBe("sales"),
     );
-    expect(screen.getByRole("button", { name: /^Manage Sales/ })).toBeTruthy();
+
+    const toolbar = document.querySelector<HTMLElement>(
+      "[data-cinatra-dashboard-toolbar]",
+    ) as HTMLElement;
+    expectNoOverflowControl(toolbar);
+    // The controls that must SURVIVE the removal are still there.
+    expect(
+      within(toolbar).getByRole("button", { name: "Select dashboard" }),
+    ).toBeTruthy();
+    expect(
+      within(toolbar).getByRole("button", { name: /New dashboard/ }),
+    ).toBeTruthy();
   });
 
   test("no New dashboard control when the actor cannot create", async () => {

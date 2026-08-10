@@ -275,10 +275,37 @@ describe("§IX conformance id: scope-dashboards-add-picker (add to scope)", () =
     }
   });
 
-  it("covers the picker data-state set (empty · error · loading)", () => {
+  it("covers the picker data-state set (empty · error · loading) — now on the section ROOT", () => {
+    // The owner's review on cinatra#2474 PR5 (PR #2638) removed every
+    // placeholder the picker used to paint below the search field — the two
+    // loading skeletons and the dashed empty panel — because only real,
+    // listable dashboards may render there. Each of those panels used to carry
+    // one `data-state`; the closed set now rides a single `data-state` on the
+    // section root, so it is still realized and still machine-readable while
+    // painting nothing. The states are asserted here as the source's own union
+    // + expression, and by REAL RENDER in scope-reference-section.test.tsx
+    // (which reads the attribute off the rendered root in all three states).
+    expect(PICKER).toContain(
+      'const sectionState: "loading" | "error" | "empty" | null =',
+    );
     for (const state of SURFACES["scope-dashboards-add-picker"].states) {
-      expect(PICKER).toContain(`data-state="${state}"`);
+      expect(PICKER).toMatch(new RegExp(`"${state}"`));
     }
+    expect(PICKER).toContain("data-state={sectionState ?? undefined}");
+    // …and NOTHING else below the field carries a data-state panel any more.
+    expect(code(PICKER)).not.toMatch(/data-state="/);
+  });
+
+  it("renders no placeholder card below the search field (owner review, PR #2638)", () => {
+    // The regression this locks, in the code: a skeleton/placeholder block, or
+    // a dashed "nothing here" panel, coming back under the field. The list is
+    // gated on `visible.length > 0` and nothing else may paint a card.
+    const c = code(PICKER);
+    expect(c).not.toContain("Skeleton");
+    expect(c).not.toContain("border-dashed");
+    expect(c).not.toContain("No dashboards you can add to this scope.");
+    expect(c).not.toContain("No dashboards match your search.");
+    expect(PICKER).toContain("{visible.length > 0 ? (");
   });
 
   it("the promotion recourse is offered ONLY on the scope-invisible disposition, never an in-place add (render → spec)", () => {
