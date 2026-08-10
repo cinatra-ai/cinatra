@@ -67,6 +67,7 @@ import {
   upsertObjectAndEnqueue,
   getObjectById,
   listObjectsByFilter,
+  resolveObjectIdsByAnchorNodeUuids,
   softDeleteObject,
 } from "@/lib/objects-store";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
@@ -451,24 +452,35 @@ function mapRowToObject(row: ObjectRecord): {
 // Graphiti search_nodes -> objectId extraction
 // ---------------------------------------------------------------------------
 //
-// Reads cinatra_object_id off entity nodes returned by Graphiti's search_nodes
-// MCP tool. cinatra_object_id is a top-level field of the episode_body JSON so
-// that Graphiti's LLM extractor surfaces it on the resulting entity nodes.
+// DETERMINISTIC FIRST, incidental second (cinatra#2591 deliverable 4).
 //
-// Recovery chain for cinatra_object_id from Graphiti entity nodes (search_nodes
-// result). Graphiti's LLM extraction does NOT propagate custom JSON fields to
-// entity node attributes in knowledge-graph-mcp 1.0.x / Graphiti 0.28.2.
-// Four probes in order of reliability:
-//   1. node.attributes.cinatra_object_id — future-proof if Graphiti adds attribute propagation
-//   2. node.cinatra_object_id           — if Graphiti flattens episode body fields onto nodes
-//   3. [oid:<uuid>] tag in node.name    — if Graphiti preserves the tag (future version)
-//   4. node.name IS a bare UUID with label "Object" — confirmed Graphiti 0.28.2 behavior:
-//      the UUID value from cinatra_object_id in the episode body is extracted as a distinct
-//      Entity/Object node whose name IS the UUID string.
+// WHAT THIS USED TO BE. A chain of four probes that read a row id off whatever
+// Graphiti's extraction model happened to put on an entity node. Three of them
+// were measured INERT against Graphiti 0.28.2 (live verification 2026-04-30 —
+// custom episode-body fields do not reach node attributes, and the `[oid:…]`
+// name tag does not survive extraction). The fourth fired only when the model
+// incidentally emitted the row UUID as an entity-node name. So a recall could
+// report `no_ids_extracted` for a row that was definitely indexed, and the
+// planned `memory_recall` semantic path (cinatra#1380) would have inherited
+// that.
+//
+// WHAT IT IS NOW. Every projected row is seeded as a DETERMINISTIC anchor node
+// whose UUID is a pure function of the row id and the lane
+// (`graphiti-projector.ts` -> `anchorNodeUuidFor`), and the inverse map lives in
+// Postgres (`objects.graphiti_anchor_node_uuid`). Ranked node UUIDs resolve
+// through that column. Nothing depends on model whim.
+//
+// THE LEGACY PROBES ARE KEPT, DEMOTED. They are the ONLY recovery path for rows
+// projected before this change (their anchor column is null until the next
+// projection) and for adapter-owned rows that project through their own
+// episode. They run second and only add ids the deterministic pass did not
+// already produce. They are not the mechanism; they are the tail.
 const OID_RE = /\[oid:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function extractObjectIds(nodes: EntityNode[]): string[] {
+/** The pre-#2591 chain: ids read off model-produced node fields. Inert for most
+ *  nodes by measurement; retained for rows with no anchor yet. */
+function extractIncidentalObjectIds(nodes: EntityNode[]): string[] {
   const ids: string[] = [];
   for (const n of nodes) {
     const attrs = (n as unknown as { attributes?: Record<string, unknown> })
@@ -484,6 +496,38 @@ function extractObjectIds(nodes: EntityNode[]): string[] {
     }
   }
   return ids;
+}
+
+/**
+ * Ranked entity nodes -> canonical object ids, RANK PRESERVED.
+ *
+ * Walks the nodes in the order Graphiti ranked them and emits, per node, the
+ * deterministically-anchored row id when there is one, otherwise whatever the
+ * incidental probes can recover. De-duplicated, because two ranked nodes can
+ * legitimately resolve onto the same row (a merged anchor).
+ */
+function resolveObjectIds(nodes: EntityNode[], orgId: string | null): string[] {
+  const byAnchor = resolveObjectIdsByAnchorNodeUuids(
+    nodes.map((n) => n.uuid).filter((u): u is string => typeof u === "string"),
+    orgId,
+  );
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+  for (const node of nodes) {
+    // A merged anchor can name more than one row — take all of them.
+    const deterministic = node.uuid ? byAnchor.get(node.uuid) : undefined;
+    const candidates =
+      deterministic && deterministic.length > 0
+        ? deterministic
+        : extractIncidentalObjectIds([node]);
+    for (const id of candidates) {
+      if (!seen.has(id)) {
+        seen.add(id);
+        ordered.push(id);
+      }
+    }
+  }
+  return ordered;
 }
 
 // ---------------------------------------------------------------------------
@@ -1293,7 +1337,7 @@ export function createObjectsPrimitiveHandlers() {
           group_ids: searchGroupIds,
           max_nodes: input.limit ?? 50,
         });
-        objectIds = extractObjectIds(res.nodes);
+        objectIds = resolveObjectIds(res.nodes, orgId);
       } catch (err) {
         console.warn(
           "[objects_list] searchNodes failed; falling back to Postgres-only filter:",
@@ -1319,9 +1363,19 @@ export function createObjectsPrimitiveHandlers() {
         );
         const visible = await filterByAuthz(rows);
         const items = applyCategoryFilter(visible.map(mapRowToObject));
-        // Distinguish "Graphiti unavailable" from "Graphiti responded but
-        // extracted no cinatra_object_id from the entity nodes". The latter
-        // signals a field-path problem rather than a network error.
+        // Distinguish "Graphiti unavailable" from "Graphiti responded, and
+        // none of its ranked nodes named a row we hold".
+        //
+        // Since cinatra#2591 that second state means something much sharper
+        // than it used to. Recovery no longer depends on the extraction model
+        // emitting an id: every projected row is seeded as a deterministic
+        // anchor node and resolved through `objects.graphiti_anchor_node_uuid`.
+        // So `no_ids_extracted` now says the hits were genuinely other nodes
+        // (extracted entities from some row's episode, another tenant's lane
+        // filtered out, or rows projected before the anchor existed) — not that
+        // the id field path is broken. It stays classified as DEGRADATION
+        // rather than an empty search result, which is the contract
+        // cinatra#1380's `memory_recall` depends on.
         const meta = degraded
           ? { semanticSearch: "unavailable" as const, fallback: "postgres_filter" as const }
           : objectIds !== null && objectIds.length === 0

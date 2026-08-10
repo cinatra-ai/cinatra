@@ -499,55 +499,102 @@ services:
       timeout: 5s
       retries: 10
 
+  # The vendor-free EMBEDDING FLOOR (cinatra#2591). Graphiti ranks on embeddings
+  # and every embedder provider it supports is a paid hosted API; Anthropic has
+  # no embeddings API at all. Without a local floor, an Anthropic-only install
+  # would have to sign up with a SECOND vendor purely to get vectors. This
+  # service speaks the OpenAI `/v1/embeddings` contract over a local
+  # sentence-transformers model (ONNX, weights baked at build time), so the
+  # indexer's embedder can point at it exactly as it would at Ollama.
+  #
+  # NO `ports:` ON PURPOSE — it is reachable only on the compose network. It has
+  # no authentication because it is never published to a host interface; giving
+  # it a host binding would be the change that makes that a problem.
+  kg-embedder:
+    build:
+      context: ./docker/kg-embedder
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
   graphiti:
-    # ALREADY at the newest STABLE — no newer tag to bump to (ops#359 reframe:
-    # latest stable, not only a major hop). The zepai/knowledge-graph-mcp repo
-    # tops out at 1.0.2-graphiti-0.28.2 (verified empirically: the registry's
-    # newest tag, == `:latest` == `:1.0.2`, same digest; the ladder is
-    # 0.4.0 -> 1.0.0-g0.22.0 -> 1.0.1-g0.23.1 -> 1.0.2-g0.28.2, with no
-    # 1.0.3 / 1.1.x / 2.x / newer graphiti line published). So this stays on its
-    # current release; the only change is an immutable digest pin (the tag
-    # floated `:latest`-style before — same hardening the Nango row got).
-    # Re-resolve at bump time with
-    # `docker buildx imagetools inspect zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2`.
-    image: zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2@sha256:c9e0efd3f0bcdb4125eceed08958aea94fe2d85a90c20dfdaadaaf8304e1c4d6
+    # UPSTREAM Graphiti's own MCP server, BUILT here (cinatra#2591) — see
+    # docker/graphiti/Dockerfile for the full rationale and both pins.
+    #
+    # It replaces `zepai/knowledge-graph-mcp:1.0.2-graphiti-0.28.2`. That is the
+    # same upstream source, but published on the `mcp-v*` cadence: its newest tag
+    # is from 2026-03-11 (graphiti-core 0.28.2) while graphiti-core is at 0.29.3,
+    # and re-checking the registry on 2026-08-10 still found no newer tag. Three
+    # things this repo now needs do not exist in that build: a custom LLM
+    # base-URL (so an OpenAI-compatible stand-in can be used at all), the
+    # `get_episode_entities` provenance tool, and a real `GET /health` readiness
+    # route.
+    #
+    # `image:` is a LOCAL tag, not a registry reference — nothing here pushes or
+    # pulls it. The tag carries both pins so a stale container is obvious in
+    # `docker ps`; bumping either build arg changes the tag in the same edit.
+    build:
+      context: ./docker/graphiti
+    image: cinatra/knowledge-graph-mcp:upstream-425bf248-core-0.29.3
     ports:
-      - "8000:8000"
-    # PROVIDER KEY (cinatra#2582) — sourced from a NARROW, generated file, NOT
-    # inlined as `environment: OPENAI_API_KEY: "${OPENAI_API_KEY:-}"`. That
-    # interpolation reads the *shell* env, and the app's OpenAI key does not live
-    # there: it lives in the app database, configured in-app. So every normal
-    # install started this container with an EMPTY key, it logged "No LLM client
+      # LOOPBACK ONLY (cinatra#2591). This used to be `8000:8000`, which binds
+      # 0.0.0.0 and publishes an UNAUTHENTICATED MCP server — full read/write on
+      # the knowledge graph, including `clear_graph` — to every interface of the
+      # host. Nothing outside this compose network is a legitimate client: the
+      # app reaches it as `http://graphiti:8000` over the internal network, and
+      # the only other consumer is a developer on the box. So the binding stays,
+      # scoped to 127.0.0.1.
+      - "127.0.0.1:8000:8000"
+    # PROVIDER CONFIG (cinatra#2582, extended to multi-provider by cinatra#2591)
+    # — sourced from a NARROW, generated file, NOT inlined as
+    # `environment: OPENAI_API_KEY: "${OPENAI_API_KEY:-}"`. That interpolation
+    # reads the *shell* env, and the app's provider keys do not live there: they
+    # live in the app database, configured in-app. So every normal install
+    # started this container with an EMPTY key, it logged "No LLM client
     # configured - entity extraction will be limited", and — because extraction
-    # runs BEFORE the Neo4j write — every episode was accepted and then dropped.
+    # runs BEFORE the graph write — every episode was accepted and then dropped.
     # The graph was silently empty. And an empty `environment:` value OVERRIDES
     # an `env_file:` value on the same key (the nango/wayflow precedent above),
-    # so the three provider keys must NOT appear in `environment:` below.
-    # `scripts/gen-graphiti-env.mjs` (run by `npm run services`) resolves the key
-    # from the app's stored provider configuration and writes
-    # docker/graphiti/.graphiti.env with ONLY those three keys;
+    # so NO key this generator writes may appear in `environment:` below.
+    # `scripts/gen-graphiti-env.mjs` (run by `npm run services`) resolves the
+    # extraction provider AND the embedder choice from the app's stored provider
+    # configuration and writes docker/graphiti/.graphiti.env;
     # `required: false` keeps a fresh checkout bootable, and a keyless bring-up
     # is a reported state ("knowledge-graph indexing OFF"), not a silent one.
     env_file:
       - path: ./docker/graphiti/.graphiti.env
         required: false
     environment:
-      # knowledge-graph-mcp uses pydantic-settings with __ as nested delimiter.
-      # DATABASE__PROVIDER=neo4j switches from the bundled FalkorDB to our Neo4j service.
+      # The upstream server is YAML-first: CONFIG_PATH selects the file, and env
+      # vars (pydantic-settings, `__` nested delimiter) deep-merge OVER it. So
+      # this file holds the static shape and the generated env file holds the
+      # provider selection — the two never share a key.
+      CONFIG_PATH: /app/mcp/config/cinatra.yaml
+      # Database wiring is static and shares no key with the generated file.
       DATABASE__PROVIDER: neo4j
       DATABASE__PROVIDERS__NEO4J__URI: bolt://neo4j:7687
       DATABASE__PROVIDERS__NEO4J__USERNAME: neo4j
       DATABASE__PROVIDERS__NEO4J__PASSWORD: ${NEO4J_PASSWORD:-cinatra-local}
       SEMAPHORE_LIMIT: "10"
+    volumes:
+      - ./docker/graphiti/config.yaml:/app/mcp/config/cinatra.yaml:ro
     depends_on:
       neo4j:
         condition: service_healthy
+      kg-embedder:
+        condition: service_healthy
     healthcheck:
-      # MCP server: check TCP port reachability (no fixed HTTP health endpoint).
-      test: ["CMD-SHELL", "python3 -c \"import socket; s=socket.socket(); s.settimeout(3); s.connect(('localhost', 8000)); s.close()\""]
+      # A REAL readiness route now (the old wrapper had none, which is why this
+      # was a bare TCP connect that went green before the server could serve).
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
+      start_period: 20s
 
   # WayFlow multi-tenant runtime.
   # ONE container hosts every installed agent at /agents/<vendor>/<slug>/, mirroring

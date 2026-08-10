@@ -2194,6 +2194,24 @@ $body$` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."objects" ADD COLUMN IF NOT EXISTS graphiti_projected_hash TEXT` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."objects" ADD COLUMN IF NOT EXISTS graphiti_projected_at TIMESTAMPTZ` },
     { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."objects" ADD COLUMN IF NOT EXISTS graphiti_projection_error TEXT` },
+    // graphiti_anchor_node_uuid: the DETERMINISTIC entity node this row is
+    // seeded as in the graph (cinatra#2591). Recall gets ranked node UUIDs back
+    // from `search_nodes`; this column is the inverse map that turns them into
+    // canonical row ids WITHOUT depending on the extraction model incidentally
+    // emitting the row UUID as an entity name (three of the four historical
+    // recovery probes were already measured inert).
+    //
+    // It stores the uuid the SERVER resolved, not the one we proposed: graphiti
+    // normally keeps the caller's uuid (measured), but it may merge a new node
+    // onto an existing near-duplicate, and then the resolved uuid is the truth.
+    // Purely additive + nullable — rides this idempotent bootstrap path like its
+    // graphiti_* siblings, NOT the destructive numbered migration ledger.
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."objects" ADD COLUMN IF NOT EXISTS graphiti_anchor_node_uuid TEXT` },
+    // The recall lookup is `WHERE graphiti_anchor_node_uuid = ANY($uuids)` on
+    // every semantic query, so it gets an index. Partial (non-null only): the
+    // column is null for every row projected before this change and for every
+    // row whose class never projects.
+    { text: `CREATE INDEX IF NOT EXISTS objects_graphiti_anchor_node_uuid_idx ON "${schemaName.replaceAll('"', '""')}"."objects" (graphiti_anchor_node_uuid) WHERE graphiti_anchor_node_uuid IS NOT NULL` },
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."graphiti_projection_outbox" (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
   object_id TEXT NOT NULL,
