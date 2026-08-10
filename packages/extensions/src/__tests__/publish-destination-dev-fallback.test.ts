@@ -10,9 +10,10 @@
 // suite). Outside dev mode, and for the PUBLIC visibility, the throw is
 // preserved.
 //
-// Also covers isPrivatePublishDestinationAvailable — the UI availability probe
-// parent RSCs thread into PublishDestinationPicker (previously the prop was
-// never threaded, so the picker always showed the not-configured notice).
+// Also covers the config-loader-throw path (#2657 review, CodeRabbit): the
+// loader can fail BEFORE any visibility branch (fail-closed production,
+// incoherent env). The dev fallback must be reachable there too, and the
+// ORIGINAL loader error must be rethrown when the fallback does not apply.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -38,6 +39,7 @@ const NO_PRIVATE_DEST_FIXTURE = {
 
 function setupMocks(overrides?: {
   deployConfig?: Record<string, unknown>;
+  deployConfigThrows?: boolean;
   verdaccioToken?: string | null;
   verdaccioThrows?: boolean;
   destinationCredential?: Record<string, unknown> | null;
@@ -46,8 +48,12 @@ function setupMocks(overrides?: {
     overrides?.verdaccioToken !== undefined ? overrides.verdaccioToken : DEV_TOKEN;
 
   vi.doMock("@/lib/deployment-registry-config", () => ({
-    loadDeploymentRegistryConfig: () =>
-      overrides?.deployConfig ?? NO_PRIVATE_DEST_FIXTURE,
+    loadDeploymentRegistryConfig: () => {
+      if (overrides?.deployConfigThrows) {
+        throw new Error("no deployment registry config: production requires a live env config");
+      }
+      return overrides?.deployConfig ?? NO_PRIVATE_DEST_FIXTURE;
+    },
     DeploymentRegistryConfigNotAvailableError: class DeploymentRegistryConfigNotAvailableError extends Error {
       readonly code = "DEPLOYMENT_REGISTRY_CONFIG_NOT_AVAILABLE";
       constructor() {
@@ -221,7 +227,7 @@ describe("resolvePublishDestination — dev-only local Verdaccio fallback (cinat
   });
 });
 
-describe("isPrivatePublishDestinationAvailable (cinatra#2644 UI probe)", () => {
+describe("resolvePublishDestination — config loader throws before the visibility branch (#2657 review)", () => {
   const PRIOR_MODE = process.env.CINATRA_RUNTIME_MODE;
 
   beforeEach(() => {
@@ -235,70 +241,64 @@ describe("isPrivatePublishDestinationAvailable (cinatra#2644 UI probe)", () => {
     else process.env.CINATRA_RUNTIME_MODE = PRIOR_MODE;
   });
 
-  it("true when the config declares a private destination AND its credential is stored (any mode)", async () => {
-    process.env.CINATRA_RUNTIME_MODE = "production";
-    setupMocks({
-      deployConfig: {
-        ...NO_PRIVATE_DEST_FIXTURE,
-        privateRegistryUrl: "https://private.registry.example.com",
-        privateReadToken: "fixture-private-read",
-        privateDestinationConfigured: true,
-        privateDestinationId: "fixture-dest-01",
-      },
-      destinationCredential: {
-        registryUrl: "https://private.registry.example.com",
-        tokenCiphertext: "enc(fixture-private-publish)",
-        tokenIv: "mock-iv",
-      },
-    });
-    const { isPrivatePublishDestinationAvailable } = await import(
-      "@cinatra-ai/extensions/destination-resolver"
-    );
-    expect(await isPrivatePublishDestinationAvailable()).toBe(true);
-  });
-
-  it("false in production when the destination is configured but its credential is MISSING (codex round 0)", async () => {
-    process.env.CINATRA_RUNTIME_MODE = "production";
-    setupMocks({
-      deployConfig: {
-        ...NO_PRIVATE_DEST_FIXTURE,
-        privateRegistryUrl: "https://private.registry.example.com",
-        privateReadToken: "fixture-private-read",
-        privateDestinationConfigured: true,
-        privateDestinationId: "fixture-dest-01",
-      },
-      destinationCredential: null,
-    });
-    const { isPrivatePublishDestinationAvailable } = await import(
-      "@cinatra-ai/extensions/destination-resolver"
-    );
-    expect(await isPrivatePublishDestinationAvailable()).toBe(false);
-  });
-
-  it("true in dev mode when only the local-Verdaccio fallback is available", async () => {
+  it("dev mode: 'private' still resolves to the local Verdaccio when the loader throws", async () => {
     process.env.CINATRA_RUNTIME_MODE = "development";
-    setupMocks();
-    const { isPrivatePublishDestinationAvailable } = await import(
+    setupMocks({ deployConfigThrows: true });
+    const { resolvePublishDestination } = await import(
       "@cinatra-ai/extensions/destination-resolver"
     );
-    expect(await isPrivatePublishDestinationAvailable()).toBe(true);
+
+    const config = await resolvePublishDestination("private");
+    expect(config.registryUrl).toBe(LOCAL_VERDACCIO_URL);
+    expect(config.token).toBe(DEV_TOKEN);
   });
 
-  it("false outside dev mode with no configured destination", async () => {
-    process.env.CINATRA_RUNTIME_MODE = "production";
-    setupMocks();
-    const { isPrivatePublishDestinationAvailable } = await import(
-      "@cinatra-ai/extensions/destination-resolver"
-    );
-    expect(await isPrivatePublishDestinationAvailable()).toBe(false);
-  });
-
-  it("false in dev mode when the Verdaccio loader fails (no seeded registry)", async () => {
+  it("dev mode: the scope override still propagates on the loader-throw path", async () => {
     process.env.CINATRA_RUNTIME_MODE = "development";
-    setupMocks({ verdaccioThrows: true });
-    const { isPrivatePublishDestinationAvailable } = await import(
+    setupMocks({ deployConfigThrows: true });
+    const { resolvePublishDestination } = await import(
       "@cinatra-ai/extensions/destination-resolver"
     );
-    expect(await isPrivatePublishDestinationAvailable()).toBe(false);
+
+    const config = await resolvePublishDestination("private", {
+      vendorScopeOverride: "acme",
+    });
+    expect(config.packageScope).toBe("@acme");
+  });
+
+  it("production: the ORIGINAL loader error is rethrown unchanged for 'private'", async () => {
+    process.env.CINATRA_RUNTIME_MODE = "production";
+    setupMocks({ deployConfigThrows: true });
+    const { resolvePublishDestination } = await import(
+      "@cinatra-ai/extensions/destination-resolver"
+    );
+
+    await expect(resolvePublishDestination("private")).rejects.toThrow(
+      /no deployment registry config/,
+    );
+  });
+
+  it("'public' rethrows the loader error even in dev mode (no fallback for public)", async () => {
+    process.env.CINATRA_RUNTIME_MODE = "development";
+    setupMocks({ deployConfigThrows: true });
+    const { resolvePublishDestination } = await import(
+      "@cinatra-ai/extensions/destination-resolver"
+    );
+
+    await expect(resolvePublishDestination("public")).rejects.toThrow(
+      /no deployment registry config/,
+    );
+  });
+
+  it("dev mode with a failing Verdaccio loader: the loader error is rethrown (not swallowed)", async () => {
+    process.env.CINATRA_RUNTIME_MODE = "development";
+    setupMocks({ deployConfigThrows: true, verdaccioThrows: true });
+    const { resolvePublishDestination } = await import(
+      "@cinatra-ai/extensions/destination-resolver"
+    );
+
+    await expect(resolvePublishDestination("private")).rejects.toThrow(
+      /no deployment registry config/,
+    );
   });
 });

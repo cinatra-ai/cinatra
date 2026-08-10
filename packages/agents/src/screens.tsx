@@ -44,10 +44,6 @@ import { MarketplaceReadmeMarkdownSection } from "@/components/marketplace-readm
 import { RequiredDependenciesSection } from "@/components/extensions/required-dependencies-section";
 import { summarizeRequiredDependencies } from "@/lib/extension-dependency-ux";
 import { parseManifestDependencyEdges } from "@cinatra-ai/extensions/manifest-dependencies";
-// cinatra#2644: availability probe for the upload form's destination picker —
-// true when a private destination is configured OR the dev-only local-Verdaccio
-// publish fallback is available.
-import { isPrivatePublishDestinationAvailable } from "@cinatra-ai/extensions/destination-resolver";
 import { Tabs, TabsContent, TabsListRow, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { ImportAgentForm } from "./import-form";
@@ -876,13 +872,6 @@ export async function AgentBuilderImportScreen() {
     isAdmin || orgRole === "org_owner" || orgRole === "org_admin";
   const uploadScopes = { orgs, projects, canGrantWorkspace };
 
-  // cinatra#2644: the picker's `privateDestinationConfigured` prop was never
-  // threaded here, so the upload form ALWAYS showed the not-configured notice
-  // and defaulted to "public" — even on instances with a configured private
-  // destination, and on fresh dev instances where the local-Verdaccio publish
-  // fallback works. Probe availability server-side (auth gate ran above).
-  const privateDestinationConfigured = await isPrivatePublishDestinationAvailable();
-
   return (
     <Main className="min-h-screen">
       <PageHeader
@@ -903,10 +892,7 @@ export async function AgentBuilderImportScreen() {
           </TabsListRow>
           <TabsContent value="agent">
             <div className="soft-panel rounded-card px-6 py-5 max-w-xl">
-              <ImportAgentForm
-                availableScopes={uploadScopes}
-                privateDestinationConfigured={privateDestinationConfigured}
-              />
+              <ImportAgentForm availableScopes={uploadScopes} />
             </div>
           </TabsContent>
           <TabsContent value="skill">

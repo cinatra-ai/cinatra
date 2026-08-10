@@ -110,38 +110,6 @@ async function resolveDevLocalVerdaccioPublishDestination(
   }
 }
 
-/**
- * UI availability probe for the PRIVATE publish destination (cinatra#2644).
- *
- * True when `resolvePublishDestination("private")` can be expected to resolve:
- * either the deployment registry config declares a private destination, or the
- * dev-only local-Verdaccio fallback is available. Parent RSCs thread the result
- * into `PublishDestinationPicker`'s `privateDestinationConfigured` prop so the
- * Private option is offered exactly when publishing to it can work.
- *
- * Caller MUST run an auth gate first (same contract as the resolvers). Never
- * throws — a failed config load degrades to the dev-fallback probe.
- */
-export async function isPrivatePublishDestinationAvailable(): Promise<boolean> {
-  try {
-    const deployConfig = loadDeploymentRegistryConfig();
-    if (
-      deployConfig.privateDestinationConfigured &&
-      deployConfig.privateRegistryUrl &&
-      deployConfig.privateDestinationId
-    ) {
-      // The resolver ALSO requires the stored destination credential (codex
-      // round 0) — presence check only, the token is never decrypted here.
-      const cred = await readDestinationCredential(deployConfig.privateDestinationId);
-      if (cred) return true;
-      // Credential missing — the dev fallback may still make private
-      // publishable; fall through to the probe.
-    }
-  } catch {
-    // Config load failed — fall through to the dev fallback probe.
-  }
-  return (await resolveDevLocalVerdaccioPublishDestination(null)) !== null;
-}
 
 // ---------------------------------------------------------------------------
 // InstallEnvironment — returned by resolveInstallEnvironment.
@@ -182,9 +150,26 @@ export async function resolvePublishDestination(
   visibility: "private" | "public",
   options?: { vendorScopeOverride?: string | null },
 ): Promise<VerdaccioConfig> {
-  const deployConfig = loadDeploymentRegistryConfig();
-  const identity = readInstanceIdentity();
   const override = options?.vendorScopeOverride?.trim() || null;
+
+  // The config loader itself can throw BEFORE any visibility branch is
+  // reached (fail-closed production without config, incoherent env config).
+  // The dev-only local-Verdaccio fallback must be reachable on that path too,
+  // or a dev instance whose loader fails resolves nothing while other probes
+  // succeed — an inconsistency flagged in the #2644 review. When the fallback
+  // does not apply, the ORIGINAL loader error is rethrown unchanged.
+  let deployConfig: ReturnType<typeof loadDeploymentRegistryConfig>;
+  try {
+    deployConfig = loadDeploymentRegistryConfig();
+  } catch (configErr) {
+    if (visibility === "private") {
+      const devFallback = await resolveDevLocalVerdaccioPublishDestination(override);
+      if (devFallback) return devFallback;
+    }
+    throw configErr;
+  }
+
+  const identity = readInstanceIdentity();
   const vendorScope = override
     ? `@${override}`
     : identity

@@ -85,6 +85,13 @@ export type PermissionsFormDraftProps = {
   ) => Promise<PermissionsFormSearchResult>;
   /** When false, the form renders read-only (rare on the upload path; kept for parity). */
   disabled?: boolean;
+  /**
+   * When false, the Access section is not rendered — for parents that mount
+   * the scope picker first-class in their own layout (the ZIP upload form)
+   * and only need the Ownership half here. The policy state still flows
+   * through `value`/`onChange` unchanged. Default true (GitHub tab).
+   */
+  showAccess?: boolean;
 };
 
 function getInitials(name: string): string {
@@ -103,6 +110,7 @@ export function PermissionsFormDraft({
   availableScopes,
   searchCandidates,
   disabled = false,
+  showAccess = true,
 }: PermissionsFormDraftProps) {
   const { policy, coOwners } = value;
 
@@ -219,21 +227,23 @@ export function PermissionsFormDraft({
   return (
     <div className="rounded-card border border-line px-6 py-5 flex flex-col gap-6 bg-surface">
       {/* Access section */}
-      <div className="flex flex-col gap-4">
-        <h2 className="text-base font-semibold text-foreground">Access</h2>
-        <div className="flex flex-col gap-1.5">
-          <AccessCombobox
-            selectionMode="multiple"
-            value={policy.runListVisibility}
-            onChange={setAccess}
-            scopes={availableScopes}
-            disabled={disabled}
-          />
-          <p className="text-xs text-muted-foreground">
-            Choose who can find and view it.
-          </p>
+      {showAccess && (
+        <div className="flex flex-col gap-4">
+          <h2 className="text-base font-semibold text-foreground">Access</h2>
+          <div className="flex flex-col gap-1.5">
+            <AccessCombobox
+              selectionMode="multiple"
+              value={policy.runListVisibility}
+              onChange={setAccess}
+              scopes={availableScopes}
+              disabled={disabled}
+            />
+            <p className="text-xs text-muted-foreground">
+              Choose who can find and view it.
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Ownership section */}
       <div className="flex flex-col gap-3">
