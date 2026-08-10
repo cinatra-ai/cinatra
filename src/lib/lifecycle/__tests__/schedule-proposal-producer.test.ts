@@ -199,7 +199,7 @@ describe("the producer PROPOSES and nothing more", () => {
       token: REF,
       expiresAt: 0,
     });
-    vi.doMock("@cinatra-ai/agents/trigger-schedule-proposal-service", () => ({
+    vi.doMock("@cinatra-ai/agents/trigger-schedule-propose", () => ({
       proposeTriggerSchedule,
     }));
     vi.doMock("@cinatra-ai/mcp-server", () => ({
@@ -220,7 +220,7 @@ describe("the producer PROPOSES and nothing more", () => {
       orgId: "o1",
       schedule: { kind: "immediate" },
     });
-    vi.doUnmock("@cinatra-ai/agents/trigger-schedule-proposal-service");
+    vi.doUnmock("@cinatra-ai/agents/trigger-schedule-propose");
     vi.doUnmock("@cinatra-ai/mcp-server");
     vi.resetModules();
   });
@@ -298,7 +298,7 @@ describe("the producer PROPOSES and nothing more", () => {
     const texts: string[] = [];
     for (const c of cases) {
       vi.resetModules();
-      vi.doMock("@cinatra-ai/agents/trigger-schedule-proposal-service", () => ({
+      vi.doMock("@cinatra-ai/agents/trigger-schedule-propose", () => ({
         proposeTriggerSchedule:
           c.propose === "throw"
             ? vi.fn().mockRejectedValue(new Error("store exploded: run r-9 in org o-3"))
@@ -314,7 +314,7 @@ describe("the producer PROPOSES and nothing more", () => {
       // Nothing about the failure leaks into a durable, model-visible result.
       expect(result.content[0].text).not.toContain("r-9");
       expect(result.content[0].text).not.toContain("o-3");
-      vi.doUnmock("@cinatra-ai/agents/trigger-schedule-proposal-service");
+      vi.doUnmock("@cinatra-ai/agents/trigger-schedule-propose");
       vi.doUnmock("@cinatra-ai/mcp-server");
     }
     // Every refusal is the SAME string — indistinguishable by construction.
