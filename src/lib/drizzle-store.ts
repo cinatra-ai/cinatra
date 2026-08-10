@@ -3991,9 +3991,9 @@ END $$` },
       state          text NOT NULL,
       created_at     timestamptz NOT NULL DEFAULT now(),
       expires_at     timestamptz NOT NULL,
-      consumed_at    timestamptz, displayed_scopes text
+      consumed_at    timestamptz
     )` },
-    { text: `CREATE INDEX IF NOT EXISTS widget_auth_transactions_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_auth_transactions" (expires_at)` }, { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."widget_auth_transactions" ADD COLUMN IF NOT EXISTS displayed_scopes text` }, // #2631: what the sign-in screen SHOWED this transaction, written once when that screen renders; NULL means no screen was rendered. ALTER rides this line for file-size headroom (see the codes table below)
+    { text: `CREATE INDEX IF NOT EXISTS widget_auth_transactions_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_auth_transactions" (expires_at)` }, { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."widget_auth_transactions" ADD COLUMN IF NOT EXISTS displayed_scopes text` }, // #2631: what the sign-in screen SHOWED this transaction, written once when that screen renders. The column is created ONLY here, for both fresh and installed deployments — adding it to the CREATE above would rewrite a deployed column line, which the schema-migration gate reads as a drop/retype. ALTER rides this line for file-size headroom
     // Table 2 — user authorization codes. Issued by the hosted page once the
     // sign-in authorized it; keyed by the sha256 of the plaintext code
     // (which is postMessage'd to the verified opener origin and never stored).

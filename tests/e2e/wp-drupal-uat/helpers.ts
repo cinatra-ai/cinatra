@@ -216,15 +216,16 @@ export async function loginDrupal(page: Page): Promise<void> {
  * After clicking the circle the panel opens. A fresh page load always mounts in
  * 'login' mode (the `cwu_` per-user token is in-memory only, lost on navigation),
  * so the conversation iframe is absent until the handshake mints one: we assert
- * the `.cw-login` gate, click "Sign in with Cinatra", drive the hosted
- * `/widget-auth` PKCE popup (which lands on consent because the browser context
- * carries the dev user's Cinatra session) by clicking "Continue", and wait for
- * the popup to close + the `cwu_` to mint. `enterConversation()` then pre-mints
+ * the `.cw-login` gate, click "Sign in with Cinatra", open the hosted
+ * `/widget-auth` PKCE popup (which goes straight to its return step, because
+ * the browser context carries the dev user's Cinatra session and cinatra#2631
+ * made signing in the grant), and wait for the popup to close itself + the
+ * `cwu_` to mint. Nothing in the popup is clicked. `enterConversation()` then pre-mints
  * the short-lived `cit_` site token and mounts the sandboxed cross-origin
  * `<iframe class="cw-frame">`. We wait for that iframe to attach, then for its
  * embed page to reach the negotiated `active` phase and expose the composer.
  *
- * Every wait keys on a REAL state transition (login → consent → token → iframe
+ * Every wait keys on a REAL state transition (login → grant → token → iframe
  * mount → embed active), not a blanket retry/timeout. The `embedActive` wait
  * doubles as the live frame-ancestors check (a `'none'` resolution renders the
  * embed's neutral error card and never bootstraps — see SEL.embedActive).
@@ -268,9 +269,17 @@ export function embedFrame(page: Page): FrameLocator {
 
 /**
  * Drive the cinatra#410 hosted-login popup to mint a `cwu_` user token. Asserts
- * the login gate, clicks the popup open, completes consent, and waits for the
- * popup to close (success path) — after which the widget swaps to conversation
- * mode and mounts the embed iframe (openWidget then waits it active).
+ * the login gate, clicks the popup open, and waits for the popup to close
+ * (success path) — after which the widget swaps to conversation mode and mounts
+ * the embed iframe (openWidget then waits it active).
+ *
+ * cinatra#2631 — THERE IS NOTHING TO CLICK IN THE POPUP. The hosted login used
+ * to render a consent step ("Continue to the assistant" + a Continue button)
+ * that this helper pressed. The owner ruled that step out: signing in IS the
+ * grant, so the popup records it and closes itself. The helper now asserts the
+ * return state and the self-close instead of driving a control — which is also
+ * the assertion that no interstitial has crept back, because a step that waited
+ * for a press would hang here.
  */
 async function completeRequiredLogin(page: Page): Promise<void> {
   // The login gate must be the reason the iframe is not yet mounted — assert it loud.
@@ -284,16 +293,20 @@ async function completeRequiredLogin(page: Page): Promise<void> {
   await popup.waitForLoadState("domcontentloaded");
 
   // The browser context carries the dev user's Cinatra session, so the hosted
-  // page renders the consent step (member of the txn's org). Click "Continue".
-  // Target the BUTTON role explicitly: the consent page's H1 is "Continue to
-  // the assistant", which a `text=Continue` substring match hits first in DOM
-  // order — clicking the heading leaves the popup open forever.
-  const continueBtn = popup.getByRole("button", { name: "Continue" });
-  await continueBtn.waitFor({ state: "visible", timeout: 30_000 });
-  await Promise.all([
-    popup.waitForEvent("close", { timeout: 30_000 }),
-    continueBtn.click(),
-  ]);
+  // page goes straight to the return step and hands the code back. Wait for the
+  // close it performs on its own. If the popup is already gone by the time we
+  // look, that is the same success — race, not failure.
+  if (!popup.isClosed()) {
+    await popup
+      .getByText("Returning to the assistant", { exact: false })
+      .waitFor({ state: "visible", timeout: 30_000 })
+      .catch(() => {
+        /* the popup may close before this resolves — the close below decides */
+      });
+    if (!popup.isClosed()) {
+      await popup.waitForEvent("close", { timeout: 30_000 });
+    }
+  }
 }
 
 // NO in-session re-mount helper (collapse→resume) exists: grounding against the
