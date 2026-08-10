@@ -77,6 +77,33 @@ export function pinnedCaptureImageUrl(
   )}/preview`;
 }
 
+/**
+ * How a surface addresses a capture's bytes (cinatra#2576, epic #2564 S8c).
+ *
+ * The COOKIE-SESSION surfaces keep the default above: the session byte route
+ * re-authorizes every request against the reading actor, so the URL needs to
+ * carry nothing. A BROKER surface (the CMS widget's cinatra-origin iframe) has
+ * no such credential on an `<img>` load, so it substitutes a minter that returns
+ * a sealed, gate-scoped, short-TTL capability URL instead.
+ *
+ * The seam is a FUNCTION, not a flag, for one reason: the projection below must
+ * stay unable to construct a broker URL by itself. It transports whatever the
+ * surface's minter returns and has no idea a capability exists.
+ *
+ * A minter may return `null` — a capability that cannot be minted (no key, an
+ * out-of-bounds field) must degrade to the honest "no picture for this side"
+ * state, never to a broken image.
+ */
+export type PinnedCaptureImageUrlMinter = (input: {
+  captureArtifactId: string;
+  representationRevisionId: string;
+}) => string | null;
+
+const DEFAULT_IMAGE_URL_MINTER: PinnedCaptureImageUrlMinter = ({
+  captureArtifactId,
+  representationRevisionId,
+}) => pinnedCaptureImageUrl(captureArtifactId, representationRevisionId);
+
 function toRegionViews(capture: StoredPreviewCapture): PinnedCaptureRegionView[] {
   const geometry = capture.data.geometry;
   if (!geometry) return [];
@@ -95,9 +122,15 @@ function toRegionViews(capture: StoredPreviewCapture): PinnedCaptureRegionView[]
     }));
 }
 
-/** Project stored captures into the surface's view model. */
+/**
+ * Project stored captures into the surface's view model.
+ *
+ * `mintImageUrl` defaults to the session byte route — every existing caller is
+ * unchanged. A broker surface passes its own capability minter (S8c).
+ */
 export function buildPinnedCaptureViews(
   captures: readonly StoredPreviewCapture[],
+  mintImageUrl: PinnedCaptureImageUrlMinter = DEFAULT_IMAGE_URL_MINTER,
 ): PinnedCaptureView[] {
   return captures.map((capture) => {
     const sanitization = capture.data.sanitization ?? null;
@@ -110,7 +143,10 @@ export function buildPinnedCaptureViews(
       status: capture.data.status,
       imageUrl:
         capture.data.status === "captured" && capture.representationRevisionId
-          ? pinnedCaptureImageUrl(capture.captureArtifactId, capture.representationRevisionId)
+          ? mintImageUrl({
+              captureArtifactId: capture.captureArtifactId,
+              representationRevisionId: capture.representationRevisionId,
+            })
           : null,
       degradedReason: capture.data.degradedReason,
       capturedAt: capture.data.capturedAt,
@@ -257,16 +293,43 @@ export function buildPinnedRepairPair(
 }
 
 /**
+ * The two host byte paths a capture picture may EVER be addressed by, matched
+ * WHOLE — not by prefix.
+ *
+ * A prefix test would have been a hole in the shape of this very function: the
+ * old `/api/artifacts/` check passed `/api/artifacts/…/content` (the arbitrary
+ * download route) just as happily as `…/preview`, so a faulty minter could have
+ * pointed the surface at the download path and stayed green. These patterns pin
+ * the ENTIRE path:
+ *
+ *   - `/api/artifacts/<id>/versions/<rev>/preview` — the cookie-session capture
+ *     byte route (#2044). Four segments, and the last one is `preview`.
+ *   - `/api/lifecycle-views/capture?c=…` — the sealed, gate-scoped, short-TTL
+ *     capability route the broker tier uses (#2576). No path parameters at all.
+ *
+ * Anything else — a remote page, a protocol-relative `//evil.example`, a
+ * `javascript:` URL, `/content`, a renderer bundle, any other first-party route
+ * — is an offender.
+ */
+const ALLOWED_CAPTURE_URL_PATTERNS: readonly RegExp[] = [
+  /^\/api\/artifacts\/[^/?#]+\/versions\/[^/?#]+\/preview$/,
+  /^\/api\/lifecycle-views\/capture\?[^#]*$/,
+];
+
+/**
  * The INERT-BY-CONTRACT assertion: every URL the view model hands the surface
- * must be a host-relative path. A remote document url reaching the surface would
- * mean the review page fetches the site at view time — exactly what #2044
- * forbids — so this returns the offenders and the view-path test fails on any.
+ * must be one of this host's own capture byte paths. A remote document url
+ * reaching the surface would mean the review page fetches the site at view time
+ * — exactly what #2044 forbids — so this returns the offenders and the view-path
+ * test fails on any. S8c widens it by exactly one host path (above) and by no
+ * other shape.
  */
 export function findRemoteDocumentUrls(views: readonly PinnedCaptureView[]): string[] {
   const offenders: string[] = [];
   for (const view of views) {
-    if (view.imageUrl === null) continue;
-    if (!view.imageUrl.startsWith("/api/artifacts/")) offenders.push(view.imageUrl);
+    const url = view.imageUrl;
+    if (url === null) continue;
+    if (!ALLOWED_CAPTURE_URL_PATTERNS.some((p) => p.test(url))) offenders.push(url);
   }
   return offenders;
 }

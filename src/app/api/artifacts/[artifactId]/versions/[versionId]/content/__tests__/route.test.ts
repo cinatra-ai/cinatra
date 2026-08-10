@@ -178,6 +178,38 @@ describe("GET artifact content", () => {
     expect(res.headers.get("Content-Security-Policy")).toContain("sandbox");
     expect(res.headers.get("Content-Disposition")).toMatch(/^attachment;/);
     expect(res.headers.get("Content-Type")).toBe("application/pdf");
+    // cinatra#2576 — CORP hygiene. The sibling preview route has carried this
+    // since #1630; this route serves the SAME auth-gated bytes and was the only
+    // one of the pair without it. Regression-pinned: neither byte route may be
+    // consumed by a cross-origin document.
+    expect(res.headers.get("Cross-Origin-Resource-Policy")).toBe("same-origin");
+  });
+
+  it("CORP rides EVERY answer shape, not just the 200 (cinatra#2576)", async () => {
+    // A 206 and a 416 stream the same auth-gated bytes' provenance; a header
+    // present on one status and absent on another is a gap by another name.
+    getAuthSession.mockResolvedValue({
+      user: { id: "u" },
+      session: { activeOrganizationId: "org1" },
+    });
+    resolveArtifactVersionForServe.mockReturnValue({
+      storageKey: "orgs/org1/artifacts/a1/versions/v1/b1.bin",
+      mime: "application/pdf",
+      sizeBytes: 100,
+      originKind: "upload",
+    });
+    openRangeByStorageKey.mockResolvedValue({
+      stream: streamOf("rng"),
+      sizeBytes: 10,
+      totalSize: 100,
+    });
+    const partial = await GET({ range: "bytes=0-9" });
+    expect(partial.status).toBe(206);
+    expect(partial.headers.get("Cross-Origin-Resource-Policy")).toBe("same-origin");
+
+    const unsatisfiable = await GET({ range: "bytes=999-" });
+    expect(unsatisfiable.status).toBe(416);
+    expect(unsatisfiable.headers.get("Cross-Origin-Resource-Policy")).toBe("same-origin");
   });
 
   it("always serves attachment from the download route, even for image mimes", async () => {
