@@ -291,6 +291,7 @@
     "build:schema-bootstrap-bundle": "node scripts/build-schema-bootstrap-bundle.mjs",
     "build:exec-service-bundle": "node scripts/build-exec-service-bundle.mjs",
     "test:root": "vitest run --config vitest.config.ts --no-coverage",
+    "test:usage-ledger": "vitest run --config vitest.integration-2578.config.ts",
     "test:e2e:render-smoke": "playwright test -c tests/e2e/config/render-smoke.config.ts",
     "test:e2e:dev-hmr-smoke": "playwright test -c tests/e2e/config/dev-hmr-smoke.config.ts",
     "test:e2e:marketplace-install": "playwright test -c tests/e2e/config/marketplace-install.config.ts",

@@ -89,7 +89,20 @@ function filesMatching(pattern: RegExp): string[] {
 // Registered exceptions — each carries the reason it is allowed to exist.
 // ---------------------------------------------------------------------------
 
-type Registered = { file: string; why: string; knownOpenIssue?: number };
+type Registered = {
+  file: string;
+  why: string;
+  knownOpenIssue?: number;
+  /**
+   * A source fragment the registered file must still contain.
+   *
+   * A registry entry is a CLAIM about code. Without this, a rename or a
+   * deletion leaves the claim behind and the inventory keeps describing a file
+   * that no longer does what it says — the same silent-drift failure this file
+   * exists to prevent, one level up.
+   */
+  mustContain?: string;
+};
 
 /** The ONE file permitted to call a connector's adapter factory. */
 const ADAPTER_MINT_POINT = "packages/llm/src/registry.ts";
@@ -175,7 +188,22 @@ const USAGE_EVENT_PUBLISHERS: Registered[] = [
  * inventory of what the ledger still cannot say now lives in
  * {@link COUNTED_BUT_UNPRICED} as well.
  */
-const KNOWN_OPEN_PATHS: Registered[] = [];
+const KNOWN_OPEN_PATHS: Registered[] = [
+  {
+    file: "src/lib/blog/gemini.ts",
+    why:
+      "cinatra#2641: `adapter.generateImage()` is billed per image and books no " +
+      "row. It is the one response-producing method the seam does not meter — " +
+      "and it CANNOT be metered by wrapping it, because the ABI's image response " +
+      "carries no usage object to read (packages/sdk-extensions/src/" +
+      "llm-provider-adapter-contract.ts). Closing it needs either a usage-carrying " +
+      "image response or a counted-but-unpriced row at the call site, which is a " +
+      "decision rather than a wrapper. Gemini-only today, so it is not part of the " +
+      "OpenAI under-report this file's issue reported.",
+    knownOpenIssue: 2641,
+    mustContain: "generateImage",
+  },
+];
 
 /**
  * Paths whose rows REACH `usage_events` but carry no dollars — counted, not
@@ -330,6 +358,23 @@ describe("known-open paths are recorded, not hidden", () => {
         `${entry.file} must name the issue that owns it`,
       ).toBeTypeOf("number");
       expect(entry.why.length).toBeGreaterThan(20);
+    }
+  });
+
+  it("every registered open path still exists and still does what it claims", () => {
+    // An entry is a claim about code. A rename or a deletion would otherwise
+    // leave the claim standing, and an inventory that describes a file which no
+    // longer contains the call is worse than an empty one — it reads as
+    // tracked while nothing is being tracked.
+    for (const entry of KNOWN_OPEN_PATHS) {
+      const source = SOURCE_FILES.find((file) => file.rel === entry.file);
+      expect(source, `${entry.file} is registered but does not exist`).toBeDefined();
+      if (entry.mustContain) {
+        expect(
+          source!.text,
+          `${entry.file} no longer contains "${entry.mustContain}" — close the entry or repoint it`,
+        ).toContain(entry.mustContain);
+      }
     }
   });
 
