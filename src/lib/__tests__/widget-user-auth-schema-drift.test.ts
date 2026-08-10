@@ -148,13 +148,26 @@ describe("the session-row insert stamp the ordering proof reads", () => {
     // session rows without naming this column, so Postgres fills it — with its
     // own clock, not the minting node's. A value the app wrote would be a node
     // clock again, which is the hole this replaced.
+    //
+    // NULLABLE, deliberately. The DEFAULT already fills the rows that were there
+    // when the column was added AND every row inserted without naming it, so
+    // NOT NULL adds no guarantee the proof relies on — while the
+    // schema-migration gate's additive carve-out is exactly "nullable columns",
+    // and a NOT NULL column added to an existing table demands a migration
+    // artifact for a change that is not doing anything a migration would help
+    // with. The proof itself is unaffected: a NULL on either side makes the
+    // comparison NULL, which is not `true`, so it refuses.
     expect(
       alters.some((t) =>
-        /ADD COLUMN IF NOT EXISTS cinatra_db_created_at timestamptz NOT NULL DEFAULT now\(\)\s*$/.test(
+        /ADD COLUMN IF NOT EXISTS cinatra_db_created_at timestamptz DEFAULT now\(\)\s*$/.test(
           t.trim(),
         ),
       ),
     ).toBe(true);
+    // ...and it is NOT declared NOT NULL, which is what the gate classifies as
+    // destructive on an existing table.
+    const alter = alters.find((t) => t.includes("cinatra_db_created_at")) ?? "";
+    expect(alter).not.toMatch(/NOT\s+NULL/i);
   });
 
   it("names the auth schema explicitly and tolerates the table not existing yet", () => {
