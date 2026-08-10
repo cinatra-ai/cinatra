@@ -49,6 +49,12 @@ pnpm lint           # ESLint
 pnpm build          # production build
 ```
 
+`pnpm build` is memory-hungry. If it dies on your machine, read
+[Building cinatra on a memory-constrained host](docs/internals/workflows/constrained-host-builds.md)
+— it documents the `CINATRA_BUILD_BUNDLER` / `CINATRA_BUILD_CPUS` knobs (also
+available as `docker build --build-arg`), the measured numbers, and the honest
+floor below which no setting helps.
+
 A pull request should pass `pnpm typecheck` cleanly. Tests are package-local — run them with `pnpm --filter <package> test` where a package has them.
 
 ---
