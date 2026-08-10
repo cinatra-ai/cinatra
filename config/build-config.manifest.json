@@ -320,6 +320,7 @@
     { "alias": "@cinatra-ai/extensions/permissions-store", "target": "./packages/extensions/src/permissions-store.ts" },
     { "alias": "@cinatra-ai/extensions/permissions-kind-hooks", "target": "./packages/extensions/src/permissions-kind-hooks.ts" },
     { "alias": "@cinatra-ai/extensions/enforce-extension-access", "target": "./packages/extensions/src/enforce-extension-access.ts" },
+    { "alias": "@cinatra-ai/extensions/access-scope-vantage", "target": "./packages/extensions/src/access-scope-vantage.ts" },
     { "alias": "@cinatra-ai/extensions/install-access-contract", "target": "./packages/extensions/src/install-access-contract.ts" },
     { "alias": "@cinatra-ai/extensions/extension-resource-identity", "target": "./packages/extensions/src/extension-resource-identity.ts" },
     { "alias": "@cinatra-ai/extensions/scope-containment", "target": "./packages/extensions/src/scope-containment.ts" },
