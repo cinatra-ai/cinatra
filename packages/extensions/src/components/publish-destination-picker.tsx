@@ -26,7 +26,12 @@ export type PublishDestinationPickerProps = {
 };
 
 const HINT_TEXT_PRIVATE = "Switch to public to share with all Cinatra instances.";
-const NOT_CONFIGURED_NOTICE = "Private publish destination not yet configured — contact your admin.";
+// Name the ACTUAL configuration step instead of pointing at a nonexistent
+// admin — on a solo/local instance the viewer IS the admin and no UI
+// configures a publish destination (cinatra#2644). The env keys live in
+// src/lib/deployment-registry-config.ts (DEPLOYMENT_REGISTRY_ENV).
+const NOT_CONFIGURED_NOTICE =
+  "Private publish destination not yet configured. An instance operator can enable it by setting the CINATRA_DEPLOYMENT_REGISTRY_PRIVATE_* environment keys.";
 
 export function PublishDestinationPicker({
   value,
