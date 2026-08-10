@@ -43,6 +43,7 @@ import {
   buildOverviewDashboardId,
   compareDashboardsForList,
   isKnownEntityType,
+  normalizeCreatableDashboardName,
   parseCanonicalOverviewId,
   type DashboardEntityRef,
 } from "./store/entity-identity";
@@ -1127,15 +1128,24 @@ function assertValidEntityRef(ref: DashboardEntityRef): void {
 
 /** Validate + normalize a user-supplied dashboard name for create/rename. The
  *  reserved "Overview" name belongs to the default and can never be claimed. */
+/**
+ * Throwing wrapper over the pure `normalizeCreatableDashboardName` rule
+ * (store/entity-identity.ts). The RULE lives there so a caller that must PREDICT
+ * a create — e.g. the installed-catalog read's name-collision check
+ * (cinatra#2474 PR4) — computes the same prospective name this writer persists,
+ * rather than reimplementing the trim/reserved-name handling beside it.
+ */
 function assertCreatableName(name: string): string {
-  const trimmed = name.trim();
-  if (trimmed.length === 0) throw new DashboardInvalidEntityError("name is required");
-  if (trimmed === OVERVIEW_DASHBOARD_NAME) {
-    throw new DashboardInvalidEntityError(
-      `"${OVERVIEW_DASHBOARD_NAME}" is reserved for the non-removable default dashboard`,
-    );
+  const normalized = normalizeCreatableDashboardName(name);
+  if (normalized === null) {
+    if (name.trim() === OVERVIEW_DASHBOARD_NAME) {
+      throw new DashboardInvalidEntityError(
+        `"${OVERVIEW_DASHBOARD_NAME}" is reserved for the non-removable default dashboard`,
+      );
+    }
+    throw new DashboardInvalidEntityError("name is required");
   }
-  return trimmed;
+  return normalized;
 }
 
 /** Build a full DashboardRow for an ownership-only auth pre-check (the real row

@@ -193,9 +193,18 @@ describe("§IX conformance id: scope-dashboards-write-access (the scope-write ga
     // NARROW predicate (the manager-only reference source); the WIDE one
     // (`|| catalog`) may only decide whether the popup exists at all.
     expect(TOOLBAR).toMatch(/const offersScopeAdd = scopeReference !== null/);
+    // cinatra#2474 PR4 supplied the catalog and NARROWED the wide predicate at
+    // the same time: the catalog counts toward the popup's existence only
+    // alongside `canCreate`, because concept B's section is browse-only until
+    // PR5's instantiate action. Both halves are locked — the catalog is still in
+    // the WIDE predicate only, and it can no longer raise a button on its own.
     expect(TOOLBAR).toMatch(
-      /const offersUnifiedAdd = offersScopeAdd \|\| scopeAdd\?\.catalog != null/,
+      /const offersUnifiedAdd =\s*\n?\s*offersScopeAdd \|\| \(scopeAdd\?\.catalog != null && canCreate\)/,
     );
+    // The catalog appears in NO other predicate: not in the narrow one, and
+    // nowhere that could reach the label, the annotation or the action.
+    const catalogMentions = [...TOOLBAR.matchAll(/scopeAdd\?\.catalog/g)];
+    expect(catalogMentions).toHaveLength(1);
     // The annotated branch opens on `offersScopeAdd`, and everything §IX.2 owns
     // lives inside it, BEFORE the non-manager branch begins.
     const managerBranch = TOOLBAR.slice(

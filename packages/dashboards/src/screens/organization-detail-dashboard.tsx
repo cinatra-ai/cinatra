@@ -33,6 +33,7 @@ import { LifecycleBadge } from "@/components/lifecycle-badge";
 import { ScopeDashboardsSection } from "@/components/dashboards/scope-dashboards-section";
 import { ScopeAddSourcesProvider } from "@/components/dashboards/scope-add-sources";
 import { buildScopeReferenceSource } from "@/components/dashboards/scope-reference-binding";
+import { buildScopeCatalogNode } from "@/components/dashboards/scope-catalog-node";
 import {
   getActorContext,
   getAuthSession,
@@ -174,6 +175,21 @@ export async function OrganizationDetailDashboardPage({
   // server-derived ref (Next-encrypted across the boundary; the client shell
   // never authors the owner axis).
   const ref = buildOrganizationDetailRef(id, userId);
+
+  // Concept B's installed-catalog section (cinatra#2474 PR4), rendered
+  // server-side into the slot PR3 left in the popup. It rides the SAME
+  // active-tenant fence the panel and the §IX.1 source ride — an org the actor
+  // is merely a member of gains no catalog either. The destination collection is
+  // DERIVED inside the read from this surface plus the actor's own id (it
+  // reproduces `buildOrganizationDetailRef`, pinned by test), so no ref crosses
+  // that could disagree with the scope the templates are authorized against.
+  const catalog =
+    actor && actorIsActiveInThisOrg
+      ? await buildScopeCatalogNode({
+          actor,
+          surface: { kind: "organization", orgId: id, scopeId: id, userId },
+        })
+      : null;
   const dataSource: EntityDashboardsDataSource = {
     listDashboards: ensureAndListOrganizationDashboardsAction.bind(null, ref),
     loadConfig: getOrganizationDashboardConfigAction.bind(null, ref),
@@ -237,6 +253,7 @@ export async function OrganizationDetailDashboardPage({
         <ScopeAddSourcesProvider
           scopeLabel={scopeLabel}
           reference={scopeReference}
+          catalog={catalog}
         >
           <OrganizationDashboards
             dataSource={dataSource}

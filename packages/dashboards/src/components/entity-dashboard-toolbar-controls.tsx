@@ -30,6 +30,7 @@
  *
  * The catalog slot deliberately does NOT promote the button to "Add dashboard":
  * concept B (cinatra#2474 PR4) must not hand a non-manager the scope-level Add.
+ * Nor does it, on its own, raise a button at all — see `offersUnifiedAdd`.
  */
 import { useState } from "react";
 import {
@@ -126,7 +127,17 @@ export function EntityDashboardsToolbarControls() {
   const offersScopeAdd = scopeReference !== null;
   // Whether the popup is worth opening at all — a strictly WIDER predicate that
   // may only decide the popup's existence, never the manager-only labelling.
-  const offersUnifiedAdd = offersScopeAdd || scopeAdd?.catalog != null;
+  //
+  // The catalog counts toward it ONLY alongside `canCreate` (cinatra#2474 PR4).
+  // Concept B's section is BROWSE-ONLY until its instantiate action lands in
+  // PR5, so a catalog on its own puts nothing pressable in the popup: letting it
+  // raise a "+ New dashboard" button for a principal who cannot even create
+  // would offer a control that opens a dialog with no available operation —
+  // a capability the product does not have (codex convergence r0). With
+  // `canCreate` the popup always holds a real Create action, and the catalog
+  // rides along as honest context.
+  const offersUnifiedAdd =
+    offersScopeAdd || (scopeAdd?.catalog != null && canCreate);
 
   async function handleDeleteConfirm() {
     if (!deleteTarget || !onDelete) return;
