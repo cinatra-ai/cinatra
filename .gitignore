@@ -137,3 +137,4 @@ Desktop.ini
 
 # Env files and secrets
 *.key
+.codex-verdicts/
