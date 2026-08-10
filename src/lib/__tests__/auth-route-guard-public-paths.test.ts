@@ -458,6 +458,173 @@ describe("auth-route-guard - cinatra#2386 /setup/account (first-account bootstra
   });
 });
 
+describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture widget egress", () => {
+  // The capture egress is painted by a plain `<img src>` inside cinatra's own
+  // embed iframe. Its reader is a broker `cwu_` principal, so there is NO
+  // Better-Auth cookie and an `<img>` cannot send a bearer header either — the
+  // sealed capability in the URL is the whole credential. Without the
+  // PUBLIC_PATH_PREFIXES exemption guardAppRoute 307s the load to /sign-in and
+  // the handler's six-rung ladder never runs at all (the browser then tries to
+  // decode the /sign-in HTML as a PNG). This mirrors /api/assistants/chat and
+  // /api/widget-auth/*: reachability only — the route still self-authorizes.
+  //
+  // The exemption is an EXACT-path entry, not a prefix. A PUBLIC_PATH_PREFIXES
+  // entry would match `pathname === prefix || pathname.startsWith(prefix + "/")`
+  // — which leaves the siblings guarded today, but would ALSO exempt any
+  // /api/lifecycle-views/capture/<descendant> that a later parent catch-all or
+  // a rewrite made routable. The egress is a static leaf that reads no path
+  // params, so the exact list expresses the real contract and does not depend
+  // on the route tree keeping its current shape (Codex round 1 on this diff).
+  //
+  // The sibling lifecycle-view routes (resolve, decide) are COOKIE-SESSION ONLY
+  // by design (their route headers say so) and are pinned below as regressions:
+  // widening this entry to an /api/lifecycle-views prefix would unguard both.
+  //
+  // STRICT admission check: `NextResponse.next()` is a 200 carrying
+  // `x-middleware-next: 1`. Asserting that exact signal (rather than merely
+  // "not a 307") means a future guard that answered 401/403/500 here — the
+  // handler still never running — fails this suite instead of passing it.
+  function isNext(res: { status?: number; headers?: Headers }): boolean {
+    return (
+      (res.status ?? 200) === 200 &&
+      res.headers?.get?.("x-middleware-next") === "1" &&
+      (res.headers?.get?.("location") ?? null) === null
+    );
+  }
+
+  // The real request carries the sealed capability as `?c=…`; the guard keys on
+  // the pathname only, so the query is present here purely to model the actual
+  // shape of the `<img>` load the route serves.
+  function captureRequest(search: string): NextRequest {
+    return {
+      nextUrl: { pathname: "/api/lifecycle-views/capture", search },
+      url: `http://localhost/api/lifecycle-views/capture${search}`,
+      cookies: { get: () => undefined },
+      headers: new Headers(),
+    } as unknown as NextRequest;
+  }
+
+  it("a COOKIELESS GET to /api/lifecycle-views/capture passes the guard (no 307 — the handler runs)", async () => {
+    const res = await guardAppRoute(fakeRequest("/api/lifecycle-views/capture"));
+    expect(isNext(res)).toBe(true);
+  });
+
+  it("the same request WITH the sealed ?c= capability also passes (the real `<img>` shape)", async () => {
+    const res = await guardAppRoute(captureRequest("?c=sealed.capability.value"));
+    expect(isNext(res)).toBe(true);
+    // The regression this pins is the measured one on PR #2640: a 307 whose
+    // Location echoed the whole capability into /sign-in?next=…
+    expect(res.headers?.get?.("location") ?? null).toBeNull();
+  });
+
+  it("SOURCE PIN: the entry is a LIVE exact-path entry with an in-handler-auth comment naming the ladder", () => {
+    // Defense against silent removal — the file's convention for every
+    // security-relevant exemption (see /api/cli, /api/extensions/purge).
+    expect(guardSource).toMatch(/"\/api\/lifecycle-views\/capture"/);
+    const line = guardSource
+      .split("\n")
+      .find((l) => l.includes('"/api/lifecycle-views/capture"'));
+    expect(line).toBeDefined();
+    // A LIVE array entry, not a commented-out one (the behavioural tests above
+    // are the real gate; this keeps the pin from passing on a corpse).
+    expect((line ?? "").trimStart().startsWith('"')).toBe(true);
+    expect((line ?? "").toLowerCase()).toMatch(/auth enforced inside/);
+    expect((line ?? "").toLowerCase()).toMatch(/sealed capability/);
+    expect(line ?? "").toMatch(/decideCaptureCapabilityServe/);
+    // It lives in PUBLIC_EXACT_PATHS and NOT in PUBLIC_PATH_PREFIXES, so a
+    // later move onto the prefix list — which would silently pick up any
+    // descendant path — is a visible, failing edit rather than a quiet one.
+    const exactBlock = guardSource.match(
+      /const PUBLIC_EXACT_PATHS = \[([\s\S]*?)\n\];/,
+    )?.[1];
+    expect(exactBlock).toBeDefined();
+    expect(exactBlock ?? "").toMatch(/"\/api\/lifecycle-views\/capture"/);
+    const prefixBlock = guardSource.match(
+      /const PUBLIC_PATH_PREFIXES = \[([\s\S]*?)\n\];/,
+    )?.[1];
+    expect(prefixBlock).toBeDefined();
+    expect(prefixBlock ?? "").not.toMatch(/lifecycle-views/);
+  });
+
+  it("SOURCE PIN: the exempted path is byte-equal to the route constant the minter builds URLs from", () => {
+    // capture-capability.ts is a `server-only` module and the guard runs in the
+    // proxy bundle, so the guard deliberately carries a LITERAL (exactly like
+    // every other entry) rather than importing it. This reads both sources as
+    // text so a rename on either side breaks here instead of silently
+    // reintroducing the 307.
+    const capabilitySource = fs.readFileSync(
+      path.resolve(__dirname, "..", "lifecycle", "capture-capability.ts"),
+      "utf-8",
+    );
+    const routeConst = capabilitySource.match(
+      /CAPTURE_CAPABILITY_ROUTE\s*=\s*"([^"]+)"/,
+    )?.[1];
+    expect(routeConst).toBe("/api/lifecycle-views/capture");
+    expect(guardSource).toContain(`"${routeConst}"`);
+  });
+
+  it("EXACTNESS: a DESCENDANT of the capture path is NOT exempt (307) — the entry is one path, not a subtree", () => {
+    // The load-bearing consequence of the exact list. On the prefix list these
+    // would all be public; here every one of them stays session-guarded, so a
+    // later parent catch-all or rewrite that made a descendant routable could
+    // not inherit this exemption.
+    return Promise.all(
+      [
+        "/api/lifecycle-views/capture/",
+        "/api/lifecycle-views/capture/anything",
+        "/api/lifecycle-views/capture/../resolve",
+        "/api/lifecycle-views/capture/1/bytes",
+      ].map(async (p) => {
+        const res = await guardAppRoute(fakeRequest(p));
+        expect(res.status, `${p} must stay guarded`).toBe(307);
+        expect(res.headers.get("location")).toContain("/sign-in");
+      }),
+    );
+  });
+
+  it("REGRESSION: the sibling /api/lifecycle-views/resolve stays session-guarded (307→/sign-in)", async () => {
+    // S1's refetch is COOKIE SESSION ONLY by design (its route header says so).
+    // The capture exemption must never reach it.
+    const res = await guardAppRoute(fakeRequest("/api/lifecycle-views/resolve"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/sign-in");
+  });
+
+  it("REGRESSION: every OTHER lifecycle-views path stays session-guarded", async () => {
+    for (const p of [
+      "/api/lifecycle-views",
+      "/api/lifecycle-views/",
+      "/api/lifecycle-views/resolve",
+      "/api/lifecycle-views/decide",
+      "/api/lifecycle-views/anything-else",
+    ]) {
+      const res = await guardAppRoute(fakeRequest(p));
+      expect(res.status, `${p} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("PREFIX-BOUNDARY CONTROL: a string-prefix sibling (/api/lifecycle-views/capture-foo) still 307s", async () => {
+    // The match is `pathname === prefix || pathname.startsWith(prefix + "/")`,
+    // never a loose substring.
+    for (const p of [
+      "/api/lifecycle-views/capture-foo",
+      "/api/lifecycle-views/captures",
+    ]) {
+      const res = await guardAppRoute(fakeRequest(p));
+      expect(res.status, `${p} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("the exemption is never broadened to an /api/lifecycle-views prefix", () => {
+    // A bare namespace prefix would unguard resolve + decide in one edit.
+    expect(guardSource).not.toMatch(/"\/api\/lifecycle-views"\s*,/);
+    expect(guardSource).not.toMatch(/"\/api\/lifecycle-views\/resolve"/);
+    expect(guardSource).not.toMatch(/"\/api\/lifecycle-views\/decide"/);
+  });
+});
+
 describe("auth-route-guard DEV_ONLY_PUBLIC_EXACT_PATHS — design-fixture harness routes", () => {
   function isNext(res: { status?: number; headers?: Headers }): boolean {
     const status = res.status ?? 200;
