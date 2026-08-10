@@ -17,10 +17,19 @@ import "server-only";
 // unit-provable and there is exactly one place a rung could be dropped.
 //
 // ONE ANSWER FOR EVERY "NO". Expired, forged, revoked, wrong gate, wrong
-// capture, no run access, a pasted link, a `curl` replay, a store failure — all
-// 404 with an empty body and the same headers. A status code is as much of an
-// oracle as a message: 401 vs 403 vs 404 would let anyone holding a capability
-// probe which gates and captures exist.
+// capture, no run access, a pasted link, a headerless replay, a store failure —
+// all 404 with an empty body and the same headers. A status code is as much of
+// an oracle as a message: 401 vs 403 vs 404 would let anyone holding a
+// capability probe which gates and captures exist.
+//
+// WHAT IS NOT ON THAT LIST. A DELIBERATE replay that hand-writes the Fetch
+// Metadata headers reaches the live checks and, while the capability is inside
+// its five-minute life and the reader still has run access, gets the picture.
+// No header a page cannot send can prevent that for a bearer in a URL fetched
+// by `<img>`. The bound is the ladder, not the transport rung: the TTL, the
+// live `cwu_` revocation edge, the live run-access re-check and the gate
+// binding. `capture-capability-serving.ts` states this in full and a test
+// asserts it rather than implying otherwise.
 //
 // WHAT THIS ROUTE CAN SERVE, AND WHAT IT STRUCTURALLY CANNOT. Only a PINNED
 // CAPTURE PNG bound to the sealed gate. It never reads an id from the request
