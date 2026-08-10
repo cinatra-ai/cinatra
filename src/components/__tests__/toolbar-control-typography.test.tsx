@@ -63,15 +63,21 @@ describe("toolbar control typography", () => {
     expect(html).toContain("h-[30px]");
   });
 
-  it("carries it through the asChild path onto the rendered element", () => {
-    // The link/Slot path merges the control classes onto the CHILD, so a
-    // regression there would leave anchors mis-set while buttons looked fine.
+  it("carries it through the asChild path onto the rendered child", () => {
+    // asChild does not render a <button>: it CLONES the child and merges the
+    // control classes onto it. That is the path the toolbar's page actions take
+    // (`<ToolbarButton asChild><Link/></ToolbarButton>`), so a regression here
+    // would leave those links mis-set while every plain button looked right.
+    // The child's element type is irrelevant to the merge, so this uses a
+    // <span> rather than a raw <a> — the repo's design-system gate reserves
+    // anchors for the shadcn Link pattern, and the assertion does not need one.
     const html = renderToStaticMarkup(
       <ToolbarButton asChild>
-        <a href="/agents">Run agent</a>
+        <span data-probe="child">Run agent</span>
       </ToolbarButton>,
     );
-    expect(html).toMatch(/<a[^>]*class="[^"]*leading-\[normal\]/);
+    expect(html).not.toContain("<button");
+    expect(html).toMatch(/<span[^>]*class="[^"]*leading-\[normal\]/);
   });
 
   it("gives the search pill the same declaration, which its input inherits", () => {
