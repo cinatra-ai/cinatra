@@ -1,3 +1,4 @@
+import { identityClaimMockFrom } from "./helpers/identity-claim-mock";
 /**
  * cinatra#2498 — the INSTALL-TIME write path for the locally-persisted
  * binding-presence authority (`agent_templates.has_artifact_bindings`).
@@ -90,10 +91,14 @@ const readTemplate = vi.fn(async (): Promise<{ id: string; status: string } | nu
 const updateTemplate = vi.fn(async (..._a: unknown[]) => {});
 vi.mock("../store", () => ({
   readAgentTemplateByPackageName: (...a: unknown[]) => readTemplate(...(a as [])),
-  updateAgentTemplate: (...a: unknown[]) => updateTemplate(...(a as [])),
+  // cinatra#2616: the install/import paths now treat a null result as a
+  // REFUSAL, so the stub must return the row it "updated".
+  updateAgentTemplate: async (...a: unknown[]) =>
+    (await updateTemplate(...(a as []))) ?? { id: (a as [string])[0] },
   updateAgentTemplatePackageVersion: vi.fn(async () => {}),
   createAgentVersion: vi.fn(async () => {}),
 }));
+vi.mock("../agent-template-identity", async () => identityClaimMockFrom((n: string) => (readTemplate as (p?: string) => unknown)(n) as never));
 
 vi.mock("../oas-compiler", () => ({
   compileOasAgentJson: async () => ({

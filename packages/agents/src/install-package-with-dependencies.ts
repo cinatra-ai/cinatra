@@ -44,6 +44,11 @@ import {
 } from "./wayflow-reload-client";
 import { installAgentFromPackage } from "./install-from-package";
 import { readAgentTemplateByPackageName } from "./store";
+// cinatra#2616 — the whole-plan identity preflight (see the loop below).
+import {
+  deriveAgentTemplateIdentityClaim,
+  resolveAgentTemplateIdentityClaim,
+} from "./agent-template-identity";
 import type {
   DependencyPlanDeps,
   ResolvedScopeLevel,
@@ -573,6 +578,31 @@ async function _installAgentPackageWithDependenciesImpl(
     }
   }
 
+    // cinatra#2616 — IDENTITY PREFLIGHT, in the same all-or-nothing window as
+    // the refusals above. This path installs members SEQUENTIALLY with no
+    // compensation machinery, so a foreign name discovered on member N would
+    // otherwise leave members 1..N-1 installed. Resolving every planned
+    // member's claim FIRST means a closure containing another organization's
+    // package refuses before ANY member mutates. It is a preflight, not the
+    // guard: each member's own write still carries the claim predicate, so a
+    // name adopted after this loop still refuses at the write.
+    //
+    // Refusing (rather than quietly reusing the foreign row) is the fail-closed
+    // choice: reuse would bind this closure to another tenant's MUTABLE
+    // executable, which is the takeover this issue exists to stop. The shared
+    // dependencies every instance actually has in common are boot-seeded and
+    // org-less, and an org-less row is unclaimed — those keep installing.
+    const memberClaim = deriveAgentTemplateIdentityClaim({
+      orgId: input.orgId ?? null,
+      anchorOrgId: input.anchorOrgId ?? null,
+    });
+    for (const member of plan.ordered) {
+      await resolveAgentTemplateIdentityClaim({
+        packageName: member.packageName,
+        claim: memberClaim,
+      });
+    }
+
   const installedTemplateIds: string[] = [];
   let rootTemplateId: string | null = null;
   for (const member of plan.ordered) {
@@ -598,6 +628,13 @@ async function _installAgentPackageWithDependenciesImpl(
         packageName: member.packageName,
         packageVersion: member.version,
         orgId: input.orgId,
+        // cinatra#2616 — EVERY member claims as the installing organization,
+        // root and transitive alike. `scopeOrgId` is the same
+        // `orgId ?? anchorOrgId` rule this file already uses for planning;
+        // without it a transitive node (which never receives `anchorOrgId`)
+        // would claim as the instance operator and launder a takeover through
+        // a dependency edge.
+        claimantOrgId: scopeOrgId,
         creatorId: input.creatorId,
         status: input.status,
         // cinatra#793: only the ROOT node is dispatcher-routed (its store

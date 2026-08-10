@@ -1,3 +1,4 @@
+import { identityClaimMockFrom } from "./helpers/identity-claim-mock";
 /**
  * cinatra#2044 GAP 2, hop 2 of 2 — `importAgentTemplateCore` must compile the
  * import ZIP's `package.json#cinatra.lifecycle` block onto
@@ -77,10 +78,14 @@ const updateTemplate = vi.fn(async (..._a: unknown[]) => {});
 vi.mock("../store", () => ({
   readAgentTemplateByPackageName: (...a: unknown[]) => readTemplate(...(a as [])),
   createAgentTemplate: (...a: unknown[]) => createTemplate(...(a as [])),
-  updateAgentTemplate: (...a: unknown[]) => updateTemplate(...(a as [])),
+  // cinatra#2616: the install/import paths now treat a null result as a
+  // REFUSAL, so the stub must return the row it "updated".
+  updateAgentTemplate: async (...a: unknown[]) =>
+    (await updateTemplate(...(a as []))) ?? { id: (a as [string])[0] },
   createAgentVersion: vi.fn(async () => {}),
   updateAgentTemplateOrigin: vi.fn(async () => {}),
 }));
+vi.mock("../agent-template-identity", async () => identityClaimMockFrom((n: string) => (readTemplate as (p?: string) => unknown)(n) as never));
 
 import { importAgentTemplateCore } from "../import-agent-core";
 import { createZipBuffer } from "../zip-helpers";
@@ -249,5 +254,52 @@ describe("cinatra#2044 GAP 2 — importAgentTemplateCore compiles cinatra.lifecy
       status: "published",
     });
     expect(upsertPatch().lifecycleConfig).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2616 — the ZIP import is an identity CLAIM, and it must RECORD it.
+//
+// The authenticated import action supplies `claimantOrgId` (its session's
+// active organization) but no `orgId`. Without recording, the row lands
+// `org_id NULL` — still UNCLAIMED — and the next organization's import of the
+// same package name takes it. Both branches must stamp it.
+// ---------------------------------------------------------------------------
+describe("cinatra#2616 — the ZIP import records its identity claim", () => {
+  it("CREATE: a claimant with no explicit orgId is RECORDED on the fresh row", async () => {
+    await importAgentTemplateCore(zip({ lifecycle: undefined }), undefined, {
+      redirect: false,
+      status: "published",
+      claimantOrgId: "org-importer",
+    });
+    expect(createInput().orgId).toBe("org-importer");
+  });
+
+  it("CREATE: an explicit orgId still wins verbatim", async () => {
+    await importAgentTemplateCore(zip({ lifecycle: undefined }), undefined, {
+      redirect: false,
+      status: "published",
+      orgId: "org-explicit",
+      claimantOrgId: "org-explicit",
+    });
+    expect(createInput().orgId).toBe("org-explicit");
+  });
+
+  it("ADOPT: taking over an org-less row RECORDS the claim on it", async () => {
+    readTemplate.mockResolvedValue({ id: "tpl-orgless" } as never);
+    await importAgentTemplateCore(zip({ lifecycle: undefined }), undefined, {
+      redirect: false,
+      status: "published",
+      claimantOrgId: "org-importer",
+    });
+    expect(upsertPatch().orgId).toBe("org-importer");
+  });
+
+  it("boot seeding (no claimant at all) leaves the row org-less, exactly as before", async () => {
+    await importAgentTemplateCore(zip({ lifecycle: undefined }), undefined, {
+      redirect: false,
+      status: "published",
+    });
+    expect(createInput().orgId).toBeUndefined();
   });
 });

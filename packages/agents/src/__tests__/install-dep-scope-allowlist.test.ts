@@ -1,3 +1,4 @@
+import { identityClaimMockFrom } from "./helpers/identity-claim-mock";
 // cinatra#1039 Phase 2 — the agent full-tree installer routes through the
 // UNIFIED dependency planner (`planDependencyInstall`) instead of the deleted
 // @cinatra-ai/registries "prefer-newer" resolver.
@@ -35,6 +36,7 @@ vi.mock("../install-from-package", () => ({
 vi.mock("../store", () => ({
   readAgentTemplateByPackageName: readAgentTemplateByPackageNameMock,
 }));
+vi.mock("../agent-template-identity", async () => identityClaimMockFrom((n: string) => (readAgentTemplateByPackageNameMock as (p?: string) => unknown)(n) as never));
 vi.mock("../wayflow-reload-client", () => ({
   triggerWayflowReload: triggerWayflowReloadMock,
 }));

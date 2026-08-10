@@ -1,3 +1,4 @@
+import { identityClaimMockFrom } from "./helpers/identity-claim-mock";
 // cinatra#1032 deliverable 3 — the PROJECT-TEMPLATE kind gate is WIRED into
 // the agent install path: a package shipping cinatra/project-template.json
 // whose worker refs violate the exact-match rule (or whose template is
@@ -81,10 +82,11 @@ vi.mock("../import-export-actions", () => ({
 const readTemplate = vi.fn(async (): Promise<{ id: string; status: string } | null> => null);
 vi.mock("../store", () => ({
   readAgentTemplateByPackageName: (...a: unknown[]) => readTemplate(...(a as [])),
-  updateAgentTemplate: vi.fn(async () => {}),
+  updateAgentTemplate: vi.fn(async (id: string) => ({ id })),
   updateAgentTemplatePackageVersion: vi.fn(async () => {}),
   createAgentVersion: vi.fn(async () => {}),
 }));
+vi.mock("../agent-template-identity", async () => identityClaimMockFrom((n: string) => (readTemplate as (p?: string) => unknown)(n) as never));
 
 vi.mock("../oas-compiler", () => ({
   compileOasAgentJson: async () => ({

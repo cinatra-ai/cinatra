@@ -163,6 +163,11 @@ import {
 // resolvePublishDestination must be called before publishAgentPackageFromGitDir.
 import { resolvePublishDestination, PublishDestinationNotConfiguredError } from "@cinatra-ai/extensions/destination-resolver";
 import { updateAgentTemplateOrigin } from "../store";
+// cinatra#2616 — the agent_templates package-name identity claim.
+import {
+  claimOfAuthorizedTemplate,
+  isAgentTemplateIdentityConflict,
+} from "../agent-template-identity";
 import { buildPublishAgentDependencies } from "../schema";
 import { deleteAgentTemplateGuarded } from "../removal-gate";
 import {
@@ -4458,6 +4463,8 @@ async function handleAgentBuilderGitPublish(
     // later reload call doesn't fire when this step threw (which would mount
     // a stale or absent agent on the runtime).
     let installSucceeded = false;
+    // cinatra#2616 — the publisher org the origin write below claims under.
+    let publishClaimOrgId: string | null = null;
     if (result.published && result.packageName && result.packageVersion) {
       try {
         // thread the publisher's identity through the install so
@@ -4473,6 +4480,7 @@ async function handleAgentBuilderGitPublish(
         const publisherUserId = actor?.userId;
         const publisherOrgId =
           actor?.orgId ?? (await resolveOrgIdFromSession()) ?? undefined;
+        publishClaimOrgId = publisherOrgId ?? null;
         await installAgentFromPackage(
           {
             packageName: result.packageName,
@@ -4487,6 +4495,10 @@ async function handleAgentBuilderGitPublish(
 );
         installSucceeded = true;
       } catch (syncErr) {
+        // cinatra#2616 — an IDENTITY CONFLICT is not a loggable hiccup: this
+        // catch used to fall through to the origin write below, stamping this
+        // publisher onto the FOREIGN row the sync had just refused.
+        if (isAgentTemplateIdentityConflict(syncErr)) return { error: syncErr.message, code: syncErr.code };
         console.warn("[agent_source_publish] DB template sync failed:", syncErr);
       }
 
@@ -4508,7 +4520,7 @@ async function handleAgentBuilderGitPublish(
             source: "github",
             updatePolicy: "manual",
           },
-        });
+        }, claimOfAuthorizedTemplate({ orgId: publishClaimOrgId }));
       } catch (originErr) {
         console.warn("[agent_source_publish] Origin persistence failed:", originErr);
       }
@@ -6093,7 +6105,7 @@ async function handleAgentBuilderRegistryPublish(
         scope: registryPublishConfig.packageScope,
         visibility: "private",
         registryUrl: registryPublishConfig.registryUrl,
-      });
+      }, claimOfAuthorizedTemplate(template, (request.actor as { orgId?: string | null } | undefined)?.orgId ?? (await resolveOrgIdFromSession()) ?? null));
     } catch (originErr) {
       console.warn("[agent_registry_publish] Origin persistence failed:", originErr);
     }

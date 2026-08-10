@@ -99,6 +99,20 @@ import type { GatedStep } from "./trigger-infer-side-effects";
 // ExtensionOrigin included in AgentTemplateRecord so callers
 // can read origin.visibility without a separate readAgentTemplateOrigin call.
 import type { ExtensionOrigin, ConnectorDependencyMap, AgentDependencyMap } from "./schema";
+// cinatra#2616 — the identity-claim RULE + the packageName derivation it
+// adjudicates (leaf: no store import, no cycle). Re-exported so every existing
+// `./store` importer of slugify/derivePackageName is unchanged.
+import {
+  AgentTemplateIdentityConflictError,
+  agentTemplateIdentityClaimPredicate,
+  agentTemplateIdentityIsClaimable,
+  derivePackageName,
+  slugify,
+  slugifyAgentTemplateName,
+  type AgentTemplateIdentityClaim,
+} from "./agent-template-identity";
+export { derivePackageName, slugify, slugifyAgentTemplateName };
+export type { AgentTemplateIdentityClaim };
 // AgentAuthPolicy persisted as JSON-as-text in
 // agent_templates.agent_auth_policy and (per-run override) agent_runs.auth_policy.
 // enforceRunAccess is the policy enforcer; PrimitiveActorContext is the actor
@@ -431,48 +445,6 @@ export type CreateAgentRunInput = {
 };
 
 // ---------------------------------------------------------------------------
-// packageName auto-derive.
-//
-// Every template row now carries a NOT NULL packageName. Templates created
-// via the internal save path that omit packageName receive an auto-derived
-// `@user-<userId>/<slug>` identity. Existing templates created with an
-// explicit packageName pass through unchanged.
-//
-// `slugify` mirrors the looser slugifyAgentTemplateName variant used for
-// route lookups but enforces the strict `[a-z0-9-]` charset that the
-// strict regex (resolveWayflowUrl) demands.
-// ---------------------------------------------------------------------------
-
-export function slugify(input: string): string {
-  const cleaned = input
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return cleaned || "untitled";
-}
-
-export function derivePackageName(input: {
-  packageName?: string | null;
-  userId?: string | null;
-  name: string;
-  id?: string | null;
-}): string {
-  const trimmed = input.packageName?.trim();
-  if (trimmed) return trimmed;
-  // Append slugified id to guarantee uniqueness, mirroring
-  // the migration backfill formula in src/lib/drizzle-store.ts. Without the
-  // id suffix two templates with the same (creator, name) collide on the
-  // unique index. The slugify pass also enforces the strict resolveWayflowUrl
-  // charset (lowercase + [a-z0-9-]) so manifests round-trip cleanly through
-  // the catch-all proxy.
-  const userPartRaw = input.userId?.trim() || "unknown";
-  const userPart = slugify(userPartRaw);
-  const slug = slugify(input.name);
-  const idPart = input.id ? slugify(input.id) : "";
-  return idPart ? `@user-${userPart}/${slug}-${idPart}` : `@user-${userPart}/${slug}`;
-}
-
-// ---------------------------------------------------------------------------
 // Template row serialization helpers
 // ---------------------------------------------------------------------------
 
@@ -803,16 +775,8 @@ export async function readAgentTemplateById(
   return row ? deserializeTemplate(row) : null;
 }
 
-// ---------------------------------------------------------------------------
-// Slug-based lookup — generic agent configuration workspace
-// ---------------------------------------------------------------------------
-
-export function slugifyAgentTemplateName(value: string): string {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
+// Slug-based lookup — generic agent configuration workspace.
+// (`slugifyAgentTemplateName` moved to ./agent-template-identity, above.)
 
 export async function readAgentTemplateBySlug(
   slug: string,
@@ -905,6 +869,14 @@ function applyAgentTemplateVisibility(
 export async function updateAgentTemplate(
   id: string,
   patch: Partial<CreateAgentTemplateInput>,
+  // cinatra#2616 — the IDENTITY CLAIM. When present, `(org_id IS NULL OR
+  // org_id = <claimant>)` rides the WHERE of EVERY write this function issues,
+  // and they all run in ONE transaction. That is what makes the claim atomic:
+  // there is no read-then-write window, and a refusal cannot leave the
+  // ownership half committed (with its `enqueue_agent_owner_move` trigger
+  // already fired) while the main write refuses. Callers that are not claiming
+  // an identity omit it and behave exactly as before.
+  claim?: AgentTemplateIdentityClaim,
 ): Promise<AgentTemplateRecord | null> {
   // same DB-writer
   // chokepoint as createAgentTemplate: patching a non-empty agentDependencies
@@ -917,16 +889,95 @@ export async function updateAgentTemplate(
       "./materialize-agent-package"
     );
     return withGlobalExtensionLifecycleLock(() =>
-      _updateAgentTemplateImpl(id, patch),
+      _updateAgentTemplateImpl(id, patch, claim),
     );
   }
-  return _updateAgentTemplateImpl(id, patch);
+  return _updateAgentTemplateImpl(id, patch, claim);
 }
 
 async function _updateAgentTemplateImpl(
   id: string,
   patch: Partial<CreateAgentTemplateInput>,
+  claim?: AgentTemplateIdentityClaim,
 ): Promise<AgentTemplateRecord | null> {
+  // cinatra#2616 — with a claim, EVERY write below is one transaction, so a
+  // refusal on the second write rolls the first (and the `path_relocations`
+  // row its owner-move trigger inserted) back. Without a claim the executor is
+  // `db` and the statement sequence is byte-identical to before.
+  const record = claim
+    ? await db.transaction((tx) => _runAgentTemplateUpdate(tx, id, patch, claim))
+    : await _runAgentTemplateUpdate(db, id, patch, undefined);
+  if (!record) return null;
+
+  // re-upsert the mutated agent template. Deliberately AFTER the transaction
+  // commits (cinatra#2616): mirroring inside it would publish a state a
+  // refusal then rolls back.
+  shadowUpsertObject({
+    id: record.id,
+    type: AGENT_TEMPLATE_TYPE_ID,
+    data: {
+      ...record,
+      createdAt: record.createdAt.toISOString(),
+      updatedAt: record.updatedAt.toISOString(),
+    },
+    orgId: record.orgId ?? null,
+    createdBy: record.creatorId ?? null,
+  });
+
+  return record;
+}
+
+/** The drizzle handle a template update runs on: the pool, or a transaction. */
+type AgentTemplateWriteExecutor =
+  | typeof db
+  | Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * Classify a claim-guarded write that matched ZERO rows, from the SAME
+ * transaction snapshot that produced it. Order is deliberate: FOREIGN precedes
+ * "already run" so this path cannot be used to probe another tenant's
+ * lifecycle state.
+ */
+async function classifyZeroRowTemplateWrite(
+  exec: AgentTemplateWriteExecutor,
+  id: string,
+  claim: AgentTemplateIdentityClaim,
+  context: "ownership" | "update",
+): Promise<{ outcome: "missing" } | { outcome: "already-run" }> {
+  const [probe] = await exec
+    .select({
+      orgId: agentTemplates.orgId,
+      firstRunAt: agentTemplates.firstRunAt,
+    })
+    .from(agentTemplates)
+    .where(eq(agentTemplates.id, id));
+  if (!probe) return { outcome: "missing" };
+  if (!agentTemplateIdentityIsClaimable(probe, claim)) {
+    console.warn(
+      `[agent-template-identity] refusing the ${context} write on template '${id}': ` +
+        `held by org '${probe.orgId ?? "<none>"}', claimed by ` +
+        `'${claim.kind === "organization" ? claim.orgId : "<platform>"}'.`,
+    );
+    throw new AgentTemplateIdentityConflictError(id);
+  }
+  if (context === "ownership" && probe.firstRunAt !== null) return { outcome: "already-run" };
+  // Claim-compatible, present, and not gated — the state that produced zero
+  // rows is gone. Never report this as a silent no-op.
+  throw new Error(
+    `[agent-template-identity] concurrent-state anomaly: the ${context} write on template ` +
+      `'${id}' matched no row, but the row is present and claimable. Retry the operation.`,
+  );
+}
+
+async function _runAgentTemplateUpdate(
+  exec: AgentTemplateWriteExecutor,
+  id: string,
+  patch: Partial<CreateAgentTemplateInput>,
+  claim: AgentTemplateIdentityClaim | undefined,
+): Promise<AgentTemplateRecord | null> {
+  // The claim as a WHERE fragment; `undefined` for the platform arm and for
+  // callers that are not claiming an identity, which drizzle's `and()` drops.
+  const claimPredicate = claim ? agentTemplateIdentityClaimPredicate(claim) : undefined;
   // A2A-publication invariant (cinatra#1875 W2, AC#7). An assistant template is a
   // conversational principal, never an A2A-addressable agent — refuse to move one
   // to status='published'. `serializeTemplate` never writes agent_kind (create is
@@ -934,7 +985,7 @@ async function _updateAgentTemplateImpl(
   // assistant reaches 'published' is a status patch here — guard exactly that, reading
   // the PERSISTED agent_kind (never a caller value) so a forged patch cannot bypass it.
   if (patch.status === "published") {
-    const [existing] = await db
+    const [existing] = await exec
       .select({ agentKind: agentTemplates.agentKind })
       .from(agentTemplates)
       .where(eq(agentTemplates.id, id));
@@ -1023,7 +1074,7 @@ async function _updateAgentTemplateImpl(
   const ownershipChanging =
     (patch.ownerLevel !== undefined || patch.ownerId !== undefined);
   if (ownershipChanging) {
-    const current = await db
+    const current = await exec
       .select({ ownerLevel: agentTemplates.ownerLevel, ownerId: agentTemplates.ownerId })
       .from(agentTemplates)
       .where(eq(agentTemplates.id, id));
@@ -1033,20 +1084,32 @@ async function _updateAgentTemplateImpl(
       const nextId = patch.ownerId === undefined ? cur.ownerId : (patch.ownerId ?? null);
       const ownershipActuallyChanged = nextLevel !== cur.ownerLevel || nextId !== cur.ownerId;
       if (ownershipActuallyChanged) {
-        // Atomic gate: only succeeds if first_run_at IS NULL.
-        const gated = await db
+        // Atomic gate: only succeeds if first_run_at IS NULL — and, under a
+        // claim (cinatra#2616), only on a row this claimant may write. Without
+        // the claim on THIS write, a foreign row's owner tuple would already
+        // have been rewritten (and its owner-move trigger already fired) by the
+        // time the main update below refused.
+        const gated = await exec
           .update(agentTemplates)
           .set({ ownerLevel: nextLevel, ownerId: nextId, updatedAt: new Date() })
           .where(
             and(
               eq(agentTemplates.id, id),
               isNull(agentTemplates.firstRunAt),
+              ...(claimPredicate ? [claimPredicate] : []),
             ) as SQL<unknown>,
           )
           .returning({ id: agentTemplates.id });
         if (gated.length === 0) {
+          if (claim) {
+            // missing → null (existing contract); foreign → conflict;
+            // claim-compatible but run → CannotReassignAfterFirstRun.
+            const verdict = await classifyZeroRowTemplateWrite(exec, id, claim, "ownership");
+            if (verdict.outcome === "missing") return null;
+            throw new CannotReassignAfterFirstRun(id);
+          }
           // Either template missing or it's been run. Distinguish for callers.
-          const probe = await db
+          const probe = await exec
             .select({ firstRunAt: agentTemplates.firstRunAt })
             .from(agentTemplates)
             .where(eq(agentTemplates.id, id));
@@ -1075,32 +1138,41 @@ async function _updateAgentTemplateImpl(
   // WHERE, so an assistant can NEVER be moved to published even under a race —
   // the write matches 0 rows and returns null (fail-safe: the publish simply does
   // not happen). Non-publish patches keep the plain id predicate (byte-identical).
-  const whereClause =
-    patch.status === "published"
-      ? and(eq(agentTemplates.id, id), ne(agentTemplates.agentKind, "assistant"))
-      : eq(agentTemplates.id, id);
-  const [row] = await db
+  //
+  // The identity claim (cinatra#2616) rides the SAME WHERE, for the same
+  // reason: a foreign write matches zero rows whatever the interleaving.
+  const whereClause = and(
+    eq(agentTemplates.id, id),
+    ...(patch.status === "published" ? [ne(agentTemplates.agentKind, "assistant")] : []),
+    ...(claimPredicate ? [claimPredicate] : []),
+  ) as SQL<unknown>;
+  const [row] = await exec
     .update(agentTemplates)
     .set(updates)
     .where(whereClause)
     .returning();
-  if (!row) return null;
-  const record = deserializeTemplate(row);
-
-  // re-upsert the mutated agent template.
-  shadowUpsertObject({
-    id: record.id,
-    type: AGENT_TEMPLATE_TYPE_ID,
-    data: {
-      ...record,
-      createdAt: record.createdAt.toISOString(),
-      updatedAt: record.updatedAt.toISOString(),
-    },
-    orgId: record.orgId ?? null,
-    createdBy: record.creatorId ?? null,
-  });
-
-  return record;
+  if (!row) {
+    // Without a claim, zero rows keeps its existing meaning (unknown id, or the
+    // assistant-publication fail-safe) and returns null.
+    if (!claim) return null;
+    // With a claim it is classified: missing → null; foreign → conflict; the
+    // assistant-publication refusal keeps its null; anything else throws rather
+    // than reporting a silent no-op.
+    if (patch.status === "published") {
+      const [kindProbe] = await exec
+        .select({ agentKind: agentTemplates.agentKind, orgId: agentTemplates.orgId })
+        .from(agentTemplates)
+        .where(eq(agentTemplates.id, id));
+      if (kindProbe && agentTemplateIdentityIsClaimable(kindProbe, claim)
+          && kindProbe.agentKind === "assistant") {
+        return null;
+      }
+    }
+    const verdict = await classifyZeroRowTemplateWrite(exec, id, claim, "update");
+    if (verdict.outcome === "missing") return null;
+    throw new CannotReassignAfterFirstRun(id);
+  }
+  return deserializeTemplate(row);
 }
 
 export async function deleteAgentTemplate(id: string): Promise<boolean> {
@@ -4241,83 +4313,11 @@ export async function purgeAgentTemplateAtomic(
   return result;
 }
 
-// ---------------------------------------------------------------------------
-// origin JSONB helpers.
-//
-// readAgentTemplateOrigin — used by resolveInstallEnvironment to determine
-// which registry URL + routing topology to use for a given extension.
-//
-// updateAgentTemplateOrigin — called by every publish path (publishToRegistry,
-// handleAgentBuilderGitPublish, importAgentTemplateCore) after successful
-// publish to persist coordinates. Tokens MUST NOT appear in origin;
-// the caller writes only opaque destinationId.
-// ---------------------------------------------------------------------------
-
-/**
- * Reads the origin JSONB from the agent_templates row identified by packageName.
- * Returns null for legacy rows (origin IS NULL) — callers treat null as
- * "public" (grandfather clause).
- */
-export async function readAgentTemplateOrigin(packageName: string): Promise<ExtensionOrigin | null> {
-  const rows = await db
-    .select({ origin: agentTemplates.origin })
-    .from(agentTemplates)
-    .where(eq(agentTemplates.packageName, packageName))
-    .limit(1);
-  return (rows[0]?.origin as ExtensionOrigin | null | undefined) ?? null;
-}
-
-/**
- * Persists origin coordinates on the agent_templates row after a successful publish.
- *
- * Tokens MUST NOT appear in origin. Only opaque coordinates are written:
- * packageName, version, destinationId (opaque key — no token), scope, visibility,
- * registryUrl, and optional importedFrom provenance.
- *
- * Called by: publishToRegistry (actions.ts), handleAgentBuilderGitPublish (mcp/handlers.ts),
- * importAgentTemplateCore (import-agent-core.ts).
- */
-export async function updateAgentTemplateOrigin(
-  packageName: string,
-  origin: ExtensionOrigin,
-): Promise<void> {
-  await db
-    .update(agentTemplates)
-    .set({ origin })
-    .where(eq(agentTemplates.packageName, packageName));
-}
-
-/**
- * updates the visibility field on the origin JSONB of an
- * agent_templates row after a successful promotion.
- *
- * Preserves all other origin fields (importedFrom, version, scope, etc.).
- * Current behavior supports only private→public. Callers are responsible for
- * enforcing that direction; this helper does NOT guard direction.
- *
- * Called exclusively by promoteExtensionToPublicAction after a successful
- * registry publish.
- */
-export async function updateAgentTemplateVisibility(
-  packageName: string,
-  visibility: "public" | "private",
-  registryUrl: string,
-): Promise<void> {
-  const existing = await readAgentTemplateOrigin(packageName);
-  if (!existing) {
-    throw new Error(`No origin row found for package ${packageName}`);
-  }
-  const updated: ExtensionOrigin = {
-    ...existing,
-    visibility,
-    // When promoting to public, clear the private destinationId;
-    // it is no longer the routing destination. When demoting (future), callers
-    // must supply the destinationId explicitly.
-    destinationId: visibility === "private" ? existing.destinationId : null,
-    registryUrl,
-  };
-  await db
-    .update(agentTemplates)
-    .set({ origin: updated })
-    .where(eq(agentTemplates.packageName, packageName));
-}
+// origin JSONB helpers MOVED to ./agent-template-identity (cinatra#2616): they
+// are package-name-keyed writers of a globally unique identity, so they now
+// carry the claim. Re-exported so `./store` importers are unchanged.
+export {
+  readAgentTemplateOrigin,
+  updateAgentTemplateOrigin,
+  updateAgentTemplateVisibility,
+} from "./agent-template-identity";

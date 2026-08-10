@@ -210,7 +210,10 @@ describe("promoteExtensionToPublicAction", () => {
 
     expect(resolveMock).toHaveBeenCalledWith("public");
     expect(publishMock).toHaveBeenCalled();
-    expect(updateMock).toHaveBeenCalledWith("@x/y", "public", "https://registry.cinatra.ai");
+    // cinatra#2616: the visibility write now carries the IDENTITY CLAIM. This
+    // fixture session has no active organization and the resolved template row
+    // is org-less, so the claim is the instance-operator arm.
+    expect(updateMock).toHaveBeenCalledWith("@x/y", "public", "https://registry.cinatra.ai", { kind: "platform" });
     expect(auditMock).toHaveBeenCalled();
     const auditPayload = auditMock.mock.calls[0][0];
     expect(auditPayload.resourceType).toBe("extension_registry");
