@@ -49,6 +49,11 @@ vi.mock("@/lib/boot/phases/agent-runtime-dep-backfill", () => ({
     { name: "agent-runtime-dep-backfill", policy: "retryable", run: async () => {} },
   ],
 }));
+vi.mock("@/lib/boot/phases/agent-template-org-reconcile", () => ({
+  agentTemplateOrgReconcilePhases: () => [
+    { name: "agent-template-org-reconcile", policy: "degraded", run: async () => {} },
+  ],
+}));
 vi.mock("@/lib/boot/phases/bundled-skill-registration", () => ({
   bundledSkillRegistrationPhases: () => [
     { name: "bundled-skill-registration", policy: "degraded", run: async () => {} },
@@ -140,6 +145,7 @@ describe("runBoot orchestration", () => {
       "agent-mount-projection", // cinatra#793 — store→mount self-heal, before marker backfill
       "agent-marker-backfill", // engineering #418 — always-on, AWAITED, before the dev scan
       "agent-runtime-dep-backfill", // cinatra#1056 — always-on, AWAITED, after marker backfill
+      "agent-template-org-reconcile", // cinatra#2619 — always-on owning-org heal, AFTER the agent phases above
       "bundled-skill-registration", // cinatra#2398 — always-on colocated scan, BEFORE the rebuild
       "skills-catalog-rebuild", // cinatra#1364 — explicit rebuild AFTER activation/materialization
       "dashboard-contribution-reconcile", // cinatra#1628 (S11c) — dormant adoption reconcile, AWAITED
@@ -180,6 +186,7 @@ describe("runBoot orchestration", () => {
       "agent-mount-projection", // cinatra#793 — store→mount self-heal (runs in PROD too)
       "agent-marker-backfill", // engineering #418 — runs in PROD too (self-heal)
       "agent-runtime-dep-backfill", // cinatra#1056 — runs in PROD too
+      "agent-template-org-reconcile", // cinatra#2619 — runs in PROD too (that is what heals a damaged deployment)
       "bundled-skill-registration", // cinatra#2398 — runs in PROD too (that is the whole fix)
       "skills-catalog-rebuild", // cinatra#1364 — runs in PROD too (explicit boot rebuild)
       "dashboard-contribution-reconcile", // cinatra#1628 (S11c) — dormant adoption reconcile, runs in PROD too

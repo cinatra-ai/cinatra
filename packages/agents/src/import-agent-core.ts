@@ -88,6 +88,21 @@ export async function importAgentTemplateCore(
      *  on the next boot scan. It passes false in that case and the absence
      *  degrades to `undefined` — leave the column exactly as it is. */
     lifecycleDeclarationAuthoritative?: boolean;
+    /** The organization that OWNS the template this import creates
+     *  (cinatra#2619). Threaded to `createAgentTemplate`, where
+     *  `withDeterminateInstallScope` turns it into the canonical determinate
+     *  anchor (`org_id` + `owner_level='organization'` + `owner_id=<org>`).
+     *
+     *  Undefined means "no owning org is resolvable" — a genuinely org-less
+     *  instance (nothing has been set up yet), or an instance with SEVERAL orgs
+     *  where an instance-wide bundled agent has no determinate owner. The row is
+     *  then born ownerless exactly as before and the boot/org-bootstrap
+     *  reconcile picks it up once an owner IS determinate. Never guessed here.
+     *
+     *  This is the going-forward half of #2619: with it, a seed written on an
+     *  instance that already has its organization is never damaged in the first
+     *  place, so the reconcile only ever has pre-existing rows to heal. */
+    orgId?: string;
   },
 ): Promise<{ templateId: string; upserted: boolean }> {
   const zipBuf = Buffer.from(zipBase64, "base64");
@@ -321,6 +336,11 @@ export async function importAgentTemplateCore(
 
     await createAgentTemplate({
       id: newId,
+      // cinatra#2619: the owning org, when the caller could resolve one. Omitted
+      // (undefined) leaves the row ownerless exactly as before —
+      // `withDeterminateInstallScope` early-returns on a missing orgId and
+      // stamps nothing, so no scope is ever guessed at write time.
+      ...(options?.orgId ? { orgId: options.orgId } : {}),
       name: importedName,
       description: agent.description ?? undefined,
       sourceNl: agent.sourceNl ?? "",

@@ -37,6 +37,7 @@ import { agentMarkerBackfillPhases } from "@/lib/boot/phases/agent-marker-backfi
 import { bundledSkillRegistrationPhases } from "@/lib/boot/phases/bundled-skill-registration";
 import { skillsCatalogRebuildPhases } from "@/lib/boot/phases/skills-catalog-rebuild";
 import { agentRuntimeDepBackfillPhases } from "@/lib/boot/phases/agent-runtime-dep-backfill";
+import { agentTemplateOrgReconcilePhases } from "@/lib/boot/phases/agent-template-org-reconcile";
 import { dashboardContributionReconcilePhases } from "@/lib/boot/phases/dashboard-contribution-reconcile";
 import { dashboardTemplateMaterializePhases } from "@/lib/boot/phases/dashboard-template-materialize";
 import { agentMountProjectionPhases } from "@/lib/boot/phases/agent-mount-projection";
@@ -192,6 +193,17 @@ async function runBootSequence(deps: RunBootDeps, watchdog: BootStallWatchdog): 
   // canonical rows are loaded. `retryable`: a backfill failure logs and boot
   // continues (the pass is idempotent and retries next boot).
   await run(agentRuntimeDepBackfillPhases());
+
+  // ── agent-template owning-org reconcile (cinatra#2619) ───────────────────────
+  // MANDATORY, always-on (dev AND prod). Heals every template the bundled-agent
+  // import seeded BEFORE any organization existed — the rows that carry
+  // `owner_level='organization'` with no `org_id`/`owner_id` and make
+  // `assertActorWithinAgentTemplateScope` deny every run with `unknown_scope`.
+  // AFTER core-boot (its DDL backfill has stamped the level) and after the
+  // extension/agent phases above, so this pass sees every row they wrote.
+  // `degraded`: a failure logs and boot continues; the pass is idempotent and
+  // retries next boot.
+  await run(agentTemplateOrgReconcilePhases());
 
 
   // ── bundled colocated-skill registration (cinatra#2398) ───────────────────────

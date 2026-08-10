@@ -1,0 +1,37 @@
+# cinatra#2619 walk — measured store + queue facts
+
+## template ownership distribution (after the fix, live instance)
+ owner_level  | org_id | owner_id | count 
+--------------+--------+----------+-------
+ organization | set    | set      |    23
+ organization | set    | NULL     |    10
+ NULL         | NULL   | NULL     |     3
+ organization | set    | EMPTY    |     1
+(4 rows)
+
+## rows still ownerless (must be 0)
+ ownerless 
+-----------
+         3
+(1 row)
+
+## the repro agent row
+            package_name             |                org_id                | owner_level  | owner_id 
+-------------------------------------+--------------------------------------+--------------+----------
+ @cinatra-ai/blog-draft-writer-agent | d199d18e-93c4-4e56-a425-34695654a44d | organization | <empty>
+(1 row)
+
+## runs
+                  id                  |            title            | status 
+--------------------------------------+-----------------------------+--------
+ 1dfcdcfb-aa26-4917-9f29-f36b40bb4ad0 | Blog Draft Writer Agent (1) | armed
+ 65941801-0a0a-4333-9b82-f5e4c29f24bf | Blog Draft Writer Agent (2) | failed
+(2 rows)
+
+## triggers
+                run_id                | trigger_type | enabled |        released_at         |      scheduled_at      |   timezone    |                   job_scheduler_id                   
+--------------------------------------+--------------+---------+----------------------------+------------------------+---------------+------------------------------------------------------
+ 65941801-0a0a-4333-9b82-f5e4c29f24bf | immediate    | t       | 2026-08-10 00:38:38.259+00 |                        | Europe/Berlin | 
+ 1dfcdcfb-aa26-4917-9f29-f36b40bb4ad0 | scheduled    | t       |                            | 2026-12-01 08:00:00+00 | Europe/Berlin | trigger-release-1dfcdcfb-aa26-4917-9f29-f36b40bb4ad0
+(2 rows)
+

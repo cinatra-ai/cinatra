@@ -414,6 +414,15 @@ export async function ensureAgentPackageFromGitFile(opts: {
   licenseAcknowledged?: boolean;
   /** Test seam — see `InstallRecordHealFn`. */
   healInstallRecord?: InstallRecordHealFn;
+  /**
+   * Resolve the organization that OWNS a template this loader CREATES
+   * (cinatra#2619). Returning `null` means "no determinate owner right now" —
+   * the row is created ownerless exactly as it always was, and the reconcile
+   * anchors it once an owner IS determinate. Injected so the unit tier drives
+   * both arms without a Better Auth store; defaults to the single-organization
+   * resolver below.
+   */
+  resolveOwningOrgId?: () => Promise<string | null>;
 }): Promise<{ templateId: string; upserted: boolean; skipped: boolean }> {
   const raw = await readFile(opts.oasSourcePath, "utf8");
   const content = JSON.parse(raw) as {
@@ -645,9 +654,29 @@ export async function ensureAgentPackageFromGitFile(opts: {
   const isFirstPartyInTree =
     packageName.startsWith("@cinatra-ai/") &&
     opts.oasSourcePath.replace(/\\/g, "/").includes("/extensions/cinatra-ai/");
+  // cinatra#2619 — the going-forward half. A seed written while the instance
+  // ALREADY has its organization is born with the determinate anchor
+  // (`withDeterminateInstallScope` turns this orgId into
+  // `owner_level='organization'` + `owner_id=<org>`), so it never needs healing.
+  // A fresh instance still imports before any org exists; that case resolves
+  // `null` here and is covered by the reconcile.
+  const owningOrgId = await (opts.resolveOwningOrgId ?? resolveSingleOrganizationId)().catch(
+    (err) => {
+      // A failed org lookup must never fail the import: fall back to the
+      // pre-#2619 behavior (ownerless row) and let the reconcile heal it.
+      console.warn(
+        `[cinatra:extensions:agent] ${packageName}: owning-org lookup failed (${
+          err instanceof Error ? err.message : String(err)
+        }) — importing without an org anchor; the boot reconcile will heal it`,
+      );
+      return null;
+    },
+  );
+
   const result = await importAgentTemplateCore(zipBase64, undefined, {
     redirect: false,
     status: "published",
+    ...(owningOrgId ? { orgId: owningOrgId } : {}),
     licenseAcknowledged: (opts.licenseAcknowledged ?? false) && isFirstPartyInTree,
     // The `package.json` in the ZIP above is SYNTHESIZED by this loader, so it
     // only speaks for the author's lifecycle declaration when a sibling manifest
@@ -672,4 +701,41 @@ export async function ensureAgentPackageFromGitFile(opts: {
   );
 
   return { templateId: result.templateId, upserted: result.upserted, skipped: false };
+}
+
+
+/**
+ * How this module learns the instance's owning organization (cinatra#2619).
+ *
+ * INJECTED, not imported. This module is reachable from the locked route graphs
+ * the `route-graph-ratchet` gate measures, so a static OR dynamic import of the
+ * reconcile module (or of the Better Auth store) from here adds a module to every
+ * one of them — which is exactly what that gate caught. The boot side registers
+ * the real resolver instead; nothing is imported from here at all.
+ *
+ * UNREGISTERED IS FAIL-CLOSED, and correct: the loader resolves `null`, the row
+ * is created ownerless exactly as it was before this change, and the reconcile
+ * anchors it once an owner is determinate. An unregistered process therefore
+ * loses the optimisation, never the correctness.
+ */
+export type OwningOrgResolver = () => Promise<string | null>;
+
+let registeredOwningOrgResolver: OwningOrgResolver | undefined;
+
+/**
+ * Register how a CREATE on this loader resolves its owning org. Called by the
+ * `agent-template-org-reconcile` boot phase.
+ *
+ * The registered resolver must apply the SAME fail-closed rule the reconcile
+ * does: answer an org id only when the instance has exactly ONE organization.
+ * With none there is nothing to anchor to; with SEVERAL an instance-wide bundled
+ * agent has no determinate owner, and picking one would hand another tenant's
+ * members a run grant.
+ */
+export function setAgentImportOwningOrgResolver(resolver: OwningOrgResolver): void {
+  registeredOwningOrgResolver = resolver;
+}
+
+async function resolveSingleOrganizationId(): Promise<string | null> {
+  return registeredOwningOrgResolver ? registeredOwningOrgResolver() : null;
 }
