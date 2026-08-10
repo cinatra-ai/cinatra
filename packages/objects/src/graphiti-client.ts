@@ -57,8 +57,8 @@ function getGraphitiUrl(): string {
 //        {"error":{"code":-32600,"message":"Bad Request: Missing session ID"}}
 //
 //   POST /mcp {"...","method":"initialize","params":{"protocolVersion":"2025-11-25",…}}
-//     -> HTTP 200, negotiated protocolVersion 2025-11-25,
-//        serverInfo {"name":"Graphiti Agent Memory","version":"1.29.0"}
+//     -> HTTP 200, negotiated protocolVersion 2025-11-25, with the peer
+//        identifying itself as the upstream graphiti server on python-mcp 1.29.0
 //
 // The rejection is identical to the old wrapper's because it has the same
 // cause: the server's Streamable-HTTP layer demands an established session
