@@ -52,7 +52,12 @@ import {
   LIFECYCLE_REFUSAL_RESULT,
   buildLifecycleViewEnvelope,
 } from "@/lib/assistant-runtime/lifecycle-view-envelope";
-import { proposeTriggerSchedule } from "@cinatra-ai/agents/trigger-schedule-proposal-service";
+// The PROPOSE LEAF, deliberately — not the full proposal service. This module
+// is registered on the self-MCP server, which the app's auth plugins mount, so
+// everything it can reach lands on five locked dev-perf route graphs. The
+// confirm transaction and the install outbox are unreachable from a proposal
+// and must stay unreachable from here; the route-graph ratchet measures it.
+import { proposeTriggerSchedule } from "@cinatra-ai/agents/trigger-schedule-propose";
 
 type McpToolResult = {
   content: { type: "text"; text: string }[];

@@ -146,30 +146,30 @@ async function resolveVerificationSummary(
 }
 
 /**
- * The trigger schedule proposal (§VI). S1 left this body returning `absent`
- * because the proposal token did not exist yet; S5 (#2569) supplies it, and the
- * resolution lives in `trigger-schedule-proposal-card` because §VI's card needs
- * a typed BODY as well as a state — the option rows before Confirm, the
- * trigger's chrome after — and this dispatcher's contract is the state alone.
+ * The trigger schedule proposal (§VI) resolves `absent` HERE — and that is the
+ * finished state, not the S1 placeholder it replaces.
  *
- * A proposal ref is not a row address; it is the proposal itself, bound to the
- * (user, org) pair it was minted for. A reader who is not that pair resolves
- * `absent` — the same answer a forged ref gets.
+ * Its live resolver is `POST /api/lifecycle-views/resolve`, which handles the
+ * kind BEFORE reaching this dispatcher and calls
+ * `resolveTriggerScheduleProposalCard` directly. It has to: §VI's card needs a
+ * typed BODY — the option rows before Confirm, the trigger's chrome after — and
+ * this dispatcher's contract is the STATE alone. Resolving it in both places
+ * would be two answers to one question, free to disagree, with the card able to
+ * draw a `pending` floor over a settled body.
+ *
+ * Keeping the arm inert also keeps a MEASURED promise. This module is reachable
+ * from the self-MCP surface (`lifecycle-pull-mcp` authorizes through it), which
+ * the app's auth plugins mount, so anything it can reach lands on five locked
+ * dev-perf route graphs. Delegating here put the card resolver and its view
+ * schema on all five for a path production never takes — the route-graph
+ * ratchet measured it. `lifecycle-pull-mcp`'s render primitives only ever pass
+ * the two gate-scoped kinds, so nothing is lost.
+ *
+ * A test pins the route as the ONLY resolver, so "filling in" this arm later is
+ * a deliberate act rather than a quiet re-import.
  */
-async function resolveTriggerScheduleProposal(
-  ref: string,
-  actorCtx: ReviewActorContext,
-): Promise<LifecycleCardState> {
-  const { resolveTriggerScheduleProposalCard } = await import(
-    "./trigger-schedule-proposal-card"
-  );
-  const card = await resolveTriggerScheduleProposalCard({
-    ref,
-    userId: actorCtx.actor.userId ?? "",
-    orgId: actorCtx.orgId,
-    isAdmin: actorCtx.roleHints?.platformRole === "platform_admin",
-  });
-  return card.state;
+async function resolveTriggerScheduleProposal(): Promise<LifecycleCardState> {
+  return ABSENT;
 }
 
 // ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ export async function resolveLifecycleCardState(params: {
         return payload ? await resolveVerificationSummary(payload, actorCtx) : ABSENT;
       }
       case "trigger_schedule_proposal":
-        return await resolveTriggerScheduleProposal(ref, actorCtx);
+        return await resolveTriggerScheduleProposal();
     }
   } catch {
     // A store/transport failure must not become an existence signal either.

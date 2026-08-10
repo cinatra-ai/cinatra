@@ -70,6 +70,7 @@
     { "alias": "@cinatra-ai/agents/pm-link-store", "target": "./packages/agents/src/pm-link-store.ts" },
     { "alias": "@cinatra-ai/agents/trigger-store", "target": "./packages/agents/src/trigger-store.ts" },
     { "alias": "@cinatra-ai/agents/trigger-schedule-proposal-service", "target": "./packages/agents/src/trigger-schedule-proposal-service.ts" },
+    { "alias": "@cinatra-ai/agents/trigger-schedule-propose", "target": "./packages/agents/src/trigger-schedule-propose.ts" },
     { "alias": "@cinatra-ai/agents/trigger-recurrence", "target": "./packages/agents/src/trigger-recurrence.ts" },
     { "alias": "@cinatra-ai/agents/auditor-apply", "target": "./packages/agents/src/auditor-apply.ts" },
     { "alias": "@cinatra-ai/agents/agent-runtime-mount", "target": "./packages/agents/src/agent-runtime-mount.ts" },

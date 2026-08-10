@@ -42,12 +42,30 @@ import {
   type RecurringConfig,
 } from "./trigger-recurrence";
 import {
-  mintTriggerScheduleProposalToken,
   proposalConsumeKey,
   verifyTriggerScheduleProposalToken,
   type ProposalSchedule,
   type TriggerScheduleProposal,
 } from "@/lib/trigger-schedule-proposal-token";
+// PROPOSE lives in its own leaf so the MCP producer can reach it WITHOUT
+// dragging this module's confirm transaction and install outbox onto the five
+// locked route graphs the self-MCP server sits on. Re-exported here so the
+// service stays the one import site for callers that need both halves.
+import {
+  naiveDatetimeToUtcMs,
+  proposeTriggerSchedule,
+  adjustTriggerSchedule,
+  type ProposeScheduleInput,
+  type ProposeScheduleResult,
+} from "./trigger-schedule-propose";
+
+export {
+  naiveDatetimeToUtcMs,
+  proposeTriggerSchedule,
+  adjustTriggerSchedule,
+  type ProposeScheduleInput,
+  type ProposeScheduleResult,
+};
 import {
   createAgentRunPendingInput,
   readAgentRunById,
@@ -103,83 +121,6 @@ export const PROPOSAL_REFUSALS = {
   past:
     "That time has already passed. Ask for a new time and confirm the new card.",
 } as const;
-
-// ---------------------------------------------------------------------------
-// PROPOSE
-// ---------------------------------------------------------------------------
-
-export type ProposeScheduleInput = {
-  templateId: string;
-  userId: string;
-  orgId: string;
-  schedule: ProposalSchedule;
-};
-
-export type ProposeScheduleResult =
-  | { ok: true; token: string; expiresAt: number }
-  | { ok: false };
-
-/**
- * Mint a proposal. WRITES NOTHING.
- *
- * The only checks here are the ones that would make the card a lie: the
- * template has to exist and be in the caller's reach, and the schedule has to
- * be one the scheduling step could have produced. Whether the reader may
- * DISPATCH is re-resolved at render and again at Confirm — a proposal is a
- * question, and a question the reader turns out not to be allowed to answer is
- * a drawn card with a disabled floor (§IV `restricted`), not a refusal to draw.
- *
- * Returns `{ok:false}` with no reason: the caller is a model-facing tool whose
- * every denial is one fixed sentence.
- */
-export async function proposeTriggerSchedule(
-  input: ProposeScheduleInput,
-): Promise<ProposeScheduleResult> {
-  if (!input.userId || !input.orgId) return { ok: false };
-
-  const template = await readAgentTemplateById(input.templateId);
-  if (!template) return { ok: false };
-  // The org boundary, before anything confirms the template exists to a caller
-  // outside it.
-  if (template.orgId && template.orgId !== input.orgId) return { ok: false };
-
-  // A schedule with a past `runAt` would be refused at Confirm by the trigger
-  // service's own future check; refusing it HERE instead means the assistant
-  // re-reads the user's intent rather than drawing a card that cannot be
-  // pressed.
-  if (input.schedule.kind === "scheduled") {
-    const ms = naiveDatetimeToUtcMs(input.schedule.runAt, input.schedule.timezone);
-    if (Number.isNaN(ms) || ms <= Date.now()) return { ok: false };
-  }
-
-  const minted = mintTriggerScheduleProposalToken({
-    templateId: input.templateId,
-    userId: input.userId,
-    orgId: input.orgId,
-    schedule: input.schedule,
-  });
-  if (!minted) return { ok: false };
-  return { ok: true, token: minted.token, expiresAt: minted.expiresAt };
-}
-
-/**
- * ADJUST. A distinct name for the same act, because §VI draws it as a distinct
- * affordance and the distinction is the safety property: "Adjust opens the same
- * option rows in place; Confirm settles them." Adjusting a proposal RE-PROPOSES
- * — a new token with a new consume identity — rather than editing the old one,
- * so the previous proposal simply stops being confirmable and no partially
- * changed schedule can ever exist.
- *
- * The superseded token is deliberately NOT revoked. It has no server record to
- * revoke, and it does not need one: the two tokens carry DIFFERENT consume
- * identities, so confirming the stale one still creates exactly one run — the
- * one it describes. Revocation would buy nothing and cost a table.
- */
-export async function adjustTriggerSchedule(
-  input: ProposeScheduleInput,
-): Promise<ProposeScheduleResult> {
-  return proposeTriggerSchedule(input);
-}
 
 // ---------------------------------------------------------------------------
 // CONFIRM
@@ -597,56 +538,6 @@ export function describeProposalSchedule(schedule: ProposalSchedule): string {
   if (schedule.kind === "immediate") return "Runs right after setup";
   if (schedule.kind === "scheduled") return `Once, at ${schedule.runAt.replace("T", " ")}`;
   return describeRecurrence(schedule.selection as RecurringConfig);
-}
-
-/**
- * Interpret a timezone-naive "YYYY-MM-DDTHH:MM" wall clock in an IANA zone.
- *
- * The same derivation `trigger-service.ts` uses, and it has to be: a proposal
- * validated here and armed there must agree on what "09:00 in Europe/Berlin"
- * is. `new Date(naive)` would read the string in the SERVER's zone (UTC), which
- * is the bug this exists to avoid.
- *
- * KNOWN LIMIT, INHERITED DELIBERATELY (codex round-2 finding). The offset is
- * inferred at a single reference instant and not round-tripped, so the two DST
- * edge cases are imprecise: a wall clock inside a spring-forward GAP (a time
- * that does not exist) maps to a nearby real instant rather than being refused,
- * and a fall-back AMBIGUOUS time resolves to one of its two instants without an
- * explicit policy. This is the SHIPPED behaviour of the scheduling form, and
- * making the conversational path stricter would be worse, not better: the
- * proposal and the form would then disagree about what a confirmed schedule
- * means, which is the one thing §VI's "confirm what you see" cannot survive.
- * Closing it is a change to BOTH, on its own issue.
- */
-export function naiveDatetimeToUtcMs(naive: string, timezone: string): number {
-  const padded = naive.length === 16 ? `${naive}:00` : naive;
-  const asUtcMs = new Date(`${padded}Z`).getTime();
-  if (Number.isNaN(asUtcMs)) return NaN;
-  let parts: Intl.DateTimeFormatPart[];
-  try {
-    parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: timezone,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    }).formatToParts(new Date(asUtcMs));
-  } catch {
-    // An unknown IANA zone. NaN, so both the propose check and the install
-    // translation refuse rather than silently scheduling in UTC.
-    return NaN;
-  }
-  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
-  const rawHour = get("hour");
-  const tzHour = rawHour === "24" ? "00" : rawHour;
-  const inTzMs = new Date(
-    `${get("year")}-${get("month")}-${get("day")}T${tzHour}:${get("minute")}:${get("second")}Z`,
-  ).getTime();
-  if (Number.isNaN(inTzMs)) return NaN;
-  return asUtcMs + (asUtcMs - inTzMs);
 }
 
 // ---------------------------------------------------------------------------
