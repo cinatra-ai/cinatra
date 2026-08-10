@@ -3970,12 +3970,10 @@ END $$` },
     // cinatra#407 — hosted /widget-auth PKCE login + user-scoped widget token.
     //
     // Three short-lived, single-use-discipline tables for the per-user widget
-    // login (Plan B, EPIC #406). All secrets are HASH-AT-REST (only sha256 of
-    // each code/token is stored). Dedicated tables (NOT TTL-cached
-    // connector_config JSON) so the single-use consume is an atomic
-    // UPDATE/DELETE...RETURNING free of read-modify-write races. Each carries an
-    // expires_at index driving the on-write sweep (no external cron). The full
-    // engine + the security rationale live in src/lib/widget-user-auth.ts.
+    // login (Plan B, EPIC #406). All secrets are HASH-AT-REST; dedicated tables
+    // (NOT TTL-cached connector_config JSON) so each single-use consume is an
+    // atomic UPDATE/DELETE...RETURNING, and each carries an expires_at index
+    // driving the on-write sweep. Engine + rationale: src/lib/widget-user-auth.ts.
     //
     // Table 1 — auth transactions. Created by the site-token-authenticated init
     // route; pins the SERVER-VERIFIED context {site_id, client, org_id,
@@ -4000,13 +3998,7 @@ END $$` },
     // logged-in MEMBER consents; keyed by the sha256 of the plaintext code
     // (which is postMessage'd to the verified opener origin and never stored).
     // Carries the full user binding; redeemed exactly once via DELETE...RETURNING.
-    //
-    // `granted_scopes` (cinatra#2574, epic #2564 S8a) records the extension
-    // scopes the user consented to on the hosted login — a space-delimited set
-    // that the redeem copies into the minted token's `scope`/`aud`. NULLABLE and
-    // added with ADD COLUMN IF NOT EXISTS below so an existing deployment
-    // upgrades in place: every code already in flight carries no grant, which is
-    // exactly the fail-closed answer for a consent that predates the extension.
+    // `granted_scopes` (cinatra#2574): the consented extension-scope set; NULLABLE + back-filled by the ALTER below, so a code already in flight carries no grant — the fail-closed answer for a consent that predates the extension.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" (
       code_hash      text PRIMARY KEY,
       user_id        text NOT NULL,
@@ -4021,8 +4013,7 @@ END $$` },
       created_at     timestamptz NOT NULL DEFAULT now(),
       expires_at     timestamptz NOT NULL
     )` },
-    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" ADD COLUMN IF NOT EXISTS granted_scopes text` },
-    { text: `CREATE INDEX IF NOT EXISTS widget_auth_codes_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" (expires_at)` },
+    { text: `CREATE INDEX IF NOT EXISTS widget_auth_codes_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" (expires_at)` }, { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" ADD COLUMN IF NOT EXISTS granted_scopes text` }, // the ALTER rides this line for file-size-ratchet headroom; CREATE TABLE IF NOT EXISTS never touches an existing table, so an installed deployment gains the column only here
     // Table 3 — opaque short-lived user tokens (cwu_). Browser-held bearer the
     // stream route validates (CHILD 3). Keyed by sha256(rawToken); only the hash
     // is stored. Multi-use within TTL; instant revoke via row delete or the live
