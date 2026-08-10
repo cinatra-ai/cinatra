@@ -44,6 +44,7 @@ import {
   ToolbarSearchInput,
 } from "@/components/ui/toolbar";
 import { AgentAllCard } from "@/components/extensions/agent-all-card";
+import { DraftAgentCard } from "./draft-agent-card";
 
 export type AgentRunRowModel = {
   key: string;
@@ -86,6 +87,25 @@ export type AgentRunRowModel = {
     /** Full accessible name (the visible label alone is not self-explanatory). */
     ctaAriaLabel: string;
   } | null;
+  /**
+   * Set for a DRAFT template surfaced for publishing (cinatra#2653): the row
+   * renders through <DraftAgentCard> — the amber DRAFT indicator plus a
+   * Publish primary action instead of Run. Derived server-side (NewAgentPage
+   * surfaces drafts only to platform admins); absent/null for every runnable
+   * row.
+   */
+  draft?: {
+    templateId: string;
+    /**
+     * True when the agent will STILL be listed on this picker once
+     * published (it carries its own HITL signal). False for a HITL-less
+     * agent — the #1007 filter drops it from this run picker after
+     * publish (it serves as a sub-agent / A2A surface instead), and the
+     * card's success toast says so instead of promising a card that
+     * will not be there.
+     */
+    staysListedAfterPublish: boolean;
+  } | null;
 };
 
 export function AgentRunClient({ rows }: { rows: AgentRunRowModel[] }) {
@@ -120,9 +140,14 @@ export function AgentRunClient({ rows }: { rows: AgentRunRowModel[] }) {
         {/* Each row is its own client component (cinatra#1121): it lifts the §V
             detail-modal open state so the card's coloured accent panel and its
             "More details" link open the SAME modal. */}
-        {filtered.map((row) => (
-          <AgentAllCard key={row.key} row={row} />
-        ))}
+        {filtered.map((row) =>
+          row.draft ? (
+            // cinatra#2653 — a draft row publishes; it never offers Run.
+            <DraftAgentCard key={row.key} row={{ ...row, draft: row.draft }} />
+          ) : (
+            <AgentAllCard key={row.key} row={row} />
+          ),
+        )}
         {filtered.length === 0 && q.length > 0 && (
           <p className="col-span-full py-8 text-center text-sm text-muted-foreground">
             No agents match &ldquo;{query}&rdquo;.

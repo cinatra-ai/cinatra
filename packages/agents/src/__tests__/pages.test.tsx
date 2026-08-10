@@ -248,3 +248,39 @@ describe("NewAgentPage merged discovery table", () => {
     expect(source).not.toMatch(/className="[^"]*\bbg-slate-/);
   });
 });
+
+// cinatra#2653 — draft visibility. An imported template lands as 'draft' and
+// the store default hid it, with no UI to find or publish it. These guards pin
+// the wiring: drafts are fetched only for platform admins, bypass the HITL run
+// filter through the ONE surfaceable-draft predicate, and render through
+// DraftAgentCard (Publish, never Run).
+describe("NewAgentPage draft visibility (cinatra#2653)", () => {
+  it("fetches drafts only for platform admins via the statuses option", () => {
+    const source = readSource();
+    expect(source).toMatch(/isPlatformAdmin\s*\(/);
+    expect(source).toMatch(/\[\s*"active",\s*"published",\s*"draft"\s*\]/);
+    // Non-admin sessions keep the pre-#2653 status set.
+    expect(source).toMatch(/:\s*\[\s*"active",\s*"published"\s*\]/);
+  });
+
+  it("drafts bypass the HITL run filter through isSurfaceableDraftTemplate", () => {
+    const source = readSource();
+    expect(source).toMatch(/isSurfaceableDraftTemplate/);
+    // Only NON-draft rows feed the HITL run filter.
+    expect(source).toMatch(/status\s*!==\s*"draft"/);
+  });
+
+  it("builds a draft row with a Publish target and no run/detail affordances", () => {
+    const source = readSource();
+    expect(source).toMatch(/draft:\s*\{\s*templateId:\s*t\.id,/);
+    // Honest post-publish feedback: the row carries whether the agent will
+    // still be listed on this picker once published (#1007 HITL semantics).
+    expect(source).toMatch(/staysListedAfterPublish:\s*templateHasOwnHitl\(t\)/);
+  });
+
+  it("AgentRunClient routes draft rows to DraftAgentCard", () => {
+    const client = readClientSource();
+    expect(client).toMatch(/DraftAgentCard/);
+    expect(client).toMatch(/row\.draft\s*\?/);
+  });
+});

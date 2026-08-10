@@ -3,7 +3,9 @@ import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
 import { readInstalledAgentTemplates } from "./store";
-import { selectHitlRunVisibleTemplates } from "./hitl-run-filter";
+import { selectHitlRunVisibleTemplates, templateHasOwnHitl } from "./hitl-run-filter";
+import { isSurfaceableDraftTemplate } from "./draft-visibility";
+import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 import { buildAgentWorkspacePath } from "@/lib/agent-url";
 import { Main } from "@/components/layout/main";
 import { Button } from "@/components/ui/button";
@@ -93,7 +95,19 @@ function buildUnavailableAction(
 }
 
 export async function NewAgentPage() {
-  const allTemplates = await readInstalledAgentTemplates();
+  // DRAFT VISIBILITY (cinatra#2653): an imported agent template lands with
+  // status='draft' (import-agent-core default) and the store's default
+  // statuses hide drafts — so a fresh upload was invisible here with no UI to
+  // find or publish it. Surface drafts to PLATFORM ADMINS (the same floor as
+  // the upload path that creates them — requireAdminSession); everyone else
+  // sees the picker exactly as before.
+  const session = await getAuthSession();
+  const draftsVisible = isPlatformAdmin(session);
+  const allTemplates = await readInstalledAgentTemplates({
+    statuses: draftsVisible
+      ? ["active", "published", "draft"]
+      : ["active", "published"],
+  });
   // RUNTIME-LIFECYCLE + PROVISIONING GATE (cinatra#659, cinatra#2605):
   // `readInstalledAgentTemplates` filters by the agent-builder `status`
   // (active|published) only — NOT the canonical `installed_extension` source of
@@ -119,7 +133,21 @@ export async function NewAgentPage() {
       ? ({ state: "runnable" } as const)
       : (availability.get(t.packageName) ?? ({ state: "runnable" } as const));
   const lifecycleVisible = allTemplates.filter((t) => availabilityOf(t).state !== "archived");
-  const visibleTemplates = selectHitlRunVisibleTemplates(lifecycleVisible);
+  // cinatra#2653 — drafts BYPASS the HITL run filter: that filter decides
+  // which agents may offer a RUN, while a surfaceable draft is listed to be
+  // FOUND and PUBLISHED (its card offers Publish, never Run). Routing drafts
+  // through the filter would hide every HITL-less import — recreating the
+  // exact invisibility this issue is about. `isSurfaceableDraftTemplate`
+  // excludes assistant-kind drafts (the seeded builtin assistants are
+  // permanent drafts by design) and external rows.
+  const surfaceableDrafts = draftsVisible
+    ? lifecycleVisible.filter(isSurfaceableDraftTemplate)
+    : [];
+  const runCandidates = lifecycleVisible.filter((t) => t.status !== "draft");
+  const visibleTemplates = [
+    ...selectHitlRunVisibleTemplates(runCandidates),
+    ...surfaceableDrafts,
+  ];
 
   const rows: AgentRunRowModel[] = visibleTemplates.map<AgentRunRowModel>((t) => {
     const ioSkills = (() => {
@@ -151,6 +179,31 @@ export async function NewAgentPage() {
         // External A2A agents carry no agent install row (their connector's
         // lifecycle governs them) → never gated by the provisioning layer.
         unavailable: null,
+      };
+    }
+    // cinatra#2653 — a DRAFT row publishes instead of running: no Run href,
+    // no marketplace listing (a draft is not published anywhere), no
+    // availability CTA (the runtime gate governs runs; this card offers none).
+    if (t.status === "draft") {
+      return {
+        key: `local:${t.id}`,
+        name: t.name,
+        description: t.description ?? "",
+        version: t.packageVersion ?? "",
+        skills: ioSkills,
+        host: "local",
+        runHref: "#",
+        packageName: null,
+        detailHref: null,
+        unavailable: null,
+        draft: {
+          templateId: t.id,
+          // Honest post-publish feedback (the #1007 picker lists only
+          // HITL-gated agents + their descendants): a HITL-less agent
+          // LEAVES this list once published — it serves as a sub-agent /
+          // A2A surface instead. The card words its success toast from this.
+          staysListedAfterPublish: templateHasOwnHitl(t),
+        },
       };
     }
     // detailHref (and thus the §V modal + its loader key packageName) exists
