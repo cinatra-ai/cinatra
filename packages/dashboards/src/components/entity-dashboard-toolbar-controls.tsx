@@ -12,14 +12,13 @@
  * the selected dashboard when `canWrite && !isDefault`. The owner asked for the
  * three dots to be removed from the toolbar, unconditionally, so it is gone.
  *
- * WHAT THAT STRANDS, stated plainly rather than quietly dropped: Rename and
- * Delete for an entity dashboard now have NO user-reachable entry point. The
- * capability itself is untouched — `EntityDashboardsContext.onRename` /
- * `.onDelete` are still wired by `entity-dashboards-shell.tsx` to the real
- * server actions, and those actions still authorize and still work — but nothing
- * in the UI calls them any more. Re-surfacing them is a render change in this
- * file alone; no contract, action or authorization was removed. (Overview was
- * already non-removable server-side, cinatra#700, so nothing there changes.)
+ * WHERE RENAME AND DELETE WENT: into the EDIT-mode group of
+ * `<CinatraDashboardToolbar>`, as ordinary buttons beside "Add text" and "Add
+ * portlet" (owner review, same PR). They keep this menu's own gate — the
+ * SELECTED dashboard, `canWrite && !isDefault`, and only where the surface wired
+ * the handler — and they call the same `EntityDashboardsContext.onRename` /
+ * `.onDelete` this menu called. No contract, action or authorization changed.
+ * (Overview was already non-removable server-side, cinatra#700.)
  *
  * The remaining controls are capability-gated — the add button appears only when
  * `canCreate` (or when the scope offers an add-to-scope source) — so a member

@@ -2,7 +2,7 @@
 //
 // Covers the reusable entity Dashboards-tab shell (cinatra#701) end-to-end at
 // the component seam, with MOCKED server-action callbacks (the DB-backed
-// service surface is proven by #700's integration suite). Two layers:
+// service surface is proven by #700's integration suite). Three layers:
 //
 //   1. Shell logic — a light `renderDashboard` stub + a context probe drive the
 //      list/select/create/rename/delete state machine and the loading / empty /
@@ -18,9 +18,10 @@
 //      Rename / Delete is gone; the context callbacks it drove are still wired
 //      and still exercised by layer 1).
 //   3. EDIT-mode toolbar — pressing "Edit dashboard" raises Rename and Delete
-//      as worded buttons in that same first toolbar (the owner's second review
-//      on PR #2638), under the ORIGINAL gate `canWrite && !isDefault`, and they
-//      drive the very same data-source calls the removed menu drove.
+//      as ORDINARY MEMBERS of the toolbar's existing edit group, beside "Add
+//      text" and "Add portlet" (the owner's second and third reviews on PR
+//      #2638), under the ORIGINAL gate `canWrite && !isDefault`, driving the
+//      very same data-source calls the removed three-dot menu drove.
 //
 //   pnpm --filter @cinatra-ai/dashboards exec vitest run \
 //     src/components/__tests__/entity-dashboards-shell.test.tsx
@@ -637,13 +638,13 @@ describe("EntityDashboardsShell — controls render in the toolbar", () => {
 
 // ── layer 3: the EDIT-mode toolbar carries Rename + Delete ───────────────────
 //
-// The owner's second review on PR #2638: "when clicking 'Edit dashboard' in the
-// toolbar, new toolbars show up that include the editing options — in the first
-// of these toolbars … add a button that allows to rename it and a button that
-// allows to delete it". The FIRST of those bars is `<CinatraDashboardToolbar>`
-// itself (the second is drizzle-cube's filter bar, mounted by
-// `<DashboardFilterBarSlot>` and out of this render). So the assertions below
-// look for the two controls in the same toolbar element as "Add portlet".
+// The owner's second review on PR #2638 asked for the two buttons in the first
+// edit toolbar; the third asked for them to be ORDINARY MEMBERS of the toolbar's
+// existing edit group rather than a cluster with behaviour of its own. So these
+// tests pin BOTH: the two controls exist and work, AND they are siblings of
+// "Add text" / "Add portlet" inside the very same `<ToolbarGroup>` — no separator
+// of their own, no group of their own, no disabled predicate their siblings do
+// not carry.
 
 /** Enter edit mode the way a user does, and hand back the toolbar element. */
 async function editModeToolbar(
@@ -659,9 +660,20 @@ async function editModeToolbar(
   fireEvent.click(screen.getByRole("button", { name: "Edit dashboard" }));
   // The edit-controls group is the proof that edit mode is on.
   expect(screen.getByRole("button", { name: "Add portlet" })).toBeTruthy();
+  return toolbarEl();
+}
+
+function toolbarEl(): HTMLElement {
   return document.querySelector<HTMLElement>(
     "[data-cinatra-dashboard-toolbar]",
   ) as HTMLElement;
+}
+
+/** The toolbar group that holds a given button — the structural unit the owner's
+ *  "use the existing toolbar behaviour" review is about. */
+function groupOf(toolbar: HTMLElement, name: string): HTMLElement {
+  const button = within(toolbar).getByRole("button", { name });
+  return button.closest('[data-slot="toolbar-group"]') as HTMLElement;
 }
 
 /** A list whose only row is the writable, non-default one — so the initial
@@ -676,28 +688,69 @@ function salesOnly(overrides: Partial<EntityDashboardsDataSource> = {}) {
   });
 }
 
+/** The confirmation's own Delete, told apart from the toolbar's by its dialog. */
+function confirmDeleteButton(): HTMLElement {
+  return within(screen.getByRole("alertdialog")).getByRole("button", {
+    name: "Delete",
+  });
+}
+
 describe("EntityDashboardsShell — Rename / Delete in the edit-mode toolbar", () => {
-  test("a writable non-default dashboard raises Rename and Delete in the first toolbar", async () => {
+  test("Rename and Delete are ordinary members of the SAME group as Add text / Add portlet", async () => {
     const toolbar = await editModeToolbar(salesOnly(), "sales");
 
+    // The structural claim, stated as one identity: all four buttons resolve to
+    // the SAME group element. A wrapper that re-introduced its own
+    // `<ToolbarGroup>` would fail here, however it was styled.
+    const editGroup = groupOf(toolbar, "Add text");
+    expect(groupOf(toolbar, "Add portlet")).toBe(editGroup);
+    expect(groupOf(toolbar, "Rename")).toBe(editGroup);
+    expect(groupOf(toolbar, "Delete")).toBe(editGroup);
+
+    // In the reading order of the group: the content actions, then the two that
+    // act on the dashboard itself.
     expect(
-      within(toolbar).getByRole("button", { name: "Rename Sales" }),
-    ).toBeTruthy();
-    expect(
-      within(toolbar).getByRole("button", { name: "Delete Sales" }),
-    ).toBeTruthy();
-    // They sit in the SAME bar as the editing options the owner named.
-    expect(within(toolbar).getByRole("button", { name: "Add portlet" })).toBeTruthy();
-    // …and they are worded controls, not a re-grown overflow: the property the
-    // first review's fix locked still holds in edit mode.
+      within(editGroup)
+        .getAllByRole("button")
+        .map((b) => b.textContent?.trim()),
+    ).toEqual(["Add text", "Add portlet", "Rename", "Delete"]);
+
+    // Same prop shape as the siblings: nothing carries a disabled state, and
+    // each button leads with one 3.5-unit icon.
+    for (const button of within(editGroup).getAllByRole("button")) {
+      expect((button as HTMLButtonElement).disabled).toBe(false);
+      expect(button.querySelectorAll("svg.size-3\\.5").length).toBe(1);
+    }
+
+    // And nothing structural was added around them: edit mode still yields the
+    // select group, this one edit group and the trailing Save group, with the
+    // single separator that already divided them.
+    expect(toolbar.querySelectorAll('[data-slot="toolbar-group"]').length).toBe(3);
+    expect(toolbar.querySelectorAll("div[aria-hidden].w-px").length).toBe(1);
+    // Still worded controls, never a re-grown overflow.
     expectNoOverflowControl(toolbar);
+  });
+
+  test("the group carries exactly its two sibling buttons when the dashboard is not manageable", async () => {
+    // Negative control for the structure above: the group is the SAME group
+    // either way — the two controls are absent from it, not moved out of it.
+    const toolbar = await editModeToolbar(makeDataSource(), "ov");
+
+    const editGroup = groupOf(toolbar, "Add text");
+    expect(
+      within(editGroup)
+        .getAllByRole("button")
+        .map((b) => b.textContent?.trim()),
+    ).toEqual(["Add text", "Add portlet"]);
+    expect(toolbar.querySelectorAll('[data-slot="toolbar-group"]').length).toBe(3);
+    expect(toolbar.querySelectorAll("div[aria-hidden].w-px").length).toBe(1);
   });
 
   test("the default (Overview) dashboard raises neither — the original gate, unchanged", async () => {
     const toolbar = await editModeToolbar(makeDataSource(), "ov");
 
-    expect(within(toolbar).queryByRole("button", { name: /^Rename / })).toBeNull();
-    expect(within(toolbar).queryByRole("button", { name: /^Delete / })).toBeNull();
+    expect(within(toolbar).queryByRole("button", { name: "Rename" })).toBeNull();
+    expect(within(toolbar).queryByRole("button", { name: "Delete" })).toBeNull();
     // Edit mode really is on — the absence is the gate, not a missing toolbar.
     expect(within(toolbar).getByRole("button", { name: "Add portlet" })).toBeTruthy();
   });
@@ -717,146 +770,44 @@ describe("EntityDashboardsShell — Rename / Delete in the edit-mode toolbar", (
     // `editable` is the selected dashboard's own canWrite, so there is no edit
     // toggle to press and no edit-mode group to carry the two controls.
     expect(screen.queryByRole("button", { name: "Edit dashboard" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Rename / })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Delete / })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Rename" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
 
   test("VIEW mode carries neither, on the very dashboard that offers both in edit mode", async () => {
     // Negative control for the placement: the two controls belong to the edit
-    // toolbar only. (The first review's promise — a view-mode toolbar with no
+    // group only. (The first review's promise — a view-mode toolbar with no
     // rename/delete entry point and no overflow — is unchanged.)
     renderShellWithToolbar(salesOnly());
     await waitFor(() =>
       expect(screen.getByTestId("rendered").getAttribute("data-id")).toBe("sales"),
     );
 
-    const toolbar = document.querySelector<HTMLElement>(
-      "[data-cinatra-dashboard-toolbar]",
-    ) as HTMLElement;
+    const toolbar = toolbarEl();
     expect(within(toolbar).getByRole("button", { name: "Edit dashboard" })).toBeTruthy();
-    expect(within(toolbar).queryByRole("button", { name: /^Rename / })).toBeNull();
-    expect(within(toolbar).queryByRole("button", { name: /^Delete / })).toBeNull();
+    expect(within(toolbar).queryByRole("button", { name: "Rename" })).toBeNull();
+    expect(within(toolbar).queryByRole("button", { name: "Delete" })).toBeNull();
     expectNoOverflowControl(toolbar);
   });
 
-  test("Rename opens the name dialog and drives the surface's rename action", async () => {
-    const renameDashboard = vi.fn(async (id: string, name: string) => ({
-      ok: true as const,
-      dashboard: { id, name, isDefault: false, canWrite: true },
-    }));
-    const toolbar = await editModeToolbar(salesOnly({ renameDashboard }), "sales");
-
-    fireEvent.click(within(toolbar).getByRole("button", { name: "Rename Sales" }));
-
-    // The dialog pre-fills the current name and renames through the shell.
-    const field = await screen.findByLabelText("Dashboard name");
-    expect((field as HTMLInputElement).value).toBe("Sales");
-    fireEvent.change(field, { target: { value: "Revenue" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() =>
-      expect(renameDashboard).toHaveBeenCalledWith("sales", "Revenue"),
-    );
-    // The new name reaches the toolbar's select trigger.
-    await waitFor(() =>
-      expect(
-        within(
-          document.querySelector<HTMLElement>(
-            "[data-cinatra-dashboard-toolbar]",
-          ) as HTMLElement,
-        ).getByText("Revenue"),
-      ).toBeTruthy(),
-    );
-  });
-
-  test("Delete asks for confirmation first, then drives the surface's delete action", async () => {
-    const deleteDashboard = vi.fn(async () => ({ ok: true as const }));
-    const toolbar = await editModeToolbar(salesOnly({ deleteDashboard }), "sales");
-
-    fireEvent.click(within(toolbar).getByRole("button", { name: "Delete Sales" }));
-
-    // Nothing is destroyed on the button press alone.
-    expect(deleteDashboard).not.toHaveBeenCalled();
-    expect(await screen.findByText("Delete “Sales”?")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: /^Delete$/ }));
-    await waitFor(() => expect(deleteDashboard).toHaveBeenCalledWith("sales"));
-  });
-
-  test("while the post-delete swap is in flight the controls name the incoming dashboard but CANNOT act on it", async () => {
-    // Codex convergence on this change. Deleting the selected dashboard leaves
-    // the deleted view on screen while the replacement's config loads, and the
-    // toolbar (select trigger AND these controls) falls back to the pending row
-    // so the group does not blink out. That fallback must never become an
-    // ACTION target: a press in this window would rename or delete a dashboard
-    // the user has not selected yet.
-    const gate = deferred<DashboardConfigV1_1>();
-    const ds = makeDataSource({
-      listDashboards: vi.fn(async () => ({
-        dashboards: [SALES, OTHER],
-        canCreate: true,
-      })),
-      loadConfig: vi.fn(async (id: string) =>
-        id === "other" ? gate.promise : config(1),
-      ),
-    });
-    const toolbar = await editModeToolbar(ds, "sales");
-
-    fireEvent.click(within(toolbar).getByRole("button", { name: "Delete Sales" }));
-    fireEvent.click(await screen.findByRole("button", { name: /^Delete$/ }));
-
-    const bar = () =>
-      document.querySelector<HTMLElement>(
-        "[data-cinatra-dashboard-toolbar]",
-      ) as HTMLElement;
-    const rename = (await within(bar()).findByRole("button", {
-      name: "Rename Other",
-    })) as HTMLButtonElement;
-    expect(rename.disabled).toBe(true);
-    expect(
-      (within(bar()).getByRole("button", {
-        name: "Delete Other",
-      }) as HTMLButtonElement).disabled,
-    ).toBe(true);
-
-    // Once the swap commits, "Other" is genuinely the selection. The shell keys
-    // the grid by dashboard id, so the replacement remounts in VIEW mode — the
-    // controls leave with the edit toolbar and come back, live, on the next
-    // "Edit dashboard".
-    gate.resolve(config(1));
-    await waitFor(() =>
-      expect(screen.getByTestId("rendered").getAttribute("data-id")).toBe("other"),
-    );
-    expect(within(bar()).queryByRole("button", { name: "Rename Other" })).toBeNull();
-
-    fireEvent.click(within(bar()).getByRole("button", { name: "Edit dashboard" }));
-    expect(
-      (within(bar()).getByRole("button", {
-        name: "Rename Other",
-      }) as HTMLButtonElement).disabled,
-    ).toBe(false);
-  });
-
-  test("the fallback label is a LABEL, never a target — proven independently of the shell's `busy`", () => {
-    // The test above rides the shell, where `busy` happens to be true for the
-    // whole fallback window. This one hands the toolbar a context that is NOT
-    // busy and whose `selectedId` is absent from the list, so the guard is
-    // pinned on its own terms: a control may act only on the row that is
-    // actually selected.
+  test("a surface that wired no rename/delete handler raises neither button", () => {
+    // The removed menu rendered each item only when the surface supplied that
+    // handler; the inline buttons keep exactly that conditional. Driven through
+    // the context directly, because every shell data source here wires both.
     render(
       <DashboardPageAnchorProvider pageAnchor="team-detail">
         <EntityDashboardsProvider
           value={{
-            dashboards: [OTHER],
-            selectedId: "gone",
-            pendingId: "other",
+            dashboards: [SALES],
+            selectedId: "sales",
+            pendingId: null,
             canCreate: true,
             busy: false,
             onSelect: () => {},
             onCreate: async () => ({ ok: true }),
             onAdopted: () => {},
-            onRename: async () => ({ ok: true }),
-            onDelete: async () => ({ ok: true }),
+            onRename: null,
+            onDelete: null,
           }}
         >
           <DashboardProvider
@@ -871,14 +822,90 @@ describe("EntityDashboardsShell — Rename / Delete in the edit-mode toolbar", (
     );
 
     fireEvent.click(screen.getByRole("button", { name: "Edit dashboard" }));
+    expect(screen.getByRole("button", { name: "Add portlet" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Rename" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+  });
+
+  test("Rename opens the name dialog and drives the surface's rename action", async () => {
+    const renameDashboard = vi.fn(async (id: string, name: string) => ({
+      ok: true as const,
+      dashboard: { id, name, isDefault: false, canWrite: true },
+    }));
+    const toolbar = await editModeToolbar(salesOnly({ renameDashboard }), "sales");
+
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Rename" }));
+
+    // The dialog pre-fills the current name and renames through the shell.
+    const field = await screen.findByLabelText("Dashboard name");
+    expect((field as HTMLInputElement).value).toBe("Sales");
+    fireEvent.change(field, { target: { value: "Revenue" } });
+    fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(renameDashboard).toHaveBeenCalledWith("sales", "Revenue"),
+    );
+    // The new name reaches the toolbar's select trigger.
+    await waitFor(() =>
+      expect(within(toolbarEl()).getByText("Revenue")).toBeTruthy(),
+    );
+  });
+
+  test("Delete asks for confirmation first, then drives the surface's delete action", async () => {
+    const deleteDashboard = vi.fn(async () => ({ ok: true as const }));
+    const toolbar = await editModeToolbar(salesOnly({ deleteDashboard }), "sales");
+
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Delete" }));
+
+    // Nothing is destroyed on the button press alone.
+    expect(deleteDashboard).not.toHaveBeenCalled();
+    expect(await screen.findByText("Delete “Sales”?")).toBeTruthy();
+
+    fireEvent.click(confirmDeleteButton());
+    await waitFor(() => expect(deleteDashboard).toHaveBeenCalledWith("sales"));
+  });
+
+  test("while the post-delete swap is in flight neither control is offered — nothing can act on a row the user has not selected", async () => {
+    // Deleting the selected dashboard leaves the deleted view on screen while
+    // the replacement's config loads. Through that window the selection names a
+    // row that has left the list, so it is not manageable and the two controls
+    // simply are not rendered — the same conditional that hides them for
+    // Overview, rather than a predicate of their own.
+    const gate = deferred<DashboardConfigV1_1>();
+    const ds = makeDataSource({
+      listDashboards: vi.fn(async () => ({
+        dashboards: [SALES, OTHER],
+        canCreate: true,
+      })),
+      loadConfig: vi.fn(async (id: string) =>
+        id === "other" ? gate.promise : config(1),
+      ),
+    });
+    const toolbar = await editModeToolbar(ds, "sales");
+
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Delete" }));
+    fireEvent.click(confirmDeleteButton());
+
+    await waitFor(() =>
+      expect(within(toolbarEl()).queryByRole("button", { name: "Delete" })).toBeNull(),
+    );
+    expect(within(toolbarEl()).queryByRole("button", { name: "Rename" })).toBeNull();
+    // The bar is still the edit bar — the absence is the gate, not an unmount.
+    expect(within(toolbarEl()).getByRole("button", { name: "Add portlet" })).toBeTruthy();
+
+    // Once the swap commits, "Other" is genuinely the selection. The shell keys
+    // the grid by dashboard id, so the replacement remounts in VIEW mode — the
+    // controls come back, live, on the next "Edit dashboard".
+    gate.resolve(config(1));
+    await waitFor(() =>
+      expect(screen.getByTestId("rendered").getAttribute("data-id")).toBe("other"),
+    );
+    fireEvent.click(within(toolbarEl()).getByRole("button", { name: "Edit dashboard" }));
     expect(
-      (screen.getByRole("button", { name: "Rename Other" }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
-    expect(
-      (screen.getByRole("button", { name: "Delete Other" }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
+      (within(toolbarEl()).getByRole("button", {
+        name: "Rename",
+      }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 
   test("a delete the server refuses keeps the confirmation open and says why", async () => {
@@ -888,8 +915,8 @@ describe("EntityDashboardsShell — Rename / Delete in the edit-mode toolbar", (
     }));
     const toolbar = await editModeToolbar(salesOnly({ deleteDashboard }), "sales");
 
-    fireEvent.click(within(toolbar).getByRole("button", { name: "Delete Sales" }));
-    fireEvent.click(await screen.findByRole("button", { name: /^Delete$/ }));
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Delete" }));
+    fireEvent.click(confirmDeleteButton());
 
     // Still open, now carrying the shell's reduced copy instead of the warning.
     expect(
@@ -899,12 +926,6 @@ describe("EntityDashboardsShell — Rename / Delete in the edit-mode toolbar", (
     expect(screen.getByRole("alertdialog")).toBeTruthy();
     expect(screen.queryByText(/This can’t be undone/)).toBeNull();
     // The dashboard is still selectable — nothing was removed from the list.
-    expect(
-      within(
-        document.querySelector<HTMLElement>(
-          "[data-cinatra-dashboard-toolbar]",
-        ) as HTMLElement,
-      ).getByText("Sales"),
-    ).toBeTruthy();
+    expect(within(toolbarEl()).getByText("Sales")).toBeTruthy();
   });
 });

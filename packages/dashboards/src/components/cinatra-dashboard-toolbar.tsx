@@ -20,13 +20,17 @@
  *     itself rides the same dirty-state path the bundled toolbar used
  *     (`onSave` fires on edit-mode exit when the config changed).
  *   - Edit-mode controls — Grid/Rows layout toggle (only when more than one
- *     mode is allowed), "Add text" and "Add portlet" via the context's
- *     `handleAddText` / `handleAddPortlet`, and — on an entity Dashboards tab —
- *     Rename / Delete for the selected dashboard via
- *     `<EntityDashboardEditControls>` (owner review on cinatra#2474 PR5, PR
- *     #2638). This bar is the FIRST of the two the owner sees after pressing
- *     "Edit dashboard"; the second is drizzle-cube's filter bar, mounted
- *     beneath by `<DashboardFilterBarSlot>`.
+ *     mode is allowed), then ONE group holding "Add text", "Add portlet" and —
+ *     on an entity Dashboards tab — "Rename" and "Delete" for the selected
+ *     dashboard (owner review on cinatra#2474 PR5, PR #2638). All four are
+ *     ordinary members of that one group: same `<ToolbarButton>`, same
+ *     `onClick`, same 3.5-unit leading icon, no separator and no group of their
+ *     own. Rename/Delete are conditionally rendered on the gate the removed
+ *     three-dot menu used (`canWrite && !isDefault`, and only when the surface
+ *     wired the handler) — the same way this file already renders the page
+ *     actions and the layout toggle conditionally. This bar is the FIRST of the
+ *     two the owner sees after pressing "Edit dashboard"; the second is
+ *     drizzle-cube's filter bar, mounted beneath by `<DashboardFilterBarSlot>`.
  *
  * Deliberately NOT reproduced from the bundled toolbar:
  *   - The colour-palette dropdown: drizzle-cube `0.6.4` does not export
@@ -40,6 +44,7 @@
  * Styling comes from the design-system `<Toolbar>` primitives, so the CSS
  * that restyled DC's internal toolbar DOM is gone with the old toolbar.
  */
+import { useState } from "react";
 import { useDashboardContext } from "drizzle-cube/client";
 import Link from "next/link";
 import {
@@ -49,9 +54,20 @@ import {
   Plus,
   Rows3,
   Save,
+  Trash2,
   Type,
 } from "lucide-react";
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Toolbar,
   ToolbarButton,
@@ -65,7 +81,7 @@ import {
   type DashboardPageAnchor,
 } from "./dashboard-page-anchor";
 import { useEntityDashboards } from "./entity-dashboards-context";
-import { EntityDashboardEditControls } from "./entity-dashboard-edit-controls";
+import { EntityDashboardNameDialog } from "./entity-dashboard-name-dialog";
 import { EntityDashboardsToolbarControls } from "./entity-dashboard-toolbar-controls";
 
 export type DashboardPageAction = {
@@ -121,6 +137,10 @@ export const DASHBOARD_PAGE_ACTIONS: Readonly<
   "org-detail": [],
 };
 
+/** The dashboard a Rename/Delete dialog is acting on, captured at click time so
+ *  a list reload underneath the open dialog cannot retarget it. */
+type DashboardTarget = { readonly id: string; readonly name: string } | null;
+
 export function CinatraDashboardToolbar() {
   const pageAnchor = useDashboardPageAnchor();
   // Present only inside an entity Dashboards-tab shell (cinatra#701); `null`
@@ -137,6 +157,14 @@ export function CinatraDashboardToolbar() {
     handleAddText,
     handleAddPortlet,
   } = useDashboardContext();
+
+  // Rename / Delete dialog state. These are the dialogs the removed three-dot
+  // manage menu opened, unchanged; only their entry point moved into the
+  // edit-mode group above. Hooks run unconditionally, above every early return.
+  const [renameTarget, setRenameTarget] = useState<DashboardTarget>(null);
+  const [deleteTarget, setDeleteTarget] = useState<DashboardTarget>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // When the dashboard filter bar renders beneath this toolbar it stacks as
   // a flush-aligned secondary toolbar (cinatra#1511 — see
@@ -155,6 +183,37 @@ export function CinatraDashboardToolbar() {
   // decide the inter-group separators below.
   const hasLeadingControls = entityDashboards != null || pageActions.length > 0;
 
+  // The SELECTED entity dashboard, when it is one this actor may manage. The
+  // gate is the removed three-dot menu's own — `canWrite && !isDefault`, so
+  // Overview (non-removable server-side, cinatra#700) offers neither control —
+  // and the resolution is the selection itself: a row the picker is merely
+  // pending on is never a rename/delete target.
+  const selectedEntityDashboard =
+    entityDashboards?.dashboards.find(
+      (d) => d.id === entityDashboards.selectedId,
+    ) ?? null;
+  const manageableDashboard =
+    selectedEntityDashboard &&
+    selectedEntityDashboard.canWrite &&
+    !selectedEntityDashboard.isDefault
+      ? selectedEntityDashboard
+      : null;
+  const onRename = entityDashboards?.onRename ?? null;
+  const onDelete = entityDashboards?.onDelete ?? null;
+
+  async function handleDeleteConfirm() {
+    if (!deleteTarget || !onDelete) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    const outcome = await onDelete(deleteTarget.id);
+    setDeleteBusy(false);
+    if (outcome.ok) {
+      setDeleteTarget(null);
+      return;
+    }
+    setDeleteError(outcome.message);
+  }
+
   // Read-only surface with no route actions AND no entity-dashboards controls:
   // nothing to show. (An entity Dashboards tab always renders — its select is a
   // primary control independent of edit capability.)
@@ -163,102 +222,188 @@ export function CinatraDashboardToolbar() {
   }
 
   return (
-    <Toolbar
-      aria-label="Dashboard"
-      data-cinatra-dashboard-toolbar="true"
-      className={`sticky top-0 z-10 ${filterBarFollows ? "mb-1.5" : "mb-4"}`}
-    >
-      {/* Entity Dashboards-tab controls (select + New dashboard), cinatra#701.
-          Renders nothing when no entity shell is mounted. */}
-      {entityDashboards != null && <EntityDashboardsToolbarControls />}
+    <>
+      <Toolbar
+        aria-label="Dashboard"
+        data-cinatra-dashboard-toolbar="true"
+        className={`sticky top-0 z-10 ${filterBarFollows ? "mb-1.5" : "mb-4"}`}
+      >
+        {/* Entity Dashboards-tab controls (select + New dashboard), cinatra#701.
+            Renders nothing when no entity shell is mounted. */}
+        {entityDashboards != null && <EntityDashboardsToolbarControls />}
 
-      {pageActions.length > 0 && entityDashboards != null && <ToolbarSeparator />}
+        {pageActions.length > 0 && entityDashboards != null && <ToolbarSeparator />}
 
-      {pageActions.length > 0 && (
-        <ToolbarGroup>
-          {pageActions.map((action) => {
-            const ActionIcon = action.icon;
-            return (
-              <ToolbarButton key={action.id} asChild>
-                <Link
-                  href={action.href}
-                  data-cinatra-page-action={action.id}
-                  className="font-semibold text-foreground"
-                >
-                  <ActionIcon aria-hidden="true" className="size-3.5 shrink-0" />
-                  {action.label}
-                </Link>
-              </ToolbarButton>
-            );
-          })}
-        </ToolbarGroup>
-      )}
-
-      {showLayoutToggle && (
-        <>
-          {hasLeadingControls && <ToolbarSeparator />}
-          <ToolbarGroup role="group" aria-label="Layout mode">
-            <ToolbarButton
-              active={layoutMode === "grid"}
-              disabled={!canChangeLayoutMode}
-              onClick={() => actions.handleLayoutModeChange("grid")}
-            >
-              <LayoutGrid aria-hidden="true" className="size-3.5 shrink-0" />
-              Grid
-            </ToolbarButton>
-            <ToolbarButton
-              active={layoutMode === "rows"}
-              disabled={!canChangeLayoutMode}
-              onClick={() => actions.handleLayoutModeChange("rows")}
-            >
-              <Rows3 aria-hidden="true" className="size-3.5 shrink-0" />
-              Rows
-            </ToolbarButton>
-          </ToolbarGroup>
-        </>
-      )}
-
-      {showEditControls && (
-        <>
-          {(hasLeadingControls || showLayoutToggle) && <ToolbarSeparator />}
+        {pageActions.length > 0 && (
           <ToolbarGroup>
-            <ToolbarButton onClick={handleAddText}>
-              <Type aria-hidden="true" className="size-3.5 shrink-0" />
-              Add text
-            </ToolbarButton>
-            <ToolbarButton onClick={handleAddPortlet}>
-              <Plus aria-hidden="true" className="size-3.5 shrink-0" />
-              Add portlet
+            {pageActions.map((action) => {
+              const ActionIcon = action.icon;
+              return (
+                <ToolbarButton key={action.id} asChild>
+                  <Link
+                    href={action.href}
+                    data-cinatra-page-action={action.id}
+                    className="font-semibold text-foreground"
+                  >
+                    <ActionIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                    {action.label}
+                  </Link>
+                </ToolbarButton>
+              );
+            })}
+          </ToolbarGroup>
+        )}
+
+        {showLayoutToggle && (
+          <>
+            {hasLeadingControls && <ToolbarSeparator />}
+            <ToolbarGroup role="group" aria-label="Layout mode">
+              <ToolbarButton
+                active={layoutMode === "grid"}
+                disabled={!canChangeLayoutMode}
+                onClick={() => actions.handleLayoutModeChange("grid")}
+              >
+                <LayoutGrid aria-hidden="true" className="size-3.5 shrink-0" />
+                Grid
+              </ToolbarButton>
+              <ToolbarButton
+                active={layoutMode === "rows"}
+                disabled={!canChangeLayoutMode}
+                onClick={() => actions.handleLayoutModeChange("rows")}
+              >
+                <Rows3 aria-hidden="true" className="size-3.5 shrink-0" />
+                Rows
+              </ToolbarButton>
+            </ToolbarGroup>
+          </>
+        )}
+
+        {showEditControls && (
+          <>
+            {(hasLeadingControls || showLayoutToggle) && <ToolbarSeparator />}
+            <ToolbarGroup>
+              <ToolbarButton onClick={handleAddText}>
+                <Type aria-hidden="true" className="size-3.5 shrink-0" />
+                Add text
+              </ToolbarButton>
+              <ToolbarButton onClick={handleAddPortlet}>
+                <Plus aria-hidden="true" className="size-3.5 shrink-0" />
+                Add portlet
+              </ToolbarButton>
+              {/* Rename / Delete for the SELECTED entity dashboard — members of
+                  this same group, not a cluster of their own. Absent outside an
+                  entity Dashboards tab, and for a default or read-only one. */}
+              {manageableDashboard && onRename && (
+                <ToolbarButton
+                  onClick={() =>
+                    setRenameTarget({
+                      id: manageableDashboard.id,
+                      name: manageableDashboard.name,
+                    })
+                  }
+                >
+                  <Pencil aria-hidden="true" className="size-3.5 shrink-0" />
+                  Rename
+                </ToolbarButton>
+              )}
+              {manageableDashboard && onDelete && (
+                <ToolbarButton
+                  onClick={() => {
+                    setDeleteError(null);
+                    setDeleteTarget({
+                      id: manageableDashboard.id,
+                      name: manageableDashboard.name,
+                    });
+                  }}
+                >
+                  <Trash2 aria-hidden="true" className="size-3.5 shrink-0" />
+                  Delete
+                </ToolbarButton>
+              )}
+            </ToolbarGroup>
+          </>
+        )}
+
+        {editable && (
+          <ToolbarGroup className="ml-auto">
+            <ToolbarButton
+              onClick={() => isResponsiveEditable && actions.toggleEditMode()}
+              disabled={!isResponsiveEditable}
+              title={
+                isResponsiveEditable
+                  ? undefined
+                  : "Desktop view required for editing"
+              }
+              className="text-foreground"
+            >
+              {isEditMode ? (
+                <Save aria-hidden="true" className="size-3.5 shrink-0" />
+              ) : (
+                <Pencil aria-hidden="true" className="size-3.5 shrink-0" />
+              )}
+              {isEditMode ? "Save dashboard" : "Edit dashboard"}
             </ToolbarButton>
           </ToolbarGroup>
-          {/* Rename / Delete for the SELECTED entity dashboard. Renders its own
-              separator + group, and nothing at all outside an entity Dashboards
-              tab or for a default/read-only dashboard. */}
-          <EntityDashboardEditControls />
-        </>
-      )}
+        )}
+      </Toolbar>
 
-      {editable && (
-        <ToolbarGroup className="ml-auto">
-          <ToolbarButton
-            onClick={() => isResponsiveEditable && actions.toggleEditMode()}
-            disabled={!isResponsiveEditable}
-            title={
-              isResponsiveEditable
-                ? undefined
-                : "Desktop view required for editing"
-            }
-            className="text-foreground"
-          >
-            {isEditMode ? (
-              <Save aria-hidden="true" className="size-3.5 shrink-0" />
-            ) : (
-              <Pencil aria-hidden="true" className="size-3.5 shrink-0" />
-            )}
-            {isEditMode ? "Save dashboard" : "Edit dashboard"}
-          </ToolbarButton>
-        </ToolbarGroup>
-      )}
-    </Toolbar>
+      {/* The Rename dialog and the Delete confirmation, exactly as the removed
+          three-dot menu opened them. Mounted beside the bar rather than inside
+          the edit-mode branch: a delete that succeeds changes the selection (and
+          drops edit mode) out from under its own button, and the confirmation
+          must survive that long enough to close itself. Both render nothing until
+          opened. */}
+      <EntityDashboardNameDialog
+        open={renameTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRenameTarget(null);
+        }}
+        title="Rename dashboard"
+        submitLabel="Save"
+        initialName={renameTarget?.name ?? ""}
+        onSubmit={async (name) => {
+          if (!renameTarget || !onRename) {
+            return { ok: false, message: "Rename is unavailable." };
+          }
+          return onRename(renameTarget.id, name);
+        }}
+      />
+
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleteBusy) {
+            setDeleteTarget(null);
+            setDeleteError(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete “{deleteTarget?.name ?? ""}”?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteError ??
+                "This permanently removes the dashboard and its saved layout. This can’t be undone."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteBusy}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                // Keep the dialog open until the server confirms, so a failure
+                // can surface inline rather than closing on an unfinished op.
+                event.preventDefault();
+                void handleDeleteConfirm();
+              }}
+              disabled={deleteBusy}
+            >
+              {deleteBusy ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
