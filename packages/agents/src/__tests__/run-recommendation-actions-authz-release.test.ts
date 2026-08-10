@@ -224,4 +224,43 @@ describe("releaseAndDispatch — a live park is never reported as dispatched (ci
     expect(res).toEqual({ ok: true, dispatched: true });
     expect(triggerAgentRun).toHaveBeenCalledWith({ runId: "run-1", templateSlug: "tpl-1" });
   });
+
+  // cinatra#2523 (codex round-1 finding). Setup now ends on `pending_trigger`,
+  // so an immediate trigger chosen there can park at the run-start
+  // recommendation interception FROM that state. This guard used to read any
+  // status other than `pending_input` as "already advanced" and answer
+  // `{ok:true, dispatched:false}` — a run that never moved, reported as a
+  // success. That is precisely the false-success shape #2148's verification and
+  // this issue's ruling both forbid.
+  it("dispatches a run parked from the setup-success state (pending_trigger) — cinatra#2523", async () => {
+    readAgentRunById.mockResolvedValue({ ...RUN, status: "pending_trigger" });
+    releaseRecommendationParkForRun.mockResolvedValue(true);
+    readRecommendationParkForRun.mockResolvedValue({
+      id: "park-1",
+      checkpoint: "recommendation",
+      status: "released",
+    });
+
+    const res = await skipRunRecommendationAction({ runId: "run-1" });
+
+    expect(res).toEqual({ ok: true, dispatched: true });
+    expect(triggerAgentRun).toHaveBeenCalledWith({ runId: "run-1", templateSlug: "tpl-1" });
+  });
+
+  // The "already advanced" arm still exists — it just no longer swallows the
+  // new waiting state.
+  it("still reports a genuinely advanced run without re-dispatching it", async () => {
+    readAgentRunById.mockResolvedValue({ ...RUN, status: "running" });
+    releaseRecommendationParkForRun.mockResolvedValue(true);
+    readRecommendationParkForRun.mockResolvedValue({
+      id: "park-1",
+      checkpoint: "recommendation",
+      status: "released",
+    });
+
+    const res = await skipRunRecommendationAction({ runId: "run-1" });
+
+    expect(res).toEqual({ ok: true, dispatched: false });
+    expect(triggerAgentRun).not.toHaveBeenCalled();
+  });
 });

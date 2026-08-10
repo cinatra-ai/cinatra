@@ -23,6 +23,10 @@ import {
 } from "./wayflow-url";
 import { runSkillAutosaveOnRunCompletion } from "./skill-autosave";
 import { isTriggerReleased } from "./trigger-gate";
+// cinatra#2523: the setup-success hand-off asks whether the user has already
+// answered "When should this run?". trigger-store is already in this module's
+// reachable graph via ./trigger-gate, so this adds no first-party graph edge.
+import { readRunTriggerByRunId } from "./trigger-store";
 // cinatra#2484: the declared-type guard rides the resolver module — same
 // import, no extra first-party module in the locked routes' reachable graph.
 import {
@@ -1954,7 +1958,15 @@ export async function assertOrchestratorReady(
 // ---------------------------------------------------------------------------
 
 export async function runAgentBuilderExecutionJob(
-  data: { runId: string; gateAttempt?: number; scopeRecheckPark?: number },
+  data: {
+    runId: string;
+    gateAttempt?: number;
+    scopeRecheckPark?: number;
+    // cinatra#2523: set ONLY by the setup-approval resume (review-task-actions).
+    // Marks this leg as "the user just submitted the setup form", which is the
+    // one leg that owes the trigger step before it may dispatch.
+    resumedFromSetup?: boolean;
+  },
   jobId: string,
 ): Promise<void> {
   const { runId } = data;
@@ -1990,7 +2002,13 @@ export async function runAgentBuilderExecutionJob(
 // ProjectContext frame; the inner contains the job body, unchanged except for
 // the moved run-row read (probeRun above is re-read here for clarity).
 async function runAgentBuilderExecutionJobInner(
-  data: { runId: string; gateAttempt?: number; scopeRecheckPark?: number },
+  data: {
+    runId: string;
+    gateAttempt?: number;
+    scopeRecheckPark?: number;
+    // cinatra#2523 — see the outer signature.
+    resumedFromSetup?: boolean;
+  },
   jobId: string,
 ): Promise<void> {
   const { runId } = data;
@@ -2517,6 +2535,120 @@ async function runAgentBuilderExecutionJobInner(
   }
 
   // All required fields present — fall through to the existing dispatch branches.
+
+  // ---------------------------------------------------------------------------
+  // SETUP-SUCCESS HAND-OFF (cinatra#2523 — owner ruling 2026-08-09, remedy (c)).
+  //
+  // Setup finished on the wizard's own resume leg and this run still has no
+  // trigger row: the user has not answered "When should this run?". Before this
+  // arm the run fell straight into dispatch, and on an agent with no gated steps
+  // the trigger gate below does not apply at all — so the run EXECUTED and landed
+  // `completed` before the trigger form was ever shown. "Run right after setup"
+  // then had nothing left to dispatch, and `setRunTriggerForActor` reported
+  // success anyway (the swallowed CAS this issue is about).
+  //
+  // End setup in the state that legitimately awaits a trigger instead:
+  // `pending_trigger` is the shipped vocabulary for "the trigger step is open,
+  // awaiting the user's choice" — already rendered by the run panel and the
+  // surface-status helper, already covered by bulk-stop, already parked (never
+  // live) for the kernel's lease accounting. The trigger form's Continue then
+  // dispatches it through a normal legal edge.
+  //
+  // Deliberately keyed on `resumedFromSetup`, the flag the setup-approval resume
+  // sets on ITS re-enqueue and nothing else in the system sets: every other
+  // producer (chat, MCP `agent_run`, recurring clones, dev child preview,
+  // orchestrator children, the Run button) reaches this point without it and
+  // dispatches byte-identically.
+  //
+  // The trigger-row read below is a FAST PATH, not the correctness boundary: it
+  // and the transition are two statements, so a trigger configured between them
+  // would be handed back to the trigger step it had just answered — an enqueued
+  // run parked forever (codex round-2 finding). The RE-READ after the transition
+  // is the boundary: once the run is on `pending_trigger`, any trigger that
+  // landed in the window is visible, and the run is returned to `queued` so the
+  // choice the user actually made is honoured.
+  if (data.resumedFromSetup === true && (await readRunTriggerByRunId(runId)) === null) {
+    try {
+      await transitionRunStatus(
+        runId,
+        "queued",
+        "pending_trigger",
+        undefined,
+        executionAuthority,
+      );
+    } catch (err) {
+      // stale_from_status: a concurrent stop/cancel already moved the row off
+      // `queued`. That writer wins — there is nothing left to hand off.
+      if (!(err instanceof RunTransitionError && err.code === "stale_from_status")) {
+        throw err;
+      }
+      // runId passed as a discrete ARGUMENT (never interpolated into the format
+      // string) so a `%`-bearing id can never be read as a util.format specifier
+      // (CodeQL js/tainted-format-string).
+      console.log(
+        "[setup-interrupt-loop] run left queued before the trigger hand-off — leaving it to that writer:",
+        runId,
+      );
+      return;
+    }
+    const configuredInTheWindow = await readRunTriggerByRunId(runId);
+    if (configuredInTheWindow === null) {
+      console.log(
+        "[setup-interrupt-loop] setup finished with no trigger configured — awaiting the trigger choice for run",
+        runId,
+      );
+      return;
+    }
+    // A trigger landed while we were handing off. Honour the choice the user
+    // actually made rather than stranding the run — and honour WHICH choice it
+    // was: reverting a SCHEDULE to `queued` would run the agent immediately,
+    // which is the opposite of what was asked (codex round-3 finding).
+    if (configuredInTheWindow.triggerType !== "immediate") {
+      // `setRunTriggerForActor` could not arm the run at the time — it was still
+      // `queued`, so both of its arming rungs missed and it left the status
+      // alone. Arm it here, or the release job's `armed -> queued` fire would
+      // find a run that is not armed and skip it forever.
+      try {
+        await transitionRunStatus(
+          runId,
+          "pending_trigger",
+          "armed",
+          undefined,
+          executionAuthority,
+        );
+      } catch (err) {
+        if (!(err instanceof RunTransitionError && err.code === "stale_from_status")) {
+          throw err;
+        }
+      }
+      console.log(
+        "[setup-interrupt-loop] a schedule was chosen during the hand-off — armed for its own fire:",
+        runId,
+      );
+      return;
+    }
+    try {
+      await transitionRunStatus(
+        runId,
+        "pending_trigger",
+        "queued",
+        undefined,
+        executionAuthority,
+      );
+    } catch (err) {
+      if (!(err instanceof RunTransitionError && err.code === "stale_from_status")) {
+        throw err;
+      }
+      // Another writer moved the run off `pending_trigger` first — the trigger
+      // form's own dispatch, an arm, a stop. Whichever it was, it owns the run
+      // from here and this job must not dispatch it a second time.
+      console.log(
+        "[setup-interrupt-loop] another writer took the run during the hand-off — leaving it to them:",
+        runId,
+      );
+      return;
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // External A2A dispatch branch.

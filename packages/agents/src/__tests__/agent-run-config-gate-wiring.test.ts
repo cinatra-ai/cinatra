@@ -83,14 +83,12 @@ describe("immediate-trigger surface routes through the config-needs run gate", (
     );
     const upsertIdx = svc.indexOf("await createOrUpdateRunTrigger(");
     const scheduleIdx = svc.indexOf("scheduleResult = await scheduleTrigger(");
-    // cinatra#1939 wave 2 added `, undefined, authority`, and cinatra#2485 C
-    // added the `{ actingUserId }` opts arg, which also broke the call across
-    // several lines. Match on the ARGUMENT TOKENS with flexible whitespace
-    // rather than a single-line literal, so this ordering scan survives further
-    // signature growth instead of silently going -1.
-    const queuedIdx = svc.search(
-      /transitionRunStatus\(\s*args\.runId,\s*"pending_input",\s*"queued"/,
-    );
+    // cinatra#2523 moved the immediate dispatch itself into `dispatchImmediateNow`
+    // (a LADDER of legal `from` states plus the enqueue), so the ordering scan
+    // anchors on that CALL SITE rather than on a transition literal that no
+    // longer appears inline. The property under test is unchanged: the readiness
+    // gate must refuse before anything is written or dispatched.
+    const queuedIdx = svc.search(/const dispatched = await dispatchImmediateNow\(/);
     expect(queuedIdx).toBeGreaterThan(-1);
     expect(gateIdx).toBeGreaterThan(-1);
     // the gate runs before the first mutation, the scheduling call, and the

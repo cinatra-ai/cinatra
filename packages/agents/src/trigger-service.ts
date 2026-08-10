@@ -58,6 +58,13 @@ import {
   syncRunTriggerPmTask,
   deleteRunTriggerPmTask,
 } from "@/lib/pm-integration-providers";
+// cinatra#2523: the immediate trigger must put a JOB on the queue, not only
+// write a status. `enqueueAgentRun` is the single sanctioned dispatch
+// chokepoint (scripts/audit/agent-builder-enqueue-gate.mjs) and re-asserts the
+// install-scope guard — the same call `releaseTriggerNow` and the trigger
+// release job make, with the same compensation shape.
+import { enqueueAgentRun } from "@/lib/agent-run-enqueue";
+import { asActionablePreflightError } from "./actionable-preflight-error";
 
 /**
  * Terminal run statuses (cinatra#2482). A run in one of these has no legal edge
@@ -251,6 +258,202 @@ async function immediateTriggerConfigBlock(
   }
 }
 
+/**
+ * The run statuses an immediate trigger may legally dispatch FROM, in the order
+ * they are attempted (cinatra#2523). Every one of these is an existing legal
+ * `→queued` edge:
+ *
+ *   - `pending_trigger` — the wizard's setup-success hand-off (execution.ts):
+ *     setup is done and the user is answering "When should this run?". This is
+ *     the documented main path this issue was filed about.
+ *   - `pending_input`  — a run created but never dispatched (the zero-input
+ *     create path, a run returned from `armed` when its trigger was removed).
+ *   - `armed`          — a run holding a scheduled/recurring trigger that the
+ *     user has just re-configured to "run now". Its old schedule was cancelled
+ *     higher up, so without this rung nothing would ever fire it.
+ */
+const IMMEDIATE_DISPATCH_FROM_STATUSES = [
+  "pending_trigger",
+  "pending_input",
+  "armed",
+] as const;
+
+/**
+ * Human-readable refusal for a run an immediate trigger cannot dispatch.
+ * Every arm names the state AND the action that clears it — the honesty half of
+ * cinatra#2523: a refusal the user cannot act on is barely better than the
+ * silent success it replaces.
+ */
+function immediateRefusalCopy(status: string): string {
+  if (TERMINAL_RUN_STATUSES.has(status)) {
+    return "This run has already finished — it can't be run again. Start a new run instead.";
+  }
+  if (status === "pending_approval") {
+    return "This run is still waiting for an answer in its setup form. Finish setup — it will run as soon as you do.";
+  }
+  if (status === "waiting_trigger") {
+    return "This run is already in progress and paused at a trigger step inside its flow. It resumes on its own — it can't be restarted from here.";
+  }
+  return `This run can't be started right now (it is ${status}). Reload the run and try again.`;
+}
+
+/**
+ * Perform an immediate trigger's ACTUAL dispatch (cinatra#2523).
+ *
+ * The gate is already open (`scheduleTrigger` marked it released), so this is
+ * the whole of "Run now": move the run onto `queued` through a legal edge, and
+ * put a job on the queue for it.
+ *
+ * Two things here are load-bearing and neither was true before:
+ *
+ *  1. NO SWALLOW. A refused transition used to be caught, logged and followed by
+ *     `{ok:true}` — which is how the documented main path came to report success
+ *     having dispatched nothing. Now every refusal that is still logically
+ *     possible is returned as `{ok:false}` with copy the user can act on. The one
+ *     honest exception is a run ALREADY on its way: `running` (executing right
+ *     now) or `queued` (a job is enqueued below) both satisfy "run it now".
+ *
+ *  2. THE ENQUEUE. `transitionRunStatus` writes a row; it does not put anything
+ *     on a queue. Before this, the immediate branch transitioned and stopped, and
+ *     the run only ever ran when some OTHER job happened to be parked on the
+ *     trigger gate — for a run that never parked (every ungated agent, every
+ *     `pending_input` run) nothing ever picked it up.
+ *
+ * Scope denials keep the existing compensation: the trigger row and the released
+ * gate are already durable, so a refused run must not be left holding an armed
+ * immediate trigger no dispatch will consume.
+ */
+async function dispatchImmediateNow(
+  runId: string,
+  actor: TriggerActorContext,
+  authority: Awaited<ReturnType<typeof verifySessionAuthority>>,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  /** Unwind the durable half of the gate this call already opened. */
+  const unwindTrigger = async () => {
+    await deleteRunTriggerByRunId(runId).catch((cleanupErr) => {
+      console.error(
+        "[setRunTriggerForActor] cleanup after refused immediate dispatch failed",
+        runId,
+        cleanupErr,
+      );
+    });
+    // Deleting the row clears only the DURABLE half of the gate. The immediate
+    // path already called `markTriggerReleased`, whose Redis flag is read FIRST
+    // and outlives the row for up to 7 days — leaving it would make a later
+    // re-trigger on this run fire immediately instead of on its new schedule.
+    const { clearTriggerReleased } = await import("./trigger-gate");
+    await clearTriggerReleased(runId);
+  };
+
+  let transitionedFrom: (typeof IMMEDIATE_DISPATCH_FROM_STATUSES)[number] | null = null;
+  for (const from of IMMEDIATE_DISPATCH_FROM_STATUSES) {
+    try {
+      // cinatra#2485 C — thread the DISPATCHING human into the `→queued` guard.
+      // `isOwnerOrAdmin` admits `role === "admin"`, i.e. an actor who is NOT the
+      // run's owner; without this the guard would evaluate only `run_by` and let
+      // an admin outside the agent's team/project fire an in-scope owner's run.
+      // Same rule as `releaseTriggerNow` and the two HITL gates: both the ACTOR
+      // and the run OWNER must be inside scope.
+      await transitionRunStatus(runId, from, "queued", undefined, authority, {
+        actingUserId: actor.userId,
+      });
+      transitionedFrom = from;
+      break;
+    } catch (err) {
+      // cinatra#2485 C — a SCOPE DENIAL from the `→queued` guard is a decision,
+      // not a fault: map it to this function's documented opaque result instead
+      // of letting the raw AgentTemplateScopeError (which names the template id,
+      // reason and level) escape to the caller.
+      if (isScopeDenial(err)) {
+        await unwindTrigger();
+        return { ok: false, error: "forbidden" };
+      }
+      // Not this `from` — try the next legal one.
+      if (err instanceof RunTransitionError && err.code === "stale_from_status") {
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  if (transitionedFrom === null) {
+    // No legal edge from wherever the run actually is. Say what is true.
+    const current = await readAgentRunById(runId);
+    if (!current) return { ok: false, error: "run not found" };
+    if (current.status === "running") {
+      // Already executing — the user's "run it now" is satisfied.
+      return { ok: true };
+    }
+    if (current.status !== "queued") {
+      // Deliberately NOT unwound: the run is mid-lifecycle (e.g. still in its
+      // setup form, or paused at an in-flow trigger wait) and the trigger row is
+      // the user's standing configuration, which other machinery reads. Removing
+      // it here would break the very flow the copy tells them to finish.
+      return { ok: false, error: immediateRefusalCopy(current.status) };
+    }
+    // `queued` already — fall through and make sure it actually has a job.
+  }
+
+  // Enqueue the execution job now that the run is queued and the gate is open.
+  // Idempotent on jobId, and identical in shape to `releaseTriggerNow`'s enqueue.
+  try {
+    await enqueueAgentRun({ runId }, { jobId: `agent-builder-${runId}` });
+  } catch (err) {
+    // The run is already `queued` at this point; leaving it there with no job is
+    // the exact stranding this function exists to stop. EVERY enqueue failure is
+    // compensated, not just the authorization one (codex round-3 finding) — a
+    // connector/LLM preflight refusal or a Redis blip would otherwise leave a
+    // permanently queued run behind an `ok:false`.
+    //
+    // A SCOPE DENIAL is terminal for the run (the cinatra#2485 C contract: a
+    // denied run fails, it is never parked), so it lands `failed` with the
+    // authority this frame holds — the chokepoint deliberately may not mint one
+    // (org-write-boundary-gate R2/R5). Every other failure is transient, so the
+    // run goes back to where it came from and stays retryable.
+    const denial = isScopeDenial(err);
+    // `transitionedFrom === null` means the run was ALREADY `queued` when this
+    // call arrived (we only ensured it had a job), so there is nothing of ours to
+    // revert — the writer that queued it owns its state.
+    const compensateTo = denial ? ("failed" as const) : transitionedFrom;
+    await (compensateTo === null
+      ? Promise.resolve()
+      : transitionRunStatus(
+          runId,
+          "queued",
+          compensateTo,
+          denial
+            ? { error: `run refused: the agent's scope no longer authorizes this run (${err.reason})` }
+            : undefined,
+          authority,
+        )
+    ).catch((compErr) => {
+      if (!(compErr instanceof RunTransitionError && compErr.code === "stale_from_status")) {
+        console.error(
+          "[setRunTriggerForActor] immediate dispatch failed but the run could not be compensated — it stays queued with no job:",
+          runId,
+          compErr instanceof Error ? compErr.message : String(compErr),
+        );
+      }
+    });
+    await unwindTrigger();
+    if (denial) {
+      return { ok: false, error: "forbidden — this agent's scope does not include you" };
+    }
+    // Surface an actionable connector / LLM-provider preflight refusal
+    // (cinatra#1056/#1062) instead of a generic failure, exactly as the
+    // canonical run-start dispatcher does.
+    const actionable = asActionablePreflightError(err);
+    return {
+      ok: false,
+      error:
+        actionable?.error ??
+        "This run could not be started just now — please try again.",
+    };
+  }
+
+  return { ok: true };
+}
+
 // ---------------------------------------------------------------------------
 // setRunTriggerForActor — configure a trigger for `runId` on behalf of `actor`.
 // ---------------------------------------------------------------------------
@@ -277,36 +480,45 @@ export async function setRunTriggerForActor(
     return { ok: false, error: "forbidden" };
   }
 
-  // IMMEDIATE TERMINAL-RUN GATE (cinatra#2482).
+  // IMMEDIATE TERMINAL-RUN GATE (cinatra#2482, closed by cinatra#2523).
   //
-  // An immediate trigger's entire contract is "dispatch NOW": it opens the gate
-  // and performs the `pending_input → queued` transition below. On a terminal
-  // run that is not a legal edge, and the code below CATCHES `stale_from_status`
-  // and continues — so the call returned `{ ok: true }` having done nothing but
-  // rewrite the trigger row. The /trigger form reads that `ok` as success and
-  // routes back to the run view: browser-back to /trigger, press Continue, land
-  // on the identical finished run. Refuse it, naming the real next action.
+  // An immediate trigger's entire contract is "dispatch NOW". A terminal run has
+  // no legal edge back into dispatch, so this call must refuse and name the real
+  // next action rather than rewrite the trigger row and report success.
   //
-  // ONE carve-out, and only one: `completed` with NO trigger row is cinatra#580's
-  // genuine setup-success state — setup finished, no trigger chosen yet, the run
-  // view redirects the user to the form precisely so they can choose one.
-  // Refusing there would hard-error the FIRST arm of every such run, i.e. the
-  // feature's main path (codex round-B finding). `failed` and `stopped` get NO
-  // such exemption even without a trigger row: their transition is stale too, so
-  // a first arm there is the same silent no-op (codex round-2 finding).
+  // This gate used to carry ONE carve-out: `completed` with no trigger row was
+  // read as cinatra#580's setup-success first arm and let through — whereupon the
+  // `→queued` CAS below failed and the failure was SWALLOWED, so the documented
+  // main path returned `{ok:true}` having dispatched nothing (cinatra#2523).
+  // Remedy (c) removed the premise: setup no longer ENDS in `completed` (the
+  // hand-off in execution.ts lands the run on `pending_trigger`), so the
+  // exemption has nothing left to exempt and every terminal status is refused
+  // alike. A genuinely finished run is never resurrected.
   //
   // Scheduled/recurring are never gated here: their row is a future-fire
   // schedule, meaningful independently of this run's own outcome.
   if (args.triggerType === "immediate" && TERMINAL_RUN_STATUSES.has(run.status)) {
-    const isSetupSuccessFirstArm =
-      run.status === "completed" && (await readRunTriggerByRunId(args.runId)) === null;
-    if (!isSetupSuccessFirstArm) {
-      return {
-        ok: false,
-        error:
-          "This run has already finished — it can't be run again. Start a new run instead.",
-      };
-    }
+    return {
+      ok: false,
+      error:
+        "This run has already finished — it can't be run again. Start a new run instead.",
+    };
+  }
+
+  // IMMEDIATE IN-FLIGHT-WAIT GATE (cinatra#2523, codex round-1 finding).
+  //
+  // `waiting_trigger` is an IN-FLIGHT run paused at a TriggerWaitNode inside its
+  // own flow: the trigger-release job resumes it by sending an A2A message into
+  // its held context, using THIS row. Refusing it late — after the cancel +
+  // upsert below — would cancel the scheduler that owns the resume and overwrite
+  // the row with an immediate trigger that enqueues no release job, stranding a
+  // live run. Refuse before any write instead.
+  if (args.triggerType === "immediate" && run.status === "waiting_trigger") {
+    return {
+      ok: false,
+      error:
+        "This run is already in progress and paused at a trigger step inside its flow. It resumes on its own — it can't be restarted from here.",
+    };
   }
 
   // CONFIGURATION-NEEDS RUN GATE — IMMEDIATE trigger surface (cinatra #1057
@@ -551,62 +763,9 @@ export async function setRunTriggerForActor(
         args.runId,
       );
     } else {
-      // Gate is already open; transition directly to queued.
-      try {
-        // cinatra#2485 C — thread the DISPATCHING human into the `→queued`
-        // guard. `isOwnerOrAdmin` admits `role === "admin"`, i.e. an actor who
-        // is NOT the run's owner; without this the guard would evaluate only
-        // `run_by` and let an admin outside the agent's team/project fire an
-        // in-scope owner's run. Same rule as `releaseTriggerNow` and the two
-        // HITL gates: both the ACTOR and the run OWNER must be inside scope.
-        await transitionRunStatus(
-          args.runId,
-          "pending_input",
-          "queued",
-          undefined,
-          authority,
-          { actingUserId: actor.userId },
-        );
-      } catch (err) {
-        // cinatra#2485 C — a SCOPE DENIAL from the `→queued` guard is a
-        // decision, not a fault: map it to this function's documented opaque
-        // result instead of letting the raw AgentTemplateScopeError (which names
-        // the template id, reason and level) escape to the caller.
-        //
-        // COMPENSATE FIRST: the trigger row and its OPEN gate are already
-        // durable at this point (`createOrUpdateRunTrigger` + `scheduleTrigger`
-        // above), so returning without cleanup would leave a refused run holding
-        // an armed immediate trigger that no dispatch will ever consume. Mirrors
-        // the compensation already used on the schedule-failure path.
-        if (isScopeDenial(err)) {
-          await deleteRunTriggerByRunId(args.runId).catch((cleanupErr) => {
-            console.error(
-              "[setRunTriggerForActor] cleanup after scope denial failed",
-              args.runId,
-              cleanupErr,
-            );
-          });
-          // Deleting the row clears only the DURABLE half of the gate. The
-          // immediate path already called `markTriggerReleased`, whose Redis
-          // flag is read FIRST and outlives the row for up to 7 days — leaving
-          // it would make a later re-trigger on this run fire immediately
-          // instead of waiting for its new schedule.
-          const { clearTriggerReleased } = await import("./trigger-gate");
-          await clearTriggerReleased(args.runId);
-          return { ok: false, error: "forbidden" };
-        }
-        if (
-          !(err instanceof RunTransitionError && err.code === "stale_from_status")
-        ) {
-          throw err;
-        }
-        // stale_from_status means the run was already in another status
-        // (e.g. was reset to pending_trigger or already queued). Log and
-        // continue — gate is already open.
-        console.log(
-          `[setRunTriggerForActor] immediate: run ${args.runId} not in pending_input — status left as-is`,
-        );
-      }
+      // Gate is already open — now actually run it (cinatra#2523).
+      const dispatched = await dispatchImmediateNow(args.runId, actor, authority);
+      if (!dispatched.ok) return dispatched;
     }
   }
 

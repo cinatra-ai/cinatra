@@ -68,14 +68,7 @@ vi.mock("../auth-policy", () => ({
 vi.mock("../store", () => ({
   // Declared INSIDE the factory: `vi.mock` is hoisted above every top-level
   // binding, so a class declared at module scope is still in its TDZ here.
-  RunTransitionError: class RunTransitionError extends Error {
-    readonly code: string;
-    constructor(code: string, message: string) {
-      super(message);
-      this.name = "RunTransitionError";
-      this.code = code;
-    }
-  },
+  RunTransitionError: StubRunTransitionError,
   readAgentRunById: (...a: unknown[]) => readAgentRunById(...a),
   readAgentTemplateBySlug: (...a: unknown[]) => readAgentTemplateBySlug(...a),
   readAgentTemplateById: (...a: unknown[]) => readAgentTemplateById(...a),
@@ -120,6 +113,23 @@ const TEMPLATE = {
   packageName: "@vendor/blog-agent",
   lifecycleConfig: null as string | null,
 };
+/** The status the fake run row is in — the CAS-shaped transition stub reads it. */
+let runStatus = "pending_input";
+/** The RunTransitionError the `../store` mock exports — declared via
+ *  `vi.hoisted` so BOTH the hoisted mock factory and the CAS stub below share
+ *  ONE class. The service branches on `err instanceof RunTransitionError`, so a
+ *  second look-alike class would be rethrown instead of advancing the ladder. */
+const { StubRunTransitionError } = vi.hoisted(() => ({
+  StubRunTransitionError: class RunTransitionError extends Error {
+    readonly code: string;
+    constructor(code: string, message: string) {
+      super(message);
+      this.name = "RunTransitionError";
+      this.code = code;
+    }
+  },
+}));
+
 const CREATED_RUN = {
   id: "run-1",
   templateId: TEMPLATE.id,
@@ -143,7 +153,18 @@ beforeEach(() => {
   readAgentTemplateById.mockResolvedValue(TEMPLATE);
   readAgentRunById.mockResolvedValue({ ...CREATED_RUN });
   createAgentRunPendingInput.mockResolvedValue({ ...CREATED_RUN });
-  transitionRunStatus.mockResolvedValue(undefined);
+  // cinatra#2523: CAS-shaped, not always-succeed. The immediate branch now
+  // walks a ladder of legal `from` states (pending_trigger → pending_input →
+  // armed), so only the rung matching the row may succeed — otherwise the
+  // "pending_input → queued" assertions below would pass on the wrong edge.
+  // The status advances on success, exactly like the real row.
+  runStatus = CREATED_RUN.status;
+  transitionRunStatus.mockImplementation(async (_runId: string, from: string, to: string) => {
+    if (from !== runStatus) {
+      throw new StubRunTransitionError("stale_from_status", `${from} -> ${to}`);
+    }
+    runStatus = to;
+  });
   enqueueAgentRun.mockResolvedValue(undefined);
   enqueueDepsForTemplate.mockReturnValue({});
   readRunTriggerByRunId.mockResolvedValue(null);
@@ -325,7 +346,62 @@ describe("setRunTriggerForActor immediate consults the run-start hold (cinatra#2
     expect(transitionRunStatus).not.toHaveBeenCalled();
   });
 
-  it("NOT HELD ⇒ byte-identical to the pre-fix path (pending_input → queued)", async () => {
+  // cinatra#2523 (codex round-1 finding): the canonical run-start dispatcher —
+  // which the recommendation chip-row's decision calls — must accept BOTH
+  // pre-dispatch waiting states, or a run parked from the setup-success state
+  // could never be released.
+  it("triggerAgentRun dispatches a RELEASED park from the setup-success state (pending_trigger → queued)", async () => {
+    readAgentRunById.mockResolvedValue({ ...CREATED_RUN, status: "pending_trigger" });
+    runStatus = "pending_trigger";
+    // The evidence that put the run here: a run-start recommendation park the
+    // chip-row decision has already released.
+    readRecommendationParkForRun.mockResolvedValue({
+      id: "park-1",
+      checkpoint: "recommendation",
+      status: "released",
+    });
+
+    const res = await triggerAgentRun({ runId: "run-1", templateSlug: TEMPLATE.id });
+
+    expect(res.ok).toBe(true);
+    expect(transitionRunStatus).toHaveBeenCalledWith(
+      "run-1",
+      "pending_trigger",
+      "queued",
+      undefined,
+      expect.anything(),
+    );
+    expect(enqueueAgentRun).toHaveBeenCalledWith({ runId: "run-1" }, expect.anything());
+  });
+
+  // cinatra#2523 (codex round-2 finding). `triggerAgentRun` is a PUBLIC server
+  // action, so "the owner asked" must not be enough to admit `pending_trigger`:
+  // that would dispatch a run straight past the trigger step the state exists to
+  // wait for. Without a park, the run is refused and stays where it is.
+  it("triggerAgentRun REFUSES a pending_trigger run that never parked — the trigger step is not bypassable", async () => {
+    readAgentRunById.mockResolvedValue({ ...CREATED_RUN, status: "pending_trigger" });
+    runStatus = "pending_trigger";
+    readRecommendationParkForRun.mockResolvedValue(null);
+
+    const res = await triggerAgentRun({ runId: "run-1", templateSlug: TEMPLATE.id });
+
+    expect(res.ok).toBe(false);
+    expect(transitionRunStatus).not.toHaveBeenCalled();
+    expect(enqueueAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("triggerAgentRun still refuses a run in no dispatchable state at all", async () => {
+    readAgentRunById.mockResolvedValue({ ...CREATED_RUN, status: "completed" });
+    runStatus = "completed";
+
+    const res = await triggerAgentRun({ runId: "run-1", templateSlug: TEMPLATE.id });
+
+    expect(res.ok).toBe(false);
+    expect(transitionRunStatus).not.toHaveBeenCalled();
+    expect(enqueueAgentRun).not.toHaveBeenCalled();
+  });
+
+  it("NOT HELD ⇒ the run really dispatches (pending_input → queued, then enqueued)", async () => {
     const res = await setRunTriggerForActor(actor, {
       runId: "run-1",
       triggerType: "immediate",
@@ -341,6 +417,10 @@ describe("setRunTriggerForActor immediate consults the run-start hold (cinatra#2
       // admits a non-owner admin, so `run_by` alone is not the scope subject.
       { actingUserId: actor.userId },
     );
+    // cinatra#2523: the transition is followed by a real enqueue. Before it, this
+    // path wrote a status and put nothing on any queue — the run only ever ran
+    // when some other job happened to be parked on the trigger gate.
+    expect(enqueueAgentRun).toHaveBeenCalledWith({ runId: "run-1" }, expect.anything());
   });
 
   it("a THROWING hold fails OPEN to the pre-fix transition", async () => {

@@ -91,8 +91,31 @@ export async function triggerAgentRun(
 
   // 4. State check (also enforced atomically in step 6, but we short-circuit
   //    here to give the client a clean error before any DB write).
+  //
+  // cinatra#2523: `pending_trigger` is the second pre-dispatch waiting state —
+  // setup finished, the user is answering "When should this run?". A run parked
+  // at the run-start recommendation interception from THERE is released through
+  // this same canonical dispatcher, so refusing it outright would leave the
+  // chip-row decision with nothing to do and no way to say so.
+  //
+  // But this is a PUBLIC server action, so "the owner asked" is not enough to
+  // admit that state: it would let a run be dispatched straight past the trigger
+  // step the state exists to wait for. Admit it only on the evidence that put it
+  // here — a run-start recommendation park that has been DECIDED.
+  //
+  // "Decided" is checked HERE, not left to the live-park short-circuit below:
+  // that read and the hold evaluation after it are both fail-OPEN, so a
+  // truthiness test on the park row would let an undecided run through whenever
+  // those reads failed (codex round-3 finding). A missing park, an unreadable
+  // park, and a park still `parked` all refuse.
   if (run.status !== "pending_input") {
-    return { ok: false, error: "run is not in pending_input state" };
+    const park =
+      run.status === "pending_trigger"
+        ? await readRecommendationParkForRun(args.runId).catch(() => null)
+        : null;
+    if (!park || park.status === "parked") {
+      return { ok: false, error: "run is not in pending_input state" };
+    }
   }
 
   // 5. templateSlug consistency check — verify the run actually belongs to
@@ -152,15 +175,26 @@ export async function triggerAgentRun(
   // Owner's member session grounds both the dispatch and its compensation.
   const authority = await verifySessionAuthority(userId, run.orgId);
 
-  // 6. Atomic compare-and-swap: pending_input → queued. Returns false if
-  //    a concurrent request already won the race.
-  try {
-    await transitionRunStatus(args.runId, "pending_input", "queued", undefined, authority);
-  } catch (err) {
-    if (err instanceof RunTransitionError && err.code === "stale_from_status") {
-      return { ok: false, error: "run is not in pending_input state" };
+  // 6. Atomic compare-and-swap onto `queued`. Returns false if a concurrent
+  //    request already won the race.
+  //
+  // cinatra#2523 made this a two-rung ladder for the same reason as the state
+  // check above: both pre-dispatch waiting states are legal dispatch sources,
+  // and the rung that WINS is remembered so the compensation below reverts the
+  // run to where it actually was rather than rewriting its state.
+  let dispatchedFrom: (typeof RUN_START_DISPATCH_FROM_STATUSES)[number] | null = null;
+  for (const from of RUN_START_DISPATCH_FROM_STATUSES) {
+    try {
+      await transitionRunStatus(args.runId, from, "queued", undefined, authority);
+      dispatchedFrom = from;
+      break;
+    } catch (err) {
+      if (err instanceof RunTransitionError && err.code === "stale_from_status") continue;
+      throw err;
     }
-    throw err;
+  }
+  if (dispatchedFrom === null) {
+    return { ok: false, error: "run is not in pending_input state" };
   }
 
   // 7. Enqueue with jobId=runId for BullMQ-level dedup. If this throws,
@@ -177,10 +211,13 @@ export async function triggerAgentRun(
     // Compensation: undo the queued transition. We use the conditional
     // helper again (queued → pending_input) so we never accidentally
     // revert a run that has already been picked up by a worker.
+    // Revert to the state the run was ACTUALLY in (cinatra#2523) — reverting a
+    // `pending_trigger` run to `pending_input` would silently undo its finished
+    // setup step and send the user back through the form.
     await transitionRunStatus(
       args.runId,
       "queued",
-      "pending_input",
+      dispatchedFrom,
       undefined,
       authority,
     ).catch(() => {
@@ -200,6 +237,18 @@ export async function triggerAgentRun(
 
   return { ok: true };
 }
+
+/**
+ * The run statuses the canonical run-START dispatcher accepts (cinatra#2523).
+ * Both are PRE-DISPATCH waiting states with a legal `→queued` edge:
+ *   - `pending_input`   — created, never dispatched (or returned from `armed`);
+ *   - `pending_trigger` — setup finished, awaiting the user's trigger choice.
+ *
+ * Declared next to `triggerAgentRun` because the run-start recommendation
+ * chip-row releases its park through it: a run parked from `pending_trigger`
+ * must dispatch on the decision, not be misread as "already advanced".
+ */
+const RUN_START_DISPATCH_FROM_STATUSES = ["pending_input", "pending_trigger"] as const;
 
 export type CreatePendingRunArgs = {
   templateSlug: string;

@@ -200,8 +200,14 @@ describe("layer 2: shared dispatch guard", () => {
     const gate = read("packages/agents/src/trigger-gate.ts");
     expect(gate).toContain("export async function clearTriggerReleased(");
     const svc = read("packages/agents/src/trigger-service.ts");
-    const at0 = at(svc, "isScopeDenial(err)");
-    expect(svc.slice(at0, at0 + 1200)).toContain("clearTriggerReleased");
+    // cinatra#2523 factored the unwind into ONE helper the immediate dispatch
+    // calls from every refusal arm (the scope denial and the refused enqueue),
+    // so the scan follows it there — the row AND the Redis flag must still be
+    // cleared together, which is the actual invariant.
+    const at0 = at(svc, "const unwindTrigger = async () => {");
+    const unwind = svc.slice(at0, at0 + 1200);
+    expect(unwind).toContain("deleteRunTriggerByRunId(runId)");
+    expect(unwind).toContain("clearTriggerReleased");
   });
 
   it("is NOT relaxed by softPreflight — that flag softens configuration, never authorization", () => {
@@ -264,12 +270,14 @@ describe("layer 2: shared dispatch guard", () => {
     // merely threw would leave a refused run holding an armed immediate trigger
     // that no dispatch will ever consume.
     const src = read("packages/agents/src/trigger-service.ts");
-    const at0 = at(src, 'actingUserId: actor.userId');
+    const at0 = at(src, "actingUserId: actor.userId");
     const block = src.slice(at0, at0 + 1600);
     expect(block).toContain("isScopeDenial(err)");
-    // compensation BEFORE the return, mirroring the schedule-failure path
-    expect(block).toContain("deleteRunTriggerByRunId(args.runId)");
-    expect(block.indexOf("deleteRunTriggerByRunId")).toBeLessThan(
+    // Compensation BEFORE the return, mirroring the schedule-failure path.
+    // cinatra#2523 named it `unwindTrigger` — the helper asserted above to clear
+    // BOTH the row and the Redis flag.
+    expect(block).toContain("await unwindTrigger()");
+    expect(block.indexOf("await unwindTrigger()")).toBeLessThan(
       block.indexOf('return { ok: false, error: "forbidden" }'),
     );
   });
@@ -277,10 +285,15 @@ describe("layer 2: shared dispatch guard", () => {
   it("threads the DISPATCHING admin into the guard on the immediate-trigger arm", () => {
     // `setRunTriggerForActor` admits `role === "admin"` via `isOwnerOrAdmin`, so
     // like the orchestrator resume it can drive a dispatch for a run it does not
-    // own. Its immediate branch transitions pending_input→queued directly.
+    // own. cinatra#2523 turned its single pending_input→queued call into a LADDER
+    // of legal `from` states, so the scan checks that EVERY rung is a documented
+    // dispatch source and that the one `→queued` call threads the acting human.
     const src = read("packages/agents/src/trigger-service.ts");
     expect(src).toMatch(
-      /transitionRunStatus\([\s\S]{0,300}?"pending_input",\s*"queued",[\s\S]{0,300}?actingUserId: actor\.userId/,
+      /const IMMEDIATE_DISPATCH_FROM_STATUSES = \[\s*"pending_trigger",\s*"pending_input",\s*"armed",\s*\] as const;/,
+    );
+    expect(src).toMatch(
+      /transitionRunStatus\(runId, from, "queued",[\s\S]{0,200}?actingUserId: actor\.userId/,
     );
   });
 

@@ -439,9 +439,18 @@ async function releaseAndDispatch(
     }
   }
 
-  // A held run is pending_input; if it already advanced (a concurrent decision
-  // won the dispatch race), report success without re-dispatching.
-  if (run.status !== "pending_input") return { ok: true, dispatched: false };
+  // A held run is in one of the two PRE-DISPATCH waiting states; if it already
+  // advanced past them (a concurrent decision won the dispatch race), report
+  // success without re-dispatching.
+  //
+  // cinatra#2523: `pending_trigger` joined that set when setup stopped ending on
+  // `completed`. Reading it as "already advanced" would report `ok:true,
+  // dispatched:false` for a run that never moved — the exact false-success shape
+  // the run-start hold's own verification (cinatra#2148) exists to prevent, and
+  // the one this issue's ruling forbids.
+  if (run.status !== "pending_input" && run.status !== "pending_trigger") {
+    return { ok: true, dispatched: false };
+  }
 
   const result = await triggerAgentRun({ runId, templateSlug: run.templateId });
   if (!result.ok) {
