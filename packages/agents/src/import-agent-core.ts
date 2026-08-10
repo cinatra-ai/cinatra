@@ -11,13 +11,19 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { redirect } from "next/navigation";
 import {
-  readAgentTemplateByPackageName,
   createAgentTemplate,
   createAgentVersion,
   updateAgentTemplate,
   updateAgentTemplateOrigin,
 } from "./store";
 import type { CreateAgentTemplateInput } from "./store";
+// cinatra#2616 — this path claims a package-name identity too (it upserts by
+// package name directly, never through installAgentFromPackage).
+import {
+  agentTemplateIdentityClaimOrgToRecord,
+  deriveAgentTemplateIdentityClaim,
+  resolveAgentTemplateIdentityClaim,
+} from "./agent-template-identity";
 // resolvePublishDestination is the gated loader for publish destination routing.
 // resolvePublishDestination is called after auth gate in importAgentTemplate (the public
 // server action); importAgentTemplateCore itself is auth-free (called from startup paths too).
@@ -103,8 +109,30 @@ export async function importAgentTemplateCore(
      *  instance that already has its organization is never damaged in the first
      *  place, so the reconcile only ever has pre-existing rows to heal. */
     orgId?: string;
+    /** cinatra#2616: the organization on whose behalf this import runs — the
+     *  IDENTITY CLAIMANT for the package name it writes. This path never rode
+     *  `installAgentFromPackage`; it reads by package name and calls
+     *  `updateAgentTemplate` directly, so it was a second, unguarded route to
+     *  the same takeover. The authenticated ZIP-import action threads its
+     *  session's active organization; boot seeding has none and claims as the
+     *  instance operator. Defaults to `orgId` when omitted. */
+    claimantOrgId?: string | null;
   },
 ): Promise<{ templateId: string; upserted: boolean }> {
+  // cinatra#2616 — WHO is claiming the package name this import writes.
+  const claim = deriveAgentTemplateIdentityClaim({
+    claimantOrgId: options?.claimantOrgId ?? null,
+    orgId: options?.orgId ?? null,
+  });
+  // …and the org that claim RECORDS on the row. A refusal predicate alone is
+  // not a claim: the authenticated import action supplies `claimantOrgId` but
+  // no `orgId`, so without this an import would leave the name `org_id NULL` —
+  // still UNCLAIMED, and the next organization's import would take it. Same
+  // treatment as the install path, on BOTH branches (fresh create and the
+  // adoption of an org-less row). `options.orgId`, when the caller supplies it,
+  // still wins verbatim.
+  const effectiveOrgId =
+    options?.orgId ?? agentTemplateIdentityClaimOrgToRecord(claim, options?.orgId);
   const zipBuf = Buffer.from(zipBase64, "base64");
   const files = readZipFiles(zipBuf);
 
@@ -255,9 +283,17 @@ export async function importAgentTemplateCore(
   try {
     // --- Upsert path: if packageName is present, check for an existing template ---
     if (effectivePackageName) {
-      const existing = await readAgentTemplateByPackageName(effectivePackageName);
+      // cinatra#2616 — resolve the claim instead of a bare name lookup: a name
+      // held by another organization REFUSES here rather than being adopted.
+      const resolved = await resolveAgentTemplateIdentityClaim({
+        packageName: effectivePackageName,
+        claim,
+      });
+      const existing = resolved.outcome === "owned" ? resolved.row : null;
       if (existing) {
-        await updateAgentTemplate(existing.id, {
+        // The claim rides the WRITE — the authoritative guard, as on the
+        // install path.
+        const updated = await updateAgentTemplate(existing.id, {
           name: importedName,
           // compiledPlan is always [] for OAS flows — never overwrite existing DB value.
           compiledPlan: undefined,
@@ -283,7 +319,18 @@ export async function importAgentTemplateCore(
           // result on re-import, exactly as installAgentFromPackage's upsert
           // branch does.
           hasArtifactBindings: compiled.hasArtifactBindings,
-        });
+          // cinatra#2616 — RECORD the claim when adopting an org-less row, so the
+          // name does not stay up for grabs.
+          orgId: effectiveOrgId,
+        }, claim);
+        // A null result is a REFUSAL, not a shrug — never write a version after
+        // one (cinatra#2616).
+        if (!updated) {
+          throw new Error(
+            `[importAgentTemplateCore] the identity claim on '${effectivePackageName}' could not ` +
+              "be applied — the template row moved or was removed mid-import. Retry the import.",
+          );
+        }
 
         const snapshotObj = {
           compiledPlan: [],
@@ -318,7 +365,7 @@ export async function importAgentTemplateCore(
               visibility: options.destination,
               registryUrl: zipConfig.registryUrl,
               importedFrom: { source: "zip", updatePolicy: "manual" },
-            });
+            }, claim);
           } catch (originErr) {
             console.warn("[importAgentTemplateCore:upsert] Origin persistence failed:", originErr);
           }
@@ -340,7 +387,10 @@ export async function importAgentTemplateCore(
       // (undefined) leaves the row ownerless exactly as before —
       // `withDeterminateInstallScope` early-returns on a missing orgId and
       // stamps nothing, so no scope is ever guessed at write time.
-      ...(options?.orgId ? { orgId: options.orgId } : {}),
+      // cinatra#2616 — the RECORDED claim (options.orgId when the caller
+      // supplies one, else the claimant). Omitted only for a genuinely
+      // organization-less import (boot seeding on an un-set-up instance).
+      ...(effectiveOrgId ? { orgId: effectiveOrgId } : {}),
       name: importedName,
       description: agent.description ?? undefined,
       sourceNl: agent.sourceNl ?? "",
@@ -404,7 +454,7 @@ export async function importAgentTemplateCore(
           visibility: options.destination,
           registryUrl: createConfig.registryUrl,
           importedFrom: { source: "zip", updatePolicy: "manual" },
-        });
+        }, claim);
       } catch (originErr) {
         console.warn("[importAgentTemplateCore:create] Origin persistence failed:", originErr);
       }

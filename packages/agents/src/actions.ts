@@ -84,6 +84,8 @@ import { compileWorkflow } from "./compiler";
 import { collectAllPrimitiveHandlers } from "@/lib/primitive-handlers";
 import { publishAgentPackage } from "./verdaccio/client";
 import { installAgentPackageWithDependencies } from "./install-package-with-dependencies";
+// cinatra#2616 — the identity claim guarding the package-name-keyed origin write.
+import { claimOfAuthorizedTemplate } from "./agent-template-identity";
 // Agent package-name validation is scope-agnostic.
 import { derivePublishMetadataFromSnapshot } from "./verdaccio/publish-metadata";
 // Explicit DI shape for publish/install paths.
@@ -579,7 +581,10 @@ export async function publishToRegistry(input: {
         scope,
         visibility: destination,
         registryUrl: resolvedConfig.registryUrl,
-      });
+        // cinatra#2616 — the claim of the row this action already resolved and
+        // authorized. package_name is globally unique, so it pins the write to
+        // that identity and refuses if the identity moved to another org.
+      }, claimOfAuthorizedTemplate(template, orgId));
     } catch (originErr) {
       // Non-fatal — publish already succeeded; log and continue.
       console.warn("[publishToRegistry] Origin persistence failed:", originErr);

@@ -229,9 +229,17 @@ export async function importAgentTemplate(
   // and supports per-template access-policy gates.
   const creatorId = session.user?.id ?? undefined;
   const { permissions, ...coreOptions } = options ?? {};
+  // cinatra#2616: this admin action is a package-name IDENTITY CLAIM. Thread the
+  // session's active organization as the claimant so an import cannot take over
+  // a name another organization already holds. A session with no active org
+  // claims as the instance operator, exactly as boot seeding does.
+  const claimantOrgId =
+    (session as { session?: { activeOrganizationId?: string | null } }).session
+      ?.activeOrganizationId ?? null;
   const result = await importAgentTemplateCore(zipBase64, nameOverride, {
     ...coreOptions,
     creatorId,
+    claimantOrgId,
   });
 
   // Record install actor + seed upload-time policy / co-owners via the generic
