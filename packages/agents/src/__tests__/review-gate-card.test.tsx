@@ -674,7 +674,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     );
   });
 
-  it("a COMMENT carries no partition, and the marks survive it (Codex r1, finding 1)", async () => {
+  it("a COMMENT carries no partition, and the marks survive it", async () => {
     // S6b refuses a partition on a non-terminal decision — a stream of comments
     // each "accepting" items on a gate that never resolves is the parallel
     // approval pathway #2047 row 8 bans. So Comment must not send one, or it
@@ -703,7 +703,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     expect(chipFor(container, "subject").getAttribute("data-suggestion-state")).toBe("accepted");
   });
 
-  it("a surface that CHANGES clears the marks and says so, rather than quietly weakening the decision (Codex r1, finding 2)", async () => {
+  it("a surface that CHANGES clears the marks and says so, rather than quietly weakening the decision", async () => {
     // The snapshot is immutable, so the surfaced set can only change by a row
     // that stopped verifying or a read that failed. Submitting whatever survived
     // would land an approve recording NOTHING while the reviewer believes it
@@ -789,7 +789,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false);
   });
 
-  it("the notice SURVIVES a second surface change — a flap must not wipe the warning (Codex r2)", async () => {
+  it("the notice SURVIVES a second surface change — a flap must not wipe the warning", async () => {
     // A transient store failure that drops the chips and then restores them is
     // two surface changes in a row. Recomputing the notice from "were there
     // marks a moment ago" would answer no on the second one, and the reviewer
@@ -837,7 +837,7 @@ describe("§VIII the marks ride the ONE decision submit", () => {
     );
   });
 
-  it("marks NEVER cross gates, even when two gates mint the same ids (Codex r1, finding 3)", async () => {
+  it("marks NEVER cross gates, even when two gates mint the same ids", async () => {
     // A suggestion id derives from (lane, projection digest, op, pointer) and
     // NOT from the gate, so two gates shown the same text legitimately mint the
     // same ids. The binding is the REF as well as the id set.
