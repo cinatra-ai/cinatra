@@ -78,6 +78,8 @@ describe("the decision travels through the ONE existing core", () => {
       "approve",
       null,
       ACTOR,
+      // cinatra#2571 — no suggestion partition on this body.
+      null,
     );
     await expect(res.json()).resolves.toEqual({
       outcome: { kind: "decided", disposition: "approve", idempotent: false },
@@ -103,6 +105,7 @@ describe("the decision travels through the ONE existing core", () => {
       "comment",
       "warmer opening",
       ACTOR,
+      null,
     );
   });
 
@@ -217,5 +220,93 @@ describe("run READ is enforced before the decision op (Codex round 1, finding 1)
     const forged = await POST(post({ ref: "nope", disposition: "approve" }));
     expect(denied.status).toBe(forged.status);
     expect(await denied.json()).toEqual(await forged.json());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2571 (epic #2564 S6b) — the suggestion partition rides this body.
+// ---------------------------------------------------------------------------
+
+describe("the suggestion partition", () => {
+  it("is forwarded to the ONE decision helper, verbatim", async () => {
+    await POST(
+      post({
+        ref: REF,
+        disposition: "approve",
+        suggestionDecisions: { accepted: ["sug_1"], dismissed: ["sug_2"] },
+      }),
+    );
+    expect(submitReviewDecisionAction).toHaveBeenCalledWith(
+      "run-1",
+      "task-1",
+      "approve",
+      null,
+      ACTOR,
+      { accepted: ["sug_1"], dismissed: ["sug_2"] },
+    );
+  });
+
+  it("a half-specified partition is normalized to two lists, not rejected", async () => {
+    await POST(post({ ref: REF, disposition: "approve", suggestionDecisions: { accepted: ["sug_1"] } }));
+    expect(submitReviewDecisionAction).toHaveBeenCalledWith(
+      "run-1",
+      "task-1",
+      "approve",
+      null,
+      ACTOR,
+      { accepted: ["sug_1"], dismissed: [] },
+    );
+  });
+
+  it("this route decides NOTHING about which ids are real — it never reads a store", async () => {
+    // A forged id is forwarded; the decision core refuses it against the pinned
+    // snapshot. A route that pre-filtered would be a second place that knows.
+    await POST(
+      post({ ref: REF, disposition: "approve", suggestionDecisions: { accepted: ["sug_forged"] } }),
+    );
+    expect(submitReviewDecisionAction).toHaveBeenCalledWith(
+      "run-1",
+      "task-1",
+      "approve",
+      null,
+      ACTOR,
+      { accepted: ["sug_forged"], dismissed: [] },
+    );
+  });
+
+  it("rejects an over-long id list at 400, before any decision is attempted", async () => {
+    const res = await POST(
+      post({
+        ref: REF,
+        disposition: "approve",
+        suggestionDecisions: { accepted: Array.from({ length: 51 }, (_, i) => `sug_${i}`) },
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(submitReviewDecisionAction).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown key inside the partition (strict shape)", async () => {
+    const res = await POST(
+      post({
+        ref: REF,
+        disposition: "approve",
+        suggestionDecisions: { accepted: ["sug_1"], applied: ["sug_2"] },
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect(submitReviewDecisionAction).not.toHaveBeenCalled();
+  });
+
+  it("an absent partition forwards null (an old client is unchanged)", async () => {
+    await POST(post({ ref: REF, disposition: "approve" }));
+    expect(submitReviewDecisionAction).toHaveBeenCalledWith(
+      "run-1",
+      "task-1",
+      "approve",
+      null,
+      ACTOR,
+      null,
+    );
   });
 });

@@ -420,6 +420,131 @@ export function lifecycleInterceptionsSchemaQueries(schemaName: string): QueryIn
 }
 
 // ---------------------------------------------------------------------------
+// chat-hitl S6b (cinatra#2571, epic #2564) — the suggestion DECISION schema.
+//
+// Two changes, both on tables the S4 block above creates, so this function is
+// spread AFTER it. The operator-upgrade twin is migration core__0092; the two
+// DDLs mirror each other.
+//
+//   suggestion_decision_ledger  — RESHAPED from "one row per snapshot" to "one
+//     row per DECIDED SUGGESTION". The shipped shape put the FK + the UNIQUE on
+//     `suggestion_id` pointing at `gate_suggestion_snapshots.id`, which admits
+//     exactly one row per snapshot — a shape that cannot hold a per-item
+//     partition. The table has never had a writer in any release, so this moves
+//     no data; the MIGRATION twin additionally refuses to run if it finds a row,
+//     rather than silently re-interpreting `suggestion_id` under it.
+//
+//   suggestion_application_outbox — NEW. The durable application-intent channel,
+//     shaped exactly like `artifact_review_resume_outbox` (lease + attempts +
+//     max_attempts + dead_lettered_at + last_error) because it carries the same
+//     exactly-once-persistence / at-least-once-delivery contract.
+//
+// Every statement is idempotent (IF EXISTS / IF NOT EXISTS), so a fresh bootstrap
+// and a re-run over an already-migrated database behave identically.
+// ---------------------------------------------------------------------------
+
+export function suggestionDecisionCasSchemaQueries(schemaName: string): QueryInput[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  const ledger = `"${q}"."suggestion_decision_ledger"`;
+  return [
+    // -----------------------------------------------------------------------
+    // Ledger reshape. THE ORDER IS THE SAFETY PROPERTY (Codex round 1, finding
+    // 4): the ADDITIVE steps and the NOT NULL assertion come FIRST, and only then
+    // the destructive drops.
+    //
+    // Bootstrap DDL runs statement-by-statement in autocommit, and it runs BEFORE
+    // the numbered migrations — so the migration's emptiness guard cannot protect
+    // it. If the drops came first, a deployment that somehow held legacy ledger
+    // rows would lose its old UNIQUE + FK, then fail at `SET NOT NULL`, and be
+    // left half-reshaped with the guard never reached. With this order the same
+    // deployment fails at `SET NOT NULL` with every original constraint still in
+    // place and nothing dropped: fail-closed, and re-runnable once an operator has
+    // dealt with the rows.
+    // -----------------------------------------------------------------------
+    { text: `ALTER TABLE ${ledger} ADD COLUMN IF NOT EXISTS snapshot_id text` },
+    { text: `ALTER TABLE ${ledger} ADD COLUMN IF NOT EXISTS decision_fingerprint text` },
+    { text: `ALTER TABLE ${ledger} ADD COLUMN IF NOT EXISTS applied_at timestamptz` },
+    // The tripwire. On an empty table (every shipped deployment — the table has
+    // never had a writer) this succeeds; on a table with legacy rows it raises,
+    // BEFORE anything destructive has run.
+    { text: `ALTER TABLE ${ledger} ALTER COLUMN snapshot_id SET NOT NULL` },
+    { text: `ALTER TABLE ${ledger} ALTER COLUMN decision_fingerprint SET NOT NULL` },
+
+    // Now the destructive half: the one-row-per-snapshot constraints go.
+    { text: `ALTER TABLE ${ledger} DROP CONSTRAINT IF EXISTS suggestion_decision_ledger_uniq` },
+    { text: `DROP INDEX IF EXISTS "${q}"."suggestion_decision_ledger_uniq"` },
+    {
+      text: `ALTER TABLE ${ledger} DROP CONSTRAINT IF EXISTS suggestion_decision_ledger_suggestion_id_fkey`,
+    },
+
+    // Re-point the foreign keys. DROP IF EXISTS + ADD (rather than a DO block
+    // that probes pg_constraint) so every statement here starts with a verb the
+    // bootstrap runner and the integration harnesses already execute — the S2
+    // CHECK-expansion precedent in `lifecycleRepairSchemaQueries`.
+    {
+      text: `ALTER TABLE ${ledger} DROP CONSTRAINT IF EXISTS suggestion_decision_ledger_snapshot_id_fkey`,
+    },
+    {
+      text: `ALTER TABLE ${ledger} ADD CONSTRAINT suggestion_decision_ledger_snapshot_id_fkey
+  FOREIGN KEY (snapshot_id) REFERENCES "${q}"."gate_suggestion_snapshots" (id) ON DELETE CASCADE`,
+    },
+    {
+      text: `ALTER TABLE ${ledger} DROP CONSTRAINT IF EXISTS suggestion_decision_ledger_gate_id_fkey`,
+    },
+    {
+      text: `ALTER TABLE ${ledger} ADD CONSTRAINT suggestion_decision_ledger_gate_id_fkey
+  FOREIGN KEY (gate_id) REFERENCES "${q}"."artifact_review_gates" (id) ON DELETE CASCADE`,
+    },
+    {
+      text: `CREATE UNIQUE INDEX IF NOT EXISTS suggestion_decision_ledger_uniq
+  ON ${ledger} (snapshot_id, suggestion_id)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS suggestion_decision_ledger_gate_idx
+  ON ${ledger} (gate_id)`,
+    },
+
+    // -----------------------------------------------------------------------
+    // The application-intent outbox. Mirrors the migration statement for
+    // statement, INCLUDING the status CHECK and the snapshot FK (Codex round 1,
+    // finding 4 + non-blocking 2): the bootstrap creates the table on a fresh
+    // install and the migration's CREATE ... IF NOT EXISTS is then a no-op, so a
+    // constraint present in only one of the two would simply never exist.
+    // -----------------------------------------------------------------------
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."suggestion_application_outbox" (
+  gate_id              text PRIMARY KEY
+                         REFERENCES "${q}"."artifact_review_gates" (id) ON DELETE CASCADE,
+  run_id               text NOT NULL,
+  review_task_id       text NOT NULL,
+  snapshot_id          text NOT NULL
+                         REFERENCES "${q}"."gate_suggestion_snapshots" (id) ON DELETE CASCADE,
+  decision_fingerprint text NOT NULL,
+  accepted_ids         jsonb NOT NULL,
+  status               text NOT NULL DEFAULT 'pending'
+                         CHECK (status IN ('pending','delivering','done')),
+  attempts             integer NOT NULL DEFAULT 0,
+  max_attempts         integer NOT NULL DEFAULT 20,
+  lease_token          text,
+  lease_expires_at     timestamptz,
+  dead_lettered_at     timestamptz,
+  last_error           text,
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  updated_at           timestamptz NOT NULL DEFAULT now()
+)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS suggestion_application_outbox_status_idx
+  ON "${q}"."suggestion_application_outbox" (status, created_at)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS suggestion_application_outbox_dead_idx
+  ON "${q}"."suggestion_application_outbox" (dead_lettered_at) WHERE dead_lettered_at IS NOT NULL`,
+    },
+  ];
+}
+
+// ---------------------------------------------------------------------------
 // lifecycle-interceptions S2 (cinatra#2040, epic #2037) bootstrap DDL — the
 // REPAIR LOOP + the two routed schema additions. Co-located in this already-
 // route-reachable schema module (the S0 precedent) so drizzle-store gains NO new

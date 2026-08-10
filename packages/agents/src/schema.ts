@@ -783,16 +783,82 @@ export const gateSuggestionSnapshots = cinatraSchema.table("gate_suggestion_snap
   gateIdx: index("gate_suggestion_snapshots_gate_idx").on(t.gateId),
 }));
 
-/** DECIDED SCHEMA (S4 auditor re-home): the suggestion decision-application ledger. */
+/**
+ * DECIDED SCHEMA (S4 auditor re-home), RESHAPED by cinatra#2571 (epic #2564 S6b).
+ *
+ * As shipped, `suggestion_id` referenced `gate_suggestion_snapshots.id` and was
+ * UNIQUE — which admits exactly ONE ledger row per snapshot. A snapshot is one
+ * row carrying MANY suggestions, so that shape could not record a per-item
+ * accepted/dismissed partition at all. It never recorded anything: the table
+ * shipped with no writer in any release, so the reshape (migration core__0092)
+ * moves a provably empty table and the migration refuses to run if it is not.
+ *
+ * NOW: one row per DECIDED SUGGESTION. `suggestion_id` is the id of a suggestion
+ * INSIDE the snapshot payload; `snapshot_id` is the snapshot row it came from
+ * (the FK that used to sit on `suggestion_id`). `decision_fingerprint` binds the
+ * row to the ONE review decision that wrote it, which is what makes a
+ * response-lost retry re-drive no duplicates. `applied_at` is stamped by the
+ * application-intent drain, exactly once per accepted row, and stays NULL forever
+ * for a dismissal.
+ */
 export const suggestionDecisionLedger = cinatraSchema.table("suggestion_decision_ledger", {
-  id:           text("id").primaryKey(),
-  suggestionId: text("suggestion_id").notNull().references(() => gateSuggestionSnapshots.id, { onDelete: "cascade" }),
-  gateId:       text("gate_id").notNull(),
-  decision:     text("decision").notNull(), // applied | dismissed
-  decidedBy:    text("decided_by").notNull(),
-  decidedAt:    timestamp("decided_at", { withTimezone: true }).notNull().defaultNow(),
+  id:                  text("id").primaryKey(),
+  /** The suggestion id from inside the snapshot payload (NOT a row id). */
+  suggestionId:        text("suggestion_id").notNull(),
+  /** The snapshot row those suggestions were surfaced from. */
+  snapshotId:          text("snapshot_id").notNull().references(() => gateSuggestionSnapshots.id, { onDelete: "cascade" }),
+  gateId:              text("gate_id").notNull().references(() => artifactReviewGates.id, { onDelete: "cascade" }),
+  decision:            text("decision").notNull(), // applied | dismissed
+  decidedBy:           text("decided_by").notNull(),
+  /** The fingerprint of the review decision that recorded this row. */
+  decisionFingerprint: text("decision_fingerprint").notNull(),
+  decidedAt:           timestamp("decided_at", { withTimezone: true }).notNull().defaultNow(),
+  /** Stamped by the application drain; NULL until applied, always NULL for a
+   * dismissal. The exactly-once CAS predicate. */
+  appliedAt:           timestamp("applied_at", { withTimezone: true }),
 }, (t) => ({
-  suggestionUniq: uniqueIndex("suggestion_decision_ledger_uniq").on(t.suggestionId),
+  // One decision per suggestion per snapshot — the row-level idempotency the
+  // decision commit relies on (the old UNIQUE on suggestion_id alone could not
+  // express it, and would have collided across snapshots).
+  suggestionUniq: uniqueIndex("suggestion_decision_ledger_uniq").on(t.snapshotId, t.suggestionId),
+  gateIdx:        index("suggestion_decision_ledger_gate_idx").on(t.gateId),
+}));
+
+/**
+ * The APPLICATION-INTENT outbox (cinatra#2571, epic #2564 S6b) — the durable
+ * channel through which ACCEPTED suggestions are applied.
+ *
+ * Deliberately the same shape as `artifact_review_resume_outbox`, because it has
+ * the same contract: the intent is persisted EXACTLY ONCE, in the same
+ * transaction as the gate CAS that authorized it, and the drain delivers it
+ * AT-LEAST-ONCE against an idempotent consumer. PK `gate_id` ⇒ at most one
+ * application intent per gate, so a gate can never grow two competing sets of
+ * accepted work.
+ *
+ * The intent names the SNAPSHOT and the accepted IDS, never patch content: the
+ * drain re-reads the immutable, hash-verified snapshot, so a row edited
+ * underneath the outbox changes nothing about what gets applied.
+ */
+export const suggestionApplicationOutbox = cinatraSchema.table("suggestion_application_outbox", {
+  gateId:              text("gate_id").primaryKey().references(() => artifactReviewGates.id, { onDelete: "cascade" }),
+  runId:               text("run_id").notNull(),
+  reviewTaskId:        text("review_task_id").notNull(),
+  snapshotId:          text("snapshot_id").notNull().references(() => gateSuggestionSnapshots.id, { onDelete: "cascade" }),
+  decisionFingerprint: text("decision_fingerprint").notNull(),
+  /** The canonical (sorted, deduped) accepted id set the decision committed. */
+  acceptedIds:         jsonb("accepted_ids").notNull(),
+  status:              text("status").notNull().default("pending"), // pending | delivering | done (CHECK in the DDL twin)
+  attempts:            integer("attempts").notNull().default(0),
+  maxAttempts:         integer("max_attempts").notNull().default(20),
+  leaseToken:          text("lease_token"),
+  leaseExpiresAt:      timestamp("lease_expires_at", { withTimezone: true }),
+  deadLetteredAt:      timestamp("dead_lettered_at", { withTimezone: true }),
+  lastError:           text("last_error"),
+  createdAt:           timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt:           timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  statusIdx: index("suggestion_application_outbox_status_idx").on(t.status, t.createdAt),
+  deadIdx:   index("suggestion_application_outbox_dead_idx").on(t.deadLetteredAt).where(sql`dead_lettered_at IS NOT NULL`),
 }));
 
 // ---------------------------------------------------------------------------

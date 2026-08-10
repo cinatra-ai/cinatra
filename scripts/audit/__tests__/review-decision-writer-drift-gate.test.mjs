@@ -52,6 +52,11 @@ const KNOWN_WRITERS = [
   "packages/agents/src/artifact-review-gate-store.ts",
   "packages/agents/src/lifecycle-repair-store.ts",
   "packages/agents/src/lifecycle-review-orchestration-store.ts",
+  // cinatra#2571 (epic #2564 S6b) — the suggestion decision's DELIVERY arm.
+  // It writes only the application-intent outbox's lease/dead-letter state and
+  // the ledger's `applied_at` stamp; the decision rows themselves are written by
+  // the gate store above, inside the gate-CAS transaction.
+  "packages/agents/src/suggestion-decision-store.ts",
 ];
 
 // --------------------------------------------------------------------------
@@ -210,9 +215,11 @@ describe("the known decision writers", () => {
         return readFileSync(join(REPO_ROOT, real), "utf8");
       },
     });
-    // The gate store owns 8 sites, the repair store 2, the orchestration
-    // store 2 — the exact set the #2047 annex enumerates.
-    expect(violations.length).toBe(12);
+    // The gate store owns 10 sites (8 from the #2047 annex + the two
+    // cinatra#2571 suggestion writes that ride the same CAS transaction), the
+    // repair store 2, the orchestration store 2, and the S6b delivery arm 5
+    // (claim, applied-stamp, done, terminal dead-letter, exhausted dead-letter).
+    expect(violations.length).toBe(19);
   });
 
   it("allowlists the guard itself and nothing unexpected", () => {
@@ -220,12 +227,16 @@ describe("the known decision writers", () => {
     expect(WRITER_ALLOWLIST.size).toBe(KNOWN_WRITERS.length + 1);
   });
 
-  it("covers all four review-decision tables", () => {
+  it("covers every review-decision table, including the S6b suggestion pair", () => {
     expect(REVIEW_DECISION_TABLES).toEqual([
       "artifact_review_gates",
       "artifact_review_audit",
       "artifact_review_dispositions",
       "artifact_review_resume_outbox",
+      // cinatra#2571 — what a per-item accept/dismiss ATTESTS, and the intent
+      // that RELEASES the accepted work. Both are decision record.
+      "suggestion_decision_ledger",
+      "suggestion_application_outbox",
     ]);
     expect(REVIEW_DECISION_SYMBOLS).toHaveLength(REVIEW_DECISION_TABLES.length);
   });

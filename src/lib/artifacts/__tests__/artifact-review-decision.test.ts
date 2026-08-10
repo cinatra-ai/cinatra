@@ -51,6 +51,8 @@ function ports(
     deriveProvenance: async () => PROV,
     // cinatra#2047 D-2 — the live acting actor the core stamps onto the plan.
     actingActorId: () => "user-decider",
+    // cinatra#2571 — no suggestions surfaced unless a test says otherwise.
+    readSurfacedSuggestions: async () => null,
     commit,
     ...over,
   } as SubmitDecisionPorts & { commit: ReturnType<typeof vi.fn> };
@@ -331,5 +333,290 @@ describe("submitReviewDecisionCore — the deciding actor is recorded", () => {
     expect(strip(a.commit.mock.calls[0][0])).toEqual(strip(b.commit.mock.calls[0][0]));
     expect(a.commit.mock.calls[0][0].decidedBy).toBe("user-producer");
     expect(b.commit.mock.calls[0][0].decidedBy).toBe("user-someone-else");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2571 (epic #2564 S6b) — the suggestion partition inside the decision.
+// ---------------------------------------------------------------------------
+
+const SURFACED = { snapshotId: "gsug_abc", suggestionIds: ["sug_1", "sug_2", "sug_3"] };
+
+function suggestionPorts(over: Partial<SubmitDecisionPorts> = {}, commitOutcome?: ReviewCommitOutcome) {
+  return ports({ readSurfacedSuggestions: async () => SURFACED, ...over }, commitOutcome);
+}
+
+describe("S6b — the accepted/dismissed partition is part of the decision IDENTITY", () => {
+  it("two partitions with the SAME disposition are DIFFERENT fingerprints", () => {
+    const base = {
+      runId: "run",
+      reviewTaskId: "wayflow-t",
+      disposition: "approve" as const,
+      comment: null,
+      reviewedTargets: PINNED,
+    };
+    const a = reviewDecisionFingerprint({
+      ...base,
+      suggestionDecisions: { accepted: ["sug_1"], dismissed: ["sug_2"] },
+    });
+    const b = reviewDecisionFingerprint({
+      ...base,
+      suggestionDecisions: { accepted: ["sug_2"], dismissed: ["sug_1"] },
+    });
+    expect(a).not.toBe(b);
+  });
+
+  it("the partition is ORDER-FREE and DUPLICATE-FREE — a reordered resubmit is the SAME decision", () => {
+    const base = {
+      runId: "run",
+      reviewTaskId: "wayflow-t",
+      disposition: "approve" as const,
+      comment: null,
+      reviewedTargets: PINNED,
+    };
+    const a = reviewDecisionFingerprint({
+      ...base,
+      suggestionDecisions: { accepted: ["sug_1", "sug_3"], dismissed: ["sug_2"] },
+    });
+    const b = reviewDecisionFingerprint({
+      ...base,
+      suggestionDecisions: { accepted: ["sug_3", "sug_1"], dismissed: ["sug_2"] },
+    });
+    expect(a).toBe(b);
+  });
+
+  it("a decision with NO partition keeps its pre-#2571 fingerprint (deploy cannot re-identify it)", () => {
+    const base = {
+      runId: "run",
+      reviewTaskId: "wayflow-t",
+      disposition: "approve" as const,
+      comment: null,
+      reviewedTargets: PINNED,
+    };
+    // The identity is pinned to a LITERAL, not re-derived from the code under
+    // test: a future change that alters the no-partition material would turn every
+    // in-flight retry into a conflict, and this is what would catch it. The value
+    // was computed INDEPENDENTLY from the pre-#2571 material
+    // (`{v:1,runId,reviewTaskId,disposition,comment,targetKeys}`), not copied out
+    // of a run of the new code — a literal snapshotted from the implementation it
+    // guards would agree with any change it was supposed to catch.
+    const LEGACY_FINGERPRINT =
+      "b04ea2ba4483de99ae7cc8997a1aa0a245c5e1edf35a78d3786d280d4cb7b0a0";
+    const withoutKey = reviewDecisionFingerprint(base);
+    const withNull = reviewDecisionFingerprint({ ...base, suggestionDecisions: null });
+    const withEmpty = reviewDecisionFingerprint({
+      ...base,
+      suggestionDecisions: { accepted: [], dismissed: [] },
+    });
+    expect(withNull).toBe(withoutKey);
+    expect(withEmpty).toBe(withoutKey);
+    expect(withoutKey).toBe(LEGACY_FINGERPRINT);
+  });
+
+  it("an IDENTICAL resubmission is idempotent — the resolved gate's fingerprint matches", async () => {
+    const suggestionDecisions = { accepted: ["sug_1"], dismissed: ["sug_2"] };
+    const first = suggestionPorts();
+    const r1 = await submitReviewDecisionCore(decision({ suggestionDecisions }), first);
+    expect(r1.ok).toBe(true);
+    if (!r1.ok) throw new Error("unreachable");
+
+    const retry = suggestionPorts({
+      readGateState: async () => ({ status: "resolved", fingerprint: r1.fingerprint }),
+    });
+    const r2 = await submitReviewDecisionCore(decision({ suggestionDecisions }), retry);
+    expect(r2).toMatchObject({ ok: true, idempotent: true, fingerprint: r1.fingerprint });
+    expect(retry.commit).not.toHaveBeenCalled();
+  });
+
+  it("a DIFFERENT partition against the same resolved gate is a CONFLICT, not an overwrite", async () => {
+    const first = suggestionPorts();
+    const r1 = await submitReviewDecisionCore(
+      decision({ suggestionDecisions: { accepted: ["sug_1"], dismissed: [] } }),
+      first,
+    );
+    if (!r1.ok) throw new Error("unreachable");
+    const second = suggestionPorts({
+      readGateState: async () => ({ status: "resolved", fingerprint: r1.fingerprint }),
+    });
+    const r2 = await submitReviewDecisionCore(
+      decision({ suggestionDecisions: { accepted: ["sug_2"], dismissed: [] } }),
+      second,
+    );
+    expect(r2).toEqual({ ok: false, error: { kind: "gate-conflict" } });
+    expect(second.commit).not.toHaveBeenCalled();
+  });
+});
+
+describe("S6b — forged / replayed suggestion ids are refused PRE-CAS", () => {
+  it("an id the pinned snapshot never surfaced is rejected and NOTHING commits", async () => {
+    const p = suggestionPorts();
+    const r = await submitReviewDecisionCore(
+      decision({ suggestionDecisions: { accepted: ["sug_1", "sug_forged"], dismissed: [] } }),
+      p,
+    );
+    expect(r).toEqual({
+      ok: false,
+      error: { kind: "suggestion-not-surfaced", suggestionIds: ["sug_forged"] },
+    });
+    expect(p.commit).not.toHaveBeenCalled();
+  });
+
+  it("a gate with NO readable snapshot surfaces nothing — every id is refused", async () => {
+    const p = suggestionPorts({ readSurfacedSuggestions: async () => null });
+    const r = await submitReviewDecisionCore(
+      decision({ suggestionDecisions: { accepted: ["sug_1"], dismissed: [] } }),
+      p,
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("unreachable");
+    expect(r.error.kind).toBe("suggestion-not-surfaced");
+    expect(p.commit).not.toHaveBeenCalled();
+  });
+
+  it("a DISMISSED forged id is refused too — the whole partition is checked", async () => {
+    const p = suggestionPorts();
+    const r = await submitReviewDecisionCore(
+      decision({ suggestionDecisions: { accepted: [], dismissed: ["sug_elsewhere"] } }),
+      p,
+    );
+    expect(r.ok).toBe(false);
+    expect(p.commit).not.toHaveBeenCalled();
+  });
+
+  it("the snapshot is read ONLY after run access + the pending-gate check", async () => {
+    const order: string[] = [];
+    const p = suggestionPorts({
+      verifyRunAccess: async () => (order.push("access"), { ok: true }),
+      readGateState: async () => (
+        order.push("gate"), { status: "pending" as const, targets: PINNED }
+      ),
+      readSurfacedSuggestions: async () => (order.push("snapshot"), SURFACED),
+    });
+    await submitReviewDecisionCore(
+      decision({ suggestionDecisions: { accepted: ["sug_1"], dismissed: [] } }),
+      p,
+    );
+    expect(order).toEqual(["access", "gate", "snapshot"]);
+  });
+
+  it("an unauthorized caller never reaches the snapshot read (no existence oracle)", async () => {
+    const readSurfacedSuggestions = vi.fn(async () => SURFACED);
+    const p = suggestionPorts({
+      verifyRunAccess: async () => ({ ok: false, status: 403 }),
+      readSurfacedSuggestions,
+    });
+    const r = await submitReviewDecisionCore(
+      decision({ suggestionDecisions: { accepted: ["sug_1"], dismissed: [] } }),
+      p,
+    );
+    expect(r).toEqual({ ok: false, error: { kind: "run-access-denied", status: 403 } });
+    expect(readSurfacedSuggestions).not.toHaveBeenCalled();
+  });
+});
+
+describe("S6b — a partition can only ride a decision that can carry it", () => {
+  it("REFUSES a partition on a non-terminal comment (no per-item pathway)", async () => {
+    const p = suggestionPorts();
+    const r = await submitReviewDecisionCore(
+      decision({
+        disposition: "comment",
+        comment: "note",
+        suggestionDecisions: { accepted: ["sug_1"], dismissed: [] },
+      }),
+      p,
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("unreachable");
+    expect(r.error.kind).toBe("invalid-decision");
+    expect(p.commit).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES accepted suggestions on a reject (they would patch tombstoned work)", async () => {
+    const p = suggestionPorts();
+    const r = await submitReviewDecisionCore(
+      decision({
+        disposition: "reject",
+        suggestionDecisions: { accepted: ["sug_1"], dismissed: [] },
+      }),
+      p,
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("unreachable");
+    expect(r.error.kind).toBe("invalid-decision");
+    expect(p.commit).not.toHaveBeenCalled();
+  });
+
+  it("ALLOWS dismissals on a reject — the reviewer looked and declined", async () => {
+    const p = suggestionPorts();
+    const r = await submitReviewDecisionCore(
+      decision({
+        disposition: "reject",
+        suggestionDecisions: { accepted: [], dismissed: ["sug_1"] },
+      }),
+      p,
+    );
+    expect(r.ok).toBe(true);
+    expect(p.commit.mock.calls[0][0].suggestionPlan).toEqual({
+      snapshotId: SURFACED.snapshotId,
+      accepted: [],
+      dismissed: ["sug_1"],
+    });
+  });
+
+  it("REFUSES an id that is both accepted and dismissed", async () => {
+    const p = suggestionPorts();
+    const r = await submitReviewDecisionCore(
+      decision({ suggestionDecisions: { accepted: ["sug_1"], dismissed: ["sug_1"] } }),
+      p,
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("unreachable");
+    expect(r.error.kind).toBe("invalid-decision");
+    expect(p.commit).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a partition declared under the pre-#2571 payload version", async () => {
+    const p = suggestionPorts();
+    const r = await submitReviewDecisionCore(
+      decision({
+        decisionApiVersion: 1,
+        suggestionDecisions: { accepted: ["sug_1"], dismissed: [] },
+      }),
+      p,
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error("unreachable");
+    expect(r.error.kind).toBe("invalid-decision");
+  });
+
+  it("still ACCEPTS a v1 payload with no partition (an old client keeps working)", async () => {
+    const p = suggestionPorts();
+    const r = await submitReviewDecisionCore(decision({ decisionApiVersion: 1 }), p);
+    expect(r.ok).toBe(true);
+    expect(p.commit.mock.calls[0][0].suggestionPlan).toBeNull();
+  });
+});
+
+describe("S6b — the commit plan carries the ledger + intent inputs", () => {
+  it("binds the plan to the SNAPSHOT the ids were validated against, canonically sorted", async () => {
+    const p = suggestionPorts();
+    await submitReviewDecisionCore(
+      decision({ suggestionDecisions: { accepted: ["sug_3", "sug_1"], dismissed: ["sug_2"] } }),
+      p,
+    );
+    expect(p.commit.mock.calls[0][0].suggestionPlan).toEqual({
+      snapshotId: "gsug_abc",
+      accepted: ["sug_1", "sug_3"],
+      dismissed: ["sug_2"],
+    });
+  });
+
+  it("a decision that surfaces suggestions but decides NONE carries no plan at all", async () => {
+    const p = suggestionPorts();
+    await submitReviewDecisionCore(
+      decision({ suggestionDecisions: { accepted: [], dismissed: [] } }),
+      p,
+    );
+    expect(p.commit.mock.calls[0][0].suggestionPlan).toBeNull();
   });
 });
