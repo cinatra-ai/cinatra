@@ -108,6 +108,85 @@ export async function readSurfacedSuggestionsForGate(
   };
 }
 
+/**
+ * What a gate's chips are drawn FROM (cinatra#2572, epic #2564 S6c): the
+ * surfaced suggestions and, on a gate that has already been decided, the
+ * partition that was RECORDED against them.
+ *
+ * ONE read for the whole chip row, and it is the same read the decision core
+ * validates against — `readSurfacedSuggestionsForGate` above narrows this very
+ * snapshot to its id set. That is the property S6c needs: a chip a reviewer can
+ * see is, by construction, an id the decision core will accept, and a snapshot
+ * whose bytes stopped verifying disappears from BOTH at once (no chips, and
+ * every id refused) instead of drifting apart.
+ *
+ * `marks` is empty for a pending gate. A pending gate HAS no recorded partition
+ * — the reviewer's marks live on their screen until the one terminal decision
+ * carries them — so an empty map here is the truth, not a missing read.
+ */
+export interface GateSuggestionSurface {
+  gateId: string;
+  snapshotId: string;
+  suggestions: ProducedSuggestion[];
+  marks: Map<string, "accepted" | "dismissed">;
+}
+
+/**
+ * Read the gate's surfaced suggestions (+ the recorded partition when asked).
+ *
+ * Returns null for a gate that does not exist, one with no snapshot, and one
+ * whose snapshot no longer verifies — the same three collapses
+ * `readSurfacedSuggestionsForGate` makes, for the same reason: a row edited
+ * underneath the store must read as "nothing here", never as a different set.
+ *
+ * ACCESS IS THE CALLER'S. This is a store read, and it authorizes nothing; the
+ * one caller (`resolveLifecycleCardState`) runs the reader's run READ check and
+ * the gate-state read BEFORE it gets here, in that order, and never asks for a
+ * gate it has not already cleared.
+ */
+export async function readGateSuggestionSurface(
+  runId: string,
+  reviewTaskId: string,
+  opts?: { withRecordedMarks?: boolean },
+): Promise<GateSuggestionSurface | null> {
+  const gateRows = await db
+    .select({ id: artifactReviewGates.id })
+    .from(artifactReviewGates)
+    .where(
+      and(
+        eq(artifactReviewGates.runId, runId),
+        eq(artifactReviewGates.reviewTaskId, reviewTaskId),
+      ),
+    )
+    .limit(1);
+  const gateId = gateRows[0]?.id;
+  if (!gateId) return null;
+
+  const snapshot = await readVerifiedSuggestionSnapshotForGate(gateId);
+  if (!snapshot) return null;
+
+  const marks = new Map<string, "accepted" | "dismissed">();
+  if (opts?.withRecordedMarks) {
+    for (const row of await readSuggestionDecisionsForGate(gateId)) {
+      // The ledger's vocabulary is the APPLICATION's (`applied`), the chip's is
+      // the REVIEWER's (`accepted`). They are not the same fact — an accepted
+      // suggestion is recorded at decision time and applied later, through the
+      // outbox — so the surface reports what the reviewer decided, which is what
+      // the chip drew. Rows belonging to a superseded snapshot are dropped: a
+      // mark is only ever shown against the suggestion it was recorded for.
+      if (row.snapshotId !== snapshot.id) continue;
+      marks.set(row.suggestionId, row.decision === "applied" ? "accepted" : "dismissed");
+    }
+  }
+
+  return {
+    gateId,
+    snapshotId: snapshot.id,
+    suggestions: snapshot.payload.suggestions,
+    marks,
+  };
+}
+
 /** One recorded per-item decision. */
 export interface SuggestionDecisionRow {
   id: string;

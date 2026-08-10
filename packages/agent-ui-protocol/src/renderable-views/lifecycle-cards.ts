@@ -160,6 +160,168 @@ export const LIFECYCLE_REVIEW_CARD_STATES = [
 
 export type LifecycleCardStateName = (typeof LIFECYCLE_CARD_STATES)[number];
 
+// ---------------------------------------------------------------------------
+// Suggestion chips (§VIII) — cinatra#2572, epic #2564 S6c
+// ---------------------------------------------------------------------------
+//
+// §VIII: "A card may carry per-item suggestions. Each is a SUGGESTION CHIP …
+// Accepting or dismissing one is a LOCAL MARK … The chips carry NO SUBMIT of
+// their own — the review card's floor is the terminal act."
+//
+// WHY THE ITEMS RIDE THE RESOLVE ANSWER AND NOT THE WIRE PAYLOAD. The DATA_PART
+// still carries a ref and nothing else — that rule is untouched, and it is what
+// keeps a persisted, LLM-visible transcript free of gate content. These items
+// are part of the AUTHORITATIVE state the card refetches: they are read from
+// the gate's own hash-verified snapshot (S6a), server-side, AFTER the reader has
+// cleared run READ and the gate has been found pending. A reader who loses
+// access between the turn and the reload gets `absent` and sees no chip at all,
+// exactly as they see no card at all.
+//
+// WHAT AN ITEM MAY SAY. Only what the reviewer is already reading: the pointer
+// into the reviewed document, the transform class, and the producer's own
+// one-line reason. No patch VALUE ever rides this — a chip names WHERE and WHAT
+// KIND, never the replacement text, so a chip can be drawn beside a target the
+// reader may see without becoming a second, unauthorized projection of it.
+
+/** Ceiling on the chips one card may draw. Mirrors the producer's
+ * `MAX_GATE_SUGGESTIONS`; a snapshot cannot hold more than a card can draw. */
+export const MAX_LIFECYCLE_SUGGESTIONS = 50;
+/** Mirrors the decision core's `MAX_SUGGESTION_ID_CHARS`. */
+export const LIFECYCLE_SUGGESTION_ID_MAX_LENGTH = 128;
+/** The chip's sans LABEL — the readable form of the pointer. */
+export const LIFECYCLE_SUGGESTION_LABEL_MAX_LENGTH = 160;
+/** The chip's one-line reason (its title / accessible description). */
+export const LIFECYCLE_SUGGESTION_MESSAGE_MAX_LENGTH = 300;
+
+/**
+ * A RECORDED per-item outcome. Present only on a gate that has already been
+ * decided — a pending gate's marks are local to the reader's screen and have no
+ * server-side existence until the one terminal decision carries them (S6b).
+ */
+export const LIFECYCLE_SUGGESTION_MARKS = ["accepted", "dismissed"] as const;
+export type LifecycleSuggestionMark = (typeof LIFECYCLE_SUGGESTION_MARKS)[number];
+
+/** The transform class a suggestion proposes — the producer's op vocabulary. */
+export const LIFECYCLE_SUGGESTION_OPS = ["replace", "add", "remove"] as const;
+export type LifecycleSuggestionOp = (typeof LIFECYCLE_SUGGESTION_OPS)[number];
+
+/** ONE surfaced suggestion, as a chip draws it. */
+export type LifecycleSuggestion = {
+  /** The snapshot's own suggestion id — the only thing a decision sends back. */
+  id: string;
+  /** The readable pointer (§VIII's label slot). */
+  label: string;
+  /**
+   * The transform class, drawn in §VIII's mono slot — a NAMED DEVIATION, and the
+   * only one this slice takes.
+   *
+   * §VIII says the chip carries "its label and its confidence in mono", because
+   * the pill it is spliced from (Artifacts § type picker) annotates a CLASSIFIER
+   * output, which has a confidence. This lane does not: S6a's producer derives
+   * its suggestions DETERMINISTICALLY from the disclosed projection — normalize
+   * what is not canonical, drop an all-empty list member, add the key a member's
+   * siblings carry — so there is no score anywhere in the payload. Printing one
+   * would be inventing a number and attributing it to the producer, which is the
+   * one thing a provenance-bound surface may never do.
+   *
+   * So the SLOT is honoured and the DATUM is the truthful one available: the
+   * transform class, in the same mono treatment, at the same size and opacity.
+   * The drawing is unchanged. When the injectable `SuggestionProjector` seam
+   * S6a left carries a scoring analyser, the confidence is what belongs here,
+   * and this field is where it lands.
+   */
+  op: LifecycleSuggestionOp;
+  /** The producer's one-line reason. */
+  message: string;
+  /** The RECORDED outcome; absent on a pending gate (marks are local there). */
+  mark?: LifecycleSuggestionMark;
+};
+
+export const lifecycleSuggestionSchema: z.ZodType<LifecycleSuggestion> = z
+  .object({
+    id: z.string().min(1).max(LIFECYCLE_SUGGESTION_ID_MAX_LENGTH),
+    label: z.string().min(1).max(LIFECYCLE_SUGGESTION_LABEL_MAX_LENGTH),
+    op: z.enum(LIFECYCLE_SUGGESTION_OPS),
+    message: z.string().min(1).max(LIFECYCLE_SUGGESTION_MESSAGE_MAX_LENGTH),
+    mark: z.enum(LIFECYCLE_SUGGESTION_MARKS).optional(),
+  })
+  .strict();
+
+const suggestionsField = z
+  .array(lifecycleSuggestionSchema)
+  .max(MAX_LIFECYCLE_SUGGESTIONS)
+  .optional();
+
+/**
+ * The readable form of an RFC 6901 JSON Pointer, for §VIII's label slot.
+ *
+ * The drawn chip's label is two parts joined by a middot ("Pricing sheet ·
+ * Sales"), which is exactly the shape a pointer has — so the pointer's segments
+ * ARE the label, unescaped per RFC 6901 (`~1` → `/`, `~0` → `~`) and joined the
+ * same way. Tier-neutral and pure so the server that projects a snapshot and the
+ * tests that pin the drawing share ONE derivation.
+ *
+ * The whole-document pointer ("") has no segments; it is labelled rather than
+ * drawn blank, because a chip with no label is not a chip.
+ */
+export function lifecycleSuggestionLabel(fieldPath: string): string {
+  const segments = fieldPath
+    .split("/")
+    .slice(1)
+    .map((s) => s.replaceAll("~1", "/").replaceAll("~0", "~"))
+    .filter((s) => s.length > 0);
+  const label = segments.length > 0 ? segments.join(" · ") : "the whole document";
+  return label.length > LIFECYCLE_SUGGESTION_LABEL_MAX_LENGTH
+    ? `${label.slice(0, LIFECYCLE_SUGGESTION_LABEL_MAX_LENGTH - 1)}…`
+    : label;
+}
+
+/**
+ * Project a snapshot's produced suggestions into the chips a card may draw.
+ *
+ * Structurally typed on the producer's row rather than importing it: this
+ * package is tier-neutral and must not reach into a server lane. The fields
+ * named here are the producer's public shape (`ProducedSuggestion`), pinned by a
+ * drift test on the server side.
+ *
+ * `marks` is the RECORDED partition, read from the decision ledger; it is empty
+ * for a pending gate. An id with no mark simply has none — a reviewer who
+ * decided some of the surfaced items and left the rest is recorded exactly that
+ * way, and inventing a mark for the remainder would misreport the decision.
+ *
+ * The list is TRUNCATED, never partially drawn: a payload holding more than a
+ * card may draw keeps its first `MAX_LIFECYCLE_SUGGESTIONS` in snapshot order.
+ * The producer already refuses to build more than that, so this bound is the
+ * wire's own belt-and-braces rather than an expected path.
+ */
+export function projectLifecycleSuggestions(
+  suggestions: ReadonlyArray<{
+    id: string;
+    fieldPath: string;
+    op: string;
+    message: string;
+  }>,
+  marks?: ReadonlyMap<string, LifecycleSuggestionMark>,
+): LifecycleSuggestion[] {
+  const out: LifecycleSuggestion[] = [];
+  for (const s of suggestions.slice(0, MAX_LIFECYCLE_SUGGESTIONS)) {
+    if (!(LIFECYCLE_SUGGESTION_OPS as readonly string[]).includes(s.op)) continue;
+    const mark = marks?.get(s.id);
+    const message =
+      s.message.length > LIFECYCLE_SUGGESTION_MESSAGE_MAX_LENGTH
+        ? `${s.message.slice(0, LIFECYCLE_SUGGESTION_MESSAGE_MAX_LENGTH - 1)}…`
+        : s.message;
+    out.push({
+      id: s.id,
+      label: lifecycleSuggestionLabel(s.fieldPath),
+      op: s.op as LifecycleSuggestionOp,
+      message,
+      ...(mark ? { mark } : {}),
+    });
+  }
+  return out;
+}
+
 /**
  * The resolved card state as the refetch contract returns it. Discriminated so
  * a renderer cannot read a decision affordance off an `absent`/`settled` state
@@ -169,12 +331,30 @@ export type LifecycleCardStateName = (typeof LIFECYCLE_CARD_STATES)[number];
  * ("you can comment but not approve"), never an enumeration of the underlying
  * gate: the generic-refusal contract forbids ids, counts and policy detail on
  * every denial path.
+ *
+ * `suggestions` (cinatra#2572) is OPTIONAL on exactly the three states that can
+ * carry chips, and its absence is not a signal: a gate with no snapshot, a
+ * snapshot whose bytes no longer verify, and a resolver that was not asked for
+ * them all answer the same way — no chips. The `loading` / `advisory` /
+ * `absent` states cannot carry them at all, because a card that draws nothing
+ * (or draws no floor) has nowhere to put a mark.
  */
 export type LifecycleCardState =
   | { state: "loading" }
-  | { state: "pending"; canDecide: true; canComment: boolean }
-  | { state: "restricted"; canDecide: false; canComment: boolean; reason: string }
-  | { state: "settled" }
+  | {
+      state: "pending";
+      canDecide: true;
+      canComment: boolean;
+      suggestions?: LifecycleSuggestion[];
+    }
+  | {
+      state: "restricted";
+      canDecide: false;
+      canComment: boolean;
+      reason: string;
+      suggestions?: LifecycleSuggestion[];
+    }
+  | { state: "settled"; suggestions?: LifecycleSuggestion[] }
   | { state: "advisory" }
   | { state: "absent" };
 
@@ -186,6 +366,7 @@ export const lifecycleCardStateSchema: z.ZodType<LifecycleCardState> = z.union([
       state: z.literal("pending"),
       canDecide: z.literal(true),
       canComment: z.boolean(),
+      suggestions: suggestionsField,
     })
     .strict(),
   z
@@ -194,9 +375,10 @@ export const lifecycleCardStateSchema: z.ZodType<LifecycleCardState> = z.union([
       canDecide: z.literal(false),
       canComment: z.boolean(),
       reason: z.string().min(1).max(200),
+      suggestions: suggestionsField,
     })
     .strict(),
-  z.object({ state: z.literal("settled") }).strict(),
+  z.object({ state: z.literal("settled"), suggestions: suggestionsField }).strict(),
   z.object({ state: z.literal("advisory") }).strict(),
   z.object({ state: z.literal("absent") }).strict(),
 ]);

@@ -8,6 +8,7 @@ import {
   type LifecycleDataPartViewType,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { resolveLifecycleCardState } from "@/lib/lifecycle/lifecycle-card-refetch";
+import { attachLifecycleSuggestions } from "@/lib/lifecycle/lifecycle-suggestion-chips";
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
 
 // ---------------------------------------------------------------------------
@@ -62,5 +63,22 @@ export async function POST(request: Request): Promise<Response> {
     actorCtx,
   });
 
-  return Response.json({ state }, { headers: { "Cache-Control": "no-store" } });
+  // §VIII's suggestion chips (cinatra#2572, epic #2564 S6c). Composed HERE, on
+  // the one endpoint that draws them, rather than inside the resolver: the
+  // resolver is on all five route-locked module budgets through the MCP pull,
+  // which uses it as the authorization ladder and never draws a chip.
+  //
+  // The state above IS the authorization — it is the ladder's own answer for
+  // this reader and this ref, and every denial has already collapsed into
+  // `absent`, which carries no chips. Nothing is disclosed here that the state
+  // did not already entitle its reader to see, and the chips ride the resolve
+  // answer rather than the wire payload, so the DATA_PART in the persisted,
+  // LLM-visible transcript still carries a ref and nothing else.
+  const withChips = await attachLifecycleSuggestions(
+    state,
+    parsed.data.viewType,
+    parsed.data.ref,
+  );
+
+  return Response.json({ state: withChips }, { headers: { "Cache-Control": "no-store" } });
 }

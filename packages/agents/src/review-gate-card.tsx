@@ -77,6 +77,20 @@
 // into one 200 `absent`. The oracle the design forbids is "does this gate exist
 // / may this reader see it", and neither branch answers it.
 //
+// SUGGESTION CHIPS ARE PART OF THIS ONE RENDERER (cinatra#2572, epic #2564 S6c;
+// spec §VIII). The chips are not a second component mounted per host — they are
+// drawn HERE, between §III's target and §II's floor, which is what makes "page
+// and card, one component" true by construction rather than by convention: the
+// review page's gate region and the run card and the chat thread all mount this
+// file, so there is exactly one place a chip can come from.
+//
+// A MARK IS LOCAL; THE DECISION IS THE ACT. §VIII: "the chips carry no submit of
+// their own — the review card's floor is the terminal act". So this component
+// holds the marks in React state, and the ONLY way they leave the browser is as
+// the `suggestionDecisions` field of the one decision the floor submits (S6b's
+// partition, folded into the decision fingerprint). There is no per-item request
+// on any host, which is the #2047-row-8 rule the whole epic is built on.
+//
 // NO NEW DECISION PRIMITIVE. A decision leaves through a seam that already
 // exists: the page passes the route-bound server action it has always used, and
 // a card with no host action posts its OPAQUE ref to the gate-scoped endpoint,
@@ -87,16 +101,21 @@
 // ---------------------------------------------------------------------------
 
 import { useCallback, useMemo, useState, type ReactElement } from "react";
-import { ClipboardCheck, Maximize2, Minimize2 } from "lucide-react";
+import { Check, ClipboardCheck, Maximize2, Minimize2, Sparkles, X } from "lucide-react";
 
 import {
   LIFECYCLE_CARD_PRESENCE,
   LIFECYCLE_VIEW_SCHEMA_VERSION,
   type LifecycleCardHost,
   type LifecycleCardState,
+  type LifecycleSuggestion,
+  type LifecycleSuggestionMark,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { Button } from "@/components/ui/button";
-import type { ReviewDisposition } from "@/lib/artifacts/artifact-review-decision";
+import type {
+  ReviewDisposition,
+  SuggestionDecisionPartition,
+} from "@/lib/artifacts/artifact-review-decision";
 import type {
   ReviewDecisionPermissions,
   ReviewSubmitOutcome,
@@ -244,6 +263,10 @@ export function ReviewGateCard({
     FIRST_PARTY_HOSTS.has(host);
   const [reloadToken, setReloadToken] = useState(0);
   const [expanded, setExpanded] = useState(false);
+  // §VIII — the reviewer's LOCAL marks, keyed by suggestion id, and BOUND to the
+  // surface that offered them. Never sent on their own; read at submit time into
+  // the one decision's partition. See `MarkState` for why the binding exists.
+  const [markState, setMarkState] = useState<MarkState>(EMPTY_MARKS);
 
   const state = useLifecycleCardState({
     viewType: "artifact_review_gate",
@@ -260,6 +283,7 @@ export function ReviewGateCard({
     return async (input: {
       disposition: ReviewDisposition;
       comment: string | null;
+      suggestionDecisions?: SuggestionDecisionPartition | null;
     }): Promise<ReviewSubmitOutcome> => {
       try {
         const response = await fetch(LIFECYCLE_VIEW_DECIDE_PATH, {
@@ -270,6 +294,12 @@ export function ReviewGateCard({
             ref: view.ref,
             disposition: input.disposition,
             comment: input.comment,
+            // Omitted entirely when there is no partition, so a gate with no
+            // chips posts the body it posted before this slice — and lands the
+            // identity-version-1 fingerprint S6b pinned.
+            ...(input.suggestionDecisions
+              ? { suggestionDecisions: input.suggestionDecisions }
+              : {}),
           }),
         });
         if (!response.ok) {
@@ -310,6 +340,57 @@ export function ReviewGateCard({
   // itself an existence oracle.
   if (!present || state === null) return null;
 
+  // §VIII — the marks, RE-BOUND to whatever is surfaced right now.
+  //
+  // A mark is meaningful only against the exact set it was made on, and that set
+  // can change under the reviewer between resolves: a snapshot row edited
+  // underneath the store stops verifying and surfaces NOTHING, and a transport
+  // failure draws no chips either. Two things must not happen when it does.
+  //
+  // A MARK MUST NOT BE SILENTLY LOST. Intersecting the marks with the new set
+  // and submitting the remainder would let an approve land WITHOUT the items the
+  // reviewer believes they accepted — an identity-version-1 decision recording
+  // nothing, from a reviewer who marked something. So a changed surface CLEARS
+  // the marks and says so on screen, before any decision, and the reviewer
+  // decides from what they can currently see.
+  //
+  // A MARK MUST NOT CROSS GATES. A suggestion id derives from (lane, projection
+  // digest, op, pointer) and NOT from the gate, so two gates shown the same text
+  // legitimately mint the SAME ids. The binding is therefore the REF as well as
+  // the id set — a card reused for another gate can never apply the previous
+  // gate's marks to identically-named suggestions.
+  const surfaced = "suggestions" in state ? (state.suggestions ?? []) : [];
+  const surfacedIdentity = `${view.ref} ${surfaced
+    .map((s) => s.id)
+    .sort()
+    .join("")}`;
+  let marks = markState.marks;
+  let marksCleared = markState.cleared;
+  if (markState.identity !== surfacedIdentity) {
+    // React's documented "adjust state when a prop changes" shape, for the same
+    // reason the resolve hook uses it: an effect would leave one painted frame
+    // in which marks made against the OLD set sit under the new one.
+    //
+    // THE NOTICE IS STICKY UNTIL THE REVIEWER ACTS. It cannot be recomputed from
+    // "were there marks a moment ago", because the second change in a row would
+    // then answer no — the first change already emptied them — and the warning
+    // would vanish while the loss it reported stood. A transient store failure
+    // that drops the chips and then restores them is exactly two changes in a
+    // row, and it would otherwise leave the reviewer looking at chips at rest
+    // with nothing to say their marks are gone. Only `onToggleMark` clears it.
+    //
+    // A DIFFERENT GATE STARTS CLEAN, though: the notice is about marks lost on
+    // THIS review, and carrying it onto another one would be a warning about
+    // nothing.
+    const sameGate = markState.ref === view.ref;
+    marksCleared = sameGate
+      ? markState.cleared || Object.keys(markState.marks).length > 0
+      : false;
+    marks = {};
+    setMarkState({ ref: view.ref, identity: surfacedIdentity, marks, cleared: marksCleared });
+  }
+  const partition = buildPartition(surfaced, marks);
+
   const frame = HOST_FRAME[host];
   const body = renderState({
     state,
@@ -318,6 +399,22 @@ export function ReviewGateCard({
     onToggleExpanded: () => setExpanded((v) => !v),
     submit: submitAndRefresh,
     onRefresh: refresh,
+    marks,
+    marksCleared,
+    onToggleMark: (id) =>
+      setMarkState((current) => {
+        const next = { ...current.marks };
+        // rest → accepted → dismissed → rest. ONE control, the three states §VIII
+        // draws, and every mark reversible without a second affordance the spec
+        // does not draw.
+        if (next[id] === "accepted") next[id] = "dismissed";
+        else if (next[id] === "dismissed") delete next[id];
+        else next[id] = "accepted";
+        // The reviewer has looked since the surface changed; the notice has done
+        // its job and stops competing with the marks they are making now.
+        return { ...current, marks: next, cleared: false };
+      }),
+    partition,
   });
   // The SECOND absence: the reader may not read the target (or there is nothing
   // to read). No panel, no placeholder, no reason — the turn carries only prose.
@@ -347,8 +444,23 @@ function renderState(args: {
   onToggleExpanded: () => void;
   submit: SubmitReviewDecisionAction;
   onRefresh: () => void;
+  marks: Readonly<Record<string, LifecycleSuggestionMark>>;
+  marksCleared: boolean;
+  onToggleMark: (id: string) => void;
+  partition: SuggestionDecisionPartition | null;
 }): ReactElement | null {
-  const { state, islandSrc, expanded, onToggleExpanded, submit, onRefresh } = args;
+  const {
+    state,
+    islandSrc,
+    expanded,
+    onToggleExpanded,
+    submit,
+    onRefresh,
+    marks,
+    marksCleared,
+    onToggleMark,
+    partition,
+  } = args;
 
   switch (state.state) {
     case "loading":
@@ -361,8 +473,18 @@ function renderState(args: {
 
     case "settled":
       // §IV "no longer open": the gate was already decided or the run moved on.
-      // A Refresh, never a stale decision slipping through.
-      return <ReviewGateBlocked reason="no-longer-pending" onRefresh={onRefresh} />;
+      // A Refresh, never a stale decision slipping through — and, when the gate
+      // carried suggestions, the partition that was RECORDED against them, drawn
+      // in the same chips with no live affordance. The decision stays readable
+      // on the surface it was made on.
+      return (
+        <>
+          {state.suggestions && state.suggestions.length > 0 ? (
+            <SuggestionChips suggestions={state.suggestions} recorded />
+          ) : null}
+          <ReviewGateBlocked reason="no-longer-pending" onRefresh={onRefresh} />
+        </>
+      );
 
     case "pending":
     case "restricted": {
@@ -374,6 +496,7 @@ function renderState(args: {
         canDecide: state.canDecide,
         canComment: state.canComment,
       };
+      const suggestions = state.suggestions ?? [];
       return (
         <>
           <ReviewGateHeader pending />
@@ -385,8 +508,24 @@ function renderState(args: {
             expanded={expanded}
             onToggleExpanded={onToggleExpanded}
           />
+          {/* §VIII — the per-item chips, between the target they annotate and
+              the floor that decides them. Marks are LIVE only for a reader who
+              may take the terminal decision they would ride on: a reader with
+              respond access alone may read the suggestions (they may read the
+              target) and mark none, because a mark that could never be
+              submitted is a control that fails on press. */}
+          <SuggestionChips
+            suggestions={suggestions}
+            marks={marks}
+            marksCleared={marksCleared}
+            onToggleMark={state.canDecide ? onToggleMark : undefined}
+          />
           {/* §II/§IV — ONE gate-level decision floor, however many targets. */}
-          <ReviewDecisionBar permissions={permissions} submitAction={submit} />
+          <ReviewDecisionBar
+            permissions={permissions}
+            submitAction={submit}
+            suggestionDecisions={partition}
+          />
         </>
       );
     }
@@ -399,6 +538,249 @@ function renderState(args: {
     case "absent":
       return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// §VIII — the suggestion chips
+// ---------------------------------------------------------------------------
+
+/**
+ * The reviewer's marks, and the surface they were made against.
+ *
+ * `identity` is the ref plus the sorted surfaced id set. It is what makes a mark
+ * meaningful: a mark belongs to the exact set that offered it, so a set that
+ * changes underneath the reviewer invalidates the marks rather than silently
+ * narrowing the decision they would ride on, and a card reused for another gate
+ * cannot apply the previous gate's marks to identically-named suggestions.
+ *
+ * `cleared` is one bit of TRUTH OWED TO THE READER: their marks were dropped and
+ * they have not looked since. It is never used to alter a decision — only to say
+ * so on screen before they take one.
+ */
+type MarkState = {
+  /** The gate the marks belong to, held apart from `identity` so the notice can
+   * be sticky WITHIN a gate and absent on a different one. */
+  ref: string;
+  identity: string;
+  marks: Readonly<Record<string, LifecycleSuggestionMark>>;
+  cleared: boolean;
+};
+
+const EMPTY_MARKS: MarkState = { ref: "", identity: "", marks: {}, cleared: false };
+
+/**
+ * Derive the decision partition from the reader's marks.
+ *
+ * Iterated over the SURFACED list, so what rides the decision is exactly what is
+ * on screen — the marks have already been re-bound to that list, so this cannot
+ * quietly drop anything; it is what keeps the two in step.
+ *
+ * Returns `null` when nothing is marked, and `null` matters: S6b keeps identity
+ * version 1 with the key ABSENT for a decision with no partition, so a reviewer
+ * who marks nothing submits the byte-identical fingerprint the surface produced
+ * before this slice — an in-flight retry across a deploy boundary stays
+ * idempotent instead of conflicting.
+ */
+function buildPartition(
+  surfaced: ReadonlyArray<LifecycleSuggestion>,
+  marks: Readonly<Record<string, LifecycleSuggestionMark>>,
+): SuggestionDecisionPartition | null {
+  const accepted: string[] = [];
+  const dismissed: string[] = [];
+  for (const s of surfaced) {
+    const mark = marks[s.id];
+    if (mark === "accepted") accepted.push(s.id);
+    else if (mark === "dismissed") dismissed.push(s.id);
+  }
+  if (accepted.length === 0 && dismissed.length === 0) return null;
+  return { accepted, dismissed };
+}
+
+/** The chip's presentation for each of §VIII's three drawn states. */
+const CHIP_STATE = {
+  rest: {
+    conformanceId: "suggestion-chip-rest",
+    // The RATIFIED pill, verbatim from the shipped Artifacts chip
+    // (`src/components/artifacts/library-upload.tsx` § SuggestedMeaningChips) —
+    // dashed mustard edge, mustard wash, mustard ink. §VIII takes that drawing
+    // as its base and states so ("the dashed mustard pill drawn on Artifacts").
+    className: "border-dashed border-warning/60 bg-warning/10 text-warning",
+    action: "accept-suggestion -> accepted",
+  },
+  accepted: {
+    conformanceId: "suggestion-chip-accepted",
+    // §VIII's new accepted mark: "goes solid and checked" — the SAME pill with
+    // its edge closed and its wash deepened, so an accepted chip is still
+    // recognisably the chip that was offered.
+    className: "border-solid border-warning/60 bg-warning/25 text-warning",
+    action: "dismiss-suggestion -> dismissed",
+  },
+  dismissed: {
+    conformanceId: "suggestion-chip-dismissed",
+    // §VIII's new dismissed mark: "goes struck and muted" — the edge stays
+    // dashed, the wash drops out, the ink goes muted and the label is struck.
+    className:
+      "border-dashed border-line-strong bg-transparent text-muted-foreground line-through opacity-70",
+    action: "clear-suggestion-mark -> rest",
+  },
+} as const;
+
+type ChipState = keyof typeof CHIP_STATE;
+
+const CHIP_ICON: Record<ChipState, typeof Sparkles> = {
+  rest: Sparkles,
+  accepted: Check,
+  dismissed: X,
+};
+
+/**
+ * THE suggestion-chip row (spec §VIII), drawn once for every host this card
+ * appears on.
+ *
+ * ONE CONTROL PER SUGGESTION, THREE DRAWN STATES. §VIII draws a single pill in
+ * three states and no second affordance, and says both marks stay reversible. So
+ * the pill is a cycle — rest → accepted → dismissed → rest — rather than a pill
+ * plus an invented dismiss button. Every press moves one step, every mark can be
+ * walked back, and no pixel exists that the ratified drawing does not.
+ *
+ * WHAT A CHIP SAYS. The readable pointer into the reviewed document as the
+ * label, and the transform class in the mono slot the drawing gives to a
+ * secondary datum. It never carries the proposed VALUE: a chip annotates the
+ * target beside it, and printing the replacement text into the chip row would
+ * make the row a second, unauthorized projection of the document.
+ *
+ * READ-ONLY IS A DIFFERENT ELEMENT, NOT A DISABLED BUTTON. A reader who may not
+ * decide, and a gate that has already been decided, both get plain elements with
+ * no press target at all. A disabled button would read as "you could do this,
+ * later"; neither of these is that.
+ */
+export function SuggestionChips({
+  suggestions,
+  marks,
+  marksCleared = false,
+  onToggleMark,
+  recorded = false,
+}: {
+  suggestions: ReadonlyArray<LifecycleSuggestion>;
+  /** The reader's LOCAL marks (pending gate). Ignored when `recorded`. */
+  marks?: Readonly<Record<string, LifecycleSuggestionMark>>;
+  /**
+   * The surfaced set changed and the reader's marks were dropped. Drawn even
+   * when there is nothing left to draw a chip for — a reviewer who marked
+   * something and then finds the row empty is owed the reason, not a silence.
+   */
+  marksCleared?: boolean;
+  /** Omitted ⇒ read-only: the reader may see the suggestions and mark none. */
+  onToggleMark?: (id: string) => void;
+  /** Draw the RECORDED partition of a gate that has already been decided. */
+  recorded?: boolean;
+}): ReactElement | null {
+  if (suggestions.length === 0 && !marksCleared) return null;
+  const interactive = !recorded && onToggleMark !== undefined;
+  const acceptedCount = recorded
+    ? 0
+    : suggestions.filter((s) => marks?.[s.id] === "accepted").length;
+
+  return (
+    <div
+      data-conformance-id="suggestion-chips"
+      data-suggestion-chips-mode={recorded ? "recorded" : interactive ? "live" : "read-only"}
+      className="flex flex-col gap-2 rounded-control border border-line bg-surface-strong px-4 py-3"
+    >
+      {/* #2042's labelling rule: a CORE lane is chrome, never an agent. The
+          producer deliberately left this string to the surface that draws it. */}
+      <div className="font-mono text-badge-2xs uppercase tracking-widest text-muted-foreground">
+        Core analysis · Suggestions
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {suggestions.map((s) => {
+          const chipState: ChipState = recorded
+            ? (s.mark ?? "rest")
+            : (marks?.[s.id] ?? "rest");
+          const spec = CHIP_STATE[chipState];
+          const Icon = CHIP_ICON[chipState];
+          const inner = (
+            <>
+              <Icon aria-hidden="true" className="size-3" />
+              {s.label}{" "}
+              <span className="font-mono text-badge-2xs opacity-75">{s.op}</span>
+            </>
+          );
+          const shared = `inline-flex h-auto items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-semibold ${spec.className}`;
+          return interactive ? (
+            <Button
+              key={s.id}
+              type="button"
+              variant="outline"
+              size="sm"
+              data-conformance-id={spec.conformanceId}
+              data-suggestion-state={chipState}
+              data-action={spec.action}
+              className={shared}
+              title={s.message}
+              aria-label={`${s.label} — ${s.message} (${chipState}; press to ${
+                chipState === "rest"
+                  ? "accept"
+                  : chipState === "accepted"
+                    ? "dismiss"
+                    : "clear the mark"
+              })`}
+              onClick={() => onToggleMark(s.id)}
+            >
+              {inner}
+            </Button>
+          ) : (
+            <span
+              key={s.id}
+              data-conformance-id={spec.conformanceId}
+              data-suggestion-state={chipState}
+              className={shared}
+              title={s.message}
+              aria-label={`${s.label} — ${s.message} (${chipState})`}
+            >
+              {inner}
+            </span>
+          );
+        })}
+      </div>
+      {marksCleared ? (
+        // The surface moved under the reviewer. Said BEFORE the decision, and
+        // said out loud: the alternative — submitting whatever survived the
+        // change — lands an approve that records nothing while the reviewer
+        // believes it recorded their accepts.
+        <p
+          role="status"
+          data-conformance-id="suggestion-marks-cleared"
+          className="text-xs leading-relaxed text-mustard-ink"
+        >
+          The suggestions changed while you were reviewing, so your marks were cleared. Check
+          them again before you decide.
+        </p>
+      ) : null}
+      {suggestions.length > 0 ? (
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          {recorded
+            ? "These are the per-item choices this review recorded."
+            : interactive
+              ? "Press a suggestion to accept it, again to dismiss it, again to clear the mark. Nothing is recorded until you approve or reject below."
+              : "Deciding these needs approve access on this run."}
+        </p>
+      ) : null}
+      {acceptedCount > 0 ? (
+        // The one combination the decision core refuses outright: a reject
+        // tombstones every reviewed revision, so it cannot also accept a patch
+        // into them. Said here, before the press, rather than only as the error
+        // the floor would return — and the accepted marks are still SENT, never
+        // silently dropped, because no entry may swallow a per-item choice.
+        <p
+          data-conformance-id="suggestion-chips-reject-note"
+          className="text-xs leading-relaxed text-muted-foreground"
+        >
+          A reject cannot carry accepted suggestions — clear them first to reject.
+        </p>
+      ) : null}
+    </div>
+  );
 }
 
 /**

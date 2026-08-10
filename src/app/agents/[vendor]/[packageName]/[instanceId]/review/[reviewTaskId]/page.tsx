@@ -48,7 +48,10 @@ import {
   loadPinnedCapturePair,
   loadReviewGateSurface,
 } from "@/app/artifacts/[id]/review-gate-ports";
-import type { ReviewDisposition } from "@/lib/artifacts/artifact-review-decision";
+import type {
+  ReviewDisposition,
+  SuggestionDecisionPartition,
+} from "@/lib/artifacts/artifact-review-decision";
 import type { ReviewSubmitOutcome } from "@/lib/artifacts/review-surface-model";
 
 import { LIFECYCLE_VIEW_SCHEMA_VERSION } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -198,9 +201,27 @@ export default async function AgentRunReviewPage({ params, searchParams }: PageP
   async function submitAction(input: {
     disposition: ReviewDisposition;
     comment: string | null;
+    suggestionDecisions?: SuggestionDecisionPartition | null;
   }): Promise<ReviewSubmitOutcome> {
     "use server";
-    return submitReviewDecisionAction(runId, reviewTaskId, input.disposition, input.comment);
+    // The per-item SUGGESTION partition (cinatra#2572, epic #2564 S6c) rides the
+    // page's decision exactly as it rides the card's: as the last argument of the
+    // ONE decision helper, which normalizes it, refuses it on a non-terminal
+    // disposition, checks it `⊆` the gate's pinned snapshot BEFORE the CAS and
+    // folds it into the fingerprint. It is CLIENT INPUT and is treated as such —
+    // nothing here trusts its shape; `normalizeSuggestionPartition` inside the
+    // core is the one validator, and it bounds both list length and id length
+    // before any store is touched. Passing it through here rather than minting a
+    // page-local per-item action is what keeps the page and the card on ONE
+    // decision path (#2047 row 8).
+    return submitReviewDecisionAction(
+      runId,
+      reviewTaskId,
+      input.disposition,
+      input.comment,
+      undefined,
+      input.suggestionDecisions ?? null,
+    );
   }
 
   // The gate's card ref — the same authenticated-encrypted ticket the run card
