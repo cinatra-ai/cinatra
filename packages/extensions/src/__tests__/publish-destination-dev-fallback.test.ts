@@ -165,6 +165,31 @@ describe("resolvePublishDestination — dev-only local Verdaccio fallback (cinat
     );
   });
 
+  it("distinguishes the credential-missing reason outside dev mode (codex round 0)", async () => {
+    process.env.CINATRA_RUNTIME_MODE = "production";
+    setupMocks({
+      deployConfig: {
+        ...NO_PRIVATE_DEST_FIXTURE,
+        privateRegistryUrl: "https://private.registry.example.com",
+        privateReadToken: "fixture-private-read",
+        privateDestinationConfigured: true,
+        privateDestinationId: "fixture-dest-01",
+      },
+      destinationCredential: null,
+    });
+    const { resolvePublishDestination } = await import(
+      "@cinatra-ai/extensions/destination-resolver"
+    );
+
+    const err = await resolvePublishDestination("private").catch((e) => e);
+    expect(err.code).toBe("PUBLISH_DESTINATION_NOT_CONFIGURED");
+    expect(err.reason).toBe("credential-missing");
+    expect(err.message).toContain("credential");
+    // The env keys alone do NOT fix a missing credential — the message must
+    // not send the operator to them for this case.
+    expect(err.message).not.toContain("CINATRA_DEPLOYMENT_REGISTRY_PRIVATE_URL");
+  });
+
   it("still throws when the Verdaccio loader itself fails (dev mode, no seeded registry)", async () => {
     setupMocks({ verdaccioThrows: true });
     const { resolvePublishDestination, PublishDestinationNotConfiguredError } =
@@ -210,7 +235,7 @@ describe("isPrivatePublishDestinationAvailable (cinatra#2644 UI probe)", () => {
     else process.env.CINATRA_RUNTIME_MODE = PRIOR_MODE;
   });
 
-  it("true when the deployment config declares a private destination (any mode)", async () => {
+  it("true when the config declares a private destination AND its credential is stored (any mode)", async () => {
     process.env.CINATRA_RUNTIME_MODE = "production";
     setupMocks({
       deployConfig: {
@@ -220,11 +245,34 @@ describe("isPrivatePublishDestinationAvailable (cinatra#2644 UI probe)", () => {
         privateDestinationConfigured: true,
         privateDestinationId: "fixture-dest-01",
       },
+      destinationCredential: {
+        registryUrl: "https://private.registry.example.com",
+        tokenCiphertext: "enc(fixture-private-publish)",
+        tokenIv: "mock-iv",
+      },
     });
     const { isPrivatePublishDestinationAvailable } = await import(
       "@cinatra-ai/extensions/destination-resolver"
     );
     expect(await isPrivatePublishDestinationAvailable()).toBe(true);
+  });
+
+  it("false in production when the destination is configured but its credential is MISSING (codex round 0)", async () => {
+    process.env.CINATRA_RUNTIME_MODE = "production";
+    setupMocks({
+      deployConfig: {
+        ...NO_PRIVATE_DEST_FIXTURE,
+        privateRegistryUrl: "https://private.registry.example.com",
+        privateReadToken: "fixture-private-read",
+        privateDestinationConfigured: true,
+        privateDestinationId: "fixture-dest-01",
+      },
+      destinationCredential: null,
+    });
+    const { isPrivatePublishDestinationAvailable } = await import(
+      "@cinatra-ai/extensions/destination-resolver"
+    );
+    expect(await isPrivatePublishDestinationAvailable()).toBe(false);
   });
 
   it("true in dev mode when only the local-Verdaccio fallback is available", async () => {

@@ -22,24 +22,53 @@ import type { ExtensionOrigin } from "@cinatra-ai/agents/schema";
 // ---------------------------------------------------------------------------
 // Error — thrown when the requested visibility has no configured destination.
 // ---------------------------------------------------------------------------
+/** Why the private destination could not be resolved — the two cases have
+ *  DIFFERENT remediations (cinatra#2644, codex round 0): setting the
+ *  `CINATRA_DEPLOYMENT_REGISTRY_PRIVATE_*` env keys only declares the
+ *  destination; the publish credential itself lives in `extension_destinations`
+ *  and is provisioned separately. */
+export type PublishDestinationNotConfiguredReason =
+  | "destination-unconfigured"
+  | "credential-missing";
+
+function publishDestinationNotConfiguredMessage(
+  visibility: "private" | "public",
+  reason: PublishDestinationNotConfiguredReason,
+): string {
+  // Name the ACTUAL configuration step (the CINATRA_DEPLOYMENT_REGISTRY_* env
+  // keys, see src/lib/deployment-registry-config.ts) instead of "contact your
+  // admin" — on a solo/local instance the viewer IS the admin and there is no
+  // UI that configures a destination (cinatra#2644).
+  if (visibility === "public") {
+    return (
+      "No public publish destination is configured. Set the " +
+      "CINATRA_DEPLOYMENT_REGISTRY_PUBLIC_PUBLISH_TOKEN environment key " +
+      "to enable public publishing."
+    );
+  }
+  if (reason === "credential-missing") {
+    return (
+      "The configured private publish destination has no stored publish " +
+      "credential. Provision the destination credential (extension_destinations) " +
+      "before publishing privately."
+    );
+  }
+  return (
+    "No private publish destination is configured. Set the " +
+    "CINATRA_DEPLOYMENT_REGISTRY_PRIVATE_URL, " +
+    "CINATRA_DEPLOYMENT_REGISTRY_PRIVATE_READ_TOKEN, and " +
+    "CINATRA_DEPLOYMENT_REGISTRY_PRIVATE_DESTINATION_ID environment keys, and " +
+    "provision the destination's publish credential, to configure one."
+  );
+}
+
 export class PublishDestinationNotConfiguredError extends Error {
   readonly code = "PUBLISH_DESTINATION_NOT_CONFIGURED";
-  constructor(public readonly visibility: "private" | "public") {
-    // Name the ACTUAL configuration step (the CINATRA_DEPLOYMENT_REGISTRY_* env
-    // keys, see src/lib/deployment-registry-config.ts) instead of "contact your
-    // admin" — on a solo/local instance the viewer IS the admin and there is no
-    // UI that configures a destination (cinatra#2644).
-    super(
-      visibility === "public"
-        ? "No public publish destination is configured. Set the " +
-            "CINATRA_DEPLOYMENT_REGISTRY_PUBLIC_PUBLISH_TOKEN environment key " +
-            "to enable public publishing."
-        : "No private publish destination is configured. Set the " +
-            "CINATRA_DEPLOYMENT_REGISTRY_PRIVATE_URL, " +
-            "CINATRA_DEPLOYMENT_REGISTRY_PRIVATE_READ_TOKEN, and " +
-            "CINATRA_DEPLOYMENT_REGISTRY_PRIVATE_DESTINATION_ID environment " +
-            "keys to configure one.",
-    );
+  constructor(
+    public readonly visibility: "private" | "public",
+    public readonly reason: PublishDestinationNotConfiguredReason = "destination-unconfigured",
+  ) {
+    super(publishDestinationNotConfiguredMessage(visibility, reason));
     this.name = "PublishDestinationNotConfiguredError";
   }
 }
@@ -101,7 +130,12 @@ export async function isPrivatePublishDestinationAvailable(): Promise<boolean> {
       deployConfig.privateRegistryUrl &&
       deployConfig.privateDestinationId
     ) {
-      return true;
+      // The resolver ALSO requires the stored destination credential (codex
+      // round 0) — presence check only, the token is never decrypted here.
+      const cred = await readDestinationCredential(deployConfig.privateDestinationId);
+      if (cred) return true;
+      // Credential missing — the dev fallback may still make private
+      // publishable; fall through to the probe.
     }
   } catch {
     // Config load failed — fall through to the dev fallback probe.
@@ -185,7 +219,7 @@ export async function resolvePublishDestination(
   if (!cred) {
     const devFallback = await resolveDevLocalVerdaccioPublishDestination(override);
     if (devFallback) return devFallback;
-    throw new PublishDestinationNotConfiguredError("private");
+    throw new PublishDestinationNotConfiguredError("private", "credential-missing");
   }
 
   // Per-field AAD binding: destination.<destinationId>.publish-token
