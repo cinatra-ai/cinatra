@@ -4,7 +4,8 @@ import { useEffect } from "react";
 
 // cinatra#407 — success step of the hosted /widget-auth flow.
 //
-// After the logged-in member consents and the server issues the user auth code,
+// Once the server has issued the user auth code for the signed-in member
+// (cinatra#2631: the sign-in itself authorizes it — there is no consent step),
 // this component postMessage's the code + state to ONLY the verified opener
 // origin (`siteOrigin`, NEVER "*"), then attempts to close the popup. The
 // targetOrigin is the server-pinned, transaction-bound site origin — a hostile

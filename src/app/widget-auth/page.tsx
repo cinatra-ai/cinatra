@@ -1,17 +1,20 @@
 import type { Metadata } from "next";
 
 import { getAuthSession, resolveOrgRoleForUser } from "@/lib/auth-session";
-import { issueConsentCsrfToken } from "@/lib/connect-provisioning";
-import { loadActiveTransaction } from "@/lib/widget-user-auth";
 import {
-  WIDGET_CONSENT_GRANTED_SCOPES,
-  widgetConsentRequestId,
+  loadActiveTransaction,
+  recordDisplayedScopesForTransaction,
+} from "@/lib/widget-user-auth";
+import {
+  WIDGET_EXTENSION_SCOPES,
+  WIDGET_SIGNIN_GRANTED_SCOPES,
+  widgetDisplayedScopesToken,
 } from "@/lib/widget-lifecycle-scope";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
 import { Main } from "@/components/layout/main";
 import { BrandMark } from "@/components/brand-mark";
 import { WidgetAuthLogin } from "@/components/widget-auth/widget-auth-login";
-import { WidgetAuthConsent } from "@/components/widget-auth/widget-auth-consent";
+import { WidgetAuthGrant } from "@/components/widget-auth/widget-auth-grant";
 
 export const metadata: Metadata = { title: "Sign in" };
 export const dynamic = "force-dynamic";
@@ -29,11 +32,27 @@ export const dynamic = "force-dynamic";
 // site-token-authenticated POST /api/widget-auth/init — the verified context
 // (org / siteOrigin / agent / instance) lives in the transaction, NOT the URL.
 //
+// cinatra#2631 — OWNER RULING (2026-08-10): "treat sign in as consent." The
+// separate consent step this page used to render — a card headed "Continue to
+// the assistant" with a Continue button — is GONE. Signing in is the whole
+// authorization: the sign-in screen names what it grants, and a signed-in member
+// goes straight to the return step, which records the grant and hands the code
+// back to the site.
+//
+// SAID PRECISELY, because it is easy to overstate: a grant is acquired by
+// running THIS FLOW again, and this flow shows the sign-in screen only when
+// there is no Cinatra session. A person who already holds one is not
+// re-authenticated — their existing session authorizes, and they never read the
+// sentences below. What is guaranteed is narrower and still the point of AC-1:
+// an ALREADY-MINTED widget token never gains a grant. The grant lives on the
+// authorization code, and only a new run of this flow mints one.
+//
 // States:
 //   • invalid/expired txn → neutral error card (no oracle).
-//   • no session          → login-only AuthView (redirects back here on login).
+//   • no session          → login-only AuthView, naming the sentences this
+//                           sign-in grants (redirects back here on login).
 //   • session, non-member → deny card (not a member of the txn's org).
-//   • session, member     → explicit consent → issue code → postMessage to opener.
+//   • session, member     → record the grant → postMessage to opener.
 //
 // The page is on the middleware public-path exact allowlist so a SESSIONLESS
 // visitor is NOT 307'd to /sign-in (it must render the login form here); a
@@ -80,6 +99,28 @@ function ErrorCard({ message }: { message: string }) {
   );
 }
 
+// What signing in grants, in the person's own words, ON the screen they sign in
+// on. The list is GENERATED from the scope vocabulary and the server action
+// records that same constant, so a grant cannot reach a token without its
+// sentence being on this screen.
+function SignInGrantNotice({ clientLabel }: { clientLabel: string }) {
+  if (WIDGET_SIGNIN_GRANTED_SCOPES.length === 0) return null;
+  return (
+    <div className="mt-5 grid w-full gap-2">
+      <p className="text-xs leading-5 text-muted-foreground">
+        Signing in connects the assistant on your {clientLabel} site to this
+        account. It follows the permissions you already have in Cinatra, and it
+        will be allowed to:
+      </p>
+      <ul className="grid list-disc gap-1 pl-4 text-xs leading-5 text-muted-foreground">
+        {WIDGET_SIGNIN_GRANTED_SCOPES.map((scope) => (
+          <li key={scope}>{WIDGET_EXTENSION_SCOPES[scope].consentCopy}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export default async function WidgetAuthPage({ searchParams }: Props) {
   const sp = await searchParams;
   const txnId = first(sp.txn);
@@ -100,6 +141,32 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
   // No session → render the login-only view. After credential login Better Auth
   // sets the cookie and redirects back here; the session branch then continues.
   if (!session) {
+    // Record, on the transaction, the scope set this screen is about to show, so
+    // the grant taken after the sign-in can be checked against the sentences the
+    // person actually read (cinatra#2631). The server is the only party that can
+    // state this: a marker carried in the URL could simply be stripped. It is
+    // idempotent, first-write-wins, and never touches the single-use consume —
+    // which is why it is allowed on a page render, unlike issuing the code.
+    //
+    // The RECORD wins over this build's opinion. If another request already
+    // recorded a different set for this transaction, showing our own list here
+    // would put a person in front of sentences that are not what would be
+    // granted — the exact failure the record exists to prevent (codex rework
+    // round 2, finding 1). So we refuse to render the screen at all.
+    const displayed = widgetDisplayedScopesToken(WIDGET_SIGNIN_GRANTED_SCOPES);
+    const recorded = recordDisplayedScopesForTransaction(txn.txnId, displayed);
+    if (recorded !== displayed) {
+      emitWidgetAuthAudit("consent_denied", {
+        siteId: txn.siteId,
+        orgId: txn.orgId,
+        agentSlug: txn.agentSlug,
+        siteOrigin: txn.siteOrigin,
+        reason: "stale_signin_screen",
+      });
+      return (
+        <ErrorCard message="Cinatra was updated while this window was open. Close this window and open the assistant login again from your site." />
+      );
+    }
     emitWidgetAuthAudit("page_viewed", {
       siteId: txn.siteId,
       orgId: txn.orgId,
@@ -111,6 +178,7 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
     return (
       <Shell>
         <WidgetAuthLogin redirectTo={redirectTo} />
+        <SignInGrantNotice clientLabel={clientLabel} />
       </Shell>
     );
   }
@@ -118,7 +186,7 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
   const userId = String(session.user.id);
 
   // Membership re-check against the TRANSACTION's org (authoritative). A
-  // non-member cannot proceed — no code, no consent step.
+  // non-member cannot proceed — no code.
   const role = await resolveOrgRoleForUser(txn.orgId, userId);
   if (!role) {
     emitWidgetAuthAudit("consent_denied", {
@@ -134,21 +202,9 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
     );
   }
 
-  // Member → explicit consent. The consent CSRF is single-use and bound to
-  // (sessionId, txnId, THE SCOPE SET THIS SCREEN DISPLAYS); the server action
-  // re-validates everything before issuing.
-  //
-  // cinatra#2574 — the scope set rides in the bound request id so a consent
-  // screen can only ever authorize the sentences it showed. A screen rendered
-  // by an older build (or left open across a deploy) verifies against the id it
-  // was signed with and no other, so its submission cannot pick up a grant the
-  // user never read; they see the sign-in fail and start again.
-  const sessionId = String(session.session?.id ?? "");
-  const consentCsrf = issueConsentCsrfToken({
-    sessionId,
-    requestId: widgetConsentRequestId(txn.txnId, WIDGET_CONSENT_GRANTED_SCOPES),
-  });
-
+  // Member → the sign-in stands as the authorization. The grant is recorded by
+  // the server action (a POST, so a page render stays non-destructive) and the
+  // code goes straight back to the opener. Nothing to read, nothing to press.
   emitWidgetAuthAudit("page_viewed", {
     actor: userId,
     siteId: txn.siteId,
@@ -156,27 +212,12 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
     client: txn.client,
     agentSlug: txn.agentSlug,
     siteOrigin: txn.siteOrigin,
-    reason: "consent",
+    reason: "grant",
   });
 
   return (
     <Shell>
-      <div className="grid w-full gap-5">
-        <div className="text-center">
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">
-            Continue to the assistant
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Signed in as {session.user.email}
-          </p>
-        </div>
-        <WidgetAuthConsent
-          txnId={txn.txnId}
-          consentCsrf={consentCsrf}
-          siteOrigin={txn.siteOrigin}
-          clientLabel={clientLabel}
-        />
-      </div>
+      <WidgetAuthGrant txnId={txn.txnId} />
     </Shell>
   );
 }

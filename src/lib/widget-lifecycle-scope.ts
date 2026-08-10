@@ -7,9 +7,21 @@
 // sufficient while a widget session could only do one thing: take a chat turn.
 //
 // Reading LIFECYCLE work (a review gate, a verification record) is a second,
-// materially different thing to consent to — it exposes org work the site
-// itself has no standing to see — so it needs its own grant, and a session that
-// consented before this grant existed must not silently acquire it.
+// materially different thing to grant — it exposes org work the site itself has
+// no standing to see — so it needs its own grant, and a session that signed in
+// before this grant existed must not silently acquire it.
+//
+// SIGNING IN IS THE GRANT (owner ruling, 2026-08-10). The hosted widget login
+// has no separate consent step: a successful sign-in records the whole granted
+// set on the authorization code and the flow returns to the site. There is no
+// screen a grant can be "displayed on" independently of the login screen.
+//
+// Stated exactly, because the short version overstates it: a grant is acquired
+// by a NEW authorization code, and codes come only from a run of the hosted
+// flow. That flow shows a sign-in screen when there is no Cinatra session and
+// uses the existing session when there is one, so "sign in again" describes the
+// signed-out case, not a re-authentication the code enforces. What IS enforced
+// is AC-1: an already-minted token never acquires a grant.
 //
 // THE VOCABULARY IS A SET, NOT A VALUE. Scope and audience are now
 // space-delimited sets (RFC 6749 §3.3 for scope; the same encoding for `aud` so
@@ -81,28 +93,76 @@ export function widgetUserBaseScope(agentSlug: string): string | null {
 }
 
 /**
- * The opaque consent request id the hosted page's CSRF token is bound to.
+ * The value a transaction carries until a sign-in screen has rendered for it —
+ * "no screen has displayed anything yet".
  *
- * cinatra#2574 (codex round 0, finding 1): the page and the action reading the
- * same constant is NOT a binding — an already-rendered consent screen submitted
- * against a newer build would record a grant whose sentence was never displayed
- * (an open tab across a deploy, or a rolling deploy serving old page + new
- * action). Folding the DISPLAYED scope set into the request id the single-use
- * CSRF token is signed over makes the two agree or the consent fail: an old
- * screen's token verifies against the old id and nothing else. This is the same
- * device the connect flow uses to stop a consent POST smuggling parameters the
- * GET never showed.
+ * cinatra#2631 (codex rework round 2, finding 2). A NULL column cannot mean
+ * this: a transaction created by a build that predates the column is ALSO NULL,
+ * and admitting it would re-open exactly the cross-build mismatch the record
+ * exists to catch. So a build that HAS the mechanism stamps this sentinel at
+ * transaction creation. NULL now means "created before this existed" and fails
+ * CLOSED; the sentinel means "created by a build that would have written a real
+ * value, and none was written", which is the legitimate existing-session case.
+ *
+ * Deliberately NOT a well-formed set member (the parentheses are outside the
+ * atom grammar), so it can never collide with a real displayed set — including
+ * the empty one, which is a screen that named no grants and is a real value.
  */
-export function widgetConsentRequestId(
-  txnId: string,
+export const WIDGET_NO_SIGNIN_SCREEN = "(no-screen)";
+
+/**
+ * The token a hosted SIGN-IN SCREEN carries forward describing the scope set it
+ * DISPLAYED — the canonical (sorted, deduplicated) set, nothing more.
+ *
+ * cinatra#2631 (codex rework round 0, finding 1). Removing the consent screen
+ * did NOT remove the gap the screen's signed CSRF binding used to close; it
+ * moved the display one request earlier. The sign-in screen is rendered by one
+ * node and the grant is recorded by another request that could be served by a
+ * DIFFERENT BUILD mid-rollout, so a person can read the old list of sentences
+ * and have the new set recorded. Writing this token onto the transaction when
+ * the screen renders means the two can be COMPARED: the action refuses when they
+ * disagree, and the person opens the assistant login again on a screen that
+ * names what they are actually granting.
+ *
+ * IT IS NEVER A SOURCE. Nothing is granted because this token says so — the
+ * recorded set is always the server constant; the token can only cause a
+ * REFUSAL. It lives on the transaction rather than in the popup's URL because a
+ * URL marker can be stripped by whoever opens the popup, and an absent marker
+ * has to be admitted (round 1, finding 1). Sorted, because this is a set:
+ * reordering the constant must not invalidate a screen someone is looking at;
+ * only a change of MEMBERSHIP does.
+ */
+export function widgetDisplayedScopesToken(
   displayedScopes: readonly string[],
 ): string {
-  // SORTED, because this is a set: two builds that ask for the same grants in a
-  // different order are asking for the same thing, and invalidating every
-  // in-flight consent screen over a reordered constant would be a needless
-  // failure (codex round 1). Only a CHANGE OF MEMBERSHIP moves the id.
   const canonical = [...displayedScopes].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  return `${txnId}#consent-scopes:${formatTokenSet(canonical)}`;
+  return formatTokenSet(canonical);
+}
+
+/**
+ * Does the screen that displayed `displayedToken` agree with what this build
+ * would record? Three distinct answers, and the distinctions are the point:
+ *
+ *   • the SENTINEL — no sign-in screen rendered for this transaction, on a build
+ *     that would have said so if one had. The person already held a Cinatra
+ *     session and went straight to the return step. ADMITTED: that is the stated
+ *     gap of the owner's ruling, not a mismatch. Nothing in a browser can
+ *     produce this value — the server writes it (round 1, finding 1).
+ *   • NULL — the transaction predates this mechanism entirely, so nothing is
+ *     known about what was displayed. REFUSED (round 2, finding 2): during the
+ *     one deploy that introduces the column, in-flight transactions fail closed
+ *     and the person opens the assistant login again.
+ *   • anything else — a real displayed set, compared exactly. The EMPTY STRING is
+ *     one of these: a screen that rendered and named no extra grants. If this
+ *     build would record one, they disagree.
+ */
+export function displayedScopesAgree(
+  displayedToken: string | null | undefined,
+  granted: readonly string[],
+): boolean {
+  if (displayedToken === null || displayedToken === undefined) return false;
+  if (displayedToken === WIDGET_NO_SIGNIN_SCREEN) return true;
+  return String(displayedToken).trim() === widgetDisplayedScopesToken(granted);
 }
 
 /**
@@ -115,10 +175,14 @@ export const WIDGET_EXTENSION_SCOPES = {
   [WIDGET_LIFECYCLE_READ_SCOPE]: {
     audiences: [WIDGET_LIFECYCLE_READ_ROUTE_PATH] as readonly string[],
     /**
-     * The consent sentence shown on the hosted login. It states what is read
-     * and by whose permission — the grant carries the USER's standing, never a
-     * widened one (the site cannot see more through the widget than the person
-     * signed into it can see in Cinatra).
+     * The sentence the hosted SIGN-IN screen shows for this grant. It states
+     * what is read and by whose permission — the grant carries the USER's
+     * standing, never a widened one (the site cannot see more through the
+     * widget than the person signing in can see in Cinatra).
+     *
+     * Since signing in IS the grant, this is the copy a signed-OUT visitor reads
+     * before they enter their credentials; it is generated from this map, so a
+     * grant cannot join the set without gaining a sentence at the same time.
      */
     consentCopy:
       "Show you work items that are waiting on you — reviews and their outcomes — using the same permissions you have in Cinatra.",
@@ -131,11 +195,18 @@ export const WIDGET_EXTENSION_SCOPES = {
 export type WidgetExtensionScope = keyof typeof WIDGET_EXTENSION_SCOPES;
 
 /**
- * The extension scopes the CURRENT hosted consent copy asks for. The consent
- * server action reads this constant — it never reads a scope list off the
- * submitted form — so what the page displayed is exactly what the code records.
+ * The extension scopes a SIGN-IN grants. The server action reads this constant
+ * and nothing else — there is no request field, no form value and no caller
+ * argument through which a scope could enter — so the grant recorded on the
+ * authorization code is always exactly the set this build defines here.
+ *
+ * Whether it is also the set the person READ is a separate question, and a
+ * separate mechanism answers it: the sign-in screen's render records what it
+ * displayed on the transaction, and the action refuses when that disagrees. When
+ * no screen was rendered at all (an existing session) there is nothing to
+ * compare — the honest gap this design carries.
  */
-export const WIDGET_CONSENT_GRANTED_SCOPES: readonly WidgetExtensionScope[] = [
+export const WIDGET_SIGNIN_GRANTED_SCOPES: readonly WidgetExtensionScope[] = [
   WIDGET_LIFECYCLE_READ_SCOPE,
 ];
 

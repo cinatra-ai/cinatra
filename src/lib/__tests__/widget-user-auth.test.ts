@@ -71,6 +71,7 @@ vi.mock("@/lib/connect-sites-store", () => ({
 import {
   createAuthTransaction,
   loadActiveTransaction,
+  recordDisplayedScopesForTransaction,
   issueUserAuthCode,
   redeemUserAuthCode,
   consumeUserWidgetToken,
@@ -81,7 +82,8 @@ import {
   __testing,
 } from "@/lib/widget-user-auth";
 import {
-  WIDGET_CONSENT_GRANTED_SCOPES,
+  WIDGET_NO_SIGNIN_SCREEN,
+  WIDGET_SIGNIN_GRANTED_SCOPES,
   WIDGET_LIFECYCLE_READ_ROUTE_PATH,
   WIDGET_LIFECYCLE_READ_SCOPE,
   type WidgetExtensionScope,
@@ -163,6 +165,20 @@ function exec(sql: string, values: unknown[] = []): { rows: Record<string, unkno
       out.not_expired = r.expires_at_ms > nowMs;
     }
     return { rows: [out] };
+  }
+
+  // cinatra#2631 — the write-once record of what the sign-in screen displayed.
+  // Interpreted faithfully, INCLUDING the `displayed_scopes IS NULL` guard, so
+  // the first-write-wins property is exercised rather than assumed.
+  if (sql.startsWith("UPDATE") && sql.includes("displayed_scopes = $2")) {
+    const r = store.get(String(values[0]));
+    if (!r || r.consumed || r.expires_at_ms <= nowMs) return { rows: [] };
+    // The write-once guard: it may only replace the no-screen sentinel.
+    if (sql.includes("displayed_scopes = $3") && r.displayed_scopes !== values[2]) {
+      return { rows: [] };
+    }
+    r.displayed_scopes = values[1];
+    return { rows: [] };
   }
 
   if (sql.startsWith("UPDATE") && sql.includes("consumed_at = now()") && sql.includes("RETURNING")) {
@@ -607,16 +623,25 @@ describe("consumeUserWidgetToken — live binding re-checks (CHILD 3 surface)", 
 // ---------------------------------------------------------------------------
 // cinatra#2574 (epic #2564 S8a) — the LIFECYCLE-READ grant.
 //
-// AC-1 in full: a widget session whose consent predates the scope extension
-// cannot read lifecycle data until the user consents again. The whole
-// create→consent→redeem→verify lifecycle runs against the same in-memory tables
-// the rest of this file uses, so "predates" is a real code with no recorded
-// grant redeemed into a real token, not a hand-written row.
+// AC-1 in full: a widget session minted before the scope extension existed
+// cannot read lifecycle data until a NEW authorization carrying the grant is
+// issued. The whole create→issue→redeem→verify lifecycle runs against the same
+// in-memory tables the rest of this file uses, so "predates" is a real code with
+// no recorded grant redeemed into a real token, not a hand-written row.
+//
+// WHAT THIS HARNESS DOES NOT RUN, stated so the names below cannot mislead
+// (codex rework round 0, finding 3): it calls the token engine directly. It does
+// not authenticate anyone and it does not go through the hosted page or its
+// server action, so it proves what the ENGINE guarantees — a grant reaches a
+// token only by riding a fresh authorization code, and an already-minted token
+// never acquires one — not that a human re-entered a password. cinatra#2631
+// makes the hosted flow record the grant at sign-in; who is asked to sign in is
+// the page's business, and `src/app/widget-auth/__tests__` covers it.
 // ---------------------------------------------------------------------------
 describe("lifecycle-read scope + audience (cinatra#2574)", () => {
   const CHAT_PATH = "/api/assistants/chat";
 
-  function mintTokenWithConsent(grantedScopes?: readonly WidgetExtensionScope[]) {
+  function mintTokenWithGrant(grantedScopes?: readonly WidgetExtensionScope[]) {
     const t = newTxn(SITE_A);
     if (!t.ok) throw new Error("txn");
     const issued = issueUserAuthCode({
@@ -649,9 +674,9 @@ describe("lifecycle-read scope + audience (cinatra#2574)", () => {
     );
   });
 
-  it("AC-1: a token from a PRE-EXTENSION consent cannot read lifecycle data", () => {
-    // A consent recorded before the grant existed carries no granted_scopes.
-    const minted = mintTokenWithConsent(undefined);
+  it("AC-1: a token from a PRE-EXTENSION authorization cannot read lifecycle data", () => {
+    // An authorization recorded before the grant existed carries no granted_scopes.
+    const minted = mintTokenWithGrant(undefined);
     // Its scope + audience are byte-identical to the pre-#2574 mint.
     expect(minted.scope).toBe("wordpress-content-editor.user");
 
@@ -680,7 +705,7 @@ describe("lifecycle-read scope + audience (cinatra#2574)", () => {
   });
 
   it("AC-1: the SAME session keeps working for chat — the grant is additive, not a cutover", () => {
-    const minted = mintTokenWithConsent(undefined);
+    const minted = mintTokenWithGrant(undefined);
     const r = consumeUserWidgetToken({
       token: minted.token,
       agentSlug: "wordpress-content-editor",
@@ -692,8 +717,8 @@ describe("lifecycle-read scope + audience (cinatra#2574)", () => {
     expect(r.claims.grantedScopes).toEqual([]);
   });
 
-  it("AC-1: RE-CONSENT mints the grant, and only then does the lifecycle read pass", () => {
-    const minted = mintTokenWithConsent(WIDGET_CONSENT_GRANTED_SCOPES);
+  it("AC-1: only a NEW authorization carrying the grant lets the lifecycle read pass", () => {
+    const minted = mintTokenWithGrant(WIDGET_SIGNIN_GRANTED_SCOPES);
     expect(minted.scope).toBe(
       `wordpress-content-editor.user ${WIDGET_LIFECYCLE_READ_SCOPE}`,
     );
@@ -722,7 +747,7 @@ describe("lifecycle-read scope + audience (cinatra#2574)", () => {
   });
 
   it("every other binding still gates the extended token (origin, agent, revoke)", () => {
-    const minted = mintTokenWithConsent(WIDGET_CONSENT_GRANTED_SCOPES);
+    const minted = mintTokenWithGrant(WIDGET_SIGNIN_GRANTED_SCOPES);
     const lifecycleRead = (over: Record<string, unknown>) =>
       consumeUserWidgetToken({
         token: minted.token,
@@ -745,8 +770,8 @@ describe("lifecycle-read scope + audience (cinatra#2574)", () => {
     expect(lifecycleRead({})).toEqual({ ok: false, reason: "site_revoked" });
   });
 
-  it("an UNKNOWN consented scope is dropped at the code — it can never reach a token", () => {
-    const minted = mintTokenWithConsent([
+  it("an UNKNOWN granted scope is dropped at the code — it can never reach a token", () => {
+    const minted = mintTokenWithGrant([
       "lifecycle.decide-everything",
     ] as unknown as readonly WidgetExtensionScope[]);
     expect(minted.scope).toBe("wordpress-content-editor.user");
@@ -765,7 +790,7 @@ describe("lifecycle-read scope + audience (cinatra#2574)", () => {
     // Simulate a row edited under the app: an unknown scope entry sits beside
     // the base scope. It is INERT — the base scope still admits a chat turn, the
     // unknown entry grants nothing, and the required lifecycle scope is absent.
-    const minted = mintTokenWithConsent(undefined);
+    const minted = mintTokenWithGrant(undefined);
     const tokenHash = __testing.sha256Hex(minted.token);
     const row = tokenStore.get(tokenHash)!;
     row.scope = "wordpress-content-editor.user superuser";
@@ -795,7 +820,7 @@ describe("lifecycle-read scope + audience (cinatra#2574)", () => {
     // admissible surfaces from the scopes the token still demonstrably carries
     // (codex round 0, finding 4), so the orphaned audience entry is refused —
     // and refused at the AUDIENCE gate, before the scope gate is even reached.
-    const minted = mintTokenWithConsent(WIDGET_CONSENT_GRANTED_SCOPES);
+    const minted = mintTokenWithGrant(WIDGET_SIGNIN_GRANTED_SCOPES);
     const row = tokenStore.get(__testing.sha256Hex(minted.token))!;
     row.scope = "wordpress-content-editor.user";
     expect(
@@ -824,7 +849,7 @@ describe("lifecycle-read scope + audience (cinatra#2574)", () => {
     // at the call site. At runtime an unrecognized requirement must fail closed
     // rather than be compared against a raw column — otherwise a stale caller
     // and a tampered row could meet on a name neither side understands.
-    const minted = mintTokenWithConsent(WIDGET_CONSENT_GRANTED_SCOPES);
+    const minted = mintTokenWithGrant(WIDGET_SIGNIN_GRANTED_SCOPES);
     const row = tokenStore.get(__testing.sha256Hex(minted.token))!;
     row.scope = `wordpress-content-editor.user ${WIDGET_LIFECYCLE_READ_SCOPE} future.scope`;
     expect(
@@ -852,7 +877,7 @@ describe("lifecycle-read scope + audience (cinatra#2574)", () => {
     const issued = issueUserAuthCode({
       txnId: t.txnId,
       userId: "user-1",
-      grantedScopes: WIDGET_CONSENT_GRANTED_SCOPES,
+      grantedScopes: WIDGET_SIGNIN_GRANTED_SCOPES,
     });
     if (!issued.ok) throw new Error("issue");
     expect(ensureSchemaMock.mock.invocationCallOrder[0]).toBeLessThan(
@@ -1111,5 +1136,73 @@ describe("resolveVerifiedSiteFromCredential", () => {
     expect(ctx).not.toBeNull();
     expect(ctx?.credentialVersion).toBe(3);
     expect(getActiveConnectSiteByIdMock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2631 — WHAT THE SIGN-IN SCREEN SHOWED, ON THE TRANSACTION.
+//
+// The hosted flow has no consent screen: signing in records the grant. The one
+// thing that could then go wrong quietly is a person reading one list of
+// sentences and a different set being recorded, which is exactly what a rolling
+// deploy can produce. The server writes what it displayed onto the transaction
+// so the two can be compared — and it lives there, not in the popup's URL,
+// because a URL marker can be stripped and an absent marker must be admitted.
+// ---------------------------------------------------------------------------
+describe("the displayed-scope record on the transaction (cinatra#2631)", () => {
+  it("starts at the NO-SCREEN SENTINEL, not NULL — provenance, not absence", () => {
+    // A NULL column would also describe a transaction created before this
+    // mechanism existed, and admitting that re-opens the mismatch the record
+    // exists to catch (codex rework round 2, finding 2). A build that HAS the
+    // mechanism says so at creation.
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    expect(loadActiveTransaction(t.txnId)?.displayedScopes).toBe(WIDGET_NO_SIGNIN_SCREEN);
+  });
+
+  it("records what the screen displayed and returns the STORED value", () => {
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    expect(recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read")).toBe(
+      "lifecycle.read",
+    );
+    expect(loadActiveTransaction(t.txnId)?.displayedScopes).toBe("lifecycle.read");
+  });
+
+  it("FIRST write wins, and the loser is TOLD it lost", () => {
+    // Returning the offered value would let a second build render its own list
+    // of sentences over a record that says something else (round 2, finding 1).
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read");
+    expect(
+      recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read lifecycle.decide"),
+    ).toBe("lifecycle.read");
+    expect(loadActiveTransaction(t.txnId)?.displayedScopes).toBe("lifecycle.read");
+  });
+
+  it("persists an EMPTY displayed set as a real value", () => {
+    // A screen that named no extra grants is a screen. Collapsing it back to the
+    // sentinel would let a later, wider build admit it (round 2, finding 3).
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    expect(recordDisplayedScopesForTransaction(t.txnId, "")).toBe("");
+    expect(loadActiveTransaction(t.txnId)?.displayedScopes).toBe("");
+  });
+
+  it("never consumes the transaction — the login screen may render twice", () => {
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read");
+    recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read");
+    expect(loadActiveTransaction(t.txnId)).not.toBeNull();
+    expect(issueUserAuthCode({ txnId: t.txnId, userId: "user-1" }).ok).toBe(true);
+  });
+
+  it("returns null for a transaction that is gone", () => {
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    expect(issueUserAuthCode({ txnId: t.txnId, userId: "user-1" }).ok).toBe(true);
+    expect(recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read")).toBeNull();
   });
 });

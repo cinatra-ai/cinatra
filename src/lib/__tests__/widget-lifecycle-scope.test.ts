@@ -9,7 +9,10 @@ import { describe, expect, it } from "vitest";
 
 import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
 import {
-  WIDGET_CONSENT_GRANTED_SCOPES,
+  WIDGET_NO_SIGNIN_SCREEN,
+  WIDGET_SIGNIN_GRANTED_SCOPES,
+  displayedScopesAgree,
+  widgetDisplayedScopesToken,
   WIDGET_EXTENSION_SCOPES,
   WIDGET_LIFECYCLE_READ_ROUTE_PATH,
   WIDGET_LIFECYCLE_READ_SCOPE,
@@ -23,7 +26,6 @@ import {
   parseTokenSet,
   tokenAudienceAdmits,
   tokenSetHas,
-  widgetConsentRequestId,
   widgetUserBaseScope,
 } from "@/lib/widget-lifecycle-scope";
 
@@ -72,8 +74,11 @@ describe("the grant vocabulary", () => {
     expect(normalizeExtensionScopes("lifecycle.read" as never)).toEqual([]);
   });
 
-  it("gives every consented scope a consent sentence — a grant cannot be silent", () => {
-    for (const scope of WIDGET_CONSENT_GRANTED_SCOPES) {
+  it("gives every granted scope a sentence — a grant cannot be silent", () => {
+    // cinatra#2631: the sentence now lives on the SIGN-IN screen, because
+    // signing in is the grant. The invariant is unchanged — a scope in the
+    // granted set must carry copy a person can read.
+    for (const scope of WIDGET_SIGNIN_GRANTED_SCOPES) {
       const entry = WIDGET_EXTENSION_SCOPES[scope];
       expect(entry).toBeDefined();
       expect(entry.consentCopy.trim().length).toBeGreaterThan(20);
@@ -207,29 +212,79 @@ describe("the audience admission test", () => {
   });
 });
 
-// codex round 0, finding 1 — a consent screen may only authorize the sentences
-// it displayed. The bound request id is what makes that true across builds.
-describe("the consent binding", () => {
-  it("changes with the displayed scope set, so an old screen cannot pick up a new grant", () => {
-    const none = widgetConsentRequestId("txn-1", []);
-    const withRead = widgetConsentRequestId("txn-1", [WIDGET_LIFECYCLE_READ_SCOPE]);
-    expect(none).not.toBe(withRead);
-    // Stable for the same inputs (the token is signed over it on the GET and
-    // recomputed on the POST).
-    expect(widgetConsentRequestId("txn-1", [WIDGET_LIFECYCLE_READ_SCOPE])).toBe(withRead);
-    // And still transaction-bound.
-    expect(widgetConsentRequestId("txn-2", [WIDGET_LIFECYCLE_READ_SCOPE])).not.toBe(withRead);
+// cinatra#2631 — THE CONSENT-BINDING SUITE IS DELETED, NOT MOVED.
+//
+// It used to live here: `widgetConsentRequestId` folded the scope set a consent
+// screen DISPLAYED into the id its single-use CSRF token was signed over, so a
+// screen rendered by an older build could not submit against a newer action and
+// record a grant whose sentence was never shown (codex round 0, finding 1).
+//
+// The owner ruled the consent screen out: signing in IS the grant. With no
+// second screen and no submission there is no displayed-set-versus-recorded-set
+// gap left to close, so the mechanism and its tests are removed rather than kept
+// as coverage of a surface that no longer exists. What replaced them is
+// structural: the grant has one source (the server constant), and
+// `src/app/widget-auth/__tests__/no-signin-interstitial.test.ts` fails if a step
+// between the sign-in and the return ever reappears.
+
+// cinatra#2631 (codex rework round 0, finding 1) — the sign-in screen and the
+// action that records the grant are two requests, and mid-rollout they can be
+// two BUILDS. This token is what lets them be compared.
+describe("the displayed-scope token", () => {
+  it("moves with MEMBERSHIP and not with order or duplication", () => {
+    expect(widgetDisplayedScopesToken(["b", "a"])).toBe(
+      widgetDisplayedScopesToken(["a", "b"]),
+    );
+    expect(widgetDisplayedScopesToken(["a", "a"])).toBe(widgetDisplayedScopesToken(["a"]));
+    expect(widgetDisplayedScopesToken(["a", "b"])).not.toBe(
+      widgetDisplayedScopesToken(["a"]),
+    );
+    expect(widgetDisplayedScopesToken([])).toBe("");
   });
 
-  it("is stable under ORDERING and duplication — only membership moves it", () => {
-    // codex round 1: a set is a set. Reordering the constant must not invalidate
-    // every consent screen currently on someone's monitor.
-    expect(widgetConsentRequestId("t", ["b", "a"])).toBe(
-      widgetConsentRequestId("t", ["a", "b"]),
+  it("agrees only with the same set", () => {
+    const shown = widgetDisplayedScopesToken([WIDGET_LIFECYCLE_READ_SCOPE]);
+    expect(displayedScopesAgree(shown, [WIDGET_LIFECYCLE_READ_SCOPE])).toBe(true);
+    expect(displayedScopesAgree(shown, [])).toBe(false);
+    expect(displayedScopesAgree(shown, [WIDGET_LIFECYCLE_READ_SCOPE, "future.scope"])).toBe(
+      false,
     );
-    expect(widgetConsentRequestId("t", ["a", "a"])).toBe(widgetConsentRequestId("t", ["a"]));
-    expect(widgetConsentRequestId("t", ["a", "b"])).not.toBe(
-      widgetConsentRequestId("t", ["a"]),
+  });
+
+  it("admits the SENTINEL — a build that would have said so, and no screen ran", () => {
+    // The person already had a session and saw no sign-in screen. That is the
+    // stated gap of the design; this helper must not refuse a flow that never
+    // displayed one.
+    expect(displayedScopesAgree(WIDGET_NO_SIGNIN_SCREEN, WIDGET_SIGNIN_GRANTED_SCOPES)).toBe(
+      true,
     );
+    expect(displayedScopesAgree(WIDGET_NO_SIGNIN_SCREEN, [])).toBe(true);
+    // The sentinel can never BE a displayed set: it is not a well-formed set
+    // member, so no scope this build could grant can spell it.
+    expect(isValidTokenSetAtom(WIDGET_NO_SIGNIN_SCREEN)).toBe(false);
+    expect(isKnownWidgetExtensionScope(WIDGET_NO_SIGNIN_SCREEN)).toBe(false);
+    for (const scope of WIDGET_SIGNIN_GRANTED_SCOPES) {
+      expect(isValidTokenSetAtom(scope)).toBe(true);
+    }
+  });
+
+  it("REFUSES null — a transaction that predates the mechanism knows nothing", () => {
+    // codex rework round 2, finding 2: NULL is not evidence of anything. Reading
+    // it as "no screen" would admit exactly the cross-build mismatch this
+    // comparison exists to catch, so it fails closed.
+    for (const unknown of [undefined, null]) {
+      expect(displayedScopesAgree(unknown, WIDGET_SIGNIN_GRANTED_SCOPES)).toBe(false);
+      expect(displayedScopesAgree(unknown, [])).toBe(false);
+    }
+  });
+
+  it("does NOT confuse an empty screen with no screen", () => {
+    // A screen that rendered and named no extra grants is a real screen. If this
+    // build would record one, they disagree — that is the rollout window in the
+    // add-a-grant direction, and it must fail closed.
+    expect(displayedScopesAgree("", WIDGET_SIGNIN_GRANTED_SCOPES)).toBe(false);
+    expect(displayedScopesAgree("   ", WIDGET_SIGNIN_GRANTED_SCOPES)).toBe(false);
+    // ...and when this build grants nothing extra either, they agree.
+    expect(displayedScopesAgree("", [])).toBe(true);
   });
 });

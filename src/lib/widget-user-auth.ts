@@ -24,6 +24,7 @@ import {
   normalizeExtensionScopes,
   tokenAudienceAdmits,
   tokenSetHas,
+  WIDGET_NO_SIGNIN_SCREEN,
   widgetUserBaseScope,
   type WidgetExtensionScope,
 } from "@/lib/widget-lifecycle-scope";
@@ -366,8 +367,8 @@ export function createAuthTransaction(input: CreateTransactionInput): CreateTran
         text:
           `INSERT INTO ${qTable(TXN_TABLE)} (` +
           `txn_id, site_id, client, org_id, site_origin, agent_slug, instance_id, ` +
-          `code_challenge, state, expires_at, created_at` +
-          `) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now() + make_interval(secs => $10), now())`,
+          `code_challenge, state, displayed_scopes, expires_at, created_at` +
+          `) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now() + make_interval(secs => $11), now())`,
         values: [
           txnId,
           input.site.siteId,
@@ -378,6 +379,11 @@ export function createAuthTransaction(input: CreateTransactionInput): CreateTran
           instanceId,
           input.codeChallenge,
           input.state,
+          // cinatra#2631 — "a build that would have recorded a displayed set
+          // created this, and none has been recorded yet". Distinguishes the
+          // legitimate no-screen case from a transaction that predates the
+          // column, which is NULL and fails closed.
+          WIDGET_NO_SIGNIN_SCREEN,
           TRANSACTION_TTL_SECONDS,
         ],
       },
@@ -397,12 +403,18 @@ export type LoadedTransaction = {
   instanceId: string;
   codeChallenge: string;
   state: string;
+  /**
+   * The scope set the hosted SIGN-IN SCREEN displayed for this transaction, or
+   * null when no sign-in screen was rendered (the person already held a Cinatra
+   * session). cinatra#2631 — see recordDisplayedScopesForTransaction.
+   */
+  displayedScopes: string | null;
 };
 
 /**
  * Load an UNCONSUMED, UNEXPIRED transaction by id. Returns null if missing,
  * expired, or already consumed. Read-only (the hosted page calls this to
- * render the login + consent context; consumption happens at code issuance).
+ * render the login context; consumption happens at code issuance).
  */
 export function loadActiveTransaction(txnId: string): LoadedTransaction | null {
   if (!txnId || typeof txnId !== "string") return null;
@@ -413,7 +425,7 @@ export function loadActiveTransaction(txnId: string): LoadedTransaction | null {
       {
         text:
           `SELECT txn_id, site_id, client, org_id, site_origin, agent_slug, instance_id, ` +
-          `code_challenge, state ` +
+          `code_challenge, state, displayed_scopes ` +
           `FROM ${qTable(TXN_TABLE)} ` +
           `WHERE txn_id = $1 AND consumed_at IS NULL AND expires_at > now() LIMIT 1`,
         values: [txnId],
@@ -433,11 +445,73 @@ export function loadActiveTransaction(txnId: string): LoadedTransaction | null {
     instanceId: String(row.instance_id ?? ""),
     codeChallenge: String(row.code_challenge ?? ""),
     state: String(row.state ?? ""),
+    displayedScopes:
+      typeof row.displayed_scopes === "string" ? row.displayed_scopes : null,
   };
 }
 
+/**
+ * Record, ON THE TRANSACTION, the scope set the hosted SIGN-IN SCREEN displayed
+ * — the one authenticated statement about what this person was shown.
+ *
+ * cinatra#2631 (codex rework round 1, finding 1). Carrying the displayed set
+ * through the sign-in redirect in the URL was not enough: a party that controls
+ * the popup's URL can STRIP the marker, and an absent marker has to be admitted
+ * because a person who already holds a Cinatra session legitimately never sees a
+ * screen. Stripping therefore turned a mismatch back into the admitted case. The
+ * server writes it here instead, where nothing in the browser can remove it: the
+ * action reads what the screen actually showed, and NULL means — provably — that
+ * no screen was rendered for this transaction.
+ *
+ * FIRST WRITE WINS (it may only replace the no-screen sentinel). A transaction
+ * is single-use and short-lived, so the first sign-in screen rendered for it is
+ * the one the person read; a later render by a build whose granted set differs
+ * does not overwrite that.
+ *
+ * RETURNS THE AUTHORITATIVE STORED VALUE, not the value offered (codex rework
+ * round 2, finding 1). A caller that assumed its own write had landed could
+ * render one list of sentences while a different one stood recorded — the
+ * mismatch the whole mechanism exists to prevent, reintroduced by optimism. The
+ * caller compares and refuses to render when they differ. Null means the
+ * transaction is no longer there to record anything against.
+ *
+ * Idempotent and NON-CONSUMING: re-rendering the sign-in screen writes nothing
+ * new, and this never touches consumed_at. It is safe on a page render for
+ * exactly that reason — unlike issuing a code, which is why THAT stays a POST.
+ */
+export function recordDisplayedScopesForTransaction(
+  txnId: string,
+  displayedScopes: string,
+): string | null {
+  if (!txnId || typeof txnId !== "string" || typeof displayedScopes !== "string") {
+    return null;
+  }
+  ensurePostgresSchema();
+  const [, read] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    transaction: true,
+    queries: [
+      {
+        text:
+          `UPDATE ${qTable(TXN_TABLE)} SET displayed_scopes = $2 ` +
+          `WHERE txn_id = $1 AND consumed_at IS NULL AND expires_at > now() ` +
+          `AND displayed_scopes = $3`,
+        values: [txnId, displayedScopes, WIDGET_NO_SIGNIN_SCREEN],
+      },
+      {
+        text:
+          `SELECT displayed_scopes FROM ${qTable(TXN_TABLE)} ` +
+          `WHERE txn_id = $1 AND consumed_at IS NULL AND expires_at > now() LIMIT 1`,
+        values: [txnId],
+      },
+    ],
+  });
+  const row = read?.rows?.[0] as Record<string, unknown> | undefined;
+  return row && typeof row.displayed_scopes === "string" ? row.displayed_scopes : null;
+}
+
 // ---------------------------------------------------------------------------
-// 2) AUTH CODE — issued by the hosted page after explicit user consent.
+// 2) AUTH CODE — issued by the hosted page once the sign-in has authorized it.
 // ---------------------------------------------------------------------------
 
 export type IssueCodeResult =
@@ -447,18 +521,18 @@ export type IssueCodeResult =
 /**
  * Atomically CONSUME the transaction (single-use) and issue a user auth code
  * bound to the now-known userId + the transaction's verified context. The
- * caller MUST have already verified the user is a member of `txn.orgId` and
- * consumed the consent CSRF token. Only the sha256 hash of the code is stored;
- * the plaintext is returned once (to be postMessage'd to the opener origin).
+ * caller MUST have already verified there is a session and that the user is a
+ * member of `txn.orgId`. Only the sha256 hash of the code is stored; the
+ * plaintext is returned once (to be postMessage'd to the opener origin).
  *
  * The transaction consume is the single-use gate: a second concurrent issue for
  * the same transaction finds consumed_at already set → txn_not_found.
  *
- * cinatra#2574 — `grantedScopes` records WHAT THE USER JUST CONSENTED TO on the
- * code itself, so the grant travels with the authorization rather than being
+ * cinatra#2574 — `grantedScopes` records WHAT THE SIGN-IN GRANTED on the code
+ * itself, so the grant travels with the authorization rather than being
  * re-decided at redeem time. Unknown entries are dropped here (a code can only
  * ever carry a scope this build understands), and the column is nullable: a code
- * issued before this slice carries none, which is how a pre-extension consent
+ * issued before this slice carries none, which is how an older authorization
  * fails closed on every lifecycle read (AC-1).
  */
 export function issueUserAuthCode(input: {

@@ -1,17 +1,21 @@
-// The hosted consent action (cinatra#407) and the scope it now records
-// (cinatra#2574, epic #2564 S8a).
+// The hosted widget-auth grant action (cinatra#407) and the scope a SIGN-IN
+// records (cinatra#2574, epic #2564 S8a; reworked by cinatra#2631).
 //
-// The point under test: what the user READ on the consent screen is exactly what
-// the authorization code CARRIES. The action takes the granted scope set from a
-// server constant — the same one the page renders its copy from — so a CMS
-// backend, a tampered form, or a widget replaying an old body cannot ask for
-// more than the screen displayed.
+// Owner ruling (2026-08-10): "treat sign in as consent." There is no consent
+// screen and no Continue button, so the property under test is no longer "what
+// the user read on the consent screen is what the code carries" — it is that the
+// grant has EXACTLY ONE source, the server constant; that a screen which showed
+// a DIFFERENT set is refused; and that every gate which does not depend on the
+// removed screen still runs before anything is recorded.
+//
+// The action has no parameter through which a grant could be requested, so these
+// tests drive the two things that DO vary: the transaction's own record of what
+// its sign-in screen displayed, and the surrounding gates.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getAuthSession = vi.fn();
 const resolveOrgRoleForUser = vi.fn();
-const consumeConsentCsrfToken = vi.fn();
 const issueUserAuthCode = vi.fn();
 const loadActiveTransaction = vi.fn();
 const emitWidgetAuthAudit = vi.fn();
@@ -19,9 +23,6 @@ const emitWidgetAuthAudit = vi.fn();
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: (...a: unknown[]) => getAuthSession(...a),
   resolveOrgRoleForUser: (...a: unknown[]) => resolveOrgRoleForUser(...a),
-}));
-vi.mock("@/lib/connect-provisioning", () => ({
-  consumeConsentCsrfToken: (...a: unknown[]) => consumeConsentCsrfToken(...a),
 }));
 vi.mock("@/lib/widget-user-auth", () => ({
   issueUserAuthCode: (...a: unknown[]) => issueUserAuthCode(...a),
@@ -33,12 +34,16 @@ vi.mock("@/lib/widget-auth-audit", () => ({
 
 import { issueWidgetAuthCodeAction } from "../actions";
 import {
-  WIDGET_CONSENT_GRANTED_SCOPES,
   WIDGET_LIFECYCLE_READ_SCOPE,
-  widgetConsentRequestId,
+  WIDGET_NO_SIGNIN_SCREEN,
+  WIDGET_SIGNIN_GRANTED_SCOPES,
+  widgetDisplayedScopesToken,
 } from "@/lib/widget-lifecycle-scope";
 
+const DISPLAYED = widgetDisplayedScopesToken(WIDGET_SIGNIN_GRANTED_SCOPES);
+
 const TXN = {
+  displayedScopes: DISPLAYED,
   txnId: "txn-1",
   siteId: "site-1",
   client: "wordpress",
@@ -50,14 +55,6 @@ const TXN = {
   state: "s",
 };
 
-function form(extra: Record<string, string> = {}): FormData {
-  const fd = new FormData();
-  fd.set("txn", "txn-1");
-  fd.set("consent_csrf", "csrf-1");
-  for (const [k, v] of Object.entries(extra)) fd.set(k, v);
-  return fd;
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   getAuthSession.mockResolvedValue({
@@ -65,7 +62,6 @@ beforeEach(() => {
     session: { id: "sess-1" },
   });
   loadActiveTransaction.mockReturnValue(TXN);
-  consumeConsentCsrfToken.mockReturnValue(true);
   resolveOrgRoleForUser.mockResolvedValue("member");
   issueUserAuthCode.mockReturnValue({
     ok: true,
@@ -75,82 +71,137 @@ beforeEach(() => {
   });
 });
 
-describe("the consent records what the screen displayed", () => {
-  it("issues the code with the SERVER constant's scope set", async () => {
-    const r = await issueWidgetAuthCodeAction(form());
+describe("one run of the hosted flow records the whole grant", () => {
+  it("issues the code with the SERVER constant's scope set — including lifecycle.read", async () => {
+    const r = await issueWidgetAuthCodeAction("txn-1");
     expect(r.ok).toBe(true);
     expect(issueUserAuthCode).toHaveBeenCalledWith({
       txnId: "txn-1",
       userId: "user-1",
-      grantedScopes: WIDGET_CONSENT_GRANTED_SCOPES,
+      grantedScopes: WIDGET_SIGNIN_GRANTED_SCOPES,
     });
-    expect(WIDGET_CONSENT_GRANTED_SCOPES).toContain(WIDGET_LIFECYCLE_READ_SCOPE);
+    expect(WIDGET_SIGNIN_GRANTED_SCOPES).toContain(WIDGET_LIFECYCLE_READ_SCOPE);
   });
 
-  it("ignores a scope claim smuggled through the form", async () => {
-    await issueWidgetAuthCodeAction(
-      form({ grantedScopes: "lifecycle.decide superuser", scope: "everything" }),
-    );
+  it("has no channel through which a caller could ask for a WIDER grant", async () => {
+    // cinatra#2631: the consent form is gone, and with it every field a caller
+    // could have smuggled a scope through. The transaction id is the only
+    // argument, and extra arguments are inert.
+    await (
+      issueWidgetAuthCodeAction as unknown as (...a: unknown[]) => Promise<unknown>
+    )("txn-1", { grantedScopes: ["lifecycle.decide", "superuser"] }, "everything");
     const call = issueUserAuthCode.mock.calls[0]?.[0] as { grantedScopes: unknown };
-    expect(call.grantedScopes).toEqual(WIDGET_CONSENT_GRANTED_SCOPES);
+    expect(call.grantedScopes).toEqual(WIDGET_SIGNIN_GRANTED_SCOPES);
   });
 
   it("audits the granted scopes on the code_issued event", async () => {
-    await issueWidgetAuthCodeAction(form());
+    await issueWidgetAuthCodeAction("txn-1");
     const issued = emitWidgetAuthAudit.mock.calls.find(([e]) => e === "code_issued");
     expect(issued).toBeDefined();
     expect((issued as [string, Record<string, unknown>])[1].grantedScopes).toBe(
       WIDGET_LIFECYCLE_READ_SCOPE,
     );
   });
+});
 
-  // codex round 0, finding 1 — the page and the action reading the same constant
-  // is not a binding. The CSRF token the screen was issued is signed over a
-  // request id carrying the DISPLAYED scope set, so a screen from another build
-  // cannot authorize a grant it never showed.
-  it("binds the consent to the scope set the screen displayed", async () => {
-    await issueWidgetAuthCodeAction(form());
-    expect(consumeConsentCsrfToken).toHaveBeenCalledWith({
-      token: "csrf-1",
-      sessionId: "sess-1",
-      requestId: widgetConsentRequestId("txn-1", WIDGET_CONSENT_GRANTED_SCOPES),
+// codex rework round 0, finding 1 — removing the consent screen moved the
+// display one request earlier; it did not remove the possibility that the screen
+// and the recording come from different builds mid-rollout.
+describe("what the sign-in screen displayed is checked against what is recorded", () => {
+  it("refuses when the transaction's screen displayed a DIFFERENT scope set", async () => {
+    loadActiveTransaction.mockReturnValue({
+      ...TXN,
+      displayedScopes: `${DISPLAYED} some.other`,
     });
-    // The bound id is NOT the bare transaction id — that is what an
-    // already-rendered older screen's token was signed over.
-    expect(
-      (consumeConsentCsrfToken.mock.calls[0]?.[0] as { requestId: string }).requestId,
-    ).not.toBe("txn-1");
+    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
+      ok: false,
+      reason: "stale_screen",
+    });
+    expect(issueUserAuthCode).not.toHaveBeenCalled();
+    const denied = emitWidgetAuthAudit.mock.calls.find(([e]) => e === "consent_denied");
+    expect((denied as [string, Record<string, unknown>])[1].reason).toBe(
+      "stale_signin_screen",
+    );
   });
 
-  it("refuses a consent screen bound to a DIFFERENT displayed scope set", async () => {
-    // Simulate the deploy window: the CSRF verifier only accepts the id the
-    // screen was signed with, so a token minted for another set fails here and
-    // no code — and therefore no grant — is issued.
-    consumeConsentCsrfToken.mockImplementation(
-      (input: { requestId: string }) =>
-        input.requestId === widgetConsentRequestId("txn-1", []),
-    );
-    expect(await issueWidgetAuthCodeAction(form())).toEqual({
+  it("refuses a screen that displayed NO extra grants at all", async () => {
+    // The other direction of the rollout window: an older build's screen said
+    // nothing about lifecycle work, and this build would record it.
+    loadActiveTransaction.mockReturnValue({ ...TXN, displayedScopes: "" });
+    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
       ok: false,
-      reason: "invalid_request",
+      reason: "stale_screen",
     });
     expect(issueUserAuthCode).not.toHaveBeenCalled();
   });
 
-  it("records NOTHING when the consent does not complete", async () => {
-    // Every pre-existing gate still runs before the grant is recorded: a bad
-    // CSRF, a non-member, an expired transaction — no code, so no grant.
-    consumeConsentCsrfToken.mockReturnValue(false);
-    expect(await issueWidgetAuthCodeAction(form())).toEqual({
-      ok: false,
-      reason: "invalid_request",
+  it("proceeds when NO screen was rendered — the stated gap, not a mismatch", async () => {
+    // The sentinel is written at transaction creation and means: a build that
+    // records displayed sets made this, and none was recorded. That happens when
+    // the person already held a Cinatra session. Nothing in the browser can
+    // produce it — but the gap it represents is real, and the PR says so rather
+    // than this check pretending to close it.
+    loadActiveTransaction.mockReturnValue({
+      ...TXN,
+      displayedScopes: WIDGET_NO_SIGNIN_SCREEN,
     });
-    consumeConsentCsrfToken.mockReturnValue(true);
+    expect((await issueWidgetAuthCodeAction("txn-1")).ok).toBe(true);
+  });
+
+  it("REFUSES a transaction that predates the mechanism (NULL)", async () => {
+    // In-flight across the one deploy that introduces the column: nothing is
+    // known about what its screen showed, so nothing is granted.
+    loadActiveTransaction.mockReturnValue({ ...TXN, displayedScopes: null });
+    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
+      ok: false,
+      reason: "stale_screen",
+    });
+    expect(issueUserAuthCode).not.toHaveBeenCalled();
+  });
+});
+
+describe("the gates that do not depend on the removed screen still run", () => {
+  it("records NOTHING without a session", async () => {
+    getAuthSession.mockResolvedValue(null);
+    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
+      ok: false,
+      reason: "not_authenticated",
+    });
+    expect(issueUserAuthCode).not.toHaveBeenCalled();
+  });
+
+  it("records NOTHING for a consumed or expired transaction (single-use)", async () => {
+    loadActiveTransaction.mockReturnValue(null);
+    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
+      ok: false,
+      reason: "transaction_expired",
+    });
+    expect(issueUserAuthCode).not.toHaveBeenCalled();
+  });
+
+  it("records NOTHING for a non-member of the TRANSACTION's org", async () => {
     resolveOrgRoleForUser.mockResolvedValue(undefined);
-    expect(await issueWidgetAuthCodeAction(form())).toEqual({
+    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
       ok: false,
       reason: "not_org_member",
     });
+    expect(resolveOrgRoleForUser).toHaveBeenCalledWith("org-A", "user-1");
     expect(issueUserAuthCode).not.toHaveBeenCalled();
+  });
+
+  it("refuses an empty transaction id before it does any work", async () => {
+    expect(await issueWidgetAuthCodeAction("")).toEqual({
+      ok: false,
+      reason: "invalid_request",
+    });
+    expect(getAuthSession).not.toHaveBeenCalled();
+  });
+
+  it("reports a losing race on the single-use transaction as expired", async () => {
+    issueUserAuthCode.mockReturnValue({ ok: false, reason: "txn_not_found" });
+    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
+      ok: false,
+      reason: "transaction_expired",
+    });
   });
 });

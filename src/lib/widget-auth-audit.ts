@@ -16,7 +16,13 @@ export type WidgetAuthAuditEvent =
   | "init_failure"
   | "page_viewed"
   | "page_invalid_txn"
-  | "consent_denied" // user not a member, or explicit deny
+  // The hosted widget login refused to authorize: no session, a stale/replayed
+  // transaction, or the signed-in user is not a member of the transaction's org.
+  // The NAME predates cinatra#2631 (which removed the separate consent step —
+  // signing in is the grant now) and is kept so the existing trail stays one
+  // series for its consumers; it has always meant "this login did not become an
+  // authorization".
+  | "consent_denied"
   | "code_issued"
   | "redeem_success"
   | "redeem_failure"

@@ -3991,11 +3991,11 @@ END $$` },
       state          text NOT NULL,
       created_at     timestamptz NOT NULL DEFAULT now(),
       expires_at     timestamptz NOT NULL,
-      consumed_at    timestamptz
+      consumed_at    timestamptz, displayed_scopes text
     )` },
-    { text: `CREATE INDEX IF NOT EXISTS widget_auth_transactions_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_auth_transactions" (expires_at)` },
-    // Table 2 — user authorization codes. Issued by the hosted page after the
-    // logged-in MEMBER consents; keyed by the sha256 of the plaintext code
+    { text: `CREATE INDEX IF NOT EXISTS widget_auth_transactions_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_auth_transactions" (expires_at)` }, { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."widget_auth_transactions" ADD COLUMN IF NOT EXISTS displayed_scopes text` }, // #2631: what the sign-in screen SHOWED this transaction, written once when that screen renders; NULL means no screen was rendered. ALTER rides this line for file-size headroom (see the codes table below)
+    // Table 2 — user authorization codes. Issued by the hosted page once the
+    // sign-in authorized it; keyed by the sha256 of the plaintext code
     // (which is postMessage'd to the verified opener origin and never stored).
     // Carries the full user binding; redeemed exactly once via DELETE...RETURNING.
     // `granted_scopes` (cinatra#2574): the consented extension-scope set; NULLABLE + back-filled by the ALTER below, so a code already in flight carries no grant — the fail-closed answer for a consent that predates the extension.

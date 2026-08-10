@@ -60,6 +60,38 @@ describe("widget_auth_transactions schema-drift guard", () => {
   });
 });
 
+// cinatra#2631 — `displayed_scopes` on the TRANSACTION carries what the sign-in
+// screen showed. Same rollout hazard as granted_scopes: CREATE TABLE IF NOT
+// EXISTS never touches an existing table, so an installed deployment gains the
+// column only through the idempotent ALTER, and the SELECT that names it would
+// otherwise break every widget login after the upgrade.
+describe("widget_auth_transactions displayed_scopes rollout", () => {
+  it("adds displayed_scopes to an EXISTING deployment (idempotent ALTER, nullable)", () => {
+    const alters = buildCreateStoreSchemaQueries("drift_test")
+      .map((q) => String(q.text))
+      .filter((t) => t.includes("ALTER TABLE") && t.includes("widget_auth_transactions"));
+    expect(
+      alters.some((t) =>
+        /ADD COLUMN IF NOT EXISTS displayed_scopes text\s*$/.test(t.trim()),
+      ),
+    ).toBe(true);
+  });
+
+  it("orders the ALTER after the CREATE", () => {
+    const texts = buildCreateStoreSchemaQueries("drift_test").map((q) => String(q.text));
+    const createIdx = texts.findIndex((t) =>
+      t.includes('CREATE TABLE IF NOT EXISTS "drift_test"."widget_auth_transactions"'),
+    );
+    const alterIdx = texts.findIndex(
+      (t) =>
+        t.includes("widget_auth_transactions") &&
+        t.includes("ADD COLUMN IF NOT EXISTS displayed_scopes"),
+    );
+    expect(createIdx).toBeGreaterThanOrEqual(0);
+    expect(alterIdx).toBeGreaterThan(createIdx);
+  });
+});
+
 describe("widget_auth_codes schema-drift guard", () => {
   const ddl = ddlFor("widget_auth_codes");
 
