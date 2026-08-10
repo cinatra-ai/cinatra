@@ -100,6 +100,14 @@ the template on disk.** The fleet ships none, so the fixture supplies it.
 
 ### The results
 
+> **Three of these frames are superseded in one detail each** (owner review on
+> PR #2638). Captures `02` and `06` show a three-dot overflow control in the
+> dashboard toolbar; capture `05` shows two grey placeholder cards under the
+> "Reference an existing dashboard" search field. Both were removed at the
+> owner's request. Everything else these frames show is still what the product
+> does. The replacements, and what the removal strands, are in
+> [`evidence/2474-pr5-review/`](../2474-pr5-review/README.md).
+
 | # | Capture | What it shows |
 |---|---|---|
 | 01 | `01-personal-manager-popup.png` | `/personal`: the toolbar says **"+ New dashboard"**, never "Add dashboard"; the popup carries Create + the catalog; the row shows name + package with **one** control (Add) and **no link**. |
