@@ -6,7 +6,10 @@ import { Check, X, CheckCheck, RotateCcw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import type { ReviewDisposition } from "@/lib/artifacts/artifact-review-decision";
+import type {
+  ReviewDisposition,
+  SuggestionDecisionPartition,
+} from "@/lib/artifacts/artifact-review-decision";
 import {
   reviewDecideDisabledReason,
   type ReviewDecisionPermissions,
@@ -18,6 +21,17 @@ import { ReviewGateBlocked } from "./review-gate-states";
 export type SubmitReviewDecisionAction = (input: {
   disposition: ReviewDisposition;
   comment: string | null;
+  /**
+   * The reviewer's per-item SUGGESTION marks (cinatra#2572, epic #2564 S6c),
+   * riding the ONE terminal decision (S6b). Optional because most gates surface
+   * no suggestions, and `null` and an absent key mean the same thing: no
+   * partition, hence the pre-#2571 decision fingerprint, byte for byte.
+   *
+   * §VIII: "the chips carry no submit of their own". This field IS that rule —
+   * a mark exists on the reviewer's screen and reaches the server only as part
+   * of the decision the floor submits, never on its own.
+   */
+  suggestionDecisions?: SuggestionDecisionPartition | null;
 }) => Promise<ReviewSubmitOutcome>;
 
 /**
@@ -44,9 +58,19 @@ export type SubmitReviewDecisionAction = (input: {
 export function ReviewDecisionBar({
   permissions,
   submitAction,
+  suggestionDecisions = null,
 }: {
   permissions: ReviewDecisionPermissions;
   submitAction: SubmitReviewDecisionAction;
+  /**
+   * The reviewer's current per-item marks (cinatra#2572), owned by the CARD that
+   * draws the chips above this bar. The bar does not know what a suggestion is;
+   * it carries the partition into the one submit it already owns, which is
+   * precisely §VIII's rule that the chips have no submit of their own. Absent on
+   * every surface that shows no chips, and the decision is then byte-identical
+   * to what it was before this parameter existed.
+   */
+  suggestionDecisions?: SuggestionDecisionPartition | null;
 }) {
   const router = useRouter();
   const [comment, setComment] = useState("");
@@ -65,6 +89,22 @@ export function ReviewDecisionBar({
       const result = await submitAction({
         disposition,
         comment: comment.trim() === "" ? null : comment.trim(),
+        // TERMINAL ONLY, and OMITTED rather than nulled otherwise.
+        //
+        // A COMMENT does not resolve the gate, so it cannot carry the terminal
+        // per-item choices — the decision core refuses that outright (#2047 row
+        // 8: a stream of comments each "accepting" items on a gate that never
+        // resolves is the parallel approval pathway). Sending them anyway would
+        // make Comment fail for any reviewer who had marked a chip. Nothing is
+        // dropped by omitting them: a mark is LOCAL (§VIII), it stays on screen
+        // and reversible after the comment lands, and it rides the terminal
+        // decision when the reviewer takes one.
+        //
+        // The omission also keeps the pre-#2571 shape exactly: a surface with no
+        // chips hands its action the byte-identical input it handed it before
+        // this slice — the review page's server-action payload included — so its
+        // decision fingerprint stays identity version 1.
+        ...(suggestionDecisions && disposition !== "comment" ? { suggestionDecisions } : {}),
       });
       setOutcome(result);
       // A landed terminal decision — or a changes-requested that resolved the gate

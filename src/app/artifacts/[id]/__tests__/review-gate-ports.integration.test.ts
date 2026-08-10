@@ -293,5 +293,6 @@ function resolvePlan(
     })),
     dispositionOps: [],
     resumeIntent: { kind: "approve", userResponse: "{}" },
+    suggestionPlan: null,
   };
 }

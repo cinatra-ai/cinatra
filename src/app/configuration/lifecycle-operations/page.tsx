@@ -19,6 +19,16 @@
  *     effect layer did not even consult the park set (fixed in the same lane:
  *     `resolveArtifactEffectDisposition` now reports `policy_unresolved`).
  *
+ * cinatra#2571 (epic #2564 S6b) adds a third queue on the same principle:
+ *
+ *   ACCEPTED SUGGESTIONS — a reviewer's accepted set is persisted in the gate-CAS
+ *     transaction and applied through a durable intent. Both ends of that queue
+ *     are shown: a DEAD-LETTERED intent (attempts exhausted — nothing retries it)
+ *     and a WAITING intent. Waiting is listed rather than hidden because no
+ *     production applier is registered yet, so an accepted suggestion legitimately
+ *     sits in this queue — and an outstanding decision nobody can see is exactly
+ *     the D-4 failure above.
+ *
  * Both are ADMIN-only and ORG-SCOPED (each read joins the row that carries the
  * org — the gate for a resume intent, the produced event for a park — so one
  * tenant's stuck releases can never appear to another). READ-ONLY by design: this
@@ -108,16 +118,23 @@ export default async function LifecycleOperationsPage() {
   // Both stores are `server-only` packages/agents modules; imported lazily so the
   // page's module graph stays a leaf (the same posture the other configuration
   // pages take with heavy stores).
-  const [{ readDeadLetteredResumeIntents }, { readPolicyUnresolvedParks }] = await Promise.all([
+  const [
+    { readDeadLetteredResumeIntents },
+    { readPolicyUnresolvedParks },
+    { readDeadLetteredApplicationIntents, readAwaitingApplicationIntents },
+  ] = await Promise.all([
     import("@cinatra-ai/agents/artifact-review-gate-store"),
     import("@cinatra-ai/agents/lifecycle-continuation-park-store"),
+    import("@cinatra-ai/agents/suggestion-decision-store"),
   ]);
 
   // Bounded reads: the most recent 100 of each. A deeper queue is a paging
   // concern, not a correctness one — the headline is that these rows exist at all.
-  const [deadLettered, blockedEffects] = await Promise.all([
+  const [deadLettered, blockedEffects, deadApplications, waitingApplications] = await Promise.all([
     readDeadLetteredResumeIntents({ orgId, limit: 100 }),
     readPolicyUnresolvedParks({ orgId, limit: 100 }),
+    readDeadLetteredApplicationIntents({ orgId, limit: 100 }),
+    readAwaitingApplicationIntents({ orgId, limit: 100 }),
   ]);
 
   return (
@@ -175,6 +192,75 @@ export default async function LifecycleOperationsPage() {
                       </TableCell>
                       <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
                         {formatTime(row.deadLetteredAt)}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {row.lastError ?? "—"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card
+          className="border-line bg-surface backdrop-blur-none"
+          data-ops-section="suggestion-applications"
+        >
+          <CardHeader>
+            <CardTitle>Accepted suggestions</CardTitle>
+            <CardDescription>
+              Suggestions a reviewer accepted as part of a review decision. Each row is one
+              decision&apos;s accepted set, waiting to be applied or dead-lettered after exhausting
+              its attempts. A dead-lettered row needs an operator; nothing retries it.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {deadApplications.length === 0 && waitingApplications.length === 0 ? (
+              <Empty data-ops-empty="suggestion-applications">
+                <EmptyHeader>
+                  <EmptyTitle>No accepted suggestions outstanding</EmptyTitle>
+                  <EmptyDescription>
+                    Every accepted suggestion has been applied.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Run</TableHead>
+                    <TableHead>Review task</TableHead>
+                    <TableHead>State</TableHead>
+                    <TableHead>Applied</TableHead>
+                    <TableHead>Attempts</TableHead>
+                    <TableHead>Since</TableHead>
+                    <TableHead>Last error</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {[...deadApplications, ...waitingApplications].map((row) => (
+                    <TableRow key={row.gateId} data-ops-row="suggestion-application">
+                      <TableCell className="font-mono text-xs" title={row.runId}>
+                        {shortId(row.runId)}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs" title={row.reviewTaskId}>
+                        {shortId(row.reviewTaskId)}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">
+                          {row.deadLetteredAt ? "dead-lettered" : "waiting"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="tabular-nums">
+                        {row.appliedCount}/{row.acceptedCount}
+                      </TableCell>
+                      <TableCell className="tabular-nums">
+                        {row.attempts}/{row.maxAttempts}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                        {formatTime(row.deadLetteredAt ?? row.createdAt)}
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {row.lastError ?? "—"}

@@ -279,6 +279,13 @@ export function mapSubmitResultToOutcome(
       return { kind: "blocked", reason: "no-longer-pending" };
     case "target-substitution":
     case "incomplete-coverage":
+    // A suggestion the gate's pinned snapshot never surfaced (cinatra#2571) is
+    // the SAME class of failure as a substituted target: what the reviewer is
+    // looking at no longer matches the gate. It maps to the same block — and to
+    // the same block a FORGED id produces, so a prober cannot tell "your chips
+    // are stale" from "that id does not exist" (the epic's non-enumerating
+    // refusal contract; the offending ids stay in the server's typed error).
+    case "suggestion-not-surfaced":
       return { kind: "blocked", reason: "targets-mismatch" };
     case "revision-not-member":
       return { kind: "blocked", reason: "revision-not-live" };

@@ -13,11 +13,18 @@ import {
   LIFECYCLE_CARD_STATES,
   LIFECYCLE_DATA_PART_VIEW_TYPES,
   LIFECYCLE_REVIEW_CARD_STATES,
+  LIFECYCLE_SUGGESTION_ID_MAX_LENGTH,
+  LIFECYCLE_SUGGESTION_LABEL_MAX_LENGTH,
+  LIFECYCLE_SUGGESTION_MESSAGE_MAX_LENGTH,
   LIFECYCLE_VIEW_REF_MAX_LENGTH,
   LIFECYCLE_VIEW_SCHEMA_VERSION,
+  MAX_LIFECYCLE_SUGGESTIONS,
   isLifecycleDataPartViewType,
   lifecycleCardStateSchema,
+  lifecycleSuggestionLabel,
+  lifecycleSuggestionSchema,
   lifecycleViewTypesForHost,
+  projectLifecycleSuggestions,
 } from "../renderable-views/lifecycle-cards";
 import {
   KNOWN_RENDERABLE_VIEW_TYPES,
@@ -151,5 +158,190 @@ describe("the wire payload is a ref and nothing else", () => {
   it("REFUSES an empty ref and a forward schemaVersion", () => {
     expect(parseRenderableView({ ...ok, ref: "" })).toBeNull();
     expect(parseRenderableView({ ...ok, schemaVersion: 2 })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §VIII — suggestion chips (cinatra#2572, epic #2564 S6c)
+// ---------------------------------------------------------------------------
+
+describe("§VIII the suggestion chip's wire shape", () => {
+  const chip = {
+    id: "sug-1",
+    label: "items · 1 · subject",
+    op: "replace" as const,
+    message: "Not canonical.",
+  };
+
+  it("carries a label, an op and a reason — and REFUSES a proposed value", () => {
+    expect(lifecycleSuggestionSchema.safeParse(chip).success).toBe(true);
+    // The chip annotates the target beside it. A patch VALUE on the wire would
+    // make the chip row a second, unauthorized projection of the document.
+    expect(
+      lifecycleSuggestionSchema.safeParse({ ...chip, value: "Q3 re-engagement" }).success,
+    ).toBe(false);
+  });
+
+  it("accepts a RECORDED mark and refuses an unknown one", () => {
+    expect(lifecycleSuggestionSchema.safeParse({ ...chip, mark: "accepted" }).success).toBe(true);
+    expect(lifecycleSuggestionSchema.safeParse({ ...chip, mark: "dismissed" }).success).toBe(true);
+    expect(lifecycleSuggestionSchema.safeParse({ ...chip, mark: "applied" }).success).toBe(false);
+  });
+
+  it("bounds the id, the label and the message", () => {
+    expect(
+      lifecycleSuggestionSchema.safeParse({
+        ...chip,
+        id: "x".repeat(LIFECYCLE_SUGGESTION_ID_MAX_LENGTH + 1),
+      }).success,
+    ).toBe(false);
+    expect(
+      lifecycleSuggestionSchema.safeParse({
+        ...chip,
+        label: "x".repeat(LIFECYCLE_SUGGESTION_LABEL_MAX_LENGTH + 1),
+      }).success,
+    ).toBe(false);
+    expect(
+      lifecycleSuggestionSchema.safeParse({
+        ...chip,
+        message: "x".repeat(LIFECYCLE_SUGGESTION_MESSAGE_MAX_LENGTH + 1),
+      }).success,
+    ).toBe(false);
+  });
+
+  it("refuses an op outside the producer's vocabulary", () => {
+    expect(lifecycleSuggestionSchema.safeParse({ ...chip, op: "delete" }).success).toBe(false);
+  });
+});
+
+describe("§VIII the chips ride only the states that can carry a mark", () => {
+  const chip = { id: "s1", label: "subject", op: "replace" as const, message: "Not canonical." };
+
+  it("pending / restricted / settled accept them", () => {
+    expect(
+      lifecycleCardStateSchema.safeParse({
+        state: "pending",
+        canDecide: true,
+        canComment: true,
+        suggestions: [chip],
+      }).success,
+    ).toBe(true);
+    expect(
+      lifecycleCardStateSchema.safeParse({
+        state: "restricted",
+        canDecide: false,
+        canComment: true,
+        reason: "Approving or rejecting needs approve access on this run.",
+        suggestions: [chip],
+      }).success,
+    ).toBe(true);
+    expect(
+      lifecycleCardStateSchema.safeParse({
+        state: "settled",
+        suggestions: [{ ...chip, mark: "accepted" }],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("loading / advisory / absent CANNOT — a card with no floor has nowhere to put a mark", () => {
+    for (const state of ["loading", "advisory", "absent"]) {
+      expect(lifecycleCardStateSchema.safeParse({ state, suggestions: [chip] }).success).toBe(false);
+    }
+  });
+
+  it("the pre-#2572 states still parse byte-identically (additive, optional)", () => {
+    expect(
+      lifecycleCardStateSchema.parse({ state: "pending", canDecide: true, canComment: false }),
+    ).toEqual({ state: "pending", canDecide: true, canComment: false });
+    expect(lifecycleCardStateSchema.parse({ state: "settled" })).toEqual({ state: "settled" });
+  });
+
+  it("bounds the number of chips a card may be told to draw", () => {
+    const many = Array.from({ length: MAX_LIFECYCLE_SUGGESTIONS + 1 }, (_, i) => ({
+      ...chip,
+      id: `s${i}`,
+    }));
+    expect(
+      lifecycleCardStateSchema.safeParse({
+        state: "pending",
+        canDecide: true,
+        canComment: true,
+        suggestions: many,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("§VIII the label is the pointer, read the way the drawing joins it", () => {
+  it("joins the pointer's segments with the drawing's middot", () => {
+    expect(lifecycleSuggestionLabel("/items/1/subject")).toBe("items · 1 · subject");
+    expect(lifecycleSuggestionLabel("/subject")).toBe("subject");
+  });
+
+  it("unescapes RFC 6901 (~1 → /, ~0 → ~)", () => {
+    expect(lifecycleSuggestionLabel("/a~1b/c~0d")).toBe("a/b · c~d");
+  });
+
+  it("labels the whole-document pointer rather than drawing a blank chip", () => {
+    expect(lifecycleSuggestionLabel("")).toBe("the whole document");
+    expect(lifecycleSuggestionLabel("/")).toBe("the whole document");
+  });
+
+  it("truncates rather than letting a pathological pointer break the bound", () => {
+    const label = lifecycleSuggestionLabel(`/${"x".repeat(500)}`);
+    expect(label.length).toBeLessThanOrEqual(LIFECYCLE_SUGGESTION_LABEL_MAX_LENGTH);
+    expect(lifecycleSuggestionSchema.safeParse({ id: "s", label, op: "add", message: "m" }).success).toBe(
+      true,
+    );
+  });
+});
+
+describe("§VIII the projection", () => {
+  const produced = [
+    { id: "s1", fieldPath: "/subject", op: "replace", message: "Not canonical." },
+    { id: "s2", fieldPath: "/items/0/bcc", op: "remove", message: "Every disclosed field is empty." },
+  ];
+
+  it("projects a producer row into a chip, and NEVER carries its value", () => {
+    const chips = projectLifecycleSuggestions([
+      { ...produced[0], value: "Q3 re-engagement" } as never,
+    ]);
+    expect(chips).toEqual([
+      { id: "s1", label: "subject", op: "replace", message: "Not canonical." },
+    ]);
+    expect(JSON.stringify(chips)).not.toContain("Q3 re-engagement");
+  });
+
+  it("attaches ONLY the marks it was given — an unmarked id keeps none", () => {
+    const chips = projectLifecycleSuggestions(
+      produced,
+      new Map([["s1", "accepted" as const]]),
+    );
+    expect(chips[0].mark).toBe("accepted");
+    expect(chips[1].mark).toBeUndefined();
+  });
+
+  it("drops a row whose op is outside the vocabulary rather than drawing it", () => {
+    expect(
+      projectLifecycleSuggestions([{ id: "s", fieldPath: "/a", op: "merge", message: "m" }]),
+    ).toEqual([]);
+  });
+
+  it("truncates to the card's ceiling in snapshot order", () => {
+    const many = Array.from({ length: MAX_LIFECYCLE_SUGGESTIONS + 5 }, (_, i) => ({
+      id: `s${i}`,
+      fieldPath: "/a",
+      op: "add",
+      message: "m",
+    }));
+    const chips = projectLifecycleSuggestions(many);
+    expect(chips).toHaveLength(MAX_LIFECYCLE_SUGGESTIONS);
+    expect(chips[0].id).toBe("s0");
+  });
+
+  it("every projected chip satisfies the wire schema", () => {
+    for (const chip of projectLifecycleSuggestions(produced)) {
+      expect(lifecycleSuggestionSchema.safeParse(chip).success).toBe(true);
+    }
   });
 });

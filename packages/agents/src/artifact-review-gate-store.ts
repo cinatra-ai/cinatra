@@ -44,7 +44,7 @@ import "server-only";
 //   readReviewGate / readResumeIntent / readDispositions — inspection readers.
 // ---------------------------------------------------------------------------
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 
@@ -55,6 +55,8 @@ import {
   artifactReviewAudit,
   artifactReviewDispositions,
   artifactReviewResumeOutbox,
+  suggestionDecisionLedger,
+  suggestionApplicationOutbox,
   gateAdvisoryComments,
   artifactVerificationRecords,
   type PinnedReviewTargetRow,
@@ -493,6 +495,31 @@ export async function commitReviewDecision(
         );
       }
     }
+    // The SUGGESTION half obeys the same rule (cinatra#2571): the pure core
+    // refuses a partition on a non-terminal decision and refuses accepted items on
+    // a reject, and these two checks make that structurally impossible for a
+    // direct store caller too. Without them, a hand-built plan could land a
+    // per-item "applied" ledger row on a gate that stays pending — the second
+    // approval pathway #2047 row 8 bans — or queue an application intent against
+    // revisions the same decision is tombstoning.
+    if (plan.suggestionPlan) {
+      if (!plan.terminal) {
+        throw new Error(
+          "artifact-review commit: a suggestion partition requires a terminal decision",
+        );
+      }
+      if (plan.disposition === "reject" && plan.suggestionPlan.accepted.length > 0) {
+        throw new Error(
+          "artifact-review commit: a reject decision cannot accept suggestions",
+        );
+      }
+      const overlap = new Set(plan.suggestionPlan.accepted);
+      if (plan.suggestionPlan.dismissed.some((id) => overlap.has(id))) {
+        throw new Error(
+          "artifact-review commit: a suggestion cannot be both accepted and dismissed",
+        );
+      }
+    }
 
     if (plan.terminal) {
       // Terminal CAS: pending → resolved, stamping fingerprint + disposition + the
@@ -621,6 +648,71 @@ export async function commitReviewDecision(
       });
     }
 
+    // SUGGESTION DECISIONS (cinatra#2571, epic #2564 S6b) — the per-item ledger
+    // and, iff anything was accepted, the ONE application intent for this gate.
+    // Both ride THIS transaction on purpose: the reviewer's per-item choices are
+    // part of the decision the CAS just resolved, so they must land with it or not
+    // at all. A separate write after the commit would be a second approval path
+    // with its own failure mode (a resolved gate whose accepted set never
+    // persisted, or an intent for a decision that rolled back).
+    if (plan.suggestionPlan) {
+      const { snapshotId, accepted, dismissed } = plan.suggestionPlan;
+      const ledgerRows = [
+        ...accepted.map((suggestionId) => ({ suggestionId, decision: "applied" as const })),
+        ...dismissed.map((suggestionId) => ({ suggestionId, decision: "dismissed" as const })),
+      ];
+      if (ledgerRows.length > 0) {
+        // A PLAIN insert, deliberately NOT onConflictDoNothing (Codex round 1,
+        // non-blocking 1) — the same reasoning as the resume intent below. The
+        // terminal CAS above just won pending→resolved for the FIRST and only
+        // time for this gate, and a gate resolved by an IDENTICAL decision short-
+        // circuits in the pure core before it ever reaches this commit. So this
+        // commit is the sole legitimate inserter of these rows, and a pre-existing
+        // row for the same (snapshot, suggestion) is an invariant violation, not a
+        // retry: swallowing it would silently keep an OLDER row whose `decision`
+        // or `decision_fingerprint` may disagree with the decision that just won.
+        // The unique-index conflict throws instead, rolling back the whole commit.
+        await tx
+          .insert(suggestionDecisionLedger)
+          .values(
+            ledgerRows.map((r) => ({
+              // DERIVED row id — the same (snapshot, suggestion) always names the
+              // same row, so the ledger's identity is a function of what was
+              // decided rather than of when it was written.
+              id: suggestionLedgerRowId(snapshotId, r.suggestionId),
+              suggestionId: r.suggestionId,
+              snapshotId,
+              gateId,
+              decision: r.decision,
+              // The gate CAS already recorded WHO decided; the ledger repeats it so
+              // a per-item row is readable without joining the gate. `unknown` only
+              // where the host could not name an actor (a non-human carrier) — the
+              // column is NOT NULL and a fabricated id would be worse than a token.
+              decidedBy: plan.decidedBy ?? "unknown",
+              decisionFingerprint: plan.fingerprint,
+            })),
+          );
+      }
+
+      // The application intent — ONE per gate (PK gate_id), and only when there is
+      // something to apply. A PLAIN insert, exactly like the resume intent above:
+      // the terminal CAS just won pending→resolved for the first and only time, so
+      // this commit is the sole legitimate inserter. A pre-existing row is an
+      // invariant violation and the PK conflict throws, rolling the whole decision
+      // back rather than silently leaving a stale accepted set in place.
+      if (accepted.length > 0) {
+        await tx.insert(suggestionApplicationOutbox).values({
+          gateId,
+          runId: plan.runId,
+          reviewTaskId: plan.reviewTaskId,
+          snapshotId,
+          decisionFingerprint: plan.fingerprint,
+          acceptedIds: accepted,
+          status: "pending",
+        });
+      }
+    }
+
     return { status: "committed" };
   });
   // cinatra#2066 C2 — a TERMINAL decision resolved this gate: clear the
@@ -637,6 +729,17 @@ export async function commitReviewDecision(
     });
   }
   return outcome;
+}
+
+/**
+ * The DERIVED suggestion-ledger row id (cinatra#2571): the same
+ * (snapshot, suggestion) always names the same row. Idempotency without relying
+ * on a generated id, matching the `gateSuggestionSnapshotRowId` discipline S6a
+ * established one table over.
+ */
+export function suggestionLedgerRowId(snapshotId: string, suggestionId: string): string {
+  const material = `${snapshotId}\u0000${suggestionId}`;
+  return `sdec_${createHash("sha256").update(material).digest("hex").slice(0, 32)}`;
 }
 
 async function readReviewGateWithinTx(

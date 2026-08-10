@@ -64,6 +64,7 @@
       "@cinatra-ai/workflows/module": ["./packages/workflows/src/integration/module.ts"],
       "@cinatra-ai/workflows/integration/register-object-types": ["./packages/workflows/src/integration/register-object-types.ts"],
       "@cinatra-ai/agents": ["./packages/agents/src/index.ts"],
+      "@cinatra-ai/agents/builtin-assistant-template": ["./packages/agents/src/builtin-assistant-template.ts"],
       "@cinatra-ai/agents/pages": ["./packages/agents/src/pages.tsx"],
       "@cinatra-ai/agents/screens": ["./packages/agents/src/screens.tsx"],
       "@cinatra-ai/agents/module": ["./packages/agents/src/integration/module.ts"],
