@@ -15,8 +15,14 @@ import { fileURLToPath } from "node:url";
 
 import {
   ACCEPTED_BUNDLERS,
+  MINIMUM_BUILDER_MEMORY_BYTES,
+  MINIMUM_BUILDER_MEMORY_GIB,
   buildKnobSummary,
+  builderMemoryWarning,
+  formatGiB,
+  readCgroupMemoryLimit,
   readKnob,
+  resolveBuilderMemory,
   resolveBundlerFlags,
   resolveNextArgs,
 } from "../next-build.mjs";
@@ -153,6 +159,193 @@ describe("the checkout wiring the knobs depend on", () => {
     // makes it bind, wire it back WITH a fresh measurement — not on faith.
     const config = readFileSync(path.join(repoRoot, "next.config.ts"), "utf8");
     expect(config).not.toMatch(/^\s*turbopackMemoryLimit:/m);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The builder-memory preflight (cinatra#2633).
+//
+// The floor is a MEASURED number — cold builds reaped at 9 GiB and 12 GiB caps,
+// and one completing at a 16 GiB cap — so these tests pin the two things a unit
+// test can actually protect: that the preflight reads the number the build
+// really has (the cgroup limit governing this process, not the host's memory),
+// and that the floor cannot drift apart across the three files that state it.
+// ---------------------------------------------------------------------------
+
+describe("readCgroupMemoryLimit", () => {
+  const reader = (files) => (file) => {
+    if (!(file in files)) {
+      const error = new Error(`ENOENT: no such file or directory, open '${file}'`);
+      error.code = "ENOENT";
+      throw error;
+    }
+    return files[file];
+  };
+
+  it("reads a cgroup v2 cap", () => {
+    expect(readCgroupMemoryLimit(reader({ "/sys/fs/cgroup/memory.max": "12884901888\n" }))).toBe(
+      12884901888,
+    );
+  });
+
+  it("treats cgroup v2 `max` as uncapped, not as a number", () => {
+    expect(readCgroupMemoryLimit(reader({ "/sys/fs/cgroup/memory.max": "max\n" }))).toBeNull();
+  });
+
+  it("falls back to cgroup v1", () => {
+    expect(
+      readCgroupMemoryLimit(
+        reader({ "/sys/fs/cgroup/memory/memory.limit_in_bytes": "9663676416" }),
+      ),
+    ).toBe(9663676416);
+  });
+
+  it("treats cgroup v1's page-counter sentinel as uncapped", () => {
+    // An uncapped v1 cgroup reports ~9.2e18. Reading that as a real limit would
+    // silently disable the preflight on every v1 host.
+    expect(
+      readCgroupMemoryLimit(
+        reader({ "/sys/fs/cgroup/memory/memory.limit_in_bytes": "9223372036854771712" }),
+      ),
+    ).toBeNull();
+  });
+
+  it("is null off Linux, where neither file exists", () => {
+    expect(readCgroupMemoryLimit(reader({}))).toBeNull();
+  });
+
+  it("is null on unparseable content rather than throwing into the build", () => {
+    expect(readCgroupMemoryLimit(reader({ "/sys/fs/cgroup/memory.max": "not-a-number" }))).toBeNull();
+  });
+
+  it("follows the process's own cgroup path, not just the cgroupfs root", () => {
+    // A nested runner (no private cgroup namespace) sees an uncapped root and
+    // the real cap further down. Reading only the root would report "uncapped".
+    const limit = readCgroupMemoryLimit(
+      reader({
+        "/proc/self/cgroup": "0::/system.slice/runner.scope\n",
+        "/sys/fs/cgroup/memory.max": "max\n",
+        "/sys/fs/cgroup/system.slice/memory.max": "max\n",
+        "/sys/fs/cgroup/system.slice/runner.scope/memory.max": "17179869184\n",
+      }),
+    );
+    expect(limit).toBe(17179869184);
+  });
+
+  it("keeps the TIGHTEST limit on the chain — an ancestor can bind harder", () => {
+    const limit = readCgroupMemoryLimit(
+      reader({
+        "/proc/self/cgroup": "0::/outer/inner\n",
+        "/sys/fs/cgroup/memory.max": "max\n",
+        "/sys/fs/cgroup/outer/memory.max": "8589934592\n",
+        "/sys/fs/cgroup/outer/inner/memory.max": "17179869184\n",
+      }),
+    );
+    expect(limit).toBe(8589934592);
+  });
+
+  it("does not fall through to cgroup v1 when a v2 hierarchy is readable", () => {
+    // The v1 file below governs nothing on a v2 host; treating it as the answer
+    // would report a cap this process is not actually subject to.
+    const limit = readCgroupMemoryLimit(
+      reader({
+        "/proc/self/cgroup": "0::/\n",
+        "/sys/fs/cgroup/memory.max": "max\n",
+        "/sys/fs/cgroup/memory/memory.limit_in_bytes": "2147483648",
+      }),
+    );
+    expect(limit).toBeNull();
+  });
+
+  it("resolves the cgroup v1 memory controller's own path", () => {
+    const limit = readCgroupMemoryLimit(
+      reader({
+        "/proc/self/cgroup": "3:cpu,cpuacct:/x\n2:memory:/docker/abc\n",
+        "/sys/fs/cgroup/memory/docker/abc/memory.limit_in_bytes": "4294967296",
+      }),
+    );
+    expect(limit).toBe(4294967296);
+  });
+});
+
+describe("resolveBuilderMemory", () => {
+  const gib = (n) => n * 1024 ** 3;
+
+  it("prefers the container cap over the host's memory — the whole point", () => {
+    // os.totalmem() calls sysinfo(2), which is not cgroup-aware: inside a
+    // container it reports the HOST. Reporting that would flatter every
+    // containerised build, which is all of them.
+    const memory = resolveBuilderMemory({
+      totalMemoryBytes: gib(64),
+      cgroupLimitBytes: gib(6),
+    });
+    expect(memory).toEqual({ bytes: gib(6), source: "container memory limit" });
+  });
+
+  it("uses total system memory when the build is uncapped", () => {
+    const memory = resolveBuilderMemory({ totalMemoryBytes: gib(8), cgroupLimitBytes: null });
+    expect(memory).toEqual({ bytes: gib(8), source: "total system memory" });
+  });
+
+  it("keeps the smaller of the two when a cap exceeds the machine", () => {
+    const memory = resolveBuilderMemory({ totalMemoryBytes: gib(8), cgroupLimitBytes: gib(32) });
+    expect(memory.bytes).toBe(gib(8));
+  });
+
+  it("is null when neither number is knowable", () => {
+    expect(resolveBuilderMemory({})).toBeNull();
+    expect(resolveBuilderMemory({ totalMemoryBytes: 0, cgroupLimitBytes: -1 })).toBeNull();
+  });
+});
+
+describe("builderMemoryWarning", () => {
+  const gib = (n) => n * 1024 ** 3;
+
+  it("says nothing at or above the floor — a big enough builder's log is untouched", () => {
+    expect(builderMemoryWarning({ bytes: MINIMUM_BUILDER_MEMORY_BYTES, source: "x" })).toBeNull();
+    expect(builderMemoryWarning({ bytes: gib(64), source: "x" })).toBeNull();
+    expect(builderMemoryWarning(null)).toBeNull();
+  });
+
+  it("names what the build has, where that came from, and the floor", () => {
+    const warning = builderMemoryWarning({ bytes: gib(6), source: "container memory limit" });
+    expect(warning).toContain("6.0 GiB");
+    expect(warning).toContain("container memory limit");
+    expect(warning).toContain(`${MINIMUM_BUILDER_MEMORY_GIB}.0 GiB`);
+  });
+
+  it("points at the evidence and says it is not a gate", () => {
+    const warning = builderMemoryWarning({ bytes: gib(6), source: "total system memory" });
+    expect(warning).toContain("docs/internals/workflows/constrained-host-builds.md");
+    expect(warning).toContain("WARNING");
+    expect(warning).toContain("not a gate");
+    // exit 137 is what an operator actually sees; naming it is the whole value.
+    expect(warning).toContain("137");
+  });
+});
+
+describe("formatGiB", () => {
+  it("states bytes in the unit the floor is stated in", () => {
+    expect(formatGiB(12 * 1024 ** 3)).toBe("12.0 GiB");
+    expect(formatGiB(5922 * 1024 ** 2)).toBe("5.8 GiB");
+  });
+});
+
+describe("the floor, stated in three places", () => {
+  // The number lives in the launcher; the Dockerfile and the doc restate it in
+  // prose for readers who never open the launcher. Nothing but this test stops
+  // one of the three from drifting.
+  it("is the same number in the Dockerfile build stage", () => {
+    const dockerfile = readFileSync(path.join(repoRoot, "Dockerfile"), "utf8");
+    expect(dockerfile).toContain(`MINIMUM BUILDER MEMORY: ${MINIMUM_BUILDER_MEMORY_GIB} GiB`);
+  });
+
+  it("is the same number in the constrained-host-builds doc", () => {
+    const doc = readFileSync(
+      path.join(repoRoot, "docs", "internals", "workflows", "constrained-host-builds.md"),
+      "utf8",
+    );
+    expect(doc).toContain(`## Minimum builder memory: ${MINIMUM_BUILDER_MEMORY_GIB} GiB`);
   });
 });
 
