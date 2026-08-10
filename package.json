@@ -241,7 +241,7 @@
     "dev:stop": "node scripts/dev-stop.mjs",
     "route-graph": "node scripts/route-graph.mjs",
     "bench:cold-start": "node scripts/bench-cold-start.mjs",
-    "build": "next build",
+    "build": "node scripts/next-build.mjs",
     "start": "next start",
     "lint": "eslint",
     "knip": "knip",

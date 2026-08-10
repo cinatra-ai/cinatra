@@ -158,11 +158,38 @@ ENV NODE_OPTIONS=${NODE_OPTIONS}
 # gated by the separate REQUIRED typecheck job (which runs `next typegen` first).
 # Empty by default so a local `docker build` keeps the in-build check as a safety net.
 ARG CI=
+# cinatra#2607 — the NATIVE (non-V8) build-memory knobs, as build-args for the
+# same reason NODE_OPTIONS above is one: a builder on a constrained host must be
+# able to move them without editing this file, and docker drops an unconsumed
+# --build-arg with only a warning, so a knob the Dockerfile never declares is
+# silently inert while looking set.
+#
+# Both are EMPTY by default, and empty means unset everywhere downstream —
+# scripts/next-build.mjs passes no bundler flag and next.config.ts spreads in no
+# experimental value — so a bare `docker build` and build-image.yml get exactly
+# today's build. Forwarded inline on the RUN (like CI) rather than as ENV so
+# they scope to `pnpm build` alone.
+#
+#   CINATRA_BUILD_BUNDLER=turbopack|webpack     bundler for this build
+#   CINATRA_BUILD_CPUS=<n>                      build worker count
+#
+# NEITHER IS A CURE for the native wall on a ~6 GB builder: this app's build
+# needs more memory than that on BOTH bundler paths, and the measured matrix in
+# the doc below says so in numbers. What the bundler knob does buy is a build
+# whose ceiling NODE_OPTIONS above can actually move — webpack fails on the V8
+# heap, which is a lever; Turbopack fails on native memory, which is not.
+#
+# Accepted values, what each one binds, and the full measured matrix:
+# docs/internals/workflows/constrained-host-builds.md
+ARG CINATRA_BUILD_BUNDLER=
+ARG CINATRA_BUILD_CPUS=
 RUN SUPABASE_DB_URL='postgresql://build:build@127.0.0.1:5432/build' \
     BETTER_AUTH_SECRET='build-only-placeholder-not-used-at-runtime' \
     NANGO_ENCRYPTION_KEY='build-only-placeholder-not-used-at-runtime' \
     OPENAI_API_KEY='build-only-placeholder-not-used-at-runtime' \
     CI="$CI" \
+    CINATRA_BUILD_BUNDLER="$CINATRA_BUILD_BUNDLER" \
+    CINATRA_BUILD_CPUS="$CINATRA_BUILD_CPUS" \
     pnpm build
 
 # ─── runtime ────────────────────────────────────────────────────────────────
