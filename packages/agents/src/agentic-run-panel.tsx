@@ -62,11 +62,7 @@ import { DispatchRenderer, type PresentationHint } from "./result-renderers";
 import { agentUIOverrideRegistry } from "./agent-ui-override-registry";
 import { getFieldRendererContextForAgentBuilderAction, getSkillsForAgentAction, type SkillForChip } from "./server-actions";
 import { HitlSkillChips } from "./hitl-skill-chips";
-import { RunRecommendationChipRow } from "./run-recommendation-chip-row";
-import {
-  getRunRecommendationHoldStateAction,
-  type RunRecommendationHoldState,
-} from "./run-recommendation-actions";
+import { RecommendationHoldCard } from "./run-recommendation-chip-row";
 import { HITL_PLACEHOLDER_FIELD_NAME, resolveFieldLabel } from "./humanize-field-name";
 
 // Client-safe serialized form of AgentRunMessageRecord — Date becomes ISO string
@@ -392,37 +388,19 @@ export function AgenticRunPanel({
       .catch(() => setHitlSkills([]));
   }, [isPendingApprovalForEffect, agentPackageName]);
 
-  // Run-start recommendation chip-row (cinatra#2067, C3) — the chat mount of the
-  // SAME shared component the run view uses (item 5). Poll the hold state while
-  // the run is held (pending_input) so the chip-row appears/refreshes; a decided
-  // (released) hold resolves to the read-only summary and stops polling.
-  const [recHold, setRecHold] = useState<RunRecommendationHoldState | null>(null);
-  useEffect(() => {
-    if (!runId) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setInterval> | null = null;
-    const fetchState = () => {
-      getRunRecommendationHoldStateAction({ runId })
-        .then((s) => {
-          if (cancelled) return;
-          setRecHold(s);
-          // Stop polling once the hold resolves to a terminal (non-held) state.
-          if (s.state !== "held" && timer) {
-            clearInterval(timer);
-            timer = null;
-          }
-        })
-        .catch(() => {
-          if (!cancelled) setRecHold({ state: "none" });
-        });
-    };
-    fetchState();
-    timer = setInterval(fetchState, 4000);
-    return () => {
-      cancelled = true;
-      if (timer) clearInterval(timer);
-    };
-  }, [runId]);
+  // Run-start recommendation hold: THE POLL IS GONE (cinatra#2568 AC-1).
+  //
+  // This panel used to own a 4-second timer over the hold-state server action
+  // plus a hand-rolled stop condition, and S4 layered a wire-driven refetch on
+  // top of it because the timer alone missed a hold that appeared after its
+  // first tick. Both are replaced by `RecommendationHoldCard` (mounted below),
+  // which resolves the SAME authoritative action on mount, on a change in the
+  // typed hold interrupt, on focus, and on its own decision — and never on a
+  // schedule. The issue ordered the retirement "LAST, after replay + routing
+  // exist": the reconnect-authoritative snapshot (the SSE route synthesizes the
+  // run's CURRENT hold, or an explicit retirement, on every connect) and the
+  // confirm/skip routing both landed with S4, so a late joiner and a re-parked
+  // run are covered by the wire rather than by re-asking every four seconds.
 
   // Audit visibility is driven by
   // the auditor-agent flow gate; renderer is mounted via field-renderer registry.
@@ -436,33 +414,31 @@ export function AgenticRunPanel({
     initialStreamedText, // hydrate from DB on page load for external runs
   });
 
-  // THE HOLD ON THE WIRE DRIVES THE ROW (cinatra#2568). The 4-second poll above
-  // stops as soon as it sees a non-held state, so a hold that appears AFTER its
-  // first tick — a re-triggered run, a park that lands a moment after this
-  // panel mounted — stayed invisible until a reload. The typed hold interrupt
-  // and its paired RESUME are exactly the events that change the answer, so
-  // refetch the AUTHORITATIVE state when one arrives. The wire only says
-  // "something changed"; the actor-scoped action still decides what this viewer
-  // may see. (The poll itself is retired when the row becomes the registry
-  // card — the issue orders that last, after replay and routing exist.)
-  const holdWireRef = streamResult.lifecycleInterrupt?.ref ?? null;
-  const lastHoldWireRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!runId || !streamEnabled) return;
-    if (lastHoldWireRef.current === holdWireRef) return;
-    lastHoldWireRef.current = holdWireRef;
-    let cancelled = false;
-    getRunRecommendationHoldStateAction({ runId })
-      .then((s) => {
-        if (!cancelled) setRecHold(s);
-      })
-      .catch(() => {
-        /* the poll remains the fallback */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [runId, streamEnabled, holdWireRef]);
+  // THE HOLD ON THE WIRE DRIVES THE CARD (cinatra#2568). The typed hold
+  // interrupt and its paired RESUME are exactly the events that change the
+  // answer, so the card takes this ref as its CHANGE SIGNAL and re-reads the
+  // authoritative, actor-scoped state when it moves. Nothing is read OUT of the
+  // ref here — the wire only ever says "something changed"; what this viewer may
+  // see is the server action's call, on every resolve.
+  //
+  // Guarded by `kind` rather than by "there is an interrupt": the slot is typed
+  // for every lifecycle interrupt kind, and only `recommendation_hold` addresses
+  // this card. A future kind landing in the slot must not move this card's ref.
+  //
+  // A RUN THAT CAN BE HELD ALWAYS HAS THE WIRE, so retiring the timer does not
+  // strand a streamless surface. `agUiEnabled` is the SSE-vs-legacy-poll
+  // discriminator, and every path that inserts a run sets it TRUE — the two
+  // `createAgentRun` inserts and the pending-input insert alike (the last one
+  // says so in its own comment: without it "a setup → run transition would
+  // appear as legacy to the panel"). `null` marks rows that predate the
+  // discriminator, and those cannot acquire a NEW hold: a hold is minted at
+  // trigger time by the same current code that sets the flag. So the case
+  // "a hold appears after mount on a run with no stream" is unreachable, and the
+  // card's mount/focus resolves cover a legacy row that was already parked.
+  const holdWireRef =
+    streamResult.lifecycleInterrupt?.kind === "recommendation_hold"
+      ? streamResult.lifecycleInterrupt.ref
+      : null;
 
   // Effective status and error:
   // SSE wins when stream is enabled and has delivered a value; otherwise fall back to poll.
@@ -1069,26 +1045,19 @@ export function AgenticRunPanel({
         </Badge>
       </div>
 
-      {/* Run-start recommendation chip-row (cinatra#2067, C3) — chat mount. */}
-      {recHold && recHold.state !== "none" ? (
-        <RunRecommendationChipRow
+      {/* The run-start recommendation hold, through the ONE card (cinatra#2568
+          AC-5). The panel's DIRECT chip-row mount — and the local hold state it
+          needed — are gone: the interaction is a lifecycle card like the review
+          gate beside it, declared on the same `run_card` host, drawn by the one
+          renderer of `recommendation_hold`. No parallel chip-row mount remains
+          on this host, and there is nothing here for a later edit to poll. */}
+      <LifecycleCardSurfaceProvider host="run_card">
+        <RecommendationHoldCard
           runId={runId}
-          agentPackageName={
-            recHold.state === "held" ? recHold.agentPackageName : (agentPackageName ?? "")
-          }
-          promptText={recHold.state === "held" ? recHold.promptText : undefined}
-          initialRecommendations={recHold.state === "held" ? recHold.recommendations : undefined}
-          holdRef={recHold.state === "held" ? recHold.holdRef : undefined}
-          decision={
-            recHold.state === "held"
-              ? { kind: "pending" }
-              : recHold.state === "confirmed"
-                ? { kind: "confirmed", skillNames: recHold.skillNames }
-                : { kind: "skipped" }
-          }
-          variant="inline"
+          agentPackageName={agentPackageName ?? ""}
+          wireRef={holdWireRef}
         />
-      ) : null}
+      </LifecycleCardSurfaceProvider>
 
       {isPendingApproval &&
       effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID ? (

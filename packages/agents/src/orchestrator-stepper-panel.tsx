@@ -30,6 +30,7 @@ import {
   useTransition,
   type ReactNode,
 } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "@/lib/cinatra-toast";
 import { AlertCircle, ArrowRight, Check, Info, Loader2, Pause, X } from "lucide-react";
@@ -71,12 +72,13 @@ import {
   resumeStoppedOrchestratorAction,
 } from "./orchestrator-actions";
 import { startDevChildPreviewRun, buildSubmissionMapByStepIndex, type SubmissionMapEntry, type SubmissionMapEntries } from "./run-actions";
-import { RunRecommendationChipRow } from "./run-recommendation-chip-row";
 import { RunCompletionCard } from "./run-completion-affordances";
+import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
+import { RecommendationHoldCard } from "./run-recommendation-chip-row";
 import {
-  getRunRecommendationHoldStateAction,
-  type RunRecommendationHoldState,
-} from "./run-recommendation-actions";
+  ReviewGateCard,
+  LIFECYCLE_VIEW_SCHEMA_VERSION,
+} from "./review-gate-card";
 import { ensureOrCheckRunNameAction } from "./run-name-actions";
 import { approveReviewTask } from "./hitl-actions";
 // Wrap the legacy `userResponse` text with the WayFlow `user_envelope`
@@ -102,7 +104,10 @@ import { statusBadgeVariant } from "./run-surface-status";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
-import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "./agent-builder-ids";
+import {
+  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
+  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+} from "./agent-builder-ids";
 
 // Inlined to avoid importing ./orchestrator-execution (server-only chain:
 // store → background-jobs → bullmq → worker_threads) into the client bundle.
@@ -271,6 +276,92 @@ function SpinnerCard({
             </Button>
           )}
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ReviewGateStepCard — the run-DETAIL page's review branch (cinatra#2623)
+//
+// THE GAP THIS CLOSES. A marked review gate is a pending-approval step whose
+// `xRenderer` is `ARTIFACT_REVIEW_REDIRECT_RENDERER_ID`, and that id is
+// deliberately NOT registered in the field-renderer registry (the cinatra#1796
+// note in `register-default-renderers.ts`) — it is handled inline, host by host.
+// This panel routed EVERY pending approval through `HitlApprovalCard`, which
+// resolves through that registry, so a marked gate fell all the way to the
+// generic "Waiting for input — no renderer configured for this step." A reviewer
+// standing on the run-detail page had no way to decide, only the step rail's
+// "Review" link, which navigates them off the page.
+//
+// IT MOUNTS THE ONE CARD, NOT A SECOND RENDERER. S2 (#2566) made `ReviewGateCard`
+// THE renderer of `artifact_review_gate` for the chat thread, the run card and
+// the review page's gate region; #2623's own words are "mounting the same
+// `ReviewGateCard` already used by" those hosts. So this branch supplies a frame
+// and nothing else. The host is `run_card`: this IS the run's own progress
+// surface, the same host class `AgenticRunPanel` declares — `page_gate_region`
+// names the dedicated review PAGE's region, which this is not.
+//
+// THE CARD IS ADDRESSED BY THE SERVER-MINTED REF, never by ids this panel holds.
+// `lifecycleCardRef` is minted (and authenticated-encrypted) at gate emission in
+// `execution.ts`; a gate emitted before S2, or an instance whose auth secret
+// rotated, carries none. Rather than inventing a client-side handle — or
+// dropping back to the generic fallback this issue exists to remove — that case
+// gets a GATE-SPECIFIC card naming the review and linking to the decision
+// surface (#2623 AC-2's second arm: "a clear, gate-specific way to reach the
+// decision surface"). The gap then reads as designed rather than as a missing
+// renderer.
+//
+// NO SECOND RESUME PATH. Exactly as on the run card, the paused run stays in
+// `pending_approval` and the decision travels through the one decision core,
+// reaching this run via the resume-delivery worker. Nothing here approves a
+// review task, and `HitlApprovalCard` — with its field-assist panel, its
+// buffered gate values and its `approveReviewTask` submit paths — is not
+// mounted at all for this gate, so the gate's interrupt values (the opaque card
+// ref included) never reach the assist route's LLM payload.
+// ---------------------------------------------------------------------------
+function ReviewGateStepCard({
+  cardRef,
+  reviewSurfaceUrl,
+}: {
+  cardRef: string | null;
+  reviewSurfaceUrl: string | null;
+}) {
+  if (cardRef) {
+    return (
+      <LifecycleCardSurfaceProvider host="run_card">
+        <ReviewGateCard
+          view={{
+            viewType: "artifact_review_gate",
+            schemaVersion: LIFECYCLE_VIEW_SCHEMA_VERSION,
+            ref: cardRef,
+          }}
+        />
+      </LifecycleCardSurfaceProvider>
+    );
+  }
+  return (
+    <Card data-review-gate-step="link-only">
+      <CardContent className="flex flex-col gap-3 p-6">
+        <span className="text-sm font-medium text-foreground">
+          This step is waiting on a review
+        </span>
+        <span className="text-sm text-muted-foreground">
+          The review opened before this run could carry its card, so the decision
+          is taken on the review surface.
+        </span>
+        {reviewSurfaceUrl ? (
+          <Button asChild size="sm" className="w-fit gap-1.5">
+            <Link href={reviewSurfaceUrl}>
+              Open the review
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </Button>
+        ) : (
+          <span className="text-sm text-muted-foreground">
+            Open it from the step rail&apos;s Review link.
+          </span>
+        )}
       </CardContent>
     </Card>
   );
@@ -1234,18 +1325,24 @@ function ReadOnlyHitlReplay(props: {
 }
 
 // ---------------------------------------------------------------------------
-// DevPreviewRecommendationRow (cinatra#2148 finding 2)
+// DevPreviewRecommendationRow (cinatra#2148 finding 2; poll retired by #2568 AC-1)
 //
-// The Dev-Stepper child preview now consults the run-start recommendation hold,
-// so a preview run whose checkpoint fires PARKS at pending_input instead of
+// The Dev-Stepper child preview consults the run-start recommendation hold, so a
+// preview run whose checkpoint fires PARKS at pending_input instead of
 // dispatching. Without a decision affordance the embedded card would sit on
-// "Queueing agent…" forever, so the dev preview mounts the SAME shared chip-row
-// the run view and the chat panel use. Renders NOTHING for an unheld preview
-// (`state: "none"`), which is every preview that did not park — so the unheld
-// path is visually byte-unchanged.
+// "Queueing agent…" forever, so the dev preview mounts the hold card. Renders
+// NOTHING for an unheld preview, which is every preview that did not park — so
+// the unheld path is visually byte-unchanged.
 //
-// Mirrors the AgenticRunPanel mount exactly: poll while held, stop as soon as
-// the hold resolves to a terminal state.
+// IT MIRRORED THE PANEL'S 4-SECOND POLL, AND FOLLOWS IT INTO RETIREMENT.
+// `RecommendationHoldCard` resolves the same authoritative action on mount, on
+// focus and when its own decision lands. That covers this surface exactly: the
+// preview run is created BEFORE this row mounts and the create result already
+// reports whether it parked, so the hold is never "not there yet"; and the only
+// transition out of the hold is the confirm/skip taken IN the row, which the
+// card is told about directly. `wireRef` is null here on purpose — the embedded
+// `OrchestratorStepperPanel` beside this row already owns the child run's SSE
+// subscription, and a second EventSource for the same run would buy nothing.
 // ---------------------------------------------------------------------------
 function DevPreviewRecommendationRow({
   runId,
@@ -1254,52 +1351,14 @@ function DevPreviewRecommendationRow({
   runId: string;
   agentPackageName: string;
 }) {
-  const [recHold, setRecHold] = useState<RunRecommendationHoldState | null>(null);
-  useEffect(() => {
-    if (!runId) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setInterval> | null = null;
-    const fetchState = () => {
-      getRunRecommendationHoldStateAction({ runId })
-        .then((s) => {
-          if (cancelled) return;
-          setRecHold(s);
-          if (s.state !== "held" && timer) {
-            clearInterval(timer);
-            timer = null;
-          }
-        })
-        .catch(() => {
-          if (!cancelled) setRecHold({ state: "none" });
-        });
-    };
-    fetchState();
-    timer = setInterval(fetchState, 4000);
-    return () => {
-      cancelled = true;
-      if (timer) clearInterval(timer);
-    };
-  }, [runId]);
-
-  if (!recHold || recHold.state === "none") return null;
   return (
-    <RunRecommendationChipRow
-      runId={runId}
-      agentPackageName={
-        recHold.state === "held" ? recHold.agentPackageName : agentPackageName
-      }
-      promptText={recHold.state === "held" ? recHold.promptText : undefined}
-      initialRecommendations={recHold.state === "held" ? recHold.recommendations : undefined}
-      holdRef={recHold.state === "held" ? recHold.holdRef : undefined}
-      decision={
-        recHold.state === "held"
-          ? { kind: "pending" }
-          : recHold.state === "confirmed"
-            ? { kind: "confirmed", skillNames: recHold.skillNames }
-            : { kind: "skipped" }
-      }
-      variant="inline"
-    />
+    <LifecycleCardSurfaceProvider host="run_card">
+      <RecommendationHoldCard
+        runId={runId}
+        agentPackageName={agentPackageName}
+        wireRef={null}
+      />
+    </LifecycleCardSurfaceProvider>
   );
 }
 
@@ -1786,6 +1845,34 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
   } else if (status === "stopped") {
     stageCard = (
       <CancelledCard runId={runId} agentId={agentId} lgThreadId={lgThreadId} />
+    );
+  } else if (
+    status === "pending_approval" &&
+    effectiveInterruptContext !== null &&
+    !awaitingNextStep &&
+    effectiveInterruptContext.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID
+  ) {
+    // cinatra#2623 — a MARKED artifact-review gate. It comes BEFORE the generic
+    // approval branch below because that branch resolves through the field-
+    // renderer registry, where this id is deliberately unregistered — the run
+    // detail page's whole defect was the gate falling through to "no renderer
+    // configured for this step". Branching HERE (at the call site, not inside
+    // `HitlApprovalCard`) keeps the two subtrees separate components, so no
+    // approval-form state, hook or submit path is constructed for a gate that
+    // has no fields to fill.
+    const reviewValues = effectiveInterruptContext.values ?? {};
+    const cardRef =
+      typeof reviewValues.lifecycleCardRef === "string" &&
+      reviewValues.lifecycleCardRef.length > 0
+        ? reviewValues.lifecycleCardRef
+        : null;
+    const reviewSurfaceUrl =
+      typeof reviewValues.reviewSurfaceUrl === "string" &&
+      reviewValues.reviewSurfaceUrl.startsWith("/")
+        ? reviewValues.reviewSurfaceUrl
+        : null;
+    stageCard = (
+      <ReviewGateStepCard cardRef={cardRef} reviewSurfaceUrl={reviewSurfaceUrl} />
     );
   } else if (status === "pending_approval" && effectiveInterruptContext !== null && !awaitingNextStep) {
     // Go directly to approval card — no SkillsPreviewCard interstitial (req 4).
