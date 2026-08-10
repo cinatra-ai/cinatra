@@ -35,8 +35,21 @@ import "server-only";
 // decoded server-side (it is authenticated-encrypted; a forged one does not
 // decode), and `loadReviewGateSurface` re-runs the reader's run access and reads
 // the pinned set from the frozen gate. The response also declares
-// `frame-ancestors 'self'` and `Cache-Control: no-store` (next.config.ts), so a
-// hostile site cannot frame it and no proxy may retain it.
+// `frame-ancestors 'self'` (next.config.ts), so a hostile site cannot frame it.
+//
+// `Cache-Control: no-store` is configured for this path in next.config.ts.
+// The MECHANISM, not this exact route, is verified: a minimal reproduction
+// using this same headers() configuration on node_modules/next@16.2.10 shows
+// the production Next.js server (`next build && next start`) serves a
+// next.config.ts-configured Cache-Control header unmodified for a
+// force-dynamic App Router page. This route was not independently curled in
+// production, and a released image's own proxy/deployment layer was not
+// checked either. On `next dev` only, EVERY App Router PAGE response is
+// forced to `no-cache, must-revalidate` by the framework itself,
+// unconditionally and with no config to opt out (`routeModule.isDev` in
+// next/dist/build/templates/app-page.js) — so a dev-server capture of this
+// header shows the dev value, not the configured one. That is a `next dev`
+// artifact, not evidence the header is unset in production.
 //
 // EVERY DENIAL DRAWS NOTHING. No access, no such gate, a ref that does not
 // decode, a gate that is no longer pending — all render an empty document. The

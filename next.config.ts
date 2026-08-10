@@ -319,7 +319,18 @@ const nextConfig: NextConfig = {
         //
         // `Cache-Control: no-store` — the document is reader-scoped. A shared
         // cache holding it would be a way for the next reader on the same proxy
-        // to see a target their own access check would have refused.
+        // to see a target their own access check would have refused. That
+        // MECHANISM — not this exact route — is verified: a minimal
+        // reproduction using this same headers() configuration on
+        // next@16.2.10 shows the production Next.js server (`next build &&
+        // next start`) serves a next.config.ts-configured Cache-Control
+        // header unmodified for a force-dynamic App Router page. This route
+        // was not independently curled in production, and a released
+        // image's own proxy/deployment layer was not checked either.
+        // `next dev` is NOT a faithful witness for this header on ANY App
+        // Router page: it forces `Cache-Control: no-cache, must-revalidate`
+        // unconditionally in dev, with no config able to opt out (see the
+        // longer note in src/app/lifecycle/review-island/page.tsx).
         source: "/lifecycle/review-island",
         headers: [
           { key: "Content-Security-Policy", value: "frame-ancestors 'self'" },
