@@ -13,13 +13,28 @@ import {
   BUILT_IN_WORDPRESS_ASSISTANT_USERNAME,
   BUILT_IN_DRUPAL_ASSISTANT_USERNAME,
 } from "@/lib/assistant-users";
+// Deep subpath, NOT the `@cinatra-ai/agents` barrel (cinatra#2633).
+//
+// These five symbols live in `builtin-assistant-template.ts`, whose own
+// reachable first-party graph is 3 modules (itself + `./db` + `./schema`).
+// Reaching them through the package barrel instead pulled 1222 first-party
+// modules / 15.5 MiB — the whole agents ↔ skills ↔ a2a ↔ extensions cycle and
+// everything downstream of it — into this module's graph. That mattered far
+// beyond this file: `@/lib/auth` imports this module, `@/lib/auth-session`
+// imports `@/lib/auth`, and 79 of the 191 app routes import `auth-session`
+// directly. So one barrel specifier put the entire agents subsystem into the
+// compiled graph of every route that merely reads the session.
+//
+// The re-export chain the barrel used (`index.ts` → `./store` → here) is
+// unchanged, so every existing `@cinatra-ai/agents` importer still resolves
+// these names exactly as before; this file just stops going the long way round.
 import {
   upsertBuiltInAssistantAgentTemplate,
   BUILT_IN_WORDPRESS_ASSISTANT_TEMPLATE_ID,
   BUILT_IN_WORDPRESS_ASSISTANT_PACKAGE_NAME,
   BUILT_IN_DRUPAL_ASSISTANT_TEMPLATE_ID,
   BUILT_IN_DRUPAL_ASSISTANT_PACKAGE_NAME,
-} from "@cinatra-ai/agents";
+} from "@cinatra-ai/agents/builtin-assistant-template";
 import { serializeAssistantConfig, type AssistantConfig } from "@/lib/assistant-config";
 import { cinatraAssistantConfig } from "@/lib/assistant-runtime/cinatra-assistant-config";
 import {
