@@ -24,7 +24,7 @@ import {
   normalizeExtensionScopes,
   tokenAudienceAdmits,
   tokenSetHas,
-  WIDGET_NO_SIGNIN_SCREEN,
+  WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
   widgetUserBaseScope,
   type WidgetExtensionScope,
 } from "@/lib/widget-lifecycle-scope";
@@ -379,11 +379,14 @@ export function createAuthTransaction(input: CreateTransactionInput): CreateTran
           instanceId,
           input.codeChallenge,
           input.state,
-          // cinatra#2631 — "a build that would have recorded a displayed set
-          // created this, and none has been recorded yet". Distinguishes the
-          // legitimate no-screen case from a transaction that predates the
-          // column, which is NULL and fails closed.
-          WIDGET_NO_SIGNIN_SCREEN,
+          // cinatra#2631 — "nothing is known yet about what was displayed for
+          // this transaction". NOT the no-screen sentinel: at creation the
+          // server cannot know what will render, and stamping "no screen" here
+          // would silently absorb a legacy signed-out page rendered by an older
+          // node in between (rework round 3, finding 1). It fails CLOSED at the
+          // grant, exactly like the pre-column NULL; the two knowable values are
+          // written later, by whoever knows them.
+          WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
           TRANSACTION_TTL_SECONDS,
         ],
       },
@@ -404,9 +407,12 @@ export type LoadedTransaction = {
   codeChallenge: string;
   state: string;
   /**
-   * The scope set the hosted SIGN-IN SCREEN displayed for this transaction, or
-   * null when no sign-in screen was rendered (the person already held a Cinatra
-   * session). cinatra#2631 — see recordDisplayedScopesForTransaction.
+   * What is KNOWN about what was displayed for this transaction: a real scope
+   * set (a sign-in screen rendered and showed it), the NO-SCREEN sentinel (a
+   * current node proved none rendered), the UNCLASSIFIED value (nothing is known
+   * yet), or null (the transaction predates the column). Only the first two are
+   * knowledge; the other two fail closed at the grant. cinatra#2631 — see
+   * recordDisplayedScopesForTransaction.
    */
   displayedScopes: string | null;
 };
@@ -451,22 +457,30 @@ export function loadActiveTransaction(txnId: string): LoadedTransaction | null {
 }
 
 /**
- * Record, ON THE TRANSACTION, the scope set the hosted SIGN-IN SCREEN displayed
- * — the one authenticated statement about what this person was shown.
+ * Record, ON THE TRANSACTION, what is KNOWN about what was displayed for it —
+ * the one authenticated statement about what this person was shown.
+ *
+ * TWO WRITERS, BOTH SERVER-SIDE, and the value distinguishes them:
+ *   • the hosted sign-in screen writes the scope set it is about to DISPLAY;
+ *   • a node that PROVED no screen rendered writes WIDGET_NO_SIGNIN_SCREEN (the
+ *     observed session already existed when the transaction was created).
+ * Everything else the grant may find — the UNCLASSIFIED value this column is
+ * created with, or the pre-column NULL — is the absence of knowledge and fails
+ * closed there (cinatra#2631, rework round 3, finding 1).
  *
  * cinatra#2631 (codex rework round 1, finding 1). Carrying the displayed set
  * through the sign-in redirect in the URL was not enough: a party that controls
- * the popup's URL can STRIP the marker, and an absent marker has to be admitted
- * because a person who already holds a Cinatra session legitimately never sees a
- * screen. Stripping therefore turned a mismatch back into the admitted case. The
- * server writes it here instead, where nothing in the browser can remove it: the
- * action reads what the screen actually showed, and NULL means — provably — that
- * no screen was rendered for this transaction.
+ * the popup's URL can STRIP the marker, and an absent marker used to be
+ * admitted. Stripping therefore turned a mismatch back into the admitted case.
+ * The server writes it here instead, where nothing in the browser can remove it,
+ * and the action reads it off the row and nowhere else.
  *
- * FIRST WRITE WINS (it may only replace the no-screen sentinel). A transaction
- * is single-use and short-lived, so the first sign-in screen rendered for it is
- * the one the person read; a later render by a build whose granted set differs
- * does not overwrite that.
+ * FIRST WRITE WINS: the UPDATE may only replace the UNCLASSIFIED value, so
+ * whichever writer knows something first is the record. A transaction is
+ * single-use and short-lived, so the first sign-in screen rendered for it is the
+ * one the person read; a later render by a build whose granted set differs does
+ * not overwrite that, and a no-screen claim can never overwrite a screen that
+ * really rendered.
  *
  * RETURNS THE AUTHORITATIVE STORED VALUE, not the value offered (codex rework
  * round 2, finding 1). A caller that assumed its own write had landed could
@@ -496,7 +510,7 @@ export function recordDisplayedScopesForTransaction(
           `UPDATE ${qTable(TXN_TABLE)} SET displayed_scopes = $2 ` +
           `WHERE txn_id = $1 AND consumed_at IS NULL AND expires_at > now() ` +
           `AND displayed_scopes = $3`,
-        values: [txnId, displayedScopes, WIDGET_NO_SIGNIN_SCREEN],
+        values: [txnId, displayedScopes, WIDGET_SIGNIN_SCREEN_UNCLASSIFIED],
       },
       {
         text:
@@ -508,6 +522,98 @@ export function recordDisplayedScopesForTransaction(
   });
   const row = read?.rows?.[0] as Record<string, unknown> | undefined;
   return row && typeof row.displayed_scopes === "string" ? row.displayed_scopes : null;
+}
+
+/**
+ * A stable, non-reversible name for ONE session row, for the no-screen token to
+ * carry (cinatra#2631, rework round 5, finding 1). The token says "no screen
+ * rendered for THIS arrival", so it has to name the arrival; it is hashed for
+ * the same reason every other identifier this module persists is — the row is
+ * read by more eyes than the flow that wrote it, and a session id is nobody
+ * else's business. Empty for anything unusable, which every consumer reads as
+ * "no token": a caller that cannot identify its session may not write one.
+ */
+export function widgetSessionFingerprint(sessionId: unknown): string {
+  const id = typeof sessionId === "string" ? sessionId.trim() : "";
+  if (!id) return "";
+  return createHash("sha256").update(id).digest("hex").slice(0, 32);
+}
+
+/**
+ * Better Auth's session table, and the app-owned column that records when the
+ * DATABASE inserted each row. Same database, `public` schema — the same place
+ * `teamMemberRoleColumnExists()` probes (src/lib/better-auth-db.ts). The column
+ * is provisioned by the schema SSOT at every boot (src/lib/drizzle-store.ts).
+ */
+const AUTH_SESSION_TABLE = `"public"."session"`;
+const AUTH_SESSION_DB_CREATED_AT = "cinatra_db_created_at";
+
+/**
+ * Was the SESSION row already in the database when the TRANSACTION row was
+ * inserted? THE PROOF behind a no-screen token (cinatra#2631).
+ *
+ * WHY THIS QUESTION. The hosted flow renders a sign-in screen only when there is
+ * no session, and signing in through one MINTS the session it lands with. So a
+ * session that predates the transaction is one no screen of this flow produced —
+ * which means no screen rendered for this transaction, including a legacy screen
+ * on an older node that would have recorded nothing. A session that came AFTER
+ * means a screen did render somewhere, and the transaction's own record is then
+ * the only thing that may speak for it.
+ *
+ * ONE CLOCK, AND IT IS THE DATABASE'S (codex rework round 4, finding 1). Both
+ * sides are stamped by Postgres DEFAULTs at INSERT: the transaction's
+ * `created_at`, and the session's `cinatra_db_created_at`. Better Auth's own
+ * `createdAt` is deliberately NOT used — it is written by whichever NODE minted
+ * the session, with that node's own clock, and the node whose clock matters most
+ * here is precisely the one we do not control: an OLD one still serving the
+ * legacy sign-in screen. If its clock lagged the database by longer than the
+ * sign-in takes, a session minted AFTER that screen would read as older than the
+ * transaction and the sentinel would be written over a screen that really
+ * rendered. A database default cannot lag: an old node inserts the row without
+ * naming the column, and Postgres fills it.
+ *
+ * INSERT-TIME, AND IT STAYS THAT WAY (round 6). Better Auth UPDATEs a session
+ * row on its `updateAge` refresh and on an org switch. Neither touches this
+ * column — which is exactly why it is a column and not the row's `xmin`, whose
+ * whole value a single refresh replaces. Reading a refreshed row's write id
+ * would have failed the ORDINARY already-signed-in path, once per person per
+ * day, for a session that genuinely predated everything.
+ *
+ * THE DATABASE DOES THE COMPARING, in one statement, so the two reads cannot
+ * disagree and nothing is re-derived in JS. FAILS CLOSED, ALWAYS: a missing
+ * session row, a missing transaction, a NULL either side, or any error at all
+ * (a deployment whose auth tables are not in `public` would raise one) proves
+ * nothing — and "proves nothing" must never write a value that grants.
+ */
+export function sessionRowPredatesTransaction(
+  sessionId: string,
+  txnId: string,
+): boolean {
+  if (!sessionId || typeof sessionId !== "string") return false;
+  if (!txnId || typeof txnId !== "string") return false;
+  ensurePostgresSchema();
+  let result;
+  try {
+    [result] = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      queries: [
+        {
+          text:
+            `SELECT (` +
+            `(SELECT ${quotePostgresIdentifier(AUTH_SESSION_DB_CREATED_AT)} ` +
+            `FROM ${AUTH_SESSION_TABLE} WHERE id = $1) ` +
+            `< ` +
+            `(SELECT created_at FROM ${qTable(TXN_TABLE)} WHERE txn_id = $2)` +
+            `) AS session_predates`,
+          values: [sessionId, txnId],
+        },
+      ],
+    });
+  } catch {
+    return false;
+  }
+  const row = result?.rows?.[0] as Record<string, unknown> | undefined;
+  return row?.session_predates === true;
 }
 
 // ---------------------------------------------------------------------------

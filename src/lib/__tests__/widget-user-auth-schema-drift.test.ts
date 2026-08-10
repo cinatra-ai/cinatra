@@ -92,6 +92,45 @@ describe("widget_auth_transactions displayed_scopes rollout", () => {
   });
 });
 
+// cinatra#2631 (codex rework rounds 4 + 6) — the hosted login proves "no sign-in
+// screen rendered" by showing that a session row was already in the database
+// when the transaction row was inserted. Both sides of that comparison must be
+// stamped by the DATABASE at INSERT, so the app owns one column on Better Auth's
+// session table (the `teamMember`.`role` precedent) and provisions it here.
+describe("the session-row insert stamp the ordering proof reads", () => {
+  const alters = buildCreateStoreSchemaQueries("drift_test")
+    .map((q) => String(q.text))
+    .filter((t) => t.includes("ALTER TABLE") && t.includes('"session"'));
+
+  it("adds cinatra_db_created_at to Better Auth's session table, defaulted by the DATABASE", () => {
+    // The DEFAULT is the whole point: a node running the PREVIOUS build inserts
+    // session rows without naming this column, so Postgres fills it — with its
+    // own clock, not the minting node's. A value the app wrote would be a node
+    // clock again, which is the hole this replaced.
+    expect(
+      alters.some((t) =>
+        /ADD COLUMN IF NOT EXISTS cinatra_db_created_at timestamptz NOT NULL DEFAULT now\(\)\s*$/.test(
+          t.trim(),
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("names the auth schema explicitly and tolerates the table not existing yet", () => {
+    // On a FRESH install this runs before Better Auth's own migration creates
+    // the table; without IF EXISTS the whole schema init would abort there.
+    const alter = alters.find((t) => t.includes("cinatra_db_created_at")) ?? "";
+    expect(alter).toContain('ALTER TABLE IF EXISTS "public"."session"');
+    // ...and it is an ALTER, never part of a CREATE: rewriting a deployed
+    // table's column list is what the schema-migration gate reads as a
+    // drop/retype.
+    const creates = buildCreateStoreSchemaQueries("drift_test")
+      .map((q) => String(q.text))
+      .filter((t) => t.includes("CREATE TABLE") && t.includes("cinatra_db_created_at"));
+    expect(creates).toEqual([]);
+  });
+});
+
 describe("widget_auth_codes schema-drift guard", () => {
   const ddl = ddlFor("widget_auth_codes");
 

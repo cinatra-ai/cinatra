@@ -4,11 +4,15 @@ import { getAuthSession, resolveOrgRoleForUser } from "@/lib/auth-session";
 import {
   loadActiveTransaction,
   recordDisplayedScopesForTransaction,
+  sessionRowPredatesTransaction,
+  widgetSessionFingerprint,
 } from "@/lib/widget-user-auth";
 import {
   WIDGET_EXTENSION_SCOPES,
   WIDGET_SIGNIN_GRANTED_SCOPES,
+  displayedScopesAgree,
   widgetDisplayedScopesToken,
+  widgetNoSignInScreenToken,
 } from "@/lib/widget-lifecycle-scope";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
 import { Main } from "@/components/layout/main";
@@ -199,6 +203,59 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
     });
     return (
       <ErrorCard message="Your account is not a member of the organization connected to this site, so it cannot be used in this assistant." />
+    );
+  }
+
+  // THE ONE POINT AT WHICH "no sign-in screen rendered" IS A FACT.
+  //
+  // cinatra#2631 (codex rework round 3, finding 1). The transaction was created
+  // saying nothing about what would be displayed, because at creation nothing is
+  // known. Here a node running THIS build is looking at a session, and if that
+  // session's ROW was already in the database when the transaction row was
+  // inserted, it cannot have come from a sign-in screen shown for this
+  // transaction — not this build's screen, and not the legacy screen of an older
+  // node still serving traffic mid-rollout. Only then may the no-screen sentinel
+  // be written, and the write is first-write-wins, so it can never paint over a
+  // screen that really rendered.
+  //
+  // The ordering is the DATABASE's own, not a clock (round 4, finding 1): a
+  // session's `createdAt` is written by whichever node minted it, and an old
+  // node's lagging clock would otherwise pass off a session minted after its
+  // legacy screen as one that predated the transaction.
+  //
+  // The sentinel NAMES THIS SESSION (round 5, finding 1). It is a fact about one
+  // person's arrival, not about the transaction: without the name, a member
+  // could stamp it with a bare GET and leave it standing for whoever came next
+  // through an older node's legacy screen. The grant re-derives the same name
+  // from its own session and admits the sentinel only for that session.
+  //
+  // When the session came AFTER, a sign-in happened during this flow: either
+  // this build's screen recorded what it displayed (the ordinary path — the
+  // record is already there and this reads it), or the screen came from a node
+  // that records nothing, in which case the transaction is still unclassified
+  // and the check below refuses. Nothing is assumed on the person's behalf.
+  const noScreenToken = widgetNoSignInScreenToken(
+    widgetSessionFingerprint(session.session?.id),
+  );
+  const noScreenProven =
+    noScreenToken.length > 0 &&
+    sessionRowPredatesTransaction(String(session.session?.id ?? ""), txn.txnId);
+  const displayedForGrant = noScreenProven
+    ? recordDisplayedScopesForTransaction(txn.txnId, noScreenToken)
+    : txn.displayedScopes;
+  if (
+    !displayedScopesAgree(displayedForGrant, WIDGET_SIGNIN_GRANTED_SCOPES, noScreenToken)
+  ) {
+    emitWidgetAuthAudit("consent_denied", {
+      actor: userId,
+      orgId: txn.orgId,
+      siteId: txn.siteId,
+      agentSlug: txn.agentSlug,
+      siteOrigin: txn.siteOrigin,
+      reason: "stale_signin_screen",
+    });
+    return (
+      <ErrorCard message="Cinatra was updated while this window was open. Close this window and open the assistant login again from your site." />
     );
   }
 

@@ -93,22 +93,92 @@ export function widgetUserBaseScope(agentSlug: string): string | null {
 }
 
 /**
- * The value a transaction carries until a sign-in screen has rendered for it —
- * "no screen has displayed anything yet".
+ * The value a transaction carries from the moment it is created until something
+ * KNOWN is recorded about what was displayed for it — "nobody has said yet".
  *
- * cinatra#2631 (codex rework round 2, finding 2). A NULL column cannot mean
- * this: a transaction created by a build that predates the column is ALSO NULL,
- * and admitting it would re-open exactly the cross-build mismatch the record
- * exists to catch. So a build that HAS the mechanism stamps this sentinel at
- * transaction creation. NULL now means "created before this existed" and fails
- * CLOSED; the sentinel means "created by a build that would have written a real
- * value, and none was written", which is the legitimate existing-session case.
+ * cinatra#2631 (codex rework round 3, finding 1). It is not the same statement
+ * as "no screen rendered", and conflating the two was the hole: at creation the
+ * server cannot know what will render, so a sentinel meaning "no screen" written
+ * at creation is a claim about the future. During a rolling deploy that claim is
+ * simply false — a NEW node creates the transaction, an OLD node renders its
+ * LEGACY signed-out page (recording nothing, naming none of the new grants), and
+ * after the login a NEW node reads a sentinel it wrote itself and grants a set
+ * the person never read. So creation writes THIS value, which asserts nothing,
+ * and the two things that can be known are written later by whoever knows them:
+ * a rendered screen writes its displayed set; a current node that can PROVE no
+ * screen rendered writes a {@link widgetNoSignInScreenToken}.
+ *
+ * FAILS CLOSED at the grant, exactly like the legacy NULL: a transaction still
+ * carrying it reached the grant without any current node accounting for what was
+ * displayed, which is precisely the mixed-version case above.
  *
  * Deliberately NOT a well-formed set member (the parentheses are outside the
- * atom grammar), so it can never collide with a real displayed set — including
- * the empty one, which is a screen that named no grants and is a real value.
+ * atom grammar), so it can never collide with a real displayed set.
  */
-export const WIDGET_NO_SIGNIN_SCREEN = "(no-screen)";
+export const WIDGET_SIGNIN_SCREEN_UNCLASSIFIED = "(unclassified)";
+
+/**
+ * "No sign-in screen rendered for this transaction, and that is PROVEN, not
+ * assumed" — written as `(no-screen:<session fingerprint>)`.
+ *
+ * cinatra#2631 (codex rework round 3, finding 1). Written at exactly ONE point:
+ * a node running THIS build observes a session whose ROW WAS ALREADY IN THE
+ * DATABASE when the transaction row was inserted (see
+ * `sessionRowPredatesTransaction` in `@/lib/widget-user-auth`). That is the only
+ * moment "no screen rendered" is a fact rather than a hope — the hosted flow
+ * shows a sign-in screen only when there is no session, and signing in through
+ * one MINTS the session it lands with, so a session older than the transaction
+ * is one no screen of this flow produced, on this build or on any older node
+ * still serving traffic. Written at creation instead (as it was), the value
+ * silently absorbed the mixed-version window where an OLD node had rendered the
+ * legacy screen in between.
+ *
+ * THE ORDERING IS THE DATABASE'S OWN (round 4, finding 1), never a clock: the
+ * transaction row is stamped by Postgres while a session row's `createdAt` is
+ * written by whichever NODE minted it — including an old node whose clock we do
+ * not control, and whose lag would otherwise make a session minted after its
+ * legacy screen look older than the transaction.
+ *
+ * IT NAMES THE SESSION IT PROVED (round 5, finding 1). "No screen rendered" is
+ * not a property of the transaction, it is a property of ONE person's arrival at
+ * it: a member holding a session can make a bare GET and stamp the sentinel
+ * while the transaction stays unconsumed, and a DIFFERENT person could then be
+ * sent through an older node's legacy sign-in screen for the same transaction
+ * and redeem against a sentinel that says nothing about them. So the token
+ * carries a fingerprint of the session that earned it, and the grant admits it
+ * only for that same session — for anyone else it reads as a value they cannot
+ * account for, and refuses.
+ *
+ * ADMITTED at the grant: a person who never saw a screen never read the grant
+ * copy, which is the stated, owner-approved gap of "signing in is the grant",
+ * not a mismatch this check can close.
+ *
+ * Nothing in a browser can produce it: the server writes it, from a session it
+ * resolved itself, and only over {@link WIDGET_SIGNIN_SCREEN_UNCLASSIFIED}
+ * (write-once). Like the unclassified value it is deliberately outside the atom
+ * grammar, so it can never collide with a real displayed set.
+ */
+export const WIDGET_NO_SIGNIN_SCREEN_PREFIX = "(no-screen:";
+
+/**
+ * The no-screen token for ONE session. Empty fingerprint → empty token, which
+ * every consumer treats as "no token": a caller that could not identify the
+ * session it is looking at may neither write the sentinel nor match one.
+ */
+export function widgetNoSignInScreenToken(sessionFingerprint: string): string {
+  const fingerprint = String(sessionFingerprint ?? "").trim();
+  if (!/^[a-f0-9]{16,128}$/.test(fingerprint)) return "";
+  return `${WIDGET_NO_SIGNIN_SCREEN_PREFIX}${fingerprint})`;
+}
+
+/** Is this recorded value a no-screen claim (whoever it names)? */
+export function isNoSignInScreenToken(value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    value.startsWith(WIDGET_NO_SIGNIN_SCREEN_PREFIX) &&
+    value.endsWith(")")
+  );
+}
 
 /**
  * The token a hosted SIGN-IN SCREEN carries forward describing the scope set it
@@ -140,28 +210,44 @@ export function widgetDisplayedScopesToken(
 }
 
 /**
- * Does the screen that displayed `displayedToken` agree with what this build
- * would record? Three distinct answers, and the distinctions are the point:
+ * Does what was displayed for this transaction agree with what this build would
+ * record, FOR THIS CALLER? Four distinct answers, and the distinctions are the
+ * point:
  *
- *   • the SENTINEL — no sign-in screen rendered for this transaction, on a build
- *     that would have said so if one had. The person already held a Cinatra
- *     session and went straight to the return step. ADMITTED: that is the stated
- *     gap of the owner's ruling, not a mismatch. Nothing in a browser can
- *     produce this value — the server writes it (round 1, finding 1).
- *   • NULL — the transaction predates this mechanism entirely, so nothing is
- *     known about what was displayed. REFUSED (round 2, finding 2): during the
- *     one deploy that introduces the column, in-flight transactions fail closed
- *     and the person opens the assistant login again.
+ *   • a NO-SCREEN token naming this caller's own session — a node running this
+ *     build PROVED that no sign-in screen rendered for it (the session row
+ *     predated the transaction). ADMITTED: the person went straight to the
+ *     return step, which is the stated gap of the owner's ruling, not a
+ *     mismatch. Nothing in a browser can produce this value.
+ *   • a NO-SCREEN token naming SOMEONE ELSE'S session — proof about a different
+ *     arrival than this one. REFUSED (round 5, finding 1): whoever is here now
+ *     may have come through a screen that recorded nothing.
+ *   • UNCLASSIFIED, or NULL — the transaction reached the grant with nothing
+ *     known about what was displayed. REFUSED: during a rolling deploy this is
+ *     the transaction whose signed-out page was rendered by an OLDER node, which
+ *     named none of the grants this build would record (round 3, finding 1);
+ *     NULL is the same absence on a transaction that predates the column
+ *     entirely (round 2, finding 2). In-flight transactions across the one
+ *     deploy that introduces this fail closed and the person opens the assistant
+ *     login again.
  *   • anything else — a real displayed set, compared exactly. The EMPTY STRING is
  *     one of these: a screen that rendered and named no extra grants. If this
  *     build would record one, they disagree.
+ *
+ * `expectedNoScreenToken` is the ONLY channel through which a no-screen claim
+ * can be admitted; a caller that omits it (or cannot build one) admits none.
  */
 export function displayedScopesAgree(
   displayedToken: string | null | undefined,
   granted: readonly string[],
+  expectedNoScreenToken?: string,
 ): boolean {
   if (displayedToken === null || displayedToken === undefined) return false;
-  if (displayedToken === WIDGET_NO_SIGNIN_SCREEN) return true;
+  if (displayedToken === WIDGET_SIGNIN_SCREEN_UNCLASSIFIED) return false;
+  if (isNoSignInScreenToken(displayedToken)) {
+    const expected = String(expectedNoScreenToken ?? "");
+    return expected.length > 0 && displayedToken === expected;
+  }
   return String(displayedToken).trim() === widgetDisplayedScopesToken(granted);
 }
 

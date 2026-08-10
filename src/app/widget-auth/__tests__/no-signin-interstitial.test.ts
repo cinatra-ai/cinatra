@@ -196,11 +196,40 @@ describe("the sign-in itself carries the grant", () => {
     );
     expect(signedOut).toContain("recordDisplayedScopesForTransaction");
     expect(signedOut).toContain("widgetDisplayedScopesToken(WIDGET_SIGNIN_GRANTED_SCOPES)");
-    expect(actionSrc).toContain(
-      "displayedScopesAgree(txn.displayedScopes, WIDGET_SIGNIN_GRANTED_SCOPES)",
-    );
+    expect(actionSrc).toContain("displayedScopesAgree(");
+    expect(actionSrc).toContain("txn.displayedScopes,");
     // ...and NOT off the request: the action takes the transaction id alone.
     expect(actionSrc).toMatch(/issueWidgetAuthCodeAction\(\s*txnId: string,\s*\)/);
     expect(pageSrc).not.toContain("&s=");
+  });
+
+  it("the no-screen sentinel is written only where it is PROVED, never at creation", () => {
+    // codex rework round 3, finding 1. The sentinel is the one value that lets a
+    // grant through without any displayed set, so where it is written IS the
+    // security property: only the member branch writes it, and only behind the
+    // proof that the session already existed when the transaction was created.
+    const memberBranch = pageSrc.slice(pageSrc.lastIndexOf("resolveOrgRoleForUser"));
+    expect(memberBranch).toContain("sessionRowPredatesTransaction(");
+    expect(memberBranch).toContain(
+      "recordDisplayedScopesForTransaction(txn.txnId, noScreenToken)",
+    );
+    expect(memberBranch).toContain("widgetNoSignInScreenToken(");
+    expect(memberBranch).toContain(
+      "displayedScopesAgree(displayedForGrant, WIDGET_SIGNIN_GRANTED_SCOPES, noScreenToken)",
+    );
+    // ...and the sentinel the ACTION admits is derived from ITS OWN session, so
+    // the two ends of the flow name the same arrival or the grant refuses
+    // (rework round 5, finding 1).
+    expect(actionSrc).toContain(
+      "widgetNoSignInScreenToken(widgetSessionFingerprint(session.session?.id))",
+    );
+    // The transaction is created carrying the value that asserts NOTHING, and
+    // the engine that creates it never builds a sentinel at all.
+    const store = code(
+      readFileSync(path.join(REPO_ROOT, "src/lib/widget-user-auth.ts"), "utf8"),
+    );
+    expect(store).toContain("WIDGET_SIGNIN_SCREEN_UNCLASSIFIED");
+    expect(store).not.toContain("widgetNoSignInScreenToken");
+    expect(store).not.toContain("(no-screen");
   });
 });

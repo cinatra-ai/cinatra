@@ -7,11 +7,13 @@ import {
 import {
   issueUserAuthCode,
   loadActiveTransaction,
+  widgetSessionFingerprint,
 } from "@/lib/widget-user-auth";
 import {
   WIDGET_SIGNIN_GRANTED_SCOPES,
   displayedScopesAgree,
   formatTokenSet,
+  widgetNoSignInScreenToken,
 } from "@/lib/widget-lifecycle-scope";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
 
@@ -78,12 +80,29 @@ export async function issueWidgetAuthCodeAction(
   // disagreement means the person read the wrong sentences, so nothing is
   // recorded and they are told to start again.
   //
-  // The value is read from the TRANSACTION, written by the server when it
-  // rendered that screen, so nothing in the browser can strip it. NULL therefore
-  // means — provably — that no screen was rendered, which happens when the person
-  // already held a Cinatra session. That case is admitted: it is the stated gap
-  // of the owner's ruling, not something this check can close.
-  if (!displayedScopesAgree(txn.displayedScopes, WIDGET_SIGNIN_GRANTED_SCOPES)) {
+  // The value is read from the TRANSACTION, written there by the SERVER, so
+  // nothing in the browser can strip it — and only two of its values are
+  // knowledge (round 3, finding 1):
+  //   • a real displayed set — a sign-in screen rendered and showed exactly it;
+  //   • a NO-SCREEN sentinel NAMING THIS SESSION — a node running this build
+  //     PROVED none rendered for this arrival (the session row was already there
+  //     when the transaction row was inserted). Admitted: the person went
+  //     straight to the return step, which is the stated gap of the owner's
+  //     ruling, not something this check can close. One naming a DIFFERENT
+  //     session is proof about somebody else and refuses (round 5, finding 1) —
+  //     otherwise a member could stamp it with a bare GET and leave it standing
+  //     for whoever came next through an older node's legacy screen.
+  // The UNCLASSIFIED value a transaction is created with and the pre-column NULL
+  // are both the ABSENCE of knowledge — nobody accounted for what was displayed,
+  // which is what a legacy node's signed-out page leaves behind mid-rollout — so
+  // both refuse here.
+  if (
+    !displayedScopesAgree(
+      txn.displayedScopes,
+      WIDGET_SIGNIN_GRANTED_SCOPES,
+      widgetNoSignInScreenToken(widgetSessionFingerprint(session.session?.id)),
+    )
+  ) {
     emitWidgetAuthAudit("consent_denied", {
       actor: userId,
       orgId: txn.orgId,

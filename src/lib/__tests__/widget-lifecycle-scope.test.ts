@@ -9,10 +9,13 @@ import { describe, expect, it } from "vitest";
 
 import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
 import {
-  WIDGET_NO_SIGNIN_SCREEN,
+  WIDGET_NO_SIGNIN_SCREEN_PREFIX,
   WIDGET_SIGNIN_GRANTED_SCOPES,
+  WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
   displayedScopesAgree,
+  isNoSignInScreenToken,
   widgetDisplayedScopesToken,
+  widgetNoSignInScreenToken,
   WIDGET_EXTENSION_SCOPES,
   WIDGET_LIFECYCLE_READ_ROUTE_PATH,
   WIDGET_LIFECYCLE_READ_SCOPE,
@@ -251,21 +254,51 @@ describe("the displayed-scope token", () => {
     );
   });
 
-  it("admits the SENTINEL — a build that would have said so, and no screen ran", () => {
+  it("admits a SENTINEL that names the session asking — and only that session", () => {
     // The person already had a session and saw no sign-in screen. That is the
     // stated gap of the design; this helper must not refuse a flow that never
-    // displayed one.
-    expect(displayedScopesAgree(WIDGET_NO_SIGNIN_SCREEN, WIDGET_SIGNIN_GRANTED_SCOPES)).toBe(
-      true,
-    );
-    expect(displayedScopesAgree(WIDGET_NO_SIGNIN_SCREEN, [])).toBe(true);
-    // The sentinel can never BE a displayed set: it is not a well-formed set
+    // displayed one. But "no screen rendered" is a fact about ONE arrival: a
+    // sentinel earned by somebody else's session says nothing about this caller
+    // (codex rework round 5, finding 1), so it refuses.
+    const mine = widgetNoSignInScreenToken("a".repeat(32));
+    const theirs = widgetNoSignInScreenToken("b".repeat(32));
+    expect(mine).not.toBe(theirs);
+    expect(displayedScopesAgree(mine, WIDGET_SIGNIN_GRANTED_SCOPES, mine)).toBe(true);
+    expect(displayedScopesAgree(mine, [], mine)).toBe(true);
+    expect(displayedScopesAgree(theirs, WIDGET_SIGNIN_GRANTED_SCOPES, mine)).toBe(false);
+    expect(displayedScopesAgree(theirs, [], mine)).toBe(false);
+    // A caller that cannot name its own session admits NO sentinel at all.
+    expect(displayedScopesAgree(mine, WIDGET_SIGNIN_GRANTED_SCOPES)).toBe(false);
+    expect(displayedScopesAgree(mine, WIDGET_SIGNIN_GRANTED_SCOPES, "")).toBe(false);
+    // A bare prefix, or a hand-made lookalike, is a no-screen claim nobody can
+    // match — never a displayed set that could be compared instead.
+    for (const forged of ["(no-screen)", "(no-screen:)", `${WIDGET_NO_SIGNIN_SCREEN_PREFIX})`]) {
+      expect(displayedScopesAgree(forged, WIDGET_SIGNIN_GRANTED_SCOPES, mine)).toBe(false);
+      expect(displayedScopesAgree(forged, [], mine)).toBe(false);
+    }
+    // The token can never BE a displayed set: it is not a well-formed set
     // member, so no scope this build could grant can spell it.
-    expect(isValidTokenSetAtom(WIDGET_NO_SIGNIN_SCREEN)).toBe(false);
-    expect(isKnownWidgetExtensionScope(WIDGET_NO_SIGNIN_SCREEN)).toBe(false);
+    expect(isNoSignInScreenToken(mine)).toBe(true);
+    expect(isNoSignInScreenToken(widgetDisplayedScopesToken(WIDGET_SIGNIN_GRANTED_SCOPES))).toBe(
+      false,
+    );
+    expect(isValidTokenSetAtom(mine)).toBe(false);
+    expect(isKnownWidgetExtensionScope(mine)).toBe(false);
     for (const scope of WIDGET_SIGNIN_GRANTED_SCOPES) {
       expect(isValidTokenSetAtom(scope)).toBe(true);
     }
+  });
+
+  it("builds NO token from a fingerprint it cannot trust", () => {
+    // Empty in, empty out — and an empty token is one no consumer will match, so
+    // a caller that could not identify its session neither writes nor admits a
+    // sentinel.
+    for (const bad of ["", "   ", "not-hex", "abc", "A".repeat(32), "a".repeat(200)]) {
+      expect(widgetNoSignInScreenToken(bad)).toBe("");
+    }
+    expect(widgetNoSignInScreenToken("f".repeat(32))).toBe(
+      `${WIDGET_NO_SIGNIN_SCREEN_PREFIX}${"f".repeat(32)})`,
+    );
   });
 
   it("REFUSES null — a transaction that predates the mechanism knows nothing", () => {
@@ -287,4 +320,22 @@ describe("the displayed-scope token", () => {
     // ...and when this build grants nothing extra either, they agree.
     expect(displayedScopesAgree("", [])).toBe(true);
   });
+
+  it("REFUSES the UNCLASSIFIED value — created saying nothing, and still saying nothing", () => {
+    // codex rework round 3, finding 1. This is the value the MIXED-VERSION window
+    // leaves behind: a new node created the transaction, an older node rendered
+    // its legacy signed-out page and recorded nothing, and the person read none
+    // of the sentences this build would grant. It is the absence of knowledge,
+    // exactly like NULL, so it fails closed in both directions.
+    expect(
+      displayedScopesAgree(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED, WIDGET_SIGNIN_GRANTED_SCOPES),
+    ).toBe(false);
+    expect(displayedScopesAgree(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED, [])).toBe(false);
+    // ...and it is a value no screen and no grant could ever spell, so nothing
+    // can arrive at it by accident.
+    expect(isNoSignInScreenToken(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED)).toBe(false);
+    expect(isValidTokenSetAtom(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED)).toBe(false);
+    expect(isKnownWidgetExtensionScope(WIDGET_SIGNIN_SCREEN_UNCLASSIFIED)).toBe(false);
+  });
 });
+

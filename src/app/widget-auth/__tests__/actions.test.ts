@@ -12,6 +12,8 @@
 // tests drive the two things that DO vary: the transaction's own record of what
 // its sign-in screen displayed, and the surrounding gates.
 
+import { createHash } from "node:crypto";
+
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getAuthSession = vi.fn();
@@ -27,6 +29,12 @@ vi.mock("@/lib/auth-session", () => ({
 vi.mock("@/lib/widget-user-auth", () => ({
   issueUserAuthCode: (...a: unknown[]) => issueUserAuthCode(...a),
   loadActiveTransaction: (...a: unknown[]) => loadActiveTransaction(...a),
+  // The REAL fingerprint (a pure hash of the session id) — the binding between
+  // the sentinel and the session is the property under test, so it is not stubbed.
+  widgetSessionFingerprint: (id: unknown) =>
+    typeof id === "string" && id.trim()
+      ? createHash("sha256").update(id.trim()).digest("hex").slice(0, 32)
+      : "",
 }));
 vi.mock("@/lib/widget-auth-audit", () => ({
   emitWidgetAuthAudit: (...a: unknown[]) => emitWidgetAuthAudit(...a),
@@ -35,12 +43,19 @@ vi.mock("@/lib/widget-auth-audit", () => ({
 import { issueWidgetAuthCodeAction } from "../actions";
 import {
   WIDGET_LIFECYCLE_READ_SCOPE,
-  WIDGET_NO_SIGNIN_SCREEN,
   WIDGET_SIGNIN_GRANTED_SCOPES,
+  WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
   widgetDisplayedScopesToken,
+  widgetNoSignInScreenToken,
 } from "@/lib/widget-lifecycle-scope";
 
 const DISPLAYED = widgetDisplayedScopesToken(WIDGET_SIGNIN_GRANTED_SCOPES);
+
+/** The no-screen sentinel one session would earn. */
+const noScreenFor = (sessionId: string) =>
+  widgetNoSignInScreenToken(
+    createHash("sha256").update(sessionId).digest("hex").slice(0, 32),
+  );
 
 const TXN = {
   displayedScopes: DISPLAYED,
@@ -135,17 +150,77 @@ describe("what the sign-in screen displayed is checked against what is recorded"
     expect(issueUserAuthCode).not.toHaveBeenCalled();
   });
 
-  it("proceeds when NO screen was rendered — the stated gap, not a mismatch", async () => {
-    // The sentinel is written at transaction creation and means: a build that
-    // records displayed sets made this, and none was recorded. That happens when
-    // the person already held a Cinatra session. Nothing in the browser can
-    // produce it — but the gap it represents is real, and the PR says so rather
-    // than this check pretending to close it.
+  it("proceeds when no screen rendered AND a current node proved it", async () => {
+    // The sentinel is written at exactly one point: a node running this build
+    // observed a session that already existed when the transaction was created,
+    // so no screen of this flow can have rendered for it. That is the person who
+    // already held a Cinatra session, and the gap it represents is real — the PR
+    // says so rather than this check pretending to close it.
     loadActiveTransaction.mockReturnValue({
       ...TXN,
-      displayedScopes: WIDGET_NO_SIGNIN_SCREEN,
+      displayedScopes: noScreenFor("sess-1"),
     });
     expect((await issueWidgetAuthCodeAction("txn-1")).ok).toBe(true);
+  });
+
+  it("REFUSES a sentinel earned by SOMEBODY ELSE'S session", async () => {
+    // codex rework round 5, finding 1. A member holding a session can stamp the
+    // sentinel with a bare GET and leave the transaction unconsumed; a different
+    // person could then be walked through an older node's legacy sign-in screen
+    // for the same transaction. The sentinel names the arrival it proved, so it
+    // says nothing about this one.
+    loadActiveTransaction.mockReturnValue({
+      ...TXN,
+      displayedScopes: noScreenFor("sess-somebody-else"),
+    });
+    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
+      ok: false,
+      reason: "stale_screen",
+    });
+    expect(issueUserAuthCode).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a hand-made no-screen lookalike", async () => {
+    // The value the browser cannot produce must also be one a stray write cannot
+    // produce: an unnamed claim matches no session at all.
+    for (const forged of ["(no-screen)", "(no-screen:)", "(no-screen:deadbeef)"]) {
+      vi.clearAllMocks();
+      loadActiveTransaction.mockReturnValue({ ...TXN, displayedScopes: forged });
+      expect((await issueWidgetAuthCodeAction("txn-1")).ok).toBe(false);
+      expect(issueUserAuthCode).not.toHaveBeenCalled();
+    }
+  });
+
+  it("REFUSES the sentinel when the session cannot be named at all", async () => {
+    getAuthSession.mockResolvedValue({ user: { id: "user-1" }, session: {} });
+    loadActiveTransaction.mockReturnValue({
+      ...TXN,
+      displayedScopes: noScreenFor("sess-1"),
+    });
+    expect((await issueWidgetAuthCodeAction("txn-1")).ok).toBe(false);
+    expect(issueUserAuthCode).not.toHaveBeenCalled();
+  });
+
+  it("REFUSES a transaction nobody classified — the MIXED-VERSION window", async () => {
+    // codex rework round 3, finding 1. A new node created the transaction; an
+    // OLD node rendered its legacy signed-out page, which names none of the
+    // grants this build records and writes nothing; the person signed in there.
+    // The column still says "nothing is known", and nothing is known, so nothing
+    // is granted — the person opens the assistant login again and reads the
+    // current sentences.
+    loadActiveTransaction.mockReturnValue({
+      ...TXN,
+      displayedScopes: WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
+    });
+    expect(await issueWidgetAuthCodeAction("txn-1")).toEqual({
+      ok: false,
+      reason: "stale_screen",
+    });
+    expect(issueUserAuthCode).not.toHaveBeenCalled();
+    const denied = emitWidgetAuthAudit.mock.calls.find(([e]) => e === "consent_denied");
+    expect((denied as [string, Record<string, unknown>])[1].reason).toBe(
+      "stale_signin_screen",
+    );
   });
 
   it("REFUSES a transaction that predates the mechanism (NULL)", async () => {
@@ -157,6 +232,18 @@ describe("what the sign-in screen displayed is checked against what is recorded"
       reason: "stale_screen",
     });
     expect(issueUserAuthCode).not.toHaveBeenCalled();
+  });
+
+  it("the two unknowing states are refused BEFORE the membership check runs", async () => {
+    // Ordering matters: the refusal must not depend on being a member, or a
+    // member of the org would still be granted on a record nothing wrote.
+    for (const displayedScopes of [WIDGET_SIGNIN_SCREEN_UNCLASSIFIED, null]) {
+      vi.clearAllMocks();
+      loadActiveTransaction.mockReturnValue({ ...TXN, displayedScopes });
+      expect((await issueWidgetAuthCodeAction("txn-1")).ok).toBe(false);
+      expect(resolveOrgRoleForUser).not.toHaveBeenCalled();
+      expect(issueUserAuthCode).not.toHaveBeenCalled();
+    }
   });
 });
 
