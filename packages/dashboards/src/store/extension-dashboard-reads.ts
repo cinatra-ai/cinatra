@@ -31,6 +31,102 @@ export async function listOrgDashboardRows(orgId: string): Promise<DashboardRow[
     .orderBy(desc(dashboards.createdAt));
 }
 
+/**
+ * The org's boot-materialized extension dashboard TEMPLATE rows (cinatra#2474
+ * PR4) — the candidate pool for the installed-catalog read. Narrow + read-only;
+ * NO access check (the caller applies the liveness gate, the extension access
+ * policy and the scope vantage).
+ *
+ * The WHERE is deliberately tight, so a malformed row never reaches the caller's
+ * gates in the first place (codex convergence — `filterRenderableDashboards`
+ * rejects `archived`, but on its own would let a `draft` / `generation_failed`
+ * template through):
+ *
+ *   - `organization_id = orgId`  — tenant fence at the SQL layer;
+ *   - `extension_id IS NOT NULL` — extension-owned, never an operator row;
+ *   - `is_template = true`       — the template, never a materialized instance;
+ *   - `status = 'published'`     — the ONE status `materializeExtensionTemplate`
+ *                                  writes; anything else is not a live template.
+ *
+ * WHAT THIS PROVES, EXACTLY: that materialization SUCCEEDED for this package in
+ * this org at some point, and that the row is still published. It does NOT
+ * re-read the pack's manifest, so it cannot prove the package still ships that
+ * template TODAY — and the gap is not self-healing: the boot reconcile
+ * (`src/lib/dashboards/reconcile-template-materializations.ts`) UPSERTS the
+ * templates it currently discovers and has NO retirement pass for one that has
+ * gone away, so a package that drops its dashboard declaration leaves its
+ * published row behind INDEFINITELY, across every later reconcile. Callers must
+ * not claim more than this.
+ */
+export async function listOrgExtensionTemplateRows(
+  orgId: string,
+): Promise<DashboardRow[]> {
+  if (!orgId) return [];
+  const db = getDashboardsDb();
+  return db
+    .select()
+    .from(dashboards)
+    .where(
+      and(
+        eq(dashboards.organizationId, orgId),
+        sql`${dashboards.extensionId} IS NOT NULL`,
+        eq(dashboards.isTemplate, true),
+        eq(dashboards.status, "published"),
+      ),
+    );
+}
+
+/**
+ * The dashboard NAMES already present in one `(entity, owner)` collection —
+ * every status, deliberately (cinatra#2474 PR4).
+ *
+ * This exists because the per-entity LIST read hides archived dashboards
+ * (`LISTABLE_STATUSES = draft | published`) while
+ * `dashboards_entity_name_uniq` carries NO status predicate — its WHERE is only
+ * `entity_type IS NOT NULL`. So an archived dashboard still OWNS its name, and a
+ * caller predicting whether a create would collide must see it. Using the list
+ * read would advertise a name whose create is guaranteed to fail on the
+ * constraint (codex convergence r2).
+ *
+ * The projection is exactly the index's own key, so what this returns is
+ * precisely "the names that would collide".
+ *
+ * NO access check — the caller gates. The one caller (`installed-catalog-read`)
+ * has already proven the composite is the ACTING USER'S OWN collection in the
+ * actor's own tenant, so this reads nothing the actor does not own.
+ */
+export async function listEntityCollectionNames(key: {
+  readonly organizationId: string;
+  readonly entityType: string;
+  readonly entityId: string;
+  readonly ownerLevel: string;
+  readonly ownerId: string;
+}): Promise<string[]> {
+  if (
+    !key.organizationId ||
+    !key.entityType ||
+    !key.entityId ||
+    !key.ownerLevel ||
+    !key.ownerId
+  ) {
+    return [];
+  }
+  const db = getDashboardsDb();
+  const rows = await db
+    .select({ name: dashboards.name })
+    .from(dashboards)
+    .where(
+      and(
+        eq(dashboards.organizationId, key.organizationId),
+        eq(dashboards.entityType, key.entityType),
+        eq(dashboards.entityId, key.entityId),
+        eq(dashboards.ownerLevel, key.ownerLevel),
+        eq(dashboards.ownerId, key.ownerId),
+      ),
+    );
+  return rows.map((r) => r.name);
+}
+
 /** Read a single dashboard row by id (no access check — caller gates). */
 export async function readDashboardRowById(id: string): Promise<DashboardRow | undefined> {
   const db = getDashboardsDb();

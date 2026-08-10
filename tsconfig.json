@@ -332,6 +332,7 @@
       "@cinatra-ai/extensions/permissions-store": ["./packages/extensions/src/permissions-store.ts"],
       "@cinatra-ai/extensions/permissions-kind-hooks": ["./packages/extensions/src/permissions-kind-hooks.ts"],
       "@cinatra-ai/extensions/enforce-extension-access": ["./packages/extensions/src/enforce-extension-access.ts"],
+      "@cinatra-ai/extensions/access-scope-vantage": ["./packages/extensions/src/access-scope-vantage.ts"],
       "@cinatra-ai/extensions/install-access-contract": ["./packages/extensions/src/install-access-contract.ts"],
       "@cinatra-ai/extensions/extension-resource-identity": ["./packages/extensions/src/extension-resource-identity.ts"],
       "@cinatra-ai/extensions/scope-containment": ["./packages/extensions/src/scope-containment.ts"],

@@ -61,6 +61,17 @@ export default defineConfig({
       },
       // The MCP cube singleton resolves the platform via
       // @cinatra-ai/dashboards/cubes-platform.
+      // cinatra#2474 PR4: ROOT-side files reached from this package (the entity
+      // landings' catalog node → the installed-catalog read + its pure
+      // eligibility core) resolve these dashboards subpaths.
+      {
+        find: "@cinatra-ai/dashboards/extension-dashboard-reads",
+        replacement: path.join(root, "packages/dashboards/src/store/extension-dashboard-reads.ts"),
+      },
+      {
+        find: "@cinatra-ai/dashboards/entity-identity",
+        replacement: path.join(root, "packages/dashboards/src/store/entity-identity.ts"),
+      },
       {
         find: "@cinatra-ai/dashboards/cubes-platform",
         replacement: path.join(root, "packages/dashboards/src/cubes/platform-singleton.ts"),

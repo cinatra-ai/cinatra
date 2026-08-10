@@ -16,6 +16,30 @@ import type { OwnerLevel } from "./schema";
 export const OVERVIEW_DASHBOARD_NAME = "Overview" as const;
 
 /**
+ * The CREATABLE-NAME rule, as a pure total function: the name a create would
+ * actually persist for `(entity, owner)`, or `null` when the name is not
+ * creatable at all (empty/blank, or the reserved Overview default).
+ *
+ * This is the single source of truth for the rule — the mutation service's
+ * `assertCreatableName` is a throwing wrapper around it, so a caller that needs
+ * to PREDICT a create (rather than perform one) cannot drift from the writer.
+ * `dashboards_entity_name_uniq` is over the persisted value, so the prospective
+ * name a collision check compares must be exactly what this returns
+ * (cinatra#2474 PR4; codex convergence — "do not independently reimplement name
+ * normalization if it can be factored into a shared pure helper").
+ *
+ * Case is significant: the unique index is over the raw text column, so
+ * PostgreSQL's case-SENSITIVE equality governs, and this function must not
+ * fold case.
+ */
+export function normalizeCreatableDashboardName(name: string): string | null {
+  const trimmed = name.trim();
+  if (trimmed.length === 0) return null;
+  if (trimmed === OVERVIEW_DASHBOARD_NAME) return null;
+  return trimmed;
+}
+
+/**
  * The six live surfaces whose existing single-id rows the #700 compat backfill
  * absorbs as that entity's Overview. Each maps 1:1 from a
  * `system-<surface>:<orgId>:<userId>` id. Keep in exact sync with the backfill

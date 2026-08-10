@@ -317,6 +317,80 @@ describe("the unified Add-dashboard popup is wired from every shared landing (#2
   });
 
   it("personal gets NO add-to-scope source (not an add-to-scope target, §IX)", () => {
-    expect(read(PERSONAL_LANDING)).not.toContain("ScopeAddSourcesProvider");
+    // cinatra#2474 PR4 wires personal into the provider (for concept B), so the
+    // lock is no longer "no provider" — it is the STRONGER property the spec
+    // actually names: personal never receives the §IX.1 reference source, so it
+    // can never grow an "Add dashboard". `reference={null}` is a LITERAL here,
+    // not an expression that could evaluate non-null.
+    const src = read(PERSONAL_LANDING);
+    expect(src).toContain("<ScopeAddSourcesProvider");
+    expect(src).toMatch(/reference=\{null\}/);
+    expect(src).not.toContain("buildScopeReferenceSource");
+  });
+
+  // ── cinatra#2474 PR4 — concept B's catalog node ──────────────────────────
+  describe("the installed-catalog node (PR4)", () => {
+    const CATALOG_LANDINGS = [
+      ORG_LANDING,
+      TEAM_LANDING,
+      PROJECT_LANDING,
+      PERSONAL_LANDING,
+    ];
+
+    for (const file of CATALOG_LANDINGS) {
+      it(`${file} — builds the catalog through the ONE shared node builder and passes it down`, () => {
+        const src = read(file);
+        expect(src).toContain("buildScopeCatalogNode");
+        expect(src).toContain(
+          'from "@/components/dashboards/scope-catalog-node"',
+        );
+        expect(src).toMatch(/catalog=\{catalog\}/);
+      });
+
+      it(`${file} — never renders the section itself, so the empty⇒null collapse cannot be skipped`, () => {
+        // The collapse lives in `buildScopeCatalogNode` alone. A landing that
+        // rendered `<ScopeCatalogSection>` directly could hand the popup a
+        // non-null empty node, which would raise a popup with nothing in it.
+        expect(read(file)).not.toContain("<ScopeCatalogSection");
+      });
+    }
+
+    it("the org landing rides its ACTIVE-TENANT fence on the catalog too", () => {
+      // The same read-widening guard PR2 established and PR3's source kept: a
+      // merely-member org must gain no catalog read either.
+      expect(read(ORG_LANDING)).toContain(
+        "actor && actorIsActiveInThisOrg\n      ? await buildScopeCatalogNode(",
+      );
+    });
+
+    it("the project landing rides its organizationId guard on the catalog too", () => {
+      expect(read(PROJECT_LANDING)).toContain(
+        "project.organizationId\n    ? await buildScopeCatalogNode(",
+      );
+    });
+
+    it("every catalog surface is built from server-derived ids only", () => {
+      // The surface descriptor is what both the access vantage and the
+      // destination ref are derived from, so a client-authored value there would
+      // be a forged scope. Each landing composes it from its own server-resolved
+      // entity id and the session's user id.
+      expect(read(TEAM_LANDING)).toContain(
+        'surface: { kind: "team", orgId: scope.orgId, scopeId: team.id, userId }',
+      );
+      expect(read(ORG_LANDING)).toContain(
+        'surface: { kind: "organization", orgId: id, scopeId: id, userId }',
+      );
+      expect(read(PERSONAL_LANDING)).toContain('kind: "personal"');
+    });
+
+    it("NO landing hands the read a destination ref — it is derived, never supplied", () => {
+      // The round-1 hardening: an independently-supplied ref made the "acting
+      // user" invariant only as strong as the caller. The read now derives the
+      // destination from the surface plus the ACTOR'S own principal id, so there
+      // is nothing for a landing to get wrong.
+      for (const file of CATALOG_LANDINGS) {
+        expect(read(file)).not.toContain("organizationRef");
+      }
+    });
   });
 });

@@ -32,8 +32,10 @@ import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { EntityScopeTabs } from "@/components/entity-scope-tabs";
+import { ScopeAddSourcesProvider } from "@/components/dashboards/scope-add-sources";
+import { buildScopeCatalogNode } from "@/components/dashboards/scope-catalog-node";
 
-import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
+import { getActorContext, getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
 
 import { buildSecurityContextFromSession } from "../auth/security-context";
 import { EntityDashboardsShell } from "../components/entity-dashboards-shell";
@@ -87,6 +89,28 @@ export async function PersonalDashboardPage() {
     },
   );
 
+  // Concept B on the personal scope (cinatra#2474 PR4) — the issue's
+  // "Personal = Create + B", which PR3 recorded as landing with this slice.
+  //
+  // `reference` is NULL and always will be: concept A's listing relation admits
+  // only team/org/project (`dashboard_entity_links`), and spec §IX says a
+  // personal scope is not an add-to-scope target and carries no Add. Passing
+  // `null` is what preserves that — the toolbar keys the "Add dashboard" label,
+  // the §IX.2 annotation and the open-add-picker action on the reference source
+  // ALONE, so personal keeps its plain "+ New dashboard" exactly as before.
+  // A catalog only changes what that button OPENS: the unified popup (Create +
+  // catalog) when there is a catalog, the name prompt directly when there is
+  // not, which is every instance that installs no dashboard-shipping extension.
+  const actor = await getActorContext();
+  const catalog = await buildScopeCatalogNode({
+    actor,
+    surface: {
+      kind: "personal",
+      orgId: ctx.organizationId,
+      userId: ctx.userId,
+    },
+  });
+
   return (
     <Main className="min-h-screen">
       <PageHeader
@@ -99,11 +123,19 @@ export async function PersonalDashboardPage() {
         {/* Personal has no Settings pane (#1904), so its entity-page tablist is
             Dashboards alone (spec §IX). */}
         <EntityScopeTabs dashboardsHref="/personal" active="dashboards" />
-        <EntityDashboardsShell
-          dataSource={dataSource}
-          pageAnchor="personal"
-          initialData={{ list, selectedId: overview.id, config }}
-        />
+        {/* The unified Add-dashboard popup's sources (cinatra#2474 PR3/PR4).
+            Personal gets the catalog and NEVER the §IX.1 reference source. */}
+        <ScopeAddSourcesProvider
+          scopeLabel="Personal"
+          reference={null}
+          catalog={catalog}
+        >
+          <EntityDashboardsShell
+            dataSource={dataSource}
+            pageAnchor="personal"
+            initialData={{ list, selectedId: overview.id, config }}
+          />
+        </ScopeAddSourcesProvider>
       </PageContent>
     </Main>
   );

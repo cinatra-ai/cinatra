@@ -47,6 +47,7 @@ import { EntityScopeTabs } from "@/components/entity-scope-tabs";
 import { ScopeDashboardsSection } from "@/components/dashboards/scope-dashboards-section";
 import { ScopeAddSourcesProvider } from "@/components/dashboards/scope-add-sources";
 import { buildScopeReferenceSource } from "@/components/dashboards/scope-reference-binding";
+import { buildScopeCatalogNode } from "@/components/dashboards/scope-catalog-node";
 import {
   getActorContext,
   isPlatformAdmin,
@@ -204,6 +205,15 @@ export async function TeamDetailDashboardPage({
   await ensureEntityOverviewAction(ref);
   const list = await listEntityDashboardsAction(ref);
 
+  // Concept B's installed-catalog section (cinatra#2474 PR4) — the node that
+  // fills the slot PR3 left in the popup. Read server-side against THIS team's
+  // vantage and THIS actor's own destination collection; `null` (and so no
+  // section, and no change to the toolbar) whenever nothing is eligible.
+  const catalog = await buildScopeCatalogNode({
+    actor,
+    surface: { kind: "team", orgId: scope.orgId, scopeId: team.id, userId },
+  });
+
   // The Overview's LIVE content — the team's current summary as render-only
   // portlets (#702). Built fresh per request and handed to `<PortletHost>`, so
   // it can never be a stale/authorization-obsolete saved row.
@@ -260,6 +270,7 @@ export async function TeamDetailDashboardPage({
         <ScopeAddSourcesProvider
           scopeLabel={scopeLabel}
           reference={scopeReference}
+          catalog={catalog}
         >
           <TeamDetailDashboards
             dataSource={dataSource}
