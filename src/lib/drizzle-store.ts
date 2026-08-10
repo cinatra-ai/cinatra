@@ -15,7 +15,7 @@ import {
   widgetStreamMetadataGrantSchemaQueries,
 } from "@/lib/extension-grant-schema";
 import { assistantThreadSchemaQueries, assistantHandleSchemaQueries, assistantTurnSkillDeliverySchemaQueries } from "@/lib/assistant-thread-schema"; // + cinatra#2240 per-turn skill-delivery record (same pure-strings leaf as its FK parent)
-import { triggerSchemaQueries } from "@/lib/trigger-schema"; // cinatra#2569 — the trigger lifecycle's DDL leaf (see it for why this is not inline)
+import { triggerScheduleProposalSchemaQueries } from "@/lib/trigger-schedule-proposal-schema"; // cinatra#2569 — the two NET-NEW proposal tables, born in their leaf
 import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
 import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
 import { extensionUpdateReadModelSchemaQueries } from "@/lib/extension-update-read-model-schema"; import { connectorInstanceToolPolicySchemaQueries } from "@/lib/connector-instance-tool-policy-schema"; import { connectorInstanceServerSchemaQueries } from "@/lib/connector-instance-server-schema"; import { connectorInstancePendingCallSchemaQueries } from "@/lib/connector-instance-pending-call-schema"; import { connectorInstanceConfirmationPolicySchemaQueries } from "@/lib/connector-instance-confirmation-policy-schema"; import { connectorInstanceNativeInjectionSchemaQueries } from "@/lib/connector-instance-native-injection-schema";
@@ -1378,12 +1378,39 @@ END $$`,
       updated_at timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS agent_run_output_derivations_status_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_output_derivations" (status, created_at)` },
-    // The TRIGGER-family tables (agent_run_triggers, agent_run_pm_links) and the
-    // conversational schedule PROPOSAL tables (cinatra#2569) all live in the
-    // `trigger-schedule-proposal-schema.ts` pure-strings leaf — one place for the
-    // trigger lifecycle's DDL, and this file is a baselined file-size-ratchet
-    // bottleneck sitting at its ceiling (same pattern as assistant-thread-schema).
-    ...triggerSchemaQueries(schemaName),
+    // agent_run_triggers: per-run trigger gate (immediate/scheduled/recurring)
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_triggers" (
+      run_id text PRIMARY KEY REFERENCES "${schemaName.replaceAll('"', '""')}"."agent_runs"(id) ON DELETE CASCADE,
+      trigger_type text NOT NULL DEFAULT 'immediate',
+      scheduled_at timestamptz,
+      cron_expression text,
+      timezone text NOT NULL DEFAULT 'UTC',
+      enabled boolean NOT NULL DEFAULT true,
+      released_at timestamptz,
+      job_scheduler_id text,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS agent_run_triggers_released_at_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_triggers" (released_at)` },
+    // agent_run_pm_links: schedule↔PM-task sync link table (cinatra#317). One
+    // row per schedule-defining trigger mirrored to an external PM provider
+    // (Plane). Keyed by run_id (one-to-one with the trigger). A link table, not
+    // columns on agent_run_triggers, so a PM outage / absent provider leaves the
+    // trigger untouched. external_task_id/synced_at are null until the first
+    // successful push; sync_error holds the last fail-open error (null=healthy);
+    // version is the optimistic-concurrency counter for the reconcile loop.
+    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_pm_links" (
+      run_id text PRIMARY KEY REFERENCES "${schemaName.replaceAll('"', '""')}"."agent_runs"(id) ON DELETE CASCADE,
+      provider text NOT NULL,
+      external_task_id text,
+      synced_at timestamptz,
+      sync_error text,
+      version integer NOT NULL DEFAULT 0,
+      created_at timestamptz NOT NULL DEFAULT now(),
+      updated_at timestamptz NOT NULL DEFAULT now()
+    )` },
+    { text: `CREATE INDEX IF NOT EXISTS agent_run_pm_links_provider_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_pm_links" (provider)` },
+    ...triggerScheduleProposalSchemaQueries(schemaName),
     // project_dispatch_attempts + project_leases: the dynamic-dispatch
     // primitive's dispatch-attempt ledger + project-level lease (cinatra#1032
     // deliverable 2). DDL lives in the projectDispatchSchemaQueries leaf
