@@ -82,6 +82,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Mints/validates short-lived widget stream tokens (timing-safe compares). Security-critical token broker; kept synchronous to avoid a validation TOCTOU window.",
   },
+  "src/lib/lifecycle/widget-capture-principal.ts": {
+    class: "sync-required",
+    justification:
+      "cinatra#2576 (epic #2564 S8c): the jti-keyed LIVE re-check behind a widget capture capability. An <img> request carries no bearer, so the capability seals the cwu_ token's jti and this leaf is the revocation edge for it — the same security-critical instant decision widget-user-auth.ts makes, keyed on jti because there is no raw token to hash. Deliberately its own sync leaf rather than an addition to widget-user-auth.ts (that module's verifier is raw-token-keyed and cannot express this read), and deliberately NOT on the async pooled/drizzle layer: this table has no drizzle mapping and the capture-store lane it runs beside is synchronous throughout. ONE read-only SELECT, no writes. Migrates with widget-user-auth.ts, serialized with it.",
+  },
 
   // --- migratable-background-setup: boot / settings / dev / cold paths ---
   "src/lib/anthropic-skill-reconcile-service.ts": {
