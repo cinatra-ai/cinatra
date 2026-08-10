@@ -31,7 +31,7 @@ import type { OrgWriteAuthority } from "@cinatra-ai/org-write-kernel";
 // cinatra#1940 P3 (Decision 2): the creation-perimeter conversion — the two
 // `agent_runs` INSERT sites below now run guarded, the same seam
 // transitionRunStatus already uses.
-import { guardedRunWrite, type GuardedRunTx } from "./org-write-run-seam";
+import { guardedRunWrite, type GuardedRunCompanionWrite } from "./org-write-run-seam";
 // cinatra#1893 (epic #1883 A5): terminal-success-with-derivation-outbox seam
 // (file-size ratchet #1893). Its producer transitionRunStatus now lives in
 // ./run-transition; only the option TYPE is re-exported for `./store` importers.
@@ -2443,81 +2443,20 @@ export async function updateAgentRunAuthPolicy(
 export { updateAgentTemplateAuthPolicy } from "./store-agent-template-policy";
 
 // ---------------------------------------------------------------------------
-// run_co_owners DAO. addRunCoOwner uses ON CONFLICT DO NOTHING
-// for atomic idempotency (the composite PK enforces uniqueness; double-add is
-// a no-op rather than an error).
+// run_co_owners DAO — extracted to `./run-co-owners-store` (cinatra#2569).
+// Re-exported so `./store` stays the import site every caller already uses;
+// this file is a baselined file-size-ratchet bottleneck sitting at its ceiling,
+// and the DAO is a self-contained vertical slice with no other coupling to it.
 // ---------------------------------------------------------------------------
-
-export type RunCoOwnerRecord = {
-  runId: string;
-  userId: string;
-  grantedBy: string;
-  grantedAt: Date;
-};
-
-export async function readRunCoOwners(runId: string): Promise<RunCoOwnerRecord[]> {
-  const rows = await db
-    .select()
-    .from(runCoOwners)
-    .where(eq(runCoOwners.runId, runId))
-    .orderBy(asc(runCoOwners.grantedAt));
-  return rows;
-}
-
-/**
- * single resolver for the run.coOwnerUserIds branch
- * required by enforceRunAccess. Centralises the readRunCoOwners → userId
- * extraction + dedup used before calling the policy
- * kernel from MCP handlers.
- *
- * Returns dedup list preserving first-seen order. Empty list when no
- * co-owners exist (caller MUST still pass coOwnerUserIds: [] explicitly
- * — undefined is the "skip the branch" sentinel in auth-policy.ts).
- */
-export async function resolveRunCoOwnerUserIds(runId: string): Promise<string[]> {
-  const rows = await readRunCoOwners(runId);
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const r of rows) {
-    if (!seen.has(r.userId)) {
-      seen.add(r.userId);
-      out.push(r.userId);
-    }
-  }
-  return out;
-}
-
-export async function addRunCoOwner(
-  runId: string,
-  userId: string,
-  grantedBy: string,
-): Promise<void> {
-  await db
-    .insert(runCoOwners)
-    .values({ runId, userId, grantedBy })
-    .onConflictDoNothing();
-}
-
-export async function removeRunCoOwner(
-  runId: string,
-  userId: string,
-): Promise<void> {
-  await db
-    .delete(runCoOwners)
-    .where(and(eq(runCoOwners.runId, runId), eq(runCoOwners.userId, userId)));
-}
-
-/**
- * Clear the original run owner. Used when the owner removes themselves from
- * the ownership list (only allowed if at least one co-owner remains, enforced
- * by the server action).
- */
-export async function clearRunRunBy(runId: string): Promise<void> {
-  await db
-    .update(agentRuns)
-    .set({ runBy: null })
-    .where(eq(agentRuns.id, runId));
-}
+import { readRunCoOwners } from "./run-co-owners-store";
+export {
+  readRunCoOwners,
+  resolveRunCoOwnerUserIds,
+  addRunCoOwner,
+  removeRunCoOwner,
+  clearRunRunBy,
+  type RunCoOwnerRecord,
+} from "./run-co-owners-store";
 
 /**
  * Find all agent_runs for a given source type and source config ID.
@@ -3222,30 +3161,9 @@ export async function createAgentRunPendingInput(
     humanPresent?: boolean | null; // cinatra#2067 presence discriminator (interactive callers pass true)
     // cinatra#2485 C — see CreateAgentRunInput.scopeActor. Same contract.
     scopeActor?: ActorContext | null;
-    /**
-     * Extra writes that MUST commit ATOMICALLY WITH THE RUN ROW (cinatra#2569,
-     * epic #2564 S5).
-     *
-     * Runs inside the SAME org-write-guarded transaction as the insert — after
-     * it, before commit — on the tx the guard hands out, so the org locks and
-     * the lifecycle ruling already apply. A THROW rolls the run back with it.
-     *
-     * It exists for exactly one shape of problem: a caller for whom a run
-     * WITHOUT its companion rows is a defect rather than an intermediate state.
-     * The conversational schedule proposal is the case that forced it — Confirm
-     * spends a single-use proposal, creates the run and records the
-     * schedule-install intent, and a crash between any two of those either
-     * strands a run nobody asked for or lets the same proposal create a second.
-     * Sequencing the writes could not fix that; sharing the transaction does.
-     *
-     * NOT a general escape hatch: the callback sees the run id and the
-     * transaction and nothing else, and every caller of it is a store module
-     * whose invariant is atomicity with the run.
-     */
-    withinCreateTx?: (
-      tx: GuardedRunTx,
-      run: { id: string; orgId: string },
-    ) => Promise<void>;
+    /** Companion writes committed ATOMICALLY WITH THE RUN ROW (cinatra#2569) —
+     *  contract + rationale on `GuardedRunCompanionWrite`. */
+    withinCreateTx?: GuardedRunCompanionWrite;
   },
   // cinatra#1940 P3 (Decision 2): see createAgentRun's authority param doc —
   // same REQUIRED-trailing-param, same fail-closed-on-undefined contract.
@@ -3297,13 +3215,9 @@ export async function createAgentRunPendingInput(
         oboCeiling: oboCeilingJson,
         humanPresent: input.humanPresent ?? null, // cinatra#2067 presence discriminator
       });
-      // Companion writes that must live or die with the run (see the option's
-      // doc). Deliberately the LAST thing in the guarded transaction: the run
-      // row exists for it to reference, and anything it throws unwinds the
-      // insert instead of leaving a run its caller never wanted.
-      if (input.withinCreateTx) {
-        await input.withinCreateTx(tx, { id, orgId: input.orgId });
-      }
+      // LAST in the guarded transaction: the row exists for it to reference, and
+      // anything it throws unwinds the insert (cinatra#2569).
+      if (input.withinCreateTx) await input.withinCreateTx(tx, { id, orgId: input.orgId });
     },
   );
   // Post-insert re-read stays OUTSIDE the guard — a committed insert cannot

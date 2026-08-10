@@ -1085,7 +1085,7 @@
     {
       "primitiveName": "schedule_proposal_render",
       "file": "src/lib/lifecycle/schedule-proposal-mcp.ts",
-      "line": 196
+      "line": 201
     },
     {
       "primitiveName": "skill_source_compile",
