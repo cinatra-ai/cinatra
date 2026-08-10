@@ -4,19 +4,33 @@ import "server-only";
  * (cinatra#2474 PR4) — the node that fills the slot PR3 left in the unified
  * Add-dashboard popup.
  *
- * Four landings need the identical sequence (take the read, render the section,
- * collapse an empty result to `null`), and the collapse is load-bearing rather
- * than cosmetic: `null` is what keeps an empty catalog from raising a popup that
- * holds nothing (see `ScopeCatalogSection`'s header and the toolbar's
- * `offersUnifiedAdd`). Putting it in one place means no landing can forget it.
+ * Four landings need the identical sequence (take the read, bind the write to the
+ * SAME server-derived surface, render the section, collapse an empty result to
+ * `null`), and two of those steps are load-bearing rather than cosmetic:
  *
- * NOT a `"use server"` module: this is a render-time helper, never a server
- * action. PR4 exposes no client-callable seam at all.
+ *   - the COLLAPSE — `null` is what keeps an empty catalog from raising a popup
+ *     that holds nothing (see `ScopeCatalogSection`'s header and the toolbar's
+ *     `offersUnifiedAdd`);
+ *   - the BINDING (cinatra#2474 PR5) — the instantiate action is bound HERE, to
+ *     the very descriptor the read was taken for, so the read's scope and the
+ *     write's scope are the same value by construction and the browser never
+ *     authors either. Next encrypts bound arguments, so the surface does not
+ *     cross to the client in a readable or forgeable form.
+ *
+ * Putting both in one place means no landing can forget either, and none can
+ * pass the write a scope it did not read.
+ *
+ * NOT a `"use server"` module: this is a render-time helper. The action it binds
+ * is the only client-callable seam concept B has.
  */
 import type { ReactElement } from "react";
 
 import type { ActorContext } from "@/lib/authz/actor-context";
-import type { CatalogSurface } from "@/lib/dashboards/installed-catalog-contract";
+import type {
+  CatalogSurface,
+  ScopeCatalogSource,
+} from "@/lib/dashboards/installed-catalog-contract";
+import { addInstalledCatalogDashboardAction } from "@/lib/dashboards/installed-catalog-actions";
 import { listInstalledCatalogTemplates } from "@/lib/dashboards/installed-catalog-read";
 
 import { ScopeCatalogSection } from "./scope-catalog-section";
@@ -36,5 +50,12 @@ export async function buildScopeCatalogNode(args: {
     surface: args.surface,
   });
   if (templates.length === 0) return null;
-  return <ScopeCatalogSection templates={templates} />;
+  // The write, bound to the SAME server-derived descriptor the read used. The
+  // client supplies only a template handle; the action re-authorizes from the
+  // live session and re-derives the destination itself, so this binding is
+  // capability minimization, never the authorization.
+  const source: ScopeCatalogSource = {
+    add: addInstalledCatalogDashboardAction.bind(null, args.surface),
+  };
+  return <ScopeCatalogSection templates={templates} source={source} />;
 }

@@ -10,7 +10,89 @@ import type { DashboardEntityRef } from "@cinatra-ai/dashboards/entity-identity"
 import { normalizeCreatableDashboardName } from "@cinatra-ai/dashboards/entity-identity";
 import type { AccessScopeVantage } from "@cinatra-ai/extensions/access-scope-vantage";
 
+import type { ActorContext } from "@/lib/authz/actor-context";
+import { actorHoldsProjectGrant } from "@/lib/authz/project-read-gate";
+
 import type { CatalogSurface } from "./installed-catalog-contract";
+
+/**
+ * SCOPE REACH — may `actor` be on this surface at all, RIGHT NOW?
+ *
+ * ── WHY THIS EXISTS (cinatra#2474 PR5, codex convergence r0/HIGH-1) ────────
+ * PR4's read is taken during a landing's server render, so the landing's own
+ * membership gate had already admitted the actor and this question never needed
+ * asking. PR5's action is client-reachable and LIVES LONGER THAN THAT RENDER: a
+ * bound action reference held by the SAME user still resolves after they are
+ * removed from the team, after a project grant is revoked, or after the entity
+ * itself is deleted. The tenant fence does not catch it (same org), and neither
+ * does the destination fence (the row is genuinely theirs) — nor can the writer,
+ * which sees a user-owned row and correctly allows it. So the reach the render
+ * gate proved must be re-proved at write time, and this is that predicate.
+ *
+ * ── EVERY ARM IS A LIVE-RESOLVED MEMBERSHIP AXIS ──────────────────────────
+ * Deliberately so, because that makes the predicate prove TWO things at once —
+ * that the actor still belongs, and that the entity still EXISTS — with no I/O
+ * of its own. Each axis on an `ActorContext` was resolved this request from a
+ * live join, so a deleted team or project simply is not in it (codex convergence
+ * r1: a pure role check would have let an org admin write onto a deleted team).
+ *
+ *   tenant        — the actor's active org IS the surface's, AND they hold a
+ *                   resolved membership role in it (`resolveOrgRoleForSession`
+ *                   reads the membership table; a removed member resolves to
+ *                   `undefined`). This costs nothing in permissiveness: the
+ *                   org-write kernel already refuses every dashboard write from
+ *                   an actor with no membership-minted authority, so a principal
+ *                   this arm turns away could not have written anyway — it is
+ *                   turned away BEFORE the store reads rather than after.
+ *   personal      — the actor IS the scope; the destination fence already proved
+ *                   the collection is theirs.
+ *   organization  — the org landing admits any member of the tenant, which the
+ *                   tenant arm above states exactly; the surface's own org-scope
+ *                   invariant (`scopeId === orgId`) is the rest of it.
+ *   team          — MEMBERSHIP, via `teamIds` (the active-org projection of
+ *                   `readTeamsForUser`).
+ *   project       — the sealed-room read gate, unchanged and not restated:
+ *                   `actorHoldsProjectGrant` over `readProjectGrantsForUser`'s
+ *                   resolved grants, the canonical predicate every project read
+ *                   surface uses.
+ *
+ * ── ONE DELIBERATE NARROWING vs PR4's LIST, STATED ────────────────────────
+ * The team landing additionally admits a MANAGER who may view without a
+ * membership row (org owner/admin, platform admin), and PR4's read showed them
+ * the catalog. This predicate does not, so they now see no catalog section on a
+ * team they do not belong to. That is chosen, not overlooked: membership is what
+ * makes the team's existence provable here without a query, and the affordance it
+ * withholds is small and strange — a private dashboard of the manager's own, on
+ * the page of a team they are not in. A manager who joins the team gets it back.
+ *
+ * PURE and FAIL-CLOSED: reads only resolved `ActorContext` axes, and anything
+ * unmatched is a denial. It can only ever NARROW what the other gates admit.
+ */
+export function actorMayReachSurface(
+  actor: ActorContext,
+  surface: CatalogSurface,
+): boolean {
+  if (!surface.orgId || actor.organizationId !== surface.orgId) return false;
+  // Membership in the tenant, not merely a session pointing at it.
+  if (!actor.orgRole) return false;
+
+  switch (surface.kind) {
+    case "personal":
+      return true;
+    case "organization":
+      // The scope IS the tenant; `destinationRefForSurface` pins that invariant.
+      return surface.scopeId === surface.orgId;
+    case "team":
+      return !!surface.scopeId && (actor.teamIds ?? []).includes(surface.scopeId);
+    case "project":
+      return !!surface.scopeId && actorHoldsProjectGrant(actor, surface.scopeId);
+    default: {
+      const _exhaustive: never = surface;
+      void _exhaustive;
+      return false;
+    }
+  }
+}
 
 /**
  * The surface's ACCESS VANTAGE — the scope whose generic member the extension

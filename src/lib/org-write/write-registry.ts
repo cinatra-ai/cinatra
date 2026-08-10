@@ -173,6 +173,23 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     allowedImporters: [
       "packages/dashboards/src/actions.ts",
       "packages/dashboards/src/screens/organization-detail-actions.ts",
+      // cinatra#2474 PR5 — concept B's installed-catalog copy. A DELIBERATE,
+      // REVIEWED design event, and the narrowest shape available:
+      //
+      //   - `entity-dashboard-writer.ts` is a re-export barrel carrying THIS
+      //     writer and nothing else that writes (mirroring
+      //     `extension-materialization.ts`). It exists because the copy's
+      //     authorization needs the extensions canonical store, the access
+      //     evaluator and the app's extension manifest, none of which the
+      //     dashboards package may pull — so the decision lives app-side while
+      //     the WRITE stays this platform writer, with its owner-axis assertion,
+      //     its reserved-name rule, its kernel guard, its same-TX audit row and
+      //     its twin pairing.
+      //   - `installed-catalog-write.ts` is the single app-side caller. It is a
+      //     confined core whose every seam is injected, and it re-runs the whole
+      //     eligibility gate chain at write time before it reaches this writer.
+      "packages/dashboards/src/entity-dashboard-writer.ts",
+      "src/lib/dashboards/installed-catalog-write.ts",
     ],
   }),
   dashboardsWriter("renameDashboard", ["dashboards"], "upsert", 1, {

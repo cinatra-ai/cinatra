@@ -29,8 +29,9 @@
  *     member keeps it, exactly as before #2474.
  *
  * The catalog slot deliberately does NOT promote the button to "Add dashboard":
- * concept B (cinatra#2474 PR4) must not hand a non-manager the scope-level Add.
- * Nor does it, on its own, raise a button at all — see `offersUnifiedAdd`.
+ * concept B (cinatra#2474 PR4/PR5) must not hand a non-manager the scope-level
+ * Add, however actionable its own section becomes. Nor does it, on its own,
+ * raise a button at all — see `offersCatalogAdd`.
  */
 import { useState } from "react";
 import {
@@ -100,6 +101,7 @@ export function EntityDashboardsToolbarControls() {
     busy,
     onSelect,
     onCreate,
+    onAdopted,
     onRename,
     onDelete,
   } = ctx;
@@ -125,19 +127,23 @@ export function EntityDashboardsToolbarControls() {
   // §IX.2 suppresses the moment cinatra#2474 PR4 supplies a catalog).
   const scopeReference = scopeAdd?.reference ?? null;
   const offersScopeAdd = scopeReference !== null;
+  // Whether concept B's section carries a usable operation for THIS principal
+  // (cinatra#2474 PR5 — the deliberate re-grounding of PR4's conjunct).
+  //
+  // PR4 required `canCreate` here for a REASON THAT NO LONGER APPLIES: its
+  // catalog was browse-only, so a catalog alone put nothing pressable in the
+  // popup. PR5 gives every row an Add — and that Add IS a create, into the
+  // ACTING USER'S OWN collection for this entity, authorized by exactly the
+  // owner-axis rule `canCreate` reports. So the conjunct stays, and stops being
+  // a stand-in: it is now the catalog Add's own authorization precondition, and
+  // the SAME value is handed to the section (through the dialog's
+  // `CatalogAddOutcomeProvider`) to gate the button itself. The two can never
+  // disagree — the popup cannot open on a catalog whose control it would then
+  // suppress, and the section cannot offer a control the writer would refuse.
+  const offersCatalogAdd = scopeAdd?.catalog != null && canCreate;
   // Whether the popup is worth opening at all — a strictly WIDER predicate that
   // may only decide the popup's existence, never the manager-only labelling.
-  //
-  // The catalog counts toward it ONLY alongside `canCreate` (cinatra#2474 PR4).
-  // Concept B's section is BROWSE-ONLY until its instantiate action lands in
-  // PR5, so a catalog on its own puts nothing pressable in the popup: letting it
-  // raise a "+ New dashboard" button for a principal who cannot even create
-  // would offer a control that opens a dialog with no available operation —
-  // a capability the product does not have (codex convergence r0). With
-  // `canCreate` the popup always holds a real Create action, and the catalog
-  // rides along as honest context.
-  const offersUnifiedAdd =
-    offersScopeAdd || (scopeAdd?.catalog != null && canCreate);
+  const offersUnifiedAdd = offersScopeAdd || offersCatalogAdd;
 
   async function handleDeleteConfirm() {
     if (!deleteTarget || !onDelete) return;
@@ -298,6 +304,14 @@ export function EntityDashboardsToolbarControls() {
           reference={scopeReference}
           catalog={scopeAdd.catalog}
           onReferenceAdded={() => setAddDialogOpen(false)}
+          // A catalog copy landed (cinatra#2474 PR5): close the popup and put
+          // the new dashboard in the dropdown + on screen, exactly as Create
+          // does. The summary came back from the server action already
+          // authorized; the shell owns the list, so the shell adopts it.
+          onCatalogAdded={(dashboard) => {
+            setAddDialogOpen(false);
+            onAdopted(dashboard);
+          }}
         />
       ) : null}
 

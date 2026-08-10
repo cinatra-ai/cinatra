@@ -51,6 +51,9 @@ import {
   validateDashboardConfigV12,
   DASHBOARD_CONFIG_V12_VERSION,
   type PortletKindLookup,
+  // The template row's identity rules (cinatra#2474 PR5) — pure, and defined in
+  // that module so a caller checking currentness never imports this writer one.
+  extensionTemplateRowName,
 } from "./extension/dashboard-config-v12";
 import { registerCorePortletKinds } from "./portlets/kinds";
 import { getPortletKindDescriptor, isRenderOnlyPortletKind, validatePortletConfig } from "./portlets/registry";
@@ -1678,7 +1681,7 @@ export async function materializeExtensionTemplate(
 ): Promise<DashboardRow> {
   const config = assertConfigV12(input.config, input.getPortletKind);
   const templateScope = config.scopeLevel;
-  const name = input.name ?? `${input.extensionId} dashboard`;
+  const name = extensionTemplateRowName(input.extensionId, input.name);
 
   return withDashboardsTx(tx, async (q) => {
     const existing = await q

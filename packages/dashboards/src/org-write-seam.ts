@@ -22,6 +22,7 @@
  */
 import {
   guardOrgMutation,
+  OrgWriteRefusedError,
   type OrgWriteAuthority,
   type OrgWriteDb,
   type OrgWriteTx,
@@ -41,6 +42,21 @@ export class DashboardOrgWriteAuthorityError extends Error {
     );
     this.name = "DashboardOrgWriteAuthorityError";
   }
+}
+
+/**
+ * True for the kernel's OWN refusal — its lifecycle ruling on a write it
+ * otherwise had authority for (an archived org, a held lease).
+ *
+ * A PREDICATE rather than a re-exported class (cinatra#2474 PR5): a caller
+ * outside this package that needed `instanceof OrgWriteRefusedError` would have
+ * to reach the kernel root itself, and opaque access to that root is exactly
+ * what the org-write boundary gate refuses — it reaches every kernel writer
+ * without naming one. The kernel edge belongs here, in the seam that already
+ * owns it; callers ask this question instead.
+ */
+export function isOrgWriteRefusal(e: unknown): boolean {
+  return e instanceof OrgWriteRefusedError;
 }
 
 /** Fail-closed extraction: no authority, or an authority/actor organization

@@ -220,11 +220,21 @@ export type ReconcileTemplateMaterializeResult = {
  * in the preceding activation phase). A discovery failure (no `/data` store, DB
  * unavailable) degrades to `[]` — the static source still reconciles.
  */
-async function defaultRuntimeArtifactRecords(): Promise<RuntimeArtifactRecord[]> {
+async function defaultRuntimeArtifactRecords(
+  /** Narrow the rescan to ONE package (cinatra#2474 PR5). The all-orgs boot
+   *  reconcile passes nothing and keeps its whole-store behaviour; the
+   *  single-package currentness probe passes its package, so an authenticated add
+   *  can never trigger a whole-store walk-and-register (codex convergence
+   *  r1/MEDIUM — the rescan already supports this narrowing for the
+   *  activate-hook path). */
+  onlyPackage?: string,
+): Promise<RuntimeArtifactRecord[]> {
   try {
     const { rescanArtifactBridgeFromStore } = await import("@/lib/extension-artifact-bridge-rescan");
     const { readPackContributionClaimFromDir } = await import("@/lib/dashboards/read-pack-dashboard-template");
-    const { registeredRecords } = await rescanArtifactBridgeFromStore();
+    const { registeredRecords } = await rescanArtifactBridgeFromStore(
+      onlyPackage ? { onlyPackage } : {},
+    );
     // FAIL-CLOSED (codex #1896-r0 HIGH): an untrusted runtime-store pack is a
     // materialize candidate ONLY when its dashboardContribution claim is VALID
     // (`parseDashboardContribution` via the shared gate — never a looser parse). A
@@ -241,6 +251,70 @@ async function defaultRuntimeArtifactRecords(): Promise<RuntimeArtifactRecord[]>
     );
     return [];
   }
+}
+
+/**
+ * The reconciler's OWN live-template resolution for ONE PACKAGE in one org — the
+ * single authority on "does this package currently DECLARE a dashboard template
+ * here, and what IS that declaration", under the same static-authoritative
+ * precedence, runtime claim gate and traversal guard the whole-org resolution
+ * applies.
+ *
+ * Exported (cinatra#2474 PR5) so concept B's instantiate action can take its
+ * CURRENTNESS gate with these exact eyes rather than a second implementation of
+ * the same precedence: the reconcile has no retirement pass, so a materialized
+ * row outlives a dropped (or REPLACED) declaration indefinitely, and the write
+ * must ask the manifest, not the row.
+ *
+ * NARROWED TO THE PACKAGE ON BOTH AXES, deliberately (codex convergence r0/r1).
+ * The whole-org resolver eagerly discovers the RUNTIME package store, and that
+ * discovery re-registers artifact object types as a side effect — far too much
+ * to do on an authenticated write path. So:
+ *
+ *   - a package the trusted STATIC manifest claims never reaches the store at
+ *     all. Since STATIC PRESENCE IS AUTHORITATIVE (such a package is NEVER
+ *     served from the runtime store, with no fall-through on a failed read), the
+ *     runtime arm is not merely expensive for it, it is unreachable.
+ *   - a genuinely marketplace-installed package does reach it, because for that
+ *     package the store IS the source — but scoped with the rescan's own
+ *     `onlyPackage`, the same narrowing the activate hook uses, so one add can
+ *     never walk-and-register the whole store.
+ *
+ * `null` when the package is not live for this org, is not on disk, or ships no
+ * `form:"dashboard"` template today.
+ */
+export async function resolveLiveDashboardTemplateForPackage(
+  organizationId: string,
+  packageName: string,
+): Promise<LiveDashboardTemplate | null> {
+  if (!organizationId || !packageName) return null;
+  const { listInstalledExtensions } = await import("@cinatra-ai/extensions/canonical-store");
+  const { STATIC_EXTENSION_MANIFEST } = await import("@/lib/generated/extensions.server");
+  const { readPackDashboardTemplate, readPackDashboardTemplateFromDir } = await import(
+    "@/lib/dashboards/read-pack-dashboard-template"
+  );
+
+  const rows = (await listInstalledExtensions({})).filter(
+    (r) => r.packageName === packageName,
+  );
+  if (rows.length === 0) return null;
+
+  // Static presence decides the SOURCE before any store work happens; and when
+  // the store IS consulted, it is walked for this package alone.
+  const staticallyClaimed = STATIC_EXTENSION_MANIFEST[packageName] !== undefined;
+  const runtimeRecords = staticallyClaimed
+    ? []
+    : await defaultRuntimeArtifactRecords(packageName);
+
+  const templates = resolveLiveTemplatesFromSources({
+    organizationId,
+    rows,
+    staticManifest: STATIC_EXTENSION_MANIFEST,
+    runtimeRecords,
+    readStaticTemplate: readPackDashboardTemplate,
+    readTemplateFromDir: readPackDashboardTemplateFromDir,
+  });
+  return templates.find((t) => t.packageName === packageName) ?? null;
 }
 
 async function defaultResolveLiveTemplates(
