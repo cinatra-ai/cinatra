@@ -27,6 +27,14 @@ import {
   classifyDrizzleStoreDiff,
   detectMigrationArtifact,
   runGate,
+  findDdlLeafModules,
+  resolveLeafSpecifier,
+  normalizeDdlLine,
+  schemaNameAliases,
+  stripComments,
+  unresolvedLeafSpreads,
+  findLocalDdlHelpers,
+  leafDdlLines,
   IN_SCOPE_FILE,
   MIGRATION_MANIFEST_PATH,
   MIGRATION_FRAGMENT_DIR,
@@ -51,7 +59,7 @@ test("fixture corpus covers the convention's required cases", () => {
   const expects = new Set(corpus.fixtures.map((f) => f.expect));
   assert.ok(expects.has("pass") && expects.has("fail"), "corpus must contain both pass and fail labels");
   const categories = corpus.fixtures.map((f) => f.category).join(" | ");
-  for (const needle of ["destructive, no artifact", "destructive, has artifact", "additive", "out of scope"]) {
+  for (const needle of ["destructive, no artifact", "destructive, has artifact", "additive", "out of scope", "spread-in leaf", "BY the relocation", "hidden inside the DDL leaf"]) {
     assert.ok(categories.includes(needle), `corpus must keep a "${needle}" fixture (have: ${categories})`);
   }
 });
@@ -1265,4 +1273,429 @@ test("union reader: the LIVE repo ledger is a valid union", () => {
   assert.ok(entries.length >= 24, `expected the shipped ledger, got ${entries.length} entries`);
   const seqs = entries.map((e) => Number(e.seq));
   assert.deepEqual([...seqs].sort((a, b) => a - b), seqs, "entries must come back sorted by numeric seq");
+});
+
+// ---------------------------------------------------------------------------
+// 10. DDL LEAF MODULES (cinatra#2625) — the executed DDL is COMPOSED, so a leaf
+//     reached by a spread is an in-scope schema region: relocating deployed DDL
+//     into one is a no-op move, and a drop inside one is still a drop.
+// ---------------------------------------------------------------------------
+
+test("resolveLeafSpecifier maps first-party specifiers and refuses bare packages", () => {
+  assert.deepEqual(resolveLeafSpecifier("@/lib/trigger-schema"), ["src/lib/trigger-schema.ts", "src/lib/trigger-schema/index.ts"]);
+  assert.deepEqual(resolveLeafSpecifier("./trigger-schema"), ["src/lib/trigger-schema.ts", "src/lib/trigger-schema/index.ts"]);
+  assert.deepEqual(resolveLeafSpecifier("../artifacts/publication-operation-schema")[0], "src/artifacts/publication-operation-schema.ts");
+  // A bare package can never be a first-party DDL leaf — no leaf, so the gate
+  // keeps treating an unexplained removal as destructive.
+  assert.deepEqual(resolveLeafSpecifier("drizzle-orm/pg-core"), []);
+});
+
+test("findDdlLeafModules resolves the REAL drizzle-store.ts spreads, and only spread-in imports", () => {
+  const content = readFileSync(join(REPO_ROOT, IN_SCOPE_FILE), "utf8");
+  const leaves = findDdlLeafModules(content);
+  // A leaf that is genuinely spread into buildCreateStoreSchemaQueries today.
+  assert.ok(leaves.has("src/lib/org-write-schema.ts"), `expected the org-write leaf; got ${[...leaves.keys()].slice(0, 8).join(", ")}`);
+  assert.ok(leaves.get("src/lib/org-write-schema.ts").has("orgWriteSchemaQueries"));
+  // Imported symbols that are NOT spread into the DDL region stay out of scope.
+  for (const [path, names] of leaves) {
+    assert.ok(names.size > 0, `${path}: a resolved leaf must name at least one export`);
+    for (const n of names) assert.ok(content.includes(`...${n}(`), `${n} was resolved without a spread call site`);
+  }
+});
+
+test("findDdlLeafModules ignores a COMMENTED-OUT spread (a decoy must not become a leaf)", () => {
+  const store = [
+    'import { realQueries } from "@/lib/real-schema";',
+    'import { decoyQueries } from "@/lib/decoy-schema";',
+    "function createStoreTables(schemaName: string) {",
+    "  return {};",
+    "}",
+    "export function buildCreateStoreSchemaQueries(schemaName: string) {",
+    "  return [",
+    "    ...realQueries(schemaName),",
+    "    // ...decoyQueries(schemaName),",
+    "  ];",
+    "}",
+  ].join("\n");
+  const leaves = findDdlLeafModules(store);
+  assert.ok(leaves.has("src/lib/real-schema.ts"));
+  assert.ok(!leaves.has("src/lib/decoy-schema.ts"), "a commented-out spread must not point the gate at an uncalled module");
+});
+
+test("schemaNameAliases only binds the ONE schema-escape expression, and drops AMBIGUOUS names", () => {
+  const aliases = schemaNameAliases(
+    [
+      "  const s = schemaName.replaceAll('\"', '\"\"');",
+      '  const shadow = "shadow_schema";',
+      "  const t = other.trim();",
+    ].join("\n"),
+  );
+  assert.deepEqual([...aliases], ["s"]);
+
+  // Rebound later — the gate cannot tell which binding a `${s}` reads.
+  assert.deepEqual(
+    [...schemaNameAliases(["let s = schemaName.replaceAll('\"', '\"\"');", '  s = "shadow_schema";'].join("\n"))],
+    [],
+  );
+  // COMPOUND mutation is a rebinding too (`s += "_shadow"`).
+  assert.deepEqual(
+    [...schemaNameAliases(["let s = schemaName.replaceAll('\"', '\"\"');", '  s += "_shadow";'].join("\n"))],
+    [],
+  );
+  // Comparisons are NOT bindings — they must not disqualify the alias.
+  assert.deepEqual(
+    [...schemaNameAliases(["const s = schemaName.replaceAll('\"', '\"\"');", "  if (s !== '' && s >= 'a' && s === x) return [];"].join("\n"))],
+    ["s"],
+  );
+  // Shadowed by a parameter default — the codex round-1/2 laundering shape.
+  assert.deepEqual(
+    [
+      ...schemaNameAliases(
+        ["const s = schemaName.replaceAll('\"', '\"\"');", 'export function queries(s = "shadow_schema") {', "  return [];", "}"].join("\n"),
+      ),
+    ],
+    [],
+  );
+  // A commented-out declaration binds nothing.
+  assert.deepEqual([...schemaNameAliases("// const s = schemaName.replaceAll('\"', '\"\"');")], []);
+});
+
+test("stripComments respects escapes, mixed quotes and block comments", () => {
+  // The `//` sits inside a string that also contains an ESCAPED quote — a
+  // quote-parity count would truncate real code here.
+  assert.equal(stripComments("const u = 'a\\'b // not a comment'; // gone"), "const u = 'a\\'b // not a comment'; ");
+  assert.equal(stripComments("keep(); /* ...decoyQueries(x) */ more();"), "keep();  more();");
+  assert.equal(stripComments('const p = "https://x"; // tail'), 'const p = "https://x"; ');
+  // Block-comment MARKERS inside strings must not open a comment and erase the
+  // real code between them (codex round 3, finding 4).
+  const smuggled = ['const open = "/*";', 'import { evilQueries } from "@/lib/evil-schema";', 'const close = "*/";'].join("\n");
+  assert.ok(stripComments(smuggled).includes("evilQueries"), stripComments(smuggled));
+  // A `//` inside a MULTI-LINE template literal survives.
+  assert.ok(stripComments("const t = `line1\n// still text`;\nreal();").includes("// still text"));
+});
+
+test("findLocalDdlHelpers scopes the LOCAL helpers the DDL region spreads in (the real file has one)", () => {
+  const content = readFileSync(join(REPO_ROOT, IN_SCOPE_FILE), "utf8");
+  const helpers = findLocalDdlHelpers(content);
+  assert.ok(
+    helpers.some((h) => h.name === "buildEmailCorrelationIndexQueries"),
+    `expected the live local helper; got ${helpers.map((h) => h.name).join(", ") || "none"}`,
+  );
+  for (const h of helpers) assert.ok(h.end > h.start, `${h.name}: region must span lines`);
+});
+
+test("leaf: a destructive edit inside a LOCAL spread-in helper reds (its body is outside both named regions)", () => {
+  const withHelper = [
+    "function createStoreTables(schemaName: string) {", // 1
+    "  return {};", // 2
+    "}", // 3
+    "", // 4
+    "function extraQueries(schemaName: string) {", // 5
+    "  return [", // 6
+    `    { text: \`CREATE TABLE IF NOT EXISTS ${INLINE_S}."extras" (`, // 7
+    "      id text PRIMARY KEY,", // 8
+    "      label text,", // 9
+    "    )` },", // 10
+    "  ];", // 11
+    "}", // 12
+    "", // 13
+    "export function buildCreateStoreSchemaQueries(schemaName: string): QueryInput[] {", // 14
+    "  return [", // 15
+    "    ...extraQueries(schemaName),", // 16
+    "  ];", // 17
+    "}", // 18
+  ].join("\n");
+  const r = runGate({
+    diffText: multiHunkDiff(IN_SCOPE_FILE, withHelper, [{ from: 9, to: 9, replacement: [] }]),
+    readBaseFile: (p) => (p === IN_SCOPE_FILE ? withHelper : null),
+  });
+  assert.equal(r.verdict, "fail");
+  assert.ok(r.destructive.some((d) => d.rule === "column-removed-from-ddl"), JSON.stringify(r.destructive));
+});
+
+test("normalizeDdlLine collapses ONLY a verified schema-name interpolation", () => {
+  const inline = '   { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll(\'"\', \'""\')}"."t" (`';
+  const leaf = '{ text: `CREATE TABLE IF NOT EXISTS "${s}"."t" (`';
+  assert.equal(normalizeDdlLine(inline), normalizeDdlLine(leaf, new Set(["s"])));
+  // Without the binding, `${s}` is just an unknown expression — no collapse, no
+  // match, so a hardcoded/foreign schema can never pose as a relocation.
+  assert.notEqual(normalizeDdlLine(inline), normalizeDdlLine(leaf));
+  // Non-schema interpolations survive verbatim: a changed FK target or
+  // predicate keeps the two lines distinct.
+  assert.notEqual(
+    normalizeDdlLine('REFERENCES "${s}"."${parent}"(id)', new Set(["s"])),
+    normalizeDdlLine('REFERENCES "${s}"."${other}"(id)', new Set(["s"])),
+  );
+  // Different TABLES never normalize together.
+  assert.notEqual(normalizeDdlLine('DROP TABLE "${s}"."a"'), normalizeDdlLine('DROP TABLE "${s}"."b"'));
+});
+
+test("leafDdlLines takes the whole file and carries the enclosing table", () => {
+  const leaf = [
+    "// helper-composed DDL lives outside the exported body — it is in scope too",
+    "export function gadgetSchemaQueries(schemaName: string) {",
+    "  const s = schemaName.replaceAll('\"', '\"\"');",
+    '  return [{ text: `CREATE TABLE IF NOT EXISTS "${s}"."gadgets" (`, },',
+    "    `  label text,`,",
+    "  ];",
+    "}",
+  ].join("\n");
+  const lines = leafDdlLines("src/lib/gadget-schema.ts", leaf);
+  assert.equal(lines.length, 7, "every line of the leaf is in scope");
+  assert.equal(lines[4].table, "gadgets", "the column line inherits its CREATE TABLE");
+  assert.match(lines[3].norm, /\$\{SCHEMA\}/, "the bound schema alias normalizes");
+  assert.deepEqual(leafDdlLines("x", ""), []);
+});
+
+// --- Synthetic relocation end to end ---------------------------------------
+
+const LEAF_PATH = "src/lib/gadget-schema.ts";
+const INLINE_S = '"${schemaName.replaceAll(\'"\', \'""\')}"';
+const LEAF_S = '"${s}"';
+const LEAF_BASE_STORE = [
+  `import { gadgetSchemaQueries } from "@/lib/gadget-schema";`, // 1
+  "", // 2
+  "function createStoreTables(schemaName: string) {", // 3
+  "  return {};", // 4
+  "}", // 5
+  "", // 6
+  "export function buildCreateStoreSchemaQueries(schemaName: string): QueryInput[] {", // 7
+  "  return [", // 8
+  `    { text: \`CREATE TABLE IF NOT EXISTS ${INLINE_S}."gadgets" (`, // 9
+  "      id text PRIMARY KEY,", // 10
+  "      label text,", // 11
+  "      amount numeric(12,8)", // 12
+  "    )` },", // 13
+  `    { text: \`CREATE INDEX IF NOT EXISTS gadgets_label_idx ON ${INLINE_S}."gadgets" (label)\` },`, // 14
+  "  ];", // 15
+  "}", // 16
+].join("\n");
+
+/** One file entry with several hunks (hunkDiff emits one header per call). */
+function multiHunkDiff(path, base, edits, ctx = 2) {
+  const lines = base.split("\n");
+  let delta = 0;
+  const hunks = [...edits]
+    .sort((a, b) => a.from - b.from)
+    .map(({ from, to, replacement }) => {
+      const before = lines.slice(Math.max(0, from - 1 - ctx), from - 1);
+      const removed = lines.slice(from - 1, to);
+      const after = lines.slice(to, to + ctx);
+      const oldStart = from - before.length;
+      const oldCount = before.length + removed.length + after.length;
+      const newCount = before.length + replacement.length + after.length;
+      const newStart = oldStart + delta;
+      delta += newCount - oldCount;
+      return (
+        `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@\n` +
+        [...before.map((l) => ` ${l}`), ...removed.map((l) => `-${l}`), ...replacement.map((l) => `+${l}`), ...after.map((l) => ` ${l}`)].join("\n") +
+        "\n"
+      );
+    });
+  return `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n${hunks.join("")}`;
+}
+
+/** The SAME store after the relocation has landed: the DDL is now the spread. */
+const LEAF_SPREAD_STORE = LEAF_BASE_STORE.split("\n")
+  .slice(0, 8)
+  .concat(["    ...gadgetSchemaQueries(schemaName),", "  ];", "}"])
+  .join("\n");
+
+/** The gadgets DDL as it reads inside the leaf (the `${s}` spelling). */
+const RELOCATED_DDL = [
+  `    { text: \`CREATE TABLE IF NOT EXISTS ${LEAF_S}."gadgets" (`,
+  "      id text PRIMARY KEY,",
+  "      label text,",
+  "      amount numeric(12,8)",
+  "    )` },",
+  `    { text: \`CREATE INDEX IF NOT EXISTS gadgets_label_idx ON ${LEAF_S}."gadgets" (label)\` },`,
+];
+const leafFile = (ddl) =>
+  [
+    "// Bootstrap DDL for the gadget tables — a pure-strings leaf.",
+    "export function gadgetSchemaQueries(schemaName: string): { text: string }[] {",
+    "  const s = schemaName.replaceAll('\"', '\"\"');",
+    "  return [",
+    ...ddl,
+    "  ];",
+    "}",
+    "",
+  ].join("\n");
+
+/** Store side of the relocation: the inline DDL becomes a spread. */
+const RELOCATION_STORE_DIFF = multiHunkDiff(LEAF_PATH === "" ? "" : IN_SCOPE_FILE, LEAF_BASE_STORE, [
+  { from: 9, to: 14, replacement: ["    ...gadgetSchemaQueries(schemaName),"] },
+]);
+const relocationDiff = (ddl) => RELOCATION_STORE_DIFF + fullReplaceDiff(LEAF_PATH, null, leafFile(ddl));
+const readLeafBase = (p) => (p === IN_SCOPE_FILE ? LEAF_BASE_STORE : null);
+
+test("leaf relocation: moving deployed DDL into a spread-in leaf is classified as no-data-impact", () => {
+  const r = runGate({ diffText: relocationDiff(RELOCATED_DDL), readBaseFile: readLeafBase });
+  assert.deepEqual(r.destructive, [], JSON.stringify(r.destructive));
+  assert.equal(r.verdict, "pass");
+  assert.ok(
+    r.notices.some((n) => n.includes("relocated") && n.includes(IN_SCOPE_FILE) && n.includes(LEAF_PATH)),
+    r.notices.join("; "),
+  );
+});
+
+test("leaf relocation: a column the leaf never receives is still a dropped column", () => {
+  const r = runGate({
+    diffText: relocationDiff(RELOCATED_DDL.filter((l) => l.trim() !== "label text,")),
+    readBaseFile: readLeafBase,
+  });
+  assert.equal(r.verdict, "fail");
+  assert.deepEqual(r.destructive.map((d) => d.rule), ["column-removed-from-ddl"]);
+  assert.match(r.destructive[0].line, /label text/);
+});
+
+test("leaf relocation: a table the leaf never receives is still a dropped table", () => {
+  const r = runGate({
+    diffText: relocationDiff([`    { text: \`CREATE INDEX IF NOT EXISTS gadgets_label_idx ON ${LEAF_S}."gadgets" (label)\` },`]),
+    readBaseFile: readLeafBase,
+  });
+  assert.equal(r.verdict, "fail");
+  assert.ok(r.destructive.some((d) => d.rule === "table-removed-from-ddl"), JSON.stringify(r.destructive));
+});
+
+test("leaf relocation: destructive DDL hidden INSIDE the leaf faces the same rules as inline DDL", () => {
+  const dropTable = runGate({
+    diffText: relocationDiff([...RELOCATED_DDL, `    { text: \`DROP TABLE IF EXISTS ${LEAF_S}."widgets"\` },`]),
+    readBaseFile: readLeafBase,
+  });
+  assert.equal(dropTable.verdict, "fail");
+  assert.ok(dropTable.destructive.some((d) => d.rule === "drop-table"), JSON.stringify(dropTable.destructive));
+
+  // The relocated table must NOT earn the new-table carve-out: its CREATE was
+  // cancelled as a move, so it is a table that exists on deployed databases.
+  const dropRelocated = runGate({
+    diffText: relocationDiff([...RELOCATED_DDL, `    { text: \`ALTER TABLE ${LEAF_S}."gadgets" ADD COLUMN IF NOT EXISTS note text NOT NULL\` },`]),
+    readBaseFile: readLeafBase,
+  });
+  assert.equal(dropRelocated.verdict, "fail");
+  assert.ok(
+    dropRelocated.destructive.some((d) => d.rule === "not-null-column-on-existing-table"),
+    JSON.stringify(dropRelocated.destructive),
+  );
+});
+
+test("leaf: a destructive change to an EXISTING leaf fails even with drizzle-store.ts untouched", () => {
+  const base = leafFile(RELOCATED_DDL);
+  const r = runGate({
+    diffText: fullReplaceDiff(LEAF_PATH, base, leafFile(RELOCATED_DDL.filter((l) => l.trim() !== "label text,"))),
+    readBaseFile: (p) => (p === IN_SCOPE_FILE ? LEAF_SPREAD_STORE : p === LEAF_PATH ? base : null),
+  });
+  assert.equal(r.verdict, "fail");
+  assert.ok(r.destructive.some((d) => d.rule === "column-removed-from-ddl"), JSON.stringify(r.destructive));
+});
+
+test("leaf relocation: a leaf pointing its DDL at a DIFFERENT schema is NOT a relocation", () => {
+  // The classic laundering attempt: the CREATE text is line-for-line identical
+  // except the schema comes from a hardcoded constant instead of the builder's
+  // argument, so the deployed schema loses the table.
+  const shadow = leafFile(RELOCATED_DDL).replace(
+    "  const s = schemaName.replaceAll('\"', '\"\"');",
+    '  const s = "shadow_schema";',
+  );
+  const r = runGate({
+    diffText: RELOCATION_STORE_DIFF + fullReplaceDiff(LEAF_PATH, null, shadow),
+    readBaseFile: readLeafBase,
+  });
+  assert.equal(r.verdict, "fail");
+  assert.ok(r.destructive.some((d) => d.rule === "table-removed-from-ddl"), JSON.stringify(r.destructive));
+});
+
+test("leaf relocation: a DUPLICATE copy of a relocated CREATE cannot launder the table into the new-table carve-out", () => {
+  // One copy is consumed by the relocation match; without the pre-existing-table
+  // subtraction the survivor would put a DEPLOYED table into `newTables` and
+  // waive the DROP that follows it (codex round 1, finding B).
+  const create = RELOCATED_DDL[0];
+  const r = runGate({
+    diffText: relocationDiff([...RELOCATED_DDL, create, `    { text: \`DROP TABLE IF EXISTS ${LEAF_S}."gadgets"\` },`]),
+    readBaseFile: readLeafBase,
+  });
+  assert.equal(r.verdict, "fail");
+  assert.ok(r.destructive.some((d) => d.rule === "drop-table"), JSON.stringify(r.destructive));
+});
+
+test("leaf: REMOVING a spread un-executes the leaf's DDL and reds, with the leaf file untouched", () => {
+  // The store drops `...gadgetSchemaQueries(schemaName),` and nothing else. The
+  // leaf file is not in the diff at all, yet its tables stop being created.
+  const r = runGate({
+    diffText: multiHunkDiff(IN_SCOPE_FILE, LEAF_SPREAD_STORE, [{ from: 9, to: 9, replacement: [] }]),
+    readBaseFile: (p) => (p === IN_SCOPE_FILE ? LEAF_SPREAD_STORE : p === LEAF_PATH ? leafFile(RELOCATED_DDL) : null),
+  });
+  assert.equal(r.verdict, "fail");
+  assert.ok(r.destructive.some((d) => d.rule === "table-removed-from-ddl"), JSON.stringify(r.destructive));
+});
+
+test("leaf: renaming a leaf together with its import is a pure move and passes", () => {
+  const MOVED = "src/lib/moved-gadget-schema.ts";
+  const leaf = leafFile(RELOCATED_DDL);
+  const storeBase = LEAF_SPREAD_STORE;
+  const storeFinal = storeBase.replace("@/lib/gadget-schema", "@/lib/moved-gadget-schema");
+  const pureMove = runGate({
+    diffText:
+      multiHunkDiff(IN_SCOPE_FILE, storeBase, [
+        { from: 1, to: 1, replacement: [`import { gadgetSchemaQueries } from "@/lib/moved-gadget-schema";`] },
+      ]) +
+      `diff --git a/${LEAF_PATH} b/${MOVED}\nsimilarity index 100%\nrename from ${LEAF_PATH}\nrename to ${MOVED}\n`,
+    readBaseFile: (p) => (p === IN_SCOPE_FILE ? storeBase : p === LEAF_PATH ? leaf : null),
+  });
+  assert.equal(storeFinal.includes("moved-gadget-schema"), true);
+  assert.deepEqual(pureMove.destructive, [], JSON.stringify(pureMove.destructive));
+  assert.equal(pureMove.verdict, "pass");
+});
+
+test("leaf: an ADDED spread the resolver cannot pin fails closed", () => {
+  // `import * as leaf` + `...leaf.queries(x)` composes executed DDL from a
+  // module the classifier never sees — including a DROP it could hide.
+  const base = LEAF_BASE_STORE;
+  const r = runGate({
+    diffText: multiHunkDiff(IN_SCOPE_FILE, base, [
+      { from: 1, to: 1, replacement: [`import { gadgetSchemaQueries } from "@/lib/gadget-schema";`, `import * as extra from "@/lib/extra-schema";`] },
+      { from: 14, to: 14, replacement: [base.split("\n")[13], "    ...extra.queries(schemaName),"] },
+    ]),
+    readBaseFile: readLeafBase,
+  });
+  assert.equal(r.verdict, "fail");
+  assert.ok(r.destructive.some((d) => d.rule === "ddl-leaf-unresolved"), JSON.stringify(r.destructive));
+
+  // The unresolvable spread set itself never reports a LOCAL spread — the real
+  // file's `...queries.filter(…)` composition must stay silent.
+  assert.deepEqual([...unresolvedLeafSpreads(readFileSync(join(REPO_ROOT, IN_SCOPE_FILE), "utf8"))], []);
+});
+
+test("leaf: an unreadable leaf revision fails closed rather than waiving its DDL", () => {
+  const r = runGate({
+    diffText: fullReplaceDiff(LEAF_PATH, "old", "new"),
+    // The store resolves the leaf, but the leaf's own base cannot be read.
+    readBaseFile: (p) => (p === IN_SCOPE_FILE ? LEAF_SPREAD_STORE : null),
+  });
+  assert.equal(r.verdict, "fail");
+  assert.deepEqual(r.destructive.map((d) => d.rule), ["ddl-leaf-unreadable"]);
+});
+
+test("the relocation pass never cancels WITHIN one file — an inline drop is unaffected", () => {
+  // Same text removed and re-added in drizzle-store.ts under DIFFERENT tables:
+  // stage 1 (exact key, table-scoped) refuses it and the cross-file pass must
+  // not rescue it, because both lines share one origin.
+  const r = runGate({
+    diffText: multiHunkDiff(IN_SCOPE_FILE, LEAF_BASE_STORE, [
+      { from: 11, to: 11, replacement: [] },
+      {
+        from: 14,
+        to: 14,
+        replacement: [
+          `    { text: \`CREATE INDEX IF NOT EXISTS gadgets_label_idx ON ${INLINE_S}."gadgets" (label)\` },`,
+          `    { text: \`CREATE TABLE IF NOT EXISTS ${INLINE_S}."doodads" (`,
+          "      label text,",
+          "    )` },",
+        ],
+      },
+    ]),
+    readBaseFile: readLeafBase,
+  });
+  assert.equal(r.verdict, "fail");
+  assert.deepEqual(r.destructive.map((d) => d.rule), ["column-removed-from-ddl"]);
 });
