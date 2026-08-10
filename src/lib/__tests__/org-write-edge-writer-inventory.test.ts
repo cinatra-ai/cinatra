@@ -207,7 +207,9 @@ describe("newly registered stores — writer-set lockstep", () => {
     expect(counts).toEqual({
       "src/lib/artifacts/semantic-assertion-store.ts": 7,
       "src/lib/connect-sites-store.ts": 6,
-      "src/lib/widget-user-auth.ts": 10,
+      // 10 -> 11 (cinatra#2631): recordDisplayedScopesForTransaction's write-once
+      // UPDATE of the transaction's displayed_scopes. Deliberately re-pinned.
+      "src/lib/widget-user-auth.ts": 11,
       "src/lib/assistant-thread-store.ts": 8,
       "src/lib/assistant-thread-dormant-content-purge.ts": 1,
     });
@@ -254,6 +256,7 @@ describe("newly registered stores — writer-set lockstep", () => {
       "createAuthTransaction",
       "issueUserAuthCode",
       "loadActiveTransaction",
+      "recordDisplayedScopesForTransaction",
       "redeemUserAuthCode",
     ]);
     expect(registryWriters("src/lib/widget-user-auth.ts")).toEqual(detected);

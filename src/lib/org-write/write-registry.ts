@@ -958,6 +958,25 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     },
   },
   {
+    // cinatra#2631 — records, on the transaction, the scope set the hosted
+    // SIGN-IN SCREEN displayed, so the grant taken after the sign-in can be
+    // checked against the sentences the person read. Write-once (it may only
+    // replace the no-screen sentinel) and NON-CONSUMING: it never touches
+    // consumed_at, which is why it is safe on the page render.
+    module: "src/lib/widget-user-auth.ts",
+    exportName: "recordDisplayedScopesForTransaction",
+    capability: "org.settings",
+    orgIdExtractor: "stored transaction row's org (the row is addressed by its own id)",
+    storageReferences: ["widget_auth_transactions"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "site-widget login flow: the org axis rides the stored transaction row and the hosted page has no app-session principal to mint from — needs the connect-surface authority-minting decision",
+    },
+  },
+  {
     module: "src/lib/widget-user-auth.ts",
     exportName: "issueUserAuthCode",
     capability: "org.settings",
