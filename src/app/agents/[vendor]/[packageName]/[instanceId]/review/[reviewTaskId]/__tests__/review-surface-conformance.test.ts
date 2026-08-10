@@ -112,6 +112,22 @@ const HOST_STANDARD_IDS = new Set([
   "review-target-island",
   "review-target-island-body",
   "review-target-island-empty",
+  // cinatra#2572 (epic #2564 S6c) — the SUGGESTION CHIPS, fixed by the same
+  // newer spec's §VIII ("Marks, not a decision"), whose three drawn states are
+  // annotated there as `suggestion-chip-rest` / `-accepted` / `-dismissed`.
+  // Listed here for the identical reason the S2 anchors are: this suite's
+  // closed set is design@5e5c53aff's, and §VIII is not in it. The chips' own
+  // bidirectional conformance is pinned in the S2 card suite.
+  "suggestion-chips",
+  "suggestion-chip-rest",
+  "suggestion-chip-accepted",
+  "suggestion-chip-dismissed",
+  // Two host-standard lines the chip row owns rather than the drawing: the
+  // truth owed to a reader whose marks were dropped when the surfaced set
+  // changed, and the note that a reject cannot carry accepted suggestions
+  // (the decision core's own rule, said before the press instead of after).
+  "suggestion-marks-cleared",
+  "suggestion-chips-reject-note",
 ]);
 
 function conformanceIdsIn(src: string): string[] {

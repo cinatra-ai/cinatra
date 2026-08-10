@@ -187,6 +187,21 @@ export function bindSubmitDecisionPorts(ctx: ReviewActorContext): SubmitDecision
     // A carrier with no user id (an A2A/system principal) yields null, and the
     // gate then records no decider rather than a fabricated one.
     actingActorId: () => ctx.actor.userId ?? null,
+    // The gate's PINNED suggestion snapshot (cinatra#2571) — the set the core
+    // validates `accepted ∪ dismissed ⊆ surfaced` against, BEFORE the CAS.
+    //
+    // DYNAMIC import on purpose, the `artifact-review-resume-delivery` posture:
+    // the suggestion store reaches the snapshot store and, through it, the
+    // producer's payload verifier. Every route that decides a review would carry
+    // that whole lane statically for a port most decisions never call (a gate with
+    // no snapshot surfaces nothing). Dynamic keeps the static route graph exactly
+    // where it was, and the port is called at most once per submit.
+    readSurfacedSuggestions: async (runId, reviewTaskId) => {
+      const { readSurfacedSuggestionsForGate } = await import(
+        "@cinatra-ai/agents/suggestion-decision-store"
+      );
+      return readSurfacedSuggestionsForGate(runId, reviewTaskId);
+    },
     commit: (plan) => commitReviewDecision(plan),
   };
 }

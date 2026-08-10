@@ -22,12 +22,19 @@ import "server-only";
 //               `edited_gate` BranchingNode surfaces the review HITL ONLY when
 //               edited="edited".
 //
-// Persistence: run phase writes EXACTLY ONE immutable proposal snapshot per run
-// (auditor_proposal_snapshots, keyed UNIQUE by agent_run_id) so /api/auditor/
-// apply can replay-validate acceptedPatchIds ⊆ the surfaced set WITHOUT unioning
-// retry rows. Replaces the legacy audit_events "auditor_suggestions_emitted"
-// insert (which unioned on retry AND failed to insert on a fresh-bootstrap DB
-// whose audit_events carries only the structured authz shape).
+// Persistence: NONE (cinatra#2570, epic #2564 S6a). This route used to write one
+// immutable proposal snapshot per run to `auditor_proposal_snapshots` so
+// `/api/auditor/apply` could replay-validate the accepted patch ids against the
+// surfaced set. That consumer was DELETED with the single-use receipt path
+// (#2047 row 8 forbids a parallel decision path), which left the write producing
+// rows nothing read. The route is now a PURE COMPUTE endpoint: it returns
+// `{ preview, edited }` and stores nothing.
+//
+// The suggestions a reviewer acts on are minted GATE-BOUND against the exact
+// pinned `{artifactId, representationRevisionId}` by
+// `packages/agents/src/lifecycle-suggestion-producer-lane.ts`, frozen into
+// `gate_suggestion_snapshots`. `auditor_proposal_snapshots` is inert (dropping
+// it is an owner-gated migration) and its writer refuses.
 //
 // Auth: bridge shared-secret OR requireAuthSession + run-ownership guard.
 // ---------------------------------------------------------------------------
@@ -41,11 +48,7 @@ import {
   readRunCoOwners,
   readAllHitlPromptsForRun,
 } from "@cinatra-ai/agents";
-import {
-  writeProposalSnapshot,
-  type AuditSkillPreview,
-} from "@cinatra-ai/agents/auditor-snapshot-store";
-import { AuditorSnapshotError } from "@cinatra-ai/agents/auditor-snapshot-errors";
+import type { AuditSkillPreview } from "@cinatra-ai/agents/auditor-snapshot-store";
 import {
   runSkillAwareDeterministicLlmTask,
   withActorContext,
@@ -410,9 +413,10 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
-  // Build the single review payload the renderer consumes. `patches` is the
-  // per-item { id, fieldPath, op, message } view (value is NOT surfaced — apply
-  // sources value from the snapshot, not the wire).
+  // Build the single review payload the WayFlow auditor OAS consumes. `patches`
+  // is the per-item { id, fieldPath, op, message } view; `value` is deliberately
+  // not surfaced, and since #2570 nothing on this route persists it either — the
+  // response is the whole output.
   const preview: AuditSkillPreview = {
     name: generatedPreview.name,
     description: generatedPreview.description,
@@ -426,23 +430,26 @@ export async function POST(request: Request): Promise<Response> {
     })),
   };
 
-  // Persist EXACTLY ONE immutable snapshot per run (idempotent on retry;
-  // fail-closed on malformed patches or a differing input digest).
-  try {
-    await writeProposalSnapshot({
-      agentRunId: parsed.agent_run_id,
-      preview,
-      patches: suggestions,
-      inputData: parsed.data,
-      edited: editedSignal,
-    });
-  } catch (error) {
-    if (error instanceof AuditorSnapshotError) {
-      const status = error.code === "malformed_snapshot" ? 400 : 409;
-      return Response.json({ error: error.message, code: error.code }, { status });
-    }
-    throw error;
-  }
-
+  // cinatra#2570 (epic #2564 S6a) — THE SNAPSHOT WRITE IS RETIRED HERE.
+  //
+  // This route used to persist one `auditor_proposal_snapshots` row per run so
+  // `/api/auditor/apply` could replay-validate the accepted patch ids against
+  // the surfaced set. That consumer was DELETED (#2047 row 8 forbids a parallel
+  // decision path; a structural test now asserts the route directory is gone),
+  // which left this write producing rows nothing read — a run-scoped store with
+  // no reader, still costing every audit run a write and a fail-closed conflict
+  // branch.
+  //
+  // The suggestions a reviewer acts on are now minted GATE-BOUND, against the
+  // exact pinned revision, by `lifecycle-suggestion-producer-lane` — a snapshot
+  // that binds to `{artifactId, representationRevisionId}` instead of to a run
+  // id, and that S6b's decision partition can validate `accepted ⊆ surfaced`
+  // against. The legacy table stays in place and INERT (dropping it is a
+  // migration, and migrations are owner-gated); the writer itself now refuses,
+  // so a resurrected caller fails loudly instead of quietly re-opening the path.
+  //
+  // The response is UNCHANGED: the WayFlow auditor OAS consumes `preview` and
+  // branches its review HITL on `edited`, and both still come back exactly as
+  // before.
   return Response.json({ preview, edited: editedSignal });
 }

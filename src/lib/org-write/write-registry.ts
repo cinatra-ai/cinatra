@@ -1063,6 +1063,26 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     },
   },
   {
+    // cinatra#2642: the implicit-default BINDING REPAIR — makes an unbound
+    // thread's already-implicit binding explicit on the owner's own access
+    // (best-effort; the /chat route resolves the row read-only either way).
+    // Same family/axis as its siblings above: same table, same nullable org
+    // axis, same 1939 exemption. It writes exactly ONE column pair on a row
+    // whose ownership + org are re-asserted in the statement's WHERE clause.
+    module: "src/lib/assistant-thread-store.ts",
+    exportName: "repairImplicitDefaultThreadBinding",
+    capability: "content.write",
+    orgIdExtractor: "thread row's org_id (binding repair, re-asserted in the UPDATE predicate)",
+    storageReferences: ["assistant_threads"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "org axis is nullable by design (ambient threads) — converts with the chat-thread family ruling",
+    },
+  },
+  {
     module: "src/lib/assistant-thread-store.ts",
     exportName: "touchAssistantThread",
     capability: "content.write",

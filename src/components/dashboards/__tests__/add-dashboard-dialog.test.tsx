@@ -206,6 +206,44 @@ describe("§IX.2 — who sees the scope-level Add (suppression, not a disabled c
     expect(screen.queryByText("Reference an existing dashboard")).toBeNull();
   });
 
+  it("a BROWSE-ONLY catalog raises no button on its own (cinatra#2474 PR4)", () => {
+    // Concept B's section has no add action until PR5, so a catalog alone puts
+    // nothing pressable in the popup. Raising "+ New dashboard" for a principal
+    // who cannot even create would open a dialog with no available operation —
+    // a control that promises what the product cannot do. It must render exactly
+    // as it did before the catalog existed: not at all.
+    mount({
+      value: ctx({ canCreate: false }),
+      reference: null,
+      catalog: CATALOG_SLOT,
+    });
+    expect(screen.queryByRole("button", { name: /Add dashboard/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /New dashboard/ })).toBeNull();
+    expect(
+      screen.queryByRole("region", { name: "Add from the installed catalog" }),
+    ).toBeNull();
+  });
+
+  it("a manager still gets the popup with the catalog even when they cannot create", async () => {
+    // The narrowing above must not reach the §IX.2 path: the manager's Add is
+    // the §IX.1 picker in its own right, so the catalog rides along exactly as
+    // before. (The picker may still load an empty or failed pool — that is its
+    // own specified empty/error state, not a non-actionable control.)
+    mount({
+      value: ctx({ canCreate: false }),
+      reference: referenceSource(),
+      catalog: CATALOG_SLOT,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Add dashboard/ }));
+    expect(
+      await screen.findByRole("region", {
+        name: "Add from the installed catalog",
+      }),
+    ).toBeTruthy();
+    // …and no Create section, because this principal may not create.
+    expect(screen.queryByText("Create new")).toBeNull();
+  });
+
   it("a scope manager's Add carries the §IX.2 annotation and the open-add-picker action", () => {
     const { container } = mount({ reference: referenceSource() });
     const annotated = container.querySelector(

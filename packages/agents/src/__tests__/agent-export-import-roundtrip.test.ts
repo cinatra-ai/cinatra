@@ -1,3 +1,4 @@
+import { identityClaimMockFrom } from "./helpers/identity-claim-mock";
 /**
  * agent_export -> agent_import round-trip contract (issue #130).
  *
@@ -86,6 +87,7 @@ vi.mock("../store", () => ({
   updateAgentTemplateOrigin: vi.fn(async () => undefined),
   resolveDefaultOrgId: vi.fn(async () => "org-1"),
 }));
+vi.mock("../agent-template-identity", async () => identityClaimMockFrom((n: string) => (state.templatesByPackageName.get(n) ?? null) as never));
 
 // Auth seams: handlers.ts (session reads) + import-export-actions
 // (requireAdminSession before importAgentTemplateCore).

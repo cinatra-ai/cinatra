@@ -208,9 +208,11 @@ describe("newly registered stores — writer-set lockstep", () => {
       "src/lib/artifacts/semantic-assertion-store.ts": 7,
       "src/lib/connect-sites-store.ts": 6,
       // 10 -> 11 (cinatra#2631): recordDisplayedScopesForTransaction's write-once
-      // UPDATE of the transaction's displayed_scopes. Deliberately re-pinned.
+      // UPDATE of the transaction's displayed_scopes AND its screen_nonce_hash —
+      // ONE statement, so the count moves by one. Deliberately re-pinned.
       "src/lib/widget-user-auth.ts": 11,
-      "src/lib/assistant-thread-store.ts": 8,
+      // 8 -> 9 on main (the suggestion-decision CAS write); kept as main has it.
+      "src/lib/assistant-thread-store.ts": 9,
       "src/lib/assistant-thread-dormant-content-purge.ts": 1,
     });
   });
@@ -272,6 +274,7 @@ describe("newly registered stores — writer-set lockstep", () => {
       "bindAssistantThread",
       "createAssistantThread",
       "ensureThreadSlug",
+      "repairImplicitDefaultThreadBinding",
       "setAssistantThreadPauseParticipant",
       "touchAssistantThread",
       "updateAssistantTurn",

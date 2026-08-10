@@ -26,12 +26,20 @@ import {
 import { buildAgentTemplateInstallSeed } from "./build-agent-template-seed";
 import { createLocalAgentTemplateVersion } from "./import-export-actions";
 import {
-  readAgentTemplateByPackageName,
   updateAgentTemplate,
   createAgentVersion,
   type CompiledStep,
   type ApprovalPolicy,
 } from "./store";
+// cinatra#2616 — the identity claim. `claimAgentTemplateIdentity` carries the
+// WHOLE insert-only-or-owned-update operation, 23505 race classification
+// included, so this primitive and its concurrency proof run the same code.
+import {
+  agentTemplateIdentityClaimOrgToRecord,
+  claimAgentTemplateIdentity,
+  deriveAgentTemplateIdentityClaim,
+  resolveAgentTemplateIdentityClaim,
+} from "./agent-template-identity";
 import { resolveAgentRuntimeMountDir } from "./agent-runtime-mount";
 import {
   materializeAgentPackageToDisk,
@@ -80,6 +88,17 @@ export type InstallAgentFromPackageInput = {
   // have not been updated.
   ownerLevel?: "user" | "team" | "organization" | "workspace" | "project";
   ownerId?: string;
+  /**
+   * cinatra#2616: the organization on whose behalf this install runs — the
+   * IDENTITY CLAIMANT for `agent_templates.package_name`. Defaults to
+   * `orgId ?? anchorOrgId ?? <platform>`, the same scope rule the dependency
+   * planner already uses. The `anchorOrgId` fallback is load-bearing: the
+   * extension/marketplace handler threads ONLY that, so without it the
+   * marketplace path would claim as platform and skip the guard entirely.
+   * Threaded EXPLICITLY by the dependency-tree installer so transitive members
+   * claim as the root's organization instead of falling back to platform.
+   */
+  claimantOrgId?: string | null;
 };
 
 export type InstallAgentFromPackageResult = {
@@ -210,6 +229,22 @@ async function _installAgentFromPackageImpl(
   config?: VerdaccioConfig,
 ): Promise<InstallAgentFromPackageResult> {
   const resolvedConfig = ensureConfig(config, "installAgentFromPackage");
+  // cinatra#2616 — WHO is claiming this package name. Derived once, before any
+  // I/O, and THROWS when the caller's org values disagree (claiming as A while
+  // stamping B would let the predicate pass against A's row and the patch write
+  // B's org). A caller with no organization at all claims as the instance
+  // operator (boot seeding, the CLI); every user-facing route resolves one.
+  const claim = deriveAgentTemplateIdentityClaim({
+    claimantOrgId: input.claimantOrgId ?? null,
+    orgId: input.orgId ?? null,
+    anchorOrgId: input.anchorOrgId ?? null,
+  });
+  if (claim.kind === "platform") {
+    console.info(
+      `[installAgentFromPackage] ${input.packageName} claims '${input.packageName}' as the ` +
+        "INSTANCE OPERATOR (no organization in this install context).",
+    );
+  }
   const extracted = await acquireAgentPackagePayload(
     {
       packageName: input.packageName,
@@ -273,7 +308,17 @@ async function _installAgentFromPackageImpl(
       const { checkRequiredExtensionVersionPin } = await import(
         "@cinatra-ai/extensions/required-in-prod"
       );
-      const isUpdateRoute = (await readAgentTemplateByPackageName(extracted.packageName)) !== null;
+      // cinatra#2616 — the IDENTITY CLAIM, resolved in the inert window. A name
+      // held by ANOTHER organization refuses HERE, before the disk materialize
+      // and before any DB write, so the refusal mutates nothing — the same
+      // posture as the pin / dependents / project-template gates around it.
+      // This is the fast path; the authoritative guard is the claim predicate
+      // riding the write below.
+      const isUpdateRoute =
+        (await resolveAgentTemplateIdentityClaim({
+          packageName: extracted.packageName,
+          claim,
+        })).outcome === "owned";
       const pin = checkRequiredExtensionVersionPin({
         packageName: extracted.packageName,
         version: extracted.packageVersion,
@@ -458,120 +503,30 @@ async function _installAgentFromPackageImpl(
       );
     }
 
-    // Upsert branch: if a template already exists for this packageName, update
-    // in place instead of creating a duplicate row.
-    const existing = await readAgentTemplateByPackageName(extracted.packageName);
-    if (existing) {
-      const snapshot = seed.snapshot;
-      const contentHash = seed.contentHash;
-      const versionId = randomUUID();
-
-      try {
-      // Update scalar fields on the existing template row. Field list mirrors
-      // the seed passed to createLocalAgentTemplateVersion below — every seed
-      // field the fresh-install branch writes must land on the upsert branch too.
-      await updateAgentTemplate(existing.id, {
-        name: seed.name,
-        description: seed.description ?? undefined,
-        sourceNl: seed.sourceNl,
-        compiledPlan: seed.compiledPlan as CompiledStep[] | undefined,
-        inputSchema: seed.inputSchema,
-        outputSchema: seed.outputSchema ?? undefined,
-        approvalPolicy: seed.approvalPolicy as ApprovalPolicy | undefined,
-        type,
-        taskSpec: seed.taskSpec ?? undefined,
-        lgGraphCode,
-        lgGraphId,
-        executionProvider: (executionProvider as "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default" | null) ?? undefined,
-        // cinatra#2047 D-1: re-project the compiled manifest LIFECYCLE
-        // declaration on every (re)install. Passed EXPLICITLY (never omitted) so
-        // a version that DROPS the block clears the column instead of leaving a
-        // stale repairCapable behind.
-        lifecycleConfig: seed.lifecycleConfig,
-        // cinatra#2498: re-project the OAS compiler's own binding-presence
-        // result on every (re)install, exactly as lifecycleConfig does — a
-        // version that DROPS its last binding must flip the column back to
-        // false, not leave a stale true behind. packageVersion rides the SAME
-        // update (below), not a separate call, so the two land ATOMICALLY:
-        // the run-completion materializer only trusts has_artifact_bindings
-        // when it's read alongside a package_version that still matches the
-        // reading run's own pin (codex round-2 finding) — a window where one
-        // column reflects the new version and the other the old would let a
-        // concurrently-completing run of the OLD version see a package_version
-        // match paired with the NEW version's (wrong) flag.
-        hasArtifactBindings: seed.hasArtifactBindings,
-        packageVersion: extracted.packageVersion,
-        agentDependencies:
-          Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
-        connectorDependencies:
-          Object.keys(connectorDependencies).length > 0 ? connectorDependencies : undefined,
-        hitlScreens: seed.hitlScreens ?? undefined,
-        status: input.status ?? existing.status,
-        // Org + owner tier must follow the install target on re-install too.
-        // Otherwise the audit row written by installRegistryPackageAtScope says
-        // targetScope: { level: "team", id: "team-X" } while this DB row keeps
-        // the prior owner_level / owner_id, producing an auth-vs-state divergence
-        // for any downstream reader (e.g. enforceResourceAccess) that consults
-        // agent_templates.owner_level / owner_id. The fresh-install branch below
-        // writes these via the freshSeed; the upsert branch must do the same.
-        // org_id rides the same rule (cinatra#847): the freshSeed persists
-        // input.orgId, so re-installing a still-NULL-org row (e.g. a boot-seeded
-        // template a user installs) must stamp org_id here or the org-scoped
-        // /agents "Installed agents" card keeps excluding it. undefined leaves
-        // the column unchanged (updateAgentTemplate only writes org_id when the
-        // patch defines it), so callers that omit orgId are unaffected.
-        orgId: input.orgId,
-        ownerLevel: input.ownerLevel,
-        ownerId: input.ownerId,
-      });
-      await createAgentVersion({
-        id: versionId,
-        templateId: existing.id,
-        contentHash,
-        snapshot,
-      });
-
-      // EDGE PERSISTENCE (#180): land the manifest edges on the PRE-RESOLVED
-      // canonical row targets now that the template write committed — the
-      // agent path's finalize seam (upsert branch). The store read already
-      // happened in the inert window above; a WRITE failure here throws into
-      // the catch below (materialize rollback) like any other post-write
-      // failure on this path.
-      await writeDependencyEdgesToCanonicalRows(dependencyEdgeTargets, dependencyEdges);
-
-      // Commit the materialize (deletes .old backup).
-      if (materializeResult !== null) {
-        await commitMaterialize(materializeResult);
-      }
-      return {
-        templateId: existing.id,
-        versionId,
-        packageName: extracted.packageName,
-        packageVersion: extracted.packageVersion,
-        agentDependencies,
-        materialized: materializeResult?.materialized
-          ? { targetDir: materializeResult.targetDir, wasReinstall: materializeResult.wasReinstall }
-          : null,
-        materializeSkippedReason:
-          materializeResult && !materializeResult.materialized
-            ? materializeResult.reason
-            : undefined,
-      };
-      } catch (dbErr) {
-        // DB upsert failed. Roll back the materialize so
-        // the WayFlow mount doesn't end up with files that don't have a
-        // matching template row. The .old dir (if any) is restored.
-        if (materializeResult !== null) {
-          await rollbackMaterialize(materializeResult);
-        }
-        throw dbErr;
-      }
-    }
-
-    // Fresh-install branch. Wrapped to catch a concurrent-install race:
-    // two callers can both read existing===null then race on INSERT — the loser
-    // gets a unique-violation (pg code 23505) on agent_templates_package_name_idx.
-    // On collision, fall through to the upsert path with the now-existing row.
+    // cinatra#2616 — INSERT-ONLY-OR-OWNED-UPDATE, through the ONE shared store
+    // operation. `claimAgentTemplateIdentity` resolves the claim, INSERTs when
+    // the name is unclaimed, and classifies a `23505` race against the
+    // COMMITTED winner — so the loser of a cross-org race receives the identity
+    // refusal instead of adopting the winner's row. The former "upsert branch"
+    // and "23505 race branch" are now the SAME adopted branch, which also gives
+    // the race path the field parity it silently lacked: it used to drop
+    // orgId / ownerLevel / ownerId, so a same-org racer lost its install target.
+    //
+    // What the claim RECORDS on a fresh insert: absent an explicit
+    // `input.orgId` — the marketplace/extension handler threads only
+    // `anchorOrgId` — the row used to land `org_id NULL`, so the name stayed
+    // UNCLAIMED and the next organization could take it. Recording the claimant
+    // here is what makes the claim durable without DDL, and it is NOT the
+    // ownership shift cinatra#793 forbids: that rule protects an EXISTING row
+    // from having its owner moved by a payload-anchor scope, and an INSERT has
+    // no prior owner to move. It also lands the row DETERMINATE
+    // (`withDeterminateInstallScope` derives owner_level='organization' /
+    // owner_id=<org> from it), which is the healthy shape cinatra#2620's boot
+    // reconcile otherwise has to repair after the fact.
+    const recordedClaimOrgId = agentTemplateIdentityClaimOrgToRecord(claim, input.orgId);
+    const effectiveOrgId = input.orgId ?? recordedClaimOrgId;
+    const snapshot = seed.snapshot;
+    const contentHash = seed.contentHash;
     const freshSeed = {
       name: seed.name,
       description: seed.description,
@@ -584,7 +539,7 @@ async function _installAgentFromPackageImpl(
       taskSpec: seed.taskSpec,
       snapshot: seed.snapshot,
       creatorId: input.creatorId,
-      orgId: input.orgId,
+      orgId: effectiveOrgId,
       // Owner tier flows through the seed into createAgentTemplate.
       ownerLevel: input.ownerLevel,
       ownerId: input.ownerId,
@@ -595,96 +550,149 @@ async function _installAgentFromPackageImpl(
       connectorDependencies:
         Object.keys(connectorDependencies).length > 0 ? connectorDependencies : undefined,
       // hitlScreens flows through the seed into createAgentTemplate so a fresh
-      // install seeds the SAME value the upsert/race branches write. Pass the
-      // array verbatim (even when empty) so all three branches persist an
-      // identical column value ("[]" for no screens) rather than NULL vs "[]".
+      // install seeds the SAME value the adopted branch writes. Pass the array
+      // verbatim (even when empty) so both branches persist an identical column
+      // value ("[]" for no screens) rather than NULL vs "[]".
       hitlScreens: seed.hitlScreens,
       lgGraphCode,
       lgGraphId,
       executionProvider: (executionProvider as "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default" | null) ?? undefined,
       // cinatra#2047 D-1 — the compiled manifest LIFECYCLE declaration rides the
-      // fresh-install seed so all three install branches persist it identically.
+      // fresh-install seed so both install branches persist it identically.
       lifecycleConfig: seed.lifecycleConfig,
-      // cinatra#2498 — same three-branch parity for the binding-presence
-      // authority.
+      // cinatra#2498 — same parity for the binding-presence authority.
       hasArtifactBindings: seed.hasArtifactBindings,
       status: input.status ?? "draft",
     };
+
     let templateId: string;
     let versionId: string;
     try {
-    try {
-      const result = await createLocalAgentTemplateVersion({ seed: freshSeed });
-      templateId = result.templateId;
-      versionId = result.versionId;
-    } catch (insertErr: unknown) {
-      const pgCode = (insertErr as { code?: string })?.code;
-      if (pgCode !== "23505") throw insertErr;
-      // Race: another concurrent install won the INSERT — apply upsert to its row.
-      const raceExisting = await readAgentTemplateByPackageName(extracted.packageName);
-      if (!raceExisting) throw insertErr;
-      const snapshot = seed.snapshot;
-      const contentHash = seed.contentHash;
-      versionId = randomUUID();
-      await updateAgentTemplate(raceExisting.id, {
-        name: seed.name,
-        description: seed.description ?? undefined,
-        sourceNl: seed.sourceNl,
-        compiledPlan: seed.compiledPlan as CompiledStep[] | undefined,
-        inputSchema: seed.inputSchema,
-        outputSchema: seed.outputSchema ?? undefined,
-        approvalPolicy: seed.approvalPolicy as ApprovalPolicy | undefined,
-        type,
-        taskSpec: seed.taskSpec ?? undefined,
-        lgGraphCode,
-        lgGraphId,
-        executionProvider: (executionProvider as "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default" | null) ?? undefined,
-        // cinatra#2047 D-1: re-project the compiled manifest LIFECYCLE
-        // declaration on every (re)install. Passed EXPLICITLY (never omitted) so
-        // a version that DROPS the block clears the column instead of leaving a
-        // stale repairCapable behind.
-        lifecycleConfig: seed.lifecycleConfig,
-        // cinatra#2498 — same three-branch parity for the binding-presence
-        // authority AND the same atomic-with-packageVersion requirement (see
-        // the upsert branch above).
-        hasArtifactBindings: seed.hasArtifactBindings,
+      const claimed = await claimAgentTemplateIdentity(
+        { packageName: extracted.packageName, claim },
+        { insert: () => createLocalAgentTemplateVersion({ seed: freshSeed }) },
+      );
+
+      if (claimed.mode === "created") {
+        templateId = claimed.created.templateId;
+        versionId = claimed.created.versionId;
+      } else {
+        const existing = claimed.row;
+        versionId = randomUUID();
+        // Update scalar fields on the existing template row. Field list mirrors
+        // the seed above — every seed field the fresh-install branch writes must
+        // land on the adopted branch too.
+        //
+        // The claim is passed as the THIRD argument, and that is the
+        // authoritative guard: `(org_id IS NULL OR org_id = <claimant>)` rides
+        // the WHERE of every statement the update issues, all inside one
+        // transaction. The resolution in the inert window above is only a fast
+        // path — a row adopted between then and now still refuses HERE.
+        const updated = await updateAgentTemplate(
+          existing.id,
+          {
+            name: seed.name,
+            description: seed.description ?? undefined,
+            sourceNl: seed.sourceNl,
+            compiledPlan: seed.compiledPlan as CompiledStep[] | undefined,
+            inputSchema: seed.inputSchema,
+            outputSchema: seed.outputSchema ?? undefined,
+            approvalPolicy: seed.approvalPolicy as ApprovalPolicy | undefined,
+            type,
+            taskSpec: seed.taskSpec ?? undefined,
+            lgGraphCode,
+            lgGraphId,
+            executionProvider: (executionProvider as "openai" | "anthropic" | "gemini" | "langgraph" | "wayflow" | "default" | null) ?? undefined,
+            // cinatra#2047 D-1: re-project the compiled manifest LIFECYCLE
+            // declaration on every (re)install. Passed EXPLICITLY (never omitted) so
+            // a version that DROPS the block clears the column instead of leaving a
+            // stale repairCapable behind.
+            lifecycleConfig: seed.lifecycleConfig,
+            // cinatra#2498: re-project the OAS compiler's own binding-presence
+            // result on every (re)install, exactly as lifecycleConfig does — a
+            // version that DROPS its last binding must flip the column back to
+            // false, not leave a stale true behind. packageVersion rides the SAME
+            // update (below), not a separate call, so the two land ATOMICALLY:
+            // the run-completion materializer only trusts has_artifact_bindings
+            // when it's read alongside a package_version that still matches the
+            // reading run's own pin (codex round-2 finding) — a window where one
+            // column reflects the new version and the other the old would let a
+            // concurrently-completing run of the OLD version see a package_version
+            // match paired with the NEW version's (wrong) flag.
+            hasArtifactBindings: seed.hasArtifactBindings,
+            packageVersion: extracted.packageVersion,
+            agentDependencies:
+              Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
+            connectorDependencies:
+              Object.keys(connectorDependencies).length > 0 ? connectorDependencies : undefined,
+            hitlScreens: seed.hitlScreens ?? undefined,
+            status: input.status ?? (existing.status as "draft" | "published" | "active"),
+            // Org + owner tier must follow the install target on re-install too.
+            // Otherwise the audit row written by installRegistryPackageAtScope says
+            // targetScope: { level: "team", id: "team-X" } while this DB row keeps
+            // the prior owner_level / owner_id, producing an auth-vs-state divergence
+            // for any downstream reader (e.g. enforceResourceAccess) that consults
+            // agent_templates.owner_level / owner_id.
+            // org_id rides the same rule (cinatra#847): the freshSeed persists it,
+            // so re-installing a still-NULL-org row (e.g. a boot-seeded template a
+            // user installs) must stamp org_id here or the org-scoped /agents
+            // "Installed agents" card keeps excluding it. undefined leaves the
+            // column unchanged. cinatra#2616 additionally RECORDS the claim on an
+            // adopted org-less row, so an anchor-only marketplace update no longer
+            // leaves the name unclaimed for the next organization to take.
+            orgId: effectiveOrgId,
+            ownerLevel: input.ownerLevel,
+            ownerId: input.ownerId,
+          },
+          claim,
+        );
+        // A null result is a REFUSAL, not a shrug: the row moved or was removed
+        // under us. Never write a version, an edge or a commit after one.
+        if (!updated) {
+          throw new Error(
+            `[installAgentFromPackage] the identity claim on '${extracted.packageName}' could ` +
+              "not be applied — the template row moved or was removed mid-install. Retry the install.",
+          );
+        }
+        await createAgentVersion({
+          id: versionId,
+          templateId: existing.id,
+          contentHash,
+          snapshot,
+        });
+        templateId = existing.id;
+      }
+
+      // EDGE PERSISTENCE (#180): land the manifest edges on the PRE-RESOLVED
+      // canonical row targets now that the template write committed — the
+      // agent path's finalize seam, shared by both claim outcomes. The store
+      // read already happened in the inert window above; a WRITE failure here
+      // throws into the catch below (materialize rollback) like any other
+      // post-write failure on this path.
+      await writeDependencyEdgesToCanonicalRows(dependencyEdgeTargets, dependencyEdges);
+
+      // Commit the materialize (deletes .old backup).
+      if (materializeResult !== null) {
+        await commitMaterialize(materializeResult);
+      }
+      return {
+        templateId,
+        versionId,
+        packageName: extracted.packageName,
         packageVersion: extracted.packageVersion,
-        agentDependencies:
-          Object.keys(agentDependencies).length > 0 ? agentDependencies : undefined,
-        connectorDependencies:
-          Object.keys(connectorDependencies).length > 0 ? connectorDependencies : undefined,
-        hitlScreens: seed.hitlScreens ?? undefined,
-        status: input.status ?? raceExisting.status,
-      });
-      await createAgentVersion({ id: versionId, templateId: raceExisting.id, contentHash, snapshot });
-      templateId = raceExisting.id;
-    }
-
-    // EDGE PERSISTENCE (#180): same finalize-seam write as the upsert branch
-    // above — covers both the fresh INSERT and the 23505-race upsert path.
-    await writeDependencyEdgesToCanonicalRows(dependencyEdgeTargets, dependencyEdges);
-
-    // Commit the materialize (deletes .old backup).
-    if (materializeResult !== null) {
-      await commitMaterialize(materializeResult);
-    }
-    return {
-      templateId,
-      versionId,
-      packageName: extracted.packageName,
-      packageVersion: extracted.packageVersion,
-      agentDependencies,
-      materialized: materializeResult?.materialized
-        ? { targetDir: materializeResult.targetDir, wasReinstall: materializeResult.wasReinstall }
-        : null,
-      materializeSkippedReason:
-        materializeResult && !materializeResult.materialized
-          ? materializeResult.reason
-          : undefined,
-    };
+        agentDependencies,
+        materialized: materializeResult?.materialized
+          ? { targetDir: materializeResult.targetDir, wasReinstall: materializeResult.wasReinstall }
+          : null,
+        materializeSkippedReason:
+          materializeResult && !materializeResult.materialized
+            ? materializeResult.reason
+            : undefined,
+      };
     } catch (dbErr) {
-      // DB-side failure in the fresh-install branch.
-      // Roll back the materialize.
+      // DB-side failure (including an identity-claim refusal). Roll the
+      // materialize back so the WayFlow mount never keeps files with no
+      // matching template row; the .old dir (if any) is restored.
       if (materializeResult !== null) {
         await rollbackMaterialize(materializeResult);
       }

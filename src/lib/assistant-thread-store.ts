@@ -541,6 +541,242 @@ export function getAssistantThreadByIdInContainer(
   return thread;
 }
 
+// ---------------------------------------------------------------------------
+// The IMPLICIT-DEFAULT container (cinatra#2642) — an UNBOUND thread's home.
+//
+// `assistant_package IS NULL` is the documented "unbound thread
+// (implicit-@cinatra, backward compatible)" state (see AssistantThread above),
+// and the CLIENT's own URL builder already encodes exactly that reading:
+// `chatPathForThread` addresses a thread at
+// `thread.assistantPackage ?? DEFAULT_ASSISTANT_PACKAGE`
+// (packages/chat/src/chat-client-url.ts). The SERVER, however, resolved the
+// trailing segment ONLY against the EXACT container
+// (`COALESCE(assistant_package,'')` = the route's package), so an unbound row
+// was out-of-container for the very URL the client builds for it → 404
+// (cinatra#2642; the #2589 id-fallback inherits the same container scoping).
+//
+// These two lookups close that read-side gap WITHOUT widening the container
+// rule: they resolve a thread ONLY in the one container the client already
+// puts an unbound thread in (the builtin default assistant, no instance), and
+// ONLY for the actor who OWNS the row. They take NO destination-package
+// parameter BY DESIGN — a caller can never name the package a thread is
+// resolved (or repaired) into, so "claim someone's thread into an assistant I
+// merely name" is structurally impossible, not merely policy-checked.
+//
+// The ORDER the route guard applies them in matters and is pinned there
+// (chat-route-resolver.ts): exact-container id → implicit-default unbound id →
+// exact-container slug → implicit-default unbound slug. Id-before-slug
+// preserves #2589's namespace rule; an EXPLICIT binding always beats the
+// implicit alias.
+// ---------------------------------------------------------------------------
+
+/** The canonical DEFAULT assistant package — the IMPLICIT container an UNBOUND
+ *  thread lives in. Held as a CONSTANT, never taken as a parameter: the repair
+ *  below can only ever write this one package.
+ *
+ *  Kept LOCAL (not imported from `@cinatra-ai/chat/chat-path-codec`, which
+ *  declares the same value) for the SAME reason that module keeps its own copy
+ *  of the builtin package rather than importing the host schema: an import here
+ *  would add a cross-package edge to every route that reaches this store — four
+ *  locked routes grow by exactly one module and the route-graph ratchet fails.
+ *  Pinned equal to the codec's `DEFAULT_ASSISTANT_PACKAGE` by a unit test
+ *  (assistant-thread-unbound-store.test.ts), so the two can never drift. */
+export const IMPLICIT_DEFAULT_ASSISTANT_PACKAGE = "@cinatra-ai/cinatra-assistant";
+
+/** The transport-verified actor an implicit-default lookup is scoped to. NEVER
+ *  built from route/tool input — the caller derives it from the session. */
+export type UnboundThreadActor = {
+  /** The authenticated user id (the thread's `owner_user_id` must equal it). */
+  userId: string;
+  /** The actor's active organization, or null when they have none. */
+  orgId: string | null;
+};
+
+/** True when a thread row is GENUINELY unbound — neither a package nor an
+ *  instance, treating the empty string as unset (rows in the field carry both
+ *  NULL and '' for these columns). Pure. */
+export function isUnboundAssistantThread(thread: AssistantThread): boolean {
+  return !(thread.assistantPackage ?? "") && !(thread.instanceId ?? "");
+}
+
+/**
+ * The PURE eligibility decision for the implicit-default alias (cinatra#2642)
+ * — exhaustively unit-testable without a database, and re-asserted in SQL by
+ * {@link repairImplicitDefaultThreadBinding} so the write can never outrun it.
+ *
+ * Eligible iff ALL hold:
+ *   - the row is genuinely UNBOUND ({@link isUnboundAssistantThread}) — an
+ *     explicitly bound thread keeps the exact-container rule, unchanged;
+ *   - the row is NOT team-owned (`team_id IS NULL`) — a team thread's home is
+ *     the team panel, and its ownership axis is not the personal owner axis;
+ *   - the row has a NON-NULL `owner_user_id` EQUAL to the actor's user id —
+ *     ownerless/legacy rows are never adoptable, and no platform-admin bypass
+ *     exists here (this is ownership repair, not administrative access);
+ *   - the row's org anchor is absent, or equals the actor's active org.
+ */
+export function isImplicitDefaultThreadEligible(
+  thread: AssistantThread,
+  actor: UnboundThreadActor,
+): boolean {
+  if (!isUnboundAssistantThread(thread)) return false;
+  if (thread.teamId) return false;
+  if (!actor.userId) return false;
+  if (!thread.ownerUserId || thread.ownerUserId !== actor.userId) return false;
+  if (thread.orgId && thread.orgId !== actor.orgId) return false;
+  return true;
+}
+
+/**
+ * Resolve an UNBOUND thread the ACTOR OWNS by its durable id, as though it sat
+ * in the implicit-default container (cinatra#2642). READ-ONLY. Returns null for
+ * a non-UUID-shaped value (checked before touching the database, exactly like
+ * {@link getAssistantThreadByIdInContainer}), an absent row, or a row failing
+ * {@link isImplicitDefaultThreadEligible}.
+ */
+export function getOwnedUnboundAssistantThreadById(
+  threadId: string,
+  actor: UnboundThreadActor,
+): AssistantThread | null {
+  if (!UUID_RE.test(threadId)) return null;
+  const thread = getAssistantThread(threadId);
+  if (!thread) return null;
+  return isImplicitDefaultThreadEligible(thread, actor) ? thread : null;
+}
+
+/**
+ * The title-slug twin of {@link getOwnedUnboundAssistantThreadById}: resolve an
+ * UNBOUND thread the ACTOR OWNS by its `title_slug` (cinatra#2642). READ-ONLY.
+ *
+ * This class is real: `createAssistantThread` mints a slug at insert whenever a
+ * title is supplied (the MCP `assistant_send` path does), while NOTHING on the
+ * /chat path ever writes `assistant_package` — so a slugged-but-unbound row is
+ * addressed by the client at its slug and was 404-hidden by the exact-container
+ * slug lookup.
+ *
+ * The empty string is NOT a slug (it addresses nothing) and never matches.
+ * Ordered LAST by the route guard, so an EXPLICITLY bound thread owning the
+ * same slug in the default container always wins the segment.
+ */
+export function getOwnedUnboundAssistantThreadBySlug(
+  titleSlug: string,
+  actor: UnboundThreadActor,
+): AssistantThread | null {
+  if (!titleSlug) return null;
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  const [res] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `SELECT id, assistant_user_id, owner_user_id, org_id, project_id, team_id, origin, title, context_id, assistant_package, instance_id, title_slug, created_at, updated_at
+               FROM "${schema}"."assistant_threads"
+               WHERE title_slug = $1
+                 AND COALESCE(assistant_package, '') = ''
+                 AND COALESCE(instance_id, '') = ''
+                 AND COALESCE(team_id, '') = ''
+                 AND owner_user_id = $2
+               ORDER BY updated_at DESC, id
+               LIMIT 1`,
+        values: [titleSlug, actor.userId],
+      },
+    ],
+  });
+  const row = res?.rows?.[0] as Record<string, unknown> | undefined;
+  if (!row) return null;
+  const thread = mapAssistantThreadRow(row);
+  // Re-apply the PURE decision on the mapped row — defense-in-depth against
+  // predicate drift between this SQL and the decision table (the same
+  // belt-and-braces the visible-thread list read uses).
+  return isImplicitDefaultThreadEligible(thread, actor) ? thread : null;
+}
+
+/**
+ * Make an eligible unbound thread's IMPLICIT default binding EXPLICIT
+ * (cinatra#2642) — the repair half of the alias above.
+ *
+ * BEST-EFFORT BY CONTRACT. Resolution never depends on it: the two lookups
+ * above already address the row read-only, so a failed/raced/refused repair
+ * strands nothing. That is what lets this run on a GET render at all — a
+ * prefetched or retried render performs an IDEMPOTENT normalization of a row
+ * into the container it already logically belongs to, and nothing else.
+ *
+ * - Takes NO destination package: it writes {@link IMPLICIT_DEFAULT_ASSISTANT_PACKAGE}
+ *   and a NULL instance, or nothing.
+ * - The full eligibility predicate is RE-ASSERTED in the UPDATE's WHERE clause,
+ *   so the write can never outrun a concurrent ownership/binding change (no
+ *   TOCTOU window between the read above and this write).
+ * - Does NOT bump `updated_at`: a repair is not thread ACTIVITY, and
+ *   `updated_at` orders the sidebar/list reads.
+ * - EVERY predicate is the SQL twin of {@link isImplicitDefaultThreadEligible},
+ *   including its empty-string-is-absent reading of `team_id`/`org_id`, so a row
+ *   the pure decision accepts is exactly a row this statement can repair.
+ *
+ * WHAT THE REPAIR DELIBERATELY CHANGES (codex round-1, MEDIUM — accepted and
+ * documented rather than papered over): once the binding is explicit, the row
+ * leaves the owner-scoped alias and joins the ORDINARY, container-scoped
+ * resolution namespace — where, exactly like every already-bound thread since
+ * #1878 W3, route RESOLUTION is not owner-scoped. Another actor in the same
+ * assistant audience who addresses that URL therefore gets a resolved route
+ * (and, on a slug URL, sees the thread's durable id) instead of a 404, where
+ * before the repair the row resolved for nobody at all. That is the platform's
+ * established route contract, not a widening of it: the thread's CONTENT stays
+ * sealed by the tenant-scoped thread reads (assistant-thread-http.ts), and the
+ * repair only puts the row into the state every /chat thread was always meant
+ * to be created in. `chat-unbound-thread-repair.integration.test.ts` pins this
+ * end-to-end sequence explicitly.
+ * - `title_slug = NULLIF(title_slug, '')` normalizes the empty-string slug seen
+ *   on rows in the field. '' is not an addressable slug, yet it IS inside the
+ *   `WHERE title_slug IS NOT NULL` container-unique index, so two ''-slug rows
+ *   repaired into the same container would otherwise collide. A NON-empty slug
+ *   is never touched (the slug is stable forever by contract).
+ *
+ * Returns true iff this call performed the repair.
+ */
+export function repairImplicitDefaultThreadBinding(
+  threadId: string,
+  actor: UnboundThreadActor,
+): boolean {
+  if (!UUID_RE.test(threadId) || !actor.userId) return false;
+  try {
+    ensurePostgresSchema();
+    const schema = schemaIdent();
+    const [res] = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      queries: [
+        {
+          text: `UPDATE "${schema}"."assistant_threads"
+                 SET assistant_package = $1,
+                     instance_id = NULL,
+                     title_slug = NULLIF(title_slug, '')
+                 WHERE id = $2
+                   AND COALESCE(assistant_package, '') = ''
+                   AND COALESCE(instance_id, '') = ''
+                   AND COALESCE(team_id, '') = ''
+                   AND owner_user_id = $3
+                   AND (COALESCE(org_id, '') = '' OR org_id = $4)`,
+          values: [IMPLICIT_DEFAULT_ASSISTANT_PACKAGE, threadId, actor.userId, actor.orgId],
+        },
+      ],
+    });
+    return (res?.rowCount ?? 0) > 0;
+  } catch (err) {
+    // A container-slug collision is the one EXPECTED refusal: an explicitly
+    // bound thread already owns this slug in the default container (the unique
+    // index keys `COALESCE(assistant_package,'')`, so an unbound row and a
+    // default-bound row may legally share a slug today). Staying unbound is the
+    // correct outcome — the read-only alias still addresses the row, and the
+    // bound thread keeps the slug. Anything else is unexpected: surface it in
+    // the log (no row data) rather than swallowing it silently.
+    if (!isContainerSlugUniqueViolation(err)) {
+      console.warn(
+        "[assistant-thread-store] implicit-default binding repair failed:",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    return false;
+  }
+}
+
 /** List an org's threads, most-recently-updated first (uses the org index). */
 export function listAssistantThreadsForOrg(orgId: string, limit = 50): AssistantThread[] {
   ensurePostgresSchema();

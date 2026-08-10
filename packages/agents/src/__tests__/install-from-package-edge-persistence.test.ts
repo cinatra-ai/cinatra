@@ -1,3 +1,4 @@
+import { identityClaimMockFrom } from "./helpers/identity-claim-mock";
 // #180 PR-1: the AGENT install path is a materializing finalizer — its edge
 // persistence must (1) resolve the canonical write targets in the INERT
 // pre-write window (fail-loud while nothing has mutated), and (2) write the
@@ -107,10 +108,14 @@ const createVersion = vi.fn(async () => {
 });
 vi.mock("../store", () => ({
   readAgentTemplateByPackageName: (...a: unknown[]) => readTemplate(...(a as [])),
-  updateAgentTemplate: (...a: unknown[]) => updateTemplate(...(a as [])),
+  // cinatra#2616: the install/import paths now treat a null result as a
+  // REFUSAL, so the stub must return the row it "updated".
+  updateAgentTemplate: async (...a: unknown[]) =>
+    (await updateTemplate(...(a as []))) ?? { id: (a as [string])[0] },
   updateAgentTemplatePackageVersion: (...a: unknown[]) => updatePkgVersion(...(a as [])),
   createAgentVersion: (...a: unknown[]) => createVersion(...(a as [])),
 }));
+vi.mock("../agent-template-identity", async () => identityClaimMockFrom((n: string) => (readTemplate as (p?: string) => unknown)(n) as never));
 
 // the install path now seeds the agent_templates row by
 // compiling cinatra/oas.json (buildAgentTemplateInstallSeed). The seed builder

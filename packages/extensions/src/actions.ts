@@ -1301,6 +1301,7 @@ export async function promoteExtensionToPublicAction(
     readAgentVersionsByTemplate,
     updateAgentTemplateVisibility,
   } = await import("@cinatra-ai/agents/store");
+  const { claimOfAuthorizedTemplate } = await import("@cinatra-ai/agents/agent-template-identity");
   const { resolvePublishDestination } = await import("@cinatra-ai/extensions/destination-resolver");
   const { publishAgentPackage } = await import("@cinatra-ai/agents/verdaccio/client");
   const { logAuditEvent, POLICY_VERSION } = await import("@/lib/authz");
@@ -1366,10 +1367,13 @@ export async function promoteExtensionToPublicAction(
   );
 
   // Persist the new visibility coordinates.
+  // cinatra#2616 — under the claim of the row this action already resolved and
+  // authorized, so the visibility write cannot land on a foreign identity.
   await updateAgentTemplateVisibility(
     input.packageName,
     "public",
     publicConfig.registryUrl,
+    claimOfAuthorizedTemplate(template, (session as { session?: { activeOrganizationId?: string | null } }).session?.activeOrganizationId ?? null),
   );
 
   // Fire-and-forget audit log.

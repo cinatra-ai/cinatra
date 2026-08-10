@@ -158,11 +158,78 @@ ENV NODE_OPTIONS=${NODE_OPTIONS}
 # gated by the separate REQUIRED typecheck job (which runs `next typegen` first).
 # Empty by default so a local `docker build` keeps the in-build check as a safety net.
 ARG CI=
+# cinatra#2607 — the NATIVE (non-V8) build-memory knobs, as build-args for the
+# same reason NODE_OPTIONS above is one: a builder on a constrained host must be
+# able to move them without editing this file, and docker drops an unconsumed
+# --build-arg with only a warning, so a knob the Dockerfile never declares is
+# silently inert while looking set.
+#
+# Both are EMPTY by default, and empty means unset everywhere downstream —
+# scripts/next-build.mjs passes no bundler flag and next.config.ts spreads in no
+# experimental value — so a bare `docker build` and build-image.yml get exactly
+# today's build. Forwarded inline on the RUN (like CI) rather than as ENV so
+# they scope to `pnpm build` alone.
+#
+#   CINATRA_BUILD_BUNDLER=turbopack|webpack     bundler for this build
+#   CINATRA_BUILD_CPUS=<n>                      build worker count
+#
+# NEITHER IS A CURE for the native wall on a ~6 GB builder: this app's build
+# needs more memory than that on BOTH bundler paths, and the measured matrix in
+# the doc below says so in numbers. What the bundler knob does buy is a build
+# whose ceiling NODE_OPTIONS above can actually move — webpack fails on the V8
+# heap, which is a lever; Turbopack fails on native memory, which is not.
+#
+# Accepted values, what each one binds, and the full measured matrix:
+# docs/internals/workflows/constrained-host-builds.md
+ARG CINATRA_BUILD_BUNDLER=
+ARG CINATRA_BUILD_CPUS=
+
+# ─── MINIMUM BUILDER MEMORY: 16 GiB (cinatra#2633) ──────────────────────────
+#
+# The `RUN` below is the heaviest step in this repository and the one that
+# decides whether a builder is big enough. Give the DOCKER ENGINE at least
+# 16 GiB of memory before running `docker build` on this file. On Docker Desktop
+# / colima that is the VM's memory setting, NOT the laptop's RAM — a 16 GiB
+# laptop whose VM is set to 8 GiB is an 8 GiB builder.
+#
+# Measured on the truncated-Dockerfile harness (image built to exactly this line,
+# then a fresh container per run, cold, `/usr/bin/time -v`, CI=true, swap
+# disabled via `--memory-swap` equal to `--memory`):
+#
+#   --memory=9g   / 14 cores / 13 workers   SIGKILL in compile   (peak 8.78 GiB)
+#   --memory=12g  / 14 cores / 13 workers   SIGKILL in compile   (peak 11.74 GiB)
+#   --memory=16g  / 14 cores / 13 workers   compiled OK, then SIGKILL collecting
+#                                           page data           (peak 14.73 GiB)
+#   --memory=16g  /  4 cores / 13 workers   same, one phase later (peak 14.19 GiB)
+#   --memory=16g  /  4 cores /  3 workers   COMPLETED — the validated floor
+#
+# So 16 GiB is the SMALLEST BOUND TESTED THAT COMPLETED — not a proven minimum
+# (nothing between 12 and 16 GiB was tried) and not sufficient on its own, since
+# demand scales with the builder's CORE COUNT too: Next fans page-data collection
+# out to (cores - 1) worker processes and sizes that from `os.cpus().length`,
+# which a `--cpuset-cpus` or `--cpus` cap does NOT change. On a many-core builder
+# either give the build more memory or bound the fan-out with CINATRA_BUILD_CPUS
+# (declared above). In every run measured below the floor — all with swap
+# disabled — the build died during "Creating an optimized production build" and
+# reported exit 137: a SIGKILL, with its cause unnamed.
+#
+# `scripts/next-build.mjs` re-states this at build time: it reads the cgroup cap
+# (NOT os.totalmem(), which reports the HOST's memory from inside a container)
+# and prints a loud non-fatal warning when the build has less than the floor. It
+# warns rather than fails on purpose — a bounded build completes through SWAP,
+# which is exactly how build-image.yml gets this done on a ~15.8 GB runner.
+#
+# Keep this figure in step with MINIMUM_BUILDER_MEMORY_GIB in
+# scripts/next-build.mjs and the "Minimum builder memory" section of
+# docs/internals/workflows/constrained-host-builds.md — a unit test fails if the
+# three disagree.
 RUN SUPABASE_DB_URL='postgresql://build:build@127.0.0.1:5432/build' \
     BETTER_AUTH_SECRET='build-only-placeholder-not-used-at-runtime' \
     NANGO_ENCRYPTION_KEY='build-only-placeholder-not-used-at-runtime' \
     OPENAI_API_KEY='build-only-placeholder-not-used-at-runtime' \
     CI="$CI" \
+    CINATRA_BUILD_BUNDLER="$CINATRA_BUILD_BUNDLER" \
+    CINATRA_BUILD_CPUS="$CINATRA_BUILD_CPUS" \
     pnpm build
 
 # ─── runtime ────────────────────────────────────────────────────────────────

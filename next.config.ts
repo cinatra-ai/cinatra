@@ -71,6 +71,63 @@ for (const key of REQUIRED_ENV) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// cinatra#2607 — constrained-host build knob (env-selectable; unset = today).
+//
+// `next build` on a small builder hits a NATIVE (non-V8) memory wall. cinatra
+// #2606's `ARG NODE_OPTIONS` binds only V8's old space, and cinatra-cli#210
+// measured a build failure that survived 4 GB → 14 GB of Docker VM RAM and
+// 14 → 6 CPUs, so the Node heap lever alone cannot clear it.
+//
+//   CINATRA_BUILD_CPUS → experimental.cpus
+//       The build's worker count (next/dist/build/index.js reads it directly
+//       whenever it differs from the default). Each worker is a whole extra
+//       Node process with its own heap, so on a small builder this is the
+//       difference between one page-data collector and several.
+//
+// The other knob, CINATRA_BUILD_BUNDLER, is an ARGV flag Next resolves before
+// this file is ever read (`next/dist/lib/bundler.js`), so it lives in
+// scripts/next-build.mjs, not here.
+//
+// DELIBERATELY ABSENT: `experimental.turbopackMemoryLimit`. It looks like the
+// obvious native lever and it is not one — on 16.2.10 it is measurably INERT
+// for `next build`. Wiring it would hand an operator a knob that changes
+// nothing while looking like the remedy. The measurements are in the doc below.
+//
+// UNSET MEANS UNSET. The knob is spread in only when its env var carries a
+// value, so an untouched build produces the byte-identical resolved config it
+// produced before this block existed. A docker `ARG X=` forwards an EMPTY
+// string rather than an absent variable, so "" is treated as unset too.
+//
+// Fail-closed: a malformed value throws here, at config load — seconds into the
+// build, long before any compile work — rather than being silently ignored and
+// leaving an operator to conclude the knob does not work.
+//
+// Accepted values and the full measured matrix (including what does NOT work):
+// docs/internals/workflows/constrained-host-builds.md
+// ---------------------------------------------------------------------------
+function readBuildKnobInt(name: string, min: number, max: number): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(
+      `${name}="${raw}" is not a whole number. Set it to an integer between ${min} and ${max}, or leave it unset.`,
+    );
+  }
+  const value = Number(trimmed);
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(
+      `${name}="${raw}" is out of range. Set it to an integer between ${min} and ${max}, or leave it unset.`,
+    );
+  }
+  return value;
+}
+
+// A band, not an opinion: the floor is one worker, the ceiling is well past any
+// real builder. The knob does not pick a "good" number — the operator's host does.
+const buildCpus = readBuildKnobInt("CINATRA_BUILD_CPUS", 1, 256);
+
 const nextConfig: NextConfig = {
   // Emit a self-contained .next/standalone/ at build time so the runtime
   // Docker image only needs the modules actually traced from the app
@@ -171,6 +228,10 @@ const nextConfig: NextConfig = {
     ...(process.env.CINATRA_TURBOPACK_DEV_FS_CACHE === "0"
       ? { turbopackFileSystemCacheForDev: false }
       : {}),
+    // cinatra#2607 constrained-host build knob — see the block above this
+    // config object. Spread in ONLY when set, so an untouched build's resolved
+    // config is unchanged.
+    ...(buildCpus !== undefined ? { cpus: buildCpus } : {}),
   },
   serverExternalPackages: [
     // Crawlee packages use native binaries and must stay external.

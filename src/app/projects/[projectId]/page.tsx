@@ -35,6 +35,7 @@ import type { PortletInstanceProp } from "@/components/dashboards/portlet-host";
 import { ScopeDashboardsSection } from "@/components/dashboards/scope-dashboards-section";
 import { ScopeAddSourcesProvider } from "@/components/dashboards/scope-add-sources";
 import { buildScopeReferenceSource } from "@/components/dashboards/scope-reference-binding";
+import { buildScopeCatalogNode } from "@/components/dashboards/scope-catalog-node";
 
 import {
   ProjectDashboardsTab,
@@ -288,6 +289,22 @@ export default async function ProjectDetailPage({ params }: Props) {
     : null;
   const scopeLabel = `Project: ${project.name}`;
 
+  // Concept B's installed-catalog section (cinatra#2474 PR4). Guarded on
+  // `organizationId` exactly as the reference source is — a project without a
+  // tenant has no org whose installs could be read, and the catalog's own tenant
+  // fence would refuse it anyway; refusing here keeps the two paths identical.
+  const catalog = project.organizationId
+    ? await buildScopeCatalogNode({
+        actor,
+        surface: {
+          kind: "project",
+          orgId: project.organizationId,
+          scopeId: project.id,
+          userId,
+        },
+      })
+    : null;
+
   return (
     <Main className="min-h-screen">
       {/* Post-gate crumb publisher (cinatra#1737). */}
@@ -342,6 +359,7 @@ export default async function ProjectDetailPage({ params }: Props) {
         <ScopeAddSourcesProvider
           scopeLabel={scopeLabel}
           reference={scopeReference}
+          catalog={catalog}
         >
           <ProjectDashboardsTab
             dataSource={dataSource}

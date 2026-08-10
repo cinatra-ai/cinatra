@@ -218,6 +218,7 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
       "recordDisplayedScopesForTransaction#1939",
       "redeemUserAuthCode#1939",
       "removeTeamMemberAction#1939",
+      "repairImplicitDefaultThreadBinding#1939",
       "revokeConnectSiteRow#1939",
       "setAssistantThreadPauseParticipant#1939",
       "sweepExpiredAuthorizationCodes#1939",
