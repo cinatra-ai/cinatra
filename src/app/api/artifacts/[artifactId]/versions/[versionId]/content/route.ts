@@ -22,6 +22,16 @@ const SECURITY_HEADERS: Record<string, string> = {
     "default-src 'none'; sandbox; style-src 'unsafe-inline'",
   "Cache-Control": "private, no-store",
   "Accept-Ranges": "bytes",
+  // Auth-gated bytes must not be embeddable by a cross-origin document
+  // (cinatra#2576). The sibling preview route has carried this since #1630; this
+  // route serves the SAME bytes under the same session/actor gating and was the
+  // only one of the pair without it — a hygiene gap, not a live hole (the
+  // disposition is always `attachment`, so a cross-origin `<img>`/`<video>` had
+  // nothing to render). Closing it means BOTH byte routes now refuse to be
+  // consumed by any document that is not this origin's, which is the property
+  // the broker-surface capture tier depends on: there is no cross-origin path to
+  // artifact bytes anywhere in the pair.
+  "Cross-Origin-Resource-Policy": "same-origin",
 };
 
 // Range parsing returns a discriminated result.
