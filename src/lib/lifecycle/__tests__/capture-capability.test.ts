@@ -30,6 +30,7 @@ const PAYLOAD: CaptureCapabilityPayload = {
   siteId: "site-1",
   client: "wordpress",
   instanceId: "inst-1",
+  agentSlug: "wordpress-assistant",
   runId: "run-1",
   reviewTaskId: "gate-1",
   captureArtifactId: "cap-1",

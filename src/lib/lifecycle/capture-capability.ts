@@ -26,11 +26,14 @@ import "server-only";
 //                            outstanding capability at the next fetch. `userId`
 //                            + `orgId` are what the run-read re-check runs as.
 //   siteId, client,        — the SITE BINDING #2576 asks for. A capability
-//   instanceId               minted for one registered site / CMS client /
-//                            canonical instance is refused when the live token
-//                            row no longer agrees, so a re-bound or re-pointed
-//                            site cannot keep serving pictures under the old
-//                            binding.
+//   instanceId,              minted for one registered site / CMS client /
+//   agentSlug                canonical instance / widget agent is refused when
+//                            the live token row no longer agrees, so a re-bound
+//                            or re-pointed site cannot keep serving pictures
+//                            under the old binding. `agentSlug` is sealed for
+//                            one reason: `consumeUserWidgetToken` rejects an
+//                            agent mismatch, and a probe that could not make the
+//                            same comparison would be the laxer of the pair.
 //   runId, reviewTaskId    — the GATE SCOPE. This is the field that makes "a URL
 //                            minted for gate A cannot fetch gate B's capture"
 //                            true: the serving path proves the sealed capture is
@@ -87,6 +90,8 @@ export interface CaptureCapabilityPayload {
   client: string;
   /** The canonical instance the origin resolved to at login. */
   instanceId: string;
+  /** The widget agent the `cwu_` token is bound to (its `agent_slug`). */
+  agentSlug: string;
   /** The gate this capability is scoped to — run half. */
   runId: string;
   /** The gate this capability is scoped to — gate half. */
@@ -144,6 +149,7 @@ type SealedShape = {
   s: string;
   c: string;
   i: string;
+  n: string;
   r: string;
   g: string;
   a: string;
@@ -171,6 +177,7 @@ export function mintCaptureCapability(
     payload.siteId,
     payload.client,
     payload.instanceId,
+    payload.agentSlug,
     payload.runId,
     payload.reviewTaskId,
     payload.captureArtifactId,
@@ -196,6 +203,7 @@ export function mintCaptureCapability(
     s: payload.siteId,
     c: payload.client,
     i: payload.instanceId,
+    n: payload.agentSlug,
     r: payload.runId,
     g: payload.reviewTaskId,
     a: payload.captureArtifactId,
@@ -262,6 +270,7 @@ export function verifyCaptureCapability(
     !boundedId(s.s) ||
     !boundedId(s.c) ||
     !boundedId(s.i) ||
+    !boundedId(s.n) ||
     !boundedId(s.r) ||
     !boundedId(s.g) ||
     !boundedId(s.a) ||
@@ -287,6 +296,7 @@ export function verifyCaptureCapability(
     siteId: s.s,
     client: s.c,
     instanceId: s.i,
+    agentSlug: s.n,
     runId: s.r,
     reviewTaskId: s.g,
     captureArtifactId: s.a,

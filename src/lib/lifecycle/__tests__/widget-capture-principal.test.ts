@@ -37,6 +37,9 @@ const TOKEN_ROW = {
   client: "wordpress",
   instance_id: "inst-1",
   site_origin: "https://blog.example.com",
+  agent_slug: "wordpress-assistant",
+  aud: "/api/assistants/chat",
+  scope: "wordpress-assistant.user",
   credential_version: 3,
   not_expired: true,
 };
@@ -64,6 +67,7 @@ describe("readLiveWidgetCapturePrincipal", () => {
       siteId: "site-1",
       client: "wordpress",
       instanceId: "inst-1",
+      agentSlug: "wordpress-assistant",
       siteOrigin: "https://blog.example.com",
     });
   });
@@ -103,7 +107,15 @@ describe("readLiveWidgetCapturePrincipal", () => {
   });
 
   it("a row missing any binding field is not a principal", () => {
-    for (const field of ["user_id", "org_id", "site_id", "client", "instance_id", "site_origin"]) {
+    for (const field of [
+      "user_id",
+      "org_id",
+      "site_id",
+      "client",
+      "instance_id",
+      "agent_slug",
+      "site_origin",
+    ]) {
       rows.length = 0;
       rows.push({ ...TOKEN_ROW, [field]: "" });
       expect(readLiveWidgetCapturePrincipal("jti-1"), field).toBeNull();
@@ -126,11 +138,34 @@ describe("readLiveWidgetCapturePrincipal", () => {
     expect(readLiveWidgetCapturePrincipal("jti-1")).toBeNull();
   });
 
-  it("DRIFT PIN: the probe re-checks everything consumeUserWidgetToken re-checks", () => {
+  it("REJECTS a row that is not an interactive per-user widget bearer (aud / scope)", () => {
+    // `consumeUserWidgetToken` refuses `aud_mismatch` and `scope_mismatch`. A
+    // probe that did not would authorize capture bytes for a token the canonical
+    // verifier would have thrown out.
+    rows.push({ ...TOKEN_ROW, aud: "/api/agents/some-agent/stream" });
+    expect(readLiveWidgetCapturePrincipal("jti-1")).toBeNull();
+    rows.length = 0;
+    rows.push({ ...TOKEN_ROW, scope: "wordpress-assistant.site" });
+    expect(readLiveWidgetCapturePrincipal("jti-1")).toBeNull();
+    rows.length = 0;
+    // The scope must be THIS agent's own user scope, not another agent's.
+    rows.push({ ...TOKEN_ROW, agent_slug: "other-agent" });
+    expect(readLiveWidgetCapturePrincipal("jti-1")).toBeNull();
+  });
+
+  it("returns the agent bind so the serving ladder can enforce agent_mismatch", () => {
+    rows.push({ ...TOKEN_ROW });
+    expect(readLiveWidgetCapturePrincipal("jti-1")?.agentSlug).toBe("wordpress-assistant");
+  });
+
+  it("DRIFT PIN: every ROW-LEVEL reason consumeUserWidgetToken rejects has a counterpart here", () => {
     // The probe is deliberately a separate leaf (it is keyed on jti; the token
     // verifier is keyed on the raw bearer it cannot have). That split is only
-    // safe while the probe stays the STRICTER of the two, so the live re-checks
-    // are pinned against the verifier's own source.
+    // safe while the probe stays no LAXER than the verifier, and a substring
+    // sweep would not prove that. So the verifier's own reason UNION is the
+    // source of truth: each reason maps either to the check that mirrors it here
+    // or to an explicit, argued exemption. Adding a reason to the verifier fails
+    // this test until it is accounted for.
     const root = process.cwd();
     const probe = readFileSync(
       path.join(root, "src/lib/lifecycle/widget-capture-principal.ts"),
@@ -138,20 +173,56 @@ describe("readLiveWidgetCapturePrincipal", () => {
     );
     const verifier = readFileSync(path.join(root, "src/lib/widget-user-auth.ts"), "utf8");
 
-    // Both re-read the site live and compare the credential GENERATION.
-    for (const src of [probe, verifier]) {
-      expect(src).toContain("getActiveConnectSiteById");
-      expect(src).toContain("credential_version");
-      expect(src).toContain("normalizeOriginStrict");
+    const union = /export type ConsumeUserTokenReason =([\s\S]*?);/.exec(verifier);
+    expect(union, "consumeUserWidgetToken's reason union must be findable").not.toBeNull();
+    const reasons = [...union![1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
+    expect(reasons.length).toBeGreaterThan(5);
+
+    /** reason -> the token in THIS probe that performs the same rejection. */
+    const MIRRORED: Record<string, string> = {
+      not_found: "if (!row) return null;",
+      expired: "(expires_at > now())",
+      agent_mismatch: "agent_slug",
+      aud_mismatch: "WIDGET_BROKER_ROUTE_PATH",
+      scope_mismatch: "userTokenScope(agentSlug)",
+      site_revoked: "getActiveConnectSiteById",
+    };
+
+    /** reason -> why this probe cannot and need not mirror it. */
+    const EXEMPT: Record<string, string> = {
+      // There is no presented bearer on an <img> request — the capability seals
+      // the row's jti instead, so "the string is not a cwu_ token" has no
+      // counterpart. The jti bound + the sealed-binding agreement in
+      // `capture-capability-serving.ts` carry the same weight.
+      not_cwu_token: "no raw token exists on an image request; the probe is jti-keyed",
+      // The verifier compares the REQUEST Origin to the bound site origin. This
+      // capability is fetched SAME-ORIGIN from cinatra's own iframe, so the
+      // request origin is cinatra's and the comparison is meaningless here. The
+      // site binding it protects is re-checked by the live connect-site read
+      // (org + origin + client + credential generation) plus the sealed
+      // {siteId, client, instanceId, agentSlug} agreement.
+      origin_mismatch: "served same-origin from cinatra; the site bind is re-checked by row+site",
+    };
+
+    const unaccounted = reasons.filter((r) => !(r in MIRRORED) && !(r in EXEMPT));
+    expect(unaccounted, "a new verifier reason must be mirrored here or argued exempt").toEqual([]);
+
+    for (const [reason, token] of Object.entries(MIRRORED)) {
+      expect(reasons, `${reason} must still exist in the verifier`).toContain(reason);
+      expect(probe, `${reason} has no counterpart check in the probe`).toContain(token);
     }
-    // Both key expiry off the DB clock.
-    expect(probe).toContain("(expires_at > now())");
-    expect(verifier).toContain("(expires_at > now())");
-    // The probe is READ-ONLY: the verifier deletes an expired row; the probe
-    // must never write, because an image request must not mutate auth state.
+    for (const reason of Object.keys(EXEMPT)) {
+      expect(reasons, `${reason} must still exist in the verifier`).toContain(reason);
+    }
+
+    // The probe is READ-ONLY: the verifier deletes an expired row; an image
+    // request must never mutate auth state.
     expect(probe).not.toMatch(/\bDELETE\b|\bUPDATE\b|\bINSERT\b/);
-    // The probe returns no reason vocabulary at all.
-    expect(probe).not.toContain("site_revoked");
-    expect(probe).not.toContain("aud_mismatch");
+    // ...and it emits no reason vocabulary of its own, so it cannot be an oracle.
+    for (const reason of reasons) {
+      expect(probe, `the probe must not surface the reason "${reason}"`).not.toContain(
+        `"${reason}"`,
+      );
+    }
   });
 });

@@ -13,19 +13,31 @@ import "server-only";
 // `loadReviewGateSurface` and S1's refetch use: never touch a store on behalf of
 // a caller who has not yet proven the previous rung.
 //
-//   1. TRANSPORT SHAPE. The request must be an image subresource load from a
-//      same-origin document. This is what makes "a copied URL fails" more than a
-//      TTL claim: pasting the link into a tab is a `document` navigation with
-//      `Sec-Fetch-Site: none`, and a CMS page mounting `<img src>` against it is
-//      `cross-site`. Both are refused before a byte of work happens. The embed
-//      iframe is a CINATRA-ORIGIN document, so its own `<img>` loads are
-//      `same-origin` — the tier this route exists for.
+//   1. TRANSPORT SHAPE. The request must present itself as an image subresource
+//      load from a same-origin document.
+//
+//      WHAT THIS RUNG IS WORTH, EXACTLY. Fetch Metadata is set by the BROWSER
+//      and cannot be forged by a page, so it closes the whole class of
+//      browser-driven misuse: pasting the link into a tab is a `document`
+//      navigation with `Sec-Fetch-Site: none`, and a CMS page mounting
+//      `<img src>` against it is `cross-site`. Both are refused before a byte of
+//      work happens.
+//
+//      WHAT IT IS NOT WORTH. It is NOT proof that the requester is a browser. A
+//      party who holds the URL can send these headers by hand from `curl` or a
+//      server, and this rung will pass. Nothing about a bearer-in-a-URL can stop
+//      that; what bounds it is the 5-minute life, the live revocation edge
+//      (rung 3), the live run-access re-check (rung 4) and the gate binding
+//      (rung 5) — a replay only ever gets what the still-authorized reader could
+//      have got in that window. The rung is a real narrowing, not a proof of
+//      origin, and the tests assert both halves.
 //   2. THE CAPABILITY ITSELF — sealed, unexpired (`capture-capability.ts`).
-//   3. THE LIVE PRINCIPAL — the `cwu_` row behind the sealed `jti` still alive
-//      and still bound to the same person, org, site, client and canonical
-//      instance. A capability whose sealed binding disagrees with the live row
-//      is refused rather than downgraded to the live one: disagreement means the
-//      binding moved under it, which is exactly when a stale picture must stop.
+//   3. THE LIVE PRINCIPAL — the `cwu_` row behind the sealed `jti` still alive,
+//      still an interactive per-user widget bearer, and still bound to the same
+//      person, org, site, client, canonical instance and agent. A capability
+//      whose sealed binding disagrees with the live row is refused rather than
+//      downgraded to the live one: disagreement means the binding moved under
+//      it, which is exactly when a stale picture must stop.
 //   4. RUN READ ACCESS — re-checked live, against the sealed principal. A reader
 //      who lost access between the mint and the fetch loses the picture too.
 //   5. THE GATE BINDING — the sealed capture must be bound to a target THIS gate
@@ -119,15 +131,24 @@ const REFUSED: CaptureServeDecision = { ok: false };
  * The transport-shape gate (rung 1).
  *
  * FAIL-CLOSED ON ABSENCE, deliberately. `Sec-Fetch-Dest` / `Sec-Fetch-Site` are
- * forbidden headers — a page cannot set or forge them, and every browser this
- * widget already requires sends them. A request WITHOUT them is not a browser
- * subresource load (a `curl` replay of a leaked URL, a server-side fetch, a link
- * unfurler), which is precisely the class this route refuses. Treating "absent"
- * as "allowed" would give the whole rung away to the only callers it targets.
+ * forbidden headers, so no PAGE can set or forge them, and every browser this
+ * widget already requires sends them. Treating "absent" as "allowed" would give
+ * the rung away to the casual replay (a link unfurler, a naive `curl`) for
+ * nothing, so absence refuses.
+ *
+ * This does NOT make the headers a proof of origin — a deliberate non-browser
+ * caller can send them (see the module header). The rung closes browser-driven
+ * misuse; the TTL, the revocation edge and the gate binding bound the rest.
  *
  * `same-origin` only: the picture is drawn inside cinatra's OWN embed iframe, so
  * `same-site` and `cross-site` have no legitimate caller here, and `none` is a
  * top-level navigation — the pasted-link case.
+ *
+ * BROWSER FLOOR (stated, not hidden): Fetch Metadata ships in Chrome 76+,
+ * Firefox 90+ and Safari 16.4+. An older browser sends no such headers and its
+ * captures will not load — the card degrades to no picture, the decision still
+ * renders. That is the fail-closed direction, and it is the same floor the
+ * widget's other modern-browser requirements already impose.
  */
 export function isSameOriginImageFetch(headers: Headers): boolean {
   const dest = headers.get("sec-fetch-dest");
@@ -176,7 +197,11 @@ export async function decideCaptureCapabilityServe(params: {
       live.orgId !== capability.orgId ||
       live.siteId !== capability.siteId ||
       live.client !== capability.client ||
-      live.instanceId !== capability.instanceId
+      live.instanceId !== capability.instanceId ||
+      // The agent bind `consumeUserWidgetToken` enforces as `agent_mismatch`.
+      // Without it a capability minted under one widget agent would keep
+      // serving after the token was re-bound to another.
+      live.agentSlug !== capability.agentSlug
     ) {
       return REFUSED;
     }

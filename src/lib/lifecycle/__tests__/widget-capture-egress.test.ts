@@ -56,6 +56,7 @@ const PRINCIPAL: WidgetCapturePrincipal = {
   siteId: "site-1",
   client: "wordpress",
   instanceId: "inst-1",
+  agentSlug: "wordpress-assistant",
 };
 
 const capturedData: CmsPreviewCaptureRecordData = {
@@ -177,6 +178,45 @@ describe("widget capture egress — the mint half", () => {
     }
     // The inert-by-contract guard still holds for the broker tier's URLs.
     expect(findRemoteDocumentUrls([pair.left, pair.right].filter((v) => v !== null))).toEqual([]);
+  });
+
+  it("the URL guard has TEETH — it names any address that is not one of the two capture paths", () => {
+    // The guard used to be a `/api/artifacts/` prefix test, which passed the
+    // arbitrary-download route just as happily as the capture byte route. It
+    // now matches the WHOLE path, so a faulty minter cannot point the surface at
+    // `/content`, at a renderer bundle, or off-host, and stay green.
+    rows.push({
+      id: "cap-c",
+      data: { ...capturedData, role: "current" },
+      representation_revision_id: "png-c",
+    });
+    const base = buildBrokerCapturePair({
+      principal: PRINCIPAL,
+      runId: "run-1",
+      reviewTaskId: "gate-1",
+      target: { artifactId: "art-1", representationRevisionId: "rev-a" },
+      kind: "review",
+    })!.right!;
+
+    const offenders = [
+      "/api/artifacts/cap-c/versions/png-c/content",
+      "/api/artifacts/cap-c/versions/png-c/preview/extra",
+      "/api/artifact-renderer-assets/artifact/x/abc/entry.js",
+      "/api/lifecycle-views/resolve",
+      "//evil.example/capture.png",
+      "https://blog.example.com/wp-json/cinatra/v1/preview/42",
+      "javascript:alert(1)",
+    ];
+    for (const imageUrl of offenders) {
+      expect(findRemoteDocumentUrls([{ ...base, imageUrl }]), imageUrl).toEqual([imageUrl]);
+    }
+    // ...and the two legitimate shapes are still accepted.
+    for (const imageUrl of [
+      "/api/artifacts/cap-c/versions/png-c/preview",
+      base.imageUrl!,
+    ]) {
+      expect(findRemoteDocumentUrls([{ ...base, imageUrl }]), imageUrl).toEqual([]);
+    }
   });
 
   it("STRUCTURAL: the mint module names no artifact byte route and no renderer-asset route", () => {

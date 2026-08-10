@@ -52,6 +52,8 @@ export interface WidgetCapturePrincipal {
   siteId: string;
   client: string;
   instanceId: string;
+  /** The widget agent the token is bound to — re-checked live at serve time. */
+  agentSlug: string;
 }
 
 /**
@@ -76,6 +78,7 @@ export function buildCaptureCapabilityMinter(params: {
       siteId: principal.siteId,
       client: principal.client,
       instanceId: principal.instanceId,
+      agentSlug: principal.agentSlug,
       runId,
       reviewTaskId,
       captureArtifactId,

@@ -25,6 +25,19 @@ import "server-only";
 // is an image or a 404, so a reason would only ever be an oracle. One boolean
 // shape, one answer.
 //
+// THE ONE RE-CHECK IT CANNOT MAKE, AND WHY THAT IS SOUND. The token verifier
+// compares the REQUEST's `Origin` against the token's bound site origin
+// (`origin_mismatch`). There is no such comparison to make here and there must
+// not be: this capability is fetched SAME-ORIGIN from cinatra's own embed
+// iframe, so the request origin is cinatra's, never the CMS site's. The binding
+// that clause protects — "this token belongs to THIS registered site" — is
+// re-checked here by a different and equally live route: the token row's
+// {siteId, client, instanceId, agentSlug} must still agree with the sealed
+// capability AND the live `connect_sites` row must still carry the same org,
+// origin, client and credential generation. The exemption is recorded as data in
+// the drift test (`widget-capture-principal.test.ts`), so a NEW verifier reason
+// fails that test until it is either mirrored here or consciously exempted.
+//
 // SYNC STORE LEAF discipline (matches `widget-user-auth.ts`): the connection and
 // schema primitives come from the postgres-config/schema-init pair, never from
 // `@/lib/database`.
@@ -32,12 +45,20 @@ import "server-only";
 
 import { getActiveConnectSiteById } from "@/lib/connect-sites-store";
 import { normalizeOriginStrict } from "@/lib/widget-token-broker";
+import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { runPostgresQueriesSync, quotePostgresIdentifier } from "@/lib/postgres-sync";
 
 /** The table the hosted-PKCE login mints `cwu_` rows into (`widget-user-auth.ts`). */
 const USER_TOKEN_TABLE = "widget_user_tokens";
+
+/** The scope a `cwu_` token carries, mirroring `widget-user-auth.ts`'s
+ * `userTokenScope`. A row whose scope is not exactly this is not an interactive
+ * per-user widget bearer, whatever else it is. */
+function userTokenScope(agentSlug: string): string {
+  return `${agentSlug}.user`;
+}
 
 /** The live facts a capability is re-checked against. */
 export interface LiveWidgetCapturePrincipal {
@@ -46,6 +67,7 @@ export interface LiveWidgetCapturePrincipal {
   siteId: string;
   client: string;
   instanceId: string;
+  agentSlug: string;
   siteOrigin: string;
 }
 
@@ -57,11 +79,13 @@ function qTable(table: string): string {
  * Read the LIVE binding of a `cwu_` user token by its `jti`.
  *
  * Returns `null` — never a reason — when the token row is gone (logout /
- * sweep), has expired against the DATABASE clock, or when its bound connect
- * site is no longer active with the SAME org, origin, client and credential
- * generation. That last clause is the rotation gate `consumeUserWidgetToken`
- * carries: a reconnect bumps `credential_version` on a still-active row, and
- * without the comparison an outstanding capability would survive the rotation.
+ * sweep), has expired against the DATABASE clock, is not an interactive
+ * per-user widget bearer (its `aud` is not the broker audience, or its `scope`
+ * is not `<agentSlug>.user`), or when its bound connect site is no longer active
+ * with the SAME org, origin, client and credential generation. That last clause
+ * is the rotation gate `consumeUserWidgetToken` carries: a reconnect bumps
+ * `credential_version` on a still-active row, and without the comparison an
+ * outstanding capability would survive the rotation.
  *
  * NEVER THROWS: a store failure is `null`, because the serving path must answer
  * a uniform 404 for "no" and an exception would surface as a distinguishable
@@ -79,7 +103,8 @@ export function readLiveWidgetCapturePrincipal(
         {
           text:
             `SELECT user_id, org_id, site_id, client, instance_id, site_origin, ` +
-            `credential_version, (expires_at > now()) AS not_expired ` +
+            `agent_slug, aud, scope, credential_version, ` +
+            `(expires_at > now()) AS not_expired ` +
             `FROM ${qTable(USER_TOKEN_TABLE)} WHERE jti = $1 LIMIT 1`,
           values: [jti],
         },
@@ -96,8 +121,19 @@ export function readLiveWidgetCapturePrincipal(
     const client = String(row.client ?? "");
     const userId = String(row.user_id ?? "");
     const instanceId = String(row.instance_id ?? "");
+    const agentSlug = String(row.agent_slug ?? "");
     const siteOrigin = normalizeOriginStrict(String(row.site_origin ?? ""));
-    if (!orgId || !siteId || !client || !userId || !instanceId || !siteOrigin) return null;
+    if (!orgId || !siteId || !client || !userId || !instanceId || !agentSlug || !siteOrigin) {
+      return null;
+    }
+
+    // The row must be an INTERACTIVE per-user widget bearer, exactly as
+    // `consumeUserWidgetToken` requires: bound to the broker audience and
+    // carrying this agent's own user scope. Without these two, a token minted
+    // for some other audience or scope could authorize capture bytes that the
+    // canonical verifier would have rejected outright.
+    if (String(row.aud ?? "") !== WIDGET_BROKER_ROUTE_PATH) return null;
+    if (String(row.scope ?? "") !== userTokenScope(agentSlug)) return null;
 
     // Live site re-check — revoke / re-bind / rotate kills the capability at the
     // next fetch, exactly as it kills the token at the next turn.
@@ -115,7 +151,7 @@ export function readLiveWidgetCapturePrincipal(
       return null;
     }
 
-    return { userId, orgId, siteId, client, instanceId, siteOrigin };
+    return { userId, orgId, siteId, client, instanceId, agentSlug, siteOrigin };
   } catch {
     return null;
   }

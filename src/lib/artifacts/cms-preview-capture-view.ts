@@ -293,21 +293,28 @@ export function buildPinnedRepairPair(
 }
 
 /**
- * The two host byte paths a capture picture may EVER be addressed by.
+ * The two host byte paths a capture picture may EVER be addressed by, matched
+ * WHOLE — not by prefix.
  *
- * A closed allowlist, not a "starts with /" test: a host-relative check would
- * pass any first-party route, and the whole point of the S8c egress is that a
- * broker surface reaches captures and NOTHING ELSE. Adding a third entry here is
- * the deliberate act that would widen it.
+ * A prefix test would have been a hole in the shape of this very function: the
+ * old `/api/artifacts/` check passed `/api/artifacts/…/content` (the arbitrary
+ * download route) just as happily as `…/preview`, so a faulty minter could have
+ * pointed the surface at the download path and stayed green. These patterns pin
+ * the ENTIRE path:
  *
- *   - `/api/artifacts/…/preview` — the cookie-session byte route (#2044).
- *   - `/api/lifecycle-views/capture` — the sealed, gate-scoped, short-TTL
- *     capability route the broker tier uses (#2576).
+ *   - `/api/artifacts/<id>/versions/<rev>/preview` — the cookie-session capture
+ *     byte route (#2044). Four segments, and the last one is `preview`.
+ *   - `/api/lifecycle-views/capture?c=…` — the sealed, gate-scoped, short-TTL
+ *     capability route the broker tier uses (#2576). No path parameters at all.
+ *
+ * Anything else — a remote page, a protocol-relative `//evil.example`, a
+ * `javascript:` URL, `/content`, a renderer bundle, any other first-party route
+ * — is an offender.
  */
-const ALLOWED_CAPTURE_URL_PREFIXES = [
-  "/api/artifacts/",
-  "/api/lifecycle-views/capture?",
-] as const;
+const ALLOWED_CAPTURE_URL_PATTERNS: readonly RegExp[] = [
+  /^\/api\/artifacts\/[^/?#]+\/versions\/[^/?#]+\/preview$/,
+  /^\/api\/lifecycle-views\/capture\?[^#]*$/,
+];
 
 /**
  * The INERT-BY-CONTRACT assertion: every URL the view model hands the surface
@@ -315,16 +322,14 @@ const ALLOWED_CAPTURE_URL_PREFIXES = [
  * reaching the surface would mean the review page fetches the site at view time
  * — exactly what #2044 forbids — so this returns the offenders and the view-path
  * test fails on any. S8c widens it by exactly one host path (above) and by no
- * other shape: a protocol-relative `//evil.example` and a first-party route that
- * is not a capture byte path are both still offenders.
+ * other shape.
  */
 export function findRemoteDocumentUrls(views: readonly PinnedCaptureView[]): string[] {
   const offenders: string[] = [];
   for (const view of views) {
-    if (view.imageUrl === null) continue;
-    if (!ALLOWED_CAPTURE_URL_PREFIXES.some((p) => view.imageUrl!.startsWith(p))) {
-      offenders.push(view.imageUrl);
-    }
+    const url = view.imageUrl;
+    if (url === null) continue;
+    if (!ALLOWED_CAPTURE_URL_PATTERNS.some((p) => p.test(url))) offenders.push(url);
   }
   return offenders;
 }

@@ -27,6 +27,7 @@ const PAYLOAD: CaptureCapabilityPayload = {
   siteId: "site-1",
   client: "wordpress",
   instanceId: "inst-1",
+  agentSlug: "wordpress-assistant",
   runId: "run-1",
   reviewTaskId: "gate-A",
   captureArtifactId: "cap-A",
@@ -39,6 +40,7 @@ const LIVE: LiveWidgetCapturePrincipal = {
   siteId: "site-1",
   client: "wordpress",
   instanceId: "inst-1",
+  agentSlug: "wordpress-assistant",
   siteOrigin: "https://blog.example.com",
 };
 
@@ -116,8 +118,9 @@ describe("capture capability serving", () => {
   });
 
   // -------------------------------------------------------------------------
-  // Rung 1 — transport shape. This is what makes "a copied URL fails" real
-  // rather than a claim about TTL.
+  // Rung 1 — transport shape. It closes BROWSER-DRIVEN misuse and nothing more,
+  // and the last test in this block says so out loud so no reader mistakes the
+  // rung for a proof of origin.
   // -------------------------------------------------------------------------
 
   describe("transport shape", () => {
@@ -147,7 +150,7 @@ describe("capture capability serving", () => {
       }
     });
 
-    it("REFUSES a non-browser replay of a leaked URL (no Sec-Fetch headers at all)", async () => {
+    it("REFUSES a replay that sends no Sec-Fetch headers at all (the casual case)", async () => {
       const ports = makePorts();
       const bare = imageHeaders({
         "sec-fetch-dest": null,
@@ -156,6 +159,39 @@ describe("capture capability serving", () => {
       });
       expect((await decide(ports, { headers: bare })).ok).toBe(false);
       expect(ports.readLivePrincipal).not.toHaveBeenCalled();
+    });
+
+    it("HONEST LIMIT: a deliberate replay that FORGES the headers passes this rung", async () => {
+      // Fetch Metadata is set by the browser and unforgeable BY A PAGE — it is
+      // not unforgeable by a party who holds the URL and writes the request by
+      // hand. This test exists so the limit is recorded in the suite rather than
+      // implied by a passing "non-browser replay is refused" test that only ever
+      // tried the easy case.
+      //
+      // What actually bounds this replay is the rest of the ladder: the sealed
+      // capability dies in five minutes, the live principal probe is the
+      // revocation edge, run access is re-checked, and the gate must vouch for
+      // the capture. A forged-header replay therefore gets only what the
+      // still-authorized reader could have got in that window — and nothing at
+      // all once any of those change.
+      const forged = new Headers({
+        "sec-fetch-dest": "image",
+        "sec-fetch-site": "same-origin",
+      });
+      expect(isSameOriginImageFetch(forged)).toBe(true);
+      expect((await decide(makePorts(), { headers: forged })).ok).toBe(true);
+
+      // ...and every later rung still bites on exactly that request.
+      expect(
+        (await decide(makePorts({ readLivePrincipal: vi.fn(() => null) }), { headers: forged })).ok,
+      ).toBe(false);
+      expect(
+        (await decide(makePorts({ runReadAccess: vi.fn(async () => false) }), { headers: forged }))
+          .ok,
+      ).toBe(false);
+      expect(
+        (await decide(makePorts(), { headers: forged, nowSeconds: NOW + 10_000 })).ok,
+      ).toBe(false);
     });
 
     it("REFUSES a contradictory shape (image dest claimed on a navigation)", () => {
@@ -197,6 +233,8 @@ describe("capture capability serving", () => {
       { siteId: "site-2" },
       { client: "drupal" },
       { instanceId: "inst-2" },
+      // The agent bind `consumeUserWidgetToken` enforces as `agent_mismatch`.
+      { agentSlug: "another-widget-agent" },
     ];
     for (const drift of drifts) {
       const ports = makePorts({
