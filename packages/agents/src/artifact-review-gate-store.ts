@@ -57,7 +57,6 @@ import {
   artifactReviewResumeOutbox,
   gateAdvisoryComments,
   artifactVerificationRecords,
-  gateSuggestionSnapshots,
   type PinnedReviewTargetRow,
 } from "./schema";
 import {
@@ -364,14 +363,6 @@ export interface GateVerificationRecordRow {
   createdAt: Date;
 }
 
-/** One immutable auditor-re-home suggestion snapshot bound to a gate. */
-export interface GateSuggestionSnapshotRow {
-  id: string;
-  gateId: string;
-  payload: unknown;
-  createdAt: Date;
-}
-
 /** Batch-read the advisory comments for a set of gates (run-scoped fan-out from
  * `listReviewGatesForRun`). Empty gate set ⇒ no query. Ordered by (gate, time). */
 export async function readAdvisoryCommentsForGates(
@@ -415,23 +406,10 @@ export async function readVerificationRecordsForGates(
   }));
 }
 
-/** Batch-read the suggestion snapshots for a set of gates (run-scoped fan-out). */
-export async function readSuggestionSnapshotsForGates(
-  gateIds: readonly string[],
-): Promise<GateSuggestionSnapshotRow[]> {
-  if (gateIds.length === 0) return [];
-  const rows = await db
-    .select()
-    .from(gateSuggestionSnapshots)
-    .where(inArray(gateSuggestionSnapshots.gateId, gateIds as string[]))
-    .orderBy(gateSuggestionSnapshots.gateId, gateSuggestionSnapshots.createdAt);
-  return rows.map((r) => ({
-    id: r.id,
-    gateId: r.gateId,
-    payload: r.payload,
-    createdAt: r.createdAt,
-  }));
-}
+// The gate-bound SUGGESTION SNAPSHOT reader + writer live in their own leaf
+// (`gate-suggestion-snapshot-store`, cinatra#2570) for the #2567 reason: the
+// read has to hash-verify each payload, and the verifier is the producer's — a
+// module this widely-imported store has no other reason to pull in.
 
 /** The PREPARATION core's `readGatePinnedTargets` port. */
 export async function readGatePinnedTargets(

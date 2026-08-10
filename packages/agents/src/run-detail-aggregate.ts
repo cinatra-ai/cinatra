@@ -33,12 +33,17 @@ import {
   listReviewGatesForRun,
   readAdvisoryCommentsForGates,
   readVerificationRecordsForGates,
-  readSuggestionSnapshotsForGates,
   type ReviewGateRow,
   type GateAdvisoryCommentRow,
   type GateVerificationRecordRow,
-  type GateSuggestionSnapshotRow,
 } from "./artifact-review-gate-store";
+// The suggestion snapshots come from their own leaf (cinatra#2570): that reader
+// HASH-VERIFIES each stored payload, so a row edited underneath the store drops
+// out of this aggregate instead of reaching the run surface.
+import {
+  readSuggestionSnapshotsForGates,
+  type GateSuggestionSnapshotRow,
+} from "./gate-suggestion-snapshot-store";
 import { readContinuationParksForRun } from "./lifecycle-continuation-park-store";
 import type { ParkRow } from "./lifecycle-continuation-park-store";
 import {

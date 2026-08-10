@@ -59,32 +59,34 @@ describe("computeSnapshotHash / computeInputDigest", () => {
   });
 });
 
-describe("writeProposalSnapshot", () => {
-  it("fails closed on duplicate patch ids (malformed_snapshot)", async () => {
+describe("writeProposalSnapshot — RETIRED (cinatra#2570, epic #2564 S6a)", () => {
+  // The run-scoped writer no longer writes. `/api/auditor/apply` — this store's
+  // only reader — was deleted with the receipt path (#2047 row 8), so the
+  // snapshot was being persisted for nobody; suggestions are now minted
+  // GATE-BOUND against the pinned revision by
+  // `lifecycle-suggestion-producer-lane`.
+  //
+  // These are the RUNTIME half of the "zero writes to
+  // `auditor_proposal_snapshots` after cutover" acceptance criterion (the grep
+  // half lives in
+  // `src/lib/__tests__/legacy-auditor-proposal-writer-retired.test.ts`). The
+  // symbol is deliberately kept and made to throw: a deleted function is a
+  // compile error today and an easy re-implementation tomorrow, whereas a
+  // refusing one fails loudly for whatever path finds its way back here.
+
+  it("refuses with `legacy_writer_retired` instead of writing", async () => {
     await expect(
       writeProposalSnapshot({
         agentRunId: "run-1",
         preview,
-        patches: [patches[0], { ...patches[0] }],
-        inputData: {},
+        patches,
+        inputData: { a: 1 },
         edited: "edited",
       }),
-    ).rejects.toBeInstanceOf(AuditorSnapshotError);
+    ).rejects.toMatchObject({ name: "AuditorSnapshotError", code: "legacy_writer_retired" });
   });
 
-  it("fails closed on a blank patch id", async () => {
-    await expect(
-      writeProposalSnapshot({
-        agentRunId: "run-1",
-        preview,
-        patches: [{ id: "", fieldPath: "/a", op: "replace", value: "1", message: "m" }],
-        inputData: {},
-        edited: "edited",
-      }),
-    ).rejects.toBeInstanceOf(AuditorSnapshotError);
-  });
-
-  it("returns the inserted snapshot on a fresh write", async () => {
+  it("refuses BEFORE touching the database — the insert stub is never reached", async () => {
     dbState.insertReturns = [
       {
         id: "s1",
@@ -98,59 +100,28 @@ describe("writeProposalSnapshot", () => {
         createdAt: new Date(),
       },
     ];
-    const snap = await writeProposalSnapshot({
-      agentRunId: "run-1",
-      preview,
-      patches,
-      inputData: { a: 1 },
-      edited: "edited",
-    });
-    expect(snap.patchIds).toEqual(["p1", "p2"]);
-  });
-
-  it("idempotent retry: same digest returns the stored snapshot on conflict", async () => {
-    const digest = computeInputDigest({ a: 1 });
-    dbState.insertReturns = []; // conflict → no insert
-    dbState.selectReturns = [
-      {
-        id: "s1",
-        agentRunId: "run-1",
-        preview,
-        patches,
-        patchIds: ["p1", "p2"],
-        inputDataDigest: digest,
-        snapshotHash: computeSnapshotHash(preview, patches),
-        edited: "edited",
-        createdAt: new Date(),
-      },
-    ];
-    const snap = await writeProposalSnapshot({
-      agentRunId: "run-1",
-      preview,
-      patches,
-      inputData: { a: 1 },
-      edited: "edited",
-    });
-    expect(snap.id).toBe("s1");
-  });
-
-  it("fails closed (snapshot_conflict) when an existing snapshot has a different digest", async () => {
-    dbState.insertReturns = []; // conflict
-    dbState.selectReturns = [
-      {
-        id: "s1",
-        agentRunId: "run-1",
-        preview,
-        patches,
-        patchIds: ["p1", "p2"],
-        inputDataDigest: "DIFFERENT-DIGEST",
-        snapshotHash: computeSnapshotHash(preview, patches),
-        edited: "edited",
-        createdAt: new Date(),
-      },
-    ];
     await expect(
-      writeProposalSnapshot({ agentRunId: "run-1", preview, patches, inputData: { a: 999 }, edited: "edited" }),
+      writeProposalSnapshot({
+        agentRunId: "run-1",
+        preview,
+        patches,
+        inputData: { a: 1 },
+        edited: "edited",
+      }),
+    ).rejects.toBeInstanceOf(AuditorSnapshotError);
+    // A write that had landed would have consumed the stubbed insert result.
+    expect(dbState.insertReturns).toHaveLength(1);
+  });
+
+  it("refuses a well-formed call exactly as it refuses a malformed one — there is no accepted shape any more", async () => {
+    await expect(
+      writeProposalSnapshot({
+        agentRunId: "run-1",
+        preview,
+        patches: [patches[0], { ...patches[0] }],
+        inputData: {},
+        edited: "edited",
+      }),
     ).rejects.toBeInstanceOf(AuditorSnapshotError);
   });
 });

@@ -26,12 +26,15 @@ const mockParks = vi.fn();
 const mockSkillRevs = vi.fn();
 const mockLifecycleDecisions = vi.fn();
 
+vi.mock("../gate-suggestion-snapshot-store", () => ({
+  readSuggestionSnapshotsForGates: (...a: unknown[]) => mockSuggestions(...a),
+}));
+
 vi.mock("../artifact-review-gate-store", () => ({
   enforceReviewRunAccess: (...a: unknown[]) => mockEnforce(...a),
   listReviewGatesForRun: (...a: unknown[]) => mockListGates(...a),
   readAdvisoryCommentsForGates: (...a: unknown[]) => mockAdvisory(...a),
   readVerificationRecordsForGates: (...a: unknown[]) => mockVerification(...a),
-  readSuggestionSnapshotsForGates: (...a: unknown[]) => mockSuggestions(...a),
 }));
 vi.mock("../store", () => ({
   readAgentRunById: (...a: unknown[]) => mockReadRun(...a),
