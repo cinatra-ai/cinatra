@@ -53,7 +53,6 @@ import { deriveExtensionAccent } from "@/lib/extension-accent";
 import { resolveVendorPresentation } from "@/lib/vendor-presentation";
 // §VI byline source indicator (cinatra#1572): the pure provenance classifier.
 import { classifyExtensionSource } from "./extension-source-label";
-import { publishAgentTemplateFormAction } from "@cinatra-ai/agents/publish-template-action";
 import { hasActiveInstallBatch } from "@/lib/extension-dependency-ux";
 import { listRecentInstallBatches } from "@/lib/extension-install-batch-ops";
 // §III per-extension update-available chip (cinatra#1041 outcome 3): the
@@ -118,7 +117,6 @@ export async function RegistryCatalogScreen({
   const {
     active: activeRows,
     archived: archivedRows,
-    drafts: draftRows,
     scope,
     registryIdentities,
   } = await loadInstalledCardRows(session, { query });
@@ -330,36 +328,6 @@ export async function RegistryCatalogScreen({
     </>
   );
 
-  // DRAFT row actions (cinatra#2653): an uploaded agent template pending
-  // admin approval carries exactly ONE action — Publish, the approval that
-  // makes the agent available (owner ruling, PR #2658: an upload must not
-  // show on /agents until an admin approves it). No Settings (a draft has no
-  // canonical install identity, so the §V settings page cannot resolve it)
-  // and no More-details (no marketplace listing exists for it). The bound
-  // inline "use server" closure follows the §V settings-page convention
-  // (extension-settings-screen.tsx archiveAction et al.); the action ends in
-  // a redirect back to this page, which re-renders the new state.
-  const renderDraftActions = (row: InstalledCardRow) => {
-    const templateId = row.draftTemplateId!;
-    async function publishDraftAction() {
-      "use server";
-      await publishAgentTemplateFormAction({ templateId });
-    }
-    return (
-      <form action={publishDraftAction}>
-        <Button
-          size="sm"
-          type="submit"
-          aria-label={`Publish ${row.displayName}`}
-          data-slot="draft-extension-publish"
-        >
-          <Upload data-icon="inline-start" />
-          Publish
-        </Button>
-      </form>
-    );
-  };
-
   // §III update affordance (cinatra#1041 outcome 3) → the card's spec-line
   // props. Derives the chip state from the cached read model and the newer
   // version's ABI compat, then maps it to the presentational bits:
@@ -427,14 +395,12 @@ export async function RegistryCatalogScreen({
       // an independent byline element alongside the resolved vendor presentation.
       // A null canonical or a verdaccio matching neither configured identity
       // resolves to the neutral "source unknown".
-      // A draft has no canonical row and no registry listing: omit the source
-      // byline (cinatra#2653) rather than render a misleading "source unknown".
-      source={row.status === "draft" ? undefined : classifyExtensionSource(row.canonical, registryIdentities)}
+      source={classifyExtensionSource(row.canonical, registryIdentities)}
       description={row.description}
       version={row.versionLabel}
       status={renderStatus(row)}
-      {...(row.status === "draft" ? {} : updateAffordanceFor(row, isArchived))}
-      actions={row.status === "draft" ? renderDraftActions(row) : renderCardActions(row, isArchived)}
+      {...updateAffordanceFor(row, isArchived)}
+      actions={renderCardActions(row, isArchived)}
       // Archived extensions render the fully-greyed §VI card (cinatra#957):
       // category ground → light grey, muted logo tile, all text/status/actions
       // muted. Active cards keep their category colour.
@@ -459,21 +425,13 @@ export async function RegistryCatalogScreen({
   // update-chip + configuration-needs derivations above (a locked required-in-
   // prod agent can still need configuration), so only the RENDERED partition
   // narrows here.
-  // DRAFT rows (cinatra#2653) PREPEND to the default Active view and to All:
-  // the ruled post-upload flow lands the admin here, so the pending upload
-  // must be visible on the view they arrive at, ahead of the sorted list.
-  // They join Active + All exactly the way active rows do (each draft appears
-  // in those two views only), so the Locked/Archived views stay untouched.
-  const activeOnlyRows = [...draftRows, ...activeRows.filter((row) => row.status === "active")];
+  const activeOnlyRows = activeRows.filter((row) => row.status === "active");
   const lockedRows = activeRows.filter((row) => row.status === "locked");
-  const allRows = [
-    ...draftRows,
-    ...[...activeRows, ...archivedRows].sort((a, b) => {
-      const kindDelta = KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind);
-      if (kindDelta !== 0) return kindDelta;
-      return a.displayName.localeCompare(b.displayName);
-    }),
-  ];
+  const allRows = [...activeRows, ...archivedRows].sort((a, b) => {
+    const kindDelta = KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind);
+    if (kindDelta !== 0) return kindDelta;
+    return a.displayName.localeCompare(b.displayName);
+  });
 
   const { rows, emptyState } =
     tab === "all"

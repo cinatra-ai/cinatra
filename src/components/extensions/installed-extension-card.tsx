@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { Check, Lock, PencilLine, RefreshCw, TriangleAlert, X } from "lucide-react";
+import { Check, Lock, RefreshCw, TriangleAlert, X } from "lucide-react";
 // Extended tailwind-merge (same reason as extension-card.tsx): the default app
 // cn strips the custom design-token size utilities whenever a text-COLOR class
 // follows in the same merge.
@@ -173,16 +173,12 @@ export type InstalledExtensionCardProps = {
 export function InstalledStatusIndicator({
   status,
 }: {
-  status: "active" | "locked" | "archived" | "draft";
+  status: "active" | "locked" | "archived";
 }) {
   const archived = status === "archived";
   const locked = status === "locked";
-  // "draft" (cinatra#2653): an UPLOADED agent template pending admin
-  // approval — the amber pencil kicker separates it from Active (green
-  // check), Locked (green lock) and Archived (muted cross).
-  const draft = status === "draft";
-  const label = archived ? "Archived" : locked ? "Locked" : draft ? "Draft" : "Active";
-  const Icon = archived ? X : locked ? Lock : draft ? PencilLine : Check;
+  const label = archived ? "Archived" : locked ? "Locked" : "Active";
+  const Icon = archived ? X : locked ? Lock : Check;
   return (
     <span
       data-slot="installed-status-indicator"
@@ -192,14 +188,12 @@ export function InstalledStatusIndicator({
         // uppercase, the design-system badge letter-spacing) — named tokens per
         // the ui-design-system gate; no arbitrary text-[]/tracking-[].
         "inline-flex items-center gap-1.5 font-mono text-badge-2xs font-bold uppercase",
-        archived ? "text-muted-foreground" : draft ? "text-warning" : "text-success",
+        archived ? "text-muted-foreground" : "text-success",
       )}
       title={
         status === "locked"
           ? "System extension — always active; cannot be archived or uninstalled."
-          : status === "draft"
-            ? "Uploaded extension pending admin approval. Publish it to make the agent available."
-            : undefined
+          : undefined
       }
     >
       <Icon aria-hidden className="size-3 shrink-0" strokeWidth={3} />
