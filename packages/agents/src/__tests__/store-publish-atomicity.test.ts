@@ -21,10 +21,14 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 
-const storeSource = readFileSync(path.resolve(__dirname, "..", "store.ts"), "utf8");
-// The executor-threaded version cores live in the ./store-template-versions
-// vertical slice (file-size ratchet extraction, same fix round); the publish
-// transaction itself stays in store.ts.
+// Both halves are extracted vertical slices (file-size ratchet, same fix
+// round): the publish transaction lives in ./publish-template — the seam the
+// upload import path calls — and the executor-threaded version cores live in
+// ./store-template-versions.
+const publishSource = readFileSync(
+  path.resolve(__dirname, "..", "publish-template.ts"),
+  "utf8",
+);
 const versionsSource = readFileSync(
   path.resolve(__dirname, "..", "store-template-versions.ts"),
   "utf8",
@@ -32,10 +36,10 @@ const versionsSource = readFileSync(
 
 /** The publishAgentTemplateAndBindVersion function body. */
 function publishFnBody(): string {
-  const start = storeSource.indexOf("export async function publishAgentTemplateAndBindVersion");
+  const start = publishSource.indexOf("export async function publishAgentTemplateAndBindVersion");
   expect(start).toBeGreaterThan(-1);
-  const end = storeSource.indexOf("\nexport ", start + 1);
-  return storeSource.slice(start, end === -1 ? undefined : end);
+  const end = publishSource.indexOf("\nexport ", start + 1);
+  return publishSource.slice(start, end === -1 ? undefined : end);
 }
 
 /** The _createAgentTemplateVersionIfChanged function body. */

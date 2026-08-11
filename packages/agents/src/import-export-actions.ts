@@ -36,6 +36,9 @@ import {
 } from "./store";
 import type { CreateAgentTemplateInput } from "./store";
 import { importAgentTemplateCore } from "./import-agent-core";
+import { publishAgentTemplateAndBindVersion } from "./publish-template";
+import { logAuditEvent } from "@/lib/authz";
+import { POLICY_VERSION } from "@/lib/authz/actor-context";
 
 // ---------------------------------------------------------------------------
 // createLocalAgentTemplateVersion — shared creation path for ZIP imports and
@@ -221,6 +224,14 @@ export async function importAgentTemplate(
       policy?: import("./auth-policy-types").AgentAuthPolicy;
       coOwnerUserIds?: string[];
     };
+    /** UI upload path only (owner ruling, PR #2658): after the archive lands,
+     *  flip the template live AND bind its compiled version in the ONE
+     *  transactional store operation (`publishAgentTemplateAndBindVersion`) —
+     *  an admin upload goes straight to /agents in its assigned scope, with
+     *  no draft limbo and no approval step. Other callers (the MCP ZIP import
+     *  handler, programmatic imports) keep today's explicit-status contract
+     *  and land drafts unless they say otherwise. */
+    publishAndBind?: boolean;
   },
 ): Promise<{ templateId: string; upserted: boolean; warnings: string[] }> {
   const session = await requireAdminSession();
@@ -228,7 +239,7 @@ export async function importAgentTemplate(
   // the template so /configuration/extensions list views can show "installed by"
   // and supports per-template access-policy gates.
   const creatorId = session.user?.id ?? undefined;
-  const { permissions, ...coreOptions } = options ?? {};
+  const { permissions, publishAndBind, ...coreOptions } = options ?? {};
   // cinatra#2616: this admin action is a package-name IDENTITY CLAIM. Thread the
   // session's active organization as the claimant so an import cannot take over
   // a name another organization already holds. A session with no active org
@@ -256,7 +267,7 @@ export async function importAgentTemplate(
       );
       if (!setResult.ok) {
         warnings.push(
-          `Could not record install actor as primary owner — manage access at /configuration/extensions/${result.templateId} or contact an admin.`,
+          `Could not record install actor as primary owner — manage access at /configuration/extensions/${result.templateId}.`,
         );
       }
     } catch (err) {
@@ -266,7 +277,7 @@ export async function importAgentTemplate(
         message,
       );
       warnings.push(
-        `Could not record install actor as primary owner — manage access at /configuration/extensions/${result.templateId} or contact an admin.`,
+        `Could not record install actor as primary owner — manage access at /configuration/extensions/${result.templateId}.`,
       );
     }
   }
@@ -317,6 +328,65 @@ export async function importAgentTemplate(
           `Could not add ${failedUserIds.length} co-owner${failedUserIds.length === 1 ? "" : "s"} — re-add from the agent template detail page.`,
         );
       }
+    }
+  }
+
+  // Owner ruling (PR #2658 review, revised): an admin upload goes LIVE — the
+  // status flip and the compiled-version binding (`current_version_id`)
+  // commit atomically in publishAgentTemplateAndBindVersion, AFTER the scope
+  // policy above is saved, so the agent surfaces on /agents already scoped.
+  // Runs after the import transaction; on failure the template stays a draft
+  // and the warning names the repair (re-upload upserts by packageName, and
+  // the atomic op's dedup path re-points a half-bound version — never a
+  // masked no-op). All assistant guard arms stay: a refusal (null) is
+  // surfaced, not retried around.
+  if (publishAndBind) {
+    try {
+      const published = await publishAgentTemplateAndBindVersion(result.templateId, {
+        createdBy: creatorId ?? null,
+      });
+      if (!published) {
+        warnings.push(
+          "The agent was imported but could not go live (publish refused) — it stays a draft. Re-upload the archive to retry.",
+        );
+      } else {
+        // Fire-and-forget audit; a failed audit write must not undo the
+        // publish (same contract as promoteExtensionToPublicAction).
+        try {
+          void logAuditEvent({
+            organizationId: published.record.orgId ?? undefined,
+            actorPrincipalId: creatorId,
+            actorPrincipalType: "human",
+            authSource: "ui",
+            resourceType: "agent_template",
+            resourceId: published.record.id,
+            operation: "update",
+            decision: "allowed",
+            policyVersion: POLICY_VERSION,
+            metadata: {
+              statusTransition: { from: "draft", to: "published" },
+              boundVersionId: published.version.id,
+              via: "upload-import",
+            },
+          }).catch((err: unknown) => {
+            console.warn(
+              "[agents/import-export-actions] logAuditEvent failed (non-fatal):",
+              err instanceof Error ? err.message : err,
+            );
+          });
+        } catch {
+          // best-effort
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(
+        "[agents/import-export-actions] publishAgentTemplateAndBindVersion failed (non-fatal):",
+        message,
+      );
+      warnings.push(
+        "The agent was imported but could not go live — it stays a draft. Re-upload the archive to retry.",
+      );
     }
   }
 

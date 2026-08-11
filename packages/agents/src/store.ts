@@ -971,7 +971,12 @@ async function classifyZeroRowTemplateWrite(
   );
 }
 
-async function _runAgentTemplateUpdate(
+/**
+ * Exported ONLY for the ./publish-template vertical slice (cinatra#2653):
+ * its transaction threads the status flip through this core so all assistant
+ * guard arms apply. Every other caller goes through `updateAgentTemplate`.
+ */
+export async function _runAgentTemplateUpdate(
   exec: AgentTemplateWriteExecutor,
   id: string,
   patch: Partial<CreateAgentTemplateInput>,
@@ -3344,13 +3349,10 @@ export { computeSnapshotContentHash, buildSnapshotFromTemplate, diffSnapshots };
 // untouched.
 // ---------------------------------------------------------------------------
 
-// Local bindings: rollbackAgentTemplateToVersion reads a version row below,
-// and publishAgentTemplateAndBindVersion threads the executor core through
-// its transaction.
-import {
-  readAgentTemplateVersionById,
-  _createAgentTemplateVersionIfChanged,
-} from "./store-template-versions";
+// Local binding: rollbackAgentTemplateToVersion reads a version row below.
+// The transactional publish-and-bind seam lives in ./publish-template (NOT
+// re-exported here — that edge would close an import cycle).
+import { readAgentTemplateVersionById } from "./store-template-versions";
 export {
   createAgentTemplateVersion,
   readLatestAgentTemplateVersion,
@@ -3361,59 +3363,6 @@ export {
   describeBreakingChange,
 } from "./store-template-versions";
 export { readAgentTemplateVersionById };
-
-/**
- * Publish a template AND bind its current version in ONE transaction
- * (cinatra#2653, CodeRabbit major). The old two-step caller flow
- * (`updateAgentTemplate({status:"published"})` then
- * `createAgentTemplateVersionIfChanged`) could commit the status flip and then
- * fail the binding, leaving a published template without a usable version —
- * and the caller's idempotent-success path masked the damage on retry.
- *
- * Here the status flip (with ALL THREE assistant guard arms via
- * `_runAgentTemplateUpdate`) and the version create + `current_version_id`
- * advance run on one transaction: either the template leaves published WITH a
- * bound version, or nothing changed. Calling it again on an
- * already-published template is the REPAIR path: the flip is a no-op and the
- * version binding is created or re-pointed as needed.
- *
- * Returns null when the write was refused (assistant-kind guard, or the
- * template disappeared) — mirroring `updateAgentTemplate`'s zero-row
- * classification. The Objects-layer shadow mirror runs AFTER commit, exactly
- * like `_updateAgentTemplateImpl` (a refusal must never publish a mirrored
- * state the transaction then rolls back).
- */
-export async function publishAgentTemplateAndBindVersion(
-  id: string,
-  opts: { createdBy?: string | null } = {},
-): Promise<{ record: AgentTemplateRecord; version: AgentTemplateVersionRecord } | null> {
-  const result = await db.transaction(async (tx) => {
-    const record = await _runAgentTemplateUpdate(tx, id, { status: "published" }, undefined);
-    if (!record) return null;
-    const { version } = await _createAgentTemplateVersionIfChanged(tx, record, {
-      createdBy: opts.createdBy ?? null,
-    });
-    return { record: { ...record, currentVersionId: version.id }, version };
-  });
-  if (!result) return null;
-
-  // Mirror AFTER the transaction commits (same ordering rationale as
-  // _updateAgentTemplateImpl).
-  shadowUpsertObject({
-    id: result.record.id,
-    type: AGENT_TEMPLATE_TYPE_ID,
-    data: {
-      ...result.record,
-      createdAt: result.record.createdAt.toISOString(),
-      updatedAt: result.record.updatedAt.toISOString(),
-    },
-    orgId: result.record.orgId ?? null,
-    createdBy: result.record.creatorId ?? null,
-  });
-
-  return result;
-}
-
 
 // ---------------------------------------------------------------------------
 // rollbackAgentTemplateToVersion — explicit rollback path (audit event row)
