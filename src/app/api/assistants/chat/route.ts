@@ -9,6 +9,7 @@ import {
 } from "@/lib/assistant-runtime/ag-ui-stream-route";
 import { runAssistantTurn } from "@/lib/assistant-runtime/runtime";
 import { resolveAssistantRuntimeConfigByPrincipal } from "@/lib/assistant-runtime/resolve-runtime-config";
+import { resolveChatContainerForCurrentActor } from "@/lib/chat-route-resolver";
 import { resolveAssistantHandles } from "@/lib/better-auth-db";
 import { isBuiltinAssistantByPackage } from "@/lib/assistant-registry-reader";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
@@ -142,6 +143,29 @@ const assistantChatBodySchema = z.object({
   // turn is driven by that assistant's OWN persisted `assistant_config` resolved
   // through its `assistant_user_id` link — never the hardcoded Cinatra fallback.
   assistant: z.string().min(1).max(200).optional(),
+  // OPTIONAL /chat CONTAINER assertion (cinatra#2650): the assistant container
+  // the browser is IN, so a thread created by this turn is bound to its home
+  // from its first persisted moment. DISTINCT from `assistant` above, which
+  // selects the PRODUCER of this one turn — a `@mention` answers a turn without
+  // re-homing the conversation, so these two may intentionally differ and the
+  // binding NEVER reads `assistant`.
+  //
+  // ASSERTED, NEVER TRUSTED: the value the client sends back is the one THIS
+  // SERVER gave it (the /chat page resolved the URL and handed the client
+  // `initialAssistantPackage`/`initialInstanceId`), and it is RE-RESOLVED here
+  // through the actor's own audience + per-instance authority
+  // (`resolveChatContainerForCurrentActor`). What gets bound is the registry
+  // entry's OWN canonical package name — never this string. A forged,
+  // uninstalled, out-of-audience, or unauthorized-instance assertion 404-hides
+  // exactly like a forged `assistant` selection; ABSENT (an older client, a
+  // non-browser caller) falls back to the implicit default container.
+  chatContainer: z
+    .object({
+      assistantPackage: z.string().min(1).max(200),
+      instanceId: z.string().min(1).max(200).nullish(),
+    })
+    .strict()
+    .optional(),
 });
 
 // ---------------------------------------------------------------------------
@@ -507,6 +531,15 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     userId: widgetPrincipal.userId,
     isAdmin: false,
     runProducer,
+    // cinatra#2650 — the widget's container comes from the SERVER-VERIFIED
+    // principal this branch already built (the CLOSED widget binding's reserved
+    // built-in package + the canonical instance the dual-token sequence pinned).
+    // Any `chatContainer` the embed asserts is IGNORED here: the embed is
+    // cross-origin and its container is not its to name.
+    container: {
+      assistantPackage: binding.builtinPackageName,
+      instanceId: widgetPrincipal.instanceId ?? null,
+    },
     // Mint the DISTINCT run-bound resume token from the SAME server-verified
     // widget principal (userId/orgId/pinned instance/kind) — option A per the
     // #1221 owner ruling. The harness delivers it on the turn response so the
@@ -567,6 +600,35 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
   if (!authz.ok) {
     return Response.json({ error: authz.error }, { status: authz.status });
   }
+
+  // cinatra#2650 — resolve the thread's CONTAINER before anything is persisted.
+  //
+  // The asserted container is RE-RESOLVED through the caller's own
+  // audience-filtered registry + per-instance authority (the exact authorities
+  // the /chat page's route guard used to hand the client this value), and what
+  // reaches the store is the REGISTRY entry's canonical package name — a
+  // client-supplied string never becomes a binding. A refusal 404-hides in the
+  // same shape and for the same reason a forged `assistant` selection does; it
+  // is NOT quietly downgraded to the default, because a caller that names a
+  // container it cannot have should be told nothing about it existing.
+  //
+  // ABSENT is the compatibility path, not a failure: a caller with no container
+  // (an older client, a non-browser caller) homes its thread in the implicit
+  // default — the same container an unbound row already lives in for the
+  // client's own URL builder and for #2649's alias, so behaviour is unchanged
+  // for every caller that does not assert one.
+  const resolvedContainer = await resolveChatContainerForCurrentActor(
+    parsed.data.chatContainer
+      ? {
+          assistantPackage: parsed.data.chatContainer.assistantPackage,
+          instanceId: parsed.data.chatContainer.instanceId ?? null,
+        }
+      : null,
+  );
+  if (!resolvedContainer.ok) {
+    return Response.json({ error: "Assistant not found" }, { status: 404 });
+  }
+  const container = resolvedContainer.container;
 
   // cinatra#2094 F10 — THE EXACT-BINDING FAILURE HAS TO NAME THE PROVIDER HERE.
   //
@@ -673,5 +735,8 @@ async function handleCookieSessionTurn(request: Request): Promise<Response> {
     userId,
     isAdmin,
     runProducer,
+    // The thread's HOME (cinatra#2650) — server-resolved above, never the
+    // producer selected just below it.
+    container,
   });
 }

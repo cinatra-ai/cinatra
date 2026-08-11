@@ -46,9 +46,23 @@ function chatThreadPath(
   return buildChatPath({
     vendor: vs.vendor,
     slug: vs.slug,
-    instance: thread.instanceId ?? undefined,
+    // An ABSENT package drops the instance too (cinatra#2650). The container is
+    // the PAIR: a row with an instance and no package is in no container at
+    // all, and pinning its stale instance onto the DEFAULT assistant's path
+    // builds a URL that assistant has no instance scope to resolve. The same
+    // normalization is applied by `resolveChatTurnContainer` below, so the URL
+    // this builds and the container the server binds cannot disagree.
+    instance: containerInstanceOf(thread),
     titleSlug: segment,
   });
+}
+
+/** The instance segment a binding contributes: only when a package is present.
+ *  See {@link chatThreadPath}. Pure. */
+function containerInstanceOf(
+  binding: Pick<ThreadUrlFields, "assistantPackage" | "instanceId">,
+): string | undefined {
+  return binding.assistantPackage ? (binding.instanceId ?? undefined) : undefined;
 }
 
 /**
@@ -85,7 +99,12 @@ export function chatBasePathForAssistant(
 ): string {
   const vs = packageNameToVendorSlug(assistantPackage ?? DEFAULT_ASSISTANT_PACKAGE);
   if (!vs) return DEFAULT_CHAT_PATH;
-  return buildChatPath({ vendor: vs.vendor, slug: vs.slug, instance: instanceId ?? undefined });
+  return buildChatPath({
+    vendor: vs.vendor,
+    slug: vs.slug,
+    // Same pairing rule as chatThreadPath (cinatra#2650).
+    instance: containerInstanceOf({ assistantPackage, instanceId }),
+  });
 }
 
 /**
@@ -133,6 +152,53 @@ export function resolveChatPushUrl<T extends ThreadUrlFields & { id: string }>(
   );
 }
 
+/** The /chat CONTAINER a turn is dispatched in (cinatra#2650) — what the server
+ *  re-resolves and binds the thread to. Always fully-resolved: an unbound thread
+ *  reports the DEFAULT package, never `null`. */
+export type ChatTurnContainer = { assistantPackage: string; instanceId: string | null };
+
+/**
+ * Pure decision core for the container a turn asserts (cinatra#2650) — the
+ * LIVE, LOGICAL container of the thread this turn is FOR, resolved at dispatch
+ * time. It is deliberately the exact twin of {@link resolveChatPushUrl}'s
+ * source selection, so the URL the client pushes and the container the server
+ * binds can never disagree:
+ *
+ *   1. a thread already in the live list → ITS OWN logical container;
+ *   2. a thread not yet in the list (just seeded, this render) → the mount's
+ *      current binding, which is the container it is being created in.
+ *
+ * TWO NORMALIZATIONS, both load-bearing:
+ *
+ *  - AN UNBOUND THREAD REPORTS THE DEFAULT PACKAGE. `assistantPackage == null`
+ *    is the documented "unbound (implicit-@cinatra)" state and is exactly how
+ *    `chatPathForThread` already addresses such a thread, so the default is its
+ *    real logical home — not "whatever container this tab happens to be in".
+ *  - AN ABSENT PACKAGE DROPS THE INSTANCE. The container key is the PAIR; an
+ *    instance scope with no package is in no container at all, and the server
+ *    refuses that shape outright. Carrying a stale instance from the mount onto
+ *    an unbound thread would fabricate a scope nobody authorized.
+ *
+ * Together these close the SPA transition the naive read gets wrong: mounted at
+ * a NON-DEFAULT assistant, selecting an OLD UNBOUND thread from the sidebar
+ * leaves `adoptThreadBinding`'s ref on the non-default package (it treats an
+ * explicit `null` as "keep the current binding", by design, so the New-chat
+ * button stays in this container) — sending on that thread must still bind the
+ * DEFAULT, because the default is where that thread's URL resolves.
+ */
+export function resolveChatTurnContainer<T extends ThreadUrlFields & { id: string }>(
+  threadId: string | null,
+  threads: readonly T[],
+  binding: ChatBinding,
+): ChatTurnContainer {
+  const known = threadId ? threads.find((t) => t.id === threadId) : null;
+  const source: ThreadUrlFields = known ?? binding;
+  return {
+    assistantPackage: source.assistantPackage ?? DEFAULT_ASSISTANT_PACKAGE,
+    instanceId: containerInstanceOf(source) ?? null,
+  };
+}
+
 /**
  * Pure decision core for the slug-arrival URL upgrade (cinatra#2562): null
  * when no upgrade is due, else the canonical URL to `replaceState` to. Fires
@@ -170,6 +236,10 @@ export function useChatUrlSync<T extends ThreadUrlFields & { id: string }>(
   restoreActiveThread: () => string | null;
   adoptThreadBinding: (thread: ThreadUrlFields) => void;
   newThreadSummary: (id: string, title: string, now: string) => UiThreadSummary;
+  /** The container to assert on a turn for `threadId` (cinatra#2650). Reads the
+   *  LIVE refs, so it is correct at DISPATCH time — after a sidebar selection, a
+   *  New-chat, or a retry — not a stale render snapshot. */
+  chatTurnContainer: (threadId: string | null) => ChatTurnContainer;
 } {
   // Live refs so the []-deps window-event handlers never read a stale closure.
   const threadsRef = useRef<readonly T[]>([]);
@@ -238,5 +308,11 @@ export function useChatUrlSync<T extends ThreadUrlFields & { id: string }>(
     [],
   );
 
-  return { pushChatUrl, pushNewChatUrl, restoreActiveThread, adoptThreadBinding, newThreadSummary };
+  const chatTurnContainer = useCallback(
+    (threadId: string | null): ChatTurnContainer =>
+      resolveChatTurnContainer(threadId, threadsRef.current, bindingRef.current),
+    [],
+  );
+
+  return { pushChatUrl, pushNewChatUrl, restoreActiveThread, adoptThreadBinding, newThreadSummary, chatTurnContainer };
 }

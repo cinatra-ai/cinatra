@@ -196,6 +196,9 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
       "addTeamMemberAction#1939",
       "appendAssistantTurn#1939",
       "assertSemanticType#1939",
+      // cinatra#2650 — the creation-seam container bind joins the chat-thread
+      // family's nullable-org exemption alongside its #2642 repair sibling.
+      "bindThreadContainerIfUnbound#1939",
       "consumeAuthorizationCode#1939",
       "consumeUserWidgetToken#1939",
       "createAssistantThread#1939",

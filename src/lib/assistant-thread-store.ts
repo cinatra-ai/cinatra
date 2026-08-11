@@ -777,6 +777,216 @@ export function repairImplicitDefaultThreadBinding(
   }
 }
 
+// ---------------------------------------------------------------------------
+// BIND-AT-CREATION — the thread's CONTAINER (cinatra#2650, successor to #2642).
+//
+// #2642/#2649 closed the READ side for unbound rows and repaired them into the
+// implicit default. This is the WRITE side the repair was always a backstop
+// for: the creation seam records the container, so a thread carries
+// `assistant_package` from its first persisted moment — default and
+// NON-default alike (a non-default thread is the class the repair provably
+// cannot recover: nothing in the row records which assistant drove it, and
+// adopting into a package the caller merely names is exactly what #2649's
+// design forbids).
+//
+// TWO IDENTITIES, DELIBERATELY DISTINCT (the #2650 design ruling, codex-converged):
+//   * CONTAINER — the thread's HOME: the server-resolved /chat route the thread
+//     was created under. Set ONCE, at creation. THIS is `assistant_package`.
+//   * PRODUCER — who answers ONE turn: the optional `@mention` selector
+//     (`body.assistant`). It never touches the binding.
+// They may intentionally differ: `@wordpress` inside a Cinatra thread answers
+// that turn without re-homing the conversation. Binding the PRODUCER instead
+// would move the row out of the container the client's own URL builder
+// addresses it at (`assistantPackage ?? DEFAULT`), 404-ing the thread on the
+// very next reload — and leaving it un-repairable, because #2649's alias only
+// adopts genuinely UNBOUND rows.
+//
+// SET-ONCE, OWNER-SCOPED, NO ADMIN BYPASS — the #2642 predicate verbatim, so a
+// bound thread is never re-pointed and an administrator driving somebody else's
+// unbound thread can never re-home it.
+//
+// THE INVARIANT THIS SHIPS (stated precisely, because the refusal cases are
+// real): a thread THIS REQUEST CREATES, or an unbound thread whose OWNER is
+// this request's actor, carries its container binding BEFORE the producer
+// starts. Every refusal below leaves the row EXACTLY as unbound as it is
+// without this change, where #2649's backstop still addresses and repairs it —
+// so a refusal is never worth failing a user's chat turn over.
+// ---------------------------------------------------------------------------
+
+/** A thread's CONTAINER: the assistant package it is homed in, plus the
+ *  optional project/site instance that scopes it. Both halves are always
+ *  written together — a package with a NULL instance is a legitimate
+ *  non-instance container, NOT a partial binding. */
+export type ThreadContainer = {
+  assistantPackage: string;
+  instanceId: string | null;
+};
+
+/**
+ * The MALFORMED partial binding: an instance scope with NO package. That row is
+ * in no container at all (the container key is the pair) and is not the
+ * documented unbound state either, so it is refused rather than "repaired" —
+ * writing a package onto it would silently adopt an instance scope nobody in
+ * this request ever authorized. Pure.
+ *
+ * NOTE the asymmetry, which is deliberate: package-without-instance is VALID
+ * (every local assistant's container), instance-without-package is not.
+ */
+export function isMalformedPartialBinding(thread: AssistantThread): boolean {
+  return !(thread.assistantPackage ?? "") && !!(thread.instanceId ?? "");
+}
+
+/** Why a container bind did not write — or that the row is already home. */
+export type ThreadContainerBindOutcome =
+  /** This call performed the set-once bind. */
+  | { kind: "bound" }
+  /** The row does not exist. */
+  | { kind: "absent" }
+  /** The actor may not bind this row: team-owned, ownerless, another owner's
+   *  (INCLUDING a platform admin — there is no bypass here), or a foreign org. */
+  | { kind: "refused-ineligible" }
+  /** Instance scope with no package — malformed; never adopted. */
+  | { kind: "refused-malformed-partial" }
+  /** A non-empty `title_slug` already exists in the TARGET container. The row is
+   *  left byte-unchanged: a minted slug is stable forever, so binding never
+   *  clears or re-mints one. */
+  | { kind: "refused-slug-collision" }
+  /** Already bound to exactly this container (an idempotent re-assert). */
+  | { kind: "already-in-container" }
+  /** Bound to a DIFFERENT container — never re-pointed. */
+  | { kind: "bound-elsewhere"; container: ThreadContainer }
+  /** Eligible and unbound on re-read, yet the conditional write matched nothing
+   *  — a concurrent writer changed the row between the two statements. Reported
+   *  honestly rather than folded into a refusal it is not. */
+  | { kind: "raced" };
+
+/** Container equality: the package case-insensitively (rows written before the
+ *  canonical-casing rule may differ in case from the registry's own spelling),
+ *  the instance exactly (an instance id is opaque). Pure. */
+function sameContainer(thread: AssistantThread, container: ThreadContainer): boolean {
+  return (
+    (thread.assistantPackage ?? "").toLowerCase() === container.assistantPackage.toLowerCase() &&
+    (thread.instanceId ?? "") === (container.instanceId ?? "")
+  );
+}
+
+/**
+ * The PURE, TOTAL classification of a row against a container + actor — the
+ * decision table {@link bindThreadContainerIfUnbound} re-asserts in SQL, and
+ * the one it re-reads through when its conditional UPDATE matches nothing.
+ *
+ * PRECEDENCE (deterministic, and the reason the order is fixed here rather than
+ * emergent from the SQL): ELIGIBILITY is decided BEFORE binding state, so a
+ * caller who could never have written this row is told exactly that — an
+ * administrator observing another owner's row is `refused-ineligible`, never
+ * handed a container claim it has no standing to make.
+ *
+ *   ineligible → malformed-partial → already-in-container → bound-elsewhere →
+ *   "bindable"
+ *
+ * `"bindable"` means the row is genuinely unbound AND the actor owns it; the
+ * caller maps a post-UPDATE `"bindable"` to {@link ThreadContainerBindOutcome}
+ * `raced`, since a matching row that the conditional write missed can only be a
+ * concurrent writer.
+ */
+export function classifyThreadContainerBind(
+  thread: AssistantThread,
+  container: ThreadContainer,
+  actor: UnboundThreadActor,
+):
+  | "bindable"
+  | "refused-ineligible"
+  | "refused-malformed-partial"
+  | "already-in-container"
+  | "bound-elsewhere" {
+  // Eligibility FIRST — same axes as isImplicitDefaultThreadEligible, minus its
+  // unbound test (which is the binding-STATE question decided below).
+  if (thread.teamId) return "refused-ineligible";
+  if (!actor.userId) return "refused-ineligible";
+  if (!thread.ownerUserId || thread.ownerUserId !== actor.userId) return "refused-ineligible";
+  if (thread.orgId && thread.orgId !== actor.orgId) return "refused-ineligible";
+
+  if (isMalformedPartialBinding(thread)) return "refused-malformed-partial";
+  if (isUnboundAssistantThread(thread)) return "bindable";
+  return sameContainer(thread, container) ? "already-in-container" : "bound-elsewhere";
+}
+
+/**
+ * Bind an UNBOUND thread into `container` — the #2650 creation-seam write.
+ *
+ * ONE conditional UPDATE whose WHERE clause re-asserts the FULL predicate (no
+ * TOCTOU window against a concurrent ownership or binding change), then, when
+ * it matches nothing, ONE re-read classified through
+ * {@link classifyThreadContainerBind}. Never bumps `updated_at`: recording a
+ * thread's home is not thread ACTIVITY, and `updated_at` orders the sidebar.
+ *
+ * `title_slug = NULLIF(title_slug, '')` normalizes the empty-string slug out of
+ * the partial container-unique index, exactly as #2649's repair does. A
+ * NON-empty slug is never touched — if it collides in the target container the
+ * whole statement rolls back and the row is left alone
+ * (`refused-slug-collision`); a minted slug is stable forever by contract, so
+ * binding may never clear or re-mint one. (Unreachable from either creation
+ * seam today: the turn path creates titleless, and the /chat mirror upsert
+ * writes no `title_slug` at all — so a row arriving here from creation has
+ * `title_slug IS NULL`. It is classified anyway, not swallowed.)
+ */
+export function bindThreadContainerIfUnbound(
+  threadId: string,
+  container: ThreadContainer,
+  actor: UnboundThreadActor,
+): ThreadContainerBindOutcome {
+  if (!UUID_RE.test(threadId) || !actor.userId || !container.assistantPackage) {
+    return { kind: "refused-ineligible" };
+  }
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  try {
+    const [res] = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      queries: [
+        {
+          text: `UPDATE "${schema}"."assistant_threads"
+                 SET assistant_package = $1,
+                     instance_id = $2,
+                     title_slug = NULLIF(title_slug, '')
+                 WHERE id = $3
+                   AND COALESCE(assistant_package, '') = ''
+                   AND COALESCE(instance_id, '') = ''
+                   AND COALESCE(team_id, '') = ''
+                   AND owner_user_id = $4
+                   AND (COALESCE(org_id, '') = '' OR org_id = $5)`,
+          values: [
+            container.assistantPackage,
+            container.instanceId,
+            threadId,
+            actor.userId,
+            actor.orgId,
+          ],
+        },
+      ],
+    });
+    if ((res?.rowCount ?? 0) > 0) return { kind: "bound" };
+  } catch (err) {
+    if (isContainerSlugUniqueViolation(err)) return { kind: "refused-slug-collision" };
+    throw err;
+  }
+
+  // Matched nothing — re-read and say WHY, rather than reporting a bare false.
+  const row = getAssistantThread(threadId);
+  if (!row) return { kind: "absent" };
+  const verdict = classifyThreadContainerBind(row, container, actor);
+  if (verdict === "bound-elsewhere") {
+    return {
+      kind: "bound-elsewhere",
+      container: {
+        assistantPackage: row.assistantPackage ?? "",
+        instanceId: row.instanceId ?? null,
+      },
+    };
+  }
+  return verdict === "bindable" ? { kind: "raced" } : { kind: verdict };
+}
+
 /** List an org's threads, most-recently-updated first (uses the org index). */
 export function listAssistantThreadsForOrg(orgId: string, limit = 50): AssistantThread[] {
   ensurePostgresSchema();

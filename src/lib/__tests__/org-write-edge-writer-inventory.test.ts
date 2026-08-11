@@ -212,7 +212,10 @@ describe("newly registered stores — writer-set lockstep", () => {
       // ONE statement, so the count moves by one. Deliberately re-pinned.
       "src/lib/widget-user-auth.ts": 11,
       // 8 -> 9 on main (the suggestion-decision CAS write); kept as main has it.
-      "src/lib/assistant-thread-store.ts": 9,
+      // 9 -> 10 (cinatra#2650): bindThreadContainerIfUnbound's ONE conditional
+      // set-once UPDATE that records a thread's container at its first persist.
+      // Deliberately re-pinned.
+      "src/lib/assistant-thread-store.ts": 10,
       "src/lib/assistant-thread-dormant-content-purge.ts": 1,
     });
   });
@@ -272,6 +275,8 @@ describe("newly registered stores — writer-set lockstep", () => {
     expect(detected).toEqual([
       "appendAssistantTurn",
       "bindAssistantThread",
+      // cinatra#2650 — the creation-seam container bind (registered below).
+      "bindThreadContainerIfUnbound",
       "createAssistantThread",
       "ensureThreadSlug",
       "repairImplicitDefaultThreadBinding",
