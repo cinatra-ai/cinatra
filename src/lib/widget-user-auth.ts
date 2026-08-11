@@ -15,7 +15,20 @@ import {
   type ValidatedConnectCredential,
 } from "@/lib/widget-stream-auth";
 import { normalizeOriginStrict } from "@/lib/widget-token-broker";
-import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
+import {
+  formatTokenSet,
+  grantedExtensionScopesFromScopeColumn,
+  isKnownWidgetExtensionScope,
+  mintWidgetTokenAudience,
+  mintWidgetTokenScope,
+  normalizeExtensionScopes,
+  tokenAudienceAdmits,
+  tokenSetHas,
+  WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
+  widgetUserBaseScope,
+  type WidgetExtensionScope,
+  type WidgetScreenRecord,
+} from "@/lib/widget-lifecycle-scope";
 import {
   getPostgresConnectionString,
   postgresSchema,
@@ -116,12 +129,19 @@ function qTable(table: string): string {
 // AGENT-BOUND via its `agent_slug` column + `scope` (`<agentSlug>.user`), only
 // the `aud` moves so `/api/assistants/chat` consumes it. The mint site is
 // unchanged; a legacy-route consume now fails `aud_mismatch` (designed cutover).
-function streamRoutePath(_agentSlug: string): string {
-  return WIDGET_BROKER_ROUTE_PATH;
-}
-
-function userTokenScope(agentSlug: string): string {
-  return `${agentSlug}.user`;
+//
+// cinatra#2574 (epic #2564 S8a) — `scope` and `aud` are now SETS (see
+// widget-lifecycle-scope.ts). The chat route stays in every token's audience and
+// the base `<agentSlug>.user` stays in every token's scope, so a token minted
+// before this slice is byte-compatible at the chat route; a lifecycle grant is
+// an ADDITIONAL member of both sets, present only when the user consented to it.
+// The MINT of both sets now lives in the vocabulary module (mintWidgetTokenScope
+// / mintWidgetTokenAudience) so a grant and the surface it unlocks have exactly
+// one definition between them — which is why the old per-agent `streamRoutePath`
+// helper is gone: it computed the audience a second time, and a second
+// computation is how the two would eventually disagree.
+function userTokenScope(agentSlug: string): string | null {
+  return widgetUserBaseScope(agentSlug);
 }
 
 // ---------------------------------------------------------------------------
@@ -348,8 +368,8 @@ export function createAuthTransaction(input: CreateTransactionInput): CreateTran
         text:
           `INSERT INTO ${qTable(TXN_TABLE)} (` +
           `txn_id, site_id, client, org_id, site_origin, agent_slug, instance_id, ` +
-          `code_challenge, state, expires_at, created_at` +
-          `) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now() + make_interval(secs => $10), now())`,
+          `code_challenge, state, displayed_scopes, expires_at, created_at` +
+          `) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now() + make_interval(secs => $11), now())`,
         values: [
           txnId,
           input.site.siteId,
@@ -360,6 +380,14 @@ export function createAuthTransaction(input: CreateTransactionInput): CreateTran
           instanceId,
           input.codeChallenge,
           input.state,
+          // cinatra#2631 — "nothing is known yet about what was displayed for
+          // this transaction". NOT the no-screen sentinel: at creation the
+          // server cannot know what will render, and stamping "no screen" here
+          // would silently absorb a legacy signed-out page rendered by an older
+          // node in between (rework round 3, finding 1). It fails CLOSED at the
+          // grant, exactly like the pre-column NULL; the two knowable values are
+          // written later, by whoever knows them.
+          WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
           TRANSACTION_TTL_SECONDS,
         ],
       },
@@ -379,12 +407,29 @@ export type LoadedTransaction = {
   instanceId: string;
   codeChallenge: string;
   state: string;
+  /**
+   * What is KNOWN about what was displayed for this transaction: a real scope
+   * set (a sign-in screen rendered and showed it), the NO-SCREEN sentinel (a
+   * current node proved none rendered), the UNCLASSIFIED value (nothing is known
+   * yet), or null (the transaction predates the column). Only the first two are
+   * knowledge; the other two fail closed at the grant. cinatra#2631 — see
+   * recordDisplayedScopesForTransaction.
+   */
+  displayedScopes: string | null;
+  /**
+   * WHOSE arrival the record above belongs to: the SHA-256 of the single-use
+   * nonce the current node minted when it wrote that record, handed to that one
+   * browser and to nothing else (cinatra#2631, rework round 7, finding 1). Null
+   * on a transaction whose record predates this mechanism — which fails closed
+   * at the grant exactly like the unclassified value.
+   */
+  screenNonceHash: string | null;
 };
 
 /**
  * Load an UNCONSUMED, UNEXPIRED transaction by id. Returns null if missing,
  * expired, or already consumed. Read-only (the hosted page calls this to
- * render the login + consent context; consumption happens at code issuance).
+ * render the login context; consumption happens at code issuance).
  */
 export function loadActiveTransaction(txnId: string): LoadedTransaction | null {
   if (!txnId || typeof txnId !== "string") return null;
@@ -395,7 +440,7 @@ export function loadActiveTransaction(txnId: string): LoadedTransaction | null {
       {
         text:
           `SELECT txn_id, site_id, client, org_id, site_origin, agent_slug, instance_id, ` +
-          `code_challenge, state ` +
+          `code_challenge, state, displayed_scopes, screen_nonce_hash ` +
           `FROM ${qTable(TXN_TABLE)} ` +
           `WHERE txn_id = $1 AND consumed_at IS NULL AND expires_at > now() LIMIT 1`,
         values: [txnId],
@@ -415,11 +460,228 @@ export function loadActiveTransaction(txnId: string): LoadedTransaction | null {
     instanceId: String(row.instance_id ?? ""),
     codeChallenge: String(row.code_challenge ?? ""),
     state: String(row.state ?? ""),
+    displayedScopes:
+      typeof row.displayed_scopes === "string" ? row.displayed_scopes : null,
+    screenNonceHash:
+      typeof row.screen_nonce_hash === "string" ? row.screen_nonce_hash : null,
   };
 }
 
+/**
+ * Record, ON THE TRANSACTION, what is KNOWN about what was displayed for it —
+ * the one authenticated statement about what this person was shown.
+ *
+ * TWO WRITERS, BOTH SERVER-SIDE, and the value distinguishes them:
+ *   • the hosted sign-in screen writes the scope set it is about to DISPLAY;
+ *   • a node that PROVED no screen rendered writes WIDGET_NO_SIGNIN_SCREEN (the
+ *     observed session already existed when the transaction was created).
+ * Everything else the grant may find — the UNCLASSIFIED value this column is
+ * created with, or the pre-column NULL — is the absence of knowledge and fails
+ * closed there (cinatra#2631, rework round 3, finding 1).
+ *
+ * AND IT RECORDS WHOSE ARRIVAL IT IS (rework round 7, finding 1). What was
+ * displayed is not a property of the TRANSACTION but of the one arrival the
+ * screen rendered for: two people can be walked through the same unconsumed
+ * transaction during a rolling deploy, and the second one must not redeem the
+ * first one's record. So the hash of a single-use nonce is written in THE SAME
+ * STATEMENT as the record, and the plaintext goes to that browser alone (the
+ * sign-in redirect URL). The two columns are therefore one fact: a record can
+ * never exist without the arrival it belongs to, and the write-once guard names
+ * both, so a record left by a node that predates this mechanism can never have a
+ * nonce attached to it afterwards by somebody who did not display it.
+ *
+ * cinatra#2631 (codex rework round 1, finding 1). Carrying the displayed set
+ * through the sign-in redirect in the URL was not enough: a party that controls
+ * the popup's URL can STRIP the marker, and an absent marker used to be
+ * admitted. Stripping therefore turned a mismatch back into the admitted case.
+ * The server writes it here instead, where nothing in the browser can remove it,
+ * and the action reads it off the row and nowhere else.
+ *
+ * FIRST WRITE WINS: the UPDATE may only replace the UNCLASSIFIED value, so
+ * whichever writer knows something first is the record. A transaction is
+ * single-use and short-lived, so the first sign-in screen rendered for it is the
+ * one the person read; a later render by a build whose granted set differs does
+ * not overwrite that, and a no-screen claim can never overwrite a screen that
+ * really rendered.
+ *
+ * RETURNS THE AUTHORITATIVE STORED RECORD, not the values offered (codex rework
+ * round 2, finding 1). A caller that assumed its own write had landed could
+ * render one list of sentences while a different one stood recorded — the
+ * mismatch the whole mechanism exists to prevent, reintroduced by optimism. The
+ * caller compares BOTH halves and refuses to render when either differs: a
+ * stored set that is not the one it offered means somebody else's screen, and a
+ * stored nonce hash that is not the one it offered means somebody else's
+ * arrival. Null means the transaction is no longer there to record anything
+ * against, or the caller offered no usable arrival.
+ *
+ * Idempotent and NON-CONSUMING: re-rendering the sign-in screen writes nothing
+ * new, and this never touches consumed_at. It is safe on a page render for
+ * exactly that reason — unlike issuing a code, which is why THAT stays a POST.
+ */
+export function recordDisplayedScopesForTransaction(
+  txnId: string,
+  displayedScopes: string,
+  screenNonceHash: string,
+): WidgetScreenRecord | null {
+  if (!txnId || typeof txnId !== "string" || typeof displayedScopes !== "string") {
+    return null;
+  }
+  // A record with no arrival attached is one anybody could redeem, so a caller
+  // that cannot name its own arrival writes nothing at all rather than a record
+  // that is weaker than the one this function promises.
+  if (!/^[a-f0-9]{64}$/.test(String(screenNonceHash ?? ""))) return null;
+  ensurePostgresSchema();
+  const [, read] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    transaction: true,
+    queries: [
+      {
+        text:
+          `UPDATE ${qTable(TXN_TABLE)} SET displayed_scopes = $2, screen_nonce_hash = $4 ` +
+          `WHERE txn_id = $1 AND consumed_at IS NULL AND expires_at > now() ` +
+          `AND displayed_scopes = $3 AND screen_nonce_hash IS NULL`,
+        values: [txnId, displayedScopes, WIDGET_SIGNIN_SCREEN_UNCLASSIFIED, screenNonceHash],
+      },
+      {
+        text:
+          `SELECT displayed_scopes, screen_nonce_hash FROM ${qTable(TXN_TABLE)} ` +
+          `WHERE txn_id = $1 AND consumed_at IS NULL AND expires_at > now() LIMIT 1`,
+        values: [txnId],
+      },
+    ],
+  });
+  const row = read?.rows?.[0] as Record<string, unknown> | undefined;
+  if (!row) return null;
+  return {
+    displayedScopes:
+      typeof row.displayed_scopes === "string" ? row.displayed_scopes : null,
+    screenNonceHash:
+      typeof row.screen_nonce_hash === "string" ? row.screen_nonce_hash : null,
+  };
+}
+
+/**
+ * A fresh single-use screen nonce — 32 bytes of CSPRNG entropy, hex. It is the
+ * one thing in this flow that lives only in the browser it was minted for: the
+ * database keeps its {@link widgetScreenNonceHash} and never the value, exactly
+ * as it keeps the authorization code and the `cwu_` token.
+ */
+export function mintWidgetScreenNonce(): string {
+  return randomBytes(32).toString("hex");
+}
+
+/**
+ * The stored form of a screen nonce. Plain SHA-256, unsalted and unstretched by
+ * design and for the same reason the code/token hashes are: the input is 256
+ * bits of server-minted entropy, so there is no dictionary to attack and nothing
+ * a salt would defend. Empty for anything unusable, which every consumer reads
+ * as "no proof".
+ *
+ * NOT NORMALIZED, deliberately. A presented value is accepted only if it is
+ * EXACTLY what was minted — no trimming, no case folding. Normalizing a bearer
+ * secret widens the set of strings that redeem it for no benefit; this one is
+ * either presented as issued or it is not presented at all.
+ */
+export function widgetScreenNonceHash(nonce: unknown): string {
+  const value = typeof nonce === "string" ? nonce : "";
+  if (!/^[a-f0-9]{64}$/.test(value)) return "";
+  return createHash("sha256").update(value).digest("hex");
+}
+
+/**
+ * A stable, non-reversible name for ONE session row, for the no-screen token to
+ * carry (cinatra#2631, rework round 5, finding 1). The token says "no screen
+ * rendered for THIS arrival", so it has to name the arrival; it is hashed for
+ * the same reason every other identifier this module persists is — the row is
+ * read by more eyes than the flow that wrote it, and a session id is nobody
+ * else's business. Empty for anything unusable, which every consumer reads as
+ * "no token": a caller that cannot identify its session may not write one.
+ */
+export function widgetSessionFingerprint(sessionId: unknown): string {
+  const id = typeof sessionId === "string" ? sessionId.trim() : "";
+  if (!id) return "";
+  return createHash("sha256").update(id).digest("hex").slice(0, 32);
+}
+
+/**
+ * Better Auth's session table, and the app-owned column that records when the
+ * DATABASE inserted each row. Same database, `public` schema — the same place
+ * `teamMemberRoleColumnExists()` probes (src/lib/better-auth-db.ts). The column
+ * is provisioned by the schema SSOT at every boot (src/lib/drizzle-store.ts).
+ */
+const AUTH_SESSION_TABLE = `"public"."session"`;
+const AUTH_SESSION_DB_CREATED_AT = "cinatra_db_created_at";
+
+/**
+ * Was the SESSION row already in the database when the TRANSACTION row was
+ * inserted? THE PROOF behind a no-screen token (cinatra#2631).
+ *
+ * WHY THIS QUESTION. The hosted flow renders a sign-in screen only when there is
+ * no session, and signing in through one MINTS the session it lands with. So a
+ * session that predates the transaction is one no screen of this flow produced —
+ * which means no screen rendered for this transaction, including a legacy screen
+ * on an older node that would have recorded nothing. A session that came AFTER
+ * means a screen did render somewhere, and the transaction's own record is then
+ * the only thing that may speak for it.
+ *
+ * ONE CLOCK, AND IT IS THE DATABASE'S (codex rework round 4, finding 1). Both
+ * sides are stamped by Postgres DEFAULTs at INSERT: the transaction's
+ * `created_at`, and the session's `cinatra_db_created_at`. Better Auth's own
+ * `createdAt` is deliberately NOT used — it is written by whichever NODE minted
+ * the session, with that node's own clock, and the node whose clock matters most
+ * here is precisely the one we do not control: an OLD one still serving the
+ * legacy sign-in screen. If its clock lagged the database by longer than the
+ * sign-in takes, a session minted AFTER that screen would read as older than the
+ * transaction and the sentinel would be written over a screen that really
+ * rendered. A database default cannot lag: an old node inserts the row without
+ * naming the column, and Postgres fills it.
+ *
+ * INSERT-TIME, AND IT STAYS THAT WAY (round 6). Better Auth UPDATEs a session
+ * row on its `updateAge` refresh and on an org switch. Neither touches this
+ * column — which is exactly why it is a column and not the row's `xmin`, whose
+ * whole value a single refresh replaces. Reading a refreshed row's write id
+ * would have failed the ORDINARY already-signed-in path, once per person per
+ * day, for a session that genuinely predated everything.
+ *
+ * THE DATABASE DOES THE COMPARING, in one statement, so the two reads cannot
+ * disagree and nothing is re-derived in JS. FAILS CLOSED, ALWAYS: a missing
+ * session row, a missing transaction, a NULL either side, or any error at all
+ * (a deployment whose auth tables are not in `public` would raise one) proves
+ * nothing — and "proves nothing" must never write a value that grants.
+ */
+export function sessionRowPredatesTransaction(
+  sessionId: string,
+  txnId: string,
+): boolean {
+  if (!sessionId || typeof sessionId !== "string") return false;
+  if (!txnId || typeof txnId !== "string") return false;
+  ensurePostgresSchema();
+  let result;
+  try {
+    [result] = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      queries: [
+        {
+          text:
+            `SELECT (` +
+            `(SELECT ${quotePostgresIdentifier(AUTH_SESSION_DB_CREATED_AT)} ` +
+            `FROM ${AUTH_SESSION_TABLE} WHERE id = $1) ` +
+            `< ` +
+            `(SELECT created_at FROM ${qTable(TXN_TABLE)} WHERE txn_id = $2)` +
+            `) AS session_predates`,
+          values: [sessionId, txnId],
+        },
+      ],
+    });
+  } catch {
+    return false;
+  }
+  const row = result?.rows?.[0] as Record<string, unknown> | undefined;
+  return row?.session_predates === true;
+}
+
 // ---------------------------------------------------------------------------
-// 2) AUTH CODE — issued by the hosted page after explicit user consent.
+// 2) AUTH CODE — issued by the hosted page once the sign-in has authorized it.
 // ---------------------------------------------------------------------------
 
 export type IssueCodeResult =
@@ -429,14 +691,25 @@ export type IssueCodeResult =
 /**
  * Atomically CONSUME the transaction (single-use) and issue a user auth code
  * bound to the now-known userId + the transaction's verified context. The
- * caller MUST have already verified the user is a member of `txn.orgId` and
- * consumed the consent CSRF token. Only the sha256 hash of the code is stored;
- * the plaintext is returned once (to be postMessage'd to the opener origin).
+ * caller MUST have already verified there is a session and that the user is a
+ * member of `txn.orgId`. Only the sha256 hash of the code is stored; the
+ * plaintext is returned once (to be postMessage'd to the opener origin).
  *
  * The transaction consume is the single-use gate: a second concurrent issue for
  * the same transaction finds consumed_at already set → txn_not_found.
+ *
+ * cinatra#2574 — `grantedScopes` records WHAT THE SIGN-IN GRANTED on the code
+ * itself, so the grant travels with the authorization rather than being
+ * re-decided at redeem time. Unknown entries are dropped here (a code can only
+ * ever carry a scope this build understands), and the column is nullable: a code
+ * issued before this slice carries none, which is how an older authorization
+ * fails closed on every lifecycle read (AC-1).
  */
-export function issueUserAuthCode(input: { txnId: string; userId: string }): IssueCodeResult {
+export function issueUserAuthCode(input: {
+  txnId: string;
+  userId: string;
+  grantedScopes?: readonly WidgetExtensionScope[];
+}): IssueCodeResult {
   ensurePostgresSchema();
 
   // Atomic single-use consume of the transaction → returns its bound context.
@@ -470,8 +743,8 @@ export function issueUserAuthCode(input: { txnId: string; userId: string }): Iss
         text:
           `INSERT INTO ${qTable(CODE_TABLE)} (` +
           `code_hash, user_id, site_id, client, org_id, site_origin, agent_slug, ` +
-          `instance_id, code_challenge, expires_at, created_at` +
-          `) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, now() + make_interval(secs => $10), now())`,
+          `instance_id, code_challenge, granted_scopes, expires_at, created_at` +
+          `) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now() + make_interval(secs => $11), now())`,
         values: [
           codeHash,
           input.userId,
@@ -482,6 +755,7 @@ export function issueUserAuthCode(input: { txnId: string; userId: string }): Iss
           String(txn.agent_slug ?? ""),
           String(txn.instance_id ?? ""),
           String(txn.code_challenge ?? ""),
+          formatTokenSet(normalizeExtensionScopes(input.grantedScopes)),
           CODE_TTL_SECONDS,
         ],
       },
@@ -540,7 +814,7 @@ export function redeemUserAuthCode(input: {
         text:
           `DELETE FROM ${qTable(CODE_TABLE)} WHERE code_hash = $1 AND expires_at > now() ` +
           `RETURNING user_id, site_id, client, org_id, site_origin, agent_slug, ` +
-          `instance_id, code_challenge`,
+          `instance_id, code_challenge, granted_scopes`,
         values: [codeHash],
       },
     ],
@@ -578,8 +852,22 @@ export function redeemUserAuthCode(input: {
   const rawToken = USER_TOKEN_PREFIX + randomBytes(TOKEN_RANDOM_BYTES).toString("base64url");
   const tokenHash = sha256Hex(rawToken);
   const jti = randomUUID();
-  const scope = userTokenScope(agentSlug);
-  const aud = streamRoutePath(agentSlug);
+  // cinatra#2574 — the token inherits EXACTLY the grant the consent recorded on
+  // the code, re-narrowed to the scopes this build knows. The audience set is
+  // DERIVED from that same grant (never stored independently), so a scope and
+  // the surface it unlocks cannot drift apart. A code with no recorded grant —
+  // every code issued before this slice — mints the pre-#2574 pair: the base
+  // scope and the chat audience, and nothing else.
+  const grantedScopes = grantedExtensionScopesFromScopeColumn(
+    String(row.granted_scopes ?? ""),
+  );
+  // An agent slug that cannot be expressed as ONE scope-set member would encode
+  // a scope column meaning something other than what it says (codex round 0,
+  // finding 3), so the mint refuses instead — generically, like every other
+  // redeem failure.
+  const scope = mintWidgetTokenScope(agentSlug, grantedScopes);
+  if (!scope) return { ok: false, reason: "invalid_grant" };
+  const aud = mintWidgetTokenAudience(grantedScopes);
 
   runPostgresQueriesSync({
     connectionString: getPostgresConnectionString(),
@@ -639,6 +927,12 @@ export type UserTokenClaims = {
   agentSlug: string;
   instanceId: string;
   jti: string;
+  /**
+   * The extension scopes this token actually carries (cinatra#2574) — known
+   * entries only, so a caller can audit what was consented to without re-parsing
+   * the column. Empty for every token minted before the vocabulary existed.
+   */
+  grantedScopes: WidgetExtensionScope[];
 };
 
 export type ConsumeUserTokenResult =
@@ -662,12 +956,23 @@ export type ConsumeUserTokenReason =
  * request Origin == bound siteOrigin, and that the bound connect-site is STILL
  * ACTIVE with the SAME org/origin (instant revoke: revoking/rotating the site,
  * or its org/origin re-binding, kills the token immediately).
+ *
+ * cinatra#2574 — `aud` and `scope` are SETS and both are checked by exact
+ * MEMBERSHIP, never by equality: the presented `routePath` must be in the
+ * token's audience, the base `<agentSlug>.user` must be in its scope, and every
+ * scope in `requiredScopes` must be in its scope too. This is the ONE place the
+ * lifecycle grant is evaluated — a caller asks for the capability it needs and
+ * the single verifier decides, so no surface can grow a second copy of the rule.
+ * A token whose consent predates a required scope fails `scope_mismatch` here
+ * (and, for the lifecycle audience, `aud_mismatch` before it).
  */
 export function consumeUserWidgetToken(input: {
   token: string;
   agentSlug: string;
   routePath: string;
   requestOrigin: string | null;
+  /** Extension scopes the CALLING surface requires. Default: none (chat turn). */
+  requiredScopes?: readonly WidgetExtensionScope[];
 }): ConsumeUserTokenResult {
   if (!input.token || !input.token.startsWith(USER_TOKEN_PREFIX)) {
     return { ok: false, reason: "not_cwu_token" };
@@ -705,11 +1010,28 @@ export function consumeUserWidgetToken(input: {
   if (String(row.agent_slug ?? "") !== input.agentSlug) {
     return { ok: false, reason: "agent_mismatch" };
   }
-  if (String(row.aud ?? "") !== input.routePath) {
+  // Audience. Not raw membership: the route must be in the stored set AND be a
+  // route this build can justify from the token's own scopes (the chat route
+  // always; anything else only via a KNOWN scope the token carries). A token
+  // minted before #2574 holds the single chat route and parses as a one-element
+  // set, so the chat branch is unchanged.
+  if (!tokenAudienceAdmits(row.scope, row.aud, input.routePath)) {
     return { ok: false, reason: "aud_mismatch" };
   }
-  if (String(row.scope ?? "") !== userTokenScope(input.agentSlug)) {
+  // Scope: the agent-bound base scope ALWAYS. An unknown entry in the column is
+  // inert — it neither grants anything nor invalidates the entries beside it.
+  const baseScope = userTokenScope(input.agentSlug);
+  if (!baseScope || !tokenSetHas(row.scope, baseScope)) {
     return { ok: false, reason: "scope_mismatch" };
+  }
+  // Required scopes. A capability the CALLER names must be one this build
+  // actually defines — an unrecognized requirement is refused rather than
+  // matched against a raw column, so a stale caller and a tampered row cannot
+  // meet in the middle on a name neither side understands.
+  for (const required of input.requiredScopes ?? []) {
+    if (!isKnownWidgetExtensionScope(required) || !tokenSetHas(row.scope, required)) {
+      return { ok: false, reason: "scope_mismatch" };
+    }
   }
 
   const storedOrigin = normalizeOriginStrict(String(row.site_origin ?? ""));
@@ -752,6 +1074,7 @@ export function consumeUserWidgetToken(input: {
       agentSlug: String(row.agent_slug ?? ""),
       instanceId: String(row.instance_id ?? ""),
       jti: String(row.jti ?? ""),
+      grantedScopes: grantedExtensionScopesFromScopeColumn(row.scope),
     },
   };
 }
@@ -764,5 +1087,4 @@ export const __testing = {
   CODE_TTL_SECONDS,
   TRANSACTION_TTL_SECONDS,
   userTokenScope,
-  streamRoutePath,
 };

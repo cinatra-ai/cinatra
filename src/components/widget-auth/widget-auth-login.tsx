@@ -17,7 +17,10 @@ import { authClient } from "@/lib/auth-client";
 //
 // On successful credential login Better Auth sets the session cookie and the
 // view redirects to `redirectTo` (back to /widget-auth?txn=...), where the
-// server component continues the transaction (membership re-check + consent).
+// server component continues the transaction (membership re-check, then the
+// grant this sign-in authorized). cinatra#2631: what THIS screen displayed is
+// recorded on the transaction by the server before it renders, not carried in
+// the redirect, so nothing in the browser can strip it before the comparison.
 export function WidgetAuthLogin({ redirectTo }: { redirectTo: string }) {
   return (
     <AuthUIProvider

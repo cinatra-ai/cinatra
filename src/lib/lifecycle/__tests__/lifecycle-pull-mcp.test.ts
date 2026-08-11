@@ -180,9 +180,21 @@ describe("the pull surface", () => {
     expect(LIFECYCLE_PRODUCER_TOOLS.verification_summary).toEqual([
       "verification_record_render",
     ]);
-    for (const producers of Object.values(LIFECYCLE_PRODUCER_TOOLS)) {
-      for (const name of producers) expect(handlers.has(name)).toBe(true);
+    // Every name THIS module owns is registered by it. The trigger proposal's
+    // producer (cinatra#2569) is registered by its own sibling module — the
+    // pull surface is S3's read primitives, and adding a fourth here would have
+    // put a proposal minter on the conversational-pull graph for no reason — so
+    // it is asserted absent here and present there (see
+    // `schedule-proposal-producer.test.ts`).
+    for (const viewType of ["artifact_review_gate", "verification_summary"] as const) {
+      for (const name of LIFECYCLE_PRODUCER_TOOLS[viewType]) {
+        expect(handlers.has(name), name).toBe(true);
+      }
     }
+    expect(LIFECYCLE_PRODUCER_TOOLS.trigger_schedule_proposal).toEqual([
+      "schedule_proposal_render",
+    ]);
+    expect(handlers.has("schedule_proposal_render")).toBe(false);
   });
 });
 

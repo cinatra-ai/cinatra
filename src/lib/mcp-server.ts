@@ -17,6 +17,7 @@ import { createArtifactsModule } from "@/lib/artifacts/mcp";
 import { createContextModule } from "@/lib/artifacts/context-mcp";
 import { createApprovalsMcpModule } from "@/lib/approvals/approvals-mcp";
 import { createLifecyclePullMcpModule } from "@/lib/lifecycle/lifecycle-pull-mcp";
+import { createScheduleProposalMcpModule } from "@/lib/lifecycle/schedule-proposal-mcp";
 import { createProjectSeamMcpModule } from "@/lib/project-seam-mcp";
 import { createAssistantMcpModule } from "@/lib/assistant-mcp";
 import { createProjectsModule } from "@cinatra-ai/projects/module";
@@ -115,6 +116,13 @@ const postConnectorPlatformModules = [
   // anywhere on the lifecycle surface; both delegated tool policies reject that
   // class by construction (structural test in src/lib/lifecycle/__tests__).
   createLifecyclePullMcpModule(),
+  // The schedule PROPOSAL producer (cinatra#2569, epic #2564 S5):
+  // schedule_proposal_render — the tool that fills S1's deliberately empty
+  // `trigger_schedule_proposal` producer allowlist. Read-only in the same sense
+  // as the pull primitives above: it mints a signed, opaque, expiring proposal
+  // token and returns a card envelope, and writes nothing. Arming happens only
+  // in a human session action carrying that token.
+  createScheduleProposalMcpModule(),
   // Project-manager pilot host tool seam (cinatra#1033 W3 / #1032 D3):
   // project_instantiate / project_tick_context / project_dispatch_worker as
   // run-token-authenticated MCP tools offered to the PM seat's own agent run.

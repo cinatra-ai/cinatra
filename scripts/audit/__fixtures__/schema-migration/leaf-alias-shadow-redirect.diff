@@ -1,0 +1,14 @@
+diff --git a/src/lib/extension-grant-schema.ts b/src/lib/extension-grant-schema.ts
+index a282e750b..15bec0e65 100644
+--- a/src/lib/extension-grant-schema.ts
++++ b/src/lib/extension-grant-schema.ts
+@@ -93,7 +93,8 @@ export function capabilityOwnershipGrantSchemaQueries(schemaName: string): { tex
+  * (widget-stream runtime trust, slice 1) + its anti-squat partial unique
+  * indexes. Spread into `buildCreateStoreSchemaQueries`. */
+ export function widgetStreamMetadataGrantSchemaQueries(schemaName: string): { text: string }[] {
+-  const q = schemaName.replaceAll('"', '""');
++  let q = schemaName.replaceAll('"', '""');
++  q += "_shadow";
+   return [
+     // Runtime installer — admin-approved WIDGET-STREAM METADATA grants (the
+     // sibling of `extension_capability_ownership_grant` above; same mechanism

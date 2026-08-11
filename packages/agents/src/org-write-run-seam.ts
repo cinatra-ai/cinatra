@@ -50,6 +50,32 @@ export class AgentRunOrgWriteAuthorityError extends Error {
  *  writer body already uses, seen through the kernel's minimal contract. */
 export type GuardedRunTx = OrgWriteTx;
 
+/**
+ * Extra writes that MUST commit ATOMICALLY WITH THE RUN ROW (cinatra#2569,
+ * epic #2564 S5).
+ *
+ * A creation writer that accepts one runs it INSIDE the same guarded
+ * transaction as its insert — after the row exists, before commit, on the tx
+ * this seam hands out, so the org locks and the lifecycle ruling already apply.
+ * A THROW rolls the run back with it.
+ *
+ * It exists for exactly one shape of problem: a caller for whom a run WITHOUT
+ * its companion rows is a DEFECT rather than an intermediate state. The
+ * conversational schedule proposal is the case that forced it — Confirm spends a
+ * single-use proposal, creates the run, and records the schedule-install intent,
+ * and a crash between any two of those either strands a run nobody asked for or
+ * lets the same proposal create a SECOND one. Sequencing the writes cannot fix
+ * that; sharing the transaction does.
+ *
+ * NOT a general escape hatch: the callback receives the run's identity and the
+ * transaction and nothing else, and its callers are store modules whose whole
+ * invariant is atomicity with the run.
+ */
+export type GuardedRunCompanionWrite = (
+  tx: GuardedRunTx,
+  run: { id: string; orgId: string },
+) => Promise<void>;
+
 export interface GuardedRunWriteOptions {
   readonly orgId: string;
   readonly runId: string;

@@ -1,0 +1,94 @@
+diff --git a/src/lib/drizzle-store.ts b/src/lib/drizzle-store.ts
+index 185899567..0a8865b75 100644
+--- a/src/lib/drizzle-store.ts
++++ b/src/lib/drizzle-store.ts
+@@ -16,6 +16,7 @@ import {
+ } from "@/lib/extension-grant-schema";
+ import { assistantThreadSchemaQueries, assistantHandleSchemaQueries, assistantTurnSkillDeliverySchemaQueries } from "@/lib/assistant-thread-schema"; // + cinatra#2240 per-turn skill-delivery record (same pure-strings leaf as its FK parent)
+ import { triggerSchemaQueries } from "@/lib/trigger-schema"; // cinatra#2569 — the trigger lifecycle's DDL leaf
++import { outputDerivationSchemaQueries } from "@/lib/output-derivation-schema"; // cinatra#1893 — the derivation outbox DDL leaf
+ import { triggerScheduleProposalSchemaQueries } from "@/lib/trigger-schedule-proposal-schema"; // cinatra#2569 — the two NET-NEW proposal tables, born in their leaf
+ import { assistantRegistrySchemaQueries, assistantPauseSchemaQueries } from "@/lib/assistant-registry-schema";
+ import { orgWriteSchemaQueries } from "@/lib/org-write-schema";
+@@ -1351,34 +1352,10 @@ END $$`,
+     )` },
+     { text: `CREATE UNIQUE INDEX IF NOT EXISTS agent_run_test_sends_run_id_submission_id_uniq ON "${schemaName.replaceAll('"', '""')}"."agent_run_test_sends" (run_id, submission_id)` },
+     { text: `CREATE INDEX IF NOT EXISTS agent_run_test_sends_run_id_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_test_sends" (run_id)` },
+-    // agent_run_output_derivations: transactional outbox for the produces-scoped
+-    // capture of an unbound agent run's final output (cinatra#1893, epic #1883
+-    // A5). ONE row per non-empty WayFlow terminal-success run, written ATOMICALLY
+-    // with the terminal status CAS + final-output snapshot (transitionRunStatus'
+-    // derivationOutbox branch). PK run_id ⇒ ON CONFLICT (run_id) DO NOTHING makes
+-    // capture idempotent under a stop/retry re-drive. `status` carries the
+-    // derivation lifecycle (pending → deriving [LEASED] → done|no_match|
+-    // no_produces); the lease (lease_token + lease_expires_at, attempts bumped on
+-    // claim) SERIALIZES the decision across the one-shot job + reconciliation
+-    // sweep. TWIN of migrations/core/core__0071 — the two DDLs MUST stay identical.
+-    { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."agent_run_output_derivations" (
+-      run_id text PRIMARY KEY REFERENCES "${schemaName.replaceAll('"', '""')}"."agent_runs"(id) ON DELETE CASCADE,
+-      org_id text NOT NULL,
+-      template_id text NOT NULL,
+-      package_version text,
+-      created_by text,
+-      content text NOT NULL,
+-      content_is_json boolean NOT NULL DEFAULT false,
+-      content_hash text NOT NULL,
+-      status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','deriving','done','no_match','no_produces')),
+-      attempts integer NOT NULL DEFAULT 0,
+-      lease_token text,
+-      lease_expires_at timestamptz,
+-      detail jsonb,
+-      created_at timestamptz NOT NULL DEFAULT now(),
+-      updated_at timestamptz NOT NULL DEFAULT now()
+-    )` },
+-    { text: `CREATE INDEX IF NOT EXISTS agent_run_output_derivations_status_idx ON "${schemaName.replaceAll('"', '""')}"."agent_run_output_derivations" (status, created_at)` },
++    // The agent_run_output_derivations outbox DDL lives in the
++    // `output-derivation-schema.ts` pure-strings leaf, spread back in here so
++    // it stays executed core-store DDL.
++    ...outputDerivationSchemaQueries(schemaName),
+     // The DEPLOYED trigger-family tables (agent_run_triggers, agent_run_pm_links)
+     // live in the `trigger-schema.ts` pure-strings leaf — RELOCATED there
+     // verbatim, because this file is a baselined file-size-ratchet bottleneck
+diff --git a/src/lib/output-derivation-schema.ts b/src/lib/output-derivation-schema.ts
+new file mode 100644
+index 000000000..247bb88d6
+--- /dev/null
++++ b/src/lib/output-derivation-schema.ts
+@@ -0,0 +1,37 @@
++// Bootstrap DDL for the produces-scoped derivation OUTBOX — a pure string
++// builder with ZERO imports, spread into buildCreateStoreSchemaQueries, so
++// every statement here is executed core-store DDL.
++
++export function outputDerivationSchemaQueries(schemaName: string): { text: string }[] {
++  const s = schemaName.replaceAll('"', '""');
++  return [
++    // agent_run_output_derivations: transactional outbox for the produces-scoped
++    // capture of an unbound agent run's final output (cinatra#1893, epic #1883
++    // A5). ONE row per non-empty WayFlow terminal-success run, written ATOMICALLY
++    // with the terminal status CAS + final-output snapshot (transitionRunStatus'
++    // derivationOutbox branch). PK run_id ⇒ ON CONFLICT (run_id) DO NOTHING makes
++    // capture idempotent under a stop/retry re-drive. `status` carries the
++    // derivation lifecycle (pending → deriving [LEASED] → done|no_match|
++    // no_produces); the lease (lease_token + lease_expires_at, attempts bumped on
++    // claim) SERIALIZES the decision across the one-shot job + reconciliation
++    // sweep. TWIN of migrations/core/core__0071 — the two DDLs MUST stay identical.
++    { text: `CREATE TABLE IF NOT EXISTS "${s}"."agent_run_output_derivations" (
++      run_id text PRIMARY KEY REFERENCES "${s}"."agent_runs"(id) ON DELETE CASCADE,
++      org_id text NOT NULL,
++      template_id text NOT NULL,
++      package_version text,
++      created_by text,
++      content text NOT NULL,
++      content_is_json boolean NOT NULL DEFAULT false,
++      content_hash text NOT NULL,
++      status text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','deriving','done','no_match','no_produces')),
++      attempts integer NOT NULL DEFAULT 0,
++      lease_token text,
++      lease_expires_at timestamptz,
++      detail jsonb,
++      created_at timestamptz NOT NULL DEFAULT now(),
++      updated_at timestamptz NOT NULL DEFAULT now()
++    )` },
++    { text: `CREATE INDEX IF NOT EXISTS agent_run_output_derivations_status_idx ON "${s}"."agent_run_output_derivations" (status, created_at)` },
++  ];
++}

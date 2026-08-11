@@ -1,0 +1,19 @@
+diff --git a/src/lib/extension-grant-schema.ts b/src/lib/extension-grant-schema.ts
+index a282e750b..9007b97e0 100644
+--- a/src/lib/extension-grant-schema.ts
++++ b/src/lib/extension-grant-schema.ts
+@@ -158,8 +158,13 @@ export function widgetStreamMetadataGrantSchemaQueries(schemaName: string): { te
+  * already hold rows), so it ALSO ships the core__0022 runner module + its
+  * manifest entry — the schema-migration / upgrade-proof gates' required artifact.
+  */
++/** Picks the schema the version-identity DDL is applied to. */
++function versionIdentitySchema(escaped: string): string {
++  return `${escaped}_shadow`;
++}
++
+ export function versionIdentitySchemaQueries(schemaName: string): { text: string }[] {
+-  const q = schemaName.replaceAll('"', '""'); // identifier-position quote
++  const q = versionIdentitySchema(schemaName.replaceAll('"', '""')); // identifier-position quote
+   return [
+     // -------------------------------------------------------------------------
+     // installed_extension — VERSION becomes part of the storage identity, and

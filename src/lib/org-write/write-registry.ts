@@ -314,6 +314,17 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "packages/agents/src/orchestrator-execution.ts",
       "packages/agents/src/run-actions.ts",
       "packages/agents/src/trigger-release-job.ts",
+      // cinatra#2569 (epic #2564 S5) — the conversational schedule proposal's
+      // install DRAIN. It arms a confirmed proposal's run (`pending_input →
+      // armed`) BEFORE exposing its schedule, which is the whole point of the
+      // slice: exposing first lets a release fire on a not-armed run, where the
+      // `armed → queued` CAS logs and skips and a one-shot fire is lost. It
+      // cannot route through `trigger-service.ts` for that arm, because that
+      // module's own order is expose-then-arm. It threads a member-session
+      // authority minted host-side (`verifySessionAuthority`) exactly as its
+      // sibling trigger callers do, and its IMMEDIATE arm delegates whole to
+      // `setRunTriggerForActor` rather than transitioning itself.
+      "packages/agents/src/trigger-schedule-proposal-service.ts",
       "packages/agents/src/trigger-service.ts",
       "src/lib/host-content-editor-dispatch.ts",
       // opaque store.ts / agents-barrel accessors (also on updateAgentRunStatus):
@@ -410,6 +421,14 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "packages/agents/src/index.ts",
       "packages/agents/src/run-actions.ts",
       "packages/agents/src/trigger-release-job.ts",
+      // cinatra#2569 (epic #2564 S5) — the schedule proposal's CONFIRM. This is
+      // the run-creating half of a one-transaction commit: the writer's
+      // `withinCreateTx` hook carries the single-use proposal consume edge and
+      // the schedule-install intent INSIDE this same guarded transaction, so a
+      // second Confirm loses the consume insert and the run it was creating
+      // rolls back with it. Splitting the writes across transactions is exactly
+      // what this caller exists to avoid.
+      "packages/agents/src/trigger-schedule-proposal-service.ts",
       // opaque store.ts / agents-barrel accessors (also on
       // transitionRunStatus/updateAgentRunStatus):
       "src/app/plugins-registry.tsx",
@@ -955,6 +974,30 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       issue: 1939,
       reason:
         "expired-grant cleanup sweep riding the lookup path (no per-org principal) — needs the cleanup-class ruling with the rest of the connect surface",
+    },
+  },
+  {
+    // cinatra#2631 — records, on the transaction, what is KNOWN about what was
+    // displayed for it: the scope set the hosted SIGN-IN SCREEN showed, or the
+    // no-screen sentinel a node writes once it has PROVED none rendered. Either
+    // way the grant taken after the sign-in can be checked against it. The same
+    // statement stores the HASH of the single-use nonce that names WHOSE arrival
+    // the record is (rework round 7, finding 1) — one write, two columns, so a
+    // record can never exist without the arrival it belongs to. Write-once (it
+    // may only replace the unclassified value a transaction is created with,
+    // while no nonce is attached) and NON-CONSUMING: it never touches
+    // consumed_at, which is why it is safe on the page render.
+    module: "src/lib/widget-user-auth.ts",
+    exportName: "recordDisplayedScopesForTransaction",
+    capability: "org.settings",
+    orgIdExtractor: "stored transaction row's org (the row is addressed by its own id)",
+    storageReferences: ["widget_auth_transactions"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "site-widget login flow: the org axis rides the stored transaction row and the hosted page has no app-session principal to mint from — needs the connect-surface authority-minting decision",
     },
   },
   {

@@ -455,7 +455,18 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
   // platform admin gets no elevated standing on any downstream authz. The OBO
   // token independently floors the MCP boundary; this floors the runtime's own
   // actor dimension. Least-privilege: no team/project grants are carried.
-  const widgetActorContext: ActorContext = {
+  //
+  // DEGRADED_WIDGET_RUNTIME_ACTOR — LIFECYCLE-BARRED (cinatra#2574, epic #2564
+  // S8a). This context is correct for a CHAT TURN, where the floor is the point,
+  // and WRONG for any permission-bearing lifecycle READ: its empty `teamIds` /
+  // `projectGrants` are not "narrow", they are UNRESOLVED, so a reader entitled
+  // to a review through a team or a project would be shown nothing and would
+  // reasonably conclude the review does not exist. Every widget lifecycle read
+  // builds its actor through `resolveWidgetLifecycleActorContext`
+  // (src/lib/lifecycle/widget-lifecycle-actor.ts) instead, which resolves those
+  // axes live. A structural test forbids this marker and this identifier from
+  // the lifecycle read paths.
+  const degradedWidgetRuntimeActorContext: ActorContext = {
     principalType: "HumanUser",
     principalId: widgetPrincipal.userId,
     organizationId: widgetPrincipal.orgId,
@@ -476,7 +487,7 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
   ) =>
     runAssistantTurn(runtimeConfig, {
       messages,
-      actorContext: widgetActorContext,
+      actorContext: degradedWidgetRuntimeActorContext,
       userId: widgetPrincipal.userId,
       platformRole: "member",
       sessionOrgId: widgetPrincipal.orgId,
