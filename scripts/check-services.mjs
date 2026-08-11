@@ -57,6 +57,43 @@ function readEnvLocal() {
 // so the dev-server preflight resolves ports identically.
 const hostPort = parseHostPort;
 
+// Build the WayFlow `/.health` URL from WAYFLOW_BASE_URL: the same contract the
+// docker-compose healthcheck probes. The loader can be hung or crash-looping
+// while the port stays bound (its restart policy re-binds it between attempts),
+// so a bare TCP connect would report a broken runtime as "up" and drop the
+// start hint. Probe HTTP like Nango instead. `/.health` answers 200 for both
+// "ok" and "degraded" (per-agent load failures never condemn the runtime), so
+// the probe's 2xx rule accepts exactly what the compose healthcheck accepts.
+function wayflowHealthUrl(baseUrl) {
+  const v = typeof baseUrl === "string" ? baseUrl.trim() : "";
+  return `${(v || "http://127.0.0.1:3010").replace(/\/+$/, "")}/.health`;
+}
+
+// Probe WayFlow `/.health` and enforce the documented contract EXACTLY as the
+// docker-compose healthcheck does: HTTP 200 AND valid JSON whose `status` is
+// "ok" or "degraded". A 204, another 2xx, malformed JSON, or any other status
+// value is NOT ready; the generic 2xx rule of probeHttpHealth would report
+// those as up and suppress the start hint while agent runs still fail.
+async function probeWayflowHealth(url, timeoutMs = 2500) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (res.status !== 200) return false;
+    let body;
+    try {
+      body = await res.json();
+    } catch {
+      return false;
+    }
+    return body?.status === "ok" || body?.status === "degraded";
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function probe(host, port, timeoutMs = 2500) {
   return new Promise((resolve) => {
     const socket = new net.Socket();
@@ -128,10 +165,20 @@ const services = [
     note: "object graph indexer",
   },
   {
+    // Recommended (not optional): agent runs are a headline feature and 100%
+    // of them hard-fail with ECONNREFUSED while this runtime is down. The
+    // profile gate means a default dev bring-up NEVER starts it (#2654), so
+    // this check is where a fresh install learns the exact start command.
+    // Recommended-tier never affects the exit code.
     name: "WayFlow",
-    tier: "optional",
+    tier: "recommended",
     ...hostPort(env.WAYFLOW_BASE_URL, { host: "127.0.0.1", port: 3010 }),
-    note: "agent runtime — needs the `wayflow` compose profile",
+    healthUrl: wayflowHealthUrl(env.WAYFLOW_BASE_URL),
+    // Contract-validating probe (200 + status ok|degraded), NOT the generic
+    // 2xx probeHttpHealth: see probeWayflowHealth.
+    probeHealth: probeWayflowHealth,
+    note: "agent runtime; serves every installed agent",
+    downHint: "agent runs fail until you run `cinatra instance wayflow start`",
   },
   {
     name: "Cinatra app",
@@ -145,9 +192,14 @@ const services = [
 const results = await Promise.all(
   services.map(async (svc) => ({
     ...svc,
-    // Nango carries a healthUrl → probe HTTP /health; everything else TCP-connects.
+    // Nango + WayFlow carry a healthUrl → probe their HTTP health contract
+    // (hung-but-port-bound must read DOWN); everything else TCP-connects. A
+    // service-specific probeHealth (WayFlow: 200 + status ok|degraded) wins
+    // over the generic 2xx probeHttpHealth.
     up: svc.healthUrl
-      ? (await probeHttpHealth(svc.healthUrl, 2500)).ok
+      ? svc.probeHealth
+        ? await svc.probeHealth(svc.healthUrl, 2500)
+        : (await probeHttpHealth(svc.healthUrl, 2500)).ok
       : await probe(svc.host, svc.port),
   })),
 );
@@ -167,9 +219,9 @@ for (const r of results) {
   let status;
   if (r.up) status = green("up");
   else if (r.tier === "app") status = dim("not started — run `make dev`");
-  else if (r.tier === "optional") status = dim("not started — enable the `wayflow` compose profile");
+  else if (r.tier === "optional") status = dim("not started; enable its compose profile");
   else if (r.tier === "required") status = red("DOWN — required");
-  else status = yellow("down — recommended");
+  else status = yellow(r.downHint ? `down — recommended; ${r.downHint}` : "down — recommended");
   console.log(`  ${mark}  ${r.name.padEnd(nameWidth)}  ${dim(addr)}  ${status}  ${dim(r.note)}`);
 }
 
