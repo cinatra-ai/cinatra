@@ -10,7 +10,7 @@
 // guardedOptional extensions — ABSENT from reduced universes (the prod
 // 8-image) as a NORMAL state:
 //   - `resolveExtensionRole` returns undefined on absence (callers degrade,
-//     e.g. the blog dashboard URL falls back to the dashboards index);
+//     e.g. the blog dashboard URL falls back to `/artifacts`);
 //   - `requireExtensionRole` throws a DESCRIPTIVE error on absence (callers
 //     whose operation is meaningless without the claimant, e.g. the blog
 //     artifact materializers — better a loud, actionable failure than

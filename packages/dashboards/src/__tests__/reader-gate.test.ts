@@ -1,8 +1,9 @@
 // ALL-READER liveness/status gate — pure predicates (cinatra#1628, S11a).
 //
 // The gate is the FAIL-SAFE that stops orphaned/archived extension dashboards
-// from rendering everywhere (the /dashboards list + detail routes, the blog
-// deep-link, the MCP readers). These tests pin the pure predicate contract
+// from rendering everywhere it is consulted (the `/artifacts` library, the
+// `/dashboards/{id}` + nested canonical detail routes, the blog deep-link, the
+// MCP readers). These tests pin the pure predicate contract
 // (the app injects the real liveness oracle); the negative cases are the
 // recovery-floor guarantee.
 import { describe, it, expect } from "vitest";

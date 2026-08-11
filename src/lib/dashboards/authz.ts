@@ -1,8 +1,19 @@
-// App-side dashboard access resolver. Thin adapter over the dashboards-package
+// App-side dashboard access adapter. Thin wrapper over the dashboards-package
 // resolver: maps a resolved actor (carrying `projectGrants`) into the package's
 // owner-gate inputs + the already-resolved project grants, then delegates.
-// Wire this into the dashboards read paths (dashboards_get / dashboards_list /
-// the /dashboards routes).
+//
+// `requireDashboardAccess` is the live product gate — the `/dashboards/{id}` +
+// nested canonical detail routes and the artifact-pointer readers go through it.
+//
+// `filterReadableDashboards` no longer has a product caller: the workspace-wide
+// `/dashboards` directory list that used it was retired in cinatra#2058. It is
+// KEPT DELIBERATELY (reviewed in cinatra#2474 item 6) as the conformance seam of
+// the #1898/#1988 ACL invariants: it is the only callable that composes what
+// production composes — the private `toDashboardActor` role normalization
+// (`org_owner`/`org_admin`/`team_admin` → the package vocabulary), the package
+// owner gate, and the resolved project grants. Deleting it would force those
+// proofs to hand-roll a copy of that normalization, which could drift from this
+// file and let the agreement pass against a mapping production no longer does.
 import "server-only";
 
 // Narrow subpath (NOT the `@cinatra-ai/dashboards/auth` barrel, which transitively
@@ -74,7 +85,8 @@ export async function requireDashboardAccess(
   });
 }
 
-/** Filter dashboard rows to those the actor may READ (owner gate + project grant). */
+/** Filter dashboard rows to those the actor may READ (owner gate + project
+ *  grant). No product caller — the #1898/#1988 conformance seam; see the header. */
 export function filterReadableDashboards<T extends { projectId: string | null }>(
   rows: T[],
   actor: DashboardAuthzActor,
