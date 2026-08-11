@@ -884,6 +884,85 @@ export type LlmBatchV2Surface = {
 };
 
 // ---------------------------------------------------------------------------
+// Image generation (cinatra#2641)
+// ---------------------------------------------------------------------------
+
+/**
+ * What an image invocation CONSUMED, in the unit an image provider bills in.
+ *
+ * A PER-IMAGE unit, deliberately, not a per-token one. Every image provider the
+ * ABI has met states a price per produced image — Google publishes the token
+ * arithmetic for `gemini-2.5-flash-image` and then states the answer as
+ * "$0.039 per image" — so an image count is the number both the provider and an
+ * operator recognise, and it survives a provider that never mentions tokens at
+ * all. Reusing {@link LlmUsageData} would have forced every image adapter to
+ * translate its bill into tokens, which is a conversion the ABI cannot check.
+ *
+ * OPTIONAL AND ADDITIVE. An adapter that omits it behaves exactly as before:
+ * the metering seam books the call as COUNTED and UNPRICED (`cost_usd` NULL,
+ * the dashboard's own unknown-cost surface). Reporting it is what lets the
+ * subscriber price the row from a per-image rate card. Nothing breaks when it
+ * is absent, and no adapter has to change to keep working.
+ */
+export type LlmImageUsage = {
+  /**
+   * How many images this invocation produced and was billed for. A positive
+   * integer. It is NOT always 1: a provider asked for several candidates bills
+   * for each one, and reporting only the image that was RETURNED would
+   * under-price that call.
+   *
+   * The seam validates it (a positive safe integer) and ignores anything else,
+   * so a malformed report costs the ledger its price, never a wrong price.
+   */
+  images: number;
+  /**
+   * Prompt tokens this invocation was billed for, when the provider charges the
+   * REQUEST as well as the images.
+   *
+   * An image bill is not always only images. Google charges Gemini 2.5 Flash
+   * Image both per produced image AND per million input tokens, so a price
+   * built from the image count alone is a PARTIAL total — the exact shape that
+   * renders like a complete one and understates real spend. An adapter whose
+   * provider bills the prompt reports it here; one whose provider does not
+   * simply omits it.
+   *
+   * The rate card decides whether it is REQUIRED: an entry that declares an
+   * input rate cannot be priced without this number, and the row stays unpriced
+   * rather than being priced short.
+   */
+  inputTokens?: number;
+};
+
+/**
+ * What `generateImage` answers with.
+ *
+ * `imageData` + `mimeType` are the shipped shape and are unchanged. `model` and
+ * `usage` are OPTIONAL ADDITIONS (cinatra#2641): before them the answer carried
+ * no way to say WHICH model produced the image or WHAT it cost, so the metering
+ * seam could only count the call.
+ */
+export type LlmImageResponse = {
+  /** Base64 image payload. */
+  imageData: string;
+  /** MIME type of {@link imageData}. */
+  mimeType: string;
+  /**
+   * The model the adapter ADDRESSED for this image — which is not necessarily
+   * the one the caller named, because an image adapter routinely substitutes an
+   * image model of its own when the caller names none.
+   *
+   * REQUIRED FOR PRICING, and the reason it is a separate field rather than an
+   * inference: the ledger looks a rate up by model, and the caller's requested
+   * name is not evidence of which model was addressed. The seam therefore prices
+   * what the ADAPTER attested here; a `usage` reported without a `model` leaves
+   * the row counted and unpriced.
+   */
+  model?: string;
+  /** Per-image usage. Absent ⇒ the row is counted and left unpriced. */
+  usage?: LlmImageUsage;
+};
+
+// ---------------------------------------------------------------------------
 // Provider adapter interface
 // ---------------------------------------------------------------------------
 
@@ -921,12 +1000,17 @@ export interface LlmProviderAdapter {
   /**
    * Generate an image from a text prompt.
    * Provider-specific: currently only Gemini supports this natively.
+   *
+   * The answer MAY carry `model` + `usage` (cinatra#2641) so the call can be
+   * priced per image; an adapter that returns only `{ imageData, mimeType }`
+   * keeps working and its rows stay counted-but-unpriced. `null` means no image
+   * came back — it is still a resolved invocation and the seam still counts it.
    */
   generateImage?(input: {
     model?: string;
     prompt: string;
     logLabel?: string;
-  }): Promise<{ imageData: string; mimeType: string } | null>;
+  }): Promise<LlmImageResponse | null>;
 
   /** Submit a batch of requests for asynchronous processing. */
   submitBatch?(input: LlmBatchSubmitInput): Promise<LlmBatchSubmitResult>;

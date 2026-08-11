@@ -3,7 +3,12 @@ import { randomUUID } from "node:crypto";
 import { onUsageEvent } from "@cinatra-ai/metric-contracts";
 import type { UsageEvent } from "@cinatra-ai/metric-contracts";
 import { insertUsageEvent } from "./store";
-import { computeLlmCostUsd, computeApolloCostUsd, batchRateMultiplier } from "./pricing";
+import {
+  computeLlmCostUsd,
+  computeApolloCostUsd,
+  computeImageCostUsd,
+  batchRateMultiplier,
+} from "./pricing";
 
 let started = false;
 
@@ -14,16 +19,41 @@ export function startUsageEventSubscriber(): void {
   onUsageEvent(async (event: UsageEvent) => {
     try {
       if (event.source === "llm") {
-        // cinatra#2641. An image call is billed PER IMAGE and reports no usage,
-        // so its row arrives with zero tokens. Running the per-TOKEN rate card
-        // over those zeros would answer 0 and store "0.00000000" — a made-up
-        // price that reads as "this was free". The row stays UNPRICED (NULL),
-        // which the dashboard already renders as an explicit unknown cost.
-        // Pricing it needs a per-image rate and a usage-carrying image response;
-        // that is cinatra#2641's open half, not a number to guess here.
+        // cinatra#2641. An image call's dominant charge is PER IMAGE, so it is
+        // priced off the PER-IMAGE card. The per-TOKEN completion card is never
+        // run over it: an image row carries no completion tokens, that card
+        // would answer 0, and a stored "0.00000000" reads as "this image was
+        // free".
+        //
+        // `provider` is part of the rate identity, not just `model`: a model
+        // NAME is a string an adapter chooses, while the provider comes from the
+        // adapter the metering seam wrapped.
+        //
+        // `computeImageCostUsd` answers null whenever the adapter attested no
+        // image usage, the provider/model pair has no rate, or a billed
+        // component (a provider that also charges the prompt) went unreported —
+        // which is the counted-but-unpriced row (`cost_usd` NULL) this path
+        // wrote before it was priceable, rendered by the dashboard as an
+        // explicit unknown cost. So an adapter that has not adopted the ABI's
+        // optional image usage keeps exactly the behaviour it had.
+        //
+        // The prompt quantity is read from the SAME field that is persisted
+        // below, so a stored cost is always backed by the stored row. What the
+        // flag adds is the one thing the NOT NULL column cannot say: an
+        // unreported prompt reaches here as `0`, and `0` is also a VALID
+        // reported count. Without the flag this would price the images of a
+        // response that reported no prompt usage at all and drop the prompt
+        // charge silently.
         const costUsd =
           event.operation === "image"
-            ? null
+            ? computeImageCostUsd({
+                provider: event.provider,
+                model: event.model,
+                images: event.imageCount,
+                inputTokens: event.imagePromptTokensReported
+                  ? event.inputTokens
+                  : undefined,
+              })
             : await computeLlmCostUsd({
                 model: event.model,
                 inputTokens: event.inputTokens,

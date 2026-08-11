@@ -16,14 +16,24 @@
  * own operation keeps them countable AND distinguishable from interactive spend
  * rather than mislabelling them as `generate`.
  *
- * `image` is additive too (cinatra#2641) and is the one operation whose row is
- * COUNTED BUT NOT PRICED. `adapter.generateImage()` calls out per image, but
- * the adapter ABI's image response carries no usage object and no model name,
- * so the only truthful statement the seam can make is "one image invocation
- * resolved". Its token columns are therefore zeros the schema
- * requires, NOT a measurement, and its `cost_usd` is NULL rather than a number
- * derived from a per-token card — see the subscriber, which refuses to price it.
- * An `image` row must never be summed as if it were interactive token spend.
+ * `image` is additive too (cinatra#2641). It is the one operation whose dominant
+ * charge is in a NON-TOKEN unit: `adapter.generateImage()` is billed per produced
+ * image. Its OUTPUT token columns are therefore zeros the schema requires, NOT a
+ * measurement, and the per-token COMPLETION card must never be run over it —
+ * that card would answer 0, and a stored 0 reads as "this image was free". An
+ * `image` row must never be summed as if it were interactive completion spend.
+ *
+ * Its dollars come from {@link LlmUsageEvent.imageCount} instead, priced against
+ * a per-image card, PLUS `inputTokens` when the provider also bills the prompt
+ * (Google does). `inputTokens` on an image row is a real measurement whenever
+ * the adapter reported one — and the NOT NULL column's placeholder `0` when it
+ * did not. {@link LlmUsageEvent.imagePromptTokensReported} is what tells the two
+ * apart, and pricing depends on that distinction.
+ *
+ * When the adapter reports no image usage the row stays COUNTED AND UNPRICED
+ * (`cost_usd` NULL) — the shape cinatra#2582 established for the Graphiti
+ * hand-over, and still the state of every adapter that has not adopted the ABI's
+ * optional image usage.
  */
 export type LlmUsageOperation =
   | "generate"
@@ -45,6 +55,38 @@ export type LlmUsageEvent = {
   reasoningOutputTokens: number;
   cacheReadInputTokens?: number;
   cacheCreationInputTokens?: number;
+  /**
+   * How many images an `operation:"image"` row was billed for (cinatra#2641).
+   *
+   * The per-image unit the image half of this ledger is priced in. Present only
+   * when the adapter ATTESTED it — together with the model that produced the
+   * images — through the ABI's optional image usage. Absent means "the adapter
+   * said nothing", which is not the same as zero and must leave the row unpriced
+   * rather than priced at $0.
+   *
+   * It is not a persisted column. `usage_events` stores the dollars this count
+   * multiplies into, so the count is an input to pricing, not a second copy of
+   * the answer.
+   */
+  imageCount?: number;
+  /**
+   * Whether the prompt tokens in {@link LlmUsageEvent.inputTokens} are a REPORT
+   * or a placeholder, on an `operation:"image"` row (cinatra#2641).
+   *
+   * WHY A FLAG AND NOT A SECOND NUMBER. `inputTokens` maps to a NOT NULL column,
+   * so it cannot express "the adapter said nothing" — absent collapses to `0`.
+   * For pricing, `0` and "unreported" are opposite answers: a provider that
+   * bills the prompt needs the real count, and treating an unreported prompt as
+   * zero prices the images and silently drops the rest of the bill.
+   *
+   * Carrying the quantity TWICE would have solved that and introduced a worse
+   * failure: two numbers that can disagree, storing a cost the row's own columns
+   * do not support. So the quantity has exactly one home — `inputTokens` — and
+   * this flag says whether to believe it. `true` ⇒ price on it (including a
+   * genuine `0`); absent/`false` ⇒ nothing was reported and the row stays
+   * unpriced when the provider bills the prompt.
+   */
+  imagePromptTokensReported?: boolean;
   idempotencyKey: string;
   occurredAt: string;
   requestedProvider?: string | null;

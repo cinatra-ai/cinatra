@@ -324,10 +324,15 @@ describe("meterLlmProviderAdapter — generateImage (cinatra#2641)", () => {
   /**
    * The gap this block closes: `generateImage` reaches a provider, is billed per
    * image, and used to fall through the proxy's pass-through arm — no row, no
-   * trace in `/analytics/llm`. It answers with `{ imageData, mimeType }` and
-   * NOTHING else, so the row it books is deliberately COUNTED and UNPRICED: the
-   * ledger states that an image invocation RESOLVED and leaves the dollars
-   * unknown rather than inventing them.
+   * trace in `/analytics/llm`.
+   *
+   * The row it books has TWO honest states, and both are pinned here. An adapter
+   * that reports the ABI's optional per-image usage hands the seam a model and
+   * an image count, and the row is PRICEABLE. An adapter that reports nothing
+   * still books a COUNTED, UNPRICED row: the ledger states that an image
+   * invocation RESOLVED and leaves the dollars unknown rather than inventing
+   * them. Nothing an adapter does can move it into a THIRD state where a price
+   * is guessed.
    */
   const imageAdapter = (
     generateImage: LlmProviderAdapter["generateImage"],
@@ -379,6 +384,221 @@ describe("meterLlmProviderAdapter — generateImage (cinatra#2641)", () => {
     emitUsageEventMock.mockClear();
     await adapter.generateImage!({ prompt: "p", model: "gemini-image-1" } as never);
     expect(emitted()[0]!.model).toBe("gemini-image-1");
+  });
+
+  // -------------------------------------------------------------------------
+  // The PRICEABLE state — the adapter reports per-image usage (cinatra#2641)
+  // -------------------------------------------------------------------------
+
+  it("carries the reported image count and prompt tokens, so the row can be PRICED", async () => {
+    // This is the whole pricing mechanism at this layer: the seam forwards what
+    // the adapter attested, and the subscriber multiplies it by a per-image
+    // rate. Without it the subscriber has nothing to multiply and the row can
+    // only be counted.
+    const adapter = imageAdapter(
+      vi.fn(async () => ({
+        imageData: "x",
+        mimeType: "image/png",
+        model: "gemini-2.5-flash-image",
+        usage: { images: 2, inputTokens: 1200 },
+      })),
+    );
+
+    await adapter.generateImage!({ prompt: "p" });
+
+    expect(emitted()[0]).toMatchObject({
+      operation: "image",
+      model: "gemini-2.5-flash-image",
+      imageCount: 2,
+      // A real measurement in the real column: Gemini bills the prompt as well
+      // as the images, and a row that priced the prompt while reporting zero
+      // prompt tokens would contradict its own cost.
+      inputTokens: 1200,
+      // …and a flag saying that number is a REPORT. The column is NOT NULL, so
+      // it cannot distinguish "0" from "unreported" on its own, and pricing
+      // depends on that distinction. A flag rather than a second copy of the
+      // number: two copies could disagree and store a cost the row does not
+      // support.
+      imagePromptTokensReported: true,
+      // Output tokens stay zero — the images are the output, and they are
+      // counted in images.
+      outputTokens: 0,
+    });
+  });
+
+  it("prefers the ATTESTED model over the one the caller asked for", async () => {
+    // An image adapter routinely substitutes an image model of its own. The
+    // ledger prices per model, so the row has to name the one the adapter
+    // attested, not the one that was requested and overridden.
+    const adapter = imageAdapter(
+      vi.fn(async () => ({
+        imageData: "x",
+        mimeType: "image/png",
+        model: "gemini-2.5-flash-image",
+        usage: { images: 1 },
+      })),
+    );
+
+    await adapter.generateImage!({ prompt: "p", model: "asked-for-model" } as never);
+
+    expect(emitted()[0]!.model).toBe("gemini-2.5-flash-image");
+  });
+
+  it("refuses to price usage the adapter could not attribute to a model", async () => {
+    // The dangerous shape: an adapter reports a count but names no model, so the
+    // only model name available is the one the CALLER asked for — which is not
+    // evidence of what answered. Pricing that would charge one model's rate for
+    // another model's work. The row is still counted, and it still LABELS itself
+    // with the requested name; only the count is withheld from the rate card.
+    const adapter = imageAdapter(
+      vi.fn(async () => ({
+        imageData: "x",
+        mimeType: "image/png",
+        usage: { images: 1, inputTokens: 500 },
+      })),
+    );
+
+    await adapter.generateImage!({ prompt: "p", model: "asked-for-model" } as never);
+
+    expect(emitted()).toHaveLength(1);
+    expect(emitted()[0]!.model).toBe("asked-for-model");
+    expect(emitted()[0]!.imageCount).toBeUndefined();
+    // …and the unattributed prompt tokens do not land in the row either: they
+    // would be a measurement the row cannot attribute to anything.
+    expect(emitted()[0]!.inputTokens).toBe(0);
+    expect(emitted()[0]!.imagePromptTokensReported).toBe(false);
+  });
+
+  it("labels the row with the attested model even when the usage is unusable", async () => {
+    // The model the adapter names is true whether or not its counts are. Falling
+    // back to the CALLER's model here would throw away the better answer for no
+    // reason — the row's price is already withheld by the missing count.
+    const adapter = imageAdapter(
+      vi.fn(async () => ({
+        imageData: "x",
+        mimeType: "image/png",
+        model: "gemini-2.5-flash-image",
+        usage: { images: 0 },
+      })) as unknown as LlmProviderAdapter["generateImage"],
+    );
+
+    await adapter.generateImage!({ prompt: "p", model: "asked-for-model" } as never);
+
+    expect(emitted()[0]!.model).toBe("gemini-2.5-flash-image");
+    expect(emitted()[0]!.imageCount).toBeUndefined();
+  });
+
+  it("keeps the count when the adapter attested a model but no prompt tokens", async () => {
+    // Not every image provider bills the prompt. Withholding the count here
+    // would make this seam decide a pricing question that belongs to the rate
+    // card, which is the layer that knows whether a prompt charge exists.
+    const adapter = imageAdapter(
+      vi.fn(async () => ({
+        imageData: "x",
+        mimeType: "image/png",
+        model: "gemini-2.5-flash-image",
+        usage: { images: 1 },
+      })),
+    );
+
+    await adapter.generateImage!({ prompt: "p" });
+
+    expect(emitted()[0]).toMatchObject({ imageCount: 1, inputTokens: 0 });
+    // ABSENT, not 0 — this is the field that stops a provider which bills the
+    // prompt from being charged for the images alone.
+    expect(emitted()[0]!.imagePromptTokensReported).toBe(false);
+  });
+
+  it("distinguishes a REPORTED zero prompt from an unreported one", async () => {
+    // `0` is a legitimate report and must survive as a number, or a provider
+    // that genuinely billed no prompt tokens would be unpriceable forever.
+    const adapter = imageAdapter(
+      vi.fn(async () => ({
+        imageData: "x",
+        mimeType: "image/png",
+        model: "gemini-2.5-flash-image",
+        usage: { images: 1, inputTokens: 0 },
+      })),
+    );
+
+    await adapter.generateImage!({ prompt: "p" });
+
+    expect(emitted()[0]!.imagePromptTokensReported).toBe(true);
+    expect(emitted()[0]!.inputTokens).toBe(0);
+  });
+
+  it("refuses a malformed prompt-token count without losing the image count", async () => {
+    const adapter = imageAdapter(
+      vi.fn(async () => ({
+        imageData: "x",
+        mimeType: "image/png",
+        model: "gemini-2.5-flash-image",
+        usage: { images: 1, inputTokens: -5 },
+      })) as unknown as LlmProviderAdapter["generateImage"],
+    );
+
+    await adapter.generateImage!({ prompt: "p" });
+
+    // The images were still attested; the prompt count was not usable, so it
+    // reaches neither the row nor the rate card, and the card refuses the price.
+    expect(emitted()[0]).toMatchObject({ imageCount: 1, inputTokens: 0 });
+    expect(emitted()[0]!.imagePromptTokensReported).toBe(false);
+  });
+
+  it("reports NO count when the adapter reports no image usage — the negative control", async () => {
+    // The pre-existing adapter shape, and the state every connector that has
+    // not adopted the ABI addition is in. Absent must stay absent: a defaulted
+    // `1` here would price every legacy adapter's calls off a number nobody
+    // measured.
+    const adapter = imageAdapter(
+      vi.fn(async () => ({ imageData: "x", mimeType: "image/png" })),
+    );
+
+    await adapter.generateImage!({ prompt: "p" });
+
+    expect(emitted()[0]).toMatchObject({ operation: "image" });
+    expect(emitted()[0]!.imageCount).toBeUndefined();
+  });
+
+  it("reports no count when the adapter answers no image at all", async () => {
+    // `null` is a resolved invocation and is still counted — but there is no
+    // response object to read a count off, so it cannot be priced.
+    const adapter = imageAdapter(vi.fn(async () => null));
+
+    await adapter.generateImage!({ prompt: "p" });
+
+    expect(emitted()[0]).toMatchObject({ operation: "image" });
+    expect(emitted()[0]!.imageCount).toBeUndefined();
+  });
+
+  it("refuses a malformed count rather than pricing off it", async () => {
+    // A connector is third-party code and this number is multiplied by a dollar
+    // rate. Every one of these would mint a nonsense price that is stored with
+    // exactly the same confidence as a real one, so each must degrade to the
+    // unpriced row instead.
+    const malformed: unknown[] = [0, -1, 1.5, NaN, Infinity, "2", null, 2 ** 53];
+
+    for (const images of malformed) {
+      emitUsageEventMock.mockClear();
+      const adapter = imageAdapter(
+        vi.fn(async () => ({
+          imageData: "x",
+          mimeType: "image/png",
+          model: "gemini-2.5-flash-image",
+          usage: { images },
+        })) as unknown as LlmProviderAdapter["generateImage"],
+      );
+
+      await adapter.generateImage!({ prompt: "p" });
+
+      // Counted, exactly as before — losing the PRICE is the failure mode, and
+      // losing the ROW would put the spend back where cinatra#2641 found it.
+      expect(emitted(), `images=${String(images)}`).toHaveLength(1);
+      expect(
+        emitted()[0]!.imageCount,
+        `images=${String(images)} must not reach the rate card`,
+      ).toBeUndefined();
+    }
   });
 
   it("books the call when the adapter answers no image", async () => {
