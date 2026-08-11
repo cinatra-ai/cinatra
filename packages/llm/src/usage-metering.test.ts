@@ -13,7 +13,10 @@
  *     and their behaviour, since core probes them to decide what a provider can
  *     do;
  *  4. there is NO opt-out — this module is the only producer of a `source:"llm"`
- *     row, so double counting is impossible by construction.
+ *     row, so double counting is impossible by construction;
+ *  5. a FROZEN adapter is metered like any other (cinatra#2670) — the shape a
+ *     defensive connector ships is exactly the one a proxy over the adapter
+ *     itself could not carry a wrapper for.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -593,5 +596,375 @@ describe("meterLlmProviderAdapter — transparency and opt-out", () => {
       () => adapter.generate({ system: "s", prompt: "p" }),
     );
     expect(emitted()).toHaveLength(1);
+  });
+});
+
+describe("meterLlmProviderAdapter — frozen adapters (cinatra#2670)", () => {
+  /**
+   * The shape this block is about: an adapter whose `generate` is a
+   * NON-CONFIGURABLE, NON-WRITABLE own data property — what a connector gets by
+   * calling `Object.freeze` on the object it hands back, i.e. by being careful.
+   *
+   * A proxy's invariants are checked against ITS TARGET, so while the target was
+   * the adapter itself this shape defeated the seam in both directions at once:
+   * `metered.generate` threw a `TypeError` (`[[Get]]` may not answer with
+   * anything but the target's own non-configurable, non-writable value), and
+   * `Object.getOwnPropertyDescriptor(metered, "generate").value` had to be the
+   * connector's RAW function — an unmetered callable reachable from a metered
+   * adapter, which is the one thing the choke point claims cannot exist. Most of
+   * what follows fails against that proxy (7 of this block's 10 tests do); the
+   * rest hold the line on what the wrapper's own object may and may not change.
+   */
+  const frozenAdapter = (
+    overrides: Partial<LlmProviderAdapter> = {},
+  ): LlmProviderAdapter => Object.freeze(makeAdapter(overrides));
+
+  /** `generate` pinned in place WITHOUT freezing the object around it. */
+  function pinnedGenerateAdapter(): LlmProviderAdapter {
+    const adapter = makeAdapter();
+    Object.defineProperty(adapter, "generate", {
+      value: adapter.generate,
+      writable: false,
+      enumerable: true,
+      configurable: false,
+    });
+    return adapter;
+  }
+
+  it("reads and meters a method pinned as non-configurable and non-writable", async () => {
+    const adapter = meterLlmProviderAdapter(pinnedGenerateAdapter());
+
+    // Reading it is the assertion: this line threw a TypeError before #2670.
+    const generate = adapter.generate;
+    expect(typeof generate).toBe("function");
+
+    await generate({ system: "s", prompt: "p" });
+    expect(emitted()).toHaveLength(1);
+  });
+
+  it("meters a frozen adapter's call exactly once, with the row it always books", async () => {
+    const adapter = meterLlmProviderAdapter(frozenAdapter());
+
+    await adapter.generate({ system: "s", prompt: "p", logLabel: "agent-x" });
+
+    expect(emitted()).toHaveLength(1);
+    expect(emitted()[0]).toMatchObject({
+      source: "llm",
+      provider: "openai",
+      model: "answered-model",
+      operation: "generate",
+      agentLabel: "agent-x",
+      inputTokens: 10,
+    });
+  });
+
+  it("hands a REFLECTIVE read the metered member, not the connector's raw function", async () => {
+    // The hole this closes: a descriptor read used to be a way to obtain an
+    // unmetered callable from a metered adapter.
+    const connector = makeAdapter();
+    const rawGenerate = connector.generate;
+    const adapter = meterLlmProviderAdapter(Object.freeze(connector));
+
+    const descriptor = Object.getOwnPropertyDescriptor(adapter, "generate");
+
+    expect(descriptor?.value).toBe(adapter.generate);
+    expect(descriptor?.value).not.toBe(rawGenerate);
+
+    await (descriptor!.value as LlmProviderAdapter["generate"])({
+      system: "s",
+      prompt: "p",
+    });
+    expect(emitted()).toHaveLength(1);
+  });
+
+  it("keeps method identity stable across repeated ordinary and reflective reads", () => {
+    const adapter = meterLlmProviderAdapter(frozenAdapter());
+    const generate = adapter.generate;
+
+    expect(adapter.generate).toBe(generate);
+    expect(Object.getOwnPropertyDescriptor(adapter, "generate")?.value).toBe(
+      generate,
+    );
+    expect(Object.getOwnPropertyDescriptor(adapter, "generate")?.value).toBe(
+      generate,
+    );
+    expect(adapter.stream).toBe(adapter.stream);
+  });
+
+  it("still describes the CONNECTOR's writability, and its refusal still stands", () => {
+    // The metered adapter is a distinct object, so its members are redefinable
+    // (`configurable: true` is the truth about IT). What a caller consumes is
+    // unchanged: the value is metered, the enumerability and writability are the
+    // connector's, and a frozen adapter still refuses the write.
+    const connector = makeAdapter();
+    const rawGenerate = connector.generate;
+    const adapter = meterLlmProviderAdapter(Object.freeze(connector));
+
+    expect(Object.getOwnPropertyDescriptor(adapter, "generate")).toMatchObject({
+      writable: false,
+      enumerable: true,
+    });
+    expect(() => {
+      (adapter as unknown as { generate: unknown }).generate = () => {};
+    }).toThrow(TypeError);
+    expect(connector.generate).toBe(rawGenerate);
+  });
+
+  it("preserves the PRESENCE and ABSENCE optional members are probed by", async () => {
+    const withImage = meterLlmProviderAdapter(
+      frozenAdapter({
+        generateImage: vi.fn(async () => ({
+          imageData: "x",
+          mimeType: "image/png",
+        })),
+      } as Partial<LlmProviderAdapter>),
+    );
+    const withoutImage = meterLlmProviderAdapter(frozenAdapter());
+
+    expect(typeof withImage.generateImage).toBe("function");
+    expect("generateImage" in withImage).toBe(true);
+    expect(withoutImage.generateImage).toBeUndefined();
+    expect("generateImage" in withoutImage).toBe(false);
+
+    await withImage.generateImage!({ prompt: "p" });
+    expect(emitted()).toHaveLength(1);
+  });
+
+  it("enumerates like the adapter, and a COPY of it carries the metered member", async () => {
+    const adapter = meterLlmProviderAdapter(frozenAdapter());
+
+    expect(Object.keys(adapter)).toEqual([
+      "provider",
+      "defaultModel",
+      "generate",
+      "stream",
+    ]);
+
+    // A spread copies through the same traps, so the copy meters too — the
+    // ledger does not depend on holding the proxy itself.
+    const copy = { ...adapter } as LlmProviderAdapter;
+    await copy.generate({ system: "s", prompt: "p" });
+    expect(emitted()).toHaveLength(1);
+  });
+
+  it("meters a FROZEN class instance with private fields, and still answers instanceof", async () => {
+    // Connector adapters are third-party code: a class, frozen, is an ordinary
+    // way to ship one. Its methods live on the PROTOTYPE, so freezing the
+    // instance never pins them — what this pins instead is that the facade did
+    // not cost the two things a class needs: the private-field binding (the
+    // wrapper calls through with `this` = the connector) and the real prototype
+    // (`instanceof` still answers).
+    class FrozenClassAdapter {
+      readonly provider = "openai" as const;
+      readonly defaultModel = "class-model";
+      #calls = 0;
+
+      async generate(): Promise<LlmResponse> {
+        this.#calls += 1;
+        return {
+          text: "ok",
+          status: null,
+          incompleteReason: null,
+          rawBody: "",
+          model: "class-model",
+          usage: usage(11),
+        };
+      }
+
+      async stream(): Promise<void> {}
+
+      async listModels(): Promise<string[]> {
+        this.#calls += 1;
+        return ["class-model"];
+      }
+    }
+
+    const connector = Object.freeze(new FrozenClassAdapter());
+    const adapter = meterLlmProviderAdapter(
+      connector as unknown as LlmProviderAdapter,
+    );
+
+    expect(adapter instanceof FrozenClassAdapter).toBe(true);
+    await expect(adapter.listModels!()).resolves.toEqual(["class-model"]);
+    await adapter.generate({ system: "s", prompt: "p" });
+
+    expect(emitted()).toHaveLength(1);
+    expect(emitted()[0]).toMatchObject({ provider: "openai", inputTokens: 11 });
+  });
+
+  it("is idempotent for a frozen adapter too", () => {
+    const once = meterLlmProviderAdapter(frozenAdapter());
+
+    expect(isMeteredAdapter(once)).toBe(true);
+    expect(meterLlmProviderAdapter(once)).toBe(once);
+  });
+
+  it("refuses to be sealed instead of pretending it was", () => {
+    // The caller-visible difference the wrapper's own object makes, in full: it
+    // describes ITSELF, and it owns nothing, because every member it answers
+    // with is produced by a trap. Sealing it would make the runtime reject the
+    // very enumeration the tests above rely on, so all three attempts are
+    // refused loudly — and the connector's object is left exactly as it was.
+    const connector = makeAdapter();
+    const adapter = meterLlmProviderAdapter(connector);
+    const frozen = meterLlmProviderAdapter(frozenAdapter());
+
+    expect(() => Object.preventExtensions(adapter)).toThrow(TypeError);
+    expect(() => Object.seal(adapter)).toThrow(TypeError);
+    expect(() => Object.freeze(adapter)).toThrow(TypeError);
+    expect(Object.isExtensible(adapter)).toBe(true);
+    expect(Object.isExtensible(connector)).toBe(true);
+    expect(Object.keys(adapter)).toContain("generate");
+
+    // Integrity reflection describes the wrapper, NOT the adapter behind it —
+    // the one place where reading the metered adapter is not the same as
+    // reading the connector's object.
+    expect(Object.isFrozen(frozen)).toBe(false);
+    expect(Object.isSealed(frozen)).toBe(false);
+  });
+});
+
+describe("meterLlmProviderAdapter — the wrapper's own object (cinatra#2670)", () => {
+  it("does not take a connector's word that it is already metered", async () => {
+    // The brand is a symbol from the GLOBAL registry, so an adapter can set it
+    // on itself. If the idempotence guard believed it, a connector could hand
+    // back an object that is returned unwrapped — an opt-out, in the one seam
+    // that has none by construction. The guard reads a module-private record of
+    // what this file actually minted instead; the brand stays as the outward
+    // answer a metered adapter gives when something asks.
+    const connector = makeAdapter() as unknown as Record<symbol, unknown>;
+    connector[Symbol.for("cinatra.llm.usage-metered-adapter")] = true;
+
+    expect(isMeteredAdapter(connector)).toBe(false);
+
+    const adapter = meterLlmProviderAdapter(
+      connector as unknown as LlmProviderAdapter,
+    );
+    expect(adapter).not.toBe(connector);
+    expect(isMeteredAdapter(adapter)).toBe(true);
+    expect(
+      (adapter as unknown as Record<symbol, unknown>)[
+        Symbol.for("cinatra.llm.usage-metered-adapter")
+      ],
+    ).toBe(true);
+
+    await adapter.generate({ system: "s", prompt: "p" });
+    expect(emitted()).toHaveLength(1);
+  });
+
+  it("re-wraps a member the connector replaces behind the proxy's back", async () => {
+    // The member cache is keyed by the RAW member it wrapped, so it cannot
+    // serve a wrapper for a function that is no longer there. Connector code
+    // holding its own reference to the adapter is the case a per-name cache
+    // could not see at all.
+    const connector = makeAdapter();
+    const adapter = meterLlmProviderAdapter(connector);
+
+    const before = adapter.generate;
+    await before({ system: "s", prompt: "p" });
+
+    connector.generate = vi.fn(async () => ({
+      text: "second",
+      status: null,
+      incompleteReason: null,
+      rawBody: "",
+      model: "second-model",
+      usage: usage(42),
+    })) as LlmProviderAdapter["generate"];
+
+    const after = adapter.generate;
+    expect(after).not.toBe(before);
+    await after({ system: "s", prompt: "p" });
+
+    expect(emitted()).toHaveLength(2);
+    expect(emitted()[1]).toMatchObject({ model: "second-model", inputTokens: 42 });
+  });
+
+  it("follows a prototype swap instead of serving the member it cached", async () => {
+    const first = { listModels: vi.fn(async () => ["first"]) };
+    const second = { listModels: vi.fn(async () => ["second"]) };
+    const connector = Object.assign(Object.create(first), makeAdapter());
+    const adapter = meterLlmProviderAdapter(connector as LlmProviderAdapter);
+
+    await expect(adapter.listModels!()).resolves.toEqual(["first"]);
+
+    Object.setPrototypeOf(adapter, second);
+
+    expect(Object.getPrototypeOf(adapter)).toBe(second);
+    await expect(adapter.listModels!()).resolves.toEqual(["second"]);
+  });
+
+  it("meters a method exposed through a GETTER, and describes it stably", async () => {
+    // An adapter may expose its methods as accessors. A descriptor read has to
+    // answer with the metered member there too, and answer with the SAME getter
+    // every time — a fresh closure per read would be a second way for two reads
+    // of one member to disagree.
+    const raw = vi.fn(async () => ({
+      text: "ok",
+      status: null,
+      incompleteReason: null,
+      rawBody: "",
+      model: "accessor-model",
+      usage: usage(13),
+    }));
+    const connector = makeAdapter();
+    Object.defineProperty(connector, "generate", {
+      get: () => raw,
+      enumerable: true,
+      configurable: true,
+    });
+    const adapter = meterLlmProviderAdapter(connector);
+
+    const descriptor = Object.getOwnPropertyDescriptor(adapter, "generate");
+    expect(typeof descriptor?.get).toBe("function");
+    expect(Object.getOwnPropertyDescriptor(adapter, "generate")?.get).toBe(
+      descriptor?.get,
+    );
+
+    const described = descriptor!.get!() as LlmProviderAdapter["generate"];
+    expect(described).toBe(adapter.generate);
+    expect(described).not.toBe(raw);
+
+    await described({ system: "s", prompt: "p" });
+    expect(emitted()).toHaveLength(1);
+    expect(emitted()[0]).toMatchObject({ model: "accessor-model", inputTokens: 13 });
+  });
+
+  it("refuses to PIN a member, and refuses BEFORE touching the connector", () => {
+    // The facade owns nothing, so it cannot own the non-configurable property
+    // such a definition promises — the runtime would throw over the trap's
+    // answer, with the connector's object already changed. Refusing first keeps
+    // the failure atomic: nothing was defined, and the caller is told so.
+    const connector = makeAdapter() as unknown as Record<string, unknown>;
+    const adapter = meterLlmProviderAdapter(
+      connector as unknown as LlmProviderAdapter,
+    );
+
+    expect(
+      Reflect.defineProperty(adapter, "pinned", {
+        value: 1,
+        configurable: false,
+      }),
+    ).toBe(false);
+    expect("pinned" in connector).toBe(false);
+
+    // Omitting the field pins it just as surely — `defineProperty` defaults
+    // every unstated attribute of a NEW property to false.
+    expect(Reflect.defineProperty(adapter, "unstated", { value: 1 })).toBe(
+      false,
+    );
+    expect("unstated" in connector).toBe(false);
+
+    // An ordinary definition still lands on the connector's object.
+    expect(
+      Reflect.defineProperty(adapter, "loose", {
+        value: 1,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      }),
+    ).toBe(true);
+    expect(connector.loose).toBe(1);
+    expect(Object.keys(adapter)).toContain("loose");
   });
 });
