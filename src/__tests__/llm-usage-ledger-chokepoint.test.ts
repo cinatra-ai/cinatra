@@ -34,9 +34,14 @@
  *
  * cinatra#2641 empties the uncounted inventory the same way. `generateImage()`
  * was the one response-producing adapter method the seam did not meter — billed
- * per image, invisible to `/analytics/llm`. It is metered at the seam now and
- * therefore lands in COUNTED_BUT_UNPRICED too: the ABI's image response carries
- * no usage object, so the row states the call and leaves the dollars unknown.
+ * per image, invisible to `/analytics/llm`. It is metered at the seam now, and
+ * it is PRICEABLE now: the ABI's image response may carry a per-image usage
+ * count, the seam forwards it, and the subscriber prices it off a per-image rate
+ * card. It stays in COUNTED_BUT_UNPRICED because the mechanism existing is not
+ * the same as the dollars arriving — the PINNED Gemini connector does not report
+ * image usage yet, so every image row production writes today is still unpriced.
+ * The register describes what the ledger currently SAYS, never what it is
+ * capable of saying.
  */
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -108,6 +113,21 @@ type Registered = {
    * exists to prevent, one level up.
    */
   mustContain?: string;
+  /**
+   * An extension whose PINNED revision the entry's claim depends on
+   * (cinatra#2641).
+   *
+   * The gap that needs this: an entry can be about code living in another repo,
+   * which this file cannot read. "The pinned Gemini connector does not report
+   * image usage yet" is true of one SHA and stops being true at another, and
+   * nothing in this repo would notice the difference. Recording the SHA the
+   * claim was written against — and asserting it against
+   * `cinatra-dev-extensions.lock.json` — turns the pin advance into a RED TEST
+   * that forces the entry to be re-read, instead of leaving a stale claim
+   * standing. It does not prove what the connector does; it proves nobody
+   * changed which connector we mean without revisiting this.
+   */
+  pinnedExtension?: { packageName: string; resolvedSha: string };
 };
 
 /** The ONE file permitted to call a connector's adapter factory. */
@@ -205,16 +225,20 @@ const COUNTED_BUT_UNPRICED: Registered[] = [
   {
     file: "packages/llm/src/usage-metering.ts",
     why:
-      "cinatra#2641: `adapter.generateImage()` is billed PER IMAGE and now books " +
-      "one row per call at the seam, so the path is no longer invisible. It " +
-      "cannot be PRICED here: the ABI's image response is `{ imageData, " +
-      "mimeType }` — no usage object and no model name — so the row carries zero " +
-      "token columns and cost_usd NULL. Extending the ABI so an image response " +
-      "carries its own usage (a connector change, and a per-image rather than " +
-      "per-token unit) is what makes it priceable, and is the half of #2641 that " +
-      "stays open.",
+      "cinatra#2641: `adapter.generateImage()` is billed PER IMAGE and books one " +
+      "row per call at the seam, so the path is not invisible. It is now " +
+      "PRICEABLE but not yet PRICED. The ABI carries an optional per-image usage " +
+      "count, the seam forwards it, and the subscriber prices it off the " +
+      "per-image rate card — but the PINNED gemini-connector does not report " +
+      "that usage yet, so every image row written in production still lands with " +
+      "cost_usd NULL. The entry closes when the connector reports and the " +
+      "extension pin advances, not when this mechanism merges.",
     knownOpenIssue: 2641,
     mustContain: "generateImage",
+    pinnedExtension: {
+      packageName: "@cinatra-ai/gemini-connector",
+      resolvedSha: "afa62b4bb875e46f71114f65fe2ad768eefb3320",
+    },
   },
   {
     file: "packages/objects/src/graphiti-client.ts",
@@ -448,13 +472,107 @@ describe("known-open paths are recorded, not hidden", () => {
     expect(seam!.text).toMatch(/prop === IMAGE_METHOD/);
     expect(seam!.text).toMatch(/operation:\s*"image"/);
 
-    // And the pricing layer must REFUSE to price it. Zero tokens through the
-    // per-token card answers 0, and a stored 0 reads as "this image was free".
+    // And the pricing layer must never run the per-TOKEN card over it. Zero
+    // tokens through that card answers 0, and a stored 0 reads as "this image
+    // was free". It routes to the PER-IMAGE card instead, which answers null
+    // — the same unpriced row — whenever no count or no rate is available.
     const subscriber = SOURCE_FILES.find(
       (file) => file.rel === "packages/metric-cost-api/src/event-subscriber.ts",
     );
     expect(subscriber).toBeDefined();
-    expect(subscriber!.text).toMatch(/operation === "image"\s*\n?\s*\?\s*null/);
+    expect(subscriber!.text).toMatch(
+      /operation === "image"\s*\n?\s*\?\s*computeImageCostUsd\(/,
+    );
+  });
+
+  it("image generation is PRICEABLE now — the mechanism exists end to end", () => {
+    // cinatra#2641's pricing half. Three source claims, one per layer, so a
+    // future edit that removes any link in the chain is visible in a diff:
+    //   1. the ABI lets an image response report a PER-IMAGE unit;
+    //   2. the seam forwards what the adapter reported (and never defaults it);
+    //   3. the subscriber has a per-image card with a rate to price against.
+    //
+    // Behaviour is proved elsewhere — `packages/llm/src/usage-metering.test.ts`
+    // for the seam, `packages/metric-cost-api/tests/image-pricing.test.ts` for
+    // the card, `.../tests/image-usage-row.test.ts` for the routing. This file
+    // proves STRUCTURE.
+    const abi = SOURCE_FILES.find(
+      (file) =>
+        file.rel === "packages/sdk-extensions/src/llm-provider-adapter-contract.ts",
+    );
+    expect(abi).toBeDefined();
+    expect(abi!.text).toMatch(/export type LlmImageUsage = \{/);
+    expect(abi!.text).toMatch(/images: number;/);
+    expect(abi!.text).toMatch(/Promise<LlmImageResponse \| null>/);
+
+    // The seam forwards only what the ADAPTER attested — never a count it
+    // paired with the model the CALLER happened to request.
+    const seam = SOURCE_FILES.find(
+      (file) => file.rel === "packages/llm/src/usage-metering.ts",
+    );
+    expect(seam!.text).toMatch(/function readPriceableImageUsage\(/);
+    expect(seam!.text).toMatch(/imageCount: priceable\?\.images/);
+    // …and the prompt quantity travels on its OWN field, because the row's
+    // `input_tokens` column is NOT NULL and cannot say "unreported".
+    expect(seam!.text).toMatch(/imagePromptTokensReported: priceable\?\.promptTokens !== undefined/);
+    const subscriberSource = SOURCE_FILES.find(
+      (file) => file.rel === "packages/metric-cost-api/src/event-subscriber.ts",
+    );
+    expect(subscriberSource!.text).toMatch(/event\.imagePromptTokensReported\s*\n?\s*\? event\.inputTokens/);
+
+    const card = SOURCE_FILES.find(
+      (file) => file.rel === "packages/metric-cost-api/src/pricing/index.ts",
+    );
+    expect(card).toBeDefined();
+    expect(card!.text).toMatch(/export function computeImageCostUsd\(/);
+    // A rate card nobody can re-check is not evidence. Every entry names the
+    // provider page it came from, the service tier it is quoted at, and the date
+    // it was read.
+    expect(card!.text).toMatch(/asOf: "\d{4}-\d{2}-\d{2}"/);
+    expect(card!.text).toMatch(/source: "https:\/\//);
+    expect(card!.text).toMatch(/tier: "/);
+    // And the provider is part of the rate identity — a model NAME alone would
+    // let any connector borrow another provider's rate by naming its model.
+    expect(card!.text).toMatch(/provider: string \| null \| undefined/);
+  });
+
+  it("PRICEABLE is registered separately from PRICED — bound to the connector pin", () => {
+    // The failure this guards: a mechanism merges, the register entry is closed
+    // because "images can be priced now", and every row production actually
+    // writes is still NULL. The pinned connector has to report first, and the
+    // extension pin has to advance, before this entry can go.
+    //
+    // The entry's claim is about code in ANOTHER repo, which this file cannot
+    // read — so it is bound to the SHA the claim was written against instead.
+    // Advancing the pin turns this red and forces the entry to be re-read. That
+    // is the honest guarantee available here: not "the connector still reports
+    // nothing", but "nobody changed which connector we mean without revisiting
+    // this".
+    const unpriced = COUNTED_BUT_UNPRICED.find(
+      (entry) => entry.file === "packages/llm/src/usage-metering.ts",
+    );
+    expect(unpriced).toBeDefined();
+    expect(unpriced!.knownOpenIssue).toBe(2641);
+    // The entry must say what is still missing, not merely that something is.
+    expect(unpriced!.why).toMatch(/pin/i);
+
+    const pin = unpriced!.pinnedExtension;
+    expect(pin, "the entry must name the extension pin it depends on").toBeDefined();
+
+    const lock = JSON.parse(
+      readFileSync(path.join(REPO_ROOT, "cinatra-dev-extensions.lock.json"), "utf8"),
+    ) as { packages?: Array<{ packageName: string; resolvedSha: string }> };
+    const locked = (lock.packages ?? []).find(
+      (entry) => entry.packageName === pin!.packageName,
+    );
+    expect(locked, `${pin!.packageName} must still be a pinned extension`).toBeDefined();
+    expect(
+      locked!.resolvedSha,
+      `${pin!.packageName} moved to ${locked!.resolvedSha}. Re-read the ` +
+        "counted-but-unpriced entry for the image seam: if that revision reports " +
+        "image usage, image rows are PRICED now and the entry closes; if not, " +
+        "repoint the entry at the new SHA.",
+    ).toBe(pin!.resolvedSha);
   });
 
   it("every counted-but-unpriced path names the issue that owns its pricing gap", () => {

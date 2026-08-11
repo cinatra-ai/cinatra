@@ -17,12 +17,14 @@
  * there is no other way to obtain an adapter.
  *
  * COUNTED VS PRICED (cinatra#2641). Most metered methods answer with usage, so
- * their rows carry both a count and dollars. `generateImage` answers with an
- * image and nothing else while the provider bills per image, so its row is
- * COUNTED and left UNPRICED (`cost_usd` NULL) instead of being dropped — see
- * {@link IMAGE_METHOD}. "The call is in the ledger" and "the spend is measured"
- * are tracked separately on purpose; collapsing them is how a $0 row starts
- * reading as "free".
+ * their rows carry both a count and dollars. `generateImage` is billed PER IMAGE
+ * rather than per token, so it is metered on its own arm — see
+ * {@link IMAGE_METHOD}. An adapter that reports the ABI's optional image usage
+ * makes its row PRICEABLE (the subscriber prices it when its per-image card has
+ * a rate for that provider and model); one that reports nothing gets the
+ * COUNTED, UNPRICED row (`cost_usd` NULL) instead of being dropped. "The call is
+ * in the ledger" and "the spend is measured" are tracked separately on purpose;
+ * collapsing them is how a $0 row starts reading as "free".
  *
  * ATTRIBUTION. The transport layer can see the provider, the model and the
  * adapter input's `logLabel`, but not the caller's skill/telemetry context. A
@@ -49,6 +51,8 @@ import { randomUUID } from "node:crypto";
 import { emitUsageEvent } from "@cinatra-ai/metric-usage-api";
 import type { LlmUsageOperation } from "@cinatra-ai/metric-usage-api";
 import type {
+  LlmImageResponse,
+  LlmImageUsage,
   LlmProvider,
   LlmProviderAdapter,
   LlmResponse,
@@ -127,6 +131,17 @@ export type EmitLlmUsageParams = {
   logLabel?: string | null;
   skillLabel?: string | null;
   usage: LlmUsageData;
+  /**
+   * The PER-IMAGE unit an `operation:"image"` row is priced in (cinatra#2641).
+   * Absent ⇒ the adapter reported no image usage and the row stays unpriced.
+   */
+  imageCount?: number;
+  /**
+   * Whether `usage.inputTokens` on an image row is a REPORT rather than the
+   * placeholder zero the NOT NULL column requires (cinatra#2641). The quantity
+   * itself is never duplicated — two copies could disagree.
+   */
+  imagePromptTokensReported?: boolean;
   idempotencyKey: string;
   requestedProvider?: string | null;
   effectiveProvider?: string | null;
@@ -154,6 +169,8 @@ export function emitLlmUsage(params: EmitLlmUsageParams): void {
     reasoningOutputTokens: params.usage.reasoningOutputTokens,
     cacheReadInputTokens: params.usage.cacheReadInputTokens,
     cacheCreationInputTokens: params.usage.cacheCreationInputTokens,
+    imageCount: params.imageCount,
+    imagePromptTokensReported: params.imagePromptTokensReported,
     idempotencyKey: params.idempotencyKey,
     occurredAt: params.occurredAt ?? new Date().toISOString(),
     requestedProvider: params.requestedProvider ?? null,
@@ -206,30 +223,34 @@ const RESPONSE_METHODS = new Set([
 ]);
 
 /**
- * The image method — response-producing, billed, and reporting NO usage
+ * The image method — response-producing and billed in a NON-TOKEN unit
  * (cinatra#2641).
  *
- * It is separated from {@link RESPONSE_METHODS} because there is nothing to read
- * off its answer: the ABI's `generateImage` resolves to `{ imageData, mimeType }`
- * — no usage object, no model name — while the provider bills per image. Before
- * this branch the call fell through to the pass-through arm below and produced
- * NO ledger row at all, which is how billed image generation stayed invisible to
- * `/analytics/llm`.
+ * It is separated from {@link RESPONSE_METHODS} because its answer is not an
+ * `LlmResponse` and its bill is not a token count: the provider charges per
+ * produced image. Before this branch existed the call fell through to the
+ * pass-through arm below and produced NO ledger row at all, which is how billed
+ * image generation stayed invisible to `/analytics/llm`.
  *
- * So the row is COUNTED AND UNPRICED, the shape cinatra#2582 established for the
- * Graphiti hand-over: the ledger states the one thing that is true — an image
- * call happened, on this provider, for this caller — and leaves the dollars
- * UNKNOWN (`cost_usd` NULL, the dashboard's own unknown-cost surface) rather than
- * inventing a price. Extending the ABI so an image response can carry its own
- * usage is what would make the path priceable; that remains cinatra#2641's open
- * half and is a connector change, not a wrapper.
+ * TWO STATES, both honest. The ABI's image response MAY carry `model` + `usage`
+ * ({@link LlmImageUsage}, a per-image unit). An adapter that attests BOTH yields
+ * a PRICEABLE row, which the subscriber prices when its per-image card holds a
+ * rate for that provider and model. An adapter that reports nothing — or reports
+ * usage it cannot attribute to a model — yields the COUNTED, UNPRICED row this
+ * arm has always written (`cost_usd` NULL, the shape cinatra#2582 established
+ * for the Graphiti hand-over): the ledger states the one thing that is true —
+ * an image call happened, on this provider, for this caller — and leaves the
+ * dollars UNKNOWN rather than inventing a price. Nothing about the second state
+ * changed, so no adapter has to move for the ledger to keep working.
  */
 const IMAGE_METHOD = "generateImage";
 
 /**
- * The token columns an image row carries: zeros because `usage_events` requires
- * numbers, never because anything was measured. The unknown lives in the NULL
- * cost — a zeroed cost would read as "this was free".
+ * The token columns an image row carries when the adapter reported nothing:
+ * zeros because `usage_events` requires numbers, never because anything was
+ * measured. An image bill is denominated in images, so a zeroed cost derived
+ * from these zeros would read as "this was free"; the dollars come from the
+ * reported image usage instead, or stay NULL.
  */
 const UNREPORTED_IMAGE_USAGE: LlmUsageData = Object.freeze({
   inputTokens: 0,
@@ -237,6 +258,76 @@ const UNREPORTED_IMAGE_USAGE: LlmUsageData = Object.freeze({
   cachedInputTokens: 0,
   reasoningOutputTokens: 0,
 });
+
+/**
+ * A count the seam is willing to multiply by money, or `undefined`.
+ *
+ * Validated rather than trusted. A connector is third-party code, and these
+ * numbers reach a dollar rate: a `NaN`, a `1.5`, a negative, an `Infinity` or a
+ * `"2"` would mint a nonsense price and store it with the same confidence as a
+ * real one. Anything that is not a safe integer at or above `min` is treated as
+ * NOT REPORTED, which lands the row in the counted-but-unpriced state it already
+ * had. A malformed report therefore costs the ledger its price, never a wrong
+ * price.
+ */
+function readBillableCount(
+  value: unknown,
+  min: number,
+): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= min
+    ? value
+    : undefined;
+}
+
+/**
+ * The model identifier the ADAPTER attested, or `undefined`.
+ *
+ * Read INDEPENDENTLY of the usage numbers on purpose. An adapter that names the
+ * model it addressed but reports no usable count has still told the ledger
+ * something true, and labelling that row with the model the CALLER asked for
+ * would throw away the better answer. Only PRICING is gated on the pair (see
+ * {@link readPriceableImageUsage}).
+ */
+function readAttestedImageModel(result: GenerateImageResult): string | undefined {
+  const model = result?.model;
+  return typeof model === "string" && model.length > 0 ? model : undefined;
+}
+
+/**
+ * What the ADAPTER attested about an image invocation, reduced to the quantities
+ * a price can be built from — or `undefined`, meaning "count the row, price
+ * nothing".
+ *
+ * WHY AN ATTESTED MODEL IS PART OF THE GATE. The ledger looks a rate up by
+ * model, and the seam's fallback for a row's model name is the model the CALLER
+ * asked for. A requested name is not evidence of which model was addressed: an
+ * adapter is free to substitute one, and pricing a substitution off the
+ * requested name would charge one model's rate for another model's work. So a
+ * `usage` reported WITHOUT an attested `model` is honoured as far as it goes —
+ * the row is still counted — and no count reaches the rate card.
+ *
+ * `promptTokens` stays `undefined` when the adapter reported none, and is NOT
+ * collapsed to `0` here. The row's `input_tokens` column cannot preserve that:
+ * it is NOT NULL, so "unreported" has to be written as `0`. For a provider that
+ * bills the prompt, `0` and "unreported" are opposite answers — reading an
+ * unreported prompt as zero would price the images and drop the rest of the
+ * bill — so the caller pairs the column with an `imagePromptTokensReported`
+ * flag. A flag and not a second copy of the number: two copies could disagree.
+ */
+function readPriceableImageUsage(
+  result: GenerateImageResult,
+): { images: number; promptTokens: number | undefined } | undefined {
+  if (readAttestedImageModel(result) === undefined) return undefined;
+
+  const images = readBillableCount(result?.usage?.images, 1);
+  if (images === undefined) return undefined;
+
+  // Zero prompt tokens IS a legitimate report (`min` 0), unlike zero images.
+  return {
+    images,
+    promptTokens: readBillableCount(result?.usage?.inputTokens, 0),
+  };
+}
 
 type AdapterCallInput = {
   model?: string;
@@ -250,7 +341,7 @@ type GenerateImageInput = {
   logLabel?: string;
 };
 
-type GenerateImageResult = { imageData: string; mimeType: string } | null;
+type GenerateImageResult = LlmImageResponse | null;
 
 /**
  * Wrap an adapter so every response-producing call is metered.
@@ -422,17 +513,44 @@ export function meterLlmProviderAdapter(
         // request is under-counted. Both errors are bounded and stated rather
         // than hidden, and closing them needs the ABI to report the attempt —
         // the same extension that would make the row priceable.
+        const priceable = readPriceableImageUsage(result);
         emitLlmUsage({
           provider: target.provider,
-          // Only what the CALLER named. `defaultModel` is the adapter's default
-          // TEXT model and naming it here would state a model that did not
-          // answer — and, worse, one the rate card knows. Absent ⇒ "unknown",
-          // which is what the ABI actually lets this seam see today.
-          model: input?.model ?? null,
+          // What the adapter ATTESTED, then what the caller asked for — the
+          // second only ever LABELS the row, never prices it (see
+          // `readPriceableImageUsage`). `defaultModel` is deliberately NOT in
+          // this chain: it is the adapter's default TEXT model, so naming it
+          // would state a model that did not answer — and, worse, one the
+          // per-token card knows. Neither ⇒ "unknown".
+          model: readAttestedImageModel(result) ?? input?.model ?? null,
           operation: "image",
           logLabel: resolveAgentLabel(attribution, input?.logLabel),
           skillLabel: attribution?.skillLabel ?? null,
-          usage: UNREPORTED_IMAGE_USAGE,
+          // The prompt tokens this call was billed for, when the adapter
+          // reported them — and the ONLY copy of that quantity anywhere in the
+          // event. Real measurements go in the real columns: leaving them at
+          // zero while pricing them would make the row's own numbers contradict
+          // its cost. Nothing reported ⇒ the zeros the schema needs, and the
+          // flag below is what remembers which of the two this is.
+          usage:
+            priceable?.promptTokens === undefined
+              ? UNREPORTED_IMAGE_USAGE
+              : { ...UNREPORTED_IMAGE_USAGE, inputTokens: priceable.promptTokens },
+          // The per-image unit the row is priced in. Read off the RESPONSE and
+          // never inferred: "an invocation resolved" does not imply "one image
+          // was billed" (a `null` answer bills whatever the provider decided,
+          // and a multi-candidate request bills more than the one image
+          // returned), so a defaulted 1 here would be a guess wearing a
+          // measurement's clothes.
+          imageCount: priceable?.images,
+          // Whether the `input_tokens` above is a REPORT or the placeholder the
+          // NOT NULL column demands. The column cannot carry that distinction
+          // itself — "nothing was said" arrives as `0` — and without it a
+          // provider that bills the prompt would be charged for the images
+          // only. A second copy of the NUMBER would have said the same thing
+          // and added a way for the two to disagree, so this is a flag over the
+          // one quantity rather than a duplicate of it.
+          imagePromptTokensReported: priceable?.promptTokens !== undefined,
           // Two resolved invocations need two distinct ledger keys — a
           // shared key would collapse the second at the unique index.
           idempotencyKey: randomUUID(),
