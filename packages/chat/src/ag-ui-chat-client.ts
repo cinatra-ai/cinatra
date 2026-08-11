@@ -193,6 +193,11 @@ export type AssistantTurnRequestMessage = {
   attachments?: LlmAttachmentRef[];
 };
 
+/** The /chat container a turn asserts (cinatra#2650) — see `chatContainer`
+ *  below. Structurally the wire shape; `resolveChatTurnContainer`
+ *  (chat-client-url.ts) is what produces it. */
+export type ChatTurnContainerRef = { assistantPackage: string; instanceId: string | null };
+
 export type StreamAssistantTurnOptions = {
   threadId: string;
   messages: AssistantTurnRequestMessage[];
@@ -208,6 +213,15 @@ export type StreamAssistantTurnOptions = {
    *  runtime config + audience gate. OMITTED for the @cinatra host default (an
    *  absent selector keeps the byte-identical `runChatTurn` path). */
   assistant?: string;
+  /** OPTIONAL /chat CONTAINER (cinatra#1878 W3 binding, persisted by
+   *  cinatra#2650): the assistant container the browser is IN, sent as
+   *  `body.chatContainer` so the server binds a newly-created thread to its home
+   *  at insert. The server does NOT trust it — it re-resolves the value through
+   *  the caller's audience + per-instance authority and binds the registry's own
+   *  canonical package, 404-ing an assertion the caller has no standing for.
+   *  OMITTED ⇒ the server's implicit-default container (byte-identical to the
+   *  pre-#2650 wire). */
+  chatContainer?: ChatTurnContainerRef;
   resumeEndpointFor?: (runId: string) => string;
   // ----- S5 Lane B embed seams (cinatra#1221 §9.1) — ADDITIVE; every field is
   // optional and defaults to today's session behaviour so `/chat` is
@@ -389,6 +403,9 @@ export async function streamAssistantTurn(
       // broker-auth branch needs it); an absent field keeps the endpoint's
       // byte-identical @cinatra default (`assistant === undefined` → `runChatTurn`).
       ...(options.assistant ? { assistant: options.assistant } : {}),
+      // The thread's CONTAINER (cinatra#2650) — the assistant this conversation
+      // is HOMED in, which is not the same question as who answers this turn.
+      ...(options.chatContainer ? { chatContainer: options.chatContainer } : {}),
     }),
     signal: options.signal,
   });
@@ -544,6 +561,11 @@ export type DriveAssistantChatTurnOptions = {
    *  assistant to drive this turn AS (forwarded to the endpoint as `body.assistant`).
    *  Omitted for the @cinatra host default. */
   assistant?: string;
+  /** The /chat CONTAINER this turn's thread is homed in (cinatra#2650) —
+   *  forwarded as `body.chatContainer` so a thread created by this turn is bound
+   *  to its assistant from its first persisted moment. DISTINCT from
+   *  {@link assistant}, which picks the PRODUCER of this one turn. */
+  chatContainer?: ChatTurnContainerRef;
 };
 
 /**
@@ -596,6 +618,9 @@ export async function driveAssistantChatTurn(
         // @cinatra turn.
         ...(options.endpoint ? { endpoint: options.endpoint } : {}),
         ...(options.assistant ? { assistant: options.assistant } : {}),
+        // Same reason: a retry must assert the SAME container, or the retried
+        // turn would home the thread in the default instead (cinatra#2650).
+        ...(options.chatContainer ? { chatContainer: options.chatContainer } : {}),
         signal,
         onState: (state) => {
           anyEventSeen = true;

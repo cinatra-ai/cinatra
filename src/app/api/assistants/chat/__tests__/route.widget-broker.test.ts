@@ -473,3 +473,49 @@ describe("OPTIONS — CORS preflight for the widget branch", () => {
     expect(res.status).toBe(403);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The thread CONTAINER on the widget branch (cinatra#2650).
+//
+// The cookie-session branch lets the caller ASSERT its /chat container and
+// re-resolves that assertion. The cross-origin embed gets no such say: its
+// container is not its to name, so an asserted `chatContainer` is IGNORED
+// outright and the binding comes from the pair this branch already verified —
+// the CLOSED widget binding's reserved built-in package, and the canonical
+// instance the dual-token sequence re-pinned server-side.
+// ---------------------------------------------------------------------------
+describe("the thread container is taken from the VERIFIED principal, never from the embed", () => {
+  it("binds the closed binding's built-in package and the server RE-PINNED instance", async () => {
+    const res = await POST(widgetReq({ cit: "cit_abc", cwu: "cwu_xyz" }));
+    expect(res.status).toBe(200);
+    expect(streamAgUiChatTurn.mock.calls[0][0].container).toEqual({
+      assistantPackage: "@cinatra-ai/wordpress-assistant",
+      instanceId: "inst-42",
+    });
+  });
+
+  it("a FORGED chatContainer on the embed's body changes NOTHING — it is not re-resolved, it is ignored", async () => {
+    const res = await POST(
+      widgetReq({
+        cit: "cit_abc",
+        cwu: "cwu_xyz",
+        body: {
+          threadId: "th-1",
+          messages: [{ role: "user", content: "edit the intro" }],
+          assistant: "wordpress",
+          // a well-formed assertion naming a different assistant AND a
+          // different site — accepted by the schema, discarded by the branch
+          chatContainer: {
+            assistantPackage: "@cinatra-ai/cinatra-assistant",
+            instanceId: "someone-elses-site",
+          },
+        },
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(streamAgUiChatTurn.mock.calls[0][0].container).toEqual({
+      assistantPackage: "@cinatra-ai/wordpress-assistant",
+      instanceId: "inst-42",
+    });
+  });
+});

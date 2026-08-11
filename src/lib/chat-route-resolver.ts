@@ -249,6 +249,106 @@ export async function resolveChatRoute(
 }
 
 // ---------------------------------------------------------------------------
+// The CONTAINER a turn creates its thread in (cinatra#2650).
+//
+// A /chat turn must record WHICH assistant's container the new thread belongs
+// to, and nothing on the wire may be trusted to say so. The browser knows the
+// container only because THIS module told it: the /chat page resolves the route
+// here and hands the client `initialAssistantPackage` / `initialInstanceId`.
+// The turn POST carries that value back as an ASSERTION, and the server
+// RE-RESOLVES it through the SAME two authorities the page used — the actor's
+// audience-filtered registry, and the per-instance `authorizeInstance`
+// authority. The bound value is the REGISTRY ENTRY'S OWN `packageName`, never
+// the caller's string, so a forged, uninstalled, out-of-audience, or
+// wrong-cased assertion can never become a binding.
+//
+// The trust model is deliberately the SAME one the sibling producer selector
+// already uses (`body.assistant`: the client names a handle, the server
+// resolves it to a principal and audience-gates it, 404-hiding a forged one) —
+// one model on one request body, not two.
+//
+// REFUSAL IS HARD, NEVER A SILENT DEFAULT (codex round-0/1): an assertion that
+// does not resolve is a 404 at the caller, exactly like the producer selector's
+// refusal. Only an ABSENT assertion falls back to the implicit default — that
+// is the compatibility path for a caller that has no container (an old client,
+// the MCP surface), not an error being swallowed.
+// ---------------------------------------------------------------------------
+
+/** What the client asserts about the /chat container its turn is running in. */
+export type ChatContainerAssertion = {
+  assistantPackage: string;
+  instanceId?: string | null;
+};
+
+/** The SERVER-RESOLVED container a thread is bound into. `assistantPackage` is
+ *  the registry entry's own canonical spelling. */
+export type ResolvedChatContainer = {
+  assistantPackage: string;
+  instanceId: string | null;
+};
+
+export type ResolveChatContainerResult =
+  | { ok: true; container: ResolvedChatContainer }
+  | { ok: false; code: "unknown-assistant" | "unauthorized-instance" };
+
+/** The two authorities a container resolution consults — the SAME members of
+ *  {@link ChatRouteResolverDeps} the route guard's steps 2 and 4 use. */
+export type ChatContainerResolverDeps = Pick<
+  ChatRouteResolverDeps,
+  "readVisibleRegistry" | "authorizeInstance"
+>;
+
+/**
+ * Re-resolve a client-asserted /chat container against the ACTOR's own
+ * authority. Pure given `deps`.
+ *
+ * - an ABSENT assertion resolves to the IMPLICIT DEFAULT container (the builtin
+ *   assistant, no instance) WITHOUT consulting either authority: no claim was
+ *   made, so there is nothing to authorize, and the default is the container an
+ *   unbound row already lives in for the client's URL builder and for #2649's
+ *   alias. This is the compatibility path for a caller that has no container;
+ *   the default container's own decision lives HERE, in the module that owns
+ *   the /chat container concept, rather than being restated at each call site;
+ * - the package matches the audience-filtered registry CASE-INSENSITIVELY (the
+ *   route guard's rule), and the resolved container carries the ENTRY's
+ *   canonical `packageName`;
+ * - an instance is honored ONLY on a `remote`-launch assistant with a
+ *   first-party connector kind, and ONLY after `authorizeInstance` passes — so
+ *   actor A can never home a thread in actor B's instance, and an instance can
+ *   never be pinned onto a local assistant that has no such scope;
+ * - anything else refuses. The caller 404-hides, never falls back.
+ */
+export async function resolveChatContainer(
+  assertion: ChatContainerAssertion | null | undefined,
+  deps: ChatContainerResolverDeps,
+): Promise<ResolveChatContainerResult> {
+  if (!assertion) {
+    return {
+      ok: true,
+      container: { assistantPackage: DEFAULT_ASSISTANT_PACKAGE, instanceId: null },
+    };
+  }
+  const asserted = assertion.assistantPackage.trim().toLowerCase();
+  if (!asserted) return { ok: false, code: "unknown-assistant" };
+  const entries = await deps.readVisibleRegistry();
+  const entry = entries.find((e) => e.packageName.toLowerCase() === asserted);
+  if (!entry) return { ok: false, code: "unknown-assistant" };
+
+  const instanceId = assertion.instanceId?.trim() ? assertion.instanceId.trim() : null;
+  if (!instanceId) return { ok: true, container: { assistantPackage: entry.packageName, instanceId: null } };
+
+  // An instance scope only exists for a remote-launch assistant, and only for
+  // the instances THIS actor is authorized to use (fail-closed on both).
+  if (entry.launch.kind !== "remote") return { ok: false, code: "unauthorized-instance" };
+  const kind = remoteConnectorKindForProvider(entry.launch.targetProvider);
+  if (!kind) return { ok: false, code: "unauthorized-instance" };
+  if (!(await deps.authorizeInstance(kind, instanceId))) {
+    return { ok: false, code: "unauthorized-instance" };
+  }
+  return { ok: true, container: { assistantPackage: entry.packageName, instanceId } };
+}
+
+// ---------------------------------------------------------------------------
 // Default (production) deps — lazily import the heavy host graph so this module
 // stays a light leaf on the unit-test path.
 // ---------------------------------------------------------------------------
@@ -373,6 +473,16 @@ export const DEFAULT_CHAT_ROUTE_RESOLVER_DEPS: ChatRouteResolverDeps = {
   resolveUnboundThreadIdById: resolveUnboundThreadIdByIdForCurrentActor,
   resolveUnboundThreadIdBySlug: resolveUnboundThreadIdBySlugForCurrentActor,
 };
+
+/** Re-resolve an asserted /chat container with the production authorities — the
+ *  entry `POST /api/assistants/chat` calls (cinatra#2650). Reuses the SAME dep
+ *  object the route guard runs on, so container resolution and route resolution
+ *  can never drift onto two different audience/instance authorities. */
+export function resolveChatContainerForCurrentActor(
+  assertion: ChatContainerAssertion | null | undefined,
+): Promise<ResolveChatContainerResult> {
+  return resolveChatContainer(assertion, DEFAULT_CHAT_ROUTE_RESOLVER_DEPS);
+}
 
 /** Resolve using the production deps — the entry the /chat route calls. */
 export function resolveChatRouteForCurrentActor(

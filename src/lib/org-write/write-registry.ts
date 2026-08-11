@@ -1119,6 +1119,28 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     },
   },
   {
+    // cinatra#2650: the CREATION-SEAM container bind — records the thread's
+    // home (assistant_package + instance_id) at its FIRST persist, so the #2642
+    // repair above becomes a backstop for pre-existing rows rather than the only
+    // writer of this column pair. Same family/axis as its siblings: same table,
+    // same nullable org axis, same 1939 exemption. SET-ONCE and owner-scoped
+    // with NO admin bypass; the full ownership + org + unbound predicate is
+    // re-asserted in the statement's own WHERE clause, so the write can never
+    // outrun it.
+    module: "src/lib/assistant-thread-store.ts",
+    exportName: "bindThreadContainerIfUnbound",
+    capability: "content.write",
+    orgIdExtractor: "thread row's org_id (container bind, re-asserted in the UPDATE predicate)",
+    storageReferences: ["assistant_threads"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "org axis is nullable by design (ambient threads) — converts with the chat-thread family ruling",
+    },
+  },
+  {
     module: "src/lib/assistant-thread-store.ts",
     exportName: "touchAssistantThread",
     capability: "content.write",

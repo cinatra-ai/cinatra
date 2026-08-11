@@ -132,7 +132,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   const isCreateAgentMode = initialMode === "create-agent";
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(initialThreadId ?? null);
-  const { pushChatUrl, pushNewChatUrl, restoreActiveThread, adoptThreadBinding, newThreadSummary } =
+  const { pushChatUrl, pushNewChatUrl, restoreActiveThread, adoptThreadBinding, newThreadSummary, chatTurnContainer } =
     useChatUrlSync(threads, initialAssistantPackage, initialInstanceId);
   const [messages, setMessages] = useState<Message[]>([]);
   // Streaming registry: one AbortController per in-flight streamResponse call.
@@ -604,9 +604,8 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
         threadId,
         assistantId,
         authorUserId,
-        // Host-runtime assistant: explicit producer endpoint + selector; @cinatra/default neither.
-        ...(endpoint ? { endpoint } : {}),
-        ...(assistant ? { assistant } : {}),
+        // Host-runtime assistant: explicit producer endpoint + selector; @cinatra/default neither. `chatContainer` is the thread's HOME (cinatra#2650) — resolved from the LIVE list + mount binding at dispatch, never the producer.
+        ...(endpoint ? { endpoint } : {}), ...(assistant ? { assistant } : {}), chatContainer: chatTurnContainer(threadId),
         slack: isSlackModeRef.current,
         signal: abortController.signal,
         messages: contextMessages.map((m) => ({

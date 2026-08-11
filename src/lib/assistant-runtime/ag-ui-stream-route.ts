@@ -5,10 +5,12 @@ import { createAgUiSinkAdapter } from "@/lib/assistant-runtime/ag-ui-sink-adapte
 import { classifyAssistantRuntimeError } from "@/lib/assistant-runtime/ports";
 import {
   appendAssistantTurn,
+  bindThreadContainerIfUnbound,
   createAssistantThread,
   getAssistantThread,
   touchAssistantThread,
   updateAssistantTurn,
+  type ThreadContainer,
 } from "@/lib/assistant-thread-store";
 import {
   isActorTeamMemberForChat,
@@ -157,6 +159,23 @@ export async function streamAgUiChatTurn(params: {
   /** From the caller's `authorizeThreadForTurn` result. */
   mirrorOrgId: string | null;
   needsStructuredRow: boolean;
+  /**
+   * The SERVER-RESOLVED container this turn's thread is homed in
+   * (cinatra#2650) — the thread's `assistant_package` (+ optional instance
+   * scope) from its first persisted moment.
+   *
+   * The CALLER owns the resolution and every gate on it: the cookie-session
+   * branch re-resolves the client's assertion through the actor's
+   * audience+instance authority (`resolveChatContainerForCurrentActor`,
+   * 404-hiding a refusal); the broker-auth widget branch takes it from its
+   * already server-verified principal and IGNORES anything the embed says.
+   * Nothing client-named ever reaches this harness.
+   *
+   * This is the thread's CONTAINER, deliberately NOT the turn's PRODUCER: a
+   * `@mention` answers one turn without re-homing the conversation (see the
+   * bind-at-creation section of assistant-thread-store.ts).
+   */
+  container: ThreadContainer;
   /** Resolved caller identity (owner claim + create-race reauthorization). */
   userId: string;
   isAdmin: boolean;
@@ -173,18 +192,35 @@ export async function streamAgUiChatTurn(params: {
    */
   mintResumeToken?: (runId: string) => string | null;
 }): Promise<Response> {
-  const { request, threadId, mirrorOrgId, needsStructuredRow, userId, isAdmin, runProducer } =
+  const { request, threadId, mirrorOrgId, needsStructuredRow, userId, isAdmin, runProducer, container } =
     params;
 
   // Bind the turn BEFORE the run starts so the resume route can authorize a
   // reconnect that races the very first events.
+  //
+  // cinatra#2650 — the CONTAINER is recorded here too, and it is recorded with
+  // the row's FIRST PERSIST, never with the turn's success: a first turn that
+  // fails after this point still leaves a bound thread.
+  //
+  // TWO ORDERINGS, BOTH BIND. The /chat client fires its thread save UNAWAITED
+  // and BEFORE it routes or streams ("Always persist the user message
+  // immediately — before routing, before LLM call", chat-page.tsx), so in the
+  // field the legacy-mirror upsert usually INSERTs the row first and this turn
+  // sees `needsStructuredRow === false`. Binding only inside the create arm
+  // would therefore bind almost nothing in production. So: the create arm binds
+  // as part of its atomic INSERT (no separate write to fail, no window), and
+  // every other path falls through to ONE conditional set-once bind below.
+  let createdHere = false;
   if (needsStructuredRow) {
     try {
       createAssistantThread({
         id: threadId,
         ownerUserId: userId,
         orgId: mirrorOrgId,
+        assistantPackage: container.assistantPackage,
+        instanceId: container.instanceId,
       });
+      createdHere = true;
     } catch {
       // Lost a create race (the legacy save's mirror or a concurrent turn).
       // The absence check was TOCTOU — RE-AUTHORIZE against the row that
@@ -201,6 +237,25 @@ export async function streamAgUiChatTurn(params: {
         return Response.json({ error: "Forbidden" }, { status: 403 });
       }
     }
+  }
+  if (!createdHere) {
+    // The row pre-existed this request (the mirror won the race — the field's
+    // normal ordering — or the thread is simply older). ONE conditional
+    // SET-ONCE bind, owner-scoped with NO admin bypass, re-asserting the whole
+    // predicate in its own WHERE clause.
+    //
+    // EVERY outcome PROCEEDS, deliberately. A refusal (another owner's unbound
+    // row under an admin, a foreign org, a team thread, a slug already taken in
+    // the target container) leaves the row EXACTLY as unbound as it is without
+    // this change — the state #2649's read-side alias and best-effort repair
+    // already address — while failing the turn would break a working chat
+    // message for a row this change did not create and cannot improve. And an
+    // already-bound thread is simply left in the home it has: a later turn under
+    // a different assistant is a PRODUCER change, never a re-homing.
+    //
+    // Nothing downstream reads the outcome; it is typed so the decision table is
+    // testable and so a future caller cannot mistake a refusal for a bind.
+    bindThreadContainerIfUnbound(threadId, container, { userId, orgId: mirrorOrgId });
   }
   const runId = randomUUID();
   const turn = appendAssistantTurn({
