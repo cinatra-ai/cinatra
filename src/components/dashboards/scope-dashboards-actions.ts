@@ -8,6 +8,16 @@
  * actor and RE-AUTHORIZES: the render gate cannot protect a later invocation
  * after an org switch. Fail-closed (a missing session / cross-tenant scope is a
  * denial, never a widen).
+ *
+ * Lives beside the components that bind it (cinatra#2474 item 6). It was written
+ * under `src/app/dashboards/` while the workspace-wide `/dashboards` directory
+ * page still occupied that folder; #2058 retired that page and #2474 PR2 folded
+ * this collection onto the entity landings, leaving the module colocated with a
+ * route that no longer exists and making `src/components/**` import out of
+ * `src/app/**`. Its consumers — `scope-dashboards-section.tsx` and
+ * `scope-reference-binding.ts` — are here, so it is here (the repo's
+ * `src/components/data-safety/*-actions.ts` precedent). PATH ONLY: the
+ * re-resolution and tenant fence below are unchanged.
  */
 import { getActorContext } from "@/lib/auth-session";
 import type {

@@ -14,7 +14,7 @@
  *      the column and its CHECK, while every other column and every row survives
  *      byte-identical;
  *   3. NO VERDICT CHANGE — the acceptance property. The canonical READ verdict
- *      (via `filterReadableDashboards`, the /dashboards list consumer, which
+ *      (via `filterReadableDashboards`, the app-side dashboard adapter, which
  *      wraps the real resolver plus the project-grant gate) for every (row,
  *      actor) pair is computed from rows SELECTed out of the real table BEFORE
  *      the drop and again AFTER it: the two matrices must be identical, which is
@@ -36,7 +36,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { connect, createTestSchema, dropSchema } from "./_fixture";
-// The CANONICAL /dashboards list consumer — it wraps the real
+// The CANONICAL app-side dashboard read adapter — it wraps the real
 // `resolveDashboardAccess` plus the project-grant gate, so a verdict computed
 // here is the verdict the product surface computes.
 import {
@@ -166,7 +166,7 @@ function grantsFor(name: string) {
 }
 
 /** The full (row × actor) READ verdict matrix, computed off REAL rows through
- *  the canonical list consumer. */
+ *  the canonical read adapter. */
 function verdictMatrix(rows: Record<string, unknown>[]): Record<string, string> {
   const out: Record<string, string> = {};
   const resolverRows = rows.map(toResolverRow);

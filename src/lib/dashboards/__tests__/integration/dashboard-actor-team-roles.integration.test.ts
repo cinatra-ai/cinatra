@@ -2,7 +2,7 @@
  * cinatra#1988 (updated for the #1898 Phase-2 ACL cutover) — the shared
  * dashboards session→actor builder must thread `teamRoles` + `teamIds`, so the
  * REAL resolver recognizes a team admin as an OWNER and a team member as a
- * MEMBER of a team-owned dashboard on the /dashboards list surface.
+ * MEMBER of a team-owned dashboard when the app-side adapter resolves it.
  *
  * REAL-STORE regression. It drives the shared builder END-TO-END: the team
  * membership + role is resolved from REAL, SEEDED store data via the REAL
@@ -10,7 +10,7 @@
  * Vitest stub of `@/lib/better-auth-db` that returns an empty membership list),
  * and the produced actor is passed through the REAL adapter (`toDashboardActor`)
  * and the REAL resolver (`resolveDashboardAccess`) via the canonical /dashboards
- * list consumer `filterReadableDashboards`.
+ * app-side adapter `filterReadableDashboards`.
  *
  * Phase-2 (cinatra#1898): a dashboard is ALWAYS visible to everyone in its scope,
  * so BOTH the team admin AND the plain team member READ a team-owned row (the
@@ -146,9 +146,9 @@ function teamRow(): DashboardArtifactRow & { visibility: string } {
   };
 }
 
-/** The canonical /dashboards list read verdict for a session user + row, via the
+/** The canonical dashboard READ verdict for a session user + row, via the
  *  shared-builder actor through the REAL adapter + resolver. */
-async function canReadViaList(
+async function canReadViaResolver(
   userId: string,
   row: DashboardArtifactRow,
 ): Promise<boolean> {
@@ -259,17 +259,17 @@ describe.skipIf(!HAS_REAL_DB)(
     }, 120_000);
 
     it("team ADMIN reads a team-owned dashboard (owner)", async () => {
-      expect(await canReadViaList(ADMIN_USER, teamRow())).toBe(true);
+      expect(await canReadViaResolver(ADMIN_USER, teamRow())).toBe(true);
     });
 
     it("WIDENED: plain team MEMBER now reads the team-owned dashboard (was owner-only)", async () => {
       // Phase-2 (#1898): everyone in the team scope reads — the retired
       // 'private'/'owners' vocabulary no longer restricts a member's read.
-      expect(await canReadViaList(MEMBER_USER, teamRow())).toBe(true);
+      expect(await canReadViaResolver(MEMBER_USER, teamRow())).toBe(true);
     });
 
     it("a STRANGER (no team, no org membership) is still denied read", async () => {
-      expect(await canReadViaList(STRANGER_USER, teamRow())).toBe(false);
+      expect(await canReadViaResolver(STRANGER_USER, teamRow())).toBe(false);
     });
 
     it("the shared builder actually threads teamRoles + teamIds from the real store (admin='admin', member='member')", async () => {
