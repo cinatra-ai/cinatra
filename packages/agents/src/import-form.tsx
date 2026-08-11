@@ -6,7 +6,6 @@ import { FileIcon, Trash2Icon, CloudUploadIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -34,14 +33,11 @@ import {
   type AgentAuthPolicyVisibility,
 } from "./auth-policy-types";
 
-// Same draft panel that the GitHub install form uses, mounted
-// on the ZIP upload tab so admins can capture upload-time policy +
-// co-owners for the new agent_template before it's registered.
-import {
-  PermissionsFormDraft,
-  type PermissionsFormDraftValue,
-} from "@/components/permissions-form-draft";
-import { searchExtensionCoOwnerCandidates } from "@cinatra-ai/extensions/permissions-actions";
+// The permissions draft SHAPE is shared with the GitHub install form; the
+// advanced ownership PANEL itself was removed from this form (cinatra#2643
+// review round — ownership is managed post-upload on the extension's own
+// permissions surface).
+import type { PermissionsFormDraftValue } from "@/components/permissions-form-draft";
 import type { AvailableScopes } from "@/components/access-combobox";
 import { toast } from "@/lib/cinatra-toast";
 
@@ -61,7 +57,6 @@ import {
 type AgentPreview = {
   name: string;
   description: string | null;
-  status: string;
   sourceNl: string;
   zipBase64: string;
   fileName: string;
@@ -73,7 +68,12 @@ async function parseZipFile(file: File): Promise<AgentPreview> {
   const resolved = resolveAgentArchive(entries);
 
   if (resolved.manifestJson) {
-    const m = JSON.parse(resolved.manifestJson) as { version?: number };
+    let m: { version?: number };
+    try {
+      m = JSON.parse(resolved.manifestJson) as { version?: number };
+    } catch {
+      throw new Error("Invalid archive: manifest.json is not valid JSON.");
+    }
     if (m.version !== 1) throw new Error(`Unsupported manifest version: ${m.version}`);
   }
 
@@ -104,7 +104,6 @@ async function parseZipFile(file: File): Promise<AgentPreview> {
   return {
     name: agent.name ?? "Unnamed Agent",
     description: agent.description ?? null,
-    status: agent.status ?? "draft",
     sourceNl: agent.sourceNl ?? "",
     zipBase64: bytesToBase64(canonical),
     fileName: file.name,
@@ -123,12 +122,12 @@ export function ImportAgentForm({
   const [nameOverride, setNameOverride] = useState("");
   const [isPending, startTransition] = useTransition();
 
-  // Upload-time permissions state. The ACCESS half renders first-class in
-  // this form (the checkbox multi-select scope picker); the advanced panel
-  // behind the disclosure adds the OWNERSHIP half (co-owners) and shares the
-  // same draft state. The captured policy + co-owner ids are threaded into
-  // importAgentTemplate's `permissions` option on every submit.
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  // Upload-time permissions state: the ACCESS half only (the checkbox
+  // multi-select scope picker). The advanced OWNERSHIP panel was removed
+  // (cinatra#2643 review round), so coOwners stays empty here; ownership is
+  // managed post-upload on the extension's own permissions surface. The
+  // captured policy rides importAgentTemplate's `permissions` option on
+  // every submit.
   const [permissionsDraft, setPermissionsDraft] = useState<PermissionsFormDraftValue>({
     policy: {
       runListVisibility: ["owner"],
@@ -185,6 +184,16 @@ export function ImportAgentForm({
 
   const fileStatus = dropzone.fileStatuses[0];
   const preview = fileStatus?.status === "success" ? fileStatus.result : null;
+  const hasFile = dropzone.fileStatuses.length > 0;
+
+  // Cancel: clear the selected file and the name override, returning the
+  // form to the "Select an extension package" picker state.
+  const handleCancel = () => {
+    setNameOverride("");
+    for (const file of dropzone.fileStatuses) {
+      void dropzone.onRemoveFile(file.id);
+    }
+  };
 
   async function runImport(zipBase64: string, licenseAcknowledged = false) {
     setLicenseRejectError(null);
@@ -267,15 +276,20 @@ export function ImportAgentForm({
         <div className="flex justify-end">
           <DropzoneMessage />
         </div>
-        <DropZoneArea className="border-none bg-transparent p-0 shadow-none ring-0 focus-visible:ring-0">
-          <DropzoneTrigger className="flex flex-col items-center gap-4 p-8 text-center text-sm w-full">
-            <CloudUploadIcon className="h-8 w-8 text-muted-foreground" />
-            <div>
-              <p className="font-medium text-foreground">Select an extension package</p>
-              <p className="text-xs text-muted-foreground mt-1">Click here or drag and drop</p>
-            </div>
-          </DropzoneTrigger>
-        </DropZoneArea>
+        {/* The picker hides once a file is selected; Cancel (or removing the
+            file) brings it back. After a successful upload the form navigates
+            to /configuration/extensions, so a fresh mount shows it again. */}
+        {!hasFile && (
+          <DropZoneArea className="border-none bg-transparent p-0 shadow-none ring-0 focus-visible:ring-0">
+            <DropzoneTrigger className="flex flex-col items-center gap-4 p-8 text-center text-sm w-full">
+              <CloudUploadIcon className="h-8 w-8 text-muted-foreground" />
+              <div>
+                <p className="font-medium text-foreground">Select an extension package</p>
+                <p className="text-xs text-muted-foreground mt-1">Click here or drag and drop</p>
+              </div>
+            </DropzoneTrigger>
+          </DropZoneArea>
+        )}
 
         <DropzoneFileList className="flex flex-col gap-3 mt-2">
           {dropzone.fileStatuses.map((file) => (
@@ -286,9 +300,6 @@ export function ImportAgentForm({
                   <p className="truncate text-sm font-medium text-foreground">{file.fileName}</p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  {file.status === "success" && file.result && (
-                    <Badge variant="outline" className="text-xs">{file.result.status}</Badge>
-                  )}
                   <DropzoneRemoveFile
                     type="button"
                     aria-label="Remove file"
@@ -352,50 +363,6 @@ export function ImportAgentForm({
         </div>
       )}
 
-      {/* Advanced ownership controls. Hidden by default; when opened,
-          captures co-owner picks that importAgentTemplate seeds into the
-          polymorphic permission tables for the new agent_template. Access
-          renders first-class above and shares the same draft state. */}
-      {availableScopes && (
-        <div className="flex flex-col gap-3">
-          <Separator className="my-1" />
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="self-start text-xs text-muted-foreground hover:text-foreground"
-            onClick={() => setAdvancedOpen((prev) => !prev)}
-            disabled={isPending}
-          >
-            {advancedOpen
-              ? "Hide ownership"
-              : "Configure ownership (advanced)"}
-          </Button>
-          {advancedOpen && (
-            <PermissionsFormDraft
-              value={permissionsDraft}
-              onChange={setPermissionsDraft}
-              // Access renders first-class in this form above; the advanced
-              // panel contributes only the Ownership half. Both share the
-              // same draft state, so there is exactly one source of truth.
-              showAccess={false}
-              availableScopes={availableScopes}
-              searchCandidates={async (q, page) => {
-                const result = await searchExtensionCoOwnerCandidates(
-                  "agent_template",
-                  null,
-                  q,
-                  page,
-                );
-                if (!result.ok) return { ok: false, error: result.error };
-                return { ok: true, results: result.results, hasMore: result.hasMore };
-              }}
-              disabled={isPending}
-            />
-          )}
-        </div>
-      )}
-
       {/* License reject inline error. */}
       {licenseRejectError && (
         <Alert variant="destructive">
@@ -404,9 +371,21 @@ export function ImportAgentForm({
         </Alert>
       )}
 
-      <Button type="submit" disabled={!preview || isPending}>
-        {isPending ? "Uploading..." : "Upload (.zip)"}
-      </Button>
+      <div className="flex items-center gap-2">
+        <Button type="submit" className="flex-1" disabled={!preview || isPending}>
+          {isPending ? "Uploading..." : "Upload (.zip)"}
+        </Button>
+        {hasFile && (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleCancel}
+            disabled={isPending}
+          >
+            Cancel
+          </Button>
+        )}
+      </div>
 
       {/* Copyleft license acknowledgement dialog. */}
       {licenseDialog && (

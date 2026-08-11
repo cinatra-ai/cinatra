@@ -84,14 +84,25 @@ export async function readZipEntries(buf: ArrayBuffer): Promise<Map<string, Uint
     const extraLen = view.getUint16(pos + 30, true);
     const commentLen = view.getUint16(pos + 32, true);
     const localHeaderOffset = view.getUint32(pos + 42, true);
+    // Bounds checks: a truncated or crafted archive must fail with a real
+    // reason, not a RangeError from an out-of-bounds typed-array view.
+    if (pos + 46 + filenameLen > len) {
+      throw new Error("Invalid archive: truncated ZIP central directory.");
+    }
     const filename = td.decode(new Uint8Array(buf, pos + 46, filenameLen));
     pos += 46 + filenameLen + extraLen + commentLen;
 
     if (filename.endsWith("/")) continue; // directory entry
 
+    if (localHeaderOffset + 30 > len) {
+      throw new Error(`Invalid archive: entry "${filename}" has a truncated local header.`);
+    }
     const lfhFilenameLen = view.getUint16(localHeaderOffset + 26, true);
     const lfhExtraLen = view.getUint16(localHeaderOffset + 28, true);
     const dataOffset = localHeaderOffset + 30 + lfhFilenameLen + lfhExtraLen;
+    if (dataOffset + compressedSize > len) {
+      throw new Error(`Invalid archive: entry "${filename}" is truncated.`);
+    }
     const raw = new Uint8Array(buf, dataOffset, compressedSize);
 
     if (method === 0) {

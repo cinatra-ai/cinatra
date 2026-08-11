@@ -320,6 +320,23 @@ describe("malformed archives", () => {
     ).rejects.toThrow(/no agent definition found/);
   });
 
+  it("rejects a truncated archive with a real reason (no RangeError)", async () => {
+    // Keep the EOCD readable but cut into an entry's data: build a valid zip,
+    // then overwrite the first entry's central-directory size field to point
+    // past the end of the buffer.
+    const buf = Buffer.from(new Uint8Array(storedZip([{ name: "agent.json", content: OAS_FLOW }])));
+    const sig = buf.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+    buf.writeUInt32LE(0x7fffffff, sig + 20); // compressedSize far beyond the buffer
+    await expect(readZipEntries(toArrayBuffer(buf))).rejects.toThrow(/entry "agent\.json" is truncated/);
+  });
+
+  it("rejects a central directory whose local header offset points past the end", async () => {
+    const buf = Buffer.from(new Uint8Array(storedZip([{ name: "agent.json", content: OAS_FLOW }])));
+    const sig = buf.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+    buf.writeUInt32LE(0x7fffffff, sig + 42); // localHeaderOffset beyond the buffer
+    await expect(readZipEntries(toArrayBuffer(buf))).rejects.toThrow(/truncated local header/);
+  });
+
   it("rejects unparseable package.json", async () => {
     await expect(
       resolve(storedZip([
