@@ -314,6 +314,17 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "packages/agents/src/orchestrator-execution.ts",
       "packages/agents/src/run-actions.ts",
       "packages/agents/src/trigger-release-job.ts",
+      // cinatra#2569 (epic #2564 S5) — the conversational schedule proposal's
+      // install DRAIN. It arms a confirmed proposal's run (`pending_input →
+      // armed`) BEFORE exposing its schedule, which is the whole point of the
+      // slice: exposing first lets a release fire on a not-armed run, where the
+      // `armed → queued` CAS logs and skips and a one-shot fire is lost. It
+      // cannot route through `trigger-service.ts` for that arm, because that
+      // module's own order is expose-then-arm. It threads a member-session
+      // authority minted host-side (`verifySessionAuthority`) exactly as its
+      // sibling trigger callers do, and its IMMEDIATE arm delegates whole to
+      // `setRunTriggerForActor` rather than transitioning itself.
+      "packages/agents/src/trigger-schedule-proposal-service.ts",
       "packages/agents/src/trigger-service.ts",
       "src/lib/host-content-editor-dispatch.ts",
       // opaque store.ts / agents-barrel accessors (also on updateAgentRunStatus):
@@ -410,6 +421,14 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "packages/agents/src/index.ts",
       "packages/agents/src/run-actions.ts",
       "packages/agents/src/trigger-release-job.ts",
+      // cinatra#2569 (epic #2564 S5) — the schedule proposal's CONFIRM. This is
+      // the run-creating half of a one-transaction commit: the writer's
+      // `withinCreateTx` hook carries the single-use proposal consume edge and
+      // the schedule-install intent INSIDE this same guarded transaction, so a
+      // second Confirm loses the consume insert and the run it was creating
+      // rolls back with it. Splitting the writes across transactions is exactly
+      // what this caller exists to avoid.
+      "packages/agents/src/trigger-schedule-proposal-service.ts",
       // opaque store.ts / agents-barrel accessors (also on
       // transitionRunStatus/updateAgentRunStatus):
       "src/app/plugins-registry.tsx",

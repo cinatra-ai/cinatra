@@ -494,6 +494,12 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   // Same authority as its review sibling above: the producing RUN's read
   // access. Read-only and ref-only; the card carries no decision axis at all.
   verification_record_render: { resourceType: "agent_run", action: "read", status: "enforced" },
+  // cinatra#2569 (epic #2564 S5) — the schedule PROPOSAL producer. Classified
+  // READ because that is what it does: it mints a card from a template the
+  // caller may already reach and writes nothing. The WRITE half of scheduling
+  // (confirmScheduleProposal) is a browser session action, not an MCP
+  // primitive, so it has no inventory entry here by design.
+  schedule_proposal_render: { resourceType: "agent_run", action: "read", status: "enforced" },
 
   // ───── wordpress (connector_instance) ─────
   wordpress_content_editor_run:    { resourceType: "connector_instance", action: "execute", status: "enforced" },

@@ -112,6 +112,22 @@ const ALLOWED_EXACT = new Set<string>([
   "artifact_review_gate_render",
   "verification_record_render",
 
+  // cinatra#2569 (epic #2564 S5) — the schedule PROPOSAL producer. Read-only in
+  // exactly the sense the three above are: it mints an opaque, expiring
+  // proposal token and returns a card envelope. It creates no run, writes no
+  // trigger row and arms no schedule; §VI's "nothing exists until the reader
+  // confirms" is enforced by there being no chat-reachable primitive that
+  // confirms — Confirm is a browser session action, and the `confirm`/`arm`/
+  // `trigger` verb tokens below keep that whole class unreachable even if a
+  // future edit put such a name on this allowlist.
+  //
+  // The NAME is load-bearing for that guarantee. A propose primitive called
+  // `agent_run_trigger_propose` would carry the `trigger` token and need an
+  // ALLOWED_PROPOSAL_OVERRIDE entry to reach chat at all — i.e. it would have
+  // to bypass the backstop that makes this safe. This one carries no denied
+  // token and needs no override.
+  "schedule_proposal_render",
+
   // Read-only cost + usage observability. The
   // user asks the chat "how much has this org spent on LLM this week?" —
   // today that requires manual cube-discovery hops. These 10 primitives

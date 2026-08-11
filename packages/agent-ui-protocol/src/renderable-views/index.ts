@@ -60,6 +60,10 @@ export * from "./change-history";
 // The lifecycle CARD registry (cinatra#2565): the interaction kinds, the states
 // §IV fixes, the §IX presence matrix, and the three ref-only DATA_PART payloads.
 export * from "./lifecycle-cards";
+// The trigger schedule PROPOSAL body (cinatra#2569): §VI's option rows and the
+// settled trigger chrome. Not a DATA_PART payload — the wire payload stays a
+// ref; this is the shape the authoritative refetch answers the card's body with.
+export * from "./trigger-schedule-proposal-view";
 
 /**
  * The registered renderable-view schemas keyed by `viewType`. The key MUST
