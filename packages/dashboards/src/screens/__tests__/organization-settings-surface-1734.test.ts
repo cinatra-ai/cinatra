@@ -68,4 +68,14 @@ describe("settings screen hosts both surfaces (#1734)", () => {
   it("pins the Settings crumb leaf (teams pattern)", () => {
     expect(SETTINGS).toContain('label: "Settings"');
   });
+
+  it("carries no back-to-organization header button — the tablist's Dashboards entry is the way back (cinatra#2666)", () => {
+    // The header button duplicated the always-present Dashboards tab (same
+    // href). The tablist is the intended navigation; the header keeps only
+    // the org title + lifecycle badge.
+    expect(SETTINGS).toContain("<EntityScopeTabs");
+    expect(SETTINGS).toContain("dashboardsHref={`/organizations/${encodeURIComponent(id)}`}");
+    expect(SETTINGS).not.toContain("Back to organization");
+    expect(SETTINGS).not.toContain("ArrowLeft");
+  });
 });

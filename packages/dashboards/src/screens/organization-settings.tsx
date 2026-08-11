@@ -17,16 +17,13 @@
  * capability check, never speculatively.
  */
 import "server-only";
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { eq, sql } from "drizzle-orm";
-import { ArrowLeft } from "lucide-react";
 
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
 import { EntityScopeTabs } from "@/components/entity-scope-tabs";
-import { Button } from "@/components/ui/button";
 import { LifecycleBadge } from "@/components/lifecycle-badge";
 import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
 import { CrumbContributions } from "@/components/crumb-contributions";
@@ -192,17 +189,7 @@ export async function OrganizationSettingsPage({
         title={orgName || "Organization"}
         description="Who has access to this organization, and its management controls."
         divider={false}
-        actions={
-          <div className="flex items-center gap-2">
-            {isArchived ? <LifecycleBadge status="archived" /> : null}
-            <Button asChild variant="outline">
-              <Link href={`/organizations/${encodeURIComponent(id)}`}>
-                <ArrowLeft data-icon="inline-start" aria-hidden="true" />
-                Back to organization
-              </Link>
-            </Button>
-          </div>
-        }
+        actions={isArchived ? <LifecycleBadge status="archived" /> : null}
       />
       <PageContent className="flex flex-col gap-6 pb-8">
         {/* The entity-page tablist: this Settings pane is the second tab (spec
