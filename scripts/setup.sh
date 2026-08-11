@@ -206,6 +206,26 @@ until curl -sf http://127.0.0.1:3003/health >/dev/null 2>&1; do
 done
 info "Nango is ready."
 
+# ── WayFlow bridge-token env (cinatra#2075, #2654) ───────────────────────────
+# The shared `wayflow` agent-runtime container authenticates every callback to
+# /api/llm-bridge with CINATRA_BRIDGE_TOKEN, which it reads from the NARROW
+# generated file docker/wayflow/.wayflow.env (its `env_file`, `required:
+# false`). `npm run services` regenerates that file on every bring-up
+# (gen-wayflow-env.mjs); the setup path once did not, so a fresh `make
+# setup-demo` started wayflow with NO token and agent_loader.py crash-looped
+# ("FATAL: CINATRA_BRIDGE_TOKEN is unset or empty") — widget agent replies then
+# stayed empty until the token was populated by hand (cinatra#2075).
+#
+# Generate the file on EVERY install (not only demo), from the per-install
+# random token minted into .env.local above (never a shared constant, never
+# printed). The runtime is profile-gated and a dev install does not start it
+# here, but the file must already be correct the moment the operator runs
+# `cinatra instance wayflow start` (#2654). `--require-bridge-token` mirrors
+# `npm run services` and turns a missing token into a loud, actionable failure
+# instead of a silent 403.
+info "Provisioning the WayFlow bridge-token env (docker/wayflow/.wayflow.env) from .env.local..."
+node scripts/gen-wayflow-env.mjs --require-bridge-token
+
 # ── Demo app profiles (cinatra#1238) ─────────────────────────────────────────
 # On a demo install, bring up the four bundled app profiles and wait for each to
 # answer. Their connectors' dev-auto-setup hooks converge a live connection to
@@ -218,21 +238,8 @@ info "Nango is ready."
 if [ "$DEMO" = "1" ]; then
   # The `wordpress` + `drupal` profiles below ALSO bring up the shared `wayflow`
   # runtime container (docker-compose.yml: the wayflow service declares
-  # `profiles: [wayflow, drupal, wordpress]`). That container authenticates every
-  # callback to /api/llm-bridge with CINATRA_BRIDGE_TOKEN, which it reads from the
-  # NARROW generated file docker/wayflow/.wayflow.env (its `env_file`,
-  # `required: false`). `npm run services` regenerates that file on every
-  # bring-up (gen-wayflow-env.mjs); the demo/setup path never did, so a fresh
-  # `make setup-demo` started wayflow with NO token and agent_loader.py
-  # crash-looped ("FATAL: CINATRA_BRIDGE_TOKEN is unset or empty") — widget agent
-  # replies then stayed empty until the token was populated by hand
-  # (cinatra#2075). Generate the file HERE, from the per-install random token
-  # minted into .env.local above (never a shared constant, never printed), BEFORE
-  # the bring-up. `--require-bridge-token` mirrors `npm run services` and turns a
-  # missing token into a loud, actionable failure instead of a silent 403.
-  info "Provisioning the WayFlow bridge-token env (docker/wayflow/.wayflow.env) from .env.local..."
-  node scripts/gen-wayflow-env.mjs --require-bridge-token
-
+  # `profiles: [wayflow, drupal, wordpress]`); its bridge-token env file was
+  # generated above.
   info "Bringing up the four demo app profiles (wordpress, drupal, twenty, plane)..."
   docker compose -f docker-compose.yml -f docker-compose.dev.yml \
     --profile wordpress --profile drupal --profile twenty --profile plane up -d
@@ -466,6 +473,12 @@ echo "  Stop infra:       docker compose down"
 echo ""
 echo "  The first user to register becomes the admin."
 echo "  After that, you can (re-)load sample data with: pnpm seed"
+echo ""
+echo "  Agent runtime: agent runs execute in the WayFlow container (:3010)."
+echo "  It is profile-gated and does NOT start by default: agent runs fail"
+echo "  with ECONNREFUSED until you start it:"
+echo "      cinatra instance wayflow start"
+echo "  (or: docker compose --profile wayflow up -d --build wayflow)"
 echo ""
 echo "  Knowledge graph: after you connect OpenAI in the app (/configuration/llm),"
 echo "  run 'npm run kg:refresh' to hand that key to the indexer container."

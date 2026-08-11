@@ -33,6 +33,20 @@
  * listed, so it must leave the pool), and the owner closes the popup and
  * refreshes the collection panel — the behaviour the standalone picker had, kept
  * (codex convergence).
+ *
+ * BELOW THE SEARCH FIELD: REAL DASHBOARDS ONLY (owner review on cinatra#2474
+ * PR5, PR #2638). This section used to paint two grey placeholder blocks while
+ * the candidate pool loaded, and a dashed panel when the pool came back empty or
+ * the search matched nothing. The owner read those as "empty cards" and asked for
+ * them to go: only actually-listable dashboards may render under the field, and
+ * nothing at all when there are none. So the placeholder skeletons and the dashed
+ * empty panel are removed, and the closed data-state set §IX.1 specifies (empty ·
+ * error · loading) moved from three placeholder panels onto the section ROOT,
+ * where it is still machine-readable without painting anything.
+ *
+ * The one thing that still draws: a LOAD FAILURE. It renders as a plain line of
+ * text, not a card — suppressing it would turn "we could not read your
+ * dashboards" into "you have none", which is a different and false statement.
  */
 import { useEffect, useState } from "react";
 import { Search } from "lucide-react";
@@ -40,7 +54,6 @@ import { toast } from "@/lib/cinatra-toast";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   SCOPE_LISTING_REASON_COPY,
   type AddPickerCandidateView,
@@ -129,10 +142,27 @@ export function ScopeReferenceSection({
         )
       : [];
 
+  /**
+   * §IX.1's closed data-state set (empty · error · loading), carried by the
+   * section ROOT — one attribute, no placeholder panel. `null` (no attribute at
+   * all) is the populated case: the spec names no state for it here, so the
+   * section invents none. Nothing but `visible.length > 0` paints a row.
+   */
+  const sectionState: "loading" | "error" | "empty" | null =
+    state.status === "loading"
+      ? "loading"
+      : state.status === "error"
+        ? "error"
+        : visible.length === 0
+          ? "empty"
+          : null;
+
   return (
     <div
       data-conformance-id="scope-dashboards-add-picker"
       data-field="candidate=collectionAdd.listable"
+      data-state={sectionState ?? undefined}
+      aria-busy={sectionState === "loading" || undefined}
       className="flex flex-col gap-2.5"
     >
       {/* Search your dashboards (§IX.1). */}
@@ -151,28 +181,18 @@ export function ScopeReferenceSection({
         />
       </div>
 
-      {state.status === "loading" ? (
-        <div data-state="loading" className="grid gap-2" aria-busy>
-          <Skeleton className="h-10 rounded-md" />
-          <Skeleton className="h-10 rounded-md opacity-70" />
-        </div>
-      ) : state.status === "error" ? (
-        <div
-          data-state="error"
-          className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-4 text-center text-xs font-semibold text-foreground"
-        >
+      {/* A LOAD FAILURE is the one non-dashboard thing that may draw here, and
+          it draws as a line of text rather than a panel — see the file header. */}
+      {sectionState === "error" ? (
+        <p className="text-xs font-semibold text-destructive">
           Couldn’t load your dashboards
-        </div>
-      ) : state.status === "empty" || visible.length === 0 ? (
-        <div
-          data-state="empty"
-          className="rounded-md border border-dashed border-line px-3 py-5 text-center text-xs text-muted-foreground"
-        >
-          {state.status === "empty"
-            ? "No dashboards you can add to this scope."
-            : "No dashboards match your search."}
-        </div>
-      ) : (
+        </p>
+      ) : null}
+
+      {/* Real, listable dashboards ONLY. While the pool loads, while it comes
+          back empty, and while the search matches nothing, this renders NOTHING
+          — no skeleton, no dashed panel, no card of any kind. */}
+      {visible.length > 0 ? (
         <ul className="overflow-hidden rounded-lg border border-line">
           {visible.map((candidate) => (
             <CandidateRow
@@ -184,7 +204,7 @@ export function ScopeReferenceSection({
             />
           ))}
         </ul>
-      )}
+      ) : null}
     </div>
   );
 }

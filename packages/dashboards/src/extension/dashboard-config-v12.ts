@@ -141,3 +141,47 @@ export function validateDashboardConfigV12(
   if (errors.length > 0) return { ok: false, code: "dashboard_config_invalid", errors };
   return { ok: true, config };
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// The MATERIALIZED TEMPLATE ROW's identity rules (cinatra#2474 PR5).
+//
+// They live here, beside the config vocabulary they speak, for two reasons:
+//
+//   1. a caller that must decide "is this stored template row still the pack's
+//      CURRENT declaration?" needs the name the reconcile WOULD write and the
+//      `template_scope` it WOULD stamp — and asking `mutation-service.ts` (or
+//      its `extension-materialization` barrel) for them means importing a
+//      module that carries org-write WRITERS. The boundary gate refuses that,
+//      correctly: an opaque import of a writer-bearing module reaches every
+//      writer in it without naming one.
+//   2. `materializeExtensionTemplate` imports THIS module already, so there is
+//      exactly one definition of each rule and no new edge in any route graph.
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * The NAME a materialized template row carries for `extensionId`, given the
+ * pack's optional declared display name. The materializer's own rule.
+ */
+export function extensionTemplateRowName(extensionId: string, name?: string): string {
+  return name ?? `${extensionId} dashboard`;
+}
+
+/**
+ * The `template_scope` a materialized row would be stamped with for `config` —
+ * the config's own VALIDATED `scopeLevel`, read exactly as the materializer
+ * reads it.
+ *
+ * `null` when the config does not validate, which is the fail-closed answer: an
+ * unvalidatable declaration has no scope, and a caller must not fall back to a
+ * stored row's cached one.
+ */
+export function extensionTemplateScope(
+  config: unknown,
+  getPortletKind?: PortletKindLookup,
+): string | null {
+  const result = validateDashboardConfigV12(
+    config,
+    getPortletKind ? { getPortletKind } : {},
+  );
+  return result.ok ? result.config.scopeLevel : null;
+}

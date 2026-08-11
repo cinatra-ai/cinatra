@@ -158,12 +158,34 @@ type ToolbarButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   asChild?: boolean;
 };
 
+// A toolbar control declares its own line-height, and that line-height is
+// `normal` — the design-system §Toolbar example writes every control's type as
+// the `font` SHORTHAND (`font:500 12.5px var(--font-sans)`), and the shorthand
+// resets `line-height` to `normal`. Reproducing only the font-SIZE
+// (`text-[12.5px]`) let Tailwind preflight's `html { line-height: 1.5 }` cascade
+// in instead, and that is not a cosmetic difference: with a NUMERIC
+// line-height Chromium positions the label's text box asymmetrically inside
+// the control (measured on the real dashboard toolbar: the label's box centre
+// landed 0.875px ABOVE the control's centre), while an icon — a plain 14px
+// flex item — is centred exactly. So every icon read ~0.9px low against its own
+// label, and the label read ~0.9px high against the toolbar's top and bottom
+// (owner review on cinatra#2474 PR5, PR #2638). With `line-height: normal` the
+// line box follows the font's OWN metrics rather than a ratio the page imposed
+// on it — CSS leaves the exact model to the UA, so this is a MEASURED result,
+// not a guarantee: on Chromium with this stack the label's box then centres on
+// the control exactly, and Inter's cap-height centre lands within 0.05px of it,
+// so icon ink, label ink, control centre and toolbar midline coincide. A font
+// whose glyphs are not centred in its own metrics would still read off; that is
+// a property of the typeface, and `normal` is the declaration that lets the
+// typeface decide. `leading-[normal]` is inherited, so it also carries to
+// <ToolbarCount> and to any label a caller nests inside a control.
+//
 // Standalone button styling for tab-as-toolbar-item and action-as-toolbar-item.
 // Per spec: hover and selected are background tints only (7px radius). Font
 // weight and color stay constant across states. Height comes from the level
 // context (34px in the primary bar, 30px inside a child toolbar).
 const TOOLBAR_BUTTON_CLASSES =
-  "inline-flex items-center gap-1.5 whitespace-nowrap rounded-[7px] px-3 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.06] data-[active=true]:bg-primary/[0.14] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50";
+  "inline-flex items-center gap-1.5 whitespace-nowrap rounded-[7px] px-3 text-[12.5px] leading-[normal] font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.06] data-[active=true]:bg-primary/[0.14] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50";
 
 function ToolbarButton({
   className,
@@ -220,7 +242,13 @@ function ToolbarSearchInput({
   return (
     <label
       className={cn(
-        "flex w-full min-w-0 items-center gap-2 rounded-[7px] bg-surface-strong px-3",
+        // `leading-[normal]` for the same reason the buttons carry it (see
+        // TOOLBAR_BUTTON_CLASSES): the spec writes the search pill's type as the
+        // `font` shorthand too, and the search glass is an icon sitting beside
+        // text in a centred flex row — the identical geometry. Preflight gives
+        // the nested <input> `font: inherit`, so declaring it here reaches the
+        // value and the placeholder as well.
+        "flex w-full min-w-0 items-center gap-2 rounded-[7px] bg-surface-strong px-3 leading-[normal]",
         TOOLBAR_CONTROL_HEIGHT[level]
       )}
     >

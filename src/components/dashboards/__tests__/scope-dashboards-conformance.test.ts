@@ -191,20 +191,31 @@ describe("§IX conformance id: scope-dashboards-write-access (the scope-write ga
     // cinatra#2474 PR4 supplies the catalog slot. The "Add dashboard" LABEL, the
     // §IX.2 annotation and the open-add-picker action must all hang off the
     // NARROW predicate (the manager-only reference source); the WIDE one
-    // (`|| catalog`) may only decide whether the popup exists at all.
+    // (`|| catalog`) may only decide whether the popup exists at all. PR5 made
+    // the catalog ACTIONABLE and this must remain true regardless.
     expect(TOOLBAR).toMatch(/const offersScopeAdd = scopeReference !== null/);
-    // cinatra#2474 PR4 supplied the catalog and NARROWED the wide predicate at
-    // the same time: the catalog counts toward the popup's existence only
-    // alongside `canCreate`, because concept B's section is browse-only until
-    // PR5's instantiate action. Both halves are locked — the catalog is still in
-    // the WIDE predicate only, and it can no longer raise a button on its own.
+    // The catalog's own predicate is NAMED (cinatra#2474 PR5) and carries the
+    // `canCreate` conjunct — no longer PR4's stand-in for "the section has
+    // nothing to press", but the catalog Add's own authorization precondition:
+    // that Add IS a create into the acting user's own collection.
     expect(TOOLBAR).toMatch(
-      /const offersUnifiedAdd =\s*\n?\s*offersScopeAdd \|\| \(scopeAdd\?\.catalog != null && canCreate\)/,
+      /const offersCatalogAdd = scopeAdd\?\.catalog != null && canCreate;/,
+    );
+    // …and it may only ever widen the popup's EXISTENCE.
+    expect(TOOLBAR).toMatch(
+      /const offersUnifiedAdd = offersScopeAdd \|\| offersCatalogAdd;/,
     );
     // The catalog appears in NO other predicate: not in the narrow one, and
     // nowhere that could reach the label, the annotation or the action.
     const catalogMentions = [...TOOLBAR.matchAll(/scopeAdd\?\.catalog/g)];
     expect(catalogMentions).toHaveLength(1);
+    // …and the SAME create authority the popup is keyed on is what the section's
+    // own Add button is gated on, so the two can never disagree: the popup
+    // cannot open on a catalog whose control it would then suppress
+    // (cinatra#2474 PR5).
+    expect(DIALOG).toMatch(
+      /<CatalogAddOutcomeProvider canAdd=\{canCreate\} onAdded=\{onCatalogAdded\}>/,
+    );
     // The annotated branch opens on `offersScopeAdd`, and everything §IX.2 owns
     // lives inside it, BEFORE the non-manager branch begins.
     const managerBranch = TOOLBAR.slice(
@@ -264,10 +275,37 @@ describe("§IX conformance id: scope-dashboards-add-picker (add to scope)", () =
     }
   });
 
-  it("covers the picker data-state set (empty · error · loading)", () => {
+  it("covers the picker data-state set (empty · error · loading) — now on the section ROOT", () => {
+    // The owner's review on cinatra#2474 PR5 (PR #2638) removed every
+    // placeholder the picker used to paint below the search field — the two
+    // loading skeletons and the dashed empty panel — because only real,
+    // listable dashboards may render there. Each of those panels used to carry
+    // one `data-state`; the closed set now rides a single `data-state` on the
+    // section root, so it is still realized and still machine-readable while
+    // painting nothing. The states are asserted here as the source's own union
+    // + expression, and by REAL RENDER in scope-reference-section.test.tsx
+    // (which reads the attribute off the rendered root in all three states).
+    expect(PICKER).toContain(
+      'const sectionState: "loading" | "error" | "empty" | null =',
+    );
     for (const state of SURFACES["scope-dashboards-add-picker"].states) {
-      expect(PICKER).toContain(`data-state="${state}"`);
+      expect(PICKER).toMatch(new RegExp(`"${state}"`));
     }
+    expect(PICKER).toContain("data-state={sectionState ?? undefined}");
+    // …and NOTHING else below the field carries a data-state panel any more.
+    expect(code(PICKER)).not.toMatch(/data-state="/);
+  });
+
+  it("renders no placeholder card below the search field (owner review, PR #2638)", () => {
+    // The regression this locks, in the code: a skeleton/placeholder block, or
+    // a dashed "nothing here" panel, coming back under the field. The list is
+    // gated on `visible.length > 0` and nothing else may paint a card.
+    const c = code(PICKER);
+    expect(c).not.toContain("Skeleton");
+    expect(c).not.toContain("border-dashed");
+    expect(c).not.toContain("No dashboards you can add to this scope.");
+    expect(c).not.toContain("No dashboards match your search.");
+    expect(PICKER).toContain("{visible.length > 0 ? (");
   });
 
   it("the promotion recourse is offered ONLY on the scope-invisible disposition, never an in-place add (render → spec)", () => {

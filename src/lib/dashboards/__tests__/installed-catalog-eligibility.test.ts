@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 
 import {
+  actorMayReachSurface,
   compareCatalogRows,
   destinationIsActorOwned,
   destinationRefForSurface,
@@ -254,5 +255,134 @@ describe("compareCatalogRows — deterministic ordering", () => {
       "t2",
       "t3",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SCOPE REACH (cinatra#2474 PR5, codex convergence r0/HIGH-1) — "may the actor
+// be on this surface at all, right now?". Each arm mirrors that landing's own
+// view gate; it can only ever NARROW what the other gates admit.
+// ---------------------------------------------------------------------------
+describe("actorMayReachSurface", () => {
+  const ORG = "org-1";
+  const base = {
+    principalType: "HumanUser",
+    principalId: "user-1",
+    organizationId: ORG,
+    orgRole: "member",
+    teamIds: ["team-a"],
+    projectGrants: [
+      { projectId: "proj-a", effectiveRole: "read", accessSource: "user" },
+    ],
+  } as unknown as ActorContextForReach;
+
+  type ActorContextForReach = Parameters<typeof actorMayReachSurface>[0];
+  const withActor = (over: Record<string, unknown>) =>
+    ({ ...base, ...over }) as unknown as ActorContextForReach;
+
+  it("admits the personal scope — the actor IS the scope", () => {
+    expect(
+      actorMayReachSurface(base, { kind: "personal", orgId: ORG, userId: "user-1" }),
+    ).toBe(true);
+  });
+
+  it("admits the organization scope only when the scope IS the tenant", () => {
+    expect(
+      actorMayReachSurface(base, {
+        kind: "organization",
+        orgId: ORG,
+        scopeId: ORG,
+        userId: "user-1",
+      }),
+    ).toBe(true);
+    expect(
+      actorMayReachSurface(base, {
+        kind: "organization",
+        orgId: ORG,
+        scopeId: "org-9",
+        userId: "user-1",
+      }),
+    ).toBe(false);
+  });
+
+  it("admits a team MEMBER and nobody else — the stated narrowing vs the landing", () => {
+    const team = {
+      kind: "team",
+      orgId: ORG,
+      scopeId: "team-a",
+      userId: "user-1",
+    } as const;
+    expect(actorMayReachSurface(base, team)).toBe(true);
+    // Removed from the team: the bound action must stop working.
+    expect(actorMayReachSurface(withActor({ teamIds: [] }), team)).toBe(false);
+    // A manager may VIEW the team landing without a membership row; this
+    // predicate deliberately does not admit them (see the module header) —
+    // membership is what proves the team still exists with no query.
+    for (const over of [
+      { teamIds: [], orgRole: "org_admin" },
+      { teamIds: [], orgRole: "org_owner" },
+      { teamIds: [], platformRole: "platform_admin" },
+    ]) {
+      expect(actorMayReachSurface(withActor(over), team)).toBe(false);
+    }
+    // A team the actor is not in, while being in another: never by proximity.
+    expect(
+      actorMayReachSurface(withActor({ teamIds: ["team-z"] }), team),
+    ).toBe(false);
+  });
+
+  it("requires a resolved MEMBERSHIP role in the tenant on every arm", () => {
+    // A removed member whose session still points at the org. Refused before any
+    // store read; the org-write kernel would refuse their insert regardless.
+    for (const surface of [
+      { kind: "personal", orgId: ORG, userId: "user-1" },
+      { kind: "team", orgId: ORG, scopeId: "team-a", userId: "user-1" },
+      { kind: "organization", orgId: ORG, scopeId: ORG, userId: "user-1" },
+      { kind: "project", orgId: ORG, scopeId: "proj-a", userId: "user-1" },
+    ] as const) {
+      expect(actorMayReachSurface(withActor({ orgRole: undefined }), surface)).toBe(
+        false,
+      );
+    }
+  });
+
+  it("admits a project only on a resolved grant (the sealed-room read gate)", () => {
+    const project = {
+      kind: "project",
+      orgId: ORG,
+      scopeId: "proj-a",
+      userId: "user-1",
+    } as const;
+    expect(actorMayReachSurface(base, project)).toBe(true);
+    expect(actorMayReachSurface(withActor({ projectGrants: [] }), project)).toBe(false);
+    // An org manager gets NO project shortcut — the sealed room has no such arm.
+    expect(
+      actorMayReachSurface(
+        withActor({ projectGrants: [], orgRole: "org_owner" }),
+        project,
+      ),
+    ).toBe(false);
+    // A grant on a DIFFERENT project is not a grant on this one.
+    expect(
+      actorMayReachSurface(
+        withActor({
+          projectGrants: [
+            { projectId: "proj-z", effectiveRole: "owner", accessSource: "user" },
+          ],
+        }),
+        project,
+      ),
+    ).toBe(false);
+  });
+
+  it("is tenant-fenced on every arm", () => {
+    for (const surface of [
+      { kind: "personal", orgId: "org-2", userId: "user-1" },
+      { kind: "team", orgId: "org-2", scopeId: "team-a", userId: "user-1" },
+      { kind: "organization", orgId: "org-2", scopeId: "org-2", userId: "user-1" },
+      { kind: "project", orgId: "org-2", scopeId: "proj-a", userId: "user-1" },
+    ] as const) {
+      expect(actorMayReachSurface(base, surface)).toBe(false);
+    }
   });
 });

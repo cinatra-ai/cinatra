@@ -3,18 +3,28 @@ import "server-only";
  * Concept B's SERVER READ — "what installed dashboard-capable extensions offer
  * this surface" (cinatra#2474 PR4, work item 4 of six).
  *
- * ── THERE IS NO CLIENT SEAM ────────────────────────────────────────────────
- * This read is taken during the entity landing's SERVER render, and its result
- * is rendered server-side into the node the landing hands the popup through
- * `ScopeAddSourcesProvider`'s `catalog` slot. PR4 exposes NO server action, so
- * there is no client-callable entry point to this read at all — the only way to
- * reach it is to render a landing whose own membership gate has already
- * admitted the actor. PR5's instantiate action is the first client-reachable
- * surface concept B gets, and it must re-authorize from scratch.
+ * ── WHO REACHES THIS, AND HOW (updated by cinatra#2474 PR5) ────────────────
+ * The LIST read is still taken only during the entity landing's SERVER render,
+ * and its result is rendered server-side into the node the landing hands the
+ * popup through `ScopeAddSourcesProvider`'s `catalog` slot. It has no
+ * client-callable entry point.
+ *
+ * PR5's instantiate action IS client-reachable, and it re-authorizes from
+ * scratch by re-running THESE GATES — not a restatement of them. That is what
+ * `resolveCatalogDestination` and `resolveAdmittedTemplates` are exported for:
+ * the write calls the same functions the list calls, in the same order, at write
+ * time. A handle that was eligible when the list rendered proves nothing later.
+ *
+ * The write additionally applies TWO gates the list does not need, both in
+ * `installed-catalog-write.ts`: the CURRENTNESS re-check (gate 9 below, which
+ * this module cannot take because it has no manifest access) and the
+ * distinguishable name-collision refusal.
  *
  * ── THE GATES, IN ORDER ────────────────────────────────────────────────────
- *   1. Tenant fence      — the actor's active org IS the surface's org, and the
- *                          actor is a human principal.
+ *   1. Tenant fence      — the actor's active org IS the surface's org, the
+ *                          actor is a human principal, and the actor may be on
+ *                          this surface AT ALL (each landing's own view gate,
+ *                          re-taken; see `actorMayReachSurface`).
  *   2. Destination fence — the collection a copy would land in is DERIVED from
  *                          the surface plus the ACTOR'S OWN principal id. The
  *                          descriptor's `userId` must equal it; there is no
@@ -47,6 +57,10 @@ import "server-only";
  *   8. Name collision    — the template is currently addable without colliding
  *                          in the destination collection, read across EVERY
  *                          status (an archived row still owns its name).
+ *   9. Currentness       — WRITE ONLY (cinatra#2474 PR5): the providing package
+ *                          still DECLARES a dashboard template in its current
+ *                          manifest. Taken in `installed-catalog-write.ts`,
+ *                          because this module has no manifest access.
  *
  * `op:"use"` and not `"read"`: the catalog means "eligible to instantiate", and
  * `use` is that op. For `kind:"artifact"` the two are the same policy field
@@ -62,9 +76,18 @@ import "server-only";
  * templates it currently discovers and has NO retirement pass for one that has
  * gone away, so a package that drops its dashboard declaration leaves its
  * published row behind INDEFINITELY — not "until the next reconcile". Closing
- * that is a reconciler change, out of this slice; PR5's re-resolution must
- * therefore re-check the CURRENT manifest declaration, not merely a live package
- * and a published row.
+ * that is a reconciler change, still out of scope.
+ *
+ * WHAT PR5 DID ABOUT IT (the honest half-fix). The WRITE now re-checks the
+ * CURRENT manifest declaration before copying anything
+ * (`installed-catalog-currentness.ts`), so a dropped dashboard can no longer be
+ * instantiated. The LIST is deliberately NOT gated on it: the currentness probe
+ * touches the filesystem and the runtime package store, which is the wrong cost
+ * to pay on four entity landings' server render, and a stale ROW that is merely
+ * LISTED is a cosmetic staleness while a stale row that is COPIED is a durable
+ * one. So a retired template can still appear in the popup for as long as its row
+ * survives, and pressing Add on it refuses with `no-longer-declared`. That is a
+ * real, visible seam and it is stated rather than hidden.
  *
  * ── FAILURE POSTURE ────────────────────────────────────────────────────────
  * NEVER throws into the landing: any failure logs and yields an EMPTY catalog,
@@ -93,6 +116,7 @@ import type {
   CatalogTemplateView,
 } from "./installed-catalog-contract";
 import {
+  actorMayReachSurface,
   compareCatalogRows,
   destinationIsActorOwned,
   destinationRefForSurface,
@@ -122,44 +146,90 @@ export type ListInstalledCatalogInput = {
   readonly surface: CatalogSurface;
 };
 
-/**
- * The eligible installed-catalog templates for `surface`, as safe display
- * metadata plus an opaque handle. Empty on any refusal or failure.
- */
-export async function listInstalledCatalogTemplates(
-  input: ListInstalledCatalogInput,
-): Promise<readonly CatalogTemplateView[]> {
-  try {
-    return await readCatalog(input);
-  } catch (e) {
-    warn("catalog read failed; rendering no catalog", e);
-    return [];
-  }
-}
+/** One materialized template row, as `listOrgExtensionTemplateRows` returns it.
+ *  Derived from the read itself so the app never restates the row's shape. */
+export type CatalogTemplateRow = Awaited<
+  ReturnType<typeof listOrgExtensionTemplateRows>
+>[number];
 
-async function readCatalog({
-  actor,
-  surface,
-}: ListInstalledCatalogInput): Promise<readonly CatalogTemplateView[]> {
-  // ── 1. Tenant fence ──────────────────────────────────────────────────────
+/**
+ * A template that PASSED every gate except the name-collision filter, with the
+ * install row whose access policy governed it. The list read projects these down
+ * to display metadata; the write needs the row itself (for the seed config) and
+ * the package name (for the currentness re-check), so the admitted set — not its
+ * projection — is what both share.
+ */
+export type AdmittedCatalogTemplate = {
+  readonly row: CatalogTemplateRow;
+  readonly packageName: string;
+};
+
+/** The tenant + destination fences (gates 1-2), resolved together because the
+ *  destination IS derived from the actor the tenant fence just checked. */
+export type CatalogDestination = {
+  readonly orgId: string;
+  readonly actorUserId: string;
+  readonly ref: DashboardEntityRef;
+};
+
+/**
+ * GATES 1-2 — the tenant fence, the SCOPE-REACH gate and the destination fence,
+ * as ONE step.
+ *
+ * `null` on any refusal: no active org, an org that is not the surface's, a
+ * non-human principal, an actor who may not be on this surface at all, a
+ * descriptor naming someone else's collection, or a structurally invalid
+ * surface. Pure apart from reading the actor it is handed — no I/O, so both
+ * callers pay the same (zero) cost for the same verdict.
+ *
+ * The scope-reach arm is a no-op for the LIST (the landing's own gate already
+ * admitted the actor) and load-bearing for the WRITE, whose bound action
+ * outlives that render (codex convergence r0/HIGH-1). It lives here, in the step
+ * both callers take, precisely so it cannot be forgotten on one of them.
+ */
+export function resolveCatalogDestination(
+  actor: ActorContext,
+  surface: CatalogSurface,
+): CatalogDestination | null {
   const orgId = surface.orgId;
-  if (!orgId) return [];
-  if (actor.organizationId !== orgId) return [];
+  if (!orgId) return null;
+  if (actor.organizationId !== orgId) return null;
+  if (!actorMayReachSurface(actor, surface)) return null;
   // The acting principal must be a HUMAN USER with an id: the destination is
   // that user's own collection, and a non-human principal (worker / agent /
   // service) has no personal collection to be the single reader of. Anything
   // else is refused rather than attributed to whatever id the descriptor holds.
   const actorUserId =
     actor.principalType === "HumanUser" ? actor.principalId : null;
-  if (!actorUserId) return [];
+  if (!actorUserId) return null;
 
-  // ── 2. Destination fence ─────────────────────────────────────────────────
   // Derived from the surface + the ACTOR'S id, then re-asserted. The descriptor
   // cannot name someone else's collection: `destinationRefForSurface` refuses a
   // `surface.userId` that is not the acting user, and the assertion below is the
   // belt to that braces (codex convergence r1).
   const ref = destinationRefForSurface(surface, actorUserId);
-  if (!ref || !destinationIsActorOwned(ref, actorUserId)) return [];
+  if (!ref || !destinationIsActorOwned(ref, actorUserId)) return null;
+  return { orgId, actorUserId, ref };
+}
+
+/**
+ * GATES 3-7 — the template pool, the canonical liveness gate, the install-identity
+ * fence, the two policy arms off ONE snapshot, and the template-scope allowlist.
+ *
+ * Everything up to but NOT including the name-collision filter, because that is
+ * the one gate whose verdict the two callers must treat differently: the list
+ * silently omits a colliding row, while the write must say `name-taken` so the
+ * user can act on it.
+ *
+ * Exported so cinatra#2474 PR5's instantiate action re-authorizes by RUNNING
+ * these gates rather than restating them.
+ */
+export async function resolveAdmittedTemplates(
+  actor: ActorContext,
+  surface: CatalogSurface,
+  destination: CatalogDestination,
+): Promise<readonly AdmittedCatalogTemplate[]> {
+  const { orgId } = destination;
 
   // ── 3. The org's materialized template rows ──────────────────────────────
   const templates = await listOrgExtensionTemplateRows(orgId);
@@ -211,7 +281,7 @@ async function readCatalog({
   );
 
   const vantage = vantageForSurface(surface);
-  const eligible: CatalogTemplateView[] = [];
+  const admitted: AdmittedCatalogTemplate[] = [];
   for (const { row, install } of candidates) {
     // THE ONE SNAPSHOT. Where no policy row exists, the platform's own default
     // applies — the identical fallback `canExtensionAccess` uses, so this can be
@@ -226,16 +296,49 @@ async function readCatalog({
     // ACTOR ARM — the platform's evaluator over that SAME policy value.
     if (!(await actorMayUseExtension({ actor, policy, install }))) continue;
 
-    eligible.push({
-      templateId: row.id,
-      name: row.name,
-      packageName: install.packageName,
-    });
+    admitted.push({ row, packageName: install.packageName });
   }
-  if (eligible.length === 0) return [];
+  return admitted;
+}
+
+/**
+ * The eligible installed-catalog templates for `surface`, as safe display
+ * metadata plus an opaque handle. Empty on any refusal or failure.
+ */
+export async function listInstalledCatalogTemplates(
+  input: ListInstalledCatalogInput,
+): Promise<readonly CatalogTemplateView[]> {
+  try {
+    return await readCatalog(input);
+  } catch (e) {
+    warn("catalog read failed; rendering no catalog", e);
+    return [];
+  }
+}
+
+async function readCatalog({
+  actor,
+  surface,
+}: ListInstalledCatalogInput): Promise<readonly CatalogTemplateView[]> {
+  // ── 1-2. Tenant + destination fences ─────────────────────────────────────
+  const destination = resolveCatalogDestination(actor, surface);
+  if (!destination) return [];
+
+  // ── 3-7. The pool, liveness, install identity, both policy arms, scope ───
+  const admitted = await resolveAdmittedTemplates(actor, surface, destination);
+  if (admitted.length === 0) return [];
+
+  const eligible: CatalogTemplateView[] = admitted.map((a) => ({
+    templateId: a.row.id,
+    name: a.row.name,
+    packageName: a.packageName,
+  }));
 
   // ── 8. Name collision against the destination collection ─────────────────
-  const existingNames = await readDestinationNames(ref, orgId);
+  const existingNames = await readDestinationNames(
+    destination.ref,
+    destination.orgId,
+  );
   if (existingNames === null) {
     warn("destination collection unreadable; rendering no catalog");
     return [];
@@ -348,7 +451,7 @@ async function actorMayUseExtension(args: {
  * advertise a template whose create is guaranteed to hit the constraint (codex
  * convergence r2).
  */
-async function readDestinationNames(
+export async function readDestinationNames(
   ref: DashboardEntityRef,
   organizationId: string,
 ): Promise<ReadonlySet<string> | null> {

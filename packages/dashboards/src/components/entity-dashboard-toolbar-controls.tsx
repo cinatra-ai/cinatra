@@ -1,16 +1,26 @@
 "use client";
 /**
- * EntityDashboardsToolbarControls — the dashboard-select dropdown, the
- * per-dashboard manage menu (Rename / Delete), and the add-a-dashboard button,
- * rendered INSIDE `<CinatraDashboardToolbar>` for a Dashboards-tab surface.
- * Reads everything from `useEntityDashboards()`; renders nothing when that
- * context is absent (every non-entity dashboard surface), so it is inert outside
- * the entity shell.
+ * EntityDashboardsToolbarControls — the dashboard-select dropdown and the
+ * add-a-dashboard button, rendered INSIDE `<CinatraDashboardToolbar>` for a
+ * Dashboards-tab surface. Reads everything from `useEntityDashboards()`; renders
+ * nothing when that context is absent (every non-entity dashboard surface), so
+ * it is inert outside the entity shell.
  *
- * Overview is reflected as non-removable (cinatra#700 enforces it server-side):
- * the manage menu is offered ONLY for the selected dashboard when it is
- * `canWrite && !isDefault`, so the Overview default never shows Rename/Delete.
- * The controls are also capability-gated — the add button appears only when
+ * NO OVERFLOW ("⋯") CONTROL (owner review on cinatra#2474 PR5, PR #2638).
+ * This toolbar used to carry a three-dot overflow button between the select and
+ * the add button — the per-dashboard manage menu (Rename / Delete), offered for
+ * the selected dashboard when `canWrite && !isDefault`. The owner asked for the
+ * three dots to be removed from the toolbar, unconditionally, so it is gone.
+ *
+ * WHERE RENAME AND DELETE WENT: into the EDIT-mode group of
+ * `<CinatraDashboardToolbar>`, as ordinary buttons beside "Add text" and "Add
+ * portlet" (owner review, same PR). They keep this menu's own gate — the
+ * SELECTED dashboard, `canWrite && !isDefault`, and only where the surface wired
+ * the handler — and they call the same `EntityDashboardsContext.onRename` /
+ * `.onDelete` this menu called. No contract, action or authorization changed.
+ * (Overview was already non-removable server-side, cinatra#700.)
+ *
+ * The remaining controls are capability-gated — the add button appears only when
  * `canCreate` (or when the scope offers an add-to-scope source) — so a member
  * who can read but not write a shared dashboard sees no write affordances.
  *
@@ -29,37 +39,19 @@
  *     member keeps it, exactly as before #2474.
  *
  * The catalog slot deliberately does NOT promote the button to "Add dashboard":
- * concept B (cinatra#2474 PR4) must not hand a non-manager the scope-level Add.
- * Nor does it, on its own, raise a button at all — see `offersUnifiedAdd`.
+ * concept B (cinatra#2474 PR4/PR5) must not hand a non-manager the scope-level
+ * Add, however actionable its own section becomes. Nor does it, on its own,
+ * raise a button at all — see `offersCatalogAdd`.
  */
 import { useState } from "react";
-import {
-  ChevronsUpDown,
-  Loader2,
-  MoreHorizontal,
-  Pencil,
-  Plus,
-  Trash2,
-} from "lucide-react";
+import { ChevronsUpDown, Loader2, Plus } from "lucide-react";
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ToolbarButton, ToolbarGroup } from "@/components/ui/toolbar";
@@ -69,24 +61,13 @@ import { useScopeAddSources } from "@/components/dashboards/scope-add-sources";
 import { useEntityDashboards } from "./entity-dashboards-context";
 import { EntityDashboardNameDialog } from "./entity-dashboard-name-dialog";
 
-type NameDialogState =
-  | { readonly mode: "create" }
-  | { readonly mode: "rename"; readonly id: string; readonly name: string }
-  | null;
-
 export function EntityDashboardsToolbarControls() {
   const ctx = useEntityDashboards();
   // Read unconditionally, ABOVE the `!ctx` bail — a hook may not be called
   // behind an early return (codex convergence).
   const scopeAdd = useScopeAddSources();
-  const [nameDialog, setNameDialog] = useState<NameDialogState>(null);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<{
-    readonly id: string;
-    readonly name: string;
-  } | null>(null);
-  const [deleteBusy, setDeleteBusy] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Rendered by the toolbar only where the shell mounts the provider; the null
   // guard keeps the component safe if it is ever mounted bare.
@@ -100,21 +81,17 @@ export function EntityDashboardsToolbarControls() {
     busy,
     onSelect,
     onCreate,
-    onRename,
-    onDelete,
+    onAdopted,
   } = ctx;
 
   // Prefer the rendered selection; fall back to the pending target when the
-  // selected row has just left the list (delete-of-selected), so the trigger
-  // label + manage menu don't blink to a placeholder during the reload.
+  // selected row has just left the list, so the trigger label doesn't blink to a
+  // placeholder during the reload.
   const selected =
     dashboards.find((d) => d.id === selectedId) ??
     dashboards.find((d) => d.id === pendingId) ??
     null;
   const activeId = pendingId ?? selectedId ?? undefined;
-  const canManageSelected =
-    !!selected && selected.canWrite && !selected.isDefault;
-  const showManage = canManageSelected && (!!onRename || !!onDelete);
 
   // §IX.2 — the scope-level Add affordance exists ONLY where the landing handed
   // down the add-to-scope source, i.e. only for a principal who may write this
@@ -125,32 +102,23 @@ export function EntityDashboardsToolbarControls() {
   // §IX.2 suppresses the moment cinatra#2474 PR4 supplies a catalog).
   const scopeReference = scopeAdd?.reference ?? null;
   const offersScopeAdd = scopeReference !== null;
+  // Whether concept B's section carries a usable operation for THIS principal
+  // (cinatra#2474 PR5 — the deliberate re-grounding of PR4's conjunct).
+  //
+  // PR4 required `canCreate` here for a REASON THAT NO LONGER APPLIES: its
+  // catalog was browse-only, so a catalog alone put nothing pressable in the
+  // popup. PR5 gives every row an Add — and that Add IS a create, into the
+  // ACTING USER'S OWN collection for this entity, authorized by exactly the
+  // owner-axis rule `canCreate` reports. So the conjunct stays, and stops being
+  // a stand-in: it is now the catalog Add's own authorization precondition, and
+  // the SAME value is handed to the section (through the dialog's
+  // `CatalogAddOutcomeProvider`) to gate the button itself. The two can never
+  // disagree — the popup cannot open on a catalog whose control it would then
+  // suppress, and the section cannot offer a control the writer would refuse.
+  const offersCatalogAdd = scopeAdd?.catalog != null && canCreate;
   // Whether the popup is worth opening at all — a strictly WIDER predicate that
   // may only decide the popup's existence, never the manager-only labelling.
-  //
-  // The catalog counts toward it ONLY alongside `canCreate` (cinatra#2474 PR4).
-  // Concept B's section is BROWSE-ONLY until its instantiate action lands in
-  // PR5, so a catalog on its own puts nothing pressable in the popup: letting it
-  // raise a "+ New dashboard" button for a principal who cannot even create
-  // would offer a control that opens a dialog with no available operation —
-  // a capability the product does not have (codex convergence r0). With
-  // `canCreate` the popup always holds a real Create action, and the catalog
-  // rides along as honest context.
-  const offersUnifiedAdd =
-    offersScopeAdd || (scopeAdd?.catalog != null && canCreate);
-
-  async function handleDeleteConfirm() {
-    if (!deleteTarget || !onDelete) return;
-    setDeleteBusy(true);
-    setDeleteError(null);
-    const outcome = await onDelete(deleteTarget.id);
-    setDeleteBusy(false);
-    if (outcome.ok) {
-      setDeleteTarget(null);
-      return;
-    }
-    setDeleteError(outcome.message);
-  }
+  const offersUnifiedAdd = offersScopeAdd || offersCatalogAdd;
 
   return (
     <>
@@ -201,48 +169,9 @@ export function EntityDashboardsToolbarControls() {
           </DropdownMenuContent>
         </DropdownMenu>
 
-        {showManage ? (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <ToolbarButton
-                aria-label={`Manage ${selected?.name ?? "dashboard"}`}
-                disabled={busy}
-              >
-                <MoreHorizontal aria-hidden="true" className="size-3.5 shrink-0" />
-              </ToolbarButton>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              {onRename ? (
-                <DropdownMenuItem
-                  onSelect={() =>
-                    selected &&
-                    setNameDialog({
-                      mode: "rename",
-                      id: selected.id,
-                      name: selected.name,
-                    })
-                  }
-                >
-                  <Pencil aria-hidden="true" className="size-3.5 shrink-0" />
-                  Rename
-                </DropdownMenuItem>
-              ) : null}
-              {onRename && onDelete ? <DropdownMenuSeparator /> : null}
-              {onDelete ? (
-                <DropdownMenuItem
-                  variant="destructive"
-                  onSelect={() =>
-                    selected &&
-                    setDeleteTarget({ id: selected.id, name: selected.name })
-                  }
-                >
-                  <Trash2 aria-hidden="true" className="size-3.5 shrink-0" />
-                  Delete
-                </DropdownMenuItem>
-              ) : null}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        ) : null}
+        {/* NOTHING between the select and the add button. The three-dot
+            overflow (Rename / Delete) that used to sit here is removed — see the
+            file header for what that strands and how it is re-surfaced. */}
 
         {offersScopeAdd ? (
           // §IX.2's manage-control — "Add dashboard", the scope-level affordance.
@@ -272,7 +201,7 @@ export function EntityDashboardsToolbarControls() {
             onClick={() =>
               offersUnifiedAdd
                 ? setAddDialogOpen(true)
-                : setNameDialog({ mode: "create" })
+                : setCreateDialogOpen(true)
             }
             className="text-foreground"
           >
@@ -293,76 +222,30 @@ export function EntityDashboardsToolbarControls() {
           canCreate={canCreate}
           onChooseCreate={() => {
             setAddDialogOpen(false);
-            setNameDialog({ mode: "create" });
+            setCreateDialogOpen(true);
           }}
           reference={scopeReference}
           catalog={scopeAdd.catalog}
           onReferenceAdded={() => setAddDialogOpen(false)}
+          // A catalog copy landed (cinatra#2474 PR5): close the popup and put
+          // the new dashboard in the dropdown + on screen, exactly as Create
+          // does. The summary came back from the server action already
+          // authorized; the shell owns the list, so the shell adopts it.
+          onCatalogAdded={(dashboard) => {
+            setAddDialogOpen(false);
+            onAdopted(dashboard);
+          }}
         />
       ) : null}
 
       <EntityDashboardNameDialog
-        open={nameDialog?.mode === "create"}
-        onOpenChange={(open) => {
-          if (!open) setNameDialog(null);
-        }}
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
         title="New dashboard"
         description="Create an empty dashboard, then add portlets to it."
         submitLabel="Create"
         onSubmit={onCreate}
       />
-
-      <EntityDashboardNameDialog
-        open={nameDialog?.mode === "rename"}
-        onOpenChange={(open) => {
-          if (!open) setNameDialog(null);
-        }}
-        title="Rename dashboard"
-        submitLabel="Save"
-        initialName={nameDialog?.mode === "rename" ? nameDialog.name : ""}
-        onSubmit={async (name) => {
-          if (nameDialog?.mode !== "rename" || !onRename) {
-            return { ok: false, message: "Rename is unavailable." };
-          }
-          return onRename(nameDialog.id, name);
-        }}
-      />
-
-      <AlertDialog
-        open={deleteTarget !== null}
-        onOpenChange={(open) => {
-          if (!open && !deleteBusy) {
-            setDeleteTarget(null);
-            setDeleteError(null);
-          }
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Delete “{deleteTarget?.name ?? ""}”?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {deleteError ??
-                "This permanently removes the dashboard and its saved layout. This can’t be undone."}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleteBusy}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(event) => {
-                // Keep the dialog open until the server confirms, so a failure
-                // can surface inline rather than closing on an unfinished op.
-                event.preventDefault();
-                void handleDeleteConfirm();
-              }}
-              disabled={deleteBusy}
-            >
-              {deleteBusy ? "Deleting…" : "Delete"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </>
   );
 }

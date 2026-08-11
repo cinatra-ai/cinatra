@@ -47,8 +47,12 @@ describe("PublishDestinationPicker static contract", () => {
     const src = readSource();
     // Must branch on !privateDestinationConfigured and return before rendering RadioGroup
     expect(src).toMatch(/if\s*\(!privateDestinationConfigured\)/);
-    // The notice text is the locked copy string
-    expect(src).toMatch(/Private publish destination not yet configured — contact your admin\./);
+    // The notice text is the locked copy string — it names the real
+    // configuration step, never "contact your admin" (cinatra#2644).
+    expect(src).toMatch(
+      /Private publish destination not yet configured\. An instance operator can enable it by setting the CINATRA_DEPLOYMENT_REGISTRY_PRIVATE_\* environment keys\./,
+    );
+    expect(src).not.toMatch(/contact your admin/i);
     // The early-return branch must NOT have a disabled RadioGroupItem — verify the
     // if-block content (between if-check and its closing brace) has no RadioGroupItem.
     const ifBlockStart = src.indexOf("if (!privateDestinationConfigured)");

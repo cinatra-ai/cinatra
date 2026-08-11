@@ -38,6 +38,18 @@ export type EntityDashboardsContextValue = {
   readonly busy: boolean;
   readonly onSelect: (id: string) => void;
   readonly onCreate: (name: string) => Promise<EntityDashboardsToolbarOutcome>;
+  /**
+   * ADOPT a dashboard this shell did not create itself (cinatra#2474 PR5): put
+   * it in the dropdown and render it, exactly as `onCreate` does with the row it
+   * just made.
+   *
+   * It exists because a create can now also happen OUTSIDE the shell — concept
+   * B's catalog copies a template through its own server action, and the created
+   * row must appear in the same list without a full page reload. The shell owns
+   * the list, so the shell owns the adoption; the caller supplies only the
+   * already-authorized summary the server returned.
+   */
+  readonly onAdopted: (dashboard: EntityDashboardSummary) => void;
   /** `null` when the surface wired no rename action. Never called for Overview. */
   readonly onRename:
     | ((id: string, name: string) => Promise<EntityDashboardsToolbarOutcome>)
