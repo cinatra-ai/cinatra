@@ -57,6 +57,18 @@ function readEnvLocal() {
 // so the dev-server preflight resolves ports identically.
 const hostPort = parseHostPort;
 
+// Build the WayFlow `/.health` URL from WAYFLOW_BASE_URL: the same contract the
+// docker-compose healthcheck probes. The loader can be hung or crash-looping
+// while the port stays bound (its restart policy re-binds it between attempts),
+// so a bare TCP connect would report a broken runtime as "up" and drop the
+// start hint. Probe HTTP like Nango instead. `/.health` answers 200 for both
+// "ok" and "degraded" (per-agent load failures never condemn the runtime), so
+// the probe's 2xx rule accepts exactly what the compose healthcheck accepts.
+function wayflowHealthUrl(baseUrl) {
+  const v = typeof baseUrl === "string" ? baseUrl.trim() : "";
+  return `${(v || "http://127.0.0.1:3010").replace(/\/+$/, "")}/.health`;
+}
+
 function probe(host, port, timeoutMs = 2500) {
   return new Promise((resolve) => {
     const socket = new net.Socket();
@@ -136,6 +148,7 @@ const services = [
     name: "WayFlow",
     tier: "recommended",
     ...hostPort(env.WAYFLOW_BASE_URL, { host: "127.0.0.1", port: 3010 }),
+    healthUrl: wayflowHealthUrl(env.WAYFLOW_BASE_URL),
     note: "agent runtime; serves every installed agent",
     downHint: "agent runs fail until you run `cinatra instance wayflow start`",
   },
@@ -151,7 +164,8 @@ const services = [
 const results = await Promise.all(
   services.map(async (svc) => ({
     ...svc,
-    // Nango carries a healthUrl → probe HTTP /health; everything else TCP-connects.
+    // Nango + WayFlow carry a healthUrl → probe their HTTP health contract
+    // (hung-but-port-bound must read DOWN); everything else TCP-connects.
     up: svc.healthUrl
       ? (await probeHttpHealth(svc.healthUrl, 2500)).ok
       : await probe(svc.host, svc.port),

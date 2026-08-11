@@ -192,11 +192,20 @@ function main() {
   // CINATRA_ALLOW_NO_CONTEXT_ATTEST_KEY=1), while a missing OPENAI_API_KEY is
   // a genuine degraded start.
   if (missing.includes("CINATRA_CONTEXT_ATTEST_KEY")) {
+    // Do NOT advertise CINATRA_ALLOW_NO_CONTEXT_ATTEST_KEY=1 as a .env.local
+    // fix here: this generator copies ONLY the allowlisted keys (pinned by
+    // scripts/__tests__/gen-wayflow-env.test.mjs), so setting the bypass in
+    // .env.local never reaches the container. The loader reads it from the
+    // CONTAINER environment only — an isolated harness injects it there
+    // (compose override / `docker compose run -e`), which is deliberate: the
+    // security opt-out must not ride the standard env contract.
     console.warn(
       "[gen-wayflow-env] WARNING: CINATRA_CONTEXT_ATTEST_KEY is not set in .env.local. " +
-        "The wayflow runtime REFUSES to start without it (agent_loader.py fails loud at boot; " +
-        "CINATRA_ALLOW_NO_CONTEXT_ATTEST_KEY=1 bypasses for isolated harnesses). " +
-        "The dev setup mints it into .env.local; re-run `cinatra install` / scripts/setup.sh to backfill.",
+        "The wayflow runtime REFUSES to start without it (agent_loader.py fails loud at boot). " +
+        "The dev setup mints it into .env.local; re-run `cinatra install` / scripts/setup.sh to backfill. " +
+        "(Isolated harnesses only: the loader's CINATRA_ALLOW_NO_CONTEXT_ATTEST_KEY=1 opt-out must be " +
+        "injected into the wayflow CONTAINER environment, e.g. a compose override; this generator " +
+        "deliberately does not copy it from .env.local.)",
     );
   }
   if (missing.includes("OPENAI_API_KEY")) {
