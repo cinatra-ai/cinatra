@@ -33,9 +33,12 @@
  *   3. BATCH: one row per succeeded outcome, and a RE-DOWNLOAD of the same ended
  *      batch adds nothing — proved by the real index, not by a mock.
  *   4. TEST-KEY ROUTE: one `models.list` row per probe press.
- *   5. GRAPHITI: one row per episode handed over, counted with cost NULL (its
+ *   5. IMAGE (cinatra#2641): one row per `generateImage()` call, counted with
+ *      cost NULL — the method is billed per image and reports no usage at all,
+ *      so the call is visible and the dollars stay honestly unknown.
+ *   6. GRAPHITI: one row per episode handed over, counted with cost NULL (its
  *      dollars are unknown, and a 0 would read as "free").
- *   6. ACCOUNTING: a mixed workload's ledger totals equal the driven truth, read
+ *   7. ACCOUNTING: a mixed workload's ledger totals equal the driven truth, read
  *      back through the same store functions `/analytics/llm` uses.
  *
  * RUNNER (real DB required — the suite self-skips without one):
@@ -216,6 +219,7 @@ import { orchestrateDownloadBatchOutcomesV2, resolveProviderAdapter } from "@cin
 import { emitLlmUsage, withUsageAttribution } from "../../../packages/llm/src/usage-metering";
 import { startUsageEventSubscriber } from "../../../packages/metric-cost-api/src/event-subscriber";
 import {
+  readCostByAgent,
   readCostByProvider,
   readCostSummary,
 } from "../../../packages/metric-cost-api/src/store";
@@ -781,6 +785,139 @@ describe.skipIf(!HAS_REAL_DB)(
     });
 
     // -----------------------------------------------------------------------
+    // 3b. IMAGE GENERATION (cinatra#2641)
+    // -----------------------------------------------------------------------
+
+    describe("an image-generation call", () => {
+      /**
+       * The gap: `generateImage()` reached a provider, was billed per image and
+       * wrote NO row — the one response-producing adapter method the cinatra#2578
+       * seam did not meter. It answers with `{ imageData, mimeType }` and nothing
+       * else, so the row it books here is COUNTED and UNPRICED: the call is
+       * visible, the dollars stay unknown rather than invented.
+       */
+      it("books one COUNTED, UNPRICED row per image, through the production seam", async () => {
+        const adapter = await mintAdapter({
+          provider: "openai",
+          defaultModel: "gpt-5.5",
+          generate: async () => ({ text: "ok", model: "gpt-5.5", usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, reasoningOutputTokens: 0 } }),
+          stream: async () => undefined,
+          generateImage: async () => ({ imageData: "aGVsbG8=", mimeType: "image/png" }),
+        });
+
+        const image = await (
+          adapter.generateImage as (input: {
+            prompt: string;
+            logLabel?: string;
+          }) => Promise<{ imageData: string; mimeType: string } | null>
+        )({ prompt: "a cover image", logLabel: "blog-post-image" });
+        // Metering never changes what the caller observes.
+        expect(image).toEqual({ imageData: "aGVsbG8=", mimeType: "image/png" });
+
+        const rows = await settledRows(1);
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({
+          source: "llm",
+          provider: "openai",
+          operation: "image",
+          agent_label: "blog-post-image",
+          // Zeros the schema requires, not a measurement. The ABI's image
+          // response reports no usage at all.
+          input_tokens: 0,
+          output_tokens: 0,
+          // The seam refuses to name the adapter's default TEXT model for a call
+          // that model did not answer — and naming it would hand the rate card a
+          // model to price.
+          model: "unknown",
+        });
+        // NULL, never 0. `gpt-5.5` is priced; had the row carried that model
+        // through the per-token card it would have stored $0.00000000 and read
+        // as "this image was free".
+        expect(rows[0]!.cost_usd).toBeNull();
+      });
+
+      it("gives two images two rows — no key collapses the second at the index", async () => {
+        // The cinatra#2578 failure mode, checked on the new path: a shared
+        // idempotency key would make the second image vanish at the unique
+        // index, which no mocked store can observe.
+        const adapter = await mintAdapter({
+          provider: "openai",
+          defaultModel: "gpt-5.5",
+          generate: async () => ({ text: "ok", model: "gpt-5.5", usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, reasoningOutputTokens: 0 } }),
+          stream: async () => undefined,
+          generateImage: async () => ({ imageData: "aGVsbG8=", mimeType: "image/png" }),
+        });
+        const generateImage = adapter.generateImage as (input: {
+          prompt: string;
+        }) => Promise<unknown>;
+
+        await generateImage({ prompt: "one" });
+        await generateImage({ prompt: "two" });
+
+        const rows = await settledRows(2);
+        expect(rows).toHaveLength(2);
+        expect(new Set(rows.map((row) => row.idempotency_key)).size).toBe(2);
+      });
+
+      it("a group MIXING priced and image rows reports its subtotal as PARTIAL", async () => {
+        // The laundering path a per-row NULL does not close. `SUM(cost_usd)`
+        // ignores NULLs, so an agent that does both priced work and image work
+        // aggregates to a NUMBER — one that used to render exactly like a
+        // complete total. The breakdown now carries the count of unpriced rows
+        // in the group so the cell can say what the number leaves out.
+        const adapter = await mintAdapter({
+          provider: "openai",
+          defaultModel: "gpt-5.5",
+          generate: async () => ({
+            text: "ok",
+            model: "gpt-5.5",
+            usage: { inputTokens: 1000, outputTokens: 100, cachedInputTokens: 0, reasoningOutputTokens: 0 },
+          }),
+          stream: async () => undefined,
+          generateImage: async () => ({ imageData: "aGVsbG8=", mimeType: "image/png" }),
+        });
+
+        // SAME agent label on both calls — that is what puts them in one group.
+        await adapter.generate({ model: "gpt-5.5", logLabel: "blog-pipeline" } as never);
+        await (adapter.generateImage as (input: {
+          prompt: string;
+          logLabel?: string;
+        }) => Promise<unknown>)({ prompt: "p", logLabel: "blog-pipeline" });
+
+        await settledRows(2);
+
+        const byAgent = await readCostByAgent({ days: 30 });
+        const group = byAgent.find((row) => row.agentLabel === "blog-pipeline");
+        expect(group).toBeDefined();
+        expect(group!.callCount).toBe(2);
+        // The subtotal is real — and it covers only ONE of the two calls.
+        expect(group!.totalCost).toBeGreaterThan(0);
+        expect(group!.unknownCostCount).toBe(1);
+      });
+
+      it("books nothing when the image call throws — the invocation did not resolve", async () => {
+        const adapter = await mintAdapter({
+          provider: "openai",
+          defaultModel: "gpt-5.5",
+          generate: async () => ({ text: "ok", model: "gpt-5.5", usage: { inputTokens: 1, outputTokens: 1, cachedInputTokens: 0, reasoningOutputTokens: 0 } }),
+          stream: async () => undefined,
+          generateImage: async () => {
+            throw new Error("image provider refused");
+          },
+        });
+
+        await expect(
+          (adapter.generateImage as (input: { prompt: string }) => Promise<unknown>)({
+            prompt: "p",
+          }),
+        ).rejects.toThrow("image provider refused");
+
+        await sleep(300);
+        expect(await ledgerRows()).toHaveLength(0);
+      });
+    });
+
+    // -----------------------------------------------------------------------
     // 4. GRAPHITI
     // -----------------------------------------------------------------------
 
@@ -876,6 +1013,7 @@ describe.skipIf(!HAS_REAL_DB)(
             retrieve: async () => ({ batchId: "mixed-batch", status: "ended" }),
             download: async () => BATCH,
           },
+          generateImage: async () => ({ imageData: "aGVsbG8=", mimeType: "image/png" }),
         });
         h.session = { user: { role: "admin" } };
         h.providerSurface = {
@@ -889,6 +1027,10 @@ describe.skipIf(!HAS_REAL_DB)(
 
         await chat.stream({ model: "gpt-5.5", logLabel: "chat-turn" } as never);
         await chat.generate({ model: "gpt-5.5", logLabel: "assistant-turn" } as never);
+        await (chat.generateImage as (input: {
+          prompt: string;
+          logLabel?: string;
+        }) => Promise<unknown>)({ prompt: "a cover image", logLabel: "blog-post-image" });
         await orchestrateDownloadBatchOutcomesV2({ provider: "openai", batchId: "mixed-batch" });
         await keyValidationPOST(
           new Request("http://127.0.0.1/configuration/mcp/llm-access/test", {
@@ -904,7 +1046,12 @@ describe.skipIf(!HAS_REAL_DB)(
         } as never);
 
         const expectedRows =
-          CHAT_STEPS.length + 1 /* sync */ + BATCH.length + 1 /* probe */ + 1; /* episode */
+          CHAT_STEPS.length +
+          1 /* sync */ +
+          1 /* image */ +
+          BATCH.length +
+          1 /* probe */ +
+          1; /* episode */
         const rows = await settledRows(expectedRows);
         expect(rows).toHaveLength(expectedRows);
 
@@ -924,15 +1071,27 @@ describe.skipIf(!HAS_REAL_DB)(
         // proof covers what an operator is shown, not just what was stored.
         const summary = await readCostSummary();
         expect(summary.eventCount).toBe(expectedRows);
-        // Exactly one row carries unknown dollars: the episode. Everything else
-        // is priced, including the deliberately-free catalog read.
-        expect(summary.nullCostCount).toBe(1);
+        // Exactly TWO rows carry unknown dollars: the episode and the image.
+        // Everything else is priced, including the deliberately-free catalog
+        // read. This counter is the dashboard's own honesty surface — the image
+        // call reaching it is what an operator sees change (cinatra#2641).
+        expect(summary.nullCostCount).toBe(2);
         expect(summary.totalAllTime).toBeGreaterThan(0);
 
         const byProvider = await readCostByProvider({ days: 30 });
         const sources = new Set(byProvider.map((row) => row.source));
         expect(sources.has("llm")).toBe(true);
         expect(sources.has("graphiti")).toBe(true);
+
+        // The image call as an operator meets it in the breakdown: its own row,
+        // one call, and a cost the table renders as "unknown" rather than as a
+        // number nobody measured (cinatra#2641).
+        const imageGroup = byProvider.find(
+          (row) => row.source === "llm" && row.model === "unknown",
+        );
+        expect(imageGroup, "the image call is missing from the breakdown").toBeDefined();
+        expect(imageGroup!.totalCost).toBeNull();
+        expect(imageGroup!.callCount).toBe(1);
         expect(
           byProvider
             .filter((row) => row.source === "llm")

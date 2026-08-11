@@ -21,8 +21,8 @@ beforeEach(() => {
 describe("readCostBySkill", () => {
   it("returns typed CostBySkillRow[] from db results", async () => {
     const mockRows: CostBySkillRow[] = [
-      { skillLabel: "@cinatra-skills/example-vendor", totalCost: 1.23, callCount: 5 },
-      { skillLabel: null, totalCost: 0.45, callCount: 2 },
+      { skillLabel: "@cinatra-skills/example-vendor", totalCost: 1.23, callCount: 5, unknownCostCount: 0 },
+      { skillLabel: null, totalCost: 0.45, callCount: 2, unknownCostCount: 0 },
     ];
     mockExecute.mockResolvedValue({ rows: mockRows });
 

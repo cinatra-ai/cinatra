@@ -14,21 +14,31 @@ export function startUsageEventSubscriber(): void {
   onUsageEvent(async (event: UsageEvent) => {
     try {
       if (event.source === "llm") {
-        const costUsd = await computeLlmCostUsd({
-          model: event.model,
-          inputTokens: event.inputTokens,
-          outputTokens: event.outputTokens,
-          cachedInputTokens: event.cachedInputTokens,
-          cacheReadInputTokens: event.cacheReadInputTokens,
-          cacheCreationInputTokens: event.cacheCreationInputTokens,
-          // cinatra#2578: asynchronous batch work is billed at half the
-          // synchronous rate this module's card carries. Pricing a batch row off
-          // the plain card would overstate that spend ~2x.
-          rateMultiplier:
-            event.operation === "batch"
-              ? batchRateMultiplier(event.provider)
-              : 1,
-        });
+        // cinatra#2641. An image call is billed PER IMAGE and reports no usage,
+        // so its row arrives with zero tokens. Running the per-TOKEN rate card
+        // over those zeros would answer 0 and store "0.00000000" — a made-up
+        // price that reads as "this was free". The row stays UNPRICED (NULL),
+        // which the dashboard already renders as an explicit unknown cost.
+        // Pricing it needs a per-image rate and a usage-carrying image response;
+        // that is cinatra#2641's open half, not a number to guess here.
+        const costUsd =
+          event.operation === "image"
+            ? null
+            : await computeLlmCostUsd({
+                model: event.model,
+                inputTokens: event.inputTokens,
+                outputTokens: event.outputTokens,
+                cachedInputTokens: event.cachedInputTokens,
+                cacheReadInputTokens: event.cacheReadInputTokens,
+                cacheCreationInputTokens: event.cacheCreationInputTokens,
+                // cinatra#2578: asynchronous batch work is billed at half the
+                // synchronous rate this module's card carries. Pricing a batch
+                // row off the plain card would overstate that spend ~2x.
+                rateMultiplier:
+                  event.operation === "batch"
+                    ? batchRateMultiplier(event.provider)
+                    : 1,
+              });
         await insertUsageEvent({
           id: randomUUID(),
           occurredAt: new Date(event.occurredAt),

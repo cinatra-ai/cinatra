@@ -184,6 +184,19 @@ describe("meterLlmProviderAdapter — generate", () => {
     expect(emitted()[0]?.agentLabel).toBe("chat-step");
   });
 
+  it("but an explicit null agent OVERRIDES the transport logLabel", async () => {
+    // Absent means "I did not say" and the transport fills in; `null` means
+    // "there is no agent here", which the frame's merge semantics promise to
+    // honour. The two must not collapse into one `??`.
+    const adapter = meterLlmProviderAdapter(makeAdapter());
+
+    await withUsageAttribution({ agentLabel: null }, () =>
+      adapter.generate({ system: "s", prompt: "p", logLabel: "chat-step" }),
+    );
+
+    expect(emitted()[0]?.agentLabel).toBeNull();
+  });
+
   it("an inner frame layers onto an outer one instead of blanking it", async () => {
     // A caller that only knows the skill must not erase an outer frame's
     // provider telemetry — the merge drops ABSENT keys, not stated ones.
@@ -307,6 +320,154 @@ describe("meterLlmProviderAdapter — stream", () => {
 
 });
 
+describe("meterLlmProviderAdapter — generateImage (cinatra#2641)", () => {
+  /**
+   * The gap this block closes: `generateImage` reaches a provider, is billed per
+   * image, and used to fall through the proxy's pass-through arm — no row, no
+   * trace in `/analytics/llm`. It answers with `{ imageData, mimeType }` and
+   * NOTHING else, so the row it books is deliberately COUNTED and UNPRICED: the
+   * ledger states that an image invocation RESOLVED and leaves the dollars
+   * unknown rather than inventing them.
+   */
+  const imageAdapter = (
+    generateImage: LlmProviderAdapter["generateImage"],
+  ): LlmProviderAdapter =>
+    meterLlmProviderAdapter(
+      makeAdapter({ generateImage } as Partial<LlmProviderAdapter>),
+    );
+
+  it("books one row per image call, with no caller involvement", async () => {
+    const adapter = imageAdapter(
+      vi.fn(async () => ({ imageData: "base64", mimeType: "image/png" })),
+    );
+
+    const image = await adapter.generateImage!({
+      prompt: "a cover image",
+      logLabel: "blog-post-image",
+    });
+
+    // The response is handed back untouched — metering is never observable.
+    expect(image).toEqual({ imageData: "base64", mimeType: "image/png" });
+    expect(emitted()).toHaveLength(1);
+    expect(emitted()[0]).toMatchObject({
+      source: "llm",
+      provider: "openai",
+      operation: "image",
+      agentLabel: "blog-post-image",
+      skillLabel: null,
+      // Zeros because the ledger's columns are NOT NULL, never because
+      // something was measured. The unknown lives in the NULL cost the
+      // subscriber stores for an `image` row.
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+      reasoningOutputTokens: 0,
+    });
+  });
+
+  it("never names the adapter's default TEXT model as the image model", async () => {
+    // `defaultModel` here is "test-default-model" — a model the rate card can
+    // price. Stating it for an image call would be a false claim about which
+    // model answered AND would hand the pricing layer a model to price.
+    const adapter = imageAdapter(
+      vi.fn(async () => ({ imageData: "x", mimeType: "image/png" })),
+    );
+
+    await adapter.generateImage!({ prompt: "p" });
+    expect(emitted()[0]!.model).toBe("unknown");
+
+    emitUsageEventMock.mockClear();
+    await adapter.generateImage!({ prompt: "p", model: "gemini-image-1" } as never);
+    expect(emitted()[0]!.model).toBe("gemini-image-1");
+  });
+
+  it("books the call when the adapter answers no image", async () => {
+    // The ordinary way to get `null` is a response that carried no image PART —
+    // a request that happened. The row states a RESOLVED invocation, which is
+    // the strongest claim the ABI supports; dropping it would put that spend
+    // back where this change found it.
+    const adapter = imageAdapter(vi.fn(async () => null));
+
+    await expect(adapter.generateImage!({ prompt: "p" })).resolves.toBeNull();
+    expect(emitted()).toHaveLength(1);
+    expect(emitted()[0]).toMatchObject({ operation: "image" });
+  });
+
+  it("books NOTHING when the call throws", async () => {
+    const adapter = imageAdapter(
+      vi.fn(async () => {
+        throw new Error("provider refused");
+      }),
+    );
+
+    await expect(adapter.generateImage!({ prompt: "p" })).rejects.toThrow(
+      "provider refused",
+    );
+    expect(emitted()).toHaveLength(0);
+  });
+
+  it("reads the attribution frame, which wins over the transport label", async () => {
+    const adapter = imageAdapter(
+      vi.fn(async () => ({ imageData: "x", mimeType: "image/png" })),
+    );
+
+    await withUsageAttribution(
+      {
+        agentLabel: "blog-pipeline-agent",
+        skillLabel: "blog-image-matcher",
+        requestedProvider: "openai",
+        effectiveProvider: "gemini",
+      },
+      () => adapter.generateImage!({ prompt: "p", logLabel: "blog-post-image" }),
+    );
+
+    expect(emitted()[0]).toMatchObject({
+      agentLabel: "blog-pipeline-agent",
+      skillLabel: "blog-image-matcher",
+      requestedProvider: "openai",
+      effectiveProvider: "gemini",
+    });
+  });
+
+  it("honours an explicit null agent — the transport label does not sneak back", async () => {
+    // The frame's merge semantics say an explicit `null` is INFORMATION ("there
+    // is no agent here"), not an omission. A `??` chain cannot tell it from an
+    // absent key and would re-attribute the row to the generic transport label.
+    const adapter = imageAdapter(
+      vi.fn(async () => ({ imageData: "x", mimeType: "image/png" })),
+    );
+
+    await withUsageAttribution({ agentLabel: null }, () =>
+      adapter.generateImage!({ prompt: "p", logLabel: "blog-post-image" }),
+    );
+
+    expect(emitted()[0]?.agentLabel).toBeNull();
+  });
+
+  it("gives every image its OWN idempotency key — two invocations are two rows", async () => {
+    // `usage_events` de-duplicates on this column, so a reused key would make
+    // the second image disappear at the database exactly as the streaming steps
+    // did in cinatra#2578.
+    const adapter = imageAdapter(
+      vi.fn(async () => ({ imageData: "x", mimeType: "image/png" })),
+    );
+
+    await adapter.generateImage!({ prompt: "one" });
+    await adapter.generateImage!({ prompt: "two" });
+
+    const keys = emitted().map((row) => row.idempotencyKey);
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it("still preserves ABSENCE — a provider without images is not given one", () => {
+    // `resolveDefaultImageAdapter` picks an adapter by PROBING `generateImage`.
+    // A proxy that manufactured the member would make every provider look
+    // image-capable.
+    expect(meterLlmProviderAdapter(makeAdapter()).generateImage).toBeUndefined();
+  });
+});
+
 describe("meterLlmProviderAdapter — transparency and opt-out", () => {
   it("is idempotent: wrapping an already-metered adapter changes nothing", () => {
     const once = meterLlmProviderAdapter(makeAdapter());
@@ -335,8 +496,11 @@ describe("meterLlmProviderAdapter — transparency and opt-out", () => {
     expect(withoutBatch.generateImage).toBeUndefined();
     expect(withBatch.provider).toBe("openai");
     expect(withBatch.defaultModel).toBe("test-default-model");
-    // A pass-through member still does its job and is NOT metered.
-    await withBatch.generateImage!({ prompt: "p" });
+    // A pass-through member still does its job and is NOT metered. `submitBatch`
+    // is the honest example: a batch's tokens arrive on the RESULT rows and are
+    // booked there, so metering the submission would double-count.
+    // (`generateImage` IS metered — see the image describe block below.)
+    await withBatch.submitBatch!({} as never);
     expect(emitted()).toHaveLength(0);
   });
 
