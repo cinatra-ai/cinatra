@@ -65,9 +65,16 @@ import "server-only";
 //      before DISCLOSURE, with the candidate query returning ids only and no
 //      gate content at all.
 //
-// The handlers are deliberately COMMON: S8d reuses them for the widget policy
-// (the widget's enablement, read scope and confirmation are its own slice's) —
-// there is no widget wiring here, and the widget policy denies all three today.
+// THE HANDLERS ARE COMMON, AND S8d (cinatra#2577) TOOK THEM AT THEIR WORD. The
+// widget policy now reaches these same three primitives — the same code, the
+// same ladder, the same one refusal sentence. Exactly ONE thing is branched, in
+// `resolveLifecycleCaller`: WHERE the reading principal comes from. A chat frame
+// carries its own identity and the transport's role hints; a widget frame
+// carries a signed grant and is resolved through S8a's actor module, which
+// resolves the reader's live standing instead of assuming a floor. Everything
+// downstream of the principal — which rows exist, which the reader may see, what
+// a denial looks like — is untouched and shared, which is the point: the widget
+// reader is the same person under the same checks, never a wider one.
 // ---------------------------------------------------------------------------
 
 import { z } from "zod";
@@ -102,6 +109,13 @@ import {
   encodeLifecycleGateRef,
   resolveLifecycleCardState,
 } from "@/lib/lifecycle/lifecycle-card-refetch";
+// The S8a widget actor's LIVE-STANDING LEAF — the one place a widget lifecycle
+// reader's standing is resolved, shared with the refetch endpoint's token door
+// (cinatra#2577). The LEAF rather than the door on purpose: the door consumes a
+// `cwu_`, which this path never holds, and importing it would pull the widget
+// token store onto four route-locked first-party graphs for code a widget frame
+// never runs.
+import { resolveWidgetLifecycleActorForFrame } from "@/lib/lifecycle/widget-lifecycle-frame-actor";
 import type { ActorRoleHints } from "@/lib/authz/build-actor-context";
 // Type-only (erased at build): the reviewing-principal shape every lifecycle
 // port already threads. Importing the TYPE keeps this module off the review
@@ -207,9 +221,20 @@ function minted(viewType: LifecycleViewType, ref: string): McpToolResult {
  * caller's org role from the run's org when the caller declared the same active
  * org, so ordinary org-role access is unaffected.
  */
-function resolveLifecycleCaller(): ReviewActorContext | null {
+async function resolveLifecycleCaller(): Promise<ReviewActorContext | null> {
   const ctx = mcpRequestContextStorage.getStore();
   if (!ctx) return null;
+  // THE WIDGET BRANCH (cinatra#2577, epic #2564 S8d). A `public_site_widget`
+  // delegation is resolved somewhere else entirely, and deliberately: the hints
+  // this function assembles below are the TRANSPORT's (org role and platform
+  // role, no teams, no projects), which is fail-closed-narrow for a chat frame
+  // and simply WRONG for a widget one — a reader entitled to a review through a
+  // team or a project would be shown nothing and would reasonably conclude it
+  // does not exist. So the widget frame goes through the S8a actor module, which
+  // resolves those axes live, and this function never sees it.
+  if (ctx.delegatedActor?.delegation === "public_site_widget") {
+    return resolveWidgetLifecycleCaller(ctx.delegatedActor);
+  }
   const a2a = ctx.a2aActorContext;
   const userId = a2a?.userId ?? ctx.userId ?? null;
   const orgId = (a2a ? a2a.orgId : ctx.orgId) ?? null;
@@ -233,6 +258,45 @@ function resolveLifecycleCaller(): ReviewActorContext | null {
     actorOrganizationId: orgId,
   };
   return { actor, orgId, roleHints };
+}
+
+/**
+ * The reviewing principal for a PUBLIC-SITE WIDGET frame (cinatra#2577, epic
+ * #2564 S8d).
+ *
+ * TWO GATES, IN THIS ORDER, BOTH FAIL-CLOSED:
+ *
+ *   1. THE GRANT. The frame must carry `lifecycleRead` — the signed `lcr` claim
+ *      the route minted onto the widget OBO token from the `cwu_` it consumed.
+ *      A widget session that signed in before the grant existed carries none, so
+ *      it gets `null` here and the caller answers the ONE fixed refusal: no
+ *      DATA_PART, no ids, nothing that distinguishes "you may not" from "there
+ *      is nothing". The tool stays VISIBLE to that turn — the policy is a
+ *      surface, not a consent record — and calling it simply achieves nothing.
+ *
+ *   2. THE LIVE STANDING. Resolved by the S8a module, in the org the TOKEN is
+ *      bound to: membership now, org role now, teams and project grants now,
+ *      with platform standing floored. A membership revoked after the turn
+ *      started does not serve one more row.
+ *
+ * What this function does NOT do is decide which rows the reader may see. That
+ * is unchanged and shared: `enforceReviewRunAccess` on the listing,
+ * `resolveLifecycleCardState`'s ladder on each render. The widget reader is the
+ * SAME person against the SAME checks as in the app — never a wider one.
+ */
+async function resolveWidgetLifecycleCaller(actor: {
+  userId: string;
+  orgId: string;
+  kind: string;
+  lifecycleRead?: boolean;
+}): Promise<ReviewActorContext | null> {
+  if (actor.lifecycleRead !== true) return null;
+  const resolved = await resolveWidgetLifecycleActorForFrame({
+    userId: actor.userId,
+    orgId: actor.orgId,
+    kind: actor.kind,
+  });
+  return resolved.ok ? resolved.actorCtx : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,7 +362,7 @@ async function handleReviewGatesList(input: unknown): Promise<McpToolResult> {
   if (!parsed.success) return refusal();
   const limit = parsed.data.limit ?? LIST_LIMIT_DEFAULT;
 
-  const caller = resolveLifecycleCaller();
+  const caller = await resolveLifecycleCaller();
   if (!caller) return refusal();
 
   try {
@@ -355,7 +419,7 @@ async function renderLifecycleCard(
 ): Promise<McpToolResult> {
   const parsed = refSchema.safeParse(input);
   if (!parsed.success) return refusal();
-  const caller = resolveLifecycleCaller();
+  const caller = await resolveLifecycleCaller();
   if (!caller) return refusal();
   const state = await resolveLifecycleCardState({
     // The two render primitives address a gate-scoped row; the trigger proposal

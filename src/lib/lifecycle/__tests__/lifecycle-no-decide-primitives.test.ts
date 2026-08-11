@@ -10,8 +10,10 @@
 //   · `delegated-chat`   — a chat user's on-behalf-of token (this slice's
 //                          surface);
 //   · `delegated-widget` — a public-site widget's on-behalf-of token, for both
-//                          bound kinds (S8d's surface; nothing lifecycle is
-//                          enabled there yet, and that is asserted too).
+//                          bound kinds. Since cinatra#2577 (S8d) that perimeter
+//                          reaches the three READ-ONLY pull primitives and
+//                          nothing else, which this file now asserts in both
+//                          directions too.
 //
 // It fails in BOTH directions on purpose: a new `*_decide`/`*_approve` style
 // lifecycle primitive that slipped onto a policy fails here, and so does a
@@ -114,14 +116,31 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
     expect(reachable).toEqual([]);
   });
 
-  it("the generated inventory contains no widget-reachable lifecycle primitive at all", () => {
-    // Stricter than the chat rule by design: the widget's closed, kind-keyed
-    // allowlist holds only its CMS-edit primitive. Lifecycle READS arrive there
-    // with S8d (#2572) plus its own enablement; the DECIDE class never does.
+  it("the generated inventory contains no widget-reachable lifecycle DECISION primitive", () => {
+    // The same rule as chat, now that S8d (cinatra#2577) gave the widget the
+    // three reads: what may never be reachable there is the DECIDE class. The
+    // read set itself is pinned exactly, below.
     const reachable = inventoryPrimitiveNames()
-      .filter(isLifecycleName)
+      .filter((name) => isLifecycleName(name) && carriesDecisionVerb(name))
       .filter((name) => WIDGET_KINDS.some((k) => isDelegatedWidgetMcpToolAllowed(k, name)));
     expect(reachable).toEqual([]);
+  });
+
+  it("the ONLY widget-reachable lifecycle primitives are S3's three reads", () => {
+    // Read off the machine-scanned inventory rather than a hand-kept list, so a
+    // NEW lifecycle primitive that lands on the widget policy — of any shape,
+    // decision-verbed or not — fails here.
+    for (const kind of WIDGET_KINDS) {
+      const reachable = inventoryPrimitiveNames()
+        .filter(isLifecycleName)
+        .filter((name) => isDelegatedWidgetMcpToolAllowed(kind, name))
+        .sort();
+      expect(reachable, kind).toEqual([
+        "artifact_review_gate_render",
+        "artifact_review_gates_list",
+        "verification_record_render",
+      ]);
+    }
   });
 
   for (const name of FORBIDDEN_LIFECYCLE_NAMES) {
@@ -148,7 +167,7 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
   });
 });
 
-describe("the read-only pull primitives are reachable from chat only", () => {
+describe("the read-only pull primitives are reachable from BOTH delegated perimeters", () => {
   const PULL_PRIMITIVES = [
     "artifact_review_gates_list",
     "artifact_review_gate_render",
@@ -156,10 +175,14 @@ describe("the read-only pull primitives are reachable from chat only", () => {
   ];
 
   for (const name of PULL_PRIMITIVES) {
-    it(`${name} is chat-callable and widget-denied`, () => {
+    it(`${name} is callable from chat and from either widget kind`, () => {
+      // cinatra#2577 (S8d). Reaching the tool is not reading a row: these
+      // handlers resolve their own principal from the request frame — for a
+      // widget frame that means the signed `lifecycle.read` grant plus a live
+      // standing resolution — and refuse generically otherwise.
       expect(isDelegatedChatMcpToolAllowed(name)).toBe(true);
       for (const kind of WIDGET_KINDS) {
-        expect(isDelegatedWidgetMcpToolAllowed(kind, name)).toBe(false);
+        expect(isDelegatedWidgetMcpToolAllowed(kind, name), kind).toBe(true);
       }
     });
   }

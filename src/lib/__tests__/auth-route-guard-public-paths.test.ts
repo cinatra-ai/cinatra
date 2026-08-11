@@ -582,21 +582,25 @@ describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture wid
     );
   });
 
-  it("REGRESSION: the sibling /api/lifecycle-views/resolve stays session-guarded (307→/sign-in)", async () => {
-    // S1's refetch is COOKIE SESSION ONLY by design (its route header says so).
-    // The capture exemption must never reach it.
+  it("cinatra#2577 (S8d): the sibling /api/lifecycle-views/resolve is reachable cookieless too", async () => {
+    // S1's refetch was COOKIE SESSION ONLY; S8d opened its broker branch, which
+    // presents `credentials:"omit"`. A 307 here is invisible in production — the
+    // card renders no DOM on a failed resolve — so it is pinned as reachability.
+    // The HANDLER still authenticates both branches and 401s an unplaceable one.
     const res = await guardAppRoute(fakeRequest("/api/lifecycle-views/resolve"));
-    expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toContain("/sign-in");
+    expect(res.status).not.toBe(307);
   });
 
   it("REGRESSION: every OTHER lifecycle-views path stays session-guarded", async () => {
     for (const p of [
       "/api/lifecycle-views",
       "/api/lifecycle-views/",
-      "/api/lifecycle-views/resolve",
+      // /decide is S8b's and keeps its cookie gate until that slice lands.
       "/api/lifecycle-views/decide",
       "/api/lifecycle-views/anything-else",
+      // The two exemptions are EXACT: no descendant inherits them.
+      "/api/lifecycle-views/resolve/",
+      "/api/lifecycle-views/resolve/anything",
     ]) {
       const res = await guardAppRoute(fakeRequest(p));
       expect(res.status, `${p} must stay guarded`).toBe(307);
@@ -617,11 +621,32 @@ describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture wid
     }
   });
 
-  it("the exemption is never broadened to an /api/lifecycle-views prefix", () => {
-    // A bare namespace prefix would unguard resolve + decide in one edit.
+  it("the exemptions are never broadened to an /api/lifecycle-views prefix", () => {
+    // A bare namespace prefix would unguard capture, resolve AND decide in one
+    // edit. Two paths are exempt (capture, and resolve since cinatra#2577) and
+    // both must be EXACT entries; `decide` must not be exempt at all.
     expect(guardSource).not.toMatch(/"\/api\/lifecycle-views"\s*,/);
-    expect(guardSource).not.toMatch(/"\/api\/lifecycle-views\/resolve"/);
     expect(guardSource).not.toMatch(/"\/api\/lifecycle-views\/decide"/);
+    const exactBlock = guardSource.match(
+      /const PUBLIC_EXACT_PATHS = \[([\s\S]*?)\n\];/,
+    )?.[1];
+    expect(exactBlock ?? "").toMatch(/"\/api\/lifecycle-views\/resolve"/);
+    const prefixBlock = guardSource.match(
+      /const PUBLIC_PATH_PREFIXES = \[([\s\S]*?)\n\];/,
+    )?.[1];
+    expect(prefixBlock ?? "").not.toMatch(/lifecycle-views/);
+  });
+
+  it("SOURCE PIN: cinatra#2577's resolve entry states that the handler still authenticates", () => {
+    // Same convention as the capture entry above: a reachability exemption
+    // carries, on its own line, the reason it is safe.
+    const line = guardSource
+      .split("\n")
+      .find((l) => l.includes('"/api/lifecycle-views/resolve"'));
+    expect(line).toBeDefined();
+    expect((line ?? "").trimStart().startsWith('"')).toBe(true);
+    expect((line ?? "").toLowerCase()).toMatch(/lifecycle\.read/);
+    expect((line ?? "").toLowerCase()).toMatch(/401/);
   });
 });
 

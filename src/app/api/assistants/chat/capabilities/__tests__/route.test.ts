@@ -6,8 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // dependency boundaries mocked (the SAME boundaries the turn endpoint's
 // route.widget-broker.test.ts mocks), asserting:
 //   - the advertised auth modes now include BOTH "session" and "token-broker"
-//     (so `negotiateEmbedChatContract` can reach ok:true), renderableViews stays
-//     empty (no oracle beyond the static contract metadata).
+//     (so `negotiateEmbedChatContract` can reach ok:true), and renderableViews is
+//     SURFACE-SCOPED — §IX's chat_thread row for a session, §IX's site_widget row
+//     for the broker branch (no oracle beyond the static contract metadata; the
+//     shape is fixed per surface CLASS, never per caller).
 //   - session GET/POST are byte-unchanged (401 without a session; served with).
 //   - a valid cit_/cwu_ broker caller is SERVED the advertisement sessionlessly.
 //   - every fail-closed rung (cwu_ missing / unknown handle / cit_ reject / cwu_
@@ -129,12 +131,26 @@ describe("GET — broker-auth advertisement (Lane A)", () => {
     );
   });
 
-  it("cinatra#2565: the WIDGET branch advertises NO lifecycle view until S8d", async () => {
+  it("cinatra#2577: the WIDGET branch advertises review + verification, and ONLY those", async () => {
     primeHappyBroker();
     const res = await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" }));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.renderableViews).toEqual([]);
+    expect([...body.renderableViews].sort()).toEqual([
+      "artifact_review_gate",
+      "verification_summary",
+    ]);
+  });
+
+  it("cinatra#2577: recommendation and schedule proposal are NEVER advertised to the widget", async () => {
+    // §IX matrix conformance, asserted by NAME rather than by set equality, so a
+    // future view type added to the first-party row cannot arrive here silently.
+    primeHappyBroker();
+    const body = await (
+      await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" }))
+    ).json();
+    expect(body.renderableViews).not.toContain("trigger_schedule_proposal");
+    expect(body.renderableViews).not.toContain("recommendation_hold");
   });
 
   it("cinatra#2565: the two auth branches DIFFER in what they advertise", async () => {
@@ -148,7 +164,11 @@ describe("GET — broker-auth advertisement (Lane A)", () => {
       await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" }))
     ).json();
     expect(sessionBody.renderableViews).not.toEqual(widgetBody.renderableViews);
-    expect(widgetBody.renderableViews).toEqual([]);
+    // The widget list is a strict SUBSET of the first-party one — the widget can
+    // never be advertised something the app itself is not.
+    for (const view of widgetBody.renderableViews) {
+      expect(sessionBody.renderableViews).toContain(view);
+    }
   });
 
   it("401s when the cwu_ user token is missing (no anonymous broker read)", async () => {

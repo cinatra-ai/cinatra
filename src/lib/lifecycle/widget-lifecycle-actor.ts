@@ -48,10 +48,16 @@ import "server-only";
 // superset. The parity fixture asserts both halves of that sentence.
 // ---------------------------------------------------------------------------
 
-import { resolveActorGrantsForUserInOrg } from "@/lib/auth-session";
-import type { ActorRoleHints } from "@/lib/authz/build-actor-context";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
+// Steps 2 + 3 of the ladder live in the LIVE-STANDING LEAF, which this module
+// delegates to rather than duplicating (cinatra#2577 split it out so the MCP
+// pull's widget branch does not drag `widget-user-auth`'s synchronous postgres
+// leaf onto four route-locked graphs). One resolution, one assembly, two entries.
+import {
+  resolveWidgetLifecycleStanding,
+  type WidgetLifecycleStandingDenial,
+} from "@/lib/lifecycle/widget-lifecycle-frame-actor";
 import {
   WIDGET_LIFECYCLE_READ_ROUTE_PATH,
   WIDGET_LIFECYCLE_READ_SCOPE,
@@ -61,12 +67,14 @@ import {
   type UserTokenClaims,
 } from "@/lib/widget-user-auth";
 
-/**
- * The platform tier a widget lifecycle actor may ever carry. A named constant,
- * not a literal, so the structural bar can forbid hardcoded role literals on the
- * lifecycle read paths without this deliberate floor tripping it.
- */
-export const WIDGET_LIFECYCLE_PLATFORM_ROLE_FLOOR = "member" as const;
+// Re-exported so every S8a import path still resolves here — the split is an
+// internal one, not a move of this module's public surface.
+export {
+  buildWidgetLifecycleRoleHints,
+  resolveWidgetLifecycleActorForFrame,
+  WIDGET_LIFECYCLE_PLATFORM_ROLE_FLOOR,
+  type WidgetLifecycleFrameActorResult,
+} from "@/lib/lifecycle/widget-lifecycle-frame-actor";
 
 /**
  * The scopes a widget lifecycle READ requires. Passed to the single token
@@ -79,10 +87,8 @@ export const WIDGET_LIFECYCLE_READ_REQUIRED_SCOPES = [
 export type WidgetLifecycleActorDenial =
   /** The `cwu_` failed the single verifier — includes the scope/audience gate. */
   | "token_rejected"
-  /** The token is valid but its bound principal is no longer an org member. */
-  | "not_org_member"
-  /** The token carries no usable principal/org binding (defensive). */
-  | "unbound_principal";
+  /** Every reason a resolved STANDING can refuse (shared with the frame entry). */
+  | WidgetLifecycleStandingDenial;
 
 export type WidgetLifecycleActorResult =
   | {
@@ -145,7 +151,7 @@ export async function resolveWidgetLifecycleActorContext(input: {
     return { ok: false, reason: "unbound_principal" };
   }
 
-  // 2. THE LIVE STANDING — ONE resolution, in the TOKEN's org.
+  // 2 + 3. THE LIVE STANDING AND THE ACTOR — the shared leaf.
   //
   //    The token proves membership held at consent; this proves it holds now,
   //    against `claims.orgId` — the org the token is bound to — so a user's
@@ -157,44 +163,17 @@ export async function resolveWidgetLifecycleActorContext(input: {
   //    resolution is two observations of a changing fact, and any "prefer
   //    whichever answered" rule between them keeps the more generous one — so a
   //    demotion or a removal landing between the two would still hand out the
-  //    older, higher standing. Here `orgRole` IS the membership: absent means
+  //    older, higher standing. There `orgRole` IS the membership: absent means
   //    not a member, and there is nothing else to fall back to. (The resolver
   //    still issues several queries internally, so this is not a transactional
   //    snapshot — it is the ordinary concurrent-change boundary. What it removes
   //    is the RECONCILIATION between two role readings, which was the defect.)
-  const grants = await resolveActorGrantsForUserInOrg(claims.userId, claims.orgId);
-  if (!grants.orgRole) {
-    emitWidgetAuthAudit("widget_lifecycle_read_rejected", {
-      actor: claims.userId,
-      orgId: claims.orgId,
-      agentSlug: input.agentSlug,
-      siteOrigin: claims.siteOrigin,
-      reason: "not_org_member",
-    });
-    return { ok: false, reason: "not_org_member" };
-  }
-
-  // 3. THE ACTOR. `source: "a2a"` maps to `authSource: "a2a"`, matching the
-  //    widget runtime's existing actor marking so a widget-originated authz
-  //    audit row stays distinguishable from an in-app one. `authSource` is audit
-  //    metadata; it is never consulted by a `can()` decision, so it cannot make
-  //    this actor decide differently from the in-app one.
-  const actorCtx: ReviewActorContext = {
-    actor: {
-      actorType: "human",
-      source: "a2a",
-      userId: claims.userId,
-      orgId: claims.orgId,
-    },
+  const standing = await resolveWidgetLifecycleStanding({
+    userId: claims.userId,
     orgId: claims.orgId,
-    roleHints: buildWidgetLifecycleRoleHints({
-      orgId: claims.orgId,
-      orgRole: grants.orgRole,
-      teamIds: grants.teamIds,
-      teamRoles: grants.teamRoles,
-      projectGrants: grants.projectGrants,
-    }),
-  };
+    auditSlug: input.agentSlug,
+  });
+  if (!standing.ok) return standing;
 
   emitWidgetAuthAudit("widget_lifecycle_read_authorized", {
     actor: claims.userId,
@@ -207,34 +186,6 @@ export async function resolveWidgetLifecycleActorContext(input: {
     grantedScopes: claims.grantedScopes.join(" "),
   });
 
-  return { ok: true, actorCtx, claims };
+  return { ok: true, actorCtx: standing.actorCtx, claims };
 }
 
-/**
- * Assemble the role hints from a resolved grant bundle.
- *
- * Mirrors the in-app review actor's hint assembly exactly — the same axes, the
- * same "omit an axis the lineage did not resolve rather than forcing an
- * under-grant" rule — with ONE difference, which is the whole security posture
- * of this module: `platformRole` is the floor, never a resolved value.
- *
- * Exported so the parity fixture can drive it directly against the in-app hints
- * for the same bundle: the assertion is about these two assemblies, so the test
- * must call this one, not a copy of it.
- */
-export function buildWidgetLifecycleRoleHints(input: {
-  orgId: string;
-  orgRole?: "org_owner" | "org_admin" | "member";
-  teamIds?: string[];
-  teamRoles?: Record<string, "team_admin" | "member">;
-  projectGrants?: ActorRoleHints["projectGrants"];
-}): ActorRoleHints {
-  return {
-    platformRole: WIDGET_LIFECYCLE_PLATFORM_ROLE_FLOOR,
-    ...(input.orgRole ? { orgRole: input.orgRole } : {}),
-    ...(input.teamRoles ? { teamRoles: input.teamRoles } : {}),
-    ...(input.teamIds ? { teamIds: input.teamIds } : {}),
-    ...(input.projectGrants ? { projectGrants: input.projectGrants } : {}),
-    actorOrganizationId: input.orgId,
-  };
-}

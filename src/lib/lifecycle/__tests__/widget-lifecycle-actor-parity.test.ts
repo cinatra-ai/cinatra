@@ -311,6 +311,14 @@ describe("the shared resolution lineage", () => {
     path.resolve(__dirname, "../widget-lifecycle-actor.ts"),
     "utf8",
   );
+  // cinatra#2577 split the LIVE-STANDING half into its own leaf (so the MCP
+  // pull's widget branch does not drag the `cwu_` token store onto four
+  // route-locked graphs). The lineage assertion follows the resolution, so it
+  // reads the leaf; the door module is still read for what must NOT be there.
+  const WIDGET_STANDING_SRC = readFileSync(
+    path.resolve(__dirname, "../widget-lifecycle-frame-actor.ts"),
+    "utf8",
+  );
 
   /** The body of one top-level `async function <name>(` declaration. */
   function bodyOf(source: string, name: string): string {
@@ -329,9 +337,21 @@ describe("the shared resolution lineage", () => {
   });
 
   it("the WIDGET lineage resolves through the SAME shared resolver, and nothing else", () => {
-    expect(WIDGET_ACTOR_SRC).toContain("resolveActorGrantsForUserInOrg(");
-    expect(WIDGET_ACTOR_SRC).not.toContain("readProjectGrantsForUser(");
-    expect(WIDGET_ACTOR_SRC).not.toContain("readTeamsForUser(");
+    expect(WIDGET_STANDING_SRC).toContain("resolveActorGrantsForUserInOrg(");
+    for (const src of [WIDGET_STANDING_SRC, WIDGET_ACTOR_SRC]) {
+      expect(src).not.toContain("readProjectGrantsForUser(");
+      expect(src).not.toContain("readTeamsForUser(");
+    }
+  });
+
+  it("cinatra#2577: the split left exactly ONE standing resolution, in the leaf", () => {
+    // The split's whole risk is a second copy appearing in the door. The door
+    // must call the leaf and never the resolver, so the two entries can never
+    // resolve a reader differently.
+    expect(WIDGET_ACTOR_SRC).not.toContain("resolveActorGrantsForUserInOrg(");
+    expect(WIDGET_ACTOR_SRC).toContain("resolveWidgetLifecycleStanding(");
+    // And the leaf must not have acquired the token door on its way out.
+    expect(WIDGET_STANDING_SRC).not.toContain("consumeUserWidgetToken");
   });
 
   it("the app's actor entry points still go THROUGH the session helper", () => {

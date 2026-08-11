@@ -107,6 +107,8 @@ const wpPrincipal: WidgetPrincipal = {
   verifiedOrigin: "https://wp.example.test",
   assistantHandle: "wordpress",
   instancesConfigKey: "wordpress_instances",
+  // cinatra#2577 — a widget turn whose sign-in granted no lifecycle read.
+  lifecycleRead: false,
 };
 
 function argsWith(

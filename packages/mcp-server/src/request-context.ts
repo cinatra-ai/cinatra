@@ -103,6 +103,18 @@ export type DelegatedMcpActor =
        */
       platformRole: "member";
       /**
+       * Did the `cwu_` that authorized this turn carry the `lifecycle.read`
+       * grant (cinatra#2577, epic #2564 S8d)? A signed claim on the widget OBO
+       * token, never caller input. OPTIONAL and FAIL-CLOSED: absent (an older
+       * token, a turn whose consent predates the grant) reads as no grant, and
+       * the read-only lifecycle handlers refuse generically without it.
+       *
+       * It is the GRANT and nothing more. The reader's actual standing — org
+       * role, teams, project grants — is resolved live at read time, and every
+       * row is access-checked, so this flag can widen nothing on its own.
+       */
+      lifecycleRead?: boolean;
+      /**
        * The NORMALIZED connector-instance pin (cinatra#2017 S2 / B1), composed at
        * the transport boundary from the widget token's native `inst` (instanceId)
        * + `knd` (connectorKey) — a widget turn is ALWAYS instance-pinned. The

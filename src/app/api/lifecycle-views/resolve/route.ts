@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import {
+  LIFECYCLE_CARD_PRESENCE,
   LIFECYCLE_DATA_PART_VIEW_TYPES,
   LIFECYCLE_VIEW_REF_MAX_LENGTH,
   type LifecycleDataPartViewType,
@@ -10,7 +11,10 @@ import {
 import { resolveLifecycleCardState } from "@/lib/lifecycle/lifecycle-card-refetch";
 import { attachLifecycleSuggestions } from "@/lib/lifecycle/lifecycle-suggestion-chips";
 import { resolveTriggerScheduleProposalCard } from "@/lib/lifecycle/trigger-schedule-proposal-card";
+import { resolveWidgetLifecycleActorContext } from "@/lib/lifecycle/widget-lifecycle-actor";
+import { resolveAssistantWidgetBinding } from "@/lib/assistant-widget-handles";
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
+import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
 
 // ---------------------------------------------------------------------------
 // POST /api/lifecycle-views/resolve — the lifecycle card's authoritative
@@ -22,10 +26,26 @@ import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[
 // but a ref: the transcript stops being a place where anything about a gate is
 // readable, and a reload cannot resurrect a stale view of it.
 //
-// COOKIE SESSION ONLY. The broker-authenticated widget branch is deliberately
-// not served here: the widget's lifecycle enablement, its read scope and its
-// decide-time confirmation are S8d/S8a/S8b's, and serving it early would ship
-// the read half of a surface whose write half has no confirmation step yet.
+// TWO AUTH BRANCHES (cinatra#2577, epic #2564 S8d opened the second).
+//
+//   · COOKIE SESSION — the first-party hosts, unchanged.
+//   · BROKER `cwu_` — the public-site widget. Its actor is built by the S8a
+//     module (`resolveWidgetLifecycleActorContext`), which consumes the token at
+//     THIS route's audience with the `lifecycle.read` scope required and then
+//     resolves the reader's live standing. A widget session that signed in
+//     before the grant existed holds neither the audience nor the scope and dies
+//     at that consume.
+//
+// THE BRANCH IS DECIDED BY THE PRESENTED CREDENTIAL, NEVER BY A CLAIM ABOUT THE
+// SURFACE, and it does not fall back: a request carrying the widget user-token
+// header is a widget request, and a failed widget consume 401s rather than
+// dropping to an ambient cookie the iframe's own origin would happily supply.
+//
+// THE MATRIX IS ENFORCED HERE, NOT ONLY DRAWN. §IX makes recommendation and
+// schedule-proposal first-party-only, so the widget branch refuses those two
+// viewTypes with the SAME 200 `absent` every other denial produces — no reason,
+// no distinguishable status. The client already will not draw them (the presence
+// table gates the card); this makes the server refuse to describe them at all.
 //
 // A DENIAL IS A 200 `absent`, NEVER A 403. The status code is as much of an
 // oracle as the body: answering 403 for "you may not read this" and 200
@@ -54,8 +74,65 @@ const requestSchema = z
   })
   .strict();
 
+/** The `cwu_` proof header — the discriminant for the widget branch. */
+const WIDGET_USER_TOKEN_HEADER = "X-Cinatra-Widget-User-Token";
+/** The embed-forwarded parent (CMS) origin; re-checked against the token binding. */
+const WIDGET_ORIGIN_HEADER = "X-Cinatra-Widget-Origin";
+/** The embed-forwarded assistant handle; only a selector — the token is the authority. */
+const WIDGET_ASSISTANT_HEADER = "X-Cinatra-Widget-Assistant";
+
+/** The one denial shape this endpoint has: a 200 that says nothing exists. */
+function absent(): Response {
+  return Response.json(
+    { state: { state: "absent" } },
+    { headers: { "Cache-Control": "no-store" } },
+  );
+}
+
+/**
+ * Resolve the widget branch's reviewing actor from the presented `cwu_`.
+ * Returns `null` for every failure — a bad handle, a rejected token, a revoked
+ * membership — because the caller turns all of them into the same 401 that a
+ * missing credential produces.
+ */
+async function resolveWidgetBranchActor(
+  request: Request,
+  userToken: string,
+): Promise<ReviewActorContext | null> {
+  // An empty/whitespace bearer is refused HERE rather than left to the door.
+  // The door would refuse it too, but a branch that hands an empty string to a
+  // token verifier is one rename away from being a branch that hands it to
+  // something more forgiving.
+  if (userToken.length === 0) return null;
+  const handle = request.headers.get(WIDGET_ASSISTANT_HEADER)?.trim().toLowerCase() ?? "";
+  const binding = resolveAssistantWidgetBinding(handle);
+  if (!binding) return null;
+  const resolved = await resolveWidgetLifecycleActorContext({
+    token: userToken,
+    agentSlug: binding.agentSlug,
+    requestOrigin: request.headers.get(WIDGET_ORIGIN_HEADER),
+  });
+  return resolved.ok ? resolved.actorCtx : null;
+}
+
 export async function POST(request: Request): Promise<Response> {
-  const actorCtx = await resolveReviewActorContext();
+  // A presented widget user token SELECTS the widget branch and there is no
+  // session fallback behind it: this endpoint is same-origin to the embed
+  // iframe, so an ambient Cinatra cookie is exactly the thing a failed widget
+  // read must not be rescued by (the auth-confusion guard the turn endpoint and
+  // the capabilities route both carry).
+  //
+  // The discriminant is the header's PRESENCE, not whether its value looks
+  // usable (codex round 0, finding 3). Selecting on a trimmed non-empty value
+  // would send a request that DID present the widget header — with an empty or
+  // whitespace value — down the session branch, where an ambient cookie would
+  // answer it as somebody else. A caller that declares itself a widget is a
+  // widget, and a widget whose token is unusable is refused.
+  const presentedUserToken = request.headers.get(WIDGET_USER_TOKEN_HEADER);
+  const isWidgetBranch = presentedUserToken !== null;
+  const actorCtx = isWidgetBranch
+    ? await resolveWidgetBranchActor(request, presentedUserToken.trim())
+    : await resolveReviewActorContext();
   if (!actorCtx) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -64,6 +141,14 @@ export async function POST(request: Request): Promise<Response> {
   const parsed = requestSchema.safeParse(raw);
   if (!parsed.success) {
     return Response.json({ error: "Invalid lifecycle view request" }, { status: 400 });
+  }
+
+  // §IX presence, enforced server-side on the widget branch. A viewType this
+  // surface may not show is answered `absent` — the same answer as "you may not
+  // read this" and as "there is nothing here", so refusing it discloses nothing
+  // about which of the three it was.
+  if (isWidgetBranch && !LIFECYCLE_CARD_PRESENCE[parsed.data.viewType].site_widget) {
+    return absent();
   }
 
   // The schedule proposal resolves state AND body in one pass — they must agree,

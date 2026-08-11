@@ -276,6 +276,8 @@ describe("S5 widget OBO — full chain (mint → verify → policy → frame →
       jti: "turn-nonce-1",
       parentJti: "cwu-row-1",
       turnRunId: "run-of-this-turn",
+      // cinatra#2577 — no `lcr` claim was minted, so the grant reads false.
+      lifecycleRead: false,
       platformRole: "member",
     });
 
