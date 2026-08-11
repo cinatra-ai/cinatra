@@ -1,5 +1,5 @@
 /**
- * cinatra#2653 — which drafts may the /agents picker surface?
+ * cinatra#2653 — which uploaded drafts may the ADMIN extensions page list?
  *
  * The predicate is the ONE policy answer: internal executor-kind drafts pass;
  * assistant-kind drafts (the seeded builtin assistants are PERMANENT drafts by

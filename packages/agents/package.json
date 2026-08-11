@@ -65,6 +65,8 @@
     "./project-instance-store": "./src/project-instance-store.ts",
     "./project-template-install-gate": "./src/project-template-install-gate.ts",
     "./trigger-store": "./src/trigger-store.ts",
+    "./publish-template-action": "./src/publish-template-action.ts",
+    "./draft-visibility": "./src/draft-visibility.ts",
   "./trigger-schedule-proposal-service": "./src/trigger-schedule-proposal-service.ts",
   "./trigger-schedule-propose": "./src/trigger-schedule-propose.ts",
   "./trigger-recurrence": "./src/trigger-recurrence.ts",

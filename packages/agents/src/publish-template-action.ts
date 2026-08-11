@@ -1,48 +1,45 @@
 "use server";
 
 // ---------------------------------------------------------------------------
-// publishAgentTemplateAction (cinatra#2653) — the UI publish path for a draft
-// agent template surfaced on /agents.
+// publishAgentTemplateFormAction (cinatra#2653) — the ADMIN approval path for
+// an uploaded draft agent template, served from /configuration/extensions.
 //
-// Before this action the ONLY way to promote an imported draft was the MCP
-// `agent_update` tool. This server action mirrors that handler's publish
-// semantics exactly (mcp/handlers.ts `handleAgentBuilderUpdate`):
+// Owner ruling (PR #2658 review): an uploaded agent extension must NOT show
+// up in /agents until an admin approves it. The draft therefore surfaces on
+// the admin extensions page, and THIS action is the approval: it publishes
+// the draft and binds its current version in ONE transactional store
+// operation (`publishAgentTemplateAndBindVersion`) — the status flip carries
+// both assistant-kind guard arms, and the version binding
+// (`current_version_id`) commits atomically with it, so a published template
+// can never leave this path without a usable version (CodeRabbit major on
+// the previous two-step shape). Re-running it on an already-published
+// template is the repair path, not a masked no-op.
 //
-//   1. `updateAgentTemplate(id, { status: "published" })` — carries BOTH
-//      assistant-kind guard arms (the pre-read assertion and the atomic
-//      `agent_kind <> 'assistant'` WHERE arm), so an assistant can never be
-//      published even under a race;
-//   2. `createAgentTemplateVersionIfChanged(updated, ...)` — creates the
-//      first `agent_template_versions` row and ADVANCES
-//      `agent_templates.current_version_id`. The import path compiles an
-//      `agent_versions` snapshot but never binds a current version
-//      (import-agent-core.ts never touches `current_version_id`), so this
-//      step is what makes "Publish" honest: the published agent leaves with
-//      a bound current version instead of a dangling NULL pointer.
-//
-// Admin-gated with the SAME floor as the upload path that creates these
-// drafts (`requireAdminSession`, matching importAgentTemplate).
+// Conventions per packages/extensions/src/actions.ts (Template A,
+// restoreExtensionPackageFormAction): `requireAdminSession()` first; failures
+// are RETURNED, never thrown (a thrown server-action error is masked in a
+// production build); success ends in `redirect("/configuration/extensions")`,
+// which re-renders the destination (revalidatePath unnecessary).
 // ---------------------------------------------------------------------------
 
-import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import { requireAdminSession } from "@/lib/auth-session";
 import { logAuditEvent } from "@/lib/authz";
 import { POLICY_VERSION } from "@/lib/authz/actor-context";
 import {
-  createAgentTemplateVersionIfChanged,
+  publishAgentTemplateAndBindVersion,
   readAgentTemplateById,
-  updateAgentTemplate,
 } from "./store";
 
-export type PublishAgentTemplateResult =
-  | { ok: true; templateId: string }
-  | { ok: false; error: string };
+export type PublishAgentTemplateResult = { ok: false; error: string };
 
-export async function publishAgentTemplateAction(
-  templateId: string,
-): Promise<PublishAgentTemplateResult> {
+export async function publishAgentTemplateFormAction(input: {
+  templateId: string;
+}): Promise<PublishAgentTemplateResult | void> {
+  "use server";
   const session = await requireAdminSession();
 
+  const templateId = input?.templateId;
   if (!templateId || typeof templateId !== "string") {
     return { ok: false, error: "templateId is required." };
   }
@@ -51,48 +48,53 @@ export async function publishAgentTemplateAction(
   if (!template) {
     return { ok: false, error: "Agent template not found." };
   }
-  // Idempotent success — a double-click / stale card publishing an
-  // already-published template is not an error.
-  if (template.status === "published") {
-    return { ok: true, templateId };
+  if (template.agentKind === "assistant") {
+    // Early, readable refusal; the store's own guard arms are the backstop.
+    return { ok: false, error: "An assistant cannot be published." };
   }
-  if (template.status !== "draft") {
+  if (template.status !== "draft" && template.status !== "published") {
+    // "published" is allowed through: publishAgentTemplateAndBindVersion is
+    // the REPAIR path for a published template with no bound version.
     return {
       ok: false,
       error: `Only a draft can be published (current status: ${template.status}).`,
     };
   }
-  if (template.agentKind === "assistant") {
-    // Early, readable refusal; the store's own guard arms are the backstop.
-    return { ok: false, error: "An assistant cannot be published." };
-  }
 
-  const updated = await updateAgentTemplate(templateId, { status: "published" });
-  if (!updated) {
+  const result = await publishAgentTemplateAndBindVersion(templateId, {
+    createdBy: session.user.id,
+  });
+  if (!result) {
     // Zero-row outcome: the atomic assistant guard (or a concurrent delete)
-    // refused the flip. `updateAgentTemplate` classified it as a no-op.
+    // refused the flip; nothing was committed.
+    console.error(
+      `[agents] publish refused for template ${templateId} (guard or concurrent delete).`,
+    );
     return { ok: false, error: "Publish was refused for this template." };
   }
 
-  // Bind a current version (see header). Without this the template publishes
-  // with `current_version_id = NULL` — the second defect confirmed on #2653.
-  await createAgentTemplateVersionIfChanged(updated, {
-    createdBy: session.user.id,
-  });
+  // Fire-and-forget audit; a failed audit write must not roll back the
+  // publish (same contract as promoteExtensionToPublicAction).
+  try {
+    void logAuditEvent({
+      organizationId: result.record.orgId ?? undefined,
+      actorPrincipalId: session.user.id,
+      actorPrincipalType: "human",
+      authSource: "ui",
+      resourceType: "agent_template",
+      resourceId: result.record.id,
+      operation: "update",
+      decision: "allowed",
+      policyVersion: POLICY_VERSION,
+      metadata: {
+        statusTransition: { from: template.status, to: "published" },
+        boundVersionId: result.version.id,
+      },
+    });
+  } catch {
+    // best-effort
+  }
 
-  void logAuditEvent({
-    organizationId: updated.orgId ?? undefined,
-    actorPrincipalId: session.user.id,
-    actorPrincipalType: "human",
-    authSource: "ui",
-    resourceType: "agent_template",
-    resourceId: updated.id,
-    operation: "update",
-    decision: "allowed",
-    policyVersion: POLICY_VERSION,
-    metadata: { statusTransition: { from: "draft", to: "published" } },
-  });
-
-  revalidatePath("/agents");
-  return { ok: true, templateId };
+  // revalidatePath is unnecessary because redirect re-renders the destination.
+  redirect("/configuration/extensions");
 }

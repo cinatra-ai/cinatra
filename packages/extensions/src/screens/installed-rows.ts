@@ -29,6 +29,9 @@ import {
 } from "@cinatra-ai/extension-types";
 import type { ExtensionDiscoveryScope } from "@cinatra-ai/extension-types";
 import type { AgentTemplateRecord } from "@cinatra-ai/agents";
+import { readInstalledAgentTemplates } from "@cinatra-ai/agents/store";
+import { isSurfaceableDraftTemplate } from "@cinatra-ai/agents/draft-visibility";
+import { isPlatformAdmin } from "@/lib/auth-session";
 import {
   listExtensionPackages,
   CATALOG_PACKUMENT_TIMEOUT_MS,
@@ -102,9 +105,19 @@ export type InstalledCardRow = {
   vendor: string | null;
   /** Representative canonical row (active > locked > archived precedence). */
   canonical: InstalledExtension | null;
-  /** Effective display status. Missing canonical row ⇒ grandfathered active. */
-  status: "active" | "locked" | "archived";
+  /**
+   * Effective display status. Missing canonical row ⇒ grandfathered active.
+   * "draft" (cinatra#2653): an UPLOADED agent template pending admin approval
+   * — no canonical row at all; the card renders the amber DRAFT indicator and
+   * a Publish action instead of Settings/More-details.
+   */
+  status: "active" | "locked" | "archived" | "draft";
   requiredInProd: boolean;
+  /**
+   * The agent_templates id backing a "draft" row (cinatra#2653) — the input
+   * of the Publish (admin approval) server action. Absent on every other row.
+   */
+  draftTemplateId?: string;
   /**
    * The card's Settings destination — the per-extension Settings page (design
    * §V), one route for every kind. See {@link settingsHrefFor}.
@@ -337,6 +350,14 @@ function sortRows(rows: InstalledCardRow[]): InstalledCardRow[] {
 export type LoadedInstalledCardRows = {
   active: InstalledCardRow[];
   archived: InstalledCardRow[];
+  /**
+   * Uploaded agent-template drafts pending admin approval (cinatra#2653).
+   * Platform admins only — every other session gets an empty array. These
+   * rows have NO canonical `installed_extension` row (the ZIP upload writes
+   * none), which is exactly why the normal discovery intersection cannot
+   * surface them.
+   */
+  drafts: InstalledCardRow[];
   /** Registry catalog entries by packageName (newest published version, author). */
   availableByName: Map<string, AgentPackageSummary>;
   /** Resolved per-actor discovery scope (the caller reuses `organizationId`). */
@@ -579,5 +600,64 @@ export async function loadInstalledCardRows(
     }),
   ]);
 
-  return { active, archived, availableByName, scope, registryIdentities };
+  // ---------------------------------------------------------------------------
+  // Uploaded agent-template drafts pending admin approval (cinatra#2653).
+  //
+  // A ZIP upload creates an agent_templates row (status='draft') and NO
+  // canonical `installed_extension` row, so the discovery intersection above
+  // can never surface it — the upload was invisible everywhere. Owner ruling
+  // (PR #2658): it must NOT appear on /agents until an admin approves it, so
+  // THIS admin page lists it with a Publish (= approval) action instead.
+  //
+  // Platform admins only (the same floor as the upload path that creates the
+  // drafts — requireAdminSession). `isSurfaceableDraftTemplate` excludes
+  // assistant-kind drafts (the seeded builtin assistants are permanent drafts
+  // by design) and external rows; a draft whose packageName already has a
+  // visible canonical identity is skipped (the installed row wins).
+  // ---------------------------------------------------------------------------
+  let drafts: InstalledCardRow[] = [];
+  if (isPlatformAdmin(session as Parameters<typeof isPlatformAdmin>[0])) {
+    const draftTemplates = (
+      await readInstalledAgentTemplates({ statuses: ["draft"] })
+    ).filter(isSurfaceableDraftTemplate);
+    drafts = buildUploadedDraftRows(draftTemplates, canonicalByKey);
+  }
+
+  return { active, archived, drafts, availableByName, scope, registryIdentities };
+}
+
+/**
+ * Pure assembly of the uploaded-draft rows (cinatra#2653): map surfaceable
+ * draft agent templates to card rows, skipping any whose packageName already
+ * has a visible canonical identity (the installed row wins), sorted by the
+ * shared kind-then-name order. Exported for direct unit coverage.
+ */
+export function buildUploadedDraftRows(
+  draftTemplates: AgentTemplateRecord[],
+  canonicalByKey: ReadonlyMap<string, unknown>,
+): InstalledCardRow[] {
+  return sortRows(
+    draftTemplates
+      .filter(
+        (t): t is AgentTemplateRecord & { packageName: string } =>
+          typeof t.packageName === "string" &&
+          t.packageName.length > 0 &&
+          !canonicalByKey.has(rowKey("agent", t.packageName)),
+      )
+      .map((t) => ({
+        kind: "agent" as const,
+        packageName: t.packageName,
+        displayName: t.name,
+        description: t.description ?? null,
+        versionLabel: t.packageVersion ? `v${t.packageVersion}` : null,
+        rawVersion: t.packageVersion ?? null,
+        vendor: null,
+        canonical: null,
+        status: "draft" as const,
+        requiredInProd: false,
+        settingsHref: settingsHrefFor("agent", t.packageName),
+        visibility: t.origin?.visibility === "private" ? ("private" as const) : ("public" as const),
+        draftTemplateId: t.id,
+      })),
+  );
 }

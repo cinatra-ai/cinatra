@@ -3370,8 +3370,29 @@ export async function createAgentTemplateVersion(input: {
   snapshot: AgentTemplateVersionSnapshot;
   createdBy: string | null;
 }): Promise<AgentTemplateVersionRecord> {
+  return _createAgentTemplateVersion(db, input);
+}
+
+/**
+ * Executor-threaded core of {@link createAgentTemplateVersion} (cinatra#2653
+ * rework). The MAX(version_number)+1 read-then-insert below is race-prone on
+ * the pool; running it on a caller-supplied transaction closes that window in
+ * addition to making multi-statement publish flows atomic.
+ */
+async function _createAgentTemplateVersion(
+  exec: AgentTemplateWriteExecutor,
+  input: {
+    templateId: string;
+    semver: string;
+    bumpType: "major" | "minor" | "patch";
+    changelogLine: string | null;
+    contentHash: string;
+    snapshot: AgentTemplateVersionSnapshot;
+    createdBy: string | null;
+  },
+): Promise<AgentTemplateVersionRecord> {
   // Compute next versionNumber = MAX(version_number) + 1 (server-side, never client-provided)
-  const existing = await db
+  const existing = await exec
     .select({ versionNumber: agentTemplateVersions.versionNumber })
     .from(agentTemplateVersions)
     .where(eq(agentTemplateVersions.templateId, input.templateId))
@@ -3381,7 +3402,7 @@ export async function createAgentTemplateVersion(input: {
 
   const id = randomUUID();
   const now = new Date();
-  await db.insert(agentTemplateVersions).values({
+  await exec.insert(agentTemplateVersions).values({
     id,
     templateId: input.templateId,
     versionNumber: nextVersionNumber,
@@ -3415,7 +3436,15 @@ export async function createAgentTemplateVersion(input: {
 export async function readLatestAgentTemplateVersion(
   templateId: string,
 ): Promise<AgentTemplateVersionRecord | null> {
-  const rows = await db
+  return _readLatestAgentTemplateVersion(db, templateId);
+}
+
+/** Executor-threaded core of {@link readLatestAgentTemplateVersion}. */
+async function _readLatestAgentTemplateVersion(
+  exec: AgentTemplateWriteExecutor,
+  templateId: string,
+): Promise<AgentTemplateVersionRecord | null> {
+  const rows = await exec
     .select()
     .from(agentTemplateVersions)
     .where(eq(agentTemplateVersions.templateId, templateId))
@@ -3583,19 +3612,48 @@ export async function createAgentTemplateVersionIfChanged(
     createdBy?: string | null;
   } = {},
 ): Promise<{ version: AgentTemplateVersionRecord; created: boolean }> {
+  return _createAgentTemplateVersionIfChanged(db, template, opts);
+}
+
+/**
+ * Executor-threaded core of {@link createAgentTemplateVersionIfChanged}
+ * (cinatra#2653 rework): the latest-version read, the version insert AND the
+ * `current_version_id` pointer advance all run on the SAME executor, so a
+ * caller-supplied transaction makes the whole save atomic. Public callers keep
+ * the pool-backed wrapper above, byte-compatible.
+ */
+async function _createAgentTemplateVersionIfChanged(
+  exec: AgentTemplateWriteExecutor,
+  template: AgentTemplateRecord,
+  opts: {
+    changelogLine?: string | null;
+    bumpTypeOverride?: "major" | "minor" | "patch";
+    createdBy?: string | null;
+  } = {},
+): Promise<{ version: AgentTemplateVersionRecord; created: boolean }> {
   const snapshot = buildSnapshotFromTemplate(template);
   const contentHash = computeSnapshotContentHash(snapshot);
 
-  const latest = await readLatestAgentTemplateVersion(template.id);
+  const latest = await _readLatestAgentTemplateVersion(exec, template.id);
 
-  // Dedup — no-op save returns the existing latest version
+  // Dedup — a no-op save returns the existing latest version. REPAIR
+  // (cinatra#2653): even in the dedup case, re-point `current_version_id`
+  // when it is not already bound to this latest version — a partially-failed
+  // earlier publish (flip landed, binding did not) must be healed by retry,
+  // never masked.
   if (latest && latest.contentHash === contentHash) {
+    if (template.currentVersionId !== latest.id) {
+      await exec
+        .update(agentTemplates)
+        .set({ currentVersionId: latest.id })
+        .where(eq(agentTemplates.id, template.id));
+    }
     return { version: latest, created: false };
   }
 
   // First version always uses the initial semver value regardless of bumpType
   if (!latest) {
-    const version = await createAgentTemplateVersion({
+    const version = await _createAgentTemplateVersion(exec, {
       templateId: template.id,
       semver: "1.0.0",
       bumpType: opts.bumpTypeOverride ?? "patch",
@@ -3605,7 +3663,7 @@ export async function createAgentTemplateVersionIfChanged(
       createdBy: opts.createdBy ?? null,
     });
     // Advance current_version_id pointer to the new version
-    await db.update(agentTemplates).set({ currentVersionId: version.id }).where(eq(agentTemplates.id, template.id));
+    await exec.update(agentTemplates).set({ currentVersionId: version.id }).where(eq(agentTemplates.id, template.id));
     return { version, created: true };
   }
 
@@ -3621,7 +3679,7 @@ export async function createAgentTemplateVersionIfChanged(
     );
   }
 
-  const version = await createAgentTemplateVersion({
+  const version = await _createAgentTemplateVersion(exec, {
     templateId: template.id,
     semver: nextSemver,
     bumpType,
@@ -3631,9 +3689,61 @@ export async function createAgentTemplateVersionIfChanged(
     createdBy: opts.createdBy ?? null,
   });
   // Advance current_version_id pointer to the new version
-  await db.update(agentTemplates).set({ currentVersionId: version.id }).where(eq(agentTemplates.id, template.id));
+  await exec.update(agentTemplates).set({ currentVersionId: version.id }).where(eq(agentTemplates.id, template.id));
 
   return { version, created: true };
+}
+
+/**
+ * Publish a template AND bind its current version in ONE transaction
+ * (cinatra#2653, CodeRabbit major). The old two-step caller flow
+ * (`updateAgentTemplate({status:"published"})` then
+ * `createAgentTemplateVersionIfChanged`) could commit the status flip and then
+ * fail the binding, leaving a published template without a usable version —
+ * and the caller's idempotent-success path masked the damage on retry.
+ *
+ * Here the status flip (with ALL THREE assistant guard arms via
+ * `_runAgentTemplateUpdate`) and the version create + `current_version_id`
+ * advance run on one transaction: either the template leaves published WITH a
+ * bound version, or nothing changed. Calling it again on an
+ * already-published template is the REPAIR path: the flip is a no-op and the
+ * version binding is created or re-pointed as needed.
+ *
+ * Returns null when the write was refused (assistant-kind guard, or the
+ * template disappeared) — mirroring `updateAgentTemplate`'s zero-row
+ * classification. The Objects-layer shadow mirror runs AFTER commit, exactly
+ * like `_updateAgentTemplateImpl` (a refusal must never publish a mirrored
+ * state the transaction then rolls back).
+ */
+export async function publishAgentTemplateAndBindVersion(
+  id: string,
+  opts: { createdBy?: string | null } = {},
+): Promise<{ record: AgentTemplateRecord; version: AgentTemplateVersionRecord } | null> {
+  const result = await db.transaction(async (tx) => {
+    const record = await _runAgentTemplateUpdate(tx, id, { status: "published" }, undefined);
+    if (!record) return null;
+    const { version } = await _createAgentTemplateVersionIfChanged(tx, record, {
+      createdBy: opts.createdBy ?? null,
+    });
+    return { record: { ...record, currentVersionId: version.id }, version };
+  });
+  if (!result) return null;
+
+  // Mirror AFTER the transaction commits (same ordering rationale as
+  // _updateAgentTemplateImpl).
+  shadowUpsertObject({
+    id: result.record.id,
+    type: AGENT_TEMPLATE_TYPE_ID,
+    data: {
+      ...result.record,
+      createdAt: result.record.createdAt.toISOString(),
+      updatedAt: result.record.updatedAt.toISOString(),
+    },
+    orgId: result.record.orgId ?? null,
+    createdBy: result.record.creatorId ?? null,
+  });
+
+  return result;
 }
 
 function autoChangelog(

@@ -1,27 +1,28 @@
 /**
- * cinatra#2653 — the UI publish path for a draft agent template.
+ * cinatra#2653 — the admin approval (publish) path for an uploaded draft
+ * agent template, served from /configuration/extensions.
  *
- * What is pinned here is the HONESTY of the new Publish action:
+ * What is pinned here:
  *
- *   1. a draft publishes via `updateAgentTemplate({ status: "published" })`
- *      AND then binds a current version via
- *      `createAgentTemplateVersionIfChanged` — the import path compiles a
- *      version snapshot but never binds `current_version_id`, so a publish
- *      that skipped this step would ship a non-runnable "published" agent
- *      (the second defect confirmed on the issue);
- *   2. an assistant-kind template is refused BEFORE any write;
- *   3. an already-published template is an idempotent success (no writes);
- *   4. a zero-row update outcome (the store's atomic assistant guard, or a
- *      concurrent delete) surfaces as a refusal, not a fake success.
+ *   1. the action delegates to the ONE transactional store operation
+ *      `publishAgentTemplateAndBindVersion` (status flip + version binding
+ *      commit atomically — the CodeRabbit major on the previous two-step
+ *      shape), and success ends in `redirect("/configuration/extensions")`;
+ *   2. an already-published template is allowed through as the REPAIR path
+ *      (the atomic op re-points a missing `current_version_id`), never a
+ *      masked no-op;
+ *   3. an assistant-kind template is refused BEFORE any write;
+ *   4. refusals are RETURNED, never thrown (a thrown server-action error is
+ *      masked in a production build);
+ *   5. the admin gate runs before any read.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const requireAdminSession = vi.fn();
 const readAgentTemplateById = vi.fn();
-const updateAgentTemplate = vi.fn();
-const createAgentTemplateVersionIfChanged = vi.fn();
+const publishAgentTemplateAndBindVersion = vi.fn();
 const logAuditEvent = vi.fn();
-const revalidatePath = vi.fn();
+const redirect = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   requireAdminSession: (...a: unknown[]) => requireAdminSession(...a),
@@ -32,17 +33,20 @@ vi.mock("@/lib/authz", () => ({
 vi.mock("@/lib/authz/actor-context", () => ({
   POLICY_VERSION: "test-policy",
 }));
-vi.mock("next/cache", () => ({
-  revalidatePath: (...a: unknown[]) => revalidatePath(...a),
+vi.mock("next/navigation", () => ({
+  redirect: (...a: unknown[]) => {
+    redirect(...a);
+    // Mirror the real redirect(): it THROWS, ending the action.
+    throw Object.assign(new Error("NEXT_REDIRECT"), { digest: "NEXT_REDIRECT" });
+  },
 }));
 vi.mock("../store", () => ({
   readAgentTemplateById: (...a: unknown[]) => readAgentTemplateById(...a),
-  updateAgentTemplate: (...a: unknown[]) => updateAgentTemplate(...a),
-  createAgentTemplateVersionIfChanged: (...a: unknown[]) =>
-    createAgentTemplateVersionIfChanged(...a),
+  publishAgentTemplateAndBindVersion: (...a: unknown[]) =>
+    publishAgentTemplateAndBindVersion(...a),
 }));
 
-import { publishAgentTemplateAction } from "../publish-template-action";
+import { publishAgentTemplateFormAction } from "../publish-template-action";
 
 const draftTemplate = {
   id: "tpl-1",
@@ -52,110 +56,96 @@ const draftTemplate = {
   name: "Everyday AI Blog Drafter",
 };
 
+const publishedResult = {
+  record: {
+    ...draftTemplate,
+    status: "published",
+    currentVersionId: "ver-1",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  },
+  version: { id: "ver-1", semver: "1.0.0" },
+};
+
+async function runAction(templateId: string) {
+  try {
+    return await publishAgentTemplateFormAction({ templateId });
+  } catch (err) {
+    if ((err as { digest?: string }).digest === "NEXT_REDIRECT") return "redirected";
+    throw err;
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   requireAdminSession.mockResolvedValue({ user: { id: "admin-1" } });
   readAgentTemplateById.mockResolvedValue({ ...draftTemplate });
-  updateAgentTemplate.mockResolvedValue({
-    ...draftTemplate,
-    status: "published",
-  });
-  createAgentTemplateVersionIfChanged.mockResolvedValue({
-    version: { id: "ver-1" },
-    created: true,
-  });
+  publishAgentTemplateAndBindVersion.mockResolvedValue(publishedResult);
 });
 
-describe("publishAgentTemplateAction (cinatra#2653)", () => {
-  it("publishes a draft AND binds a current version", async () => {
-    const result = await publishAgentTemplateAction("tpl-1");
-    expect(result).toEqual({ ok: true, templateId: "tpl-1" });
-    expect(updateAgentTemplate).toHaveBeenCalledWith("tpl-1", {
-      status: "published",
+describe("publishAgentTemplateFormAction (cinatra#2653)", () => {
+  it("publishes a draft through the ONE atomic store op, then redirects to /configuration/extensions", async () => {
+    const outcome = await runAction("tpl-1");
+    expect(outcome).toBe("redirected");
+    expect(publishAgentTemplateAndBindVersion).toHaveBeenCalledTimes(1);
+    expect(publishAgentTemplateAndBindVersion).toHaveBeenCalledWith("tpl-1", {
+      createdBy: "admin-1",
     });
-    // The honesty core: the version pointer is bound on publish, with the
-    // acting admin recorded as creator.
-    expect(createAgentTemplateVersionIfChanged).toHaveBeenCalledTimes(1);
-    expect(createAgentTemplateVersionIfChanged).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "tpl-1", status: "published" }),
-      { createdBy: "admin-1" },
-    );
-    // Version binding runs on the UPDATED record, after the status flip.
-    const updateOrder = updateAgentTemplate.mock.invocationCallOrder[0];
-    const bindOrder =
-      createAgentTemplateVersionIfChanged.mock.invocationCallOrder[0];
-    expect(bindOrder).toBeGreaterThan(updateOrder);
-    expect(revalidatePath).toHaveBeenCalledWith("/agents");
+    expect(redirect).toHaveBeenCalledWith("/configuration/extensions");
     expect(logAuditEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         resourceType: "agent_template",
         resourceId: "tpl-1",
         operation: "update",
         decision: "allowed",
+        metadata: expect.objectContaining({ boundVersionId: "ver-1" }),
       }),
     );
   });
 
-  it("is admin-gated (requireAdminSession runs before any read)", async () => {
-    await publishAgentTemplateAction("tpl-1");
+  it("is admin-gated before any read", async () => {
+    await runAction("tpl-1");
     expect(requireAdminSession).toHaveBeenCalledTimes(1);
-    const gateOrder = requireAdminSession.mock.invocationCallOrder[0];
-    const readOrder = readAgentTemplateById.mock.invocationCallOrder[0];
-    expect(gateOrder).toBeLessThan(readOrder);
+    expect(requireAdminSession.mock.invocationCallOrder[0]).toBeLessThan(
+      readAgentTemplateById.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("allows an already-published template through as the repair path", async () => {
+    readAgentTemplateById.mockResolvedValue({ ...draftTemplate, status: "published" });
+    const outcome = await runAction("tpl-1");
+    expect(outcome).toBe("redirected");
+    expect(publishAgentTemplateAndBindVersion).toHaveBeenCalledTimes(1);
   });
 
   it("refuses an assistant-kind template before any write", async () => {
-    readAgentTemplateById.mockResolvedValue({
-      ...draftTemplate,
-      agentKind: "assistant",
-    });
-    const result = await publishAgentTemplateAction("tpl-1");
-    expect(result).toEqual({
-      ok: false,
-      error: "An assistant cannot be published.",
-    });
-    expect(updateAgentTemplate).not.toHaveBeenCalled();
-    expect(createAgentTemplateVersionIfChanged).not.toHaveBeenCalled();
+    readAgentTemplateById.mockResolvedValue({ ...draftTemplate, agentKind: "assistant" });
+    const outcome = await runAction("tpl-1");
+    expect(outcome).toEqual({ ok: false, error: "An assistant cannot be published." });
+    expect(publishAgentTemplateAndBindVersion).not.toHaveBeenCalled();
+    expect(redirect).not.toHaveBeenCalled();
   });
 
-  it("treats an already-published template as an idempotent success without writes", async () => {
-    readAgentTemplateById.mockResolvedValue({
-      ...draftTemplate,
-      status: "published",
-    });
-    const result = await publishAgentTemplateAction("tpl-1");
-    expect(result).toEqual({ ok: true, templateId: "tpl-1" });
-    expect(updateAgentTemplate).not.toHaveBeenCalled();
-    expect(createAgentTemplateVersionIfChanged).not.toHaveBeenCalled();
-  });
-
-  it("refuses a non-draft, non-published status", async () => {
-    readAgentTemplateById.mockResolvedValue({
-      ...draftTemplate,
-      status: "archived",
-    });
-    const result = await publishAgentTemplateAction("tpl-1");
-    expect(result).toEqual({
+  it("refuses an archived template", async () => {
+    readAgentTemplateById.mockResolvedValue({ ...draftTemplate, status: "archived" });
+    const outcome = await runAction("tpl-1");
+    expect(outcome).toEqual({
       ok: false,
       error: "Only a draft can be published (current status: archived).",
     });
-    expect(updateAgentTemplate).not.toHaveBeenCalled();
+    expect(publishAgentTemplateAndBindVersion).not.toHaveBeenCalled();
   });
 
-  it("surfaces a zero-row update outcome as a refusal, not a success", async () => {
-    updateAgentTemplate.mockResolvedValue(null);
-    const result = await publishAgentTemplateAction("tpl-1");
-    expect(result).toEqual({
-      ok: false,
-      error: "Publish was refused for this template.",
-    });
-    expect(createAgentTemplateVersionIfChanged).not.toHaveBeenCalled();
-    expect(revalidatePath).not.toHaveBeenCalled();
+  it("returns (never throws) the refusal when the atomic op refuses", async () => {
+    publishAgentTemplateAndBindVersion.mockResolvedValue(null);
+    const outcome = await runAction("tpl-1");
+    expect(outcome).toEqual({ ok: false, error: "Publish was refused for this template." });
+    expect(redirect).not.toHaveBeenCalled();
   });
 
   it("errors on a missing template", async () => {
     readAgentTemplateById.mockResolvedValue(null);
-    const result = await publishAgentTemplateAction("tpl-1");
-    expect(result).toEqual({ ok: false, error: "Agent template not found." });
+    const outcome = await runAction("tpl-1");
+    expect(outcome).toEqual({ ok: false, error: "Agent template not found." });
   });
 });
