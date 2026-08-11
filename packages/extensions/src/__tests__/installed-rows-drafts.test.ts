@@ -71,12 +71,14 @@ describe("buildUploadedDraftRows (cinatra#2653)", () => {
       kind: "agent",
       packageName: "@e2e/blog-drafter-agent",
       displayName: "Everyday AI Blog Drafter",
-      versionLabel: "v1.0.0",
       status: "draft",
       canonical: null,
       requiredInProd: false,
       draftTemplateId: "tpl-1",
     });
+    // Derived label `v${packageVersion}` — asserted as a same-line matcher
+    // (the source-leak gate's sanctioned form for version-shaped literals).
+    expect(rows[0].versionLabel).toBe("v1.0.0");
   });
 
   it("skips a draft whose packageName already has a canonical identity (installed row wins)", () => {

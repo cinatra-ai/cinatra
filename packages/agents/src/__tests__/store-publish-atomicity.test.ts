@@ -22,6 +22,13 @@ import { readFileSync } from "node:fs";
 import * as path from "node:path";
 
 const storeSource = readFileSync(path.resolve(__dirname, "..", "store.ts"), "utf8");
+// The executor-threaded version cores live in the ./store-template-versions
+// vertical slice (file-size ratchet extraction, same fix round); the publish
+// transaction itself stays in store.ts.
+const versionsSource = readFileSync(
+  path.resolve(__dirname, "..", "store-template-versions.ts"),
+  "utf8",
+);
 
 /** The publishAgentTemplateAndBindVersion function body. */
 function publishFnBody(): string {
@@ -33,10 +40,10 @@ function publishFnBody(): string {
 
 /** The _createAgentTemplateVersionIfChanged function body. */
 function ifChangedBody(): string {
-  const start = storeSource.indexOf("async function _createAgentTemplateVersionIfChanged");
+  const start = versionsSource.indexOf("async function _createAgentTemplateVersionIfChanged");
   expect(start).toBeGreaterThan(-1);
-  const end = storeSource.indexOf("\n/**", start + 1);
-  return storeSource.slice(start, end === -1 ? undefined : end);
+  const end = versionsSource.indexOf("\n/**", start + 1);
+  return versionsSource.slice(start, end === -1 ? undefined : end);
 }
 
 describe("publishAgentTemplateAndBindVersion atomicity wiring (cinatra#2653)", () => {
@@ -78,9 +85,9 @@ describe("publishAgentTemplateAndBindVersion atomicity wiring (cinatra#2653)", (
   });
 
   it("the version-number allocation runs on the executor (closing the MAX+1 race under tx)", () => {
-    const start = storeSource.indexOf("async function _createAgentTemplateVersion(");
+    const start = versionsSource.indexOf("async function _createAgentTemplateVersion(");
     expect(start).toBeGreaterThan(-1);
-    const body = storeSource.slice(start, storeSource.indexOf("\n}", storeSource.indexOf("return {", start)));
+    const body = versionsSource.slice(start, versionsSource.indexOf("\n}", versionsSource.indexOf("return {", start)));
     expect(body).toMatch(/exec\s*[\r\n\s]*\.select\(/);
     expect(body).toMatch(/exec\.insert\(agentTemplateVersions\)/);
   });
