@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { FileIcon, Trash2Icon, CloudUploadIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,11 +22,17 @@ import {
   useDropzone,
 } from "@/components/ui/dropzone";
 import { importAgentTemplate } from "./import-export-actions";
-import {
-  PublishDestinationPicker,
-  type PublishDestination,
-} from "@cinatra-ai/extensions/components/publish-destination-picker";
 import { LicenseWarningDialog } from "@cinatra-ai/extensions/components/license-warning-dialog";
+// The upload form's first-class scope picker: the checkbox multi-select
+// mode of the unified access picker. It configures which scopes can access
+// the uploaded extension; the publish destination is no longer user-facing —
+// an uploaded extension always lands in the local registry by default
+// (owner ruling on cinatra#2644).
+import { AccessCombobox } from "@/components/access-combobox";
+import {
+  normalizeVisibilitySelection,
+  type AgentAuthPolicyVisibility,
+} from "./auth-policy-types";
 
 // Same draft panel that the GitHub install form uses, mounted
 // on the ZIP upload tab so admins can capture upload-time policy +
@@ -124,27 +131,22 @@ async function parseZipFile(file: File): Promise<AgentPreview> {
 }
 
 type ImportAgentFormProps = {
-  /** Passed from parent RSC which reads loadDeploymentRegistryConfig() server-side. */
-  privateDestinationConfigured?: boolean;
-  /** Scopes for the access picker inside PermissionsFormDraft. */
+  /** Scopes for the first-class access picker and PermissionsFormDraft. */
   availableScopes?: AvailableScopes;
 };
 
 export function ImportAgentForm({
-  privateDestinationConfigured = false,
   availableScopes,
 }: ImportAgentFormProps) {
+  const router = useRouter();
   const [nameOverride, setNameOverride] = useState("");
   const [isPending, startTransition] = useTransition();
-  // Default to "private" when private destination is configured.
-  const [destination, setDestination] = useState<PublishDestination>(
-    privateDestinationConfigured ? "private" : "public",
-  );
 
-  // Upload-time PermissionsFormDraft state. The advanced panel
-  // is hidden behind a disclosure so the default flow (admin-only) stays
-  // one-click. When the user opens it, the captured policy + co-owner ids
-  // are threaded into importAgentTemplate's `permissions` option.
+  // Upload-time permissions state. The ACCESS half renders first-class in
+  // this form (the checkbox multi-select scope picker); the advanced panel
+  // behind the disclosure adds the OWNERSHIP half (co-owners) and shares the
+  // same draft state. The captured policy + co-owner ids are threaded into
+  // importAgentTemplate's `permissions` option on every submit.
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [permissionsDraft, setPermissionsDraft] = useState<PermissionsFormDraftValue>({
     policy: {
@@ -155,6 +157,22 @@ export function ImportAgentForm({
     },
     coOwners: [],
   });
+
+  // Scope selection → locksteps the three visibility fields through the
+  // canonicalizing normalizer, mirroring PermissionsFormDraft's own
+  // projection so both mounts of the picker agree on shape.
+  const setAccessScopes = (next: string[]) => {
+    const selection = normalizeVisibilitySelection(next as AgentAuthPolicyVisibility[]);
+    setPermissionsDraft((prev) => ({
+      ...prev,
+      policy: {
+        runListVisibility: selection,
+        runDataVisibility: selection,
+        runExecuteVisibility: selection,
+        allowRunSharing: prev.policy.allowRunSharing,
+      },
+    }));
+  };
 
   // License dialog state.
   // When the server action throws LicenseAcknowledgementRequiredError, open this dialog.
@@ -190,21 +208,32 @@ export function ImportAgentForm({
   async function runImport(zipBase64: string, licenseAcknowledged = false) {
     setLicenseRejectError(null);
     try {
-      const permissions = advancedOpen
-        ? {
-            policy: permissionsDraft.policy,
-            coOwnerUserIds: permissionsDraft.coOwners.map((c) => c.userId),
-          }
-        : undefined;
+      // The scope picker is first-class now, so the captured policy always
+      // rides the submit (its default is the owner-only floor — the same
+      // effective access the permissions-less submit produced before).
+      const permissions = {
+        policy: permissionsDraft.policy,
+        coOwnerUserIds: permissionsDraft.coOwners.map((c) => c.userId),
+      };
       const result = await importAgentTemplate(zipBase64, nameOverride.trim() || undefined, {
-        destination,
+        // The publish destination is not user-facing: an uploaded extension
+        // always lands in the local registry by default (owner ruling on
+        // cinatra#2644). "private" routes through resolvePublishDestination,
+        // which resolves the instance's own destination — on a dev instance,
+        // the local Verdaccio via the dev fallback.
+        destination: "private",
         licenseAcknowledged,
         permissions,
+        // The success landing is /configuration/extensions (owner ruling on
+        // cinatra#2644) — suppress the server-side redirect and navigate
+        // client-side after the warnings have been surfaced.
+        redirect: false,
       });
       // Surface non-fatal install-time permissions warnings.
       for (const warning of result.warnings) {
         toast.warning(warning, { duration: 8000 });
       }
+      router.push("/configuration/extensions");
     } catch (err) {
       const code = (err as { code?: string }).code;
       const message = err instanceof Error ? err.message : "Import failed.";
@@ -322,19 +351,30 @@ export function ImportAgentForm({
         </div>
       )}
 
-      {/* Publish destination picker, last step before submit. */}
+      {/* Access scope picker, last step before submit: the checkbox
+          multi-select mode of the unified access picker. Configures which
+          scopes can access the uploaded extension. */}
       <Separator className="my-1" />
-      <PublishDestinationPicker
-        value={destination}
-        onValueChange={setDestination}
-        privateDestinationConfigured={privateDestinationConfigured}
-        idPrefix="import-form"
-      />
+      {availableScopes && (
+        <div className="flex flex-col gap-2">
+          <Label className="text-sm font-semibold text-foreground">Access</Label>
+          <AccessCombobox
+            selectionMode="multiple"
+            value={permissionsDraft.policy.runListVisibility}
+            onChange={setAccessScopes}
+            scopes={availableScopes}
+            disabled={isPending}
+          />
+          <p className="text-xs text-muted-foreground">
+            Choose which scopes can access the uploaded extension.
+          </p>
+        </div>
+      )}
 
-      {/* Advanced access & ownership controls. Hidden by default
-          (admin-only is the safe ZIP-upload behaviour); when opened, captures
-          policy + co-owner picks that importAgentTemplate seeds into the
-          polymorphic permission tables for the new agent_template. */}
+      {/* Advanced ownership controls. Hidden by default; when opened,
+          captures co-owner picks that importAgentTemplate seeds into the
+          polymorphic permission tables for the new agent_template. Access
+          renders first-class above and shares the same draft state. */}
       {availableScopes && (
         <div className="flex flex-col gap-3">
           <Separator className="my-1" />
@@ -347,13 +387,17 @@ export function ImportAgentForm({
             disabled={isPending}
           >
             {advancedOpen
-              ? "Hide access & ownership"
-              : "Configure access & ownership (advanced)"}
+              ? "Hide ownership"
+              : "Configure ownership (advanced)"}
           </Button>
           {advancedOpen && (
             <PermissionsFormDraft
               value={permissionsDraft}
               onChange={setPermissionsDraft}
+              // Access renders first-class in this form above; the advanced
+              // panel contributes only the Ownership half. Both share the
+              // same draft state, so there is exactly one source of truth.
+              showAccess={false}
               availableScopes={availableScopes}
               searchCandidates={async (q, page) => {
                 const result = await searchExtensionCoOwnerCandidates(

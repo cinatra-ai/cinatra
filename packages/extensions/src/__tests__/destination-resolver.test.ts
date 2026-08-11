@@ -62,7 +62,10 @@ describe("resolvePublishDestination", () => {
     expect(err.code).toBe("PUBLISH_DESTINATION_NOT_CONFIGURED");
     expect(err.visibility).toBe("private");
     expect(err.message).toContain("private");
-    expect(err.message).toContain("Contact your admin");
+    // cinatra#2644: the message names the actual configuration step (the
+    // CINATRA_DEPLOYMENT_REGISTRY_* env keys), never "contact your admin".
+    expect(err.message).toContain("CINATRA_DEPLOYMENT_REGISTRY_PRIVATE_URL");
+    expect(err.message).not.toContain("Contact your admin");
   });
 
   it("throws PublishDestinationNotConfiguredError when constructed with visibility 'public'", async () => {

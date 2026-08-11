@@ -22,13 +22,94 @@ import type { ExtensionOrigin } from "@cinatra-ai/agents/schema";
 // ---------------------------------------------------------------------------
 // Error — thrown when the requested visibility has no configured destination.
 // ---------------------------------------------------------------------------
+/** Why the private destination could not be resolved — the two cases have
+ *  DIFFERENT remediations (cinatra#2644, codex round 0): setting the
+ *  `CINATRA_DEPLOYMENT_REGISTRY_PRIVATE_*` env keys only declares the
+ *  destination; the publish credential itself lives in `extension_destinations`
+ *  and is provisioned separately. */
+export type PublishDestinationNotConfiguredReason =
+  | "destination-unconfigured"
+  | "credential-missing";
+
+function publishDestinationNotConfiguredMessage(
+  visibility: "private" | "public",
+  reason: PublishDestinationNotConfiguredReason,
+): string {
+  // Name the ACTUAL configuration step (the CINATRA_DEPLOYMENT_REGISTRY_* env
+  // keys, see src/lib/deployment-registry-config.ts) instead of "contact your
+  // admin" — on a solo/local instance the viewer IS the admin and there is no
+  // UI that configures a destination (cinatra#2644).
+  if (visibility === "public") {
+    return (
+      "No public publish destination is configured. Set the " +
+      "CINATRA_DEPLOYMENT_REGISTRY_PUBLIC_PUBLISH_TOKEN environment key " +
+      "to enable public publishing."
+    );
+  }
+  if (reason === "credential-missing") {
+    return (
+      "The configured private publish destination has no stored publish " +
+      "credential. Provision the destination credential (extension_destinations) " +
+      "before publishing privately."
+    );
+  }
+  return (
+    "No private publish destination is configured. Set the " +
+    "CINATRA_DEPLOYMENT_REGISTRY_PRIVATE_URL, " +
+    "CINATRA_DEPLOYMENT_REGISTRY_PRIVATE_READ_TOKEN, and " +
+    "CINATRA_DEPLOYMENT_REGISTRY_PRIVATE_DESTINATION_ID environment keys, and " +
+    "provision the destination's publish credential, to configure one."
+  );
+}
+
 export class PublishDestinationNotConfiguredError extends Error {
   readonly code = "PUBLISH_DESTINATION_NOT_CONFIGURED";
-  constructor(public readonly visibility: "private" | "public") {
-    super(`No ${visibility} publish destination is configured. Contact your admin.`);
+  constructor(
+    public readonly visibility: "private" | "public",
+    public readonly reason: PublishDestinationNotConfiguredReason = "destination-unconfigured",
+  ) {
+    super(publishDestinationNotConfiguredMessage(visibility, reason));
     this.name = "PublishDestinationNotConfiguredError";
   }
 }
+
+// ---------------------------------------------------------------------------
+// Dev-only local-Verdaccio PUBLISH fallback (cinatra#2644 — parity with the
+// install path's resolveDevLocalVerdaccioInstallEnvironment below).
+//
+// A fresh `cinatra install` dev instance seeds a local Verdaccio that the
+// INSTALL path already falls back to, but the publish path threw
+// PublishDestinationNotConfiguredError — so agent upload was unusable out of
+// the box in local dev. The MCP publish handlers (agent_source_publish /
+// agent_registry_publish in packages/agents/src/mcp/handlers.ts) each carry a
+// catch-based copy of this fallback; hoisting it INSIDE the canonical
+// resolvePublishDestination() gives the UI import path
+// (packages/agents/src/import-agent-core.ts) and publishToRegistry the same
+// behavior without a fourth copy. The handlers' catch blocks are preserved for
+// the non-dev wired-Verdaccio case and simply never fire in dev now.
+//
+// Gated on CINATRA_RUNTIME_MODE === "development" so production keeps the hard
+// PublishDestinationNotConfiguredError. Errors from the Verdaccio loader are
+// swallowed (return null) so the resolver still throws its canonical error and
+// existing callers keep their composed error paths.
+async function resolveDevLocalVerdaccioPublishDestination(
+  vendorScopeOverride: string | null,
+): Promise<VerdaccioConfig | null> {
+  if (process.env.CINATRA_RUNTIME_MODE !== "development") return null;
+  try {
+    const { loadVerdaccioConfigForServer } = await import("@/lib/verdaccio-config");
+    const fallback = await loadVerdaccioConfigForServer();
+    if (!fallback.token) return null;
+    // Clone so the dev-mode publish-scope override still propagates — exactly
+    // the shape the MCP handlers' catch-based fallback builds.
+    return vendorScopeOverride
+      ? { ...fallback, packageScope: `@${vendorScopeOverride}` }
+      : fallback;
+  } catch {
+    return null;
+  }
+}
+
 
 // ---------------------------------------------------------------------------
 // InstallEnvironment — returned by resolveInstallEnvironment.
@@ -69,9 +150,26 @@ export async function resolvePublishDestination(
   visibility: "private" | "public",
   options?: { vendorScopeOverride?: string | null },
 ): Promise<VerdaccioConfig> {
-  const deployConfig = loadDeploymentRegistryConfig();
-  const identity = readInstanceIdentity();
   const override = options?.vendorScopeOverride?.trim() || null;
+
+  // The config loader itself can throw BEFORE any visibility branch is
+  // reached (fail-closed production without config, incoherent env config).
+  // The dev-only local-Verdaccio fallback must be reachable on that path too,
+  // or a dev instance whose loader fails resolves nothing while other probes
+  // succeed — an inconsistency flagged in the #2644 review. When the fallback
+  // does not apply, the ORIGINAL loader error is rethrown unchanged.
+  let deployConfig: ReturnType<typeof loadDeploymentRegistryConfig>;
+  try {
+    deployConfig = loadDeploymentRegistryConfig();
+  } catch (configErr) {
+    if (visibility === "private") {
+      const devFallback = await resolveDevLocalVerdaccioPublishDestination(override);
+      if (devFallback) return devFallback;
+    }
+    throw configErr;
+  }
+
+  const identity = readInstanceIdentity();
   const vendorScope = override
     ? `@${override}`
     : identity
@@ -96,12 +194,17 @@ export async function resolvePublishDestination(
     !deployConfig.privateRegistryUrl ||
     !deployConfig.privateDestinationId
   ) {
+    // cinatra#2644: dev-only local-Verdaccio fallback — install/publish parity.
+    const devFallback = await resolveDevLocalVerdaccioPublishDestination(override);
+    if (devFallback) return devFallback;
     throw new PublishDestinationNotConfiguredError("private");
   }
 
   const cred = await readDestinationCredential(deployConfig.privateDestinationId);
   if (!cred) {
-    throw new PublishDestinationNotConfiguredError("private");
+    const devFallback = await resolveDevLocalVerdaccioPublishDestination(override);
+    if (devFallback) return devFallback;
+    throw new PublishDestinationNotConfiguredError("private", "credential-missing");
   }
 
   // Per-field AAD binding: destination.<destinationId>.publish-token
