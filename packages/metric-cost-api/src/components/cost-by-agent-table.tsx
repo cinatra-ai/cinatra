@@ -10,7 +10,8 @@ import type { CostByAgentRow } from "../store";
 // The ONE cost-cell formatter (cinatra#2582 / #2641). Imported rather than
 // re-declared: this table used to print "$0.00" for a group whose cost the
 // ledger does not know, and cinatra#2641 puts a NAMED agent behind unpriced
-// spend for the first time — `blog-post-image`, one row per billed image. An
+// spend for the first time — `blog-post-image`, one row per resolved image
+// invocation. An
 // agent that ALSO does priced work lands in a mixed group, whose `SUM(cost_usd)`
 // is a partial number; `formatCostCell` says how many rows it leaves out.
 import { formatCostCell } from "./cost-by-provider-table";
