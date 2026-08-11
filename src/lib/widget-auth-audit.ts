@@ -16,7 +16,13 @@ export type WidgetAuthAuditEvent =
   | "init_failure"
   | "page_viewed"
   | "page_invalid_txn"
-  | "consent_denied" // user not a member, or explicit deny
+  // The hosted widget login refused to authorize: no session, a stale/replayed
+  // transaction, or the signed-in user is not a member of the transaction's org.
+  // The NAME predates cinatra#2631 (which removed the separate consent step —
+  // signing in is the grant now) and is kept so the existing trail stays one
+  // series for its consumers; it has always meant "this login did not become an
+  // authorization".
+  | "consent_denied"
   | "code_issued"
   | "redeem_success"
   | "redeem_failure"
@@ -46,7 +52,14 @@ export type WidgetAuthAuditEvent =
   // the static advertisement (this authenticates the capability READ; it does
   // not authorize a run — the turn's own dual-token decision above is the
   // dispatch record). Reason-coded/scrubbed like its siblings; never a secret.
-  | "assistant_chat_capabilities_broker_advertised";
+  | "assistant_chat_capabilities_broker_advertised"
+  // cinatra#2574 (epic #2564 S8a) — the authorization DECISION for a widget
+  // LIFECYCLE READ. Emitted by the one actor-construction seam every widget
+  // lifecycle read goes through: authorized once the `cwu_` proved the
+  // lifecycle grant AND the live org membership held, rejected (reason-coded,
+  // never a secret and never a row identifier) on any fail-closed deny.
+  | "widget_lifecycle_read_authorized"
+  | "widget_lifecycle_read_rejected";
 
 export type WidgetAuthAuditFields = {
   actor?: string | null; // userId (never an email/secret)
@@ -59,6 +72,12 @@ export type WidgetAuthAuditFields = {
   ip?: string | null;
   ua?: string | null;
   reason?: string | null;
+  /**
+   * The extension scopes a consent granted / a token carried (cinatra#2574),
+   * space-delimited. Capability NAMES only — the scope vocabulary is public and
+   * contains no credential, and the scrubber still runs over it.
+   */
+  grantedScopes?: string | null;
 };
 
 // Patterns that must NEVER appear in an audit line (defense-in-depth against a

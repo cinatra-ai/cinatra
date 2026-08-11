@@ -3948,12 +3948,10 @@ END $$` },
     // cinatra#407 — hosted /widget-auth PKCE login + user-scoped widget token.
     //
     // Three short-lived, single-use-discipline tables for the per-user widget
-    // login (Plan B, EPIC #406). All secrets are HASH-AT-REST (only sha256 of
-    // each code/token is stored). Dedicated tables (NOT TTL-cached
-    // connector_config JSON) so the single-use consume is an atomic
-    // UPDATE/DELETE...RETURNING free of read-modify-write races. Each carries an
-    // expires_at index driving the on-write sweep (no external cron). The full
-    // engine + the security rationale live in src/lib/widget-user-auth.ts.
+    // login (Plan B, EPIC #406). All secrets are HASH-AT-REST; dedicated tables
+    // (NOT TTL-cached connector_config JSON) so each single-use consume is an
+    // atomic UPDATE/DELETE...RETURNING, and each carries an expires_at index
+    // driving the on-write sweep. Engine + rationale: src/lib/widget-user-auth.ts.
     //
     // Table 1 — auth transactions. Created by the site-token-authenticated init
     // route; pins the SERVER-VERIFIED context {site_id, client, org_id,
@@ -3973,11 +3971,12 @@ END $$` },
       expires_at     timestamptz NOT NULL,
       consumed_at    timestamptz
     )` },
-    { text: `CREATE INDEX IF NOT EXISTS widget_auth_transactions_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_auth_transactions" (expires_at)` },
-    // Table 2 — user authorization codes. Issued by the hosted page after the
-    // logged-in MEMBER consents; keyed by the sha256 of the plaintext code
+    { text: `CREATE INDEX IF NOT EXISTS widget_auth_transactions_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_auth_transactions" (expires_at)` }, { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."widget_auth_transactions" ADD COLUMN IF NOT EXISTS displayed_scopes text` }, { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."widget_auth_transactions" ADD COLUMN IF NOT EXISTS screen_nonce_hash text` }, { text: `ALTER TABLE IF EXISTS "public"."session" ADD COLUMN IF NOT EXISTS cinatra_db_created_at timestamptz DEFAULT now()` }, // #2631: what the sign-in screen SHOWED this transaction, written once when that screen renders. The SECOND alter is WHOSE ARRIVAL that record belongs to — the sha256 of the single-use nonce the same node minted and handed to that one browser in the sign-in redirect URL, written in the SAME statement as the record so the two are one fact; a record with no nonce (one left by a node predating this) fails closed at the grant, like the unclassified value. See widgetScreenNonceMatches in src/lib/widget-lifecycle-scope.ts. Both columns are created ONLY here, for fresh and installed deployments alike — adding either to the CREATE above would rewrite a deployed column line, which the schema-migration gate reads as a drop/retype. The ALTERs ride this line for file-size headroom. The THIRD alter is the DATABASE's own record of when a Better Auth session row was INSERTED — an app-owned column on an auth-owned table (the `teamMember`.`role` precedent), provisioned by EVERY node at boot so that a node running the PREVIOUS build, which inserts session rows without naming it, still gets a DATABASE-clock value rather than its own. NULLABLE with a DEFAULT, deliberately: the DEFAULT is what fills both the rows already there when the column is added and every row inserted without naming it, so a nullability constraint would add no guarantee this needs — and the schema-migration gate's additive carve-out is nullable columns, which is what this is. A NULL, however it arose, makes the ordering comparison NULL, which is not true, so it proves nothing and refuses. Better Auth never writes or updates it, so a session refresh cannot move it; the hosted widget login compares it with a transaction's created_at (same clock, both insert-time) to prove a session ALREADY EXISTED when a transaction was created — see sessionRowPredatesTransaction in src/lib/widget-user-auth.ts. IF EXISTS: on a fresh install this runs before Better Auth's own migration creates the table, and a missing table must not abort the schema init
+    // Table 2 — user authorization codes. Issued by the hosted page once the
+    // sign-in authorized it; keyed by the sha256 of the plaintext code
     // (which is postMessage'd to the verified opener origin and never stored).
     // Carries the full user binding; redeemed exactly once via DELETE...RETURNING.
+    // `granted_scopes` (cinatra#2574): the consented extension-scope set; NULLABLE + back-filled by the ALTER below, so a code already in flight carries no grant — the fail-closed answer for a consent that predates the extension.
     { text: `CREATE TABLE IF NOT EXISTS "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" (
       code_hash      text PRIMARY KEY,
       user_id        text NOT NULL,
@@ -3988,10 +3987,11 @@ END $$` },
       agent_slug     text NOT NULL,
       instance_id    text NOT NULL,
       code_challenge text NOT NULL,
+      granted_scopes text,
       created_at     timestamptz NOT NULL DEFAULT now(),
       expires_at     timestamptz NOT NULL
     )` },
-    { text: `CREATE INDEX IF NOT EXISTS widget_auth_codes_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" (expires_at)` },
+    { text: `CREATE INDEX IF NOT EXISTS widget_auth_codes_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" (expires_at)` }, { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" ADD COLUMN IF NOT EXISTS granted_scopes text` }, // the ALTER rides this line for file-size-ratchet headroom; CREATE TABLE IF NOT EXISTS never touches an existing table, so an installed deployment gains the column only here
     // Table 3 — opaque short-lived user tokens (cwu_). Browser-held bearer the
     // stream route validates (CHILD 3). Keyed by sha256(rawToken); only the hash
     // is stored. Multi-use within TTL; instant revoke via row delete or the live

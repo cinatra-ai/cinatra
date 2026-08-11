@@ -375,17 +375,54 @@ function toKernelTeamRoles(
  */
 async function resolveSessionGrantsAndTeams(
   session: { user?: { id?: string | null } | null; session?: { activeOrganizationId?: string | null } | null },
-): Promise<{
-  projectGrants: ProjectGrant[];
-  teamIds: string[];
-  teamRoles?: Record<string, "team_admin" | "member">;
-}> {
+): Promise<ResolvedActorGrants> {
   const userId = session.user?.id ?? null;
   const orgId = session.session?.activeOrganizationId ?? null;
   if (!userId || !orgId) return { projectGrants: [], teamIds: [] };
-  const orgRole = await resolveOrgRoleForSession(
-    session as SessionWithUserAndActiveOrg,
-  );
+  const resolved = await resolveActorGrantsForUserInOrg(userId, orgId);
+  // The session lineage's callers resolve `orgRole` themselves (through
+  // `resolveOrgRoleForSession`) and pass it into `buildActorContext`
+  // separately, so it is dropped from this return value exactly as before.
+  return {
+    projectGrants: resolved.projectGrants,
+    teamIds: resolved.teamIds,
+    ...(resolved.teamRoles ? { teamRoles: resolved.teamRoles } : {}),
+  };
+}
+
+/**
+ * The org/team/project axes for ONE (userId, orgId) pair — the single
+ * resolution lineage every permission-bearing surface reads.
+ *
+ * Extracted (cinatra#2574, epic #2564 S8a) from `resolveSessionGrantsAndTeams`
+ * without a behaviour change, because the widget's lifecycle reads have to
+ * resolve the SAME axes for the SAME person and "the same" must be a fact about
+ * the code rather than a claim in a comment. The session lineage calls it with
+ * the session's active org; the `cwu_` lineage calls it with the org the token
+ * is bound to. One function, one set of queries, one option shape — so a widget
+ * read and an in-app read of the same row cannot disagree because one of them
+ * forgot an axis.
+ *
+ * Deliberately carries NO platform role: platform standing is the caller's to
+ * decide (a session reads it off the session; the widget floors it to `member`),
+ * and folding it in here would let a surface acquire it by accident.
+ *
+ * Always returns arrays (`[]` = "resolved, none", never `undefined`), so the
+ * kernel marks the context RESOLVED rather than degrading to "not resolved".
+ */
+export type ResolvedActorGrants = {
+  projectGrants: ProjectGrant[];
+  teamIds: string[];
+  teamRoles?: Record<string, "team_admin" | "member">;
+  orgRole?: AuthzOrgRole;
+};
+
+export async function resolveActorGrantsForUserInOrg(
+  userId: string,
+  orgId: string,
+): Promise<ResolvedActorGrants> {
+  if (!userId || !orgId) return { projectGrants: [], teamIds: [] };
+  const orgRole = await cachedResolveOrgRole(orgId, userId);
   const teams = await readTeamsForUser(userId, orgId);
   const teamIds = teams.map((t) => t.id);
   const teamRoles = toKernelTeamRoles(teams);
@@ -398,6 +435,7 @@ async function resolveSessionGrantsAndTeams(
     projectGrants,
     teamIds,
     ...(teamRoles ? { teamRoles } : {}),
+    ...(orgRole ? { orgRole } : {}),
   };
 }
 

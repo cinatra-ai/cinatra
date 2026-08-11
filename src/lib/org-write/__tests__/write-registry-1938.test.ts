@@ -211,6 +211,11 @@ describe("R4 import-ban ratchet (#1939 wave 3, Decision 4)", () => {
       "materializeExtensionInstanceForProject#1939",
       "materializeExtensionTemplate#1939",
       "purgeBackfilledDormantContentTurns#1939",
+      // cinatra#2631 — the transaction's displayed-scope record joins the same
+      // site-widget login family as createAuthTransaction / issueUserAuthCode:
+      // no app session to mint an org axis from, the axis rides the stored
+      // transaction row. Ledgered on the same #1939 exemption, deliberately.
+      "recordDisplayedScopesForTransaction#1939",
       "redeemUserAuthCode#1939",
       "removeTeamMemberAction#1939",
       "repairImplicitDefaultThreadBinding#1939",

@@ -977,6 +977,30 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
     },
   },
   {
+    // cinatra#2631 — records, on the transaction, what is KNOWN about what was
+    // displayed for it: the scope set the hosted SIGN-IN SCREEN showed, or the
+    // no-screen sentinel a node writes once it has PROVED none rendered. Either
+    // way the grant taken after the sign-in can be checked against it. The same
+    // statement stores the HASH of the single-use nonce that names WHOSE arrival
+    // the record is (rework round 7, finding 1) — one write, two columns, so a
+    // record can never exist without the arrival it belongs to. Write-once (it
+    // may only replace the unclassified value a transaction is created with,
+    // while no nonce is attached) and NON-CONSUMING: it never touches
+    // consumed_at, which is why it is safe on the page render.
+    module: "src/lib/widget-user-auth.ts",
+    exportName: "recordDisplayedScopesForTransaction",
+    capability: "org.settings",
+    orgIdExtractor: "stored transaction row's org (the row is addressed by its own id)",
+    storageReferences: ["widget_auth_transactions"],
+    cascadeOwnership: "inert-history",
+    importBanned: false,
+    importBanExemption: {
+      issue: 1939,
+      reason:
+        "site-widget login flow: the org axis rides the stored transaction row and the hosted page has no app-session principal to mint from — needs the connect-surface authority-minting decision",
+    },
+  },
+  {
     module: "src/lib/widget-user-auth.ts",
     exportName: "issueUserAuthCode",
     capability: "org.settings",
