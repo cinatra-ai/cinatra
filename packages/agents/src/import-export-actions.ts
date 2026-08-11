@@ -33,6 +33,7 @@ import { requireAdminSession } from "@/lib/auth-session";
 import {
   createAgentTemplate,
   createAgentVersion,
+  readAgentTemplateById,
 } from "./store";
 import type { CreateAgentTemplateInput } from "./store";
 import { importAgentTemplateCore } from "./import-agent-core";
@@ -331,16 +332,80 @@ export async function importAgentTemplate(
     }
   }
 
-  // Owner ruling (PR #2658 review, revised): an admin upload goes LIVE — the
-  // status flip and the compiled-version binding (`current_version_id`)
-  // commit atomically in publishAgentTemplateAndBindVersion, AFTER the scope
-  // policy above is saved, so the agent surfaces on /agents already scoped.
-  // Runs after the import transaction; on failure the template stays a draft
-  // and the warning names the repair (re-upload upserts by packageName, and
-  // the atomic op's dedup path re-points a half-bound version — never a
-  // masked no-op). All assistant guard arms stay: a refusal (null) is
-  // surfaced, not retried around.
+  // Owner ruling (PR #2658 review, revised): an admin upload goes LIVE. Two
+  // steps, both UI-upload-path only:
+  //
+  //   1. REGISTER the upload in the canonical installed-extensions store
+  //      through the sanctioned lifecycle primitive, so the EXISTING
+  //      installed list on /configuration/extensions shows it (the ZIP
+  //      upload previously wrote no installed_extension row, so the list
+  //      could never surface it). Probe first: the store insert is not an
+  //      upsert, and a re-upload of an already-registered package is a
+  //      template upsert, not a second row. An archived row is an operator
+  //      decision; it is never auto-resurrected here.
+  //   2. PUBLISH-AND-BIND: the status flip and the compiled-version binding
+  //      (current_version_id) commit atomically in
+  //      publishAgentTemplateAndBindVersion, AFTER the scope policy above is
+  //      saved, so the agent surfaces on /agents already scoped. On failure
+  //      the template stays a draft and the warning names the repair
+  //      (re-upload upserts by packageName; the atomic op's dedup path
+  //      re-points a half-bound version, never a masked no-op). All
+  //      assistant guard arms stay: a refusal (null) is surfaced, not
+  //      retried around.
   if (publishAndBind) {
+    try {
+      const template = await readAgentTemplateById(result.templateId);
+      if (template?.packageName) {
+        const { readInstalledExtensionsByPackageName } = await import(
+          "@cinatra-ai/extensions/canonical-store"
+        );
+        const existingRows = await readInstalledExtensionsByPackageName(template.packageName);
+        if (existingRows.length === 0) {
+          const { installExtensionManifest } = await import(
+            "@cinatra-ai/extensions/lifecycle-primitive"
+          );
+          await installExtensionManifest(
+            {
+              id: `iext_${randomUUID().slice(0, 12)}`,
+              packageName: template.packageName,
+              ownerLevel: claimantOrgId ? "organization" : "platform",
+              ownerId: claimantOrgId,
+              organizationId: claimantOrgId,
+              kind: "agent",
+              source: {
+                type: "local",
+                path: `agent-template:${result.templateId}`,
+                resolvedCommitOrTreeHash: `upload@${template.packageVersion ?? "0.0.0"}`,
+              },
+              version: template.packageVersion ?? undefined,
+              requiredInProd: false,
+              dependencies: [],
+              manifestHash: null,
+              accessDeclaration: null,
+            },
+            {
+              actor: { source: "ui", userId: creatorId },
+              reason: "cinatra#2653: an admin upload registers as installed and goes live",
+            },
+          );
+        } else if (
+          !existingRows.some((r) => r.status === "active" || r.status === "locked")
+        ) {
+          warnings.push(
+            "This package is archived in the installed-extensions store — restore it from the Archived tab on /configuration/extensions to relist it.",
+          );
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(
+        "[agents/import-export-actions] installed-extension registration failed (non-fatal):",
+        message,
+      );
+      warnings.push(
+        "The agent was imported but could not be registered in the installed-extensions list — re-upload the archive to retry.",
+      );
+    }
     try {
       const published = await publishAgentTemplateAndBindVersion(result.templateId, {
         createdBy: creatorId ?? null,

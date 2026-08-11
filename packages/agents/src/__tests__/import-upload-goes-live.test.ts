@@ -30,6 +30,9 @@ const logAuditEvent = vi.fn();
 const setExtensionInstaller = vi.fn();
 const saveExtensionAccessPolicy = vi.fn();
 const addExtensionCoOwner = vi.fn();
+const readAgentTemplateById = vi.fn();
+const readInstalledExtensionsByPackageName = vi.fn();
+const installExtensionManifest = vi.fn();
 
 vi.mock("@/lib/auth-session", () => ({
   requireAdminSession: (...a: unknown[]) => requireAdminSession(...a),
@@ -43,6 +46,14 @@ vi.mock("@/lib/authz/actor-context", () => ({
 vi.mock("../store", () => ({
   createAgentTemplate: vi.fn(),
   createAgentVersion: vi.fn(),
+  readAgentTemplateById: (...a: unknown[]) => readAgentTemplateById(...a),
+}));
+vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
+  readInstalledExtensionsByPackageName: (...a: unknown[]) =>
+    readInstalledExtensionsByPackageName(...a),
+}));
+vi.mock("@cinatra-ai/extensions/lifecycle-primitive", () => ({
+  installExtensionManifest: (...a: unknown[]) => installExtensionManifest(...a),
 }));
 vi.mock("../import-agent-core", () => ({
   importAgentTemplateCore: (...a: unknown[]) => importAgentTemplateCore(...a),
@@ -94,6 +105,13 @@ beforeEach(() => {
   setExtensionInstaller.mockResolvedValue({ ok: true });
   saveExtensionAccessPolicy.mockResolvedValue({ ok: true });
   addExtensionCoOwner.mockResolvedValue({ ok: true });
+  readAgentTemplateById.mockResolvedValue({
+    id: "tpl-1",
+    packageName: "@e2e/blog-drafter-agent",
+    packageVersion: "0.3.1",
+  });
+  readInstalledExtensionsByPackageName.mockResolvedValue([]);
+  installExtensionManifest.mockResolvedValue({ id: "iext-row-1", status: "active" });
 });
 
 describe("importAgentTemplate upload path goes live (cinatra#2653)", () => {
@@ -127,9 +145,73 @@ describe("importAgentTemplate upload path goes live (cinatra#2653)", () => {
     );
   });
 
-  it("does NOT publish without the flag (the MCP ZIP import path keeps landing drafts)", async () => {
+  it("registers the upload in the canonical installed-extensions store BEFORE going live", async () => {
+    const result = await importAgentTemplate("emlwLXBheWxvYWQ=", undefined, {
+      redirect: false,
+      publishAndBind: true,
+    });
+    expect(installExtensionManifest).toHaveBeenCalledTimes(1);
+    const [row, opts] = installExtensionManifest.mock.calls[0] as [
+      Record<string, unknown>,
+      { actor: { source: string; userId?: string }; reason: string },
+    ];
+    expect(row).toMatchObject({
+      packageName: "@e2e/blog-drafter-agent",
+      kind: "agent",
+      ownerLevel: "organization",
+      ownerId: "org-1",
+      organizationId: "org-1",
+      requiredInProd: false,
+      dependencies: [],
+    });
+    expect(row.source).toMatchObject({ type: "local" });
+    expect(opts.actor).toMatchObject({ source: "ui", userId: "admin-1" });
+    // Registration lands before the go-live flip.
+    expect(installExtensionManifest.mock.invocationCallOrder[0]).toBeLessThan(
+      publishAgentTemplateAndBindVersion.mock.invocationCallOrder[0],
+    );
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("does not insert a second row when the package is already registered live", async () => {
+    readInstalledExtensionsByPackageName.mockResolvedValue([{ status: "active" }]);
+    const result = await importAgentTemplate("emlwLXBheWxvYWQ=", undefined, {
+      redirect: false,
+      publishAndBind: true,
+    });
+    expect(installExtensionManifest).not.toHaveBeenCalled();
+    expect(result.warnings).toEqual([]);
+    // The go-live flip still runs (re-upload is the repair path).
+    expect(publishAgentTemplateAndBindVersion).toHaveBeenCalledTimes(1);
+  });
+
+  it("never auto-resurrects an archived row — it warns and points at the Archived tab", async () => {
+    readInstalledExtensionsByPackageName.mockResolvedValue([{ status: "archived" }]);
+    const result = await importAgentTemplate("emlwLXBheWxvYWQ=", undefined, {
+      redirect: false,
+      publishAndBind: true,
+    });
+    expect(installExtensionManifest).not.toHaveBeenCalled();
+    expect(result.warnings).toEqual([expect.stringContaining("Archived tab")]);
+  });
+
+  it("surfaces a registration failure as a warning and still goes live", async () => {
+    installExtensionManifest.mockRejectedValue(new Error("insert refused"));
+    const result = await importAgentTemplate("emlwLXBheWxvYWQ=", undefined, {
+      redirect: false,
+      publishAndBind: true,
+    });
+    expect(result.warnings).toEqual([
+      expect.stringContaining("could not be registered in the installed-extensions list"),
+    ]);
+    expect(publishAgentTemplateAndBindVersion).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT publish or register without the flag (the MCP ZIP import path keeps landing drafts)", async () => {
     await importAgentTemplate("emlwLXBheWxvYWQ=", undefined, { redirect: false });
     expect(publishAgentTemplateAndBindVersion).not.toHaveBeenCalled();
+    expect(installExtensionManifest).not.toHaveBeenCalled();
+    expect(readInstalledExtensionsByPackageName).not.toHaveBeenCalled();
     expect(logAuditEvent).not.toHaveBeenCalled();
   });
 
