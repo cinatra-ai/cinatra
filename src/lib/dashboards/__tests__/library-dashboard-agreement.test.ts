@@ -5,9 +5,10 @@
 //
 // The library gates a dashboard-typed artifact via the SINGLE canonical
 // `object.read` filter over the dashboard's scope tuple
-// (`evaluateOwnershipVisibility` ∘ `deriveDashboardScopeTuple`). The /dashboards
-// surfaces gate via the scope resolver (`filterReadableDashboards` →
-// `resolveDashboardAccess` + the project grant). Post-cutover the two MUST return
+// (`evaluateOwnershipVisibility` ∘ `deriveDashboardScopeTuple`). The dashboard
+// surfaces gate via the scope resolver, reached through the app-side adapter
+// (`filterReadableDashboards` → role normalization → `resolveDashboardAccess` +
+// the project grant). Post-cutover the two MUST return
 // the identical verdict for EVERY (dashboard, actor) pair — this test drives a
 // generated corpus (all owner tiers × project/non-project × owner/member/
 // non-member × grant/no-grant, same-org and cross-org) through BOTH and asserts
@@ -67,7 +68,7 @@ const ROWS: Row[] = [
   r("xorg-proj", "organization", "org-2", "p9", "org-2"), // cross-org project row (org-2's p9)
 ];
 
-// Actors. `grants` seeds BOTH the /dashboards projectGrants and the library
+// Actors. `grants` seeds BOTH the adapter's projectGrants and the library
 // vantage's projectIds (a project member's read gate is the grant on both sides).
 type ActorSpec = {
   name: string;

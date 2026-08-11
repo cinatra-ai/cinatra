@@ -27,7 +27,7 @@ import type {
 import {
   scopeRemoveListingAction,
   type ScopeActionArg,
-} from "@/app/dashboards/scope-dashboards-actions";
+} from "@/components/dashboards/scope-dashboards-actions";
 
 export async function ScopeDashboardsSection({
   actor,

@@ -151,7 +151,7 @@ export default async function ProjectDetailPage({ params }: Props) {
   // axis via `readProjectGrantsForUser` (Source 1 implicit-owned incl.
   // org-owned member read, Source 2 explicit user/team/org grants, Source 3
   // co-owner). 404-hide on a miss so existence is never leaked. This is the
-  // SAME resolved-grant source the `/dashboards` tab route, the `/projects`
+  // SAME resolved-grant source this landing's own Dashboards tab, the `/projects`
   // cube, and the `/artifacts` project dashboard gate on — NOT the kernel
   // `can(project.read)` path, whose `member` role would grant blanket org-wide
   // read and defeat the sealed room.

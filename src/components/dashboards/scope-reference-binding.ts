@@ -23,7 +23,7 @@ import {
   scopeListCandidatesAction,
   scopeRequestPromotionAction,
   type ScopeActionArg,
-} from "@/app/dashboards/scope-dashboards-actions";
+} from "@/components/dashboards/scope-dashboards-actions";
 
 import type { ScopeReferenceSource } from "./scope-dashboards-contract";
 

@@ -11,11 +11,14 @@ import type { DashboardRow } from "./schema";
 const ACTIVE_STATUSES = ["published"] as const;
 
 /**
- * Rows in the actor's org that are candidates for the `/dashboards` list:
- * published, and EXCLUDING project-scope TEMPLATE rows (`is_template = true AND
- * template_scope = 'project'`) — those are templates only; their per-project
- * instances are the operational rows. Owner/project access filtering is applied
- * by the caller (filterReadableDashboards).
+ * Rows in the actor's org that are candidates for a dashboard READ surface (the
+ * `/artifacts` library's dashboard entries, the blog deep-link resolver, the
+ * artifact-pointer readers): published, and EXCLUDING project-scope TEMPLATE
+ * rows (`is_template = true AND template_scope = 'project'`) — those are
+ * templates only; their per-project instances are the operational rows.
+ * This read is NOT access-filtered: each caller applies its own gate — the
+ * library hands these ids to the canonical `object.read` filter, and the blog
+ * resolver only mints a detail URL whose destination re-authorizes.
  */
 export async function listOrgDashboardRows(orgId: string): Promise<DashboardRow[]> {
   const db = getDashboardsDb();
@@ -220,9 +223,10 @@ export function isDashboardRowLive(
 }
 
 /**
- * FULL reader gate, applied at every read surface (the /dashboards list + detail
- * routes, the blog deep-link resolver, and the MCP readers) so an orphaned or
- * archived EXTENSION dashboard stops rendering everywhere — with the generic
+ * FULL reader gate, applied at every read surface that consults it (the
+ * `/artifacts` library, the `/dashboards/{id}` + nested canonical detail routes,
+ * the blog deep-link resolver, and the MCP readers) so an orphaned or archived
+ * EXTENSION dashboard stops rendering everywhere — with the generic
  * empty/absent state, never a crash.
  *
  * SCOPED TO EXTENSION ROWS. An operator-authored row is NEVER hidden by this gate

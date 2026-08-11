@@ -16,7 +16,7 @@ vi.mock("@/lib/dashboards/scope-dashboards-service", () => ({
 
 // Stub the server-action module so the success path's `.bind` targets resolve
 // without pulling the server-action graph (auth-session, the service, …).
-vi.mock("@/app/dashboards/scope-dashboards-actions", () => ({
+vi.mock("@/components/dashboards/scope-dashboards-actions", () => ({
   scopeListCandidatesAction: vi.fn(),
   scopeAddListingAction: vi.fn(),
   scopeRemoveListingAction: vi.fn(),

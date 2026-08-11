@@ -140,10 +140,14 @@ export function coreBootPhases(): BootPhase[] {
         // Retryable: a partial/failed backfill simply completes on the next boot.
         // Post Phase-2 ACL cutover (cinatra#1898): an un-twinned dashboard has no
         // `objects` row, so it is simply ABSENT from the library until backfilled
-        // (a visibility lag, never a leak), while /dashboards still gates it via the
-        // scope resolver reading the dashboards row directly — so a deferred
-        // backfill is never a correctness gap. The registered writer now stamps the
-        // canonical Phase-2 scope tuple, so a backfilled row lands correctly gated.
+        // (a visibility lag, never a leak), while the surviving dashboard surfaces
+        // — the `/dashboards/{id}` detail route and each entity landing's
+        // Dashboards tab — still gate it via the scope resolver reading the
+        // dashboards row directly, so a deferred backfill is never a correctness
+        // gap. (The workspace-wide `/dashboards` directory page this comment used
+        // to name was retired in cinatra#2058; #2474 item 6.) The registered
+        // writer now stamps the canonical Phase-2 scope tuple, so a backfilled
+        // row lands correctly gated.
         // No-op on a fresh install (no dashboards to backfill / no DB configured).
         const { backfillDashboardArtifactTwins } = await import(
           "@cinatra-ai/dashboards/twin-backfill"
