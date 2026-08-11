@@ -449,6 +449,205 @@ describe("agent_export -> agent_import round trip", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// cinatra#2645 — export must repair wayflow-style documents the import
+// compiler rejects (absent metadata.cinatra.type + description: null on
+// every connection), or the round trip is dead for any such agent.
+// ---------------------------------------------------------------------------
+
+const WAYFLOW_PACKAGE_NAME = "@cinatra-test/wayflow-drafter-agent";
+const WAYFLOW_PACKAGE_SLUG = "wayflow-drafter-agent";
+
+/**
+ * Structural replica of the real defective export from #2645: a
+ * wayflow-style Flow (Start -> LlmNode -> End) whose writer serialized every
+ * absent optional description as `null` and omitted `metadata.cinatra.type`.
+ */
+function buildDefectiveWayflowFlow(): Record<string, unknown> {
+  return {
+    agentspec_version: "26.1.0",
+    component_type: "Flow",
+    id: "wayflow-drafter",
+    name: "Wayflow Drafter",
+    description: "Drafts blog posts.",
+    metadata: {
+      cinatra: {
+        label: "Wayflow Drafter",
+        summary: "Drafts things.",
+        hitlScreens: [],
+        packageName: WAYFLOW_PACKAGE_NAME,
+        packageSlug: WAYFLOW_PACKAGE_SLUG,
+      },
+    },
+    inputs: [{ type: "string", title: "topic", description: "The topic." }],
+    outputs: [{ type: "string", title: "draft", description: "The draft." }],
+    start_node: { $component_ref: "start" },
+    nodes: [
+      { $component_ref: "start" },
+      { $component_ref: "draft" },
+      { $component_ref: "end" },
+    ],
+    control_flow_connections: [
+      {
+        id: "start_to_draft",
+        name: "start_to_draft",
+        metadata: {},
+        description: null,
+        from_branch: null,
+        component_type: "ControlFlowEdge",
+        from_node: { $component_ref: "start" },
+        to_node: { $component_ref: "draft" },
+      },
+      {
+        id: "draft_to_end",
+        name: "draft_to_end",
+        metadata: {},
+        description: null,
+        from_branch: null,
+        component_type: "ControlFlowEdge",
+        from_node: { $component_ref: "draft" },
+        to_node: { $component_ref: "end" },
+      },
+    ],
+    data_flow_connections: [
+      {
+        id: "topic_to_draft",
+        name: "topic_to_draft",
+        metadata: {},
+        description: null,
+        component_type: "DataFlowEdge",
+        source_node: { $component_ref: "start" },
+        source_output: "topic",
+        destination_node: { $component_ref: "draft" },
+        destination_input: "topic",
+      },
+      {
+        id: "draft_to_end_data",
+        name: "draft_to_end_data",
+        metadata: {},
+        description: null,
+        component_type: "DataFlowEdge",
+        source_node: { $component_ref: "draft" },
+        source_output: "output",
+        destination_node: { $component_ref: "end" },
+        destination_input: "draft",
+      },
+    ],
+    $referenced_components: {
+      start: {
+        component_type: "StartNode",
+        id: "start",
+        name: "start",
+        description: null,
+        inputs: [{ type: "string", title: "topic", description: "The topic." }],
+        metadata: { cinatra: { required: ["topic"] } },
+      },
+      draft: {
+        component_type: "LlmNode",
+        id: "draft",
+        name: "draft",
+        description: null,
+        prompt_template: "Draft about {{topic}}.",
+        inputs: [{ type: "string", title: "topic", description: null }],
+        outputs: [{ type: "string", title: "output", description: null }],
+      },
+      end: {
+        component_type: "EndNode",
+        id: "end",
+        name: "end",
+        description: null,
+        outputs: [{ type: "string", title: "draft", description: "The draft." }],
+      },
+    },
+  };
+}
+
+function stageWayflowStylePackage(): void {
+  const rootDir = path.join(state.installDir, "cinatra-ai", WAYFLOW_PACKAGE_SLUG);
+  mkdirSync(path.join(rootDir, "cinatra"), { recursive: true });
+  writeFileSync(
+    path.join(rootDir, "cinatra", "oas.json"),
+    JSON.stringify(buildDefectiveWayflowFlow(), null, 2),
+  );
+  writeFileSync(
+    path.join(rootDir, "package.json"),
+    JSON.stringify(
+      { name: WAYFLOW_PACKAGE_NAME, version: "0.1.0", license: "MIT" },
+      null,
+      2,
+    ),
+  );
+  writeFileSync(path.join(rootDir, "LICENSE"), "MIT License\n");
+}
+
+function collectNullDescriptionPaths(value: unknown, p = ""): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item, i) => collectNullDescriptionPaths(item, `${p}[${i}]`));
+  }
+  if (value === null || typeof value !== "object") return [];
+  const rec = value as Record<string, unknown>;
+  const own = "description" in rec && rec.description === null ? [`${p}.description`] : [];
+  return own.concat(
+    Object.entries(rec).flatMap(([k, v]) => collectNullDescriptionPaths(v, `${p}.${k}`)),
+  );
+}
+
+describe("agent_export repairs wayflow-style documents (#2645)", () => {
+  it("ships an archive whose agent.json carries metadata.cinatra.type and no null descriptions", async () => {
+    stageWayflowStylePackage();
+    seedTemplate({ id: "tpl-wf", name: "Wayflow Drafter", packageName: WAYFLOW_PACKAGE_NAME });
+
+    const result = await runExport("tpl-wf");
+    expect(result.error).toBeUndefined();
+
+    const files = readZipFiles(Buffer.from(result.zipBase64 as string, "base64"));
+    const shipped = JSON.parse(files.get("agent.json")!) as Record<string, unknown>;
+    const cinatra = (shipped.metadata as { cinatra: Record<string, unknown> }).cinatra;
+    // Type derived from component_type: Flow -> "flow"; siblings preserved.
+    expect(cinatra.type).toBe("flow");
+    expect(cinatra.label).toBe("Wayflow Drafter");
+    expect(cinatra.packageName).toBe(WAYFLOW_PACKAGE_NAME);
+    // No connection (or port/node) ships description: null — the key is ABSENT.
+    expect(collectNullDescriptionPaths(shipped)).toEqual([]);
+    const edge = (shipped.control_flow_connections as Array<Record<string, unknown>>)[0];
+    expect("description" in edge).toBe(false);
+    // Minimality: the schema-tolerated from_branch: null is untouched.
+    expect(edge.from_branch).toBeNull();
+  });
+
+  it("round-trips: the exported archive imports cleanly through the real compile gate", async () => {
+    stageWayflowStylePackage();
+    seedTemplate({ id: "tpl-wf", name: "Wayflow Drafter", packageName: WAYFLOW_PACKAGE_NAME });
+
+    const exported = await runExport("tpl-wf");
+    expect(exported.error).toBeUndefined();
+
+    // Restore on a "fresh instance": no template rows known.
+    state.templatesById.clear();
+    state.templatesByPackageName.clear();
+
+    const imported = await runImport(exported.zipBase64 as string);
+    // Pre-#2645 this failed at importAgentTemplateCore's compile gate with
+    // `metadata.cinatra.type: Invalid option` + `description: Invalid input:
+    // expected string, received null` on every connection.
+    expect(imported.error).toBeUndefined();
+    expect(typeof imported.templateId).toBe("string");
+    expect(state.createCalls).toHaveLength(1);
+    expect(state.createCalls[0].packageName).toBe(WAYFLOW_PACKAGE_NAME);
+  });
+
+  it("a document that needs no repair still ships byte-for-byte (#130 contract preserved)", async () => {
+    stageCanonicalPackage();
+    seedTemplate();
+
+    const result = await runExport("tpl-1");
+    expect(result.error).toBeUndefined();
+    const files = readZipFiles(Buffer.from(result.zipBase64 as string, "base64"));
+    // Exact bytes of the staged on-disk file — no reformat, no key reorder.
+    expect(files.get("agent.json")).toBe(JSON.stringify(buildOasFlow(), null, 2));
+  });
+});
+
 describe("agent_export fail-explicit fallback (no DB-derived shell)", () => {
   it("returns an explicit error for templates without a packageName", async () => {
     seedTemplate({ packageName: null });

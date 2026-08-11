@@ -98,7 +98,7 @@ import {
   type ReviewFinding,
   detectCredentialPattern,
 } from "../validate-agent-json";
-import { compileOasAgentJson, injectCinatraLlmIntoApiNodes } from "../oas-compiler";
+import { compileOasAgentJson, injectCinatraLlmIntoApiNodes, normalizeOasJsonForExport } from "../oas-compiler";
 import type { OasCinatraLlm } from "../llm-provider-policy";
 // agent_creation_review primitive (replaces the
 // @cinatra/agent-creation-finalizer Flow).
@@ -2607,6 +2607,7 @@ async function handleAgentBuilderExport(
       };
     }
 
+    agentJson = normalizeOasJsonForExport(agentJson);
     const exportedAt = new Date().toISOString();
     const manifestJson = JSON.stringify({
       version: 1,
