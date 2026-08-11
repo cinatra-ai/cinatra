@@ -165,13 +165,37 @@ export function emitLlmUsage(params: EmitLlmUsageParams): void {
 // The metering proxy
 // ---------------------------------------------------------------------------
 
-/** Marks an adapter as already metered so wrapping is idempotent. */
+/**
+ * The OUTWARD brand: a metered adapter ANSWERS `true` for this symbol, so code
+ * that holds one can ask what it is holding.
+ *
+ * Answering with it is all it does. It is NOT what {@link isMeteredAdapter}
+ * decides on, because the value would then come from an object the connector
+ * controls: a connector that set this symbol on a RAW adapter would be handed
+ * straight back by the idempotence guard below, unwrapped — a connector-side
+ * opt-out, in the one seam whose whole point is that no opt-out exists.
+ */
 const METERED_ADAPTER = Symbol.for("cinatra.llm.usage-metered-adapter");
 
+/**
+ * The RECORD of what this module actually minted — the only thing the
+ * idempotence guard trusts, because nothing outside this file can put an entry
+ * in it. Weak, so a metered adapter is still collectable.
+ *
+ * That makes idempotence MODULE-LOCAL: a second copy of this package would not
+ * recognise the first copy's proxies and would wrap one again. It cannot arise
+ * from the seam, because the single wrap site — `resolveProviderAdapter`, pinned
+ * as the only caller of a connector's `createAdapter()` by
+ * `src/__tests__/llm-usage-ledger-chokepoint.test.ts` — wraps an adapter the
+ * connector has just minted, never one it received already wrapped. Trusting the
+ * global symbol instead would trade that impossible case for a reachable one.
+ */
+const meteredAdapters = new WeakSet<object>();
+
 export function isMeteredAdapter(adapter: unknown): boolean {
-  return Boolean(
-    adapter && (adapter as Record<symbol, unknown>)[METERED_ADAPTER] === true,
-  );
+  // `has` answers false for anything that cannot be held weakly, so a primitive
+  // (or `undefined`) needs no guard of its own.
+  return meteredAdapters.has(adapter as object);
 }
 
 /** Adapter methods that answer with an `LlmResponse` (and therefore with usage). */
@@ -238,8 +262,46 @@ type GenerateImageResult = { imageData: string; mimeType: string } | null;
  * spread would have to enumerate them and would silently drop any member added
  * to the ABI later.
  *
- * Metering NEVER changes what a caller observes: the response object is returned
- * untouched, and `emitUsageEvent` itself never throws.
+ * ITS TARGET IS A FACADE, not the connector's adapter (cinatra#2670). A proxy's
+ * invariants are checked against ITS TARGET, so wrapping the adapter itself made
+ * a FROZEN adapter — `Object.freeze(adapter)`, or a method defined
+ * non-configurable and non-writable — unable to carry a metered method at all:
+ * `[[Get]]` may not answer with anything other than the value of the target's own
+ * non-configurable, non-writable property, so `metered.generate` threw a
+ * `TypeError`, and `[[GetOwnProperty]]` had to report such a property VERBATIM,
+ * so `Object.getOwnPropertyDescriptor(metered, "generate").value` handed back the
+ * connector's raw, unmetered function. Both failures came from the target rather
+ * than from the traps. The target below is therefore an empty, extensible object
+ * that owns nothing and can contradict nothing, and every trap answers for the
+ * ADAPTER. The other way out — reporting the adapter's own non-configurable
+ * property as configurable — the runtime REJECTS while the adapter is the target,
+ * and it would misdescribe the connector's object anyway; this design needs no
+ * such claim, because the object being described really is the facade.
+ *
+ * WHAT A CALLER SEES DIFFERENTLY because of the facade, all of it about the
+ * OBJECT rather than about its members: `Object.isExtensible` is true and
+ * `Object.isFrozen` / `Object.isSealed` are false even for a frozen adapter;
+ * `Object.preventExtensions` / `seal` / `freeze` are REFUSED (a `TypeError`)
+ * rather than sealing an object whose every member is answered by a trap; a
+ * described member reports `configurable: true`, the truth about the facade and
+ * the reason a frozen adapter's method can be described at all; and a
+ * `defineProperty` that would PIN a member is refused rather than half-applied.
+ * Each is stated at the trap that decides it. Everything a caller actually
+ * consumes — members and their values, presence, enumeration, the prototype, and
+ * ordinary assignment and deletion including a frozen adapter's refusals — reads
+ * through to the adapter.
+ *
+ * WHAT IT STILL DOES NOT DEFEND, stated because "no unmetered callable exists"
+ * would otherwise be read as absolute: a class-based adapter's methods live on
+ * its PROTOTYPE, and the prototype is the connector's own object (it has to be,
+ * or `instanceof` would stop answering). `Object.getPrototypeOf(metered).generate`
+ * is therefore the raw method, exactly as it was before this seam existed. The
+ * guarantee this module makes is against a call site SILENTLY bypassing the
+ * ledger — reaching a provider by resolving an adapter and calling it — not
+ * against code that walks a prototype chain to defeat its own instrumentation.
+ *
+ * Metering never changes the ANSWER a caller observes: the response object is
+ * returned untouched, and `emitUsageEvent` itself never throws.
  */
 export function meterLlmProviderAdapter(
   adapter: LlmProviderAdapter,
@@ -255,27 +317,39 @@ export function meterLlmProviderAdapter(
   //     written as a class with `#private` fields throws a brand-check error the
   //     moment it touches one. Connector adapters are third-party code, so the
   //     proxy has to be safe for shapes this repo never sees.
-  const members = new Map<string | symbol, unknown>();
+  //
+  // Each entry is TAGGED with the raw member it wrapped, so it cannot go stale:
+  // the resolver re-reads the adapter on every access and reuses the wrapper only
+  // while the adapter still answers with that same member. A member replaced by
+  // anyone — through this proxy, through a prototype swap, or by connector code
+  // holding its own reference — is therefore re-wrapped on the next read instead
+  // of being served from a snapshot taken before it moved.
+  const members = new Map<string | symbol, { raw: unknown; metered: unknown }>();
 
-  const remember = (prop: string | symbol, value: unknown): unknown => {
-    members.set(prop, value);
-    return value;
+  const remember = (
+    prop: string | symbol,
+    raw: unknown,
+    metered: unknown,
+  ): unknown => {
+    members.set(prop, { raw, metered });
+    return metered;
   };
 
   // The single member resolver both traps go through, so a reflective read and
   // a normal read can never disagree about what `generate` is.
   const readMeteredMember = (prop: string | symbol): unknown => {
     if (prop === METERED_ADAPTER) return true;
-    if (members.has(prop)) return members.get(prop);
     // Deliberately reading off `adapter` rather than forwarding a `receiver`:
     // a connector getter that reads a sibling member would otherwise re-enter
     // this trap with the proxy as `this`.
     const target = adapter;
     const value = Reflect.get(target, prop);
+    const cached = members.get(prop);
+    if (cached && cached.raw === value) return cached.metered;
     if (typeof value !== "function") return value;
 
     if (typeof prop === "string" && RESPONSE_METHODS.has(prop)) {
-      return remember(prop, async (input: AdapterCallInput): Promise<LlmResponse> => {
+      return remember(prop, value, async (input: AdapterCallInput): Promise<LlmResponse> => {
         const attribution = getUsageAttribution();
         const response = (await Reflect.apply(value, target, [
           input,
@@ -301,7 +375,7 @@ export function meterLlmProviderAdapter(
     }
 
     if (prop === "stream") {
-      return remember(prop, async (input: AdapterCallInput): Promise<void> => {
+      return remember(prop, value, async (input: AdapterCallInput): Promise<void> => {
         const attribution = getUsageAttribution();
         const callerOnUsageData = input?.onUsageData;
         const model = input?.model ?? target.defaultModel;
@@ -330,7 +404,7 @@ export function meterLlmProviderAdapter(
     }
 
     if (prop === IMAGE_METHOD) {
-      return remember(prop, async (
+      return remember(prop, value, async (
         input: GenerateImageInput,
       ): Promise<GenerateImageResult> => {
         const attribution = getUsageAttribution();
@@ -370,11 +444,29 @@ export function meterLlmProviderAdapter(
     }
 
     // Every other member passes through BOUND to the connector object.
-    return remember(prop, value.bind(target));
+    return remember(prop, value, value.bind(target));
   };
 
-  return new Proxy(adapter, {
-    get(_target, prop) {
+  // A described ACCESSOR member's replacement getter, memoised per property so a
+  // descriptor read is as stable as a member read: two descriptors for the same
+  // accessor carry the same `get`, not two closures that merely behave alike.
+  const facadeGetters = new Map<string | symbol, () => unknown>();
+
+  const facadeGetter = (prop: string | symbol): (() => unknown) => {
+    const existing = facadeGetters.get(prop);
+    if (existing) return existing;
+    const read = (): unknown => readMeteredMember(prop);
+    facadeGetters.set(prop, read);
+    return read;
+  };
+
+  // The proxy TARGET (see the note above): an empty, extensible object that
+  // exists only so that nothing the target owns can contradict what a trap
+  // answers. It is never written to; every trap below reads the ADAPTER.
+  const facade = Object.create(null) as LlmProviderAdapter;
+
+  const metered = new Proxy(facade, {
+    get(_facade, prop) {
       return readMeteredMember(prop);
     },
 
@@ -383,16 +475,90 @@ export function meterLlmProviderAdapter(
      *
      * Without this, `Object.getOwnPropertyDescriptor(adapter, "generate").value`
      * would hand back the connector's raw, unmetered function — a hole in the
-     * "there is no way to obtain an unmetered adapter" claim. A NON-configurable
-     * own property must be reported verbatim (a proxy invariant TypeScript
-     * cannot enforce and the runtime throws over), so those are passed through
-     * unchanged; adapter methods in practice are ordinary configurable members.
+     * "there is no way to obtain an unmetered adapter" claim. It holds for a
+     * frozen adapter too, because the descriptor describes the FACADE, and the
+     * facade owns no property that could pin the answer; `value`, `writable` and
+     * `enumerable` are the adapter's, so enumeration, cloning and write behaviour
+     * are unchanged (a frozen adapter still refuses the write `set` forwards).
+     *
+     * An ACCESSOR member keeps its accessor shape, with a getter that answers
+     * exactly what an ordinary read answers — invoked on READ, so a lazy member
+     * is still built lazily, and never resolved merely by describing it.
      */
-    getOwnPropertyDescriptor(target, prop) {
-      const descriptor = Reflect.getOwnPropertyDescriptor(target, prop);
-      if (!descriptor || !descriptor.configurable) return descriptor;
-      if (typeof descriptor.value !== "function") return descriptor;
-      return { ...descriptor, value: readMeteredMember(prop) };
+    getOwnPropertyDescriptor(_facade, prop) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(adapter, prop);
+      if (!descriptor) return undefined;
+      const reported = { ...descriptor, configurable: true };
+      if (reported.get) return { ...reported, get: facadeGetter(prop) };
+      if (typeof descriptor.value !== "function") return reported;
+      return { ...reported, value: readMeteredMember(prop) };
+    },
+
+    // PRESENCE is the adapter's: core decides what a provider can do by probing
+    // optional members, and the facade knows none of them.
+    has(_facade, prop) {
+      return prop === METERED_ADAPTER || Reflect.has(adapter, prop);
+    },
+
+    ownKeys() {
+      return Reflect.ownKeys(adapter);
+    },
+
+    getPrototypeOf() {
+      return Reflect.getPrototypeOf(adapter);
+    },
+
+    setPrototypeOf(_facade, proto) {
+      return Reflect.setPrototypeOf(adapter, proto);
+    },
+
+    // Writes land on the CONNECTOR's object — including its refusals, so a
+    // frozen adapter still rejects them. A connector SETTER runs with the
+    // connector as its receiver, for the reason the resolver reads off the
+    // adapter: with the proxy as receiver, a setter touching a sibling member
+    // would re-enter these traps, and a `#private` field would fail its brand
+    // check. The member cache needs no invalidation here — an entry is only
+    // reused while the adapter still answers with the member it wrapped.
+    set(_facade, prop, value) {
+      return Reflect.set(adapter, prop, value);
+    },
+
+    /**
+     * A definition that would PIN a property is REFUSED before it can touch the
+     * adapter. The facade would not own the matching non-configurable property
+     * afterwards, so the runtime would throw over the trap's `true` — with the
+     * connector's object already mutated — and short of a throw the adapter
+     * would hold a pinned member while every descriptor read reported an open
+     * one. For a property the adapter does not own yet, OMITTING `configurable`
+     * pins it exactly as `false` does: that is what `defineProperty` defaults
+     * to. Pinning a member is the CONNECTOR's to do, on its own object, before
+     * metering wraps it — which is precisely the frozen adapter this proxy now
+     * carries.
+     */
+    defineProperty(_facade, prop, descriptor) {
+      const owned = Reflect.getOwnPropertyDescriptor(adapter, prop);
+      const pins = owned
+        ? descriptor.configurable === false
+        : descriptor.configurable !== true;
+      if (pins) return false;
+      return Reflect.defineProperty(adapter, prop, descriptor);
+    },
+
+    deleteProperty(_facade, prop) {
+      return Reflect.deleteProperty(adapter, prop);
+    },
+
+    /**
+     * REFUSED, loudly, rather than half-done. Sealing the facade would leave a
+     * target that owns nothing while every member is answered by a trap, and the
+     * runtime would then reject `ownKeys` for naming members the target lacks.
+     * There is nothing here to seal; the connector's own object is untouched.
+     */
+    preventExtensions() {
+      return false;
     },
   });
+
+  meteredAdapters.add(metered);
+  return metered;
 }
