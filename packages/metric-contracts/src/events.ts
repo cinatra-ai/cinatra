@@ -15,8 +15,22 @@
  * that the ledger previously did not carry at all. Recording them under their
  * own operation keeps them countable AND distinguishable from interactive spend
  * rather than mislabelling them as `generate`.
+ *
+ * `image` is additive too (cinatra#2641) and is the one operation whose row is
+ * COUNTED BUT NOT PRICED. `adapter.generateImage()` calls out per image, but
+ * the adapter ABI's image response carries no usage object and no model name,
+ * so the only truthful statement the seam can make is "one image invocation
+ * resolved". Its token columns are therefore zeros the schema
+ * requires, NOT a measurement, and its `cost_usd` is NULL rather than a number
+ * derived from a per-token card — see the subscriber, which refuses to price it.
+ * An `image` row must never be summed as if it were interactive token spend.
  */
-export type LlmUsageOperation = "generate" | "stream" | "batch" | "validate";
+export type LlmUsageOperation =
+  | "generate"
+  | "stream"
+  | "batch"
+  | "validate"
+  | "image";
 
 export type LlmUsageEvent = {
   source: "llm";

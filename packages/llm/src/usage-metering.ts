@@ -16,6 +16,14 @@
  * STRUCTURAL — a future call site cannot silently bypass the ledger, because
  * there is no other way to obtain an adapter.
  *
+ * COUNTED VS PRICED (cinatra#2641). Most metered methods answer with usage, so
+ * their rows carry both a count and dollars. `generateImage` answers with an
+ * image and nothing else while the provider bills per image, so its row is
+ * COUNTED and left UNPRICED (`cost_usd` NULL) instead of being dropped — see
+ * {@link IMAGE_METHOD}. "The call is in the ledger" and "the spend is measured"
+ * are tracked separately on purpose; collapsing them is how a $0 row starts
+ * reading as "free".
+ *
  * ATTRIBUTION. The transport layer can see the provider, the model and the
  * adapter input's `logLabel`, but not the caller's skill/telemetry context. A
  * caller supplies that through {@link withUsageAttribution}, an AsyncLocalStorage
@@ -88,6 +96,26 @@ export function getUsageAttribution(): UsageAttribution | undefined {
   return attributionStore.getStore();
 }
 
+/**
+ * The agent label a row carries: the frame's if it STATED one, else the
+ * transport's `logLabel`.
+ *
+ * `??` cannot do this. An absent `agentLabel` means "I did not say", and the
+ * transport label should fill in; an explicit `null` means "there is no agent
+ * here", which {@link withUsageAttribution}'s merge semantics promise to honour
+ * — and `??` would silently re-attribute that row to whatever generic label the
+ * transport happened to carry. Only `undefined` is an omission.
+ */
+function resolveAgentLabel(
+  attribution: UsageAttribution | undefined,
+  logLabel: string | null | undefined,
+): string | null {
+  if (attribution && attribution.agentLabel !== undefined) {
+    return attribution.agentLabel;
+  }
+  return logLabel ?? null;
+}
+
 // ---------------------------------------------------------------------------
 // The single emitter
 // ---------------------------------------------------------------------------
@@ -153,11 +181,52 @@ const RESPONSE_METHODS = new Set([
   "generateFromMediaFile",
 ]);
 
+/**
+ * The image method — response-producing, billed, and reporting NO usage
+ * (cinatra#2641).
+ *
+ * It is separated from {@link RESPONSE_METHODS} because there is nothing to read
+ * off its answer: the ABI's `generateImage` resolves to `{ imageData, mimeType }`
+ * — no usage object, no model name — while the provider bills per image. Before
+ * this branch the call fell through to the pass-through arm below and produced
+ * NO ledger row at all, which is how billed image generation stayed invisible to
+ * `/analytics/llm`.
+ *
+ * So the row is COUNTED AND UNPRICED, the shape cinatra#2582 established for the
+ * Graphiti hand-over: the ledger states the one thing that is true — an image
+ * call happened, on this provider, for this caller — and leaves the dollars
+ * UNKNOWN (`cost_usd` NULL, the dashboard's own unknown-cost surface) rather than
+ * inventing a price. Extending the ABI so an image response can carry its own
+ * usage is what would make the path priceable; that remains cinatra#2641's open
+ * half and is a connector change, not a wrapper.
+ */
+const IMAGE_METHOD = "generateImage";
+
+/**
+ * The token columns an image row carries: zeros because `usage_events` requires
+ * numbers, never because anything was measured. The unknown lives in the NULL
+ * cost — a zeroed cost would read as "this was free".
+ */
+const UNREPORTED_IMAGE_USAGE: LlmUsageData = Object.freeze({
+  inputTokens: 0,
+  outputTokens: 0,
+  cachedInputTokens: 0,
+  reasoningOutputTokens: 0,
+});
+
 type AdapterCallInput = {
   model?: string;
   logLabel?: string;
   onUsageData?: (usage: LlmUsageData) => void;
 };
+
+type GenerateImageInput = {
+  model?: string;
+  prompt?: string;
+  logLabel?: string;
+};
+
+type GenerateImageResult = { imageData: string; mimeType: string } | null;
 
 /**
  * Wrap an adapter so every response-producing call is metered.
@@ -216,7 +285,7 @@ export function meterLlmProviderAdapter(
             provider: target.provider,
             model: response.model ?? input?.model ?? target.defaultModel,
             operation: "generate",
-            logLabel: attribution?.agentLabel ?? input?.logLabel ?? null,
+            logLabel: resolveAgentLabel(attribution, input?.logLabel),
             skillLabel: attribution?.skillLabel ?? null,
             usage: response.usage,
             // Synchronous calls have no provider-stable id at this seam, and
@@ -236,7 +305,7 @@ export function meterLlmProviderAdapter(
         const attribution = getUsageAttribution();
         const callerOnUsageData = input?.onUsageData;
         const model = input?.model ?? target.defaultModel;
-        const logLabel = attribution?.agentLabel ?? input?.logLabel ?? null;
+        const logLabel = resolveAgentLabel(attribution, input?.logLabel);
         const onUsageData = (usage: LlmUsageData): void => {
           emitLlmUsage({
             provider: target.provider,
@@ -257,6 +326,46 @@ export function meterLlmProviderAdapter(
         return Reflect.apply(value, target, [
           { ...input, onUsageData },
         ]) as Promise<void>;
+      });
+    }
+
+    if (prop === IMAGE_METHOD) {
+      return remember(prop, async (
+        input: GenerateImageInput,
+      ): Promise<GenerateImageResult> => {
+        const attribution = getUsageAttribution();
+        const result = (await Reflect.apply(value, target, [
+          input,
+        ])) as GenerateImageResult;
+        // WHAT THIS ROW MEANS, precisely: one image invocation that RESOLVED.
+        // Not "one billed provider request" — the ABI reports neither whether a
+        // request was issued nor whether it was billable, so this seam cannot
+        // state that. A `null` answer is booked because the ordinary way to get
+        // one is a response that carried no image PART, i.e. a request that DID
+        // happen (the rule cinatra#2582 applies to an episode whose
+        // acknowledgement we fail to parse); an adapter that returns `null` from
+        // a local preflight would be over-counted, and a throw AFTER a billable
+        // request is under-counted. Both errors are bounded and stated rather
+        // than hidden, and closing them needs the ABI to report the attempt —
+        // the same extension that would make the row priceable.
+        emitLlmUsage({
+          provider: target.provider,
+          // Only what the CALLER named. `defaultModel` is the adapter's default
+          // TEXT model and naming it here would state a model that did not
+          // answer — and, worse, one the rate card knows. Absent ⇒ "unknown",
+          // which is what the ABI actually lets this seam see today.
+          model: input?.model ?? null,
+          operation: "image",
+          logLabel: resolveAgentLabel(attribution, input?.logLabel),
+          skillLabel: attribution?.skillLabel ?? null,
+          usage: UNREPORTED_IMAGE_USAGE,
+          // Two resolved invocations need two distinct ledger keys — a
+          // shared key would collapse the second at the unique index.
+          idempotencyKey: randomUUID(),
+          requestedProvider: attribution?.requestedProvider ?? null,
+          effectiveProvider: attribution?.effectiveProvider ?? null,
+        });
+        return result;
       });
     }
 

@@ -7,15 +7,18 @@ import {
 } from "@/components/ui/table";
 import { PaginatedTable } from "@/components/ui/paginated-table";
 import type { CostByAgentRow } from "../store";
+// The ONE cost-cell formatter (cinatra#2582 / #2641). Imported rather than
+// re-declared: this table used to print "$0.00" for a group whose cost the
+// ledger does not know, and cinatra#2641 puts a NAMED agent behind unpriced
+// spend for the first time — `blog-post-image`, one row per resolved image
+// invocation. An
+// agent that ALSO does priced work lands in a mixed group, whose `SUM(cost_usd)`
+// is a partial number; `formatCostCell` says how many rows it leaves out.
+import { formatCostCell } from "./cost-by-provider-table";
 
 type CostByAgentTableProps = {
   data: CostByAgentRow[];
 };
-
-function formatUsd(v: number | null): string {
-  if (v === null || v === undefined) return "$0.00";
-  return `$${v.toFixed(4)}`;
-}
 
 export function CostByAgentTable({ data }: CostByAgentTableProps) {
   return (
@@ -32,7 +35,7 @@ export function CostByAgentTable({ data }: CostByAgentTableProps) {
           {data.map((row, i) => (
             <TableRow key={i} className="border-b border-line/50 text-foreground">
               <TableCell className="py-2 pr-4">{row.agentLabel ?? "(no agent context)"}</TableCell>
-              <TableCell className="py-2 pr-4 text-right">{formatUsd(row.totalCost)}</TableCell>
+              <TableCell className="py-2 pr-4 text-right">{formatCostCell(row.totalCost, row.unknownCostCount)}</TableCell>
               <TableCell className="py-2 text-right">{row.callCount}</TableCell>
             </TableRow>
           ))}

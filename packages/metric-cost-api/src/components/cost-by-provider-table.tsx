@@ -25,13 +25,42 @@ import type { CostByProviderRow, LegacyCostEntry } from "../store";
 //   - a knowledge-graph row counts EPISODES, and one episode fans out to an
 //     unknown number of provider requests inside the indexer's own container,
 //     so a bare number under a "Calls" heading understates the request volume
-//     by an unknown multiple.
+//     by an unknown multiple;
+//   - a group MIXING priced and unpriced rows sums to a number that looks
+//     complete, because `SUM(cost_usd)` skips NULLs (cinatra#2641). All three
+//     breakdown tabs use `formatCostCell`, which states the remainder.
+//
+// All three tabs import these from here for the same reason: one formatter, one
+// wording, no per-tab drift about what "unknown" looks like.
 // ---------------------------------------------------------------------------
 
 /** Dollars, or the word "unknown" — never a number the ledger cannot back. */
 export function formatUsd(v: number | null): string {
   if (v === null || v === undefined) return "unknown";
   return `$${v.toFixed(4)}`;
+}
+
+/**
+ * A breakdown row's cost cell: the subtotal AND what it leaves out (cinatra#2641).
+ *
+ * `SUM(cost_usd)` skips NULLs, so a group holding priced and unpriced rows
+ * answers with a number that LOOKS complete. {@link formatUsd} alone can only
+ * tell the truth about a group where every row is unpriced. Mixed groups became
+ * ordinary when image calls started booking counted-but-unpriced rows that share
+ * a provider, an agent or a skill with priced work, so the cell states the
+ * remainder instead of hiding it:
+ *
+ *   0 unknown        -> "$1.2345"          (a complete subtotal)
+ *   some unknown     -> "$1.2345 + 2 unknown-cost rows"
+ *   nothing priced   -> "unknown"          (there is no subtotal to show)
+ */
+export function formatCostCell(
+  total: number | null,
+  unknownCostCount: number,
+): string {
+  if (!unknownCostCount || unknownCostCount < 0) return formatUsd(total);
+  if (total === null || total === undefined) return "unknown";
+  return `${formatUsd(total)} + ${unknownCostCount} unknown-cost ${unknownCostCount === 1 ? "row" : "rows"}`;
 }
 
 /** What the row's count MEANS, given which producer wrote it. */
@@ -99,7 +128,7 @@ export function CostByProviderTable({ data, legacyCosts }: CostByProviderTablePr
             <TableRow key={i} className="border-b border-line/50 text-foreground">
               <TableCell className="py-2 pr-4">{row.provider}</TableCell>
               <TableCell className="py-2 pr-4">{describeModel(row.source, row.model)}</TableCell>
-              <TableCell className="py-2 pr-4 text-right">{formatUsd(row.totalCost)}</TableCell>
+              <TableCell className="py-2 pr-4 text-right">{formatCostCell(row.totalCost, row.unknownCostCount)}</TableCell>
               <TableCell className="py-2 pr-4 text-right">{describeUnit(row.source, row.callCount)}</TableCell>
               <TableCell className="py-2 pr-4 text-right">{row.totalInput?.toLocaleString()}</TableCell>
               <TableCell className="py-2 text-right">{row.totalOutput?.toLocaleString()}</TableCell>

@@ -40,18 +40,42 @@ export type CostByProviderRow = {
   totalInput: number;
   totalOutput: number;
   callCount: number;
+  /** @see {@link UnknownCostCount} */
+  unknownCostCount: UnknownCostCount;
 };
+
+/**
+ * How many rows in this group carry NO price (cinatra#2641).
+ *
+ * `SUM(cost_usd)` IGNORES NULLs, so a group holding one priced row and one
+ * unpriced row answers with a number — a PARTIAL total that renders exactly like
+ * a complete one. NULL only survives aggregation when EVERY row in the group is
+ * unpriced, which is why "the dashboard already shows unknown costs" was true
+ * only for groups that happen to be pure.
+ *
+ * cinatra#2641 makes mixed groups ordinary: an image call is unpriced by design
+ * and can share a provider, an agent or a skill with priced work. So each
+ * breakdown row now carries the count of its unpriced rows and states it next to
+ * the subtotal ("$1.2345 + 2 unknown") rather than dropping it. Counting is
+ * preferred over collapsing the whole group to "unknown": a real subtotal plus
+ * an explicit remainder tells an operator more than a blank.
+ */
+type UnknownCostCount = number;
 
 export type CostByAgentRow = {
   agentLabel: string | null;
   totalCost: number | null;
   callCount: number;
+  /** @see {@link UnknownCostCount} */
+  unknownCostCount: UnknownCostCount;
 };
 
 export type CostBySkillRow = {
   skillLabel: string | null;
   totalCost: number | null;
   callCount: number;
+  /** @see {@link UnknownCostCount} */
+  unknownCostCount: UnknownCostCount;
 };
 
 export type CostTimeSeriesRow = {
@@ -110,7 +134,8 @@ export async function readCostByProvider({ days }: { days: number }): Promise<Co
       SUM(cost_usd)::float AS "totalCost",
       SUM(input_tokens)::int AS "totalInput",
       SUM(output_tokens)::int AS "totalOutput",
-      COUNT(*)::int AS "callCount"
+      COUNT(*)::int AS "callCount",
+      COUNT(*) FILTER (WHERE cost_usd IS NULL)::int AS "unknownCostCount"
     FROM ${usageEvents}
     WHERE occurred_at >= now() - interval '1 day' * ${safeDays}
     GROUP BY provider, source, model
@@ -125,7 +150,8 @@ export async function readCostByAgent({ days }: { days: number }): Promise<CostB
     SELECT
       agent_label AS "agentLabel",
       SUM(cost_usd)::float AS "totalCost",
-      COUNT(*)::int AS "callCount"
+      COUNT(*)::int AS "callCount",
+      COUNT(*) FILTER (WHERE cost_usd IS NULL)::int AS "unknownCostCount"
     FROM ${usageEvents}
     WHERE occurred_at >= now() - interval '1 day' * ${safeDays}
     GROUP BY agent_label
@@ -140,7 +166,8 @@ export async function readCostBySkill({ days }: { days: number }): Promise<CostB
     SELECT
       skill_label AS "skillLabel",
       SUM(cost_usd)::float AS "totalCost",
-      COUNT(*)::int AS "callCount"
+      COUNT(*)::int AS "callCount",
+      COUNT(*) FILTER (WHERE cost_usd IS NULL)::int AS "unknownCostCount"
     FROM ${usageEvents}
     WHERE occurred_at >= now() - interval '1 day' * ${safeDays}
     GROUP BY skill_label

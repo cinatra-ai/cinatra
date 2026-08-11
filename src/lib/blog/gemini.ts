@@ -139,6 +139,10 @@ export async function generateBlogPostImage(input: {
       ].join("\n")
     : basePrompt;
 
+  // Metered at the seam, not here (cinatra#2641). The adapter came from
+  // `resolveDefaultImageAdapter`, so it is the metering proxy: this call books
+  // its own `usage_events` row — counted, and unpriced because the ABI's image
+  // response reports no usage. `logLabel` is what the ledger attributes it to.
   const image = await adapter.generateImage!({
     prompt,
     logLabel: "blog-post-image",

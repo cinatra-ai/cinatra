@@ -31,6 +31,12 @@
  * COUNTED_BUT_UNPRICED against the issue that owns closing that gap. "Counted"
  * and "priced" are tracked separately here on purpose: collapsing them is how a
  * $0 row starts reading as "free".
+ *
+ * cinatra#2641 empties the uncounted inventory the same way. `generateImage()`
+ * was the one response-producing adapter method the seam did not meter — billed
+ * per image, invisible to `/analytics/llm`. It is metered at the seam now and
+ * therefore lands in COUNTED_BUT_UNPRICED too: the ABI's image response carries
+ * no usage object, so the row states the call and leaves the dollars unknown.
  */
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -188,22 +194,7 @@ const USAGE_EVENT_PUBLISHERS: Registered[] = [
  * inventory of what the ledger still cannot say now lives in
  * {@link COUNTED_BUT_UNPRICED} as well.
  */
-const KNOWN_OPEN_PATHS: Registered[] = [
-  {
-    file: "src/lib/blog/gemini.ts",
-    why:
-      "cinatra#2641: `adapter.generateImage()` is billed per image and books no " +
-      "row. It is the one response-producing method the seam does not meter — " +
-      "and it CANNOT be metered by wrapping it, because the ABI's image response " +
-      "carries no usage object to read (packages/sdk-extensions/src/" +
-      "llm-provider-adapter-contract.ts). Closing it needs either a usage-carrying " +
-      "image response or a counted-but-unpriced row at the call site, which is a " +
-      "decision rather than a wrapper. Gemini-only today, so it is not part of the " +
-      "OpenAI under-report this file's issue reported.",
-    knownOpenIssue: 2641,
-    mustContain: "generateImage",
-  },
-];
+const KNOWN_OPEN_PATHS: Registered[] = [];
 
 /**
  * Paths whose rows REACH `usage_events` but carry no dollars — counted, not
@@ -211,6 +202,20 @@ const KNOWN_OPEN_PATHS: Registered[] = [
  * measured", with the issue that owns closing the gap.
  */
 const COUNTED_BUT_UNPRICED: Registered[] = [
+  {
+    file: "packages/llm/src/usage-metering.ts",
+    why:
+      "cinatra#2641: `adapter.generateImage()` is billed PER IMAGE and now books " +
+      "one row per call at the seam, so the path is no longer invisible. It " +
+      "cannot be PRICED here: the ABI's image response is `{ imageData, " +
+      "mimeType }` — no usage object and no model name — so the row carries zero " +
+      "token columns and cost_usd NULL. Extending the ABI so an image response " +
+      "carries its own usage (a connector change, and a per-image rather than " +
+      "per-token unit) is what makes it priceable, and is the half of #2641 that " +
+      "stays open.",
+    knownOpenIssue: 2641,
+    mustContain: "generateImage",
+  },
   {
     file: "packages/objects/src/graphiti-client.ts",
     why:
@@ -406,6 +411,52 @@ describe("known-open paths are recorded, not hidden", () => {
     expect(client!.text).not.toMatch(/source:\s*"llm"/);
   });
 
+  it("image generation is COUNTED now, and its pricing gap is registered", () => {
+    // cinatra#2641. `adapter.generateImage()` reached a provider, was billed per
+    // image and booked NO row — the one response-producing adapter method the
+    // seam did not meter. It is metered at the seam now, so its caller leaves
+    // the uncounted inventory and the SEAM joins the counted-but-unpriced one:
+    // the ABI's image response carries no usage, so there are no dollars to
+    // state, only a call to count.
+    //
+    // These are SOURCE assertions on purpose — this file proves structure. That
+    // the row is really written is proved behaviourally in
+    // `packages/llm/src/usage-metering.test.ts` (the real proxy, a fake adapter)
+    // and end to end in `src/__tests__/integration/usage-ledger-capture.
+    // integration.test.ts` (a real `usage_events` table).
+    expect(KNOWN_OPEN_PATHS.some((entry) => entry.file.includes("blog/gemini"))).toBe(
+      false,
+    );
+
+    const unpriced = COUNTED_BUT_UNPRICED.find(
+      (entry) => entry.file === "packages/llm/src/usage-metering.ts",
+    );
+    expect(unpriced).toBeDefined();
+    expect(unpriced!.knownOpenIssue).toBe(2641);
+
+    // The claim has to be true of the code: the seam meters the image method and
+    // books it under its OWN operation, so image work stays separable from
+    // interactive spend by query rather than only by reading a label. (Its token
+    // columns are zeros, so token sums are unaffected; DOLLAR aggregates are a
+    // different matter — `SUM(cost_usd)` skips NULLs, which is why the breakdown
+    // rows carry an explicit unpriced count.)
+    const seam = SOURCE_FILES.find(
+      (file) => file.rel === "packages/llm/src/usage-metering.ts",
+    );
+    expect(seam).toBeDefined();
+    expect(seam!.text).toMatch(/IMAGE_METHOD\s*=\s*"generateImage"/);
+    expect(seam!.text).toMatch(/prop === IMAGE_METHOD/);
+    expect(seam!.text).toMatch(/operation:\s*"image"/);
+
+    // And the pricing layer must REFUSE to price it. Zero tokens through the
+    // per-token card answers 0, and a stored 0 reads as "this image was free".
+    const subscriber = SOURCE_FILES.find(
+      (file) => file.rel === "packages/metric-cost-api/src/event-subscriber.ts",
+    );
+    expect(subscriber).toBeDefined();
+    expect(subscriber!.text).toMatch(/operation === "image"\s*\n?\s*\?\s*null/);
+  });
+
   it("every counted-but-unpriced path names the issue that owns its pricing gap", () => {
     for (const entry of COUNTED_BUT_UNPRICED) {
       expect(
@@ -413,6 +464,22 @@ describe("known-open paths are recorded, not hidden", () => {
         `${entry.file} must name the issue that owns its pricing gap`,
       ).toBeTypeOf("number");
       expect(entry.why.length).toBeGreaterThan(20);
+    }
+  });
+
+  it("every counted-but-unpriced path still exists and still does what it claims", () => {
+    // Same drift guard the uncounted inventory carries: an entry is a claim
+    // about code, and a claim left standing over a renamed or deleted file
+    // reads as tracked while nothing is tracked.
+    for (const entry of COUNTED_BUT_UNPRICED) {
+      const source = SOURCE_FILES.find((file) => file.rel === entry.file);
+      expect(source, `${entry.file} is registered but does not exist`).toBeDefined();
+      if (entry.mustContain) {
+        expect(
+          source!.text,
+          `${entry.file} no longer contains "${entry.mustContain}" — close the entry or repoint it`,
+        ).toContain(entry.mustContain);
+      }
     }
   });
 
