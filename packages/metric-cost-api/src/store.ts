@@ -22,7 +22,23 @@ export type CostSummaryRow = {
   totalThisMonth: number | null;
   totalThisWeek: number | null;
   eventCount: number;
+  /** Unpriced rows over ALL time — the summary cards' own footnote. */
   nullCostCount: number;
+  /**
+   * Unpriced rows inside the CURRENT CALENDAR MONTH (cinatra#2669).
+   *
+   * `nullCostCount` is all-time, so it cannot qualify a monthly figure: a ledger
+   * carrying a hundred unpriced rows from March says nothing about whether
+   * THIS month's total is complete. The budget alert compares
+   * {@link CostSummaryRow.totalThisMonth} against the configured budget, so the
+   * count that qualifies it has to be measured over the SAME window — which is
+   * why this counter exists next to the amount rather than being derived from
+   * the all-time one.
+   *
+   * Both are produced by one shared window expression in {@link readCostSummary},
+   * so the amount and its qualifier cannot drift apart.
+   */
+  nullCostCountThisMonth: number;
 };
 
 export type CostByProviderRow = {
@@ -59,6 +75,11 @@ export type CostByProviderRow = {
  * the subtotal ("$1.2345 + 2 unknown") rather than dropping it. Counting is
  * preferred over collapsing the whole group to "unknown": a real subtotal plus
  * an explicit remainder tells an operator more than a blank.
+ *
+ * cinatra#2669 carries the same counter onto every remaining aggregation: the
+ * day/provider time series, the chart-shaped time series, and the monthly budget
+ * window. Wherever a `SUM(cost_usd)` is reported, the number of rows that sum
+ * silently skipped is reported beside it.
  */
 type UnknownCostCount = number;
 
@@ -78,10 +99,32 @@ export type CostBySkillRow = {
   unknownCostCount: UnknownCostCount;
 };
 
+/**
+ * One (day, provider) bucket of the Daily Cost chart (cinatra#2669).
+ *
+ * FOUR bucket states have to stay apart, and `COALESCE(SUM(cost_usd), 0)`
+ * collapsed three of them onto the same `0`:
+ *
+ *   | state          | `cost`   | `unknownCostCount` |
+ *   |----------------|----------|--------------------|
+ *   | empty (spine)  | `null`   | `0`                |
+ *   | measured zero  | `0`      | `0`                |
+ *   | unpriced only  | `null`   | `> 0`              |
+ *   | mixed          | a number | `> 0`              |
+ *
+ * `cost` is the KNOWN subtotal and nothing else: `null` means "no priced row in
+ * this bucket", never "zero dollars". A day whose only activity was an image
+ * call or a knowledge-graph episode is a day whose cost is UNKNOWN, and drawing
+ * it at the same height as a day that genuinely cost nothing is the quiet
+ * overstatement this counter exists to remove.
+ */
 export type CostTimeSeriesRow = {
   day: string;
   provider: string;
-  cost: number;
+  /** The bucket's KNOWN-cost subtotal; `null` when nothing in it is priced. */
+  cost: number | null;
+  /** @see {@link UnknownCostCount} */
+  unknownCostCount: UnknownCostCount;
 };
 
 export type SubscriptionCosts = {
@@ -100,6 +143,35 @@ function sanitizeDays(days: number): number {
 
 const ALLOWED_PROVIDERS = ["openai", "anthropic", "gemini", "apollo"];
 
+/**
+ * The CURRENT calendar month, stated ONCE (cinatra#2669).
+ *
+ * `readCostSummary` reports a monthly amount and, next to it, how many rows that
+ * amount could not price. Those two numbers only mean anything together if they
+ * are measured over the identical window, so the window is a single expression
+ * embedded twice rather than two hand-copied predicates that can drift.
+ *
+ * Two things the previous month predicate got wrong, both of which the budget
+ * alert's new "at least" claim depends on:
+ *
+ *   - BOUNDARY TYPE. `date_trunc('month', now() AT TIME ZONE 'UTC')` is a
+ *     `timestamp WITHOUT time zone`. Comparing it against the `timestamptz`
+ *     `occurred_at` makes Postgres read it in the SESSION's timezone, so on any
+ *     non-UTC session the month started at the wrong instant and rows near the
+ *     boundary fell on the wrong side. Casting back with `AT TIME ZONE 'UTC'`
+ *     makes the boundary the UTC instant the name already claimed.
+ *   - NO UPPER BOUND. A row dated in a LATER month (clock skew on a producer)
+ *     counted toward "this month". The bound closes the calendar month, and
+ *     deliberately NOT at `now()`: the figure is labelled "This Month" on the
+ *     card that displays it, and capping it at the current instant would
+ *     redefine that number — and only that one, since its All Time / This Week
+ *     siblings stay uncapped. So a row dated later TODAY still counts; a row
+ *     dated next month no longer does.
+ */
+const CURRENT_MONTH_WINDOW = sql`
+  occurred_at >= (date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+  AND occurred_at < ((date_trunc('month', now() AT TIME ZONE 'UTC') + interval '1 month') AT TIME ZONE 'UTC')`;
+
 // ---------------------------------------------------------------------------
 // Dashboard query functions
 // ---------------------------------------------------------------------------
@@ -108,10 +180,11 @@ export async function readCostSummary(): Promise<CostSummaryRow> {
   const rows = await db.execute(sql`
     SELECT
       SUM(cost_usd)::float AS total_all_time,
-      SUM(cost_usd) FILTER (WHERE occurred_at >= date_trunc('month', now() AT TIME ZONE 'UTC'))::float AS total_this_month,
+      SUM(cost_usd) FILTER (WHERE ${CURRENT_MONTH_WINDOW} )::float AS total_this_month,
       SUM(cost_usd) FILTER (WHERE occurred_at >= date_trunc('week', now() AT TIME ZONE 'UTC'))::float AS total_this_week,
       COUNT(*)::int AS event_count,
-      COUNT(*) FILTER (WHERE cost_usd IS NULL)::int AS null_cost_count
+      COUNT(*) FILTER (WHERE cost_usd IS NULL)::int AS null_cost_count,
+      COUNT(*) FILTER (WHERE cost_usd IS NULL AND ${CURRENT_MONTH_WINDOW} )::int AS null_cost_count_this_month
     FROM ${usageEvents}
   `);
   const row = rows.rows[0] as Record<string, unknown>;
@@ -121,6 +194,7 @@ export async function readCostSummary(): Promise<CostSummaryRow> {
     totalThisWeek: row.total_this_week as number | null,
     eventCount: Number(row.event_count) || 0,
     nullCostCount: Number(row.null_cost_count) || 0,
+    nullCostCountThisMonth: Number(row.null_cost_count_this_month) || 0,
   };
 }
 
@@ -179,12 +253,25 @@ export async function readCostBySkill({ days }: { days: number }): Promise<CostB
 export async function readCostTimeSeries({ days }: { days: number }): Promise<CostTimeSeriesRow[]> {
   const safeDays = sanitizeDays(days);
   // Cross-join date spine × distinct providers so every (day, provider) pair
-  // appears in the result — missing days get cost=0 rather than disappearing.
+  // appears in the result — a day with no events still gets a row rather than
+  // disappearing from the chart's x-axis.
+  //
+  // The subtotal is DELIBERATELY not coalesced (cinatra#2669). `SUM(cost_usd)`
+  // skips NULLs, so coalescing its answer to 0 made an unpriced-only bucket
+  // arrive looking exactly like a bucket that genuinely cost nothing. The
+  // companion count says how many rows the SUM skipped:
+  //
+  //   COUNT(ue.id) FILTER (…)  — NOT COUNT(*). On the outer-join's spine-only
+  //   rows every `ue.*` column is NULL, so `cost_usd IS NULL` is TRUE and
+  //   `COUNT(*)` would report ONE unpriced row for every EMPTY bucket. Counting
+  //   `ue.id` (the primary key, NULL only when nothing joined) counts real rows
+  //   and nothing else.
   const rows = await db.execute(sql`
     SELECT
       gs.day::date::text AS day,
       p.provider,
-      COALESCE(SUM(ue.cost_usd), 0)::float AS cost
+      SUM(ue.cost_usd)::float AS cost,
+      COUNT(ue.id) FILTER (WHERE ue.cost_usd IS NULL)::int AS "unknownCostCount"
     FROM generate_series(
       (now() AT TIME ZONE 'UTC' - interval '1 day' * (${safeDays} - 1))::date,
       (now() AT TIME ZONE 'UTC')::date,
@@ -214,8 +301,27 @@ export type CostTimeseriesChartResult = {
   granularity: "day";
   points: Array<{
     date: string;      // YYYY-MM-DD
-    buckets: Record<string, number>;
-    total: number;
+    /**
+     * KNOWN-cost subtotal per bucket. `null` means the bucket holds rows but
+     * none of them is priced — never "zero dollars" (cinatra#2669).
+     */
+    buckets: Record<string, number | null>;
+    /**
+     * Rows in each bucket the subtotal could not price, keyed by the SAME
+     * bucket name. A bucket appears here whenever it appears in `buckets`, so
+     * `buckets[b] === null && unknownCostCounts[b] > 0` reads as "unknown", and
+     * `buckets[b] === 0 && unknownCostCounts[b] === 0` reads as "measured zero".
+     */
+    unknownCostCounts: Record<string, number>;
+    /**
+     * The day's KNOWN-cost total. `null` ONLY when the day HELD rows and none
+     * of them was priced; a day with no events at all keeps reporting `0`,
+     * because "nothing happened" has a known cost and `buckets: {}` already
+     * says which case it is.
+     */
+    total: number | null;
+    /** Rows across the whole day that the day's total could not price. */
+    unknownCostCount: number;
   }>;
 };
 
@@ -223,6 +329,20 @@ export type CostTimeseriesChartResult = {
  * Returns daily cost time series pivoted by the requested groupBy dimension.
  * The date spine is always dense (every day for the last N days appears even
  * if there were no events) so charting libraries always get contiguous x-values.
+ *
+ * cinatra#2669 — WHAT A BUCKET'S NUMBER MEANS. The subtotal is no longer
+ * coalesced to 0: `SUM(cost_usd)` skips unpriced rows, so a bucket holding only
+ * image calls or knowledge-graph episodes used to arrive as a confident `0`.
+ * Each bucket now reports its known subtotal (possibly `null`) AND the number of
+ * rows that subtotal excludes, and so does each day's total.
+ *
+ * The dense spine is produced by an OUTER join, which fabricates one all-NULL
+ * row per EMPTY day. That row used to be pivoted into a real-looking bucket
+ * named "unknown" holding `0` — harmless while every bucket was a number,
+ * indistinguishable from a genuine `agent = NULL` bucket now that a bucket
+ * carries an unpriced-row count. The query therefore reports each group's real
+ * `rowCount` and the pivot drops the fabricated rows while STILL emitting the
+ * day, so the spine stays dense and an empty day is an empty bucket map.
  *
  * Security: days is clamped to 1-366 before being interpolated into the SQL.
  */
@@ -247,7 +367,9 @@ export async function readCostTimeseriesForChart({
     SELECT
       gs.day::date::text AS day,
       ${bucketExpr} AS bucket,
-      COALESCE(SUM(ue.cost_usd), 0)::float AS cost
+      COUNT(ue.id)::int AS "rowCount",
+      SUM(ue.cost_usd)::float AS cost,
+      COUNT(ue.id) FILTER (WHERE ue.cost_usd IS NULL)::int AS "unknownCostCount"
     FROM generate_series(
       (now() AT TIME ZONE 'UTC' - interval '1 day' * (${safeDays} - 1))::date,
       (now() AT TIME ZONE 'UTC')::date,
@@ -259,22 +381,75 @@ export async function readCostTimeseriesForChart({
     ORDER BY gs.day, ${bucketExpr}
   `);
 
-  // Pivot rows: day -> { bucketName -> cost, total }
-  const byDay = new Map<string, { buckets: Record<string, number>; total: number }>();
+  // Pivot rows: day -> { bucket -> known subtotal, bucket -> unpriced rows, … }
+  //
+  // Buckets accumulate in MAPS, not in `{}` object literals. Bucket names are
+  // database values — an agent or a model may legitimately be called
+  // `constructor`, `toString` or `__proto__`, and on a plain object those read
+  // back through `Object.prototype`: `buckets["constructor"] ?? 0` starts from
+  // the Object constructor rather than from 0, and `"constructor" in buckets`
+  // is true before anything was ever written, which would silently DROP such a
+  // bucket. `Object.fromEntries` materialises the plain records the result type
+  // promises only once the arithmetic is done.
+  type DayEntry = {
+    buckets: Map<string, number | null>;
+    unknownCostCounts: Map<string, number>;
+    knownTotal: number | null;
+    unknownCostCount: number;
+    /** Whether ANY real event landed on this day (vs. a spine-only day). */
+    hasRows: boolean;
+  };
+  const byDay = new Map<string, DayEntry>();
 
-  for (const r of rows.rows as Array<{ day: string; bucket: string; cost: number }>) {
+  for (const r of rows.rows as Array<{
+    day: string;
+    bucket: string;
+    rowCount: number;
+    cost: number | null;
+    unknownCostCount: number;
+  }>) {
     let entry = byDay.get(r.day);
     if (!entry) {
-      entry = { buckets: {}, total: 0 };
+      // Created for EVERY day the spine returned, including the fabricated
+      // ones — that is what keeps the date spine dense.
+      entry = {
+        buckets: new Map(),
+        unknownCostCounts: new Map(),
+        knownTotal: null,
+        unknownCostCount: 0,
+        hasRows: false,
+      };
       byDay.set(r.day, entry);
     }
-    entry.buckets[r.bucket] = (entry.buckets[r.bucket] ?? 0) + r.cost;
-    entry.total += r.cost;
+    // A spine-only group: the outer join fabricated it, no event is behind it.
+    // The DAY stays; the phantom bucket does not.
+    if (Number(r.rowCount) === 0) continue;
+    entry.hasRows = true;
+
+    const cost = r.cost === null || r.cost === undefined ? null : Number(r.cost);
+    const unknown = Number(r.unknownCostCount) || 0;
+    if (cost !== null) {
+      entry.buckets.set(r.bucket, (entry.buckets.get(r.bucket) ?? 0) + cost);
+      entry.knownTotal = (entry.knownTotal ?? 0) + cost;
+    } else if (!entry.buckets.has(r.bucket)) {
+      // Unpriced-only bucket: present, with no subtotal to state.
+      entry.buckets.set(r.bucket, null);
+    }
+    entry.unknownCostCounts.set(r.bucket, (entry.unknownCostCounts.get(r.bucket) ?? 0) + unknown);
+    entry.unknownCostCount += unknown;
   }
 
   const points = Array.from(byDay.entries())
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, { buckets, total }]) => ({ date, buckets, total }));
+    .map(([date, entry]) => ({
+      date,
+      buckets: Object.fromEntries(entry.buckets),
+      unknownCostCounts: Object.fromEntries(entry.unknownCostCounts),
+      // A day with no events has a KNOWN total of zero — nothing happened.
+      // `null` is reserved for the day that held rows nobody could price.
+      total: entry.hasRows ? entry.knownTotal : 0,
+      unknownCostCount: entry.unknownCostCount,
+    }));
 
   return { days: safeDays, groupBy, granularity: "day", points };
 }
