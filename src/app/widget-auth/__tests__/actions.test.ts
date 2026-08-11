@@ -132,8 +132,11 @@ describe("one run of the hosted flow records the whole grant", () => {
     await issueWidgetAuthCodeAction("txn-1", NONCE_A);
     const issued = emitWidgetAuthAudit.mock.calls.find(([e]) => e === "code_issued");
     expect(issued).toBeDefined();
+    // The WHOLE granted set, space-delimited, in the order the constant lists
+    // it — cinatra#2575 made that set two entries, and the audit line records
+    // every grant the sign-in recorded, not just the first.
     expect((issued as [string, Record<string, unknown>])[1].grantedScopes).toBe(
-      WIDGET_LIFECYCLE_READ_SCOPE,
+      WIDGET_SIGNIN_GRANTED_SCOPES.join(" "),
     );
   });
 });

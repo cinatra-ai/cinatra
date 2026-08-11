@@ -153,6 +153,35 @@ describe("readLiveWidgetCapturePrincipal", () => {
     expect(readLiveWidgetCapturePrincipal("jti-1")).toBeNull();
   });
 
+  it("ACCEPTS a real post-S8a row, whose `aud` and `scope` are SETS (cinatra#2575)", () => {
+    // THE REGRESSION THIS PINS. cinatra#2574 (S8a) turned both columns into
+    // space-delimited sets; every `cwu_` minted since carries `"<slug>.user
+    // lifecycle.read …"` and `"/api/assistants/chat /api/lifecycle-views/resolve
+    // …"`. This probe still compared them with `!==`, so it refused EVERY
+    // genuine bearer and the capture path would have served nothing at all once
+    // S8d rendered these URLs. The fixture above is a PRE-S8a row and kept
+    // passing, which is exactly why the regression was invisible.
+    rows.push({
+      ...TOKEN_ROW,
+      aud: "/api/assistants/chat /api/lifecycle-views/resolve /api/lifecycle-views/broker-decide",
+      scope: "wordpress-assistant.user lifecycle.read lifecycle.decide",
+    });
+    expect(readLiveWidgetCapturePrincipal("jti-1")).toMatchObject({
+      userId: "user-1",
+      orgId: "org-1",
+      agentSlug: "wordpress-assistant",
+    });
+  });
+
+  it("...and membership is not substring matching — a LOOK-ALIKE set member is refused", () => {
+    // The move from equality to membership must not become a move to "contains".
+    rows.push({ ...TOKEN_ROW, scope: "wordpress-assistant.username lifecycle.read" });
+    expect(readLiveWidgetCapturePrincipal("jti-1")).toBeNull();
+    rows.length = 0;
+    rows.push({ ...TOKEN_ROW, aud: "/api/assistants/chat-evil" });
+    expect(readLiveWidgetCapturePrincipal("jti-1")).toBeNull();
+  });
+
   it("returns the agent bind so the serving ladder can enforce agent_mismatch", () => {
     rows.push({ ...TOKEN_ROW });
     expect(readLiveWidgetCapturePrincipal("jti-1")?.agentSlug).toBe("wordpress-assistant");
@@ -183,8 +212,8 @@ describe("readLiveWidgetCapturePrincipal", () => {
       not_found: "if (!row) return null;",
       expired: "(expires_at > now())",
       agent_mismatch: "agent_slug",
-      aud_mismatch: "WIDGET_BROKER_ROUTE_PATH",
-      scope_mismatch: "userTokenScope(agentSlug)",
+      aud_mismatch: "tokenAudienceAdmits(row.scope, row.aud, WIDGET_BROKER_ROUTE_PATH)",
+      scope_mismatch: "tokenSetHas(row.scope, userTokenScope(agentSlug))",
       site_revoked: "getActiveConnectSiteById",
     };
 

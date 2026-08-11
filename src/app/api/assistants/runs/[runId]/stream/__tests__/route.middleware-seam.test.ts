@@ -30,6 +30,16 @@ const getAssistantThread = vi.fn();
 const loadChatThreadForActorAccess = vi.fn();
 const subscribeToAgUiEventsWithId = vi.fn();
 
+const isWidgetBrokerSessionLive = vi.fn();
+// cinatra#2575 (epic #2564 S8b) — the resume seam now re-probes the widget
+// session LIVE (no standalone-token trust). These suites are about the token and
+// the transport, so the probe is doubled here; its own refusals are proven in
+// `src/lib/__tests__/widget-broker-liveness.test.ts` and the WITHDRAWN case is
+// exercised below.
+vi.mock("@/lib/widget-broker-liveness", () => ({
+  isWidgetBrokerSessionLive: (...args: unknown[]) => isWidgetBrokerSessionLive(...args),
+}));
+
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: () => getAuthSession(),
   isPlatformAdmin: (s: unknown) => isPlatformAdmin(s),
@@ -98,6 +108,8 @@ function mintResume(runId: string): string {
     kind: "wordpress",
     runId,
     jti: "run-nonce-seam",
+    widgetJti: "cwu-jti-2575",
+    siteId: "site-2575",
   });
 }
 
@@ -112,6 +124,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  isWidgetBrokerSessionLive.mockResolvedValue(true);
   vi.clearAllMocks();
   // Cookieless broker path: no session.
   getAuthSession.mockResolvedValue(null);

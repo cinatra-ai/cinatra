@@ -51,10 +51,14 @@ import "server-only";
 import { resolveActorGrantsForUserInOrg } from "@/lib/auth-session";
 import type { ActorRoleHints } from "@/lib/authz/build-actor-context";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
-import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
+import { emitWidgetAuthAudit, type WidgetAuthAuditEvent } from "@/lib/widget-auth-audit";
 import {
+  WIDGET_LIFECYCLE_DECIDE_REQUEST_ROUTE_PATH,
+  WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH,
+  WIDGET_LIFECYCLE_DECIDE_SCOPE,
   WIDGET_LIFECYCLE_READ_ROUTE_PATH,
   WIDGET_LIFECYCLE_READ_SCOPE,
+  type WidgetExtensionScope,
 } from "@/lib/widget-lifecycle-scope";
 import {
   consumeUserWidgetToken,
@@ -75,6 +79,70 @@ export const WIDGET_LIFECYCLE_PLATFORM_ROLE_FLOOR = "member" as const;
 export const WIDGET_LIFECYCLE_READ_REQUIRED_SCOPES = [
   WIDGET_LIFECYCLE_READ_SCOPE,
 ] as const;
+
+/**
+ * A GRANT — the (audience, required scopes, audit surface) triple one widget
+ * lifecycle surface consumes its token under.
+ *
+ * cinatra#2575 (epic #2564 S8b). S8a had one surface, so the three values were
+ * literals inside the resolver. S8b adds two more, and the failure mode of
+ * letting each new caller pass its own strings is the one this whole module
+ * exists to prevent: a surface that asks for a weaker audience or forgets a
+ * scope does not error, it silently authorizes more than it should. So the
+ * triples are DECLARED here, as a closed set, and a caller names one.
+ */
+export interface WidgetLifecycleGrant {
+  /** The route path the token's audience must admit. */
+  routePath: string;
+  /** Every extension scope the surface requires, checked by the ONE verifier. */
+  requiredScopes: readonly WidgetExtensionScope[];
+  /**
+   * The audit pair this surface writes. Spelled out as LITERALS on each grant
+   * rather than assembled from the surface name, so every event this module can
+   * emit is greppable and belongs to the audit module's closed union.
+   */
+  audit: { authorized: WidgetAuthAuditEvent; rejected: WidgetAuthAuditEvent };
+}
+
+/** Reading lifecycle work (S8a): the read grant at the resolve endpoint. */
+export const WIDGET_LIFECYCLE_READ_GRANT: WidgetLifecycleGrant = {
+  routePath: WIDGET_LIFECYCLE_READ_ROUTE_PATH,
+  requiredScopes: WIDGET_LIFECYCLE_READ_REQUIRED_SCOPES,
+  audit: {
+    authorized: "widget_lifecycle_read_authorized",
+    rejected: "widget_lifecycle_read_rejected",
+  },
+};
+
+/**
+ * ASKING for a decision to be confirmed (S8b). Requires BOTH grants: the request
+ * discloses which gate is being decided and re-derives the gate's pinned set, so
+ * it is a read as well as the first half of an act. Requiring only the decide
+ * grant would let a session that may act but not read learn a gate's shape.
+ */
+export const WIDGET_LIFECYCLE_DECIDE_REQUEST_GRANT: WidgetLifecycleGrant = {
+  routePath: WIDGET_LIFECYCLE_DECIDE_REQUEST_ROUTE_PATH,
+  requiredScopes: [WIDGET_LIFECYCLE_READ_SCOPE, WIDGET_LIFECYCLE_DECIDE_SCOPE],
+  audit: {
+    authorized: "widget_lifecycle_decide_request_authorized",
+    rejected: "widget_lifecycle_decide_request_rejected",
+  },
+};
+
+/**
+ * SPENDING a confirmed decision (S8b). Both grants again, for the same reason
+ * and one more: the broker endpoint enforces run READ before the decision op,
+ * exactly as the first-party gate-scoped entry does, so a token that cannot read
+ * must not reach the check that would tell it whether a gate is there.
+ */
+export const WIDGET_LIFECYCLE_DECIDE_GRANT: WidgetLifecycleGrant = {
+  routePath: WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH,
+  requiredScopes: [WIDGET_LIFECYCLE_READ_SCOPE, WIDGET_LIFECYCLE_DECIDE_SCOPE],
+  audit: {
+    authorized: "widget_lifecycle_decide_authorized",
+    rejected: "widget_lifecycle_decide_rejected",
+  },
+};
 
 export type WidgetLifecycleActorDenial =
   /** The `cwu_` failed the single verifier — includes the scope/audience gate. */
@@ -114,20 +182,29 @@ export async function resolveWidgetLifecycleActorContext(input: {
   agentSlug: string;
   /** The request Origin — re-checked against the token's bound site origin. */
   requestOrigin: string | null;
+  /**
+   * WHICH grant the calling surface consumes under (cinatra#2575). Defaults to
+   * the READ grant, so every S8a caller is byte-unchanged. A caller may only
+   * pass one of the declared triples above — never a hand-assembled one.
+   */
+  grant?: WidgetLifecycleGrant;
 }): Promise<WidgetLifecycleActorResult> {
-  // 1. THE TOKEN. Consumed at the LIFECYCLE audience with the LIFECYCLE scope
+  const grant = input.grant ?? WIDGET_LIFECYCLE_READ_GRANT;
+  const { authorized, rejected } = grant.audit;
+
+  // 1. THE TOKEN. Consumed at the GRANT's audience with the GRANT's scopes
   //    required, so the same verifier that authorizes a chat turn decides this
   //    too — with a strictly higher bar. A token minted before the grant existed
   //    holds neither the audience nor the scope and dies here (AC-1).
   const consumed = consumeUserWidgetToken({
     token: input.token,
     agentSlug: input.agentSlug,
-    routePath: WIDGET_LIFECYCLE_READ_ROUTE_PATH,
+    routePath: grant.routePath,
     requestOrigin: input.requestOrigin,
-    requiredScopes: WIDGET_LIFECYCLE_READ_REQUIRED_SCOPES,
+    requiredScopes: grant.requiredScopes,
   });
   if (!consumed.ok) {
-    emitWidgetAuthAudit("widget_lifecycle_read_rejected", {
+    emitWidgetAuthAudit(rejected, {
       agentSlug: input.agentSlug,
       reason: consumed.reason,
     });
@@ -138,7 +215,7 @@ export async function resolveWidgetLifecycleActorContext(input: {
   // Defensive: a row that validated but carries no principal/org cannot anchor
   // an authorization. There is no "best effort" actor to fall back to.
   if (!claims.userId || !claims.orgId) {
-    emitWidgetAuthAudit("widget_lifecycle_read_rejected", {
+    emitWidgetAuthAudit(rejected, {
       agentSlug: input.agentSlug,
       reason: "unbound_principal",
     });
@@ -164,7 +241,7 @@ export async function resolveWidgetLifecycleActorContext(input: {
   //    is the RECONCILIATION between two role readings, which was the defect.)
   const grants = await resolveActorGrantsForUserInOrg(claims.userId, claims.orgId);
   if (!grants.orgRole) {
-    emitWidgetAuthAudit("widget_lifecycle_read_rejected", {
+    emitWidgetAuthAudit(rejected, {
       actor: claims.userId,
       orgId: claims.orgId,
       agentSlug: input.agentSlug,
@@ -196,7 +273,7 @@ export async function resolveWidgetLifecycleActorContext(input: {
     }),
   };
 
-  emitWidgetAuthAudit("widget_lifecycle_read_authorized", {
+  emitWidgetAuthAudit(authorized, {
     actor: claims.userId,
     orgId: claims.orgId,
     siteId: claims.siteId,

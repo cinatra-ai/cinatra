@@ -46,6 +46,7 @@ import "server-only";
 import { getActiveConnectSiteById } from "@/lib/connect-sites-store";
 import { normalizeOriginStrict } from "@/lib/widget-token-broker";
 import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
+import { tokenAudienceAdmits, tokenSetHas } from "@/lib/widget-lifecycle-scope";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { runPostgresQueriesSync, quotePostgresIdentifier } from "@/lib/postgres-sync";
@@ -132,8 +133,22 @@ export function readLiveWidgetCapturePrincipal(
     // carrying this agent's own user scope. Without these two, a token minted
     // for some other audience or scope could authorize capture bytes that the
     // canonical verifier would have rejected outright.
-    if (String(row.aud ?? "") !== WIDGET_BROKER_ROUTE_PATH) return null;
-    if (String(row.scope ?? "") !== userTokenScope(agentSlug)) return null;
+    //
+    // SET MEMBERSHIP, NOT EQUALITY (cinatra#2575). This probe was written while
+    // `aud` and `scope` still held exactly one value each, and it compared them
+    // with `!==`. cinatra#2574 (S8a) made both columns SPACE-DELIMITED SETS: a
+    // token minted since then carries `"<slug>.user lifecycle.read …"` and
+    // `"/api/assistants/chat /api/lifecycle-views/resolve …"`, so the equality
+    // test refused EVERY genuine bearer and the capture path would have served
+    // nothing at all once S8d rendered these URLs. The canonical verifier
+    // already moved to membership; this is the same move, through the same
+    // parser, so the pair the drift test pins together cannot disagree about
+    // what a column means. It is not a relaxation: `tokenAudienceAdmits`
+    // RE-DERIVES the admissible audience from the token's own known scopes and
+    // then requires it to be present in the stored set, so an audience this
+    // build cannot justify is still refused.
+    if (!tokenAudienceAdmits(row.scope, row.aud, WIDGET_BROKER_ROUTE_PATH)) return null;
+    if (!tokenSetHas(row.scope, userTokenScope(agentSlug))) return null;
 
     // Live site re-check — revoke / re-bind / rotate kills the capability at the
     // next fetch, exactly as it kills the token at the next turn.

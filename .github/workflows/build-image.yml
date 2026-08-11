@@ -705,6 +705,22 @@ jobs:
           CINATRA_DB_INTEGRATION_TESTS: '1'
         run: pnpm exec vitest run src/lib/__tests__/integration/anthropic-skill-upload-outbox.integration.test.ts
 
+      # cinatra#2575 (epic #2564 S8b). The widget decision path rests on a
+      # credential that may be spent exactly once, and every property that makes
+      # that true is a property of SQL rather than of TypeScript: the
+      # confirmation and the burn are `WHERE ... IS NULL` CAS statements that an
+      # in-memory double cannot lose a race on, "spent implies confirmed" is a
+      # DDL CHECK, and both windows are measured by the DATABASE clock so two
+      # nodes cannot disagree about "expired". So this drives the REAL bootstrap
+      # DDL this slice ships and the REAL store against this job's service
+      # Postgres, including concurrent redemptions. Own vitest invocation (own
+      # process) so its SUPABASE_DB_URL/SUPABASE_SCHEMA lifecycle never touches
+      # the steps above.
+      - name: Widget action-capability ledger DB test (cinatra#2575)
+        env:
+          CINATRA_DB_INTEGRATION_TESTS: '1'
+        run: pnpm exec vitest run src/lib/lifecycle/__tests__/widget-action-capability-store.integration.test.ts
+
       # cinatra#1988 — the shared dashboards session→actor builder must thread
       # `teamRoles` end-to-end. Real-store regression: seeds team memberships in
       # a lane-unique DB and drives buildDashboardActorFromSession → the real

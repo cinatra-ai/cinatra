@@ -6,6 +6,7 @@ import { loadChatThreadForActorAccess } from "@/lib/chat-thread-store";
 import { evaluateChatThreadAccess } from "@/lib/chat-thread-access";
 import { subscribeToAgUiEventsWithId } from "@cinatra-ai/agent-ui-protocol/server";
 import { verifyWidgetChatResumeToken } from "@/lib/widget-chat-resume-token";
+import { isWidgetBrokerSessionLive } from "@/lib/widget-broker-liveness";
 import { listAssistantWidgetBindings } from "@/lib/assistant-widget-handles";
 import {
   resolveWidgetStreamAgentUnion,
@@ -153,6 +154,27 @@ export async function GET(request: Request, context: RouteContext) {
       expectedRunId: decodedRunId,
     });
     if (!resumeActor) {
+      return new Response("Unauthorized", { status: 401, headers: corsHeaders });
+    }
+    // NO STANDALONE-TOKEN TRUST (cinatra#2575, epic #2564 S8b). The signature
+    // proves who minted this token and for which run; it says nothing about
+    // NOW. Re-probe the widget session it names: the `cwu_` row must still be
+    // alive and still bound to the same person, org, site and canonical
+    // instance, its connect site must still be active with the same credential
+    // generation, and the person must still be a member of that org. Signing
+    // out, suspending or re-keying the site, revoking the connection and
+    // removing a membership therefore all stop the stream at the next
+    // reconnect, instead of leaving it delivering for the token's full life.
+    // Refused with the SAME 401 as a bad token — a resumer learns nothing about
+    // which of the two it was.
+    const sessionLive = await isWidgetBrokerSessionLive({
+      widgetJti: resumeActor.widgetJti,
+      siteId: resumeActor.siteId,
+      userId: resumeActor.userId,
+      orgId: resumeActor.orgId,
+      instanceId: resumeActor.instanceId,
+    });
+    if (!sessionLive) {
       return new Response("Unauthorized", { status: 401, headers: corsHeaders });
     }
     // The run-bound token IS the authorization (minted only after the broker-auth

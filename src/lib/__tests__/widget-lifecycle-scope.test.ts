@@ -31,6 +31,9 @@ import {
   tokenAudienceAdmits,
   tokenSetHas,
   widgetUserBaseScope,
+  WIDGET_LIFECYCLE_DECIDE_SCOPE,
+  WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH,
+  WIDGET_LIFECYCLE_DECIDE_REQUEST_ROUTE_PATH,
 } from "@/lib/widget-lifecycle-scope";
 
 describe("the set codec", () => {
@@ -65,7 +68,10 @@ describe("the set codec", () => {
 describe("the grant vocabulary", () => {
   it("knows only the scopes it declares", () => {
     expect(isKnownWidgetExtensionScope(WIDGET_LIFECYCLE_READ_SCOPE)).toBe(true);
-    expect(isKnownWidgetExtensionScope("lifecycle.decide")).toBe(false);
+    // cinatra#2575 added the DECIDE grant, so it is known now — the negative
+    // case moves to a name no build has ever declared.
+    expect(isKnownWidgetExtensionScope(WIDGET_LIFECYCLE_DECIDE_SCOPE)).toBe(true);
+    expect(isKnownWidgetExtensionScope("lifecycle.publish")).toBe(false);
     expect(isKnownWidgetExtensionScope("toString")).toBe(false); // no prototype hits
     expect(isKnownWidgetExtensionScope(null)).toBe(false);
   });
@@ -109,11 +115,25 @@ describe("the mint", () => {
     expect(tokenSetHas(aud, WIDGET_LIFECYCLE_READ_ROUTE_PATH)).toBe(true);
   });
 
+  it("the decide grant adds ITS scope and BOTH its audiences (cinatra#2575)", () => {
+    const scope = mintWidgetTokenScope("wordpress-content-editor", [
+      WIDGET_LIFECYCLE_DECIDE_SCOPE,
+    ]);
+    const aud = mintWidgetTokenAudience([WIDGET_LIFECYCLE_DECIDE_SCOPE]);
+    expect(tokenSetHas(scope, WIDGET_LIFECYCLE_DECIDE_SCOPE)).toBe(true);
+    // Both halves of one act: asking for a confirmation, and spending it.
+    expect(tokenSetHas(aud, WIDGET_LIFECYCLE_DECIDE_REQUEST_ROUTE_PATH)).toBe(true);
+    expect(tokenSetHas(aud, WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH)).toBe(true);
+    // ...and it does NOT smuggle the read grant in with it.
+    expect(tokenSetHas(scope, WIDGET_LIFECYCLE_READ_SCOPE)).toBe(false);
+    expect(tokenSetHas(aud, WIDGET_LIFECYCLE_READ_ROUTE_PATH)).toBe(false);
+  });
+
   it("an unknown grant unlocks no scope and no audience", () => {
-    expect(mintWidgetTokenScope("wordpress-content-editor", ["lifecycle.decide"])).toBe(
+    expect(mintWidgetTokenScope("wordpress-content-editor", ["lifecycle.publish"])).toBe(
       "wordpress-content-editor.user",
     );
-    expect(mintWidgetTokenAudience(["lifecycle.decide"])).toBe(WIDGET_BROKER_ROUTE_PATH);
+    expect(mintWidgetTokenAudience(["lifecycle.publish"])).toBe(WIDGET_BROKER_ROUTE_PATH);
   });
 
   it("the chat audience is in EVERY token — a grant never costs the base surface", () => {

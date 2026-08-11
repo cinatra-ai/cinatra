@@ -64,6 +64,68 @@ export const WIDGET_LIFECYCLE_READ_SCOPE = "lifecycle.read";
 export const WIDGET_LIFECYCLE_READ_ROUTE_PATH = "/api/lifecycle-views/resolve";
 
 /**
+ * The lifecycle DECIDE grant (cinatra#2575, epic #2564 S8b).
+ *
+ * WHAT IT IS NOT. It is not permission to decide. A `cwu_` carrying this scope
+ * still cannot approve anything: the broker decision endpoint requires a FRESH,
+ * single-use action capability minted in a cinatra-origin window the site can
+ * never script, and refuses every request that does not carry one. Replaying the
+ * bearer server-side — the thing a hostile site admin can trivially do, because
+ * the CMS backend possesses it — reaches an endpoint that says no.
+ *
+ * WHAT IT IS. Participation. A widget session may ASK for a decision to be
+ * confirmed, and may PRESENT the confirmation once it exists. That is a second,
+ * materially different thing to grant on top of reading — reading shows you work
+ * waiting on you, this lets the same session become the transport for a change to
+ * org state — so it gets its own grant rather than riding `lifecycle.read`, and a
+ * session that signed in before this grant existed acquires neither audience nor
+ * scope and fails closed at both endpoints (AC-1, exactly as S8a).
+ *
+ * WHY BOTH ENDPOINTS SIT UNDER ONE SCOPE. The request and the redeem are two
+ * halves of one act; a session that may do one and not the other can only ever
+ * produce a stuck confirmation. Splitting them would be a distinction with no
+ * safety content and two things to keep in sync.
+ */
+export const WIDGET_LIFECYCLE_DECIDE_SCOPE = "lifecycle.decide";
+
+/**
+ * Where a widget session ASKS for a decision to be confirmed — the surface that
+ * records what a confirmation would be about and hands back its opaque id. It
+ * authorizes nothing on its own; the hosted confirmation page is what turns a
+ * request into a spendable capability.
+ */
+export const WIDGET_LIFECYCLE_DECIDE_REQUEST_ROUTE_PATH =
+  "/api/lifecycle-views/action-capability";
+
+/**
+ * Where a confirmed decision is SPENT — the broker decision entry, and the ONE
+ * audience an action capability may name. This is the door into the epic's one
+ * decision module for a widget reviewer; there is deliberately no second one.
+ */
+export const WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH = "/api/lifecycle-views/broker-decide";
+
+/**
+ * The hosted CONFIRMATION page — the cinatra-origin window a widget decision
+ * passes through, and the surface the site can never perform.
+ *
+ * It is NOT an audience: it carries no `cwu_` and grants nothing to a widget
+ * session. It is reached as a TOP-LEVEL window with the person's ordinary
+ * Cinatra cookie session, which is exactly why the site cannot drive it — a
+ * cross-origin script can open the window but can neither read it nor press the
+ * button inside it. Named here so the request endpoint, the page and the tests
+ * share one spelling.
+ */
+export const WIDGET_DECISION_CONFIRM_PATH = "/widget-decision";
+
+/**
+ * The query parameter the confirmation page reads its request id from. One
+ * parameter, and it names a row that grants nothing on its own: the page
+ * re-checks that the signed-in principal is the one the row names before it
+ * renders a single detail of the decision.
+ */
+export const WIDGET_DECISION_REQUEST_QUERY_PARAM = "t";
+
+/**
  * The grammar of a single set member. Deliberately strict and whitespace-free:
  * the set encoding IS the whitespace, so a value carrying any is not one member
  * but several, and a member assembled from an attacker-influenced string could
@@ -403,6 +465,23 @@ export const WIDGET_EXTENSION_SCOPES = {
     consentCopy:
       "Show you work items that are waiting on you — reviews and their outcomes — using the same permissions you have in Cinatra.",
   },
+  [WIDGET_LIFECYCLE_DECIDE_SCOPE]: {
+    audiences: [
+      WIDGET_LIFECYCLE_DECIDE_REQUEST_ROUTE_PATH,
+      WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH,
+    ] as readonly string[],
+    /**
+     * The sentence the hosted SIGN-IN screen shows for this grant.
+     *
+     * It names the extra step rather than hiding it, because the extra step is
+     * the product: the person is told, at sign-in, that deciding from this site
+     * will ask them to confirm again in a Cinatra window. Copy that promised
+     * "decide reviews from this site" and then produced a second prompt would
+     * read as a fault; this reads as the design.
+     */
+    consentCopy:
+      "Let you act on those work items from this site. Each decision asks you to confirm once more in a Cinatra window, which this site cannot open or read.",
+  },
 } as const satisfies Record<
   string,
   { audiences: readonly string[]; consentCopy: string }
@@ -424,6 +503,7 @@ export type WidgetExtensionScope = keyof typeof WIDGET_EXTENSION_SCOPES;
  */
 export const WIDGET_SIGNIN_GRANTED_SCOPES: readonly WidgetExtensionScope[] = [
   WIDGET_LIFECYCLE_READ_SCOPE,
+  WIDGET_LIFECYCLE_DECIDE_SCOPE,
 ];
 
 export function isKnownWidgetExtensionScope(

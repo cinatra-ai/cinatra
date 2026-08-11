@@ -31,6 +31,16 @@ vi.mock("@/lib/assistant-thread-store", () => ({
 vi.mock("@/lib/chat-thread-store", () => ({
   loadChatThreadForActorAccess: (i: unknown) => loadChatThreadForActorAccess(i),
 }));
+const isWidgetBrokerSessionLive = vi.fn();
+// cinatra#2575 (epic #2564 S8b) — the resume seam now re-probes the widget
+// session LIVE (no standalone-token trust). These suites are about the token and
+// the transport, so the probe is doubled here; its own refusals are proven in
+// `src/lib/__tests__/widget-broker-liveness.test.ts` and the WITHDRAWN case is
+// exercised below.
+vi.mock("@/lib/widget-broker-liveness", () => ({
+  isWidgetBrokerSessionLive: (...args: unknown[]) => isWidgetBrokerSessionLive(...args),
+}));
+
 vi.mock("@cinatra-ai/agent-ui-protocol/server", () => ({
   subscribeToAgUiEventsWithId: (runId: string, opts: unknown) =>
     subscribeToAgUiEventsWithId(runId, opts),
@@ -74,6 +84,8 @@ function mintResume(runId: string): string {
     kind: "wordpress",
     runId,
     jti: "run-nonce-1",
+    widgetJti: "cwu-jti-2575",
+    siteId: "site-2575",
   });
 }
 
@@ -88,6 +100,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  isWidgetBrokerSessionLive.mockResolvedValue(true);
   vi.clearAllMocks();
   // Default: NO session (the broker path).
   getAuthSession.mockResolvedValue(null);
@@ -126,6 +139,51 @@ describe("resume seam — broker resume-token ACCEPT", () => {
     const res = await GET(...req(RUN, { authHeader: `Bearer ${mintResume(RUN)}` }));
     expect(res.status).toBe(404);
     expect(subscribeToAgUiEventsWithId).not.toHaveBeenCalled();
+  });
+
+  it("probes the LIVE session it names, not just its own signature (cinatra#2575)", async () => {
+    await (await GET(...req(RUN, { authHeader: `Bearer ${mintResume(RUN)}` }))).text();
+    expect(isWidgetBrokerSessionLive).toHaveBeenCalledWith({
+      widgetJti: "cwu-jti-2575",
+      siteId: "site-2575",
+      userId: "u-widget",
+      orgId: "org-widget",
+      instanceId: "inst-canonical-uuid",
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2575 (epic #2564 S8b) AC-4 — resume after a WITHDRAWAL fails closed.
+//
+// The token is still validly signed, still bound to this run and still inside
+// its ten minutes. Before this slice that was the whole authorization, so a
+// person signed out mid-run, a suspended site, a revoked or re-keyed connection
+// and a removed membership all kept streaming until the signature aged out.
+// The probe answers all four; here we assert the SEAM honours it, and that the
+// refusal is byte-identical to a bad token so a resumer learns nothing.
+// ---------------------------------------------------------------------------
+describe("resume seam — a WITHDRAWN session fails closed (cinatra#2575 AC-4)", () => {
+  it("401s a perfectly valid token whose widget session is no longer live", async () => {
+    isWidgetBrokerSessionLive.mockResolvedValue(false);
+    const res = await GET(...req(RUN, { authHeader: `Bearer ${mintResume(RUN)}` }));
+    expect(res.status).toBe(401);
+    expect(subscribeToAgUiEventsWithId).not.toHaveBeenCalled();
+  });
+
+  it("...and answers IDENTICALLY to a forged token — no oracle for which it was", async () => {
+    isWidgetBrokerSessionLive.mockResolvedValue(false);
+    const withdrawn = await GET(...req(RUN, { authHeader: `Bearer ${mintResume(RUN)}` }));
+    const forged = await GET(...req(RUN, { authHeader: "Bearer cwu_cafebabecafebabe" }));
+    expect(withdrawn.status).toBe(forged.status);
+    expect(await withdrawn.text()).toBe(await forged.text());
+  });
+
+  it("the run's turn row is never even looked up for a withdrawn session", async () => {
+    isWidgetBrokerSessionLive.mockResolvedValue(false);
+    findAssistantTurnByRunId.mockClear();
+    await GET(...req(RUN, { authHeader: `Bearer ${mintResume(RUN)}` }));
+    expect(findAssistantTurnByRunId).not.toHaveBeenCalled();
   });
 });
 

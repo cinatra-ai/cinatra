@@ -59,7 +59,19 @@ export type WidgetAuthAuditEvent =
   // lifecycle grant AND the live org membership held, rejected (reason-coded,
   // never a secret and never a row identifier) on any fail-closed deny.
   | "widget_lifecycle_read_authorized"
-  | "widget_lifecycle_read_rejected";
+  | "widget_lifecycle_read_rejected"
+  // cinatra#2575 (epic #2564 S8b) — the two halves of the widget DECISION path,
+  // emitted by the SAME actor-construction seam as the read pair above. The
+  // `decide_request` pair records that a widget session asked for a decision to
+  // be confirmed (it authorizes nothing on its own); the `decide` pair records
+  // that a session presented a confirmed capability at the broker decision
+  // endpoint and cleared the credential checks. Neither is the decision itself:
+  // the decision's own audit row is written by the ONE decision module, and is
+  // deliberately indistinguishable in shape from an in-app one.
+  | "widget_lifecycle_decide_request_authorized"
+  | "widget_lifecycle_decide_request_rejected"
+  | "widget_lifecycle_decide_authorized"
+  | "widget_lifecycle_decide_rejected";
 
 export type WidgetAuthAuditFields = {
   actor?: string | null; // userId (never an email/secret)

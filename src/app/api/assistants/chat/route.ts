@@ -520,6 +520,13 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
         kind: widgetPrincipal.assistantHandle,
         runId,
         jti: randomUUID(),
+        // cinatra#2575 (epic #2564 S8b). The resume token carries the WIDGET
+        // SESSION it was minted inside and the site it was authenticated for,
+        // so the resume seam can re-probe LIVE state instead of trusting a
+        // ten-minute signature: sign the person out, suspend or re-key the
+        // site, or remove their membership, and the next reconnect stops.
+        widgetJti: claims.jti,
+        siteId: claims.siteId,
       }),
   });
   // Reflect CORS onto the streamed response so the cross-origin widget can read

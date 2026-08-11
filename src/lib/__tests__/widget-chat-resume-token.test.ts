@@ -65,6 +65,10 @@ const RESUME_INPUT: WidgetChatResumeTokenInput = {
   kind: "wordpress",
   runId: RUN_ID,
   jti: "run-nonce-abc123",
+  // cinatra#2575 — the widget SESSION and SITE the token was minted inside, so
+  // the resume seam can re-probe live state instead of trusting the signature.
+  widgetJti: "cwu-jti-abc123",
+  siteId: "site-abc123",
 };
 
 const EXPECTED_ACTOR: WidgetChatResumeActor = {
@@ -75,6 +79,8 @@ const EXPECTED_ACTOR: WidgetChatResumeActor = {
   kind: "wordpress",
   runId: RUN_ID,
   jti: "run-nonce-abc123",
+  widgetJti: "cwu-jti-abc123",
+  siteId: "site-abc123",
   platformRole: "member",
 };
 
@@ -151,6 +157,8 @@ function baseClaims(overrides: Record<string, unknown> = {}) {
     run: RUN_ID,
     src: "public_site_widget",
     jti: "run-nonce-abc123",
+    wjti: "cwu-jti-abc123",
+    sid: "site-abc123",
     scope: "chat:resume",
     aud: WIDGET_CHAT_RESUME_ROUTE_PATH,
     iss: RESUME_ISSUER,
@@ -409,5 +417,47 @@ describe("widget-chat-resume-token verify — cross-type forgery protection (bot
     obj.run = "attacker-chosen-run";
     const mutated = Buffer.from(JSON.stringify(obj), "utf8").toString("base64url");
     expect(verify(`${header}.${mutated}.${signature}`, "attacker-chosen-run")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2575 (epic #2564 S8b) — the session claims are REQUIRED.
+//
+// The point of carrying them is that the resume seam can re-probe live state. A
+// token that cannot name its own widget session and site is a token whose
+// authority cannot be re-checked, and an un-re-checkable resume token is exactly
+// the standalone trust this slice removes — so it is refused rather than
+// resumed on its signature alone.
+// ---------------------------------------------------------------------------
+describe("widget-chat-resume-token — the live-recheck claims (cinatra#2575)", () => {
+  const verifyFor = (token: string) =>
+    verifyWidgetChatResumeToken({ authHeader: `Bearer ${token}`, expectedRunId: RUN_ID });
+
+  it("mints both claims from the widget session that authorized the turn", () => {
+    const p = decodePayload(issueWidgetChatResumeToken(RESUME_INPUT));
+    expect(p.wjti).toBe("cwu-jti-abc123");
+    expect(p.sid).toBe("site-abc123");
+  });
+
+  it("carries both onto the resolved actor, so the seam has something to probe", () => {
+    const actor = verifyFor(issueWidgetChatResumeToken(RESUME_INPUT));
+    expect(actor?.widgetJti).toBe("cwu-jti-abc123");
+    expect(actor?.siteId).toBe("site-abc123");
+  });
+
+  it("REFUSES a validly-signed token minted before these claims existed", () => {
+    const { wjti: _w, sid: _s, ...legacy } = baseClaims();
+    expect(verifyFor(signClaims(legacy))).toBeNull();
+  });
+
+  it("REFUSES a blank or whitespace-only value on either claim", () => {
+    for (const overrides of [
+      { wjti: "" },
+      { sid: "" },
+      { wjti: " " },
+      { sid: " " },
+    ]) {
+      expect(verifyFor(signClaims(baseClaims(overrides))), JSON.stringify(overrides)).toBeNull();
+    }
   });
 });
