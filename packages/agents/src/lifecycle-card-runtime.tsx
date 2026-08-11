@@ -79,7 +79,35 @@ export type LifecycleCardAuth = {
   credentials: RequestCredentials;
 };
 
+/**
+ * The EMBEDDING CONTEXT a non-first-party host renders in (cinatra#2577).
+ *
+ * A card on the site widget is drawn inside `/embed/assistant`, which is itself
+ * framed by the registered site. So the review card's §III island — a nested
+ * first-party document — has TWO ancestors, and a `frame-ancestors` wall that
+ * names only `'self'` refuses to render it (Chrome: "Framing '<app origin>'
+ * violates the following Content Security Policy directive: frame-ancestors
+ * 'self'. The request has been blocked."). The island was blank on the widget
+ * for exactly that reason.
+ *
+ * These are the SAME two disambiguators the embed page itself carries in its
+ * URL, and they are passed on to the island for the SAME reason: so the SERVER
+ * can re-derive the one registered origin from its own records. They are
+ * opaque selectors, never an origin — nothing a caller writes here can put an
+ * origin into a policy. `frameAncestorsDirectiveFor` maps them through the
+ * CLOSED host-side binding table and the stored instance row, and fails closed
+ * to `'self'`-only for anything it cannot resolve to exactly one registered
+ * site.
+ */
+export type LifecycleCardFrame = {
+  /** == the embed's `?assistant` == the `cit_`-bound kind. */
+  assistant: string;
+  /** == the embed's `?instanceId` — the connector instance disambiguator. */
+  instanceId: string;
+};
+
 const LifecycleCardAuthContext = createContext<LifecycleCardAuth | null>(null);
+const LifecycleCardFrameContext = createContext<LifecycleCardFrame | null>(null);
 
 /**
  * The hosts whose identity travels by COOKIE. Every other host must declare a
@@ -114,20 +142,40 @@ const COOKIE_SESSION_HOSTS: ReadonlySet<LifecycleCardHost> =
 export function LifecycleCardSurfaceProvider({
   host,
   auth,
+  frame,
   children,
 }: {
   host: LifecycleCardHost;
   auth?: LifecycleCardAuth;
+  /** The embedding context, for a host that renders inside another frame. A
+   *  cookie-session host is first-party and declares none; one declared there
+   *  is IGNORED rather than trusted, so a stray prop can never widen a
+   *  first-party wall. */
+  frame?: LifecycleCardFrame;
   children: ReactNode;
 }): ReactElement {
   const cookieHost = COOKIE_SESSION_HOSTS.has(host);
   const credentialOk = cookieHost
     ? auth === undefined
     : auth !== undefined && auth.credentials === "omit";
+  // Both fields must be present and non-empty; a half-declared frame is no
+  // frame, so the island falls back to the first-party wall rather than being
+  // asked to resolve half a binding.
+  const frameOk =
+    !cookieHost &&
+    frame !== undefined &&
+    typeof frame.assistant === "string" &&
+    frame.assistant.length > 0 &&
+    typeof frame.instanceId === "string" &&
+    frame.instanceId.length > 0;
   return (
     <LifecycleCardSurfaceContext.Provider value={credentialOk ? host : null}>
       <LifecycleCardAuthContext.Provider value={credentialOk ? (auth ?? null) : null}>
-        {children}
+        <LifecycleCardFrameContext.Provider
+          value={credentialOk && frameOk ? (frame ?? null) : null}
+        >
+          {children}
+        </LifecycleCardFrameContext.Provider>
       </LifecycleCardAuthContext.Provider>
     </LifecycleCardSurfaceContext.Provider>
   );
@@ -148,6 +196,15 @@ export function useLifecycleCardHost(): LifecycleCardHost | null {
  */
 export function useLifecycleCardAuth(): LifecycleCardAuth | null {
   return useContext(LifecycleCardAuthContext);
+}
+
+/**
+ * The host's embedding context, or `null` on a first-party host. Read by the
+ * review card when it addresses the §III island, so the server can re-derive
+ * the ancestor origin the island must admit.
+ */
+export function useLifecycleCardFrame(): LifecycleCardFrame | null {
+  return useContext(LifecycleCardFrameContext);
 }
 
 // ---------------------------------------------------------------------------

@@ -114,3 +114,54 @@ export function frameAncestorsDirectiveFor(input: {
   });
   return origin ?? FRAME_ANCESTORS_NONE;
 }
+
+/**
+ * The ONE answer to "is this request a VERIFIED widget frame, and which origin
+ * is it?" — the resolved registered origin, or `null` (cinatra#2577).
+ *
+ * WHY IT IS SEPARATE FROM THE DIRECTIVE ABOVE. Two callers need the same
+ * decision for two different purposes: the middleware writes it into the
+ * island's `frame-ancestors`, and the island PAGE keys on it to draw the empty
+ * island instead of redirecting a nested widget frame to an interactive
+ * sign-in. One resolution, so the header and the page can never disagree about
+ * whether a frame is a widget.
+ *
+ * A SECOND VALIDATION, ON PURPOSE (codex round 1, finding 1). The resolver
+ * above returns whatever `normalizeOriginStrict` produced, and the URL parser
+ * normalizes `https://*` and `https://%2A.example.com` to an ORIGIN that STILL
+ * contains `*`. Interpolated into `frame-ancestors` that is a wildcard letting
+ * every HTTPS origin frame an authenticated reader's review target, off ONE
+ * stored `siteUrl`. So the value is re-checked HERE, at the boundary that
+ * writes policy: it must round-trip through the URL parser to ITSELF (which
+ * pins it to a serialized http(s) origin — IPv6 literals included) and must
+ * carry no `*`, no whitespace, no quote and no control character.
+ */
+export function resolveVerifiedWidgetFrameOrigin(input: {
+  assistant: string | null | undefined;
+  instanceId: string | null | undefined;
+}): string | null {
+  const assistant = input.assistant;
+  const instanceId = input.instanceId;
+  // BOTH selectors are required: a half-declared frame is not a frame.
+  if (!assistant || !instanceId) return null;
+  const directive = frameAncestorsDirectiveFor({ assistant, instanceId });
+  if (directive === FRAME_ANCESTORS_NONE) return null;
+  return isPolicySafeOrigin(directive) ? directive : null;
+}
+
+/** Characters that must never reach a policy, whatever the parser accepted. */
+const POLICY_FORBIDDEN = /[*\s"'`;,\\]|[\u0000-\u001f]/;
+
+/** A serialized http(s) origin and nothing else — IPv6 literals included. */
+function isPolicySafeOrigin(value: string): boolean {
+  if (!value || POLICY_FORBIDDEN.test(value)) return false;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    // Round-trip: a serialized origin re-parses to ITSELF. Anything carrying a
+    // path, query, fragment, credentials or trailing slash fails here.
+    return url.origin === value;
+  } catch {
+    return false;
+  }
+}

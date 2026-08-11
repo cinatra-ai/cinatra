@@ -63,6 +63,7 @@ import { Suspense } from "react";
 import { redirect } from "next/navigation";
 
 import { getAuthSession, signInRedirectTarget } from "@/lib/auth-session";
+import { resolveVerifiedWidgetFrameOrigin } from "@/lib/embed/frame-ancestors.server";
 import { loadReviewGateSurface } from "@/app/artifacts/[id]/review-gate-ports";
 import { pinnedCaptureKey } from "@/lib/artifacts/review-surface-model";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
@@ -79,6 +80,14 @@ type PageProps = {
 };
 
 /**
+ * `?assistant` + `?instanceId` (cinatra#2577) are the SAME two disambiguators
+ * `/embed/assistant` carries. They are not read as content and never authorize
+ * anything — they only let the server re-derive the registered origin of the
+ * frame this document is nested in, which the response's `frame-ancestors` wall
+ * must admit for the island to render at all inside the widget.
+ */
+
+/**
  * The empty island — the ONE shape every denial and every absence renders. It is
  * a single shared ELEMENT rather than a component, so "no access", "no such
  * gate", "a ref that does not decode" and "the gate moved on" are not merely
@@ -91,14 +100,39 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   const sp = (await searchParams) ?? {};
   const rawRef = sp.ref;
   const ref = typeof rawRef === "string" ? rawRef : null;
+  const one = (v: string | string[] | undefined) => (typeof v === "string" ? v : null);
 
-  // A session is required. This is the ONE branch that is not an empty island:
-  // an unauthenticated frame should land on sign-in, exactly like any other
-  // first-party page, rather than silently render blank forever.
+  // Is this a VERIFIED widget frame? Resolved server-side from the SAME closed
+  // binding the island's `frame-ancestors` wall uses, so the header and this
+  // page cannot disagree (cinatra#2577). Nothing here is authorization: it only
+  // decides which SHAPE a denial takes.
+  const widgetFrame = resolveVerifiedWidgetFrameOrigin({
+    assistant: one(sp.assistant),
+    instanceId: one(sp.instanceId),
+  });
+
+  // A session is required. First-party, that is the ONE branch that is not an
+  // empty island: an unauthenticated frame lands on sign-in exactly like any
+  // other first-party page, rather than silently rendering blank forever.
+  //
+  // INSIDE A WIDGET IT DRAWS NOTHING INSTEAD (codex round 1, finding 4). The
+  // redirect there would put Cinatra's interactive sign-in form inside chrome a
+  // third-party site controls — the shape of a credential-phishing surface —
+  // and the reader has no way to tell it apart from the real thing. It is also
+  // pointless: the widget reader's own sign-in is the hosted popup flow, not a
+  // form in a nested frame. So on that surface an absent session, an expired or
+  // revoked one, and an unresolvable actor all draw the SAME empty island every
+  // other denial here draws.
   const session = await getAuthSession();
-  if (!session) redirect(await signInRedirectTarget());
+  if (!session) {
+    if (widgetFrame) return EMPTY_ISLAND;
+    redirect(await signInRedirectTarget());
+  }
   const actorCtx = await resolveReviewActorContext();
-  if (!actorCtx) redirect(await signInRedirectTarget());
+  if (!actorCtx) {
+    if (widgetFrame) return EMPTY_ISLAND;
+    redirect(await signInRedirectTarget());
+  }
 
   if (!ref) return EMPTY_ISLAND;
   // The ref is authenticated-encrypted: a forged or tampered one does not decode,

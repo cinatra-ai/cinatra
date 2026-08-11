@@ -160,6 +160,20 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
     [authHeaders],
   );
 
+  // The lifecycle card's EMBEDDING CONTEXT (cinatra#2577). The review card's
+  // §III island is a nested first-party document, so inside this widget it has
+  // two ancestors — this frame and the registered site framing it — and a
+  // `frame-ancestors 'self'` wall refuses to render it (the island was blank on
+  // the widget for exactly that reason). These are the page's OWN server-read
+  // query disambiguators, passed on so the island's guard can re-derive the one
+  // registered origin from the same closed binding the embed's own wall uses.
+  // Not a credential and not an origin: they select a row, they do not assert
+  // anything.
+  const lifecycleCardFrame = useMemo(
+    () => ({ assistant: props.assistant, instanceId: props.instanceId }),
+    [props.assistant, props.instanceId],
+  );
+
   // Render assistant text through the S3 packaged renderer (`renderMarkdown`),
   // the EXACT content path `/chat` and the render-parity reference target render
   // through — so the same assistant renders IDENTICALLY here (the epic promise),
@@ -324,7 +338,11 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       )}
       {phase.kind === "active" && (
         <div className="p-4" data-embed-state="active">
-          <LifecycleCardSurfaceProvider host="site_widget" auth={lifecycleCardAuth}>
+          <LifecycleCardSurfaceProvider
+            host="site_widget"
+            auth={lifecycleCardAuth}
+            frame={lifecycleCardFrame}
+          >
             <ConversationTurn state={convo} renderers={{ onApplyIntent, renderText }} />
           </LifecycleCardSurfaceProvider>
           <EmbedComposer onSend={(text) => void runTurn([{ role: "user", content: text }])} />

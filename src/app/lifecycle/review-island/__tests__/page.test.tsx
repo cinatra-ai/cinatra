@@ -20,12 +20,16 @@ const redirect = vi.fn((to: string) => {
 });
 const resolveReviewActorContext = vi.fn();
 const loadReviewGateSurface = vi.fn();
+const resolveVerifiedWidgetFrameOrigin = vi.fn<(input: unknown) => string | null>(() => null);
 
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: () => getAuthSession(),
   signInRedirectTarget: () => signInRedirectTarget(),
 }));
 vi.mock("next/navigation", () => ({ redirect: (to: string) => redirect(to) }));
+vi.mock("@/lib/embed/frame-ancestors.server", () => ({
+  resolveVerifiedWidgetFrameOrigin: (input: unknown) => resolveVerifiedWidgetFrameOrigin(input),
+}));
 vi.mock("@/app/artifacts/[id]/review-gate-ports", () => ({
   loadReviewGateSurface: (args: unknown) => loadReviewGateSurface(args),
 }));
@@ -62,9 +66,12 @@ function target(artifactId: string) {
   };
 }
 
-async function renderIsland(ref: string | undefined) {
+async function renderIsland(
+  ref: string | undefined,
+  extra: Record<string, string> = {},
+) {
   return (await ReviewTargetIslandPage({
-    searchParams: Promise.resolve(ref === undefined ? {} : { ref }),
+    searchParams: Promise.resolve(ref === undefined ? { ...extra } : { ref, ...extra }),
   })) as ReactElement;
 }
 
@@ -76,6 +83,7 @@ function isEmptyIsland(el: ReactElement): boolean {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resolveVerifiedWidgetFrameOrigin.mockReturnValue(null);
   getAuthSession.mockResolvedValue({ user: { id: "u1" } });
   resolveReviewActorContext.mockResolvedValue(ACTOR);
   signInRedirectTarget.mockResolvedValue("/sign-in");
@@ -173,5 +181,64 @@ describe("a session is required", () => {
     resolveReviewActorContext.mockResolvedValue(null);
     await expect(renderIsland(REF)).rejects.toThrow(/REDIRECT:\/sign-in/);
     expect(loadReviewGateSurface).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2577 — inside a VERIFIED widget frame, a missing session draws the
+// empty island instead of redirecting.
+//
+// Codex round 1, finding 4: `frame-ancestors` on a 307 is not inherited by the
+// document the browser fetches next, and /sign-in declares no framing policy of
+// its own — so the redirect put Cinatra's interactive sign-in form inside chrome
+// a third-party site controls, which a reader cannot tell from the real thing.
+// It is also pointless there: the widget reader signs in through the hosted
+// popup, never a form in a nested frame.
+// ---------------------------------------------------------------------------
+describe("a widget frame is never sent to an interactive sign-in", () => {
+  const WIDGET = { assistant: "wordpress", instanceId: "inst-1" };
+
+  beforeEach(() => {
+    resolveVerifiedWidgetFrameOrigin.mockReturnValue("https://site.example");
+  });
+
+  it("no session → the SAME empty island every other denial draws", async () => {
+    getAuthSession.mockResolvedValue(null);
+    const el = await renderIsland(REF, WIDGET);
+    expect(isEmptyIsland(el)).toBe(true);
+    expect(redirect).not.toHaveBeenCalled();
+    expect(loadReviewGateSurface).not.toHaveBeenCalled();
+  });
+
+  it("an unresolvable actor (expired / revoked / no standing) draws the same emptiness", async () => {
+    resolveReviewActorContext.mockResolvedValue(null);
+    const el = await renderIsland(REF, WIDGET);
+    expect(isEmptyIsland(el)).toBe(true);
+    expect(redirect).not.toHaveBeenCalled();
+  });
+
+  it("is byte-identical to the not-authorized denial — no oracle", async () => {
+    getAuthSession.mockResolvedValue(null);
+    const noSession = await renderIsland(REF, WIDGET);
+    getAuthSession.mockResolvedValue({ user: { id: "u1" } });
+    loadReviewGateSurface.mockResolvedValue({ kind: "not-authorized" });
+    const denied = await renderIsland(REF, WIDGET);
+    expect(JSON.stringify(noSession)).toBe(JSON.stringify(denied));
+  });
+
+  it("resolves the frame from the SERVER's binding, not from the query", async () => {
+    getAuthSession.mockResolvedValue(null);
+    await renderIsland(REF, WIDGET);
+    expect(resolveVerifiedWidgetFrameOrigin).toHaveBeenCalledWith({
+      assistant: "wordpress",
+      instanceId: "inst-1",
+    });
+  });
+
+  it("an UNVERIFIED frame keeps the first-party sign-in redirect", async () => {
+    // The selectors are present but the server does not vouch for them.
+    resolveVerifiedWidgetFrameOrigin.mockReturnValue(null);
+    getAuthSession.mockResolvedValue(null);
+    await expect(renderIsland(REF, WIDGET)).rejects.toThrow(/REDIRECT:\/sign-in/);
   });
 });

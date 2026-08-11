@@ -142,8 +142,10 @@ import type {
 
 import {
   useLifecycleCardAuth,
+  useLifecycleCardFrame,
   useLifecycleCardHost,
   useLifecycleCardState,
+  type LifecycleCardFrame,
 } from "./lifecycle-card-runtime";
 import { ReviewDecisionBar, type SubmitReviewDecisionAction } from "./review-decision-bar";
 import { ReviewGateBlocked, ReviewGateLoading } from "./review-gate-states";
@@ -156,6 +158,32 @@ export { LIFECYCLE_VIEW_SCHEMA_VERSION };
 
 /** The authenticated, display-only island that server-renders §III's ladder. */
 export const REVIEW_TARGET_ISLAND_PATH = "/lifecycle/review-island";
+
+/**
+ * The island URL for one gate ref, on one host (cinatra#2577).
+ *
+ * FIRST-PARTY: the ref and nothing else. The island's only ancestor is the page
+ * itself, and its wall stays `frame-ancestors 'self'`.
+ *
+ * EMBEDDED: the host's two frame disambiguators ride along — the SAME
+ * `assistant` + `instanceId` the embed page already carries. They let the
+ * SERVER re-derive the one registered site origin that is genuinely an ancestor
+ * here, so the island can admit exactly that chain instead of refusing to
+ * render (which is what a `'self'`-only wall does inside a widget, and what
+ * made the island blank there). They are opaque selectors: no origin, no URL,
+ * nothing a caller writes can put into a policy.
+ */
+export function reviewTargetIslandSrc(
+  ref: string,
+  frame: LifecycleCardFrame | null,
+): string {
+  const params = new URLSearchParams({ ref });
+  if (frame) {
+    params.set("assistant", frame.assistant);
+    params.set("instanceId", frame.instanceId);
+  }
+  return `${REVIEW_TARGET_ISLAND_PATH}?${params.toString()}`;
+}
 /** The gate-scoped decision entry — decodes the ref, calls the SAME core. */
 export const LIFECYCLE_VIEW_DECIDE_PATH = "/api/lifecycle-views/decide";
 
@@ -260,6 +288,9 @@ export function ReviewGateCard({
   submitAction?: SubmitReviewDecisionAction;
 }): ReactElement | null {
   const host = useLifecycleCardHost();
+  // The host's embedding context, when it has one (cinatra#2577). Only an
+  // embedded host declares it; it addresses the island and nothing else.
+  const cardFrame = useLifecycleCardFrame();
   // The FIRST absence: a subtree that declared no host is not a lifecycle
   // surface at all. Every DECLARED host — the chat thread, the run card, the
   // page gate region and the site widget — draws this card, identically.
@@ -406,7 +437,7 @@ export function ReviewGateCard({
   const frame = HOST_FRAME[host];
   const body = renderState({
     state,
-    islandSrc: `${REVIEW_TARGET_ISLAND_PATH}?ref=${encodeURIComponent(view.ref)}`,
+    islandSrc: reviewTargetIslandSrc(view.ref, cardFrame),
     expanded,
     onToggleExpanded: () => setExpanded((v) => !v),
     submit: submitAndRefresh,

@@ -7,7 +7,10 @@ import {
   GENERATED_WIDGET_STREAM_CAPABILITY_PATHS,
 } from "@/lib/generated/widget-stream-public-paths";
 import { isRuntimeApprovedWidgetStreamPublicPath } from "@/lib/widget-stream-runtime-slug-snapshot";
-import { frameAncestorsDirectiveFor } from "@/lib/embed/frame-ancestors.server";
+import {
+  frameAncestorsDirectiveFor,
+  resolveVerifiedWidgetFrameOrigin,
+} from "@/lib/embed/frame-ancestors.server";
 import { CURRENT_PATH_HEADER, buildSignInPath } from "@/lib/auth-redirect-target";
 
 const PUBLIC_PATH_PREFIXES = [
@@ -270,6 +273,106 @@ function isSetupPath(pathname: string) {
 // the legitimate CMS frame). `Cache-Control: no-store` so a per-instance CSP is
 // never cached and served to a different instance. Gated on the EXACT path so no
 // other route pays.
+// cinatra#2577 (epic #2564 S8d) — the §III review-target ISLAND's framing wall,
+// per request.
+//
+// WHAT WAS WRONG. S2 fixed the island at `frame-ancestors 'self'` +
+// `X-Frame-Options: SAMEORIGIN` in next.config.ts, reasoning that the island is
+// a first-party fragment with no legitimate cross-origin embedder. S8d made the
+// widget draw the SAME review card, and there the island is nested one level
+// deeper: its ancestors are the `/embed/assistant` frame (this origin) AND the
+// registered site framing that (a different origin). `frame-ancestors` is
+// checked against EVERY ancestor, so `'self'` alone refuses the render — the
+// island returned 200 with the reader's cookie and painted nothing. Chrome says
+// it outright: "Framing '<app origin>' violates the following Content Security
+// Policy directive: \"frame-ancestors 'self'\". The request has been blocked."
+//
+// WHAT IT IS NOW. `'self'` ALWAYS, plus — only when the request names a widget
+// frame AND that frame resolves to exactly one registered site — that ONE
+// origin. The origin is never taken from the request: `assistant` and
+// `instanceId` are opaque selectors, mapped by `frameAncestorsDirectiveFor`
+// through the CLOSED host-side binding table and the stored instance row, the
+// SAME derivation `/embed/assistant`'s own wall uses. An unknown assistant, an
+// unknown / duplicate / non-normalizable instance, or any thrown read all
+// resolve to `'none'` there and land on the `'self'`-only wall here. So the
+// worst a forged pair can do is the first-party policy — never a widening, and
+// never a wildcard.
+//
+// `X-Frame-Options` is DROPPED on the widened arm and kept on the first-party
+// one, exactly as `/embed/assistant` does: XFO cannot express an allow-list
+// origin, and `SAMEORIGIN` is a second wall that would contradict the first.
+// (Per CSP2 a `frame-ancestors` directive obsoletes XFO, so a conformant browser
+// ignores it — but shipping a header whose meaning is "block this" next to one
+// whose meaning is "allow this" is a defect waiting for a non-conformant agent.)
+//
+// This is NOT an authorization boundary and does not soften one. The island
+// still requires the reader's own session, still decodes the ref server-side,
+// and still re-runs `loadReviewGateSurface`'s per-row access. The wall is
+// anti-clickjacking only.
+const REVIEW_ISLAND_PATH = "/lifecycle/review-island";
+
+/** The island's framing headers for this request. Fail-closed to first-party. */
+export function reviewIslandFramingHeaders(request: NextRequest): {
+  contentSecurityPolicy: string;
+  xFrameOptions: string | null;
+  /** True only when the wall was actually widened for a resolved widget frame. */
+  widened: boolean;
+} {
+  const FIRST_PARTY = {
+    contentSecurityPolicy: "frame-ancestors 'self'",
+    xFrameOptions: "SAMEORIGIN",
+    widened: false,
+  } as const;
+  // ONE resolution, shared with the island page (which keys the empty-island
+  // answer on the same decision) — so the header and the page can never
+  // disagree about whether this is a widget frame. `null` covers every failure:
+  // a half-declared frame, an unknown assistant, an unknown / duplicate /
+  // non-normalizable instance, a thrown read, and a resolved value that is not
+  // a policy-safe origin. All of them land on the first-party wall — never
+  // `'none'`, which on the ISLAND would refuse the first-party card too.
+  const origin = resolveVerifiedWidgetFrameOrigin({
+    assistant: request.nextUrl.searchParams.get("assistant"),
+    instanceId: request.nextUrl.searchParams.get("instanceId"),
+  });
+  if (!origin) return { ...FIRST_PARTY };
+  return {
+    contentSecurityPolicy: `frame-ancestors 'self' ${origin}`,
+    xFrameOptions: null,
+    widened: true,
+  };
+}
+
+/**
+ * The island's answer to a widget frame with no session cookie (codex round 1,
+ * finding 4). It is EMPTY, not a redirect.
+ *
+ * A 307 to `/sign-in` was wrong twice over. It does not carry this wall — a
+ * redirect's `frame-ancestors` is not inherited by the document the browser
+ * fetches next, and `/sign-in` declares no framing policy of its own — so the
+ * "the 307 keeps the outcome indistinguishable" reasoning was simply false.
+ * And what it produces is worse than nothing: Cinatra's interactive sign-in
+ * form, rendered inside chrome a third-party site controls, which is the shape
+ * of a credential-phishing surface. An empty document is what every other
+ * island denial draws, so this one is not distinguishable from them either.
+ */
+function emptyIslandResponse(): NextResponse {
+  return new NextResponse("", {
+    status: 200,
+    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" },
+  });
+}
+
+/** Put the island's framing wall on whatever response the guard produced. */
+function applyReviewIslandFraming(
+  framing: ReturnType<typeof reviewIslandFramingHeaders>,
+  response: NextResponse,
+): NextResponse {
+  response.headers.set("Content-Security-Policy", framing.contentSecurityPolicy);
+  if (framing.xFrameOptions) response.headers.set("X-Frame-Options", framing.xFrameOptions);
+  else response.headers.delete("X-Frame-Options");
+  return response;
+}
+
 function applyEmbedFrameAncestors(request: NextRequest): NextResponse {
   const response = NextResponse.next();
   const directive = frameAncestorsDirectiveFor({
@@ -289,6 +392,26 @@ export async function guardAppRoute(request: NextRequest) {
   if (pathname === EMBED_ASSISTANT_PATH) {
     return applyEmbedFrameAncestors(request);
   }
+
+  // The island is a PROTECTED path and keeps every gate below unchanged — it
+  // only needs its framing wall computed per request (cinatra#2577), with ONE
+  // substitution: a widget frame with no session cookie is answered with the
+  // empty island rather than sent to an interactive sign-in inside somebody
+  // else's chrome (see `emptyIslandResponse`).
+  if (pathname === REVIEW_ISLAND_PATH) {
+    const framing = reviewIslandFramingHeaders(request);
+    const response =
+      framing.widened && !getSessionCookie(request)
+        ? emptyIslandResponse()
+        : await guardProtectedRoute(request);
+    return applyReviewIslandFraming(framing, response);
+  }
+
+  return guardProtectedRoute(request);
+}
+
+async function guardProtectedRoute(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
 
   if (isPublicPath(pathname)) {
     return NextResponse.next();
