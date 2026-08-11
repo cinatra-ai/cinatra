@@ -69,6 +69,31 @@ function wayflowHealthUrl(baseUrl) {
   return `${(v || "http://127.0.0.1:3010").replace(/\/+$/, "")}/.health`;
 }
 
+// Probe WayFlow `/.health` and enforce the documented contract EXACTLY as the
+// docker-compose healthcheck does: HTTP 200 AND valid JSON whose `status` is
+// "ok" or "degraded". A 204, another 2xx, malformed JSON, or any other status
+// value is NOT ready; the generic 2xx rule of probeHttpHealth would report
+// those as up and suppress the start hint while agent runs still fail.
+async function probeWayflowHealth(url, timeoutMs = 2500) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (res.status !== 200) return false;
+    let body;
+    try {
+      body = await res.json();
+    } catch {
+      return false;
+    }
+    return body?.status === "ok" || body?.status === "degraded";
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function probe(host, port, timeoutMs = 2500) {
   return new Promise((resolve) => {
     const socket = new net.Socket();
@@ -149,6 +174,9 @@ const services = [
     tier: "recommended",
     ...hostPort(env.WAYFLOW_BASE_URL, { host: "127.0.0.1", port: 3010 }),
     healthUrl: wayflowHealthUrl(env.WAYFLOW_BASE_URL),
+    // Contract-validating probe (200 + status ok|degraded), NOT the generic
+    // 2xx probeHttpHealth: see probeWayflowHealth.
+    probeHealth: probeWayflowHealth,
     note: "agent runtime; serves every installed agent",
     downHint: "agent runs fail until you run `cinatra instance wayflow start`",
   },
@@ -165,9 +193,13 @@ const results = await Promise.all(
   services.map(async (svc) => ({
     ...svc,
     // Nango + WayFlow carry a healthUrl → probe their HTTP health contract
-    // (hung-but-port-bound must read DOWN); everything else TCP-connects.
+    // (hung-but-port-bound must read DOWN); everything else TCP-connects. A
+    // service-specific probeHealth (WayFlow: 200 + status ok|degraded) wins
+    // over the generic 2xx probeHttpHealth.
     up: svc.healthUrl
-      ? (await probeHttpHealth(svc.healthUrl, 2500)).ok
+      ? svc.probeHealth
+        ? await svc.probeHealth(svc.healthUrl, 2500)
+        : (await probeHttpHealth(svc.healthUrl, 2500)).ok
       : await probe(svc.host, svc.port),
   })),
 );
