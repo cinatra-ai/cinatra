@@ -236,6 +236,25 @@ export function EntityDashboardsShell({
     [view, pendingId, list, loadConfigInto],
   );
 
+  // ── adopt a newly-created dashboard ────────────────────────────────────
+  // Put a just-created row in the dropdown and render it. Extracted from
+  // `onCreate` (cinatra#2474 PR5) because a create can now also originate
+  // OUTSIDE this shell — concept B's installed-catalog copy runs its own server
+  // action and hands the resulting summary back here — and both paths must land
+  // the row identically. The summary is already server-authorized; this only
+  // moves it into the shell's own state.
+  const onAdopted = useCallback(
+    (dashboard: EntityDashboardSummary) => {
+      setList((prev) =>
+        prev
+          ? { ...prev, dashboards: [...prev.dashboards, dashboard] }
+          : { dashboards: [dashboard], canCreate: true },
+      );
+      loadConfigInto(dashboard);
+    },
+    [loadConfigInto],
+  );
+
   // ── create ─────────────────────────────────────────────────────────────
   const onCreate = useCallback(
     async (name: string): Promise<EntityDashboardsToolbarOutcome> => {
@@ -243,13 +262,8 @@ export function EntityDashboardsShell({
       try {
         const result = await createDashboard(name);
         if (!result.ok) return { ok: false, message: reason(result.reason) };
-        setList((prev) =>
-          prev
-            ? { ...prev, dashboards: [...prev.dashboards, result.dashboard] }
-            : { dashboards: [result.dashboard], canCreate: true },
-        );
         // Select + render the new (empty) dashboard so the user can add portlets.
-        loadConfigInto(result.dashboard);
+        onAdopted(result.dashboard);
         return { ok: true };
       } catch {
         return { ok: false, message: "Couldn’t create the dashboard. Try again." };
@@ -257,7 +271,7 @@ export function EntityDashboardsShell({
         setMutating(false);
       }
     },
-    [createDashboard, loadConfigInto],
+    [createDashboard, onAdopted],
   );
 
   // ── rename ─────────────────────────────────────────────────────────────
@@ -353,6 +367,7 @@ export function EntityDashboardsShell({
     busy: pendingId != null || mutating,
     onSelect,
     onCreate,
+    onAdopted,
     onRename: renameDashboard ? onRename : null,
     onDelete: deleteDashboard ? onDelete : null,
   };

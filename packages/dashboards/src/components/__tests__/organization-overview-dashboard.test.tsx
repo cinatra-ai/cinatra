@@ -48,6 +48,7 @@ function ctx(overrides: Partial<EntityDashboardsContextValue> = {}): EntityDashb
     busy: false,
     onSelect: vi.fn(),
     onCreate: vi.fn(async () => ({ ok: true as const })),
+    onAdopted: vi.fn(),
     onRename: vi.fn(async () => ({ ok: true as const })),
     onDelete: vi.fn(async () => ({ ok: true as const })),
     ...overrides,

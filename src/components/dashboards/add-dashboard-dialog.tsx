@@ -14,12 +14,15 @@
  *     embedded as `<ScopeReferenceSection>`. Present ONLY when the hosting
  *     landing handed down a reference source, which it does only for a scope
  *     MANAGER (§IX.2 suppression, applied server-side).
- *   - **Add from the installed catalog (B)** — an opaque slot. Concept B's
- *     server-side read is cinatra#2474 PR4 and its instantiate action is PR5;
- *     until PR4 supplies the node this section renders NOTHING. It deliberately
- *     does not ship a placeholder: a section announcing a catalog before any
- *     catalog read exists would advertise a capability the product does not yet
- *     have.
+ *   - **Add from the installed catalog (B)** — an opaque slot the landing fills
+ *     server-side (cinatra#2474 PR4's read; PR5's instantiate action). The slot
+ *     stays opaque: this dialog neither builds nor inspects the section, it only
+ *     provides the two things the section cannot know from the server — whether
+ *     the actor may create at all, and what to do when a copy lands
+ *     (`CatalogAddOutcomeProvider`). When the landing supplies no node the
+ *     section renders NOTHING; it deliberately ships no placeholder, because a
+ *     section announcing a catalog an instance does not have would advertise a
+ *     capability the product does not have.
  *
  * The dialog is presentation only. It owns no scope, no actor and no capability
  * — every section is driven by what the server-rendered landing chose to hand
@@ -29,6 +32,7 @@ import { useRef, useTransition, type ReactElement } from "react";
 import { useRouter } from "next/navigation";
 import { Plus } from "lucide-react";
 
+import type { EntityDashboardSummary } from "@cinatra-ai/dashboards/entity-dashboards-contract";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -38,6 +42,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
+import { CatalogAddOutcomeProvider } from "./catalog-add-outcome";
 import { ScopeReferenceSection } from "./scope-reference-section";
 import type { ScopeReferenceSource } from "./scope-dashboards-contract";
 
@@ -55,11 +60,14 @@ export type AddDashboardDialogProps = {
   readonly onChooseCreate: () => void;
   /** §IX.1 add-to-scope actions — present ONLY for a scope manager. */
   readonly reference: ScopeReferenceSource | null;
-  /** Concept B's section (cinatra#2474 PR4 supplies it; `null` until then).
-   *  `ReactElement`, not `ReactNode` — see `ScopeAddSources.catalog`. */
+  /** Concept B's section (the landing supplies it; `null` where nothing is
+   *  eligible). `ReactElement`, not `ReactNode` — see `ScopeAddSources.catalog`. */
   readonly catalog: ReactElement | null;
   /** A reference listing was added — the owner closes the popup. */
   readonly onReferenceAdded: () => void;
+  /** A catalog copy landed (cinatra#2474 PR5) — the owner closes the popup and
+   *  adopts the new dashboard into the shell's list. */
+  readonly onCatalogAdded: (dashboard: EntityDashboardSummary) => void;
 };
 
 export function AddDashboardDialog({
@@ -71,6 +79,7 @@ export function AddDashboardDialog({
   reference,
   catalog,
   onReferenceAdded,
+  onCatalogAdded,
 }: AddDashboardDialogProps) {
   // Set for exactly one close: the Create hand-off. See `onCloseAutoFocus`.
   const handingOff = useRef(false);
@@ -173,8 +182,15 @@ export function AddDashboardDialog({
             </section>
           ) : null}
 
-          {/* Concept B's mount point (cinatra#2474 PR4). */}
-          {catalog}
+          {/* Concept B's mount point (cinatra#2474 PR4), with the two client
+              facts the server-built section cannot carry (PR5): the create
+              authority its Add is gated on — the SAME `canCreate` the Create
+              section above is gated on, so the popup can never offer a catalog
+              Add to a principal it will not offer Create to — and where to
+              report a landed copy. */}
+          <CatalogAddOutcomeProvider canAdd={canCreate} onAdded={onCatalogAdded}>
+            {catalog}
+          </CatalogAddOutcomeProvider>
         </div>
       </DialogContent>
     </Dialog>

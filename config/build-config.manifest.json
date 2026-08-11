@@ -212,6 +212,8 @@
     { "alias": "@cinatra-ai/dashboards/entity-dashboard-actions", "target": "./packages/dashboards/src/actions.ts" },
     { "alias": "@cinatra-ai/dashboards/entity-dashboards-contract", "target": "./packages/dashboards/src/entity-dashboards-contract.ts" },
     { "alias": "@cinatra-ai/dashboards/entity-identity", "target": "./packages/dashboards/src/store/entity-identity.ts" },
+    { "alias": "@cinatra-ai/dashboards/entity-dashboard-writer", "target": "./packages/dashboards/src/entity-dashboard-writer.ts" },
+    { "alias": "@cinatra-ai/dashboards/dashboard-config-v12", "target": "./packages/dashboards/src/extension/dashboard-config-v12.ts" },
     { "alias": "@cinatra-ai/dashboards/entity-dashboards-shell", "target": "./packages/dashboards/src/components/entity-dashboards-shell.tsx" },
     { "alias": "@cinatra-ai/dashboards/entity-dashboard-toolbar-controls", "target": "./packages/dashboards/src/components/entity-dashboard-toolbar-controls.tsx" },
     { "alias": "@cinatra-ai/dashboards/screens", "target": "./packages/dashboards/src/screens/index.tsx" },
