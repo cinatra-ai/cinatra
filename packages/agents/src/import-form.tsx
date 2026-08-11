@@ -45,41 +45,18 @@ import { searchExtensionCoOwnerCandidates } from "@cinatra-ai/extensions/permiss
 import type { AvailableScopes } from "@/components/access-combobox";
 import { toast } from "@/lib/cinatra-toast";
 
-// Minimal client-side ZIP reader
-function readZipFilesClient(buf: ArrayBuffer): Map<string, string> {
-  const view = new DataView(buf);
-  const result = new Map<string, string>();
-  const len = buf.byteLength;
-
-  let eocdOffset = -1;
-  for (let i = len - 22; i >= 0; i--) {
-    if (view.getUint32(i, true) === 0x06054b50) { eocdOffset = i; break; }
-  }
-  if (eocdOffset < 0) return result;
-
-  const numEntries = view.getUint16(eocdOffset + 10, true);
-  const centralDirOffset = view.getUint32(eocdOffset + 16, true);
-
-  const td = new TextDecoder("utf-8");
-  let pos = centralDirOffset;
-  for (let i = 0; i < numEntries; i++) {
-    if (view.getUint32(pos, true) !== 0x02014b50) break;
-    const filenameLen = view.getUint16(pos + 28, true);
-    const extraLen = view.getUint16(pos + 30, true);
-    const commentLen = view.getUint16(pos + 32, true);
-    const compressedSize = view.getUint32(pos + 20, true);
-    const localHeaderOffset = view.getUint32(pos + 42, true);
-    const filename = td.decode(new Uint8Array(buf, pos + 46, filenameLen));
-
-    const lfhFilenameLen = view.getUint16(localHeaderOffset + 26, true);
-    const lfhExtraLen = view.getUint16(localHeaderOffset + 28, true);
-    const dataOffset = localHeaderOffset + 30 + lfhFilenameLen + lfhExtraLen;
-    result.set(filename, td.decode(new Uint8Array(buf, dataOffset, compressedSize)));
-
-    pos += 46 + filenameLen + extraLen + commentLen;
-  }
-  return result;
-}
+// Archive reading lives in upload-archive.ts (cinatra#2643): it accepts the
+// standardized published-package layout (package.json cinatra.entrypoint →
+// cinatra/oas.json, optionally under one top-level <slug>/ folder) plus the
+// legacy flat agent.json shape, inflates deflate-compressed entries, and
+// repacks the resolved files into the flat stored-method ZIP the server
+// importer consumes.
+import {
+  readZipEntries,
+  resolveAgentArchive,
+  buildCanonicalAgentZip,
+  bytesToBase64,
+} from "./upload-archive";
 
 type AgentPreview = {
   name: string;
@@ -92,17 +69,15 @@ type AgentPreview = {
 
 async function parseZipFile(file: File): Promise<AgentPreview> {
   const buf = await file.arrayBuffer();
-  const files = readZipFilesClient(buf);
-  const agentRaw = files.get("agent.json");
-  if (!agentRaw) throw new Error("Invalid archive: agent.json not found.");
+  const entries = await readZipEntries(buf);
+  const resolved = resolveAgentArchive(entries);
 
-  const manifestRaw = files.get("manifest.json");
-  if (manifestRaw) {
-    const m = JSON.parse(manifestRaw) as { version?: number };
+  if (resolved.manifestJson) {
+    const m = JSON.parse(resolved.manifestJson) as { version?: number };
     if (m.version !== 1) throw new Error(`Unsupported manifest version: ${m.version}`);
   }
 
-  const agent = JSON.parse(agentRaw) as {
+  let agent: {
     component_type?: string;
     agentspec_version?: string;
     name?: string;
@@ -111,21 +86,27 @@ async function parseZipFile(file: File): Promise<AgentPreview> {
     sourceNl?: string;
     metadata?: { cinatra?: { type?: string } };
   };
+  try {
+    agent = JSON.parse(resolved.agentJson) as typeof agent;
+  } catch {
+    throw new Error("Invalid archive: the agent definition is not valid JSON.");
+  }
   // Accept compact OAS Flow documents only.
   if (agent.agentspec_version !== "26.1.0" || agent.component_type !== "Flow") {
     throw new Error(`Unsupported agent format (expected OAS v26.1.0 Flow).`);
   }
 
-  const bytes = new Uint8Array(buf);
-  let binary = "";
-  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+  // Repack into the flat stored-method shape importAgentTemplateCore
+  // consumes (root agent.json + manifest/package/license sidecars) — the
+  // server contract is unchanged; the acceptance widening is client-side.
+  const canonical = buildCanonicalAgentZip(resolved);
 
   return {
     name: agent.name ?? "Unnamed Agent",
     description: agent.description ?? null,
     status: agent.status ?? "draft",
     sourceNl: agent.sourceNl ?? "",
-    zipBase64: btoa(binary),
+    zipBase64: bytesToBase64(canonical),
     fileName: file.name,
   };
 }
