@@ -62,9 +62,19 @@ function isDisabled(el: HTMLElement): boolean {
   return (el as HTMLButtonElement).disabled === true;
 }
 
+/** The widget's credential declaration — required by the provider's fail-closed
+ *  invariant (codex round 0, finding 2), and the real shape the embed passes. */
+const WIDGET_AUTH = {
+  headers: () => ({ "X-Cinatra-Widget-User-Token": "cwu_user" }),
+  credentials: "omit" as const,
+};
+
 function renderOn(host: "chat_thread" | "run_card" | "page_gate_region" | "site_widget") {
   return render(
-    <LifecycleCardSurfaceProvider host={host}>
+    <LifecycleCardSurfaceProvider
+      host={host}
+      auth={host === "site_widget" ? WIDGET_AUTH : undefined}
+    >
       <ReviewGateCard view={VIEW} />
     </LifecycleCardSurfaceProvider>,
   );
@@ -179,12 +189,22 @@ describe("the two absences are distinct", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("SURFACE absence (site widget): this slice is first-party only — nothing drawn, nothing asked", async () => {
+  it("the SITE WIDGET is a full host: the card resolves and draws the same floor as chat", async () => {
+    // The correction (owner ruling 2026-08-11): the widget is not a reduced
+    // surface. It resolves like every other declared host, and a `pending` gate
+    // draws the live floor there — not a metadata stub, not a disabled bar.
     const fetchMock = mockResolve({ state: "pending", canDecide: true, canComment: true });
-    const { container } = renderOn("site_widget");
-    await Promise.resolve();
-    expect(container.innerHTML).toBe("");
-    expect(fetchMock).not.toHaveBeenCalled();
+    renderOn("site_widget");
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const widgetFloor = await screen.findByRole("button", { name: /approve/i });
+    expect(isDisabled(widgetFloor)).toBe(false);
+    cleanup();
+
+    // …and it is the SAME drawing the chat thread produces for the same state.
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    renderOn("chat_thread");
+    const chatFloor = await screen.findByRole("button", { name: /approve/i });
+    expect(widgetFloor.textContent).toBe(chatFloor.textContent);
   });
 
   it("neither absence is ever drawn as a DISABLED card", async () => {

@@ -439,7 +439,8 @@ describe("pending-call-decision-token verify — cross-type forgery (both direct
       kind: "wordpress",
       runId: "run-abc",
       jti: "run-nonce",
-      parentJti: "parent-jti-1",
+      parentJti: "cwu-jti",
+      siteId: "site-1",
     });
     expect(verify(resumeToken)).toBeNull();
   });

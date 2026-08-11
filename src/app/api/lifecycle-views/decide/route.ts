@@ -11,6 +11,13 @@ import {
 } from "@/lib/artifacts/artifact-review-decision";
 import { submitReviewDecisionAction } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/actions";
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
+import { resolveAssistantWidgetBinding } from "@/lib/assistant-widget-handles";
+import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
+import {
+  WIDGET_LIFECYCLE_DECIDE_GRANT,
+  resolveWidgetLifecycleActorContext,
+} from "@/lib/lifecycle/widget-lifecycle-actor";
+import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
 
 // ---------------------------------------------------------------------------
 // POST /api/lifecycle-views/decide — the GATE-SCOPED decision entry for a review
@@ -60,6 +67,31 @@ import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[
 // a gate that no longer exists must be indistinguishable, so neither a status
 // code nor a message may report which. Only a malformed body (400) and no
 // session (401) are distinguishable, and neither depends on the ref.
+//
+// TWO AUTH BRANCHES, ONE DECISION (cinatra#2575, epic #2564 S8b; corrected
+// 2026-08-11 and folded into this route rather than given an endpoint of its
+// own):
+//
+//   · COOKIE SESSION — the first-party hosts, unchanged.
+//   · BROKER `cwu_` — the site widget. Its actor is built by the SAME S8a module
+//     the widget's refetch uses, consumed at THIS route's audience with the
+//     `lifecycle.decide` scope required, and it is the SAME `ReviewActorContext`
+//     shape — so from the READ below onwards, the two branches are one code path
+//     and a widget reviewer's authorization and race outcomes are the page's by
+//     construction, not by assertion.
+//
+// WHAT THIS BRANCH DELIBERATELY DOES NOT HAVE. No single-use action capability,
+// no hosted confirmation window, no second decision endpoint, no reduced body.
+// Those came from the invented premise that the embedding site holds the widget
+// user's token; the widget session is the person's own cinatra authentication
+// (hosted PKCE sign-in, cinatra#407), so a widget reviewer decides exactly as
+// they do in the app.
+//
+// THE BRANCH IS DECIDED BY THE PRESENTED CREDENTIAL AND NEVER FALLS BACK. A
+// request that presents the widget user-token header is a widget request; a
+// failed widget consume 401s rather than dropping to an ambient cookie — which
+// matters more here than anywhere, because this endpoint is same-origin to the
+// embed iframe and an ambient cookie would RECORD A DECISION as somebody else.
 // ---------------------------------------------------------------------------
 
 const requestSchema = z
@@ -93,8 +125,63 @@ const UNIFORM_REFUSAL = {
     "You do not have the run access this decision needs — a terminal decision requires approve access, a comment requires respond access.",
 };
 
+/** The `cwu_` proof header — the discriminant for the widget branch. */
+const WIDGET_USER_TOKEN_HEADER = "X-Cinatra-Widget-User-Token";
+/** The embed-forwarded parent (CMS) origin; re-checked against the token binding. */
+const WIDGET_ORIGIN_HEADER = "X-Cinatra-Widget-Origin";
+/** The embed-forwarded assistant handle; only a selector — the token is the authority. */
+const WIDGET_ASSISTANT_HEADER = "X-Cinatra-Widget-Assistant";
+
+/**
+ * Resolve the widget branch's deciding actor from the presented `cwu_`.
+ *
+ * Returns `null` for every failure — a bad handle, a rejected token, a revoked
+ * membership — because the caller turns all of them into the same 401 a missing
+ * credential produces. It is the SAME construction the widget's lifecycle READ
+ * uses, differing only in the grant it consumes under, so the person who was
+ * shown a card and the person whose decision is recorded are resolved the same
+ * way from the same token.
+ */
+async function resolveWidgetDecidingActor(
+  request: Request,
+  userToken: string,
+): Promise<ReviewActorContext | null> {
+  // An empty/whitespace bearer is refused HERE rather than left to the door, for
+  // the reason the refetch route states: a branch that hands an empty string to
+  // a token verifier is one rename away from handing it to something forgiving.
+  // The two failures that happen BEFORE the actor door — an unusable bearer and
+  // an unknown handle — are audited here, because the door never runs for them
+  // and a decision attempt that leaves no record at all is the wrong kind of
+  // silence (codex round 1 on finding 6). No identifiers: the handle is caller
+  // input and the token is a secret, so the row carries neither.
+  if (userToken.length === 0) {
+    emitWidgetAuthAudit("widget_lifecycle_decide_rejected", { reason: "no_bearer" });
+    return null;
+  }
+  const handle = request.headers.get(WIDGET_ASSISTANT_HEADER)?.trim().toLowerCase() ?? "";
+  const binding = resolveAssistantWidgetBinding(handle);
+  if (!binding) {
+    emitWidgetAuthAudit("widget_lifecycle_decide_rejected", { reason: "unknown_handle" });
+    return null;
+  }
+  const resolved = await resolveWidgetLifecycleActorContext({
+    token: userToken,
+    agentSlug: binding.agentSlug,
+    requestOrigin: request.headers.get(WIDGET_ORIGIN_HEADER),
+    grant: WIDGET_LIFECYCLE_DECIDE_GRANT,
+  });
+  return resolved.ok ? resolved.actorCtx : null;
+}
+
 export async function POST(request: Request): Promise<Response> {
-  const actorCtx = await resolveReviewActorContext();
+  // The discriminant is the header's PRESENCE, not whether its value looks
+  // usable: a caller that declares itself a widget is a widget, and a widget
+  // whose token is unusable is refused rather than rescued by a cookie.
+  const presentedUserToken = request.headers.get(WIDGET_USER_TOKEN_HEADER);
+  const actorCtx =
+    presentedUserToken !== null
+      ? await resolveWidgetDecidingActor(request, presentedUserToken.trim())
+      : await resolveReviewActorContext();
   if (!actorCtx) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }

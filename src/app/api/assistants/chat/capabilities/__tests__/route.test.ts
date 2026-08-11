@@ -131,29 +131,23 @@ describe("GET — broker-auth advertisement (Lane A)", () => {
     );
   });
 
-  it("cinatra#2577: the WIDGET branch advertises review + verification, and ONLY those", async () => {
+  it("cinatra#2577 (corrected): the WIDGET branch advertises the SAME set as first-party chat", async () => {
     primeHappyBroker();
     const res = await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" }));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect([...body.renderableViews].sort()).toEqual([
       "artifact_review_gate",
+      "trigger_schedule_proposal",
       "verification_summary",
     ]);
   });
 
-  it("cinatra#2577: recommendation and schedule proposal are NEVER advertised to the widget", async () => {
-    // §IX matrix conformance, asserted by NAME rather than by set equality, so a
-    // future view type added to the first-party row cannot arrive here silently.
-    primeHappyBroker();
-    const body = await (
-      await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" }))
-    ).json();
-    expect(body.renderableViews).not.toContain("trigger_schedule_proposal");
-    expect(body.renderableViews).not.toContain("recommendation_hold");
-  });
-
-  it("cinatra#2565: the two auth branches DIFFER in what they advertise", async () => {
+  it("cinatra#2577 (corrected): the two auth branches advertise the SAME lifecycle views", async () => {
+    // The correction, as an equality. This assertion previously said the two
+    // branches must DIFFER, which is exactly the reduced-widget premise the
+    // owner rejected: a widget session is the person's own cinatra
+    // authentication, so it is offered the same set.
     getAuthSession.mockResolvedValue({ user: { id: "u1" } });
     const sessionBody = await (
       await GET(new Request("https://app.test/api/assistants/chat/capabilities"))
@@ -163,12 +157,25 @@ describe("GET — broker-auth advertisement (Lane A)", () => {
     const widgetBody = await (
       await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" }))
     ).json();
-    expect(sessionBody.renderableViews).not.toEqual(widgetBody.renderableViews);
-    // The widget list is a strict SUBSET of the first-party one — the widget can
-    // never be advertised something the app itself is not.
-    for (const view of widgetBody.renderableViews) {
-      expect(sessionBody.renderableViews).toContain(view);
-    }
+    expect([...widgetBody.renderableViews].sort()).toEqual(
+      [...sessionBody.renderableViews].sort(),
+    );
+  });
+
+  it("the recommendation hold is advertised to NEITHER branch — carriage, not restriction", async () => {
+    // It rides an INTERRUPT, so it has no advertised viewType anywhere. Pinned
+    // so this absence is never read as a surviving per-surface reduction.
+    getAuthSession.mockResolvedValue({ user: { id: "u1" } });
+    const sessionBody = await (
+      await GET(new Request("https://app.test/api/assistants/chat/capabilities"))
+    ).json();
+    vi.clearAllMocks();
+    primeHappyBroker();
+    const widgetBody = await (
+      await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" }))
+    ).json();
+    expect(sessionBody.renderableViews).not.toContain("recommendation_hold");
+    expect(widgetBody.renderableViews).not.toContain("recommendation_hold");
   });
 
   it("401s when the cwu_ user token is missing (no anonymous broker read)", async () => {

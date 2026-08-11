@@ -55,6 +55,11 @@ const LIFECYCLE_FAMILY = [
   "trigger_schedule",
   "lifecycle_",
   "gate_suggestion",
+  // cinatra#2569's proposal producer. It is a lifecycle card producer and must
+  // be scanned as one, even though its name mentions neither "trigger" nor
+  // "lifecycle" — the name was chosen precisely to avoid a denied verb token,
+  // so this family entry is what keeps it inside the scan rather than outside it.
+  "schedule_proposal",
 ] as const;
 
 /**
@@ -118,29 +123,47 @@ describe("no lifecycle decide/mutate primitive is reachable from a delegated per
 
   it("the generated inventory contains no widget-reachable lifecycle DECISION primitive", () => {
     // The same rule as chat, now that S8d (cinatra#2577) gave the widget the
-    // three reads: what may never be reachable there is the DECIDE class. The
-    // read set itself is pinned exactly, below.
+    // full read set: what may never be reachable on EITHER perimeter is the
+    // DECIDE class. The read set itself is pinned by the parity test below.
     const reachable = inventoryPrimitiveNames()
       .filter((name) => isLifecycleName(name) && carriesDecisionVerb(name))
       .filter((name) => WIDGET_KINDS.some((k) => isDelegatedWidgetMcpToolAllowed(k, name)));
     expect(reachable).toEqual([]);
   });
 
-  it("the ONLY widget-reachable lifecycle primitives are S3's three reads", () => {
-    // Read off the machine-scanned inventory rather than a hand-kept list, so a
-    // NEW lifecycle primitive that lands on the widget policy — of any shape,
-    // decision-verbed or not — fails here.
+  it("the widget's reachable lifecycle set EQUALS chat's — parity, both directions", () => {
+    // THE CORRECTED CONTRACT (owner ruling 2026-08-11). Read off the
+    // machine-scanned inventory rather than a hand-kept list, and compared
+    // against CHAT rather than against literals, so BOTH failure directions are
+    // caught: a primitive that lands on the widget policy alone, and a primitive
+    // chat gains that the widget is quietly denied.
+    const chatReachable = inventoryPrimitiveNames()
+      .filter(isLifecycleName)
+      .filter((name) => isDelegatedChatMcpToolAllowed(name))
+      .sort();
     for (const kind of WIDGET_KINDS) {
-      const reachable = inventoryPrimitiveNames()
+      const widgetReachable = inventoryPrimitiveNames()
         .filter(isLifecycleName)
         .filter((name) => isDelegatedWidgetMcpToolAllowed(kind, name))
         .sort();
-      expect(reachable, kind).toEqual([
-        "artifact_review_gate_render",
-        "artifact_review_gates_list",
-        "verification_record_render",
-      ]);
+      expect(widgetReachable, kind).toEqual(chatReachable);
     }
+  });
+
+  it("that shared set is exactly the four READ-ONLY pulls — nothing that resolves an interaction", () => {
+    // The parity assertion above says "the same"; this one says "the same WHAT".
+    // Together they are the whole rule: the person sees everything on every
+    // surface, and the AI transport resolves nothing on any of them.
+    const chatReachable = inventoryPrimitiveNames()
+      .filter(isLifecycleName)
+      .filter((name) => isDelegatedChatMcpToolAllowed(name))
+      .sort();
+    expect(chatReachable).toEqual([
+      "artifact_review_gate_render",
+      "artifact_review_gates_list",
+      "schedule_proposal_render",
+      "verification_record_render",
+    ]);
   });
 
   for (const name of FORBIDDEN_LIFECYCLE_NAMES) {
@@ -172,6 +195,11 @@ describe("the read-only pull primitives are reachable from BOTH delegated perime
     "artifact_review_gates_list",
     "artifact_review_gate_render",
     "verification_record_render",
+    // cinatra#2577 corrected: the widget reaches the schedule proposal too. It
+    // CREATES NOTHING — it mints an expiring proposal and returns a card
+    // envelope; only the person's own Confirm, a browser session action with no
+    // transport-reachable primitive behind it, arms anything.
+    "schedule_proposal_render",
   ];
 
   for (const name of PULL_PRIMITIVES) {

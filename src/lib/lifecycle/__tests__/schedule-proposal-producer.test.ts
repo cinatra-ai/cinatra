@@ -162,14 +162,64 @@ describe("the tool NAME keeps the decision-verb backstop intact", () => {
     }
   });
 
-  it("is NOT widget-reachable — §IX marks this card first-party only", () => {
-    // Argument order is (kind, name) — the widget policy is kind-keyed.
+  it("IS widget-reachable — first-party parity (corrected 2026-08-11)", () => {
+    // The withheld row was invented: a signed-in widget reader is the same
+    // person with the same rights, so the proposal reaches them as it reaches
+    // first-party chat. What still stops anything from being ARMED is the name
+    // itself — it carries no denied verb token, and there is no
+    // transport-reachable primitive that confirms (asserted just above and in
+    // the test below). Argument order is (kind, name) — the policy is kind-keyed.
     expect(isDelegatedWidgetMcpToolAllowed("wordpress", SCHEDULE_PROPOSAL_TOOL_NAME)).toBe(
-      false,
+      true,
     );
     expect(isDelegatedWidgetMcpToolAllowed("drupal", SCHEDULE_PROPOSAL_TOOL_NAME)).toBe(
-      false,
+      true,
     );
+  });
+
+  it("a widget frame with NO lifecycle grant proposes nothing", async () => {
+    // The grant, not the surface, is the gate. A widget session whose sign-in
+    // predates the lifecycle grant reaches the tool and achieves nothing — the
+    // same fixed refusal every other denial produces. The positive control is
+    // the granted frame right after it.
+    const widgetStore = (lifecycleRead: boolean | undefined) => ({
+      userId: "u-widget",
+      orgId: "org-1",
+      delegatedActor: {
+        delegation: "public_site_widget",
+        userId: "u-widget",
+        orgId: "org-1",
+        instanceId: "inst-1",
+        kind: "wordpress",
+        jti: "j1",
+        platformRole: "member",
+        ...(lifecycleRead === undefined ? {} : { lifecycleRead }),
+      },
+    });
+    const run = async (store: unknown) => {
+      vi.resetModules();
+      vi.doMock("@cinatra-ai/agents/trigger-schedule-propose", () => ({
+        proposeTriggerSchedule: vi
+          .fn()
+          .mockResolvedValue({ ok: true, token: "proposal-token-1" }),
+      }));
+      vi.doMock("@cinatra-ai/mcp-server", () => ({
+        mcpRequestContextStorage: { getStore: () => store },
+      }));
+      const mod = await import("../schedule-proposal-mcp");
+      const result = await mod.handleScheduleProposalRender({
+        templateId: "tpl-1",
+        schedule: { kind: "immediate" },
+      });
+      vi.doUnmock("@cinatra-ai/agents/trigger-schedule-propose");
+      vi.doUnmock("@cinatra-ai/mcp-server");
+      return result.content[0].text as string;
+    };
+    expect(await run(widgetStore(undefined))).toBe(LIFECYCLE_REFUSAL_RESULT);
+    expect(await run(widgetStore(false))).toBe(LIFECYCLE_REFUSAL_RESULT);
+    // GRANTED: the same frame, the same code, a minted card.
+    expect(await run(widgetStore(true))).not.toBe(LIFECYCLE_REFUSAL_RESULT);
+    vi.resetModules();
   });
 
   it("leaves the trigger MUTATION primitives denied on chat, exactly as before", () => {

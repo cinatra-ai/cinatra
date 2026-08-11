@@ -47,8 +47,10 @@ import { Input } from "@/components/ui/input";
 import { negotiateEmbedChatContract } from "./embed-chat-negotiate";
 // cinatra#2577 (epic #2564 S8d) — the host declaration that turns lifecycle
 // cards on for this surface. Until now the embed declared nothing and a card
-// rendered no DOM whatever the transcript carried; §IX's `site_widget` row is
-// what it may draw now, and the row holds review and verification only.
+// rendered no DOM whatever the transcript carried. It now draws the SAME
+// lifecycle cards as first-party chat — review, verification, recommendation and
+// schedule proposal — because a signed-in widget reader is the same person with
+// the same rights as inside Cinatra. Only this frame differs.
 import {
   LifecycleCardSurfaceProvider,
   type LifecycleCardAuth,

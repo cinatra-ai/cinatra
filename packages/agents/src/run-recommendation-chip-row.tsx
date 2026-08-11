@@ -11,7 +11,6 @@ import {
 import { useRouter } from "next/navigation";
 import { ChevronDown, Check } from "lucide-react";
 
-import { LIFECYCLE_CARD_PRESENCE } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -23,7 +22,10 @@ import {
 } from "@/components/ui/sheet";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
-import { useLifecycleCardHost } from "./lifecycle-card-runtime";
+import {
+  useLifecycleCardAuth,
+  useLifecycleCardHost,
+} from "./lifecycle-card-runtime";
 import type { RecommendedSkillForChip } from "./server-actions";
 import { getRunRecommendedSkillsAction } from "./server-actions";
 import {
@@ -383,9 +385,11 @@ export function RunRecommendationChipRow({
 // (the hold is an interrupt kind — it has no `DATA_PART` ref envelope to POST):
 //
 //  1. FAIL-CLOSED SURFACE GATING. A host opts IN via
-//     `LifecycleCardSurfaceProvider`. No provider ⇒ no host ⇒ no DOM, and §IX's
-//     presence row is consulted on top of that (`recommendation_hold` is
-//     first-party only — "a widget visitor never shapes a run's skills").
+//     `LifecycleCardSurfaceProvider`. No provider ⇒ no host ⇒ no DOM, and that
+//     declaration is the ONLY gate: every declared host draws this card,
+//     including the site widget (corrected 2026-08-11 — a signed-in widget
+//     reader is the same person with the same rights as inside Cinatra, so the
+//     "a widget visitor never shapes a run's skills" row is gone).
 //
 //  2. NOTHING WITHOUT AN AUTHORIZED RESOLVE. `getRunRecommendationHoldStateAction`
 //     is the authority, not the wire. It runs the run-access door and intersects
@@ -595,9 +599,26 @@ export function RecommendationHoldCard({
    */
   wireRef?: string | null;
 }): ReactElement | null {
-  // §IX, fail-closed: no declared host ⇒ no card DOM at all.
+  // Fail-closed: no declared host ⇒ no card DOM at all. A declared host draws
+  // it — the per-surface matrix that withheld this card from the widget is gone.
   const host = useLifecycleCardHost();
-  const present = host !== null && LIFECYCLE_CARD_PRESENCE.recommendation_hold[host];
+  // …with ONE credential-keyed exception, and it is not a surface rule (codex
+  // round 0, finding 4). This card does not resolve or decide through the
+  // lifecycle endpoints: it calls COOKIE-BOUND server actions
+  // (`getRunRecommendationHoldStateAction`, and Confirm/Skip), which resolve
+  // their identity from the ambient session and cannot carry a host credential.
+  // On a host that declares one — a broker surface, same-origin to the app — a
+  // drawn card would therefore read, and act, as whoever else is signed in on
+  // that browser. That is exactly the ambient-session fallback the contract
+  // forbids, so the card draws NOTHING until its actions are broker-aware.
+  //
+  // Stated plainly because it is a shortfall, not a design: this is the one
+  // lifecycle card whose widget parity is not yet complete end to end. It is
+  // ALSO unreachable there today — a lifecycle interrupt is dropped by the chat
+  // reducer and the embed mounts no run panel — so nothing regresses; when the
+  // broker-aware entry lands, this guard is what gets deleted.
+  const auth = useLifecycleCardAuth();
+  const present = host !== null && auth === null;
 
   // A decision taken IN the row is the one state change the wire cannot be
   // relied on to announce first (the RESUME is published after the action

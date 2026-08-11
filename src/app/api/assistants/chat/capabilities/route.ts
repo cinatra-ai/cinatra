@@ -43,12 +43,12 @@ import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
 // SURFACE CLASS, and the class is decided by the auth branch, never by anything
 // the caller says about itself.
 //
-// `renderableViews` is SURFACE-SCOPED as of cinatra#2565: the session branch
-// advertises the lifecycle view types §IX places on the chat thread; the widget
-// branch advertises §IX's site_widget row (review + verification only) as of
-// cinatra#2577. The entry stays ADVISORY by contract — it never gates rendering,
-// which is why the widget's real gate is the host declaration on the embed side
-// plus the resolve endpoint's authorization, not this list.
+// `renderableViews` is advertised PER SURFACE as of cinatra#2565 and is the SAME
+// set on both branches as of the 2026-08-11 correction: widget chat carries the
+// same lifecycle views as first-party chat. The entry stays ADVISORY by contract
+// — it never gates rendering, which is why the widget's real gate is the host
+// declaration on the embed side plus the resolve endpoint's authorization, not
+// this list.
 //
 // AUTH advertised = ["session", "token-broker"]: the surface genuinely accepts
 // BOTH (the turn endpoint `route.ts` landed the broker branch in S5). Adding
@@ -72,26 +72,25 @@ const USER_TOKEN_HEADER = "X-Cinatra-Widget-User-Token";
 const WIDGET_ORIGIN_HEADER = "X-Cinatra-Widget-Origin";
 const WIDGET_ASSISTANT_HEADER = "X-Cinatra-Widget-Assistant";
 
-// cinatra#2565 (epic #2564 S1) — SURFACE-SCOPED advertisement, TURNED ON for the
-// widget by cinatra#2577 (S8d). The two auth branches still do not advertise the
-// same view set, and now for the reason the matrix gives rather than a flag: a
-// cookie session is a first-party host and gets §IX's chat-thread row; the
-// broker-authenticated widget gets §IX's site_widget row, which is REVIEW and
-// VERIFICATION only. Recommendation and schedule proposal are false there —
-// "a widget visitor never shapes a run's skills or arms a schedule" — so they
-// are not advertised here and are not renderable there either.
+// cinatra#2565 (epic #2564 S1) — the advertisement, TURNED ON for the widget by
+// cinatra#2577 (S8d) and CORRECTED to parity on 2026-08-11 (owner ruling).
+//
+// THE TWO BRANCHES ADVERTISE THE SAME SET. A widget session is the person's own
+// cinatra authentication, so widget chat resolves the same lifecycle view set as
+// first-party chat — review, verification and schedule proposal on the wire, plus
+// the interrupt-carried recommendation hold, which has no advertised viewType
+// because it does not ride a DATA_PART. The earlier "site_widget row" (review +
+// verification only) came from a per-surface restriction matrix that has been
+// removed as invented; each branch still NAMES its host so the parity property
+// is stated at the call site rather than assumed.
 //
 // S1's second gate (a local `WIDGET_LIFECYCLE_VIEWS_ENABLED = false`) is GONE
 // rather than flipped to true: a constant that can only be true is not a gate,
-// it is a comment pretending to be one. The matrix is now the single definition
-// of what each surface may show, pinned by
-// `packages/agent-ui-protocol/src/__tests__/lifecycle-cards.test.ts` and by this
-// route's own suite, so widening the widget takes an edit to §IX's table with
-// those tests in front of it.
+// it is a comment pretending to be one.
 //
 // This list stays ADVISORY by contract — it never gates rendering. The widget's
 // real fail-closed gate is the host declaration (`LifecycleCardSurfaceProvider`)
-// the embed now makes, and behind it the resolve endpoint's own authorization.
+// the embed makes, and behind it the resolve endpoint's own authorization.
 function chatSurfaceCapabilities(surface: "session" | "widget") {
   const lifecycleViews =
     surface === "session"

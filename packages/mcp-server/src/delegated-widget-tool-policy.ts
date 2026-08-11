@@ -25,15 +25,27 @@
 // simply not in that kind's set. This is the MCP-boundary half of the G9
 // handle↔token binding (the route enforces the other half).
 //
-// THE ONE WIDENING (cinatra#2577, epic #2564 S8d). The set gained the three
-// READ-ONLY lifecycle pull primitives and nothing else. They are the SAME
-// handlers the chat surface calls (`src/lib/lifecycle/lifecycle-pull-mcp.ts`),
-// which resolve their own principal from the request frame, re-authorize every
-// row, and answer one fixed refusal sentence otherwise — so being visible on a
-// widget turn is not being readable by it. What this policy grants is REACH; the
-// grant (`lifecycle.read` on the `cwu_`), the actor and the per-row access check
-// are the handlers'. No lifecycle DECIDE/MUTATE primitive is here, and the
-// verb backstop below makes adding one insufficient to expose it.
+// THE ONE WIDENING (cinatra#2577, epic #2564 S8d; corrected 2026-08-11). The set
+// gained the READ-ONLY lifecycle pull primitives — ALL of them, the same four the
+// chat policy holds — and nothing else. They are the SAME handlers the chat
+// surface calls (`src/lib/lifecycle/lifecycle-pull-mcp.ts` and
+// `src/lib/lifecycle/schedule-proposal-mcp.ts`), which resolve their own
+// principal from the request frame, re-authorize every row, and answer one fixed
+// refusal sentence otherwise — so being visible on a widget turn is not being
+// readable by it. What this policy grants is REACH; the grant (`lifecycle.read`
+// on the `cwu_`), the actor and the per-row access check are the handlers'.
+//
+// PARITY IS THE POINT. An earlier revision withheld the schedule proposal from
+// the widget on the premise that "a widget visitor never arms a schedule". A
+// widget reader is not a visitor — they are the signed-in person, with the rights
+// they have inside Cinatra — so the widget reaches the same pull surface as
+// first-party chat, and a structural test pins the two sets equal.
+//
+// WHAT DOES NOT CHANGE, ON ANY SURFACE: no lifecycle DECIDE/MUTATE primitive is
+// here, and the verb backstop below makes adding one insufficient to expose it.
+// `schedule_proposal_render` CREATES NOTHING — it mints an opaque, expiring
+// proposal and returns a card envelope; arming is a human session action from
+// the card, which is exactly why its name carries no denied verb token.
 //
 // Dependency-free on purpose (mirrors delegated-chat-tool-policy.ts): imported
 // by both packages/mcp-server (the enforcement point) and app-layer
@@ -54,31 +66,33 @@ const WIDGET_CONTENT_EDITOR_TOOLS: Readonly<Record<WidgetDelegationKind, string>
 };
 
 /**
- * The READ-ONLY lifecycle pull primitives (cinatra#2567 S3), reachable on a
- * widget delegation as of S8d. KIND-INDEPENDENT on purpose, and that is not a
- * loosening of the G9 kind binding: G9 exists because a `wordpress` token must
- * not drive a `drupal` CMS instance, and these primitives address neither. They
- * address the caller's own cinatra lifecycle work through the caller's own
- * standing, so keying them on the connector kind would encode a distinction that
- * does not exist.
+ * The READ-ONLY lifecycle pull primitives (cinatra#2567 S3 + #2569 S5),
+ * reachable on a widget delegation as of S8d. KIND-INDEPENDENT on purpose, and
+ * that is not a loosening of the G9 kind binding: G9 exists because a
+ * `wordpress` token must not drive a `drupal` CMS instance, and these primitives
+ * address neither. They address the caller's own cinatra lifecycle work through
+ * the caller's own standing, so keying them on the connector kind would encode a
+ * distinction that does not exist.
  *
  * THE NAMES ARE THE CONTRACT and they are duplicated here as literals because
  * this module is deliberately dependency-free. A rename in the producer without
  * a matching edit here does not fail open — it fails CLOSED (the renamed tool is
- * simply not allowed) — and the structural test pins the two lists equal so the
- * silent-withdrawal direction is caught too.
+ * simply not allowed) — and the structural test pins this list equal to the chat
+ * policy's, so both the silent-withdrawal and the silent-divergence directions
+ * are caught.
  */
 export const DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS: readonly string[] = [
   "artifact_review_gates_list",
   "artifact_review_gate_render",
   "verification_record_render",
+  "schedule_proposal_render",
 ];
 
 // The CLOSED, KIND-KEYED minimal allowlist. Each kind maps to the EXACT set of
 // primitives a widget delegation of that kind may see + call.
 //
 // The set is the kind's single `*_content_editor_run` CMS-edit primitive plus
-// the three read-only lifecycle pulls. The design (§4.1) permits "explicitly
+// the read-only lifecycle pulls (all of them — first-party parity). The design (§4.1) permits "explicitly
 // enumerated, kind-scoped reads" here IF the surface needs them — the CMS
 // editor's own reads still do NOT, because on the S5 path they happen at HOP-2
 // under the carrier agent-run's OBO token (`buildLlmMcpServerToolForAgentRun`,
@@ -110,8 +124,11 @@ const DELEGATED_WIDGET_ALLOWLIST: Readonly<
  *
  * Matched as WHOLE underscore-delimited tokens, never raw substrings, so the
  * allowed surface is untouched: `wordpress_content_editor_run` (tokens
- * "wordpress", "content", "editor", "run"), `artifact_review_gates_list` and
- * both `*_render` primitives carry none of these tokens.
+ * "wordpress", "content", "editor", "run"), `artifact_review_gates_list` and the
+ * three `*_render` primitives carry none of these tokens. `schedule_proposal_
+ * render` is deliberately named so — a propose primitive called
+ * `agent_run_trigger_propose` would carry the `trigger` token and be denied here,
+ * which is the property that keeps arming unreachable from any transport.
  */
 const DELEGATED_WIDGET_DENIED_VERB_TOKENS: ReadonlySet<string> = new Set<string>([
   "decide",

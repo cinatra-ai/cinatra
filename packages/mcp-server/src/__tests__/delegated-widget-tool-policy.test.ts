@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { isDelegatedChatMcpToolAllowed } from "../delegated-chat-tool-policy";
 import {
   DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
   carriesDelegatedWidgetDeniedVerb,
@@ -14,6 +15,18 @@ import {
 // interaction.
 
 const KINDS: WidgetDelegationKind[] = ["wordpress", "drupal"];
+
+/**
+ * Every lifecycle PULL primitive the platform registers — the union both
+ * delegated perimeters are compared against. Literal names on purpose: this file
+ * is the drift detector, so it must not read its expectation from either policy.
+ */
+const LIFECYCLE_PULL_PRIMITIVES = [
+  "artifact_review_gates_list",
+  "artifact_review_gate_render",
+  "verification_record_render",
+  "schedule_proposal_render",
+] as const;
 
 describe("isDelegatedWidgetMcpToolAllowed — delegated-widget closed policy", () => {
   it("allows ONLY the bound kind's *_content_editor_run (positive)", () => {
@@ -86,25 +99,47 @@ describe("isDelegatedWidgetMcpToolAllowed — delegated-widget closed policy", (
 // ---------------------------------------------------------------------------
 
 describe("S8d — the read-only lifecycle primitives, on BOTH kinds", () => {
-  it.each(KINDS)("%s: all three pull primitives are allowed", (kind) => {
+  it.each(KINDS)("%s: every pull primitive is allowed", (kind) => {
     for (const tool of DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS) {
       expect(isDelegatedWidgetMcpToolAllowed(kind, tool), tool).toBe(true);
     }
   });
 
-  it("the pull set is EXACTLY S3's three names — no more, no fewer", () => {
-    // Pinned against the producer's own registration names. A rename in
-    // `lifecycle-pull-mcp.ts` without an edit here fails CLOSED (the tool simply
-    // stops being reachable from the widget), and this assertion is what turns
-    // that silent withdrawal into a red test.
+  it("the widget pull set EQUALS the chat pull set — first-party parity, not a subset", () => {
+    // THE CORRECTED CONTRACT (cinatra#2577, owner ruling 2026-08-11). The widget
+    // reaches every lifecycle pull primitive first-party chat reaches. Asserted
+    // as an equality against the CHAT policy's own allowlist rather than a
+    // literal list, so a primitive added to chat and forgotten here is a red
+    // test instead of a silent widget reduction.
+    // Both directions, through the CHAT policy's own predicate:
+    //   · everything the widget reaches, chat reaches (no widget-only surface);
+    //   · everything chat reaches of this family, the widget reaches (no
+    //     widget reduction — the half the correction is about).
+    for (const tool of DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS) {
+      expect(isDelegatedChatMcpToolAllowed(tool), tool).toBe(true);
+    }
+    const chatLifecyclePulls = LIFECYCLE_PULL_PRIMITIVES.filter((name) =>
+      isDelegatedChatMcpToolAllowed(name),
+    );
+    expect([...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS].sort()).toEqual(
+      [...chatLifecyclePulls].sort(),
+    );
+  });
+
+  it("the pull set is EXACTLY the four producer names — no more, no fewer", () => {
+    // Pinned against the producers' own registration names. A rename in
+    // `lifecycle-pull-mcp.ts` / `schedule-proposal-mcp.ts` without an edit here
+    // fails CLOSED (the tool simply stops being reachable from the widget), and
+    // this assertion is what turns that silent withdrawal into a red test.
     expect([...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS].sort()).toEqual([
       "artifact_review_gate_render",
       "artifact_review_gates_list",
+      "schedule_proposal_render",
       "verification_record_render",
     ]);
   });
 
-  it.each(KINDS)("%s: the WHOLE declared set is the editor plus the three reads", (kind) => {
+  it.each(KINDS)("%s: the WHOLE declared set is the editor plus the reads", (kind) => {
     // The complete contents, asserted as a set: an addition fails as loudly as
     // a removal, so widening this policy cannot happen quietly.
     expect(delegatedWidgetAllowedToolNames(kind)).toEqual(

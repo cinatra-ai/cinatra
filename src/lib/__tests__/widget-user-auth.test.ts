@@ -798,8 +798,11 @@ describe("lifecycle-read scope + audience (cinatra#2574)", () => {
 
   it("AC-1: only a NEW authorization carrying the grant lets the lifecycle read pass", () => {
     const minted = mintTokenWithGrant(WIDGET_SIGNIN_GRANTED_SCOPES);
-    expect(minted.scope).toBe(
-      `wordpress-content-editor.user ${WIDGET_LIFECYCLE_READ_SCOPE}`,
+    // A sign-in grants BOTH lifecycle scopes as of cinatra#2575's correction —
+    // reading work and deciding it, exactly as inside Cinatra. Asserted as set
+    // membership so the assertion is about the grant, not about ordering.
+    expect(minted.scope.split(" ").sort()).toEqual(
+      ["wordpress-content-editor.user", ...WIDGET_SIGNIN_GRANTED_SCOPES].sort(),
     );
 
     const r = consumeUserWidgetToken({
@@ -811,7 +814,9 @@ describe("lifecycle-read scope + audience (cinatra#2574)", () => {
     });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    expect(r.claims.grantedScopes).toEqual([WIDGET_LIFECYCLE_READ_SCOPE]);
+    expect([...r.claims.grantedScopes].sort()).toEqual(
+      [...WIDGET_SIGNIN_GRANTED_SCOPES].sort(),
+    );
 
     // The extended token still takes chat turns — the base scope and the chat
     // audience are unchanged members of their sets.

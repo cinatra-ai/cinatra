@@ -6,14 +6,34 @@
 // `specs/app-lifecycle-cards.html` §II (the card in the thread), §III (what the
 // target shows), §IV (the review states), §IX (where each card appears).
 //
-// ONE RENDERER, THREE FIRST-PARTY HOSTS. The same component draws the review in
-// the chat thread, in the run card, and in the review page's gate region. That
-// is the epic's structural rule, and it is why this file is the only place the
-// review interaction is composed: S1's registry dispatches `artifact_review_gate`
-// here, the run panel mounts it where the display-only redirect card used to be,
-// and the review page mounts it where its own target-panel + decision-bar
-// composition used to be. The HOST supplies a frame (spacing, and on the page a
-// bound decision action); it never supplies a second drawing.
+// ONE RENDERER, EVERY HOST — INCLUDING THE WIDGET (corrected 2026-08-11;
+// cinatra#2577 + #2575, owner ruling). The same component draws the review in
+// the chat thread, in the run card, in the review page's gate region and in the
+// site widget. That is the epic's structural rule, and it is why this file is
+// the only place the review interaction is composed: S1's registry dispatches
+// `artifact_review_gate` here, the run panel mounts it where the display-only
+// redirect card used to be, the review page mounts it where its own target-panel
+// + decision-bar composition used to be, and the embed mounts it inside its own
+// host declaration. The HOST supplies a frame (spacing, a credential, and on the
+// page a bound decision action); it never supplies a second drawing.
+//
+// WHAT WAS REMOVED HERE, AND WHY. This file used to hold a `FIRST_PARTY_HOSTS`
+// set that made the widget draw nothing, on the premise that a widget reader may
+// not mount a renderer and must pass a fresh confirmation window before any
+// decision. That premise was invented: the widget session IS the person's own
+// cinatra authentication (hosted PKCE sign-in, cinatra#407), so through the
+// widget they have the same rights and the same experience as inside Cinatra —
+// the renderer island, the live floor, the same states. The restriction that
+// remains is the one that was always real and is surface-independent: the AI
+// transport may show and propose, and can never decide, schedule or mutate.
+//
+// THE DECISION TRAVELS ON THE HOST'S OWN CREDENTIAL. A first-party host posts
+// same-origin with its cookie; the widget posts the broker headers it already
+// proves its resolve with, at `credentials: "omit"`. That is not a second
+// decision path — it is the same endpoint and the same core decision module,
+// entered with the proof the surface actually has. On the widget the omission is
+// load-bearing: the embed is same-origin to the app, so an ambient cookie would
+// record the decision against a different person entirely.
 //
 // IT REUSES THE SHIPPED REVIEW COMPONENTS, IT DOES NOT RESTYLE THEM. The spec
 // page was SPLICED from the ratified `Agent run & review` drawings — §II's floor
@@ -61,21 +81,21 @@
 //                floor where a decision is expected. Fail closed.
 //   absent     → NO card DOM at all — the reader may not read the target, so the
 //                turn carries only its prose;
-//   not-present→ NO card DOM at all either, for a different reason: §IX says
-//                this kind does not appear on this host (or no host declared
-//                itself). The two absences are separate branches on purpose —
-//                one is "you may not see this", the other is "this surface does
-//                not carry this card".
+//   not-present→ NO card DOM at all either, for a different reason: no host
+//                declared itself, so this subtree is not a lifecycle surface.
+//                The two absences are separate branches on purpose — one is
+//                "you may not see this", the other is "nothing here draws
+//                lifecycle cards".
 //
 // What the two absences guarantee, precisely: neither produces card DOM, and
 // neither is ever drawn as the OTHER or as a disabled card. They are not
 // indistinguishable to an observer of the page's own network activity — the
 // surface-absence issues no resolve at all, the reader-absence issues one and is
-// answered `absent`. That difference leaks nothing about a row: whether a host
-// carries this card is a static, public property of the surface, and the resolve
-// itself is the endpoint that already collapses "no access" and "no such row"
-// into one 200 `absent`. The oracle the design forbids is "does this gate exist
-// / may this reader see it", and neither branch answers it.
+// answered `absent`. That difference leaks nothing about a row: whether a
+// subtree declares a lifecycle host is a static, public property of the surface,
+// and the resolve itself is the endpoint that already collapses "no access" and
+// "no such row" into one 200 `absent`. The oracle the design forbids is "does
+// this gate exist / may this reader see it", and neither branch answers it.
 //
 // SUGGESTION CHIPS ARE PART OF THIS ONE RENDERER (cinatra#2572, epic #2564 S6c;
 // spec §VIII). The chips are not a second component mounted per host — they are
@@ -104,7 +124,6 @@ import { useCallback, useMemo, useState, type ReactElement } from "react";
 import { Check, ClipboardCheck, Maximize2, Minimize2, Sparkles, X } from "lucide-react";
 
 import {
-  LIFECYCLE_CARD_PRESENCE,
   LIFECYCLE_VIEW_SCHEMA_VERSION,
   type LifecycleCardHost,
   type LifecycleCardState,
@@ -122,6 +141,7 @@ import type {
 } from "@/lib/artifacts/review-surface-model";
 
 import {
+  useLifecycleCardAuth,
   useLifecycleCardHost,
   useLifecycleCardState,
 } from "./lifecycle-card-runtime";
@@ -156,21 +176,6 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
   page_gate_region: "flex w-full flex-col gap-3",
   site_widget: "my-3 flex w-full flex-col gap-3",
 };
-
-/**
- * The hosts THIS slice renders on (#2566 is "ReviewGateCard on first-party
- * hosts"). §IX's presence matrix says the review card eventually appears on the
- * site widget too, but a widget reader may not mount a renderer and must meet a
- * fresh confirmation before any decision — both are S8b/S8d's, and neither
- * exists yet. So the widget is not enabled HERE, in the renderer, rather than
- * quietly weakened in the design table: a surface whose rules are unbuilt draws
- * no card at all. That is the same surface-absence as "no host declared itself".
- */
-const FIRST_PARTY_HOSTS: ReadonlySet<LifecycleCardHost> = new Set<LifecycleCardHost>([
-  "chat_thread",
-  "run_card",
-  "page_gate_region",
-]);
 
 /** Clamped island height (§ the issue's clamp + internal scroll + expand). */
 const ISLAND_HEIGHT_CLAMPED = 380;
@@ -255,12 +260,16 @@ export function ReviewGateCard({
   submitAction?: SubmitReviewDecisionAction;
 }): ReactElement | null {
   const host = useLifecycleCardHost();
-  // §IX presence: no declared host, or a host this kind does not appear on →
-  // the card is not part of this surface at all. This is the FIRST absence.
-  const present =
-    host !== null &&
-    LIFECYCLE_CARD_PRESENCE.artifact_review_gate[host] &&
-    FIRST_PARTY_HOSTS.has(host);
+  // The FIRST absence: a subtree that declared no host is not a lifecycle
+  // surface at all. Every DECLARED host — the chat thread, the run card, the
+  // page gate region and the site widget — draws this card, identically.
+  const present = host !== null;
+  // The host's credential, when it has one. The first-party hosts declare none
+  // and keep the same-origin cookie; the widget declares broker headers with
+  // `credentials: "omit"`, and the DECISION must travel on exactly the same
+  // proof its resolve does — a decision posted with an ambient cookie from this
+  // same-origin iframe would be recorded against whoever else uses the browser.
+  const auth = useLifecycleCardAuth();
   const [reloadToken, setReloadToken] = useState(0);
   const [expanded, setExpanded] = useState(false);
   // §VIII — the reviewer's LOCAL marks, keyed by suggestion id, and BOUND to the
@@ -288,8 +297,11 @@ export function ReviewGateCard({
       try {
         const response = await fetch(LIFECYCLE_VIEW_DECIDE_PATH, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            ...(auth?.headers() ?? {}),
+          },
+          credentials: auth?.credentials ?? "same-origin",
           body: JSON.stringify({
             ref: view.ref,
             disposition: input.disposition,
@@ -320,7 +332,7 @@ export function ReviewGateCard({
         };
       }
     };
-  }, [view.ref]);
+  }, [view.ref, auth]);
 
   // A landed decision RE-RESOLVES the card. Whichever transport carried it, an
   // approve/reject/changes-requested leaves the gate resolved, and the card must

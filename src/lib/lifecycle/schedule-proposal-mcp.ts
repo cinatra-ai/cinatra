@@ -141,13 +141,28 @@ export const SCHEDULE_PROPOSAL_TOOL_META = {
  * A2A IS DELIBERATELY REFUSED. A proposal is a question put to a PERSON in a
  * conversation they are reading; an agent-to-agent frame has no such person and
  * no surface on which the card would be seen, so a proposal minted there could
- * only ever be confirmed by someone who never saw it. The same reasoning is why
- * §IX marks this card first-party only.
+ * only ever be confirmed by someone who never saw it.
+ *
+ * A WIDGET FRAME IS A PERSON, and is accepted (cinatra#2577, corrected
+ * 2026-08-11) — the widget session is the user's own cinatra authentication and
+ * the card is drawn in a conversation they are reading. It must still carry the
+ * lifecycle GRANT: a widget session whose sign-in predates it holds none, and a
+ * grantless frame gets the same fixed refusal every other denial produces. The
+ * proposal itself remains a proposal on every surface: it writes nothing, and
+ * only the person's own Confirm — a browser session action from the card, with
+ * no transport-reachable primitive behind it — arms anything.
  */
 function resolveProposer(): { userId: string; orgId: string } | null {
   const ctx = mcpRequestContextStorage.getStore();
   if (!ctx) return null;
   if (ctx.a2aActorContext) return null;
+  const delegated = ctx.delegatedActor;
+  if (
+    delegated?.delegation === "public_site_widget" &&
+    delegated.lifecycleRead !== true
+  ) {
+    return null;
+  }
   const userId = ctx.userId ?? null;
   const orgId = ctx.orgId ?? null;
   if (!userId || !orgId) return null;

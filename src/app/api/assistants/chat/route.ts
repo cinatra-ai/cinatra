@@ -572,12 +572,16 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
         kind: widgetPrincipal.assistantHandle,
         runId,
         jti: randomUUID(),
-        // cinatra#2684 — the `cwu_` row this turn authenticated against. The
-        // resume route re-asks whether that row's sign-in is still there before
-        // it streams a byte. Read from the principal since #2687: the OBO token
-        // needs the same handle, so it stopped being one credential's private
-        // business and became a property of the turn.
+        // cinatra#2684 + cinatra#2575 (epic #2564 S8b). The resume token names
+        // the `cwu_` row this turn authenticated against and the site it was
+        // authenticated for, so the resume seam can re-probe LIVE state instead
+        // of trusting a ten-minute signature: sign the person out, suspend or
+        // re-key the site, or remove their membership, and the next reconnect
+        // stops. Read from the principal since #2687: the OBO token needs the
+        // same handle, so it stopped being one credential's private business
+        // and became a property of the turn.
         parentJti: widgetPrincipal.parentTokenJti,
+        siteId: claims.siteId,
       }),
   });
   // Reflect CORS onto the streamed response so the cross-origin widget can read

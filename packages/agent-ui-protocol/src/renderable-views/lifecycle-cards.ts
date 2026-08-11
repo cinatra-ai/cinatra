@@ -1,15 +1,15 @@
 // ---------------------------------------------------------------------------
 // Lifecycle CARDS — the one-card-per-interaction registry (cinatra#2565, epic
 // #2564 S1). Design: design@6c20871b4108176c1d0193f19ecd2947f6c6355f
-// `specs/app-lifecycle-cards.html` at that commit (§IV states, §IX presence matrix).
+// `specs/app-lifecycle-cards.html` at that commit (§IV states; its §IX matrix is
+// SUPERSEDED — see the parity rule below and the corrected design#118).
 //
 // The epic's structural rule is ONE card per interaction kind, rendered on every
-// host that shows that interaction. This module is the REGISTRY that makes the
-// rule checkable: the closed set of interaction kinds, how each one REACHES a
-// surface on the one wire, the states every lifecycle card must be able to
-// express, and the per-host presence matrix. It carries NO pixels — the drawn
-// card lands in S2 (`ReviewGateCard` and its siblings); what lands here is the
-// shape those renderers must satisfy.
+// host. This module is the REGISTRY that makes the rule checkable: the closed
+// set of interaction kinds, how each one REACHES a surface on the one wire, the
+// states every lifecycle card must be able to express, and the closed list of
+// hosts. It carries NO pixels — the drawn card lands in S2 (`ReviewGateCard` and
+// its siblings); what lands here is the shape those renderers must satisfy.
 //
 // THE WIRE PAYLOAD IS A REF, NEVER CONTENT. A lifecycle DATA_PART carries
 // `{ viewType, schemaVersion, ref }` and nothing else — the schemas below are
@@ -33,10 +33,9 @@ import type { RenderableViewBase } from "../renderable-views";
 // ---------------------------------------------------------------------------
 
 /**
- * Every lifecycle interaction that becomes a card. Closed set: the four rows of
- * the spec's §IX presence matrix. Adding a fifth interaction means adding a
- * kind HERE first — that is what keeps "one card per interaction" enforceable
- * instead of aspirational.
+ * Every lifecycle interaction that becomes a card. Closed set of four. Adding a
+ * fifth interaction means adding a kind HERE first — that is what keeps "one
+ * card per interaction" enforceable instead of aspirational.
  */
 export const LIFECYCLE_CARD_KINDS = [
   "artifact_review_gate",
@@ -384,10 +383,10 @@ export const lifecycleCardStateSchema: z.ZodType<LifecycleCardState> = z.union([
 ]);
 
 // ---------------------------------------------------------------------------
-// The presence matrix (§IX) — WHETHER a card appears, never how it is laid out
+// The hosts — WHERE a card is drawn. Not WHETHER: every host draws every card.
 // ---------------------------------------------------------------------------
 
-/** The four hosts a lifecycle card can appear on (§IX). */
+/** The four hosts a lifecycle card is drawn on. */
 export const LIFECYCLE_CARD_HOSTS = [
   "chat_thread",
   "site_widget",
@@ -398,62 +397,44 @@ export const LIFECYCLE_CARD_HOSTS = [
 export type LifecycleCardHost = (typeof LIFECYCLE_CARD_HOSTS)[number];
 
 /**
- * §IX verbatim: review and verification appear on EVERY host; recommendation
- * and schedule proposal are first-party only — "a widget visitor never shapes a
- * run's skills or arms a schedule".
+ * THE PARITY RULE (owner ruling 2026-08-11; cinatra#2577, #2575, epic #2564).
  *
- * Presence is not layout. A card that appears keeps the drawing its section
- * fixes; the widget's two rules only ever REMOVE (no renderer island — the
- * metadata floor only — and no decision without a fresh confirmation step).
- * Those removals are S8b/S8d's to implement; this table is what they read.
- */
-export const LIFECYCLE_CARD_PRESENCE = {
-  artifact_review_gate: {
-    chat_thread: true,
-    site_widget: true,
-    run_card: true,
-    page_gate_region: true,
-  },
-  verification_summary: {
-    chat_thread: true,
-    site_widget: true,
-    run_card: true,
-    page_gate_region: true,
-  },
-  recommendation_hold: {
-    chat_thread: true,
-    site_widget: false,
-    run_card: true,
-    page_gate_region: true,
-  },
-  trigger_schedule_proposal: {
-    chat_thread: true,
-    site_widget: false,
-    run_card: true,
-    page_gate_region: true,
-  },
-} as const satisfies Record<LifecycleCardKind, Record<LifecycleCardHost, boolean>>;
-
-/**
- * The lifecycle view types a HOST may render, in registry order. This table
- * says what the widget may EVENTUALLY show once §IX's row for it is true; it
- * does not say whether the widget shows anything TODAY, and it is not the
- * widget's fail-closed gate. That gate is `LifecycleCardSurfaceProvider`
- * (`packages/agents/src/lifecycle-card-runtime.tsx`): a host opts IN by
- * wrapping its subtree in the provider, and no widget embed does — with no
- * host declared, a card renders no DOM at all, whatever this function
- * returns. (The chat capabilities route separately carries its own advisory
- * `WIDGET_LIFECYCLE_VIEWS_ENABLED` flag on ITS advertisement —
- * `src/app/api/assistants/chat/capabilities/route.ts` — which is not this
- * table's concern and is not load-bearing for rendering either.) S8d is the
- * one that wires the provider in.
+ * Every lifecycle card appears on every host. The four interaction kinds —
+ * review, verification, recommendation, schedule proposal — are drawn by ONE
+ * component each, with the same states, the same data and the same human
+ * affordances, wherever the person reads them. Only the host FRAME adapts
+ * (spacing, and on the review page a route-bound decision action).
+ *
+ * WHAT USED TO BE HERE, AND WHY IT IS GONE. This module carried a per-(kind,
+ * host) presence matrix that made recommendation and schedule proposal FALSE on
+ * `site_widget`. It rested on an invented premise — that the embedding site
+ * holds the widget user's token, so a widget reader is a "public visitor" who
+ * must be shown less. That premise is wrong: the widget session IS the person's
+ * own cinatra authentication (hosted PKCE sign-in, cinatra#407), so through the
+ * widget a cinatra user has the same rights and the same experience as inside
+ * Cinatra. The matrix, the reduced widget tier and the metadata floor it fed
+ * are removed rather than re-valued, because a table whose every cell is `true`
+ * is not a rule — it is a place for a future reduction to hide.
+ *
+ * The restriction that DOES survive is orthogonal and unchanged: the AI
+ * transport may show and propose, and can never decide, schedule or mutate.
+ * That is enforced by the tool policies and their structural tests (plan §3.D),
+ * identically on every surface, and it reduces nothing the authenticated person
+ * may see or do through a card.
+ *
+ * The fail-closed gate is, and stays, the HOST DECLARATION: a surface opts in
+ * through `LifecycleCardSurfaceProvider`, and a subtree that declares no host
+ * renders no lifecycle card DOM at all.
  */
 export function lifecycleViewTypesForHost(
   host: LifecycleCardHost,
 ): LifecycleDataPartViewType[] {
-  return LIFECYCLE_DATA_PART_VIEW_TYPES.filter(
-    (viewType) => LIFECYCLE_CARD_PRESENCE[viewType][host],
-  );
+  // The parameter is retained deliberately: every call site names the surface it
+  // is answering for, so the parity property is stated at each one and a future
+  // divergence would have to be written here, in front of the test that pins
+  // every host to the same set.
+  void host;
+  return [...LIFECYCLE_DATA_PART_VIEW_TYPES];
 }
 
 // ---------------------------------------------------------------------------

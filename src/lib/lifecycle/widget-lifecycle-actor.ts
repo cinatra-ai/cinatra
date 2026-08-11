@@ -36,16 +36,27 @@ import "server-only";
 //      (user, token org) in ONE resolution: the org role IS the membership
 //      re-check (the chat broker re-checks per turn; a read is no different — a
 //      membership revoked one second ago must not serve one more row);
-//   3. the actor, with platform standing FLOORED.
+//   3. the actor, with platform standing floored (see the note below).
 //
-// THE PLATFORM-ROLE FLOOR (deliberate, and the one place widget ≠ app). A
-// widget bearer lives in a browser on a public site and the site's backend
-// possesses it by design, so it may carry the user's ORG standing — that is what
-// "reading as yourself" means — but never their PLATFORM standing, which is
-// cross-org and exists for operating cinatra, not for reading a CMS review. A
-// platform admin therefore sees, through a widget, exactly what they would see
-// without their platform tier: a strict SUBSET of the in-app set, never a
-// superset. The parity fixture asserts both halves of that sentence.
+// EVERY ORG-SCOPED AXIS IS RESOLVED, NOT FLOORED. Org role, teams and project
+// grants are the person's real ones, live — that is what #2577 means by "no role
+// or grant axis is suppressed or floored because the surface is a widget", and
+// it is what makes a widget reader see exactly the rows they see in the app.
+//
+// THE PLATFORM TIER IS THE ONE AXIS STILL FLOORED, AND IT IS AN OPEN QUESTION
+// FOR THE OWNER (recorded, not decided here; codex rounds 0-1 on this PR).
+// Round 0 read the corrected sentence literally and called the floor a parity
+// shortfall — correctly: a platform admin can read something in Cinatra that the
+// widget refuses them. This lane removed it and asked codex to confirm; round 1
+// showed the removal is a NEW cross-org escalation. The embed receives the
+// `cwu_` through a postMessage bootstrap the PARENT page composes, so the
+// embedding site's own JavaScript possesses the bearer. Origin binding does not
+// help against the bound origin itself. With the tier resolved live, a
+// compromised CMS site would hold a platform admin's CROSS-ORG authority — over
+// orgs that site has nothing to do with — and could spend it through the decide
+// grant. The floor is a NARROWING, so keeping it can expose nothing; removing it
+// can. The removal was therefore reverted and the conflict is stated in the PR
+// body for a ruling, rather than shipped in either direction on this lane's say.
 // ---------------------------------------------------------------------------
 
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
@@ -59,6 +70,8 @@ import {
   type WidgetLifecycleStandingDenial,
 } from "@/lib/lifecycle/widget-lifecycle-frame-actor";
 import {
+  WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH,
+  WIDGET_LIFECYCLE_DECIDE_SCOPE,
   WIDGET_LIFECYCLE_READ_ROUTE_PATH,
   WIDGET_LIFECYCLE_READ_SCOPE,
 } from "@/lib/widget-lifecycle-scope";
@@ -83,6 +96,34 @@ export {
 export const WIDGET_LIFECYCLE_READ_REQUIRED_SCOPES = [
   WIDGET_LIFECYCLE_READ_SCOPE,
 ] as const;
+
+/**
+ * The GRANTS a widget lifecycle request can be consumed under (cinatra#2575 +
+ * #2577, corrected 2026-08-11). A grant is a (route audience, required scope)
+ * pair, and it is the ONLY thing that differs between a widget read and a widget
+ * decision: both build the SAME full actor, through the same ladder, against the
+ * same live standing. Naming the pair here keeps the audience and the scope from
+ * drifting apart at a call site.
+ */
+export const WIDGET_LIFECYCLE_READ_GRANT = {
+  routePath: WIDGET_LIFECYCLE_READ_ROUTE_PATH,
+  requiredScopes: [WIDGET_LIFECYCLE_READ_SCOPE],
+} as const;
+
+/**
+ * The DECIDE grant — the review card's decision bar on the widget surface. It
+ * authorizes reaching the one decision endpoint as this person; whether this
+ * person may decide THIS gate is still the core decision module's answer, taken
+ * against the same actor, in the same order, as on the review page.
+ */
+export const WIDGET_LIFECYCLE_DECIDE_GRANT = {
+  routePath: WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH,
+  requiredScopes: [WIDGET_LIFECYCLE_DECIDE_SCOPE],
+} as const;
+
+export type WidgetLifecycleGrant =
+  | typeof WIDGET_LIFECYCLE_READ_GRANT
+  | typeof WIDGET_LIFECYCLE_DECIDE_GRANT;
 
 export type WidgetLifecycleActorDenial =
   /** The `cwu_` failed the single verifier — includes the scope/audience gate. */
@@ -120,20 +161,41 @@ export async function resolveWidgetLifecycleActorContext(input: {
   agentSlug: string;
   /** The request Origin — re-checked against the token's bound site origin. */
   requestOrigin: string | null;
+  /**
+   * WHICH grant this request is consumed under. Defaults to READ so every S8a
+   * call site is unchanged; the decision entry passes
+   * `WIDGET_LIFECYCLE_DECIDE_GRANT`. Nothing else about the ladder varies — the
+   * actor a decision is taken with is byte-for-byte the actor a read is served
+   * with, which is what makes "same authorization outcome on both surfaces"
+   * true rather than asserted.
+   */
+  grant?: WidgetLifecycleGrant;
 }): Promise<WidgetLifecycleActorResult> {
-  // 1. THE TOKEN. Consumed at the LIFECYCLE audience with the LIFECYCLE scope
+  const grant = input.grant ?? WIDGET_LIFECYCLE_READ_GRANT;
+  // The audit names the OPERATION, not just the module (codex round 0, finding
+  // 6). A widget DECISION authenticated under the decide grant used to be
+  // recorded as a read, which makes an investigation of a suspicious decision
+  // read the wrong rows. Derived from the grant so the two can never disagree.
+  const isDecide = grant === WIDGET_LIFECYCLE_DECIDE_GRANT;
+  const authorized = isDecide
+    ? "widget_lifecycle_decide_authorized"
+    : "widget_lifecycle_read_authorized";
+  const rejected = isDecide
+    ? "widget_lifecycle_decide_rejected"
+    : "widget_lifecycle_read_rejected";
+  // 1. THE TOKEN. Consumed at the grant's audience with the grant's scope
   //    required, so the same verifier that authorizes a chat turn decides this
   //    too — with a strictly higher bar. A token minted before the grant existed
   //    holds neither the audience nor the scope and dies here (AC-1).
   const consumed = consumeUserWidgetToken({
     token: input.token,
     agentSlug: input.agentSlug,
-    routePath: WIDGET_LIFECYCLE_READ_ROUTE_PATH,
+    routePath: grant.routePath,
     requestOrigin: input.requestOrigin,
-    requiredScopes: WIDGET_LIFECYCLE_READ_REQUIRED_SCOPES,
+    requiredScopes: grant.requiredScopes,
   });
   if (!consumed.ok) {
-    emitWidgetAuthAudit("widget_lifecycle_read_rejected", {
+    emitWidgetAuthAudit(rejected, {
       agentSlug: input.agentSlug,
       reason: consumed.reason,
     });
@@ -144,7 +206,7 @@ export async function resolveWidgetLifecycleActorContext(input: {
   // Defensive: a row that validated but carries no principal/org cannot anchor
   // an authorization. There is no "best effort" actor to fall back to.
   if (!claims.userId || !claims.orgId) {
-    emitWidgetAuthAudit("widget_lifecycle_read_rejected", {
+    emitWidgetAuthAudit(rejected, {
       agentSlug: input.agentSlug,
       reason: "unbound_principal",
     });
@@ -152,6 +214,13 @@ export async function resolveWidgetLifecycleActorContext(input: {
   }
 
   // 2 + 3. THE LIVE STANDING AND THE ACTOR — the shared leaf.
+  //
+  //    The leaf emits the READ-flavoured audit for its own denials, because it
+  //    is shared with the MCP-frame entry, which has no grant to key on. A
+  //    DECIDE that dies on standing is therefore recorded twice: the leaf's read
+  //    row, and the decide row this door adds below — so an investigation that
+  //    filters on `widget_lifecycle_decide_rejected` sees every failed decision
+  //    (codex round 1 on finding 6).
   //
   //    The token proves membership held at consent; this proves it holds now,
   //    against `claims.orgId` — the org the token is bound to — so a user's
@@ -173,9 +242,19 @@ export async function resolveWidgetLifecycleActorContext(input: {
     orgId: claims.orgId,
     auditSlug: input.agentSlug,
   });
-  if (!standing.ok) return standing;
+  if (!standing.ok) {
+    if (isDecide) {
+      emitWidgetAuthAudit(rejected, {
+        actor: claims.userId,
+        orgId: claims.orgId,
+        agentSlug: input.agentSlug,
+        reason: standing.reason,
+      });
+    }
+    return standing;
+  }
 
-  emitWidgetAuthAudit("widget_lifecycle_read_authorized", {
+  emitWidgetAuthAudit(authorized, {
     actor: claims.userId,
     orgId: claims.orgId,
     siteId: claims.siteId,

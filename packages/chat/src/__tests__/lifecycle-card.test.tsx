@@ -48,7 +48,7 @@ function mockResolve(state: LifecycleCardState) {
   return fetchMock;
 }
 
-describe("the host declaration is fail-closed (§IX)", () => {
+describe("the host declaration is the one fail-closed surface gate", () => {
   it("renders NO DOM and issues NO request without a declared host", async () => {
     const fetchMock = mockResolve({ state: "pending", canDecide: true, canComment: true });
     const { container } = render(<LifecycleCard view={REVIEW_VIEW} />);
@@ -57,13 +57,67 @@ describe("the host declaration is fail-closed (§IX)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("renders NO DOM on a host the matrix excludes this kind from", async () => {
+  it("a DECLARED host resolves every kind — no per-surface exclusion remains", async () => {
+    // The corrected contract (owner ruling 2026-08-11): the host declaration is
+    // the ONLY gate. A kind that used to be withheld from the widget is now
+    // asked about there like any other. The widget must declare its credential
+    // (see the fail-closed test below), so this mounts the real shape.
     const fetchMock = mockResolve({ state: "pending", canDecide: true, canComment: true });
-    const { container } = render(
-      <LifecycleCardSurfaceProvider host="site_widget">
+    render(
+      <LifecycleCardSurfaceProvider
+        host="site_widget"
+        auth={{ headers: () => ({ "X-Cinatra-Widget-User-Token": "cwu_x" }), credentials: "omit" }}
+      >
         <LifecycleCard
           view={{ ...REVIEW_VIEW, viewType: "trigger_schedule_proposal" }}
         />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+  });
+
+  it("FAIL-CLOSED: a non-cookie host that declares NO credential is not a host at all", async () => {
+    // codex round 0, finding 2. A dropped `auth` prop on the widget would
+    // otherwise send the resolve — and the DECISION — same-origin with an
+    // ambient Cinatra cookie, and the server would answer as whoever else uses
+    // this browser. The provider refuses to declare the host: no DOM, no request.
+    const fetchMock = mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = render(
+      <LifecycleCardSurfaceProvider host="site_widget">
+        <LifecycleCard view={REVIEW_VIEW} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await Promise.resolve();
+    expect(container.innerHTML).toBe("");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("FAIL-CLOSED: a widget credential that would send cookies is refused the same way", async () => {
+    const fetchMock = mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = render(
+      <LifecycleCardSurfaceProvider
+        host="site_widget"
+        auth={{ headers: () => ({}), credentials: "same-origin" }}
+      >
+        <LifecycleCard view={REVIEW_VIEW} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await Promise.resolve();
+    expect(container.innerHTML).toBe("");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("FAIL-CLOSED: a COOKIE host that declares a credential is refused too", async () => {
+    // The invariant runs both ways: a first-party host is defined by having no
+    // credential of its own, so one appearing there means the two identity paths
+    // could disagree. Silence, not a guess.
+    const fetchMock = mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = render(
+      <LifecycleCardSurfaceProvider
+        host="chat_thread"
+        auth={{ headers: () => ({}), credentials: "omit" }}
+      >
+        <LifecycleCard view={REVIEW_VIEW} />
       </LifecycleCardSurfaceProvider>,
     );
     await Promise.resolve();

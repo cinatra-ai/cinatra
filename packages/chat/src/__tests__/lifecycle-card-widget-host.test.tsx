@@ -10,9 +10,10 @@
 //   · review and verification draw on the widget, and the request that
 //     authorizes them carries the surface's OWN credential (the broker proof),
 //     never an ambient cookie belonging to whoever else uses the browser;
-//   · recommendation and schedule proposal draw NOTHING there and are not even
-//     asked about — §IX makes them first-party-only, and a request would be an
-//     existence probe on a surface that may not have one;
+//   · every lifecycle kind draws there — the widget resolves the SAME set as
+//     first-party chat, because a signed-in widget reader is the same person
+//     with the same rights (corrected 2026-08-11; the per-surface matrix that
+//     withheld the schedule proposal and the recommendation hold is gone);
 //   · a denial is still no DOM at all, on this host as on every other.
 //
 // The first-party hosts declare no credential and keep S1's exact same-origin
@@ -77,6 +78,12 @@ function firstCall(fetchMock: ReturnType<typeof mockResolve>) {
   return { url: call![0], init: (call![1] ?? {}) as RequestInit };
 }
 
+/** The `viewType` the card actually ASKED the server about. */
+function bodyViewType(fetchMock: ReturnType<typeof mockResolve>): string {
+  const { init } = firstCall(fetchMock);
+  return (JSON.parse(String(init.body)) as { viewType: string }).viewType;
+}
+
 function renderOnWidget(view: { viewType: string; schemaVersion: number; ref: string }) {
   return render(
     <LifecycleCardSurfaceProvider host="site_widget" auth={WIDGET_AUTH}>
@@ -128,19 +135,45 @@ describe("the widget's request carries its OWN credential", () => {
   });
 });
 
-describe("§IX matrix conformance on the widget branch", () => {
-  it.each(["trigger_schedule_proposal", "recommendation_hold"])(
-    "'%s' draws NO DOM and issues NO request",
+describe("SURFACE PARITY on the widget branch (corrected 2026-08-11)", () => {
+  it.each(["artifact_review_gate", "verification_summary", "trigger_schedule_proposal"])(
+    "'%s' resolves and draws on the widget, exactly as on first-party chat",
     async (viewType) => {
       const fetchMock = mockResolve({ state: "pending", canDecide: true, canComment: true });
-      const { container } = renderOnWidget({ ...REVIEW_VIEW, viewType, ref: "ref-x" });
-      await Promise.resolve();
-      expect(container.innerHTML).toBe("");
-      // Not merely undrawn: never asked about. A request would be an existence
-      // probe for a kind this surface may not carry.
-      expect(fetchMock).not.toHaveBeenCalled();
+      renderOnWidget({ ...REVIEW_VIEW, viewType, ref: "ref-x" });
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      expect(bodyViewType(fetchMock)).toBe(viewType);
     },
   );
+
+  it("resolves the SAME kinds on the widget as on the chat thread", async () => {
+    // The parity property as a comparison rather than a list: whatever the chat
+    // thread asks the server about, the widget asks about too. This is the exact
+    // assertion the removed per-surface matrix used to make false.
+    const asked = async (host: "site_widget" | "chat_thread") => {
+      const seen: string[] = [];
+      for (const viewType of [
+        "artifact_review_gate",
+        "verification_summary",
+        "trigger_schedule_proposal",
+      ] as const) {
+        const fetchMock = mockResolve({ state: "advisory" });
+        render(
+          <LifecycleCardSurfaceProvider
+            host={host}
+            auth={host === "site_widget" ? WIDGET_AUTH : undefined}
+          >
+            <LifecycleCard view={{ ...REVIEW_VIEW, viewType, ref: "ref-x" }} />
+          </LifecycleCardSurfaceProvider>,
+        );
+        await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+        seen.push(bodyViewType(fetchMock));
+        cleanup();
+      }
+      return seen.sort();
+    };
+    expect(await asked("site_widget")).toEqual(await asked("chat_thread"));
+  });
 });
 
 describe("a denial is still no card at all", () => {

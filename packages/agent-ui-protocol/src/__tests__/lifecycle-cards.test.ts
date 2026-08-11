@@ -9,7 +9,6 @@ import {
   LIFECYCLE_CARD_CARRIAGE,
   LIFECYCLE_CARD_HOSTS,
   LIFECYCLE_CARD_KINDS,
-  LIFECYCLE_CARD_PRESENCE,
   LIFECYCLE_CARD_STATES,
   LIFECYCLE_DATA_PART_VIEW_TYPES,
   LIFECYCLE_REVIEW_CARD_STATES,
@@ -62,33 +61,46 @@ describe("the registry is one card per interaction kind (§IX)", () => {
   });
 });
 
-describe("the presence matrix (§IX)", () => {
-  it("review and verification appear on EVERY host", () => {
-    for (const host of LIFECYCLE_CARD_HOSTS) {
-      expect(LIFECYCLE_CARD_PRESENCE.artifact_review_gate[host]).toBe(true);
-      expect(LIFECYCLE_CARD_PRESENCE.verification_summary[host]).toBe(true);
-    }
+describe("SURFACE PARITY — every host draws every card (owner ruling 2026-08-11)", () => {
+  it("advertises the SAME lifecycle view set for the widget as for first-party chat", () => {
+    // The corrected #2577 deliverable, stated as an equality rather than as two
+    // lists that happen to match today: whatever first-party chat resolves, the
+    // widget resolves. A reduction would have to break this line.
+    expect([...lifecycleViewTypesForHost("site_widget")].sort()).toEqual(
+      [...lifecycleViewTypesForHost("chat_thread")].sort(),
+    );
   });
 
-  it("recommendation and schedule proposal are first-party only — never the widget", () => {
-    expect(LIFECYCLE_CARD_PRESENCE.recommendation_hold.site_widget).toBe(false);
-    expect(LIFECYCLE_CARD_PRESENCE.trigger_schedule_proposal.site_widget).toBe(false);
-    for (const host of ["chat_thread", "run_card", "page_gate_region"] as const) {
-      expect(LIFECYCLE_CARD_PRESENCE.recommendation_hold[host]).toBe(true);
-      expect(LIFECYCLE_CARD_PRESENCE.trigger_schedule_proposal[host]).toBe(true);
-    }
-  });
-
-  it("lifecycleViewTypesForHost projects the matrix onto the DATA_PART kinds", () => {
-    expect([...lifecycleViewTypesForHost("chat_thread")].sort()).toEqual([
+  it("gives EVERY host the whole DATA_PART set — no per-surface subset survives", () => {
+    const whole = [...LIFECYCLE_DATA_PART_VIEW_TYPES].sort();
+    expect(whole).toEqual([
       "artifact_review_gate",
       "trigger_schedule_proposal",
       "verification_summary",
     ]);
-    expect([...lifecycleViewTypesForHost("site_widget")].sort()).toEqual([
-      "artifact_review_gate",
-      "verification_summary",
-    ]);
+    for (const host of LIFECYCLE_CARD_HOSTS) {
+      expect([...lifecycleViewTypesForHost(host)].sort()).toEqual(whole);
+    }
+  });
+
+  it("keeps the recommendation hold off the advertised set on EVERY host — carriage, not restriction", () => {
+    // The one kind absent from every host's list, and for a reason that is not a
+    // surface rule: it rides an INTERRUPT, so it has no advertised viewType
+    // anywhere. Pinned so a future reader cannot mistake this absence for the
+    // per-surface matrix that was removed.
+    for (const host of LIFECYCLE_CARD_HOSTS) {
+      expect(lifecycleViewTypesForHost(host)).not.toContain("recommendation_hold");
+    }
+    expect(LIFECYCLE_CARD_CARRIAGE.recommendation_hold).toBe("interrupt");
+  });
+
+  it("exports no per-(kind, host) presence table at all", async () => {
+    // The negative control for the correction. A table whose cells are all true
+    // is a place for a reduction to hide, so the module must not carry one.
+    const mod: Record<string, unknown> = await import(
+      "../renderable-views/lifecycle-cards"
+    );
+    expect(Object.keys(mod)).not.toContain("LIFECYCLE_CARD_PRESENCE");
   });
 });
 

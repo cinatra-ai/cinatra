@@ -59,7 +59,13 @@ export type WidgetAuthAuditEvent =
   // lifecycle grant AND the live org membership held, rejected (reason-coded,
   // never a secret and never a row identifier) on any fail-closed deny.
   | "widget_lifecycle_read_authorized"
-  | "widget_lifecycle_read_rejected";
+  | "widget_lifecycle_read_rejected"
+  // cinatra#2575 (epic #2564 S8b, corrected 2026-08-11) — the same DECISION, for
+  // a widget lifecycle DECIDE. A separate pair rather than a shared one so an
+  // investigation of a suspicious decision does not have to read every read
+  // (codex round 0, finding 6). Same seam, same fields, same scrubbing.
+  | "widget_lifecycle_decide_authorized"
+  | "widget_lifecycle_decide_rejected";
 
 export type WidgetAuthAuditFields = {
   actor?: string | null; // userId (never an email/secret)

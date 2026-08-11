@@ -3,7 +3,6 @@ import "server-only";
 import { z } from "zod";
 
 import {
-  LIFECYCLE_CARD_PRESENCE,
   LIFECYCLE_DATA_PART_VIEW_TYPES,
   LIFECYCLE_VIEW_REF_MAX_LENGTH,
   type LifecycleDataPartViewType,
@@ -41,11 +40,11 @@ import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports"
 // header is a widget request, and a failed widget consume 401s rather than
 // dropping to an ambient cookie the iframe's own origin would happily supply.
 //
-// THE MATRIX IS ENFORCED HERE, NOT ONLY DRAWN. §IX makes recommendation and
-// schedule-proposal first-party-only, so the widget branch refuses those two
-// viewTypes with the SAME 200 `absent` every other denial produces — no reason,
-// no distinguishable status. The client already will not draw them (the presence
-// table gates the card); this makes the server refuse to describe them at all.
+// BOTH BRANCHES RESOLVE THE SAME VIEW SET (corrected 2026-08-11, owner ruling).
+// An earlier revision refused two viewTypes on the widget branch from a §IX
+// presence matrix; that matrix was invented and is removed. A widget reader is
+// the same authenticated person, so the only thing that decides what they see is
+// the per-row authorization every branch already runs.
 //
 // A DENIAL IS A 200 `absent`, NEVER A 403. The status code is as much of an
 // oracle as the body: answering 403 for "you may not read this" and 200
@@ -80,14 +79,6 @@ const WIDGET_USER_TOKEN_HEADER = "X-Cinatra-Widget-User-Token";
 const WIDGET_ORIGIN_HEADER = "X-Cinatra-Widget-Origin";
 /** The embed-forwarded assistant handle; only a selector — the token is the authority. */
 const WIDGET_ASSISTANT_HEADER = "X-Cinatra-Widget-Assistant";
-
-/** The one denial shape this endpoint has: a 200 that says nothing exists. */
-function absent(): Response {
-  return Response.json(
-    { state: { state: "absent" } },
-    { headers: { "Cache-Control": "no-store" } },
-  );
-}
 
 /**
  * Resolve the widget branch's reviewing actor from the presented `cwu_`.
@@ -143,13 +134,12 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "Invalid lifecycle view request" }, { status: 400 });
   }
 
-  // §IX presence, enforced server-side on the widget branch. A viewType this
-  // surface may not show is answered `absent` — the same answer as "you may not
-  // read this" and as "there is nothing here", so refusing it discloses nothing
-  // about which of the three it was.
-  if (isWidgetBranch && !LIFECYCLE_CARD_PRESENCE[parsed.data.viewType].site_widget) {
-    return absent();
-  }
+  // NO PER-SURFACE VIEWTYPE FILTER (corrected 2026-08-11, owner ruling). This
+  // endpoint used to refuse two viewTypes on the widget branch, from a presence
+  // matrix that has been removed as invented. Both branches now resolve the same
+  // set: the widget reader is the same authenticated person, and what they may
+  // see is decided — for every viewType, on every surface — by the per-row
+  // authorization below, which is the only thing that ever knew.
 
   // The schedule proposal resolves state AND body in one pass — they must agree,
   // and resolving twice would both cost a second verify and open a window where

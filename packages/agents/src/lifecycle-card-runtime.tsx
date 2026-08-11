@@ -82,14 +82,34 @@ export type LifecycleCardAuth = {
 const LifecycleCardAuthContext = createContext<LifecycleCardAuth | null>(null);
 
 /**
+ * The hosts whose identity travels by COOKIE. Every other host must declare a
+ * credential, and the provider refuses to mount without one.
+ *
+ * WHY THIS IS A CLOSED LIST AND NOT AN `auth?:` DEFAULT (codex round 0, finding
+ * 2). `auth` used to be optional for every host, so
+ * `<LifecycleCardSurfaceProvider host="site_widget">` — one dropped prop, one
+ * refactor, one second widget mount — would have sent both the resolve and the
+ * DECISION same-origin with an ambient cookie. On a surface that is same-origin
+ * to the app, that is the forbidden fallback in its worst form: the server
+ * would answer, and record a decision, as whoever else uses that browser. The
+ * unsafe shape is removed rather than documented.
+ */
+const COOKIE_SESSION_HOSTS: ReadonlySet<LifecycleCardHost> =
+  new Set<LifecycleCardHost>(["chat_thread", "run_card", "page_gate_region"]);
+
+/**
  * Declare the host a subtree renders lifecycle cards on. A host opts IN; there
  * is no default. S8d (cinatra#2577) turns the widget on: the embed wraps its
  * transcript in `<LifecycleCardSurfaceProvider host="site_widget" auth={…}>`,
  * and a surface that declares nothing still renders no lifecycle card DOM at
  * all.
  *
- * `auth` is optional and its ABSENCE is the first-party default (same-origin
- * cookie), so every existing host is unchanged by its arrival.
+ * FAIL-CLOSED ON THE CREDENTIAL. A cookie-session host must declare no `auth`
+ * and keeps S1's exact same-origin request. Any other host MUST declare one, and
+ * it must be `credentials: "omit"` — a broker surface that sent cookies would be
+ * asking the server to pick between two identities. A violation declares NO host
+ * at all, so the subtree renders no lifecycle card DOM and issues no request:
+ * the same silence as a surface that never opted in.
  */
 export function LifecycleCardSurfaceProvider({
   host,
@@ -100,9 +120,13 @@ export function LifecycleCardSurfaceProvider({
   auth?: LifecycleCardAuth;
   children: ReactNode;
 }): ReactElement {
+  const cookieHost = COOKIE_SESSION_HOSTS.has(host);
+  const credentialOk = cookieHost
+    ? auth === undefined
+    : auth !== undefined && auth.credentials === "omit";
   return (
-    <LifecycleCardSurfaceContext.Provider value={host}>
-      <LifecycleCardAuthContext.Provider value={auth ?? null}>
+    <LifecycleCardSurfaceContext.Provider value={credentialOk ? host : null}>
+      <LifecycleCardAuthContext.Provider value={credentialOk ? (auth ?? null) : null}>
         {children}
       </LifecycleCardAuthContext.Provider>
     </LifecycleCardSurfaceContext.Provider>
@@ -111,6 +135,19 @@ export function LifecycleCardSurfaceProvider({
 
 export function useLifecycleCardHost(): LifecycleCardHost | null {
   return useContext(LifecycleCardSurfaceContext);
+}
+
+/**
+ * The host's credential declaration, or `null` on a cookie-session host.
+ *
+ * Read by every card request that is NOT the resolve — today the review card's
+ * ref-bound decision POST (cinatra#2577 / #2575). One declaration serves both,
+ * deliberately: a surface that proves itself one way to read and another way to
+ * decide is a surface where the two can disagree, and on the widget the
+ * disagreement would be an ambient cookie deciding as somebody else.
+ */
+export function useLifecycleCardAuth(): LifecycleCardAuth | null {
+  return useContext(LifecycleCardAuthContext);
 }
 
 // ---------------------------------------------------------------------------

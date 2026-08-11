@@ -10,10 +10,10 @@
 //   2. There is NO session fallback behind a failed widget consume. The embed is
 //      same-origin to the Cinatra app, so an ambient cookie belonging to whoever
 //      else uses this browser is exactly the thing that must not rescue it.
-//   3. §IX's matrix is enforced SERVER-SIDE: recommendation and schedule
-//      proposal are first-party-only, and asking for one from the widget gets
-//      the same `absent` every other denial gets — never a distinguishable
-//      status or reason.
+//   3. SURFACE PARITY (corrected 2026-08-11): the widget branch resolves the
+//      SAME view set as a cookie session. The per-surface matrix this endpoint
+//      used to enforce was invented and is gone; what a reader may see is
+//      decided by the per-row authorization, on every surface.
 //   4. The session branch is untouched.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -181,27 +181,7 @@ describe("the widget branch fails closed", () => {
   });
 });
 
-describe("§IX matrix conformance — the widget never resolves a first-party-only view", () => {
-  it.each(["trigger_schedule_proposal"])(
-    "'%s' answers a 200 `absent` on the widget branch",
-    async (viewType) => {
-      const res = await POST(widgetPost(viewType));
-      expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ state: { state: "absent" } });
-      // Not merely undrawn — never resolved. No producer is consulted, so the
-      // answer cannot depend on whether such a proposal exists.
-      expect(resolveTriggerScheduleProposalCard).not.toHaveBeenCalled();
-      expect(resolveLifecycleCardState).not.toHaveBeenCalled();
-    },
-  );
-
-  it("the refusal is BYTE-EQUAL to a denied review — no distinguishable shape", async () => {
-    const matrixRefusal = await (await POST(widgetPost("trigger_schedule_proposal"))).json();
-    resolveLifecycleCardState.mockResolvedValue({ state: "absent" });
-    const accessRefusal = await (await POST(widgetPost("artifact_review_gate"))).json();
-    expect(matrixRefusal).toEqual(accessRefusal);
-  });
-
+describe("SURFACE PARITY — the widget resolves the SAME view set as first-party chat", () => {
   it("review and verification ARE resolved on the widget branch", async () => {
     for (const viewType of ["artifact_review_gate", "verification_summary"]) {
       resolveLifecycleCardState.mockClear();
@@ -210,42 +190,34 @@ describe("§IX matrix conformance — the widget never resolves a first-party-on
       expect(resolveLifecycleCardState, viewType).toHaveBeenCalled();
     }
   });
-});
 
-describe("the session branch is untouched", () => {
-  it("401s a request with neither a session nor a widget token", async () => {
-    const res = await POST(post({}));
-    expect(res.status).toBe(401);
-  });
-
-  it("still serves the schedule proposal to a first-party session", async () => {
-    resolveReviewActorContext.mockResolvedValue({
-      actor: { actorType: "human", userId: "u-session" },
-      orgId: "o1",
-      roleHints: { platformRole: "member" },
-    });
-    const res = await POST(post({ viewType: "trigger_schedule_proposal" }));
+  it("the SCHEDULE PROPOSAL is resolved on the widget branch too (corrected 2026-08-11)", async () => {
+    // This route used to short-circuit this viewType to a 200 `absent` on the
+    // widget branch, from a §IX presence matrix that has been removed as
+    // invented. The producer is now consulted, exactly as for a cookie session,
+    // and what the reader may see is decided by the per-row authorization.
+    resolveTriggerScheduleProposalCard.mockClear();
+    const res = await POST(widgetPost("trigger_schedule_proposal"));
     expect(res.status).toBe(200);
     expect(resolveTriggerScheduleProposalCard).toHaveBeenCalled();
-    expect(await res.json()).toEqual({
-      state: { state: "pending" },
-      view: { anything: true },
-    });
   });
 
-  it("400s a malformed body before any resolution", async () => {
-    resolveReviewActorContext.mockResolvedValue({
-      actor: { actorType: "human", userId: "u-session" },
-      orgId: "o1",
-      roleHints: {},
-    });
-    const res = await POST(
-      new Request("https://app.test/api/lifecycle-views/resolve", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ viewType: "not_a_view", ref: REF }),
-      }),
-    );
-    expect(res.status).toBe(400);
+  it("no viewType is refused for being asked on the widget rather than in chat", async () => {
+    // The negative control for the correction: for every advertised viewType,
+    // the widget branch reaches a resolver instead of a surface-level refusal.
+    for (const viewType of [
+      "artifact_review_gate",
+      "verification_summary",
+      "trigger_schedule_proposal",
+    ]) {
+      resolveLifecycleCardState.mockClear();
+      resolveTriggerScheduleProposalCard.mockClear();
+      const res = await POST(widgetPost(viewType));
+      expect(res.status, viewType).toBe(200);
+      const consulted =
+        resolveLifecycleCardState.mock.calls.length +
+        resolveTriggerScheduleProposalCard.mock.calls.length;
+      expect(consulted, viewType).toBeGreaterThan(0);
+    }
   });
 });
