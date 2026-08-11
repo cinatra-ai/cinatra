@@ -98,8 +98,7 @@ import {
   type ReviewFinding,
   detectCredentialPattern,
 } from "../validate-agent-json";
-import { compileOasAgentJson, injectCinatraLlmIntoApiNodes } from "../oas-compiler";
-import { normalizeOasDocumentForExport } from "../oas-export-normalize";
+import { compileOasAgentJson, injectCinatraLlmIntoApiNodes, normalizeOasJsonForExport } from "../oas-compiler";
 import type { OasCinatraLlm } from "../llm-provider-policy";
 // agent_creation_review primitive (replaces the
 // @cinatra/agent-creation-finalizer Flow).
@@ -2608,24 +2607,7 @@ async function handleAgentBuilderExport(
       };
     }
 
-    // cinatra#2645 — repair the wayflow-exporter artifacts the import
-    // compiler rejects (absent metadata.cinatra.type; `description: null`
-    // for absent optional descriptions) so every exported archive
-    // round-trips through importAgentTemplateCore. A document that needs no
-    // repair ships byte-for-byte, preserving the #130 contract. A file that
-    // is not valid JSON also ships unmodified — the importer's own JSON
-    // parse rejects it with an explicit error.
-    try {
-      const normalized = normalizeOasDocumentForExport(
-        JSON.parse(agentJson) as Record<string, unknown>,
-      );
-      if (normalized.changed) {
-        agentJson = JSON.stringify(normalized.doc, null, 2) + "\n";
-      }
-    } catch {
-      /* non-JSON source file — ship original bytes */
-    }
-
+    agentJson = normalizeOasJsonForExport(agentJson);
     const exportedAt = new Date().toISOString();
     const manifestJson = JSON.stringify({
       version: 1,

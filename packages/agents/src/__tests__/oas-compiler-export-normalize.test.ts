@@ -13,12 +13,11 @@
  * the schema-tolerated `from_branch: null` survive, and the repair is
  * idempotent and non-mutating.
  *
- * Run: cd packages/agents && pnpm exec vitest run src/__tests__/oas-export-normalize.test.ts
+ * Run: cd packages/agents && pnpm exec vitest run src/__tests__/oas-compiler-export-normalize.test.ts
  */
 import { describe, expect, it } from "vitest";
 
-import { normalizeOasDocumentForExport } from "../oas-export-normalize";
-import { validateOasFlowStructural } from "../oas-compiler";
+import { normalizeOasDocumentForExport, validateOasFlowStructural } from "../oas-compiler";
 
 /**
  * Structural replica of the real defective export from #2645
