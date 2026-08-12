@@ -1,6 +1,6 @@
 {
-  "note": "Archive adversarial acceptance coverage-completeness manifest (cinatra#1943 A0). Every row is one literal criterion from #1943's issue body (15 total, verbatim from the issue — see the gate script's CANONICAL_CRITERIA). This is NOT a scanned-surface manifest (contrast scripts/audit/system-writer-manifest.json): rows are hand-authored against the issue text, not discovered by a source scan, so there is no --write-manifest regeneration mode. `owner: \"sibling\"` rows point at a SIBLING slice's own test (w3-1939 / r-1940) via ciDependency rather than re-authoring it — #1943 never duplicates a criterion another slice's acceptance map already proves. `status` is a DECLARED claim: it may read \"green\" only once the gate's `strict` mode structurally confirms the referenced proof(s) exist, pass, AND the coverage-gate's own CI job `needs:` the job named in ciDependency (see the gate script header for the current, honestly-disclosed gap: NO row can pass strict mode yet, because the coverage-gate itself is not wired into any CI job in this PR by design — that wiring is a separate, always-human-gated follow-up per the design's Decision 6). Every row therefore ships `red` at authoring time (Decision 1's zero-baseline), each with a trackingIssue, even where the underlying proof already exists and passes today. Regenerate NOTHING — edit this file by hand, one row per criterion, and update kernelProof/e2eProof/ciDependency/status/trackingIssue as each tier (A0..A7) lands, per DESIGN.md's PR ladder in .claude/scratch/a-1943/DESIGN.md.",
-  "version": 1,
+  "note": "Archive adversarial acceptance coverage-completeness manifest (cinatra#1943). Every row is one literal criterion from #1943's issue body (15 total, verbatim from the issue — see the gate script's CANONICAL_CRITERIA). This is NOT a scanned-surface manifest (contrast scripts/audit/system-writer-manifest.json): rows are hand-authored against the issue text, not discovered by a source scan, so there is no --write-manifest regeneration mode. `owner: \"sibling\"` rows point at a SIBLING slice's own test (w3-1939 / r-1940) via ciDependency rather than re-authoring it — #1943 never duplicates a criterion another slice's acceptance map already proves. `status` is a DECLARED claim: it may read \"green\" only once the gate's `strict` mode structurally confirms the referenced proof(s) exist, AND the coverage-gate's own CI job `needs:` the job named in ciDependency. Every row ALSO carries a `negativeControl` once green — the RED half of the issue's \"each its own RED-THEN-GREEN test\": the counterpart run in which the OUTCOME INVERTS once the one guard under test is removed. For a row whose proof is a refusal claim that means the same payload LANDS unguarded; for a row whose proof is a success claim (lease settle, eventual archive under contention) it means the same operation is REFUSED in the state that lacks the precondition. Either way a green row can never rest on a claim nothing could have falsified (see the gate script's CONTROL_KIND comment for why this is enforced mechanically rather than recorded in PR prose). Regenerate NOTHING — edit this file by hand, one row per criterion.",
+  "version": 2,
   "rows": [
     {
       "criterion": "Forged/ambient run identity refused",
@@ -9,8 +9,15 @@
         "file": "src/lib/org-write/__tests__/authority-1938.test.ts",
         "testName": "a cast cannot forge a VerifiedRunRef"
       },
-      "ciDependency": { "workflow": "build-image.yml", "job": "perpetual-loops-invariants" },
-      "status": "red",
+      "negativeControl": {
+        "file": "src/lib/__tests__/archive-acceptance-negative-controls.test.ts",
+        "testName": "negative control (row 1): a shape-only verifier ACCEPTS the very ref isVerifiedRunRef rejects — the brand, not the shape, is what refuses"
+      },
+      "ciDependency": {
+        "workflow": "build-image.yml",
+        "job": "perpetual-loops-invariants"
+      },
+      "status": "green",
       "trackingIssue": 1943
     },
     {
@@ -20,8 +27,15 @@
         "file": "packages/agents/src/__tests__/run-authority-adversarial.test.ts",
         "testName": "a forged execution-attempt id (well-typed but not the leased one) is refused"
       },
-      "ciDependency": { "workflow": "build-image.yml", "job": "test" },
-      "status": "red",
+      "negativeControl": {
+        "file": "packages/agents/src/__tests__/run-authority-adversarial.test.ts",
+        "testName": "negative control (row 2): the SAME forged attempt id lands the write when the SAME body runs outside guardedRunWrite — the seam, not the payload, is what refuses"
+      },
+      "ciDependency": {
+        "workflow": "build-image.yml",
+        "job": "test"
+      },
+      "status": "green",
       "trackingIssue": 1943
     },
     {
@@ -31,8 +45,15 @@
         "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
         "testName": "ticket replay across an unarchive/re-archive cycle: a stale ticket never un-refuses, and a fresh ticket at the new epoch redeems (positive control)"
       },
-      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
-      "status": "red",
+      "negativeControl": {
+        "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
+        "testName": "negative control (row 3): with the archive-epoch clause removed, the SAME stale ticket passes every other kernel check and would redeem — the epoch, not staleness of any other kind, is what refuses"
+      },
+      "ciDependency": {
+        "workflow": "build-image.yml",
+        "job": "extension-lifecycle-db-tests"
+      },
+      "status": "green",
       "trackingIssue": 1943
     },
     {
@@ -42,8 +63,15 @@
         "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
         "testName": "delete-vs-completion race: a run.complete write queued behind a guarded delete's exclusive fence sees the committed delete, never landing into a deleted org"
       },
-      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
-      "status": "red",
+      "negativeControl": {
+        "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
+        "testName": "negative control (row 4): the SAME sentinel completion write, issued UNGUARDED, is never queued behind the delete's fence — it commits mid-delete and its row outlives the deleted org"
+      },
+      "ciDependency": {
+        "workflow": "build-image.yml",
+        "job": "extension-lifecycle-db-tests"
+      },
+      "status": "green",
       "trackingIssue": 1943
     },
     {
@@ -53,8 +81,15 @@
         "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
         "testName": "platform-admin denial: an unconditionally-permissive authority is still refused for a mismatched org (org-scope beats any elevated capability bit)"
       },
-      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
-      "status": "red",
+      "negativeControl": {
+        "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
+        "testName": "negative control (row 5): the SAME permissive authority, differing ONLY in the org it is scoped to, lands the SAME write through the SAME kernel guard"
+      },
+      "ciDependency": {
+        "workflow": "build-image.yml",
+        "job": "extension-lifecycle-db-tests"
+      },
+      "status": "green",
       "trackingIssue": 1943
     },
     {
@@ -64,8 +99,15 @@
         "file": "src/lib/__tests__/background-jobs-authority-adversarial.test.ts",
         "testName": "a real job's authority stripped post-hoc via Object.assign is refused at dispatch and never runs its handler"
       },
-      "ciDependency": { "workflow": "build-image.yml", "job": "perpetual-loops-invariants" },
-      "status": "red",
+      "negativeControl": {
+        "file": "src/lib/__tests__/archive-acceptance-negative-controls.test.ts",
+        "testName": "negative control (row 6): the identically-stripped handler RUNS when invoked directly, bypassing dispatchRegisteredJob's authority check"
+      },
+      "ciDependency": {
+        "workflow": "build-image.yml",
+        "job": "perpetual-loops-invariants"
+      },
+      "status": "green",
       "trackingIssue": 1943
     },
     {
@@ -75,8 +117,15 @@
         "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
         "testName": "two-connection post-check race: a guarded write blocks behind the lifecycle locks, then LOSES to the committed archive (capability-denied)"
       },
-      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
-      "status": "red",
+      "negativeControl": {
+        "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
+        "testName": "negative control (row 7): the SAME sentinel write, issued UNGUARDED, neither blocks on the lifecycle locks nor re-reads the state — it lands into the org that is mid-archive"
+      },
+      "ciDependency": {
+        "workflow": "build-image.yml",
+        "job": "extension-lifecycle-db-tests"
+      },
+      "status": "green",
       "trackingIssue": 1939
     },
     {
@@ -86,7 +135,14 @@
         "file": "src/lib/org-write/__tests__/job-system-authority-mint-adversarial.test.ts",
         "testName": "every real mintable job refuses every purpose NOT in its own declared allowedPurposes"
       },
-      "ciDependency": { "workflow": "build-image.yml", "job": "perpetual-loops-invariants" },
+      "negativeControl": {
+        "file": "src/lib/__tests__/archive-acceptance-negative-controls.test.ts",
+        "testName": "negative control (row 8): the SAME foreign job, purpose, org and payload MINTS real capabilities once its allowedPurposes AND capabilities declarations are both tampered — each check refuses on its own, neither is redundant"
+      },
+      "ciDependency": {
+        "workflow": "build-image.yml",
+        "job": "perpetual-loops-invariants"
+      },
       "status": "green",
       "trackingIssue": 1943
     },
@@ -97,7 +153,14 @@
         "file": "packages/agents/src/__tests__/run-creation-race.integration.test.ts",
         "testName": "a child-run creation blocked behind an in-progress archive LOSES the race: refused, and no child row ever lands"
       },
-      "ciDependency": { "workflow": "build-image.yml", "job": "agents-integration-db" },
+      "negativeControl": {
+        "file": "packages/agents/src/__tests__/run-creation-race.integration.test.ts",
+        "testName": "positive control: a child run created BEFORE any archive succeeds normally (the guard isn't vacuously refusing everything)"
+      },
+      "ciDependency": {
+        "workflow": "build-image.yml",
+        "job": "agents-integration-db"
+      },
       "status": "green",
       "trackingIssue": 1943
     },
@@ -105,12 +168,29 @@
       "criterion": "Lease expiry mid-completion → cancel-then-settle",
       "owner": "self",
       "kernelProof": {
+        "file": "packages/agents/src/__tests__/lease-expiry-finalizer.test.ts",
+        "testName": "a2aTaskId present, cancel CONFIRMED ⇒ settles this tick, in DB-call order"
+      },
+      "negativeControl": {
+        "file": "packages/agents/src/__tests__/lease-expiry-finalizer.test.ts",
+        "testName": "a2aTaskId present, cancel THROWS, attempts below threshold ⇒ deferred, NO settle this tick"
+      },
+      "ciDependency": [
+        {
+          "workflow": "build-image.yml",
+          "job": "test"
+        },
+        {
+          "workflow": "build-image.yml",
+          "job": "agents-integration-db"
+        }
+      ],
+      "status": "green",
+      "trackingIssue": 1943,
+      "e2eProof": {
         "file": "packages/agents/src/__tests__/lease-expiry-finalizer-adversarial.integration.test.ts",
         "testName": "a genuinely expired lease on a non-terminal run settles to a typed FAILURE, never a bare denial — real CAS + real lease DELETE"
-      },
-      "ciDependency": { "workflow": "build-image.yml", "job": "agents-integration-db" },
-      "status": "green",
-      "trackingIssue": 1943
+      }
     },
     {
       "criterion": "Archive-vs-terminal-CAS race",
@@ -119,18 +199,38 @@
         "file": "packages/agents/src/__tests__/run-transition-lease-settle.test.ts",
         "testName": "archived org + held lease + run.complete ⇒ CAS + meta + lease DELETE commit together"
       },
-      "ciDependency": { "workflow": "build-image.yml", "job": "test" },
+      "negativeControl": {
+        "file": "packages/agents/src/__tests__/run-transition-lease-settle.test.ts",
+        "testName": "archived org + terminal edge but NO held lease ⇒ refused, no CAS, no settle"
+      },
+      "ciDependency": {
+        "workflow": "build-image.yml",
+        "job": "test"
+      },
       "status": "green",
       "trackingIssue": 1940
     },
     {
       "criterion": "Direct BA-DML-vs-archive, both lock interleavings",
       "owner": "self",
-      "kernelProof": {
+      "kernelProof": [
+        {
+          "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
+          "testName": "interleaving 1 — a queued member INSERT holds the org row's FOR SHARE lock first (org still active): the archive UPDATE genuinely BLOCKS behind it, and only lands after the insert commits"
+        },
+        {
+          "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
+          "testName": "interleaving 2 — an in-flight (uncommitted) archive UPDATE holds the org row lock first: a concurrent member INSERT's FOR SHARE...NOWAIT fails IMMEDIATELY (55P03), never landing a row into what becomes an archived org"
+        }
+      ],
+      "negativeControl": {
         "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
-        "testName": "interleaving 1 — a queued member INSERT holds the org row's FOR SHARE lock first (org still active): the archive UPDATE genuinely BLOCKS behind it, and only lands after the insert commits"
+        "testName": "negative control (row 12): with NO concurrent holder, the SAME member INSERT and the SAME archive UPDATE both succeed promptly — the blocking and the 55P03 come from the contention, not from either statement being unable to run"
       },
-      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
+      "ciDependency": {
+        "workflow": "build-image.yml",
+        "job": "extension-lifecycle-db-tests"
+      },
       "status": "green",
       "trackingIssue": 1939
     },
@@ -141,7 +241,14 @@
         "file": "src/lib/__tests__/organization-archive-dual-transport-adversarial.test.ts",
         "testName": "ONE shared archive flip refuses ALL THREE surfaces for the identical org — in-process BA, raw-HTTP BA, and the app-native guard"
       },
-      "ciDependency": { "workflow": "build-image.yml", "job": "perpetual-loops-invariants" },
+      "negativeControl": {
+        "file": "src/lib/__tests__/organization-archive-dual-transport-adversarial.test.ts",
+        "testName": "positive control: an ACTIVE org allows all three surfaces — neither transport is hard-coded to always-refuse"
+      },
+      "ciDependency": {
+        "workflow": "build-image.yml",
+        "job": "perpetual-loops-invariants"
+      },
       "status": "green",
       "trackingIssue": 1943
     },
@@ -156,14 +263,24 @@
         "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
         "testName": "bounded contention against the REAL archiveOrganization action: a fixed, finite set of concurrent guarded writers never blocks it past a generous deadline, and it succeeds once they drain (Decision 8's two-phase criterion, e2e half)"
       },
-      "ciDependency": { "workflow": "build-image.yml", "job": "extension-lifecycle-db-tests" },
+      "negativeControl": {
+        "file": "src/lib/__tests__/integration/org-write-archive-race.integration.test.ts",
+        "testName": "forced lock-exhaustion: every bounded attempt hits 55P03 under a continuously held fence → a typed busy error, never a hang and never a silent {ok:true} — then the SAME org archives successfully the instant contention clears (eventual success, the criterion's other half)"
+      },
+      "ciDependency": {
+        "workflow": "build-image.yml",
+        "job": "extension-lifecycle-db-tests"
+      },
       "status": "green",
       "trackingIssue": 1943
     },
     {
       "criterion": "3-role live Playwright proof (owner archives/unarchives; admin/member read-only; non-member 404) on a production-equivalent build",
       "owner": "self",
-      "ciDependency": { "workflow": "e2e-app-suites.yml", "job": "archive-acceptance" },
+      "ciDependency": {
+        "workflow": "build-image.yml",
+        "job": "e2e-rbac"
+      },
       "status": "red",
       "trackingIssue": 1942
     }

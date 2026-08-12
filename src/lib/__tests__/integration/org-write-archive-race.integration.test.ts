@@ -42,6 +42,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { Client, Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
+import { sql } from "drizzle-orm";
 
 import { buildCreateStoreSchemaQueries } from "@/lib/drizzle-store";
 import {
@@ -175,6 +176,98 @@ describe.skipIf(!enabled)("org-write archive race — kernel harness on live Pos
     await root.query(`DELETE FROM public."organization" WHERE id = $1`, [orgId]);
   }
 
+  // -------------------------------------------------------------------------
+  // cinatra#1943 — shared machinery for the RED half of the red-then-green
+  // pairs below (the negative controls).
+  //
+  // ONE sentinel write, issued by BOTH halves of a pair. A control is only a
+  // control if it re-runs the SAME operation the guarded half attempted: if
+  // the guarded callback merely returns a string while the control writes a
+  // row, the two halves are testing different things and the "it lands
+  // unguarded" claim proves nothing about what the guard refused. So the
+  // guarded callbacks below write this exact row (they never get to run, which
+  // is the point — the assertion is that the row is ABSENT afterwards), and
+  // each control writes the identical row on a connection that takes no locks
+  // and consults no lifecycle state.
+  //
+  // Two executor dialects for one payload: the kernel hands its callback a
+  // drizzle transaction (`.execute(sql\`…\`)`), while the unguarded half is a
+  // raw `pg` client (`.query(text, values)`). Same table, same columns, same
+  // values — the dialect is plumbing, not payload.
+  // -------------------------------------------------------------------------
+
+  interface SentinelWrite {
+    readonly key: string;
+    readonly runId: string;
+    readonly attemptId: string;
+  }
+
+  function newSentinel(): SentinelWrite {
+    return {
+      key: `idem_sentinel_${randomUUID().slice(0, 8)}`,
+      runId: `run_${randomUUID().slice(0, 8)}`,
+      attemptId: `att_${randomUUID().slice(0, 8)}`,
+    };
+  }
+
+  /** The sentinel write on the kernel's own transaction (guarded half). */
+  async function writeSentinelOnTx(
+    tx: { execute(query: unknown): Promise<unknown> },
+    s: SentinelWrite,
+  ): Promise<void> {
+    await tx.execute(
+      sql`INSERT INTO ${sql.raw(`"${schema}"."org_write_completion_ticket"`)}
+            (org_id, archive_epoch, run_id, execution_attempt_id, output_ref, idempotency_key, expires_at, consumed_at)
+          VALUES (${orgId}, 1, ${s.runId}, ${s.attemptId}, 'out:sentinel', ${s.key}, now() + interval '1 hour', now())`,
+    );
+  }
+
+  /** The identical sentinel write on a raw connection (unguarded half). */
+  async function writeSentinelOnClient(client: Client, s: SentinelWrite): Promise<void> {
+    await client.query(
+      `INSERT INTO "${schema}"."org_write_completion_ticket"
+         (org_id, archive_epoch, run_id, execution_attempt_id, output_ref, idempotency_key, expires_at, consumed_at)
+       VALUES ($1, 1, $2, $3, 'out:sentinel', $4, now() + interval '1 hour', now())`,
+      [orgId, s.runId, s.attemptId, s.key],
+    );
+  }
+
+  async function sentinelLanded(s: SentinelWrite): Promise<boolean> {
+    const { rows } = await root.query(
+      `SELECT 1 FROM "${schema}"."org_write_completion_ticket" WHERE org_id = $1 AND idempotency_key = $2`,
+      [orgId, s.key],
+    );
+    return rows.length === 1;
+  }
+
+  /**
+   * A connection for the UNGUARDED half of a control, with a hard
+   * `statement_timeout`.
+   *
+   * WHY A TIMEOUT AND NOT A `Promise.race` STOPWATCH: the control asserts the
+   * unguarded write is NOT queued behind the fence. A wall-clock race would
+   * decide that by scheduler timing, which on a loaded CI runner can false-RED
+   * a correct tree — and worse, if a regression ever DID make this write block,
+   * the pending query would keep the connection busy and `client.end()` in the
+   * cleanup would wait on it, converting a clean assertion failure into a suite
+   * timeout with no diagnosis. With `statement_timeout` the database itself
+   * decides, in bounded time: blocked ⇒ the query errors (57014) and the test
+   * fails on the assertion, connection free, cleanup instant.
+   */
+  async function openUnguardedClient(): Promise<Client> {
+    const client = new Client({ connectionString: dbUrl });
+    await client.connect();
+    try {
+      await client.query(`SET statement_timeout = '4s'`);
+    } catch (err) {
+      // Never leak a connected client on the failure path — a leaked one
+      // holds a backend for the rest of the suite.
+      await client.end().catch(() => {});
+      throw err;
+    }
+    return client;
+  }
+
   it("a guarded content.write refuses AFTER the org archives (post-check, capability-denied)", async () => {
     try {
       const { archiveEpoch } = await simulateArchiveTransition(db, {
@@ -238,6 +331,10 @@ describe.skipIf(!enabled)("org-write archive race — kernel harness on live Pos
     // drive correctness.
     const blocker = new Client({ connectionString: dbUrl });
     await blocker.connect();
+    // cinatra#1943: the guarded callback issues the SAME sentinel write its
+    // negative control issues unguarded, so "A never wrote" is an assertion
+    // about a real row rather than about a boolean flag.
+    const sentinel = newSentinel();
     try {
       // B holds BOTH lifecycle locks (an in-progress archive) via the harness.
       const hold = await holdOrgLocks(blocker, { orgId, epoch: true });
@@ -247,8 +344,9 @@ describe.skipIf(!enabled)("org-write archive race — kernel harness on live Pos
       const aPromise = guardOrgMutation(
         db,
         { orgId, capability: "content.write", authority: anyAuthority(orgId) },
-        async () => {
+        async (tx) => {
           aRan = true;
+          await writeSentinelOnTx(tx as unknown as { execute(q: unknown): Promise<unknown> }, sentinel);
           return "A-wrote";
         },
       );
@@ -269,8 +367,77 @@ describe.skipIf(!enabled)("org-write archive race — kernel harness on live Pos
       // committed) → content.write is denied. Deterministic loss; no row landed.
       await expect(aPromise).rejects.toMatchObject({ reason: "capability-denied" });
       expect(aRan).toBe(false);
+      expect(await sentinelLanded(sentinel)).toBe(false);
     } finally {
       await blocker.end();
+      await dropOrg();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // cinatra#1943 — REVERT-STYLE NEGATIVE CONTROL for manifest row 7.
+  //
+  // The green test above proves a guarded write BLOCKS behind an in-flight
+  // archive and then LOSES to it (`capability-denied`). That ordering is the
+  // guard's doing, not Postgres's: an ordinary write on the same rows takes
+  // none of the lifecycle advisory locks, so it neither waits for the archive
+  // nor re-reads the lifecycle state afterwards. This control issues the same
+  // write unguarded against the same held locks and shows it sails through
+  // and lands into an org that is archiving — the "write loses" property is
+  // manufactured entirely by `guardOrgMutation`.
+  // -------------------------------------------------------------------------
+
+  it("negative control (row 7): the SAME sentinel write, issued UNGUARDED, neither blocks on the lifecycle locks nor re-reads the state — it lands into the org that is mid-archive", async () => {
+    // PAIRS WITH: "two-connection post-check race: a guarded write blocks behind
+    //   the lifecycle locks, then LOSES to the committed archive
+    //   (capability-denied)"
+    const blocker = new Client({ connectionString: dbUrl });
+    const sentinel = newSentinel(); // the write the guarded half attempts.
+    // Held OUTSIDE the try so cleanup can always release it FIRST — see the
+    // finally block. The unguarded client is opened INSIDE the try so a
+    // blocker-connect failure cannot leak it.
+    let hold: { release(): Promise<void> } | undefined;
+    let unguarded: Client | undefined;
+    try {
+      await blocker.connect();
+      unguarded = await openUnguardedClient();
+      // B holds BOTH lifecycle locks: an archive in progress, exactly as in
+      // the green test.
+      hold = await holdOrgLocks(blocker, { orgId, epoch: true });
+
+      // The UNPROTECTED path: the identical sentinel write, with no guard, on
+      // a connection under a 4s statement_timeout. The guarded twin is queued
+      // behind the fence at this exact moment; this one is not queued at all.
+      // If a regression ever DID make it block, the timeout fails it in
+      // bounded time instead of hanging the suite.
+      await writeSentinelOnClient(unguarded!, sentinel);
+
+      // B commits the archive and releases the locks.
+      await blocker.query(
+        `UPDATE public."organization" SET "archivedAt" = now(), "archiveEpoch" = COALESCE("archiveEpoch", 0) + 1 WHERE id = $1`,
+        [orgId],
+      );
+      await hold.release();
+      hold = undefined;
+
+      // The org is archived and the unguarded row is sitting inside it. The
+      // guarded twin never got this far — its own test asserts this same
+      // sentinel is ABSENT.
+      const { rows: orgRows } = await root.query<{ archivedAt: Date | null; archiveEpoch: number | string }>(
+        `SELECT "archivedAt", COALESCE("archiveEpoch", 0)::int AS "archiveEpoch" FROM public."organization" WHERE id = $1`,
+        [orgId],
+      );
+      expect(orgRows[0].archivedAt).not.toBeNull();
+      expect(Number(orgRows[0].archiveEpoch)).toBe(1);
+      expect(await sentinelLanded(sentinel)).toBe(true);
+    } finally {
+      // Release the fence BEFORE closing the unguarded connection: if the
+      // unguarded write is ever left pending (the regression this control
+      // would catch), `end()` would otherwise wait on a query that cannot
+      // finish while the blocker still owns the lock.
+      await hold?.release().catch(() => {});
+      await blocker.end();
+      await unguarded?.end();
       await dropOrg();
     }
   });
@@ -361,12 +528,165 @@ describe.skipIf(!enabled)("org-write archive race — kernel harness on live Pos
   });
 
   // -------------------------------------------------------------------------
+  // cinatra#1943 — REVERT-STYLE NEGATIVE CONTROL for manifest row 3.
+  //
+  // The green test above proves a stale ticket never redeems across three
+  // epoch transitions. It would ALSO pass if the ticket were unredeemable for
+  // some unrelated reason — expired, consumed, wrong run identity, wrong
+  // output — in which case the epoch machinery would be guarding a ticket that
+  // was already dead and the test would keep passing after the epoch clause
+  // was deleted. This control re-runs the kernel's TICKET-VALIDITY checks
+  // against the same stale ticket with the epoch comparison
+  // (`Number(ticket.archive_epoch) !== state.archiveEpoch`,
+  // packages/org-write-kernel/src/tickets.ts) left out: every other one of
+  // them passes, and the redemption then completes — consuming the ticket and
+  // letting a superseded run land its output into an org that has since been
+  // archived, unarchived and re-archived. The in-test comment below states the
+  // honest scope of what this mutant does and does not reproduce.
+  // -------------------------------------------------------------------------
+
+  it("negative control (row 3): with the archive-epoch clause removed, the SAME stale ticket passes every other kernel check and would redeem — the epoch, not staleness of any other kind, is what refuses", async () => {
+    // PAIRS WITH: "ticket replay across an unarchive/re-archive cycle: a stale
+    //   ticket never un-refuses, and a fresh ticket at the new epoch redeems
+    //   (positive control)"
+    try {
+      const runId = `run_${randomUUID().slice(0, 8)}`;
+      const attemptId = `att_${randomUUID().slice(0, 8)}`;
+      const staleKey = `idem_negctl_${randomUUID().slice(0, 8)}`;
+      await root.query(
+        `INSERT INTO "${schema}"."org_write_completion_ticket"
+           (org_id, archive_epoch, run_id, execution_attempt_id, output_ref, idempotency_key, expires_at, consumed_at)
+         VALUES ($1, 0, $2, $3, $4, $5, now() + interval '1 hour', NULL)`,
+        [orgId, runId, attemptId, "out:v1", staleKey],
+      );
+      const runAuthority: OrgWriteAuthority = {
+        orgId,
+        runId,
+        executionAttemptId: attemptId,
+        can: (c) => c === "run.complete",
+      };
+
+      // Drive the org through the SAME cycle the green test does, so the
+      // ticket is stale in exactly the same way.
+      await simulateArchiveTransition(db, { schema, orgId, to: "archived" }); // epoch 1
+      await simulateArchiveTransition(db, { schema, orgId, to: "active" }); // epoch 2
+      await simulateArchiveTransition(db, { schema, orgId, to: "archived" }); // epoch 3
+
+      // ONE redemption callback, driven by both halves of the pair — so
+      // "it redeemed" means the same body ran, not merely that some code did.
+      const bodyRuns: string[] = [];
+      const redemptionBody = async () => {
+        bodyRuns.push("landed");
+        return "landed";
+      };
+
+      // The guarded path refuses (the green test's claim, re-pinned here so
+      // both halves of the pair are visible in one place) and never runs it.
+      await expect(
+        redeemCompletionTicket(
+          db,
+          { schema, orgId, authority: runAuthority, idempotencyKey: staleKey, outputRef: "out:v1" },
+          redemptionBody,
+        ),
+      ).rejects.toMatchObject({ reason: "ticket-invalid" });
+      expect(bodyRuns).toEqual([]);
+
+      // The UNPROTECTED path: an EPOCH-BLIND REDEEMER. It really redeems —
+      // takes the ticket FOR UPDATE with the kernel's verbatim SELECT, applies
+      // every TICKET-VALIDITY check the kernel makes (exists, unexpired,
+      // unconsumed, run identity, output match) EXCEPT the epoch comparison,
+      // stamps consumed_at, runs the SAME shared body, and commits.
+      //
+      // HONEST SCOPE — this is NOT a faithful clone of
+      // `redeemCompletionTicket` (packages/org-write-kernel/src/tickets.ts)
+      // with one line deleted. It reproduces that function's ticket-validity
+      // arm only; it does not re-take the advisory locks, re-read the org
+      // state, re-check schema/authority/capability, or mint a permit. Those
+      // are omitted deliberately: the guarded half above ALREADY ran every one
+      // of them for real against this same fixture and got past all of them —
+      // its refusal reason is `ticket-invalid`, not `authority-*`,
+      // `organization-not-found` or a lock failure. So the question this
+      // control has to answer is narrower than "would a full mutant commit?":
+      // it is "among the ticket-validity checks, is the EPOCH the one that
+      // refused?" Every other one is asserted here to pass, and the redemption
+      // then completes.
+      const mutant = await openUnguardedClient();
+      let redeemed: string | undefined;
+      try {
+        await mutant.query("BEGIN");
+        const { rows } = await mutant.query<{
+          archive_epoch: number | string;
+          run_id: string;
+          execution_attempt_id: string;
+          output_ref: string;
+          consumed_at: Date | null;
+          unexpired: boolean;
+        }>(
+          `SELECT archive_epoch, run_id, execution_attempt_id, output_ref, consumed_at,
+                  (expires_at IS NULL OR expires_at > now()) AS unexpired
+             FROM "${schema}"."org_write_completion_ticket"
+            WHERE org_id = $1 AND idempotency_key = $2
+            FOR UPDATE`,
+          [orgId, staleKey],
+        );
+        expect(rows).toHaveLength(1); // "no such ticket" → not the reason
+        const ticket = rows[0];
+        expect(ticket.unexpired).toBe(true); // "expired" → not the reason
+        expect(ticket.consumed_at).toBeNull(); // "already consumed" → not the reason
+        expect(ticket.run_id).toBe(runAuthority.runId); // "run identity mismatch" → not the reason
+        expect(ticket.execution_attempt_id).toBe(runAuthority.executionAttemptId);
+        expect(ticket.output_ref).toBe("out:v1"); // "output mismatch" → not the reason
+        // (the epoch comparison the kernel makes HERE is the deleted line)
+        await mutant.query(
+          `UPDATE "${schema}"."org_write_completion_ticket"
+              SET consumed_at = now()
+            WHERE org_id = $1 AND idempotency_key = $2`,
+          [orgId, staleKey],
+        );
+        redeemed = await redemptionBody();
+        await mutant.query("COMMIT");
+      } catch (err) {
+        await mutant.query("ROLLBACK").catch(() => {});
+        throw err;
+      } finally {
+        await mutant.end();
+      }
+
+      // The stale ticket redeemed and is now CONSUMED — a superseded run
+      // landed its output into an org that archived, unarchived and
+      // re-archived under it. Dropping the epoch comparison from the ticket's
+      // validity checks is all it takes.
+      expect(redeemed).toBe("landed");
+      expect(bodyRuns).toEqual(["landed"]); // the SAME body the guarded half never reached
+      const { rows: after } = await root.query<{ consumed_at: Date | null }>(
+        `SELECT consumed_at FROM "${schema}"."org_write_completion_ticket" WHERE org_id = $1 AND idempotency_key = $2`,
+        [orgId, staleKey],
+      );
+      expect(after[0].consumed_at).not.toBeNull();
+
+      // And the epoch really is the discriminator: the ticket names its birth
+      // epoch while the org has moved three transitions past it.
+      const { rows: orgRows } = await root.query<{ archiveEpoch: number | string }>(
+        `SELECT COALESCE("archiveEpoch", 0)::int AS "archiveEpoch" FROM public."organization" WHERE id = $1`,
+        [orgId],
+      );
+      expect(Number(orgRows[0].archiveEpoch)).toBe(3);
+    } finally {
+      await dropOrg();
+    }
+  });
+
+  // -------------------------------------------------------------------------
   // cinatra#1943 A0 — manifest row 4: delete-vs-completion race.
   // -------------------------------------------------------------------------
 
   it("delete-vs-completion race: a run.complete write queued behind a guarded delete's exclusive fence sees the committed delete, never landing into a deleted org", async () => {
     const blocker = new Client({ connectionString: dbUrl });
     await blocker.connect();
+    // cinatra#1943: the guarded callback issues the SAME sentinel completion
+    // row its negative control issues unguarded, so "no completion landed" is
+    // an assertion about a real row rather than about a boolean flag.
+    const sentinel = newSentinel();
     try {
       const runId = `run_${randomUUID().slice(0, 8)}`;
       const attemptId = `att_${randomUUID().slice(0, 8)}`;
@@ -400,8 +720,9 @@ describe.skipIf(!enabled)("org-write archive race — kernel harness on live Pos
       const aPromise = guardOrgMutation(
         db,
         { orgId, capability: "run.complete", authority: runAuthority, schema },
-        async () => {
+        async (tx) => {
           aRan = true;
+          await writeSentinelOnTx(tx as unknown as { execute(q: unknown): Promise<unknown> }, sentinel);
           return "A-completed";
         },
       );
@@ -422,10 +743,73 @@ describe.skipIf(!enabled)("org-write archive race — kernel harness on live Pos
       // side arrives second sees the other's committed state).
       await expect(aPromise).rejects.toMatchObject({ reason: "organization-not-found" });
       expect(aRan).toBe(false);
+      expect(await sentinelLanded(sentinel)).toBe(false);
     } finally {
       await blocker.end();
       // The org row is already gone (B deleted it); dropOrg() is then a
       // harmless no-op DELETE.
+      await dropOrg();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // cinatra#1943 — REVERT-STYLE NEGATIVE CONTROL for manifest row 4.
+  //
+  // The green test above proves a GUARDED completion write queues behind the
+  // delete's exclusive fence and then refuses `organization-not-found`. Two
+  // things could make that pass vacuously: the write might never have been
+  // able to land anyway (a foreign key, a trigger, a schema constraint doing
+  // the work the fence claims), or the "blocked" observation might be a slow
+  // connection rather than a real lock wait. This control removes the guard
+  // and re-runs the SAME write against the SAME held locks: unguarded, it is
+  // not queued at all — it commits immediately, while the delete is still in
+  // flight — and the row it writes survives the delete as exactly the orphan
+  // the fence exists to prevent.
+  // -------------------------------------------------------------------------
+
+  it("negative control (row 4): the SAME sentinel completion write, issued UNGUARDED, is never queued behind the delete's fence — it commits mid-delete and its row outlives the deleted org", async () => {
+    // PAIRS WITH: "delete-vs-completion race: a run.complete write queued behind
+    //   a guarded delete's exclusive fence sees the committed delete, never
+    //   landing into a deleted org"
+    const blocker = new Client({ connectionString: dbUrl });
+    const sentinel = newSentinel(); // the write the guarded half attempts.
+    let hold: { release(): Promise<void> } | undefined;
+    let unguarded: Client | undefined;
+    try {
+      await blocker.connect();
+      unguarded = await openUnguardedClient();
+      await simulateArchiveTransition(db, { schema, orgId, to: "archived" });
+
+      // B holds BOTH lifecycle locks — the same in-flight guarded delete the
+      // green test simulates.
+      hold = await holdOrgLocks(blocker, { orgId, epoch: true });
+
+      // The UNPROTECTED path: the identical sentinel completion row, written
+      // on a connection that takes NO org locks and consults NO lifecycle
+      // state, under a 4s statement_timeout. It is not queued behind the
+      // fence — it commits while B still holds it. (The guarded twin, in its
+      // own test, is still blocked at this exact moment.)
+      await writeSentinelOnClient(unguarded!, sentinel);
+
+      // B finishes the delete and releases.
+      await blocker.query(`DELETE FROM public."organization" WHERE id = $1`, [orgId]);
+      await hold.release();
+      hold = undefined;
+
+      // The org is gone; the unguarded completion row is not. That is the
+      // orphan the guarded path refuses to create — and the same sentinel the
+      // green test asserts is ABSENT.
+      const { rows: orgRows } = await root.query(
+        `SELECT 1 FROM public."organization" WHERE id = $1`,
+        [orgId],
+      );
+      expect(orgRows).toHaveLength(0);
+      expect(await sentinelLanded(sentinel)).toBe(true);
+    } finally {
+      // Fence first, then the unguarded connection — see openUnguardedClient().
+      await hold?.release().catch(() => {});
+      await blocker.end();
+      await unguarded?.end();
       await dropOrg();
     }
   });
@@ -447,16 +831,83 @@ describe.skipIf(!enabled)("org-write archive race — kernel harness on live Pos
         can: () => true,
       };
       let ran = false;
+      // cinatra#1943: the callback issues the SAME sentinel write its negative
+      // control issues, so "nothing landed" is an assertion about a real row.
+      const sentinel = newSentinel();
       await expect(
         guardOrgMutation(
           db,
           { orgId, capability: "content.write", authority: platformAdminForOtherOrg },
-          async () => {
+          async (tx) => {
             ran = true;
+            await writeSentinelOnTx(tx as unknown as { execute(q: unknown): Promise<unknown> }, sentinel);
           },
         ),
       ).rejects.toMatchObject({ reason: "authority-org-mismatch" });
       expect(ran).toBe(false);
+      expect(await sentinelLanded(sentinel)).toBe(false);
+    } finally {
+      await dropOrg();
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // cinatra#1943 — REVERT-STYLE NEGATIVE CONTROL for manifest row 5.
+  //
+  // The green test above asserts `authority-org-mismatch`. Left alone, that
+  // assertion cannot tell "the org-scope check refused it" apart from "this
+  // authority could never have written anything anyway", and it would keep
+  // passing after the org-scope check was deleted.
+  //
+  // ONE VARIABLE. This control re-issues the identical call through the
+  // REAL kernel guard — same `guardOrgMutation`, same db, same target org,
+  // same `content.write` capability, same sentinel-writing callback, and an
+  // authority that is field-for-field the attacker's except for the one field
+  // under test: `orgId`. Everything else the kernel does (both advisory locks,
+  // the locked lifecycle-state read, the capability ruling, the permit mint)
+  // runs for real on both halves, so the ONLY difference between "refused,
+  // nothing written" and "committed" is the org the authority is scoped to.
+  //
+  // Deliberately NOT a hand-rolled stand-in guard: a mutant that also skipped
+  // the locks, the state read and the permit would be a different code path,
+  // and "the write landed" through it would prove nothing about which of those
+  // omissions let it through.
+  // -------------------------------------------------------------------------
+
+  it("negative control (row 5): the SAME permissive authority, differing ONLY in the org it is scoped to, lands the SAME write through the SAME kernel guard", async () => {
+    // PAIRS WITH: "platform-admin denial: an unconditionally-permissive
+    //   authority is still refused for a mismatched org (org-scope beats any
+    //   elevated capability bit)"
+    try {
+      const sentinel = newSentinel();
+      const writeBody = async (tx: unknown) => {
+        await writeSentinelOnTx(tx as { execute(q: unknown): Promise<unknown> }, sentinel);
+        return "landed";
+      };
+
+      // The attacker from the green test, with `orgId` — and ONLY `orgId` —
+      // changed from the foreign org to the org actually being written.
+      const sameAuthorityCorrectlyScoped: OrgWriteAuthority = {
+        orgId,
+        can: () => true,
+      };
+      const attacker: OrgWriteAuthority = {
+        orgId: "org-platform-admin-different-org",
+        can: () => true,
+      };
+      // Field-for-field identical apart from the scope under test.
+      expect(Object.keys(sameAuthorityCorrectlyScoped).sort()).toEqual(Object.keys(attacker).sort());
+      expect(sameAuthorityCorrectlyScoped.orgId).not.toBe(attacker.orgId);
+      expect(sameAuthorityCorrectlyScoped.can("content.write")).toBe(attacker.can("content.write"));
+
+      const out = await guardOrgMutation(
+        db,
+        { orgId, capability: "content.write", authority: sameAuthorityCorrectlyScoped },
+        writeBody,
+      );
+
+      expect(out).toBe("landed");
+      expect(await sentinelLanded(sentinel)).toBe(true);
     } finally {
       await dropOrg();
     }
@@ -1065,6 +1516,62 @@ describe.skipIf(!enabled)(
       } finally {
         await archiverConn.end();
         await writerConn.end();
+        await dropFixtures();
+      }
+    });
+
+    // -------------------------------------------------------------------
+    // cinatra#1943 — REVERT-STYLE NEGATIVE CONTROL for manifest row 12,
+    // covering BOTH interleavings above with one uncontended baseline.
+    //
+    // Interleaving 1 asserts the archive UPDATE genuinely BLOCKS; interleaving
+    // 2 asserts the member INSERT fails IMMEDIATELY with 55P03. Neither
+    // assertion means anything if those statements simply cannot run on this
+    // org at all — a schema constraint, a trigger firing unconditionally, or a
+    // fixture mistake would produce the same "blocked" and "errored"
+    // observations with no contention involved. This control runs the SAME two
+    // statements, in the SAME order, on the SAME fixtures, with NO concurrent
+    // holder: both succeed promptly. So the blocking in interleaving 1 and the
+    // 55P03 in interleaving 2 are caused by the contention the tests stage,
+    // and nothing else.
+    // -------------------------------------------------------------------
+
+    it("negative control (row 12): with NO concurrent holder, the SAME member INSERT and the SAME archive UPDATE both succeed promptly — the blocking and the 55P03 come from the contention, not from either statement being unable to run", async () => {
+      // PAIRS WITH: "interleaving 1 — a queued member INSERT holds the org row's
+      //   FOR SHARE lock first …" AND "interleaving 2 — an in-flight
+      //   (uncommitted) archive UPDATE holds the org row lock first …"
+      const memberId = `member_${randomUUID().slice(0, 8)}`;
+      // Opened INSIDE the try (cleanup below) so a failing connect/SET can
+      // never leak a connected backend for the rest of the run.
+      let soloConn: Client | undefined;
+      try {
+        soloConn = new Client({ connectionString: dbUrl });
+        await soloConn.connect();
+        await soloConn.query(`SET statement_timeout = '4s'`);
+        // 1. The member INSERT of interleaving 2 — verbatim — with nobody
+        //    holding the org row lock. No 55P03: it lands.
+        await soloConn.query(
+          `INSERT INTO public."member" (id, "organizationId", "userId", "role", "createdAt") VALUES ($1, $2, $3, $4, now())`,
+          [memberId, orgId, userId, "member"],
+        );
+        const inserted = await root.query(`SELECT 1 FROM public."member" WHERE id = $1`, [memberId]);
+        expect(inserted.rowCount).toBe(1);
+
+        // 2. The archive UPDATE of interleaving 1 — verbatim — with nobody
+        //    holding the org row lock. It does not block: under the 4s
+        //    statement_timeout above, a genuine block would raise 57014 here
+        //    rather than hang, so "it returned" is a real, bounded claim.
+        await soloConn.query(
+          `UPDATE public."organization" SET "archivedAt" = now(), "archiveEpoch" = COALESCE("archiveEpoch", 0) + 1 WHERE id = $1`,
+          [orgId],
+        );
+        const orgCheck = await root.query<{ archivedAt: Date | null }>(
+          `SELECT "archivedAt" FROM public."organization" WHERE id = $1`,
+          [orgId],
+        );
+        expect(orgCheck.rows[0]?.archivedAt).not.toBeNull();
+      } finally {
+        await soloConn?.end();
         await dropFixtures();
       }
     });

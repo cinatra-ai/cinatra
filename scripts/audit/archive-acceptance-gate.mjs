@@ -25,13 +25,14 @@
  *   - `audit` (default) — the HONESTY check, runs on every PR touching the
  *     manifest: exactly 15 rows, one per literal criterion (no duplicates, no
  *     drift from the canonical set below), every row shaped correctly (a row
- *     with a `kernelProof`/`e2eProof` key present must have it FULLY
- *     populated — presence implies populated, by construction), every row
- *     missing a trackingIssue while red is a violation, and every referenced
- *     {file, testName} pair is grep-findable in the real tree (catches a
- *     stale reference: a renamed test, a deleted file). Does NOT prove a
- *     referenced test currently PASSES or runs in CI — that is strict mode's
- *     job.
+ *     with a `kernelProof`/`e2eProof`/`negativeControl` key present must have
+ *     it FULLY populated — presence implies populated, by construction), every
+ *     row missing a trackingIssue while red is a violation, every GREEN row
+ *     carries a `negativeControl` (the RED half of its red-then-green pair —
+ *     see below), and every referenced {file, testName} pair is grep-findable
+ *     in the real tree (catches a stale reference: a renamed test, a deleted
+ *     file). Does NOT prove a referenced test currently PASSES or runs in CI —
+ *     that is strict mode's job.
  *   - `--strict` — the actual V6-precondition check (v-1942 Decision 10):
  *     re-runs full shape validation (a malformed manifest cannot slip past
  *     strict mode just because nothing happens to be green yet), THEN
@@ -49,41 +50,39 @@
  *     would let an all-red, zero-progress manifest silently satisfy a check
  *     whose entire purpose is proving #1943 is DONE.
  *
- * HONEST DISCLOSURE (read before trusting a `--strict` run today): as of
- * this PR (#1943 A0), the coverage gate itself is NOT wired into ANY CI job
- * — that wiring is `.github/workflows/**`, which is ALWAYS its own
- * always-human-gated follow-up PR per the design's Decision 6, never bundled
- * into a content PR. Every row therefore reports NOT READY under `--strict`
- * right now — that is the CORRECT, expected state, not a bug in this
- * script. Two further findings surfaced while grounding this gate,
- * left here for whoever wires the follow-up:
- *   1. `src/lib/__tests__/integration/org-write-archive-race.integration.test.ts`
- *      — including the ALREADY-LANDED sibling two-connection-race test
- *      (#1939, merged with #2133) — is not invoked by ANY workflow today
- *      (verified: `grep -rl "org-write-archive-race" .github/workflows/`
- *      finds nothing). Its own header comment says it runs in the
- *      `extension-lifecycle-db-tests` job of `build-image.yml`; that job
- *      exists but does not yet have a step running this file. Several rows
- *      here (ticket replay, delete-vs-completion, platform-admin,
- *      bounded-contention, and the sibling two-connection row) all point at
- *      this file and cannot reach `--strict` green until that step is added.
- *   2. GitHub Actions `needs:` is an INTRA-workflow-file edge only — it
- *      cannot express "job X in workflow A must complete before job Y in
- *      workflow B". Several rows here (the two above under
- *      `extension-lifecycle-db-tests`, plus the root-vitest-suite rows under
- *      `perpetual-loops-invariants`/`test`) name jobs that live in
- *      `build-image.yml`. SELF_WORKFLOW/SELF_JOB below are set to
- *      `build-image.yml` / `archive-acceptance-gate` for exactly this reason
- *      (cinatra#1943 P1-CI, wired in #2209): the gate's own job lives
- *      alongside the jobs it depends on, not in `org-write-boundary-gate.yml`
- *      — a same-named-sounding but UNRELATED workflow (it enforces #1938's
+ * HONEST DISCLOSURE — WHAT `--strict` DOES AND DOES NOT PROVE. Both findings
+ * this header was originally written to disclose are now RESOLVED, and are
+ * kept (resolved, dated) because they are the reason the constants below are
+ * what they are:
+ *   1. RESOLVED (#2209): `src/lib/__tests__/integration/
+ *      org-write-archive-race.integration.test.ts` was invoked by NO workflow
+ *      at all when this gate was authored — including the already-landed
+ *      sibling two-connection-race test (#1939, merged with #2133). Its own
+ *      header claimed it ran in `extension-lifecycle-db-tests`; that job
+ *      existed but had no step running the file. #2209 added the step. Every
+ *      row pointing at this file (ticket replay, delete-vs-completion,
+ *      platform-admin, bounded-contention, and the sibling two-connection
+ *      row) was structurally unable to go green until then.
+ *   2. RESOLVED (#2209/#2211): GitHub Actions `needs:` is an INTRA-workflow-
+ *      file edge only — it cannot express "job X in workflow A must complete
+ *      before job Y in workflow B". Every row's ciDependency therefore has to
+ *      name a job in the SAME file as this gate's own job, which is why
+ *      SELF_WORKFLOW/SELF_JOB below are `build-image.yml` /
+ *      `archive-acceptance-gate` and not `org-write-boundary-gate.yml` — a
+ *      same-named-sounding but UNRELATED workflow (it enforces #1938's
  *      kernel-boundary / table-sweep / writer-manifest checks and has no
  *      `archive-acceptance-gate` job at all; the constants briefly pointed
- *      there by mistake after #2207 merged, fixed here). Until the
- *      `archive-acceptance-gate` job actually exists in `build-image.yml`,
- *      `--strict` mode correctly reports "self job not found" for every
- *      green row — the honest, expected pre-wiring state, not a bug in this
- *      script.
+ *      there by mistake after #2207 merged).
+ *
+ * STILL TRUE, and the honest limit of this gate: `--strict` proves that a
+ * green row's referenced tests EXIST as live declarations, that the CI job it
+ * names EXISTS, and that this gate's own job structurally `needs:` that job.
+ * It does NOT execute those tests, and it cannot see whether the job actually
+ * RUNS the file they live in — a step could be deleted from a job this gate
+ * needs and every row would still verify. That residual is covered the only
+ * way it can be: the referenced tests run in jobs whose failure is itself
+ * blocking, so a deleted step shows up as a coverage drop in those jobs'
+ * own logs rather than here.
  *
  * Usage:
  *   node scripts/audit/archive-acceptance-gate.mjs            # audit mode (default)
@@ -151,6 +150,49 @@ const REQUIRES_BOTH_PROOF_KINDS =
 
 const PROOF_KINDS = ["kernelProof", "e2eProof"];
 
+/**
+ * The RED half of each row's red-then-green pair (cinatra#1943's issue body:
+ * "each its own RED-THEN-GREEN test").
+ *
+ * WHY THE GATE ENFORCES THIS AND NOT ONLY THE PROOF. Most rows of this
+ * manifest assert that an attack LOSES. An assertion of that shape is silently
+ * worthless when the attack could never have won: a purpose nothing grants, a
+ * payload some OTHER layer already made unreachable, a lifecycle check
+ * standing in front of a foreign key that was doing the work all along. Such
+ * a test passes forever — including after the guard it claims to cover is
+ * deleted. A green `kernelProof`/`e2eProof` therefore proves only half of what
+ * the issue asks for.
+ *
+ * WHAT A CONTROL MUST BE: the counterpart run in which the OUTCOME INVERTS,
+ * reached by removing the one guard under test rather than by changing the
+ * attack. Two shapes, because the rows come in two shapes:
+ *   - a row whose proof is a REFUSAL claim ("the forged authority is denied")
+ *     pairs with a control where the SAME payload LANDS — issued outside the
+ *     seam, evaluated by the shape-only check the brand replaced, or run in
+ *     the lifecycle state where the guard's own predicate is false (for an
+ *     archive-conditioned guard, an ACTIVE org);
+ *   - a row whose proof is a SUCCESS claim ("the expired lease settles";
+ *     "archive eventually succeeds under bounded contention") pairs with a
+ *     control where the same operation is REFUSED — no held lease, a planted
+ *     row the fence re-derives away, a continuously held fence — so the
+ *     success is demonstrably conditional rather than unconditional.
+ * What a control is NOT: a second refusal test of a different attack. Two
+ * refusals do not falsify each other.
+ *
+ * Recorded per row (not in PR prose) for the same reason the proofs are: prose
+ * rots and nobody re-verifies an already-checked box, while a manifest
+ * reference is re-grep-verified on every CI run — so renaming, disabling or
+ * deleting a control breaks this gate immediately instead of quietly leaving a
+ * green row resting on an unfalsifiable claim.
+ *
+ * Required on GREEN rows only: a red row has no claim to falsify yet.
+ */
+const CONTROL_KIND = "negativeControl";
+
+/** Everything whose {file, testName} must resolve to a live test declaration
+ *  in the real tree — proofs AND the red-half controls. */
+const REFERENCE_KINDS = [...PROOF_KINDS, CONTROL_KIND];
+
 // ---------------------------------------------------------------------------
 // Manifest loading
 // ---------------------------------------------------------------------------
@@ -169,10 +211,44 @@ function isNonEmptyString(v) {
   return typeof v === "string" && v.trim().length > 0;
 }
 
+/**
+ * Normalize a reference field to a list. A criterion that names TWO things
+ * ("Direct BA-DML-vs-archive, BOTH lock interleavings") needs two proofs, and
+ * a criterion naming a two-phase behaviour ("lease expiry → CANCEL-THEN-
+ * SETTLE") needs a proof per phase — sometimes in different CI jobs. A single
+ * scalar slot silently under-claims those rows: the manifest reads green while
+ * half the criterion has no named proof at all. So every reference field (and
+ * ciDependency) accepts either one object or an array of them; scalars stay
+ * valid, so nothing already written has to change.
+ */
+export function asList(value) {
+  if (value === undefined) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
 function validateProofShape(proof, label, errors) {
   if (proof === undefined) return;
-  if (typeof proof !== "object" || proof === null || Array.isArray(proof)) {
-    errors.push(`${label}: must be an object when present`);
+  if (Array.isArray(proof)) {
+    if (proof.length === 0) {
+      errors.push(`${label}: an array form must name at least one {file, testName}`);
+      return;
+    }
+    proof.forEach((entry, i) => validateProofShape(entry, `${label}[${i}]`, errors));
+    // The array form exists so a two-part criterion can cite BOTH parts. The
+    // same reference twice cites one part and looks like two — padding a row
+    // to appear better-proven than it is, which is the exact dishonesty this
+    // manifest is built to prevent.
+    const seen = new Set();
+    for (const entry of proof) {
+      if (!entry || typeof entry !== "object") continue;
+      const key = `${String(entry.file)}::${String(entry.testName)}`;
+      if (seen.has(key)) errors.push(`${label}: duplicate reference (cited twice): ${key}`);
+      seen.add(key);
+    }
+    return;
+  }
+  if (typeof proof !== "object" || proof === null) {
+    errors.push(`${label}: must be an object (or an array of objects) when present`);
     return;
   }
   if (!isNonEmptyString(proof.file)) errors.push(`${label}: "file" must be a non-empty string`);
@@ -228,14 +304,29 @@ export function validateManifestShape(manifest) {
     if (row?.status !== "red" && row?.status !== "green") {
       errors.push(`${label}: "status" must be "red" or "green"`);
     }
-    if (typeof row?.ciDependency !== "object" || row.ciDependency === null) {
+    const deps = asList(row?.ciDependency);
+    if (typeof row?.ciDependency !== "object" || row.ciDependency === null || deps.length === 0) {
       errors.push(`${label}: "ciDependency" is required`);
     } else {
-      if (!isNonEmptyString(row.ciDependency.workflow)) errors.push(`${label}: ciDependency.workflow must be a non-empty string`);
-      if (!isNonEmptyString(row.ciDependency.job)) errors.push(`${label}: ciDependency.job must be a non-empty string`);
+      const seenDeps = new Set();
+      deps.forEach((dep, di) => {
+        const dl = deps.length > 1 ? `${label}: ciDependency[${di}]` : `${label}: ciDependency`;
+        if (typeof dep !== "object" || dep === null) {
+          errors.push(`${dl} must be an object`);
+          return;
+        }
+        if (!isNonEmptyString(dep.workflow)) errors.push(`${dl}.workflow must be a non-empty string`);
+        if (!isNonEmptyString(dep.job)) errors.push(`${dl}.job must be a non-empty string`);
+        // Same rule as duplicate proofs: citing one job twice makes a row look
+        // like it spans two CI tiers when it spans one.
+        const key = `${String(dep.workflow)}::${String(dep.job)}`;
+        if (seenDeps.has(key)) errors.push(`${label}: duplicate ciDependency (cited twice): ${key}`);
+        seenDeps.add(key);
+      });
     }
     validateProofShape(row?.kernelProof, `${label}.kernelProof`, errors);
     validateProofShape(row?.e2eProof, `${label}.e2eProof`, errors);
+    validateProofShape(row?.[CONTROL_KIND], `${label}.${CONTROL_KIND}`, errors);
 
     if (row?.status === "red" && row?.trackingIssue === undefined) {
       errors.push(`${label}: a red row must carry a trackingIssue (no unowned red row)`);
@@ -261,6 +352,17 @@ export function validateManifestShape(manifest) {
     if (row?.status === "green" && !row?.kernelProof && !row?.e2eProof) {
       errors.push(`${label}: a green row must have at least one of kernelProof/e2eProof populated`);
     }
+
+    // The red-then-green rule (see CONTROL_KIND above): a row may not claim
+    // green on a refusal proof alone. It must also name the control that
+    // shows the same attack LANDS against the unprotected path — otherwise
+    // the green claim is unfalsifiable and survives deletion of the guard.
+    if (row?.status === "green" && !row?.[CONTROL_KIND]) {
+      errors.push(
+        `${label}: a green row must declare a ${CONTROL_KIND} — the RED half of its red-then-green pair ` +
+          `(the test proving the same attack LANDS against the unprotected/mutated path)`,
+      );
+    }
   });
 
   return errors;
@@ -277,18 +379,34 @@ export function validateManifestShape(manifest) {
 
 /**
  * True when `testName` appears, double-quoted, on a line that ALSO opens a
- * vitest test declaration (`it(`, `it.only(`, `it.skip(`, `it.each(`,
- * `test(`, …) and that line is not itself commented out — not merely
- * mentioned in a comment or unrelated string.
+ * LIVE vitest test declaration (`it(`, `it.only(`, `it.each(`, `test(`, …)
+ * and that line is not itself commented out — not merely mentioned in a
+ * comment or unrelated string.
  *
  * Checks EVERY occurrence of the needle in the file (not just the first): a
  * real test declaration elsewhere in the file must not be missed just
- * because the needle happens to also appear earlier in an unrelated
- * comment. Also
- * excludes a line whose test-declaration token is itself commented out
- * (`// it("...")`) — a disabled test must not count as a live proof, which
- * is exactly the "excluded from its CI job" staleness class this gate exists
- * to catch.
+ * because the needle happens to also appear earlier in an unrelated comment.
+ * Excludes a line whose test-declaration token is itself commented out
+ * (`// it("...")`).
+ *
+ * REJECTS `.skip`, `.todo` and `.fails`. A disabled test is not a proof:
+ * `it.skip(...)` keeps the exact string this gate greps for while the
+ * assertion never runs, which would let any row stay structurally green with
+ * its proof — or its red-half control — quietly switched off. `it.fails(...)`
+ * is worse still: it inverts the contract, so the row would stay green while
+ * the suite asserted the OPPOSITE of the manifest's claim. All three are the
+ * "green claim, no honest execution" class this gate exists to catch, each
+ * reachable in one keystroke, so all three are refused.
+ *
+ * RESIDUAL, stated rather than papered over: this is a LINE scan, so an
+ * ENCLOSING `describe.skip(...)` several lines above is invisible to it — the
+ * declaration itself still reads live. A blanket "no describe.skip anywhere
+ * in the file" rule would be wrong here (this suite's DB tier legitimately
+ * uses `describe.skipIf(!enabled)` to self-skip without a database, which is
+ * how the same file runs on a laptop and in the DB-backed CI job). Closing
+ * the residual properly needs the runner's own collected-test report, not a
+ * regex; until then the backstop is that these proofs live in jobs whose
+ * failure blocks, so a wholesale skip shows up as a test-count drop there.
  */
 export function isProofGrepFindable(fileContent, testName) {
   const needle = `"${testName}"`;
@@ -298,7 +416,13 @@ export function isProofGrepFindable(fileContent, testName) {
     if (idx === -1) return false;
     const lineStart = fileContent.lastIndexOf("\n", idx) + 1;
     const beforeNeedleOnLine = fileContent.slice(lineStart, idx + needle.length);
-    const declRe = /\b(it|test)(?:\.only|\.skip|\.concurrent|\.each)?\s*\(/;
+    // `.skip`, `.todo` and `.fails` are deliberately ABSENT from this
+    // alternation. `.skip`/`.todo` never run. `.fails` is worse than not
+    // running: it INVERTS the contract — the test passes when its body
+    // throws — so a proof or control switched to `it.fails("<the exact
+    // manifest title>")` would keep this gate green while asserting the
+    // opposite of what the manifest claims. All three are refused.
+    const declRe = /\b(it|test)(?:\.only|\.concurrent|\.each|\.sequential)?\s*\(/;
     const declMatch = declRe.exec(beforeNeedleOnLine);
     if (declMatch) {
       // Reject if the declaration token itself sits after a `//` line-comment
@@ -313,17 +437,24 @@ export function isProofGrepFindable(fileContent, testName) {
 }
 
 function checkProof(proof, label, repoRoot, readFileImpl, errors) {
-  if (!proof) return;
-  let content;
-  try {
-    content = readFileImpl(join(repoRoot, proof.file));
-  } catch {
-    errors.push(`${label}: file not found: ${proof.file}`);
-    return;
-  }
-  if (!isProofGrepFindable(content, proof.testName)) {
-    errors.push(`${label}: testName not grep-findable as a test declaration in ${proof.file}: ${JSON.stringify(proof.testName)}`);
-  }
+  const entries = asList(proof);
+  entries.forEach((entry, i) => {
+    if (!entry || typeof entry !== "object") return; // shape validation already reported it
+    const entryLabel = entries.length > 1 ? `${label}[${i}]` : label;
+    let content;
+    try {
+      content = readFileImpl(join(repoRoot, entry.file));
+    } catch {
+      errors.push(`${entryLabel}: file not found: ${entry.file}`);
+      return;
+    }
+    if (!isProofGrepFindable(content, entry.testName)) {
+      errors.push(
+        `${entryLabel}: testName not grep-findable as a LIVE test declaration in ${entry.file} ` +
+          `(a .skip/.todo/.fails declaration is deliberately not accepted): ${JSON.stringify(entry.testName)}`,
+      );
+    }
+  });
 }
 
 /**
@@ -334,7 +465,7 @@ function checkProof(proof, label, repoRoot, readFileImpl, errors) {
 export function auditManifest(manifest, { repoRoot = DEFAULT_REPO_ROOT, readFileImpl = (p) => readFileSync(p, "utf8") } = {}) {
   const errors = validateManifestShape(manifest);
   for (const row of manifest?.rows ?? []) {
-    for (const kind of PROOF_KINDS) {
+    for (const kind of REFERENCE_KINDS) {
       checkProof(row[kind], `${row.criterion} (${kind})`, repoRoot, readFileImpl, errors);
     }
   }
@@ -437,7 +568,8 @@ export function extractNeeds(jobBlock) {
 /**
  * Strict-mode verdict for ONE row. A row not claimed "green" trivially
  * passes (nothing to verify yet — the honest red-baseline state). A "green"
- * row must: re-pass every audit-mode proof check, have its ciDependency job
+ * row must: re-pass every audit-mode reference check (both proof kinds AND
+ * the red-half `negativeControl`), have its ciDependency job
  * actually exist in its named workflow, AND have the coverage-gate's OWN job
  * (SELF_WORKFLOW/SELF_JOB) `needs:` that job — cross-workflow references are
  * flagged explicitly rather than silently treated as satisfied (GitHub
@@ -449,33 +581,38 @@ export function strictCheckRow(row, { repoRoot = DEFAULT_REPO_ROOT, readFileImpl
   if (row.status !== "green") {
     return { ok: true, reasons: [] };
   }
-  for (const kind of PROOF_KINDS) {
+  for (const kind of REFERENCE_KINDS) {
     checkProof(row[kind], kind, repoRoot, readFileImpl, reasons);
   }
-  const dep = row.ciDependency ?? {};
-  let targetWorkflowText;
-  try {
-    targetWorkflowText = readFileImpl(join(repoRoot, ".github", "workflows", dep.workflow));
-  } catch {
-    reasons.push(`ciDependency workflow not found: ${dep.workflow}`);
-    return { ok: false, reasons };
-  }
-  if (!extractJobBlock(targetWorkflowText, dep.job)) {
-    reasons.push(`ciDependency job "${dep.job}" not found in ${dep.workflow}`);
-  }
-  if (dep.workflow !== SELF_WORKFLOW) {
-    reasons.push(
-      `cross-workflow: the coverage-gate's own job is expected in ${SELF_WORKFLOW}, but this row's proof is enforced in ${dep.workflow} — ` +
-        `a needs: edge cannot cross workflow files in GitHub Actions, so this row is structurally unable to satisfy strict mode until the ` +
-        `gate step is relocated into ${dep.workflow} (or an equivalent same-file job).`,
-    );
-  } else {
+  // EVERY named CI dependency must check out — a row whose proofs span two
+  // jobs (cancel-then-settle: a unit-tier ordering proof plus a DB-tier settle
+  // proof) is only as verified as its weakest edge.
+  for (const dep of asList(row.ciDependency)) {
+    if (!dep || typeof dep !== "object") continue; // shape validation reported it
+    let targetWorkflowText;
+    try {
+      targetWorkflowText = readFileImpl(join(repoRoot, ".github", "workflows", dep.workflow));
+    } catch {
+      reasons.push(`ciDependency workflow not found: ${dep.workflow}`);
+      continue;
+    }
+    if (!extractJobBlock(targetWorkflowText, dep.job)) {
+      reasons.push(`ciDependency job "${dep.job}" not found in ${dep.workflow}`);
+    }
+    if (dep.workflow !== SELF_WORKFLOW) {
+      reasons.push(
+        `cross-workflow: the coverage-gate's own job is expected in ${SELF_WORKFLOW}, but this row's proof is enforced in ${dep.workflow} — ` +
+          `a needs: edge cannot cross workflow files in GitHub Actions, so this row is structurally unable to satisfy strict mode until the ` +
+          `gate step is relocated into ${dep.workflow} (or an equivalent same-file job).`,
+      );
+      continue;
+    }
     let selfWorkflowText;
     try {
       selfWorkflowText = readFileImpl(join(repoRoot, ".github", "workflows", SELF_WORKFLOW));
     } catch {
       reasons.push(`self workflow not found: ${SELF_WORKFLOW} (the coverage gate is not wired into CI yet)`);
-      return { ok: false, reasons };
+      continue;
     }
     const selfBlock = extractJobBlock(selfWorkflowText, SELF_JOB);
     if (!selfBlock) {
