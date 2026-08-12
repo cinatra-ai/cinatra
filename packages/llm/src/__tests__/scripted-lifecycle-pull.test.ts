@@ -1,0 +1,184 @@
+// ---------------------------------------------------------------------------
+// The scripted widget turn's LIFECYCLE PULL (cinatra#2683, epic #2564 S8f).
+//
+// The subject is narrow and it is the whole point of the extension: the provider
+// DECIDES WHICH PRIMITIVE TO CALL and forwards what the real one answered,
+// VERBATIM. It never composes a lifecycle envelope, and it cannot — every result
+// it emits came out of the injected dispatcher.
+//
+// What is deliberately NOT asserted here: that an envelope becomes a card. That
+// is the sink's recognizer and the runtime's provenance stamp, both of which live
+// outside this module and have their own tests. Asserting it here would let this
+// test pass on a provider that invented the envelope — the exact failure this
+// extension exists to make impossible.
+// ---------------------------------------------------------------------------
+import { describe, expect, it, vi } from "vitest";
+
+import {
+  SCRIPTED_LIFECYCLE_GATE_RENDER_TOOL,
+  SCRIPTED_LIFECYCLE_LIST_TOOL,
+  SCRIPTED_LIFECYCLE_VERIFICATION_RENDER_TOOL,
+  UAT_SENTINEL,
+  runScriptedWidgetAssistantTurn,
+} from "../scripted-test-provider";
+
+type Emitted = {
+  text: string[];
+  calls: Array<{ id: string; name: string }>;
+  results: Array<{ id: string; name: string; result: string }>;
+};
+
+function sink(): Emitted & {
+  onText: (c: string) => void;
+  onToolCall: (c: { id: string; name: string }) => void;
+  onToolResult: (r: { id: string; name: string; result: string }) => void;
+} {
+  const e: Emitted = { text: [], calls: [], results: [] };
+  return {
+    ...e,
+    onText: (c) => e.text.push(c),
+    onToolCall: (c) => e.calls.push(c),
+    onToolResult: (r) => e.results.push(r),
+  };
+}
+
+const REAL_LIST_ANSWER = JSON.stringify({ refs: ["REF-ONE", "REF-TWO"] });
+const REAL_ENVELOPE = JSON.stringify({
+  $cinatraLifecycleView: 1,
+  viewType: "artifact_review_gate",
+  ref: "REF-ONE",
+});
+
+describe("scripted widget turn — the lifecycle pull", () => {
+  it("LISTS then RENDERS through the injected dispatcher, forwarding both results verbatim", async () => {
+    const s = sink();
+    const callSelfMcpTool = vi.fn(async (call: { name: string }) =>
+      call.name === SCRIPTED_LIFECYCLE_LIST_TOOL ? REAL_LIST_ANSWER : REAL_ENVELOPE,
+    );
+
+    await runScriptedWidgetAssistantTurn({
+      instructions: "Which reviews are waiting for me right now?",
+      assistantHandle: "wordpress",
+      callSelfMcpTool,
+      onText: s.onText,
+      onToolCall: s.onToolCall,
+      onToolResult: s.onToolResult,
+    });
+
+    // The ORDER and the ARGUMENTS are the model-layer decision this stands in for.
+    expect(callSelfMcpTool.mock.calls.map(([c]) => c.name)).toEqual([
+      SCRIPTED_LIFECYCLE_LIST_TOOL,
+      SCRIPTED_LIFECYCLE_GATE_RENDER_TOOL,
+    ]);
+    // The render is addressed by a ref the LIST returned — never a ref this
+    // module chose, which is what "refs, never content" means on the read side.
+    expect(callSelfMcpTool.mock.calls[1][0].args).toEqual({ ref: "REF-ONE" });
+
+    // VERBATIM. Byte-for-byte, both of them: the envelope the producer minted is
+    // what reaches the sink, because anything else would not be the producer's.
+    expect(s.results.map((r) => r.result)).toEqual([REAL_LIST_ANSWER, REAL_ENVELOPE]);
+    expect(s.results.map((r) => r.name)).toEqual([
+      SCRIPTED_LIFECYCLE_LIST_TOOL,
+      SCRIPTED_LIFECYCLE_GATE_RENDER_TOOL,
+    ]);
+    // Each result is bound to the tool_call it answers.
+    expect(s.results.map((r) => r.id)).toEqual(s.calls.map((c) => c.id));
+  });
+
+  it("selects the VERIFICATION primitive when that is what was asked for", async () => {
+    const s = sink();
+    const callSelfMcpTool = vi.fn(async (call: { name: string }) =>
+      call.name === SCRIPTED_LIFECYCLE_LIST_TOOL ? REAL_LIST_ANSWER : "Not available to you.",
+    );
+
+    await runScriptedWidgetAssistantTurn({
+      instructions: "Show me the verification reading for that review.",
+      assistantHandle: "wordpress",
+      callSelfMcpTool,
+      onText: s.onText,
+      onToolCall: s.onToolCall,
+      onToolResult: s.onToolResult,
+    });
+
+    expect(callSelfMcpTool.mock.calls[1][0].name).toBe(
+      SCRIPTED_LIFECYCLE_VERIFICATION_RENDER_TOOL,
+    );
+    // A REFUSAL travels unchanged too. The provider does not soften it, retry it,
+    // or substitute a card for it — "not available to you" is the answer.
+    expect(s.results[1].result).toBe("Not available to you.");
+  });
+
+  it("renders NOTHING beyond the list when the caller may read no gate", async () => {
+    const s = sink();
+    const callSelfMcpTool = vi.fn(async () => JSON.stringify({ refs: [] }));
+
+    await runScriptedWidgetAssistantTurn({
+      instructions: "Which reviews are waiting for me?",
+      assistantHandle: "wordpress",
+      callSelfMcpTool,
+      onText: s.onText,
+      onToolCall: s.onToolCall,
+      onToolResult: s.onToolResult,
+    });
+
+    expect(callSelfMcpTool).toHaveBeenCalledTimes(1);
+    expect(s.results).toHaveLength(1);
+  });
+
+  it("never emits a lifecycle result when NO dispatcher was injected", async () => {
+    const s = sink();
+    await runScriptedWidgetAssistantTurn({
+      instructions: "Which reviews are waiting for me right now?",
+      assistantHandle: "wordpress",
+      onText: s.onText,
+      onToolCall: s.onToolCall,
+      onToolResult: s.onToolResult,
+    });
+    // The pull is unreachable without the runtime's real dispatcher, so the turn
+    // is the plain sentinel reply it has always been.
+    expect(s.calls).toHaveLength(0);
+    expect(s.results).toHaveLength(0);
+    expect(s.text.join("")).toContain(UAT_SENTINEL);
+  });
+
+  it("degrades to the plain reply — never a card — when the dispatch FAILS", async () => {
+    const s = sink();
+    const callSelfMcpTool = vi.fn(async () => {
+      throw new Error("self-MCP dispatch: tools/call answered HTTP 401");
+    });
+
+    await runScriptedWidgetAssistantTurn({
+      instructions: "Which reviews are waiting for me right now?",
+      assistantHandle: "wordpress",
+      callSelfMcpTool,
+      onText: s.onText,
+      onToolCall: s.onToolCall,
+      onToolResult: s.onToolResult,
+    });
+
+    // The tool_call was announced and then answered by nothing. A tool call that
+    // did not happen produces no result — the honest outcome, and structurally
+    // the only one available: this module has no envelope to fall back on.
+    expect(s.results).toHaveLength(0);
+    expect(s.text.join("")).toContain(UAT_SENTINEL);
+  });
+
+  it("keeps the CONTENT-EDITOR stand-in unchanged for an edit instruction", async () => {
+    const s = sink();
+    const callSelfMcpTool = vi.fn(async () => JSON.stringify({ refs: [] }));
+
+    await runScriptedWidgetAssistantTurn({
+      instructions: "Shorten the headline on this page",
+      assistantHandle: "wordpress",
+      callSelfMcpTool,
+      onText: s.onText,
+      onToolCall: s.onToolCall,
+      onToolResult: s.onToolResult,
+    });
+
+    // No lifecycle word in the instruction ⇒ the pull never fires and the twelve
+    // existing WP/Drupal scenarios are byte-unaffected by this extension.
+    expect(callSelfMcpTool).not.toHaveBeenCalled();
+    expect(s.calls.map((c) => c.name)).toEqual(["wordpress_content_editor_run"]);
+  });
+});

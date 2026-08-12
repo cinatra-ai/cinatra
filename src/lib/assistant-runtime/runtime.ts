@@ -83,6 +83,10 @@ import {
   isScriptedTestProviderEnabled,
   runScriptedWidgetAssistantTurn,
 } from "@cinatra-ai/llm/scripted-test-provider";
+// The reserved producer label the sink's recognizer requires. Stamped by THIS
+// module, on THIS module's own record of what it actually dispatched — never by
+// the provider, which holds no provenance.
+import { LIFECYCLE_PRODUCER_SERVER_LABEL } from "./lifecycle-view-envelope";
 import {
   observeSurfaceExecutionDispatches,
   resolveSurfaceExecutionBinding,
@@ -90,6 +94,10 @@ import {
 import { evaluateExecutionProvenance } from "@cinatra-ai/llm/execution-plane";
 import { issueChatMcpActorToken } from "@/lib/chat-mcp-actor-token";
 import { issueWidgetMcpActorToken } from "@/lib/widget-mcp-actor-token";
+// The scripted widget turn's REAL self-MCP dispatcher (cinatra#2683). Imported
+// unconditionally (a module, not a side effect); CONSTRUCTED only inside the
+// scripted branch, which is fenced to an explicit development runtime.
+import { createScriptedSelfMcpDispatch } from "./scripted-self-mcp-dispatch";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import {
@@ -605,9 +613,35 @@ export async function runAssistantTurn(
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     const instructions =
       typeof lastUser?.content === "string" ? lastUser.content : "";
+    // THE TOOL LAYER IS REAL ON THIS PATH (cinatra#2683, epic #2564 S8f).
+    //
+    // The provider decides WHICH primitive to call and with what arguments — the
+    // one thing a real model decides here — and this dispatcher performs the call
+    // against the REAL self-MCP server, over the real transport, carrying a real
+    // `cinatra.widget.mcp-obo` token minted from the SERVER-VERIFIED principal.
+    // Every check downstream of that is the shipped one: the transport's token
+    // verification, the closed kind-keyed widget tool policy, the handler's own
+    // caller resolution through S8a's live-standing actor, the per-row access
+    // check, the S1 authorization ladder, and the producer's own envelope mint.
+    //
+    // THE LABEL IS EARNED, NOT ASSERTED. `serverLabel` is the provenance half of
+    // the sink's recognizer, so it may only ride a result this frame KNOWS came
+    // back from the cinatra self-MCP. `dispatchedResults` is that knowledge:
+    // every string the dispatcher actually returned, recorded by the dispatcher
+    // itself. A result the provider composed — the content-editor stand-in, or a
+    // hypothetical invented envelope — is not in that set and is emitted with NO
+    // label, so `recognizeLifecycleViewEnvelope` refuses it and no card mints.
+    // The anti-fabrication property is therefore structural: the provider cannot
+    // put a lifecycle card on screen, only the producer can.
+    const dispatchedResults = new Set<string>();
+    const callSelfMcpTool = createScriptedSelfMcpDispatch({
+      widgetPrincipal,
+      onDispatched: (resultText) => dispatchedResults.add(resultText),
+    });
     await runScriptedWidgetAssistantTurn({
       instructions,
       assistantHandle: widgetPrincipal.assistantHandle,
+      callSelfMcpTool,
       onText: (content) => send("text", { content }),
       onToolCall: (call) =>
         send("tool_call", { id: call.id, name: call.name, status: "running" }),
@@ -616,6 +650,9 @@ export async function runAssistantTurn(
           id: result.id,
           name: result.name,
           status: "completed",
+          ...(dispatchedResults.has(result.result)
+            ? { serverLabel: LIFECYCLE_PRODUCER_SERVER_LABEL }
+            : {}),
           resultLabel: deriveResultLabel(result.name, result.result),
           result: result.result,
         }),

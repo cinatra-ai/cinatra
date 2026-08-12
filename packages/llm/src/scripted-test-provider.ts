@@ -55,6 +55,107 @@ const EDIT_INTENT =
   /\b(edit|change|rewrite|update|revise|tighten|shorten|summar|title|headline|add|append|fix)\b/i;
 
 /**
+ * The LIFECYCLE-PULL intent (cinatra#2683, epic #2564 S8f proof).
+ *
+ * Matched against the USER'S INSTRUCTIONS ONLY, exactly like `EDIT_INTENT`.
+ * When it fires AND the runtime supplied a real self-MCP dispatcher, this
+ * provider CALLS the read-only lifecycle pull primitives instead of answering
+ * with prose — the deterministic stand-in for the ONE decision a real model
+ * makes on this path: which tool to call, with which arguments.
+ */
+const LIFECYCLE_PULL_INTENT =
+  /\b(review|reviews|gate|gates|waiting|approval|approvals|verification|verified|check)\b/i;
+
+/**
+ * Does the instruction ask for the VERIFICATION reading rather than the review
+ * gate itself? Narrow on purpose: `verification_record_render` and
+ * `artifact_review_gate_render` take the SAME ref, so the only thing that
+ * selects between them is what the person asked for.
+ */
+const VERIFICATION_INTENT = /\b(verification|verified|verify)\b/i;
+
+/** The pull primitives this provider may drive. NAMES ARE THE CONTRACT — they
+ *  must equal the producer's registered names (`src/lib/lifecycle/lifecycle-pull-mcp.ts`)
+ *  or the call refuses at the transport and no card mints. */
+export const SCRIPTED_LIFECYCLE_LIST_TOOL = "artifact_review_gates_list";
+export const SCRIPTED_LIFECYCLE_GATE_RENDER_TOOL = "artifact_review_gate_render";
+export const SCRIPTED_LIFECYCLE_VERIFICATION_RENDER_TOOL = "verification_record_render";
+
+/**
+ * The REAL self-MCP dispatcher the runtime injects. The provider holds no
+ * transport, no token and no knowledge of the sink: it names a tool and passes
+ * arguments, and receives back whatever the REAL primitive answered, verbatim.
+ *
+ * THE ANTI-FABRICATION RULE, STRUCTURALLY. This provider can not mint a
+ * lifecycle envelope even if it tried: the envelope is built by the producer
+ * (`buildLifecycleViewEnvelope`) inside the tool handler, and the sink accepts
+ * it only from the (serverLabel `cinatra`, allowlisted tool) tuple, which the
+ * RUNTIME stamps from the dispatch it actually performed. A string this module
+ * invented would carry no such provenance and would be dropped by
+ * `recognizeLifecycleViewEnvelope` — which is exactly the point.
+ */
+export type ScriptedSelfMcpDispatch = (call: {
+  name: string;
+  args: Record<string, unknown>;
+}) => Promise<string>;
+
+/** The list primitive's answer shape — refs, and nothing else. */
+function parseRefs(result: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(result);
+    if (typeof parsed !== "object" || parsed === null) return [];
+    const refs = (parsed as { refs?: unknown }).refs;
+    if (!Array.isArray(refs)) return [];
+    return refs.filter((r): r is string => typeof r === "string" && r.length > 0);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Drive the REAL read-only lifecycle pull, one primitive at a time, forwarding
+ * every real result verbatim. Returns true when at least one call was made, so
+ * the caller knows the turn already answered with tool work.
+ *
+ * The sequence is the one the producer's own tool descriptions prescribe:
+ * LIST the refs the caller may read, then RENDER one of them. Both results —
+ * including the fixed refusal sentence — travel to the sink unchanged.
+ */
+async function runScriptedLifecyclePull(input: {
+  instructions: string;
+  callSelfMcpTool: ScriptedSelfMcpDispatch;
+  onToolCall: (call: { id: string; name: string }) => void;
+  onToolResult: (result: { id: string; name: string; result: string }) => void;
+}): Promise<boolean> {
+  const listId = randomUUID();
+  input.onToolCall({ id: listId, name: SCRIPTED_LIFECYCLE_LIST_TOOL });
+  const listResult = await input.callSelfMcpTool({
+    name: SCRIPTED_LIFECYCLE_LIST_TOOL,
+    args: {},
+  });
+  input.onToolResult({
+    id: listId,
+    name: SCRIPTED_LIFECYCLE_LIST_TOOL,
+    result: listResult,
+  });
+
+  const refs = parseRefs(listResult);
+  if (refs.length === 0) return true;
+
+  const renderTool = VERIFICATION_INTENT.test(input.instructions)
+    ? SCRIPTED_LIFECYCLE_VERIFICATION_RENDER_TOOL
+    : SCRIPTED_LIFECYCLE_GATE_RENDER_TOOL;
+  const renderId = randomUUID();
+  input.onToolCall({ id: renderId, name: renderTool });
+  const renderResult = await input.callSelfMcpTool({
+    name: renderTool,
+    args: { ref: refs[0] },
+  });
+  input.onToolResult({ id: renderId, name: renderTool, result: renderResult });
+  return true;
+}
+
+/**
  * Deterministic stand-in for the CONTENT-EDITOR AGENT'S REPLY TEXT on the
  * widget-stream relay path (cinatra#246 architecture). The widget stream route
  * calls this INSTEAD of the A2A dispatch when the scripted provider is enabled
@@ -133,6 +234,13 @@ export async function runScriptedWidgetAssistantTurn(input: {
   onText: (chunk: string) => void;
   onToolCall: (call: { id: string; name: string }) => void;
   onToolResult: (result: { id: string; name: string; result: string }) => void;
+  /**
+   * The REAL self-MCP dispatcher (cinatra#2683). OPTIONAL: when absent — every
+   * pre-existing caller, and the WP/Drupal UAT specs — this turn behaves exactly
+   * as it did, so the twelve scenarios are unaffected. When present, a lifecycle
+   * question drives the REAL read-only pull primitives through it.
+   */
+  callSelfMcpTool?: ScriptedSelfMcpDispatch;
 }): Promise<void> {
   const isDrupal = input.assistantHandle.trim().toLowerCase() === "drupal";
   const idKey: "postId" | "nodeId" = isDrupal ? "nodeId" : "postId";
@@ -146,6 +254,25 @@ export async function runScriptedWidgetAssistantTurn(input: {
     `You said: "${input.instructions.slice(0, 120)}".`;
   for (const chunk of reply.match(/[\s\S]{1,24}/g) ?? [reply]) {
     input.onText(chunk);
+  }
+
+  // The LIFECYCLE PULL takes precedence over the edit stand-in when both could
+  // match ("update the review" is a review question, not a CMS edit), and it is
+  // reachable ONLY when the runtime injected a real dispatcher. A dispatcher
+  // that throws degrades to the plain text reply above — the honest outcome for
+  // a tool call that did not happen, and never a fabricated card.
+  if (input.callSelfMcpTool && LIFECYCLE_PULL_INTENT.test(input.instructions)) {
+    try {
+      await runScriptedLifecyclePull({
+        instructions: input.instructions,
+        callSelfMcpTool: input.callSelfMcpTool,
+        onToolCall: input.onToolCall,
+        onToolResult: input.onToolResult,
+      });
+      return;
+    } catch {
+      return;
+    }
   }
 
   if (EDIT_INTENT.test(input.instructions)) {
