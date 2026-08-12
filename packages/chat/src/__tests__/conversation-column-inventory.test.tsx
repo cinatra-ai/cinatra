@@ -230,6 +230,69 @@ describe.each(SURFACES)("conversation column on %s (#2683)", (surface) => {
     expect(measureConversationColumn(root(surface, container)).hasAttachmentInput).toBe(false);
   });
 
+  it.skipIf(surface !== "widget")(
+    "8 (the whole path) — PICKING a file uploads it, with the WIDGET's own credential",
+    async () => {
+    // The row EXISTING was all the check above measured, and that is not the
+    // affordance: a picker that draws and then swallows the file is exactly the
+    // shape the widget was accused of. So this drives the pick and reads what
+    // left the browser.
+    //
+    // WIDGET ARM ONLY, and not for convenience. `/chat`'s handler is
+    // `useChatAttachments` with no transport — the cookie default, whose header
+    // and refusal behaviour `upload-chat-attachments.test.ts` covers directly —
+    // while the harness's chat arm wires the identity handler, because every
+    // other check in this file is about the row EXISTING on both surfaces. What
+    // was never asserted anywhere is the half only the widget can get wrong:
+    // the embed frame is SAME-ORIGIN to the Cinatra app, so an upload that rode
+    // the ambient cookie would file a third-party site's attachment under
+    // whoever else is signed in on that browser. `credentials: "omit"` plus the
+    // broker headers is what makes the upload the widget READER's.
+    //
+    // THE LIMIT OF A DOM TEST, STATED: the stub answers 201 to anything, so this
+    // measures WHAT LEFT THE BROWSER — not that a server accepted it. That the
+    // real route accepts this exact shape was measured live on the host2 UAT
+    // stack (POST /api/artifacts/upload → 201 with an artifact ref, cookieless)
+    // and is what the evidence capture records.
+    const { container } = await mountSurface(surface);
+    const scope = root(surface, container);
+    const picker = scope.querySelector<HTMLInputElement>('input[type="file"]');
+    expect(picker).not.toBeNull();
+
+    const file = new File(["parity"], "note.txt", { type: "text/plain" });
+    // jsdom's FileList is read-only; define the property the change handler reads.
+    Object.defineProperty(picker as HTMLInputElement, "files", {
+      configurable: true,
+      value: {
+        0: file,
+        length: 1,
+        item: (i: number) => (i === 0 ? file : null),
+        [Symbol.iterator]: function* () {
+          yield file;
+        },
+      },
+    });
+    fireEvent.change(picker as HTMLInputElement);
+
+    await waitFor(() => {
+      const uploads = widgetServer.calls.filter((c) =>
+        c.url.startsWith("/api/artifacts/upload"),
+      );
+      expect(uploads).toHaveLength(1);
+    });
+    const upload = widgetServer.calls.find((c) =>
+      c.url.startsWith("/api/artifacts/upload"),
+    )!;
+    const headers = (upload.init.headers ?? {}) as Record<string, string>;
+    expect(upload.init.method).toBe("POST");
+    // The file's own metadata travels as headers — the server classifies on them.
+    expect(headers["X-Artifact-Filename"]).toBe("note.txt");
+    expect(upload.init.credentials).toBe("omit");
+    expect(headers.Authorization).toContain("cit_");
+    expect(headers["X-Cinatra-Widget-User-Token"]).toContain("cwu_");
+    },
+  );
+
   it("9 — the prompt-options flyout appears, with all three of its rows", async () => {
     // The flyout is gated on its CONTENTS, so this is really three checks: the
     // attachment row (item 8), the Skill-autosave row (the same account setting,

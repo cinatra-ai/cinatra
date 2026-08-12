@@ -21,7 +21,9 @@ import {
   UAT_SENTINEL,
   runScriptedChatAssistantTurn,
   runScriptedWidgetAssistantTurn,
+  SCRIPTED_AGENT_RUN_TOOL,
   scriptedTurnAsksForLifecyclePull,
+  scriptedTurnNamesAgentRun,
 } from "../scripted-test-provider";
 
 type Emitted = {
@@ -259,5 +261,87 @@ describe("scripted chat turn — the same lifecycle pull on /chat", () => {
     expect(scriptedTurnAsksForLifecyclePull("Show me the verification reading.")).toBe(true);
     expect(scriptedTurnAsksForLifecyclePull("Please rewrite the title.")).toBe(false);
     expect(scriptedTurnAsksForLifecyclePull("")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The AGENT-RUN scenario (cinatra#2683) — the undo chip's mount site.
+// ---------------------------------------------------------------------------
+// The chip renders under an `agent_run` tool part and nowhere else, so on a
+// key-free stack it had no mount site at all. What is asserted here is only what
+// this module decides: the part is emitted, it carries THE RUN THE PERSON NAMED,
+// and no other scenario is disturbed. Whether a chip then appears is the chip's
+// own real read against the §VI eligibility gate — deliberately not stood in for.
+// ---------------------------------------------------------------------------
+describe("scripted widget turn — the agent-run reference", () => {
+  const RUN_ID = "run-671960a9-35e0-4fc1-80e2-2333fc23e28c";
+
+  it("emits ONE agent_run part carrying the run the person named", async () => {
+    const s = sink();
+    await runScriptedWidgetAssistantTurn({
+      instructions: `Show me the agent run ${RUN_ID}`,
+      assistantHandle: "wordpress",
+      onText: s.onText,
+      onToolCall: s.onToolCall,
+      onToolResult: s.onToolResult,
+    });
+
+    expect(s.calls.map((c) => c.name)).toEqual([SCRIPTED_AGENT_RUN_TOOL]);
+    expect(s.results).toHaveLength(1);
+    // The sink pins the inline card's run id off THIS shape and nothing else.
+    expect(JSON.parse(s.results[0].result)).toEqual({ runId: RUN_ID });
+    // The tool_result belongs to the tool_call — the reducer joins them by id.
+    expect(s.results[0].id).toBe(s.calls[0].id);
+    expect(s.text.join("")).toContain(UAT_SENTINEL);
+  });
+
+  it("INVENTS NO RUN: an instruction that names none emits no agent_run part", async () => {
+    const s = sink();
+    await runScriptedWidgetAssistantTurn({
+      instructions: "Undo the last thing you did",
+      assistantHandle: "wordpress",
+      onText: s.onText,
+      onToolCall: s.onToolCall,
+      onToolResult: s.onToolResult,
+    });
+    expect(s.calls.map((c) => c.name)).not.toContain(SCRIPTED_AGENT_RUN_TOOL);
+  });
+
+  it("the CMS stand-in still wins for an ordinary edit, and the pull still wins over both", async () => {
+    // The twelve UAT scenarios say "rewrite the title" and name no run: unchanged.
+    const edit = sink();
+    await runScriptedWidgetAssistantTurn({
+      instructions: "Please rewrite the title",
+      assistantHandle: "wordpress",
+      onText: edit.onText,
+      onToolCall: edit.onToolCall,
+      onToolResult: edit.onToolResult,
+    });
+    expect(edit.calls.map((c) => c.name)).toEqual(["wordpress_content_editor_run"]);
+
+    // A turn that is BOTH a lifecycle question and names a run is a lifecycle
+    // question — the narrower reading, and the one with a dispatcher behind it.
+    const both = sink();
+    const callSelfMcpTool = vi.fn(async () => JSON.stringify({ refs: [] }));
+    await runScriptedWidgetAssistantTurn({
+      instructions: `Which reviews are waiting from ${RUN_ID}?`,
+      assistantHandle: "wordpress",
+      callSelfMcpTool,
+      onText: both.onText,
+      onToolCall: both.onToolCall,
+      onToolResult: both.onToolResult,
+    });
+    expect(both.calls.map((c) => c.name)).toEqual([SCRIPTED_LIFECYCLE_LIST_TOOL]);
+  });
+
+  it("the run-id reading is the SHAPE the platform mints, not any token", () => {
+    expect(scriptedTurnNamesAgentRun(`about ${RUN_ID} please`)).toBe(RUN_ID);
+    // The bare-uuid form too — this must not depend on the `run-` prefix.
+    const bare = RUN_ID.slice("run-".length);
+    expect(scriptedTurnNamesAgentRun(`show ${bare}`)).toBe(bare);
+    expect(scriptedTurnNamesAgentRun("run-short")).toBeNull();
+    expect(scriptedTurnNamesAgentRun("run-not-a-uuid-at-all-really")).toBeNull();
+    expect(scriptedTurnNamesAgentRun("no run here")).toBeNull();
+    expect(scriptedTurnNamesAgentRun("")).toBeNull();
   });
 });

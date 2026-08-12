@@ -91,6 +91,86 @@ export function scriptedTurnAsksForLifecyclePull(instructions: string): boolean 
  */
 const VERIFICATION_INTENT = /\b(verification|verified|verify)\b/i;
 
+// ---------------------------------------------------------------------------
+// The AGENT-RUN scenario (cinatra#2683, epic #2564 S8f — the undo chip's mount).
+// ---------------------------------------------------------------------------
+// The inline run card and the "Undo last action" chip beside it render under ONE
+// condition: an assistant turn carrying an `agent_run` tool part whose result
+// named a run. On a key-free stack nothing ever produced one — the deterministic
+// provider only knew the CMS edit stand-in and the lifecycle pull — so the chip
+// had no mount site at all, and the parity proof could not photograph it.
+//
+// WHAT IS STOOD IN FOR, SAID EXACTLY. The DISPATCH is — precisely as the CMS
+// content-editor stand-in above stands in for that dispatch. This module calls
+// no agent, starts no run and observes no status: it emits the reference part a
+// real model emits after dispatching, naming the run THE PERSON NAMED, and
+// nothing else. It deliberately reports NO status, because it has not seen one.
+//
+// WHAT IS NOT STOOD IN FOR — and this is the part that makes the view worth
+// photographing. The run is real or nothing draws: the inline panel resolves it
+// server-side under the reader's own standing, and the chip beside it asks the
+// §VI eligibility gate (`/api/chat/undo-candidate` with the host's own
+// credential; the cookie action on `/chat`) whether THIS reader may still
+// reverse something this run did. A run that does not exist, or a change-set
+// this reader may not touch, draws no chip. So this is a mount site, never a
+// prop, and an evidence capture of it is a capture of those real reads.
+//
+// TEST-ONLY, FENCED THE SAME WAY. It lives behind the same
+// `assertScriptedProviderNotProduction` gate as the lifecycle branch, and it is
+// reachable only from the scripted turn functions below.
+// ---------------------------------------------------------------------------
+
+/**
+ * The run id the person named, or null.
+ *
+ * An IDENTIFIER SHAPE, not "any token": a uuid, optionally carrying the `run-`
+ * prefix this deployment's agent-run rows are keyed by (verified against a live
+ * `cinatra.agent_runs` table — every row is `run-<uuid>`; the bare-uuid form is
+ * accepted too so this does not depend on that prefix being universal). The
+ * narrowness is the point — "undo that" names no run, and a turn that guessed
+ * one would put a stranger's identifier on a third-party site's screen.
+ */
+const AGENT_RUN_ID_PATTERN =
+  /(?<![0-9a-zA-Z-])(?:run-)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?![0-9a-zA-Z-])/i;
+
+/** The tool name the sink reads the run id off. THE NAME IS THE CONTRACT — the
+ *  AG-UI sink pins the inline run card's id from an `agent_run` tool_result and
+ *  from nothing else. */
+export const SCRIPTED_AGENT_RUN_TOOL = "agent_run";
+
+/**
+ * Does this turn's instruction name an agent run to show?
+ *
+ * Exported for the same reason `scriptedTurnAsksForLifecyclePull` is: the intent
+ * reading belongs to the model layer, so a host that has to decide something
+ * before the turn asks the provider rather than re-deriving a second answer.
+ */
+export function scriptedTurnNamesAgentRun(instructions: string): string | null {
+  return instructions.match(AGENT_RUN_ID_PATTERN)?.[0] ?? null;
+}
+
+/**
+ * Emit the run part: one `agent_run` tool_call plus the tool_result whose
+ * `{ runId }` the sink parses into the DATA_PART that pins the inline card.
+ *
+ * The result carries the RUN ID AND NOTHING ELSE — no status, no summary. This
+ * module dispatched nothing, so it has no status to report, and the panel reads
+ * the run's real state itself.
+ */
+function runScriptedAgentRunReference(input: {
+  runId: string;
+  onToolCall: (call: { id: string; name: string }) => void;
+  onToolResult: (result: { id: string; name: string; result: string }) => void;
+}): void {
+  const id = randomUUID();
+  input.onToolCall({ id, name: SCRIPTED_AGENT_RUN_TOOL });
+  input.onToolResult({
+    id,
+    name: SCRIPTED_AGENT_RUN_TOOL,
+    result: JSON.stringify({ runId: input.runId }),
+  });
+}
+
 /** The pull primitives this provider may drive. NAMES ARE THE CONTRACT — they
  *  must equal the producer's registered names (`src/lib/lifecycle/lifecycle-pull-mcp.ts`)
  *  or the call refuses at the transport and no card mints. */
@@ -290,6 +370,20 @@ export async function runScriptedWidgetAssistantTurn(input: {
     } catch {
       return;
     }
+  }
+
+  // THE AGENT-RUN REFERENCE (cinatra#2683). Below the lifecycle branch because a
+  // lifecycle question is the more specific reading of a turn that is both — and
+  // above the CMS stand-in because naming a run is not an editing instruction,
+  // however many editing words surround it.
+  const namedRun = scriptedTurnNamesAgentRun(input.instructions);
+  if (namedRun) {
+    runScriptedAgentRunReference({
+      runId: namedRun,
+      onToolCall: input.onToolCall,
+      onToolResult: input.onToolResult,
+    });
+    return;
   }
 
   if (EDIT_INTENT.test(input.instructions)) {

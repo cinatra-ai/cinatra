@@ -63,9 +63,42 @@ const MCP_BASE_PATH = "/api/mcp";
  *  mismatch surfaces as a loud initialize error rather than a silent no-card. */
 const MCP_PROTOCOL_VERSION = "2025-06-18";
 
-/** Bound the whole dispatch so a wedged transport fails the turn's tool call
- *  loudly instead of hanging the widget stream. */
-const DISPATCH_TIMEOUT_MS = 20_000;
+/**
+ * Bound ONE tool call. By the time a call is made the route is compiled and
+ * every request is served from memory — measured at 15-25 ms on the host2 UAT
+ * stack — so this is a wedged-transport bound, not a budget anything normal has
+ * to fit inside.
+ */
+export const SELF_MCP_CALL_TIMEOUT_MS = 30_000;
+
+/**
+ * Bound the HANDSHAKE, which is a DIFFERENT KIND OF WAIT and is why it has its
+ * own constant (cinatra#2683).
+ *
+ * `initialize` is this process's FIRST request to `/api/mcp`, and under the
+ * Next dev server the UAT stack runs, that request pays the route's ON-DEMAND
+ * COMPILE — the whole self-MCP surface plus every extension module it registers.
+ * Measured on the host2 UAT stack at this branch: 19.2 s for a cold
+ * `initialize`, 15-25 ms for every one after it. A single 20 s budget therefore
+ * sat one second inside the cold cost on an IDLE machine, and the widget turn is
+ * never the only thing compiling — the same stack served a sibling route in 41 s
+ * while other routes compiled beside it.
+ *
+ * What that cost, exactly: the handshake aborted, the dispatcher threw, the
+ * provider degraded to its plain reply, and the widget's lifecycle question
+ * answered with prose and NO CARD — indistinguishable, on screen, from "nothing
+ * is waiting for you". The proof lane read it as a refusal in the producer and
+ * spent a wave there. So the budget is now sized for the compile, and the
+ * failure is LOGGED (below) instead of only being thrown into a catch.
+ *
+ * WHAT IT DOES COST, STATED: a server that accepts the connection and then never
+ * answers `initialize` now holds this dispatch for two minutes instead of
+ * twenty seconds. That is the honest price of covering a compile that is
+ * measured in tens of seconds, and it is bounded to the ONE request that can
+ * pay a compile — the notification after it, and every tool call, keep the
+ * short budget.
+ */
+export const SELF_MCP_HANDSHAKE_TIMEOUT_MS = 120_000;
 
 type JsonRpcResponse = {
   result?: unknown;
@@ -145,8 +178,16 @@ function createDispatchWithBearer(params: {
   /** Names the surface in the MCP `clientInfo` — visible in transport logs. */
   clientName: string;
   onDispatched?: OnDispatched;
+  /**
+   * The two budgets, overridable so the transport suite can drive both of them
+   * inside a test's own runtime. Production never passes it; the defaults are
+   * the shipped values and the suite pins them separately.
+   */
+  timeouts?: { handshakeMs: number; callMs: number };
 }): ScriptedSelfMcpDispatch {
   const { token, clientName, onDispatched } = params;
+  const handshakeMs = params.timeouts?.handshakeMs ?? SELF_MCP_HANDSHAKE_TIMEOUT_MS;
+  const callMs = params.timeouts?.callMs ?? SELF_MCP_CALL_TIMEOUT_MS;
   const mcpUrl = getLocalMcpServerUrl(MCP_BASE_PATH);
 
   let sessionId: string | null = null;
@@ -155,7 +196,10 @@ function createDispatchWithBearer(params: {
   async function rpc(
     method: string,
     params: Record<string, unknown> | undefined,
-    { notification = false }: { notification?: boolean } = {},
+    {
+      notification = false,
+      timeoutMs = callMs,
+    }: { notification?: boolean; timeoutMs?: number } = {},
   ): Promise<JsonRpcResponse> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -173,7 +217,7 @@ function createDispatchWithBearer(params: {
         method,
         ...(params ? { params } : {}),
       }),
-      signal: AbortSignal.timeout(DISPATCH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const negotiated = response.headers.get("mcp-session-id");
     if (negotiated) sessionId = negotiated;
@@ -200,25 +244,49 @@ function createDispatchWithBearer(params: {
   let handshake: Promise<void> | null = null;
   async function ensureHandshake(): Promise<void> {
     handshake ??= (async () => {
-      await rpc("initialize", {
-        protocolVersion: MCP_PROTOCOL_VERSION,
-        capabilities: {},
-        clientInfo: { name: clientName, version: "1.0.0" },
-      });
+      await rpc(
+        "initialize",
+        {
+          protocolVersion: MCP_PROTOCOL_VERSION,
+          capabilities: {},
+          clientInfo: { name: clientName, version: "1.0.0" },
+        },
+        // The cold-compile budget — see SELF_MCP_HANDSHAKE_TIMEOUT_MS.
+        { timeoutMs: handshakeMs },
+      );
+      // The CALL budget, deliberately: only `initialize` can pay the compile,
+      // and by the time this notification is sent the route is warm. Giving it
+      // the cold budget too would make the handshake's worst case the sum of
+      // both, and would let a wedged server hold the turn for twice as long as
+      // the one wait that has a reason to be long.
       await rpc("notifications/initialized", undefined, { notification: true });
     })();
     await handshake;
   }
 
   return async (call) => {
-    await ensureHandshake();
-    const answer = await rpc("tools/call", {
-      name: call.name,
-      arguments: call.args,
-    });
-    const text = toolResultText(answer.result);
-    onDispatched?.(text);
-    return text;
+    // SAY WHAT FAILED, WHERE (cinatra#2683). The provider degrades a throwing
+    // dispatch to its plain reply — correctly, because a card it invented would
+    // be a fabricated proof — and that degradation is SILENT on screen: a turn
+    // whose transport never answered looks exactly like a turn with nothing to
+    // show. One line here is the difference between reading the failure and
+    // inferring it from an absent card.
+    try {
+      await ensureHandshake();
+      const answer = await rpc("tools/call", {
+        name: call.name,
+        arguments: call.args,
+      });
+      const text = toolResultText(answer.result);
+      onDispatched?.(text);
+      return text;
+    } catch (err) {
+      console.error(
+        `[scripted-self-mcp] ${clientName}: ${call.name} did not complete against ${mcpUrl} — ` +
+          `${err instanceof Error ? err.message : String(err)}. The turn keeps its text and mints no card.`,
+      );
+      throw err;
+    }
   };
 }
 
@@ -234,6 +302,8 @@ function createDispatchWithBearer(params: {
 export function createScriptedSelfMcpDispatch(params: {
   widgetPrincipal: WidgetPrincipal;
   onDispatched?: OnDispatched;
+  /** Transport-suite only; production takes the shipped budgets. */
+  timeouts?: { handshakeMs: number; callMs: number };
 }): ScriptedSelfMcpDispatch {
   const { widgetPrincipal, onDispatched } = params;
   return createDispatchWithBearer({
@@ -247,6 +317,7 @@ export function createScriptedSelfMcpDispatch(params: {
     }),
     clientName: "cinatra-scripted-widget-turn",
     onDispatched,
+    ...(params.timeouts ? { timeouts: params.timeouts } : {}),
   });
 }
 
