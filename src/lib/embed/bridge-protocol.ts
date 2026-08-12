@@ -69,8 +69,8 @@ export const EMBED_MESSAGE_TYPES = {
   /** iframe -> parent, PRE-context, the ONLY message without a correlationId. */
   ready: "cinatra.embed.ready",
   /** parent -> iframe, the ONE inbound envelope. Carries SELECTORS, never a
-   *  credential — the type was renamed from `…bootstrap` so the retired
-   *  credential carrier cannot be reached by name either. */
+   *  credential. The type name is deliberately not the retired credential
+   *  carrier's, so that envelope cannot be reached by name either. */
   context: "cinatra.embed.context",
   /** iframe -> parent uplinks (post-context). */
   resize: "cinatra.embed.resize",
