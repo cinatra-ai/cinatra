@@ -179,6 +179,41 @@ export const SCRIPTED_LIFECYCLE_GATE_RENDER_TOOL = "artifact_review_gate_render"
 export const SCRIPTED_LIFECYCLE_VERIFICATION_RENDER_TOOL = "verification_record_render";
 
 /**
+ * The card ref the person named, or null.
+ *
+ * A REF SHAPE, not "any token": the sealed base64url handle the list primitive
+ * mints (`encodeLifecycleGateRef` — AES-GCM over the run + review task), which is
+ * far longer than any word and carries no `.` or `/`. The floor is deliberately
+ * above a uuid's 36 characters so `scriptedTurnNamesAgentRun`'s subject can never
+ * be read as a ref.
+ *
+ * WHY A TURN MAY NAME ONE, said exactly. `artifact_review_gates_list` answers
+ * with the OLDEST few gates a caller may read, and a verification reading exists
+ * only for a target that has actually been repaired — so on any real backlog the
+ * head of the list is almost never the item with a reading, and a provider that
+ * can only ever render `refs[0]` cannot show one. A real model asked about a
+ * SPECIFIC item renders that item; this is the same stand-in
+ * `scriptedTurnNamesAgentRun` already makes for the run card, and it is safe for
+ * the same reason: the ref is opaque and inert on its own — the REAL primitive
+ * decodes it, re-runs the whole S1 ladder (run READ, then the gate, then the
+ * record) and answers the fixed "not available to you" for anything the asker may
+ * not see. Naming a ref grants nothing.
+ */
+const LIFECYCLE_CARD_REF_PATTERN = /(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{48,512}(?![A-Za-z0-9_-])/;
+
+/**
+ * Does this turn's instruction name a lifecycle card ref to show?
+ *
+ * Exported for the same reason `scriptedTurnAsksForLifecyclePull` and
+ * `scriptedTurnNamesAgentRun` are: the intent reading belongs to the model layer,
+ * so a host that must decide something before the turn asks the provider rather
+ * than deriving a second answer of its own.
+ */
+export function scriptedTurnNamesLifecycleRef(instructions: string): string | null {
+  return instructions.match(LIFECYCLE_CARD_REF_PATTERN)?.[0] ?? null;
+}
+
+/**
  * The REAL self-MCP dispatcher the runtime injects. The provider holds no
  * transport, no token and no knowledge of the sink: it names a tool and passes
  * arguments, and receives back whatever the REAL primitive answered, verbatim.
@@ -224,6 +259,25 @@ async function runScriptedLifecyclePull(input: {
   onToolCall: (call: { id: string; name: string }) => void;
   onToolResult: (result: { id: string; name: string; result: string }) => void;
 }): Promise<boolean> {
+  // A NAMED REF short-circuits the LIST. Listing is the discovery step, and a
+  // turn that already names the item has nothing to discover — so this renders
+  // exactly what was asked for, once. The primitive still decides whether the
+  // asker may see it.
+  const namedRef = scriptedTurnNamesLifecycleRef(input.instructions);
+  if (namedRef) {
+    const namedTool = VERIFICATION_INTENT.test(input.instructions)
+      ? SCRIPTED_LIFECYCLE_VERIFICATION_RENDER_TOOL
+      : SCRIPTED_LIFECYCLE_GATE_RENDER_TOOL;
+    const namedId = randomUUID();
+    input.onToolCall({ id: namedId, name: namedTool });
+    const namedResult = await input.callSelfMcpTool({
+      name: namedTool,
+      args: { ref: namedRef },
+    });
+    input.onToolResult({ id: namedId, name: namedTool, result: namedResult });
+    return true;
+  }
+
   const listId = randomUUID();
   input.onToolCall({ id: listId, name: SCRIPTED_LIFECYCLE_LIST_TOOL });
   const listResult = await input.callSelfMcpTool({
