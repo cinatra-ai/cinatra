@@ -52,27 +52,13 @@ import type { Job } from "bullmq";
 
 vi.mock("server-only", () => ({}));
 
-const { logAuditEventMock } = vi.hoisted(() => ({
-  logAuditEventMock: vi.fn(async () => undefined),
-}));
-vi.mock("@/lib/authz/audit", () => ({ logAuditEvent: logAuditEventMock }));
-
-import { ORG_WRITE_CAPABILITIES } from "@cinatra-ai/org-write-kernel";
-import type { OrgWriteAuthority, OrgWriteCapability } from "@cinatra-ai/org-write-kernel";
 import {
   isVerifiedRunRef,
   verifyRunAuthority,
-  OrgWriteAuthorityError,
   type RunRowForAuthority,
   type VerifiedRunRef,
 } from "../org-write/authority";
-import { mintSystemAuthorityForJob } from "../org-write/job-system-authority-mint";
-import { runWithJobFrame } from "@/lib/background-jobs-system-frame";
-import {
-  BACKGROUND_JOB_REGISTRY,
-  type JobAuthorityMetadata,
-  type JobHandler,
-} from "@/lib/background-jobs-registry";
+import { BACKGROUND_JOB_REGISTRY, type JobHandler } from "@/lib/background-jobs-registry";
 
 // ---------------------------------------------------------------------------
 // Row 1 — "Forged/ambient run identity refused"
@@ -166,8 +152,9 @@ describe("row 1 negative control — the forged run ref is only refused BECAUSE 
 // Its control needs the REAL kernel guard on a real transaction to contrast
 // against, so it lives beside its proof in
 // src/lib/__tests__/integration/org-write-archive-race.integration.test.ts
-// ("negative control (row 5): …guard mutant with ONLY the org-scope check
-// removed…"). Asserting here that an authority declared `can: () => true`
+// ("negative control (row 5): the SAME permissive authority, differing ONLY
+// in the org it is scoped to, lands the SAME write through the SAME kernel
+// guard"). Asserting here that an authority declared `can: () => true`
 // returns true would be a tautology, not a control.
 // ---------------------------------------------------------------------------
 
@@ -204,117 +191,5 @@ describe("row 6 negative control — the stripped job is refused by the DISPATCH
     // self-limiting — the guard is the whole defense.
     await stripped.handle(job, "neg-ctrl-6");
     expect(handle).toHaveBeenCalledTimes(1);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Row 8 — "Cross-job capability misuse"
-// ---------------------------------------------------------------------------
-
-/** Every REAL registry entry that can mint and declares purposes — the same
- *  universe the row-8 sweep walks. */
-const MINTABLE_REAL_ENTRIES: ReadonlyArray<[string, JobAuthorityMetadata]> = Object.entries(
-  BACKGROUND_JOB_REGISTRY,
-)
-  .filter(([, handler]) => {
-    const a = handler.authority;
-    return (
-      (a.authorityKind === "system-maintenance" || a.authorityKind === "grandfathered-run") &&
-      Array.isArray(a.allowedPurposes) &&
-      a.allowedPurposes.length > 0
-    );
-  })
-  .map(([name, handler]) => [name, handler.authority] as [string, JobAuthorityMetadata]);
-
-
-describe("row 8 negative control — the cross-job attack is stopped by the job's own two declarations, and lands once both are neutralized", () => {
-  it("negative control (row 8): the SAME foreign job, purpose, org and payload MINTS real capabilities once its allowedPurposes AND capabilities declarations are both tampered — each check refuses on its own, neither is redundant", async () => {
-    // PAIRS WITH: src/lib/org-write/__tests__/job-system-authority-mint-adversarial.test.ts
-    //   "every real mintable job refuses every purpose NOT in its own declared allowedPurposes"
-    //
-    // The principal, the purpose, the org and the payload are held FIXED
-    // across all three calls below — the only thing that changes is the job's
-    // OWN authority declaration, which is precisely the guard. That is the
-    // revert: the sweep's refusal is caused by those declarations, not by the
-    // purpose being inert, retired, or unreachable for this job by some other
-    // route. (Contrast a control that switched to the job which legitimately
-    // owns the purpose: that changes the principal, so it shows the purpose is
-    // alive but never shows the cross-job attack succeeding.)
-    const ORG = "org-neg-ctrl-8";
-
-    const PURPOSE = "lease-expiry-finalizer";
-    // The capability that purpose actually grants — asserted at step 3 below,
-    // and required ABSENT from the foreign job's ceiling so step 2 genuinely
-    // refuses on the ceiling rather than passing through.
-    const PURPOSE_GRANT = "run.lease-expire";
-
-    // Select the foreign job by the EXACT properties this control needs, not
-    // by registry order: a newly inserted first entry must not silently change
-    // what is being tested (it would either mint at step 2 — because its
-    // ceiling already covers the grant — or refuse for org-mismatch instead of
-    // the ceiling, and the test would still be green while proving something
-    // else). If no such job exists any more, this fails loudly and the pairing
-    // gets re-derived deliberately.
-    const foreign = MINTABLE_REAL_ENTRIES.find(
-      ([, a]) =>
-        !(a.allowedPurposes ?? []).includes(PURPOSE) &&
-        !((a.capabilities ?? []) as readonly string[]).includes(PURPOSE_GRANT) &&
-        a.orgExtractor?.source !== "payload",
-    );
-    expect(
-      foreign,
-      `expected a real mintable job that (a) does not declare "${PURPOSE}", (b) does not already ` +
-        `hold "${PURPOSE_GRANT}" in its ceiling, and (c) is not payload-org-bound`,
-    ).toBeDefined();
-    const [foreignJobName, foreignAuthority] = foreign!;
-    const payload = foreignAuthority.runExtractor ? { runId: "run-neg-ctrl-8" } : {};
-
-    const mintUnder = (authority: JobAuthorityMetadata) =>
-      Promise.resolve(
-        runWithJobFrame(
-          { jobName: foreignJobName, jobId: "neg-ctrl-8", authority, payload },
-          () => {
-            try {
-              const minted = mintSystemAuthorityForJob(PURPOSE, ORG);
-              return {
-                minted: true as const,
-                grants: ORG_WRITE_CAPABILITIES.filter((c) => minted.can(c)),
-                orgId: minted.orgId,
-              };
-            } catch (err) {
-              return { minted: false as const, error: err };
-            }
-          },
-        ),
-      );
-
-    // 1. UNTAMPERED — the green sweep's own claim: refused by the
-    //    allowedPurposes membership check.
-    const untampered = await mintUnder(foreignAuthority);
-    expect(untampered.minted).toBe(false);
-    expect((untampered as { error: unknown }).error).toBeInstanceOf(OrgWriteAuthorityError);
-    expect(String((untampered as { error: Error }).error.message)).toContain("allowedPurposes");
-
-    // 2. MEMBERSHIP CHECK NEUTRALIZED (allowedPurposes tampered to include the
-    //    foreign purpose) — STILL refused, now by the independent capability
-    //    ceiling. Proves the two declarations are not one check spelled twice.
-    const purposesTampered: JobAuthorityMetadata = Object.assign({}, foreignAuthority, {
-      allowedPurposes: [...(foreignAuthority.allowedPurposes ?? []), PURPOSE],
-    });
-    const half = await mintUnder(purposesTampered);
-    expect(half.minted).toBe(false);
-    expect(String((half as { error: Error }).error.message)).toContain("ceiling");
-
-    // 3. BOTH NEUTRALIZED — the attack LANDS. Same job, same purpose, same
-    //    org, same payload: a cross-job mint that yields real, non-empty
-    //    power. So the sweep in the green test is guarding something that
-    //    genuinely works once the guard is gone.
-    const bothTampered: JobAuthorityMetadata = Object.assign({}, purposesTampered, {
-      capabilities: [...ORG_WRITE_CAPABILITIES],
-    });
-    const landed = await mintUnder(bothTampered);
-    expect(landed.minted).toBe(true);
-    expect((landed as { grants: string[] }).grants).toContain(PURPOSE_GRANT);
-    expect((landed as { orgId: string }).orgId).toBe(ORG);
   });
 });

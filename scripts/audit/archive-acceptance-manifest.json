@@ -136,7 +136,7 @@
         "testName": "every real mintable job refuses every purpose NOT in its own declared allowedPurposes"
       },
       "negativeControl": {
-        "file": "src/lib/__tests__/archive-acceptance-negative-controls.test.ts",
+        "file": "src/lib/org-write/__tests__/job-system-authority-mint-adversarial.test.ts",
         "testName": "negative control (row 8): the SAME foreign job, purpose, org and payload MINTS real capabilities once its allowedPurposes AND capabilities declarations are both tampered — each check refuses on its own, neither is redundant"
       },
       "ciDependency": {
