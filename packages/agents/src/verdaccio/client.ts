@@ -370,7 +370,11 @@ async function registryJson<T>(
   return (await response.json()) as T;
 }
 
-async function isVersionPublished(config: VerdaccioConfig, packageName: string, version: string): Promise<boolean> {
+// Exported for the publish-time claimability preflight (cinatra#2675): the gate
+// must not refuse a republish that this function would classify as
+// `alreadyPublished`, because that publish writes nothing and never reaches the
+// DB claim. One oracle, one definition — the preflight asks THIS.
+export async function isVersionPublished(config: VerdaccioConfig, packageName: string, version: string): Promise<boolean> {
   // Single packument fetch — eliminates the TOCTOU race from two sequential calls.
   try {
     const packument = (await pacote.packument(packageName, pacoteOptions(config, { fullMetadata: true }))) as RegistryPackument;
