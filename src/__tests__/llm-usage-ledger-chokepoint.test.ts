@@ -35,11 +35,21 @@
  * cinatra#2641 empties the uncounted inventory the same way. `generateImage()`
  * was the one response-producing adapter method the seam did not meter — billed
  * per image, invisible to `/analytics/llm`. It is metered at the seam now, and
- * it is PRICEABLE now: the ABI's image response may carry a per-image usage
- * count, the seam forwards it, and the subscriber prices it off a per-image rate
- * card. It stays in COUNTED_BUT_UNPRICED because the mechanism existing is not
- * the same as the dollars arriving — the PINNED Gemini connector does not report
- * image usage yet, so every image row production writes today is still unpriced.
+ * for as long as the PINNED Gemini connector reported no image usage it was
+ * PRICEABLE, not yet PRICED: the ABI's image response may carry a per-image
+ * usage count, the seam forwards it, and the subscriber prices it off a
+ * per-image rate card, but a mechanism with nothing to forward still leaves
+ * every row NULL.
+ *
+ * The pin advance to gemini-connector#61 (`bea71fa`) closes that gap: the
+ * revision reports `model` and per-image `usage` from `generateImage()`, so
+ * re-reading the cinatra#2641 COUNTED_BUT_UNPRICED entry against the new SHA —
+ * exactly what its `pinnedExtension` binding exists to force — found the row
+ * genuinely PRICED, not merely priceable. The entry is RETIRED rather than
+ * repointed: image rows now join the ordinary per-token ones, priced whenever a
+ * call succeeds against a rate the card knows and NULL on any individual miss,
+ * with no standing register entry because the systemic gap is gone.
+ *
  * The register describes what the ledger currently SAYS, never what it is
  * capable of saying.
  */
@@ -222,24 +232,6 @@ const KNOWN_OPEN_PATHS: Registered[] = [];
  * measured", with the issue that owns closing the gap.
  */
 const COUNTED_BUT_UNPRICED: Registered[] = [
-  {
-    file: "packages/llm/src/usage-metering.ts",
-    why:
-      "cinatra#2641: `adapter.generateImage()` is billed PER IMAGE and books one " +
-      "row per call at the seam, so the path is not invisible. It is now " +
-      "PRICEABLE but not yet PRICED. The ABI carries an optional per-image usage " +
-      "count, the seam forwards it, and the subscriber prices it off the " +
-      "per-image rate card — but the PINNED gemini-connector does not report " +
-      "that usage yet, so every image row written in production still lands with " +
-      "cost_usd NULL. The entry closes when the connector reports and the " +
-      "extension pin advances, not when this mechanism merges.",
-    knownOpenIssue: 2641,
-    mustContain: "generateImage",
-    pinnedExtension: {
-      packageName: "@cinatra-ai/gemini-connector",
-      resolvedSha: "afa62b4bb875e46f71114f65fe2ad768eefb3320",
-    },
-  },
   {
     file: "packages/objects/src/graphiti-client.ts",
     why:
@@ -435,13 +427,14 @@ describe("known-open paths are recorded, not hidden", () => {
     expect(client!.text).not.toMatch(/source:\s*"llm"/);
   });
 
-  it("image generation is COUNTED now, and its pricing gap is registered", () => {
+  it("image generation is COUNTED now — the seam meters it structurally", () => {
     // cinatra#2641. `adapter.generateImage()` reached a provider, was billed per
     // image and booked NO row — the one response-producing adapter method the
     // seam did not meter. It is metered at the seam now, so its caller leaves
-    // the uncounted inventory and the SEAM joins the counted-but-unpriced one:
-    // the ABI's image response carries no usage, so there are no dollars to
-    // state, only a call to count.
+    // the uncounted inventory. Whether the row it books is PRICED depends on the
+    // pinned connector (see the retirement test below, currently: yes) — but the
+    // seam's own counting duty does not depend on any connector's SHA, so it
+    // stays proved here on its own, unconditionally.
     //
     // These are SOURCE assertions on purpose — this file proves structure. That
     // the row is really written is proved behaviourally in
@@ -451,12 +444,6 @@ describe("known-open paths are recorded, not hidden", () => {
     expect(KNOWN_OPEN_PATHS.some((entry) => entry.file.includes("blog/gemini"))).toBe(
       false,
     );
-
-    const unpriced = COUNTED_BUT_UNPRICED.find(
-      (entry) => entry.file === "packages/llm/src/usage-metering.ts",
-    );
-    expect(unpriced).toBeDefined();
-    expect(unpriced!.knownOpenIssue).toBe(2641);
 
     // The claim has to be true of the code: the seam meters the image method and
     // books it under its OWN operation, so image work stays separable from
@@ -536,43 +523,47 @@ describe("known-open paths are recorded, not hidden", () => {
     expect(card!.text).toMatch(/provider: string \| null \| undefined/);
   });
 
-  it("PRICEABLE is registered separately from PRICED — bound to the connector pin", () => {
-    // The failure this guards: a mechanism merges, the register entry is closed
-    // because "images can be priced now", and every row production actually
-    // writes is still NULL. The pinned connector has to report first, and the
-    // extension pin has to advance, before this entry can go.
-    //
-    // The entry's claim is about code in ANOTHER repo, which this file cannot
-    // read — so it is bound to the SHA the claim was written against instead.
-    // Advancing the pin turns this red and forces the entry to be re-read. That
-    // is the honest guarantee available here: not "the connector still reports
-    // nothing", but "nobody changed which connector we mean without revisiting
-    // this".
-    const unpriced = COUNTED_BUT_UNPRICED.find(
+  it("the image row's counted-but-unpriced entry RETIRED when the pin advanced", () => {
+    // What used to live here: the entry was bound to the exact pinned SHA
+    // (cinatra#2676's `afa62b4`) so that ADVANCING THE PIN — not merging this
+    // mechanism — was the event that forced a re-read. Advancing the pin to
+    // gemini-connector#61 (`bea71fa`) was that forced re-read: the new revision
+    // reports `model` + per-image `usage` from `generateImage()`, matching the
+    // ABI exactly (asserted structurally above), so the row this seam books is
+    // genuinely PRICED now, not merely priceable. The honest move per the old
+    // entry's own instructions is retirement, not a repoint to the new SHA —
+    // repointing would keep tracking a gap that already closed.
+    const stillRegistered = COUNTED_BUT_UNPRICED.find(
       (entry) => entry.file === "packages/llm/src/usage-metering.ts",
     );
-    expect(unpriced).toBeDefined();
-    expect(unpriced!.knownOpenIssue).toBe(2641);
-    // The entry must say what is still missing, not merely that something is.
-    expect(unpriced!.why).toMatch(/pin/i);
+    expect(
+      stillRegistered,
+      "the cinatra#2641 image-pricing gap closed with the gemini-connector pin " +
+        "advance — this entry should be gone, not repointed at a new SHA",
+    ).toBeUndefined();
 
-    const pin = unpriced!.pinnedExtension;
-    expect(pin, "the entry must name the extension pin it depends on").toBeDefined();
+    // The retirement removed exactly one entry, not the mechanism this file
+    // protects overall: Graphiti's (still open, different issue) unpriced row
+    // stays registered.
+    const graphiti = COUNTED_BUT_UNPRICED.find((entry) =>
+      entry.file.includes("graphiti"),
+    );
+    expect(graphiti).toBeDefined();
+    expect(graphiti!.knownOpenIssue).toBe(2578);
 
+    // The pin this retirement turned on: still a pinned extension, and no
+    // longer sitting on the SHA the now-retired entry was bound to.
     const lock = JSON.parse(
       readFileSync(path.join(REPO_ROOT, "cinatra-dev-extensions.lock.json"), "utf8"),
     ) as { packages?: Array<{ packageName: string; resolvedSha: string }> };
     const locked = (lock.packages ?? []).find(
-      (entry) => entry.packageName === pin!.packageName,
+      (entry) => entry.packageName === "@cinatra-ai/gemini-connector",
     );
-    expect(locked, `${pin!.packageName} must still be a pinned extension`).toBeDefined();
+    expect(locked, "@cinatra-ai/gemini-connector must still be a pinned extension").toBeDefined();
     expect(
       locked!.resolvedSha,
-      `${pin!.packageName} moved to ${locked!.resolvedSha}. Re-read the ` +
-        "counted-but-unpriced entry for the image seam: if that revision reports " +
-        "image usage, image rows are PRICED now and the entry closes; if not, " +
-        "repoint the entry at the new SHA.",
-    ).toBe(pin!.resolvedSha);
+      "the pin never advanced past the SHA the retired entry was bound to",
+    ).not.toBe("afa62b4bb875e46f71114f65fe2ad768eefb3320");
   });
 
   it("every counted-but-unpriced path names the issue that owns its pricing gap", () => {
