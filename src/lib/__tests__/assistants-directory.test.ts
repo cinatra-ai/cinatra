@@ -4,11 +4,17 @@
 // actions; remote links match the instance records.
 import { describe, expect, it, vi } from "vitest";
 import {
+  assistantAudienceScopeEntries,
   buildAssistantsDirectory,
   resolveRemoteChatForBoundRoute,
   type AssistantsDirectoryDeps,
 } from "../assistants-directory.server";
 import type { AssistantRegistryEntry } from "../assistant-registry-reader";
+import {
+  isDefaultScopeSelection,
+  scopeSelectionMatchesAny,
+  type NormalizedResourceScope,
+} from "../scope-filter";
 
 function entry(over: Partial<AssistantRegistryEntry> & { packageName: string }): AssistantRegistryEntry {
   return {
@@ -112,6 +118,180 @@ describe("buildAssistantsDirectory (AC#4)", () => {
       listAuthorizedInstances,
     });
     expect(rows[0].remoteInstances).toEqual([]);
+    expect(listAuthorizedInstances).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2688 — the `?scope=` half of the Connectors-style toolbar.
+// ---------------------------------------------------------------------------
+
+const ORG_ASSISTANT = entry({
+  packageName: "@cinatra-ai/org-assistant",
+  displayName: "Org Assistant",
+  handle: "org",
+  audience: [{ subjectKind: "organization", subjectId: "o1" }],
+});
+const TEAM_ASSISTANT = entry({
+  packageName: "@cinatra-ai/team-assistant",
+  displayName: "Team Assistant",
+  handle: "team",
+  audience: [{ subjectKind: "team", subjectId: "t1" }],
+});
+const PROJECT_ASSISTANT = entry({
+  packageName: "@cinatra-ai/project-assistant",
+  displayName: "Project Assistant",
+  handle: "project",
+  audience: [{ subjectKind: "project", subjectId: "p1" }],
+});
+const WORKSPACE_ASSISTANT = entry({
+  packageName: "@cinatra-ai/workspace-assistant",
+  displayName: "Workspace Assistant",
+  handle: "workspace",
+  audience: [{ subjectKind: "workspace", subjectId: null }],
+});
+const ADMIN_ASSISTANT = entry({
+  packageName: "@cinatra-ai/admin-assistant",
+  displayName: "Admin Assistant",
+  handle: "admin",
+  audience: [{ subjectKind: "admin", subjectId: null }],
+});
+
+const SCOPED_REGISTRY = [
+  CINATRA,
+  ORG_ASSISTANT,
+  TEAM_ASSISTANT,
+  PROJECT_ASSISTANT,
+  WORKSPACE_ASSISTANT,
+  ADMIN_ASSISTANT,
+];
+
+/**
+ * Build the injected `?scope=` predicate the /assistants page builds, from the
+ * REAL shared helpers — so these tests exercise the same OR-semantics the page
+ * does, while the resolver itself stays free of a scope-filter value import.
+ */
+function scopeMatchFor(scopeTokens: string[]) {
+  if (isDefaultScopeSelection(scopeTokens)) return undefined;
+  return (scopeEntries: readonly NormalizedResourceScope[]) =>
+    scopeEntries.some((entry) => scopeSelectionMatchesAny(scopeTokens, entry));
+}
+
+async function handlesForScope(scopeTokens?: string[]): Promise<string[]> {
+  const rows = await buildAssistantsDirectory(
+    { readVisibleRegistry: async () => SCOPED_REGISTRY, listAuthorizedInstances: async () => [] },
+    scopeTokens ? { scopeMatch: scopeMatchFor(scopeTokens) } : {},
+  );
+  return rows.map((r) => r.handle).sort();
+}
+
+describe("assistantAudienceScopeEntries (cinatra#2688)", () => {
+  it("maps each audience subject kind to the shared scope vocabulary", () => {
+    expect(
+      assistantAudienceScopeEntries({
+        isBuiltin: false,
+        audience: [
+          { subjectKind: "workspace", subjectId: null },
+          { subjectKind: "admin", subjectId: null },
+          { subjectKind: "organization", subjectId: "o1" },
+          { subjectKind: "team", subjectId: "t1" },
+          { subjectKind: "project", subjectId: "p1" },
+        ],
+      }),
+    ).toEqual([
+      { locus: "workspace" },
+      { locus: "workspace", adminOnly: true },
+      { locus: "organization", locusId: "o1" },
+      { locus: "team", locusId: "t1" },
+      { locus: "project", locusId: "p1" },
+    ]);
+  });
+
+  it("FAILS CLOSED on an unknown kind and on an id-less org/team/project grant", () => {
+    expect(
+      assistantAudienceScopeEntries({
+        isBuiltin: false,
+        audience: [
+          { subjectKind: "wat", subjectId: "x" },
+          { subjectKind: "organization", subjectId: null },
+          { subjectKind: "team", subjectId: null },
+          { subjectKind: "project", subjectId: null },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it("normalizes the grant-less builtin to the workspace locus", () => {
+    expect(assistantAudienceScopeEntries({ isBuiltin: true })).toEqual([{ locus: "workspace" }]);
+    // A non-builtin with no grants folds to NOTHING — it can never over-match.
+    expect(assistantAudienceScopeEntries({ isBuiltin: false })).toEqual([]);
+  });
+});
+
+describe("buildAssistantsDirectory ?scope= filter (cinatra#2688)", () => {
+  it("shows every audience-admitted row when no selection is passed", async () => {
+    expect(await handlesForScope()).toEqual([
+      "admin",
+      "cinatra",
+      "org",
+      "project",
+      "team",
+      "workspace",
+    ]);
+  });
+
+  it("the default selection short-circuits — it narrows nothing", async () => {
+    expect(await handlesForScope(["workspace"])).toEqual(await handlesForScope());
+  });
+
+  it("an org selection matches ONLY that org's grants", async () => {
+    expect(await handlesForScope(["org:o1"])).toEqual(["org"]);
+    expect(await handlesForScope(["org:o2"])).toEqual([]);
+  });
+
+  it("team and project selections match their own concrete locus only", async () => {
+    expect(await handlesForScope(["team:t1"])).toEqual(["team"]);
+    expect(await handlesForScope(["project:p1"])).toEqual(["project"]);
+  });
+
+  it("OR-unions a multi-token selection", async () => {
+    expect(await handlesForScope(["team:t1", "project:p1"])).toEqual(["project", "team"]);
+  });
+
+  it("the admin token is a visibility TIER, not 'everything non-personal'", async () => {
+    expect(await handlesForScope(["admin"])).toEqual(["admin"]);
+  });
+
+  it("no assistant matches `personal` — assistant_audience has no per-user subject kind", async () => {
+    expect(await handlesForScope(["personal"])).toEqual([]);
+  });
+
+  it("carries the fold onto each row so the filter and the row agree", async () => {
+    const rows = await buildAssistantsDirectory({
+      readVisibleRegistry: async () => [TEAM_ASSISTANT],
+      listAuthorizedInstances: async () => [],
+    });
+    expect(rows[0].scopeEntries).toEqual([{ locus: "team", locusId: "t1" }]);
+  });
+
+  it("an excluded row never costs an instance-authority round trip", async () => {
+    // The scope check runs BEFORE listAuthorizedInstances, so filtering out a
+    // remote-capable assistant does no per-row authorization work.
+    const listAuthorizedInstances = vi.fn(async () => []);
+    const remoteOutOfScope = entry({
+      packageName: "@cinatra-ai/wordpress-assistant",
+      handle: "wordpress",
+      launch: { kind: "remote", targetProvider: "wordpress" },
+      audience: [{ subjectKind: "team", subjectId: "t9" }],
+    });
+    const rows = await buildAssistantsDirectory(
+      {
+        readVisibleRegistry: async () => [remoteOutOfScope],
+        listAuthorizedInstances,
+      },
+      { scopeMatch: scopeMatchFor(["team:t1"]) },
+    );
+    expect(rows).toEqual([]);
     expect(listAuthorizedInstances).not.toHaveBeenCalled();
   });
 });
