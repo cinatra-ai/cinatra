@@ -108,3 +108,127 @@ something it does not show. The two composed images (V11, V14) put a real panel
 screenshot and a real server-log excerpt in one frame, both labelled as what they
 are — nothing in either was redrawn. The one file that is not a delivered view
 carries `PARTIAL` in its name.
+
+---
+
+# The seed wave — V9r and V13 are REAL, and the blocker is gone
+
+Captured 2026-08-13 on host2, on the SAME stack, at
+`lane/2683-s8f-parity` with the in-process seed path. The two views the previous
+section listed as NOT DELIVERED and PARTIAL are now delivered, and the reason
+they could not be is closed rather than worked around.
+
+| View | File | State |
+|---|---|---|
+| V9r | `V9r-REAL-verification-card-advisory.png` | **DELIVERED — REAL** |
+| V13 | `V13-REAL-undo-chip-on-seeded-changeset.png` | **DELIVERED — REAL** |
+
+`V13-PARTIAL-run-card-mounts-no-changeset.png` is kept: it is the honest record
+of the state before this wave (the run card mounted, no chip), and the two read
+side by side.
+
+## What changed
+
+The previous section named ONE cause for both gaps: the writers that produce an
+`artifact_verification_records` row and a CLOSED, restorable `change_set` with
+member events are `server-only` behind a top-level `await` in `src/lib/auth.ts`
+that tsx's CJS output rejects, so no out-of-process runner can load them.
+
+This wave adds the smallest thing that puts a caller INSIDE the Next process — a
+development-only, capability-gated, loopback POST that names a SUBJECT (an org, a
+reader, an existing run) and calls the shipped writers. It holds no SQL. The
+fence and its reasoning live in `src/lib/test-support/lifecycle-seed-fence.ts`.
+
+## V9r — a VERIFICATION card in the shipped plugin's panel
+
+The pipeline ran end to end: `createSemanticArtifact` -> `emitArtifactReviewGate`
+-> `recordChangesRequested` -> `createSemanticArtifact` -> `submitRepairResponse`,
+whose own trigger minted the record. The seed's answer, read back through the
+shipped read port:
+
+```
+successorGateId  f790a65f-5185-47b5-b075-9439dab03140
+verificationRecordPresent  true
+verificationOutcome        drifted
+```
+
+and the row itself, joined to its gate:
+
+```
+verify:f790a65f-…  outcome=drifted  gate_status=pending
+run-ff2087fd-0872-4745-ae8b-f576d41f35aa
+lifecycle-review:repair:b3863564-…:1
+```
+
+**The verdict is `drifted`, not `verified`, and that is reported rather than
+tuned.** The seed does not choose it: `computeVerificationVerdict` projects the
+reviewed and repaired revisions and answers. `drifted` is a real product state —
+the reading exists and is advisory, which is exactly what the card draws.
+
+On screen: the real WordPress page editor, the shipped plugin's panel, the
+reader's own message, the assistant's reply, and the **Verification /
+"Advisory reading."** card. The DOM probe on that frame:
+`lifecycleCards: 1`, `states: ["advisory"]`.
+
+The turn NAMED the card ref. It has to: `artifact_review_gates_list` answers with
+the oldest five gates a caller may read, this org's backlog has nine, and a
+verification reading only exists for a target that has been repaired — so the
+head of that list is never the item with a reading. Naming grants nothing; the
+ref is opaque and the real primitive decodes it and re-runs the whole access
+ladder. This is the same stand-in the run card already makes for a named run.
+
+## V13 — the undo chip, on a change-set that really exists
+
+`openChangeSet` -> `historyAwareUpsert` -> `closeChangeSet`, seeded 14 seconds
+before the capture opened. The seed's answer:
+
+```
+changeSetId       cs_8b8ee5db-cfe7-4f63-967c-3fec6d3e9bd0
+objectType        @cinatra-ai/text-artifact:artifact
+memberEventCount  1
+effectRollup      reversible-internal
+restorable        true
+closedAt          2026-08-12T23:45:06.100Z
+```
+
+**`memberEventCount: 1` is the whole point.** The previous wave refused to
+photograph this chip because a `change_set` row with NO member events also
+satisfies its gate — `bool_and(restore_eligible)` over zero rows is not `false` —
+so the chip would have drawn over the restore of nothing. The set here closes
+over a REAL object write, and the event is restore-eligible.
+
+The panel's own network record for the captured turn:
+
+```
+GET /api/chat/undo-candidate?runId=run-671960a9-35e0-4fc1-80e2-2333fc23e28c
+  -> 200 {"changeSetId":"cs_8b8ee5db-cfe7-4f63-967c-3fec6d3e9bd0"}
+```
+
+byte-identical to the id the seed returned. On screen: the inline run card
+RESOLVED ("Agentic Run Progress", `queued`, "Waiting to start...") and the
+**"Undo last action"** chip beside it. The chip drew because the §VI eligibility
+gate found that closed, restorable set inside its five-minute window and then
+authorized THIS reader against its events — not because a row existed.
+
+## The fence, exercised on the live stack
+
+Every refusal below was measured against this running server, which listens on
+`0.0.0.0` — so the LAN case is a real request from a real address, not a mock.
+
+```
+no capability                                 -> 403 capability-not-presented
+wrong capability                              -> 403 capability-not-presented
+LAN address + "Host: localhost", no capability -> 403 capability-not-presented
+right capability, content-type: text/plain    -> 403 non-json-content-type
+right capability, x-forwarded-for: 203.0.113.7 -> 403 forwarded-from-off-host
+right capability, correct shape                -> 200
+```
+
+The Host-spoof line is the one worth reading twice. `new URL(request.url).hostname`
+reflects the HOST HEADER, not the socket peer, so every host-shaped check passes
+for a remote caller who simply sets it. The capability is what refuses.
+
+## RENDER-VERIFY
+
+Both PNGs were opened and read before they were committed. Each caption states
+what is visible in its own frame. Neither is composed; nothing was redrawn.
