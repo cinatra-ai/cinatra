@@ -481,19 +481,30 @@ describe("strictVerdict — the FULL strict-mode pass condition", () => {
     expect(verdict.ready).toBe(false);
     // Every criterion #1943 can prove with code is green and structurally
     // verified: the mint/seam/registry rows in the root and packages/agents
-    // tiers, and the raced-Postgres rows in the DB tiers. The ONE row that
-    // stays honestly red is the 3-role live Playwright proof, which is
-    // blocked on product code that does not exist yet: cinatra#1942's
-    // Danger-zone Archive/Unarchive affordance (verified absent — no
-    // src/app or src/components surface references archiveOrganization /
-    // unarchiveOrganization). No test can drive "owner archives/unarchives"
-    // through an affordance that has not been built, so this row must not be
-    // flipped by this slice. Its ciDependency names build-image.yml's
-    // `e2e-rbac` job — the production-equivalent Playwright job — so the spec
-    // becomes strict-verifiable the moment it lands under tests/e2e/rbac/
-    // (that suite's config globs the directory; no workflow change is needed
-    // to RUN it, only the one-line `needs: e2e-rbac` edge on this gate's own
-    // job, which is workflow-scoped and therefore its own PR).
+    // tiers, and the raced-Postgres rows in the DB tiers. The ONE row still
+    // red is the 3-role live Playwright proof.
+    //
+    // CORRECTION (was wrong here from #2703 until #1942's UI lane): this
+    // comment used to say that row was "blocked on product code that does not
+    // exist yet — cinatra#1942's Danger-zone Archive/Unarchive affordance
+    // (verified absent)". That claim rested on a PATH-SCOPED grep of src/app
+    // and src/components. The affordance was already built and merged, in
+    // `packages/dashboards/src/` — organization-archive-danger-form.tsx, the
+    // archive/unarchive cards in organization-manage-panel.tsx, and the
+    // gate-aware `archiveControl` computation in screens/organization-
+    // settings.tsx, all landed with #2273 (V5) — which is why the grep found
+    // nothing under the two directories it looked in. Nothing was missing;
+    // the search was.
+    //
+    // What is actually outstanding is narrower and purely structural. The
+    // live spec now exists (tests/e2e/rbac/rbac-org-archive-live.spec.ts) and
+    // RUNS: this row's ciDependency names build-image.yml's `e2e-rbac` job,
+    // whose config globs tests/e2e/rbac/, so no workflow change is needed to
+    // run it. The row stays red only until the one-line `needs: e2e-rbac`
+    // edge lands on this gate's OWN job — a .github/workflows change, hence
+    // its own maintainer-gated PR. Until then `strictCheckRow` cannot verify
+    // a green claim here, and the assertion two lines below would fail if
+    // this slice flipped it anyway.
     expect(verdict.notYetGreen).toEqual([
       "3-role live Playwright proof (owner archives/unarchives; admin/member read-only; non-member 404) on a production-equivalent build",
     ]);

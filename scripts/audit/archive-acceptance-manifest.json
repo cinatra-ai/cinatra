@@ -277,12 +277,57 @@
     {
       "criterion": "3-role live Playwright proof (owner archives/unarchives; admin/member read-only; non-member 404) on a production-equivalent build",
       "owner": "self",
+      "e2eProof": [
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "the owner archives the organization from the Danger zone and it goes read-only"
+        },
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "the owner unarchives the organization and it is restored"
+        },
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "an org admin is read-only on the archived organization and gets no archive control"
+        },
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "an ordinary member sees the organization as archived, with no management or archive control"
+        },
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "the same archive submission is refused by the action when it carries an org admin's or a member's session"
+        },
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "a non-member gets a 404 on the archived organization's settings surface"
+        }
+      ],
+      "negativeControl": [
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "negative control: with the activation gate off, the same owner's same archive submission renders nothing and lands nothing"
+        },
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "negative control: on the active organization the same admin and member see the state invert"
+        },
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "negative control: the same admin session lands the same submission once its membership row says owner"
+        },
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "negative control: the same non-member reaches the same organization once their membership row exists"
+        }
+      ],
       "ciDependency": {
         "workflow": "build-image.yml",
         "job": "e2e-rbac"
       },
       "status": "red",
-      "trackingIssue": 1942
+      "trackingIssue": 1942,
+      "note": "PROOF LANDED, ROW NOT YET CLAIMABLE — and the distinction is mechanical, not editorial. The spec and its four red halves above exist, are grep-verified by audit mode, and RUN: they live in tests/e2e/rbac/, which tests/e2e/config/rbac.config.ts globs, so build-image.yml's e2e-rbac job executes them with no workflow change. What is still missing is ONE structural edge: this gate's own job, archive-acceptance-gate, does not `needs: e2e-rbac`. strictCheckRow therefore reports a green claim on this row as unverifiable, and scripts/audit/__tests__/archive-acceptance-gate.test.mjs — which runs in the blocking `test` job — asserts that EVERY green row passes strictCheckRow with zero reasons. Flipping this row green before that edge exists would turn a blocking CI job red: a false claim the gate itself catches. Adding the edge is a .github/workflows change — a high-risk, maintainer-gated path this program deliberately keeps in its own sibling PR (PR #2703's Decision 6, where it is item 1 of three). The flip is then this one word, on the strength of a green e2e-rbac run: no test, no proof and no further CI work remains."
     }
   ]
 }
