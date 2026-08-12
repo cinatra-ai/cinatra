@@ -110,6 +110,14 @@ let nowMs: number;
 // a column DEFAULT, so an UPDATE never moves it). cinatra#2631, rework rounds
 // 4 and 6.
 let sessionRows: Map<string, number>; // session id -> cinatra_db_created_at (ms)
+// cinatra#2684 — which Better Auth session rows are STILL SIGNED IN. Deleting an
+// id from this set is exactly what a sign-out or a revoke does to the row, and
+// it is the only thing the widget flow ever learns about a session.
+let liveSessionIds: Set<string>;
+/** The session the hosted sign-in ran under, unless a test says otherwise. */
+const SESSION_A = "sess-A";
+/** A SECOND live session of the SAME person — the per-session negative control. */
+const SESSION_B = "sess-B";
 
 function tableOf(sql: string): "txn" | "code" | "token" | null {
   if (sql.includes("widget_auth_transactions")) return "txn";
@@ -127,6 +135,25 @@ function storeOf(t: "txn" | "code" | "token") {
 // UPDATE ... SET consumed_at=now() ... RETURNING, DELETE ... WHERE key=$1 ...
 // RETURNING, and the unconditional "DELETE ... WHERE expires_at < now()" sweep.
 function exec(sql: string, values: unknown[] = []): { rows: Record<string, unknown>[] } {
+  // cinatra#2684 — the parent-session liveness read (widget-session-binding.ts).
+  // It is the ONE question every widget verifier asks about a session, and it
+  // hits Better Auth's own table, not one of the three widget tables. A row is
+  // returned only while the id is in the live set; a sign-out removes it, which
+  // is exactly what deleting the session row does in production.
+  if (sql.includes('"public"."session"') && sql.includes("AS alive")) {
+    return { rows: liveSessionIds.has(String(values[0])) ? [{ alive: 1 }] : [] };
+  }
+  // The sign-out cascade: delete every widget row bound to ONE session id. Keyed
+  // equality, so a row bound to another session is untouched (AC-5).
+  if (sql.startsWith("DELETE") && sql.includes("auth_session_id = $1")) {
+    const target = String(values[0]);
+    const t2 = tableOf(sql);
+    if (!t2) return { rows: [] };
+    const store2 = storeOf(t2);
+    for (const [k, r] of store2) if (r.auth_session_id === target) store2.delete(k);
+    return { rows: [] };
+  }
+
   const t = tableOf(sql);
   if (!t) return { rows: [] };
   const store = storeOf(t);
@@ -260,6 +287,8 @@ beforeEach(() => {
   codeStore = new Map();
   tokenStore = new Map();
   sessionRows = new Map();
+  // Both sessions start signed in; a test that wants a sign-out deletes one.
+  liveSessionIds = new Set([SESSION_A, SESSION_B]);
   nowMs = Date.UTC(2026, 5, 21, 12, 0, 0);
   vi.clearAllMocks();
   vi.spyOn(Date, "now").mockImplementation(() => nowMs);
@@ -417,7 +446,7 @@ describe("issueUserAuthCode — single-use transaction consume", () => {
     const t = newTxn(SITE_A);
     expect(t.ok).toBe(true);
     if (!t.ok) return;
-    const issued = issueUserAuthCode({ txnId: t.txnId, userId: "user-1" });
+    const issued = issueUserAuthCode({ authSessionId: SESSION_A, txnId: t.txnId, userId: "user-1" });
     expect(issued.ok).toBe(true);
     if (!issued.ok) return;
     expect(issued.siteOrigin).toBe(SITE_A.siteOrigin);
@@ -432,15 +461,15 @@ describe("issueUserAuthCode — single-use transaction consume", () => {
   it("a second issue for the same (already-consumed) txn fails", () => {
     const t = newTxn(SITE_A);
     if (!t.ok) return;
-    expect(issueUserAuthCode({ txnId: t.txnId, userId: "user-1" }).ok).toBe(true);
-    const second = issueUserAuthCode({ txnId: t.txnId, userId: "user-1" });
+    expect(issueUserAuthCode({ authSessionId: SESSION_A, txnId: t.txnId, userId: "user-1" }).ok).toBe(true);
+    const second = issueUserAuthCode({ authSessionId: SESSION_A, txnId: t.txnId, userId: "user-1" });
     expect(second).toEqual({ ok: false, reason: "txn_not_found" });
   });
   it("an expired txn cannot issue a code", () => {
     const t = newTxn(SITE_A);
     if (!t.ok) return;
     nowMs += (__testing.TRANSACTION_TTL_SECONDS + 1) * 1000;
-    expect(issueUserAuthCode({ txnId: t.txnId, userId: "user-1" })).toEqual({
+    expect(issueUserAuthCode({ authSessionId: SESSION_A, txnId: t.txnId, userId: "user-1" })).toEqual({
       ok: false,
       reason: "txn_not_found",
     });
@@ -451,7 +480,7 @@ describe("redeemUserAuthCode — PKCE + single-use + cross-site binding", () => 
   function issueCodeFor(site = SITE_A) {
     const t = newTxn(site);
     if (!t.ok) throw new Error("txn failed");
-    const issued = issueUserAuthCode({ txnId: t.txnId, userId: "user-1" });
+    const issued = issueUserAuthCode({ authSessionId: SESSION_A, txnId: t.txnId, userId: "user-1" });
     if (!issued.ok) throw new Error("issue failed");
     return issued.code;
   }
@@ -528,7 +557,7 @@ describe("consumeUserWidgetToken — live binding re-checks (CHILD 3 surface)", 
   function mintToken(site = SITE_A) {
     const t = newTxn(site);
     if (!t.ok) throw new Error("txn");
-    const issued = issueUserAuthCode({ txnId: t.txnId, userId: "user-1" });
+    const issued = issueUserAuthCode({ authSessionId: SESSION_A, txnId: t.txnId, userId: "user-1" });
     if (!issued.ok) throw new Error("issue");
     const r = redeemUserAuthCode({
       code: issued.code,
@@ -694,7 +723,7 @@ describe("lifecycle-read scope + audience (cinatra#2574)", () => {
   function mintTokenWithGrant(grantedScopes?: readonly WidgetExtensionScope[]) {
     const t = newTxn(SITE_A);
     if (!t.ok) throw new Error("txn");
-    const issued = issueUserAuthCode({
+    const issued = issueUserAuthCode({ authSessionId: SESSION_A,
       txnId: t.txnId,
       userId: "user-1",
       ...(grantedScopes ? { grantedScopes } : {}),
@@ -924,7 +953,7 @@ describe("lifecycle-read scope + audience (cinatra#2574)", () => {
     if (!t.ok) throw new Error("txn");
     ensureSchemaMock.mockClear();
     runPostgresQueriesSyncMock.mockClear();
-    const issued = issueUserAuthCode({
+    const issued = issueUserAuthCode({ authSessionId: SESSION_A,
       txnId: t.txnId,
       userId: "user-1",
       grantedScopes: WIDGET_SIGNIN_GRANTED_SCOPES,
@@ -959,7 +988,7 @@ describe("lifecycle-read scope + audience (cinatra#2574)", () => {
     });
     expect(t.ok).toBe(true);
     if (!t.ok) return;
-    const issued = issueUserAuthCode({ txnId: t.txnId, userId: "user-1" });
+    const issued = issueUserAuthCode({ authSessionId: SESSION_A, txnId: t.txnId, userId: "user-1" });
     expect(issued.ok).toBe(true);
     if (!issued.ok) return;
     expect(
@@ -1007,7 +1036,7 @@ describe("rotation TOCTOU regression (cinatra#407 merge-time codex finding)", ()
       state: STATE,
     });
     if (!t.ok) throw new Error("txn failed");
-    const issued = issueUserAuthCode({ txnId: t.txnId, userId: "user-1" });
+    const issued = issueUserAuthCode({ authSessionId: SESSION_A, txnId: t.txnId, userId: "user-1" });
     if (!issued.ok) throw new Error("issue failed");
     const r = redeemUserAuthCode({
       code: issued.code,
@@ -1360,13 +1389,13 @@ describe("the displayed-scope record on the transaction (cinatra#2631)", () => {
     recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", a.hash);
     recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", a.hash);
     expect(loadActiveTransaction(t.txnId)).not.toBeNull();
-    expect(issueUserAuthCode({ txnId: t.txnId, userId: "user-1" }).ok).toBe(true);
+    expect(issueUserAuthCode({ authSessionId: SESSION_A, txnId: t.txnId, userId: "user-1" }).ok).toBe(true);
   });
 
   it("returns null for a transaction that is gone", () => {
     const t = newTxn(SITE_A);
     if (!t.ok) throw new Error("txn");
-    expect(issueUserAuthCode({ txnId: t.txnId, userId: "user-1" }).ok).toBe(true);
+    expect(issueUserAuthCode({ authSessionId: SESSION_A, txnId: t.txnId, userId: "user-1" }).ok).toBe(true);
     expect(
       recordDisplayedScopesForTransaction(t.txnId, "lifecycle.read", arrival().hash),
     ).toBeNull();
@@ -1696,5 +1725,239 @@ describe("widgetSessionFingerprint — one session, one name", () => {
     const theirs = noScreenTokenFor("sess-B");
     expect(displayedScopesAgree(theirs, WIDGET_SIGNIN_GRANTED_SCOPES, mine)).toBe(false);
     expect(displayedScopesAgree(mine, WIDGET_SIGNIN_GRANTED_SCOPES, mine)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2684 — SIGN-OUT MEANS SIGNED OUT, EVERYWHERE, AT ONCE.
+//
+// A `cwu_` widget row is now bound to the exact Better Auth session whose
+// sign-in authorized it, and every verification re-asks whether that session is
+// still there. These are the issue's acceptance criteria, each paired with the
+// control that must still pass — a rejection nobody can distinguish from a
+// broken flow proves nothing, so every "refused" case below sits next to the
+// same call under a live session.
+// ---------------------------------------------------------------------------
+describe("the widget token dies with the session that authorized it (cinatra#2684)", () => {
+  const CHAT_PATH = "/api/assistants/chat";
+
+  beforeEach(() => {
+    getActiveConnectSiteByIdMock.mockImplementation((siteId: string) =>
+      siteId === SITE_A.siteId
+        ? {
+            siteId: SITE_A.siteId,
+            client: "wordpress",
+            widgetOrigin: SITE_A.siteOrigin,
+            orgId: SITE_A.orgId,
+            credentialVersion: SITE_A.credentialVersion,
+          }
+        : null,
+    );
+  });
+
+  /** Run the whole hosted flow under ONE named session and return the bearer. */
+  function mintTokenUnder(authSessionId: string, site = SITE_A): string {
+    const t = newTxn(site);
+    if (!t.ok) throw new Error("txn");
+    const issued = issueUserAuthCode({ authSessionId, txnId: t.txnId, userId: "user-1" });
+    if (!issued.ok) throw new Error(`issue: ${issued.reason}`);
+    const r = redeemUserAuthCode({
+      code: issued.code,
+      codeVerifier: VERIFIER,
+      site,
+      issuerBaseUrl: "https://cinatra.test",
+    });
+    if (!r.ok) throw new Error(`redeem: ${r.reason}`);
+    return r.token;
+  }
+
+  function turn(token: string) {
+    return consumeUserWidgetToken({
+      token,
+      agentSlug: "wordpress-content-editor",
+      routePath: CHAT_PATH,
+      requestOrigin: SITE_A.siteOrigin,
+    });
+  }
+
+  // AC-1. The regression test: a widget turn under a signed-out session refuses.
+  // Its control is the SAME token one line earlier, while the session was live —
+  // which is precisely what fails when the binding or the liveness check is
+  // reverted, because then the token is accepted after the sign-out too.
+  it("AC-1 after sign-out a widget turn with that session's token is refused", () => {
+    const token = mintTokenUnder(SESSION_A);
+    expect(turn(token).ok).toBe(true); // control: live session, same token
+
+    liveSessionIds.delete(SESSION_A); // the sign-out
+
+    expect(turn(token)).toEqual({ ok: false, reason: "session_revoked" });
+  });
+
+  it("the refused row is DELETED, so a second turn cannot even find it", () => {
+    const token = mintTokenUnder(SESSION_A);
+    liveSessionIds.delete(SESSION_A);
+    expect(turn(token)).toEqual({ ok: false, reason: "session_revoked" });
+    // The row is gone now — the reason changes from "your session ended" to
+    // "there is no such token", which is what a swept row answers.
+    expect(turn(token)).toEqual({ ok: false, reason: "not_found" });
+  });
+
+  // AC-4, first half. Revoking one exact session invalidates its bound rows.
+  it("AC-4 revoking the exact session invalidates the rows bound to it", () => {
+    const token = mintTokenUnder(SESSION_A);
+    liveSessionIds.delete(SESSION_A);
+    expect(turn(token).ok).toBe(false);
+  });
+
+  // AC-5 — THE PRECISION CONTROL. One person, two live sessions, two widget
+  // tokens. Ending one must not touch the other. A cascade keyed on the USER
+  // rather than the SESSION passes every other test on this page and fails only
+  // this one, which is why it is here.
+  it("AC-5 revoking ONE session leaves another live session's token working", () => {
+    const tokenA = mintTokenUnder(SESSION_A);
+    const tokenB = mintTokenUnder(SESSION_B);
+    expect(turn(tokenA).ok).toBe(true);
+    expect(turn(tokenB).ok).toBe(true);
+
+    liveSessionIds.delete(SESSION_A); // sign out of ONE of them
+
+    expect(turn(tokenA)).toEqual({ ok: false, reason: "session_revoked" });
+    expect(turn(tokenB).ok).toBe(true); // …and the other is untouched
+  });
+
+  // AC-4, second half. Revoking ALL of a user's sessions kills every bound row,
+  // because each session is asked about independently.
+  it("AC-4 revoking every session of the user invalidates every bound row", () => {
+    const tokenA = mintTokenUnder(SESSION_A);
+    const tokenB = mintTokenUnder(SESSION_B);
+
+    liveSessionIds.clear();
+
+    expect(turn(tokenA).ok).toBe(false);
+    expect(turn(tokenB).ok).toBe(false);
+  });
+
+  // AC-6 — the PRE-REDEMPTION revocation. The code is already issued and the CMS
+  // backend still holds it; the person signs out before it is exchanged. No live
+  // token may come out of that exchange.
+  it("AC-6 a code whose session is revoked BEFORE redemption mints no token", () => {
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    const issued = issueUserAuthCode({
+      authSessionId: SESSION_A,
+      txnId: t.txnId,
+      userId: "user-1",
+    });
+    if (!issued.ok) throw new Error("issue");
+
+    liveSessionIds.delete(SESSION_A); // signed out between issue and redeem
+
+    expect(
+      redeemUserAuthCode({
+        code: issued.code,
+        codeVerifier: VERIFIER,
+        site: SITE_A,
+        issuerBaseUrl: "https://cinatra.test",
+      }),
+    ).toEqual({ ok: false, reason: "invalid_grant" });
+  });
+
+  it("AC-6 control: the same exchange under a LIVE session still mints a token", () => {
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    const issued = issueUserAuthCode({
+      authSessionId: SESSION_A,
+      txnId: t.txnId,
+      userId: "user-1",
+    });
+    if (!issued.ok) throw new Error("issue");
+    const redeemed = redeemUserAuthCode({
+      code: issued.code,
+      codeVerifier: VERIFIER,
+      site: SITE_A,
+      issuerBaseUrl: "https://cinatra.test",
+    });
+    expect(redeemed.ok).toBe(true);
+  });
+
+  // AC-7. Nothing about a LIVE session's token changed: the TTL is the same
+  // fifteen minutes, and every pre-existing liveness check still decides.
+  it("AC-7 TTL and the existing live re-checks are unchanged for a live session", () => {
+    const token = mintTokenUnder(SESSION_A);
+    expect(turn(token).ok).toBe(true);
+
+    // Same TTL boundary as before this slice.
+    nowMs += (__testing.USER_TOKEN_TTL_SECONDS - 1) * 1000;
+    expect(turn(token).ok).toBe(true);
+    nowMs += 2000;
+    expect(turn(token)).toEqual({ ok: false, reason: "expired" });
+
+    // …and the site re-check still fires first-class on a fresh token.
+    const token2 = mintTokenUnder(SESSION_A);
+    getActiveConnectSiteByIdMock.mockReturnValue(null);
+    expect(turn(token2)).toEqual({ ok: false, reason: "site_revoked" });
+  });
+
+  // The binding is only trustworthy if it can never be absent. An authorization
+  // the server cannot attribute to a session is refused at the source, BEFORE
+  // the single-use transaction is burned.
+  it("an authorization with no nameable session issues nothing, and spares the transaction", () => {
+    const t = newTxn(SITE_A);
+    if (!t.ok) throw new Error("txn");
+    expect(issueUserAuthCode({ authSessionId: "  ", txnId: t.txnId, userId: "user-1" })).toEqual({
+      ok: false,
+      reason: "no_auth_session",
+    });
+    // The transaction was NOT consumed — the person can still complete the flow.
+    expect(
+      issueUserAuthCode({ authSessionId: SESSION_A, txnId: t.txnId, userId: "user-1" }).ok,
+    ).toBe(true);
+  });
+
+  // A row minted before this slice names no parent. It cannot prove one is
+  // alive, so it fails closed — bounded entirely by its own 15-minute TTL.
+  it("a pre-binding token row (no session named) fails closed at the next turn", () => {
+    const token = mintTokenUnder(SESSION_A);
+    for (const row of tokenStore.values()) row.auth_session_id = null;
+    expect(turn(token)).toEqual({ ok: false, reason: "session_revoked" });
+  });
+
+  // codex round 0, finding 4. Refusing is right; DESTROYING is only right when
+  // the answer was a fact. A store that could not answer must not turn a blip
+  // into a forced re-login for a token that was still perfectly good.
+  it("an UNANSWERABLE liveness read refuses the turn but does NOT destroy the token", () => {
+    const token = mintTokenUnder(SESSION_A);
+    const before = tokenStore.size;
+
+    // The session read throws — everything else still works.
+    const realImpl = runPostgresQueriesSyncMock.getMockImplementation()!;
+    runPostgresQueriesSyncMock.mockImplementation(
+      (input: { queries: { text: string; values?: unknown[] }[] }) => {
+        if (input.queries.some((q) => q.text.includes('"public"."session"'))) {
+          throw new Error("connection terminated unexpectedly");
+        }
+        return realImpl(input);
+      },
+    );
+    expect(turn(token)).toEqual({ ok: false, reason: "session_revoked" });
+    expect(tokenStore.size, "the row survives an outage").toBe(before);
+
+    // …and once the store answers again, the still-live session works.
+    runPostgresQueriesSyncMock.mockImplementation(realImpl);
+    expect(turn(token).ok).toBe(true);
+  });
+
+  it("a DEFINITELY dead session still reaps the row (the difference is the point)", () => {
+    const token = mintTokenUnder(SESSION_A);
+    liveSessionIds.delete(SESSION_A);
+    turn(token);
+    expect(tokenStore.size).toBe(0);
+  });
+
+  it("the token row records the session it was minted under, and only that one", () => {
+    mintTokenUnder(SESSION_A);
+    mintTokenUnder(SESSION_B);
+    const bound = [...tokenStore.values()].map((r) => r.auth_session_id).sort();
+    expect(bound).toEqual([SESSION_A, SESSION_B]);
   });
 });

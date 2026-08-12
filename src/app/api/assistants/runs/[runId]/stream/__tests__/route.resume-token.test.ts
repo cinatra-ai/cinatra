@@ -20,6 +20,15 @@ const getAssistantThread = vi.fn();
 const loadChatThreadForActorAccess = vi.fn();
 const subscribeToAgUiEventsWithId = vi.fn();
 
+const parentLiveness = vi.fn((_jti: unknown) => "live" as "live" | "dead" | "unknown");
+
+// cinatra#2684 — the resume token is derived from a `cwu_` row, so the route
+// re-asks whether that row's Better Auth session is still signed in. Mocked as a
+// data switch: "live" is a signed-in person, anything else is a sign-out.
+vi.mock("@/lib/widget-session-binding", () => ({
+  readWidgetTokenParentLiveness: (jti: unknown) => parentLiveness(jti),
+}));
+
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: () => getAuthSession(),
   isPlatformAdmin: (s: unknown) => isPlatformAdmin(s),
@@ -74,6 +83,7 @@ function mintResume(runId: string): string {
     kind: "wordpress",
     runId,
     jti: "run-nonce-1",
+    parentJti: "parent-jti-1",
   });
 }
 
@@ -89,6 +99,8 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: the person who started the run is still signed in.
+  parentLiveness.mockReturnValue("live");
   // Default: NO session (the broker path).
   getAuthSession.mockResolvedValue(null);
   isPlatformAdmin.mockReturnValue(false);
@@ -119,6 +131,33 @@ describe("resume seam — broker resume-token ACCEPT", () => {
       RUN,
       expect.objectContaining({ fromId: "42-7" }),
     );
+  });
+
+  // cinatra#2684 — a resume token is a ten-minute tail of a run the person
+  // started while signed in. Signing out must end that tail too, or "sign out
+  // means signed out" would be false for the one surface that streams.
+  it("401s once the sign-in behind the token has ended, and the control streams", async () => {
+    expect((await GET(...req(RUN, { authHeader: `Bearer ${mintResume(RUN)}` }))).status).toBe(
+      200,
+    ); // control: the same token while signed in
+
+    parentLiveness.mockReturnValue("dead"); // the sign-out
+
+    const res = await GET(...req(RUN, { authHeader: `Bearer ${mintResume(RUN)}` }));
+    expect(res.status).toBe(401);
+    expect(subscribeToAgUiEventsWithId).toHaveBeenCalledTimes(1); // only the control
+  });
+
+  it("401s when the parent could not be checked at all — an outage does not authorize", async () => {
+    parentLiveness.mockReturnValue("unknown");
+    expect((await GET(...req(RUN, { authHeader: `Bearer ${mintResume(RUN)}` }))).status).toBe(
+      401,
+    );
+  });
+
+  it("asks about the PARENT jti the token seals, not the per-run nonce", async () => {
+    await GET(...req(RUN, { authHeader: `Bearer ${mintResume(RUN)}` }));
+    expect(parentLiveness).toHaveBeenCalledWith("parent-jti-1");
   });
 
   it("404s (existence not disclosed) when the accepted token's run has no turn row", async () => {

@@ -150,9 +150,15 @@ export async function issueWidgetAuthCodeAction(
   // cinatra#2574 — the granted scope set is the SERVER constant, never a value
   // that travelled with the request: what the sign-in screen names is what the
   // code records. A widget/CMS backend therefore has no way to ask for more.
+  //
+  // cinatra#2684 — the code is BOUND to THIS sign-in. The session id comes off
+  // the server-read session, never off the request, so a widget token can always
+  // be traced back to the one authenticated session that authorized it and dies
+  // when that session does. A session the server cannot name issues nothing.
   const issued = issueUserAuthCode({
     txnId,
     userId,
+    authSessionId: String(session.session?.id ?? ""),
     grantedScopes: WIDGET_SIGNIN_GRANTED_SCOPES,
   });
   if (!issued.ok) {
@@ -163,7 +169,13 @@ export async function issueWidgetAuthCodeAction(
       agentSlug: txn.agentSlug,
       reason: issued.reason,
     });
-    return { ok: false, reason: "transaction_expired" };
+    // A session the server holds but cannot NAME is not a stale transaction, and
+    // saying so would send the person to retry a flow that will refuse again
+    // (cinatra#2684). It is the same answer a missing session gets: sign in.
+    return {
+      ok: false,
+      reason: issued.reason === "no_auth_session" ? "not_authenticated" : "transaction_expired",
+    };
   }
 
   emitWidgetAuthAudit("code_issued", {

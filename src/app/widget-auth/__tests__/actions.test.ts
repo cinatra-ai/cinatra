@@ -111,6 +111,10 @@ describe("one run of the hosted flow records the whole grant", () => {
     expect(issueUserAuthCode).toHaveBeenCalledWith({
       txnId: "txn-1",
       userId: "user-1",
+      // cinatra#2684 — and the SESSION that authorized it, read off the server's
+      // own session and never off the request, so the code (and the token it
+      // mints) dies when that session does.
+      authSessionId: "sess-1",
       grantedScopes: WIDGET_SIGNIN_GRANTED_SCOPES,
     });
     expect(WIDGET_SIGNIN_GRANTED_SCOPES).toContain(WIDGET_LIFECYCLE_READ_SCOPE);

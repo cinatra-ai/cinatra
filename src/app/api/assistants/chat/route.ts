@@ -553,6 +553,13 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
         kind: widgetPrincipal.assistantHandle,
         runId,
         jti: randomUUID(),
+        // cinatra#2684 — the `cwu_` row this turn authenticated against, taken
+        // from the verified claims rather than added to `WidgetPrincipal`: the
+        // principal travels into the MCP OBO token and the carrier run, and a
+        // revocation handle belongs to the credential that needs it, not to
+        // everything downstream of it. The resume route re-asks whether that
+        // row's sign-in is still there before it streams a byte.
+        parentJti: claims.jti,
       }),
   });
   // Reflect CORS onto the streamed response so the cross-origin widget can read

@@ -38,6 +38,12 @@ import {
   runPostgresQueriesSync,
   quotePostgresIdentifier,
 } from "@/lib/postgres-sync";
+import {
+  normalizeWidgetAuthSessionId,
+  readWidgetAuthSessionLiveness,
+  widgetAuthSessionIsLive,
+  WIDGET_AUTH_SESSION_COLUMN,
+} from "@/lib/widget-session-binding";
 
 // ---------------------------------------------------------------------------
 // cinatra#407 — hosted /widget-auth PKCE login + user-scoped widget token.
@@ -686,7 +692,7 @@ export function sessionRowPredatesTransaction(
 
 export type IssueCodeResult =
   | { ok: true; code: string; state: string; siteOrigin: string }
-  | { ok: false; reason: "txn_not_found" };
+  | { ok: false; reason: "txn_not_found" | "no_auth_session" };
 
 /**
  * Atomically CONSUME the transaction (single-use) and issue a user auth code
@@ -704,12 +710,26 @@ export type IssueCodeResult =
  * ever carry a scope this build understands), and the column is nullable: a code
  * issued before this slice carries none, which is how an older authorization
  * fails closed on every lifecycle read (AC-1).
+ *
+ * cinatra#2684 — `authSessionId` NAMES THE SIGN-IN, and it is REQUIRED. The
+ * authorization is the one act in this flow that a person performs while signed
+ * in, so it is the only place the parent session is knowable; from here it is
+ * carried, never re-derived. A caller that cannot name its session issues
+ * nothing rather than an authorization no revocation could ever reach — the same
+ * posture the transaction's own screen record takes, and the reason the column
+ * can be trusted at every later read.
  */
 export function issueUserAuthCode(input: {
   txnId: string;
   userId: string;
+  /** The Better Auth session id of the sign-in that authorized this code. */
+  authSessionId: string;
   grantedScopes?: readonly WidgetExtensionScope[];
 }): IssueCodeResult {
+  const authSessionId = normalizeWidgetAuthSessionId(input.authSessionId);
+  // Refuse BEFORE consuming the transaction: an unnameable session must not
+  // also burn the single-use transaction the person would need to try again.
+  if (!authSessionId) return { ok: false, reason: "no_auth_session" };
   ensurePostgresSchema();
 
   // Atomic single-use consume of the transaction → returns its bound context.
@@ -743,8 +763,9 @@ export function issueUserAuthCode(input: {
         text:
           `INSERT INTO ${qTable(CODE_TABLE)} (` +
           `code_hash, user_id, site_id, client, org_id, site_origin, agent_slug, ` +
-          `instance_id, code_challenge, granted_scopes, expires_at, created_at` +
-          `) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now() + make_interval(secs => $11), now())`,
+          `instance_id, code_challenge, granted_scopes, ` +
+          `${WIDGET_AUTH_SESSION_COLUMN}, expires_at, created_at` +
+          `) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, now() + make_interval(secs => $12), now())`,
         values: [
           codeHash,
           input.userId,
@@ -756,6 +777,7 @@ export function issueUserAuthCode(input: {
           String(txn.instance_id ?? ""),
           String(txn.code_challenge ?? ""),
           formatTokenSet(normalizeExtensionScopes(input.grantedScopes)),
+          authSessionId,
           CODE_TTL_SECONDS,
         ],
       },
@@ -814,7 +836,8 @@ export function redeemUserAuthCode(input: {
         text:
           `DELETE FROM ${qTable(CODE_TABLE)} WHERE code_hash = $1 AND expires_at > now() ` +
           `RETURNING user_id, site_id, client, org_id, site_origin, agent_slug, ` +
-          `instance_id, code_challenge, granted_scopes`,
+          `instance_id, code_challenge, granted_scopes, ` +
+          WIDGET_AUTH_SESSION_COLUMN,
         values: [codeHash],
       },
     ],
@@ -849,6 +872,17 @@ export function redeemUserAuthCode(input: {
   const instanceId = String(row.instance_id ?? "");
   if (!userId || !agentSlug) return { ok: false, reason: "invalid_grant" };
 
+  // cinatra#2684 — THE PARENT SESSION MUST STILL BE SIGNED IN (AC-6). The code
+  // is already consumed at this point, so a revocation that landed between the
+  // sign-in and the CMS backend's redeem can only be caught here. A code with no
+  // named session (one issued before this slice) cannot prove a parent and is
+  // refused for the same reason. Generic `invalid_grant` like every other redeem
+  // failure — the presenter learns nothing about which check said no.
+  const authSessionId = normalizeWidgetAuthSessionId(row[WIDGET_AUTH_SESSION_COLUMN]);
+  if (!authSessionId || !widgetAuthSessionIsLive(authSessionId)) {
+    return { ok: false, reason: "invalid_grant" };
+  }
+
   const rawToken = USER_TOKEN_PREFIX + randomBytes(TOKEN_RANDOM_BYTES).toString("base64url");
   const tokenHash = sha256Hex(rawToken);
   const jti = randomUUID();
@@ -878,8 +912,9 @@ export function redeemUserAuthCode(input: {
         text:
           `INSERT INTO ${qTable(USER_TOKEN_TABLE)} (` +
           `token_hash, jti, user_id, site_id, client, org_id, site_origin, agent_slug, ` +
-          `instance_id, credential_version, aud, iss, scope, expires_at, created_at` +
-          `) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now() + make_interval(secs => $14), now())`,
+          `instance_id, credential_version, aud, iss, scope, ` +
+          `${WIDGET_AUTH_SESSION_COLUMN}, expires_at, created_at` +
+          `) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now() + make_interval(secs => $15), now())`,
         values: [
           tokenHash,
           jti,
@@ -897,6 +932,10 @@ export function redeemUserAuthCode(input: {
           aud,
           input.issuerBaseUrl,
           scope,
+          // The parent the code carried, copied forward unchanged. The token is
+          // bound to the session that authorized it and to no other — which is
+          // what makes revoking ONE session precise (cinatra#2684, AC-5).
+          authSessionId,
           USER_TOKEN_TTL_SECONDS,
         ],
       },
@@ -947,13 +986,16 @@ export type ConsumeUserTokenReason =
   | "aud_mismatch"
   | "scope_mismatch"
   | "origin_mismatch"
+  | "session_revoked"
   | "site_revoked";
 
 /**
  * Validate a presented opaque user widget token for the stream route. Returns
  * the bound user claims on success. Re-checks, against the STORED row and live
  * state: not-expired (DB clock), agent_slug, aud (route path), scope, the
- * request Origin == bound siteOrigin, and that the bound connect-site is STILL
+ * request Origin == bound siteOrigin, that the PARENT BETTER AUTH SESSION is
+ * still signed in (cinatra#2684 — sign-out, an admin revoke or session expiry
+ * kills the token at this turn), and that the bound connect-site is STILL
  * ACTIVE with the SAME org/origin (instant revoke: revoking/rotating the site,
  * or its org/origin re-binding, kills the token immediately).
  *
@@ -986,7 +1028,9 @@ export function consumeUserWidgetToken(input: {
       {
         text:
           `SELECT jti, user_id, site_id, client, org_id, site_origin, agent_slug, ` +
-          `instance_id, credential_version, aud, scope, (expires_at > now()) AS not_expired ` +
+          `instance_id, credential_version, aud, scope, ` +
+          `${WIDGET_AUTH_SESSION_COLUMN}, ` +
+          `(expires_at > now()) AS not_expired ` +
           `FROM ${qTable(USER_TOKEN_TABLE)} WHERE token_hash = $1 LIMIT 1`,
         values: [tokenHash],
       },
@@ -1038,6 +1082,45 @@ export function consumeUserWidgetToken(input: {
   const requestOriginNorm = normalizeOriginStrict(input.requestOrigin);
   if (!requestOriginNorm || requestOriginNorm !== storedOrigin) {
     return { ok: false, reason: "origin_mismatch" };
+  }
+
+  // cinatra#2684 — LIVE PARENT-SESSION re-check. The token was minted out of one
+  // Cinatra sign-in; when that session is gone (sign-out, an admin revoke, or
+  // its own expiry) the token is gone with it, at this turn and not at the end
+  // of its TTL. A row that names no session at all — one minted before this
+  // slice — cannot prove a live parent and fails the same way.
+  //
+  // The dead row is DELETED here, exactly as the expired branch above deletes
+  // its own: the deletion is keyed on this token's hash, so it can never touch a
+  // row bound to another still-live session (AC-5). It is tidiness, not the
+  // decision — the decision was made by the read.
+  //
+  // It sits immediately before the live SITE re-check because the two are the
+  // same kind of check (live external state, one indexed read each) and the
+  // jti-keyed capture probe mirrors them in this order.
+  //
+  // THE ROW IS DELETED ONLY WHEN THE ANSWER IS A FACT (codex round 0, finding
+  // 4). A liveness read that could not reach the store answers `unknown`, and
+  // `unknown` still REFUSES this turn — but it must not also destroy a token
+  // that was very likely still good, because that turns a two-second database
+  // hiccup into a forced re-login for everyone mid-conversation. Refuse on both;
+  // reap only on `dead`. The delete is guarded for the same reason: a failure to
+  // tidy up must not become a 500 on a path whose answer is already decided.
+  const liveness = readWidgetAuthSessionLiveness(row[WIDGET_AUTH_SESSION_COLUMN]);
+  if (liveness !== "live") {
+    if (liveness === "dead") {
+      try {
+        runPostgresQueriesSync({
+          connectionString: getPostgresConnectionString(),
+          queries: [
+            { text: `DELETE FROM ${qTable(USER_TOKEN_TABLE)} WHERE token_hash = $1`, values: [tokenHash] },
+          ],
+        });
+      } catch {
+        /* the refusal above is the decision; the sweep gets the row later */
+      }
+    }
+    return { ok: false, reason: "session_revoked" };
   }
 
   // Live site re-check: the bound connect-site must still be active AND still

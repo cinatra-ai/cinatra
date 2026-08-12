@@ -49,6 +49,11 @@ import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { runPostgresQueriesSync, quotePostgresIdentifier } from "@/lib/postgres-sync";
+import {
+  normalizeWidgetAuthSessionId,
+  widgetAuthSessionIsLive,
+  WIDGET_AUTH_SESSION_COLUMN,
+} from "@/lib/widget-session-binding";
 
 /** The table the hosted-PKCE login mints `cwu_` rows into (`widget-user-auth.ts`). */
 const USER_TOKEN_TABLE = "widget_user_tokens";
@@ -81,7 +86,10 @@ function qTable(table: string): string {
  * Returns `null` — never a reason — when the token row is gone (logout /
  * sweep), has expired against the DATABASE clock, is not an interactive
  * per-user widget bearer (its `aud` is not the broker audience, or its `scope`
- * is not `<agentSlug>.user`), or when its bound connect site is no longer active
+ * is not `<agentSlug>.user`), when the BETTER AUTH SESSION it was minted out of
+ * is no longer signed in (cinatra#2684 — a sign-out or revoke ends the
+ * capability at the next fetch, not at the end of its 300-second life), or when
+ * its bound connect site is no longer active
  * with the SAME org, origin, client and credential generation. That last clause
  * is the rotation gate `consumeUserWidgetToken` carries: a reconnect bumps
  * `credential_version` on a still-active row, and without the comparison an
@@ -104,6 +112,7 @@ export function readLiveWidgetCapturePrincipal(
           text:
             `SELECT user_id, org_id, site_id, client, instance_id, site_origin, ` +
             `agent_slug, aud, scope, credential_version, ` +
+            `${WIDGET_AUTH_SESSION_COLUMN}, ` +
             `(expires_at > now()) AS not_expired ` +
             `FROM ${qTable(USER_TOKEN_TABLE)} WHERE jti = $1 LIMIT 1`,
           values: [jti],
@@ -134,6 +143,17 @@ export function readLiveWidgetCapturePrincipal(
     // canonical verifier would have rejected outright.
     if (String(row.aud ?? "") !== WIDGET_BROKER_ROUTE_PATH) return null;
     if (String(row.scope ?? "") !== userTokenScope(agentSlug)) return null;
+
+    // Live PARENT-SESSION re-check (cinatra#2684) — the capability is a picture
+    // authorized by one person's sign-in, so when that sign-in ends the picture
+    // stops being served. `consumeUserWidgetToken` refuses `session_revoked`
+    // here; this is the same predicate, from the same leaf, in the same position
+    // in the order. A row naming no session cannot prove a live parent and is
+    // refused too. READ-ONLY, like everything else in this probe: the token
+    // verifier deletes the dead row, this one only declines to use it.
+    if (!widgetAuthSessionIsLive(normalizeWidgetAuthSessionId(row[WIDGET_AUTH_SESSION_COLUMN]))) {
+      return null;
+    }
 
     // Live site re-check — revoke / re-bind / rotate kills the capability at the
     // next fetch, exactly as it kills the token at the next turn.

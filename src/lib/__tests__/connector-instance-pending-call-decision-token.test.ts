@@ -138,6 +138,7 @@ function baseClaims(overrides: Record<string, unknown> = {}) {
     act: "confirm",
     sid: SESSION_ID,
     jti: "nonce-fixed-abc123",
+    parentJti: "parent-jti-1",
     aud: DECISION_AUDIENCE,
     iss: DECISION_ISSUER,
     iat,
@@ -438,6 +439,7 @@ describe("pending-call-decision-token verify — cross-type forgery (both direct
       kind: "wordpress",
       runId: "run-abc",
       jti: "run-nonce",
+      parentJti: "parent-jti-1",
     });
     expect(verify(resumeToken)).toBeNull();
   });

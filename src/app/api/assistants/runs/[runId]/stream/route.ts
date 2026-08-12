@@ -6,6 +6,7 @@ import { loadChatThreadForActorAccess } from "@/lib/chat-thread-store";
 import { evaluateChatThreadAccess } from "@/lib/chat-thread-access";
 import { subscribeToAgUiEventsWithId } from "@cinatra-ai/agent-ui-protocol/server";
 import { verifyWidgetChatResumeToken } from "@/lib/widget-chat-resume-token";
+import { readWidgetTokenParentLiveness } from "@/lib/widget-session-binding";
 import { listAssistantWidgetBindings } from "@/lib/assistant-widget-handles";
 import {
   resolveWidgetStreamAgentUnion,
@@ -153,6 +154,16 @@ export async function GET(request: Request, context: RouteContext) {
       expectedRunId: decodedRunId,
     });
     if (!resumeActor) {
+      return new Response("Unauthorized", { status: 401, headers: corsHeaders });
+    }
+    // cinatra#2684 — AND THE SIGN-IN BEHIND IT MUST STILL BE THERE. This token
+    // is derived from one `cwu_` row, and a run is a ten-minute tail: without
+    // this, somebody who signed out could keep reading the assistant's output
+    // for the rest of that window. The check is the same predicate every other
+    // widget verifier uses, asked from the parent `jti` the token seals, and it
+    // refuses on `unknown` as well as `dead` — a store that cannot answer does
+    // not get to authorize.
+    if (readWidgetTokenParentLiveness(resumeActor.parentJti) !== "live") {
       return new Response("Unauthorized", { status: 401, headers: corsHeaders });
     }
     // The run-bound token IS the authorization (minted only after the broker-auth

@@ -3993,10 +3993,9 @@ END $$` },
     )` },
     { text: `CREATE INDEX IF NOT EXISTS widget_auth_codes_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" (expires_at)` }, { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" ADD COLUMN IF NOT EXISTS granted_scopes text` }, // the ALTER rides this line for file-size-ratchet headroom; CREATE TABLE IF NOT EXISTS never touches an existing table, so an installed deployment gains the column only here
     // Table 3 — opaque short-lived user tokens (cwu_). Browser-held bearer the
-    // stream route validates (CHILD 3). Keyed by sha256(rawToken); only the hash
-    // is stored. Multi-use within TTL; instant revoke via row delete or the live
-    // connect-site re-check (see consumeUserWidgetToken). NO refresh token.
-    //
+    // stream route validates (CHILD 3). Keyed by sha256(rawToken); only the hash is stored.
+    // Multi-use within TTL; instant revoke via row delete, the live connect-site re-check,
+    // or the parent Better Auth session dying (see consumeUserWidgetToken). NO refresh token.
     // `credential_version` pins the `connect_sites` credential generation the
     // token was minted against (rotation binding, mirroring the site-scoped
     // broker's `token_key_fingerprint` re-check in widget-token-broker.ts:384).
@@ -4023,6 +4022,7 @@ END $$` },
       created_at         timestamptz NOT NULL DEFAULT now()
     )` },
     { text: `CREATE INDEX IF NOT EXISTS widget_user_tokens_expiry_idx ON "${schemaName.replaceAll('"', '""')}"."widget_user_tokens" (expires_at)` },
+    { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."widget_user_tokens" ADD COLUMN IF NOT EXISTS auth_session_id text` }, { text: `CREATE INDEX IF NOT EXISTS widget_user_tokens_auth_session_idx ON "${schemaName.replaceAll('"', '""')}"."widget_user_tokens" (auth_session_id)` }, { text: `ALTER TABLE "${schemaName.replaceAll('"', '""')}"."widget_auth_codes" ADD COLUMN IF NOT EXISTS auth_session_id text` }, // cinatra#2684 — the Better Auth session each row was minted out of, plus the index a revocation is read by. Nullable on purpose: a row already in flight when this shipped names no parent, so it cannot prove one is alive and dies at its next verification, bounded by its own TTL. Requiring a value would be a destructive change to a deployed table and would guarantee nothing that failing closed does not already give. All three ride ONE NEW line — never appended to a line that already carries DDL, and never added to the CREATEs above, because either would rewrite deployed schema text. See src/lib/widget-session-binding.ts
     // -----------------------------------------------------------------------
     // cinatra#221 "Connect with Cinatra" provisioning tables.
     //
