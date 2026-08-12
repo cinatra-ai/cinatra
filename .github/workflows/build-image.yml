@@ -1116,13 +1116,11 @@ jobs:
   # `needs:` lists every job a manifest row's ciDependency currently names,
   # so this job structurally depends on each of them — the hard CI-graph
   # edge Decision 1's `--strict` mode looks for when it parses this workflow
-  # file's own YAML. `always()` below means this job's own run is NOT gated
-  # on those jobs' pass/fail (audit mode doesn't assert whether the
-  # referenced tests currently pass, only that the manifest is well-formed
-  # and every reference is grep-findable — a different, unrelated concern
-  # from whether `test`/`extension-lifecycle-db-tests`/
-  # `perpetual-loops-invariants`/`agents-integration-db` happened to go green
-  # this run); it still respects `detect`'s docs-only/draft skip.
+  # file's own YAML. `always()` below no longer means this job's own result
+  # is unhooked from those jobs' pass/fail — see DEPENDENCY-HONEST below for
+  # why that used to be true, why it was a bug, and the fix. `always()` now
+  # exists only so a FAILED prerequisite produces a definitive job FAILURE
+  # here rather than a silent SKIP, the same reason the `build` job uses it.
   #
   # `agents-integration-db` (cinatra#1943 P1-CI follow-up) — added so a row
   # whose ciDependency names that job (the two live-Postgres acceptance rows
@@ -1137,13 +1135,45 @@ jobs:
   # change) — it only removes the CI-graph blocker so a future green claim on
   # those rows can actually be verified instead of failing on a missing edge.
   #
-  # Only `audit` mode is a real (blocking) check here — the manifest-hygiene
-  # check Decision 1 says runs on every PR. `--strict` mode is run for
-  # visibility only and never fails this job: most of the manifest's 15 rows
-  # are honestly red until tiers A1-A7 land over the following weeks (each
-  # gated on a named sibling PR per DESIGN.md's tier table) — that is the
-  # correct, by-design state, not something this wiring PR should turn red
-  # CI over.
+  # `e2e-rbac` (cinatra#1943/#1942, the sibling-workflow follow-up to #2703's
+  # content PR) joins `needs:` for the identical reason: the manifest's row
+  # 15 ("3-role live Playwright proof (owner archives/unarchives;
+  # admin/member read-only; non-member 404) on a production-equivalent
+  # build") now names `build-image.yml` / `e2e-rbac` as its ciDependency —
+  # #2703 pointed it there, replacing an `e2e-app-suites.yml` /
+  # `archive-acceptance` pair that never existed and could never have passed
+  # strict mode. Without this edge, row 15 stays structurally unable to
+  # satisfy `--strict` no matter how green cinatra#1942 eventually makes it.
+  #
+  # BLOCKING, STAGED ON ROW 15 (cinatra#1943, #2703's "Sibling workflow PR"
+  # section, edit 2 of 3): `audit` mode has always been a real, blocking
+  # check — the manifest-hygiene check Decision 1 says runs on every PR.
+  # `--strict` mode is now ALSO blocking, but only once the manifest's row 15
+  # itself reads "green" — see the strict-mode step below for the exact
+  # mechanism. Before row 15 lands (cinatra#1942), it is the one row this
+  # program has documented will stay honestly red while the other fourteen
+  # are already green; making `--strict` unconditionally blocking ahead of
+  # that would red every PR in this repo over a KNOWN, by-design gap, not a
+  # regression. The step self-arms: the moment a future PR flips row 15 to
+  # green, this SAME step starts blocking with no further workflow-only PR
+  # needed — the same "no follow-up PR to turn it on" shape as the DEGRADES
+  # GRACEFULLY note above.
+  #
+  # DEPENDENCY-HONEST (cinatra#1943, #2703's "Sibling workflow PR" section,
+  # edit 3 of 3 — a codex finding recorded in that PR): this job used to run
+  # `if: always()` while checking only `detect`'s own result, and no step
+  # ever inspected the OTHER `needs:` jobs' outcomes — so a green
+  # `archive-acceptance-gate` never actually implied `test` /
+  # `extension-lifecycle-db-tests` / `perpetual-loops-invariants` /
+  # `agents-integration-db` / `e2e-rbac` had passed; it could report green
+  # while every one of them had failed. Fixed the same way `build` fixes the
+  # identical hole (see that job's own comments): the job-level `if:` now
+  # runs whenever `detect` did NOT cleanly succeed-and-skip — so a `detect`
+  # failure is a definitive job FAILURE, never the silent SKIP that some
+  # branch-protection configurations would count as passing — and the new
+  # "Guard prerequisite gates" step hard-fails immediately if ANY `needs:`
+  # job's result isn't `success`. Docs-only/draft PRs (`detect` succeeds with
+  # `skip: true`) still skip this job entirely, exactly as before.
   #
   # RESOLVED (was a KNOWN MISMATCH flagged, not fixed, when this job was
   # first wired in #2209): the gate script's SELF_WORKFLOW/SELF_JOB constants
@@ -1155,13 +1185,27 @@ jobs:
   # for a mismatch that no longer exists.
   archive-acceptance-gate:
     name: Archive acceptance coverage-completeness gate (#1943)
-    needs: [detect, test, extension-lifecycle-db-tests, perpetual-loops-invariants, agents-integration-db]
-    if: ${{ always() && needs.detect.result == 'success' && needs.detect.outputs.skip != 'true' }}
+    needs: [detect, test, extension-lifecycle-db-tests, perpetual-loops-invariants, agents-integration-db, e2e-rbac]
+    # Run even when a prerequisite FAILED, so the guard step below reports a
+    # definitive job FAILURE instead of a SKIP — GitHub can count a skipped
+    # required check as successful (the same hole `build`'s own comment
+    # names). Docs-only and draft PRs (`detect` succeeds with `skip: true`)
+    # still skip this job.
+    if: ${{ always() && (needs.detect.result != 'success' || needs.detect.outputs.skip != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
     steps:
+      # Hard-fail (definitive RED, never a passing SKIP) the instant any
+      # prerequisite gate did not succeed — see DEPENDENCY-HONEST above.
+      # No-ops on the success path (zero extra latency there).
+      - name: Guard prerequisite gates (detect + test + extension-lifecycle-db-tests + perpetual-loops-invariants + agents-integration-db + e2e-rbac)
+        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['extension-lifecycle-db-tests'].result != 'success' || needs['perpetual-loops-invariants'].result != 'success' || needs['agents-integration-db'].result != 'success' || needs['e2e-rbac'].result != 'success' }}
+        run: |
+          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} extension-lifecycle-db-tests=${{ needs['extension-lifecycle-db-tests'].result }} perpetual-loops-invariants=${{ needs['perpetual-loops-invariants'].result }} agents-integration-db=${{ needs['agents-integration-db'].result }} e2e-rbac=${{ needs['e2e-rbac'].result }}. A green coverage-completeness gate must not be reachable when the CI it depends on failed (cinatra#1943, codex finding recorded in #2703). Refusing to report this gate green."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node.js
@@ -1173,10 +1217,43 @@ jobs:
         if: ${{ hashFiles('scripts/audit/archive-acceptance-gate.mjs') != '' }}
         run: node scripts/audit/archive-acceptance-gate.mjs
 
-      - name: Coverage-completeness gate — strict mode (informational V6-readiness signal; never blocking here)
+      - name: Coverage-completeness gate — strict mode (blocking once row 15 is green; informational until then)
         if: ${{ hashFiles('scripts/audit/archive-acceptance-gate.mjs') != '' }}
         run: |
-          node scripts/audit/archive-acceptance-gate.mjs --strict || echo "::notice::--strict reports NOT READY — expected while #1943's tiers A1-A7 are still landing (see cinatra#1943 for the current tier); not a failure of this wiring job."
+          set +e
+          node scripts/audit/archive-acceptance-gate.mjs --strict
+          strict_status=$?
+
+          # Row 15 ("3-role live Playwright proof...") is the one criterion
+          # #2703 documented will stay honestly red until cinatra#1942 lands
+          # the Danger-zone Archive/Unarchive affordance the Playwright spec
+          # needs to drive. Matched by its exact criterion text, not array
+          # position — the same way archive-acceptance-gate.mjs itself
+          # singles out its one special row (REQUIRES_BOTH_PROOF_KINDS) — so
+          # a manifest re-ordering can't silently point this check at the
+          # wrong row.
+          row15_green=$(node -e '
+            const fs = require("fs");
+            const CRITERION = "3-role live Playwright proof (owner archives/unarchives; admin/member read-only; non-member 404) on a production-equivalent build";
+            try {
+              const manifest = JSON.parse(fs.readFileSync("scripts/audit/archive-acceptance-manifest.json", "utf8"));
+              const row = (manifest.rows || []).find((r) => r && r.criterion === CRITERION);
+              process.stdout.write(row && row.status === "green" ? "true" : "false");
+            } catch {
+              process.stdout.write("false");
+            }
+          ')
+
+          if [ "$strict_status" -eq 0 ]; then
+            exit 0
+          fi
+
+          if [ "$row15_green" = "true" ]; then
+            echo "::error::--strict reports NOT READY while row 15 (the 3-role live Playwright proof, cinatra#1942) is green — cinatra#1943's V6 precondition has regressed. See the log above for which row(s) failed. Failing this job."
+            exit 1
+          fi
+
+          echo "::notice::--strict reports NOT READY — row 15 (the 3-role live Playwright proof) is still red, expected until cinatra#1942's Danger-zone Archive/Unarchive affordance lands (see cinatra#1943 for the current tier); not a failure of this wiring job. This step starts blocking automatically the moment row 15 turns green — no follow-up workflow PR needed."
 
       - name: Coverage-completeness gate — not yet landed (cinatra#2207 not merged)
         if: ${{ hashFiles('scripts/audit/archive-acceptance-gate.mjs') == '' }}
