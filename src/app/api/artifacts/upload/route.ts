@@ -11,8 +11,20 @@ import { createUploadedArtifact } from "@/lib/artifacts/artifact-service";
 import { BlobTooLargeError } from "@cinatra-ai/artifacts";
 
 // Upload ingestion API. Node runtime is required for fs and streaming support.
-// The route is session-gated and origin-gated, and must not be added to the
-// public-path allowlist. The 50 MiB hard cap is streamed, not buffered.
+// The route is CREDENTIAL-gated (session OR the widget branch below) and
+// origin-gated. The 50 MiB hard cap is streamed, not buffered.
+//
+// It IS on the route-guard's public-path list, and that sentence used to say the
+// opposite — corrected in cinatra#2683 rather than left to contradict the guard.
+// The old wording was true while "gated" meant "a Better-Auth cookie": the guard
+// entry could then only ever weaken the route. Once S8f gave this route a second
+// auth branch whose whole point is that it holds NO cookie, the redirect stopped
+// being a wall and became a way to LOSE an upload silently — a 307 the browser
+// follows as a GET, bytes dropped, no error the caller can name. The entry
+// removes that redirect and nothing else; the gate is the credential branch in
+// `resolveUploader` plus `isAllowedOrigin`, both unchanged and both still first
+// in the handler. See the entry in src/lib/auth-route-guard.ts for the full
+// reasoning.
 export const runtime = "nodejs";
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;

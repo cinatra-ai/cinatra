@@ -335,16 +335,15 @@ describe("auth-route-guard - cinatra#1881 assistant run-stream resume matcher", 
   });
 
   it("OVER-MATCH CONTROL: the bare /runs collection and other assistants siblings stay guarded", async () => {
-    // `/api/assistants/list` used to be listed here as a fourth control. It is
-    // not one any more: cinatra#2683 gave it its OWN exact entry (the widget's
-    // @-mention directory), pinned by its own test above. The three below still
-    // prove the point this control exists for — the run-stream matcher is
-    // structural and `/api/assistants` is not a public prefix.
-    for (const p of [
-      "/api/assistants/runs",
-      "/api/assistants/runs/stream",
-      "/api/assistants/threads/" + RUN,
-    ]) {
+    // `/api/assistants/list` used to be listed here as a fourth control, and
+    // `/api/assistants/threads/<id>` as a third. Neither is one any more:
+    // cinatra#2683 gave the directory its OWN exact entry and the thread read
+    // its OWN pattern entry (a thread id is an opaque CMS-minted string, not a
+    // UUID, so the two matchers cannot be confused), each pinned by its own
+    // tests. The two below still prove the point this control exists for — the
+    // run-stream matcher is structural, and `/api/assistants` is not a public
+    // prefix.
+    for (const p of ["/api/assistants/runs", "/api/assistants/runs/stream"]) {
       const res = await guardAppRoute(fakeRequest(p));
       expect(res.status, `${p} must stay guarded`).toBe(307);
       expect(res.headers.get("location")).toContain("/sign-in");
@@ -616,20 +615,264 @@ describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture wid
   });
 
   it("EXACT, not a prefix: /api/assistants/list descendants and siblings stay guarded", async () => {
+    // `/api/assistants/autosave` and `/api/chat/pending-tool-calls` used to be
+    // listed here, as evidence that this entry exempted only itself. They are
+    // not controls any more — cinatra#2683 gave each of them its OWN entry and
+    // its own reasoning, pinned by its own test below. What this control still
+    // proves is the thing it was written for: the list entry is one PATH, and
+    // `/api/assistants` is not a public prefix.
     for (const p of [
       "/api/assistants/list/",
       "/api/assistants/list/anything",
       "/api/assistants/listing",
       "/api/assistants",
-      // The sibling widget-branch routes S8f added are NOT exempted by this
-      // entry — each owes its own (see the note on the list entry).
-      "/api/assistants/autosave",
-      "/api/chat/pending-tool-calls",
     ]) {
       const res = await guardAppRoute(fakeRequest(p));
       expect(res.status, `${p} must stay guarded`).toBe(307);
       expect(res.headers.get("location")).toContain("/sign-in");
     }
+  });
+
+  // -------------------------------------------------------------------------
+  // cinatra#2683 (epic #2564 S8f) — the five sibling widget-branch routes.
+  //
+  // Each gets its own reachability test AND its own negative control, because
+  // each is a different shape: one dynamic path, one read, and three that
+  // MUTATE. A batch test would have made them look like one decision, which is
+  // exactly what the entries refuse to be.
+  //
+  // The shared negative control every one of them carries: an unrelated,
+  // structurally similar route on the same namespace still 307s. A test that
+  // only asserts "this path is reachable" cannot tell an exact entry from an
+  // accidental prefix.
+  // -------------------------------------------------------------------------
+
+  it("cinatra#2683 (S8f): /api/assistants/autosave is reachable cookieless — the Skill-autosave row (GET and PATCH)", async () => {
+    // The flyout READS this on open and WRITES it on toggle. Both are invisible
+    // failures behind a 307: the read parses sign-in HTML and the row is absent;
+    // the write is followed as a GET, so the switch appears to take and nothing
+    // is stored. The guard is method-blind, so ONE entry serves both — the
+    // HANDLER is what splits them, consuming GET under `conversation.read` and
+    // PATCH under `conversation.write`.
+    const res = await guardAppRoute(fakeRequest("/api/assistants/autosave"));
+    expect(res.status).not.toBe(307);
+  });
+
+  it("SOURCE PIN: the autosave entry describes BOTH PATCH arms, not just one", () => {
+    // codex round 1, finding 3. The first draft of this entry said "a
+    // non-platform actor is refused" AND "the write lands in the caller's own
+    // account setting" — two true sentences about two DIFFERENT arms, which
+    // together describe a handler that does not exist. An entry that
+    // misdescribes what it admits is the failure mode this convention exists to
+    // prevent, so the correction is pinned rather than trusted to stay.
+    const line = guardSource
+      .split("\n")
+      .find((l) => l.includes('"/api/assistants/autosave"'));
+    expect(line).toBeDefined();
+    // The app-wide arm: named, and named as platform-admin-only.
+    expect(line ?? "").toMatch(/settings\.update/);
+    expect(line ?? "").toMatch(/platform.admin/i);
+    // The self arm: named, and named as the caller's own row under the flag.
+    expect(line ?? "").toMatch(/userChatCaptureEnabled/);
+    expect(line ?? "").toMatch(/userCanConfigure/);
+  });
+
+  it("NEGATIVE CONTROL: /api/assistants/autosave neighbours and descendants still 307", async () => {
+    for (const p of [
+      "/api/assistants/autosave/",
+      "/api/assistants/autosave/anything",
+      "/api/assistants/autosaves",
+      // The collection thread route has NO widget branch and must keep redirecting.
+      "/api/assistants/threads",
+    ]) {
+      const res = await guardAppRoute(fakeRequest(p));
+      expect(res.status, `${p} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("cinatra#2683 (S8f): /api/chat/pending-tool-calls is reachable cookieless — list AND decide", async () => {
+    // The list (GET) and the decision (POST) share one path, so they share one
+    // entry; they do NOT share a grant. The list consumes `conversation.read`,
+    // the decision `tools.confirm`, and `canDecide` comes off the same consume —
+    // a session holding only the read is served cards with no decision tokens.
+    const res = await guardAppRoute(fakeRequest("/api/chat/pending-tool-calls"));
+    expect(res.status).not.toBe(307);
+  });
+
+  it("NEGATIVE CONTROL: /api/chat/pending-tool-calls descendants and /api/chat siblings still 307", async () => {
+    for (const p of [
+      "/api/chat/pending-tool-calls/",
+      "/api/chat/pending-tool-calls/decide",
+      "/api/chat/pending-tool-callsx",
+      // `/api/chat` is NOT a public prefix — the rest of the namespace is
+      // cookie-only and stays that way.
+      "/api/chat",
+      "/api/chat/save",
+      "/api/chat/thread/abc",
+    ]) {
+      const res = await guardAppRoute(fakeRequest(p));
+      expect(res.status, `${p} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("cinatra#2683 (S8f): /api/chat/undo-candidate is reachable cookieless — the undo chip's read", async () => {
+    // A 307 here renders as "this run changed nothing", which is a state a
+    // reader would believe. The handler still runs the ONE §VI eligibility gate
+    // and answers `{changeSetId:null}` for an ineligible reader and an unchanged
+    // run alike, so reachability discloses nothing.
+    const res = await guardAppRoute(fakeRequest("/api/chat/undo-candidate"));
+    expect(res.status).not.toBe(307);
+  });
+
+  it("NEGATIVE CONTROL: /api/chat/undo-candidate descendants still 307 (and the RESTORE surface is not here at all)", async () => {
+    for (const p of [
+      "/api/chat/undo-candidate/",
+      "/api/chat/undo-candidate/anything",
+      "/api/chat/undo-candidates",
+      // The undo ITSELF is a first-party surface under the reader's own
+      // session. Nothing in this slice makes a restore path reachable.
+      "/api/chat/undo",
+      "/api/chat/restore",
+    ]) {
+      const res = await guardAppRoute(fakeRequest(p));
+      expect(res.status, `${p} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("cinatra#2683 (S8f): /api/artifacts/upload is reachable cookieless — the composer's attachment", async () => {
+    // The only entry admitting a route that CREATES an object. Behind a 307 the
+    // POST is followed as a GET, the bytes are dropped, and the composer reports
+    // a refusal with no reason. The handler still resolves the uploader FIRST
+    // (widget → the conversation door under `conversation.write`), 401s when it
+    // cannot, and files the artifact private to the WIDGET PRINCIPAL.
+    const res = await guardAppRoute(fakeRequest("/api/artifacts/upload"));
+    expect(res.status).not.toBe(307);
+  });
+
+  it("NEGATIVE CONTROL: the artifact BYTE routes stay guarded — writing an attachment never opens reading one", async () => {
+    // The load-bearing half of this entry. `/api/artifacts` must not become a
+    // prefix: a cookieless caller may reach the door that WRITES their own
+    // upload and must still be redirected away from every route that READS
+    // artifact content.
+    for (const p of [
+      "/api/artifacts",
+      "/api/artifacts/upload/",
+      "/api/artifacts/uploads",
+      "/api/artifacts/abc",
+      "/api/artifacts/abc/versions/v1/content",
+      "/api/artifacts/abc/versions/v1/preview",
+    ]) {
+      const res = await guardAppRoute(fakeRequest(p));
+      expect(res.status, `${p} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("cinatra#2683 (S8f): /api/assistants/threads/<threadId> is reachable cookieless — the transcript restore", async () => {
+    // The PATTERN entry. A thread id is whatever the embedding CMS minted (an
+    // opaque 1..200-char string in the bridge bootstrap), so the matcher can
+    // only be structural: exactly one non-empty segment. Behind a 307 the
+    // restore settles EMPTY and the panel opens on a blank conversation.
+    for (const id of [
+      "wp-thread-42",
+      "3f2504e0-4f89-41d3-9a0c-0305e82c3301",
+      "thread.with.dots",
+      encodeURIComponent("thread with spaces"),
+    ]) {
+      const res = await guardAppRoute(fakeRequest(`/api/assistants/threads/${id}`));
+      expect(res.status, `${id} must be reachable`).not.toBe(307);
+    }
+  });
+
+  it("NEGATIVE CONTROL: the threads COLLECTION and any deeper path still 307 — one segment, no more", async () => {
+    // The collection route (POST upserts a thread) has NO widget branch, so it
+    // must keep redirecting; and the entry must not become a subtree.
+    for (const p of [
+      "/api/assistants/threads",
+      "/api/assistants/threads/",
+      "/api/assistants/threads/abc/",
+      "/api/assistants/threads/abc/messages",
+      "/api/assistants/threads/abc/anything/deeper",
+    ]) {
+      const res = await guardAppRoute(fakeRequest(p));
+      expect(res.status, `${p} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
+  });
+
+  it("SOURCE PIN: /api/assistants/threads/<id> is a PATTERN, never an /api/assistants/threads prefix", () => {
+    // A prefix entry would exempt the collection POST and every future
+    // descendant in one edit. The matcher must be the structural regex.
+    expect(guardSource).toMatch(/ASSISTANT_THREAD_BY_ID_PATH/);
+    expect(guardSource).toMatch(
+      /ASSISTANT_THREAD_BY_ID_PATH\s*=\s*\/\^\\\/api\\\/assistants\\\/threads\\\/\[\^\/\]\+\$\//,
+    );
+    const prefixBlock = guardSource.match(
+      /const PUBLIC_PATH_PREFIXES = \[([\s\S]*?)\n\];/,
+    )?.[1];
+    expect(prefixBlock ?? "").not.toMatch(/assistants\/threads/);
+    const exactBlock = guardSource.match(
+      /const PUBLIC_EXACT_PATHS = \[([\s\S]*?)\n\];/,
+    )?.[1];
+    expect(exactBlock ?? "").not.toMatch(/"\/api\/assistants\/threads"/);
+  });
+
+  it("RESIDUAL PIN: /api/assistants/threads/ has exactly ONE child, the dynamic one the matcher was written for", () => {
+    // The stated residual of a one-segment matcher: a future STATIC child would
+    // be admitted without anyone deciding it should be. Pin the directory so
+    // adding a sibling breaks here and the decision lands on its author.
+    const threadsDir = path.resolve(
+      __dirname,
+      "..",
+      "..",
+      "app",
+      "api",
+      "assistants",
+      "threads",
+    );
+    const children = fs
+      .readdirSync(threadsDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && e.name !== "__tests__")
+      .map((e) => e.name)
+      .sort();
+    expect(children).toEqual(["[threadId]"]);
+  });
+
+  it("SOURCE PIN: every S8f entry states the grant it consumes under and the refusal it produces", () => {
+    // The convention the capture/resolve/decide entries established: a
+    // reachability exemption carries, on its own line, the reason it is safe.
+    // Applied to all five so none of them can be reduced to "the widget needs
+    // it" by a later edit.
+    const expectations: ReadonlyArray<[string, RegExp]> = [
+      ['"/api/assistants/autosave"', /conversation\.write/],
+      ['"/api/chat/pending-tool-calls"', /tools\.confirm/],
+      ['"/api/chat/undo-candidate"', /conversation\.read/],
+      ['"/api/artifacts/upload"', /conversation\.write/],
+    ];
+    for (const [needle, grant] of expectations) {
+      const line = guardSource.split("\n").find((l) => l.includes(needle));
+      expect(line, `${needle} must have an entry`).toBeDefined();
+      expect((line ?? "").trimStart().startsWith('"')).toBe(true);
+      expect((line ?? ""), `${needle} must name its grant`).toMatch(grant);
+      expect((line ?? ""), `${needle} must name its refusal`).toMatch(/401/);
+      expect(
+        (line ?? "").toLowerCase(),
+        `${needle} must state it is reachability only`,
+      ).toMatch(/reachability only/);
+      expect(
+        (line ?? "").toLowerCase(),
+        `${needle} must state the entry is exact`,
+      ).toMatch(/exact path, never a prefix/);
+    }
+    // The dynamic one lives in its own commented block, not on a list line.
+    const threadBlock = guardSource.match(
+      /\/\/ cinatra#2683 \(epic #2564 S8f\) — GET \/api\/assistants\/threads([\s\S]*?)const ASSISTANT_THREAD_BY_ID_PATH/,
+    )?.[1];
+    expect(threadBlock ?? "").toMatch(/conversation\.read/);
+    expect(threadBlock ?? "").toMatch(/Reachability only/);
   });
 
   it("REGRESSION: every OTHER lifecycle-views path stays session-guarded", async () => {
