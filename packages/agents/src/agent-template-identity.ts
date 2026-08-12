@@ -21,10 +21,19 @@
 //     claim-GUARDED (they were a second unguarded writer of a globally unique
 //     identity: agent_source_publish caught its DB-sync failure, logged it, and
 //     then wrote origin onto the foreign row anyway).
+//   - cinatra#2675 — preflightAgentPublishClaim, the READ-ONLY claimability
+//     gate agent_source_publish runs BEFORE it writes the version to the
+//     registry. See its own header for why it lives in THIS module.
 
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { and, eq, isNull, or, type SQL } from "drizzle-orm";
 import { db } from "./db";
 import { agentTemplates, type ExtensionOrigin } from "./schema";
+// TYPE-only (erased): the publish preflight is handed the registry the caller
+// already resolved. The one value import it needs is DYNAMIC, at its call site,
+// so this module keeps the tiny static graph its header claims.
+import type { VerdaccioConfig } from "./verdaccio/config";
 
 // ---------------------------------------------------------------------------
 // packageName DERIVATION (moved from store.ts, cinatra#2616 — it mints the very
@@ -494,4 +503,156 @@ async function assertRowMissingOrThrowConflict(packageName: string): Promise<voi
     .where(eq(agentTemplates.packageName, packageName))
     .limit(1);
   if (rows.length > 0) throw new AgentTemplateIdentityConflictError(packageName);
+}
+
+// ---------------------------------------------------------------------------
+// cinatra#2675 — the PUBLISH-TIME claimability PREFLIGHT.
+//
+// `agent_source_publish` wrote the requested version to the registry BEFORE
+// `installAgentFromPackage` ran the guarded DB claim, and a registry version is
+// not retractable (the Verdaccio config forbids unpublish by design). So an
+// ordinary identity refusal — a name another organization already holds —
+// arrived AFTER an irreversible write, and the refused version stayed in the
+// registry forever. Running the SAME rule read-only first removes that in the
+// ordinary case.
+//
+// It lives in THIS module rather than a new file on purpose, for the reason
+// this module's own header records: the route-graph ratchet counts first-party
+// modules reachable from the locked dev-perf routes AND follows dynamic
+// `import()`, so a new file would raise four locked ceilings — needing an
+// annotated absorb — to hold one gate whose whole substance is "run the rule
+// this module already owns, without writing". The `node:fs` read below is the
+// only filesystem touch here, and it reads the SAME file and the SAME two
+// fields the publisher reads verbatim (`publishAgentPackageFromGitDir` takes
+// both the package name and the version from `<agentDir>/package.json`, and
+// refuses when either is missing).
+//
+// WHAT THIS IS NOT: it cannot RESERVE a name. Two organizations publishing a
+// brand-new absent name both pass here and both reach the DB sync; the guarded
+// write — `claimAgentTemplateIdentity`, whose 23505 branch classifies the loser
+// — stays the fail-closed authority for that case. An EXISTING row with
+// `org_id IS NULL` is the same story for the same reason: org-less is
+// UNCLAIMED under the rule, so two organizations both pass this read and meet
+// at the write, where one adopts the row and records its claim and the other is
+// refused. This gate spares the ORDINARY collision, nothing more.
+//
+// Nor does it bind the name: `package.json` is read here and read AGAIN by the
+// publisher, so a concurrent `agent_source_write_files` that renames the package
+// between the two reads is adjudicated on the OLD name. Both directions are
+// stated, because they are not symmetric:
+//   - claimable renamed to FOREIGN: the gate passes, the version is published,
+//     and the authoritative claim refuses after the write — exactly where that
+//     case landed before this gate existed.
+//   - foreign renamed to CLAIMABLE: the gate refuses a publish that would now
+//     have succeeded. That is a NEW false refusal, it writes nothing, and the
+//     operator's retry succeeds.
+// Closing the window means threading an expected-name parameter through
+// `publishAgentPackageFromGitDir` — a shared publisher with other callers — for
+// a race that requires one operator's rename to interleave with another's
+// publish of the same source tree. Deliberately not done here; recorded so the
+// next reader does not mistake this for a guarantee.
+// ---------------------------------------------------------------------------
+
+/**
+ * The refusal `agent_source_publish` hands back. The identity conflict carries
+ * the SAME `code` the handler's DB-sync catch already returns — this gate moves
+ * that refusal earlier, it does not mint a new one. The undecidable case
+ * (below) carries no code, matching the handler's other infrastructure
+ * refusals.
+ */
+export type AgentPublishClaimRefusal = {
+  error: string;
+  code?: AgentTemplateIdentityConflictError["code"];
+};
+
+/**
+ * Read-only: may this publisher write the package name on disk?
+ *
+ * Returns the refusal to hand back to the caller, or `null` to proceed.
+ *
+ * The claimant is derived exactly as the install call after it derives one
+ * (`deriveAgentTemplateIdentityClaim` on the publisher's organization), so a
+ * DECIDED refusal here is one the authoritative claim would also have made. A
+ * publisher with no organization at all claims as the instance operator and is
+ * never refused here — again matching the write.
+ *
+ * The gate adjudicates ONLY a publish that could actually WRITE to the
+ * registry. Everything that cannot reach a write proceeds untouched, so this
+ * gate can never REPLACE another refusal — it only ever moves the identity
+ * refusal earlier. Three deliberate non-refusals and one deliberate refusal:
+ *
+ *  - A `package.json` that is unreadable, NAMELESS or VERSIONLESS proceeds. The
+ *    publisher requires both fields ("package.json must have name and version
+ *    fields."), reads the same file two statements later and refuses on it
+ *    itself before writing anything, so inventing a second copy of that error
+ *    buys nothing — and adjudicating identity on a tree that cannot publish at
+ *    all would hand the operator a conflict where the real fault is the
+ *    manifest. Uniform on both fields on purpose: refusing on a missing version
+ *    while proceeding on a missing name would be an arbitrary split.
+ *  - A version ALREADY in the registry proceeds. That publish writes nothing
+ *    (`publishAgentPackageFromGitDir` returns `alreadyPublished`) and never
+ *    reaches the DB claim, since the install branch requires `published` — so
+ *    refusing it would invent a refusal the authoritative path never makes.
+ *    Costs one packument read on the publish path; the publisher then makes the
+ *    same check as its own overwrite guard. Skipping on "already present" is
+ *    sound because version existence is MONOTONIC on this registry: the config
+ *    forbids unpublish, so a version this read sees cannot have vanished by the
+ *    time the publisher looks again.
+ *  - A registry read that FAILS proceeds to the claim check rather than
+ *    skipping it: an unknown registry state is not evidence that the publish
+ *    would be a no-op, and the publisher surfaces the registry error itself.
+ *  - A database read that fails REFUSES, and this is the one place the gate
+ *    fails closed. Publishing blind is precisely the defect cinatra#2675 is
+ *    about: the version is unretractable, and a publish whose DB sync then
+ *    fails leaves a version in the registry with no template row — which a
+ *    retry cannot repair, because the retry is an `alreadyPublished` no-op that
+ *    skips the install. This does NOT make that orphan state impossible — a
+ *    database or install failure AFTER this read still produces it — it removes
+ *    the case where the write was made without ever asking. The reason goes to
+ *    the OPERATOR log only; the returned copy carries no database detail, which
+ *    the MCP tool result would persist LLM-visibly.
+ */
+export async function preflightAgentPublishClaim(input: {
+  agentDir: string;
+  publisherOrgId?: string | null;
+  registry: VerdaccioConfig;
+}): Promise<AgentPublishClaimRefusal | null> {
+  let packageName: string;
+  let packageVersion: string;
+  try {
+    const raw = await readFile(join(input.agentDir, "package.json"), "utf8");
+    const pkg = JSON.parse(raw) as { name?: unknown; version?: unknown };
+    if (typeof pkg.name !== "string" || pkg.name.length === 0) return null;
+    if (typeof pkg.version !== "string" || pkg.version.length === 0) return null;
+    packageName = pkg.name;
+    packageVersion = pkg.version;
+  } catch {
+    return null;
+  }
+
+  try {
+    const { isVersionPublished } = await import("./verdaccio/client");
+    if (await isVersionPublished(input.registry, packageName, packageVersion)) return null;
+  } catch {
+    /* registry unreadable — check the claim; the publisher reports the registry error */
+  }
+
+  const claim = deriveAgentTemplateIdentityClaim({ orgId: input.publisherOrgId ?? null });
+  try {
+    await resolveAgentTemplateIdentityClaim({ packageName, claim });
+    return null;
+  } catch (err) {
+    if (isAgentTemplateIdentityConflict(err)) return { error: err.message, code: err.code };
+    console.warn(
+      `[agent-template-identity] publish preflight could not resolve '${packageName}' — ` +
+        "refusing before the registry write.",
+      err,
+    );
+    return {
+      error:
+        `Publish refused: could not verify which organization holds the package name '${packageName}'. ` +
+        "Nothing was published. This is an instance-side failure — retry once the platform database is " +
+        "healthy again, and check the server log for the cause.",
+    };
+  }
 }

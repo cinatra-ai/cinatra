@@ -167,6 +167,7 @@ import { updateAgentTemplateOrigin } from "../store";
 import {
   claimOfAuthorizedTemplate,
   isAgentTemplateIdentityConflict,
+  preflightAgentPublishClaim,
 } from "../agent-template-identity";
 import { buildPublishAgentDependencies } from "../schema";
 import { deleteAgentTemplateGuarded } from "../removal-gate";
@@ -4364,8 +4365,6 @@ async function handleAgentBuilderGitPublish(
   // @cinatra-ai/extensions/publish-authority.
   if (destination === "public") {
     try {
-      const { readFile } = await import("node:fs/promises");
-      const { join } = await import("node:path");
       const pkgRaw = await readFile(join(agentDir, "package.json"), "utf8");
       const pkgVersion = (JSON.parse(pkgRaw) as { version?: string }).version;
       const v = typeof pkgVersion === "string" ? pkgVersion : "";
@@ -4430,8 +4429,6 @@ async function handleAgentBuilderGitPublish(
   // publish time. Validate up front and return a clear error.
   if (gitPublishScopeOverride) {
     try {
-      const { readFile } = await import("node:fs/promises");
-      const { join } = await import("node:path");
       const pkgPath = join(agentDir, "package.json");
       const pkgRaw = await readFile(pkgPath, "utf8");
       const pkgName = (JSON.parse(pkgRaw) as { name?: string }).name;
@@ -4447,6 +4444,23 @@ async function handleAgentBuilderGitPublish(
       };
     }
   }
+
+  // the publisher's identity, threaded through the install below so the upserted
+  // agent_templates row carries creator_id + org_id and is visible in the caller's
+  // own org-scoped /agents list. cinatra#2675 — resolved HERE, before the registry
+  // write, so the preflight and the authoritative DB claim adjudicate the SAME
+  // claimant. Hoisting it is inert: resolveOrgIdFromSession is total (it catches
+  // and returns undefined), and the auth gate above already resolved this value.
+  const publisherActor = request.actor as { userId?: string; orgId?: string | null } | undefined;
+  const publisherOrgId = publisherActor?.orgId ?? (await resolveOrgIdFromSession()) ?? undefined;
+
+  // cinatra#2675 — the READ-ONLY claimability preflight. A name held by another
+  // organization refuses HERE with NOTHING written to the registry; before this
+  // the version was published first and the refusal arrived after an
+  // irreversible write. It cannot reserve an ABSENT name across concurrent
+  // publishers — the guarded DB claim below stays the fail-closed authority.
+  const claimRefusal = await preflightAgentPublishClaim({ agentDir, publisherOrgId, registry: gitPublishConfig });
+  if (claimRefusal) return claimRefusal;
 
   try {
     const result = await publishAgentPackageFromGitDir({ agentDir, changelog: changelog ?? null }, gitPublishConfig);
@@ -4464,32 +4478,16 @@ async function handleAgentBuilderGitPublish(
     // later reload call doesn't fire when this step threw (which would mount
     // a stale or absent agent on the runtime).
     let installSucceeded = false;
-    // cinatra#2616 — the publisher org the origin write below claims under.
-    let publishClaimOrgId: string | null = null;
     if (result.published && result.packageName && result.packageVersion) {
       try {
-        // thread the publisher's identity through the install so
-        // the newly upserted agent_templates row carries creator_id + org_id
-        // and is visible to the caller in the standard /agents list. Without
-        // this, the install path landed with NULL org_id + empty owner_id,
-        // and agent_list (which scopes by activeOrganizationId) returned
-        // nothing for any user — leaving freshly-published agents
-        // unreachable through the UI until manually backfilled.
-        const actor = request.actor as
-          | { userId?: string; orgId?: string | null; platformRole?: string }
-          | undefined;
-        const publisherUserId = actor?.userId;
-        const publisherOrgId =
-          actor?.orgId ?? (await resolveOrgIdFromSession()) ?? undefined;
-        publishClaimOrgId = publisherOrgId ?? null;
         await installAgentFromPackage(
           {
             packageName: result.packageName,
             packageVersion: result.packageVersion,
-            creatorId: publisherUserId,
+            creatorId: publisherActor?.userId,
             orgId: publisherOrgId ?? undefined,
             ownerLevel: publisherOrgId ? "organization" : "user",
-            ownerId: publisherOrgId ?? publisherUserId,
+            ownerId: publisherOrgId ?? publisherActor?.userId,
             status: "published",
           },
           gitPublishConfig,
@@ -4521,7 +4519,7 @@ async function handleAgentBuilderGitPublish(
             source: "github",
             updatePolicy: "manual",
           },
-        }, claimOfAuthorizedTemplate({ orgId: publishClaimOrgId }));
+        }, claimOfAuthorizedTemplate({ orgId: publisherOrgId ?? null }));
       } catch (originErr) {
         console.warn("[agent_source_publish] Origin persistence failed:", originErr);
       }
