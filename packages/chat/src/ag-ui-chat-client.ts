@@ -847,6 +847,19 @@ export type UploadChatAttachmentsOptions = {
    *  Omitted (or absent thread) means no thread context is captured; the upload
    *  still succeeds. */
   threadId?: string;
+  /**
+   * The BROKER seam (cinatra#2683, epic #2564 S8f) — the same pair the turn
+   * driver takes, for the same reason, so an attachment and the turn it rides on
+   * prove who is asking in exactly one way.
+   *
+   * Absent ⇒ the first-party cookie upload, byte-identical to before.
+   * Present ⇒ the headers are built AT CALL TIME from the host's closure-held
+   * tokens and `credentialsMode: "omit"` is load-bearing: this endpoint is
+   * same-origin to the embed frame, so an ambient cookie would file the reader's
+   * attachment into whoever else's account is signed in on that browser.
+   */
+  authHeaders?: () => Record<string, string>;
+  credentialsMode?: "include" | "omit";
 };
 
 /** Upload picked files to /api/artifacts/upload.
@@ -870,13 +883,15 @@ export async function uploadChatAttachments(
     try {
       const r = await fetch("/api/artifacts/upload", {
         method: "POST",
-        credentials: "include",
+        credentials: options.credentialsMode ?? "include",
         headers: {
           "Content-Type": file.type || "application/octet-stream",
           "X-Artifact-Filename": file.name,
           "X-Artifact-Title": file.name,
           // Opt-in chat-context signal — only when a thread id is known.
           ...(threadId ? { "X-Artifact-Chat-Thread-Id": threadId } : {}),
+          // Built at call time, never held — see the options doc.
+          ...(options.authHeaders?.() ?? {}),
         },
         body: file,
       });

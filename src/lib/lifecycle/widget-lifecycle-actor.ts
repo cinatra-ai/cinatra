@@ -60,7 +60,10 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
-import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
+import {
+  emitWidgetAuthAudit,
+  type WidgetAuthAuditEvent,
+} from "@/lib/widget-auth-audit";
 // Steps 2 + 3 of the ladder live in the LIVE-STANDING LEAF, which this module
 // delegates to rather than duplicating (cinatra#2577 split it out so the MCP
 // pull's widget branch does not drag `widget-user-auth`'s synchronous postgres
@@ -74,6 +77,7 @@ import {
   WIDGET_LIFECYCLE_DECIDE_SCOPE,
   WIDGET_LIFECYCLE_READ_ROUTE_PATH,
   WIDGET_LIFECYCLE_READ_SCOPE,
+  type WidgetExtensionScope,
 } from "@/lib/widget-lifecycle-scope";
 import {
   consumeUserWidgetToken,
@@ -108,6 +112,8 @@ export const WIDGET_LIFECYCLE_READ_REQUIRED_SCOPES = [
 export const WIDGET_LIFECYCLE_READ_GRANT = {
   routePath: WIDGET_LIFECYCLE_READ_ROUTE_PATH,
   requiredScopes: [WIDGET_LIFECYCLE_READ_SCOPE],
+  auditAuthorized: "widget_lifecycle_read_authorized",
+  auditRejected: "widget_lifecycle_read_rejected",
 } as const;
 
 /**
@@ -119,11 +125,38 @@ export const WIDGET_LIFECYCLE_READ_GRANT = {
 export const WIDGET_LIFECYCLE_DECIDE_GRANT = {
   routePath: WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH,
   requiredScopes: [WIDGET_LIFECYCLE_DECIDE_SCOPE],
+  auditAuthorized: "widget_lifecycle_decide_authorized",
+  auditRejected: "widget_lifecycle_decide_rejected",
 } as const;
 
-export type WidgetLifecycleGrant =
-  | typeof WIDGET_LIFECYCLE_READ_GRANT
-  | typeof WIDGET_LIFECYCLE_DECIDE_GRANT;
+/**
+ * WHAT A GRANT IS, generalized (cinatra#2683, epic #2564 S8f).
+ *
+ * A (route audience, required scope set) pair, plus the two audit events its
+ * authorization decision is recorded under. S8f gave the conversation column's
+ * own data paths their grants (`@/lib/widget-conversation-grants`), and every one
+ * of them is consumed through THIS door — so the type is the shape, not a union
+ * of the two lifecycle constants.
+ *
+ * THE AUDIT EVENTS TRAVEL WITH THE GRANT, deliberately. They used to be derived
+ * from an `isDecide` comparison against one constant, which is a rule that has to
+ * be extended by hand every time a grant is added — and a grant whose author
+ * forgot would have been recorded as a lifecycle READ. Naming the pair here means
+ * a new grant cannot exist without saying where its decisions are written down.
+ */
+export type WidgetTokenGrant = {
+  routePath: string;
+  /** KNOWN scopes only — the verifier's own vocabulary. A grant cannot demand a
+   *  scope this build does not recognize, which is what keeps "unknown tokens
+   *  grant nothing" true from both ends. */
+  requiredScopes: readonly WidgetExtensionScope[];
+  auditAuthorized: WidgetAuthAuditEvent;
+  auditRejected: WidgetAuthAuditEvent;
+};
+
+/** @deprecated Kept as the pre-S8f name for the two lifecycle grants. New call
+ *  sites type against {@link WidgetTokenGrant}. */
+export type WidgetLifecycleGrant = WidgetTokenGrant;
 
 export type WidgetLifecycleActorDenial =
   /** The `cwu_` failed the single verifier — includes the scope/audience gate. */
@@ -164,25 +197,21 @@ export async function resolveWidgetLifecycleActorContext(input: {
   /**
    * WHICH grant this request is consumed under. Defaults to READ so every S8a
    * call site is unchanged; the decision entry passes
-   * `WIDGET_LIFECYCLE_DECIDE_GRANT`. Nothing else about the ladder varies — the
-   * actor a decision is taken with is byte-for-byte the actor a read is served
-   * with, which is what makes "same authorization outcome on both surfaces"
-   * true rather than asserted.
+   * `WIDGET_LIFECYCLE_DECIDE_GRANT`, and S8f's conversation entries pass theirs.
+   * Nothing else about the ladder varies — the actor a decision is taken with is
+   * byte-for-byte the actor a read is served with, which is what makes "same
+   * authorization outcome on both surfaces" true rather than asserted.
    */
-  grant?: WidgetLifecycleGrant;
+  grant?: WidgetTokenGrant;
 }): Promise<WidgetLifecycleActorResult> {
   const grant = input.grant ?? WIDGET_LIFECYCLE_READ_GRANT;
   // The audit names the OPERATION, not just the module (codex round 0, finding
   // 6). A widget DECISION authenticated under the decide grant used to be
   // recorded as a read, which makes an investigation of a suspicious decision
-  // read the wrong rows. Derived from the grant so the two can never disagree.
-  const isDecide = grant === WIDGET_LIFECYCLE_DECIDE_GRANT;
-  const authorized = isDecide
-    ? "widget_lifecycle_decide_authorized"
-    : "widget_lifecycle_read_authorized";
-  const rejected = isDecide
-    ? "widget_lifecycle_decide_rejected"
-    : "widget_lifecycle_read_rejected";
+  // read the wrong rows. Carried BY the grant (S8f) so a grant cannot exist
+  // without naming its trail, and so the two can never disagree.
+  const authorized = grant.auditAuthorized;
+  const rejected = grant.auditRejected;
   // 1. THE TOKEN. Consumed at the grant's audience with the grant's scope
   //    required, so the same verifier that authorizes a chat turn decides this
   //    too — with a strictly higher bar. A token minted before the grant existed
@@ -215,12 +244,13 @@ export async function resolveWidgetLifecycleActorContext(input: {
 
   // 2 + 3. THE LIVE STANDING AND THE ACTOR — the shared leaf.
   //
-  //    The leaf emits the READ-flavoured audit for its own denials, because it
-  //    is shared with the MCP-frame entry, which has no grant to key on. A
-  //    DECIDE that dies on standing is therefore recorded twice: the leaf's read
-  //    row, and the decide row this door adds below — so an investigation that
-  //    filters on `widget_lifecycle_decide_rejected` sees every failed decision
-  //    (codex round 1 on finding 6).
+  //    The leaf writes the denial under THIS grant's series (cinatra#2683, codex
+  //    round 1, finding 2). It used to write a READ row unconditionally and this
+  //    door added a second, grant-named one beside it — so a refused upload was
+  //    also recorded as a refused lifecycle read, and an investigation of either
+  //    series read attempts that never happened. One denial, one row, named for
+  //    the operation that was actually attempted. (The MCP-frame entry has no
+  //    grant and keeps the read default, which is what it has always written.)
   //
   //    The token proves membership held at consent; this proves it holds now,
   //    against `claims.orgId` — the org the token is bound to — so a user's
@@ -241,18 +271,9 @@ export async function resolveWidgetLifecycleActorContext(input: {
     userId: claims.userId,
     orgId: claims.orgId,
     auditSlug: input.agentSlug,
+    auditRejected: rejected,
   });
-  if (!standing.ok) {
-    if (isDecide) {
-      emitWidgetAuthAudit(rejected, {
-        actor: claims.userId,
-        orgId: claims.orgId,
-        agentSlug: input.agentSlug,
-        reason: standing.reason,
-      });
-    }
-    return standing;
-  }
+  if (!standing.ok) return standing;
 
   emitWidgetAuthAudit(authorized, {
     actor: claims.userId,

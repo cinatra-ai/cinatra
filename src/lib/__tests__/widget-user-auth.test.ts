@@ -1235,7 +1235,10 @@ describe("resolveVerifiedSiteFromCredential", () => {
 // ---------------------------------------------------------------------------
 /** The no-screen token one session would earn. */
 function noScreenTokenFor(sessionId: string): string {
-  return widgetNoSignInScreenToken(widgetSessionFingerprint(sessionId));
+  return widgetNoSignInScreenToken(
+    widgetSessionFingerprint(sessionId),
+    WIDGET_SIGNIN_GRANTED_SCOPES,
+  );
 }
 
 /** Insert a Better Auth session ROW; the DATABASE stamps when it did so. */
@@ -1721,7 +1724,9 @@ describe("widgetSessionFingerprint — one session, one name", () => {
   it("names nothing for an unusable id, so no token can be built from one", () => {
     for (const bad of ["", "   ", null, undefined, 42, {}]) {
       expect(widgetSessionFingerprint(bad)).toBe("");
-      expect(widgetNoSignInScreenToken(widgetSessionFingerprint(bad))).toBe("");
+      expect(
+        widgetNoSignInScreenToken(widgetSessionFingerprint(bad), WIDGET_SIGNIN_GRANTED_SCOPES),
+      ).toBe("");
     }
   });
 

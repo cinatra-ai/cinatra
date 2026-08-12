@@ -43,8 +43,21 @@ function jsonError(status: number, error: string): Response {
 // No session -> 401 (do NOT redirect an API call). The response carries the
 // caller's OWN per-user chat-capture preference (cinatra#1367) alongside the
 // global config — additive, so existing consumers are unaffected.
-export async function handleGetChatCaptureConfig(): Promise<Response> {
-  const actor = await getActorContext();
+export async function handleGetChatCaptureConfig(
+  /**
+   * The actor a NON-COOKIE caller already proved (cinatra#2683, epic #2564 S8f).
+   *
+   * The widget's prompt-options flyout carries the same Skill-autosave row
+   * `/chat` carries, and it has to read the same account setting to draw it. The
+   * widget door hands the S8a FULL actor in here rather than this module
+   * reaching for a session that, on a same-origin embed frame, would belong to
+   * whoever else is signed in on that browser.
+   *
+   * Absent ⇒ the cookie path, byte-identical to before.
+   */
+  brokeredActor?: Awaited<ReturnType<typeof getActorContext>>,
+): Promise<Response> {
+  const actor = brokeredActor ?? (await getActorContext());
   if (!actor) return jsonError(401, "Authentication required.");
   const config = readSkillAutosaveConfig();
   const userPref = readSkillAutosaveUserPref(actor.principalId);
@@ -62,14 +75,23 @@ export async function handleGetChatCaptureConfig(): Promise<Response> {
 //     authenticated; allowed for platform admins always, for other users only
 //     while the admin `userCanConfigure` flag is on. Writes ONLY the caller's
 //     own preference — there is deliberately no path to another user's row.
-export async function handlePatchChatCaptureConfig(request: Request): Promise<Response> {
+export async function handlePatchChatCaptureConfig(
+  request: Request,
+  /** See {@link handleGetChatCaptureConfig}. The WRITE takes the same actor the
+   *  read took, so what a widget reader may change is decided by their live
+   *  standing — the identical `can()` call, against the identical resource. A
+   *  non-platform actor is refused here exactly as they are refused in the app. */
+  brokeredActor?: Awaited<ReturnType<typeof getActorContext>>,
+): Promise<Response> {
   // 1. Same-origin enforcement (CSRF defense-in-depth for this cookie-backed,
-  //    settings-mutating route).
+  //    settings-mutating route). The embed frame IS same-origin to the app, so a
+  //    widget PATCH satisfies it for free — and a broker caller additionally
+  //    proves itself with a token this guard never sees.
   const crossOrigin = rejectCrossOrigin(request);
   if (crossOrigin) return crossOrigin;
 
   // 2. Authenticate.
-  const actor = await getActorContext();
+  const actor = brokeredActor ?? (await getActorContext());
   if (!actor) return jsonError(401, "Authentication required.");
 
   const body = (await request.json()) as {

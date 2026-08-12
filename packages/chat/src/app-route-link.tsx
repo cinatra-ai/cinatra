@@ -29,38 +29,32 @@
 
 import type { ComponentProps, ReactNode } from "react";
 import Link from "next/link";
-import {
-  useCookieSessionSurface,
-  useLifecycleCardAuth,
-} from "@cinatra-ai/agents/lifecycle-card-runtime";
+import { useLifecycleCardAuth } from "@cinatra-ai/agents/lifecycle-card-runtime";
 
 /**
- * True when this subtree is NOT a first-party cookie session — the site widget,
- * and anything else that has not declared itself a cookie host.
+ * REMOVED in the second half of S8f (cinatra#2683). `useBrokeredSurface()` was a
+ * BOOLEAN — "not a first-party cookie session" — and it existed only to switch
+ * cookie-bound affordances OFF where a cookie could not be trusted. Now that
+ * those affordances ask with whichever credential the host declared, the
+ * question they need is not a boolean: a mis-wired mount that exposes no
+ * credential must behave differently from BOTH working surfaces, and a boolean
+ * has nowhere to put it. `useConversationCredential()`
+ * (`./conversation-credential`) answers with three states instead, and the
+ * refused one still asks nothing at all.
  *
- * DELIBERATELY THE NEGATION OF THE COOKIE ANSWER, not "does it carry a broker
- * credential" (codex round 1, finding 1). Reading the credential would make an
- * INVALID broker declaration — one the lifecycle runtime refused, so it exposes
- * no auth — indistinguishable from a first-party page, and the cookie-bound
- * affordances gated on this would then fire from inside the widget frame, which
- * is same-origin to the app: the server would answer, and record decisions, as
- * whoever else is signed in on that browser. Asking the cookie question instead
- * makes every unclear case fail closed.
+ * The link policy below keeps its own question, and keeps the opposite default,
+ * for the reason it always stated.
  */
-export function useBrokeredSurface(): boolean {
-  return !useCookieSessionSurface();
-}
 
 /**
  * True when this subtree renders under a DECLARED, valid broker credential —
  * i.e. the widget frame, actually wired.
  *
- * NOT the same question as `useBrokeredSurface`, and deliberately defaulted the
- * other way, because the two guard different risks:
+ * NOT the same question as `useConversationCredential`, and deliberately
+ * defaulted the other way, because the two guard different risks:
  *
- *   · a cookie-bound REQUEST fired from the wrong surface leaks or mutates
- *     another person's data, so its guard must refuse whenever the surface is
- *     unclear — `useBrokeredSurface`;
+ *   · a REQUEST fired with the wrong credential leaks or mutates another
+ *     person's data, so its guard must refuse whenever the surface is unclear;
  *   · a LINK's target is cosmetic. Defaulting THAT to "not first party" would
  *     turn every same-tab in-app link into a new tab on any first-party surface
  *     that renders a chat error card outside a lifecycle-host declaration —

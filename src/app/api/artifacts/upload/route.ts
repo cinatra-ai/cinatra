@@ -1,4 +1,9 @@
 import { getAuthSession } from "@/lib/auth-session";
+import {
+  authenticateWidgetConversationRequest,
+  isWidgetBranchRequest,
+} from "@/lib/widget-conversation-door";
+import { WIDGET_ATTACHMENT_UPLOAD_GRANT } from "@/lib/widget-conversation-grants";
 import { createUploadedArtifact } from "@/lib/artifacts/artifact-service";
 // `ArtifactCreationDisabledError` is not an expected upload failure; upload
 // creation is enabled on the semantic model. BlobTooLargeError remains as the
@@ -47,18 +52,53 @@ async function* webStreamToAsyncIterable(
   }
 }
 
+// TWO AUTH BRANCHES (cinatra#2683, epic #2564 S8f opened the second), on the
+// pattern `/api/lifecycle-views/resolve` established.
+//
+// WHY THE WIDGET NEEDED ONE. The shared composer's upload row is prop-gated, and
+// the widget passed no handler for one reason: `uploadChatAttachments` posted
+// here with `credentials: "include"`, and the embed frame is SAME-ORIGIN to the
+// app — so an attachment picked inside somebody's website would have been filed
+// into whichever Cinatra account that browser happened to be signed into.
+//
+// The fix is not a widget upload path. It is this door: the widget presents its
+// `cwu_`, the WIDGET PRINCIPAL becomes the owner, and the artifact is created by
+// the same service call with the same private, user-owned visibility an in-app
+// upload gets. There is no widget-shaped artifact.
+//
+// The branch is decided by the presented credential and never falls back.
+async function resolveUploader(
+  request: Request,
+): Promise<{ orgId: string | null | undefined; userId: string | undefined } | null> {
+  if (isWidgetBranchRequest(request)) {
+    const authed = await authenticateWidgetConversationRequest(
+      request,
+      WIDGET_ATTACHMENT_UPLOAD_GRANT,
+    );
+    if (!authed) return null;
+    // The org the TOKEN is bound to, and the user it names. Never a session's
+    // active org — the widget has no business reading one.
+    return { orgId: authed.claims.orgId, userId: authed.claims.userId };
+  }
+  const session = await getAuthSession();
+  if (!session) return null;
+  return {
+    orgId: session.session?.activeOrganizationId,
+    // The uploading user — owner of the upload (private, #1885 C1) AND the
+    // recipient of the refusal advisory (cinatra#1890).
+    userId: session.user?.id ?? undefined,
+  };
+}
+
 export async function POST(request: Request): Promise<Response> {
   if (!isAllowedOrigin(request)) {
     return Response.json({ ok: false, error: "Forbidden" }, { status: 403 });
   }
-  const session = await getAuthSession();
-  if (!session) {
+  const uploader = await resolveUploader(request);
+  if (!uploader) {
     return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
-  const orgId = session.session?.activeOrganizationId;
-  // The uploading user — owner of the upload (private, #1885 C1) AND the
-  // recipient of the refusal advisory (cinatra#1890).
-  const userId = session.user?.id ?? undefined;
+  const { orgId, userId } = uploader;
   if (!orgId) {
     return Response.json(
       { ok: false, error: "No active organization" },

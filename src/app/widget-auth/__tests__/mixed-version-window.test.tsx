@@ -130,6 +130,7 @@ const OTHER_SESSION = { user: { id: "user-2" }, session: { id: "sess-2" } };
 const noScreenFor = (sessionId: string) =>
   widgetNoSignInScreenToken(
     createHash("sha256").update(sessionId).digest("hex").slice(0, 32),
+    WIDGET_SIGNIN_GRANTED_SCOPES,
   );
 
 /** A nonce no node in this flow ever minted — what an arrival guesses with. */

@@ -437,6 +437,7 @@ export function useConversationColumnTurns({
   widgetManifests = EMPTY_WIDGET_MANIFESTS,
   initialMessages,
   onTurnStatusChange,
+  takePendingAttachments,
 }: {
   threadId: string;
   transport?: ConversationTransport;
@@ -447,6 +448,17 @@ export function useConversationColumnTurns({
   /** The reduced turn status after every list write, so a host can mirror it
    *  (the embed's `data-turn-status` observability hook). */
   onTurnStatusChange?: (status: ConversationTurnStatus) => void;
+  /**
+   * The attachments the composer has uploaded and not yet sent (cinatra#2683,
+   * epic #2564 S8f). Called ONCE at submit and expected to clear its own buffer,
+   * so a file cannot ride two turns. Absent ⇒ a host with no upload row, which
+   * is the same as an empty buffer.
+   *
+   * It is a callback rather than a prop because the buffer changes on every
+   * upload and the submit handler must read the LATEST one — the same reason
+   * `/chat` reads its own buffer at submit time rather than closing over it.
+   */
+  takePendingAttachments?: () => UiMessage["attachments"];
 }) {
   const [messages, setMessages] = useState<UiMessage[]>(() => initialMessages ?? []);
   // The list MIRROR — `/chat` keeps the same one (`messagesRef`). Two reasons,
@@ -538,12 +550,21 @@ export function useConversationColumnTurns({
       const text = value.trim();
       if (!text || hasActiveStream) return;
       promptRef.current?.clear();
-      const userMessage: UiMessage = { id: generateId(), role: "user", content: text };
+      // The uploaded-but-unsent files belong to THIS turn — taken (and cleared)
+      // at submit, exactly as `/chat` takes its own buffer, so the wire carries
+      // them and the next turn does not.
+      const attachments = takePendingAttachments?.();
+      const userMessage: UiMessage = {
+        id: generateId(),
+        role: "user",
+        content: text,
+        ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      };
       const history = [...listRef.current, userMessage];
       writeMessages(history);
       void runTurn(history);
     },
-    [hasActiveStream, runTurn, writeMessages],
+    [hasActiveStream, runTurn, takePendingAttachments, writeMessages],
   );
 
   /**

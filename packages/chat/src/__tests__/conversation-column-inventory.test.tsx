@@ -14,17 +14,23 @@
 // prop, a fail-closed guard widened by accident), and each numbered check names
 // the thing a reader would notice going missing.
 //
-// TWO ITEMS DO NOT PASS ON THE WIDGET, AND ARE NOT PRETENDED TO. The pending
-// tool-confirmation cards (11) and the undo chip (12) read and decide through
-// COOKIE-BOUND server actions. The embed frame is same-origin to the Cinatra
-// app, so firing them from the widget would answer — and record a decision — as
-// whoever else is signed in on that browser. They are fail-closed on a broker
-// credential and asserted ABSENT here, with the reason, and carried as open
-// questions on the PR. A silent reduction would have been the alternative, and
-// the issue forbids it.
+// EVERY ITEM NOW PASSES ON BOTH SURFACES, AND SIX OF THEM ARE NEW HERE. The
+// first half of S8f left six items open, each for the same reason: the data path
+// behind the affordance resolved its identity from an ambient cookie, and the
+// embed frame is same-origin to the Cinatra app, so a cookie request from it
+// answers as whoever else is signed in on that browser. The column was never the
+// problem.
+//
+// The second half gave each of them a broker-aware path — a widget auth BRANCH
+// on the route that already existed, the S8a full actor, the same per-row check
+// — so the six pinned open questions below became assertions. They are asserted
+// the same way as every other row: on BOTH host configurations, from the same
+// fixture, with the widget arm resolving its inputs the way production resolves
+// them (`installWidgetServiceStub`), and with a NEGATIVE CONTROL beside each one
+// so a green run is evidence the check can go red.
 // ---------------------------------------------------------------------------
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 
 // ---------------------------------------------------------------------------
@@ -42,32 +48,44 @@ import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 //     out of scope here; the undo chip beside it still renders, which is the
 //     part this file measures.
 // ---------------------------------------------------------------------------
+/**
+ * ONE server answer, presented at BOTH doors (cinatra#2683, second half).
+ *
+ * The cookie arm reaches these rows through the server action and the widget arm
+ * through the route, so the fixture is HOISTED and used by both — a check that
+ * the two surfaces agree is only meaningful when they were told the same thing.
+ */
+const SERVER = vi.hoisted(() => ({
+  pendingRows: [
+    {
+      id: "pending-1",
+      connectorKey: "files",
+      toolName: "delete_everything",
+      serverId: "files-mcp",
+      instanceId: "inst-1",
+      instanceLabel: "Files",
+      argsPreview: '{"path":"/"}',
+      status: "pending",
+      failureCode: null,
+      resultSummary: null,
+      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      confirmToken: "confirm-tok",
+      rejectToken: "reject-tok",
+    },
+  ],
+  undoChangeSetId: "cs-2683",
+}));
+
 vi.mock("../pending-call-actions", () => ({
-  listPendingToolConfirmations: async () => ({
-    rows: [
-      {
-        id: "pending-1",
-        connectorKey: "files",
-        toolName: "delete_everything",
-        serverId: "files-mcp",
-        instanceId: "inst-1",
-        instanceLabel: "Files",
-        argsPreview: '{"path":"/"}',
-        status: "pending",
-        failureCode: null,
-        resultSummary: null,
-        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        confirmToken: "confirm-tok",
-        rejectToken: "reject-tok",
-      },
-    ],
-  }),
+  listPendingToolConfirmations: async () => ({ rows: SERVER.pendingRows }),
   decidePendingToolCall: async () => ({ ok: true }),
 }));
 vi.mock("../undo-actions", () => ({
-  recentUndoableChangeSetForRunAction: async () => ({ changeSetId: "cs-2683" }),
+  recentUndoableChangeSetForRunAction: async () => ({
+    changeSetId: SERVER.undoChangeSetId,
+  }),
 }));
 vi.mock("@/components/data-safety/undo-toast", () => ({
   undoDeepLink: (id: string) => `/objects?undo=${id}`,
@@ -78,19 +96,47 @@ vi.mock("../inline-agent-run-card", () => ({
 
 import {
   SURFACES,
+  installWidgetServiceStub,
+  mountRefusedSurface,
   measureConversationColumn,
   mountRunningSurface,
   mountSurface,
   PARITY_MENTIONABLES,
+  PARITY_REMOTE_CHAT,
   parityAgentRunMessages,
   parityErrorMessages,
   parityFixtureMessages,
+  WIDGET_AUTOSAVE_VISIBLE,
+  WIDGET_DIRECTORY,
   type SurfaceName,
 } from "./conversation-column-harness";
+import { fetchThreadMessages } from "../conversation-services";
+
+/**
+ * The widget's server, installed for every mount in this file.
+ *
+ * The widget arm resolves its composer inputs through the shared services, so
+ * without this the arm would measure a surface whose reads all failed — which is
+ * the state the FIRST half of S8f left, not the state under test. Each numbered
+ * check that depends on one of the six says which answer it depends on.
+ */
+let widgetServer: ReturnType<typeof installWidgetServiceStub>;
+beforeEach(() => {
+  widgetServer = installWidgetServiceStub({
+    mentionables: WIDGET_DIRECTORY,
+    autosave: WIDGET_AUTOSAVE_VISIBLE,
+    pendingRows: SERVER.pendingRows,
+    undoChangeSetId: SERVER.undoChangeSetId,
+  });
+});
+afterEach(() => widgetServer.restore());
 
 afterEach(cleanup);
 
-const root = (surface: SurfaceName, container: HTMLElement): HTMLElement =>
+const root = (
+  surface: SurfaceName | "undeclared",
+  container: HTMLElement,
+): HTMLElement =>
   container.querySelector<HTMLElement>(`[data-parity-surface="${surface}"]`)!;
 
 /**
@@ -168,35 +214,66 @@ describe.each(SURFACES)("conversation column on %s (#2683)", (surface) => {
     expect(m.legacySingleLineInputs).toBe(0);
   });
 
-  it("8 — the composer takes attachments when the host supplies a handler", async () => {
-    const withHandler = await mountSurface(surface, { onAttachmentsSelected: () => {} });
-    expect(
-      measureConversationColumn(root(surface, withHandler.container)).hasAttachmentInput,
-    ).toBe(true);
-    cleanup();
-    // Prop-gated on BOTH surfaces in the same way: no handler, no upload row.
-    const without = await mountSurface(surface);
-    expect(measureConversationColumn(root(surface, without.container)).hasAttachmentInput).toBe(
-      false,
-    );
+  it("8 — the composer takes attachments", async () => {
+    // PRODUCTION inputs on both arms: `/chat` wires its upload handler and the
+    // widget wires the SAME one with its broker transport, so the shared
+    // composer draws its upload row on both. (The gate itself is still a prop
+    // gate, and the negative control below proves it still closes.)
+    const { container } = await mountSurface(surface);
+    expect(measureConversationColumn(root(surface, container)).hasAttachmentInput).toBe(true);
   });
 
-  it("9 — the prompt-options flyout appears when the host supplies something to put in it", async () => {
-    // Measures the COLUMN's seam, not the widget's wiring: the flyout is the
-    // container for the attachment row, so both arms are handed a handler here.
-    // What the REAL embed passes — and why it passes nothing yet — is asserted
-    // in the open-questions block at the bottom of this file.
-    const { container } = await mountSurface(surface, { onAttachmentsSelected: () => {} });
+  it("8 (negative control) — no handler, no upload row", async () => {
+    // The gate is the COLUMN's, identical on both surfaces: a host that supplies
+    // nothing draws nothing. This is what makes the check above meaningful.
+    const { container } = await mountSurface(surface, { withoutComposerInputs: true });
+    expect(measureConversationColumn(root(surface, container)).hasAttachmentInput).toBe(false);
+  });
+
+  it("9 — the prompt-options flyout appears, with all three of its rows", async () => {
+    // The flyout is gated on its CONTENTS, so this is really three checks: the
+    // attachment row (item 8), the Skill-autosave row (the same account setting,
+    // read through the same handler) and the remote-chat jump-out (a
+    // server-resolved prop on both surfaces).
+    const { container } = await mountSurface(surface, { remoteChat: PARITY_REMOTE_CHAT });
+    const scope = root(surface, container);
+    const trigger = scope.querySelector<HTMLButtonElement>(
+      'button[aria-label="Prompt options"]',
+    );
+    expect(trigger).not.toBeNull();
+    // Radix opens a dropdown on POINTERDOWN, not on click — a click-only test
+    // would report "no flyout" for a flyout that works.
+    fireEvent.pointerDown(trigger!, { button: 0, ctrlKey: false });
+    fireEvent.click(trigger!);
+    // The flyout is a Radix dropdown, so it PORTALS out of the column.
+    await waitFor(() => {
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Upload files");
+      expect(text).toContain("Skills autosave");
+      expect(text).toContain(PARITY_REMOTE_CHAT.label);
+    });
+    // The jump-out is an EXTERNAL destination on both surfaces and already opened
+    // out of the page on both — so the widget carries the identical row with the
+    // identical target. No reduction, and none invented.
+    const remote = Array.from(document.body.querySelectorAll("a")).find(
+      (a) => a.getAttribute("href") === PARITY_REMOTE_CHAT.href,
+    );
+    expect(remote?.getAttribute("target")).toBe("_blank");
+  });
+
+  it("9 (negative control) — nothing to put in it, no flyout", async () => {
+    const { container } = await mountSurface(surface, { withoutComposerInputs: true });
     expect(
       measureConversationColumn(root(surface, container)).hasPromptOptionsTrigger,
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("10 — @-mentions open the composer's flyout when the host supplies participants", async () => {
-    // Same reading as item 9: the participant list is a host input, handed to
-    // BOTH arms here so the check measures the shared composer. The widget's own
-    // (empty) list is asserted in the open-questions block.
-    const { container } = await mountSurface(surface, { mentionables: PARITY_MENTIONABLES });
+  it("10 — @-mentions open the composer's flyout", async () => {
+    // PRODUCTION inputs on both arms: `/chat` resolves its participant list from
+    // the directory reader and the widget resolves the SAME list, from the same
+    // reader, through its broker branch — tenant-scoped by the reader's own
+    // proven membership on both.
+    const { container } = await mountSurface(surface);
     const editor = root(surface, container).querySelector<HTMLElement>(
       '[data-testid="chat-prompt-input"]',
     )!;
@@ -207,6 +284,16 @@ describe.each(SURFACES)("conversation column on %s (#2683)", (surface) => {
     await waitFor(() => {
       expect(document.body.querySelector('[role="listbox"]')).not.toBeNull();
     });
+  });
+
+  it("10 (negative control) — an empty participant list draws no flyout", async () => {
+    const { container } = await mountSurface(surface, { mentionables: [] });
+    const editor = root(surface, container).querySelector<HTMLElement>(
+      '[data-testid="chat-prompt-input"]',
+    )!;
+    typeIntoEditor(editor, "@");
+    await new Promise((r) => setTimeout(r, 30));
+    expect(document.body.querySelector('[role="listbox"]')).toBeNull();
   });
 
   it("13 — a failed turn shows the friendly error body with Copy error details", async () => {
@@ -248,27 +335,31 @@ describe.each(SURFACES)("conversation column on %s (#2683)", (surface) => {
 
 describe("the inventory row is the SAME on both surfaces (#2683)", () => {
   /**
-   * The two fields the surfaces are KNOWN to differ on, excluded from the
-   * whole-row compare and asserted separately below with their reason. Naming
-   * them here — rather than loosening the compare — is what keeps a third
-   * difference from slipping in unnoticed.
+   * THE WHOLE ROW, WITH NOTHING EXCLUDED (cinatra#2683, second half).
+   *
+   * This compare used to carry a KNOWN_DIFFERENCES list holding
+   * `pendingConfirmationCards` and `undoChips` — the two affordances that could
+   * only ask with a cookie, and so could not answer on the widget. Both now ask
+   * with the host's own credential through the same server module, so the list
+   * is EMPTY and the compare is total: a single field that differs fails here,
+   * which is the property the list was weakening.
    */
-  const KNOWN_DIFFERENCES = ["pendingConfirmationCards", "undoChips"] as const;
-  const comparable = (row: Record<string, unknown>) => {
-    const copy = { ...row };
-    for (const k of KNOWN_DIFFERENCES) delete copy[k];
-    return copy;
-  };
+  const comparable = (row: Record<string, unknown>) => ({ ...row });
 
   it("agrees element for element on a populated thread", async () => {
     const hostInputs = {
       withCatalog: true,
-      onAttachmentsSelected: () => {},
       mentionables: PARITY_MENTIONABLES,
+      remoteChat: PARITY_REMOTE_CHAT,
     };
     const chat = await mountSurface("chat", hostInputs);
     await waitFor(() =>
       expect(root("chat", chat.container).querySelector("[data-mermaid-block]")).not.toBeNull(),
+    );
+    await waitFor(() =>
+      expect(
+        measureConversationColumn(root("chat", chat.container)).pendingConfirmationCards,
+      ).toBe(1),
     );
     const chatRow = measureConversationColumn(root("chat", chat.container));
     cleanup();
@@ -276,82 +367,114 @@ describe("the inventory row is the SAME on both surfaces (#2683)", () => {
     await waitFor(() =>
       expect(root("widget", widget.container).querySelector("[data-mermaid-block]")).not.toBeNull(),
     );
+    await waitFor(() =>
+      expect(
+        measureConversationColumn(root("widget", widget.container)).pendingConfirmationCards,
+      ).toBe(1),
+    );
     const widgetRow = measureConversationColumn(root("widget", widget.container));
     expect(comparable(widgetRow)).toEqual(comparable(chatRow));
   });
 
   it("agrees on a failed turn", async () => {
     const chat = await mountSurface("chat", { messages: parityErrorMessages() });
+    await waitFor(() =>
+      expect(
+        measureConversationColumn(root("chat", chat.container)).pendingConfirmationCards,
+      ).toBe(1),
+    );
     const chatRow = measureConversationColumn(root("chat", chat.container));
     cleanup();
     const widget = await mountSurface("widget", { messages: parityErrorMessages() });
+    await waitFor(() =>
+      expect(
+        measureConversationColumn(root("widget", widget.container)).pendingConfirmationCards,
+      ).toBe(1),
+    );
     const widgetRow = measureConversationColumn(root("widget", widget.container));
     expect(comparable(widgetRow)).toEqual(comparable(chatRow));
   });
 });
 
 // ---------------------------------------------------------------------------
-// Items 11 and 12 — the cookie-bound affordances, stated honestly.
+// Items 11 and 12 — the two affordances that ASK the server, on both surfaces.
 // ---------------------------------------------------------------------------
+// These were the two the first half of S8f could not ship: both read (and one
+// decides) through a path that resolved its identity from an ambient cookie, so
+// on the widget they were fail-closed and asserted ABSENT here.
+//
+// They now ask with the credential the HOST declared, through a route whose
+// widget branch builds the S8a full actor and runs the same per-row check. So
+// the row they produce is the same on both surfaces — which is why they leave
+// the known-differences list below and join the whole-row compare.
 
-describe("cookie-bound affordances fail CLOSED on the broker surface (#2683)", () => {
-  it("11 — /chat draws the pending tool-confirmation card; the widget draws none", async () => {
-    const chat = await mountSurface("chat");
-    await waitFor(() =>
-      expect(
-        measureConversationColumn(root("chat", chat.container)).pendingConfirmationCards,
-      ).toBe(1),
-    );
-    cleanup();
-    const widget = await mountSurface("widget");
-    // Not "renders empty": the component returns null and issues NO request,
-    // because the request would be answered from an ambient Cinatra cookie that
-    // belongs to whoever else uses this browser.
-    await new Promise((r) => setTimeout(r, 20));
-    expect(
-      measureConversationColumn(root("widget", widget.container)).pendingConfirmationCards,
-    ).toBe(0);
+describe("the asking affordances answer on BOTH surfaces (#2683)", () => {
+  it("11 — both surfaces draw the pending tool-confirmation card", async () => {
+    for (const surface of SURFACES) {
+      const mounted = await mountSurface(surface);
+      await waitFor(() =>
+        expect(
+          measureConversationColumn(root(surface, mounted.container)).pendingConfirmationCards,
+        ).toBe(1),
+      );
+      cleanup();
+    }
   });
 
-  it("12 — /chat draws the undo chip under a run; the widget draws none", async () => {
+  it("12 — both surfaces draw the undo chip under a run", async () => {
     const messages = parityAgentRunMessages();
-    const chat = await mountSurface("chat", { messages });
-    await waitFor(() =>
-      expect(measureConversationColumn(root("chat", chat.container)).undoChips).toBe(1),
-    );
-    cleanup();
-    const widget = await mountSurface("widget", { messages });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(measureConversationColumn(root("widget", widget.container)).undoChips).toBe(0);
+    for (const surface of SURFACES) {
+      const mounted = await mountSurface(surface, { messages });
+      await waitFor(() =>
+        expect(measureConversationColumn(root(surface, mounted.container)).undoChips).toBe(1),
+      );
+      cleanup();
+    }
   });
 
-  it("the guard is keyed on the CREDENTIAL, so every cookie host keeps them", async () => {
-    // `/chat` mounts the same components from the same list and is untouched:
-    // the guard reads the declared broker credential, not a surface name, so a
-    // future cookie-session host needs no edit and cannot be caught by it.
-    const guarded = [
-      "pending-tool-confirmation-card.tsx",
-      "chat-undo-action-chip.tsx",
-    ];
+  it("11/12 (negative control) — a surface that declares nothing asks nothing", async () => {
+    // The fail-closed default did not move: an undeclared or refused host issues
+    // NO request and draws no card. The full four-shape matrix — including the
+    // REFUSED broker declaration that a credential-based read got backwards —
+    // lives in `cookie-bound-affordances-fail-closed.test.tsx`; this is the
+    // in-column restatement, so the inventory itself cannot go green on a column
+    // that answers for anybody who mounts it.
+    const { container } = await mountRefusedSurface({
+      messages: parityAgentRunMessages(),
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    const row = measureConversationColumn(root("undeclared", container));
+    expect(row.pendingConfirmationCards).toBe(0);
+    expect(row.undoChips).toBe(0);
+  });
+
+  it("the guard is keyed on the CREDENTIAL, never on a surface name", async () => {
+    // One seam, read in one place per component, so a future host declares
+    // itself ONCE and neither component needs a surface list to be updated.
+    const guarded = ["pending-tool-confirmation-card.tsx", "chat-undo-action-chip.tsx"];
     for (const file of guarded) {
-      const src = require("node:fs").readFileSync(
-        require("node:path").join(__dirname, "..", file),
-        "utf8",
-      ) as string;
-      expect(src).toContain("useBrokeredSurface()");
+      const src = readFileSync(path.join(PKG_ROOT, "src", file), "utf8");
+      expect(src.match(/useConversationCredential\(\)/g) ?? []).toHaveLength(1);
       expect(src).not.toMatch(/host === "site_widget"/);
+      expect(src).not.toMatch(/surface === "widget"/);
     }
   });
 });
 
 // ---------------------------------------------------------------------------
-// THE RECORDED OPEN QUESTIONS — what the widget still cannot do, and why.
+// THE SIX ITEMS THAT WERE OPEN — closed, and asserted closed.
 // ---------------------------------------------------------------------------
-// Four inventory items depend on a request the BROKER transport cannot make
-// today. Each one is recorded here, with the reason, and carried on the S8f PR.
-// They are pinned as tests for one reason: an open question that lives only in a
-// PR body is forgotten, and the next reader cannot tell a known gap from a bug.
-// When the missing broker-aware path lands, these checks go red and say so.
+// The first half of S8f carried six open questions here, each pinned as a test
+// so a known gap could not be mistaken for a bug. Every one of them said the
+// same thing in a different place: the affordance's data path was cookie-bound,
+// and this surface must never send a cookie.
+//
+// Each is now a broker-aware path — a widget auth BRANCH on the route that
+// already existed, the S8a full actor, the same per-row check, no ambient-session
+// fallback — so the pins are assertions of the closure. They check the two things
+// the DOM checks above cannot: that the WIDGET really wires each path (a source
+// pin, so the two-surface arm cannot claim a widget that does not exist), and
+// that every one of its requests carries the credential rails.
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -362,67 +485,149 @@ const EMBED_SRC = readFileSync(
   path.join(REPO_ROOT, "src", "app", "embed", "assistant", "embed-assistant-client.tsx"),
   "utf8",
 );
+const EMBED_SHELL_SRC = readFileSync(
+  path.join(REPO_ROOT, "src", "app", "embed", "assistant", "page.tsx"),
+  "utf8",
+);
+const BROKERED_INPUTS = readFileSync(
+  path.join(PKG_ROOT, "src", "brokered-composer-inputs.tsx"),
+  "utf8",
+);
 const TURN_CLIENT = readFileSync(path.join(PKG_ROOT, "src", "ag-ui-chat-client.ts"), "utf8");
 
-describe("open questions carried on the S8f PR (#2683)", () => {
-  it("1 (partial) — the widget's transcript is per session: a reload starts empty", () => {
-    // WHAT WORKS: within a session the widget renders the WHOLE thread — the
-    // user's echo and every prior turn — because it renders the shared list over
-    // a real message array. That is the gap the inventory measured.
-    // WHAT DOES NOT: restoring a thread across a frame reload needs a read of
-    // `/api/assistants/threads/:id`, which is COOKIE-bound. The embed must not
-    // send a cookie (same-origin frame, somebody else's session), so it has no
-    // way to ask. The seam is ready — the shared engine seeds from
-    // `initialMessages` — and only the broker-aware read is missing.
-    expect(readFileSync(path.join(PKG_ROOT, "src", "conversation-column.tsx"), "utf8")).toContain(
-      "initialMessages",
+describe("the six items S8f carried open are CLOSED (#2683)", () => {
+  it("1 — a reload restores the thread, through a broker-authenticated read", async () => {
+    // The seam was always ready (the shared engine seeds from `initialMessages`);
+    // what was missing was a read this surface could make. It is the SAME route
+    // `/chat` reads, through the SAME shared function, with the transport.
+    const server = installWidgetServiceStub({
+      threadMessages: [{ id: "restored-1", role: "assistant", content: "From before." }],
+    });
+    try {
+      const restored = await fetchThreadMessages("thread-parity-2683", {
+        authHeaders: () => ({ "X-Cinatra-Widget-User-Token": "cwu_user" }),
+        credentialsMode: "omit",
+      });
+      expect(restored?.[0]?.content).toBe("From before.");
+      const call = server.calls.find((c) => c.url.includes("/api/assistants/threads/"));
+      expect(call).toBeDefined();
+      expect(call!.init.credentials).toBe("omit");
+      expect(
+        (call!.init.headers as Record<string, string>)["X-Cinatra-Widget-User-Token"],
+      ).toBe("cwu_user");
+    } finally {
+      server.restore();
+    }
+    // A restored transcript renders as the whole thread — the shared list over a
+    // real message array, which is what every check above already measures.
+    const { container } = await mountSurface("widget", {
+      messages: [{ id: "restored-1", role: "assistant", content: "From before." }],
+    });
+    expect(root("widget", container).textContent).toContain("From before.");
+    // And the EMBED really does this: it seeds the mount from the shared read,
+    // and it MOUNTS ONCE — the column opens only after the restore settles, so a
+    // late transcript can never remount over a turn the reader already started.
+    expect(EMBED_SRC).toContain("fetchThreadMessages");
+    expect(EMBED_SRC).toContain("restoredMessages");
+    expect(EMBED_SRC).toContain("historySettled");
+    // EVERY request this surface makes omits credentials — including the
+    // test-only parity seam, which was the file's last cookie-bearing fetch.
+    // Matched as a REQUEST OPTION, so the file may still explain in prose what
+    // it used to send.
+    expect(EMBED_SRC).not.toMatch(/^\s*credentials: "include",/m);
+    expect((EMBED_SRC.match(/credentialsMode: "omit"/g) ?? []).length).toBeGreaterThan(0);
+  });
+
+  it("1 (negative control) — a refused read restores nothing, silently", async () => {
+    const server = installWidgetServiceStub({ threadMessages: null });
+    try {
+      // A denied read is a 404 — the route refuses to disclose a thread's
+      // existence across tenants — and so is an absent one. Both restore
+      // nothing, and neither is reported to the host page.
+      expect(
+        await fetchThreadMessages("someone-elses-thread", {
+          authHeaders: () => ({}),
+          credentialsMode: "omit",
+        }),
+      ).toBeNull();
+    } finally {
+      server.restore();
+    }
+  });
+
+  it("2 — the upload carries the broker credential, never a cookie", () => {
+    // The upload used to be `credentials: "include"` with no seam, which on this
+    // same-origin frame would have filed the reader's file into whoever else's
+    // account. The one upload path now takes the transport, and the widget's
+    // composer draws its row because a handler exists (item 8 above).
+    expect(TURN_CLIENT).toMatch(/credentials: options\.credentialsMode \?\? "include"/);
+    expect(TURN_CLIENT).toContain("...(options.authHeaders?.() ?? {})");
+    expect(BROKERED_INPUTS).toContain("useChatAttachments(threadIdBox, transport)");
+    expect(EMBED_SRC).toContain("useBrokeredComposerInputs");
+  });
+
+  it("3 — the flyout's three rows are wired, and the jump-out needs no reduction", () => {
+    // Attachments and the Skill-autosave row come from the shared brokered-inputs
+    // hook; the remote-chat row is SERVER-RESOLVED by the embed shell from the
+    // same first-party builder `/chat` uses.
+    expect(BROKERED_INPUTS).toContain("fetchChatCaptureConfig");
+    expect(BROKERED_INPUTS).toContain("patchChatCaptureConfig");
+    expect(EMBED_SHELL_SRC).toContain("buildRemoteChatHref");
+    expect(EMBED_SHELL_SRC).toContain("remoteConnectorKindForProvider");
+    // NOT a first-party app link, and never was: the destination is the connected
+    // CMS site and the shared composer already opened it out of the page on both
+    // surfaces. So the host link policy has nothing to decide here and no
+    // reduction was invented — which the DOM check for item 9 also asserts.
+    expect(EMBED_SHELL_SRC).not.toContain("remoteChat: undefined");
+  });
+
+  it("4 — the participant list is the same reader, broker-authorized", () => {
+    expect(BROKERED_INPUTS).toContain("fetchMentionables");
+    // The widget passes NO hardcoded list any more — it resolves the reader's own.
+    expect(EMBED_SRC).not.toMatch(/const NO_MENTIONABLES/);
+    expect(EMBED_SRC).toContain("mentionables={mentionables}");
+  });
+
+  it("5/6 — both asking affordances reach the SAME server module, per credential", () => {
+    // ONE seam per component, and the route is the widget's door onto the module
+    // the cookie action already reached. The four-shape credential matrix (and
+    // the still-fail-closed refused case) is
+    // `cookie-bound-affordances-fail-closed.test.tsx`.
+    const card = readFileSync(
+      path.join(PKG_ROOT, "src", "pending-tool-confirmation-card.tsx"),
+      "utf8",
     );
-    // The embed restores nothing today, and does NOT reach for the cookie route
-    // to do it. (The one `credentials: "include"` fetch it still has is the
-    // TEST-ONLY parity seed, inert in production behind a server env gate.)
-    const liveRestores = EMBED_SRC.split("loadParitySeed")[0];
-    expect(liveRestores).not.toContain("/api/assistants/threads/");
+    const chip = readFileSync(path.join(PKG_ROOT, "src", "chat-undo-action-chip.tsx"), "utf8");
+    expect(card).toContain("/api/chat/pending-tool-calls");
+    expect(card).toContain("listPendingToolConfirmations");
+    expect(chip).toContain("/api/chat/undo-candidate");
+    expect(chip).toContain("recentUndoableChangeSetForRunAction");
+    // The undo DEEP LINK follows the column's shared link policy rather than a
+    // second undo path: restoring still happens on the first-party surface,
+    // under the reader's own session.
+    expect(chip).toContain("<AppRouteLink");
+    expect(chip).not.toMatch(/<Link\b/);
   });
 
-  it("8 — the widget composer offers no attachments: the upload route is cookie-bound", () => {
-    // The COLUMN's attachment seam works on either host — the checks above mount
-    // both surfaces with a handler and both draw the picker. What is missing is
-    // a handler the widget could honour: `uploadChatAttachments` posts to
-    // `/api/artifacts/upload` with `credentials: "include"`, which on this
-    // surface would upload as whoever else is signed in on that browser.
-    expect(TURN_CLIENT).toMatch(/\/api\/artifacts\/upload[\s\S]{0,200}credentials: "include"/);
-    // So the embed passes no handler, and the shared composer correctly draws no
-    // upload row — a prop gate, not a per-surface reduction inside the composer.
-    expect(EMBED_SRC).not.toContain("onAttachmentsSelected");
-  });
-
-  it("10 — the widget composer has no @-mention list, so it draws no flyout", () => {
-    // Two reasons, and only the second is a gap: the widget conversation has ONE
-    // bound assistant, so there is no second participant to address; and the
-    // list `/chat` shows is resolved through a first-party, cookie-bound reader
-    // the embed cannot call. The COMPOSER is unchanged — hand it a list and it
-    // draws the same flyout on this surface, which the item-10 check above
-    // demonstrates. What is missing is a broker-aware source for the list.
-    expect(EMBED_SRC).toContain("NO_MENTIONABLES");
-    expect(EMBED_SRC).toMatch(/const NO_MENTIONABLES: never\[\] = \[\];/);
-  });
-
-  it("9 — the widget composer draws no prompt-options flyout, because it has nothing to put in it", () => {
-    // The flyout is prop-gated on its CONTENTS: the attachment row (blocked by
-    // item 8), the Skill-autosave row (a `/chat` account setting written through
-    // a cookie-bound PATCH) and the remote-chat jump-out (a `/chat`
-    // server-resolved prop). With none supplied the shared composer correctly
-    // renders no trigger. Item 9 returns with item 8.
-    expect(EMBED_SRC).not.toContain("autosave=");
-    expect(EMBED_SRC).not.toContain("remoteChat=");
-  });
-
-  it("11/12 — the two cookie-bound affordances are guarded in ONE place each", () => {
-    for (const file of ["pending-tool-confirmation-card.tsx", "chat-undo-action-chip.tsx"]) {
-      const src = readFileSync(path.join(PKG_ROOT, "src", file), "utf8");
-      // One guard, keyed on the credential, deleted in one edit when the actions
-      // become broker-aware.
-      expect(src.match(/useBrokeredSurface\(\)/g) ?? []).toHaveLength(1);
+  it("every widget request omits credentials and carries the broker header", async () => {
+    // The credential rail, measured over EVERY call a mounted widget surface
+    // makes rather than asserted one call at a time — so a new data path cannot
+    // be added without it.
+    const server = installWidgetServiceStub({
+      mentionables: WIDGET_DIRECTORY,
+      autosave: WIDGET_AUTOSAVE_VISIBLE,
+    });
+    try {
+      await mountSurface("widget");
+      await waitFor(() => expect(server.calls.length).toBeGreaterThan(1));
+      for (const call of server.calls) {
+        expect(call.init.credentials).toBe("omit");
+        expect(
+          (call.init.headers as Record<string, string>)["X-Cinatra-Widget-User-Token"],
+        ).toBe("cwu_user");
+      }
+    } finally {
+      server.restore();
     }
   });
 });

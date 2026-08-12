@@ -330,6 +330,7 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
   // redeemable by an arrival which cannot present its own nonce.
   const noScreenToken = widgetNoSignInScreenToken(
     widgetSessionFingerprint(session.session?.id),
+    WIDGET_SIGNIN_GRANTED_SCOPES,
   );
   let record = { displayedScopes: txn.displayedScopes, screenNonceHash: txn.screenNonceHash };
   if (!arrivalHoldsRecord && txnUnclaimed && presentedNonceHash.length > 0) {

@@ -230,10 +230,77 @@ export async function handleGetAssistantThreadById(threadId: string): Promise<Re
   if (!session) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
+  return readAssistantThreadForActor({
+    threadId,
+    actorUserId: session.user.id,
+    isPlatformAdmin: isPlatformAdmin(session),
+  });
+}
 
-  const actorUserId = session.user.id;
-  const admin = isPlatformAdmin(session);
+/**
+ * The thread read for a WIDGET principal (cinatra#2683, epic #2564 S8f).
+ *
+ * WHY IT EXISTS. Reloading the frame used to empty the widget's transcript: the
+ * shared column seeds from `initialMessages`, and the only way to fill them is
+ * this read — which was cookie-bound, so the widget could not ask. Restoring the
+ * conversation is the last thing the widget did differently from `/chat`.
+ *
+ * IT IS THE SAME MATRIX, NOT A WIDGET MATRIX. The ownership/tenant evaluation
+ * below is the shared one, run with the widget principal as the actor: personal
+ * → owner-only; team → member of the owning org; a missing row and a denial are
+ * both 404 so a thread's existence is never disclosed across tenants. The widget
+ * turn already binds its threads with exactly this principal
+ * (`authorizeThreadForTurn`, `isAdmin: false`), so a reader gets back precisely
+ * the threads they were allowed to create.
+ *
+ * PLATFORM STANDING IS FLOORED, matching every other widget path: a platform
+ * admin reading through a widget reads as a member. The floor can only narrow.
+ */
+export async function handleGetAssistantThreadByIdForWidget(
+  threadId: string,
+  principal: { userId: string; orgId: string },
+): Promise<Response> {
+  if (!principal.userId || !principal.orgId) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
+  // THE TOKEN'S ORG IS A HARD WALL, and it is EXTRA — the shared matrix runs
+  // first and this can only refuse more (codex round 1, finding 1 on the routes).
+  //
+  // A cookie session has an active org it can switch; a `cwu_` is minted for ONE
+  // org and cannot leave it. Without this, a person who belongs to two orgs
+  // could read a thread anchored in org B through a widget signed in for org A —
+  // the reader is entitled to that thread IN THE APP, but not through a
+  // credential bound elsewhere, and the site framing that widget has standing in
+  // neither.
+  //
+  // A thread with NO org anchor is refused rather than allowed: the anchor is
+  // what proves the row belongs to this token's org, and a widget's own threads
+  // always carry one (its turns bind the mirror to the widget principal's org).
+  // Team-owned threads mirror with a NULL anchor by policy, so they are not
+  // readable through a widget — the narrowing direction, stated rather than
+  // discovered.
+  const anchored = getAssistantThread(threadId);
+  if (!anchored || anchored.orgId !== principal.orgId) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
+  return readAssistantThreadForActor({
+    threadId,
+    actorUserId: principal.userId,
+    isPlatformAdmin: false,
+  });
+}
 
+/**
+ * THE read, for whichever actor proved themselves at the door. One access
+ * evaluation and one reconstruction, so the two credentials cannot drift into
+ * disagreeing about who may read a thread.
+ */
+async function readAssistantThreadForActor(input: {
+  threadId: string;
+  actorUserId: string;
+  isPlatformAdmin: boolean;
+}): Promise<Response> {
+  const { threadId, actorUserId, isPlatformAdmin: admin } = input;
   const info = loadChatThreadForActorAccess({ threadId, actorUserId, isPlatformAdmin: admin });
   const allowed =
     info !== null &&

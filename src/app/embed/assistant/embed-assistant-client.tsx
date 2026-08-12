@@ -60,6 +60,16 @@ import {
   ConversationColumn,
   useConversationColumnTurns,
 } from "@cinatra-ai/chat/conversation-column";
+// cinatra#2683 (epic #2564 S8f, second half) — the conversation column's own
+// data paths, with the BROKER transport. These are the SAME functions `/chat`
+// calls; the only difference is that this surface hands them a transport, and
+// the routes behind them have a widget auth branch that resolves the reader's
+// live standing from the `cwu_` instead of from an ambient cookie.
+import {
+  fetchThreadMessages,
+  type ConversationServiceTransport,
+} from "@cinatra-ai/chat/conversation-services";
+import { useBrokeredComposerInputs } from "@cinatra-ai/chat/brokered-composer-inputs";
 import {
   installEmbedBridge,
   type EmbedBridge,
@@ -116,6 +126,17 @@ export type EmbedAssistantClientProps = {
    *  CANNOT bypass auth (reaching `active` still requires the real handshake) and
    *  is not user-controllable in prod (the server gate is off → this is null). */
   paritySeam?: { threadId: string } | null;
+  /**
+   * The "Remote chat" jump-out row of the prompt-options flyout (cinatra#2683
+   * item 3), resolved SERVER-SIDE by the page shell from the SAME first-party
+   * builder `/chat` uses, for this widget's own registered site.
+   *
+   * It is NOT a first-party app link and never was: on both surfaces it points
+   * at the connected CMS site, and the shared composer already opens it in a new
+   * tab on both. So the widget carries the identical row with the identical
+   * target — there is no reduction here to invent or to justify.
+   */
+  remoteChat?: { label: string; href: string };
 };
 
 export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
@@ -128,6 +149,25 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   const [session, setSession] = useState<MountedSession | null>(null);
   const [turnStatus, setTurnStatus] = useState<ConversationTurnStatus>("idle");
   const [seededMessages, setSeededMessages] = useState<UiMessage[] | undefined>(undefined);
+  // The RESTORED transcript (cinatra#2683 item 1). A widget panel that reloads —
+  // a navigation on the host page, a closed and reopened panel — used to come
+  // back empty, because the only way to read a thread was a cookie-bound request
+  // this surface must never make. It now reads the SAME route `/chat` reads,
+  // through the broker branch, authorized as the widget principal by the same
+  // per-row ownership matrix. `undefined` means "not asked yet"; an empty array
+  // is a real answer (a thread with nothing in it).
+  const [restoredMessages, setRestoredMessages] = useState<UiMessage[] | undefined>(undefined);
+  // Has the restore SETTLED? (codex round 1, finding 2 on the client.)
+  //
+  // The turn engine seeds its list at first render, so a transcript that arrives
+  // after the mount could only be applied by remounting — and a remount throws
+  // away whatever the reader did in between. Mounting an empty column and then
+  // replacing it is therefore not "eventually consistent", it is a lost message.
+  // So the conversation waits: the frame keeps its neutral waiting card for the
+  // one round trip, and the column is mounted ONCE, already seeded. `false` only
+  // between reaching `active` and the read answering (or failing) — both of
+  // which settle it.
+  const [historySettled, setHistorySettled] = useState(false);
 
   // Tokens + session context held ONLY here (never state / log / URL / uplink).
   const bootstrapRef = useRef<EmbedBootstrap | null>(null);
@@ -213,26 +253,45 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // Gated OFF in prod (`paritySeam` is null unless the server env is set), so
   // this fetch never runs for a real user. It cannot bypass auth — it runs only
   // AFTER the real bootstrap + broker negotiation reached `active`.
-  const loadParitySeed = useCallback(async (threadId: string) => {
-    try {
-      const res = await fetch(`/api/assistants/threads/${encodeURIComponent(threadId)}`, {
-        credentials: "include",
-        cache: "no-store",
+  const loadParitySeed = useCallback(
+    async (threadId: string) => {
+      // THROUGH THE BROKER, like everything else this surface asks (codex round
+      // 1, finding 1 on the client). This used to be the file's one
+      // `credentials: "include"` fetch — inert in production behind the server
+      // env gate, but still a cookie-bearing request written inside a frame that
+      // is same-origin to the app, which is the one shape this surface must not
+      // contain. It now reads the SAME route through the SAME shared function
+      // with the SAME transport, so "every widget request omits credentials" is
+      // a property of the file rather than a property of a gate.
+      const messages = await fetchThreadMessages(threadId, {
+        authHeaders,
+        credentialsMode: "omit",
       });
-      if (!res.ok) return;
-      const payload = (await res.json()) as {
-        messages?: Array<{ role?: string; content?: string }>;
-      };
-      const assistantMsg = payload.messages?.find((m) => m.role === "assistant");
+      const assistantMsg = messages?.find((m) => m.role === "assistant");
       setSeededMessages([
         { id: "parity-seed", role: "assistant", content: assistantMsg?.content ?? "" },
       ]);
       setTurnStatus("finished");
-    } catch {
-      /* best-effort + test-only: a failure leaves the mounted-but-empty active
-         state, which the harness surfaces as a missing content block (loud). */
-    }
-  }, []);
+    },
+    [authHeaders],
+  );
+
+  // The broker-authenticated transcript read (cinatra#2683 item 1). Built from
+  // the closure-held tokens at call time, exactly like every other request this
+  // surface makes — the tokens never enter state, a prop, a log or the DOM.
+  const restoreThread = useCallback(
+    async (threadId: string) => {
+      const messages = await fetchThreadMessages(threadId, {
+        authHeaders,
+        credentialsMode: "omit",
+      });
+      if (messages && messages.length > 0) setRestoredMessages(messages);
+      // A new thread, a denied read and a transport failure all SETTLE — the
+      // column must open for every one of them, with whatever there was.
+      setHistorySettled(true);
+    },
+    [authHeaders],
+  );
 
   const onBootstrap = useCallback(
     (bootstrap: EmbedBootstrap) => {
@@ -259,14 +318,30 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
           // TEST-ONLY seam (gated OFF in prod): render the seeded corpus here in
           // place of a live turn, through the same mounted column.
           if (props.paritySeam) {
-            void loadParitySeed(props.paritySeam.threadId);
+            // The seam supplies the transcript, so it settles the history too.
+            void loadParitySeed(props.paritySeam.threadId).finally(() =>
+              setHistorySettled(true),
+            );
+          } else {
+            // The REAL restore. Best-effort by design: a new thread, a denied
+            // read and a transport failure are all "nothing to restore", and all
+            // three leave the reader in the empty conversation they would have
+            // had anyway. Nothing is reported to the page — a restore that told
+            // the host whether a thread exists would be an oracle.
+            void restoreThread(bootstrap.session.threadId);
           }
         } catch {
           setPhase({ kind: "gated", reason: "handshake_failed" });
         }
       })();
     },
-    [authHeaders, props.expectedParentOrigin, props.paritySeam, loadParitySeed],
+    [
+      authHeaders,
+      props.expectedParentOrigin,
+      props.paritySeam,
+      loadParitySeed,
+      restoreThread,
+    ],
   );
 
   // Install the bridge + post READY once. The expected parent origin gates the
@@ -338,7 +413,15 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
           This assistant could not be loaded here.
         </div>
       )}
-      {phase.kind === "active" && session && (
+      {phase.kind === "active" && session && !historySettled && (
+        // The one round trip the restore costs. The SAME neutral card the
+        // pre-bootstrap state shows, so nothing about the wait tells the parent
+        // page whether a conversation exists to restore.
+        <div className="p-4 text-sm text-muted-foreground" data-embed-state="waiting">
+          Waiting for the host…
+        </div>
+      )}
+      {phase.kind === "active" && session && historySettled && (
         // The column owns an internal scroll exactly as it does on `/chat`, so
         // the frame gives it a definite height instead of growing with the
         // transcript. The resize uplink still reports that height and the parent
@@ -347,7 +430,8 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
         // reader already knows from `/chat`.
         <div className="flex min-h-0 flex-1 flex-col" data-embed-state="active">
           <EmbedConversation
-            key={seededMessages ? "parity-seed" : "live"}
+            // Mounted ONCE, already seeded — the restore settled above, so there
+            // is no remount to lose a turn to.
             session={session}
             transport={transport}
             theme={props.theme ?? "github-light"}
@@ -355,7 +439,8 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
             widgets={props.widgets}
             widgetManifests={props.widgetManifests}
             chatViews={props.chatViews}
-            seededMessages={seededMessages}
+            seededMessages={seededMessages ?? restoredMessages}
+            remoteChat={props.remoteChat}
             onApplyIntent={onApplyIntent}
             onTurnStatusChange={setTurnStatus}
           />
@@ -383,6 +468,7 @@ function EmbedConversation({
   widgetManifests,
   chatViews,
   seededMessages,
+  remoteChat,
   onApplyIntent,
   onTurnStatusChange,
 }: {
@@ -394,9 +480,35 @@ function EmbedConversation({
   widgetManifests?: WidgetManifest[];
   chatViews?: ChatViewComponents;
   seededMessages?: UiMessage[];
+  remoteChat?: { label: string; href: string };
   onApplyIntent: (ref: ApplyIntentRef) => void;
   onTurnStatusChange: (status: ConversationTurnStatus) => void;
 }) {
+  // The BROKER transport, in the shape the shared services take. One object, so
+  // every one of this surface's requests proves itself the same way — and
+  // `credentialsMode: "omit"` stays load-bearing on all of them: this frame is
+  // same-origin to the Cinatra app.
+  const serviceTransport = useMemo<ConversationServiceTransport>(
+    () => ({ authHeaders: transport.authHeaders, credentialsMode: "omit" }),
+    [transport.authHeaders],
+  );
+
+  // ITEMS 2, 3 and 4 — attachments, the Skill-autosave row and the @-mention
+  // list, resolved by the SHARED brokered-inputs hook. They are not wired here
+  // because a second brokered host would then wire them again, slightly
+  // differently; the hook is the one composition, and the two-surface parity
+  // harness mounts the same one.
+  const {
+    mentionables,
+    onAttachmentsSelected,
+    composerNotice,
+    takePendingAttachments,
+    autosave,
+  } = useBrokeredComposerInputs({
+    threadId: session.threadId,
+    transport: serviceTransport,
+  });
+
   const turns = useConversationColumnTurns({
     threadId: session.threadId,
     transport,
@@ -404,6 +516,7 @@ function EmbedConversation({
     ...(widgetManifests ? { widgetManifests } : {}),
     ...(seededMessages ? { initialMessages: seededMessages } : {}),
     onTurnStatusChange,
+    takePendingAttachments,
   });
   const host = useMemo(
     () => ({ lifecycleSurface, onApplyIntent }),
@@ -417,18 +530,18 @@ function EmbedConversation({
       chatViews={chatViews ?? {}}
       onActivateResource={NOOP_ACTIVATE_RESOURCE}
       onActiveGateChange={NOOP_ACTIVE_GATE_CHANGE}
-      mentionables={NO_MENTIONABLES}
+      mentionables={mentionables}
       placeholder="Type a message..."
       promptStorageKey={`cinatra_embed_prompt_${session.threadId}`}
       submitAriaLabel="Send message"
+      onAttachmentsSelected={onAttachmentsSelected}
+      composerNotice={composerNotice}
+      {...(autosave ? { autosave } : {})}
+      {...(remoteChat ? { remoteChat } : {})}
     />
   );
 }
 
-/** The widget has no second conversation participant to @-mention, so the shared
- *  composer draws no mention flyout — its own seam, not a per-surface reduction:
- *  supply mentionables and the same composer draws the same flyout here. */
-const NO_MENTIONABLES: never[] = [];
 /** `/chat`'s in-app resource activation opens a first-party route the widget
  *  frame cannot become; the affordance itself is a `/chat` thread-panel gesture
  *  that no card in this column emits. */

@@ -28,7 +28,10 @@ import "server-only";
 import { resolveActorGrantsForUserInOrg } from "@/lib/auth-session";
 import type { ActorRoleHints } from "@/lib/authz/build-actor-context";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
-import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
+import {
+  emitWidgetAuthAudit,
+  type WidgetAuthAuditEvent,
+} from "@/lib/widget-auth-audit";
 
 /**
  * The platform tier a widget lifecycle actor may ever carry. A named constant,
@@ -65,10 +68,23 @@ export async function resolveWidgetLifecycleStanding(input: {
   orgId: string;
   /** Audit context only — the connector kind or agent slug. Never an authz input. */
   auditSlug: string;
+  /**
+   * WHICH series a standing denial is written to (cinatra#2683, codex round 1,
+   * finding 2).
+   *
+   * This leaf is shared by every widget entry, and it used to record every
+   * denial as a lifecycle READ. Once the conversation grants started coming
+   * through it, a revoked user's refused ATTACHMENT UPLOAD was filed as a
+   * lifecycle read — so an investigation filtered on the upload series missed
+   * it, and the read series carried attempts that never happened. The caller
+   * that knows the grant names the series; the MCP-frame entry has no grant and
+   * keeps the read default it always had.
+   */
+  auditRejected?: WidgetAuthAuditEvent;
 }): Promise<WidgetLifecycleFrameActorResult> {
   const grants = await resolveActorGrantsForUserInOrg(input.userId, input.orgId);
   if (!grants.orgRole) {
-    emitWidgetAuthAudit("widget_lifecycle_read_rejected", {
+    emitWidgetAuthAudit(input.auditRejected ?? "widget_lifecycle_read_rejected", {
       actor: input.userId,
       orgId: input.orgId,
       agentSlug: input.auditSlug,

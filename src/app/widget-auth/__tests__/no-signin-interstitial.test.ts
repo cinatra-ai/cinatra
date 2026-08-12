@@ -247,8 +247,11 @@ describe("the sign-in itself carries the grant", () => {
     // ...and the sentinel the ACTION admits is derived from ITS OWN session, so
     // the two ends of the flow name the same arrival or the grant refuses
     // (rework round 5, finding 1).
+    // …AND from the set THIS build would grant (cinatra#2683, codex round 1,
+    // finding 1), so a sentinel earned under a smaller set — the one an older
+    // node writes mid-rollout — cannot admit the larger one.
     expect(actionSrc).toContain(
-      "widgetNoSignInScreenToken(\n        widgetSessionFingerprint(session.session?.id),\n      )",
+      "widgetNoSignInScreenToken(\n        widgetSessionFingerprint(session.session?.id),\n        WIDGET_SIGNIN_GRANTED_SCOPES,\n      )",
     );
     // The transaction is created carrying the value that asserts NOTHING, and
     // the engine that creates it never builds a sentinel at all.

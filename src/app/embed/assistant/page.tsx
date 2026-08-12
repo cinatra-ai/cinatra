@@ -18,6 +18,7 @@
 
 import {
   frameAncestorsDirectiveFor,
+  resolveRegisteredInstanceSiteUrl,
   FRAME_ANCESTORS_NONE,
 } from "@/lib/embed/frame-ancestors.server";
 // cinatra#2683 (epic #2564 S8f) — the widget conversation column renders the
@@ -32,6 +33,15 @@ import {
 // stays dataless: it renders no user data and reads no session.
 import { resolveChatWidgetCatalog } from "@/lib/chat-widget-catalog.server";
 import { resolveChatViewCatalog } from "@/lib/chat-views-catalog.server";
+// cinatra#2683 (epic #2564 S8f) — the "Remote chat" jump-out of the composer's
+// prompt-options flyout. The SAME first-party builder `/chat` uses, keyed on the
+// SAME closed provider table; it can only ever append a ratified path to a site
+// origin this server already resolved, so there is no new URL logic here and no
+// open-redirect surface.
+import {
+  buildRemoteChatHref,
+  remoteConnectorKindForProvider,
+} from "@/lib/assistant-remote-target";
 import { EmbedAssistantClient } from "./embed-assistant-client";
 
 export const dynamic = "force-dynamic";
@@ -88,6 +98,28 @@ export default async function EmbedAssistantPage({
   const directive = frameAncestorsDirectiveFor({ assistant, instanceId });
   const expectedParentOrigin = directive === FRAME_ANCESTORS_NONE ? "" : directive;
 
+  // The remote-chat destination for THIS widget's own registered site.
+  //
+  // It stays a dataless resolution, which is what lets the shell keep its
+  // posture: the kind comes from the closed provider table (an unknown handle
+  // yields none), and the site comes from the registered instance row through
+  // the same closed binding — never a query value, never a session, never user
+  // data. An unresolvable row yields no destination, so the flyout simply does
+  // not carry the jump-out.
+  //
+  // The REGISTERED SITE URL, not the CSP's origin (codex round 1, finding 4):
+  // the builder appends a ratified path to what it is given, so an origin-only
+  // value silently drops a subdirectory install — `https://example.com/blog/`
+  // would link to `/wp-admin/` instead of `/blog/wp-admin/`, which is a
+  // destination `/chat` never produces.
+  const remoteKind = remoteConnectorKindForProvider(assistant);
+  const registeredSiteUrl = resolveRegisteredInstanceSiteUrl({ assistant, instanceId });
+  const remoteHref =
+    remoteKind && registeredSiteUrl
+      ? buildRemoteChatHref(remoteKind, { id: instanceId, siteUrl: registeredSiteUrl })
+      : null;
+  const remoteChat = remoteHref ? { label: "Remote chat", href: remoteHref } : undefined;
+
   return (
     // The column scrolls internally (as it does on `/chat`), so the shell gives
     // it the frame's height instead of growing with the transcript.
@@ -101,6 +133,7 @@ export default async function EmbedAssistantPage({
         widgetManifests={widgetCatalog.manifests}
         chatViews={viewCatalog}
         paritySeam={paritySeam}
+        {...(remoteChat ? { remoteChat } : {})}
       />
     </main>
   );

@@ -21,7 +21,7 @@
 
 import { fireEvent, render, waitFor, type RenderResult } from "@testing-library/react";
 import { expect } from "vitest";
-import type { ReactElement } from "react";
+import { useMemo, type ReactElement } from "react";
 
 import type { ChatViewComponents } from "../chat-messages-view";
 import {
@@ -31,6 +31,8 @@ import {
   type ConversationTransport,
 } from "../conversation-column";
 import { createChatWidgetRuntime, EMPTY_WIDGETS, EMPTY_WIDGET_MANIFESTS } from "../widget-runtime";
+import { useBrokeredComposerInputs } from "../brokered-composer-inputs";
+import type { ConversationServiceTransport } from "../conversation-services";
 import type { UiMessage } from "../types";
 import type { Mentionable } from "@cinatra-ai/sdk-ui/prompt-field";
 
@@ -132,6 +134,17 @@ export const PARITY_MENTIONABLES: Mentionable[] = [
 
 export const PARITY_SESSION_USER = { name: "Ada Lovelace", image: null };
 
+/**
+ * `/chat`'s Skill-autosave prop, in the state its own read produces for a reader
+ * allowed to see and change it. The widget arm resolves the SAME answer from the
+ * SAME route through its broker branch, so the flyout compares like for like.
+ */
+export const CHAT_AUTOSAVE_PROP = {
+  enabled: false,
+  canToggle: true,
+  onToggle: () => {},
+};
+
 /** A widget definition + manifest pair, so the EXTENSION-widget detector has
  *  something to find on both surfaces (item 14's "extension chat widgets"). */
 export function parityWidgetCatalog() {
@@ -164,6 +177,14 @@ export type SurfaceMountOptions = {
   withCatalog?: boolean;
   /** Supply the composer's attachment handler (items 8/9's prop gate). */
   onAttachmentsSelected?: (files: File[]) => void;
+  /** The remote-chat jump-out row, server-resolved on BOTH surfaces. */
+  remoteChat?: { label: string; href: string };
+  /**
+   * Mount with NO composer inputs at all — the negative control for the
+   * prop-gated rows. Both arms honour it, so a check that the gate still CLOSES
+   * measures the column's own gate rather than one surface's wiring.
+   */
+  withoutComposerInputs?: boolean;
 };
 
 /**
@@ -217,59 +238,185 @@ export function chatSurfaceElement(options: SurfaceMountOptions = {}): ReactElem
         onSubmit={() => {}}
         submitAriaLabel="Send message"
         onStop={() => {}}
-        {...(options.onAttachmentsSelected
-          ? { onAttachmentsSelected: options.onAttachmentsSelected }
-          : {})}
+        {...(options.withoutComposerInputs
+          ? {}
+          : {
+              // `/chat`'s PRODUCTION composer inputs: it wires an upload handler
+              // and a Skill-autosave row from its own reads. The widget arm
+              // resolves the same two through its broker branch, so the rows
+              // compare like for like rather than one arm being handed
+              // something the real page never passes.
+              onAttachmentsSelected: options.onAttachmentsSelected ?? NOOP_ATTACHMENTS,
+              autosave: CHAT_AUTOSAVE_PROP,
+            })}
+        {...(options.remoteChat ? { remoteChat: options.remoteChat } : {})}
       />
     </div>
   );
 }
 
+/** A handler reduced to its identity: the composer's gate reads that one EXISTS,
+ *  and what it does with the files is `useChatAttachments`' own suite. */
+const NOOP_ATTACHMENTS = () => {};
+
 /**
- * The WIDGET arm — THE SAME column, with the embed's host adapters and the
- * shared turn engine, exactly as `embed-assistant-client.tsx` mounts it.
+ * The WIDGET arm — THE SAME column, with the embed's host adapters, the shared
+ * turn engine and the SHARED BROKERED-INPUTS hook, exactly as
+ * `embed-assistant-client.tsx` mounts them.
+ *
+ * IT RESOLVES ITS COMPOSER INPUTS THE WAY PRODUCTION DOES (cinatra#2683,
+ * second half). Before the broker-aware data paths existed, this arm hardcoded
+ * what the widget could pass — an empty participant list, no attachment handler
+ * — because those were the honest production values. They are no longer: the
+ * widget resolves each one through the shared services with its broker
+ * transport, so the arm calls the SAME hook and the checks measure what a reader
+ * really gets. `widgetServiceFetchStub` answers those calls the way the widget
+ * routes do; an arm that answered them itself would be measuring the fixture.
+ *
+ * A test that wants to measure the COLUMN's own seam rather than the widget's
+ * wiring still passes an input explicitly, to BOTH arms.
  */
-/**
- * The widget's PRODUCTION composer inputs. The embed supplies no participant
- * list (it has one bound assistant, and no broker-aware source for a list) and
- * no attachment handler (the upload route is cookie-bound) — see the open
- * questions in `conversation-column-inventory.test.tsx`. The arm therefore
- * defaults to what production passes, so a check cannot pass here by being
- * handed something the real widget never gets (codex round 2, finding 1). A test
- * that wants to measure the COLUMN's seam rather than the widget's wiring passes
- * the input explicitly, to BOTH arms.
- */
-const WIDGET_PRODUCTION_MENTIONABLES: Mentionable[] = [];
+const WIDGET_SERVICE_TRANSPORT: ConversationServiceTransport = {
+  authHeaders: WIDGET_TRANSPORT.authHeaders,
+  credentialsMode: "omit",
+};
 
 function WidgetSurface(options: SurfaceMountOptions) {
   const catalog = options.withCatalog ? parityWidgetCatalog() : null;
+  const brokered = useBrokeredComposerInputs({
+    threadId: FIXTURE_THREAD_ID,
+    transport: WIDGET_SERVICE_TRANSPORT,
+  });
   const turns = useConversationColumnTurns({
     threadId: FIXTURE_THREAD_ID,
     transport: WIDGET_TRANSPORT,
     ...(catalog ? { widgets: catalog.widgets, widgetManifests: catalog.manifests } : {}),
     initialMessages: options.messages ?? parityFixtureMessages(),
+    takePendingAttachments: brokered.takePendingAttachments,
   });
+  const host = useMemo(() => ({ lifecycleSurface: WIDGET_LIFECYCLE_SURFACE }), []);
   return (
     <div data-parity-surface="widget">
       <ConversationColumn
         {...turns}
-        host={{ lifecycleSurface: WIDGET_LIFECYCLE_SURFACE }}
+        host={host}
         theme="github-light"
         sessionUser={options.sessionUser ?? PARITY_SESSION_USER}
-        mentionables={options.mentionables ?? WIDGET_PRODUCTION_MENTIONABLES}
+        mentionables={options.mentionables ?? brokered.mentionables}
         chatViews={options.withCatalog ? PARITY_CHAT_VIEWS : {}}
         onActivateResource={() => {}}
         onActiveGateChange={() => {}}
         placeholder="Type a message..."
         promptStorageKey={`cinatra_embed_prompt_${FIXTURE_THREAD_ID}`}
         submitAriaLabel="Send message"
-        {...(options.onAttachmentsSelected
-          ? { onAttachmentsSelected: options.onAttachmentsSelected }
-          : {})}
+        composerNotice={brokered.composerNotice}
+        {...(options.withoutComposerInputs
+          ? {}
+          : {
+              onAttachmentsSelected:
+                options.onAttachmentsSelected ?? brokered.onAttachmentsSelected,
+              ...(brokered.autosave ? { autosave: brokered.autosave } : {}),
+            })}
+        {...(options.remoteChat ? { remoteChat: options.remoteChat } : {})}
       />
     </div>
   );
 }
+
+
+// ---------------------------------------------------------------------------
+// The WIDGET's server, as a fetch stub (cinatra#2683, second half).
+// ---------------------------------------------------------------------------
+// The widget arm resolves its composer inputs through the SHARED services, so
+// the harness has to answer them — and it answers them the way the widget
+// branches of those routes do, with the widget principal's own data. Anything
+// this stub gets wrong is a thing a reader would notice; anything it gets
+// generous is a check that would pass for the wrong reason, so it also RECORDS
+// every call and every credential, which the credential-rail check reads back.
+
+export type WidgetServiceCall = { url: string; init: RequestInit };
+
+export type WidgetServiceStubOptions = {
+  /** The reader's directory (item 4). Empty ⇒ no @-mention flyout. */
+  mentionables?: Array<{ id: string; handle: string }>;
+  /** The Skill-autosave answer (item 3). Null ⇒ the row is not drawn. */
+  autosave?: { enabled: boolean; userCanConfigure: boolean; userCanSeeIndicator: boolean } | null;
+  /** The restored transcript (item 1). Null ⇒ nothing to restore. */
+  threadMessages?: UiMessage[] | null;
+  /** The parked destructive calls (item 5). */
+  pendingRows?: unknown[];
+  /** The undo candidate (item 6). Null ⇒ no chip. */
+  undoChangeSetId?: string | null;
+  /** Make one route refuse, so a check can prove the refusal is honoured. */
+  unauthorized?: string[];
+};
+
+/**
+ * Install a fetch that answers the widget's conversation routes. Returns the
+ * recorded calls and a restore function; the caller restores in a cleanup.
+ */
+export function installWidgetServiceStub(options: WidgetServiceStubOptions = {}) {
+  const calls: WidgetServiceCall[] = [];
+  const original = globalThis.fetch;
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push({ url, init: init ?? {} });
+    if ((options.unauthorized ?? []).some((p) => url.startsWith(p))) {
+      return json({ error: "Unauthorized" }, 401);
+    }
+    if (url.startsWith("/api/assistants/list")) {
+      return json({ assistants: options.mentionables ?? [] });
+    }
+    if (url.startsWith("/api/assistants/autosave")) {
+      return options.autosave ? json(options.autosave) : json({ error: "no" }, 403);
+    }
+    if (url.startsWith("/api/assistants/threads/")) {
+      return options.threadMessages
+        ? json({ messages: options.threadMessages })
+        : json({ error: "Not found" }, 404);
+    }
+    if (url.startsWith("/api/chat/pending-tool-calls")) {
+      return json({ rows: options.pendingRows ?? [] });
+    }
+    if (url.startsWith("/api/chat/undo-candidate")) {
+      return json({ changeSetId: options.undoChangeSetId ?? null });
+    }
+    if (url.startsWith("/api/artifacts/upload")) {
+      return json({ ok: true, ref: { artifactId: "art-1", mime: "text/plain" } }, 201);
+    }
+    return json({}, 404);
+  }) as unknown as typeof fetch;
+  return {
+    calls,
+    restore() {
+      globalThis.fetch = original;
+    },
+  };
+}
+
+/** The directory the widget arm resolves when the stub is asked for one. */
+export const WIDGET_DIRECTORY = [
+  { id: "assistant-1", handle: "cinatra" },
+  { id: "assistant-2", handle: "claude" },
+];
+
+/** A Skill-autosave answer that makes the row visible and toggleable. */
+export const WIDGET_AUTOSAVE_VISIBLE = {
+  enabled: false,
+  userCanConfigure: true,
+  userCanSeeIndicator: true,
+};
+
+/** The remote-chat row both surfaces receive server-resolved. */
+export const PARITY_REMOTE_CHAT = {
+  label: "Remote chat",
+  href: "https://blog.example.com/wp-admin/",
+};
 
 export function surfaceElement(
   surface: SurfaceName,
@@ -287,6 +434,56 @@ export function surfaceElement(
  * browser too. Waiting on the list's own presence hook keeps every check below
  * measuring a mounted column rather than a loading one.
  */
+/**
+ * A mount whose host declaration the runtime REFUSES — `site_widget` with no
+ * credential. It is neither surface: it is the mis-wired case, and the column's
+ * asking affordances must issue no request at all under it.
+ */
+export function refusedSurfaceElement(options: SurfaceMountOptions = {}): ReactElement {
+  return (
+    <div data-parity-surface="undeclared">
+      <RefusedSurface {...options} />
+    </div>
+  );
+}
+
+function RefusedSurface(options: SurfaceMountOptions) {
+  const turns = useConversationColumnTurns({
+    threadId: FIXTURE_THREAD_ID,
+    transport: WIDGET_TRANSPORT,
+    initialMessages: options.messages ?? parityFixtureMessages(),
+  });
+  const host = useMemo(
+    () => ({ lifecycleSurface: { host: "site_widget" as const } }),
+    [],
+  );
+  return (
+    <ConversationColumn
+      {...turns}
+      host={host}
+      theme="github-light"
+      sessionUser={PARITY_SESSION_USER}
+      mentionables={[]}
+      chatViews={{}}
+      onActivateResource={() => {}}
+      onActiveGateChange={() => {}}
+      placeholder="Type a message..."
+      promptStorageKey={`cinatra_refused_prompt_${FIXTURE_THREAD_ID}`}
+      submitAriaLabel="Send message"
+    />
+  );
+}
+
+export async function mountRefusedSurface(
+  options: SurfaceMountOptions = {},
+): Promise<RenderResult> {
+  const result = render(refusedSurfaceElement(options));
+  await waitFor(() =>
+    expect(result.container.querySelector("[data-conversation-list]")).not.toBeNull(),
+  );
+  return result;
+}
+
 export async function mountSurface(
   surface: SurfaceName,
   options: SurfaceMountOptions = {},

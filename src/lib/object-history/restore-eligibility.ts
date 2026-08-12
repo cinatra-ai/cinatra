@@ -15,6 +15,7 @@ import "server-only";
 // as `resolveSessionRestoreAuthz` so the two paths can never diverge on which
 // actor + role hints the authz kernel sees).
 
+import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 import { requireAuthSession, resolveOrgRoleForSession } from "@/lib/auth-session";
 import {
   actorFromSession,
@@ -65,25 +66,63 @@ export async function resolveSessionRestoreAuthz(
 export async function loadAuthorizedTargetedRestore(
   changeSetId: string,
 ): Promise<LoadedTargetedRestore | null> {
+  // The empty id short-circuits BEFORE the session is touched: an affordance that
+  // has no change-set to ask about must not cost a session read (and a test pins
+  // exactly that).
   if (!changeSetId) return null;
   try {
     const session = await requireAuthSession();
     const orgId = session.session?.activeOrganizationId ?? null;
     if (!orgId) return null;
-    // Org-scoped load — a foreign-org or unknown id returns null (never leaks).
-    const loaded = loadChangeSet(changeSetId, { orgId });
-    if (!loaded) return null;
-    if (!loaded.changeSet.restorable) return null;
     const { primitiveActor, roleHints } = await resolveSessionRestoreAuthz(session);
-    const authorized = await canActorRestoreChangeSet(
-      loaded.events,
-      primitiveActor,
+    return await loadAuthorizedTargetedRestoreForActor({
+      changeSetId,
+      orgId,
+      actor: primitiveActor,
       roleHints,
-    );
-    return authorized ? loaded : null;
+    });
   } catch {
     // Best-effort gate — degrade to "not authorized" rather than throw into a
     // chat render, a toast, or the artifacts page.
+    return null;
+  }
+}
+
+/**
+ * The same gate, for an actor that is NOT a cookie session (cinatra#2683, epic
+ * #2564 S8f).
+ *
+ * The widget's undo chip has to ask the identical question — "may THIS person
+ * reverse this change-set?" — for a reader proven by a `cwu_` broker token
+ * rather than by a cookie. Giving it a second implementation would have been the
+ * defect: §VI's rule is per-object authorization with NO administrator bypass,
+ * and a second copy of that rule is a second place for it to weaken.
+ *
+ * So the org-scoped load and the per-object check live HERE, take the actor as
+ * an argument, and the session façade above is one caller of them. The widget
+ * entry is the other, passing the S8a FULL actor and the org the TOKEN is bound
+ * to — never a session's active org, which a widget request has no business
+ * reading.
+ */
+export async function loadAuthorizedTargetedRestoreForActor(input: {
+  changeSetId: string;
+  orgId: string;
+  actor: ActorFromSession | PrimitiveActorContext;
+  roleHints: ActorRoleHints | undefined;
+}): Promise<LoadedTargetedRestore | null> {
+  if (!input.changeSetId || !input.orgId) return null;
+  try {
+    // Org-scoped load — a foreign-org or unknown id returns null (never leaks).
+    const loaded = loadChangeSet(input.changeSetId, { orgId: input.orgId });
+    if (!loaded) return null;
+    if (!loaded.changeSet.restorable) return null;
+    const authorized = await canActorRestoreChangeSet(
+      loaded.events,
+      input.actor,
+      input.roleHints,
+    );
+    return authorized ? loaded : null;
+  } catch {
     return null;
   }
 }

@@ -81,6 +81,11 @@ import {
   ensureAssistantChatWireNegotiated,
 } from "./ag-ui-chat-client";
 import { useChatAttachments } from "./use-chat-attachments";
+import {
+  fetchChatCaptureConfig,
+  fetchMentionables,
+  patchChatCaptureConfig,
+} from "./conversation-services";
 import { SkillBadgeCloud } from "./skill-badge-cloud";
 import { selectChatBadges, chatEmptyStateCaption, isPinnedBadgePrefill, getGreeting, DEFAULT_GREETING } from "./chat-badges";
 import { fingerprintMessages, isRealActivity } from "./thread-activity";
@@ -253,26 +258,22 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     void fetchThreadList().then(setThreads);
     setGreeting(getGreeting());
 
-    void fetch("/api/assistants/autosave")
-      .then((r) => r.json())
-      .then((config: { enabled?: boolean; userCanConfigure?: boolean; userCanSeeIndicator?: boolean }) => {
-        setAutosaveEnabled(Boolean(config.enabled));
-        setAutosaveCanToggle(Boolean(config.userCanConfigure));
-        setAutosaveVisible(Boolean(config.userCanSeeIndicator) || Boolean(config.userCanConfigure));
-      })
-      .catch(() => {});
+    // Both reads go through the SHARED conversation services (cinatra#2683,
+    // epic #2564 S8f) — the same functions the widget calls, with no transport
+    // argument, so this surface sends exactly the cookie request it always sent.
+    // One implementation of each read means the widget cannot be given a
+    // different answer than `/chat` by accident.
+    void fetchChatCaptureConfig().then((config) => {
+      if (!config) return;
+      setAutosaveEnabled(config.enabled);
+      setAutosaveCanToggle(config.userCanConfigure);
+      setAutosaveVisible(config.userCanSeeIndicator || config.userCanConfigure);
+    });
 
     let mentionablesCancelled = false;
-    void fetch("/api/assistants/list")
-      .then((r) => (r.ok ? r.json() : { assistants: [] }))
-      .then((data: { assistants?: { id: string; handle: string }[] }) => {
-        if (!mentionablesCancelled && Array.isArray(data.assistants)) {
-          setMentionables(data.assistants.map((a) => ({ ...a, displayName: a.handle })));
-        }
-      })
-      .catch((err) => {
-        console.error("[chat] failed to load assistants for @-mention flyout:", err);
-      });
+    void fetchMentionables().then((list) => {
+      if (!mentionablesCancelled) setMentionables(list);
+    });
 
     function resetSlackMode() {
       setIsSlackMode(false);
@@ -1067,11 +1068,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     canToggle: autosaveCanToggle,
     onToggle: (enabled: boolean) => {
       setAutosaveEnabled(enabled);
-      void fetch("/api/assistants/autosave", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
+      void patchChatCaptureConfig(enabled);
     },
   } : undefined;
 

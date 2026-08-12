@@ -22,12 +22,12 @@ import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-
 /**
  * The card, mounted in the context it really has (cinatra#2683, epic #2564 S8f).
  *
- * These cards read and decide through COOKIE-BOUND server actions, so since S8f
- * they render only inside a declared FIRST-PARTY COOKIE host — and nowhere else,
- * because the widget conversation column now mounts the same list and the embed
- * frame is same-origin to the app. Every case below is the cookie case, so the
- * declaration is folded into one wrapper here; the broker case (no card, no
- * request) is asserted in `conversation-column-inventory.test.tsx`.
+ * These cards ask the server with whichever credential the host declared, so
+ * they must be mounted under a declaration. Every case below is the COOKIE case
+ * — the server-action path `/chat` has always used — so the declaration is
+ * folded into one wrapper here. The BROKER case (the route, with the host's
+ * headers and no cookie) and the refused case (no request at all) are the matrix
+ * in `cookie-bound-affordances-fail-closed.test.tsx`.
  */
 function PendingToolConfirmationCards(
   props: React.ComponentProps<typeof RawPendingToolConfirmationCards>,
