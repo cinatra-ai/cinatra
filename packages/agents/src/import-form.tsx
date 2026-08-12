@@ -218,6 +218,11 @@ export function ImportAgentForm({
         // cinatra#2644) — suppress the server-side redirect and navigate
         // client-side after the warnings have been surfaced.
         redirect: false,
+        // Owner ruling (PR #2658 review, revised): an admin upload goes LIVE —
+        // the template is published and its compiled version bound atomically,
+        // so the agent appears on /agents immediately in the scope chosen
+        // above. No draft limbo, no approval step.
+        publishAndBind: true,
       });
       // Surface non-fatal install-time permissions warnings.
       for (const warning of result.warnings) {

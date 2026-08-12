@@ -33,9 +33,14 @@ import { requireAdminSession } from "@/lib/auth-session";
 import {
   createAgentTemplate,
   createAgentVersion,
+  readAgentTemplateById,
 } from "./store";
 import type { CreateAgentTemplateInput } from "./store";
 import { importAgentTemplateCore } from "./import-agent-core";
+import { publishAgentTemplateAndBindVersion } from "./publish-template";
+import { deriveAgentTemplateIdentityClaim } from "./agent-template-identity";
+import { logAuditEvent } from "@/lib/authz";
+import { POLICY_VERSION } from "@/lib/authz/actor-context";
 
 // ---------------------------------------------------------------------------
 // createLocalAgentTemplateVersion — shared creation path for ZIP imports and
@@ -221,6 +226,14 @@ export async function importAgentTemplate(
       policy?: import("./auth-policy-types").AgentAuthPolicy;
       coOwnerUserIds?: string[];
     };
+    /** UI upload path only (owner ruling, PR #2658): after the archive lands,
+     *  flip the template live AND bind its compiled version in the ONE
+     *  transactional store operation (`publishAgentTemplateAndBindVersion`) —
+     *  an admin upload goes straight to /agents in its assigned scope, with
+     *  no draft limbo and no approval step. Other callers (the MCP ZIP import
+     *  handler, programmatic imports) keep today's explicit-status contract
+     *  and land drafts unless they say otherwise. */
+    publishAndBind?: boolean;
   },
 ): Promise<{ templateId: string; upserted: boolean; warnings: string[] }> {
   const session = await requireAdminSession();
@@ -228,7 +241,7 @@ export async function importAgentTemplate(
   // the template so /configuration/extensions list views can show "installed by"
   // and supports per-template access-policy gates.
   const creatorId = session.user?.id ?? undefined;
-  const { permissions, ...coreOptions } = options ?? {};
+  const { permissions, publishAndBind, ...coreOptions } = options ?? {};
   // cinatra#2616: this admin action is a package-name IDENTITY CLAIM. Thread the
   // session's active organization as the claimant so an import cannot take over
   // a name another organization already holds. A session with no active org
@@ -256,7 +269,7 @@ export async function importAgentTemplate(
       );
       if (!setResult.ok) {
         warnings.push(
-          `Could not record install actor as primary owner — manage access at /configuration/extensions/${result.templateId} or contact an admin.`,
+          `Could not record install actor as primary owner — manage access at /configuration/extensions/${result.templateId}.`,
         );
       }
     } catch (err) {
@@ -266,7 +279,7 @@ export async function importAgentTemplate(
         message,
       );
       warnings.push(
-        `Could not record install actor as primary owner — manage access at /configuration/extensions/${result.templateId} or contact an admin.`,
+        `Could not record install actor as primary owner — manage access at /configuration/extensions/${result.templateId}.`,
       );
     }
   }
@@ -317,6 +330,163 @@ export async function importAgentTemplate(
           `Could not add ${failedUserIds.length} co-owner${failedUserIds.length === 1 ? "" : "s"} — re-add from the agent template detail page.`,
         );
       }
+    }
+  }
+
+  // Owner ruling (PR #2658 review, revised): an admin upload goes LIVE. Two
+  // steps, both UI-upload-path only:
+  //
+  //   1. REGISTER the upload in the canonical installed-extensions store
+  //      through the sanctioned lifecycle primitive, so the EXISTING
+  //      installed list on /configuration/extensions shows it (the ZIP
+  //      upload previously wrote no installed_extension row, so the list
+  //      could never surface it). Probe first: the store insert is not an
+  //      upsert, and a re-upload of an already-registered package is a
+  //      template upsert, not a second row. An archived row is an operator
+  //      decision; it is never auto-resurrected here.
+  //   2. PUBLISH-AND-BIND: the status flip and the compiled-version binding
+  //      (current_version_id) commit atomically in
+  //      publishAgentTemplateAndBindVersion, AFTER the scope policy above is
+  //      saved, so the agent surfaces on /agents already scoped. On failure
+  //      the template stays a draft and the warning names the repair
+  //      (re-upload upserts by packageName; the atomic op's dedup path
+  //      re-points a half-bound version, never a masked no-op). All
+  //      assistant guard arms stay: a refusal (null) is surfaced, not
+  //      retried around.
+  if (publishAndBind) {
+    // ONE read shared by the registration and the audit record below: the
+    // audit must report the REAL prior status (a re-upload of an
+    // already-published package repairs, it does not transition), so the
+    // read happens before the go-live flip (CodeRabbit finding).
+    const template = await readAgentTemplateById(result.templateId).catch(() => null);
+    const priorStatus = template?.status ?? "draft";
+    try {
+      if (template?.packageName) {
+        const { readInstalledExtensionsByPackageName } = await import(
+          "@cinatra-ai/extensions/canonical-store"
+        );
+        const existingRows = await readInstalledExtensionsByPackageName(template.packageName);
+        if (existingRows.length === 0) {
+          const { installExtensionManifest } = await import(
+            "@cinatra-ai/extensions/lifecycle-primitive"
+          );
+          await installExtensionManifest(
+            {
+              id: `iext_${randomUUID().slice(0, 12)}`,
+              packageName: template.packageName,
+              ownerLevel: claimantOrgId ? "organization" : "platform",
+              ownerId: claimantOrgId,
+              organizationId: claimantOrgId,
+              kind: "agent",
+              source: {
+                type: "local",
+                path: `agent-template:${result.templateId}`,
+                resolvedCommitOrTreeHash: `upload@${template.packageVersion ?? "0.0.0"}`,
+              },
+              version: template.packageVersion ?? undefined,
+              requiredInProd: false,
+              dependencies: [],
+              manifestHash: null,
+              accessDeclaration: null,
+            },
+            {
+              actor: { source: "ui", userId: creatorId },
+              reason: "cinatra#2653: an admin upload registers as installed and goes live",
+            },
+          );
+        } else if (
+          !existingRows.some((r) => r.status === "active" || r.status === "locked")
+        ) {
+          warnings.push(
+            "This package is archived in the installed-extensions store — restore it from the Archived tab on /configuration/extensions to relist it.",
+          );
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Check-then-insert race classification (CodeRabbit finding): two
+      // concurrent uploads (or a double submit) can both probe zero rows;
+      // the store's partial-unique default index then fails the SECOND
+      // insert closed. Re-probe once — a live row means the package IS
+      // registered (the concurrent writer won) and that is success, not a
+      // warning.
+      let racedToRegistered = false;
+      if (template?.packageName) {
+        try {
+          const { readInstalledExtensionsByPackageName } = await import(
+            "@cinatra-ai/extensions/canonical-store"
+          );
+          const rowsAfter = await readInstalledExtensionsByPackageName(template.packageName);
+          racedToRegistered = rowsAfter.some(
+            (r) => r.status === "active" || r.status === "locked",
+          );
+        } catch {
+          // fall through to the warning
+        }
+      }
+      if (!racedToRegistered) {
+        console.warn(
+          "[agents/import-export-actions] installed-extension registration failed (non-fatal):",
+          message,
+        );
+        warnings.push(
+          "The agent was imported but could not be registered in the installed-extensions list — re-upload the archive to retry.",
+        );
+      }
+    }
+    try {
+      const published = await publishAgentTemplateAndBindVersion(result.templateId, {
+        createdBy: creatorId ?? null,
+        // The session's identity claim rides the flip's WHERE (CodeRabbit
+        // security finding): an org-scoped admin can never flip another
+        // tenant's template; an org-less session keeps the operator arm.
+        claim: deriveAgentTemplateIdentityClaim({ claimantOrgId }),
+      });
+      if (!published) {
+        warnings.push(
+          "The agent was imported but could not go live (publish refused) — it stays a draft. Re-upload the archive to retry.",
+        );
+      } else {
+        // Fire-and-forget audit; a failed audit write must not undo the
+        // publish (same contract as promoteExtensionToPublicAction).
+        try {
+          void logAuditEvent({
+            organizationId: published.record.orgId ?? undefined,
+            actorPrincipalId: creatorId,
+            actorPrincipalType: "human",
+            authSource: "ui",
+            resourceType: "agent_template",
+            resourceId: published.record.id,
+            operation: "update",
+            decision: "allowed",
+            policyVersion: POLICY_VERSION,
+            metadata: {
+              // The REAL prior status (read before the flip): a re-upload of
+              // an already-published package records published→published
+              // (the repair path), never a transition that did not happen.
+              statusTransition: { from: priorStatus, to: "published" },
+              boundVersionId: published.version.id,
+              via: "upload-import",
+            },
+          }).catch((err: unknown) => {
+            console.warn(
+              "[agents/import-export-actions] logAuditEvent failed (non-fatal):",
+              err instanceof Error ? err.message : err,
+            );
+          });
+        } catch {
+          // best-effort
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(
+        "[agents/import-export-actions] publishAgentTemplateAndBindVersion failed (non-fatal):",
+        message,
+      );
+      warnings.push(
+        "The agent was imported but could not go live — it stays a draft. Re-upload the archive to retry.",
+      );
     }
   }
 
