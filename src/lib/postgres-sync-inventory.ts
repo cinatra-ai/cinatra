@@ -87,6 +87,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Mints/validates short-lived widget stream tokens (timing-safe compares). Security-critical token broker; kept synchronous to avoid a validation TOCTOU window.",
   },
+  "src/lib/lifecycle/review-island-serving.ts": {
+    class: "sync-required",
+    justification:
+      "cinatra#2674 (epic #2564 S8e, the 2026-08-12 scope addition): the jti-keyed LIVE re-check behind a review-island credential. An <iframe> load on a third-party CMS page carries no bearer and no cookie, so the URL seals the cwu_ token's jti and this read is the revocation edge for it — the same security-critical instant decision widget-user-auth.ts makes, keyed on jti because there is no raw token to hash. It is the exact sibling of widget-capture-principal.ts (same table, same jti key, same revocation role), differing only in requiring the LIFECYCLE grant, and it is deliberately its own leaf for the same reason that one is: widget-user-auth.ts's verifier is raw-token-keyed and cannot express this read. NOT on the async pooled/drizzle layer: widget_user_tokens has no drizzle mapping. ONE read-only SELECT, no writes. Migrates with widget-user-auth.ts, serialized with it.",
+  },
   "src/lib/lifecycle/widget-capture-principal.ts": {
     class: "sync-required",
     justification:
@@ -419,7 +424,7 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
   "src/lib/connect-sites-store.ts": {
     class: "migratable-request-path",
     justification:
-      "Connect-site registry read on embed/request paths. Migratable to async pooled access (the security-critical widget validators that consume it stay sync-required for now).",
+      "Connect-site registry read on embed/request paths. Migratable to async pooled access (the security-critical widget validators that consume it stay sync-required for now). cinatra#2674 adds ONE call site — listActiveConnectSitesForClientOrigin, the {client, widgetOrigin} lookup the frame-owned sign-in re-derives its site from — in the SAME read-only shape as every other selector in this file, so it migrates with the rest of the store rather than separately.",
   },
   "src/lib/object-history/canonical-writer.ts": {
     class: "migratable-request-path",
