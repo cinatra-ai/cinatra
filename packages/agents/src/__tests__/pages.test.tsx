@@ -210,12 +210,37 @@ describe("NewAgentPage merged discovery table", () => {
     expect(source).toMatch(/state\s*!==\s*"archived"/);
   });
 
-  it("builds a truthful CTA for an agent that cannot run (cinatra#2605)", () => {
+  // cinatra#2679 — /agents lists ONLY installed agents. A verdict the gate can
+  // PROVE is uninstalled removes the row, exactly like an archived one; there is
+  // no Install affordance on this page any more.
+  it("drops a NOT-INSTALLED row from the listing (cinatra#2679)", () => {
+    const source = readSource();
+    expect(source).toMatch(/state\s*!==\s*"not-installed"/);
+    // Both removals are applied to the SAME pre-HITL list, so a not-installed
+    // row cannot slip back in through the HITL selector.
+    expect(source).toMatch(
+      /state\s*!==\s*"archived"\s*&&\s*state\s*!==\s*"not-installed"/,
+    );
+    expect(source).toMatch(/selectHitlRunVisibleTemplates\(installedVisible\)/);
+  });
+
+  it("builds no Install CTA anywhere on /agents (cinatra#2679)", () => {
+    const source = readSource();
+    // The row-level Install CTA of #2605 is gone with the rows that carried it.
+    expect(source).not.toMatch(/ctaLabel: detailHref \? "Install"/);
+    expect(source).not.toMatch(/ctaAriaLabel: `Install /);
+    // The only surviving install ENTRY POINT is the empty state's marketplace
+    // link — a browse destination, not a per-agent install promise.
+    expect(source).toMatch(/href="\/configuration\/marketplace">Browse marketplace/);
+  });
+
+  it("builds a truthful CTA for an INSTALLED agent that cannot run (cinatra#2605)", () => {
     const source = readSource();
     expect(source).toMatch(/function buildUnavailableAction/);
-    // Not installed → Install; a missing required dependency → a DETAILS
-    // destination, never an install promise the target page cannot keep.
-    expect(source).toMatch(/ctaLabel: detailHref \? "Install"/);
+    // The one remaining unavailable verdict a LISTED row can carry: a missing
+    // required dependency → a DETAILS destination, never an install promise the
+    // target page cannot keep.
+    expect(source).toMatch(/state\s*!==\s*"missing-required-dependency"\)\s*return null/);
     expect(source).toMatch(/ctaLabel: "View requirements"/);
     expect(source).toMatch(/ctaAriaLabel/);
   });

@@ -95,8 +95,22 @@ describe("NewAgentPage (the /agents All-Agents picker) intersects against the ru
     expect(pages).toMatch(/t\.sourceType === "external" \|\| t\.packageName == null/);
   });
 
-  it("only an ARCHIVED verdict removes a row; a non-runnable one keeps the card (#2605)", () => {
-    expect(pages).toMatch(/availabilityOf\(t\)\.state !== "archived"/);
+  // #2605 kept a non-runnable row and gave it a truthful CTA. #2679 narrowed
+  // that: a PROVEN-uninstalled row now leaves the page with the archived ones
+  // (the owner's ruling on PR #2658 — an agent that is not installed does not
+  // belong on /agents, not even behind an Install button). A row whose own
+  // required DEPENDENCY is missing still stays, because that agent IS installed.
+  it("an ARCHIVED or NOT-INSTALLED verdict removes a row; a missing-dependency one keeps the card (#2605, #2679)", () => {
+    expect(pages).toMatch(/state !== "archived" && state !== "not-installed"/);
     expect(pages).toMatch(/buildUnavailableAction\(/);
+    expect(pages).toMatch(/state !== "missing-required-dependency"/);
+  });
+
+  // The gate's fail-open floors must survive #2679: hiding a row requires PROOF
+  // of absence, so a store outage or an ungoverned package still lists.
+  it("hides only a PROVEN-uninstalled row, never a fail-open one (#2679)", () => {
+    // The listing filter keys on the gate verdict, never on a raw install read.
+    expect(pages).toMatch(/const state = availabilityOf\(t\)\.state;/);
+    expect(pages).not.toMatch(/readEffectiveStatusByPackageNames/);
   });
 });
