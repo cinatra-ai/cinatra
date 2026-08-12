@@ -27,6 +27,21 @@ export type WidgetPrincipal = {
   userId: string;
   /** The end user's org (cwu_ claim — never session-derived). */
   orgId: string;
+  /**
+   * THE `cwu_` ROW THIS TURN AUTHENTICATED AGAINST — its `jti` (cinatra#2687).
+   *
+   * It travels on the principal because the OBO token needs it: the token is
+   * minted deep inside the runtime, from this object and nothing else, and it
+   * seals this value as `pjti` so the MCP authorization layer can ask whether
+   * that row's Better Auth sign-in is still there (#2684's shared predicate).
+   * The chat resume token seals the same value at the route.
+   *
+   * It is a NAME, not a credential: it recovers nothing on its own and the
+   * widget token itself never travels here. #2685 kept it off the principal
+   * precisely because the principal travels into the OBO token and the carrier
+   * run — which is now the reason it belongs on it.
+   */
+  parentTokenJti: string;
   /** SERVER-DERIVED canonical instance id (the verifiedOrigin re-pin). */
   instanceId: string;
   /** The cit_-derived server-verified origin — authoritative; carried for audit. */

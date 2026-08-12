@@ -92,7 +92,7 @@ vi.mock("@cinatra-ai/llm", () => ({
 }));
 
 import { runAssistantTurn } from "../runtime";
-import { resolveChatExternalMcpTools } from "@cinatra-ai/llm";
+import { resolveChatExternalMcpTools, buildLlmMcpServerToolForWidget } from "@cinatra-ai/llm";
 import { UAT_SENTINEL } from "@cinatra-ai/llm/scripted-test-provider";
 import { buildCinatraAssistantRuntimeConfig } from "../cinatra-assistant-config";
 
@@ -100,6 +100,9 @@ const wpPrincipal: WidgetPrincipal = {
   kind: "public_site_widget",
   userId: "u1",
   orgId: "o1",
+  // cinatra#2687 — the `cwu_` row the turn authenticated against; the OBO mint
+  // seals it as `pjti`.
+  parentTokenJti: "cwu-row-1",
   instanceId: "wp-canonical",
   verifiedOrigin: "https://wp.example.test",
   assistantHandle: "wordpress",
@@ -218,6 +221,37 @@ describe("runAssistantTurn scripted-provider short-circuit (widget path)", () =>
     expect(vi.mocked(resolveChatExternalMcpTools)).toHaveBeenCalledWith("openai", {
       surface: "public_site_widget",
     });
+  });
+
+  it("SEALS THE OBO TOKEN to the parent cwu_ row and to THIS turn (cinatra#2687)", async () => {
+    // The mint is the only place both facts are in hand: the principal carries
+    // the `cwu_` row the turn authenticated against, and the harness-bound
+    // identity carries the run id of the turn being served. Before #2687 the
+    // mint passed neither, so the token it produced could not be checked
+    // against anything and worked for its whole 120 seconds.
+    delete process.env.CINATRA_TEST_LLM_PROVIDER;
+    resolveDefaultAdapter.mockResolvedValueOnce({ provider: "openai", defaultModel: "gpt-4o" });
+    vi.mocked(buildLlmMcpServerToolForWidget).mockClear();
+
+    await runAssistantTurn(
+      buildCinatraAssistantRuntimeConfig(),
+      argsWith(() => {}, wpPrincipal, "Please rewrite the title."),
+    );
+
+    expect(vi.mocked(buildLlmMcpServerToolForWidget)).toHaveBeenCalledTimes(1);
+    const [, actor] = vi.mocked(buildLlmMcpServerToolForWidget).mock.calls[0];
+    expect(actor).toMatchObject({
+      userId: "u1",
+      orgId: "o1",
+      instanceId: "wp-canonical",
+      kind: "wordpress",
+      // The two seals, both taken from values this turn already holds.
+      parentJti: "cwu-row-1",
+      turnRunId: "run-widget",
+    });
+    // The per-turn nonce is still minted fresh and is NOT the binding.
+    expect(typeof (actor as { jti: unknown }).jti).toBe("string");
+    expect((actor as { jti: string }).jti).not.toBe("run-widget");
   });
 
   it("SCOPE: the cookie-session path (no widget principal) is NEVER short-circuited, even with the flag on", async () => {

@@ -33,6 +33,10 @@ const ACTOR: WidgetMcpActor = {
   instanceId: "inst_42",
   kind: "wordpress",
   jti: "turn-nonce-1",
+  // The two seals the host's authorization layer checks (cinatra#2687). This
+  // package only carries them to the injected issuer.
+  parentJti: "cwu-row-1",
+  turnRunId: "run-1",
 };
 
 describe("buildLlmMcpServerToolForWidget (S5)", () => {
@@ -45,7 +49,8 @@ describe("buildLlmMcpServerToolForWidget (S5)", () => {
     // The transport applies delegated-widget; the tool advertises no allowlist.
     expect(tool!.allowedTools).toBeNull();
     expect(tool!.headers?.Authorization).toBe("Bearer widget.wordpress.turn-nonce-1");
-    // The full actor (pinned instance + kind + jti) is handed to the issuer.
+    // The full actor (pinned instance + kind + jti + both seals) is handed to
+    // the issuer verbatim — this package narrows nothing.
     expect(issue).toHaveBeenCalledWith(ACTOR);
   });
 

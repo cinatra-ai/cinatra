@@ -184,6 +184,8 @@ describe("resume seam — chat-token / cross-type REJECT (option A, not B)", () 
       instanceId: "inst-canonical-uuid",
       kind: "wordpress",
       jti: "turn-nonce",
+      parentJti: "cwu-row-1",
+      turnRunId: RUN,
     });
     const res = await GET(...req(RUN, { authHeader: `Bearer ${mcp}` }));
     expect(res.status).toBe(401);

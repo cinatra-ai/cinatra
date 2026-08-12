@@ -159,8 +159,9 @@ export type ChatMcpActorTokenIssuer = (actor: ChatMcpActor) => string;
  * at the token mint (the token omits `prole`, the verifier hard-codes it), so
  * there is no way to mint a platform-admin widget token here (G5). The pinned
  * `instanceId` + `kind` ride the token as its FAIL-CLOSED `inst`/`knd` claims,
- * and `jti` is the per-turn nonce the transport turn-binds for replay
- * containment.
+ * `jti` is the per-turn nonce, and `parentJti`/`turnRunId` are the two seals
+ * (cinatra#2687) the host's authorization layer checks against the live sign-in
+ * and the live turn.
  */
 export type WidgetMcpActor = {
   userId: string;
@@ -168,6 +169,10 @@ export type WidgetMcpActor = {
   instanceId: string;
   kind: "wordpress" | "drupal";
   jti: string;
+  /** The `jti` of the `cwu_` widget token whose sign-in the turn ran under. */
+  parentJti: string;
+  /** The AG-UI run id of the turn this token is minted for. */
+  turnRunId: string;
 };
 
 export type WidgetMcpActorTokenIssuer = (actor: WidgetMcpActor) => string;
