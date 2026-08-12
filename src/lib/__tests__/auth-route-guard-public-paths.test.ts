@@ -335,11 +335,15 @@ describe("auth-route-guard - cinatra#1881 assistant run-stream resume matcher", 
   });
 
   it("OVER-MATCH CONTROL: the bare /runs collection and other assistants siblings stay guarded", async () => {
+    // `/api/assistants/list` used to be listed here as a fourth control. It is
+    // not one any more: cinatra#2683 gave it its OWN exact entry (the widget's
+    // @-mention directory), pinned by its own test above. The three below still
+    // prove the point this control exists for — the run-stream matcher is
+    // structural and `/api/assistants` is not a public prefix.
     for (const p of [
       "/api/assistants/runs",
       "/api/assistants/runs/stream",
       "/api/assistants/threads/" + RUN,
-      "/api/assistants/list",
     ]) {
       const res = await guardAppRoute(fakeRequest(p));
       expect(res.status, `${p} must stay guarded`).toBe(307);
@@ -599,6 +603,33 @@ describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture wid
     // the provenance and the gate CAS.
     const res = await guardAppRoute(fakeRequest("/api/lifecycle-views/decide"));
     expect(res.status).not.toBe(307);
+  });
+
+  it("cinatra#2683 (S8f): /api/assistants/list is reachable cookieless — the @-mention directory", async () => {
+    // The embed frame GETs the participant directory with `credentials:"omit"`
+    // and the widget proof header. A 307 does not fail loudly here: `fetch`
+    // follows it, the client parses the sign-in HTML, and the composer simply
+    // draws no flyout — indistinguishable from "this org has nobody to mention".
+    // The HANDLER still places the caller and tenant-scopes the directory.
+    const res = await guardAppRoute(fakeRequest("/api/assistants/list"));
+    expect(res.status).not.toBe(307);
+  });
+
+  it("EXACT, not a prefix: /api/assistants/list descendants and siblings stay guarded", async () => {
+    for (const p of [
+      "/api/assistants/list/",
+      "/api/assistants/list/anything",
+      "/api/assistants/listing",
+      "/api/assistants",
+      // The sibling widget-branch routes S8f added are NOT exempted by this
+      // entry — each owes its own (see the note on the list entry).
+      "/api/assistants/autosave",
+      "/api/chat/pending-tool-calls",
+    ]) {
+      const res = await guardAppRoute(fakeRequest(p));
+      expect(res.status, `${p} must stay guarded`).toBe(307);
+      expect(res.headers.get("location")).toContain("/sign-in");
+    }
   });
 
   it("REGRESSION: every OTHER lifecycle-views path stays session-guarded", async () => {
