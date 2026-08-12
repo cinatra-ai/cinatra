@@ -325,9 +325,9 @@
         "workflow": "build-image.yml",
         "job": "e2e-rbac"
       },
-      "status": "red",
+      "status": "green",
       "trackingIssue": 1942,
-      "note": "PROOF LANDED, ROW NOT YET CLAIMABLE — and the distinction is mechanical, not editorial. The spec and its four red halves above exist, are grep-verified by audit mode, and RUN: they live in tests/e2e/rbac/, which tests/e2e/config/rbac.config.ts globs, so build-image.yml's e2e-rbac job executes them with no workflow change. What is still missing is ONE structural edge: this gate's own job, archive-acceptance-gate, does not `needs: e2e-rbac`. strictCheckRow therefore reports a green claim on this row as unverifiable, and scripts/audit/__tests__/archive-acceptance-gate.test.mjs — which runs in the blocking `test` job — asserts that EVERY green row passes strictCheckRow with zero reasons. Flipping this row green before that edge exists would turn a blocking CI job red: a false claim the gate itself catches. Adding the edge is a .github/workflows change — a high-risk, maintainer-gated path this program deliberately keeps in its own sibling PR (PR #2703's Decision 6, where it is item 1 of three). The flip is then this one word, on the strength of a green e2e-rbac run: no test, no proof and no further CI work remains."
+      "note": "GREEN as of the live proof's first passing e2e-rbac run. Read the sequence, because this row is the one the whole #1943 suite could not fake: the spec (tests/e2e/rbac/rbac-org-archive-live.spec.ts) drives the REAL #1942 Danger-zone surface — which had already shipped in packages/dashboards/src/ with #2273, contrary to the path-scoped grep recorded in #2703 — through a production build with three seeded roles and a non-member. It lives in tests/e2e/rbac/, which tests/e2e/config/rbac.config.ts globs, so build-image.yml's e2e-rbac job runs it with no workflow change; #2704 supplied the one structural piece that was missing, the `needs: e2e-rbac` edge on this gate's own job, and staged its --strict step to start blocking the moment this word changed. It has. The activation gate is armed ONLY inside that harness — an ephemeral database, behind a loopback fence, snapshotted and restored byte-exactly — so nothing here advances #1942's owner-run production flip, which remains the V6 closeout's call."
     }
   ]
 }
