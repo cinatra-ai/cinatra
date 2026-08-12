@@ -66,6 +66,10 @@ export const SEL = {
   // submission is blocked and never fires. PromptField submits from onClick /
   // Enter inside a plain <div>, so nothing depends on form submission being
   // permitted. While a turn runs the SAME control becomes "Stop generating".
+  //
+  // PRESENCE hook: `sendPrompt` submits with Enter rather than by clicking this,
+  // because in the dev server the composer's bottom-right corner is under the
+  // Next.js dev-overlay portal — see the note there.
   embedComposerSubmit: 'button[aria-label="Send message"]',
   embedComposerStop: 'button[aria-label="Stop generating"]',
   // One `[data-embed-content]` per assistant-text part (the S3 renderer output).
@@ -334,8 +338,23 @@ export async function sendPrompt(page: Page, text: string): Promise<void> {
   // A contenteditable is filled, not `.fill()`-ed like an <input> — Playwright's
   // fill() works on contenteditable too and dispatches the `input` event the
   // composer learns its value from, so this stays one call.
-  await frame.locator(SEL.embedComposerInput).fill(text);
-  await frame.locator(SEL.embedComposerSubmit).click();
+  const editor = frame.locator(SEL.embedComposerInput);
+  await editor.fill(text);
+  // SUBMIT WITH ENTER, NOT BY CLICKING THE SEND CONTROL (cinatra#2683).
+  //
+  // Since S8f the widget mounts the SAME composer `/chat` mounts, whose send
+  // control is a circular icon button pinned to the composer's bottom-right
+  // corner. In the DEV server this suite drives, that corner is exactly where
+  // Next.js parks its dev-overlay portal — so the click retried for 30s against
+  // "<nextjs-portal> … intercepts pointer events" while the button itself was
+  // visible, enabled and stable. Nothing about the widget was wrong; the overlay
+  // was on top of it.
+  //
+  // Enter is the same submit path (`PromptField` handles the keydown itself) and
+  // is the gesture a reader actually uses. It is also still sandbox-safe: the
+  // composer is a contenteditable in a plain <div>, never a <form>, so no part of
+  // this depends on `allow-forms`, which the CMS widget's iframe does not grant.
+  await editor.press("Enter");
 }
 
 /**
