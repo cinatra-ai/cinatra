@@ -353,3 +353,43 @@ describe("readCostSummary — the month's unpriced rows, on the month's window",
     expect(summary.nullCostCountThisMonth).toBe(0);
   });
 });
+
+describe("readCostSummary — the week's lower boundary (cinatra#2691)", () => {
+  it("does NOT compare occurred_at against a bare timestamp-without-time-zone week truncation", async () => {
+    mockExecute.mockResolvedValue({ rows: [{}] });
+    await readCostSummary();
+    const sql = flat(lastSql());
+    // The exact pre-#2691 expression. Its presence IS the defect: a bare
+    // `date_trunc('week', now() AT TIME ZONE 'UTC')` is a timestamp WITHOUT
+    // time zone, so comparing it against occurred_at (timestamptz) reads it in
+    // the SESSION's timezone rather than UTC — the same trap CURRENT_MONTH_WINDOW
+    // fixed for the month boundary in cinatra#2673.
+    expect(sql).not.toContain("occurred_at >= date_trunc('week'");
+  });
+
+  it("casts the week's lower boundary back to timestamptz, on an explicit UTC instant", async () => {
+    mockExecute.mockResolvedValue({ rows: [{}] });
+    await readCostSummary();
+    const sql = flat(lastSql());
+    expect(sql).toContain(
+      "SUM(cost_usd) FILTER (WHERE occurred_at >= (date_trunc('week', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'))::float AS total_this_week",
+    );
+  });
+
+  it("keeps the week uncapped — no upper bound, unlike the month (cinatra#2673)", async () => {
+    mockExecute.mockResolvedValue({ rows: [{}] });
+    await readCostSummary();
+    const sql = flat(lastSql());
+    // "This Week" is deliberately one-sided: isolate its own FILTER clause
+    // (between the month's alias and the week's) and confirm no second bound
+    // rode along with the boundary-type fix.
+    const monthMarker = "AS total_this_month,";
+    const weekMarker = "AS total_this_week,";
+    const weekClause = sql.slice(
+      sql.indexOf(monthMarker) + monthMarker.length,
+      sql.indexOf(weekMarker) + weekMarker.length,
+    );
+    expect(weekClause).not.toContain(" AND ");
+    expect(weekClause).not.toContain("interval '1 week'");
+  });
+});

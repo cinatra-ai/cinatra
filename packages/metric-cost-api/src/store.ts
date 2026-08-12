@@ -176,12 +176,17 @@ const CURRENT_MONTH_WINDOW = sql`
 // Dashboard query functions
 // ---------------------------------------------------------------------------
 
+// The week's lower boundary casts back to timestamptz, same as
+// CURRENT_MONTH_WINDOW above (cinatra#2691): a bare `date_trunc('week', ...)`
+// is a timestamp WITHOUT time zone, so comparing it against occurred_at
+// (timestamptz) reads it in the SESSION's timezone rather than UTC. Unlike the
+// month, the week stays uncapped (cinatra#2673) — no upper bound is added.
 export async function readCostSummary(): Promise<CostSummaryRow> {
   const rows = await db.execute(sql`
     SELECT
       SUM(cost_usd)::float AS total_all_time,
       SUM(cost_usd) FILTER (WHERE ${CURRENT_MONTH_WINDOW} )::float AS total_this_month,
-      SUM(cost_usd) FILTER (WHERE occurred_at >= date_trunc('week', now() AT TIME ZONE 'UTC'))::float AS total_this_week,
+      SUM(cost_usd) FILTER (WHERE occurred_at >= (date_trunc('week', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'))::float AS total_this_week,
       COUNT(*)::int AS event_count,
       COUNT(*) FILTER (WHERE cost_usd IS NULL)::int AS null_cost_count,
       COUNT(*) FILTER (WHERE cost_usd IS NULL AND ${CURRENT_MONTH_WINDOW} )::int AS null_cost_count_this_month
