@@ -47,10 +47,12 @@ export default defineConfig({
   //
   // Raised to 12 min for cinatra#1943 row 15 (rbac-org-archive-live.spec.ts):
   // ten tests over four seeded identities, ~15 navigations against a prebuilt
-  // production server, plus two unavoidable 11s waits for the 10s
-  // `readConnectorConfigFromDatabase` TTL — the only way the running server
-  // observes a gate flip written straight to the database. That is ~2 min
-  // added to a ~7 min typical (~9 min worst observed) suite.
+  // production server, and ~30s of deterministic waiting it cannot avoid —
+  // two 11s waits for the 10s `readConnectorConfigFromDatabase` TTL (the only
+  // way the running server observes a gate flip written straight to the
+  // database) plus roughly one 10s Better Auth sign-up window, whose limiter
+  // is 3 per 10s and is live because this job serves a production build. That
+  // is ~2 min added to a ~7 min typical (~9 min worst observed) suite.
   //
   // Be honest about what this number is: at 12 min it is a GRACEFUL-FAILURE
   // boundary, not headroom. The job wraps the suite in

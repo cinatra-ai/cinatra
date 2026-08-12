@@ -315,39 +315,108 @@ const HOME_ORG_ID = `archive-home-org-${SUFFIX}`;
 type StorageState = Awaited<ReturnType<APIRequestContext["storageState"]>>;
 
 const STATE: Partial<Record<RoleName, StorageState>> = {};
+/** One live API context per identity, from sign-up until its state is captured. */
+const CTX: Partial<Record<RoleName, APIRequestContext>> = {};
 
-async function signUp(email: string, name: string): Promise<void> {
-  const ctx = await playwrightRequest.newContext({ baseURL: BASE_URL });
-  try {
-    // 200 = created; 400/422 = already exists. Anything else is a real failure.
-    const res = await ctx.post("/api/auth/sign-up/email", {
-      data: { email, password: PASSWORD, name },
+/**
+ * Better Auth rate-limits `/sign-in*` and `/sign-up*` through ONE shared rule
+ * — window 10s, max 3 per client — and that limiter is ON here, because
+ * `e2e-rbac` serves a production build. This file seeds FOUR identities into a
+ * suite that has already spent part of that budget on its own fixtures, so a
+ * 429 on the fourth account is the expected steady state, not an anomaly (it
+ * is exactly how this spec failed its first CI run).
+ *
+ * Two things keep it out of the way. Sign-up AUTO-SIGNS-IN
+ * (`emailAndPassword.autoSignIn: true`), so each identity costs ONE
+ * rate-limited request instead of two — `set-active` and `get-session` fall
+ * under the ordinary 100-per-10s rule and are free by comparison. And a 429 is
+ * retried, honouring the server's own `X-Retry-After`, rather than either
+ * failing the suite or being swallowed as an acceptable status: a swallowed
+ * 429 leaves the account uncreated and every later assertion meaningless.
+ */
+const RATE_LIMIT_MAX_ATTEMPTS = 6;
+const RATE_LIMIT_FALLBACK_WAIT_S = 10;
+
+async function postThroughRateLimit(
+  ctx: APIRequestContext,
+  path: string,
+  data: unknown,
+  label: string,
+) {
+  for (let attempt = 1; ; attempt += 1) {
+    const res = await ctx.post(path, {
+      data,
       headers: { Origin: BASE_URL },
       failOnStatusCode: false,
     });
-    expect([200, 400, 422]).toContain(res.status());
-  } finally {
-    await ctx.dispose();
+    if (res.status() !== 429) return res;
+    if (attempt >= RATE_LIMIT_MAX_ATTEMPTS) {
+      throw new Error(`${label}: still rate-limited (429) after ${attempt} attempts`);
+    }
+    const advertised = Number(res.headers()["x-retry-after"]);
+    const waitS = Number.isFinite(advertised) && advertised > 0 ? advertised : RATE_LIMIT_FALLBACK_WAIT_S;
+    await new Promise((r) => setTimeout(r, waitS * 1_000 + 500));
   }
 }
 
-async function signInAndCaptureState(email: string, activeOrganizationId: string): Promise<StorageState> {
+/**
+ * Create an identity and hold its authenticated context. Idempotent: an
+ * account that already exists (a re-run against a warm database) signs in
+ * instead. The session is VERIFIED rather than assumed — if auto-sign-in ever
+ * stops handing back a session, this fails here with a clear reason instead of
+ * producing an empty storage state that would surface as a mystery redirect
+ * ten assertions later.
+ */
+async function createIdentity(role: RoleName): Promise<void> {
+  const { email, name } = ACCOUNTS[role];
   const ctx = await playwrightRequest.newContext({ baseURL: BASE_URL });
-  try {
-    const signIn = await ctx.post("/api/auth/sign-in/email", {
-      data: { email, password: PASSWORD },
-      headers: { Origin: BASE_URL },
-    });
+  CTX[role] = ctx;
+
+  const signUp = await postThroughRateLimit(
+    ctx,
+    "/api/auth/sign-up/email",
+    { email, password: PASSWORD, name },
+    `sign-up ${email}`,
+  );
+  expect([200, 400, 422], `sign-up ${email} returned ${signUp.status()}`).toContain(signUp.status());
+
+  let session = await ctx.get("/api/auth/get-session", { failOnStatusCode: false });
+  let body = session.ok() ? await session.text() : "";
+  if (!body.includes('"user"')) {
+    const signIn = await postThroughRateLimit(
+      ctx,
+      "/api/auth/sign-in/email",
+      { email, password: PASSWORD },
+      `sign-in ${email}`,
+    );
     expect(signIn.ok(), `sign-in failed for ${email} (${signIn.status()})`).toBeTruthy();
+    session = await ctx.get("/api/auth/get-session", { failOnStatusCode: false });
+    body = session.ok() ? await session.text() : "";
+  }
+  expect(body.includes('"user"'), `no session established for ${email}`).toBeTruthy();
+}
+
+/**
+ * Point an identity's session at the home org and capture its storage state.
+ * Runs only AFTER the membership rows exist — `set-active` requires them.
+ */
+async function activateAndCaptureState(role: RoleName, activeOrganizationId: string): Promise<void> {
+  const ctx = CTX[role];
+  if (!ctx) throw new Error(`no API context for ${role}`);
+  try {
     const setActive = await ctx.post("/api/auth/organization/set-active", {
       data: { organizationId: activeOrganizationId },
       headers: { Origin: BASE_URL },
       failOnStatusCode: false,
     });
-    expect(setActive.ok(), `set-active failed for ${email} (${setActive.status()})`).toBeTruthy();
-    return await ctx.storageState();
+    expect(
+      setActive.ok(),
+      `set-active failed for ${ACCOUNTS[role].email} (${setActive.status()})`,
+    ).toBeTruthy();
+    STATE[role] = await ctx.storageState();
   } finally {
     await ctx.dispose();
+    delete CTX[role];
   }
 }
 
@@ -529,8 +598,8 @@ test.describe("archive live proof — 3 roles on a production-equivalent build (
     await setMetadataValue(INSTANCE_IDENTITY_KEY, { ...identity, singleOrg: false });
     await setArchiveActivationGate(true);
 
-    for (const account of Object.values(ACCOUNTS)) {
-      await signUp(account.email, account.name);
+    for (const role of Object.keys(ACCOUNTS) as RoleName[]) {
+      await createIdentity(role);
     }
 
     await withDb(async (c) => {
@@ -577,7 +646,7 @@ test.describe("archive live proof — 3 roles on a production-equivalent build (
     });
 
     for (const role of Object.keys(ACCOUNTS) as RoleName[]) {
-      STATE[role] = await signInAndCaptureState(ACCOUNTS[role].email, HOME_ORG_ID);
+      await activateAndCaptureState(role, HOME_ORG_ID);
     }
 
     // One wait for both metadata writes above to clear the 10s TTL in the
@@ -586,6 +655,11 @@ test.describe("archive live proof — 3 roles on a production-equivalent build (
   });
 
   test.afterAll(async () => {
+    // A beforeAll that threw part-way leaves live API contexts behind.
+    for (const role of Object.keys(CTX) as RoleName[]) {
+      await CTX[role]?.dispose().catch(() => {});
+      delete CTX[role];
+    }
     // Byte-exact restore, absence included — never a guessed default.
     if (SNAPSHOT.gate !== undefined) await restoreMetadataRaw(ARCHIVE_GATE_KEY, SNAPSHOT.gate);
     if (SNAPSHOT.instanceIdentity !== undefined) {
