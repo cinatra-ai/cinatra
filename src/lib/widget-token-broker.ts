@@ -8,6 +8,8 @@ import {
 } from "node:crypto";
 import { Buffer } from "node:buffer";
 
+import { normalizeConcreteOrigin } from "@cinatra-ai/streams/origin-policy";
+
 import type { GeneratedWidgetStreamAuth } from "@/lib/generated/extensions.server";
 import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
 import { readMetadataValueFromDatabase } from "@/lib/database";
@@ -127,19 +129,19 @@ function connectSiteFingerprintHex(siteId: string, credentialVersion: number): s
   return sha256Hex(`cnx:${siteId}:${credentialVersion}`);
 }
 
-/** `scheme://host[:port]` only — no path/query/hash. Returns "" if invalid. */
+/**
+ * `scheme://host[:port]` only — no path/query/hash. Returns "" if invalid.
+ *
+ * The host's widest-used origin gate: every stored site origin, every mint-time
+ * binding and every consume-time re-check in this file and its callers passes
+ * through here. It is now a thin alias over the ONE origin resolver
+ * (`@cinatra-ai/streams/origin-policy`) — the second copy of this reading is
+ * gone, so a candidate the resolver refuses is refused HERE, at the token
+ * broker, at the connect-site registration and at the embed framing wall
+ * alike, with no way for the four to drift apart again.
+ */
 export function normalizeOriginStrict(value: unknown): string {
-  const trimmed = String(value ?? "").trim();
-  if (!trimmed) return "";
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
-    // url.origin is already `scheme://host[:port]` with no path/query/hash.
-    if (!url.origin || url.origin === "null") return "";
-    return url.origin;
-  } catch {
-    return "";
-  }
+  return normalizeConcreteOrigin(value);
 }
 
 function qSchemaTable(): string {

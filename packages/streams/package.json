@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./event-log": "./src/event-log.ts",
+    "./origin-policy": "./src/origin-policy.ts",
     "./sse": "./src/sse.ts",
     "./token-broker": "./src/token-broker.ts"
   },

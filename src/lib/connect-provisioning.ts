@@ -23,6 +23,7 @@ import {
 } from "node:crypto";
 
 import { mintWebhookSecret } from "@cinatra-ai/webhooks";
+import { resolveConcreteOrigin } from "@cinatra-ai/streams/origin-policy";
 
 import { ensureInstanceId } from "@/lib/instance-identity-store";
 import { webhookSecretService } from "@/lib/webhook-secret-service";
@@ -220,39 +221,70 @@ export function validateRedirectUri(
 /**
  * Validate a widget_origin: an absolute ORIGIN only (scheme+host+optional
  * port; no path/query/fragment/userinfo), https in prod (loopback-http in
- * dev), reject the literal "null". Returns the normalized origin or null.
+ * dev), reject the literal "null". Returns the normalized origin, or the
+ * refusal with a message the caller can show.
+ *
+ * REGISTRATION IS THE FIRST DOOR. Whatever this function accepts is what the
+ * rest of the system later compares against and, for a widget site, what a
+ * framing policy is eventually built from. So the host is judged by the ONE
+ * shared origin resolver (`@cinatra-ai/streams/origin-policy`) and not by "the
+ * URL parser did not throw": the parser accepts a host that is a shape rather
+ * than a place, and a shape admitted here would be a real widening much later,
+ * far from the form that took it. The origin-only / scheme / userinfo rules
+ * below are this door's OWN, stricter requirements and stay exactly as they
+ * were.
  */
 export function validateWidgetOrigin(
   origin: string,
-): { ok: true; widgetOrigin: string } | { ok: false } {
-  if (typeof origin !== "string" || !origin || hasControlOrCrlf(origin)) return { ok: false };
+): { ok: true; widgetOrigin: string } | { ok: false; reason: string } {
+  const refuse = (reason: string) => ({ ok: false as const, reason });
+  if (typeof origin !== "string" || !origin || hasControlOrCrlf(origin)) {
+    return refuse("Enter the website address of the site that shows the assistant.");
+  }
   const trimmed = origin.trim();
-  if (trimmed.toLowerCase() === "null") return { ok: false };
+  if (trimmed.toLowerCase() === "null") {
+    return refuse("Enter a full website address, for example https://example.com.");
+  }
+  // The shared resolver runs FIRST: it names a wildcard-shaped or otherwise
+  // non-concrete host for what it is, before any of the local shape rules can
+  // report the same value as merely malformed.
+  const resolved = resolveConcreteOrigin(trimmed);
+  if (!resolved.ok) return refuse(resolved.message);
   let url: URL;
   try {
     url = new URL(trimmed);
   } catch {
-    return { ok: false };
+    return refuse("Enter a full website address, for example https://example.com.");
   }
   if (url.protocol === "https:") {
     // ok
   } else if (url.protocol === "http:") {
-    if (!(allowsHttp() && isLoopbackHost(url.hostname))) return { ok: false };
+    if (!(allowsHttp() && isLoopbackHost(url.hostname))) {
+      return refuse("Use an https:// address.");
+    }
   } else {
-    return { ok: false };
+    return refuse("Use an https:// address.");
   }
-  if (url.username || url.password) return { ok: false };
-  if (!url.hostname) return { ok: false };
+  if (url.username || url.password) {
+    return refuse("Remove the user name and password from the address.");
+  }
+  if (!url.hostname) return refuse("Enter a real host name, for example https://example.com.");
   // Origin only: reject anything beyond scheme://host[:port]. URL.pathname is
   // "/" for an origin-only input; any other path, any query, or any hash means
   // the caller supplied more than an origin.
-  if (url.pathname !== "/" && url.pathname !== "") return { ok: false };
-  if (url.search) return { ok: false };
-  if (url.hash) return { ok: false };
-  // url.origin is the punycode-normalized, port-normalized canonical origin
-  // ("https://example.com", "https://example.com:8443"). Default ports are
-  // dropped by URL, giving stable equality with the widget Origin header.
-  return { ok: true, widgetOrigin: url.origin };
+  if (url.pathname !== "/" && url.pathname !== "") {
+    return refuse("Enter the address only, with no path — for example https://example.com.");
+  }
+  if (url.search) {
+    return refuse("Enter the address only, with no query — for example https://example.com.");
+  }
+  if (url.hash) {
+    return refuse("Enter the address only, with no #fragment — for example https://example.com.");
+  }
+  // The resolver's origin is the punycode-normalized, port-normalized canonical
+  // origin ("https://example.com", "https://example.com:8443"). Default ports
+  // are dropped, giving stable equality with the widget Origin header.
+  return { ok: true, widgetOrigin: resolved.origin };
 }
 
 // ---------------------------------------------------------------------------

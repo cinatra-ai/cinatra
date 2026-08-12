@@ -36,6 +36,13 @@ export type {
 } from "./sse";
 
 export {
+  resolveConcreteOrigin,
+  normalizeConcreteOrigin,
+  isConcreteOrigin,
+} from "./origin-policy";
+export type { OriginRefusal, OriginResolution } from "./origin-policy";
+
+export {
   createTokenBroker,
   normalizeOriginStrict,
   sha256Hex,

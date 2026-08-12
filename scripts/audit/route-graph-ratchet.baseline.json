@@ -2,35 +2,35 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 218,
-    "/api/mcp": 1700,
-    "/chat": 1772,
-    "/api/a2a": 1705,
-    "/api/llm-bridge": 1715
+    "/api/mcp": 1701,
+    "/chat": 1773,
+    "/api/a2a": 1706,
+    "/api/llm-bridge": 1716
   },
   "absorbs": {
-    "/api/mcp": {
-      "from": 1698,
-      "to": 1700,
-      "reason": "cinatra#2653 rework (PR #2658): the owner ruling makes an admin UPLOAD go live directly, and landing it forced TWO vertical-slice extractions out of packages/agents/src/store.ts, whose file-size ratchet ceiling may only ever shrink: `store-template-versions.ts` (the version-row cores, executor-threaded so the publish transaction closes the MAX+1 race; store.ts re-exports every public name) and `publish-template.ts` (the transactional publish-and-bind seam the upload import action calls; NOT re-exported by store.ts because that edge would close an import cycle). Both are RELOCATED code, not new subtrees: the split the file-size ratchet prescribes adds exactly one module per slice to every route that already reached store.ts — the four self-MCP-bearing routes, uniformly +2 on top of the #2663 ceiling (whose +1 absorb this record replaces by re-raising; upload-archive.ts stays counted inside these totals). Dynamic import buys nothing (the analyzer follows import() too). Counts measured on the merged tree with the companion extension repos cloned pinned exactly as CI clones them. /sign-in is unaffected (#2639 cut its edge to this closure).",
-      "pr": 2658
-    },
-    "/chat": {
-      "from": 1770,
-      "to": 1772,
-      "reason": "cinatra#2653 rework (PR #2658): the owner ruling makes an admin UPLOAD go live directly, and landing it forced TWO vertical-slice extractions out of packages/agents/src/store.ts, whose file-size ratchet ceiling may only ever shrink: `store-template-versions.ts` (the version-row cores, executor-threaded so the publish transaction closes the MAX+1 race; store.ts re-exports every public name) and `publish-template.ts` (the transactional publish-and-bind seam the upload import action calls; NOT re-exported by store.ts because that edge would close an import cycle). Both are RELOCATED code, not new subtrees: the split the file-size ratchet prescribes adds exactly one module per slice to every route that already reached store.ts — the four self-MCP-bearing routes, uniformly +2 on top of the #2663 ceiling (whose +1 absorb this record replaces by re-raising; upload-archive.ts stays counted inside these totals). Dynamic import buys nothing (the analyzer follows import() too). Counts measured on the merged tree with the companion extension repos cloned pinned exactly as CI clones them. /sign-in is unaffected (#2639 cut its edge to this closure).",
-      "pr": 2658
-    },
     "/api/a2a": {
-      "from": 1703,
-      "to": 1705,
-      "reason": "cinatra#2653 rework (PR #2658): the owner ruling makes an admin UPLOAD go live directly, and landing it forced TWO vertical-slice extractions out of packages/agents/src/store.ts, whose file-size ratchet ceiling may only ever shrink: `store-template-versions.ts` (the version-row cores, executor-threaded so the publish transaction closes the MAX+1 race; store.ts re-exports every public name) and `publish-template.ts` (the transactional publish-and-bind seam the upload import action calls; NOT re-exported by store.ts because that edge would close an import cycle). Both are RELOCATED code, not new subtrees: the split the file-size ratchet prescribes adds exactly one module per slice to every route that already reached store.ts — the four self-MCP-bearing routes, uniformly +2 on top of the #2663 ceiling (whose +1 absorb this record replaces by re-raising; upload-archive.ts stays counted inside these totals). Dynamic import buys nothing (the analyzer follows import() too). Counts measured on the merged tree with the companion extension repos cloned pinned exactly as CI clones them. /sign-in is unaffected (#2639 cut its edge to this closure).",
-      "pr": 2658
+      "from": 1705,
+      "pr": 2680,
+      "reason": "cinatra#2680: the ONE origin resolver (packages/streams/src/origin-policy.ts) is a single new leaf reachable from these four routes, because the modules that used to answer \"is this an origin?\" themselves — the widget token broker, the widget stream auth, the connect-site provisioning validator and the dev-setup shell — now all import it instead of each carrying its own copy. It is +1 on each route and net-negative in real code: four divergent readings collapse into one, and the file is a dependency-free pure module (no crypto, no DB, no server-only), so it adds a node and no subtree. Narrowing considered and rejected: keeping the implementation inside any existing module is impossible without duplication, since the consumers span the neutral packages/streams package (which may not import host code) and four host modules; duplicating it is the exact defect this change removes. Measured as a uniform +1 vs the clean base on exactly these four routes (/sign-in untouched at 218).",
+      "to": 1706
     },
     "/api/llm-bridge": {
-      "from": 1713,
-      "to": 1715,
-      "reason": "cinatra#2653 rework (PR #2658): the owner ruling makes an admin UPLOAD go live directly, and landing it forced TWO vertical-slice extractions out of packages/agents/src/store.ts, whose file-size ratchet ceiling may only ever shrink: `store-template-versions.ts` (the version-row cores, executor-threaded so the publish transaction closes the MAX+1 race; store.ts re-exports every public name) and `publish-template.ts` (the transactional publish-and-bind seam the upload import action calls; NOT re-exported by store.ts because that edge would close an import cycle). Both are RELOCATED code, not new subtrees: the split the file-size ratchet prescribes adds exactly one module per slice to every route that already reached store.ts — the four self-MCP-bearing routes, uniformly +2 on top of the #2663 ceiling (whose +1 absorb this record replaces by re-raising; upload-archive.ts stays counted inside these totals). Dynamic import buys nothing (the analyzer follows import() too). Counts measured on the merged tree with the companion extension repos cloned pinned exactly as CI clones them. /sign-in is unaffected (#2639 cut its edge to this closure).",
-      "pr": 2658
+      "from": 1715,
+      "pr": 2680,
+      "reason": "cinatra#2680: the ONE origin resolver (packages/streams/src/origin-policy.ts) is a single new leaf reachable from these four routes, because the modules that used to answer \"is this an origin?\" themselves — the widget token broker, the widget stream auth, the connect-site provisioning validator and the dev-setup shell — now all import it instead of each carrying its own copy. It is +1 on each route and net-negative in real code: four divergent readings collapse into one, and the file is a dependency-free pure module (no crypto, no DB, no server-only), so it adds a node and no subtree. Narrowing considered and rejected: keeping the implementation inside any existing module is impossible without duplication, since the consumers span the neutral packages/streams package (which may not import host code) and four host modules; duplicating it is the exact defect this change removes. Measured as a uniform +1 vs the clean base on exactly these four routes (/sign-in untouched at 218).",
+      "to": 1716
+    },
+    "/api/mcp": {
+      "from": 1700,
+      "pr": 2680,
+      "reason": "cinatra#2680: the ONE origin resolver (packages/streams/src/origin-policy.ts) is a single new leaf reachable from these four routes, because the modules that used to answer \"is this an origin?\" themselves — the widget token broker, the widget stream auth, the connect-site provisioning validator and the dev-setup shell — now all import it instead of each carrying its own copy. It is +1 on each route and net-negative in real code: four divergent readings collapse into one, and the file is a dependency-free pure module (no crypto, no DB, no server-only), so it adds a node and no subtree. Narrowing considered and rejected: keeping the implementation inside any existing module is impossible without duplication, since the consumers span the neutral packages/streams package (which may not import host code) and four host modules; duplicating it is the exact defect this change removes. Measured as a uniform +1 vs the clean base on exactly these four routes (/sign-in untouched at 218).",
+      "to": 1701
+    },
+    "/chat": {
+      "from": 1772,
+      "pr": 2680,
+      "reason": "cinatra#2680: the ONE origin resolver (packages/streams/src/origin-policy.ts) is a single new leaf reachable from these four routes, because the modules that used to answer \"is this an origin?\" themselves — the widget token broker, the widget stream auth, the connect-site provisioning validator and the dev-setup shell — now all import it instead of each carrying its own copy. It is +1 on each route and net-negative in real code: four divergent readings collapse into one, and the file is a dependency-free pure module (no crypto, no DB, no server-only), so it adds a node and no subtree. Narrowing considered and rejected: keeping the implementation inside any existing module is impossible without duplication, since the consumers span the neutral packages/streams package (which may not import host code) and four host modules; duplicating it is the exact defect this change removes. Measured as a uniform +1 vs the clean base on exactly these four routes (/sign-in untouched at 218).",
+      "to": 1773
     }
   }
 }
