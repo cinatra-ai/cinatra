@@ -364,6 +364,7 @@
     { "alias": "@cinatra-ai/webhooks/schema", "target": "./packages/webhooks/src/schema.ts" },
     { "alias": "@cinatra-ai/streams", "target": "./packages/streams/src/index.ts" },
     { "alias": "@cinatra-ai/streams/event-log", "target": "./packages/streams/src/event-log.ts" },
+    { "alias": "@cinatra-ai/streams/origin-policy", "target": "./packages/streams/src/origin-policy.ts" },
     { "alias": "@cinatra-ai/streams/sse", "target": "./packages/streams/src/sse.ts" },
     { "alias": "@cinatra-ai/streams/token-broker", "target": "./packages/streams/src/token-broker.ts" },
     { "alias": "@cinatra-ai/errors", "target": "./packages/errors/src/index.ts" },

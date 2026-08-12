@@ -1,7 +1,8 @@
 import "server-only";
 
+import { isConcreteOrigin, normalizeConcreteOrigin } from "@cinatra-ai/streams/origin-policy";
+
 import { readConnectorConfigFromDatabase } from "@/lib/database";
-import { normalizeOriginStrict } from "@/lib/widget-token-broker";
 import { resolveAssistantWidgetBinding } from "@/lib/assistant-widget-handles";
 
 // ---------------------------------------------------------------------------
@@ -28,6 +29,23 @@ import { resolveAssistantWidgetBinding } from "@/lib/assistant-widget-handles";
 
 /** The CSP `frame-ancestors` value for a page that must NOT be framed anywhere. */
 export const FRAME_ANCESTORS_NONE = "'none'" as const;
+
+// THE ONE ORIGIN RESOLVER, AND A SEAL AT THE POLICY BOUNDARY.
+//
+// A stored `siteUrl` is operator-supplied data that ends up INSIDE a browser
+// policy, so it is judged by the shared resolver
+// (`@cinatra-ai/streams/origin-policy`) rather than by "the URL parser did not
+// throw" — the parser accepts a host that is a shape rather than a place, and
+// such a value reads as a WILDCARD once it is interpolated into
+// `frame-ancestors`. The resolver refuses it, and `sealPolicyOrigin` re-asserts
+// the same verdict on the way out, at the last point before the value becomes
+// a directive. The second reading is deliberate: this is the boundary where a
+// wrong answer stops being a bad string and becomes a widened wall, and the
+// seal costs one function call to make that impossible by construction rather
+// than by trusting an upstream caller to have been careful.
+function sealPolicyOrigin(origin: string): string | null {
+  return isConcreteOrigin(origin) ? origin : null;
+}
 
 type StoredInstanceRow = { id?: unknown; siteUrl?: unknown };
 
@@ -63,10 +81,11 @@ export function resolveInstanceFrameAncestor(input: {
     if (matches.length !== 1) return null;
 
     const siteUrl = typeof matches[0].siteUrl === "string" ? matches[0].siteUrl : "";
-    // normalizeOriginStrict returns "" for a missing / non-http(s) /
-    // non-normalizable siteUrl.
-    const origin = normalizeOriginStrict(siteUrl);
-    return origin || null;
+    // The shared resolver returns "" for a missing / non-http(s) /
+    // wildcard-shaped / otherwise non-concrete siteUrl; the seal re-asserts the
+    // same verdict at the boundary that produces a policy value.
+    const origin = normalizeConcreteOrigin(siteUrl);
+    return origin ? sealPolicyOrigin(origin) : null;
   } catch {
     // Any thrown DB/read/normalize exception → treat as unresolved (→ 'none').
     return null;

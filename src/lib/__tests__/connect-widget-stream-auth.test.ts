@@ -39,6 +39,7 @@ import {
   validateWidgetStreamToken,
   validateConnectServerCredential,
   resolveWidgetStreamOrigin,
+  originMatchesSiteUrl,
 } from "@/lib/widget-stream-auth";
 
 const AUTH = {
@@ -310,5 +311,59 @@ describe("resolveWidgetStreamOrigin allowlist union", () => {
     resolveWidgetStreamOrigin("https://shop.example.com", AUTH);
     // The union query was scoped by the agent's client (instancesConfigKey).
     expect(connectStore.listActiveConnectSiteOrigins).toHaveBeenCalledWith("wordpress");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The stored-siteUrl reading, held to the SAME standard as the framing wall.
+//
+// `normalizeStoredSiteUrl` stays deliberately lenient about SPELLING — an
+// operator types a site into a settings field, so a bare host, a trailing
+// slash or a path are all accepted — but leniency about spelling is not
+// leniency about WHAT a host may be. A row whose host is a shape rather than a
+// place must match nothing here, or the broker would call a registration
+// configured while `/embed/assistant` reads the same row as unresolvable.
+// ---------------------------------------------------------------------------
+describe("originMatchesSiteUrl — one origin reading across the surfaces", () => {
+  it("still matches the operator-friendly spellings it always did", () => {
+    expect(originMatchesSiteUrl("https://shop.example.com", "shop.example.com")).toBe(true);
+    expect(originMatchesSiteUrl("https://shop.example.com", "https://shop.example.com/")).toBe(
+      true,
+    );
+    expect(originMatchesSiteUrl("https://shop.example.com", "https://SHOP.example.com")).toBe(
+      true,
+    );
+    expect(originMatchesSiteUrl("https://shop.example.com:8443", "shop.example.com:8443")).toBe(
+      true,
+    );
+  });
+
+  it("matches nothing for a stored host that is a shape, not a place", () => {
+    for (const stored of [
+      "https://*",
+      "https://*.example.com",
+      "https://%2A.example.com",
+      "*",
+      "https://.example.com",
+    ]) {
+      expect(originMatchesSiteUrl("https://shop.example.com", stored)).toBe(false);
+      // Not even against itself — the row is simply not a site.
+      expect(originMatchesSiteUrl(stored, stored)).toBe(false);
+    }
+  });
+
+  it("does not over-refuse: a star in the stored PATH still names the site", () => {
+    expect(
+      originMatchesSiteUrl("https://shop.example.com", "https://shop.example.com/?filter=*"),
+    ).toBe(true);
+  });
+
+  it("keeps the DNS root dot a distinct site, matched exactly", () => {
+    expect(originMatchesSiteUrl("https://shop.example.com.", "https://shop.example.com.")).toBe(
+      true,
+    );
+    expect(originMatchesSiteUrl("https://shop.example.com", "https://shop.example.com.")).toBe(
+      false,
+    );
   });
 });

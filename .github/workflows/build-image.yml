@@ -1261,7 +1261,7 @@ jobs:
       - name: webhooks unit suite (4 files / 138 tests, 0.6s)
         run: cd packages/webhooks && pnpm test
 
-      - name: streams unit suite (3 files / 36 tests, 0.9s)
+      - name: streams unit suite (4 files / 49 tests, 1.0s)
         run: cd packages/streams && pnpm test
 
       - name: extension-types unit suite (2 files / 19 tests, 0.6s)

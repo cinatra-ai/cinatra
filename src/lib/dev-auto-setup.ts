@@ -46,6 +46,7 @@ import type {
   ExtensionDevSetupStatus,
 } from "@cinatra-ai/sdk-extensions";
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy";
+import { normalizeConcreteOrigin } from "@cinatra-ai/streams/origin-policy";
 import { resolveCapabilityProviders } from "@/lib/extension-capabilities-registry";
 import { setDevActorForExternalMcp } from "@/lib/external-mcp-registry";
 import { GENERATED_DEV_SETUP_MODULES } from "@/lib/generated/extensions.server";
@@ -862,15 +863,16 @@ function mintDevConnectCredential(
   }
 }
 
-/** `scheme://host[:port]` only (no path/query/hash); "" if invalid. */
+/**
+ * `scheme://host[:port]` only (no path/query/hash); "" if invalid.
+ *
+ * The THIRD copy of this reading, kept local only so this dev shell stays
+ * import-light. It is now the shared resolver too — a dev-seeded origin is held
+ * to the same standard as a registered one, so dev cannot mint a site shape
+ * that production would refuse.
+ */
 function normalizeOriginStrictLocal(value: string): string {
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
-    return url.origin && url.origin !== "null" ? url.origin : "";
-  } catch {
-    return "";
-  }
+  return normalizeConcreteOrigin(value);
 }
 
 // ---------------------------------------------------------------------------

@@ -2,6 +2,8 @@ import "server-only";
 import { Buffer } from "node:buffer";
 import { createHash, timingSafeEqual } from "node:crypto";
 
+import { normalizeConcreteOrigin } from "@cinatra-ai/streams/origin-policy";
+
 import type { GeneratedWidgetStreamAuth } from "@/lib/generated/extensions.server";
 import {
   readConnectorConfigFromDatabase,
@@ -74,6 +76,13 @@ function normalizeStoredSiteUrl(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return "";
   const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  // ONE origin resolver decides whether the stored value names a place at all.
+  // The leniency ABOVE (a bare host, a trailing slash, a path) is deliberate —
+  // it is how an operator types a site into a settings field — but a host that
+  // is a SHAPE is not a lenient spelling of anything, and a row carrying one
+  // must not count as a configured instance here while the framing wall reads
+  // the same row as unresolvable. Returning "" makes the row match nothing.
+  if (!normalizeConcreteOrigin(withProtocol)) return "";
   try {
     const url = new URL(withProtocol);
     url.pathname = url.pathname.replace(/\/+$/, "");

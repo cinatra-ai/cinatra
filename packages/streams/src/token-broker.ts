@@ -1,6 +1,8 @@
 import { createHash, hkdfSync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
 
+import { normalizeConcreteOrigin } from "./origin-policy";
+
 // ---------------------------------------------------------------------------
 // Neutral short-lived opaque token broker (cinatra#344).
 //
@@ -23,19 +25,16 @@ import { Buffer } from "node:buffer";
 // reuse the same mechanics with its own storage and config.
 // ---------------------------------------------------------------------------
 
-/** `scheme://host[:port]` only — no path/query/hash. Returns "" if invalid. */
+/**
+ * `scheme://host[:port]` only — no path/query/hash. Returns "" if invalid.
+ *
+ * A thin alias over the ONE origin resolver (`./origin-policy`). It used to
+ * carry its own `new URL()` reading, which meant "the parser accepted it" was
+ * the whole standard — and the parser accepts a host that is a shape rather
+ * than a place. The resolver owns that judgement now, for every caller at once.
+ */
 export function normalizeOriginStrict(value: unknown): string {
-  const trimmed = String(value ?? "").trim();
-  if (!trimmed) return "";
-  try {
-    const url = new URL(trimmed);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return "";
-    // url.origin is already `scheme://host[:port]` with no path/query/hash.
-    if (!url.origin || url.origin === "null") return "";
-    return url.origin;
-  } catch {
-    return "";
-  }
+  return normalizeConcreteOrigin(value);
 }
 
 /** SHA-256 hex of a HIGH-ENTROPY value (token / lookup key). Not a password hash. */

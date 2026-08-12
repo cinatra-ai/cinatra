@@ -186,6 +186,24 @@ describe("validateWidgetOrigin", () => {
     expect(validateWidgetOrigin("https://u:p@shop.example.com").ok).toBe(false);
   });
 
+  it("rejects a host that is a shape, not a place — with a message to act on", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    // Every one of these survives `new URL()`; the parser is not a validator.
+    // The shared origin resolver is what refuses them at this door.
+    for (const candidate of [
+      "*",
+      "https://*",
+      "https://*.example.com",
+      "https://%2A.example.com",
+      "https://.example.com",
+      "https://shop.example..com",
+    ]) {
+      const verdict = validateWidgetOrigin(candidate);
+      expect(verdict.ok).toBe(false);
+      if (!verdict.ok) expect(verdict.reason.length).toBeGreaterThan(0);
+    }
+  });
+
   it("rejects http in prod, allows http loopback in dev", () => {
     vi.stubEnv("NODE_ENV", "production");
     expect(validateWidgetOrigin("http://shop.example.com").ok).toBe(false);
