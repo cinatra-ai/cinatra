@@ -28,10 +28,13 @@
 // REQUIRES a disposable registry: set `CINATRA_TEST_VERDACCIO_URL` (plus the
 // optional `CINATRA_TEST_VERDACCIO_TOKEN`). Everything is published under the
 // throwaway `@pf2675` scope under a per-run package name, so the suite cannot
-// touch shared registry state. The CI integration job has postgres + redis and
-// NO registry service, so this file self-skips there; the DB-only sibling
-// (agent-source-publish-claim-race.integration.test.ts) is the part that gates
-// in CI.
+// touch shared registry state. The CI integration job (`agents-integration-db`
+// in .github/workflows/build-image.yml) provisions postgres, redis AND a
+// disposable Verdaccio — cinatra#2675's registry-provisioned lane, the
+// follow-up this file originally deferred (see the strict-mode block below) —
+// so this file runs for real there, in both the blocking gated set and the
+// informational whole-tier pass, alongside the DB-only sibling
+// (agent-source-publish-claim-race.integration.test.ts).
 import { describe, it, expect, afterAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import * as path from "node:path";
@@ -57,8 +60,11 @@ const hasRegistry = registryUrl.length > 0;
 // exactly like a pass. So the skip announces itself by name, and any runner that
 // DOES mean to run this proof sets `CINATRA_TEST_VERDACCIO_REQUIRED=1` to turn a
 // missing prerequisite into a failure instead of a skip. Standing up such a CI
-// lane is a workflow change and belongs in its own PR — this one keeps protected
-// CI paths out — but the handle it needs ships here, with the test that needs it.
+// lane was deliberately deferred to its own PR — a workflow change, kept out of
+// this one so protected CI paths stayed out of it — and now exists:
+// `agents-integration-db` sets both env vars unconditionally (cinatra#2675's
+// registry-provisioned lane), so this block is live for any OTHER runner —
+// local dev, a future CI job — that means to exercise this proof without one.
 //
 // Strict mode covers BOTH prerequisites, not just the registry: a lane that
 // means to run this and quietly loses its DATABASE is the same green no-op as
