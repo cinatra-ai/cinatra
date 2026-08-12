@@ -895,6 +895,15 @@ jobs:
       CINATRA_TEST_DB_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
       SUPABASE_SCHEMA: cinatra
       REDIS_URL: redis://127.0.0.1:6379
+      # cinatra#2675 — the registry half of the AC1 preflight proof (see the
+      # "Start a disposable Verdaccio" step below for the container itself and
+      # why it is not a native `services:` entry above it). REQUIRED=1 turns a
+      # missing prerequisite (this OR the database) into a hard failure instead
+      # of the suite's default loud-but-passing skip — standing up this lane is
+      # the whole point of giving it something to require (PR #2678's recorded
+      # residual).
+      CINATRA_TEST_VERDACCIO_URL: http://127.0.0.1:4873
+      CINATRA_TEST_VERDACCIO_REQUIRED: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -909,6 +918,73 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      # cinatra#2675 AC1 — the one suite that can prove a colliding publish
+      # refuses BEFORE it reaches the registry
+      # (agent-source-publish-claim-preflight.integration.test.ts) self-skips
+      # (loudly) unless CINATRA_TEST_VERDACCIO_URL is set. PR #2678 shipped
+      # that suite and recorded standing up this lane as the owed follow-up
+      # rather than mix a CI-wiring change into a PR that also changes
+      # application code (protected-path hygiene) — this is that follow-up.
+      #
+      # A plain `docker run`, NOT this job's native `services:` block above:
+      # GitHub starts service containers before the job's first STEP (the
+      # checkout above), so a `services:`-declared container cannot bind-mount
+      # a file this repo ships — it is not yet on disk when that mount would
+      # happen. Running the container from a step, after checkout, sidesteps
+      # that entirely; scripts/ci/works-after/verdaccio.sh already uses this
+      # exact shape for the same reason (see its header comment). Nothing is
+      # host- or repo-mounted at /verdaccio/storage, so Docker gives it the
+      # image's declared VOLUME as a fresh ANONYMOUS volume scoped to this one
+      # container — it starts empty every run, and the "Stop the disposable
+      # Verdaccio" cleanup step's `docker rm -v` removes that volume along
+      # with the container, so nothing survives past the end of this job.
+      #
+      # The image ref is SCRAPED from docker-compose.yml's `verdaccio:`
+      # service (mirrors works-after-proof.yml's `svc_image_str`) instead of
+      # being re-pinned here as a second literal: one source of truth for the
+      # digest, so Renovate's docker-compose manager (which already owns that
+      # line, e.g. #2622) keeps this lane's version current for free. A
+      # digest hand-pinned a second time inside a `run:` shell block would sit
+      # outside every automated pin-freshness tool this repo has — Renovate's
+      # compose manager only reads compose files, and Dependabot's
+      # github-actions manager only reads `uses:` refs — so it would go stale
+      # silently instead.
+      #
+      # docker/verdaccio/config.ci.yaml (mounted read-only below) is a
+      # DIFFERENT config from the dev registry's docker/verdaccio/config.yaml:
+      # no uplink, ephemeral container-scoped storage, and open (`$all`)
+      # publish so the suite's static bearer token — never a real
+      # Verdaccio-signed session — is enough to admit a publish. See that
+      # file's header for the full reasoning.
+      - name: Start a disposable Verdaccio (cinatra#2675 AC1 registry-refusal proof)
+        run: |
+          set -euo pipefail
+          VERDACCIO_IMAGE="$(awk '
+            $0 ~ "^  verdaccio:[[:space:]]*$" {found=1; next}
+            found && /^  [a-zA-Z0-9_-]+:[[:space:]]*$/ {exit}
+            found && $1=="image:" {print $2; exit}' "${GITHUB_WORKSPACE}/docker-compose.yml")"
+          [ -n "$VERDACCIO_IMAGE" ] || { echo "::error::could not scrape the verdaccio image from docker-compose.yml"; exit 1; }
+          echo "Starting disposable Verdaccio from ${VERDACCIO_IMAGE}"
+          # Loopback-only publish (127.0.0.1, not every interface): this
+          # registry grants `publish: $all` (see config.ci.yaml), so nothing
+          # else should be able to reach it — hardening-only on a
+          # single-tenant, ephemeral GitHub-hosted runner, but free and
+          # matches scripts/ci/works-after/verdaccio.sh's identical `-p
+          # 127.0.0.1::4873`.
+          docker run -d --name agents-it-verdaccio -p 127.0.0.1:4873:4873 \
+            -v "${GITHUB_WORKSPACE}/docker/verdaccio/config.ci.yaml:/verdaccio/conf/config.yaml:ro" \
+            "$VERDACCIO_IMAGE" >/dev/null
+          for i in $(seq 1 40); do
+            if curl -fsS "${CINATRA_TEST_VERDACCIO_URL}/-/ping" >/dev/null 2>&1; then
+              echo "verdaccio is up at ${CINATRA_TEST_VERDACCIO_URL} (attempt ${i}/40)"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::disposable verdaccio did not answer /-/ping within 120s"
+          docker logs agents-it-verdaccio || true
+          exit 1
 
       - name: Provision Better Auth tables (public schema)
         # FIRST — the store DDL below carries FKs to public."user" /
@@ -1005,6 +1081,15 @@ jobs:
             echo "::warning::Whole-tier packages/agents integration run exited $status. Recorded baseline for this branch (cinatra#2226): 31 files / 277 tests, 0 skipped, 8 files / 44 tests failing — pre-existing test-health debt named in this job's header. COMPARE the summary above against that baseline: a WORSE result (more failing files/tests, a different file, a crash or timeout rather than assertion failures) is a real finding and should be investigated, not assumed pre-existing. This step never fails the job; the gated step above is the blocking signal."
           fi
           exit 0
+
+      # Always — even when a step above failed or the job was cancelled — so a
+      # red run does not leak a running container into the runner's teardown.
+      # The VM is ephemeral and this would cost nothing either way, but a
+      # named container left running is a confusing thing to find in a
+      # "why is docker unhappy" diagnostic on a shared runner image.
+      - name: Stop the disposable Verdaccio
+        if: ${{ always() }}
+        run: docker rm -fv agents-it-verdaccio >/dev/null 2>&1 || true
 
   # Archive-acceptance coverage-completeness gate (cinatra#1943 Decision 1 /
   # the "P1-CI" wiring PR). Wires scripts/audit/archive-acceptance-gate.mjs

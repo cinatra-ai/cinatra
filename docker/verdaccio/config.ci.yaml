@@ -1,0 +1,54 @@
+# CI-ONLY Verdaccio config for cinatra#2675's registry-provisioned integration
+# lane: agent-source-publish-claim-preflight.integration.test.ts, run for real
+# from the `agents-integration-db` job in .github/workflows/build-image.yml.
+# That job starts a container from this file with a plain `docker run` (not the
+# job's native `services:` block) precisely so it CAN mount this file: native
+# service containers are created before the job's first step (checkout), so a
+# repo-sourced config is not yet on disk for them to bind-mount — see the job's
+# "Start a disposable Verdaccio" step for the full note.
+#
+# Deliberately NOT docker/verdaccio/config.yaml — that file backs the shared
+# DEV registry (docker-compose.yml), which this instance must not resemble in
+# the ways that matter for a throwaway, single-job registry:
+#   - NO uplinks. The suite only round-trips packages it just published itself
+#     under the throwaway `@pf2675` scope (see the test file's header), so
+#     there is nothing to proxy — and reaching out to the real npm registry
+#     from a CI runner would be unnecessary egress and a flake source unrelated
+#     to what AC1 proves.
+#   - storage is IN-CONTAINER. Nothing is host- or repo-mounted at
+#     /verdaccio/storage — only THIS file is bind-mounted, read-only, to
+#     /verdaccio/conf/config.yaml. The image declares that path a Docker
+#     VOLUME, so it becomes an ANONYMOUS volume scoped to this one container
+#     (not, as an earlier draft of this comment said, the container's plain
+#     writable layer) — either way, every job run starts from empty, and nothing
+#     survives `docker rm -v` at the end of the job (the workflow's cleanup step
+#     passes `-v` for exactly this reason: it also drops the anonymous volume,
+#     not just the container).
+#   - publish does not require a real registered user. The suite authenticates
+#     with a static bearer token (CINATRA_TEST_VERDACCIO_TOKEN, default
+#     "disposable-registry-token" — see the test file) that this Verdaccio
+#     cannot verify as one of its own signed sessions, so the request resolves
+#     to its anonymous identity. `publish: $all` below is what actually admits
+#     it — the token's role here is "present a header", not "prove identity".
+#   - unpublish stays refused (`nobody`), matching the dev registry's
+#     immutable-on-publish posture even though this suite never calls it.
+storage: /verdaccio/storage
+
+auth:
+  htpasswd:
+    file: /verdaccio/storage/htpasswd
+
+packages:
+  '@*/*':
+    access: $all
+    publish: $all
+    unpublish: nobody
+  '**':
+    access: $all
+    publish: $all
+    unpublish: nobody
+
+log:
+  type: stdout
+  format: pretty
+  level: http
