@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 /**
- * AgentAllCard — the RENDERED primary action (cinatra#2605).
+ * AgentAllCard — the RENDERED primary action (cinatra#2605, cinatra#2679).
  *
  * The defect this pins is a rendering lie: `/agents` offered a Run button for an
- * agent that cannot run (no canonical install row / an uninstalled required
- * dependency). The server derives the verdict; THIS card renders it. So the
+ * agent that cannot run because one of its required dependencies is not
+ * installed. (The sibling case — the agent itself not installed — is no longer
+ * rendered at all: cinatra#2679 removed such rows from the listing rather than
+ * giving them an Install button.) The server derives the verdict; THIS card
+ * renders it. So the
  * assertions here are on the produced markup — the CTA's href and accessible
  * name, the absence of the Run link and of its play glyph — not on the source
  * text that produced them.
@@ -55,27 +58,12 @@ describe("AgentAllCard primary action", () => {
     expect(html).toContain("Run");
   });
 
-  it("a NOT-INSTALLED agent renders the Install CTA instead of Run — no run href, no play glyph", () => {
-    const html = render({
-      ...BASE,
-      unavailable: {
-        reason: "This agent is not installed yet.",
-        ctaLabel: "Install",
-        ctaHref: "/configuration/marketplace/cinatra-ai/blog-draft-writer-agent",
-        ctaAriaLabel: "Install Blog Draft Writer Agent",
-      },
-    });
-    expect(html).toContain('href="/configuration/marketplace/cinatra-ai/blog-draft-writer-agent"');
-    expect(html).toContain('aria-label="Install Blog Draft Writer Agent"');
-    expect(html).toContain('title="This agent is not installed yet."');
-    // The run affordance — and the solid play glyph that reads as "start a
-    // run" — must be gone, not merely relabelled.
-    expect(html).not.toContain("/agents/cinatra-ai/blog-draft-writer-agent/new");
-    expect(html).not.toContain("lucide-play");
-    expect(html).not.toContain("fill-current");
-  });
-
-  it("a MISSING-DEPENDENCY agent renders the requirements CTA and names the reason accessibly", () => {
+  // cinatra#2679 removed the Install variant of this slot at its ONLY producer:
+  // NewAgentPage no longer lists a not-installed agent, so it never builds an
+  // "Install" unavailable model. The rendering invariants that case pinned (the
+  // run affordance and its solid play glyph are GONE, not relabelled) are
+  // asserted here on the one verdict a listed row can still carry.
+  it("a MISSING-DEPENDENCY agent renders the requirements CTA instead of Run — no run href, no play glyph", () => {
     const html = render({
       ...BASE,
       unavailable: {
@@ -87,10 +75,16 @@ describe("AgentAllCard primary action", () => {
           "Blog Draft Writer Agent cannot run — Context Selection Agent not installed. View requirements",
       },
     });
+    expect(html).toContain('href="/configuration/marketplace/cinatra-ai/blog-draft-writer-agent"');
     expect(html).toContain("View requirements");
     expect(html).toContain(
       'aria-label="Blog Draft Writer Agent cannot run — Context Selection Agent not installed. View requirements"',
     );
+    expect(html).toContain(
+      'title="This agent cannot run: Context Selection Agent is not installed."',
+    );
     expect(html).not.toContain("/agents/cinatra-ai/blog-draft-writer-agent/new");
+    expect(html).not.toContain("lucide-play");
+    expect(html).not.toContain("fill-current");
   });
 });

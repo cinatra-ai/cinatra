@@ -51,36 +51,33 @@ function agentDetailHref(packageName: string): string | null {
 }
 
 /**
- * The truthful action for an agent the picker may NOT offer a Run for
- * (cinatra#2605). The picker keeps the card — hiding it would delete the only
- * discovery path for the ~24 bundled opt-in agents — but the primary action
- * stops promising a run that cannot start, and points at what is actually
- * missing:
+ * The truthful action for a LISTED agent the picker may still not offer a Run
+ * for (cinatra#2605, narrowed by cinatra#2679).
  *
- *   • not-installed → "Install", targeting the agent's OWN marketplace listing,
- *     the one detail route that carries install controls for an agent;
- *   • missing required dependency → "View requirements", targeting the same
- *     listing (a DETAILS destination, so the label never promises an install
- *     the target page cannot perform — the missing package may be a connector /
- *     artifact / skill whose detail route is details-only).
+ * Since #2679 an agent the gate can prove is NOT INSTALLED is not listed at all
+ * (owner ruling on PR #2658: "Agents that are not installed yet should not show
+ * up in /agents at all, neither with an Install button"), so /agents no longer
+ * builds an Install CTA — discovery and installation belong to the marketplace
+ * (/configuration/marketplace and the per-agent listing under it), which the
+ * empty state still points at.
  *
- * Returns `null` for a runnable agent (the card renders Run, unchanged).
+ * That leaves exactly ONE unavailable verdict a listed row can carry: a missing
+ * required dependency. The agent itself IS installed; one of its own required
+ * packages is not. The primary action then stops promising a run that cannot
+ * start and points at what is missing — "View requirements", a DETAILS
+ * destination, so the label never promises an install the target page cannot
+ * perform (the missing package may be a connector / artifact / skill whose
+ * detail route is details-only).
+ *
+ * Returns `null` for every other verdict (the card renders Run, unchanged).
  */
 function buildUnavailableAction(
   name: string,
   availability: AgentRunAvailability,
   detailHref: string | null,
 ): AgentRunRowModel["unavailable"] {
-  if (availability.state === "runnable" || availability.state === "archived") return null;
+  if (availability.state !== "missing-required-dependency") return null;
   const marketplaceHref = detailHref ?? "/configuration/marketplace";
-  if (availability.state === "not-installed") {
-    return {
-      reason: "This agent is not installed yet.",
-      ctaLabel: detailHref ? "Install" : "Browse marketplace",
-      ctaHref: marketplaceHref,
-      ctaAriaLabel: `Install ${name}`,
-    };
-  }
   const missing = availability.missing
     .map((m) => m.displayName ?? m.packageName)
     .join(", ");
@@ -94,20 +91,27 @@ function buildUnavailableAction(
 
 export async function NewAgentPage() {
   const allTemplates = await readInstalledAgentTemplates();
-  // RUNTIME-LIFECYCLE + PROVISIONING GATE (cinatra#659, cinatra#2605):
-  // `readInstalledAgentTemplates` filters by the agent-builder `status`
-  // (active|published) only — NOT the canonical `installed_extension` source of
-  // truth. Resolve each LOCAL (non-external) template's run AVAILABILITY against
-  // the live install + required-dependency reality:
-  //   • archived                     → the row DISAPPEARS (unchanged #659);
-  //   • not-installed / missing dep  → the row STAYS but offers no Run — it
-  //     cannot succeed, so the card carries the truthful CTA built below;
-  //   • runnable                     → Run, as before.
+  // RUNTIME-LIFECYCLE + PROVISIONING GATE (cinatra#659, cinatra#2605,
+  // cinatra#2679): `readInstalledAgentTemplates` filters by the agent-builder
+  // `status` (active|published) only — NOT the canonical `installed_extension`
+  // source of truth, which is why boot-seeded catalog templates reached this
+  // page at all. Resolve each LOCAL (non-external) template's run AVAILABILITY
+  // against the live install + required-dependency reality:
+  //   • archived        → the row DISAPPEARS (unchanged #659);
+  //   • not-installed   → the row DISAPPEARS (#2679 — this page lists only what
+  //     is installed; the marketplace, not /agents, is where an agent is found
+  //     and installed);
+  //   • missing dep     → the row STAYS (the agent IS installed) but offers no
+  //     Run — it cannot succeed, so the card carries the truthful CTA built
+  //     above;
+  //   • runnable        → Run, as before.
   // CG-1: a template with NO canonical row that the catalog does not govern —
-  // and a `null` packageName — stays runnable (the bundled/ungoverned floor).
+  // and a `null` packageName — stays runnable (the bundled/ungoverned floor), so
+  // #2679 hides only what the gate can PROVE is uninstalled, never a row it is
+  // merely unsure about.
   // External A2A templates are governed by their own connector lifecycle, not an
   // agent install row, so they bypass this gate. Fail-OPEN on a store outage
-  // (every input reads runnable).
+  // (every input reads runnable) — an outage must not empty the page.
   const { resolveAgentRunAvailabilityMap } = await import("./runtime-install-gate");
   const availability = await resolveAgentRunAvailabilityMap(
     allTemplates
@@ -118,8 +122,11 @@ export async function NewAgentPage() {
     t.sourceType === "external" || t.packageName == null
       ? ({ state: "runnable" } as const)
       : (availability.get(t.packageName) ?? ({ state: "runnable" } as const));
-  const lifecycleVisible = allTemplates.filter((t) => availabilityOf(t).state !== "archived");
-  const visibleTemplates = selectHitlRunVisibleTemplates(lifecycleVisible);
+  const installedVisible = allTemplates.filter((t) => {
+    const state = availabilityOf(t).state;
+    return state !== "archived" && state !== "not-installed";
+  });
+  const visibleTemplates = selectHitlRunVisibleTemplates(installedVisible);
 
   const rows: AgentRunRowModel[] = visibleTemplates.map<AgentRunRowModel>((t) => {
     const ioSkills = (() => {
