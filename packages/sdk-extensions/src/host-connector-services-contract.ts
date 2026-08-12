@@ -200,8 +200,10 @@ export type HostContentEditorDispatchService = {
      * active turn is a trusted `public_site_widget` delegation; the host binding
      * forwards it VERBATIM into `dispatchContentEditorViaA2A` so the carrier
      * `agent_run` is created AS THE END USER against the SERVER-PINNED instance,
-     * with `sourceType:"public_site_widget"` (platform-admin bypass suppressed
-     * downstream). ABSENT on the normal agent path → byte-identical dispatch.
+     * with `sourceType:"public_site_widget"`. That source type is a RECORD of
+     * the carrier class, not a reduction: cinatra#2674 removed the downstream
+     * platform-admin suppression, so the carrier resolves the person's real
+     * standing. ABSENT on the normal agent path → byte-identical dispatch.
      */
     actorOverride?: WidgetActorOverride;
     /**

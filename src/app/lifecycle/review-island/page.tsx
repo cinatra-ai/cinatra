@@ -31,11 +31,27 @@ import "server-only";
 // THE FRAME IS CONTAINMENT, NOT A TRUST BOUNDARY. The embedding card sets
 // `sandbox="allow-scripts allow-same-origin"`, which — with both tokens — does
 // not isolate a same-origin document from its opener. That is deliberate and
-// harmless BECAUSE the authorization is here: a session is required, the ref is
+// harmless BECAUSE the authorization is here: a reader is required, the ref is
 // decoded server-side (it is authenticated-encrypted; a forged one does not
 // decode), and `loadReviewGateSurface` re-runs the reader's run access and reads
 // the pinned set from the frozen gate. The response also declares
 // `frame-ancestors 'self'` (next.config.ts), so a hostile site cannot frame it.
+//
+// TWO WAYS TO BE A READER (cinatra#2674 scope addition, 2026-08-12).
+//
+//   • A SESSION COOKIE — the first-party path, unchanged in every respect.
+//   • AN ISLAND CREDENTIAL (`?ic=`) — for the widget. The island is same-origin
+//     to Cinatra but the PAGE around it is a third-party CMS, and a
+//     SameSite-bound session cookie is simply not sent into that frame. So on a
+//     genuinely cross-site deployment the cookie path paints nothing, however
+//     correct the framing wall is; until this slice, island parity held only on
+//     same-site and subdomain deployments. The credential closes that: it is
+//     short-lived, ref-bound, derived from the WIDGET principal (never from the
+//     parent), and re-checked against the live `cwu_` row at every paint.
+//
+// THE CREDENTIAL AUTHENTICATES; IT AUTHORIZES NOTHING. Both paths converge on
+// the SAME `loadReviewGateSurface` call with a fully-resolved actor, so the
+// reader's run access decides what appears, exactly as it always has.
 //
 // `Cache-Control: no-store` is configured for this path in next.config.ts.
 // The MECHANISM, not this exact route, is verified: a minimal reproduction
@@ -67,6 +83,8 @@ import { resolveVerifiedWidgetFrameOrigin } from "@/lib/embed/frame-ancestors.se
 import { loadReviewGateSurface } from "@/app/artifacts/[id]/review-gate-ports";
 import { pinnedCaptureKey } from "@/lib/artifacts/review-surface-model";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
+import { REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM } from "@/lib/lifecycle/review-island-credential";
+import { resolveIslandCredentialReader } from "@/lib/lifecycle/review-island-serving";
 import { ReviewGateLoading } from "@cinatra-ai/agents/review-gate-states";
 
 import { resolveReviewActorContext } from "@/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/review-actor";
@@ -101,48 +119,74 @@ export default async function ReviewTargetIslandPage({ searchParams }: PageProps
   const rawRef = sp.ref;
   const ref = typeof rawRef === "string" ? rawRef : null;
   const one = (v: string | string[] | undefined) => (typeof v === "string" ? v : null);
+  const rawCredential = sp[REVIEW_ISLAND_CREDENTIAL_QUERY_PARAM];
+  const credential = typeof rawCredential === "string" ? rawCredential : null;
 
   // Is this a VERIFIED widget frame? Resolved server-side from the SAME closed
   // binding the island's `frame-ancestors` wall uses, so the header and this
   // page cannot disagree (cinatra#2577). Nothing here is authorization: it only
-  // decides which SHAPE a denial takes.
+  // decides which SHAPE a denial takes on the COOKIE path below.
   const widgetFrame = resolveVerifiedWidgetFrameOrigin({
     assistant: one(sp.assistant),
     instanceId: one(sp.instanceId),
   });
 
-  // A session is required. First-party, that is the ONE branch that is not an
-  // empty island: an unauthenticated frame lands on sign-in exactly like any
-  // other first-party page, rather than silently rendering blank forever.
-  //
-  // INSIDE A WIDGET IT DRAWS NOTHING INSTEAD (codex round 1, finding 4). The
-  // redirect there would put Cinatra's interactive sign-in form inside chrome a
-  // third-party site controls — the shape of a credential-phishing surface —
-  // and the reader has no way to tell it apart from the real thing. It is also
-  // pointless: the widget reader's own sign-in is the hosted popup flow, not a
-  // form in a nested frame. So on that surface an absent session, an expired or
-  // revoked one, and an unresolvable actor all draw the SAME empty island every
-  // other denial here draws.
-  const session = await getAuthSession();
-  if (!session) {
-    if (widgetFrame) return EMPTY_ISLAND;
-    redirect(await signInRedirectTarget());
-  }
-  const actorCtx = await resolveReviewActorContext();
-  if (!actorCtx) {
-    if (widgetFrame) return EMPTY_ISLAND;
-    redirect(await signInRedirectTarget());
-  }
+  // THE WIDGET PATH FIRST, and it never redirects. A frame on a third-party CMS
+  // has no session to fall back to and must not be sent to a sign-in page it
+  // cannot usefully render inside an embedded card: a credential that does not
+  // resolve draws the empty island, like every other refusal here.
+  let actorCtx: Awaited<ReturnType<typeof resolveReviewActorContext>> = null;
+  let runId: string;
+  let reviewTaskId: string;
+  if (credential) {
+    const reader = await resolveIslandCredentialReader({ credential, ref });
+    if (!reader) return EMPTY_ISLAND;
+    actorCtx = reader.actorCtx;
+    // The GATE COMES FROM THE CREDENTIAL, not from a second decode of the ref.
+    // The two were proven equal inside the resolver; reading the ref again here
+    // would be a place for them to stop being equal.
+    runId = reader.runId;
+    reviewTaskId = reader.reviewTaskId;
+  } else {
+    // THE FIRST-PARTY COOKIE PATH. A session is required, and first-party that
+    // is the ONE branch that is not an empty island: an unauthenticated frame
+    // lands on sign-in exactly like any other first-party page, rather than
+    // silently rendering blank forever.
+    //
+    // INSIDE A WIDGET IT DRAWS NOTHING INSTEAD (cinatra#2577, codex round 1,
+    // finding 4). The redirect there would put Cinatra's interactive sign-in
+    // form inside chrome a third-party site controls — the shape of a
+    // credential-phishing surface — and the reader has no way to tell it apart
+    // from the real thing. It is also pointless: the widget reader's own sign-in
+    // is the frame-owned popup flow (cinatra#2674), not a form in a nested
+    // frame. So on that surface an absent session, an expired or revoked one,
+    // and an unresolvable actor all draw the SAME empty island every other
+    // denial here draws. A widget deployment that IS same-site still reaches
+    // this branch when it sends no `?ic=`, which is why the guard stays even
+    // though the credential path above is the widget's real answer.
+    const session = await getAuthSession();
+    if (!session) {
+      if (widgetFrame) return EMPTY_ISLAND;
+      redirect(await signInRedirectTarget());
+    }
+    actorCtx = await resolveReviewActorContext();
+    if (!actorCtx) {
+      if (widgetFrame) return EMPTY_ISLAND;
+      redirect(await signInRedirectTarget());
+    }
 
-  if (!ref) return EMPTY_ISLAND;
-  // The ref is authenticated-encrypted: a forged or tampered one does not decode,
-  // and a replayed one still has to pass the access checks below.
-  const payload = decodeLifecycleGateRef(ref);
-  if (!payload) return EMPTY_ISLAND;
+    if (!ref) return EMPTY_ISLAND;
+    // The ref is authenticated-encrypted: a forged or tampered one does not
+    // decode, and a replayed one still has to pass the access checks below.
+    const payload = decodeLifecycleGateRef(ref);
+    if (!payload) return EMPTY_ISLAND;
+    runId = payload.runId;
+    reviewTaskId = payload.reviewTaskId;
+  }
 
   const surface = await loadReviewGateSurface({
-    runId: payload.runId,
-    reviewTaskId: payload.reviewTaskId,
+    runId,
+    reviewTaskId,
     actorCtx,
   });
   // `not-authorized` and `blocked` both draw nothing here — see the header.

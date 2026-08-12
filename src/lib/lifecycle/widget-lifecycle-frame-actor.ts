@@ -5,7 +5,8 @@ import "server-only";
 // by cinatra#2577 S8d).
 //
 // This is steps 2 and 3 of S8a's ladder — resolve the reader's LIVE standing in
-// the token's org, then assemble the actor with platform standing floored — and
+// the token's org, then assemble the actor with that standing, the platform
+// tier included since cinatra#2674 (epic #2564 S8e) — and
 // nothing else. Step 1, the `cwu_` consume, lives in `widget-lifecycle-actor.ts`
 // and stays THE ONE DOOR for a presented bearer.
 //
@@ -26,6 +27,11 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import { resolveActorGrantsForUserInOrg } from "@/lib/auth-session";
+// cinatra#2674 (epic #2564 S8e) — the LIVE platform tier. This adds no module
+// to the four route-locked graphs this file was split out to protect:
+// `@/lib/auth-session` above already imports `@/lib/better-auth-db`, so the
+// reader is a named export off a module that is already in reach.
+import { readUserIsPlatformAdmin } from "@/lib/better-auth-db";
 import type { ActorRoleHints } from "@/lib/authz/build-actor-context";
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
 import {
@@ -34,11 +40,19 @@ import {
 } from "@/lib/widget-auth-audit";
 
 /**
- * The platform tier a widget lifecycle actor may ever carry. A named constant,
- * not a literal, so the structural bar can forbid hardcoded role literals on the
- * lifecycle read paths without this deliberate floor tripping it.
+ * The platform tier a widget lifecycle actor carries when the reader is NOT a
+ * platform admin. A named constant, not a literal, so the structural bar can
+ * forbid hardcoded role literals on the lifecycle read paths without this
+ * ordinary default tripping it.
+ *
+ * IT IS NO LONGER A CEILING (cinatra#2674, epic #2564 S8e). It used to be named
+ * for the floor it imposed, and that floor's whole justification was that the
+ * embedding site possessed the widget bearer. The frame-owned sign-in ends that
+ * possession, so a reader who IS a platform admin now carries `platform_admin`
+ * here exactly as they do in the app. The name changed with the meaning, so a
+ * caller cannot keep reading a default as a guarantee.
  */
-export const WIDGET_LIFECYCLE_PLATFORM_ROLE_FLOOR = "member" as const;
+export const WIDGET_LIFECYCLE_DEFAULT_PLATFORM_ROLE = "member" as const;
 
 /** Why a widget lifecycle read was refused. Shared with the token door, which
  *  adds the one reason only a presented bearer can produce. */
@@ -83,6 +97,14 @@ export async function resolveWidgetLifecycleStanding(input: {
   auditRejected?: WidgetAuthAuditEvent;
 }): Promise<WidgetLifecycleFrameActorResult> {
   const grants = await resolveActorGrantsForUserInOrg(input.userId, input.orgId);
+  // The PLATFORM tier, resolved live from the user record alongside the org axes
+  // (cinatra#2674). It is read HERE, in the one shared assembly, so the token
+  // door and the MCP-frame entry cannot carry different tiers for the same
+  // person. `readUserIsPlatformAdmin` is fail-closed on any read error — an
+  // unreadable role is `member`, which can only ever narrow.
+  const platformRole = (await readUserIsPlatformAdmin(input.userId))
+    ? ("platform_admin" as const)
+    : WIDGET_LIFECYCLE_DEFAULT_PLATFORM_ROLE;
   if (!grants.orgRole) {
     emitWidgetAuthAudit(input.auditRejected ?? "widget_lifecycle_read_rejected", {
       actor: input.userId,
@@ -109,6 +131,7 @@ export async function resolveWidgetLifecycleStanding(input: {
       orgId: input.orgId,
       roleHints: buildWidgetLifecycleRoleHints({
         orgId: input.orgId,
+        platformRole,
         orgRole: grants.orgRole,
         teamIds: grants.teamIds,
         teamRoles: grants.teamRoles,
@@ -176,10 +199,11 @@ export async function resolveWidgetLifecycleActorForFrame(input: {
 /**
  * Assemble the role hints from a resolved grant bundle.
  *
- * Mirrors the in-app review actor's hint assembly exactly — the same axes, the
+ * Mirrors the in-app review actor's hint assembly EXACTLY — the same axes, the
  * same "omit an axis the lineage did not resolve rather than forcing an
- * under-grant" rule — with ONE difference, which is the whole security posture
- * of this module: `platformRole` is the floor, never a resolved value.
+ * under-grant" rule, and, since cinatra#2674, the same platform tier. There is
+ * no longer a difference to describe: this is the in-app assembly, driven by a
+ * widget-authenticated principal instead of a cookie-authenticated one.
  *
  * Exported so the parity fixture can drive it directly against the in-app hints
  * for the same bundle: the assertion is about these two assemblies, so the test
@@ -187,13 +211,16 @@ export async function resolveWidgetLifecycleActorForFrame(input: {
  */
 export function buildWidgetLifecycleRoleHints(input: {
   orgId: string;
+  /** The reader's REAL platform tier. Defaults to `member` when a caller cannot
+   *  resolve one — an unresolved tier narrows, it never elevates. */
+  platformRole?: "platform_admin" | "member";
   orgRole?: "org_owner" | "org_admin" | "member";
   teamIds?: string[];
   teamRoles?: Record<string, "team_admin" | "member">;
   projectGrants?: ActorRoleHints["projectGrants"];
 }): ActorRoleHints {
   return {
-    platformRole: WIDGET_LIFECYCLE_PLATFORM_ROLE_FLOOR,
+    platformRole: input.platformRole ?? WIDGET_LIFECYCLE_DEFAULT_PLATFORM_ROLE,
     ...(input.orgRole ? { orgRole: input.orgRole } : {}),
     ...(input.teamRoles ? { teamRoles: input.teamRoles } : {}),
     ...(input.teamIds ? { teamIds: input.teamIds } : {}),

@@ -4,32 +4,35 @@ import {
   EMBED_MESSAGE_TYPES,
   RESIZE_MAX_HEIGHT,
   embedReadySchema,
-  embedBootstrapSchema,
+  embedContextSchema,
   embedResizeSchema,
   embedApplyIntentSchema,
   embedUplinkSchema,
   originMatchesExpected,
   sourceMatchesExpected,
-  evaluateBootstrap,
+  evaluateContext,
   createMonotonicSeqGate,
   createSingleUseGate,
-  selectParentBootstrapTransport,
-  sendBootstrapOverTransport,
-  type EmbedBootstrap,
+  selectParentContextTransport,
+  sendContextOverTransport,
+  containsCredentialShapedValue,
+  isCredentialShapedValue,
+  RETIRED_BOOTSTRAP_MESSAGE_TYPE,
+  RETIRED_CREDENTIAL_PROTOCOL_VERSION,
+  type EmbedContext,
 } from "@/lib/embed/bridge-protocol";
 
 // A well-formed CSPRNG-shaped base64url id (>=22 chars) for the id fields.
 const NONCE = "abcdefghijklmnopqrstuvwxyz012345";
 const CORR = "CORRELATION-id_0123456789ABCDEFG";
 
-function validBootstrap(overrides: Record<string, unknown> = {}) {
+function validContext(overrides: Record<string, unknown> = {}) {
   return {
-    type: EMBED_MESSAGE_TYPES.bootstrap,
+    type: EMBED_MESSAGE_TYPES.context,
     protocolVersion: EMBED_PROTOCOL_VERSION,
     correlationId: CORR,
     nonceEcho: NONCE,
     seq: 0,
-    auth: { citToken: "cit_site_transport_token", cwuToken: "cwu_per_user_token" },
     session: { threadId: "thread-1", assistant: "wordpress" },
     cms: { instanceId: "inst-1" },
     ...overrides,
@@ -40,7 +43,7 @@ describe("bridge-protocol READY (§3a)", () => {
   it("accepts a well-formed READY with no correlationId", () => {
     const r = embedReadySchema.safeParse({
       type: EMBED_MESSAGE_TYPES.ready,
-      protocolVersion: 1,
+      protocolVersion: EMBED_PROTOCOL_VERSION,
       nonce: NONCE,
       seq: 0,
     });
@@ -50,7 +53,7 @@ describe("bridge-protocol READY (§3a)", () => {
   it("B13: rejects a READY carrying a correlationId (unknown key, strict)", () => {
     const r = embedReadySchema.safeParse({
       type: EMBED_MESSAGE_TYPES.ready,
-      protocolVersion: 1,
+      protocolVersion: EMBED_PROTOCOL_VERSION,
       nonce: NONCE,
       seq: 0,
       correlationId: CORR,
@@ -61,7 +64,7 @@ describe("bridge-protocol READY (§3a)", () => {
   it("rejects a too-short (low-entropy) nonce", () => {
     const r = embedReadySchema.safeParse({
       type: EMBED_MESSAGE_TYPES.ready,
-      protocolVersion: 1,
+      protocolVersion: EMBED_PROTOCOL_VERSION,
       nonce: "short",
       seq: 0,
     });
@@ -69,59 +72,47 @@ describe("bridge-protocol READY (§3a)", () => {
   });
 });
 
-describe("bridge-protocol BOOTSTRAP schema (§4 / B2)", () => {
-  it("accepts a well-formed bootstrap", () => {
-    expect(embedBootstrapSchema.safeParse(validBootstrap()).success).toBe(true);
+describe("bridge-protocol CONTEXT schema (§4 / B2)", () => {
+  it("accepts a well-formed context message", () => {
+    expect(embedContextSchema.safeParse(validContext()).success).toBe(true);
+  });
+
+  it("accepts the optional public site selector", () => {
+    const ok = validContext({ site: { siteId: "site-public-handle" } });
+    expect(embedContextSchema.safeParse(ok).success).toBe(true);
   });
 
   it("B2: rejects an unknown top-level key (strict)", () => {
-    expect(embedBootstrapSchema.safeParse(validBootstrap({ extra: 1 })).success).toBe(false);
-  });
-
-  it("B2: rejects an unknown nested key under auth (strict)", () => {
-    const bad = validBootstrap({
-      auth: { citToken: "cit_x", cwuToken: "cwu_y", leaked: "z" },
-    });
-    expect(embedBootstrapSchema.safeParse(bad).success).toBe(false);
+    expect(embedContextSchema.safeParse(validContext({ extra: 1 })).success).toBe(false);
   });
 
   it("B2: rejects a wrong protocolVersion", () => {
-    expect(embedBootstrapSchema.safeParse(validBootstrap({ protocolVersion: 2 })).success).toBe(false);
-  });
-
-  it("B2: rejects a missing/ wrong-prefix cit_ token", () => {
-    const bad = validBootstrap({ auth: { citToken: "nope_x", cwuToken: "cwu_y" } });
-    expect(embedBootstrapSchema.safeParse(bad).success).toBe(false);
-  });
-
-  it("B2: rejects a wrong-prefix cwu_ token", () => {
-    const bad = validBootstrap({ auth: { citToken: "cit_x", cwuToken: "nope_y" } });
-    expect(embedBootstrapSchema.safeParse(bad).success).toBe(false);
+    expect(embedContextSchema.safeParse(validContext({ protocolVersion: 99 })).success).toBe(false);
   });
 
   it("B5: rejects an assistant outside the closed enum", () => {
-    const bad = validBootstrap({ session: { threadId: "t", assistant: "shopify" } });
-    expect(embedBootstrapSchema.safeParse(bad).success).toBe(false);
+    const bad = validContext({ session: { threadId: "t", assistant: "shopify" } });
+    expect(embedContextSchema.safeParse(bad).success).toBe(false);
   });
 
   it("§6g: rejects a non-http(s) cms.href", () => {
-    const bad = validBootstrap({ cms: { instanceId: "inst-1", href: "javascript:alert(1)" } });
-    expect(embedBootstrapSchema.safeParse(bad).success).toBe(false);
+    const bad = validContext({ cms: { instanceId: "inst-1", href: "javascript:alert(1)" } });
+    expect(embedContextSchema.safeParse(bad).success).toBe(false);
   });
 
   it("§6g: accepts an https cms.href", () => {
-    const ok = validBootstrap({ cms: { instanceId: "inst-1", href: "https://site.example/post/1" } });
-    expect(embedBootstrapSchema.safeParse(ok).success).toBe(true);
+    const ok = validContext({ cms: { instanceId: "inst-1", href: "https://site.example/post/1" } });
+    expect(embedContextSchema.safeParse(ok).success).toBe(true);
   });
 });
 
 describe("bridge-protocol prototype-key guard (§6d)", () => {
   // JSON.parse produces an OWN `__proto__` data property that zod .strict()
   // silently strips; the proto guard must FAIL CLOSED on it, at any depth.
-  it("B2: rejects a top-level own __proto__ key on bootstrap", () => {
-    const raw = JSON.parse(`{"type":"${EMBED_MESSAGE_TYPES.bootstrap}","protocolVersion":1,"correlationId":"${CORR}","nonceEcho":"${NONCE}","seq":0,"auth":{"citToken":"cit_x","cwuToken":"cwu_y"},"session":{"threadId":"t","assistant":"wordpress"},"cms":{"instanceId":"inst-1"},"__proto__":{"polluted":true}}`);
-    expect(embedBootstrapSchema.safeParse(raw).success).toBe(false);
-    const d = evaluateBootstrap({
+  it("B2: rejects a top-level own __proto__ key on the context message", () => {
+    const raw = JSON.parse(`{"type":"${EMBED_MESSAGE_TYPES.context}","protocolVersion":${EMBED_PROTOCOL_VERSION},"correlationId":"${CORR}","nonceEcho":"${NONCE}","seq":0,"session":{"threadId":"t","assistant":"wordpress"},"cms":{"instanceId":"inst-1"},"__proto__":{"polluted":true}}`);
+    expect(embedContextSchema.safeParse(raw).success).toBe(false);
+    const d = evaluateContext({
       raw,
       frameNonce: NONCE,
       expectedAssistant: "wordpress",
@@ -130,15 +121,15 @@ describe("bridge-protocol prototype-key guard (§6d)", () => {
     expect(d).toEqual({ ok: false, reason: "schema" });
   });
 
-  it("B2: rejects a NESTED own __proto__ key under auth", () => {
-    const raw = JSON.parse(`{"type":"${EMBED_MESSAGE_TYPES.bootstrap}","protocolVersion":1,"correlationId":"${CORR}","nonceEcho":"${NONCE}","seq":0,"auth":{"citToken":"cit_x","cwuToken":"cwu_y","__proto__":{"x":1}},"session":{"threadId":"t","assistant":"wordpress"},"cms":{"instanceId":"inst-1"}}`);
-    expect(embedBootstrapSchema.safeParse(raw).success).toBe(false);
+  it("B2: rejects a NESTED own __proto__ key under cms", () => {
+    const raw = JSON.parse(`{"type":"${EMBED_MESSAGE_TYPES.context}","protocolVersion":${EMBED_PROTOCOL_VERSION},"correlationId":"${CORR}","nonceEcho":"${NONCE}","seq":0,"session":{"threadId":"t","assistant":"wordpress"},"cms":{"instanceId":"inst-1","__proto__":{"x":1}}}`);
+    expect(embedContextSchema.safeParse(raw).success).toBe(false);
   });
 
   it("B13: rejects a __proto__ key on READY and on an uplink", () => {
-    const ready = JSON.parse(`{"type":"${EMBED_MESSAGE_TYPES.ready}","protocolVersion":1,"nonce":"${NONCE}","seq":0,"__proto__":{"x":1}}`);
+    const ready = JSON.parse(`{"type":"${EMBED_MESSAGE_TYPES.ready}","protocolVersion":${EMBED_PROTOCOL_VERSION},"nonce":"${NONCE}","seq":0,"__proto__":{"x":1}}`);
     expect(embedReadySchema.safeParse(ready).success).toBe(false);
-    const uplink = JSON.parse(`{"type":"${EMBED_MESSAGE_TYPES.resize}","protocolVersion":1,"correlationId":"${CORR}","seq":1,"height":100,"__proto__":{"x":1}}`);
+    const uplink = JSON.parse(`{"type":"${EMBED_MESSAGE_TYPES.resize}","protocolVersion":${EMBED_PROTOCOL_VERSION},"correlationId":"${CORR}","seq":1,"height":100,"__proto__":{"x":1}}`);
     expect(embedUplinkSchema.safeParse(uplink).success).toBe(false);
   });
 });
@@ -169,42 +160,42 @@ describe("bridge-protocol origin + source-window binding (§6a / §6a-2 / B1 / B
   });
 });
 
-describe("bridge-protocol evaluateBootstrap (§4 ordered fail-closed / B3 / B5)", () => {
+describe("bridge-protocol evaluateContext (§4 ordered fail-closed / B3 / B5)", () => {
   const base = {
     frameNonce: NONCE,
     expectedAssistant: "wordpress" as const,
     expectedInstanceId: "inst-1",
   };
 
-  it("accepts a fully-agreeing bootstrap", () => {
-    const d = evaluateBootstrap({ raw: validBootstrap(), ...base });
+  it("accepts a fully-agreeing context message", () => {
+    const d = evaluateContext({ raw: validContext(), ...base });
     expect(d.ok).toBe(true);
   });
 
   it("B2: schema failure yields reason 'schema'", () => {
-    const d = evaluateBootstrap({ raw: { type: "wrong" }, ...base });
+    const d = evaluateContext({ raw: { type: "wrong" }, ...base });
     expect(d).toEqual({ ok: false, reason: "schema" });
   });
 
   it("B3: a nonceEcho that does not match the frame nonce is rejected", () => {
-    const d = evaluateBootstrap({
-      raw: validBootstrap({ nonceEcho: "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ" }),
+    const d = evaluateContext({
+      raw: validContext({ nonceEcho: "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ" }),
       ...base,
     });
     expect(d).toEqual({ ok: false, reason: "nonce_mismatch" });
   });
 
   it("B5: session.assistant != ?assistant is rejected", () => {
-    const d = evaluateBootstrap({
-      raw: validBootstrap({ session: { threadId: "t", assistant: "drupal" } }),
+    const d = evaluateContext({
+      raw: validContext({ session: { threadId: "t", assistant: "drupal" } }),
       ...base,
     });
     expect(d).toEqual({ ok: false, reason: "assistant_mismatch" });
   });
 
   it("B5: cms.instanceId != ?instanceId is rejected", () => {
-    const d = evaluateBootstrap({
-      raw: validBootstrap({ cms: { instanceId: "other-inst" } }),
+    const d = evaluateContext({
+      raw: validContext({ cms: { instanceId: "other-inst" } }),
       ...base,
     });
     expect(d).toEqual({ ok: false, reason: "instance_mismatch" });
@@ -229,7 +220,7 @@ describe("bridge-protocol replay + sequence gates (§6c / B3)", () => {
     expect(down.accept(1)).toBe(true);
   });
 
-  it("B3: a second bootstrap on a burned nonce is ignored", () => {
+  it("B3: a second context message on a burned nonce is ignored", () => {
     const gate = createSingleUseGate();
     expect(gate.consume()).toBe(true);
     expect(gate.consume()).toBe(false);
@@ -238,7 +229,7 @@ describe("bridge-protocol replay + sequence gates (§6c / B3)", () => {
 });
 
 describe("bridge-protocol uplinks (§5 / B9)", () => {
-  const up = { protocolVersion: 1, correlationId: CORR, seq: 1 };
+  const up = { protocolVersion: EMBED_PROTOCOL_VERSION, correlationId: CORR, seq: 1 };
 
   it("B9: rejects a negative height", () => {
     const r = embedResizeSchema.safeParse({ type: EMBED_MESSAGE_TYPES.resize, ...up, height: -1 });
@@ -298,8 +289,8 @@ describe("bridge-protocol uplinks (§5 / B9)", () => {
     expect(r.success).toBe(false);
   });
 
-  it("B6/B13: the uplink union rejects a bootstrap-shaped message (closed allowlist)", () => {
-    const r = embedUplinkSchema.safeParse(validBootstrap());
+  it("B6/B13: the uplink union rejects a context-shaped message (closed allowlist)", () => {
+    const r = embedUplinkSchema.safeParse(validContext());
     expect(r.success).toBe(false);
   });
 
@@ -311,14 +302,14 @@ describe("bridge-protocol uplinks (§5 / B9)", () => {
 
 // ---------------------------------------------------------------------------
 // §12b — PORT-BOUND TRANSPORT (issue #1965). The PARENT-side transport primitives
-// the two CMS widgets mirror. The load-bearing acceptance regression: in PORT
-// mode a token-bearing message is NEVER sent via a window-targeted postMessage —
-// the bootstrap rides ONLY the entangled port the pre-navigation realm
-// established; and the READY handshake is TOKEN-FREE.
+// the two CMS widgets mirror. At protocol 2 (cinatra#2674) NO message on this
+// bridge carries a credential in either direction, so these cases assert the
+// channel binding itself: in PORT mode the message rides ONLY the entangled port
+// the pre-navigation realm established, and the whole handshake is credential-free.
 // ---------------------------------------------------------------------------
-describe("bridge-protocol §12b READY handshake is token-free", () => {
+describe("bridge-protocol §12b READY handshake is credential-free", () => {
   it("a well-formed READY parses and carries NO cit_/cwu_ token", () => {
-    const ready = { type: EMBED_MESSAGE_TYPES.ready, protocolVersion: 1, nonce: NONCE, seq: 0 };
+    const ready = { type: EMBED_MESSAGE_TYPES.ready, protocolVersion: EMBED_PROTOCOL_VERSION, nonce: NONCE, seq: 0 };
     expect(embedReadySchema.safeParse(ready).success).toBe(true);
     const serialized = JSON.stringify(ready);
     expect(serialized).not.toContain("cit_");
@@ -328,7 +319,7 @@ describe("bridge-protocol §12b READY handshake is token-free", () => {
   it("a token-bearing field on READY is rejected (strict) — READY can never carry auth", () => {
     const bad = {
       type: EMBED_MESSAGE_TYPES.ready,
-      protocolVersion: 1,
+      protocolVersion: EMBED_PROTOCOL_VERSION,
       nonce: NONCE,
       seq: 0,
       auth: { citToken: "cit_x", cwuToken: "cwu_y" },
@@ -337,16 +328,16 @@ describe("bridge-protocol §12b READY handshake is token-free", () => {
   });
 });
 
-describe("bridge-protocol §12b selectParentBootstrapTransport (downgrade-resistant)", () => {
+describe("bridge-protocol §12b selectParentContextTransport (downgrade-resistant)", () => {
   const PARENT = "https://cms.example.com";
-  const legacyWindow = { postMessage: vi.fn() };
+  const fallbackWindow = { postMessage: vi.fn() };
 
   it("selects PORT mode when the iframe transferred a port", () => {
     const port = { postMessage: vi.fn() };
-    const d = selectParentBootstrapTransport({
+    const d = selectParentContextTransport({
       transferredPorts: [port],
-      legacyWindow,
-      legacyTargetOrigin: PARENT,
+      fallbackWindow,
+      fallbackTargetOrigin: PARENT,
       requirePort: false,
     });
     expect(d.ok).toBe(true);
@@ -354,10 +345,10 @@ describe("bridge-protocol §12b selectParentBootstrapTransport (downgrade-resist
   });
 
   it("FAILS CLOSED (no_port_available) with no port under requirePort — no downgrade by stripping the port", () => {
-    const d = selectParentBootstrapTransport({
+    const d = selectParentContextTransport({
       transferredPorts: [],
-      legacyWindow,
-      legacyTargetOrigin: PARENT,
+      fallbackWindow,
+      fallbackTargetOrigin: PARENT,
       requirePort: true,
     });
     expect(d).toEqual({ ok: false, reason: "no_port_available" });
@@ -365,122 +356,288 @@ describe("bridge-protocol §12b selectParentBootstrapTransport (downgrade-resist
 
   it("null/undefined ports also fail closed under requirePort", () => {
     for (const ports of [null, undefined]) {
-      const d = selectParentBootstrapTransport({
+      const d = selectParentContextTransport({
         transferredPorts: ports,
-        legacyWindow,
-        legacyTargetOrigin: PARENT,
+        fallbackWindow,
+        fallbackTargetOrigin: PARENT,
         requirePort: true,
       });
       expect(d).toEqual({ ok: false, reason: "no_port_available" });
     }
   });
 
-  it("falls back to LEGACY window mode with no port only when legacy is allowed", () => {
-    const d = selectParentBootstrapTransport({
+  it("falls back to WINDOW mode with no port only when the window path is allowed", () => {
+    const d = selectParentContextTransport({
       transferredPorts: [],
-      legacyWindow,
-      legacyTargetOrigin: PARENT,
+      fallbackWindow,
+      fallbackTargetOrigin: PARENT,
       requirePort: false,
     });
     expect(d.ok).toBe(true);
-    expect(d.ok && d.transport.mode).toBe("legacy");
+    expect(d.ok && d.transport.mode).toBe("window");
   });
 });
 
-describe("bridge-protocol §12b sendBootstrapOverTransport — no token-bearing postMessage in port mode", () => {
+describe("bridge-protocol §12b sendContextOverTransport — no token-bearing postMessage in port mode", () => {
   const PARENT = "https://cms.example.com";
-  const bootstrap = validBootstrap() as unknown as EmbedBootstrap;
+  const context = validContext() as unknown as EmbedContext;
 
-  it("REGRESSION: in PORT mode the token-bearing bootstrap rides ONLY the port — window.postMessage is never called", () => {
+  it("REGRESSION: in PORT mode the context message rides ONLY the port — window.postMessage is never called", () => {
     const port = { postMessage: vi.fn() };
-    const legacyWindow = { postMessage: vi.fn() };
-    const decision = selectParentBootstrapTransport({
+    const fallbackWindow = { postMessage: vi.fn() };
+    const decision = selectParentContextTransport({
       transferredPorts: [port],
-      legacyWindow,
-      legacyTargetOrigin: PARENT,
+      fallbackWindow,
+      fallbackTargetOrigin: PARENT,
       requirePort: true, // strictest: both peers require the port
     });
     expect(decision.ok).toBe(true);
     if (!decision.ok) return;
-    sendBootstrapOverTransport(decision.transport, bootstrap);
-    // the tokens went over the port …
+    sendContextOverTransport(decision.transport, context);
+    // the message went over the port …
     expect(port.postMessage).toHaveBeenCalledTimes(1);
-    expect(port.postMessage).toHaveBeenCalledWith(bootstrap);
+    expect(port.postMessage).toHaveBeenCalledWith(context);
     // … and NEVER via a window-targeted postMessage.
-    expect(legacyWindow.postMessage).not.toHaveBeenCalled();
-    const windowSerialized = JSON.stringify(legacyWindow.postMessage.mock.calls);
+    expect(fallbackWindow.postMessage).not.toHaveBeenCalled();
+    const windowSerialized = JSON.stringify(fallbackWindow.postMessage.mock.calls);
     expect(windowSerialized).not.toContain("cit_");
     expect(windowSerialized).not.toContain("cwu_");
   });
 
-  it("in LEGACY mode posts to the origin-pinned window, never '*'", () => {
-    const legacyWindow = { postMessage: vi.fn() };
-    const decision = selectParentBootstrapTransport({
+  it("in WINDOW mode posts to the origin-pinned window, never '*'", () => {
+    const fallbackWindow = { postMessage: vi.fn() };
+    const decision = selectParentContextTransport({
       transferredPorts: [],
-      legacyWindow,
-      legacyTargetOrigin: PARENT,
+      fallbackWindow,
+      fallbackTargetOrigin: PARENT,
       requirePort: false,
     });
     expect(decision.ok).toBe(true);
     if (!decision.ok) return;
-    sendBootstrapOverTransport(decision.transport, bootstrap);
-    expect(legacyWindow.postMessage).toHaveBeenCalledWith(bootstrap, PARENT);
+    sendContextOverTransport(decision.transport, context);
+    expect(fallbackWindow.postMessage).toHaveBeenCalledWith(context, PARENT);
   });
 
-  it("LEGACY mode FAILS CLOSED on a wildcard/empty target origin — no token broadcast", () => {
-    for (const legacyTargetOrigin of ["*", ""]) {
-      const legacyWindow = { postMessage: vi.fn() };
-      sendBootstrapOverTransport(
-        { mode: "legacy", window: legacyWindow, targetOrigin: legacyTargetOrigin },
-        bootstrap,
+  it("WINDOW mode FAILS CLOSED on a wildcard/empty target origin — nothing is broadcast", () => {
+    for (const fallbackTargetOrigin of ["*", ""]) {
+      const fallbackWindow = { postMessage: vi.fn() };
+      const sent = sendContextOverTransport(
+        { mode: "window", window: fallbackWindow, targetOrigin: fallbackTargetOrigin },
+        context,
       );
-      expect(legacyWindow.postMessage).not.toHaveBeenCalled();
+      expect(sent).toBe(false);
+      expect(fallbackWindow.postMessage).not.toHaveBeenCalled();
     }
   });
 
-  it("downgrade attempt: a no-port READY under requirePort sends NOTHING (fail closed)", () => {
-    const legacyWindow = { postMessage: vi.fn() };
-    const decision = selectParentBootstrapTransport({
+  it("a no-port READY under requirePort sends NOTHING (fail closed)", () => {
+    const fallbackWindow = { postMessage: vi.fn() };
+    const decision = selectParentContextTransport({
       transferredPorts: [],
-      legacyWindow,
-      legacyTargetOrigin: PARENT,
+      fallbackWindow,
+      fallbackTargetOrigin: PARENT,
       requirePort: true,
     });
-    // The caller sends only on ok; a fail-closed decision emits no token traffic.
-    if (decision.ok) sendBootstrapOverTransport(decision.transport, bootstrap);
-    expect(legacyWindow.postMessage).not.toHaveBeenCalled();
+    // The caller sends only on ok; a fail-closed decision emits no traffic.
+    if (decision.ok) sendContextOverTransport(decision.transport, context);
+    expect(fallbackWindow.postMessage).not.toHaveBeenCalled();
   });
 
-  it("single-use binding: a REPLACEMENT no-port READY on a burned nonce cannot re-open a legacy downgrade", () => {
+  it("single-use binding: a REPLACEMENT no-port READY on a burned nonce cannot re-open the window channel", () => {
     // Parent binds the transport to the frame's single-use nonce gate: the first
     // (port) READY consumes it; a later replacement's no-port READY is ignored,
-    // so it can never coax the parent into a legacy token send.
+    // so it can never coax the parent onto the window channel.
     const nonceGate = createSingleUseGate();
     const port = { postMessage: vi.fn() };
-    const legacyWindow = { postMessage: vi.fn() };
+    const fallbackWindow = { postMessage: vi.fn() };
 
     // READY #1 — the genuine iframe transferred a port; parent commits.
     if (nonceGate.consume()) {
-      const d1 = selectParentBootstrapTransport({
+      const d1 = selectParentContextTransport({
         transferredPorts: [port],
-        legacyWindow,
-        legacyTargetOrigin: PARENT,
+        fallbackWindow,
+        fallbackTargetOrigin: PARENT,
         requirePort: false,
       });
-      if (d1.ok) sendBootstrapOverTransport(d1.transport, bootstrap);
+      if (d1.ok) sendContextOverTransport(d1.transport, context);
     }
     // READY #2 — a same-origin replacement, no port; the burned nonce drops it.
     if (nonceGate.consume()) {
-      const d2 = selectParentBootstrapTransport({
+      const d2 = selectParentContextTransport({
         transferredPorts: [],
-        legacyWindow,
-        legacyTargetOrigin: PARENT,
+        fallbackWindow,
+        fallbackTargetOrigin: PARENT,
         requirePort: false,
       });
-      if (d2.ok) sendBootstrapOverTransport(d2.transport, bootstrap);
+      if (d2.ok) sendContextOverTransport(d2.transport, context);
     }
 
     expect(port.postMessage).toHaveBeenCalledTimes(1); // only the genuine send
-    expect(legacyWindow.postMessage).not.toHaveBeenCalled(); // no downgrade send
+    expect(fallbackWindow.postMessage).not.toHaveBeenCalled(); // no window send
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2674 (epic #2564 S8e) — THE CREDENTIAL IS GONE FROM THE BRIDGE.
+//
+// AC-1 of the issue: "Protocol unit tests prove the new parent↔iframe schemas
+// contain no credential field and reject credential-bearing or unknown fields.
+// The breaking protocol version is advanced."
+//
+// Each case below is NEGATIVE-CONTROLLED: the credential-free twin of every
+// rejected message is asserted to PARSE, so a test that passes because the
+// fixture is malformed for some other reason cannot hide here.
+// ---------------------------------------------------------------------------
+describe("cinatra#2674 — the context schema has no credential field", () => {
+  it("the breaking protocol version is advanced past the credential-bearing one", () => {
+    expect(EMBED_PROTOCOL_VERSION).toBeGreaterThan(RETIRED_CREDENTIAL_PROTOCOL_VERSION);
+  });
+
+  it("REJECTS a protocol-1 credential-bearing bootstrap in full; ACCEPTS the v2 twin", () => {
+    const v1 = {
+      type: RETIRED_BOOTSTRAP_MESSAGE_TYPE,
+      protocolVersion: RETIRED_CREDENTIAL_PROTOCOL_VERSION,
+      correlationId: CORR,
+      nonceEcho: NONCE,
+      seq: 0,
+      auth: { citToken: "cit_site_transport", cwuToken: "cwu_per_user" },
+      session: { threadId: "thread-1", assistant: "wordpress" },
+      cms: { instanceId: "inst-1" },
+    };
+    expect(embedContextSchema.safeParse(v1).success).toBe(false);
+    expect(
+      evaluateContext({
+        raw: v1,
+        frameNonce: NONCE,
+        expectedAssistant: "wordpress",
+        expectedInstanceId: "inst-1",
+      }),
+    ).toEqual({ ok: false, reason: "schema" });
+    // NEGATIVE CONTROL: the same message minus the credential, at v2, parses.
+    expect(embedContextSchema.safeParse(validContext()).success).toBe(true);
+  });
+
+  it("REJECTS an `auth` block even at the new version and type (no credential field exists)", () => {
+    const bad = validContext({
+      auth: { citToken: "cit_site_transport", cwuToken: "cwu_per_user" },
+    });
+    expect(embedContextSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it("REJECTS the retired message TYPE at the new version", () => {
+    const bad = validContext({ type: RETIRED_BOOTSTRAP_MESSAGE_TYPE });
+    expect(embedContextSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it("REJECTS any unknown field, credential-named or not (strict)", () => {
+    for (const extra of [
+      { token: "anything" },
+      { citToken: "cit_x" },
+      { cwuToken: "cwu_y" },
+      { bearer: "x" },
+      { harmlessTypo: 1 },
+    ]) {
+      expect(embedContextSchema.safeParse(validContext(extra)).success).toBe(false);
+    }
+    // NEGATIVE CONTROL: with none of them, the same fixture parses.
+    expect(embedContextSchema.safeParse(validContext()).success).toBe(true);
+  });
+});
+
+describe("cinatra#2674 — no credential-shaped VALUE, in either direction", () => {
+  it("recognises each minted bearer prefix, trimmed and case-insensitively", () => {
+    for (const value of ["cwu_abc", "cit_abc", "cnx_abc", "  CWU_ABC  ", "Cit_x"]) {
+      expect(isCredentialShapedValue(value)).toBe(true);
+    }
+    for (const value of ["citation", "cwuppercase-no-underscore", "", 42, null, {}]) {
+      expect(isCredentialShapedValue(value)).toBe(false);
+    }
+  });
+
+  it("finds one at any depth — object value, array member, or KEY", () => {
+    expect(containsCredentialShapedValue({ a: { b: ["x", "cwu_leak"] } })).toBe(true);
+    expect(containsCredentialShapedValue({ a: { cit_leak: 1 } })).toBe(true);
+    expect(containsCredentialShapedValue({ a: { b: ["x", "y"] } })).toBe(false);
+  });
+
+  it("REJECTS a bearer smuggled inside an allowed context field; ACCEPTS the clean twin", () => {
+    const smuggled = validContext({
+      cms: { instanceId: "inst-1", resourceId: "cwu_smuggled_user_token" },
+    });
+    expect(embedContextSchema.safeParse(smuggled).success).toBe(false);
+    // NEGATIVE CONTROL — identical message, ordinary resourceId.
+    const clean = validContext({ cms: { instanceId: "inst-1", resourceId: "42" } });
+    expect(embedContextSchema.safeParse(clean).success).toBe(true);
+  });
+
+  it("REJECTS a bearer smuggled into an UPLINK (iframe -> parent) too", () => {
+    const up = { protocolVersion: EMBED_PROTOCOL_VERSION, correlationId: CORR, seq: 1 };
+    const smuggled = {
+      type: EMBED_MESSAGE_TYPES.a11y,
+      ...up,
+      liveRegion: "cit_site_transport_token",
+      politeness: "polite" as const,
+    };
+    expect(embedUplinkSchema.safeParse(smuggled).success).toBe(false);
+    // NEGATIVE CONTROL — the same uplink with ordinary text.
+    expect(
+      embedUplinkSchema.safeParse({ ...smuggled, liveRegion: "Assistant is thinking" })
+        .success,
+    ).toBe(true);
+  });
+
+  it("the SENDER refuses to emit a credential-bearing message at all", () => {
+    const port = { postMessage: vi.fn() };
+    const smuggled = validContext({
+      cms: { instanceId: "inst-1", resourceId: "cwu_smuggled" },
+    }) as unknown as EmbedContext;
+    expect(sendContextOverTransport({ mode: "port", port }, smuggled)).toBe(false);
+    expect(port.postMessage).not.toHaveBeenCalled();
+    // NEGATIVE CONTROL — the clean message IS sent over the same transport.
+    expect(
+      sendContextOverTransport({ mode: "port", port }, validContext() as unknown as EmbedContext),
+    ).toBe(true);
+    expect(port.postMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2674, codex round 0 finding 2 — the credential guard matches a bearer
+// ANYWHERE at a token boundary, not only at character zero. An error string or a
+// URL carrying a token is a credential on the wire.
+// ---------------------------------------------------------------------------
+describe("cinatra#2674 — a bearer inside a longer string is still a bearer", () => {
+  it("matches after a separator: an error message, a URL, a bracketed value", () => {
+    for (const value of [
+      "Error: cwu_the_user_bearer expired",
+      "https://cinatra.test/x?token=cit_site_transport",
+      "[cnx_site_credential]",
+      "auth=cwu_abc",
+      "  CWU_ABC  ",
+    ]) {
+      expect(isCredentialShapedValue(value)).toBe(true);
+    }
+  });
+
+  it("does NOT fire on a word that merely ends in the letters", () => {
+    for (const value of ["abccwu_x", "specit_x", "", "citation", 42, null]) {
+      expect(isCredentialShapedValue(value)).toBe(false);
+    }
+  });
+
+  it("REJECTS an uplink whose a11y text embeds a bearer mid-string", () => {
+    const up = { protocolVersion: EMBED_PROTOCOL_VERSION, correlationId: CORR, seq: 1 };
+    const leaky = {
+      type: EMBED_MESSAGE_TYPES.a11y,
+      ...up,
+      liveRegion: "Sign-in failed for cwu_abcdef — please retry",
+      politeness: "polite" as const,
+    };
+    expect(embedUplinkSchema.safeParse(leaky).success).toBe(false);
+    // NEGATIVE CONTROL — the same sentence without the token.
+    expect(
+      embedUplinkSchema.safeParse({ ...leaky, liveRegion: "Sign-in failed — please retry" })
+        .success,
+    ).toBe(true);
   });
 });

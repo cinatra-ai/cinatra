@@ -55,14 +55,24 @@ export function sessionSelectorCaller(
 
 /**
  * The audience caller for the BROKER-AUTH WIDGET selector, derived from the
- * server-verified {@link WidgetPrincipal}. platformRole is HARD-FLOORED to
- * `member` — a widget end user who is also a platform admin gets NO elevated
- * audience standing (mirrors the OBO mint floor + the runtime ActorContext floor,
- * #1848 / G5). `orgId` is the cwu_-claim org carried on the principal, never a
- * session value. Pure.
+ * server-verified {@link WidgetPrincipal}.
+ *
+ * `platformRole` is the principal's REAL tier since cinatra#2674 (epic #2564
+ * S8e; codex round 0, finding 5). It used to be hard-floored to `member`,
+ * mirroring the OBO mint floor — and when that floor went, leaving this one
+ * behind would have made the parity claim false in a way nobody would notice
+ * until a platform admin was 404'd out of an assistant they can select in the
+ * app. An UNDER-grant is still a divergence, and #2674 asks for none.
+ *
+ * `orgId` is the cwu_-claim org carried on the principal, never a session value.
+ * Pure.
  */
 export function widgetSelectorCaller(principal: WidgetPrincipal): AudienceCaller {
-  return { userId: principal.userId, orgId: principal.orgId, platformRole: "member" };
+  return {
+    userId: principal.userId,
+    orgId: principal.orgId,
+    platformRole: principal.platformRole,
+  };
 }
 
 /**

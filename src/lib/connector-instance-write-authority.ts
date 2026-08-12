@@ -309,13 +309,23 @@ function createInstanceUseAuthorityGateCore(
     if (!resolved) await deny("no_trusted_actor");
     const { actor, userId, orgId } = resolved as ResolvedActor;
 
-    // (c) Defensive: on the public-site-widget path the actor must NOT carry a
-    // platform-admin bypass (post-#408 `resolveAgentRunMcpActor` suppresses it;
-    // assert it here so a future regression on the carrier cannot silently
-    // re-grant admin-bypass writes from a public widget).
-    if (sourceType === "public_site_widget" && actor.platformRole === "platform_admin") {
-      await deny("platform_admin_on_public_widget", { userId, orgId });
-    }
+    // (c) THE WIDGET-ONLY PLATFORM-ADMIN DENY IS GONE (cinatra#2674, epic #2564
+    // S8e). It refused the write outright when a public-site-widget actor
+    // carried platform-admin standing — the same temporary floor #2574 imposed
+    // on the lifecycle actor and the OBO token, expressed here as a refusal
+    // rather than a reduction, and justified by the same fact: the embedding
+    // site possessed the widget bearer. S8e ends that possession, so the
+    // exception ends with it and a platform admin writing through a widget is
+    // treated exactly as one writing in the app.
+    //
+    // THAT IS PARITY, NOT A WIDENING, and the reason is a few lines below: this
+    // module strips `platformRole` from the delegated decision actor
+    // UNCONDITIONALLY, on EVERY path. Platform standing has never decided a
+    // content write here and still does not. Removing this branch stops a widget
+    // platform admin being denied something an in-app platform admin is allowed;
+    // it grants nobody anything. Every other control on this path — live
+    // membership, the per-instance org binding, the sanitized-from-scratch
+    // actor — is untouched.
 
     // (c-universal) LIVE ORG-MEMBERSHIP RE-VERIFICATION on EVERY path — a
     // mandatory precondition for ANY per-instance CMS write (cinatra#406 +

@@ -155,13 +155,16 @@ export type ChatMcpActorTokenIssuer = (actor: ChatMcpActor) => string;
  * `WidgetMcpActorTokenInput` (src/lib/widget-mcp-actor-token.ts); the issuer is
  * INJECTED from the app layer so this package stays `@/`-free.
  *
- * `platformRole` is deliberately ABSENT — a widget user is floored to `member`
- * at the token mint (the token omits `prole`, the verifier hard-codes it), so
- * there is no way to mint a platform-admin widget token here (G5). The pinned
- * `instanceId` + `kind` ride the token as its FAIL-CLOSED `inst`/`knd` claims,
- * `jti` is the per-turn nonce, and `parentJti`/`turnRunId` are the two seals
- * (cinatra#2687) the host's authorization layer checks against the live sign-in
- * and the live turn.
+ * `platformRole` is the end user's REAL tier since cinatra#2674 (epic #2564
+ * S8e). It used to be deliberately ABSENT so the token could floor a widget user
+ * to `member`; that floor existed because the embedding site possessed the
+ * widget bearer, and S8e ends that possession. The value is resolved server-side
+ * at the chat route from the user record — the browser and the CMS have no
+ * channel to it — and OMITTING it still means `member`, so a caller that does
+ * not set it can only ever narrow. The pinned `instanceId` + `kind` ride the
+ * token as its FAIL-CLOSED `inst`/`knd` claims, `jti` is the per-turn nonce, and
+ * `parentJti`/`turnRunId` are the two seals (cinatra#2687) the host's
+ * authorization layer checks against the live sign-in and the live turn.
  */
 export type WidgetMcpActor = {
   userId: string;
@@ -181,6 +184,13 @@ export type WidgetMcpActor = {
    * This package neither derives nor interprets it.
    */
   lifecycleRead: boolean;
+  /**
+   * cinatra#2674 (epic #2564 S8e) — the end user's REAL platform tier, resolved
+   * server-side from the user record. Optional at the type level because
+   * omitting it means `member`: a caller that does not set it can only narrow,
+   * never elevate.
+   */
+  platformRole?: "platform_admin" | "member";
 };
 
 export type WidgetMcpActorTokenIssuer = (actor: WidgetMcpActor) => string;

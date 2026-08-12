@@ -57,6 +57,36 @@ export function allowConnectTokenRequest(input: {
   return ipOk && codeOk;
 }
 
+/**
+ * Charge ONE named bucket and answer whether the request is allowed
+ * (cinatra#2674; codex confirming round).
+ *
+ * WHY THIS EXISTS. `allowConnectTokenRequest` always charges BOTH buckets, which
+ * is right for a code-redeem — every such request has an IP and a code. It is
+ * wrong for a caller that wants a SECOND, independent dimension: charging the
+ * pair again would double-charge the IP bucket for one request, and passing a
+ * constant where a code hash belongs would turn the 5/min code bucket into a
+ * GLOBAL cap that one caller could exhaust for everybody. The widget frame's
+ * per-site limit needs exactly one bucket, so it gets a function that charges
+ * exactly one.
+ *
+ * `windowMs`/`max` default to the code bucket's, which is the right shape for
+ * "attempts against one named thing".
+ */
+export function allowNamedRateLimit(input: {
+  key: string;
+  now?: number;
+  windowMs?: number;
+  max?: number;
+}): boolean {
+  return hit(
+    `named:${input.key}`,
+    input.windowMs ?? CODE_WINDOW_MS,
+    input.max ?? CODE_MAX,
+    input.now ?? Date.now(),
+  );
+}
+
 /** Test seam: clear all buckets. */
 export function __resetConnectRateLimitForTests(): void {
   buckets().clear();

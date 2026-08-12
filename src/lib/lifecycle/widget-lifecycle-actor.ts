@@ -36,27 +36,41 @@ import "server-only";
 //      (user, token org) in ONE resolution: the org role IS the membership
 //      re-check (the chat broker re-checks per turn; a read is no different — a
 //      membership revoked one second ago must not serve one more row);
-//   3. the actor, with platform standing floored (see the note below).
+//   3. the actor, with the person's REAL platform standing — resolved live,
+//      like every other axis.
 //
-// EVERY ORG-SCOPED AXIS IS RESOLVED, NOT FLOORED. Org role, teams and project
-// grants are the person's real ones, live — that is what #2577 means by "no role
-// or grant axis is suppressed or floored because the surface is a widget", and
-// it is what makes a widget reader see exactly the rows they see in the app.
+// THE PLATFORM-ROLE FLOOR IS GONE (cinatra#2674, epic #2564 S8e). It was
+// deliberate and it was temporary, and its whole justification was possession:
+// a widget bearer lived in a browser on a public site and the SITE'S BACKEND
+// possessed it by design, so carrying a cross-org platform tier on it would have
+// handed a compromised CMS a platform admin's authority over orgs that site has
+// nothing to do with. S8e ends that possession — the credential is minted for
+// the Cinatra frame, delivered only to the Cinatra origin, and no CMS backend or
+// parent page ever holds it — so the reason for the floor ended with it, in the
+// same change set that removed the reason (#2674's own criterion).
 //
-// THE PLATFORM TIER IS THE ONE AXIS STILL FLOORED, AND IT IS AN OPEN QUESTION
-// FOR THE OWNER (recorded, not decided here; codex rounds 0-1 on this PR).
-// Round 0 read the corrected sentence literally and called the floor a parity
-// shortfall — correctly: a platform admin can read something in Cinatra that the
-// widget refuses them. This lane removed it and asked codex to confirm; round 1
-// showed the removal is a NEW cross-org escalation. The embed receives the
-// `cwu_` through a postMessage bootstrap the PARENT page composes, so the
-// embedding site's own JavaScript possesses the bearer. Origin binding does not
-// help against the bound origin itself. With the tier resolved live, a
-// compromised CMS site would hold a platform admin's CROSS-ORG authority — over
-// orgs that site has nothing to do with — and could spend it through the decide
-// grant. The floor is a NARROWING, so keeping it can expose nothing; removing it
-// can. The removal was therefore reverted and the conflict is stated in the PR
-// body for a ruling, rather than shipped in either direction on this lane's say.
+// THAT IS WHY THE EARLIER "OPEN QUESTION" NOTE IS NOT HERE ANY MORE. #2577 read
+// the floor as a parity shortfall and reverted its own removal, because codex
+// showed the removal was a cross-org escalation ON THE PROTOCOL-1 FLOW: the
+// embed received the `cwu_` through a bootstrap the PARENT page composed, so the
+// embedding site's JavaScript possessed the bearer and origin binding did not
+// help against the bound origin itself. That premise is exactly what this slice
+// deletes. With protocol 2 there is no party outside this frame that ever holds
+// the credential, so the escalation the revert protected against has no carrier.
+//
+// What stands in its place is the epic's rule, unqualified: through the widget a
+// person authenticates to Cinatra and has the same rights they have inside
+// Cinatra. Every axis — org role, teams, project grants, and now the platform
+// tier — is the person's real, live one. The parity fixture asserts EQUALITY
+// with the in-app hints for the same bundle, so a re-introduced floor and an
+// escalation both turn it red.
+//
+// The platform tier is resolved from the user record at read time, not carried
+// on the token, for the same reason every other axis is: standing is live, and a
+// tier revoked one second ago must not serve one more row. It is resolved in the
+// LIVE-STANDING LEAF beside the org axes (#2577 split steps 2-3 out), so BOTH
+// entries — this token door and the MCP-frame one — carry the same real tier and
+// neither can drift from the other.
 // ---------------------------------------------------------------------------
 
 import type { ReviewActorContext } from "@/app/artifacts/[id]/review-gate-ports";
@@ -83,13 +97,20 @@ import {
   consumeUserWidgetToken,
   type UserTokenClaims,
 } from "@/lib/widget-user-auth";
+import {
+  mintReviewIslandCredential,
+  reviewIslandUrl,
+} from "@/lib/lifecycle/review-island-credential";
 
 // Re-exported so every S8a import path still resolves here — the split is an
-// internal one, not a move of this module's public surface.
+// internal one, not a move of this module's public surface. The former
+// `WIDGET_LIFECYCLE_PLATFORM_ROLE_FLOOR` is now
+// `WIDGET_LIFECYCLE_DEFAULT_PLATFORM_ROLE`: same value, and no longer a ceiling
+// (cinatra#2674).
 export {
   buildWidgetLifecycleRoleHints,
   resolveWidgetLifecycleActorForFrame,
-  WIDGET_LIFECYCLE_PLATFORM_ROLE_FLOOR,
+  WIDGET_LIFECYCLE_DEFAULT_PLATFORM_ROLE,
   type WidgetLifecycleFrameActorResult,
 } from "@/lib/lifecycle/widget-lifecycle-frame-actor";
 
@@ -289,3 +310,50 @@ export async function resolveWidgetLifecycleActorContext(input: {
   return { ok: true, actorCtx: standing.actorCtx, claims };
 }
 
+/**
+ * Mint the island URL a widget lifecycle card puts in its `<iframe src>`
+ * (cinatra#2674 scope addition, 2026-08-12).
+ *
+ * THIS IS THE ONE MINT SITE, and it lives here for the same reason every widget
+ * lifecycle read builds its actor here: the credential is derived from the
+ * verified widget principal — the `cwu_` claims this module just consumed — and
+ * from nothing else. There is no path by which a parent page, a CMS backend or a
+ * request field can influence what it names.
+ *
+ * IT IS MINTED PER RESOLVE, NEVER PERSISTED. A lifecycle envelope persists in
+ * `assistant_turns.content` and is re-fed to the model; a credential in one
+ * would be a bearer sitting in a transcript. The card re-resolves on mount, on
+ * focus and on reload, and each resolve mints a fresh short-lived URL.
+ *
+ * `null` when the credential cannot be expressed (a missing signing key, an
+ * out-of-bounds id): the caller renders no island rather than a broken frame.
+ *
+ * IT HAS NO CALLER IN THIS CHANGE SET, AND THAT IS RECORDED RATHER THAN HIDDEN
+ * (codex round 0, finding 1). The consumer is the widget branch of the lifecycle
+ * RESOLVE route and the widget lifecycle card host — both of which land in S8d
+ * (cinatra#2577, PR #2668), which this slice deliberately does not merge in. So
+ * S8e ships the credential, its verification and the island's acceptance of it,
+ * and the island paints on a true third-party site once S8d's branch calls this
+ * function with the ref it just authorized. Until then island parity holds on
+ * same-site and subdomain deployments, exactly as the issue comment recorded.
+ */
+export function mintWidgetReviewIslandUrl(input: {
+  claims: UserTokenClaims;
+  ref: string;
+  runId: string;
+  reviewTaskId: string;
+}): string | null {
+  const credential = mintReviewIslandCredential({
+    orgId: input.claims.orgId,
+    userId: input.claims.userId,
+    jti: input.claims.jti,
+    siteId: input.claims.siteId,
+    client: input.claims.client,
+    instanceId: input.claims.instanceId,
+    agentSlug: input.claims.agentSlug,
+    runId: input.runId,
+    reviewTaskId: input.reviewTaskId,
+  });
+  if (!credential) return null;
+  return reviewIslandUrl({ ref: input.ref, credential });
+}

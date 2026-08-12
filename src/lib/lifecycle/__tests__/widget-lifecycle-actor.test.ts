@@ -3,9 +3,9 @@
 // What these assertions are about: an actor that decides what a person on a
 // public site may READ of their organization's lifecycle work. So they are
 // written around the two ways that can go wrong — granting more than the person
-// has (the token's grant, the platform floor, the org anchor) and granting less
-// than the person has (the resolved team/project axes, which the runtime's
-// degraded context drops).
+// has (the token's grant, the org anchor) and granting less than the person has
+// (the resolved team/project axes, which the runtime's degraded context drops,
+// and — since cinatra#2674 removed the floor — the platform tier).
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -22,6 +22,10 @@ vi.mock("@/lib/auth-session", () => ({
 }));
 vi.mock("@/lib/widget-auth-audit", () => ({
   emitWidgetAuthAudit: (...args: unknown[]) => emitWidgetAuthAudit(...args),
+}));
+const readUserIsPlatformAdmin = vi.fn();
+vi.mock("@/lib/better-auth-db", () => ({
+  readUserIsPlatformAdmin: (...args: unknown[]) => readUserIsPlatformAdmin(...args),
 }));
 
 import {
@@ -72,6 +76,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   consumeUserWidgetToken.mockReturnValue({ ok: true, claims: CLAIMS });
   resolveActorGrantsForUserInOrg.mockResolvedValue(GRANTS);
+  readUserIsPlatformAdmin.mockResolvedValue(false);
 });
 
 describe("the token gate", () => {
@@ -152,20 +157,32 @@ describe("the constructed actor", () => {
     });
   });
 
-  it("FLOORS the platform tier — a platform admin gets no elevated standing here", async () => {
-    // The floor is unconditional: nothing in the token, the claims or the
-    // resolved grants can raise it, because the resolver never asks for it.
+  it("cinatra#2674: CARRIES the platform tier — a platform admin keeps it here", async () => {
+    // The floor S8a imposed is gone, together with its justification (the site's
+    // possession of the widget bearer). The tier is resolved LIVE, like every
+    // other axis, and it is the person's real one.
+    readUserIsPlatformAdmin.mockResolvedValue(true);
+    const r = await call();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.actorCtx.roleHints?.platformRole).toBe("platform_admin");
+    // …and it was resolved for the TOKEN's principal, not for anybody else.
+    expect(readUserIsPlatformAdmin).toHaveBeenCalledWith("user-1");
+  });
+
+  it("an ordinary member is NOT elevated — removing the floor granted nobody anything", async () => {
+    readUserIsPlatformAdmin.mockResolvedValue(false);
     const r = await call();
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.actorCtx.roleHints?.platformRole).toBe("member");
+  });
 
-    const hinted = buildWidgetLifecycleRoleHints({
-      orgId: "org-A",
-      orgRole: "org_owner",
-      // Even if a caller hands it a bundle that came from a platform admin, the
-      // assembled hints carry the floor.
-    });
+  it("fails CLOSED to `member` when the tier cannot be read", async () => {
+    // `readUserIsPlatformAdmin` swallows its own read errors and answers false;
+    // this pins the consequence at this layer — an unreadable tier narrows.
+    readUserIsPlatformAdmin.mockResolvedValue(false);
+    const hinted = buildWidgetLifecycleRoleHints({ orgId: "org-A", orgRole: "org_owner" });
     expect(hinted.platformRole).toBe("member");
   });
 

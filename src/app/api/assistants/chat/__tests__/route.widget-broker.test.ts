@@ -57,6 +57,10 @@ vi.mock("@/app/api/chat/runner", () => ({
 }));
 vi.mock("@/lib/better-auth-db", () => ({
   resolveAssistantHandles: (...a: unknown[]) => resolveAssistantHandles(...a),
+  // cinatra#2674 — the widget branch resolves the person's real platform tier
+  // here. `false` is the ordinary case; the elevated one is asserted in the
+  // parity suites, not by re-running the whole route.
+  readUserIsPlatformAdmin: async () => false,
 }));
 vi.mock("@/lib/assistant-runtime/resolve-runtime-config", () => ({
   resolveAssistantRuntimeConfigByPrincipal: (...a: unknown[]) =>
@@ -214,7 +218,7 @@ describe("T-cookie — no Authorization bearer keeps the cookie-session path byt
 });
 
 describe("broker-auth happy path — builds the WidgetPrincipal and drives the seam", () => {
-  it("threads a SERVER-VERIFIED principal into runAssistantTurn (platformRole floored to member — T5)", async () => {
+  it("threads a SERVER-VERIFIED principal into runAssistantTurn, carrying the resolved platform tier", async () => {
     const res = await POST(widgetReq({ cit: "cit_abc", cwu: "cwu_xyz" }));
     expect(res.status).toBe(200);
     // The cit_ token is consumed at the UNIFIED chat aud, not the stream path.
@@ -258,6 +262,11 @@ describe("broker-auth happy path — builds the WidgetPrincipal and drives the s
       // claims. This fixture's `cwu_` carries none, so the widget turn's OBO
       // token mints no `lcr` and its lifecycle reads refuse generically.
       lifecycleRead: false,
+      // cinatra#2674 — the person's REAL tier, resolved server-side here after
+      // the whole dual-token sequence. `member` for this fixture's user; the
+      // elevated case is asserted in the parity suites rather than by re-running
+      // the route.
+      platformRole: "member",
     });
     // CORS reflected onto the streamed response for the cross-origin widget.
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);

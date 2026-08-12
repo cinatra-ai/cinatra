@@ -18,7 +18,7 @@ import {
 import {
   EMBED_MESSAGE_TYPES,
   EMBED_PROTOCOL_VERSION,
-  type EmbedBootstrap,
+  type EmbedContext,
 } from "@/lib/embed/bridge-protocol";
 
 const PARENT_ORIGIN = "https://cms.example.com";
@@ -99,32 +99,34 @@ function harness(overrides: Partial<EmbedBridgeOptions> = {}) {
   const self = makeWindow();
   const parent = makeWindow();
   const { channel, localPort, remotePort } = makeChannel();
-  const onBootstrap = vi.fn();
+  const onContext = vi.fn();
   const onReject = vi.fn();
   const bridge = installEmbedBridge({
     expectedParentOrigin: PARENT_ORIGIN,
     expectedAssistant: "wordpress",
     expectedInstanceId: "inst-1",
-    onBootstrap,
+    onContext,
     onReject,
     selfWindow: self as unknown as Window,
     parentWindow: parent as unknown as Window,
     createChannel: () => channel,
     ...overrides,
   });
-  return { self, parent, port: localPort, remotePort, onBootstrap, onReject, bridge };
+  return { self, parent, port: localPort, remotePort, onContext, onReject, bridge };
 }
 
-function bootstrapMessage(nonce: string, overrides: Record<string, unknown> = {}) {
+function contextMessage(nonce: string, overrides: Record<string, unknown> = {}) {
   return {
-    type: EMBED_MESSAGE_TYPES.bootstrap,
+    type: EMBED_MESSAGE_TYPES.context,
     protocolVersion: EMBED_PROTOCOL_VERSION,
     correlationId: CORR,
     nonceEcho: nonce,
     seq: 0,
-    auth: { citToken: CIT, cwuToken: CWU },
+    // PUBLIC SELECTORS ONLY (cinatra#2674). There is no `auth` block to build:
+    // the schema has no credential field, and the frame acquires its own
+    // credential on the Cinatra origin.
     session: { threadId: "thread-1", assistant: "wordpress" },
-    cms: { instanceId: "inst-1" },
+    cms: { instanceId: "inst-1", resourceId: "42" },
     ...overrides,
   };
 }
@@ -169,38 +171,38 @@ describe("embed-bridge.client — READY (§3a/§12b)", () => {
 
 describe("embed-bridge.client — BOOTSTRAP gate order, legacy window path (§4/§6)", () => {
   it("B1: drops a foreign-origin bootstrap BEFORE schema — no mount, no reject oracle", () => {
-    const { bridge, self, onBootstrap, onReject } = harness();
+    const { bridge, self, onContext, onReject } = harness();
     self.deliver({
       origin: "https://evil.example.com",
       source: {} as Window,
-      data: bootstrapMessage(bridge.nonce),
+      data: contextMessage(bridge.nonce),
     });
-    expect(onBootstrap).not.toHaveBeenCalled();
+    expect(onContext).not.toHaveBeenCalled();
     expect(onReject).not.toHaveBeenCalled(); // dropped silently before schema
-    expect(bridge.bootstrapped).toBe(false);
+    expect(bridge.contextReceived).toBe(false);
   });
 
   it("B10: drops a correct-origin bootstrap whose source is NOT window.parent", () => {
-    const { bridge, self, onBootstrap } = harness();
+    const { bridge, self, onContext } = harness();
     self.deliver({
       origin: PARENT_ORIGIN,
       source: { not: "parent" } as unknown as Window,
-      data: bootstrapMessage(bridge.nonce),
+      data: contextMessage(bridge.nonce),
     });
-    expect(onBootstrap).not.toHaveBeenCalled();
-    expect(bridge.bootstrapped).toBe(false);
+    expect(onContext).not.toHaveBeenCalled();
+    expect(bridge.contextReceived).toBe(false);
   });
 
   it("B3: rejects a bootstrap whose nonceEcho != frame nonce (typed reject, no mount)", () => {
-    const { bridge, self, parent, onBootstrap, onReject } = harness();
+    const { bridge, self, parent, onContext, onReject } = harness();
     self.deliver({
       origin: PARENT_ORIGIN,
       source: parent as unknown as Window,
-      data: bootstrapMessage("wrong-nonce-000000000000000000000"),
+      data: contextMessage("wrong-nonce-000000000000000000000"),
     });
-    expect(onBootstrap).not.toHaveBeenCalled();
+    expect(onContext).not.toHaveBeenCalled();
     expect(onReject).toHaveBeenCalledWith("nonce_mismatch");
-    expect(bridge.bootstrapped).toBe(false);
+    expect(bridge.contextReceived).toBe(false);
   });
 
   it("B5: rejects on assistant / instance disagreement", () => {
@@ -208,52 +210,56 @@ describe("embed-bridge.client — BOOTSTRAP gate order, legacy window path (§4/
     self.deliver({
       origin: PARENT_ORIGIN,
       source: parent as unknown as Window,
-      data: bootstrapMessage(bridge.nonce, { session: { threadId: "t", assistant: "drupal" } }),
+      data: contextMessage(bridge.nonce, { session: { threadId: "t", assistant: "drupal" } }),
     });
     expect(onReject).toHaveBeenCalledWith("assistant_mismatch");
-    expect(bridge.bootstrapped).toBe(false);
+    expect(bridge.contextReceived).toBe(false);
   });
 
-  it("accepts a valid bootstrap (all gates pass) exactly once and hands tokens via closure", () => {
-    const { bridge, self, parent, onBootstrap } = harness();
-    self.deliver({ origin: PARENT_ORIGIN, source: parent as unknown as Window, data: bootstrapMessage(bridge.nonce) });
-    expect(bridge.bootstrapped).toBe(true);
-    expect(onBootstrap).toHaveBeenCalledTimes(1);
-    expect(onBootstrap.mock.calls[0][0].auth.citToken).toBe(CIT);
+  it("accepts a valid context message (all gates pass) exactly once and hands SELECTORS via closure", () => {
+    const { bridge, self, parent, onContext } = harness();
+    self.deliver({ origin: PARENT_ORIGIN, source: parent as unknown as Window, data: contextMessage(bridge.nonce) });
+    expect(bridge.contextReceived).toBe(true);
+    expect(onContext).toHaveBeenCalledTimes(1);
+    expect(onContext.mock.calls[0][0].cms.resourceId).toBe("42");
+    // cinatra#2674: nothing credential-shaped reaches the callback, because
+    // nothing credential-shaped can pass the schema.
+    expect(JSON.stringify(onContext.mock.calls[0][0])).not.toContain("cwu_");
+    expect(JSON.stringify(onContext.mock.calls[0][0])).not.toContain("cit_");
   });
 
   it("B3: a SECOND bootstrap on a mounted session is IGNORED (single-use nonce burn)", () => {
-    const { bridge, self, parent, onBootstrap } = harness();
+    const { bridge, self, parent, onContext } = harness();
     const deliver = () =>
-      self.deliver({ origin: PARENT_ORIGIN, source: parent as unknown as Window, data: bootstrapMessage(bridge.nonce) });
+      self.deliver({ origin: PARENT_ORIGIN, source: parent as unknown as Window, data: contextMessage(bridge.nonce) });
     deliver();
     deliver();
-    expect(onBootstrap).toHaveBeenCalledTimes(1);
+    expect(onContext).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("embed-bridge.client — port-bound BOOTSTRAP (§12b, issue #1965)", () => {
-  it("accepts the token-bearing bootstrap delivered over the RETAINED port, no origin/source needed", () => {
-    const { bridge, port, onBootstrap } = harness();
+  it("accepts the context message delivered over the RETAINED port, no origin/source needed", () => {
+    const { bridge, port, onContext } = harness();
     // A port message carries NO origin/source — provenance is the targeted
-    // transfer. The bootstrap is accepted on schema + nonce + agreement alone.
-    port.deliver(bootstrapMessage(bridge.nonce));
-    expect(bridge.bootstrapped).toBe(true);
-    expect(onBootstrap).toHaveBeenCalledTimes(1);
-    expect(onBootstrap.mock.calls[0][0].auth.cwuToken).toBe(CWU);
+    // transfer. It is accepted on schema + nonce + agreement alone.
+    port.deliver(contextMessage(bridge.nonce));
+    expect(bridge.contextReceived).toBe(true);
+    expect(onContext).toHaveBeenCalledTimes(1);
+    expect(onContext.mock.calls[0][0].session.threadId).toBe("thread-1");
   });
 
   it("still enforces schema + nonce over the port (a bad-nonce port bootstrap is rejected)", () => {
-    const { bridge, port, onBootstrap, onReject } = harness();
-    port.deliver(bootstrapMessage("wrong-nonce-000000000000000000000"));
-    expect(onBootstrap).not.toHaveBeenCalled();
+    const { bridge, port, onContext, onReject } = harness();
+    port.deliver(contextMessage("wrong-nonce-000000000000000000000"));
+    expect(onContext).not.toHaveBeenCalled();
     expect(onReject).toHaveBeenCalledWith("nonce_mismatch");
-    expect(bridge.bootstrapped).toBe(false);
+    expect(bridge.contextReceived).toBe(false);
   });
 
   it("port-mode uplinks ride the RETAINED port, never window.postMessage", () => {
     const { bridge, port, parent } = harness();
-    port.deliver(bootstrapMessage(bridge.nonce));
+    port.deliver(contextMessage(bridge.nonce));
     parent.posts.length = 0; // drop READY (window post)
     expect(bridge.sendResize(120)).toBe(true);
     expect(bridge.sendFocus(true)).toBe(true);
@@ -269,22 +275,22 @@ describe("embed-bridge.client — port-bound BOOTSTRAP (§12b, issue #1965)", ()
   });
 
   it("the single-use burn is SHARED across transports: a window bootstrap after a port bootstrap is ignored", () => {
-    const { bridge, port, self, parent, onBootstrap } = harness();
-    port.deliver(bootstrapMessage(bridge.nonce));
-    self.deliver({ origin: PARENT_ORIGIN, source: parent as unknown as Window, data: bootstrapMessage(bridge.nonce) });
-    expect(onBootstrap).toHaveBeenCalledTimes(1);
+    const { bridge, port, self, parent, onContext } = harness();
+    port.deliver(contextMessage(bridge.nonce));
+    self.deliver({ origin: PARENT_ORIGIN, source: parent as unknown as Window, data: contextMessage(bridge.nonce) });
+    expect(onContext).toHaveBeenCalledTimes(1);
   });
 
   it("shared burn holds in the REVERSE order too: a port bootstrap after a window bootstrap is ignored", () => {
-    const { bridge, port, self, parent, onBootstrap } = harness();
-    self.deliver({ origin: PARENT_ORIGIN, source: parent as unknown as Window, data: bootstrapMessage(bridge.nonce) });
-    port.deliver(bootstrapMessage(bridge.nonce));
-    expect(onBootstrap).toHaveBeenCalledTimes(1);
+    const { bridge, port, self, parent, onContext } = harness();
+    self.deliver({ origin: PARENT_ORIGIN, source: parent as unknown as Window, data: contextMessage(bridge.nonce) });
+    port.deliver(contextMessage(bridge.nonce));
+    expect(onContext).toHaveBeenCalledTimes(1);
   });
 
   it("mixed-version: a legacy (window) parent still bootstraps a compat iframe; uplinks ride the window", () => {
     const { bridge, self, parent, port } = harness();
-    self.deliver({ origin: PARENT_ORIGIN, source: parent as unknown as Window, data: bootstrapMessage(bridge.nonce) });
+    self.deliver({ origin: PARENT_ORIGIN, source: parent as unknown as Window, data: contextMessage(bridge.nonce) });
     parent.posts.length = 0; // drop READY
     expect(bridge.sendResize(80)).toBe(true);
     expect(parent.posts).toHaveLength(1); // legacy uplink over the window
@@ -295,25 +301,25 @@ describe("embed-bridge.client — port-bound BOOTSTRAP (§12b, issue #1965)", ()
 
 describe("embed-bridge.client — downgrade resistance (§12b requirePort)", () => {
   it("under requirePort, a legacy/window bootstrap is NEVER accepted (window path not attached)", () => {
-    const { bridge, self, parent, onBootstrap, onReject } = harness({ requirePort: true });
-    self.deliver({ origin: PARENT_ORIGIN, source: parent as unknown as Window, data: bootstrapMessage(bridge.nonce) });
-    expect(onBootstrap).not.toHaveBeenCalled();
+    const { bridge, self, parent, onContext, onReject } = harness({ requirePort: true });
+    self.deliver({ origin: PARENT_ORIGIN, source: parent as unknown as Window, data: contextMessage(bridge.nonce) });
+    expect(onContext).not.toHaveBeenCalled();
     expect(onReject).not.toHaveBeenCalled(); // the window path is simply absent
-    expect(bridge.bootstrapped).toBe(false);
+    expect(bridge.contextReceived).toBe(false);
   });
 
   it("under requirePort, the SAME bootstrap over the port IS accepted", () => {
-    const { bridge, port, onBootstrap } = harness({ requirePort: true });
-    port.deliver(bootstrapMessage(bridge.nonce));
-    expect(bridge.bootstrapped).toBe(true);
-    expect(onBootstrap).toHaveBeenCalledTimes(1);
+    const { bridge, port, onContext } = harness({ requirePort: true });
+    port.deliver(contextMessage(bridge.nonce));
+    expect(bridge.contextReceived).toBe(true);
+    expect(onContext).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("embed-bridge.client — uplinks, legacy window transport (§5/§6c)", () => {
   function mounted() {
     const h = harness();
-    h.self.deliver({ origin: PARENT_ORIGIN, source: h.parent as unknown as Window, data: bootstrapMessage(h.bridge.nonce) });
+    h.self.deliver({ origin: PARENT_ORIGIN, source: h.parent as unknown as Window, data: contextMessage(h.bridge.nonce) });
     h.parent.posts.length = 0; // drop READY
     return h;
   }
@@ -354,11 +360,15 @@ describe("embed-bridge.client — uplinks, legacy window transport (§5/§6c)", 
   });
 });
 
-describe("embed-bridge.client — token non-disclosure (§6i/B4/B17)", () => {
-  it("tokens never appear in READY, any uplink, or the minted nonce (window transport)", () => {
+describe("embed-bridge.client — credential non-disclosure (§6i/B4/B17)", () => {
+  // At protocol 2 (cinatra#2674) these sentinels never enter the bridge in the
+  // first place — the schema refuses them. The cases are kept and STRENGTHENED:
+  // they now assert the absence of a credential the parent tried to inject, not
+  // merely the absence of one the frame was handed.
+  it("credentials never appear in READY, any uplink, or the minted nonce (window transport)", () => {
     const { self, bridge, parent } = harness();
     bridge.postReady();
-    self.deliver({ origin: PARENT_ORIGIN, source: parent as unknown as Window, data: bootstrapMessage(bridge.nonce) });
+    self.deliver({ origin: PARENT_ORIGIN, source: parent as unknown as Window, data: contextMessage(bridge.nonce) });
     bridge.sendResize(100);
     bridge.sendA11y("saved", "polite");
     bridge.sendApplyIntent({ changeSetId: "cs1", viewType: "content_change_proposal" });
@@ -368,10 +378,10 @@ describe("embed-bridge.client — token non-disclosure (§6i/B4/B17)", () => {
     expect(bridge.nonce).not.toContain(CIT);
   });
 
-  it("tokens never appear in READY or any uplink (port transport)", () => {
+  it("credentials never appear in READY or any uplink (port transport)", () => {
     const { bridge, port, parent } = harness();
     bridge.postReady();
-    port.deliver(bootstrapMessage(bridge.nonce));
+    port.deliver(contextMessage(bridge.nonce));
     bridge.sendResize(100);
     bridge.sendA11y("saved", "polite");
     const serialized = JSON.stringify([parent.posts, port.posts]);
@@ -382,14 +392,14 @@ describe("embed-bridge.client — token non-disclosure (§6i/B4/B17)", () => {
 
 describe("embed-bridge.client — dispose", () => {
   it("detaches both transports (window listener + port listener) and closes the port", () => {
-    const { bridge, port, self, parent, onBootstrap } = harness();
+    const { bridge, port, self, parent, onContext } = harness();
     bridge.dispose();
     expect(port.state.closed).toBe(true);
     // after dispose neither channel can bootstrap.
-    port.deliver(bootstrapMessage(bridge.nonce));
-    self.deliver({ origin: PARENT_ORIGIN, source: parent as unknown as Window, data: bootstrapMessage(bridge.nonce) });
-    expect(onBootstrap).not.toHaveBeenCalled();
-    expect(bridge.bootstrapped).toBe(false);
+    port.deliver(contextMessage(bridge.nonce));
+    self.deliver({ origin: PARENT_ORIGIN, source: parent as unknown as Window, data: contextMessage(bridge.nonce) });
+    expect(onContext).not.toHaveBeenCalled();
+    expect(bridge.contextReceived).toBe(false);
   });
 });
 
@@ -398,7 +408,7 @@ describe("embed-bridge.client — real MessageChannel end-to-end (§12b)", () =>
     const self = makeWindow();
     const parent = makeWindow();
     // Wait on the bridge's OWN completion signal rather than on a timer turn.
-    // `onBootstrap` is the callback the bridge invokes at the end of
+    // `onContext` is the callback the bridge invokes at the end of
     // `acceptBootstrap`, so this promise settles exactly when the port-delivered
     // bootstrap has been applied. The `setTimeout(resolve, 0)` hop this replaces
     // was not a completion signal at all: it only ASSUMED that a real MessagePort
@@ -411,14 +421,14 @@ describe("embed-bridge.client — real MessageChannel end-to-end (§12b)", () =>
     const bootstrapApplied = new Promise<void>((resolve) => {
       signalBootstrapped = resolve;
     });
-    const onBootstrap = vi.fn<(bootstrap: EmbedBootstrap) => void>(() => {
+    const onContext = vi.fn<(bootstrap: EmbedContext) => void>(() => {
       signalBootstrapped();
     });
     const bridge = installEmbedBridge({
       expectedParentOrigin: PARENT_ORIGIN,
       expectedAssistant: "wordpress",
       expectedInstanceId: "inst-1",
-      onBootstrap,
+      onContext,
       selfWindow: self as unknown as Window,
       parentWindow: parent as unknown as Window,
       // real MessageChannel (Node/DOM global) — the iframe retains port1.
@@ -428,11 +438,11 @@ describe("embed-bridge.client — real MessageChannel end-to-end (§12b)", () =>
     // token-bearing bootstrap over it. A real port delivers asynchronously.
     const remote = parent.posts[0].transfer?.[0] as MessagePort;
     expect(remote).toBeInstanceOf(MessagePort);
-    remote.postMessage(bootstrapMessage(bridge.nonce));
+    remote.postMessage(contextMessage(bridge.nonce));
     await bootstrapApplied;
-    expect(bridge.bootstrapped).toBe(true);
-    expect(onBootstrap).toHaveBeenCalledTimes(1);
-    expect(onBootstrap.mock.calls[0][0].auth.citToken).toBe(CIT);
+    expect(bridge.contextReceived).toBe(true);
+    expect(onContext).toHaveBeenCalledTimes(1);
+    expect(onContext.mock.calls[0][0].cms.instanceId).toBe("inst-1");
     bridge.dispose();
     // Bounded failure path: awaiting a signal that never arrives would otherwise
     // burn the suite-wide 30s default before reporting.
@@ -445,5 +455,108 @@ describe("embed-bridge.client — mintBridgeNonce", () => {
     const b = mintBridgeNonce();
     expect(a).toMatch(/^[A-Za-z0-9_-]{22,128}$/);
     expect(a).not.toBe(b);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2674 (epic #2564 S8e) — the frame refuses a credential-bearing inbound
+// message on BOTH transports, and the retired protocol-1 bootstrap cannot mount
+// anything. Negative-controlled: the credential-free twin of each rejected
+// message mounts normally.
+// ---------------------------------------------------------------------------
+describe("embed-bridge.client — cinatra#2674 credential refusal", () => {
+  const v1Bootstrap = (nonce: string) => ({
+    type: "cinatra.embed.bootstrap",
+    protocolVersion: 1,
+    correlationId: CORR,
+    nonceEcho: nonce,
+    seq: 0,
+    auth: { citToken: CIT, cwuToken: CWU },
+    session: { threadId: "thread-1", assistant: "wordpress" },
+    cms: { instanceId: "inst-1" },
+  });
+
+  it("a protocol-1 credential bootstrap over the WINDOW mounts nothing and rejects as schema", () => {
+    const { bridge, self, parent, onContext, onReject } = harness();
+    self.deliver({
+      origin: PARENT_ORIGIN,
+      source: parent as unknown as Window,
+      data: v1Bootstrap(bridge.nonce),
+    });
+    expect(onContext).not.toHaveBeenCalled();
+    expect(bridge.contextReceived).toBe(false);
+    expect(onReject).toHaveBeenCalledWith("schema");
+  });
+
+  it("a protocol-1 credential bootstrap over the PORT mounts nothing either", () => {
+    const { bridge, port, onContext } = harness();
+    port.deliver(v1Bootstrap(bridge.nonce));
+    expect(onContext).not.toHaveBeenCalled();
+    expect(bridge.contextReceived).toBe(false);
+  });
+
+  it("a v2 message smuggling a bearer in an allowed field is refused; the clean twin mounts", () => {
+    const smuggled = harness();
+    smuggled.port.deliver(
+      contextMessage(smuggled.bridge.nonce, {
+        cms: { instanceId: "inst-1", resourceId: CWU },
+      }),
+    );
+    expect(smuggled.onContext).not.toHaveBeenCalled();
+    expect(smuggled.bridge.contextReceived).toBe(false);
+
+    // NEGATIVE CONTROL — same harness shape, ordinary resourceId.
+    const clean = harness();
+    clean.port.deliver(contextMessage(clean.bridge.nonce));
+    expect(clean.onContext).toHaveBeenCalledTimes(1);
+    expect(clean.bridge.contextReceived).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2674, codex round 0 finding 2 — the OUTBOUND path enforces the schema.
+//
+// The uplink schema carried the credential guard from the start; until this
+// round nothing RAN it on the way out, so the frame would have posted whatever it
+// composed. These cases pin the enforcement on both transports.
+// ---------------------------------------------------------------------------
+describe("embed-bridge.client — nothing leaves that the schema would refuse", () => {
+  function mounted() {
+    const h = harness();
+    h.port.deliver(contextMessage(h.bridge.nonce));
+    expect(h.bridge.contextReceived).toBe(true);
+    return h;
+  }
+
+  it("REFUSES to send an a11y uplink carrying a bearer (port transport)", () => {
+    const h = mounted();
+    const before = h.port.posts.length;
+    expect(h.bridge.sendA11y(`Sign-in failed for ${CWU}`, "polite")).toBe(false);
+    expect(h.port.posts.length).toBe(before);
+    // NEGATIVE CONTROL — the same call with ordinary text IS sent.
+    expect(h.bridge.sendA11y("Sign-in failed", "polite")).toBe(true);
+    expect(h.port.posts.length).toBe(before + 1);
+  });
+
+  it("REFUSES it on the WINDOW transport too", () => {
+    const h = harness();
+    h.self.deliver({
+      origin: PARENT_ORIGIN,
+      source: h.parent as unknown as Window,
+      data: contextMessage(h.bridge.nonce),
+    });
+    const before = h.parent.posts.length;
+    expect(h.bridge.sendA11y(`token ${CIT} leaked`, "assertive")).toBe(false);
+    expect(h.parent.posts.length).toBe(before);
+    expect(JSON.stringify(h.parent.posts)).not.toContain(CIT);
+  });
+
+  it("REFUSES an apply-intent whose selector is a bearer", () => {
+    const h = mounted();
+    const before = h.port.posts.length;
+    expect(
+      h.bridge.sendApplyIntent({ proposalId: CWU, viewType: "content_change_proposal" }),
+    ).toBe(false);
+    expect(h.port.posts.length).toBe(before);
   });
 });

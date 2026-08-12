@@ -126,23 +126,29 @@ describe("auth-route-guard PUBLIC_PATH_PREFIXES - WayFlow ApiNode bridge routes"
   });
 });
 
-describe("auth-route-guard - cinatra#407 hosted /widget-auth surface", () => {
-  // The two server-to-server routes are PREFIX-exempt (self-authenticated by the
-  // per-site cnx_ credential inside the handler); the hosted PAGE is EXACT-exempt
-  // so a sessionless visitor renders the login form instead of being 307'd.
+describe("auth-route-guard - the hosted /widget-auth surface (cinatra#2674)", () => {
+  // WHY THE ENTRY IS NOW THE NAMESPACE PREFIX, having deliberately NOT been one.
+  //
+  // Before S8e the exemption named the two leaf routes precisely, and a bare
+  // "/api/widget-auth" prefix was called out as a thing to avoid: it would
+  // exempt any future sub-route. S8e adds two sub-routes (`frame/init`,
+  // `frame/token`) whose ENTIRE PURPOSE is to be reachable without a session —
+  // the visitor has none, which is what the flow exists to fix — and retires the
+  // other two to a 410 that must also be reachable so a legacy plugin gets an
+  // honest answer rather than a redirect.
+  //
+  // So every route in this namespace is, by construction, self-authenticating
+  // and session-less. The prefix now EXPRESSES that rather than enumerating it,
+  // and the assertion below moves accordingly: instead of pinning two names, it
+  // pins that the entry documents in-handler authorization, and that the widget
+  // NAMESPACE is the widest thing exempted — no `/api` prefix, no bare `/api/w`.
 
-  it("exempts /api/widget-auth/init (server-to-server transaction init; in-handler cnx_ auth)", () => {
-    expect(guardSource).toMatch(/"\/api\/widget-auth\/init"/);
-    const line = guardSource.split("\n").find((l) => l.includes('"/api/widget-auth/init"'));
+  it("exempts the /api/widget-auth namespace, documented as authorized in-handler", () => {
+    const line = guardSource
+      .split("\n")
+      .find((l) => /"\/api\/widget-auth",/.test(l));
     expect(line).toBeDefined();
-    expect((line ?? "").toLowerCase()).toMatch(/auth enforced inside/);
-  });
-
-  it("exempts /api/widget-auth/token (server-to-server redeem; in-handler cnx_ + PKCE auth)", () => {
-    expect(guardSource).toMatch(/"\/api\/widget-auth\/token"/);
-    const line = guardSource.split("\n").find((l) => l.includes('"/api/widget-auth/token"'));
-    expect(line).toBeDefined();
-    expect((line ?? "").toLowerCase()).toMatch(/auth enforced inside/);
+    expect((line ?? "").toLowerCase()).toMatch(/authorized inside|auth enforced inside/);
   });
 
   it("EXACT-exempts the /widget-auth page so a sessionless visitor renders login (not 307→/sign-in)", () => {
@@ -152,12 +158,30 @@ describe("auth-route-guard - cinatra#407 hosted /widget-auth surface", () => {
     expect(guardSource).not.toMatch(/"\/widget-auth\//); // never a prefix entry
   });
 
-  it("does NOT exempt /api/widget-auth as a broad prefix (only the two precise routes)", () => {
-    // A bare "/api/widget-auth" prefix would expose any future sub-route. Only
-    // the init + token leaf paths are listed.
+  it("does NOT widen beyond that namespace", () => {
     const lines = guardSource.split("\n");
-    const hasBroad = lines.some((l) => /"\/api\/widget-auth"\s*,/.test(l));
-    expect(hasBroad).toBe(false);
+    expect(lines.some((l) => /"\/api",/.test(l))).toBe(false);
+    expect(lines.some((l) => /"\/api\/widget",/.test(l))).toBe(false);
+  });
+});
+
+describe("auth-route-guard - the review island (cinatra#2674 scope addition)", () => {
+  // The island is framed by cinatra's OWN embed iframe on a third-party CMS
+  // page, where a SameSite-bound session cookie is not sent. Without the
+  // exemption the guard 307s that frame to /sign-in and the island can never
+  // paint on the deployments the parity criterion is about. Reachability only:
+  // the page authorizes with a sealed, ref-bound island credential, or with a
+  // session when there is one.
+
+  it("EXACT-exempts /lifecycle/review-island, never as a prefix", () => {
+    const line = guardSource
+      .split("\n")
+      .find((l) => l.includes('"/lifecycle/review-island"'));
+    expect(line).toBeDefined();
+    expect((line ?? "").toLowerCase()).toContain("reachability only");
+    expect(guardSource).not.toMatch(/"\/lifecycle\/review-island\//);
+    // The sibling lifecycle surfaces stay session-gated.
+    expect(guardSource).not.toMatch(/"\/lifecycle",/);
   });
 });
 
