@@ -28,11 +28,22 @@ describe("AssistantsDirectoryPage scope filter", () => {
     expect(src).toMatch(/accessibleScopeTokens,?\s*\)/);
   });
 
-  it("carries the full scope-token vocabulary (personal, workspace, org, team, project, admin)", () => {
-    expect(src).toMatch(/\["personal", "workspace", "admin"\]/);
+  it("carries the scope-token vocabulary this surface can actually match", () => {
+    expect(src).toMatch(/\["workspace", "admin"\]/);
     expect(src).toMatch(/org:\$\{/);
     expect(src).toMatch(/team:\$\{/);
     expect(src).toMatch(/project:\$\{/);
+  });
+
+  it("omits `personal`, which no assistant can ever match", () => {
+    // assistant_audience has no per-user subject kind, so a Personal selection
+    // could only ever empty the directory. The token is not accessible here, so
+    // ?scope=personal falls back to the broadest view instead. Asserted against
+    // the accessible-token SET literal, not the whole file, so the prose that
+    // explains the omission does not satisfy the check.
+    // (The picker half, `showPersonal={false}`, is asserted where it lives:
+    // src/components/assistants/__tests__/assistants-directory-client-design.test.ts)
+    expect(src).not.toMatch(/new Set<string>\(\[[^\]]*"personal"/);
   });
 
   it("hands the resolved selection to the RESOLVER, not only to the picker", () => {

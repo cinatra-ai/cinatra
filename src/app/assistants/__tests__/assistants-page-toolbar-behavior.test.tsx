@@ -170,6 +170,14 @@ describe("/assistants toolbar — scope pipeline (cinatra#2688)", () => {
     expect(await handlesForScope("team:t9")).toEqual(["cinatra", "projectly", "teamly"]);
   });
 
+  it("?scope=personal falls back to the broadest view rather than emptying the page", async () => {
+    // `personal` is not in this surface's accessible set (no assistant can carry
+    // a personal locus), so the canonical parser drops it like any inaccessible
+    // token. A hand-typed or stale personal URL must therefore show everything,
+    // never an empty directory.
+    expect(await handlesForScope("personal")).toEqual(["cinatra", "projectly", "teamly"]);
+  });
+
   it("a workspace token collapses the whole selection to the default", async () => {
     expect(await handlesForScope(`workspace,team:${TEAM}`)).toEqual([
       "cinatra",

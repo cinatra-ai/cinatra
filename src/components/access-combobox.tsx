@@ -222,6 +222,17 @@ export type AccessComboboxMultiProps = {
    */
   showAdmin?: boolean;
   /**
+   * Whether to render the "Personal: Only me" (owner) row. Defaults to true.
+   *
+   * A FILTER surface whose resources can never carry a personal locus passes
+   * false, so the row is not offered at all (cinatra#2688: an assistant's scope
+   * comes from its `assistant_audience` grants, which have no per-user subject
+   * kind, so a Personal selection on /assistants could only ever return an empty
+   * directory). Same one-way, rows-only contract as `installMode`: it removes a
+   * row, never alters any row's semantics.
+   */
+  showPersonal?: boolean;
+  /**
    * PER-SCOPE disable (cinatra#953 W3 — mirrors the flat single-mode contract):
    * option VALUES ("owner" | "workspace" | "admin" | `org:<id>` | `team:<id>` |
    * `project:<id>`) rendered non-selectable. Used by the connection share
@@ -829,6 +840,7 @@ function AccessComboboxMultiSelect({
   disabled = false,
   id,
   showAdmin = true,
+  showPersonal = true,
   disabledScopes,
   disabledReasons,
   toggleSelection,
@@ -869,7 +881,9 @@ function AccessComboboxMultiSelect({
   const filteredOrgs = scopes.orgs.filter(
     (o) => offered(`org:${o.id}`) && matches(`organization ${o.name}`),
   );
-  const showOnlyMe = matches("only me"); // Personal is never dropped by containment (§6.2).
+  // Personal is never dropped by CONTAINMENT (§6.2); `showPersonal` is a
+  // separate, explicit opt-out for a surface where the row can match nothing.
+  const showOnlyMe = showPersonal && matches("only me");
   const showWorkspaceAll = offered("workspace") && matches("workspace all");
   const showAdminsOnly = showAdmin && offered("admin") && matches("workspace admins only");
 

@@ -27,9 +27,19 @@ describe("AssistantsDirectoryClient — toolbar composition", () => {
 
   it("reuses the shared ScopeFilterCombobox, server-fed and URL-owning", () => {
     expect(SRC).toMatch(/from\s+["']@\/components\/scope-filter-combobox["']/);
-    expect(SRC).toMatch(
-      /<ScopeFilterCombobox\s+id="assistants-scope-filter"\s+value=\{scopeValue\}\s+scopes=\{scopes\}\s*\/>/,
-    );
+    expect(SRC).toMatch(/<ScopeFilterCombobox[\s\S]*?id="assistants-scope-filter"/);
+    expect(SRC).toMatch(/value=\{scopeValue\}/);
+    expect(SRC).toMatch(/scopes=\{scopes\}/);
+  });
+
+  it("hides the Personal row, which no assistant can ever match", () => {
+    // The same rule the add affordance follows: a control that leads nowhere is
+    // never shown. Paired with the page dropping the `personal` token.
+    expect(SRC).toMatch(/showPersonal=\{false\}/);
+  });
+
+  it("gives the search field its own accessible name", () => {
+    expect(SRC).toMatch(/aria-label="Search assistants"/);
   });
 
   it("carries a THREE-state type filter on the shared ToggleGroup, landing on 'all'", () => {

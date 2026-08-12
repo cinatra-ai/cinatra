@@ -60,13 +60,22 @@ export default async function AssistantsDirectoryPage({
     canGrantWorkspace: true,
   };
 
-  // The scope tokens the actor may select. "personal" / "workspace" / "admin"
-  // are always selectable filters; org / team / project tokens are gated to the
-  // actor's memberships. `?scope=` is a comma-separated multi-value OR-filter
-  // parsed by the ONE canonical parser: invalid / inaccessible tokens are
-  // dropped — never honor a scope the actor can't see — and an empty or
-  // workspace-containing selection collapses to the default (the broadest view).
-  const accessibleScopeTokens = new Set<string>(["personal", "workspace", "admin"]);
+  // The scope tokens the actor may select. "workspace" / "admin" are always
+  // selectable filters; org / team / project tokens are gated to the actor's
+  // memberships. `?scope=` is a comma-separated multi-value OR-filter parsed by
+  // the ONE canonical parser: invalid / inaccessible tokens are dropped — never
+  // honor a scope the actor can't see — and an empty or workspace-containing
+  // selection collapses to the default (the broadest view).
+  //
+  // "personal" is deliberately ABSENT (unlike /connectors and /skills, whose
+  // resources really can be personally owned). An assistant's scope comes from
+  // its `assistant_audience` grants, which have no per-user subject kind, so a
+  // Personal selection could only ever return an empty directory. Dropping the
+  // token here makes `?scope=personal` fall back to the broadest view instead of
+  // silently emptying the page, and the picker hides the row to match
+  // (`showPersonal={false}`). Restore both halves together if the audience table
+  // ever gains a per-user kind.
+  const accessibleScopeTokens = new Set<string>(["workspace", "admin"]);
   for (const org of orgs) {
     accessibleScopeTokens.add(`org:${org.id}`);
     for (const team of org.teams) accessibleScopeTokens.add(`team:${team.id}`);

@@ -159,6 +159,10 @@ export function AssistantsDirectoryClient({
           <div className="relative">
             <Input
               placeholder="Search assistants"
+              // A placeholder is only a FALLBACK accessible name and drops out
+              // of the accessibility tree in some AT configurations, so the
+              // field carries its own label like the sort control does.
+              aria-label="Search assistants"
               className="h-8 w-[180px] pr-7 lg:w-[260px]"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -179,7 +183,18 @@ export function AssistantsDirectoryClient({
         </ToolbarGroup>
         <ToolbarSeparator />
         <ToolbarGroup>
-          <ScopeFilterCombobox id="assistants-scope-filter" value={scopeValue} scopes={scopes} />
+          {/* `showPersonal={false}`: an assistant's scope comes from its
+              `assistant_audience` grants, which carry no per-user subject kind,
+              so a Personal selection could only ever return an empty directory.
+              The same rule the add affordance follows: a control that leads
+              nowhere is never shown. The page drops the `personal` token from
+              the accessible set too, so the URL cannot reach it either. */}
+          <ScopeFilterCombobox
+            id="assistants-scope-filter"
+            value={scopeValue}
+            scopes={scopes}
+            showPersonal={false}
+          />
         </ToolbarGroup>
         {/* "+ Assistant" (cinatra#2688). An assistant is an extension, so it is
             acquired the ways any extension is — hence a MENU rather than
