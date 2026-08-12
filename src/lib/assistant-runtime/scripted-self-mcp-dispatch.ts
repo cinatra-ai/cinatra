@@ -298,14 +298,38 @@ function createDispatchWithBearer(params: {
  * consumed `cwu_` genuinely granted it — the `lcr` lifecycle-read claim. Those
  * are the principal's values, read off the same object the real path mints from;
  * nothing here can widen them.
+ *
+ * IT MINTS THE SAME SEALED TOKEN THE PRODUCTION MINT DOES (cinatra#2687). The
+ * shipped mint in `runtime.ts` seals the token to two things it cannot outlive —
+ * `pjti`, the `cwu_` row the turn authenticated against, and `run`, the AG-UI run
+ * id of the turn minting it — and the MCP authorization layer now REFUSES a token
+ * carrying neither. A scripted dispatcher that omitted them would not be a
+ * weaker proof, it would be a DEAD one: every call would 401 at the transport
+ * and the turn would degrade to prose with no card, which on screen is
+ * indistinguishable from "nothing is waiting for you" (the exact failure mode
+ * SELF_MCP_HANDSHAKE_TIMEOUT_MS exists to stop being silent about).
+ *
+ * So both seals are REQUIRED inputs here, and both come from the caller rather
+ * than from anything this module can invent: `parentJti` off the server-verified
+ * principal, `turnRunId` off the harness-bound turn identity. That is the same
+ * pair, read off the same two objects, that the production mint uses — which is
+ * the property the proof depends on: this path is the shipped credential, not a
+ * test-shaped relative of it.
  */
 export function createScriptedSelfMcpDispatch(params: {
   widgetPrincipal: WidgetPrincipal;
+  /**
+   * The AG-UI run id of the turn being served (cinatra#2687's `run` seal). Taken
+   * from the runtime's own `turnIdentity`, never derived here — the token must
+   * name the turn whose `assistant_turns` row the authorization layer reads, and
+   * a run id this module made up would name no row and be refused.
+   */
+  turnRunId: string;
   onDispatched?: OnDispatched;
   /** Transport-suite only; production takes the shipped budgets. */
   timeouts?: { handshakeMs: number; callMs: number };
 }): ScriptedSelfMcpDispatch {
-  const { widgetPrincipal, onDispatched } = params;
+  const { widgetPrincipal, turnRunId, onDispatched } = params;
   return createDispatchWithBearer({
     token: issueWidgetMcpActorToken({
       userId: widgetPrincipal.userId,
@@ -313,6 +337,11 @@ export function createScriptedSelfMcpDispatch(params: {
       instanceId: widgetPrincipal.instanceId,
       kind: widgetPrincipal.assistantHandle,
       jti: randomUUID(),
+      // The two seals (cinatra#2687), byte-for-byte the pair `runtime.ts` mints
+      // on the production path: the principal's parent `cwu_` row, and THIS
+      // turn's run id.
+      parentJti: widgetPrincipal.parentTokenJti,
+      turnRunId,
       lifecycleRead: widgetPrincipal.lifecycleRead,
     }),
     clientName: "cinatra-scripted-widget-turn",

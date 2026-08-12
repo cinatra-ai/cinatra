@@ -650,6 +650,12 @@ export async function runAssistantTurn(
     const dispatchedResults = new Set<string>();
     const callSelfMcpTool = createScriptedSelfMcpDispatch({
       widgetPrincipal,
+      // The `run` seal (cinatra#2687) — THIS turn's AG-UI run id, the same value
+      // the production mint below passes. The scripted path carries the SHIPPED
+      // sealed credential or it carries nothing that works: the authorization
+      // layer refuses an unsealed token, so an omission here would 401 every
+      // call and photograph an empty panel.
+      turnRunId: args.turnIdentity.runId,
       onDispatched: (resultText) => dispatchedResults.add(resultText),
     });
     await runScriptedWidgetAssistantTurn({

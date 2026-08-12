@@ -25,6 +25,7 @@ import {
   scriptedTurnAsksForLifecyclePull,
   scriptedTurnNamesAgentRun,
 } from "../scripted-test-provider";
+import type { ScriptedSelfMcpDispatch } from "../scripted-test-provider";
 
 type Emitted = {
   text: string[];
@@ -56,7 +57,10 @@ const REAL_ENVELOPE = JSON.stringify({
 describe("scripted widget turn — the lifecycle pull", () => {
   it("LISTS then RENDERS through the injected dispatcher, forwarding both results verbatim", async () => {
     const s = sink();
-    const callSelfMcpTool = vi.fn(async (call: { name: string }) =>
+    // Typed as the REAL dispatch signature (not a narrowed `{ name }`) so the
+    // recorded call carries `args` — a mock that dropped the parameter from its
+    // type would make an assertion about the render's ref untypecheckable.
+    const callSelfMcpTool = vi.fn<ScriptedSelfMcpDispatch>(async (call) =>
       call.name === SCRIPTED_LIFECYCLE_LIST_TOOL ? REAL_LIST_ANSWER : REAL_ENVELOPE,
     );
 
@@ -193,7 +197,10 @@ describe("scripted widget turn — the lifecycle pull", () => {
 describe("scripted chat turn — the same lifecycle pull on /chat", () => {
   it("LISTS then RENDERS through the injected dispatcher, forwarding both results verbatim", async () => {
     const s = sink();
-    const callSelfMcpTool = vi.fn(async (call: { name: string }) =>
+    // Typed as the REAL dispatch signature (not a narrowed `{ name }`) so the
+    // recorded call carries `args` — a mock that dropped the parameter from its
+    // type would make an assertion about the render's ref untypecheckable.
+    const callSelfMcpTool = vi.fn<ScriptedSelfMcpDispatch>(async (call) =>
       call.name === SCRIPTED_LIFECYCLE_LIST_TOOL ? REAL_LIST_ANSWER : REAL_ENVELOPE,
     );
 

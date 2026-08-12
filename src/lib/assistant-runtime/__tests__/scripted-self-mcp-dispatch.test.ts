@@ -25,6 +25,7 @@
 // the token; `s5-widget-obo-integration.test.ts` is where that side lives.
 // ---------------------------------------------------------------------------
 
+import { createHmac } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -44,12 +45,17 @@ const WIDGET_PRINCIPAL: WidgetPrincipal = {
   kind: "public_site_widget",
   userId: "u-widget-reader",
   orgId: "org-widget",
+  /** The `cwu_` row this turn authenticated against — #2687's `pjti` seal. */
+  parentTokenJti: "cwu-row-of-this-signin",
   instanceId: "inst-canonical",
   verifiedOrigin: "https://blog.example.com",
   assistantHandle: "wordpress",
   instancesConfigKey: "wordpress",
   lifecycleRead: true,
 };
+
+/** The AG-UI run id of the turn under test — #2687's `run` seal. */
+const TURN_RUN_ID = "run-of-this-scripted-turn";
 
 /** One recorded JSON-RPC request: the method, its params, and its bearer. */
 type Recorded = { method: string; params: Record<string, unknown>; authorization: string };
@@ -169,6 +175,7 @@ describe("the scripted turn's self-MCP transport", () => {
     });
     const dispatch = createScriptedSelfMcpDispatch({
       widgetPrincipal: WIDGET_PRINCIPAL,
+      turnRunId: TURN_RUN_ID,
       timeouts: { handshakeMs: 2_000, callMs: 60 },
     });
     await expect(
@@ -201,7 +208,10 @@ describe("the scripted turn's self-MCP transport", () => {
     const server = await withStub({
       toolResults: { artifact_review_gates_list: '{"refs":[]}' },
     });
-    const dispatch = createScriptedSelfMcpDispatch({ widgetPrincipal: WIDGET_PRINCIPAL });
+    const dispatch = createScriptedSelfMcpDispatch({
+      widgetPrincipal: WIDGET_PRINCIPAL,
+      turnRunId: TURN_RUN_ID,
+    });
     await dispatch({ name: "artifact_review_gates_list", args: {} });
 
     const authorization = server.recorded[0]?.authorization ?? "";
@@ -227,12 +237,95 @@ describe("the scripted turn's self-MCP transport", () => {
     expect(actor?.lifecycleRead).toBe(true);
   });
 
+  // THE SEALS ARE ON THE WIRE TOO (cinatra#2687).
+  //
+  // The verifier above already refuses a token carrying neither seal — `pjti`
+  // and `run` are REQUIRED and fail-closed there — so `actor !== null` in the
+  // previous test is itself the proof that this mint seals SOMETHING. What that
+  // cannot say is WHICH values, and the values are the whole property: a seal
+  // pointing at a row that is not this sign-in, or a run that is not this turn,
+  // would verify perfectly and then be refused one layer down by the
+  // authorization leaf, which reads the seals to ask whether the sign-in is
+  // still there and the turn still running. So the two claims are pinned to the
+  // two objects they must come from.
+  it("THE SEALS ARE ON THE WIRE: `pjti` is the principal's parent row and `run` is THIS turn", async () => {
+    const server = await withStub({
+      toolResults: { artifact_review_gates_list: '{"refs":[]}' },
+    });
+    const dispatch = createScriptedSelfMcpDispatch({
+      widgetPrincipal: WIDGET_PRINCIPAL,
+      turnRunId: TURN_RUN_ID,
+    });
+    await dispatch({ name: "artifact_review_gates_list", args: {} });
+
+    const actor = verifyWidgetMcpActorToken({
+      authHeader: server.recorded[0]?.authorization ?? "",
+      request: new Request(`${server.origin}/api/mcp`),
+      expectedAudience: `${server.origin}/api/mcp`,
+      expectedIssuer: `${server.origin}/api/auth`,
+    });
+    expect(actor?.parentJti).toBe(WIDGET_PRINCIPAL.parentTokenJti);
+    expect(actor?.turnRunId).toBe(TURN_RUN_ID);
+    // The per-turn nonce stays a fresh audit handle and is NOT either seal —
+    // mistaking the nonce for the binding is the defect #2687 closed.
+    expect(actor?.jti).not.toBe(TURN_RUN_ID);
+    expect(actor?.jti).not.toBe(WIDGET_PRINCIPAL.parentTokenJti);
+  });
+
+  // NEGATIVE CONTROL FOR THE SEALS, run rather than asserted. Strip either seal
+  // from the minted token and re-verify: the SHIPPED verifier refuses it. That
+  // is what an unsealed scripted dispatch would have put on the wire, and it is
+  // why the seals are required inputs here instead of optional ones — the turn
+  // would not have been weaker, it would have 401'd every call and photographed
+  // an empty panel.
+  it("STRIPPING EITHER SEAL makes the shipped verifier refuse the very same token", async () => {
+    const server = await withStub({
+      toolResults: { artifact_review_gates_list: '{"refs":[]}' },
+    });
+    const dispatch = createScriptedSelfMcpDispatch({
+      widgetPrincipal: WIDGET_PRINCIPAL,
+      turnRunId: TURN_RUN_ID,
+    });
+    await dispatch({ name: "artifact_review_gates_list", args: {} });
+    const sent = (server.recorded[0]?.authorization ?? "").replace(/^Bearer\s+/, "");
+
+    const verifyAs = (token: string) =>
+      verifyWidgetMcpActorToken({
+        authHeader: `Bearer ${token}`,
+        request: new Request(`${server.origin}/api/mcp`),
+        expectedAudience: `${server.origin}/api/mcp`,
+        expectedIssuer: `${server.origin}/api/auth`,
+      });
+
+    // POSITIVE CONTROL: the untouched token verifies, so a refusal below is
+    // attributable to the dropped claim and to nothing else.
+    expect(verifyAs(sent)).not.toBeNull();
+
+    // Re-sign the payload without each seal, using the same secret the mint
+    // used — the signature is valid, only the claim is gone.
+    const [header, payload] = sent.split(".");
+    const claims = JSON.parse(Buffer.from(payload!, "base64url").toString("utf8"));
+    const resign = (next: Record<string, unknown>) => {
+      const encoded = Buffer.from(JSON.stringify(next), "utf8").toString("base64url");
+      const signingInput = `${header}.${encoded}`;
+      const signature = createHmac("sha256", process.env.BETTER_AUTH_SECRET!)
+        .update(signingInput)
+        .digest("base64url");
+      return `${signingInput}.${signature}`;
+    };
+    const { pjti: _noParent, ...withoutParent } = claims;
+    const { run: _noRun, ...withoutRun } = claims;
+    expect(verifyAs(resign(withoutParent))).toBeNull();
+    expect(verifyAs(resign(withoutRun))).toBeNull();
+  });
+
   it("A PRINCIPAL WITHOUT CONSENT MINTS NO GRANT — the verifier reads no `lcr`", async () => {
     const server = await withStub({
       toolResults: { artifact_review_gates_list: '{"refs":[]}' },
     });
     const dispatch = createScriptedSelfMcpDispatch({
       widgetPrincipal: { ...WIDGET_PRINCIPAL, lifecycleRead: false },
+      turnRunId: TURN_RUN_ID,
     });
     await dispatch({ name: "artifact_review_gates_list", args: {} });
     const actor = verifyWidgetMcpActorToken({
@@ -258,6 +351,7 @@ describe("the scripted turn's self-MCP transport", () => {
     const dispatched: string[] = [];
     const dispatch = createScriptedSelfMcpDispatch({
       widgetPrincipal: WIDGET_PRINCIPAL,
+      turnRunId: TURN_RUN_ID,
       onDispatched: (text) => dispatched.push(text),
     });
     const toolCalls: string[] = [];
