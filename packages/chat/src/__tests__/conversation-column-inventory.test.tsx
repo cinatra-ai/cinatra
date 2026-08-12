@@ -110,7 +110,11 @@ import {
   WIDGET_DIRECTORY,
   type SurfaceName,
 } from "./conversation-column-harness";
-import { fetchThreadMessages } from "../conversation-services";
+import {
+  buildThreadWrite,
+  fetchThreadMessages,
+  saveThreadTranscript,
+} from "../conversation-services";
 
 /**
  * The widget's server, installed for every mount in this file.
@@ -599,6 +603,94 @@ describe("the six items S8f carried open are CLOSED (#2683)", () => {
     // it used to send.
     expect(EMBED_SRC).not.toMatch(/^\s*credentials: "include",/m);
     expect((EMBED_SRC.match(/credentialsMode: "omit"/g) ?? []).length).toBeGreaterThan(0);
+  });
+
+  it("1 (write half) — the SAVE carries the broker credential, never a cookie", async () => {
+    // The read had nothing to restore because a widget could never write. The
+    // save is the same shape as every other request this surface makes: broker
+    // headers built at call time, `credentials: "omit"` — a cookie here would
+    // write this widget's turns into whoever else is signed in on the browser.
+    const server = installWidgetServiceStub({});
+    try {
+      await saveThreadTranscript(
+        buildThreadWrite({
+          threadId: "thread-parity-2683",
+          messages: [{ id: "m1", role: "user", content: "keep this" }],
+          createdAt: "2026-08-12T10:00:00.000Z",
+          activeAssistantHandle: "wordpress",
+        }),
+        {
+          authHeaders: () => ({ "X-Cinatra-Widget-User-Token": "cwu_user" }),
+          credentialsMode: "omit",
+        },
+      );
+      const call = server.calls.find((c) => c.url === "/api/assistants/threads");
+      expect(call).toBeDefined();
+      expect(call!.init.method).toBe("POST");
+      expect(call!.init.credentials).toBe("omit");
+      expect(
+        (call!.init.headers as Record<string, string>)["X-Cinatra-Widget-User-Token"],
+      ).toBe("cwu_user");
+      // The payload is the SAME contract `/chat` posts — the title derived by
+      // `/chat`'s own rule, not a widget-shaped body.
+      const body = JSON.parse(String(call!.init.body));
+      expect(body).toMatchObject({
+        id: "thread-parity-2683",
+        title: "keep this",
+        activeAssistantHandle: "wordpress",
+      });
+      expect(body.messages).toHaveLength(1);
+    } finally {
+      server.restore();
+    }
+    // And the EMBED really does this, on the turn's settle, with the SAME
+    // service transport it reads with.
+    expect(EMBED_SRC).toContain("saveThreadTranscript");
+    expect(EMBED_SRC).toContain("buildThreadWrite");
+  });
+
+  it("1 (write half, ordering) — two saves of one thread cannot commit out of order", async () => {
+    // Each save posts the WHOLE transcript and the server deletes every turn the
+    // snapshot omits, so an older snapshot landing last is a silently lost
+    // message. The writer serializes per thread; this is that, measured.
+    const original = globalThis.fetch;
+    const started: string[] = [];
+    const finished: string[] = [];
+    const release: Array<() => void> = [];
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const label = JSON.parse(String(init?.body)).title as string;
+      started.push(label);
+      await new Promise<void>((resolve) => release.push(resolve));
+      finished.push(label);
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      const one = saveThreadTranscript({
+        id: "t-order",
+        title: "first",
+        messages: [],
+        createdAt: "c",
+        updatedAt: "u1",
+      });
+      const two = saveThreadTranscript({
+        id: "t-order",
+        title: "second",
+        messages: [],
+        createdAt: "c",
+        updatedAt: "u2",
+      });
+      // The SECOND request has not even been issued while the first is in
+      // flight — which is what makes an out-of-order commit impossible.
+      await Promise.resolve();
+      expect(started).toEqual(["first"]);
+      release.shift()!();
+      await one;
+      release.shift()!();
+      await two;
+      expect(finished).toEqual(["first", "second"]);
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 
   it("1 (negative control) — a refused read restores nothing, silently", async () => {

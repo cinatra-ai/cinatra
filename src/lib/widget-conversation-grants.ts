@@ -37,6 +37,26 @@ export const WIDGET_THREAD_HISTORY_GRANT: WidgetTokenGrant = {
   auditRejected: "widget_conversation_read_rejected",
 };
 
+/**
+ * Item 1, THE WRITE HALF — keep the turns the restore above reads back.
+ *
+ * SAME ROUTE PATH, DIFFERENT SCOPE, exactly as the Skill-autosave pair above:
+ * the audience admits the surface, the scope admits the verb. A session granted
+ * only `conversation.read` can restore a transcript and cannot append to one,
+ * which is the negative control this pair exists to make possible.
+ *
+ * It is a SEPARATE constant rather than a second `requiredScopes` entry on the
+ * history grant because the two consumes are two different decisions with two
+ * different audit series — a refused write must not read, in the log, like a
+ * refused read.
+ */
+export const WIDGET_THREAD_WRITE_GRANT: WidgetTokenGrant = {
+  routePath: WIDGET_CHAT_THREADS_ROUTE_PATH,
+  requiredScopes: [WIDGET_CONVERSATION_WRITE_SCOPE],
+  auditAuthorized: "widget_conversation_write_authorized",
+  auditRejected: "widget_conversation_write_rejected",
+};
+
 /** Item 4 — the @-mention participant list, from the SAME directory reader. */
 export const WIDGET_PARTICIPANTS_GRANT: WidgetTokenGrant = {
   routePath: WIDGET_CHAT_PARTICIPANTS_ROUTE_PATH,

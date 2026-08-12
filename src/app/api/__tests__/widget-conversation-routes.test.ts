@@ -30,10 +30,17 @@ vi.mock("@/lib/widget-conversation-door", async (importOriginal) => {
 // --- the server modules behind the routes (each shared by BOTH branches) ---
 const handleGetAssistantThreadById = vi.fn();
 const handleGetAssistantThreadByIdForWidget = vi.fn();
+const handleListAssistantThreads = vi.fn();
+const handleSaveAssistantThread = vi.fn();
+const handleSaveAssistantThreadForWidget = vi.fn();
 vi.mock("@/lib/assistant-thread-http", () => ({
   handleGetAssistantThreadById: (...a: unknown[]) => handleGetAssistantThreadById(...a),
   handleGetAssistantThreadByIdForWidget: (...a: unknown[]) =>
     handleGetAssistantThreadByIdForWidget(...a),
+  handleListAssistantThreads: (...a: unknown[]) => handleListAssistantThreads(...a),
+  handleSaveAssistantThread: (...a: unknown[]) => handleSaveAssistantThread(...a),
+  handleSaveAssistantThreadForWidget: (...a: unknown[]) =>
+    handleSaveAssistantThreadForWidget(...a),
 }));
 
 const handleGetChatCaptureConfig = vi.fn();
@@ -112,6 +119,9 @@ beforeEach(() => {
   resolveOrgRoleForSession.mockResolvedValue("member");
   handleGetAssistantThreadById.mockResolvedValue(new Response("cookie"));
   handleGetAssistantThreadByIdForWidget.mockResolvedValue(new Response("widget"));
+  handleListAssistantThreads.mockResolvedValue(Response.json([]));
+  handleSaveAssistantThread.mockResolvedValue(Response.json({ ok: true }));
+  handleSaveAssistantThreadForWidget.mockResolvedValue(Response.json({ ok: true }));
   handleGetChatCaptureConfig.mockResolvedValue(Response.json({ enabled: false }));
   handlePatchChatCaptureConfig.mockResolvedValue(Response.json({ enabled: true }));
   listPendingToolCallsFor.mockResolvedValue({ rows: [] });
@@ -152,6 +162,75 @@ describe("GET /api/assistants/threads/[threadId] (#2683)", () => {
     const { GET } = await import("@/app/api/assistants/threads/[threadId]/route");
     await GET(cookie("https://app.test/api/assistants/threads/t-1"), { params });
     expect(handleGetAssistantThreadById).toHaveBeenCalledWith("t-1");
+    expect(authenticateWidgetConversationRequest).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Item 1, WRITE HALF — keeping the conversation the read above restores.
+// ---------------------------------------------------------------------------
+describe("POST /api/assistants/threads (#2683 write half)", () => {
+  const url = "https://app.test/api/assistants/threads";
+  const body = JSON.stringify({ id: "t-1", title: "T", messages: [] });
+
+  it("authorizes a widget write and scopes it to the WIDGET principal", async () => {
+    const { POST } = await import("@/app/api/assistants/threads/route");
+    await POST(widget(url, { method: "POST", body }));
+    expect(handleSaveAssistantThreadForWidget).toHaveBeenCalledWith(expect.anything(), {
+      userId: "widget-user",
+      orgId: "widget-org",
+    });
+    // The cookie writer is not merely unused — it is never reached.
+    expect(handleSaveAssistantThread).not.toHaveBeenCalled();
+  });
+
+  it("consumes under conversation.WRITE, at the same audience the READ uses", async () => {
+    const { POST } = await import("@/app/api/assistants/threads/route");
+    const { GET } = await import("@/app/api/assistants/threads/[threadId]/route");
+    await POST(widget(url, { method: "POST", body }));
+    await GET(widget(`${url}/t-1`), { params: Promise.resolve({ threadId: "t-1" }) });
+    const [writeGrant] = authenticateWidgetConversationRequest.mock.calls[0].slice(1);
+    const [readGrant] = authenticateWidgetConversationRequest.mock.calls[1].slice(1);
+    expect(writeGrant.requiredScopes).toEqual(["conversation.write"]);
+    expect(readGrant.requiredScopes).toEqual(["conversation.read"]);
+    // ONE audience, two verbs — the pair is what makes "granted the read, not
+    // the write" an expressible state rather than a hope.
+    expect(writeGrant.routePath).toBe(readGrant.routePath);
+    // Two decisions, two audit series: a refused write must not read, in the
+    // log, like a refused read.
+    expect(writeGrant.auditRejected).not.toBe(readGrant.auditRejected);
+  });
+
+  it("401s a failed widget consume — no cookie fallback", async () => {
+    authenticateWidgetConversationRequest.mockResolvedValue(null);
+    const { POST } = await import("@/app/api/assistants/threads/route");
+    const res = await POST(widget(url, { method: "POST", body }));
+    expect(res.status).toBe(401);
+    expect(handleSaveAssistantThread).not.toHaveBeenCalled();
+    expect(handleSaveAssistantThreadForWidget).not.toHaveBeenCalled();
+  });
+
+  it("leaves the cookie writer alone — same request in, same response out", async () => {
+    const { POST } = await import("@/app/api/assistants/threads/route");
+    const answer = Response.json({ ok: "cookie-writer" });
+    handleSaveAssistantThread.mockResolvedValue(answer);
+    const request = cookie(url, { method: "POST", body });
+    const res = await POST(request);
+    // The ORIGINAL request object is forwarded — not a copy, not a re-read body
+    // — and the handler's own response is what the caller gets back.
+    expect(handleSaveAssistantThread).toHaveBeenCalledWith(request);
+    expect(res).toBe(answer);
+    expect(handleSaveAssistantThreadForWidget).not.toHaveBeenCalled();
+    expect(authenticateWidgetConversationRequest).not.toHaveBeenCalled();
+  });
+
+  it("the thread LIST has no widget branch — it never consults the door", async () => {
+    // Narrowing, stated: an enumeration of every conversation this person has
+    // had is not what a widget needs, so the GET stays cookie-only even though
+    // the middleware now admits the path for the POST.
+    const { GET } = await import("@/app/api/assistants/threads/route");
+    await GET();
+    expect(handleListAssistantThreads).toHaveBeenCalled();
     expect(authenticateWidgetConversationRequest).not.toHaveBeenCalled();
   });
 });

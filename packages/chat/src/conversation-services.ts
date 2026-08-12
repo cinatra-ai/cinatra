@@ -25,6 +25,7 @@
 // ---------------------------------------------------------------------------
 
 import type { Mentionable } from "@cinatra-ai/sdk-ui/prompt-field";
+import { deriveThreadTitle } from "./ag-ui-chat-client";
 import type { UiMessage } from "./types";
 
 /**
@@ -82,6 +83,121 @@ export async function fetchThreadMessages(
   } catch {
     return null;
   }
+}
+
+/**
+ * The thread payload BOTH surfaces post. `/chat` has always sent this object to
+ * `POST /api/assistants/threads`; naming it here is what makes "the same payload
+ * contract" checkable instead of asserted.
+ *
+ * `ownerUserId`/`teamId` are deliberately ABSENT from the type: the server
+ * derives ownership from the existing row and strips whatever the body carried,
+ * so a field here would be a field that is dropped — and a client author would
+ * reasonably read its presence as meaning it does something.
+ */
+export type ConversationThreadWrite = {
+  id: string;
+  title: string;
+  messages: UiMessage[];
+  createdAt: string;
+  updatedAt: string;
+  activeAssistantHandle?: string;
+};
+
+/**
+ * Assemble the payload from what a column actually holds. It exists so the two
+ * surfaces cannot disagree about the SHAPE while agreeing about the route —
+ * `deriveThreadTitle` is `/chat`'s own title rule, imported rather than
+ * re-stated, so a thread saved by the widget is titled the way the same
+ * conversation would be titled in the app.
+ *
+ * `createdAt` is the caller's, because only the caller knows whether this thread
+ * is new or restored; `updatedAt` is stamped here so every writer stamps it the
+ * same way.
+ */
+export function buildThreadWrite(input: {
+  threadId: string;
+  messages: UiMessage[];
+  createdAt: string;
+  activeAssistantHandle?: string;
+}): ConversationThreadWrite {
+  const firstUser = input.messages.find((m) => m.role === "user");
+  return {
+    id: input.threadId,
+    title: deriveThreadTitle(typeof firstUser?.content === "string" ? firstUser.content : ""),
+    messages: input.messages,
+    createdAt: input.createdAt,
+    updatedAt: new Date().toISOString(),
+    ...(input.activeAssistantHandle
+      ? { activeAssistantHandle: input.activeAssistantHandle }
+      : {}),
+  };
+}
+
+/**
+ * KEEP the conversation (cinatra#2683 item 1, write half).
+ *
+ * The read above restores a transcript; this is what puts one there. Without it
+ * a widget's turns live only in the mounted column: they stream, they render,
+ * and the next reload opens on a blank panel, because the payload
+ * reconstruction reads the legacy-mirror rows this upsert writes and a widget
+ * could not write them.
+ *
+ * BEST-EFFORT AND SILENT, exactly like `/chat`'s writer: a failed save must
+ * never interrupt a conversation that is otherwise working. The cost is stated
+ * rather than hidden — a save that fails is a turn that will not come back after
+ * a reload, and the reader is told nothing at the time.
+ *
+ * SERIALIZED PER THREAD, and that is a correctness fix rather than tidiness
+ * (codex round 0, MEDIUM 3). Each save posts the WHOLE transcript, and the
+ * server reconciles the mirror by DELETING every turn the snapshot omits. Two
+ * saves in flight at once can therefore commit out of order — an older snapshot
+ * landing last deletes the newer turn — which is a silently lost message,
+ * discoverable only after a reload. Chaining them means a save always follows
+ * the one before it, so the newest snapshot is always the last write.
+ *
+ * WHAT THE CHAIN DOES NOT COVER, stated (codex round 1): it is ONE JavaScript
+ * realm. The same thread open in two tabs, or in a widget and in `/chat` at
+ * once, has two chains and no shared order — the server takes the last write it
+ * receives. Ordering across realms needs a revision the server can reject a
+ * stale write against, which is a change to the shared upsert both surfaces use
+ * and is not something a widget slice should invent on its own.
+ */
+/** One save's own bound. Generous — it carries a whole transcript — but finite. */
+const SAVE_TIMEOUT_MS = 15_000;
+
+const inFlightSaves = new Map<string, Promise<void>>();
+
+export async function saveThreadTranscript(
+  thread: ConversationThreadWrite,
+  transport?: ConversationServiceTransport,
+): Promise<void> {
+  if (!thread.id) return;
+  const previous = inFlightSaves.get(thread.id) ?? Promise.resolve();
+  const next = previous.then(async () => {
+    try {
+      await fetch(
+        "/api/assistants/threads",
+        requestInit(transport, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(thread),
+          // BOUNDED, because the chain is only as available as its slowest
+          // link (codex round 1): a request that never answers would otherwise
+          // hold every later save for this thread forever, turning one wedged
+          // connection into a conversation that stops being kept at all.
+          signal: AbortSignal.timeout(SAVE_TIMEOUT_MS),
+        }),
+      );
+    } catch {
+      /* best-effort: the conversation on screen is unaffected. */
+    }
+  });
+  inFlightSaves.set(thread.id, next);
+  await next;
+  // Drop the chain only while THIS save is still the tail, so a save already
+  // queued behind it keeps its ordering guarantee.
+  if (inFlightSaves.get(thread.id) === next) inFlightSaves.delete(thread.id);
 }
 
 // ---------------------------------------------------------------------------

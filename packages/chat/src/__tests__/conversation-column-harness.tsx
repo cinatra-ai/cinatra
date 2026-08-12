@@ -375,6 +375,10 @@ export function installWidgetServiceStub(options: WidgetServiceStubOptions = {})
     if (url.startsWith("/api/assistants/autosave")) {
       return options.autosave ? json(options.autosave) : json({ error: "no" }, 403);
     }
+    // The COLLECTION (the write), before the by-id prefix below.
+    if (url === "/api/assistants/threads") {
+      return json({ ok: true });
+    }
     if (url.startsWith("/api/assistants/threads/")) {
       return options.threadMessages
         ? json({ messages: options.threadMessages })

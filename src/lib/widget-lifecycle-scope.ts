@@ -587,14 +587,24 @@ export const WIDGET_EXTENSION_SCOPES = {
     audiences: [
       WIDGET_CHAT_UPLOAD_ROUTE_PATH,
       WIDGET_CHAT_SETTINGS_ROUTE_PATH,
+      // cinatra#2683 item 1, WRITE HALF. The transcript restore reads this same
+      // route path under `conversation.read`; keeping the conversation is the
+      // write that makes there be something to read. One audience, two verbs,
+      // two scopes — the audience admits the surface, the scope admits the verb.
+      WIDGET_CHAT_THREADS_ROUTE_PATH,
     ] as readonly string[],
     /**
      * The sentence the hosted SIGN-IN screen shows for this grant. It says whose
      * account the write lands in, because that is the question a reader on
      * somebody else's website is actually asking.
+     *
+     * The first clause is new with the thread-write audience above: a grant
+     * cannot gain an audience without the sentence that admits to it changing in
+     * the same edit, and "your conversation is kept" is the one thing a reader
+     * would be surprised by if it were not said.
      */
     consentCopy:
-      "Let you attach files to that conversation and change your own chat settings from this site. Files are saved to your Cinatra account and stay private to you.",
+      "Keep your conversation with this assistant, so it is still there when you come back to this page. Let you attach files to it and change your own chat settings from this site. The conversation and the files are saved to your Cinatra account and stay private to you.",
   },
   [WIDGET_TOOL_CONFIRM_SCOPE]: {
     audiences: [WIDGET_CHAT_PENDING_CALLS_ROUTE_PATH] as readonly string[],

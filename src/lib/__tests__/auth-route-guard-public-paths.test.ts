@@ -265,10 +265,15 @@ describe("auth-route-guard - cinatra#1221 S5 /api/assistants/chat broker-auth wi
 
   it("does NOT expose a sibling assistants sub-route (exact-path list, no prefix)", async () => {
     // A broad /api/assistants prefix would make every assistant API route
-    // public; only the exact exempt pathnames are. A different assistants
-    // sub-route (threads) stays session-guarded (307→/sign-in).
+    // public; only the exact exempt pathnames are. An assistants sub-route that
+    // was never given an entry stays session-guarded (307→/sign-in).
+    //
+    // The probe used to be `/api/assistants/threads`, which now HAS its own
+    // exact entry (cinatra#2683 item 1, write half). Pinning "no prefix" needs a
+    // path nobody exempted, not a path that happens to still be closed — so it
+    // is a genuinely unexempted sibling, and the assertion means what it says.
     expect(guardSource).not.toMatch(/"\/api\/assistants"\s*,/);
-    const res = await guardAppRoute(fakeRequest("/api/assistants/threads"));
+    const res = await guardAppRoute(fakeRequest("/api/assistants/runs"));
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).toContain("/sign-in");
   });
@@ -682,8 +687,6 @@ describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture wid
       "/api/assistants/autosave/",
       "/api/assistants/autosave/anything",
       "/api/assistants/autosaves",
-      // The collection thread route has NO widget branch and must keep redirecting.
-      "/api/assistants/threads",
     ]) {
       const res = await guardAppRoute(fakeRequest(p));
       expect(res.status, `${p} must stay guarded`).toBe(307);
@@ -787,11 +790,11 @@ describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture wid
     }
   });
 
-  it("NEGATIVE CONTROL: the threads COLLECTION and any deeper path still 307 — one segment, no more", async () => {
-    // The collection route (POST upserts a thread) has NO widget branch, so it
-    // must keep redirecting; and the entry must not become a subtree.
+  it("NEGATIVE CONTROL: any path DEEPER than one segment still 307s — one segment, no more", async () => {
+    // The one-segment matcher must not become a subtree. `/threads` itself is
+    // admitted by its OWN exact entry (the write half, cinatra#2683 item 1) and
+    // is asserted separately below — everything under it stays guarded.
     for (const p of [
-      "/api/assistants/threads",
       "/api/assistants/threads/",
       "/api/assistants/threads/abc/",
       "/api/assistants/threads/abc/messages",
@@ -801,6 +804,23 @@ describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture wid
       expect(res.status, `${p} must stay guarded`).toBe(307);
       expect(res.headers.get("location")).toContain("/sign-in");
     }
+  });
+
+  it("cinatra#2683 (S8f, write half): the threads COLLECTION is reachable cookieless, by its OWN exact entry", async () => {
+    // The widget POSTs its transcript here with `credentials:"omit"`. A 307 is
+    // followed by the browser as a GET with the body dropped, so the save 200s
+    // and nothing is written — the reload then opens on a blank panel.
+    const res = await guardAppRoute(fakeRequest("/api/assistants/threads"));
+    expect(res.status).not.toBe(307);
+    // The entry must state the scope split that makes admitting a MUTATING
+    // route safe: the same audience, read for the restore, write for the save.
+    const line = guardSource
+      .split("\n")
+      .find((l) => l.includes('"/api/assistants/threads",'));
+    expect(line ?? "").toMatch(/conversation\.write/);
+    expect(line ?? "").toMatch(/conversation\.read/);
+    // ...and that the LIST stays closed: reachability is not a widget branch.
+    expect((line ?? "").toLowerCase()).toMatch(/no widget branch/);
   });
 
   it("SOURCE PIN: /api/assistants/threads/<id> is a PATTERN, never an /api/assistants/threads prefix", () => {
@@ -814,10 +834,15 @@ describe("auth-route-guard - cinatra#2576 (S8c) /api/lifecycle-views/capture wid
       /const PUBLIC_PATH_PREFIXES = \[([\s\S]*?)\n\];/,
     )?.[1];
     expect(prefixBlock ?? "").not.toMatch(/assistants\/threads/);
+    // The COLLECTION is exempted by an EXACT entry and by nothing else. That is
+    // the whole distinction this test protects: an exact path admits one path,
+    // a prefix would admit the collection AND every future descendant in one
+    // edit that nobody would have to argue for.
     const exactBlock = guardSource.match(
       /const PUBLIC_EXACT_PATHS = \[([\s\S]*?)\n\];/,
     )?.[1];
-    expect(exactBlock ?? "").not.toMatch(/"\/api\/assistants\/threads"/);
+    expect(exactBlock ?? "").toMatch(/"\/api\/assistants\/threads",/);
+    expect(exactBlock ?? "").not.toMatch(/"\/api\/assistants\/threads\/"/);
   });
 
   it("RESIDUAL PIN: /api/assistants/threads/ has exactly ONE child, the dynamic one the matcher was written for", () => {

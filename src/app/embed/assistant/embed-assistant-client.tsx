@@ -66,7 +66,9 @@ import {
 // the routes behind them have a widget auth branch that resolves the reader's
 // live standing from the `cwu_` instead of from an ambient cookie.
 import {
+  buildThreadWrite,
   fetchThreadMessages,
+  saveThreadTranscript,
   type ConversationServiceTransport,
 } from "@cinatra-ai/chat/conversation-services";
 import { useBrokeredComposerInputs } from "@cinatra-ai/chat/brokered-composer-inputs";
@@ -509,15 +511,83 @@ function EmbedConversation({
     transport: serviceTransport,
   });
 
+  // ITEM 1, WRITE HALF (cinatra#2683) — KEEP the conversation.
+  //
+  // The restore above reads the transcript back; this is what puts one there.
+  // A widget turn's own durable rows carry a `run_id`, and the payload
+  // reconstruction reads only the legacy-mirror rows the thread upsert writes —
+  // which `/chat` writes on every turn and the widget could not, because this
+  // frame is same-origin to the Cinatra app and a cookie request from it is
+  // answered as whoever else is signed in on that browser. So every reload
+  // opened on a blank panel, and nothing said why.
+  //
+  // WHEN: on the turn's SETTLE, and only on a real settle. The status is
+  // mirrored locally as well as reported upward so the save can be a plain
+  // effect on (status, list) — by the time React runs it both are the final
+  // values, which is the whole reason it is an effect and not a callback fired
+  // from inside the driver's `finally`, where the list is still the one the
+  // closure captured. A transition INTO `running` never saves, and the mount's
+  // own `idle` never saves, so the restored transcript is not immediately
+  // written back.
+  //
+  // WHAT IS STATED RATHER THAN HIDDEN: an ABORTED turn settles to `idle`, and
+  // that IS saved — the reader's own message is part of the conversation whether
+  // or not the assistant finished answering it, and losing it to a stop button
+  // would be the same blank-panel surprise one turn smaller.
+  const [localTurnStatus, setLocalTurnStatus] = useState<ConversationTurnStatus>("idle");
+  const reportTurnStatus = useCallback(
+    (status: ConversationTurnStatus) => {
+      setLocalTurnStatus(status);
+      onTurnStatusChange(status);
+    },
+    [onTurnStatusChange],
+  );
+
   const turns = useConversationColumnTurns({
     threadId: session.threadId,
     transport,
     ...(widgets ? { widgets } : {}),
     ...(widgetManifests ? { widgetManifests } : {}),
     ...(seededMessages ? { initialMessages: seededMessages } : {}),
-    onTurnStatusChange,
+    onTurnStatusChange: reportTurnStatus,
     takePendingAttachments,
   });
+
+  // The thread's `createdAt` is decided ONCE per mount: a restored thread keeps
+  // whatever it had by re-stating the moment this panel first opened on it, and
+  // a new thread is created now. The server takes the value only on the row's
+  // first write, so a later save cannot move a thread's birthday.
+  const createdAtRef = useRef<string>("");
+  if (!createdAtRef.current) createdAtRef.current = new Date().toISOString();
+
+  const wasRunningRef = useRef(false);
+  const messages = turns.messages;
+  useEffect(() => {
+    if (localTurnStatus === "running") {
+      wasRunningRef.current = true;
+      return;
+    }
+    // Only a turn that actually RAN produces a save. Without this the restored
+    // transcript would be re-posted at mount, stamping `updatedAt` for a
+    // conversation nobody added to.
+    if (!wasRunningRef.current) return;
+    wasRunningRef.current = false;
+    if (messages.length === 0) return;
+    void saveThreadTranscript(
+      buildThreadWrite({
+        threadId: session.threadId,
+        messages,
+        createdAt: createdAtRef.current,
+        activeAssistantHandle: session.assistant,
+      }),
+      // THE BROKER TRANSPORT, like every other request this surface makes. The
+      // headers are built at call time from the closure-held tokens and
+      // `credentials: "omit"` is load-bearing: a cookie here would write this
+      // widget's turns into the conversation of whoever else is signed in on
+      // this browser.
+      serviceTransport,
+    );
+  }, [localTurnStatus, messages, serviceTransport, session.threadId, session.assistant]);
   const host = useMemo(
     () => ({ lifecycleSurface, onApplyIntent }),
     [lifecycleSurface, onApplyIntent],
