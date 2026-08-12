@@ -64,10 +64,12 @@ import type {
  *  never a silent skip. cinatra#1216 S6 / #1222 / #1998. */
 const EMBED_PARITY_LIVE_ENV = "E2E_EMBED_PARITY_LIVE";
 
-/** The stable content-block hook the embed's `renderText` renders the seeded
- *  corpus into (`[data-embed-content]`, embed-assistant-client.tsx). Its
- *  innerHTML is the S3 `renderMarkdown` output — byte-comparable to the
- *  reference target's output after the shared DOM normalization. */
+/** The stable content-block hook the seeded corpus renders into. Since
+ *  cinatra#2683 it lives on the SHARED conversation list's assistant-text block
+ *  (packages/chat/src/chat-messages-view.tsx) rather than on an embed-local
+ *  render, so both compared surfaces expose the same hook. Its innerHTML is the
+ *  S3 `renderMarkdown` output — byte-comparable to the reference target's output
+ *  after the shared DOM normalization. */
 const EMBED_CONTENT_SELECTOR = "[data-embed-content]";
 
 /** A non-secret disambiguator the embed shell reads; the AUTHORITATIVE write

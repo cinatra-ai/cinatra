@@ -54,15 +54,20 @@ export const SEL = {
   // never bootstraps), so waiting on `embedActive` is ALSO the live
   // frame-ancestors check.
   embedActive: '[data-embed-assistant][data-phase="active"]',
-  embedComposerInput: 'input[aria-label="Message"]',
-  // The embed composer's Send control. It is a JS-driven `type="button"` (NOT a
-  // form submit): the embed runs inside the CMS widget's
-  // `sandbox="allow-scripts allow-same-origin"` iframe, which grants no
-  // `allow-forms`, so a native form submission is blocked and never fires — the
-  // composer sends via onClick/Enter instead (embed-assistant-client.tsx). Target
-  // the stable `data-embed-composer-submit` hook, not a `type` that no longer
-  // means "submit".
-  embedComposerSubmit: "[data-embed-composer-submit]",
+  // cinatra#2683 (epic #2564 S8f): the embed's bespoke single-line `<input>` is
+  // gone. The widget now mounts the SAME composer `/chat` mounts (`PromptField`,
+  // a contenteditable editor with the circular icon send control), so these
+  // selectors are the shared composer's own hooks — identical on both surfaces,
+  // which is the point of the slice.
+  embedComposerInput: '[data-testid="chat-prompt-input"]',
+  // The send control is STILL a JS-driven `type="button"`, not a form submit:
+  // the embed runs inside the CMS widget's `sandbox="allow-scripts
+  // allow-same-origin"` iframe, which grants no `allow-forms`, so a native form
+  // submission is blocked and never fires. PromptField submits from onClick /
+  // Enter inside a plain <div>, so nothing depends on form submission being
+  // permitted. While a turn runs the SAME control becomes "Stop generating".
+  embedComposerSubmit: 'button[aria-label="Send message"]',
+  embedComposerStop: 'button[aria-label="Stop generating"]',
   // One `[data-embed-content]` per assistant-text part (the S3 renderer output).
   embedAssistant: "[data-embed-content]",
   // The embed container mirrors the reduced conversation status; "finished" is a
@@ -326,6 +331,9 @@ export async function sendPrompt(page: Page, text: string): Promise<void> {
   // The composer lives INSIDE the sandboxed cross-origin embed iframe now; type
   // + submit through the frame (openWidget() has already waited it `active`).
   const frame = page.frameLocator(SEL.frame);
+  // A contenteditable is filled, not `.fill()`-ed like an <input> — Playwright's
+  // fill() works on contenteditable too and dispatches the `input` event the
+  // composer learns its value from, so this stays one call.
   await frame.locator(SEL.embedComposerInput).fill(text);
   await frame.locator(SEL.embedComposerSubmit).click();
 }

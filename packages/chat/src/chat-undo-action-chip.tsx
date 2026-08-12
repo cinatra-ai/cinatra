@@ -6,6 +6,7 @@ import { Undo2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { undoDeepLink } from "@/components/data-safety/undo-toast";
+import { useBrokeredSurface } from "./app-route-link";
 import { recentUndoableChangeSetForRunAction } from "./undo-actions";
 
 // Inline "Undo last action" chip under an agent_run card.
@@ -20,9 +21,23 @@ const POLL_DELAYS_MS = [0, 3000, 6000]; // mount, +3s, +6s, then stop.
 export type UndoActionChipProps = { runId: string };
 
 export function UndoActionChip({ runId }: UndoActionChipProps) {
+  // CREDENTIAL-KEYED FAIL-CLOSED (cinatra#2683, epic #2564 S8f) — same guard,
+  // same reason as the pending-confirmation cards.
+  // `recentUndoableChangeSetForRunAction` is a COOKIE-BOUND server action, and
+  // the widget frame is same-origin to the app: fired from there it would answer
+  // for whoever else is signed in on that browser, and the answer is a
+  // change-set id — an identifier for somebody else's data, rendered into a
+  // deep link inside a third-party site's chrome. So on a host that declares a
+  // broker credential the chip issues NO poll and draws nothing.
+  //
+  // Recorded as an OPEN QUESTION on the S8f PR: the affordance needs a
+  // broker-aware read before it can be honest on the widget.
+  const brokerSurface = useBrokeredSurface();
+
   const [changeSetId, setChangeSetId] = useState<string | null>(null);
 
   useEffect(() => {
+    if (brokerSurface) return;
     let cancelled = false;
     const timers: ReturnType<typeof setTimeout>[] = [];
     for (const delay of POLL_DELAYS_MS) {
@@ -44,11 +59,12 @@ export function UndoActionChip({ runId }: UndoActionChipProps) {
     };
     // changeSetId intentionally omitted: once found we stop (the guard above).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId]);
+  }, [runId, brokerSurface]);
 
   // §VI: the chip renders ONLY when the actor is eligible (the action returns a
   // changeSetId only for an eligible actor); an ineligible actor renders
   // nothing — the `not-eligible` conformance state is the affordance's absence.
+  if (brokerSurface) return null;
   if (!changeSetId) return null;
 
   return (

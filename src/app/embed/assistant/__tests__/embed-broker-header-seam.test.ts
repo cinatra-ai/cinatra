@@ -68,7 +68,14 @@ describe("the embed sends every widget header the resolve route reads", () => {
     expect(EMBED_SRC).toMatch(/credentials:\s*"omit"/);
   });
 
-  it("the surface provider is declared for the widget host", () => {
-    expect(EMBED_SRC).toContain('host="site_widget"');
+  it("the widget host is declared, and handed to the shared conversation column", () => {
+    // cinatra#2683 moved the declaration from a provider this file wrapped by
+    // hand to a `lifecycleSurface` object the SHARED column carries with it. The
+    // host is still named here — what changed is that one declaration now
+    // travels with the one column, so a second mount cannot pick a different
+    // host (or, worse, inherit `chat_thread` and its ambient cookie).
+    expect(EMBED_SRC).toMatch(/host:\s*"site_widget"\s+as\s+const/);
+    expect(EMBED_SRC).toMatch(/lifecycleSurface=\{lifecycleSurface\}/);
+    expect(EMBED_SRC).not.toContain("LifecycleCardSurfaceProvider");
   });
 });

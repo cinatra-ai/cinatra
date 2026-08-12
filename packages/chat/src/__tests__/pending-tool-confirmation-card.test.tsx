@@ -16,7 +16,28 @@ vi.mock("../pending-call-actions", () => ({
     decidePendingToolCall(id as never, action as never, token as never),
 }));
 
-import { PendingToolConfirmationCards } from "../pending-tool-confirmation-card";
+import { PendingToolConfirmationCards as RawPendingToolConfirmationCards } from "../pending-tool-confirmation-card";
+import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
+
+/**
+ * The card, mounted in the context it really has (cinatra#2683, epic #2564 S8f).
+ *
+ * These cards read and decide through COOKIE-BOUND server actions, so since S8f
+ * they render only inside a declared FIRST-PARTY COOKIE host — and nowhere else,
+ * because the widget conversation column now mounts the same list and the embed
+ * frame is same-origin to the app. Every case below is the cookie case, so the
+ * declaration is folded into one wrapper here; the broker case (no card, no
+ * request) is asserted in `conversation-column-inventory.test.tsx`.
+ */
+function PendingToolConfirmationCards(
+  props: React.ComponentProps<typeof RawPendingToolConfirmationCards>,
+) {
+  return (
+    <LifecycleCardSurfaceProvider host="chat_thread">
+      <RawPendingToolConfirmationCards {...props} />
+    </LifecycleCardSurfaceProvider>
+  );
+}
 
 function pendingRow(overrides: Record<string, unknown> = {}) {
   return {

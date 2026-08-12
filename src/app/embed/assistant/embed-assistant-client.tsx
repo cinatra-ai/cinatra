@@ -15,10 +15,28 @@
 //      as-yet-unmigrated widget; it flips to true once both widgets have migrated;
 //   3. negotiates the stream contract CLIENT-SIDE (§8) — mounts the wire ONLY on
 //      `ok`, else renders the honest GATED state (Lane-A interlock);
-//   4. drives the turn against `/api/assistants/chat` with the §9.1 broker seams
-//      (`assistant`, `authHeaders`, `credentials: "omit"`);
+//   4. mounts the SHARED conversation column, which drives the turn against
+//      `/api/assistants/chat` with the §9.1 broker seams (`assistant`,
+//      `authHeaders`, `credentials: "omit"`);
 //   5. mirrors the renderer's apply-intent gesture (§6e) back to the parent over
 //      the bridge as a signal-only uplink (§6f — the parent does the CMS check).
+//
+// WHAT S8f (cinatra#2683) CHANGED HERE, AND WHY IT IS A DELETION. This file used
+// to mount `ConversationTurn` — a renderer whose state is ONE reduced assistant
+// message — plus a bespoke single-line composer, a bespoke `renderMarkdown` call
+// and an empty widget detector. The 2026-08-12 inventory measured what followed
+// from that: no history, no user echo, no identity row, no per-message actions,
+// no response actions, no attachments / prompt options / @-mentions, no code
+// highlighting, no mermaid, no charts, no extension chat widgets. All of it was
+// present in `/chat` the whole time, in modules this file did not mount.
+//
+// So this file no longer renders conversation UI at all. It renders the FRAME
+// and hands the shared `ConversationColumn` its host adapters: the broker
+// transport, the lifecycle host declaration, the extension catalogs the server
+// component resolved, and the apply-intent uplink. Everything a reader sees
+// inside the column is now the SAME component `/chat` renders — which is the
+// epic's rule, and the reason a future conversation affordance cannot land on
+// one surface and miss the other.
 //
 // TOKEN NON-DISCLOSURE (§6i): the `cit_`/`cwu_` tokens live ONLY in a ref closure
 // — never in React state (no render/serialization exposure), never logged, never
@@ -27,34 +45,36 @@
 // ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ConversationTurn } from "@cinatra-ai/chat/renderer/ag-ui-interactive";
-import { renderMarkdown, type ThemeName } from "@cinatra-ai/chat/renderer";
+import type { ThemeName } from "@cinatra-ai/chat/renderer";
+import type {
+  ApplyIntentRef,
+  ChatViewComponents,
+  ConversationTransport,
+  ConversationTurnStatus,
+  LifecycleSurfaceDeclaration,
+  UiMessage,
+  WidgetDefinition,
+  WidgetManifest,
+} from "@cinatra-ai/chat/conversation-column";
 import {
-  initialConversationState,
-  type ConversationViewState,
-} from "@cinatra-ai/chat/renderer/ag-ui-reducer";
-import {
-  streamAssistantTurn,
-  type AssistantTurnRequestMessage,
-} from "@cinatra-ai/chat/ag-ui-chat-client";
+  ConversationColumn,
+  useConversationColumnTurns,
+} from "@cinatra-ai/chat/conversation-column";
 import {
   installEmbedBridge,
   type EmbedBridge,
 } from "@/lib/embed/embed-bridge.client";
 import type { EmbedBootstrap } from "@/lib/embed/bridge-protocol";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { negotiateEmbedChatContract } from "./embed-chat-negotiate";
 // cinatra#2577 (epic #2564 S8d) — the host declaration that turns lifecycle
-// cards on for this surface. Until now the embed declared nothing and a card
-// rendered no DOM whatever the transcript carried. It now draws the SAME
-// lifecycle cards as first-party chat — review, verification, recommendation and
-// schedule proposal — because a signed-in widget reader is the same person with
-// the same rights as inside Cinatra. Only this frame differs.
-import {
-  LifecycleCardSurfaceProvider,
-  type LifecycleCardAuth,
-} from "@cinatra-ai/agents/lifecycle-card-runtime";
+// cards on for this surface. Until then the embed declared nothing and a card
+// rendered no DOM whatever the transcript carried. It draws the SAME lifecycle
+// cards as first-party chat — review, verification, recommendation and schedule
+// proposal — because a signed-in widget reader is the same person with the same
+// rights as inside Cinatra. Only this frame differs. S8f passes the declaration
+// DOWN to the shared column instead of wrapping a provider here, so the one
+// column carries its host with it and a second mount cannot pick a different one.
+import type { LifecycleCardAuth } from "@cinatra-ai/agents/lifecycle-card-runtime";
 
 type Phase =
   | { kind: "waiting" } // pre-bootstrap: neutral "waiting for host"
@@ -62,48 +82,41 @@ type Phase =
   | { kind: "error" } // bootstrap rejected / turn transport failure
   | { kind: "active" }; // negotiated + mounted
 
+/** The non-secret session context the mounted column needs. Deliberately NOT
+ *  the bootstrap: the tokens stay in the ref closure and never enter state. */
+type MountedSession = { threadId: string; assistant: string };
+
 export type EmbedAssistantClientProps = {
   /** Server-resolved expected parent origin (§7). Empty when unresolvable — then
    *  the bridge posts nothing and the shell shows the neutral error card. */
   expectedParentOrigin: string;
   assistant: string;
   instanceId: string;
-  /** github-light | github-dark — the content-render theme passed to the S3
-   *  `renderMarkdown` (shiki code theme). Prod default is github-light; the
-   *  render-parity seam pins each theme so the compare exercises both goldens. */
+  /** github-light | github-dark — the content-render theme handed to the shared
+   *  column (shiki code theme). Prod default is github-light; the render-parity
+   *  seam pins each theme so the compare exercises both goldens. */
   theme?: ThemeName;
+  /** Extension-provided chat WIDGETS, resolved server-side from the generated
+   *  extension manifest by the page shell — the SAME catalog `/chat` resolves,
+   *  through the same resolver. Absent ⇒ the shared column builds its own empty
+   *  runtime from the same factory (a real detector with nothing registered, not
+   *  a bespoke "no widgets" stub). */
+  widgets?: WidgetDefinition[];
+  widgetManifests?: WidgetManifest[];
+  /** Extension-provided renderable-view components (viewType → component), the
+   *  SAME server-resolved map `/chat` receives. Absent ⇒ the never-blank
+   *  fallback for `chart`, exactly as on `/chat` with no view extension live. */
+  chatViews?: ChatViewComponents;
   /** cinatra#1998 (b) — the TEST-ONLY deterministic corpus-render seam. Non-null
    *  ONLY when the server-side `EMBED_PARITY_SEAM` gate is on (resolved in
    *  page.tsx from a non-public server env, never a client/URL value), so prod is
    *  INERT. When set, the embed — AFTER reaching `active` via the REAL mount path
-   *  (parent bootstrap + broker negotiation + renderer mount) — renders a seeded
+   *  (parent bootstrap + broker negotiation + column mount) — renders a seeded
    *  thread's assistant message deterministically IN PLACE OF a live LLM turn. It
    *  CANNOT bypass auth (reaching `active` still requires the real handshake) and
    *  is not user-controllable in prod (the server gate is off → this is null). */
   paritySeam?: { threadId: string } | null;
 };
-
-/** The S3 renderer's live widget detector. The render-parity corpus is
- *  widget-free by design (the reference target supplies the same empty
- *  detector), so the embed content block is byte-comparable to the reference. */
-const NO_WIDGETS = (): [] => [];
-
-/** Build a deterministic reduced conversation state whose sole assistant message
- *  IS the seeded corpus — the same content the /chat reference target seeds,
- *  rendered here through the embed's REAL mounted `ConversationTurn`. */
-function seededCorpusState(content: string): ConversationViewState {
-  const base = initialConversationState();
-  return {
-    ...base,
-    message: {
-      ...base.message,
-      id: "parity-seed",
-      content,
-      parts: [{ kind: "text", content }],
-    },
-    status: "finished",
-  };
-}
 
 export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // An unresolvable expected parent origin (§7 'none') is an initial ERROR — a
@@ -112,15 +125,14 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   const [phase, setPhase] = useState<Phase>(() =>
     props.expectedParentOrigin ? { kind: "waiting" } : { kind: "error" },
   );
-  const [convo, setConvo] = useState<ConversationViewState>(() =>
-    initialConversationState(),
-  );
+  const [session, setSession] = useState<MountedSession | null>(null);
+  const [turnStatus, setTurnStatus] = useState<ConversationTurnStatus>("idle");
+  const [seededMessages, setSeededMessages] = useState<UiMessage[] | undefined>(undefined);
 
   // Tokens + session context held ONLY here (never state / log / URL / uplink).
   const bootstrapRef = useRef<EmbedBootstrap | null>(null);
   const bridgeRef = useRef<EmbedBridge | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
 
   // §9.1 broker headers derived from the closure-held tokens.
   const authHeaders = useCallback((): Record<string, string> => {
@@ -148,13 +160,27 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
     };
   }, [props.expectedParentOrigin]);
 
-  // The lifecycle card's credential (cinatra#2577). The card resolves its own
-  // authoritative state server-side, and on this surface that request carries the
-  // SAME broker proof the turn does — built at call time from the closure-held
-  // tokens, never held in state or a prop. `credentials: "omit"` matters here as
-  // much as it does on the turn: the embed is same-origin to the Cinatra app, so
-  // an ambient cookie from another Cinatra user of this browser would otherwise
-  // answer the resolve as THEM.
+  // The conversation column's TRANSPORT. One declaration now serves the turn on
+  // this surface, built at call time from the closure-held tokens — never held
+  // in state or a prop. `credentialsMode: "omit"` is load-bearing: the embed is
+  // same-origin to the Cinatra app, so an ambient cookie from another Cinatra
+  // user of this browser would otherwise answer as THEM.
+  // Read the selector out FIRST: the memo then depends on the string, not on
+  // the session object, so it does not re-create on an unrelated session field.
+  const producerSelector = session?.assistant;
+  const transport = useMemo(
+    () => ({
+      authHeaders,
+      credentialsMode: "omit" as const,
+      ...(producerSelector ? { assistant: producerSelector } : {}),
+    }),
+    [authHeaders, producerSelector],
+  );
+
+  // The lifecycle card's credential (cinatra#2577) — the same proof, declared in
+  // the shape the card runtime reads. The runtime REFUSES to declare a host when
+  // the credential is wrong for it, so a dropped field here means no card DOM and
+  // no request, never a cookie-borne resolve.
   const lifecycleCardAuth = useMemo<LifecycleCardAuth>(
     () => ({ headers: authHeaders, credentials: "omit" }),
     [authHeaders],
@@ -169,31 +195,21 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // registered origin from the same closed binding the embed's own wall uses.
   // Not a credential and not an origin: they select a row, they do not assert
   // anything.
-  const lifecycleCardFrame = useMemo(
-    () => ({ assistant: props.assistant, instanceId: props.instanceId }),
-    [props.assistant, props.instanceId],
-  );
-
-  // Render assistant text through the S3 packaged renderer (`renderMarkdown`),
-  // the EXACT content path `/chat` and the render-parity reference target render
-  // through — so the same assistant renders IDENTICALLY here (the epic promise),
-  // not as the interactive layer's plain-text safe default. `[data-embed-content]`
-  // is the stable content-block hook the render-parity harness scrapes.
-  const renderText = useCallback(
-    (text: string) => (
-      <div
-        data-embed-content
-        className="max-w-none leading-relaxed text-foreground"
-        dangerouslySetInnerHTML={{
-          __html: renderMarkdown(text, props.theme ?? "github-light", NO_WIDGETS),
-        }}
-      />
-    ),
-    [props.theme],
+  //
+  // The whole declaration now travels to the shared column as ONE object, which
+  // is also the seam the column's link policy and its cookie-bound affordances
+  // key off — one statement of "who this surface is", read by everything.
+  const lifecycleSurface = useMemo(
+    () => ({
+      host: "site_widget" as const,
+      auth: lifecycleCardAuth,
+      frame: { assistant: props.assistant, instanceId: props.instanceId },
+    }),
+    [lifecycleCardAuth, props.assistant, props.instanceId],
   );
 
   // cinatra#1998 (b) TEST-ONLY seam: load a seeded thread's assistant message and
-  // render it deterministically through the mounted renderer (no live LLM turn).
+  // render it deterministically through the mounted column (no live LLM turn).
   // Gated OFF in prod (`paritySeam` is null unless the server env is set), so
   // this fetch never runs for a real user. It cannot bypass auth — it runs only
   // AFTER the real bootstrap + broker negotiation reached `active`.
@@ -208,36 +224,15 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
         messages?: Array<{ role?: string; content?: string }>;
       };
       const assistantMsg = payload.messages?.find((m) => m.role === "assistant");
-      setConvo(seededCorpusState(assistantMsg?.content ?? ""));
+      setSeededMessages([
+        { id: "parity-seed", role: "assistant", content: assistantMsg?.content ?? "" },
+      ]);
+      setTurnStatus("finished");
     } catch {
       /* best-effort + test-only: a failure leaves the mounted-but-empty active
          state, which the harness surfaces as a missing content block (loud). */
     }
   }, []);
-
-  const runTurn = useCallback(
-    async (messages: AssistantTurnRequestMessage[]) => {
-      const b = bootstrapRef.current;
-      if (!b) return;
-      abortRef.current?.abort();
-      const abort = new AbortController();
-      abortRef.current = abort;
-      try {
-        await streamAssistantTurn({
-          threadId: b.session.threadId,
-          messages,
-          assistant: b.session.assistant, // "wordpress" | "drupal" (§9.1)
-          authHeaders, // Bearer cit_ + X-Cinatra-Widget-User-Token cwu_
-          credentialsMode: "omit", // §B11 — no ambient cookie fallback
-          signal: abort.signal,
-          onState: (next) => setConvo(next),
-        });
-      } catch {
-        if (!abort.signal.aborted) setPhase({ kind: "error" });
-      }
-    },
-    [authHeaders],
-  );
 
   const onBootstrap = useCallback(
     (bootstrap: EmbedBootstrap) => {
@@ -256,9 +251,13 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
             setPhase({ kind: "gated", reason: negotiation.reason });
             return;
           }
+          setSession({
+            threadId: bootstrap.session.threadId,
+            assistant: bootstrap.session.assistant,
+          });
           setPhase({ kind: "active" });
           // TEST-ONLY seam (gated OFF in prod): render the seeded corpus here in
-          // place of a live turn, through the same mounted renderer.
+          // place of a live turn, through the same mounted column.
           if (props.paritySeam) {
             void loadParitySeed(props.paritySeam.threadId);
           }
@@ -285,13 +284,15 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
     bridgeRef.current = bridge;
     bridge.postReady();
     return () => {
-      abortRef.current?.abort();
       bridge.dispose();
     };
   }, [props.expectedParentOrigin, props.assistant, props.instanceId, onBootstrap]);
 
   // §5 resize uplink: mirror the content height to the parent so it can size the
-  // panel (the parent additionally CLAMPS to its cap). Observed, not polled.
+  // panel (the parent additionally CLAMPS to its cap). Observed, not polled — a
+  // ResizeObserver on the container covers every growth the column produces (a
+  // streamed token, an expanded thought group, a mounted card), so this no
+  // longer needs the conversation state as a dependency.
   useEffect(() => {
     const el = containerRef.current;
     if (!el || phase.kind !== "active") return;
@@ -300,27 +301,28 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
     const ro = new ResizeObserver(post);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [phase.kind, convo]);
+  }, [phase.kind]);
 
   // §6e apply-intent gesture → signal-only uplink (§6f: the PARENT does the CMS
   // permission check + in-place draft refresh; the iframe asserts nothing).
-  const onApplyIntent = useCallback(
-    (ref:
-      | { proposalId: string; viewType: "content_change_proposal" }
-      | { changeSetId: string; viewType: "content_change_proposal" }) => {
-      bridgeRef.current?.sendApplyIntent(ref);
-    },
-    [],
-  );
+  const onApplyIntent = useCallback((ref: ApplyIntentRef) => {
+    bridgeRef.current?.sendApplyIntent(ref);
+  }, []);
 
   return (
-    // `data-turn-status` mirrors the reduced conversation status (idle → running
-    // → finished/error) so an out-of-process observer (the wp-drupal-uat E2E) can
+    // `data-turn-status` mirrors the conversation turn status (idle → running →
+    // finished/error) so an out-of-process observer (the wp-drupal-uat E2E) can
     // fence deterministically on a CLIENT-CONSUMED `RUN_FINISHED` (status ===
     // "finished") rather than a mid-stream signal like a completed tool chip. It
     // is a passive test-observability attribute only — it drives no behaviour and
     // is not part of the render-parity content contract (cinatra#1998 (c)).
-    <div ref={containerRef} data-embed-assistant data-phase={phase.kind} data-turn-status={convo.status}>
+    <div
+      ref={containerRef}
+      data-embed-assistant
+      data-phase={phase.kind}
+      data-turn-status={turnStatus}
+      className="flex h-full min-h-0 flex-col"
+    >
       {phase.kind === "waiting" && (
         <div className="p-4 text-sm text-muted-foreground" data-embed-state="waiting">
           Waiting for the host…
@@ -336,75 +338,101 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
           This assistant could not be loaded here.
         </div>
       )}
-      {phase.kind === "active" && (
-        <div className="p-4" data-embed-state="active">
-          <LifecycleCardSurfaceProvider
-            host="site_widget"
-            auth={lifecycleCardAuth}
-            frame={lifecycleCardFrame}
-          >
-            <ConversationTurn state={convo} renderers={{ onApplyIntent, renderText }} />
-          </LifecycleCardSurfaceProvider>
-          <EmbedComposer onSend={(text) => void runTurn([{ role: "user", content: text }])} />
+      {phase.kind === "active" && session && (
+        // The column owns an internal scroll exactly as it does on `/chat`, so
+        // the frame gives it a definite height instead of growing with the
+        // transcript. The resize uplink still reports that height and the parent
+        // still clamps it — what changes is that a long conversation scrolls
+        // inside the panel rather than stretching it, which is the behaviour a
+        // reader already knows from `/chat`.
+        <div className="flex min-h-0 flex-1 flex-col" data-embed-state="active">
+          <EmbedConversation
+            key={seededMessages ? "parity-seed" : "live"}
+            session={session}
+            transport={transport}
+            theme={props.theme ?? "github-light"}
+            lifecycleSurface={lifecycleSurface}
+            widgets={props.widgets}
+            widgetManifests={props.widgetManifests}
+            chatViews={props.chatViews}
+            seededMessages={seededMessages}
+            onApplyIntent={onApplyIntent}
+            onTurnStatusChange={setTurnStatus}
+          />
         </div>
       )}
     </div>
   );
 }
 
-/** Minimal composer — the embed's own input (the CMS widget holds no chat UI).
+/**
+ * The mounted column, with the widget's host adapters.
  *
- * SANDBOX CONSTRAINT (why NOT a <form> submit): this embed renders INSIDE the CMS
- * widget's `sandbox="allow-scripts allow-same-origin"` iframe (wordpress-plugin /
- * drupal-module #1221), which deliberately grants NO `allow-forms`. Under that
- * sandbox a native form submission — pressing Enter in the field OR clicking a
- * `type="submit"` button — is BLOCKED by the browser and its `submit` event never
- * fires ("Blocked form submission … the 'allow-forms' permission is not set"), so
- * a `<form onSubmit>` composer could type but never start a turn. Drive the send
- * purely from JS instead: an explicit `type="button"` onClick plus an Enter
- * keydown, inside a plain <div> so nothing depends on form submission being
- * permitted. Behaves identically outside the sandbox. */
-function EmbedComposer({ onSend }: { onSend: (text: string) => void }) {
-  const [value, setValue] = useState("");
-  const submit = () => {
-    const text = value.trim();
-    if (!text) return;
-    setValue("");
-    onSend(text);
-  };
+ * A separate component ONLY because the shared turn engine is a hook and the
+ * frame above renders four phases, three of which mount no conversation at all.
+ * It adds no conversation UI of its own — it calls the shared engine and mounts
+ * the shared column, and a structural test fails the build if it ever does more
+ * (`one-conversation-column.test.ts`).
+ */
+function EmbedConversation({
+  session,
+  transport,
+  theme,
+  lifecycleSurface,
+  widgets,
+  widgetManifests,
+  chatViews,
+  seededMessages,
+  onApplyIntent,
+  onTurnStatusChange,
+}: {
+  session: MountedSession;
+  transport: ConversationTransport;
+  theme: ThemeName;
+  lifecycleSurface: LifecycleSurfaceDeclaration;
+  widgets?: WidgetDefinition[];
+  widgetManifests?: WidgetManifest[];
+  chatViews?: ChatViewComponents;
+  seededMessages?: UiMessage[];
+  onApplyIntent: (ref: ApplyIntentRef) => void;
+  onTurnStatusChange: (status: ConversationTurnStatus) => void;
+}) {
+  const turns = useConversationColumnTurns({
+    threadId: session.threadId,
+    transport,
+    ...(widgets ? { widgets } : {}),
+    ...(widgetManifests ? { widgetManifests } : {}),
+    ...(seededMessages ? { initialMessages: seededMessages } : {}),
+    onTurnStatusChange,
+  });
+  const host = useMemo(
+    () => ({ lifecycleSurface, onApplyIntent }),
+    [lifecycleSurface, onApplyIntent],
+  );
   return (
-    <div className="mt-3 flex gap-2">
-      <Input
-        className="flex-1"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={(e) => {
-          // Enter sends; Shift+Enter is reserved (a no-op on this single-line
-          // input). Ignore the Enter that COMMITS an IME candidate: most engines
-          // set `isComposing`, but WebKit fires that Enter with isComposing=false
-          // and keyCode 229 (WebKit bug 165004), so guard on BOTH signals.
-          if (
-            e.key === "Enter" &&
-            !e.shiftKey &&
-            !e.nativeEvent.isComposing &&
-            e.nativeEvent.keyCode !== 229
-          ) {
-            e.preventDefault();
-            submit();
-          }
-        }}
-        placeholder="Ask the assistant…"
-        aria-label="Message"
-      />
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        data-embed-composer-submit
-        onClick={submit}
-      >
-        Send
-      </Button>
-    </div>
+    <ConversationColumn
+      {...turns}
+      host={host}
+      theme={theme}
+      chatViews={chatViews ?? {}}
+      onActivateResource={NOOP_ACTIVATE_RESOURCE}
+      onActiveGateChange={NOOP_ACTIVE_GATE_CHANGE}
+      mentionables={NO_MENTIONABLES}
+      placeholder="Type a message..."
+      promptStorageKey={`cinatra_embed_prompt_${session.threadId}`}
+      submitAriaLabel="Send message"
+    />
   );
 }
+
+/** The widget has no second conversation participant to @-mention, so the shared
+ *  composer draws no mention flyout — its own seam, not a per-surface reduction:
+ *  supply mentionables and the same composer draws the same flyout here. */
+const NO_MENTIONABLES: never[] = [];
+/** `/chat`'s in-app resource activation opens a first-party route the widget
+ *  frame cannot become; the affordance itself is a `/chat` thread-panel gesture
+ *  that no card in this column emits. */
+const NOOP_ACTIVATE_RESOURCE = () => {};
+/** Prompt-window HITL gate tracking is `/chat` page state (it drives the
+ *  page-level gate registry, which the widget frame does not mount). */
+const NOOP_ACTIVE_GATE_CHANGE = () => {};

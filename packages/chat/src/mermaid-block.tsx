@@ -73,9 +73,13 @@ export function MermaidBlock({ source, id }: MermaidBlockProps) {
     };
   }, [source, id, resolvedTheme]);
 
+  // `data-mermaid-block` is the stable presence hook the two-surface regression
+  // suite reads (cinatra#2683). Passive test observability on the SHARED block,
+  // so "the widget renders mermaid" is checked against the same DOM `/chat`
+  // produces rather than against a per-surface guess.
   if (error) {
     return (
-      <div className="my-3 rounded-lg border border-line bg-surface-muted p-3">
+      <div data-mermaid-block data-state="error" className="my-3 rounded-lg border border-line bg-surface-muted p-3">
         <div className="mb-2 text-xs text-muted-foreground">Mermaid render failed — showing source</div>
         <pre className="overflow-x-auto whitespace-pre-wrap break-words text-xs font-mono text-foreground">
           <code>{source}</code>
@@ -86,14 +90,14 @@ export function MermaidBlock({ source, id }: MermaidBlockProps) {
 
   if (!svg) {
     return (
-      <div className="my-3 flex h-32 items-center justify-center rounded-lg border border-line bg-surface-muted">
+      <div data-mermaid-block data-state="rendering" className="my-3 flex h-32 items-center justify-center rounded-lg border border-line bg-surface-muted">
         <div className="text-xs text-muted-foreground">Rendering diagram…</div>
       </div>
     );
   }
 
   return (
-    <div className="my-3 overflow-x-auto rounded-lg border border-line bg-surface p-3">
+    <div data-mermaid-block data-state="rendered" className="my-3 overflow-x-auto rounded-lg border border-line bg-surface p-3">
       {/* svg content is produced by mermaid with securityLevel:"strict" which disables raw HTML in labels */}
       {/* eslint-disable-next-line react/no-danger */}
       <div dangerouslySetInnerHTML={{ __html: svg }} />

@@ -110,6 +110,27 @@ const LifecycleCardAuthContext = createContext<LifecycleCardAuth | null>(null);
 const LifecycleCardFrameContext = createContext<LifecycleCardFrame | null>(null);
 
 /**
+ * "Does this subtree carry a FIRST-PARTY COOKIE SESSION?" (cinatra#2683, epic
+ * #2564 S8f.)
+ *
+ * A separate context from the host and the auth, because those two answer a
+ * different question and answer it UNSAFELY for this one. Both are `null` in
+ * TWO distinct situations: on a properly declared cookie surface, and on a
+ * BROKEN non-cookie declaration that the provider refused. Anything reading
+ * "auth === null" as "cookie session" therefore treats a mis-wired widget mount
+ * as first-party — and a cookie-bound server action fired from the widget frame,
+ * which is same-origin to the app, answers (and records decisions) as whoever
+ * else is signed in on that browser.
+ *
+ * This context is the answer that fails the right way: TRUE only when a
+ * COOKIE_SESSION_HOSTS host is declared with no credential — the one shape that
+ * really does travel by cookie. No provider, a refused declaration, or any
+ * credential-bearing host all read FALSE, so a caller that gates a cookie-bound
+ * affordance on it draws nothing and issues no request rather than guessing.
+ */
+const LifecycleCardCookieSessionContext = createContext<boolean>(false);
+
+/**
  * The hosts whose identity travels by COOKIE. Every other host must declare a
  * credential, and the provider refuses to mount without one.
  *
@@ -174,11 +195,27 @@ export function LifecycleCardSurfaceProvider({
         <LifecycleCardFrameContext.Provider
           value={credentialOk && frameOk ? (frame ?? null) : null}
         >
-          {children}
+          {/* TRUE only for a well-formed cookie-session declaration — see the
+              context's own note for why "no auth" is not the same question. */}
+          <LifecycleCardCookieSessionContext.Provider value={cookieHost && credentialOk}>
+            {children}
+          </LifecycleCardCookieSessionContext.Provider>
         </LifecycleCardFrameContext.Provider>
       </LifecycleCardAuthContext.Provider>
     </LifecycleCardSurfaceContext.Provider>
   );
+}
+
+/**
+ * TRUE only inside a well-formed cookie-session host declaration.
+ *
+ * Gate every COOKIE-BOUND affordance on this — a server action, a first-party
+ * fetch that relies on the ambient session, a deep link into the app that only
+ * a signed-in first-party page can follow. Outside such a declaration it is
+ * FALSE, including when there is no provider at all, so the default is silence.
+ */
+export function useCookieSessionSurface(): boolean {
+  return useContext(LifecycleCardCookieSessionContext);
 }
 
 export function useLifecycleCardHost(): LifecycleCardHost | null {

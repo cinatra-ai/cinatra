@@ -20,6 +20,18 @@ import {
   frameAncestorsDirectiveFor,
   FRAME_ANCESTORS_NONE,
 } from "@/lib/embed/frame-ancestors.server";
+// cinatra#2683 (epic #2564 S8f) — the widget conversation column renders the
+// SAME extension-provided chat widgets and renderable views `/chat` does, so it
+// needs the SAME server-resolved catalogs. Resolved through the identical
+// manifest + extension-lifecycle resolvers the `/chat` mount uses; the host
+// names no extension anywhere, on either surface.
+//
+// NOT AUTHORIZATION, AND NOT USER DATA. Both resolvers read the generated
+// extension manifest and the lifecycle status of the packages in it — the same
+// answer for every caller, resolved before any bootstrap exists. This shell
+// stays dataless: it renders no user data and reads no session.
+import { resolveChatWidgetCatalog } from "@/lib/chat-widget-catalog.server";
+import { resolveChatViewCatalog } from "@/lib/chat-views-catalog.server";
 import { EmbedAssistantClient } from "./embed-assistant-client";
 
 export const dynamic = "force-dynamic";
@@ -48,7 +60,15 @@ export default async function EmbedAssistantPage({
 }: {
   searchParams: SearchParams;
 }) {
-  const params = await searchParams;
+  // Both catalogs are best-effort ADJUNCTS to the frame: a degraded extension
+  // load must never stop the assistant loading. An empty catalog is a state
+  // `/chat` has too (no view-bearing extension live) and the shared column draws
+  // its own never-blank fallback for it.
+  const [params, widgetCatalog, viewCatalog] = await Promise.all([
+    searchParams,
+    resolveChatWidgetCatalog().catch(() => ({ widgets: [], manifests: [] })),
+    resolveChatViewCatalog().catch(() => ({})),
+  ]);
   const assistant = params.assistant ?? "";
   const instanceId = params.instanceId ?? "";
 
@@ -69,12 +89,17 @@ export default async function EmbedAssistantPage({
   const expectedParentOrigin = directive === FRAME_ANCESTORS_NONE ? "" : directive;
 
   return (
-    <main data-embed-assistant-shell>
+    // The column scrolls internally (as it does on `/chat`), so the shell gives
+    // it the frame's height instead of growing with the transcript.
+    <main data-embed-assistant-shell className="h-dvh">
       <EmbedAssistantClient
         expectedParentOrigin={expectedParentOrigin}
         assistant={assistant}
         instanceId={instanceId}
         theme={theme}
+        widgets={widgetCatalog.widgets}
+        widgetManifests={widgetCatalog.manifests}
+        chatViews={viewCatalog}
         paritySeam={paritySeam}
       />
     </main>

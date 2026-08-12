@@ -566,6 +566,22 @@ export type DriveAssistantChatTurnOptions = {
    *  to its assistant from its first persisted moment. DISTINCT from
    *  {@link assistant}, which picks the PRODUCER of this one turn. */
   chatContainer?: ChatTurnContainerRef;
+  // ----- Broker-transport seams (cinatra#2683, epic #2564 S8f) — ADDITIVE.
+  // `streamAssistantTurn` has carried these since S5 Lane B (#1221 §9.1); this
+  // driver did not, so the embed could not use it and drove the wire itself
+  // with a reduced single-turn state. Threading them here is what lets ONE turn
+  // driver serve both surfaces: the widget conversation column gets the whole
+  // `/chat` turn lifecycle (empty-bubble insert, per-fold projection,
+  // retry-once, AbortError silence, transport-error surfacing on the bubble)
+  // instead of a second implementation of it. Absent ⇒ byte-identical
+  // cookie-session behaviour. ---------------------------------------------
+  /** A `token-broker` header provider. Applied to the TURN POST exactly as
+   *  `streamAssistantTurn` applies it; NEVER to the resume GET (its audience is
+   *  distinct — see `resumeAuthHeaders` there). */
+  authHeaders?: () => Record<string, string>;
+  /** `"omit"` on a broker surface so an ambient Cinatra cookie cannot create a
+   *  silent session fallback (§B11). Absent/`"include"` = cookie session. */
+  credentialsMode?: "include" | "omit";
 };
 
 /**
@@ -621,6 +637,14 @@ export async function driveAssistantChatTurn(
         // Same reason: a retry must assert the SAME container, or the retried
         // turn would home the thread in the default instead (cinatra#2650).
         ...(options.chatContainer ? { chatContainer: options.chatContainer } : {}),
+        // Same reason again, and it is the load-bearing one on a broker surface
+        // (cinatra#2683): a retry that silently dropped the credential would
+        // re-issue the turn with NO proof — and, without `credentials: "omit"`
+        // carried alongside, would re-issue it under whatever ambient Cinatra
+        // cookie happens to be in that browser. Both travel together, on every
+        // attempt, or neither does.
+        ...(options.authHeaders ? { authHeaders: options.authHeaders } : {}),
+        ...(options.credentialsMode ? { credentialsMode: options.credentialsMode } : {}),
         signal,
         onState: (state) => {
           anyEventSeen = true;

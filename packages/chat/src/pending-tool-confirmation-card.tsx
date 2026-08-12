@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useBrokeredSurface } from "./app-route-link";
 import {
   decidePendingToolCall,
   listPendingToolConfirmations,
@@ -83,11 +84,35 @@ export function PendingToolConfirmationCards({
   /** Bump to trigger a refresh (the mount site's parked-result prefix match). */
   pollSignal?: number;
 }) {
+  // CREDENTIAL-KEYED FAIL-CLOSED (cinatra#2683, epic #2564 S8f) — the same
+  // guard, for the same reason, as `RunRecommendationHoldCard` (#2577 codex
+  // round 0, finding 4). This component reads and decides through COOKIE-BOUND
+  // server actions (`listPendingToolConfirmations`, `decidePendingToolCall`),
+  // which resolve their identity from the ambient session and cannot carry a
+  // host credential.
+  //
+  // Until S8f the widget conversation column did not mount this component at
+  // all, so the question never arose. It now mounts the SAME shared list `/chat`
+  // does — and the embed frame is SAME-ORIGIN to the Cinatra app, so a server
+  // action fired from it would ride whatever Cinatra cookie is in that browser.
+  // That is not a cosmetic mismatch: the list returns another person's parked
+  // DESTRUCTIVE calls together with freshly minted decision tokens, inside
+  // chrome a third-party site controls. Drawing it there would be the worst
+  // shape of the ambient-session fallback the contract forbids.
+  //
+  // Keyed on the CREDENTIAL, not on a surface list: a host that declares one
+  // draws nothing and issues no request; every cookie-session host is untouched.
+  // When these actions become broker-aware, this guard is what gets deleted — no
+  // surface list to edit. Recorded as an OPEN QUESTION on the S8f PR, never as a
+  // quiet reduction.
+  const brokerSurface = useBrokeredSurface();
+
   const [rows, setRows] = useState<PendingToolConfirmationRow[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
   const mountedRef = useRef(true);
 
   const load = useCallback(async () => {
+    if (brokerSurface) return; // no request, not just no render
     try {
       const { rows: fresh } = await listPendingToolConfirmations();
       if (!mountedRef.current) return;
@@ -96,7 +121,7 @@ export function PendingToolConfirmationCards({
     } catch {
       // A failed refresh keeps the current cards; the next signal retries.
     }
-  }, []);
+  }, [brokerSurface]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -124,7 +149,7 @@ export function PendingToolConfirmationCards({
       action: "confirm" | "deny" | "cancel",
       token: string | null,
     ) => {
-      if (!token || busyId) return;
+      if (brokerSurface || !token || busyId) return;
       setBusyId(row.id);
       try {
         const result = await decidePendingToolCall(row.id, action, token);
@@ -152,9 +177,10 @@ export function PendingToolConfirmationCards({
         if (mountedRef.current) setBusyId(null);
       }
     },
-    [busyId, load],
+    [brokerSurface, busyId, load],
   );
 
+  if (brokerSurface) return null;
   if (rows.length === 0) return null;
 
   return (
