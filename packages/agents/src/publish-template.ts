@@ -20,6 +20,7 @@ import { shadowUpsertObject } from "@/lib/objects-dual-write";
 import { AGENT_TEMPLATE_TYPE_ID } from "./agent-builder-ids";
 import { _runAgentTemplateUpdate } from "./store";
 import type { AgentTemplateRecord, AgentTemplateVersionRecord } from "./store";
+import type { AgentTemplateIdentityClaim } from "./agent-template-identity";
 import { _createAgentTemplateVersionIfChanged } from "./store-template-versions";
 
 /**
@@ -45,10 +46,19 @@ import { _createAgentTemplateVersionIfChanged } from "./store-template-versions"
  */
 export async function publishAgentTemplateAndBindVersion(
   id: string,
-  opts: { createdBy?: string | null } = {},
+  opts: {
+    createdBy?: string | null;
+    /** WHO is publishing (CodeRabbit security finding on this seam): the
+     *  identity claim rides the flip's WHERE via `_runAgentTemplateUpdate`,
+     *  so an organization-scoped caller can never flip another tenant's
+     *  template — the foreign write matches zero rows and returns null.
+     *  Callers derive it with `deriveAgentTemplateIdentityClaim`; the
+     *  platform claim keeps the unrestricted operator arm. */
+    claim?: AgentTemplateIdentityClaim;
+  } = {},
 ): Promise<{ record: AgentTemplateRecord; version: AgentTemplateVersionRecord } | null> {
   const result = await db.transaction(async (tx) => {
-    const record = await _runAgentTemplateUpdate(tx, id, { status: "published" }, undefined);
+    const record = await _runAgentTemplateUpdate(tx, id, { status: "published" }, opts.claim);
     if (!record) return null;
     const { version } = await _createAgentTemplateVersionIfChanged(tx, record, {
       createdBy: opts.createdBy ?? null,

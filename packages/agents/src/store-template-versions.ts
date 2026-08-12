@@ -168,11 +168,15 @@ export async function readAgentTemplateVersions(
     .where(eq(agentTemplateVersions.templateId, templateId));
   const total = countRows.length;
 
-  // Fetch page — cursor is the versionNumber we last saw; fetch items with versionNumber < cursor
-  const whereClauses = opts.cursor
+  // Fetch page — cursor is the versionNumber we last saw; fetch items with
+  // versionNumber < cursor. The cursor arrives from the caller and can be
+  // arbitrary: a non-integer value would bind NaN to an integer column
+  // (CodeRabbit finding), so a malformed cursor is treated as absent.
+  const cursorValue = opts.cursor !== undefined ? Number(opts.cursor) : undefined;
+  const whereClauses = cursorValue !== undefined && Number.isInteger(cursorValue)
     ? and(
         eq(agentTemplateVersions.templateId, templateId),
-        lt(agentTemplateVersions.versionNumber, Number(opts.cursor)),
+        lt(agentTemplateVersions.versionNumber, cursorValue),
       )
     : eq(agentTemplateVersions.templateId, templateId);
 

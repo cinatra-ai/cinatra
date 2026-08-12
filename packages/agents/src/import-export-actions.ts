@@ -38,6 +38,7 @@ import {
 import type { CreateAgentTemplateInput } from "./store";
 import { importAgentTemplateCore } from "./import-agent-core";
 import { publishAgentTemplateAndBindVersion } from "./publish-template";
+import { deriveAgentTemplateIdentityClaim } from "./agent-template-identity";
 import { logAuditEvent } from "@/lib/authz";
 import { POLICY_VERSION } from "@/lib/authz/actor-context";
 
@@ -353,8 +354,13 @@ export async function importAgentTemplate(
   //      assistant guard arms stay: a refusal (null) is surfaced, not
   //      retried around.
   if (publishAndBind) {
+    // ONE read shared by the registration and the audit record below: the
+    // audit must report the REAL prior status (a re-upload of an
+    // already-published package repairs, it does not transition), so the
+    // read happens before the go-live flip (CodeRabbit finding).
+    const template = await readAgentTemplateById(result.templateId).catch(() => null);
+    const priorStatus = template?.status ?? "draft";
     try {
-      const template = await readAgentTemplateById(result.templateId);
       if (template?.packageName) {
         const { readInstalledExtensionsByPackageName } = await import(
           "@cinatra-ai/extensions/canonical-store"
@@ -398,17 +404,43 @@ export async function importAgentTemplate(
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.warn(
-        "[agents/import-export-actions] installed-extension registration failed (non-fatal):",
-        message,
-      );
-      warnings.push(
-        "The agent was imported but could not be registered in the installed-extensions list — re-upload the archive to retry.",
-      );
+      // Check-then-insert race classification (CodeRabbit finding): two
+      // concurrent uploads (or a double submit) can both probe zero rows;
+      // the store's partial-unique default index then fails the SECOND
+      // insert closed. Re-probe once — a live row means the package IS
+      // registered (the concurrent writer won) and that is success, not a
+      // warning.
+      let racedToRegistered = false;
+      if (template?.packageName) {
+        try {
+          const { readInstalledExtensionsByPackageName } = await import(
+            "@cinatra-ai/extensions/canonical-store"
+          );
+          const rowsAfter = await readInstalledExtensionsByPackageName(template.packageName);
+          racedToRegistered = rowsAfter.some(
+            (r) => r.status === "active" || r.status === "locked",
+          );
+        } catch {
+          // fall through to the warning
+        }
+      }
+      if (!racedToRegistered) {
+        console.warn(
+          "[agents/import-export-actions] installed-extension registration failed (non-fatal):",
+          message,
+        );
+        warnings.push(
+          "The agent was imported but could not be registered in the installed-extensions list — re-upload the archive to retry.",
+        );
+      }
     }
     try {
       const published = await publishAgentTemplateAndBindVersion(result.templateId, {
         createdBy: creatorId ?? null,
+        // The session's identity claim rides the flip's WHERE (CodeRabbit
+        // security finding): an org-scoped admin can never flip another
+        // tenant's template; an org-less session keeps the operator arm.
+        claim: deriveAgentTemplateIdentityClaim({ claimantOrgId }),
       });
       if (!published) {
         warnings.push(
@@ -429,7 +461,10 @@ export async function importAgentTemplate(
             decision: "allowed",
             policyVersion: POLICY_VERSION,
             metadata: {
-              statusTransition: { from: "draft", to: "published" },
+              // The REAL prior status (read before the flip): a re-upload of
+              // an already-published package records published→published
+              // (the repair path), never a transition that did not happen.
+              statusTransition: { from: priorStatus, to: "published" },
               boundVersionId: published.version.id,
               via: "upload-import",
             },

@@ -107,6 +107,7 @@ beforeEach(() => {
   addExtensionCoOwner.mockResolvedValue({ ok: true });
   readAgentTemplateById.mockResolvedValue({
     id: "tpl-1",
+    status: "draft",
     packageName: "@e2e/blog-drafter-agent",
     packageVersion: "0.3.1",
   });
@@ -122,8 +123,10 @@ describe("importAgentTemplate upload path goes live (cinatra#2653)", () => {
       publishAndBind: true,
     });
     expect(publishAgentTemplateAndBindVersion).toHaveBeenCalledTimes(1);
+    // The session's identity claim rides the flip (org session → org claim).
     expect(publishAgentTemplateAndBindVersion).toHaveBeenCalledWith("tpl-1", {
       createdBy: "admin-1",
+      claim: { kind: "organization", orgId: "org-1" },
     });
     // The scope is saved BEFORE go-live, so the agent surfaces already scoped.
     expect(saveExtensionAccessPolicy.mock.invocationCallOrder[0]).toBeLessThan(
@@ -205,6 +208,43 @@ describe("importAgentTemplate upload path goes live (cinatra#2653)", () => {
       expect.stringContaining("could not be registered in the installed-extensions list"),
     ]);
     expect(publishAgentTemplateAndBindVersion).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies the lost check-then-insert race as success (a live row appeared)", async () => {
+    // First probe: zero rows (both racers see this). Insert then fails on the
+    // store's partial-unique default index; the re-probe finds the winner's
+    // live row and the upload reports NO warning.
+    installExtensionManifest.mockRejectedValue(new Error("duplicate key value"));
+    readInstalledExtensionsByPackageName
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ status: "active" }]);
+    const result = await importAgentTemplate("emlwLXBheWxvYWQ=", undefined, {
+      redirect: false,
+      publishAndBind: true,
+    });
+    expect(result.warnings).toEqual([]);
+    expect(publishAgentTemplateAndBindVersion).toHaveBeenCalledTimes(1);
+  });
+
+  it("audits the REAL prior status on the repair path (published stays published)", async () => {
+    readAgentTemplateById.mockResolvedValue({
+      id: "tpl-1",
+      status: "published",
+      packageName: "@e2e/blog-drafter-agent",
+      packageVersion: "0.3.1",
+    });
+    readInstalledExtensionsByPackageName.mockResolvedValue([{ status: "active" }]);
+    await importAgentTemplate("emlwLXBheWxvYWQ=", undefined, {
+      redirect: false,
+      publishAndBind: true,
+    });
+    expect(logAuditEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          statusTransition: { from: "published", to: "published" },
+        }),
+      }),
+    );
   });
 
   it("does NOT publish or register without the flag (the MCP ZIP import path keeps landing drafts)", async () => {
