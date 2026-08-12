@@ -42,6 +42,12 @@ type ScopeFilterComboboxProps = {
   id?: string;
   /** Whether the "Workspace: Admins only" row is offered. Defaults to true. */
   showAdmin?: boolean;
+  /**
+   * Whether the "Personal: Only me" row is offered. Defaults to true. A surface
+   * whose resources can never carry a personal locus passes false, so it never
+   * offers a filter that can only ever return an empty list (cinatra#2688).
+   */
+  showPersonal?: boolean;
 };
 
 export function ScopeFilterCombobox({
@@ -50,6 +56,7 @@ export function ScopeFilterCombobox({
   paramName = "scope",
   id,
   showAdmin = true,
+  showPersonal = true,
 }: ScopeFilterComboboxProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -93,6 +100,7 @@ export function ScopeFilterCombobox({
       rowState={scopeFilterComboboxRowState}
       scopes={scopes}
       showAdmin={showAdmin}
+      showPersonal={showPersonal}
     />
   );
 }

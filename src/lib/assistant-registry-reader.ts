@@ -340,6 +340,21 @@ export type AssistantRegistryEntry = {
    *  titleSlug for `local`); the /assistants directory + "Remote chat" flyout use
    *  it (and `targetProvider`) for the remote destination. FAIL-SAFE to `local`. */
   launch: AssistantLaunch;
+  /**
+   * The `assistant_audience` grant rows this package carries (cinatra#2688).
+   * The reader ALREADY reads these to decide visibility; surfacing them lets a
+   * downstream surface (the /assistants directory scope filter) narrow by the
+   * SAME truth rather than inventing a second one. Visibility is unaffected —
+   * an entry only exists here because its grants already admitted the actor.
+   *
+   * OPTIONAL, and absence is FAIL-CLOSED by construction: a consumer folds the
+   * grants into `NormalizedResourceScope` entries, and no grants means no scope
+   * entries, which matches NOTHING under an id-carrying scope selection (the
+   * cinatra#953 W3 rule). The builtin Cinatra descriptor carries no grant rows
+   * at all — it is unconditionally visible — so a consumer normalizes it to the
+   * workspace locus from `isBuiltin`, never from this array.
+   */
+  audience?: readonly AssistantAudienceGrant[];
 };
 
 type CandidateRow = {
@@ -356,7 +371,12 @@ type CandidateRow = {
 /** Minimal drizzle read surface (injectable — the default is `betterAuthDb`). */
 type ReaderDb = Pick<typeof betterAuthDb, "select">;
 
-function toEntry(row: CandidateRow, aliases: string[], isBuiltin: boolean): AssistantRegistryEntry {
+function toEntry(
+  row: CandidateRow,
+  aliases: string[],
+  isBuiltin: boolean,
+  audience: readonly AssistantAudienceGrant[] = [],
+): AssistantRegistryEntry {
   return {
     packageName: row.packageName,
     templateId: row.templateId,
@@ -368,6 +388,7 @@ function toEntry(row: CandidateRow, aliases: string[], isBuiltin: boolean): Assi
     isBuiltin,
     delivery: projectAssistantDelivery(row.declaration),
     launch: projectAssistantLaunch(row.declaration),
+    audience,
   };
 }
 
@@ -502,12 +523,21 @@ export async function readAssistantRegistryForActor(
   const byPkg = new Map<string, AssistantRegistryEntry>();
   for (const row of installed) {
     if (row.assistantUserId && pausedIds.has(row.assistantUserId)) continue; // paused → fail-closed
-    if (matchesAssistantAudience(grantsByPkg.get(row.packageName) ?? [], ctx)) {
-      byPkg.set(row.packageName, toEntry(row, aliasesByPkg.get(row.packageName) ?? [], false));
+    const grants = grantsByPkg.get(row.packageName) ?? [];
+    if (matchesAssistantAudience(grants, ctx)) {
+      // cinatra#2688: the ADMITTING grants ride along on the entry, so the
+      // /assistants scope filter narrows by the same audience truth this gate
+      // already applied — never a second, drifting one.
+      byPkg.set(row.packageName, toEntry(row, aliasesByPkg.get(row.packageName) ?? [], false, grants));
     }
   }
   for (const row of builtin) {
-    byPkg.set(row.packageName, toEntry(row, aliasesByPkg.get(row.packageName) ?? [], true));
+    // The builtin carries NO grant rows (it is unconditionally visible), so its
+    // audience array stays empty; a consumer reads `isBuiltin` for its locus.
+    byPkg.set(
+      row.packageName,
+      toEntry(row, aliasesByPkg.get(row.packageName) ?? [], true, grantsByPkg.get(row.packageName) ?? []),
+    );
   }
 
   return Array.from(byPkg.values()).sort((a, b) => a.handle.localeCompare(b.handle));

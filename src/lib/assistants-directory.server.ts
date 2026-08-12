@@ -14,7 +14,17 @@ import {
   buildChatPath,
   packageNameToVendorSlug,
 } from "@cinatra-ai/chat/chat-path-codec";
-import type { AssistantRegistryEntry } from "@/lib/assistant-registry-reader";
+import type {
+  AssistantAudienceGrant,
+  AssistantRegistryEntry,
+} from "@/lib/assistant-registry-reader";
+// TYPE-ONLY, deliberately. This module sits in the reachable graph of /chat and
+// the a2a / llm-bridge / mcp API routes, all of which are route-graph-ratcheted.
+// A VALUE import of the scope-filter helpers would add a module to every one of
+// those budgets to serve a filter only /assistants uses, so the predicate is
+// INJECTED by the caller instead (see `AssistantsDirectoryOptions.scopeMatch`)
+// and only the erased types cross this boundary.
+import type { NormalizedResourceScope } from "@/lib/scope-filter";
 import {
   remoteConnectorKindForProvider,
   resolveRemoteChatDestination,
@@ -49,6 +59,89 @@ export type AssistantDirectoryRow = {
   localChatHref: string;
   /** Authorized instances (remote-capable rows only; [] when none/authorized). */
   remoteInstances: DirectoryRemoteInstance[];
+  /**
+   * The row's scope footprint (cinatra#2688), folded from the assistant's
+   * `assistant_audience` grants by `assistantAudienceScopeEntries`. The
+   * `?scope=` filter OR-matches the selection against THESE entries, exactly as
+   * /connectors matches its granted-connection entries.
+   */
+  scopeEntries: NormalizedResourceScope[];
+};
+
+// ---------------------------------------------------------------------------
+// Audience → scope-filter fold (cinatra#2688).
+// ---------------------------------------------------------------------------
+
+/**
+ * Fold an assistant's `assistant_audience` grants into the shared
+ * `NormalizedResourceScope` vocabulary the `?scope=` filter matches against.
+ *
+ * The two grammars already align (the URL filter's `org:` is the audience
+ * table's `organization`; `scopeSelectionMatches` bridges that itself), so the
+ * fold is a straight per-kind mapping:
+ *
+ *   workspace                 → { locus: "workspace" }
+ *   admin                     → { locus: "workspace", adminOnly: true }
+ *   organization/team/project → { locus: …, locusId: subjectId }
+ *
+ * FAIL-CLOSED, mirroring cinatra#953 W3: a grant of an unknown kind, or an
+ * org/team/project grant with NO `subjectId`, yields no entry — so it can never
+ * over-match an id-carrying selection. An assistant with no usable grant at all
+ * therefore shows only under the default ("workspace") view.
+ *
+ * The builtin Cinatra descriptor carries no grant rows because it is
+ * unconditionally visible; it is normalized to the workspace locus from
+ * `isBuiltin`, so it behaves like a workspace-granted assistant rather than
+ * vanishing under every non-default selection.
+ *
+ * There is deliberately NO "personal" mapping: `assistant_audience` has no
+ * per-user subject kind, so no assistant matches the `personal` token today.
+ */
+export function assistantAudienceScopeEntries(entry: {
+  isBuiltin: boolean;
+  audience?: readonly AssistantAudienceGrant[];
+}): NormalizedResourceScope[] {
+  const entries: NormalizedResourceScope[] = [];
+  if (entry.isBuiltin) entries.push({ locus: "workspace" });
+  for (const grant of entry.audience ?? []) {
+    switch (grant.subjectKind) {
+      case "workspace":
+        entries.push({ locus: "workspace" });
+        break;
+      case "admin":
+        entries.push({ locus: "workspace", adminOnly: true });
+        break;
+      case "organization":
+        if (grant.subjectId) entries.push({ locus: "organization", locusId: grant.subjectId });
+        break;
+      case "team":
+        if (grant.subjectId) entries.push({ locus: "team", locusId: grant.subjectId });
+        break;
+      case "project":
+        if (grant.subjectId) entries.push({ locus: "project", locusId: grant.subjectId });
+        break;
+      // Unknown kinds fold to nothing (fail-closed, mirroring the reader's own
+      // unknown-kind handling in `matchesAssistantAudience`).
+    }
+  }
+  return entries;
+}
+
+/** Build options — the `?scope=` narrowing the /assistants page resolved. */
+export type AssistantsDirectoryOptions = {
+  /**
+   * The `?scope=` predicate (cinatra#2688): does a row's scope footprint match
+   * the reader's selection? Built by the /assistants page from the ONE shared
+   * canonical parser + OR-predicate, and INJECTED here rather than imported, so
+   * the scope-filter module never enters the route budgets of the other
+   * surfaces that reach this resolver.
+   *
+   * OMITTED means the broadest view — every row the audience gate admitted,
+   * unnarrowed. The caller omits it for the default selection, which is where
+   * the default short-circuit lives on /connectors too, so a row carrying NO
+   * scope entries still shows under the default view.
+   */
+  scopeMatch?: (scopeEntries: readonly NormalizedResourceScope[]) => boolean;
 };
 
 /** The injectable data sources. */
@@ -62,11 +155,18 @@ export type AssistantsDirectoryDeps = {
 /**
  * Build the directory rows for an actor. Pure given `deps`. Rows are sorted by
  * display name (builtin Cinatra first) for a stable directory.
+ *
+ * `options.scopeMatch` applies the `?scope=` OR-filter (cinatra#2688) on top of
+ * the audience gate — it can only ever NARROW what the actor already sees, never
+ * widen it. An omitted predicate is the broadest view, so a row that carries no
+ * scope entries at all still shows there.
  */
 export async function buildAssistantsDirectory(
   deps: AssistantsDirectoryDeps,
+  options: AssistantsDirectoryOptions = {},
 ): Promise<AssistantDirectoryRow[]> {
   const entries = await deps.readVisibleRegistry();
+  const scopeMatch = options.scopeMatch;
 
   const rows: AssistantDirectoryRow[] = [];
   for (const entry of entries) {
@@ -74,6 +174,11 @@ export async function buildAssistantsDirectory(
     if (!vs) continue; // a non-scoped package can never be a /chat route target
     const { vendor, slug } = vs;
     const remoteCapable = entry.launch.kind === "remote";
+
+    // Scope-filter BEFORE the per-row instance authority runs: a row the
+    // selection excludes must not cost a `listAuthorizedInstances` round trip.
+    const scopeEntries = assistantAudienceScopeEntries(entry);
+    if (scopeMatch && !scopeMatch(scopeEntries)) continue;
 
     const remoteInstances: DirectoryRemoteInstance[] = [];
     if (remoteCapable) {
@@ -104,6 +209,7 @@ export async function buildAssistantsDirectory(
       remoteCapable,
       localChatHref: buildChatPath({ vendor, slug }),
       remoteInstances,
+      scopeEntries,
     });
   }
 
@@ -176,8 +282,10 @@ export const DEFAULT_ASSISTANTS_DIRECTORY_DEPS: AssistantsDirectoryDeps = {
 };
 
 /** Build the directory for the current actor — the entry the /assistants page calls. */
-export function buildAssistantsDirectoryForCurrentActor(): Promise<AssistantDirectoryRow[]> {
-  return buildAssistantsDirectory(DEFAULT_ASSISTANTS_DIRECTORY_DEPS);
+export function buildAssistantsDirectoryForCurrentActor(
+  options: AssistantsDirectoryOptions = {},
+): Promise<AssistantDirectoryRow[]> {
+  return buildAssistantsDirectory(DEFAULT_ASSISTANTS_DIRECTORY_DEPS, options);
 }
 
 /**

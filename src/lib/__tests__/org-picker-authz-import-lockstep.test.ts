@@ -59,6 +59,11 @@ const UI_ALLOWLIST = new Set<string>([
   "packages/extensions/src/screens/extension-settings-screen.tsx",
   "packages/agents/src/screens.tsx",
   "packages/agents/src/instance-screens.tsx",
+  // /assistants directory scope filter (cinatra#2688) — the same picker wiring
+  // as /connectors: the page feeds AvailableScopes to the shared
+  // ScopeFilterCombobox and resolves ?scope= server-side. A UI pick target, so
+  // an archived org must never be offered here either.
+  "src/app/assistants/page.tsx",
 ]);
 
 function walk(dir: string, acc: string[] = []): string[] {
