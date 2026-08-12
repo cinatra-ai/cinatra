@@ -320,12 +320,32 @@ describe("this layer asks the SHARED liveness predicate, not a copy of it", () =
 // structurally, which is the same technique #2684 used for its third reader.
 // ---------------------------------------------------------------------------
 describe("the MCP transport resolves widget actors through THIS layer", () => {
-  it("drives the checked resolver, and the raw verifier's name is absent from the seam", async () => {
+  it("the delegated-actor callback is EXACTLY the three-verifier chain, widget arm last", async () => {
     const src = await readSource("src/lib/mcp-server.ts");
+    const open = "verifyDelegatedActorToken: async (input) => {";
+    const start = src.indexOf(open);
+    expect(start, "the delegated-actor callback moved or was renamed").toBeGreaterThan(-1);
+    const end = src.indexOf("\n  },", start);
+    const body = src
+      .slice(start + open.length, end)
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith("//"))
+      .join(" ");
+    // The WHOLE arm, not a substring of it (codex round 2). Pinning only the
+    // presence of the checked call lets a bypass sit in front of it and return
+    // first; pinning the body means any extra branch, any second return and any
+    // other verifier call fails here.
+    expect(body).toBe(
+      [
+        "const chatActor = await verifyChatMcpActorToken(input);",
+        "if (chatActor) return chatActor;",
+        "const agentRunActor = await verifyAgentRunMcpActorToken(input);",
+        "if (agentRunActor) return agentRunActor;",
+        "return resolveWidgetDelegatedActorForTransport(input);",
+      ].join(" "),
+    );
     expect(src).toContain('from "./widget-mcp-actor-authorization"');
-    // The CALL, not just the import (codex round 1): an import can sit unused
-    // beside a bypass and satisfy a name-only assertion.
-    expect(src).toContain("return resolveWidgetDelegatedActorForTransport(input);");
     // The raw verifier skips both store reads. Its name must not appear at the
     // transport seam at all.
     expect(
@@ -378,13 +398,16 @@ describe("the MCP transport resolves widget actors through THIS layer", () => {
       "issueWidgetMcpActorToken",
       "verifyWidgetMcpActorToken",
     ]);
-    // And no `export { … }` list in either — the form the regex above cannot
-    // read is simply not allowed in these two files.
+    // And neither `export { … }` nor `export default` in either file — the two
+    // forms the regex above cannot read (codex rounds 1 and 2 built a bypass out
+    // of each in turn) are simply not allowed here.
     for (const rel of [
       "src/lib/widget-mcp-actor-authorization.ts",
       "src/lib/widget-mcp-actor-token.ts",
     ]) {
-      expect((await readSource(rel)).match(/^export \{/m), rel).toBeNull();
+      const src = await readSource(rel);
+      expect(src.match(/^export \{/m), rel).toBeNull();
+      expect(src.match(/^export default\b/m), rel).toBeNull();
     }
   });
 
