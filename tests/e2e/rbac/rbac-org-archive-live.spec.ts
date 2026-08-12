@@ -652,9 +652,10 @@ test.describe("archive live proof — 3 roles on a production-equivalent build (
       await expect(page.locator('[data-cinatra-org-manage-readonly="members"]')).toBeVisible();
       // Recovery is ungated by design (Decision 2 asymmetry) — the Unarchive
       // control replaces the Archive one, outside any disabled fieldset.
-      const unarchiveCard = page.locator('[data-cinatra-org-archive="unarchive"]');
-      await expect(unarchiveCard).toBeVisible();
-      await expect(unarchiveCard.locator("xpath=ancestor::fieldset")).toHaveCount(0);
+      await expect(page.locator('[data-cinatra-org-archive="unarchive"]')).toBeVisible();
+      await expect(
+        page.locator('fieldset[disabled] [data-cinatra-org-archive="unarchive"]'),
+      ).toHaveCount(0);
       await expect(page.locator('form[data-cinatra-org-archive="armed"]')).toHaveCount(0);
       await shot(page, testInfo, "02-owner-settings-archived-readonly");
       await page.goto("/organizations", { waitUntil: "domcontentloaded" });
