@@ -951,11 +951,16 @@ export async function runAssistantTurn(
   // delegated actor token depending on the caller:
   //   · widget principal present → a `cinatra.widget.mcp-obo` OBO token (pinned
   //     canonical instance + connector kind + `public_site_widget` discriminator;
-  //     platform-admin floored to `member` at mint). A fresh per-turn `jti` is
-  //     minted here (turn-binding for replay containment); the 120 s TTL is bound
-  //     at verify. The MCP transport verifies it to a `delegation:
-  //     "public_site_widget"` actor → the CLOSED, kind-keyed `delegated-widget`
-  //     tool policy applies (only the bound kind's `*_content_editor_run`).
+  //     platform-admin floored to `member` at mint). A fresh nonce is minted
+  //     here, and the token is SEALED to two things it cannot outlive
+  //     (cinatra#2687): the `cwu_` row this turn authenticated against, and THIS
+  //     turn's AG-UI run id. The MCP authorization layer refuses the token once
+  //     that sign-in ends or that turn's terminal status is committed — so the
+  //     120 s TTL now bounds only the gap between the relay's last call and that
+  //     commit, instead of being the whole containment. The transport
+  //     verifies it to a `delegation: "public_site_widget"` actor → the CLOSED,
+  //     kind-keyed `delegated-widget` tool policy applies (only the bound kind's
+  //     `*_content_editor_run`).
   //   · absent → the existing chat OBO token (`delegation: "chat"`), byte-
   //     identical to before — the cookie-session `@cinatra` path is unchanged.
   //
@@ -971,6 +976,11 @@ export async function runAssistantTurn(
           instanceId: widgetPrincipal.instanceId,
           kind: widgetPrincipal.assistantHandle,
           jti: randomUUID(),
+          // The two seals (cinatra#2687). Both are values THIS turn already
+          // holds — the principal's parent row and the harness-bound run id — so
+          // the mint invents nothing and nothing downstream can widen them.
+          parentJti: widgetPrincipal.parentTokenJti,
+          turnRunId: args.turnIdentity.runId,
         },
         issueWidgetMcpActorToken,
       )

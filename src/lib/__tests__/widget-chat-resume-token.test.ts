@@ -86,6 +86,8 @@ const WIDGET_MCP_INPUT: WidgetMcpActorTokenInput = {
   instanceId: "inst-canonical-uuid",
   kind: "wordpress",
   jti: "turn-nonce-abc123",
+  parentJti: "parent-jti-1",
+  turnRunId: RUN_ID,
 };
 
 const CHAT_ACTOR: ChatMcpActor = {

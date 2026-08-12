@@ -44,16 +44,27 @@ import {
 //      `platform_admin` at the boundary; the platform-admin short-circuit is
 //      suppressed at MINT time (defense-in-depth to the hop-1 belt-and-braces
 //      `platform_admin_on_public_widget` deny) (G5).
-//   6. SHORT TTL (120 s) + turn-bound `jti`. The widget turn is a SINGLE
+//   6. SHORT TTL (120 s) + a per-turn `jti`. The widget turn is a SINGLE
 //      blocking CMS-edit dispatch, not a 60-90 s multi-validate chat turn, so
 //      the chat token's 30 min is far too loose for a cross-origin public
-//      surface. `jti` is a per-turn nonce the transport records against the
-//      active thread/turn so the token cannot be replayed on a DIFFERENT
-//      turn/thread. Strict per-CALL single-use is INCOMPATIBLE with the
-//      hosted-MCP relay (OpenAI/Anthropic reuse the Authorization header as a
-//      static value for every `mcp_call` in the step), so turn-binding — not
-//      per-call burn — is the correct containment shape; the short TTL bounds
-//      the residual window (G12).
+//      surface. Strict per-CALL single-use is INCOMPATIBLE with the hosted-MCP
+//      relay (OpenAI/Anthropic reuse the Authorization header as a static value
+//      for every `mcp_call` in the step), so binding to the turn — not per-call
+//      burn — is the correct containment shape (G12).
+//   7. THE TWO SEALS (cinatra#2687), REQUIRED and FAIL-CLOSED at verify:
+//        · `pjti` — the `jti` of the `cwu_` widget token whose sign-in this
+//          turn ran under. A credential derived from a sign-in must not outlive
+//          that sign-in, so the token NAMES the row it came from.
+//        · `run`  — the AG-UI run id of the turn that minted it. This is what
+//          makes the token turn-bound in fact and not only in intent: until
+//          #2687 the `jti` was carried and returned but nothing ever compared
+//          it to anything, so the token worked for its whole 120 s including
+//          after the turn had finished and after the user had signed out.
+//      This module only PARSES both. The store reads that decide "is that
+//      sign-in still there" and "is that turn still running" live one layer up
+//      (`src/lib/widget-mcp-actor-authorization.ts`), exactly as the resume
+//      token's parent check lives in its route (#2684) — this stays a pure
+//      signing leaf with no database edge.
 //
 // `aud`/`iss` and the `BETTER_AUTH_SECRET` HMAC are IDENTICAL to the chat token
 // (no new secret). Per-instance write authority + live-membership re-checks are
@@ -85,11 +96,25 @@ export type WidgetMcpActor = {
   /** The connector KIND (`knd` claim). Binds the token to its editor primitive. */
   kind: WidgetMcpConnectorKind;
   /**
-   * Per-turn nonce. The transport records it against the active thread/turn so
-   * the token cannot be replayed on a DIFFERENT turn/thread (turn-binding, not
-   * per-call burn — the hosted-MCP relay reuses the header for every call).
+   * Per-turn nonce (`jti`). Distinguishes two tokens minted for the same turn
+   * and is the audit handle in the boundary's logs. It is NOT the turn binding —
+   * `turnRunId` is, and mistaking the nonce for the binding is precisely the
+   * defect #2687 closes.
    */
   jti: string;
+  /**
+   * THE PARENT `cwu_` TOKEN'S OWN `jti` (`pjti`, cinatra#2687). This token is
+   * derived from one widget-token row; the authorization layer asks whether that
+   * row's Better Auth session is still signed in before the token authorizes
+   * anything, through the same predicate every other widget verifier uses.
+   */
+  parentJti: string;
+  /**
+   * THE AG-UI RUN ID OF THE TURN THAT MINTED IT (`run`, cinatra#2687). The
+   * authorization layer refuses unless that turn is still running, so a token
+   * whose turn has completed is dead inside its own 120 seconds.
+   */
+  turnRunId: string;
   /**
    * ALWAYS `"member"` — hard-coded by the verifier because the token omits
    * `prole`. A widget user is NEVER `platform_admin` at the boundary; this
@@ -111,6 +136,10 @@ export type WidgetMcpActorTokenInput = {
   instanceId: string;
   kind: WidgetMcpConnectorKind;
   jti: string;
+  /** The `jti` of the `cwu_` widget token that authenticated the turn (#2687). */
+  parentJti: string;
+  /** The AG-UI run id of the turn this token is minted for (#2687). */
+  turnRunId: string;
 };
 
 type WidgetMcpActorTokenClaims = {
@@ -120,7 +149,9 @@ type WidgetMcpActorTokenClaims = {
   inst: string; // pinned canonical instanceId — REQUIRED, fail-closed
   knd: WidgetMcpConnectorKind; // connector KIND — REQUIRED, fail-closed
   src: "public_site_widget"; // fixed discriminator
-  jti: string; // per-turn nonce (turn-binding, replay containment)
+  jti: string; // per-turn nonce (audit handle)
+  pjti: string; // the parent cwu_ token's jti — the revocation handle (#2687)
+  run: string; // the minting turn's AG-UI run id — the turn seal (#2687)
   scope: "mcp:connect";
   aud: string;
   iss: string;
@@ -136,8 +167,10 @@ const TOKEN_SOURCE = "public_site_widget";
 // intra-turn reads), not a multi-validate chat turn. 120 s comfortably outlasts
 // one blocking dispatch while sitting well under any human-review pause; it
 // bounds the replay window of a leaked token on a cross-origin public surface
-// far tighter than the chat token's 30 min. Turn-bound `jti` (recorded at the
-// transport) contains replay WITHIN the window; the short TTL bounds it.
+// far tighter than the chat token's 30 min. The `run` seal (checked against the
+// live turn, #2687) contains replay WITHIN the window; the short TTL bounds what
+// the seal cannot — the stretch between the relay's last call and the commit of
+// the turn's terminal status.
 const TOKEN_TTL_SECONDS = 120;
 const AUTH_BASE_PATH = "/api/auth";
 const MCP_BASE_PATH = "/api/mcp";
@@ -192,6 +225,8 @@ export function issueWidgetMcpActorToken(input: WidgetMcpActorTokenInput): strin
     knd: input.kind,
     src: TOKEN_SOURCE,
     jti: input.jti,
+    pjti: input.parentJti,
+    run: input.turnRunId,
     scope: TOKEN_SCOPE,
     aud: issueAudience(),
     iss: issueIssuer(),
@@ -301,9 +336,18 @@ export function verifyWidgetMcpActorToken(input: {
     // knd is REQUIRED and FAIL-CLOSED — binds the token to its connector kind so
     // a wordpress token can never drive a drupal editor primitive (G9).
     if (!isConnectorKind(payload.knd)) return null;
-    // jti is REQUIRED — the transport records it for turn-binding (replay
-    // containment). A missing/blank/whitespace-only nonce fails closed.
+    // jti is REQUIRED — the per-turn nonce (audit handle). A missing/blank/
+    // whitespace-only nonce fails closed.
     if (!isNonBlankString(payload.jti)) return null;
+    // pjti is REQUIRED and FAIL-CLOSED (cinatra#2687) — it names the `cwu_` row
+    // this token was derived from, and without it the authorization layer has
+    // nothing to ask about. A token minted before this shipped carries none and
+    // is refused; its 120-second life bounds that entirely.
+    if (!isNonBlankString(payload.pjti)) return null;
+    // run is REQUIRED and FAIL-CLOSED (cinatra#2687) — the turn seal. A token
+    // that names no turn cannot be turn-bound by anybody downstream, so it never
+    // resolves an actor at all rather than resolving one nothing can check.
+    if (!isNonBlankString(payload.run)) return null;
     // Exact aud + iss binding to THIS request's canonical origin (passed by the
     // MCP transport). Membership-in-trusted-set is NOT enough: it would let a
     // token minted for the public funnel URL be replayed against localhost (or
@@ -343,6 +387,8 @@ export function verifyWidgetMcpActorToken(input: {
       instanceId: payload.inst,
       kind: payload.knd,
       jti: payload.jti,
+      parentJti: payload.pjti,
+      turnRunId: payload.run,
       // Floored at mint: the token omits `prole`, so a widget user is ALWAYS
       // resolved as `member` here — never `platform_admin` at the boundary.
       platformRole: "member",

@@ -34,6 +34,7 @@ import {
   threadBindingOf,
   getAssistantThreadByIdInContainer,
   ensureThreadSlug,
+  readAssistantTurnActivityByRunId,
 } from "../assistant-thread-store";
 import type { AssistantThread, AssistantTurn } from "../assistant-thread-store";
 
@@ -803,5 +804,73 @@ describe("title-slug allocator excludes UUID-shaped candidates (cinatra#2562)", 
     // "aaaaaaaa-bbbb-cccc-dddd-111111111111" — a full UUID shape.
     expect(mintedSlug).not.toMatch(UUID_RE);
     expect(mintedSlug).toBe("aaaaaaaa-bbbb-cccc-dddd-z11111111111");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readAssistantTurnActivityByRunId (cinatra#2687) — the predicate the widget
+// OBO token's authorization layer asks. It answers about the TURN, and it
+// answers three ways so a caller can tell "this turn is over" from "I could not
+// find out"; both refuse, and nothing here writes.
+// ---------------------------------------------------------------------------
+describe("readAssistantTurnActivityByRunId (#2687)", () => {
+  beforeEach(() => {
+    runPostgresQueriesSync.mockReset();
+  });
+
+  it("`active` while the turn is still running", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [{ status: "running" }] }]);
+    expect(readAssistantTurnActivityByRunId("run-1")).toBe("active");
+  });
+
+  it("`ended` once the turn reached a terminal status", () => {
+    // This is the whole point: `completed` is committed when the run finishes,
+    // so a token sealed to this run stops authorizing then rather than at its
+    // own expiry.
+    runPostgresQueriesSync.mockReturnValue([{ rows: [{ status: "completed" }] }]);
+    expect(readAssistantTurnActivityByRunId("run-1")).toBe("ended");
+    runPostgresQueriesSync.mockReturnValue([{ rows: [{ status: "error" }] }]);
+    expect(readAssistantTurnActivityByRunId("run-1")).toBe("ended");
+  });
+
+  it("`ended` for a run id no row carries, and for an unusable one — without a query", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [] }]);
+    expect(readAssistantTurnActivityByRunId("run-nobody-has")).toBe("ended");
+    runPostgresQueriesSync.mockClear();
+    // A blank/absent/over-long run id names no turn, so there is nothing
+    // indeterminate about it and the store is never touched.
+    expect(readAssistantTurnActivityByRunId("")).toBe("ended");
+    expect(readAssistantTurnActivityByRunId("   ")).toBe("ended");
+    expect(readAssistantTurnActivityByRunId(undefined)).toBe("ended");
+    expect(readAssistantTurnActivityByRunId(42)).toBe("ended");
+    expect(readAssistantTurnActivityByRunId("r".repeat(129))).toBe("ended");
+    expect(runPostgresQueriesSync).not.toHaveBeenCalled();
+  });
+
+  it("`unknown` when the store cannot answer — never a thrown error", () => {
+    runPostgresQueriesSync.mockImplementation(() => {
+      throw new Error("relation \"assistant_turns\" does not exist");
+    });
+    expect(readAssistantTurnActivityByRunId("run-1")).toBe("unknown");
+  });
+
+  it("reads the newest row for the run id, and reads only its status", () => {
+    runPostgresQueriesSync.mockReturnValue([{ rows: [{ status: "running" }] }]);
+    readAssistantTurnActivityByRunId("  run-7  ");
+    const call = runPostgresQueriesSync.mock.calls[0][0] as {
+      queries: Array<{ text: string; values: unknown[] }>;
+    };
+    expect(call.queries[0].values).toEqual(["run-7"]); // trimmed
+    expect(call.queries[0].text).toContain("SELECT status");
+    // The TABLE and the BINDING PREDICATE are pinned, not just the shape (codex
+    // round 0, LOW 1): a regression that read some other table, or dropped the
+    // `run_id = $1` filter, would answer `active` about an unrelated live turn
+    // and authorize a completed token while a shape-only assertion stayed green.
+    expect(call.queries[0].text).toContain('"assistant_turns"');
+    expect(call.queries[0].text).toContain("WHERE run_id = $1");
+    expect(call.queries[0].text).toContain("ORDER BY created_at DESC");
+    expect(call.queries[0].text).toContain("LIMIT 1");
+    // A read-only predicate: it must never appear in a write path.
+    expect(call.queries[0].text).not.toMatch(/\b(UPDATE|DELETE|INSERT)\b/);
   });
 });

@@ -246,6 +246,10 @@ describe("broker-auth happy path — builds the WidgetPrincipal and drives the s
       kind: "public_site_widget",
       userId: "user-7",
       orgId: "org-3",
+      // cinatra#2687 — the `cwu_` row's jti, from the VERIFIED claims. It rides
+      // the principal because the OBO token the runtime mints out of this object
+      // seals it, so a signed-out user's turn credential dies with the sign-in.
+      parentTokenJti: "u1",
       instanceId: "inst-42", // the server-derived canonical RE-PIN
       verifiedOrigin: ORIGIN,
       assistantHandle: "wordpress",
@@ -298,6 +302,10 @@ describe("broker-auth happy path — builds the WidgetPrincipal and drives the s
         instanceId: "inst-42", // the server-derived canonical RE-PIN
         kind: "wordpress",
         runId: "run-from-harness",
+        // cinatra#2684/#2687 — the parent `cwu_` row, now read from the
+        // principal rather than re-read from the claims, so this token and the
+        // OBO token the runtime mints name the SAME row by construction.
+        parentJti: "u1",
         platformRole: "member",
       });
       // Cross-run: the SAME token does not verify for a different run.

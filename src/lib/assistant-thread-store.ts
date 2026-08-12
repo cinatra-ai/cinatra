@@ -1226,6 +1226,70 @@ export function findAssistantTurnByRunId(runId: string): AssistantTurn | null {
   return row ? mapAssistantTurnRow(row) : null;
 }
 
+/**
+ * IS THIS TURN STILL RUNNING — and if not, is that a fact or an outage?
+ *
+ *   active   — the row is there and its status is still `running`;
+ *   ended    — no run id was named, no row carries it, or the turn reached
+ *              `completed`/`error`;
+ *   unknown  — the store could not answer at all.
+ *
+ * THREE answers, not two, and for the same reason the widget session predicate
+ * has three (cinatra#2684): a credential sealed to a turn must be refused when
+ * the turn is over AND when the question cannot be asked, but only one of those
+ * is a fact about the turn. Both refuse; nothing here reaps.
+ *
+ * WHY IT LIVES HERE. `assistant_turns` is this store's table and its lifecycle
+ * (`running` → `completed` | `error`) is this module's contract, written by
+ * `updateAssistantTurn`. A caller that needed to know "is the turn over" by
+ * reading the row itself would be holding a second, driftable copy of that rule.
+ *
+ * ITS CALLER (cinatra#2687) is the widget OBO token's authorization layer: the
+ * token seals the run id of the turn that minted it, and a turn that has reached
+ * a terminal status can no longer authorize a CMS write — even inside the
+ * token's own 120 seconds.
+ *
+ * WHAT "ENDED" IS PRECISELY (codex round 0, MEDIUM 1). The revocation instant is
+ * the terminal STATUS COMMIT, which `streamAgUiChatTurn` performs AFTER the
+ * run's terminal frame has been published to the durable log — not at the frame
+ * itself. So there is a short window in which a consumer has already seen
+ * RUN_FINISHED and this predicate still says `active`. Nothing legitimate calls
+ * in it (the producer awaits the provider stream, so the relay's last call has
+ * settled before the frame exists), and it is stated here rather than papered
+ * over because the alternative — writing the status before the frame — belongs
+ * to the shared chat harness that also serves the cookie-session path.
+ *
+ * NEVER THROWS.
+ */
+export type AssistantTurnActivity = "active" | "ended" | "unknown";
+
+export function readAssistantTurnActivityByRunId(runId: unknown): AssistantTurnActivity {
+  const id = typeof runId === "string" ? runId.trim() : "";
+  if (!id || id.length > 128) return "ended";
+  let row: Record<string, unknown> | undefined;
+  try {
+    ensurePostgresSchema();
+    const [res] = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      queries: [
+        {
+          text: `SELECT status
+                 FROM "${schemaIdent()}"."assistant_turns"
+                 WHERE run_id = $1
+                 ORDER BY created_at DESC, id
+                 LIMIT 1`,
+          values: [id],
+        },
+      ],
+    });
+    row = res?.rows?.[0] as Record<string, unknown> | undefined;
+  } catch {
+    return "unknown";
+  }
+  if (!row) return "ended";
+  return row.status === "running" ? "active" : "ended";
+}
+
 /** List a thread's turns in creation order (uses the per-thread index). */
 export function listAssistantTurns(threadId: string): AssistantTurn[] {
   ensurePostgresSchema();

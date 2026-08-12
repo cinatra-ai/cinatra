@@ -159,6 +159,8 @@ const WIDGET_INPUT: WidgetMcpActorTokenInput = {
   instanceId: "inst-canonical",
   kind: "wordpress",
   jti: "turn-nonce-1",
+  parentJti: "cwu-row-1",
+  turnRunId: "run-of-this-turn",
 };
 
 const BEFORE_AUTH_SECRET = process.env.BETTER_AUTH_SECRET;
@@ -207,6 +209,8 @@ function baseClaims(overrides: Record<string, unknown> = {}) {
     knd: "wordpress",
     src: "public_site_widget",
     jti: "turn-nonce-1",
+    pjti: "cwu-row-1",
+    run: "run-of-this-turn",
     scope: "mcp:connect",
     aud: PUBLIC_MCP_URL,
     iss: PUBLIC_AUTH_URL,
@@ -270,6 +274,8 @@ describe("S5 widget OBO — full chain (mint → verify → policy → frame →
       instanceId: "inst-canonical",
       kind: "wordpress",
       jti: "turn-nonce-1",
+      parentJti: "cwu-row-1",
+      turnRunId: "run-of-this-turn",
       platformRole: "member",
     });
 
@@ -447,9 +453,10 @@ describe("T5 — platform-admin floor (G5)", () => {
 });
 
 // ===========================================================================
-// T6 — replay window: TTL bound + jti surfaced for turn-binding.
+// T6 — replay window: TTL bound + both seals surfaced for the authorization
+// layer to check (cinatra#2687 — until then the window WAS the containment).
 // ===========================================================================
-describe("T6 — replay window (120 s TTL; jti surfaced)", () => {
+describe("T6 — replay window (120 s TTL; seals surfaced)", () => {
   it("a token past its 120 s TTL resolves NO actor", () => {
     vi.useFakeTimers();
     try {
@@ -462,9 +469,21 @@ describe("T6 — replay window (120 s TTL; jti surfaced)", () => {
     }
   });
 
-  it("surfaces the per-turn jti verbatim (the transport turn-binding input)", () => {
+  it("surfaces the per-turn jti verbatim (the audit handle)", () => {
     const actor = boundaryVerify(issueWidgetMcpActorToken({ ...WIDGET_INPUT, jti: "nonce-xyz" }));
     expect(actor!.jti).toBe("nonce-xyz");
+  });
+
+  it("surfaces BOTH seals verbatim — the parent cwu_ row and the minting turn", () => {
+    // The end-to-end proof that the seals survive the real mint → real verify
+    // hop unchanged. What is DONE with them (refuse a dead sign-in, refuse a
+    // finished turn) is the authorization layer's own suite; the containment
+    // they enable is why this token no longer relies on its TTL alone.
+    const actor = boundaryVerify(
+      issueWidgetMcpActorToken({ ...WIDGET_INPUT, parentJti: "cwu-row-9", turnRunId: "run-9" }),
+    );
+    expect(actor!.parentJti).toBe("cwu-row-9");
+    expect(actor!.turnRunId).toBe("run-9");
   });
 });
 

@@ -9,7 +9,7 @@ import {
 import { readAgentRunByTokenHash } from "@cinatra-ai/agents";
 import { verifyChatMcpActorToken } from "./chat-mcp-actor-token";
 import { verifyAgentRunMcpActorToken } from "./agent-run-mcp-actor-token";
-import { verifyWidgetMcpActorToken } from "./widget-mcp-actor-token";
+import { resolveWidgetDelegatedActorForTransport } from "./widget-mcp-actor-authorization";
 import { sessionAuthorityFromResolvedRole } from "./org-write/authority";
 import { mintRunWriteAuthorityForMcp } from "./org-write/run-authority-mint";
 import { createObjectsModule } from "@cinatra-ai/objects/module";
@@ -561,6 +561,10 @@ export const mcpServerMount = createMcpServerMount({
   //      or `knd`, wrong `t`, expired/over-long TTL, or bad HMAC → the
   //      verifier returns null → this falls through to the machine-token
   //      path, DENIED at the boundary (never an un-pinned OBO actor).
+  //      cinatra#2687: the widget entry point is the AUTHORIZATION layer, not
+  //      the raw token verifier — it additionally refuses a token whose parent
+  //      `cwu_` sign-in has ended and one whose turn has finished, so the seal
+  //      the token carries is actually enforced somewhere.
   //
   // App-layer callback because the mcp-server package cannot import
   // app-local modules (no `@/` imports in packages/mcp-server). Each token
@@ -576,19 +580,12 @@ export const mcpServerMount = createMcpServerMount({
     // S2 / B1); absent ⇒ org scope. No re-mapping needed here.
     const agentRunActor = await verifyAgentRunMcpActorToken(input);
     if (agentRunActor) return agentRunActor;
-    const widgetActor = await verifyWidgetMcpActorToken(input);
-    if (!widgetActor) return null;
-    // Normalize the widget token's native `inst`/`knd` into the SAME unified
-    // `connectorInstancePin` shape (cinatra#2017 S2 / B1) — a widget turn is
-    // ALWAYS instance-pinned, so the governed invoker reads one field regardless
-    // of token type.
-    return {
-      ...widgetActor,
-      connectorInstancePin: {
-        connectorKey: widgetActor.kind,
-        instanceId: widgetActor.instanceId,
-      },
-    };
+    // cinatra#2687 — ONE delegating line, deliberately. The widget branch
+    // (verify → parent-session live → turn still running → normalize the
+    // instance pin → drop the spent seals) lives in the leaf so a test can drive
+    // the EXACT expression this seam runs; nothing about it is re-stated here,
+    // where nothing could check it.
+    return resolveWidgetDelegatedActorForTransport(input);
   },
   // cinatra#1939 S3: membership-grounded org-write authority for session /
   // chat-OBO callers. The transport already resolved the membership role for

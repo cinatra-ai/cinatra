@@ -379,6 +379,11 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     kind: "public_site_widget",
     userId: claims.userId,
     orgId: claims.orgId,
+    // cinatra#2687 — the `cwu_` row this turn authenticated against, from the
+    // VERIFIED claims. Every credential this turn derives seals it, so each one
+    // dies when the sign-in behind it does: the resume token below, and the MCP
+    // OBO token the runtime mints out of this principal.
+    parentTokenJti: claims.jti,
     instanceId: reResolvedInstance,
     verifiedOrigin: verifiedOrigin ?? "",
     assistantHandle: binding.handle,
@@ -553,13 +558,12 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
         kind: widgetPrincipal.assistantHandle,
         runId,
         jti: randomUUID(),
-        // cinatra#2684 — the `cwu_` row this turn authenticated against, taken
-        // from the verified claims rather than added to `WidgetPrincipal`: the
-        // principal travels into the MCP OBO token and the carrier run, and a
-        // revocation handle belongs to the credential that needs it, not to
-        // everything downstream of it. The resume route re-asks whether that
-        // row's sign-in is still there before it streams a byte.
-        parentJti: claims.jti,
+        // cinatra#2684 — the `cwu_` row this turn authenticated against. The
+        // resume route re-asks whether that row's sign-in is still there before
+        // it streams a byte. Read from the principal since #2687: the OBO token
+        // needs the same handle, so it stopped being one credential's private
+        // business and became a property of the turn.
+        parentJti: widgetPrincipal.parentTokenJti,
       }),
   });
   // Reflect CORS onto the streamed response so the cross-origin widget can read

@@ -59,6 +59,8 @@ const WIDGET_INPUT: WidgetMcpActorTokenInput = {
   instanceId: "inst-canonical-uuid",
   kind: "wordpress",
   jti: "turn-nonce-abc123",
+  parentJti: "cwu-row-jti-1",
+  turnRunId: "run-of-this-turn",
 };
 
 const EXPECTED_ACTOR: WidgetMcpActor = {
@@ -68,6 +70,8 @@ const EXPECTED_ACTOR: WidgetMcpActor = {
   instanceId: "inst-canonical-uuid",
   kind: "wordpress",
   jti: "turn-nonce-abc123",
+  parentJti: "cwu-row-jti-1",
+  turnRunId: "run-of-this-turn",
   platformRole: "member",
 };
 
@@ -149,6 +153,8 @@ function baseClaims(overrides: Record<string, unknown> = {}) {
     knd: "wordpress",
     src: "public_site_widget",
     jti: "turn-nonce-abc123",
+    pjti: "cwu-row-jti-1",
+    run: "run-of-this-turn",
     scope: "mcp:connect",
     aud: PUBLIC_MCP_URL,
     iss: PUBLIC_AUTH_URL,
@@ -172,6 +178,9 @@ describe("widget-mcp-actor-token mint", () => {
     expect(p.inst).toBe("inst-canonical-uuid");
     expect(p.knd).toBe("wordpress");
     expect(p.jti).toBe("turn-nonce-abc123");
+    // The two seals (cinatra#2687) ride the token as their own claims.
+    expect(p.pjti).toBe("cwu-row-jti-1");
+    expect(p.run).toBe("run-of-this-turn");
     // prole is DELIBERATELY not minted — the floor is imposed at verify.
     expect(p).not.toHaveProperty("prole");
   });
@@ -256,10 +265,10 @@ describe("widget-mcp-actor-token verify — TTL / replay window (T6)", () => {
     expect(verify(signClaims(baseClaims({ iat: t + 0.5, exp: t + 120.5 })))).toBeNull();
   });
 
-  it("carries the per-turn `jti` onto the resolved actor (transport turn-binding input)", () => {
-    // Token-level replay containment is the `jti` the transport records against
-    // the active thread/turn; the token verifier's job is to (a) REQUIRE it and
-    // (b) surface it verbatim. Cross-turn denial itself is a transport test.
+  it("carries the per-turn `jti` onto the resolved actor (the audit handle)", () => {
+    // `jti` distinguishes two tokens minted for the same turn. It is NOT the
+    // turn binding — `run` is (cinatra#2687) — and this module's job is to
+    // REQUIRE it and surface it verbatim.
     const token = issueWidgetMcpActorToken({ ...WIDGET_INPUT, jti: "nonce-xyz" });
     expect(verify(token)?.jti).toBe("nonce-xyz");
   });
@@ -268,6 +277,49 @@ describe("widget-mcp-actor-token verify — TTL / replay window (T6)", () => {
     const { jti: _drop, ...noJti } = baseClaims();
     expect(verify(signClaims(noJti))).toBeNull();
     expect(verify(signClaims(baseClaims({ jti: "" })))).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The two seals (cinatra#2687). This module PARSES them; the authorization layer
+// (widget-mcp-actor-authorization.ts) is what checks them against the live
+// sign-in and the live turn. What is pinned here is that neither can be absent:
+// a token that names no parent and no turn is one nothing downstream could check
+// even if it wanted to, so it never resolves an actor at all.
+// ---------------------------------------------------------------------------
+describe("widget-mcp-actor-token verify — the parent + turn seals (#2687)", () => {
+  it("surfaces both seals verbatim on the resolved actor", () => {
+    const actor = verify(
+      issueWidgetMcpActorToken({
+        ...WIDGET_INPUT,
+        parentJti: "cwu-row-42",
+        turnRunId: "run-42",
+      }),
+    );
+    expect(actor?.parentJti).toBe("cwu-row-42");
+    expect(actor?.turnRunId).toBe("run-42");
+  });
+
+  it("rejects a token re-signed without a `pjti` — including one minted before #2687", () => {
+    const { pjti: _drop, ...noParent } = baseClaims();
+    // This IS the pre-#2687 token shape: a valid HMAC over the old claim set.
+    expect(verify(signClaims(noParent))).toBeNull();
+    expect(verify(signClaims(baseClaims({ pjti: "" })))).toBeNull();
+    expect(verify(signClaims(baseClaims({ pjti: "   " })))).toBeNull();
+    expect(verify(signClaims(baseClaims({ pjti: 7 })))).toBeNull();
+  });
+
+  it("rejects a token re-signed without a `run` — the seal is not optional", () => {
+    const { run: _drop, ...noRun } = baseClaims();
+    expect(verify(signClaims(noRun))).toBeNull();
+    expect(verify(signClaims(baseClaims({ run: "" })))).toBeNull();
+    expect(verify(signClaims(baseClaims({ run: "   " })))).toBeNull();
+    expect(verify(signClaims(baseClaims({ run: 7 })))).toBeNull();
+  });
+
+  it("positive control: the SAME hand-signed path WITH both seals verifies", () => {
+    const actor = verify(signClaims(baseClaims()));
+    expect(actor).toEqual(EXPECTED_ACTOR);
   });
 });
 

@@ -21,9 +21,10 @@ import type { OboCeilingChain } from "./obo-ceiling";
  *   claim and the verifier hard-codes `member`, so the platform-admin
  *   immediate-allow can't trigger for a widget delegation. `instanceId` is the
  *   SERVER-DERIVED canonical row (verified-origin re-pin) the boundary asserts
- *   the tool-arg instance against. (Transport wiring — verifier + tool policy
- *   + `jti` turn-binding — lands in a later S5 wave; this branch is the type
- *   contract they build against.)
+ *   the tool-arg instance against. The token's two seals — its parent `cwu_`
+ *   row and its turn's run id — are checked by the HOST's authorization layer
+ *   before this actor is ever built (cinatra#2687) and deliberately do not
+ *   appear here: they are what earned the frame, not something the frame grants.
  *
  * Existing callers that only read `userId`, `orgId`, `platformRole` are
  * union-compatible; discriminating callsites must check `actor.delegation`.
@@ -87,9 +88,11 @@ export type DelegatedMcpActor =
        */
       kind: "wordpress" | "drupal";
       /**
-       * Per-turn nonce (the token's `jti`). The transport records it against the
-       * active thread/turn so the token cannot be replayed on a DIFFERENT
-       * turn/thread; the token's short TTL bounds the residual window.
+       * Per-turn nonce (the token's `jti`) — the audit handle that distinguishes
+       * two tokens minted for the same turn. The TURN BINDING itself is the
+       * token's `run` seal, checked against the live `assistant_turns` row by
+       * the host before this actor exists (cinatra#2687); this field never was
+       * that binding, and reading it as one is the defect #2687 closed.
        */
       jti: string;
       /**
