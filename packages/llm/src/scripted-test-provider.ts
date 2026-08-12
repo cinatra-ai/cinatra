@@ -67,6 +67,23 @@ const LIFECYCLE_PULL_INTENT =
   /\b(review|reviews|gate|gates|waiting|approval|approvals|verification|verified|check)\b/i;
 
 /**
+ * Does this turn's instruction ask for the lifecycle pull?
+ *
+ * The PROVIDER's own reading, exported so a host can ask BEFORE it builds a
+ * dispatcher — which is what the cookie-session `/chat` branch does
+ * (cinatra#2683). The decision stays here, in the model layer, for the reason the
+ * whole seam exists: choosing which primitive a turn calls is the one thing a
+ * real model decides on this path, so the runtime asks the provider instead of
+ * re-deriving an intent of its own. The runtime's own use of the answer is
+ * narrow and stated where it is made: only a turn this predicate accepts takes
+ * the scripted short-circuit on `/chat`, so every other cookie-session turn under
+ * the test flag keeps resolving its real adapter exactly as it did.
+ */
+export function scriptedTurnAsksForLifecyclePull(instructions: string): boolean {
+  return LIFECYCLE_PULL_INTENT.test(instructions);
+}
+
+/**
  * Does the instruction ask for the VERIFICATION reading rather than the review
  * gate itself? Narrow on purpose: `verification_record_render` and
  * `artifact_review_gate_render` take the SAME ref, so the only thing that
@@ -295,6 +312,56 @@ export async function runScriptedWidgetAssistantTurn(input: {
         ],
       }),
     });
+  }
+}
+
+/**
+ * Deterministic COOKIE-SESSION `/chat` turn (cinatra#2683, epic #2564 S8f — the
+ * parity proof's comparison view).
+ *
+ * The widget turn above answers a CMS editing question and, when asked a
+ * lifecycle question, calls the real pull primitives. `/chat` is not a CMS
+ * surface, so this turn is ONLY the lifecycle pull: it streams one sentinel line
+ * so the transcript reads like a turn rather than a bare tool trace, then names
+ * the primitives and forwards what they answered, byte for byte.
+ *
+ * WHAT IS STOOD IN FOR, EXACTLY. The model layer, and only it. The runtime
+ * reaches this function only for a turn `scriptedTurnAsksForLifecyclePull`
+ * accepts, and everything after the name is real: the runtime's dispatcher
+ * carries the chat surface's OWN `cinatra.chat.mcp-obo` token to the real
+ * self-MCP, the delegated-chat tool policy decides whether the primitive may be
+ * called at all, and the producer mints the envelope or refuses. This module
+ * cannot mint a card: a string it composed carries no dispatch provenance, so the
+ * runtime emits it unlabelled and the sink's recognizer drops it.
+ *
+ * A dispatcher that throws degrades to the streamed text — the honest outcome of
+ * a tool call that did not happen, never a fabricated card.
+ */
+export async function runScriptedChatAssistantTurn(input: {
+  /** The end user's latest message. */
+  instructions: string;
+  /** The REAL self-MCP dispatcher the runtime injects (chat-token flavour). */
+  callSelfMcpTool: ScriptedSelfMcpDispatch;
+  onText: (chunk: string) => void;
+  onToolCall: (call: { id: string; name: string }) => void;
+  onToolResult: (result: { id: string; name: string; result: string }) => void;
+}): Promise<void> {
+  const reply =
+    `${UAT_SENTINEL}: deterministic chat reply. ` +
+    `You said: "${input.instructions.slice(0, 120)}".`;
+  for (const chunk of reply.match(/[\s\S]{1,24}/g) ?? [reply]) {
+    input.onText(chunk);
+  }
+
+  try {
+    await runScriptedLifecyclePull({
+      instructions: input.instructions,
+      callSelfMcpTool: input.callSelfMcpTool,
+      onToolCall: input.onToolCall,
+      onToolResult: input.onToolResult,
+    });
+  } catch {
+    // The turn keeps the text it already streamed and mints nothing.
   }
 }
 

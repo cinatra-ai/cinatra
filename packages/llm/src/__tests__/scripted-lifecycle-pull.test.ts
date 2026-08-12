@@ -19,7 +19,9 @@ import {
   SCRIPTED_LIFECYCLE_LIST_TOOL,
   SCRIPTED_LIFECYCLE_VERIFICATION_RENDER_TOOL,
   UAT_SENTINEL,
+  runScriptedChatAssistantTurn,
   runScriptedWidgetAssistantTurn,
+  scriptedTurnAsksForLifecyclePull,
 } from "../scripted-test-provider";
 
 type Emitted = {
@@ -180,5 +182,82 @@ describe("scripted widget turn — the lifecycle pull", () => {
     // existing WP/Drupal scenarios are byte-unaffected by this extension.
     expect(callSelfMcpTool).not.toHaveBeenCalled();
     expect(s.calls.map((c) => c.name)).toEqual(["wordpress_content_editor_run"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The COOKIE-SESSION `/chat` turn — the same pull, the other surface.
+// ---------------------------------------------------------------------------
+describe("scripted chat turn — the same lifecycle pull on /chat", () => {
+  it("LISTS then RENDERS through the injected dispatcher, forwarding both results verbatim", async () => {
+    const s = sink();
+    const callSelfMcpTool = vi.fn(async (call: { name: string }) =>
+      call.name === SCRIPTED_LIFECYCLE_LIST_TOOL ? REAL_LIST_ANSWER : REAL_ENVELOPE,
+    );
+
+    await runScriptedChatAssistantTurn({
+      instructions: "Which reviews are waiting for me right now?",
+      callSelfMcpTool,
+      onText: s.onText,
+      onToolCall: s.onToolCall,
+      onToolResult: s.onToolResult,
+    });
+
+    expect(callSelfMcpTool.mock.calls.map(([c]) => c.name)).toEqual([
+      SCRIPTED_LIFECYCLE_LIST_TOOL,
+      SCRIPTED_LIFECYCLE_GATE_RENDER_TOOL,
+    ]);
+    // The SAME primitives, in the same order, addressed by a ref the list
+    // returned — so the two surfaces' proofs compare like for like.
+    expect(s.results.map((r) => r.result)).toEqual([REAL_LIST_ANSWER, REAL_ENVELOPE]);
+    expect(s.results.map((r) => r.id)).toEqual(s.calls.map((c) => c.id));
+    // The turn still reads as a turn: one sentinel-bearing line above the card.
+    expect(s.text.join("")).toContain(UAT_SENTINEL);
+  });
+
+  it("NO CMS STAND-IN on /chat: an edit-shaped lifecycle question emits no content-editor tool", async () => {
+    const s = sink();
+    const callSelfMcpTool = vi.fn(async () => JSON.stringify({ refs: [] }));
+
+    await runScriptedChatAssistantTurn({
+      // "update" is an edit word AND "review" a lifecycle one — on the widget this
+      // is the pull's precedence rule; on /chat the CMS branch does not exist at
+      // all, which is the point: this turn can only ever call the real primitives.
+      instructions: "Update me on the review that is waiting.",
+      callSelfMcpTool,
+      onText: s.onText,
+      onToolCall: s.onToolCall,
+      onToolResult: s.onToolResult,
+    });
+
+    expect(s.calls.map((c) => c.name)).toEqual([SCRIPTED_LIFECYCLE_LIST_TOOL]);
+    expect(s.calls.some((c) => c.name.endsWith("_content_editor_run"))).toBe(false);
+  });
+
+  it("degrades to the plain reply — never a card — when the dispatch FAILS", async () => {
+    const s = sink();
+    const callSelfMcpTool = vi.fn(async () => {
+      throw new Error("self-MCP dispatch: tools/call answered HTTP 401");
+    });
+
+    await runScriptedChatAssistantTurn({
+      instructions: "Which reviews are waiting for me right now?",
+      callSelfMcpTool,
+      onText: s.onText,
+      onToolCall: s.onToolCall,
+      onToolResult: s.onToolResult,
+    });
+
+    expect(s.results).toHaveLength(0);
+    expect(s.text.join("")).toContain(UAT_SENTINEL);
+  });
+
+  it("the INTENT PREDICATE the runtime asks is the provider's own reading", () => {
+    // The runtime gates its /chat short-circuit on this answer, so the predicate
+    // and the turn must agree: what it accepts is exactly what drives a pull.
+    expect(scriptedTurnAsksForLifecyclePull("Which reviews are waiting for me?")).toBe(true);
+    expect(scriptedTurnAsksForLifecyclePull("Show me the verification reading.")).toBe(true);
+    expect(scriptedTurnAsksForLifecyclePull("Please rewrite the title.")).toBe(false);
+    expect(scriptedTurnAsksForLifecyclePull("")).toBe(false);
   });
 });

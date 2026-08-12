@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { getLocalMcpServerUrl } from "@cinatra-ai/mcp-server/credentials";
 import type { ScriptedSelfMcpDispatch } from "@cinatra-ai/llm/scripted-test-provider";
 
+import { issueChatMcpActorToken } from "@/lib/chat-mcp-actor-token";
 import { issueWidgetMcpActorToken } from "@/lib/widget-mcp-actor-token";
 import type { WidgetPrincipal } from "./widget-principal";
 
@@ -42,9 +43,17 @@ import type { WidgetPrincipal } from "./widget-principal";
 // structural, not a promise: this provider cannot put a lifecycle card on screen,
 // only the producer can.
 //
+// BOTH SURFACES, ONE TRANSPORT. The parity proof owes a comparison view, so the
+// cookie-session `/chat` turn reaches the same primitives through the same
+// transport — with the SHIPPED chat bearer instead of the widget's OBO grant, and
+// therefore under the delegated-CHAT tool policy instead of the closed
+// kind-keyed widget one. Which identity a turn carries is decided by the factory
+// the runtime picks (`…ForWidget` / `…ForChat`, mirroring the real tool-assembly
+// seam) and verified at the transport; the dispatch itself knows only a bearer.
+//
 // TEST-ONLY REACHABILITY. Constructed only inside the scripted-provider branch,
 // which `assertScriptedProviderNotProduction` already fences to an explicit
-// development runtime. Production never builds this dispatcher.
+// development runtime. Production never builds either dispatcher.
 // ---------------------------------------------------------------------------
 
 /** The MCP route this app mounts its self-MCP server at. */
@@ -115,34 +124,30 @@ function toolResultText(result: unknown): string {
 }
 
 /**
- * Build the dispatcher for ONE widget turn.
- *
- * The OBO token is minted once per turn and carries the turn's own `jti`, the
- * server-derived instance pin, the bound connector kind and — only when the
- * consumed `cwu_` genuinely granted it — the `lcr` lifecycle-read claim. Those
- * are the principal's values, read off the same object the real path mints from;
- * nothing here can widen them.
+ * Called with the EXACT result string every real dispatch returned. The caller
+ * uses it to decide which emitted tool_result has earned the reserved `cinatra`
+ * producer label — provenance recorded by the frame that performed the call,
+ * never claimed by the provider that consumed it.
  */
-export function createScriptedSelfMcpDispatch(params: {
-  widgetPrincipal: WidgetPrincipal;
-  /**
-   * Called with the EXACT result string every real dispatch returned. The caller
-   * uses it to decide which emitted tool_result has earned the reserved
-   * `cinatra` producer label — provenance recorded by the frame that performed
-   * the call, never claimed by the provider that consumed it.
-   */
-  onDispatched?: (resultText: string) => void;
+type OnDispatched = (resultText: string) => void;
+
+/**
+ * The transport half, shared by both surfaces (cinatra#2683). It takes a BEARER
+ * and nothing else: which identity that bearer carries — a widget's OBO grant or
+ * the chat session's own delegated token — is decided by the caller below and
+ * verified by the MCP transport, which applies the matching delegated tool policy.
+ * Sharing the transport is deliberate: one place to be right about the handshake,
+ * the SSE/JSON reply shapes, the timeout and the provenance callback, and no
+ * second copy to drift into a wider one.
+ */
+function createDispatchWithBearer(params: {
+  token: string;
+  /** Names the surface in the MCP `clientInfo` — visible in transport logs. */
+  clientName: string;
+  onDispatched?: OnDispatched;
 }): ScriptedSelfMcpDispatch {
-  const { widgetPrincipal, onDispatched } = params;
+  const { token, clientName, onDispatched } = params;
   const mcpUrl = getLocalMcpServerUrl(MCP_BASE_PATH);
-  const token = issueWidgetMcpActorToken({
-    userId: widgetPrincipal.userId,
-    orgId: widgetPrincipal.orgId,
-    instanceId: widgetPrincipal.instanceId,
-    kind: widgetPrincipal.assistantHandle,
-    jti: randomUUID(),
-    lifecycleRead: widgetPrincipal.lifecycleRead,
-  });
 
   let sessionId: string | null = null;
   let rpcId = 0;
@@ -198,7 +203,7 @@ export function createScriptedSelfMcpDispatch(params: {
       await rpc("initialize", {
         protocolVersion: MCP_PROTOCOL_VERSION,
         capabilities: {},
-        clientInfo: { name: "cinatra-scripted-widget-turn", version: "1.0.0" },
+        clientInfo: { name: clientName, version: "1.0.0" },
       });
       await rpc("notifications/initialized", undefined, { notification: true });
     })();
@@ -215,4 +220,70 @@ export function createScriptedSelfMcpDispatch(params: {
     onDispatched?.(text);
     return text;
   };
+}
+
+/**
+ * Build the dispatcher for ONE widget turn.
+ *
+ * The OBO token is minted once per turn and carries the turn's own `jti`, the
+ * server-derived instance pin, the bound connector kind and — only when the
+ * consumed `cwu_` genuinely granted it — the `lcr` lifecycle-read claim. Those
+ * are the principal's values, read off the same object the real path mints from;
+ * nothing here can widen them.
+ */
+export function createScriptedSelfMcpDispatch(params: {
+  widgetPrincipal: WidgetPrincipal;
+  onDispatched?: OnDispatched;
+}): ScriptedSelfMcpDispatch {
+  const { widgetPrincipal, onDispatched } = params;
+  return createDispatchWithBearer({
+    token: issueWidgetMcpActorToken({
+      userId: widgetPrincipal.userId,
+      orgId: widgetPrincipal.orgId,
+      instanceId: widgetPrincipal.instanceId,
+      kind: widgetPrincipal.assistantHandle,
+      jti: randomUUID(),
+      lifecycleRead: widgetPrincipal.lifecycleRead,
+    }),
+    clientName: "cinatra-scripted-widget-turn",
+    onDispatched,
+  });
+}
+
+/**
+ * Build the dispatcher for ONE COOKIE-SESSION `/chat` turn (cinatra#2683).
+ *
+ * The comparison view the parity proof owes: the same primitive, called from the
+ * first-party surface, so the two conversations can be read side by side. It
+ * mints the SHIPPED chat bearer — `issueChatMcpActorToken`, the exact token the
+ * real chat turn's `type: "mcp"` tool carries — from the route's own session
+ * values, which is the whole reason this stays a thin wrapper: the identity is
+ * the session's, the ceiling is the delegated-CHAT tool policy's, and this frame
+ * adds nothing to either. It cannot widen them: it holds no claim of its own and
+ * passes the caller's `userId` / `orgId` / `platformRole` straight through.
+ *
+ * TEST-ONLY REACHABILITY, same as its widget twin: constructed only inside the
+ * scripted-provider branch, which `assertScriptedProviderNotProduction` fences to
+ * an explicit development runtime.
+ */
+export function createScriptedChatSelfMcpDispatch(params: {
+  /** The signed-in human this turn runs as — the session's own user. */
+  userId: string;
+  /** The session's active org, or null when the session carries none. */
+  orgId: string | null;
+  /** The session's platform role, unfloored and uninvented. */
+  platformRole: "platform_admin" | "member";
+  onDispatched?: OnDispatched;
+}): ScriptedSelfMcpDispatch {
+  const { userId, orgId, platformRole, onDispatched } = params;
+  return createDispatchWithBearer({
+    token: issueChatMcpActorToken({
+      delegation: "chat",
+      userId,
+      orgId,
+      platformRole,
+    }),
+    clientName: "cinatra-scripted-chat-turn",
+    onDispatched,
+  });
 }
