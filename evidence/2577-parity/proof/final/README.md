@@ -1,10 +1,11 @@
-# #2683 / #2577 — the fix-set wave, photographed
+# #2683 / #2577 — the final wave, photographed
 
-Captured 2026-08-12 on host2 against a live stack: the **shipped WordPress plugin
-in `wp-admin`** framing the real `/embed/assistant` surface, a dev server on
-`lane/2683-s8f-parity` at `1acc61044` with the repo's own `wp-drupal-uat`
-environment (`CINATRA_TEST_LLM_PROVIDER=scripted`), the real hosted widget login,
-and rows written by the shipped stores.
+Captured 2026-08-12/13 on host2 against a live stack: the **shipped WordPress
+plugin in `wp-admin`** framing the real `/embed/assistant` surface, a dev server
+on `lane/2683-s8f-parity` at **`108e10ec2`** (this branch REBASED onto the
+post-#2689 `main`, with the widget thread-WRITE half) under the repo's own
+`wp-drupal-uat` environment (`CINATRA_TEST_LLM_PROVIDER=scripted`), the real
+hosted widget login, and rows written by the shipped stores.
 
 **PLUGIN BUILD UNDER TEST.** `cinatra` **v0.1.7** (the shipped plugin, as
 installed in the container) **plus the thread-continuity change from this wave**,
@@ -21,78 +22,89 @@ guards the bridge, not this write).
 
 | View | File | State |
 |---|---|---|
-| V2r | `V2r-widget-review-card-island-painting.png` | **DELIVERED** |
+| V2r | `V2r-widget-review-card-island-painting.png` | **DELIVERED** (earlier wave, unchanged) |
 | V9r | — | **NOT DELIVERED** (see below) |
-| V11 | `V11-PARTIAL-upload-accepted-no-chip-exists.png` | PARTIAL |
-| V13 | `V13-PARTIAL-run-card-mounts-no-changeset.png` | PARTIAL |
-| V14 | `V14-REFUSED-same-thread-empty-restore.png` | REFUSED, with the measurement |
+| V11 | `V11-upload-201-with-picked-file.png` | **DELIVERED** in its truthful form |
+| V13 | `V13-PARTIAL-run-card-mounts-no-changeset.png` | PARTIAL (see below) |
+| V14 | `V14-REAL-history-restored-after-reload.png` | **DELIVERED — REAL** |
 
-### V2r — the card, and the island PAINTING
+---
 
-The shipped plugin's panel drawing the review card the closure pass could not
-produce: "Review requested · Awaiting your decision", the review-target island
-beneath it (`Launch banner — S8f parity proof · Image Artifact`, the artifact
-coordinates, the `Image Artifact · build-time · detail` renderer strip) and **the
-image itself, painted**. Measured inside the island's own frame:
-`{ naturalWidth: 320, naturalHeight: 160, complete: true }` on
-`/api/artifacts/…/versions/…`.
+### V14 — REAL. The conversation comes back after a full page reload
 
-That answers the one question the closure pass left open. It named the widget
-frame as the unclosed case; on this stack the island paints there too.
+**This is the view the whole slice was for, and it is now a delivered one.** The
+previous wave photographed it as REFUSED: the plugin asked for the SAME thread id
+after the reload and the read answered 404, because the widget could show a
+transcript it was structurally unable to WRITE. The write half closes that.
 
-The card exists because the dispatch now completes: the server's own record for
-this turn is `POST /api/mcp 200` (initialize), `202` (initialized), then **two**
-`tools/call 200`s — the LIST and the RENDER. Before the fix there was no
-`/api/mcp` line at all.
+The image is the real WordPress page editor, the shipped plugin's panel, and —
+after a **full document reload** — the reader's own message and the assistant's
+answer, restored. Under it is the server's own record for that run, in order:
 
-### V11 — the upload is accepted; there is no chip to photograph, on either surface
+1. `GET /api/assistants/threads/qmzVg97hhLwpqXw8iEvGjVCl` → **404** — the first
+   mount, before there was anything to restore. This is the state EVERY widget
+   thread was stuck in before this wave.
+2. `[widget-auth-audit] widget_conversation_write_authorized` — the new grant,
+   consumed at THIS route's audience, with the token's real granted scopes
+   (`conversation.read conversation.write lifecycle.decide lifecycle.read
+   tools.confirm`).
+3. `POST /api/assistants/threads` → **200** — the widget KEPT the turn,
+   cookieless, with the broker headers.
+4. `GET /api/assistants/threads/qmzVg97hhLwpqXw8iEvGjVCl` → **200** — after the
+   reload, the same id, and this time the read answers.
 
-Picking a file in the widget's composer fires the change handler and
-`POST /api/artifacts/upload` answers **201** with a real artifact ref, cookieless,
-with the broker headers. The frame shows the turn that file rode.
+Driver measurement: `restoredCarriesMarker: true`; the plugin's own storage shows
+the thread id survived the reload
+(`cinatra.widget.thread.v1|http://localhost:3000|6928763b-…|wordpress|1`).
 
-It is PARTIAL for one reason, stated rather than worked around: **neither surface
-draws a pending-attachment chip.** `/chat` does not (`chat-page.tsx` renders the
-refusal notice and nothing else) and the shared column does not, so there is no
-affordance to photograph and inventing one would be a design decision this wave
-has no drawing for. The epic's item 8 is "attachments on the composer", and the
-parity claim is satisfied — measured, not asserted.
+`V14-server-record.txt` is the raw log excerpt the caption is built from.
 
-### V13 — the mount site now exists; the chip's own gate answers no
+### V11 — the upload is ACCEPTED, and that is the whole truthful view
+
+Picking a file in the widget's composer fires `POST /api/artifacts/upload`, which
+answers **201** with a real artifact ref
+(`objectId b8d703a5-…`, `resourceId 9bf0d305-…`, a representation revision) —
+cookieless, with the broker headers. The panel shows the turn that file rode.
+
+**There is no pending-attachment chip to photograph, on EITHER surface.** `/chat`
+does not draw one and the shared column does not, so parity holds; a chip would
+be net-new UI with no ratified drawing behind it, and this wave does not invent
+one. The image therefore carries the panel and the network record together,
+which is the honest form of this view rather than a smaller claim.
+
+### V13 — PARTIAL, unchanged, and now with the exact reason
 
 The panel drawing an `agent_run` card for a run the person NAMED — the mount site
-the undo chip needs, which a key-free stack never had. The chip does not appear,
-and that is the honest answer here rather than a missing mount: the chip renders
-only when the §VI eligibility gate finds a CLOSED restorable change-set from that
-run inside its five-minute window, and this rebuilt stack has none. Seeding one
-through the shipped writers is a data job this wave did not do; the mount site,
-which was the fix, is in the frame.
+the undo chip needs. The chip still does not appear: it renders only when the §VI
+eligibility gate finds a **CLOSED restorable change-set** from that run inside its
+five-minute window, and this stack has none.
 
-### V14 — the same thread is asked for after a real reload, and the read answers 404
+**Seeding one was attempted this wave and refused rather than faked.** The chip's
+gate is satisfied by a `change_set` row with no member events (`bool_and` over
+zero rows is not `false`), so the row alone would have made the chip render — and
+that would have been a screenshot of a chip deep-linking to the restore of
+nothing. The honest seed goes through the shipped writers
+(`openChangeSet` → `historyAwareUpsert` → `closeChangeSet`), and those cannot be
+driven from outside the Next process on this host: `canonical-writer` reaches
+`server-only`, and past that `src/lib/auth.ts` has a top-level `await` that tsx's
+CJS output rejects. The product path that drives them is an `agent_run`, which
+needs an LLM key this stack does not have.
 
-The plugin half WORKS and is measured: after a full page reload the widget asks
-for the SAME thread id, resolved from its own storage —
-`cinatra.widget.thread.v1|http://localhost:3000|6928763b…|wordpress|1 =>
-{"id":"fLbGvBnbJmrqYbFFPrliGt6C","at":…}` — where before this wave it minted a new
-id per bootstrap and could never ask twice.
+### V9r — NOT DELIVERED, same class
 
-The conversation is still empty, and the reason is a SECOND defect this wave found
-rather than a failure of the first fix:
-`GET /api/assistants/threads/fLbGvBnbJmrqYbFFPrliGt6C` answers **404** although the
-row exists (`assistant_threads`, owner = the widget reader, org = the token's org)
-and carries a turn. `reconstructThreadPayload` assembles only LEGACY-MIRROR turns
-(`id LIKE 'legacy:%' AND run_id IS NULL`) — rows the `/chat` client writes through
-`saveChatThreadViaFetch` (cookie-bound, `POST /api/assistants/threads`, no widget
-branch). The widget's turns are the runtime's own rows, so there is nothing for
-the reconstruct to assemble.
-
-**It is not a widget-auth defect.** The same read was driven with a first-party
-cookie session for the same thread id and answered **404** identically. The widget
-can read a transcript it is structurally unable to write.
+`artifact_verification_records` is empty on this stack. The record is written by
+`submitRepairResponse`'s own trigger at the end of the repair pipeline
+(`createSemanticArtifact` → `emitArtifactReviewGate` → `recordChangesRequested` →
+`createSemanticArtifact` → `submitRepairResponse`), and none of those five is an
+MCP primitive, so the pipeline is reachable only from inside the app process —
+the same blocker as V13. The card's own code path is unchanged by this branch and
+was photographed on an earlier wave.
 
 ## RENDER-VERIFY
 
 Every PNG here was opened and read before it was committed. Each caption states
-what is actually visible in its own frame; no view was composed, cropped to imply
-something else, or substituted for a view that could not be taken. The three files
-that are not a delivered view carry `PARTIAL` / `REFUSED` in their names.
+what is actually visible in its own frame; no view was composed to imply
+something it does not show. The two composed images (V11, V14) put a real panel
+screenshot and a real server-log excerpt in one frame, both labelled as what they
+are — nothing in either was redrawn. The one file that is not a delivered view
+carries `PARTIAL` in its name.
