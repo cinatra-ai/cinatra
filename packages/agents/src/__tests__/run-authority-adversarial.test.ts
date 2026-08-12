@@ -139,4 +139,64 @@ describe("guardedRunWrite — adversarial authority shapes (#1943 A0, row 2: sta
     expect(result).toBe("landed");
     expect(fn).toHaveBeenCalledTimes(1);
   });
+
+  // -------------------------------------------------------------------------
+  // cinatra#1943 — REVERT-STYLE NEGATIVE CONTROL for manifest row 2
+  // ("Stale-attempt lease reuse denied"). The green test above asserts the
+  // forged attempt id is refused and the write body never runs. That claim is
+  // only load-bearing if the body WOULD have run — i.e. if `guardedRunWrite`
+  // is the sole thing stopping it, and not some incidental breakage in the
+  // forged authority itself. This control re-issues the IDENTICAL forged
+  // authority and the IDENTICAL write body against the unguarded path: a
+  // plain `db.transaction(...)`, which is exactly what an agent-run writer
+  // looks like BEFORE it is converted onto this seam (the seam's own header
+  // documents that per-writer ratchet). The attack lands there.
+  //
+  // See src/lib/__tests__/archive-acceptance-negative-controls.test.ts for
+  // the rest of the no-DB controls and the rationale in full.
+  // -------------------------------------------------------------------------
+  it("negative control (row 2): the SAME forged attempt id lands the write when the SAME body runs outside guardedRunWrite — the seam, not the payload, is what refuses", async () => {
+    // PAIRS WITH: "a forged execution-attempt id (well-typed but not the leased one) is refused"
+    const forged = {
+      orgId: ORG,
+      runId: RUN,
+      executionAttemptId: "att-forged-not-leased",
+      can: () => true,
+    };
+    // Sanity: this is the same payload the green test above refuses, and it is
+    // NOT the leased attempt.
+    expect(forged.executionAttemptId).not.toBe(LEASED_ATTEMPT);
+
+    // ONE completion body, used by both halves. It records the attempt id it
+    // was driven with, so "the write landed" means the FORGED identity was the
+    // one that completed the run — not merely that some callback ran.
+    const completed: string[] = [];
+    const completionBody = async () => {
+      completed.push(forged.executionAttemptId);
+      return `completed-by:${forged.executionAttemptId}`;
+    };
+
+    // GUARDED — the green test's claim, re-pinned here so both halves of the
+    // pair sit together: refused, and the body never executes.
+    const guardedFake = archivedDb(false); // no matching lease row for the forged id.
+    await expect(
+      guardedRunWrite(
+        forged,
+        { orgId: ORG, runId: RUN, capability: "run.complete", db: guardedFake.db },
+        completionBody,
+      ),
+    ).rejects.toMatchObject({ reason: "lease-required-but-not-held" });
+    expect(completed).toEqual([]);
+
+    // UNGUARDED — the same body, same forged identity, on a plain transaction:
+    // exactly what an agent-run writer looks like BEFORE it is converted onto
+    // this seam (the seam's own header documents that per-writer ratchet). No
+    // authority is consulted, no lease is re-derived, and the forged attempt
+    // completes the run.
+    const unguardedFake = archivedDb(false); // identical DB answers.
+    const result = await unguardedFake.db.transaction(completionBody);
+
+    expect(result).toBe("completed-by:att-forged-not-leased");
+    expect(completed).toEqual(["att-forged-not-leased"]);
+  });
 });

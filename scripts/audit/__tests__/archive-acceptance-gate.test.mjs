@@ -18,8 +18,11 @@
 //      this gate surfaces (a `needs:` edge cannot cross workflow files).
 //   5. strictVerdict — the FULL strict-mode pass condition ("all 15 rows
 //      green and verified", not merely "no false green claim found"): an
-//      all-red manifest (this PR's own committed state) must report NOT
-//      READY, never "clean" — the honesty bug an early draft had.
+//      all-red manifest must report NOT READY, never "clean" — the honesty
+//      bug an early draft had.
+//   5b. The red-then-green rule — a green row must name the `negativeControl`
+//      that proves the same attack LANDS against the unprotected path, and a
+//      STALE control reference is caught exactly like a stale proof.
 //   6. The gate is green on the REAL committed manifest against the REAL
 //      tree (zero-baseline) — this also makes the gate RUN in CI:
 //      scripts/audit/__tests__/** is inside the root Vitest include glob.
@@ -432,13 +435,14 @@ describe("strictVerdict — the FULL strict-mode pass condition", () => {
         owner: "self",
         kernelProof: { file: "x.test.ts", testName: "the proof" },
         e2eProof: { file: "x.test.ts", testName: "the proof" },
+        negativeControl: { file: "x.test.ts", testName: "the control" },
         ciDependency: { workflow: SELF_WORKFLOW, job: "wired-job" },
         status: "green",
       })),
     };
     const readFileImpl = (p) => {
       if (p.endsWith(`.github/workflows/${SELF_WORKFLOW}`)) return workflowText;
-      if (p.endsWith("x.test.ts")) return 'it("the proof", () => {});';
+      if (p.endsWith("x.test.ts")) return 'it("the proof", () => {});\nit("the control", () => {});';
       throw new Error("ENOENT");
     };
     const verdict = strictVerdict(m, { repoRoot: "/repo", readFileImpl });
@@ -455,6 +459,7 @@ describe("strictVerdict — the FULL strict-mode pass condition", () => {
         owner: "self",
         kernelProof: { file: "x.test.ts", testName: "the proof" },
         e2eProof: { file: "x.test.ts", testName: "the proof" },
+        negativeControl: { file: "x.test.ts", testName: "the control" },
         // Row 0 points at a job that doesn't exist — everything else is wired correctly.
         ciDependency: { workflow: SELF_WORKFLOW, job: i === 0 ? "no-such-job" : "wired-job" },
         status: "green",
@@ -462,7 +467,7 @@ describe("strictVerdict — the FULL strict-mode pass condition", () => {
     };
     const readFileImpl = (p) => {
       if (p.endsWith(`.github/workflows/${SELF_WORKFLOW}`)) return workflowText;
-      if (p.endsWith("x.test.ts")) return 'it("the proof", () => {});';
+      if (p.endsWith("x.test.ts")) return 'it("the proof", () => {});\nit("the control", () => {});';
       throw new Error("ENOENT");
     };
     const verdict = strictVerdict(m, { repoRoot: "/repo", readFileImpl });
@@ -470,21 +475,124 @@ describe("strictVerdict — the FULL strict-mode pass condition", () => {
     expect(verdict.rowFailures).toHaveLength(1);
   });
 
-  it("the real committed manifest is honestly NOT READY under strict mode today (cinatra#1943 A1/A2/A3/A3b/A4/A5/A6 landed 7 rows; A7 remains) — not a bug", () => {
+  it("the real committed manifest is honestly NOT READY under strict mode today — all 14 code-level rows are green and verified; only the 3-role live proof remains", () => {
     const manifest = loadManifest();
     const verdict = strictVerdict(manifest);
     expect(verdict.ready).toBe(false);
-    // Cross-job capability misuse (A1), Pre-archive parent spawning
-    // post-archive child denied (A2), Lease expiry mid-completion →
-    // cancel-then-settle (A3), Archive-vs-terminal-CAS race (A3b), Direct
-    // BA-DML-vs-archive both lock interleavings (A4), Dual-transport
-    // coverage (A5), and BOUNDED eventual-successful-archive under
-    // contention (A6 — both the kernel AND e2e subproofs now populated,
-    // Decision 1's AND-of-subproofs rule) are structurally verified green
-    // this stage; only the 3-role live Playwright proof (A7) honestly stays
-    // red, pending its own human-gated CI-wiring PR.
-    expect(verdict.notYetGreen).toHaveLength(8);
+    // Every criterion #1943 can prove with code is green and structurally
+    // verified: the mint/seam/registry rows in the root and packages/agents
+    // tiers, and the raced-Postgres rows in the DB tiers. The ONE row that
+    // stays honestly red is the 3-role live Playwright proof, which is
+    // blocked on product code that does not exist yet: cinatra#1942's
+    // Danger-zone Archive/Unarchive affordance (verified absent — no
+    // src/app or src/components surface references archiveOrganization /
+    // unarchiveOrganization). No test can drive "owner archives/unarchives"
+    // through an affordance that has not been built, so this row must not be
+    // flipped by this slice. Its ciDependency names build-image.yml's
+    // `e2e-rbac` job — the production-equivalent Playwright job — so the spec
+    // becomes strict-verifiable the moment it lands under tests/e2e/rbac/
+    // (that suite's config globs the directory; no workflow change is needed
+    // to RUN it, only the one-line `needs: e2e-rbac` edge on this gate's own
+    // job, which is workflow-scoped and therefore its own PR).
+    expect(verdict.notYetGreen).toEqual([
+      "3-role live Playwright proof (owner archives/unarchives; admin/member read-only; non-member 404) on a production-equivalent build",
+    ]);
     expect(verdict.rowFailures).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5b. The red-then-green rule (cinatra#1943's issue body: "each its own
+//     RED-THEN-GREEN test"). A green row must name the control proving the
+//     same attack LANDS unprotected — otherwise the refusal it claims is
+//     unfalsifiable and would survive deletion of the guard.
+// ---------------------------------------------------------------------------
+
+describe("negativeControl — the red half of each pair", () => {
+  it("rejects a green row that names a proof but NO negativeControl", () => {
+    const m = baseManifest();
+    m.rows[0].status = "green";
+    m.rows[0].kernelProof = { file: "a.test.ts", testName: "the proof" };
+    const errors = validateManifestShape(m);
+    expect(errors.some((e) => e.includes("must declare a negativeControl"))).toBe(true);
+  });
+
+  it("accepts the same row once the negativeControl is named", () => {
+    const m = baseManifest();
+    m.rows[0].status = "green";
+    m.rows[0].kernelProof = { file: "a.test.ts", testName: "the proof" };
+    m.rows[0].negativeControl = { file: "a.test.ts", testName: "the control" };
+    const errors = validateManifestShape(m);
+    expect(errors.some((e) => e.includes("negativeControl"))).toBe(false);
+  });
+
+  it("a RED row needs no negativeControl (there is no green claim to falsify yet)", () => {
+    const m = baseManifest(); // every row red
+    const errors = validateManifestShape(m);
+    expect(errors.some((e) => e.includes("negativeControl"))).toBe(false);
+  });
+
+  it("rejects a negativeControl object missing file or testName", () => {
+    const m = baseManifest();
+    m.rows[0].negativeControl = { file: "a.test.ts" }; // testName missing
+    const errors = validateManifestShape(m);
+    expect(
+      errors.some((e) => e.includes('negativeControl: "testName" must be a non-empty string')),
+    ).toBe(true);
+  });
+
+  it("audit mode catches a STALE negativeControl reference the same way it catches a stale proof (a renamed control is a broken pair)", () => {
+    const m = baseManifest();
+    m.rows[0].status = "green";
+    m.rows[0].kernelProof = { file: "fixture.test.ts", testName: "the proof" };
+    m.rows[0].negativeControl = { file: "fixture.test.ts", testName: "the control" };
+    const files = { "fixture.test.ts": 'it("the proof", () => {});' }; // control renamed away
+    const errors = auditManifest(m, {
+      repoRoot: "/repo",
+      readFileImpl: (p) => {
+        const rel = p.replace("/repo/", "");
+        if (rel in files) return files[rel];
+        throw new Error("ENOENT");
+      },
+    });
+    expect(
+      errors.some((e) => e.includes("negativeControl") && e.includes("not grep-findable")),
+    ).toBe(true);
+  });
+
+  it("a DISABLED declaration is not a live proof: .skip and .todo are rejected", () => {
+    // The one-keystroke defeat this gate has to refuse: keep the manifest
+    // title byte-identical, switch the runner off.
+    expect(isProofGrepFindable('it("the exact test name", () => {});', "the exact test name")).toBe(true);
+    expect(isProofGrepFindable('it.skip("the exact test name", () => {});', "the exact test name")).toBe(false);
+    expect(isProofGrepFindable('it.todo("the exact test name");', "the exact test name")).toBe(false);
+    expect(isProofGrepFindable('test.skip("the exact test name", () => {});', "the exact test name")).toBe(false);
+  });
+
+  it("an INVERTED declaration is not a live proof either: .fails is rejected (it passes when the body fails — the manifest's claim, backwards)", () => {
+    expect(isProofGrepFindable('it.fails("the exact test name", () => {});', "the exact test name")).toBe(false);
+    expect(isProofGrepFindable('test.fails("the exact test name", () => {});', "the exact test name")).toBe(false);
+  });
+
+  it("live modifiers that still RUN the assertions are accepted (.only/.concurrent/.each/.sequential)", () => {
+    for (const mod of [".only", ".concurrent", ".sequential"]) {
+      expect(isProofGrepFindable(`it${mod}("the exact test name", () => {});`, "the exact test name")).toBe(true);
+    }
+    expect(isProofGrepFindable('it.each([1])("the exact test name", () => {});', "the exact test name")).toBe(true);
+  });
+
+  it("every green row in the REAL committed manifest names a negativeControl that exists as a live test declaration", () => {
+    const manifest = loadManifest();
+    const greens = manifest.rows.filter((r) => r.status === "green");
+    // Anti-vacuity: this assertion is worthless against an all-red manifest.
+    expect(greens.length).toBeGreaterThan(0);
+    for (const row of greens) {
+      expect(row.negativeControl, `${row.criterion} has no negativeControl`).toBeDefined();
+      const errors = auditManifest({ rows: [row] }).filter((e) => e.includes("negativeControl"));
+      // (row-count/shape errors from the single-row slice are filtered out;
+      // only the control's own file/grep resolution is under test here)
+      expect(errors).toEqual([]);
+    }
   });
 });
 
@@ -520,5 +628,146 @@ describe("the real committed manifest", () => {
         expect(ok).toBe(true);
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. Array forms — a criterion that names TWO things ("both lock
+//    interleavings") or TWO phases ("cancel-THEN-settle", proven in two
+//    different CI tiers) must be able to cite them all, and EVERY entry must
+//    be verified. A row that cites two proofs but only has one checked would
+//    be worse than the scalar form it replaced.
+// ---------------------------------------------------------------------------
+
+describe("array proof / ciDependency forms", () => {
+  const files = {
+    "a.test.ts": 'it("first proof", () => {});\nit("the control", () => {});',
+    "b.test.ts": 'it("second proof", () => {});',
+  };
+  const readFiles = (p) => {
+    const rel = p.replace("/repo/", "").replace("/repo/.github/workflows/", "");
+    if (rel in files) return files[rel];
+    throw new Error("ENOENT");
+  };
+
+  it("accepts an array of well-formed proofs and grep-checks EVERY entry", () => {
+    const m = baseManifest();
+    m.rows[0].status = "green";
+    m.rows[0].kernelProof = [
+      { file: "a.test.ts", testName: "first proof" },
+      { file: "b.test.ts", testName: "second proof" },
+    ];
+    m.rows[0].negativeControl = { file: "a.test.ts", testName: "the control" };
+    expect(validateManifestShape(m).filter((e) => e.includes("row[0]"))).toEqual([]);
+    const errors = auditManifest(m, { repoRoot: "/repo", readFileImpl: readFiles });
+    expect(errors.filter((e) => e.includes("first proof") || e.includes("second proof"))).toEqual([]);
+  });
+
+  it("catches a STALE SECOND entry — the whole point of citing both", () => {
+    const m = baseManifest();
+    m.rows[0].status = "green";
+    m.rows[0].kernelProof = [
+      { file: "a.test.ts", testName: "first proof" },
+      { file: "b.test.ts", testName: "second proof RENAMED AWAY" },
+    ];
+    m.rows[0].negativeControl = { file: "a.test.ts", testName: "the control" };
+    const errors = auditManifest(m, { repoRoot: "/repo", readFileImpl: readFiles });
+    expect(errors.some((e) => e.includes("[1]") && e.includes("not grep-findable"))).toBe(true);
+  });
+
+  it("rejects an EMPTY array (citing nothing is not citing two things)", () => {
+    const m = baseManifest();
+    m.rows[0].kernelProof = [];
+    const errors = validateManifestShape(m);
+    expect(errors.some((e) => e.includes("must name at least one"))).toBe(true);
+  });
+
+  it("rejects a DUPLICATE entry inside an array (padding a row to look better-proven than it is)", () => {
+    const m = baseManifest();
+    m.rows[0].kernelProof = [
+      { file: "a.test.ts", testName: "first proof" },
+      { file: "a.test.ts", testName: "first proof" },
+    ];
+    const errors = validateManifestShape(m);
+    expect(errors.some((e) => e.includes("duplicate"))).toBe(true);
+  });
+
+  it("strict mode requires a needs: edge for EVERY job in a ciDependency array, not just the first", () => {
+    // The gate's own job needs `wired-job` but NOT `second-job`.
+    const workflowText = `jobs:\n  ${SELF_JOB}:\n    needs: [wired-job]\n    runs-on: ubuntu-latest\n\n  wired-job:\n    runs-on: ubuntu-latest\n\n  second-job:\n    runs-on: ubuntu-latest\n`;
+    const readFileImpl = (p) => {
+      if (p.endsWith(`.github/workflows/${SELF_WORKFLOW}`)) return workflowText;
+      if (p.endsWith("a.test.ts")) return files["a.test.ts"];
+      throw new Error("ENOENT");
+    };
+    const row = {
+      criterion: CANONICAL_CRITERIA[0],
+      owner: "self",
+      status: "green",
+      kernelProof: { file: "a.test.ts", testName: "first proof" },
+      negativeControl: { file: "a.test.ts", testName: "the control" },
+      ciDependency: [
+        { workflow: SELF_WORKFLOW, job: "wired-job" },
+        { workflow: SELF_WORKFLOW, job: "second-job" },
+      ],
+    };
+    const { ok, reasons } = strictCheckRow(row, { repoRoot: "/repo", readFileImpl });
+    expect(ok).toBe(false);
+    expect(reasons.some((r) => r.includes('does not needs: "second-job"'))).toBe(true);
+
+    // …and passes once the edge exists for both.
+    const wired = workflowText.replace("needs: [wired-job]", "needs: [wired-job, second-job]");
+    const okResult = strictCheckRow(row, {
+      repoRoot: "/repo",
+      readFileImpl: (p) =>
+        p.endsWith(`.github/workflows/${SELF_WORKFLOW}`) ? wired : readFileImpl(p),
+    });
+    expect(okResult.reasons).toEqual([]);
+    expect(okResult.ok).toBe(true);
+  });
+
+  it("strict mode catches a MISSING job named only in the second ciDependency entry", () => {
+    const workflowText = `jobs:\n  ${SELF_JOB}:\n    needs: [wired-job, ghost-job]\n    runs-on: ubuntu-latest\n\n  wired-job:\n    runs-on: ubuntu-latest\n`;
+    const readFileImpl = (p) => {
+      if (p.endsWith(`.github/workflows/${SELF_WORKFLOW}`)) return workflowText;
+      if (p.endsWith("a.test.ts")) return files["a.test.ts"];
+      throw new Error("ENOENT");
+    };
+    const row = {
+      criterion: CANONICAL_CRITERIA[0],
+      owner: "self",
+      status: "green",
+      kernelProof: { file: "a.test.ts", testName: "first proof" },
+      negativeControl: { file: "a.test.ts", testName: "the control" },
+      ciDependency: [
+        { workflow: SELF_WORKFLOW, job: "wired-job" },
+        { workflow: SELF_WORKFLOW, job: "ghost-job" },
+      ],
+    };
+    const { ok, reasons } = strictCheckRow(row, { repoRoot: "/repo", readFileImpl });
+    expect(ok).toBe(false);
+    expect(reasons.some((r) => r.includes('ciDependency job "ghost-job" not found'))).toBe(true);
+  });
+});
+
+describe("duplicate ciDependency entries", () => {
+  it("rejects the same job cited twice (a row spanning one CI tier must not look like two)", () => {
+    const m = baseManifest();
+    m.rows[0].ciDependency = [
+      { workflow: "build-image.yml", job: "test" },
+      { workflow: "build-image.yml", job: "test" },
+    ];
+    const errors = validateManifestShape(m);
+    expect(errors.some((e) => e.includes("duplicate ciDependency"))).toBe(true);
+  });
+
+  it("accepts two genuinely different jobs", () => {
+    const m = baseManifest();
+    m.rows[0].ciDependency = [
+      { workflow: "build-image.yml", job: "test" },
+      { workflow: "build-image.yml", job: "agents-integration-db" },
+    ];
+    const errors = validateManifestShape(m);
+    expect(errors.some((e) => e.includes("ciDependency"))).toBe(false);
   });
 });
