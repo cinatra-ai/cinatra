@@ -77,6 +77,11 @@ export const SYNC_CALLER_CLASSIFICATIONS: Record<string, SyncCallerClassificatio
     justification:
       "Widget user-auth validates connect-site credentials + origin on the embed auth path; a synchronous, instant decision with no TOCTOU window. Security-critical — deferred and serialized.",
   },
+  "src/lib/widget-session-binding.ts": {
+    class: "sync-required",
+    justification:
+      "cinatra#2684: the PARENT-SESSION leaf behind every widget credential. Two read-only call sites: whether the Better Auth session a `cwu_` row was minted under is still signed in, and the same question asked from a token `jti` alone (for the credentials that cannot present the bearer — the capture capability and the run-bound chat resume token). This is the security-critical instant decision `widget-user-auth.ts` already makes for its other bindings, taken inside that same SYNCHRONOUS verifier, so it cannot be awaited without either making the verifier async (a cross-cutting change to the chat turn, the capability probe and the resume route) or opening the TOCTOU window the check exists to close. Deliberately NOT on the async pooled/drizzle layer: neither widget table has a drizzle mapping. NO WRITES. Migrates with widget-user-auth.ts, serialized with it.",
+  },
   "src/lib/widget-token-broker.ts": {
     class: "sync-required",
     justification:

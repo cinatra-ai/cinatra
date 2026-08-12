@@ -14,6 +14,7 @@ import path from "node:path";
 
 const rows: Array<Record<string, unknown>> = [];
 const getActiveConnectSiteById = vi.fn();
+const widgetAuthSessionIsLive = vi.fn();
 
 vi.mock("@/lib/postgres-sync", () => ({
   runPostgresQueriesSync: () => [{ rows }],
@@ -27,6 +28,12 @@ vi.mock("@/lib/postgres-config", () => ({
 vi.mock("@/lib/connect-sites-store", () => ({
   getActiveConnectSiteById: (id: string) => getActiveConnectSiteById(id),
 }));
+// cinatra#2684 — the parent-session leaf. Mocked as a data switch so a sign-out
+// is expressible here as what it is: the session stops being live.
+vi.mock("@/lib/widget-session-binding", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/widget-session-binding")>();
+  return { ...actual, widgetAuthSessionIsLive: (id: unknown) => widgetAuthSessionIsLive(id) };
+});
 
 import { readLiveWidgetCapturePrincipal } from "@/lib/lifecycle/widget-capture-principal";
 
@@ -41,6 +48,7 @@ const TOKEN_ROW = {
   aud: "/api/assistants/chat",
   scope: "wordpress-assistant.user",
   credential_version: 3,
+  auth_session_id: "sess-1",
   not_expired: true,
 };
 
@@ -57,6 +65,8 @@ describe("readLiveWidgetCapturePrincipal", () => {
     rows.length = 0;
     getActiveConnectSiteById.mockReset();
     getActiveConnectSiteById.mockReturnValue({ ...SITE_ROW });
+    widgetAuthSessionIsLive.mockReset();
+    widgetAuthSessionIsLive.mockReturnValue(true);
   });
 
   it("returns the live binding for a healthy token row", () => {
@@ -153,6 +163,29 @@ describe("readLiveWidgetCapturePrincipal", () => {
     expect(readLiveWidgetCapturePrincipal("jti-1")).toBeNull();
   });
 
+  // cinatra#2684 — AC-3. A capture capability minted before a sign-out serves no
+  // bytes afterwards, because the parent widget row it hangs off is dead. Paired
+  // with its control: the identical row while the session is live.
+  it("REVOKED: the Better Auth session that authorized the picture has ended", () => {
+    rows.push({ ...TOKEN_ROW });
+    expect(readLiveWidgetCapturePrincipal("jti-1")).not.toBeNull(); // control
+
+    widgetAuthSessionIsLive.mockReturnValue(false); // the sign-out
+    expect(readLiveWidgetCapturePrincipal("jti-1")).toBeNull();
+  });
+
+  it("asks about the session NAMED ON THE ROW, and refuses a row that names none", () => {
+    rows.push({ ...TOKEN_ROW });
+    readLiveWidgetCapturePrincipal("jti-1");
+    expect(widgetAuthSessionIsLive).toHaveBeenCalledWith("sess-1");
+
+    // A row minted before the binding shipped cannot prove a live parent.
+    rows.length = 0;
+    rows.push({ ...TOKEN_ROW, auth_session_id: null });
+    widgetAuthSessionIsLive.mockImplementation((id: unknown) => Boolean(id));
+    expect(readLiveWidgetCapturePrincipal("jti-1")).toBeNull();
+  });
+
   it("returns the agent bind so the serving ladder can enforce agent_mismatch", () => {
     rows.push({ ...TOKEN_ROW });
     expect(readLiveWidgetCapturePrincipal("jti-1")?.agentSlug).toBe("wordpress-assistant");
@@ -186,6 +219,10 @@ describe("readLiveWidgetCapturePrincipal", () => {
       aud_mismatch: "WIDGET_BROKER_ROUTE_PATH",
       scope_mismatch: "userTokenScope(agentSlug)",
       site_revoked: "getActiveConnectSiteById",
+      // cinatra#2684 — the same predicate, from the same leaf, in the same
+      // position in the order. A picture authorized by a sign-in stops being
+      // served when that sign-in ends.
+      session_revoked: "widgetAuthSessionIsLive",
     };
 
     /** reason -> why this probe cannot and need not mirror it. */

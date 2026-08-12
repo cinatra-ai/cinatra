@@ -210,7 +210,11 @@ describe("newly registered stores — writer-set lockstep", () => {
       // 10 -> 11 (cinatra#2631): recordDisplayedScopesForTransaction's write-once
       // UPDATE of the transaction's displayed_scopes AND its screen_nonce_hash —
       // ONE statement, so the count moves by one. Deliberately re-pinned.
-      "src/lib/widget-user-auth.ts": 11,
+      // 11 -> 12 (cinatra#2684): consumeUserWidgetToken reaps a token whose
+      // parent Better Auth session is DEFINITELY gone, keyed on that one token's
+      // hash — the same shape as the expired-row delete beside it. Deliberately
+      // re-pinned.
+      "src/lib/widget-user-auth.ts": 12,
       // 8 -> 9 on main (the suggestion-decision CAS write); kept as main has it.
       // 9 -> 10 (cinatra#2650): bindThreadContainerIfUnbound's ONE conditional
       // set-once UPDATE that records a thread's container at its first persist.

@@ -84,6 +84,15 @@ export type WidgetChatResumeActor = {
   /** Per-run nonce (carried for future replay dedup; the short TTL bounds it). */
   jti: string;
   /**
+   * THE PARENT WIDGET TOKEN'S OWN `jti` (cinatra#2684). This token is derived
+   * from a `cwu_` row, and a credential derived from a sign-in must not outlive
+   * that sign-in — so it names the row it came from, and the resume route asks
+   * whether that row's Better Auth session is still there before it streams a
+   * byte. The verifier only PARSES it: the store read belongs in the route, so
+   * this module stays a pure signing leaf.
+   */
+  parentJti: string;
+  /**
    * ALWAYS `"member"` — hard-coded by the verifier because the token omits
    * `prole`. A widget user is NEVER `platform_admin` at the resume boundary.
    */
@@ -98,6 +107,8 @@ export type WidgetChatResumeActor = {
  */
 export type WidgetChatResumeTokenInput = {
   userId: string;
+  /** The `jti` of the `cwu_` widget token that authorized the turn (#2684). */
+  parentJti: string;
   orgId: string;
   instanceId: string;
   kind: WidgetChatResumeConnectorKind;
@@ -114,6 +125,7 @@ type WidgetChatResumeTokenClaims = {
   run: string; // the bound AG-UI runId — REQUIRED, fail-closed
   src: "public_site_widget"; // fixed discriminator
   jti: string; // per-run nonce
+  pjti: string; // the parent cwu_ token's jti — the revocation handle (#2684)
   scope: "chat:resume";
   aud: string;
   iss: string;
@@ -190,6 +202,7 @@ export function issueWidgetChatResumeToken(
     run: input.runId,
     src: TOKEN_SOURCE,
     jti: input.jti,
+    pjti: input.parentJti,
     scope: TOKEN_SCOPE,
     aud: WIDGET_CHAT_RESUME_ROUTE_PATH,
     iss: WIDGET_CHAT_RESUME_ISSUER,
@@ -311,6 +324,11 @@ export function verifyWidgetChatResumeToken(input: {
     if (payload.run !== expectedRunId) return null;
     // jti is REQUIRED (carried for future replay dedup). Blank fails closed.
     if (!isNonBlankString(payload.jti)) return null;
+    // pjti is REQUIRED and FAIL-CLOSED (cinatra#2684) — it names the `cwu_` row
+    // this token was derived from, and without it the route has nothing to ask
+    // about. A token minted before this shipped carries none and is refused; its
+    // ten-minute life bounds that entirely.
+    if (!isNonBlankString(payload.pjti)) return null;
     // Exact aud + iss binding — this token is for the RESUME route only, not the
     // chat turn route. A token minted for a different audience/issuer is rejected.
     if (typeof payload.aud !== "string" || payload.aud !== WIDGET_CHAT_RESUME_ROUTE_PATH) {
@@ -347,6 +365,7 @@ export function verifyWidgetChatResumeToken(input: {
       kind: payload.knd,
       runId: payload.run,
       jti: payload.jti,
+      parentJti: payload.pjti,
       // Floored at mint: the token omits `prole`, so a widget user is ALWAYS
       // resolved as `member` here — never `platform_admin` at the boundary.
       platformRole: "member",

@@ -30,6 +30,15 @@ const getAssistantThread = vi.fn();
 const loadChatThreadForActorAccess = vi.fn();
 const subscribeToAgUiEventsWithId = vi.fn();
 
+const parentLiveness = vi.fn((_jti: unknown) => "live" as "live" | "dead" | "unknown");
+
+// cinatra#2684 — the resume token is derived from a `cwu_` row, so the route
+// re-asks whether that row's Better Auth session is still signed in. Mocked as a
+// data switch: "live" is a signed-in person, anything else is a sign-out.
+vi.mock("@/lib/widget-session-binding", () => ({
+  readWidgetTokenParentLiveness: (jti: unknown) => parentLiveness(jti),
+}));
+
 vi.mock("@/lib/auth-session", () => ({
   getAuthSession: () => getAuthSession(),
   isPlatformAdmin: (s: unknown) => isPlatformAdmin(s),
@@ -98,6 +107,7 @@ function mintResume(runId: string): string {
     kind: "wordpress",
     runId,
     jti: "run-nonce-seam",
+    parentJti: "parent-jti-1",
   });
 }
 
@@ -113,6 +123,8 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: the person who started the run is still signed in.
+  parentLiveness.mockReturnValue("live");
   // Cookieless broker path: no session.
   getAuthSession.mockResolvedValue(null);
   isPlatformAdmin.mockReturnValue(false);

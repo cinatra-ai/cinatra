@@ -65,6 +65,7 @@ const RESUME_INPUT: WidgetChatResumeTokenInput = {
   kind: "wordpress",
   runId: RUN_ID,
   jti: "run-nonce-abc123",
+  parentJti: "parent-jti-1",
 };
 
 const EXPECTED_ACTOR: WidgetChatResumeActor = {
@@ -75,6 +76,7 @@ const EXPECTED_ACTOR: WidgetChatResumeActor = {
   kind: "wordpress",
   runId: RUN_ID,
   jti: "run-nonce-abc123",
+  parentJti: "parent-jti-1",
   platformRole: "member",
 };
 
@@ -151,6 +153,7 @@ function baseClaims(overrides: Record<string, unknown> = {}) {
     run: RUN_ID,
     src: "public_site_widget",
     jti: "run-nonce-abc123",
+    pjti: "parent-jti-1",
     scope: "chat:resume",
     aud: WIDGET_CHAT_RESUME_ROUTE_PATH,
     iss: RESUME_ISSUER,
@@ -283,6 +286,22 @@ describe("widget-chat-resume-token verify — TTL / reconnect window", () => {
     const { jti: _drop, ...noJti } = baseClaims();
     expect(verify(signClaims(noJti))).toBeNull();
     expect(verify(signClaims(baseClaims({ jti: "" })))).toBeNull();
+  });
+
+  // cinatra#2684 — the token names the `cwu_` row it was derived from, which is
+  // what lets the resume route ask whether that sign-in is still there. Without
+  // the claim there is nothing to ask about, so it fails closed here.
+  it("carries the PARENT widget token's jti, and refuses a token without one", () => {
+    expect(verify(signClaims(baseClaims()))?.parentJti).toBe("parent-jti-1");
+    const { pjti: _drop, ...noParent } = baseClaims();
+    expect(verify(signClaims(noParent))).toBeNull();
+    expect(verify(signClaims(baseClaims({ pjti: "" })))).toBeNull();
+    expect(verify(signClaims(baseClaims({ pjti: "   " })))).toBeNull();
+  });
+
+  it("the issuer seals the parent jti it was handed", () => {
+    const token = issueWidgetChatResumeToken({ ...RESUME_INPUT, parentJti: "cwu-jti-9" });
+    expect(verify(token)?.parentJti).toBe("cwu-jti-9");
   });
 });
 

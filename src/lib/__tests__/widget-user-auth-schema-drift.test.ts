@@ -286,3 +286,56 @@ describe("widget_user_tokens schema-drift guard", () => {
     expect(ok).toBe(true);
   });
 });
+
+// cinatra#2684 — the PARENT SESSION binding. The engine writes `auth_session_id`
+// on both short-lived tables and re-reads it at every verification, so the
+// column has to exist on installed deployments too, and the cascade has to be a
+// keyed delete rather than a scan.
+describe("auth_session_id rollout (cinatra#2684)", () => {
+  const texts = () => buildCreateStoreSchemaQueries("drift_test").map((q) => String(q.text));
+
+  for (const table of ["widget_auth_codes", "widget_user_tokens"] as const) {
+    it(`adds auth_session_id to an EXISTING ${table} deployment (idempotent ALTER, nullable)`, () => {
+      // NULLABLE is the mixed-version contract: a row minted by the previous
+      // build names no session, cannot prove one is alive, and therefore fails
+      // closed at its next verification. A NOT NULL here would instead be a
+      // destructive change to a deployed table for no added guarantee.
+      const alters = texts().filter((t) => t.includes("ALTER TABLE") && t.includes(table));
+      expect(
+        alters.some((t) => /ADD COLUMN IF NOT EXISTS auth_session_id text\s*$/.test(t.trim())),
+      ).toBe(true);
+    });
+
+    it(`orders the ${table} ALTER after its CREATE, and never rewrites the CREATE`, () => {
+      const all = texts();
+      const createIdx = all.findIndex((t) =>
+        t.includes(`CREATE TABLE IF NOT EXISTS "drift_test"."${table}"`),
+      );
+      const alterIdx = all.findIndex(
+        (t) => t.includes(table) && t.includes("ADD COLUMN IF NOT EXISTS auth_session_id"),
+      );
+      expect(createIdx).toBeGreaterThanOrEqual(0);
+      expect(alterIdx).toBeGreaterThan(createIdx);
+      // Adding it to a deployed CREATE reads to the schema-migration gate as a
+      // drop/retype of the whole table.
+      expect(
+        all.filter((t) => t.includes(`CREATE TABLE`) && t.includes(`"${table}"`) && t.includes("auth_session_id")),
+      ).toEqual([]);
+    });
+  }
+
+  it("indexes widget_user_tokens by auth_session_id so the sign-out cascade is keyed", () => {
+    const ok = texts().some(
+      (t) =>
+        t.includes("CREATE INDEX") &&
+        t.includes("widget_user_tokens_auth_session_idx") &&
+        t.includes('"widget_user_tokens" (auth_session_id)'),
+    );
+    expect(ok).toBe(true);
+  });
+
+  it("keeps the index NON-UNIQUE — one session legitimately holds several tokens", () => {
+    const idx = texts().find((t) => t.includes("widget_user_tokens_auth_session_idx")) ?? "";
+    expect(idx).not.toContain("UNIQUE");
+  });
+});
