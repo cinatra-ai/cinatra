@@ -38,11 +38,15 @@
  * archive-conditioned guard, an ACTIVE org). Both are honest reverts — they
  * are what the code does today with the guard's contribution removed.
  *
- * SCOPE — this file is the no-DB tier. Controls whose green test needs real
- * raced Postgres transactions live adjacent to that test in
+ * SCOPE — this file is the no-DB tier, minus the controls that cannot live
+ * here. Controls whose green test needs real raced Postgres transactions live
+ * adjacent to that test in
  * src/lib/__tests__/integration/org-write-archive-race.integration.test.ts;
- * the packages/agents seam controls live in that package's own suites. The
- * manifest's `negativeControl` refs are the index of where each one lives.
+ * the packages/agents seam controls live in that package's own suites; and the
+ * row-8 control lives in src/lib/org-write/__tests__/ because the kernel
+ * boundary gate's R5-job-system-mint rule restricts naming that mint seam to
+ * the seam's own test directory. The manifest's `negativeControl` refs are the
+ * index of where each one lives — always consult those, not this list.
  *
  * Runs in the root vitest tier (`pnpm test:root`, the
  * perpetual-loops-invariants CI job) — no database, no network.
