@@ -351,7 +351,7 @@ function publishRequest(slug: string, orgId: string, userId: string): unknown {
 
 /** What the REGISTRY holds for a package: its published versions. */
 async function readPublishedVersions(packageName: string): Promise<string[]> {
-  const res = await fetch(`${registryUrl}/${packageName.replace("/", "%2f")}`, {
+  const res = await fetch(`${registryUrl}/${encodeURIComponent(packageName)}`, {
     headers: { accept: "application/json" },
   });
   if (res.status === 404) return [];
@@ -362,7 +362,7 @@ async function readPublishedVersions(packageName: string): Promise<string[]> {
 
 /** The tarball URL Verdaccio serves for a version, or null when unpublished. */
 async function readTarballUrl(packageName: string, version: string): Promise<string | null> {
-  const res = await fetch(`${registryUrl}/${packageName.replace("/", "%2f")}`, {
+  const res = await fetch(`${registryUrl}/${encodeURIComponent(packageName)}`, {
     headers: { accept: "application/json" },
   });
   if (res.status === 404) return null;
