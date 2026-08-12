@@ -29,7 +29,18 @@ import {
 import type { PendingCallDecisionAction } from "@/lib/connector-instance-pending-call-decision-token";
 import type { PendingCallDecisionResult } from "@/lib/connector-instance-pending-call-executor";
 
-export type { PendingToolConfirmationRow };
+// NO TYPE RE-EXPORT HERE, and the reason is a runtime one (cinatra#2683).
+//
+// This file carries "use server", so the actions loader enumerates its exports
+// and registers each one as a server reference. Under the dev bundler that
+// enumeration is taken from the export list BEFORE the type erasure pass, so a
+// re-exported TYPE became a value binding that nothing defines — and the whole
+// actions module for `/chat` failed to evaluate with `ReferenceError:
+// PendingToolConfirmationRow is not defined`. Every server action on the page
+// answered 500 with it: send, rename, delete, decide. A "use server" module may
+// export async functions and nothing else, so `PendingToolConfirmationRow` is
+// imported from its one home (`@/lib/chat/pending-tool-call-surface`) by every
+// consumer instead of being passed through this door.
 
 type SessionShape = {
   user: { id: string };

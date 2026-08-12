@@ -29,8 +29,10 @@ import {
 import {
   decidePendingToolCall,
   listPendingToolConfirmations,
-  type PendingToolConfirmationRow,
 } from "./pending-call-actions";
+// The row type comes from the shared surface, never through the "use server"
+// door — see the note there.
+import type { PendingToolConfirmationRow } from "@/lib/chat/pending-tool-call-surface";
 import type { PendingCallDecisionResult } from "@/lib/connector-instance-pending-call-executor";
 
 /** The widget's door onto the SAME server module the action reaches. */
