@@ -43,10 +43,18 @@ import {
 } from "./actions";
 // Chat prompt-window HITL drive.
 import {
+  ambiguousComposerRefusal,
   classifyPromptForGate,
   createChatGateRegistry,
+  resolveComposerRouting,
   resolveExtractedGateValues,
 } from "./inline-hitl-classify";
+// cinatra#2566's composer focus: the store the review cards register with, and
+// the pure resolver that says which gate (if any) the composer is bound to.
+import {
+  createComposerFocusStore,
+  resolveComposerTarget,
+} from "@cinatra-ai/agents/lifecycle-card-runtime";
 // Chat persistence/replay must carry artifact refs alongside text. Adding to
 // the Message shape lets the bridge resolve them without the chat path
 // importing @/lib directly.
@@ -236,6 +244,20 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // so both function identities are stable across renders (the handler is
   // threaded to InlineAgentRunCard).
   const [{ handleActiveGateChange, getLatestOpenGate }] = useState(createChatGateRegistry);
+  // COMPOSER FOCUS (cinatra#2566): which review card this page's composer is
+  // bound to. One store for the page's lifetime, handed DOWN to the column (so
+  // the cards register and draw the affordance) and read HERE at send time (so
+  // the message is routed by what is true when the reader presses send). The
+  // same useState-initializer shape as the gate registry, and for the same
+  // reason: one instance, stable identity.
+  const [composerFocusStore] = useState(createComposerFocusStore);
+  // The host adapter `/chat` declares, plus its composer-focus store. Composed
+  // rather than baked into the exported constant because the store is per-mount
+  // — the constant stays the explicit statement of WHICH host this is.
+  const chatHostAdapter = useMemo(
+    () => ({ ...CHAT_THREAD_HOST, composerFocus: composerFocusStore }),
+    [composerFocusStore],
+  );
   // Latest-value ref for the active thread id so in-flight streamResponse coroutines
   // can detect thread switches after an await and no-op their patches.
   const activeThreadIdRef = useRef<string | null>(null);
@@ -886,50 +908,81 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     // approval path the embedded form uses (AgenticRunPanel single source of
     // truth) and does NOT trigger an LLM turn; a non-response falls through
     // to normal chat routing below.
+    //
+    // A FOCUSED REVIEW CARD (cinatra#2566) is the other thing the composer can
+    // be bound to. Where it goes — and when it refuses to guess — is decided by
+    // the pure `resolveComposerRouting`; this block only carries the outcome
+    // out. See that function for the precedence and why ambiguity is refused.
     // -----------------------------------------------------------------------
     {
-      // Drive the most-recently-registered open gate (typical case: one).
-      const gate = getLatestOpenGate();
+      // Append an assistant ack AND persist it, mirroring the immediate
+      // user-message save above. Without the explicit save the gate path's
+      // early returns leave the ack reliant on the generic no-stream
+      // persistence effect; persisting here removes the timing inconsistency
+      // so the ack survives an immediate reload.
+      const persistAck = (content: string): void => {
+        const ackMsg: Message = {
+          id: generateId(),
+          role: "assistant",
+          content,
+        };
+        const messagesWithAck = [...currentMessages, ackMsg];
+        setMessages((prev) => [...prev, ackMsg]);
+        const now = new Date().toISOString();
+        const title =
+          threads.find((t) => t.id === threadId)?.title ??
+          deriveThreadTitle(trimmed);
+        // createdAt is immutable: prefer the summary, then the loaded
+        // thread's createdAt, then now for a genuinely new thread (#283).
+        const createdAt =
+          threads.find((t) => t.id === threadId)?.createdAt ?? loadedThreadCreatedAtRef.current ?? now;
+        saveChatThreadViaFetch({
+          id: threadId,
+          title,
+          messages: messagesWithAck,
+          createdAt,
+          updatedAt: now,
+          activeAssistantHandle,
+          taggedAssistantUserIds,
+          slackMode: isSlackMode,
+          ownerUserId: userId,
+        } as Record<string, unknown> & { id: string }).catch((err) =>
+          console.error("[chat] saveChatThread (gate ack) failed:", err),
+        );
+      };
+      // Read the binding at SEND time, not at render time: a card can be
+      // focused, decided or unmounted while the reader is typing, and the
+      // message must be routed by what is true when they press send.
+      const composerRouting = resolveComposerRouting({
+        target: resolveComposerTarget(composerFocusStore.getSnapshot()),
+        latestOpenGate: getLatestOpenGate(),
+        commentActionFor: composerFocusStore.getCommentAction,
+      });
+
+      if (composerRouting.kind === "refuse-ambiguous") {
+        // Nothing was sent — not to a review, not to the model. Said out loud,
+        // because the alternative is a comment landing on a review the reader
+        // did not choose.
+        persistAck(ambiguousComposerRefusal(composerRouting.count));
+        return;
+      }
+
+      if (composerRouting.kind === "review-comment") {
+        // The reader's text IS the comment — no classifier, no field wrap. The
+        // action is the CARD's own, so this lands in the same decision module,
+        // with the same validation order, that pressing Comment on the card
+        // lands in.
+        const result = await composerRouting.comment(trimmed);
+        persistAck(result.message);
+        return;
+      }
+
+      const gate = composerRouting.kind === "field-gate" ? composerRouting.gate : undefined;
       if (gate) {
         const verdict = classifyPromptForGate(trimmed, {
           fields: gate.fields,
           fieldName: gate.fieldName,
         });
-        // Append an assistant ack AND persist it, mirroring the immediate
-        // user-message save above. Without the explicit save the gate path's
-        // early returns leave the ack reliant on the generic no-stream
-        // persistence effect; persisting here removes the timing inconsistency
-        // so the ack survives an immediate reload.
-        const persistAck = (content: string): void => {
-          const ackMsg: Message = {
-            id: generateId(),
-            role: "assistant",
-            content,
-          };
-          const messagesWithAck = [...currentMessages, ackMsg];
-          setMessages((prev) => [...prev, ackMsg]);
-          const now = new Date().toISOString();
-          const title =
-            threads.find((t) => t.id === threadId)?.title ??
-            deriveThreadTitle(trimmed);
-          // createdAt is immutable: prefer the summary, then the loaded
-          // thread's createdAt, then now for a genuinely new thread (#283).
-          const createdAt =
-            threads.find((t) => t.id === threadId)?.createdAt ?? loadedThreadCreatedAtRef.current ?? now;
-          saveChatThreadViaFetch({
-            id: threadId,
-            title,
-            messages: messagesWithAck,
-            createdAt,
-            updatedAt: now,
-            activeAssistantHandle,
-            taggedAssistantUserIds,
-            slackMode: isSlackMode,
-            ownerUserId: userId,
-          } as Record<string, unknown> & { id: string }).catch((err) =>
-            console.error("[chat] saveChatThread (gate ack) failed:", err),
-          );
-        };
         const finishGateSubmit = async (
           value: Record<string, unknown> | string | number | boolean,
         ): Promise<void> => {
@@ -1134,7 +1187,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     <div className="flex h-full">
       <ConversationColumn
         // `/chat` states its host EXPLICITLY: the first-party cookie surface.
-        host={CHAT_THREAD_HOST}
+        host={chatHostAdapter}
         messages={messages}
         isSlackMode={isSlackMode}
         animating={animating}

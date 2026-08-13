@@ -77,6 +77,10 @@ import type {
   WidgetSubmitHandle,
 } from "@cinatra-ai/sdk-ui/widget";
 import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
+import {
+  LifecycleComposerFocusProvider,
+  type ComposerFocusStore,
+} from "@cinatra-ai/agents/lifecycle-card-runtime";
 import type { ThemeName } from "./syntax-highlight";
 import {
   createChatWidgetRuntime,
@@ -152,6 +156,19 @@ export type ConversationHostAdapter = {
    * display-only. The seam ADDS a gesture — it never changes which card renders.
    */
   onApplyIntent?: (ref: ApplyIntentRef) => void;
+  /**
+   * COMPOSER FOCUS (cinatra#2566). The store that binds this column's composer
+   * to ONE review card, so a typed message can become a comment on the review
+   * the reader chose. A host that supplies one gets the focus affordance on its
+   * review cards; a host that supplies none has cards that register nothing and
+   * draw no affordance, and its composer behaves exactly as it did before.
+   *
+   * `/chat` supplies one. The WIDGET deliberately does not: a widget reviewer
+   * must meet a fresh confirmation before any decision (S8b), and a composer
+   * that quietly turned typing into a decision-module call would route straight
+   * past it. Enabling it there is that slice's, not this one's.
+   */
+  composerFocus?: ComposerFocusStore;
 };
 
 /**
@@ -309,7 +326,7 @@ export function ConversationColumn({
     if (!hasActiveStream) promptRef.current?.focus();
   }, [hasActiveStream, promptRef]);
 
-  return (
+  const column = (
     <div className="relative flex min-h-0 flex-1 flex-col">
 
       <div
@@ -383,6 +400,19 @@ export function ConversationColumn({
         </div>
       </div>
     </div>
+  );
+
+  // COMPOSER FOCUS (cinatra#2566) wraps the WHOLE column — the review cards in
+  // the list and the composer below them — because the binding is a fact about
+  // the pair. A host that declares no store gets the column verbatim, so its
+  // cards see no provider, register nothing, and draw no focus affordance: the
+  // same fail-closed shape as the lifecycle host declaration itself.
+  return host.composerFocus ? (
+    <LifecycleComposerFocusProvider store={host.composerFocus}>
+      {column}
+    </LifecycleComposerFocusProvider>
+  ) : (
+    column
   );
 }
 

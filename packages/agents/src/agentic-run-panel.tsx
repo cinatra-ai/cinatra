@@ -26,7 +26,11 @@ import {
   Clock,
 } from "lucide-react";
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
-import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
+import {
+  LifecycleCardSurfaceProvider,
+  useComposerFocusStore,
+  useComposerTarget,
+} from "./lifecycle-card-runtime";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION, ReviewGateCard } from "./review-gate-card";
 import { toast } from "@/lib/cinatra-toast";
 import { approveReviewTask } from "./hitl-actions";
@@ -154,9 +158,32 @@ export type ChatGateDescriptor = {
   /** Setup-loop primitive-wrap key; undefined for mid-run renderer gates. */
   fieldName?: string;
   /**
-   * Submit the gate from the chat prompt-window path. Reuses AgenticRunPanel's
-   * approval logic verbatim. `value` is either an object of field values or a
-   * bare primitive (string/number/boolean) for a single-field gate.
+   * WHAT THE COMPOSER IS HOLDING (cinatra#2566's composer-focus deliverable).
+   *
+   * - `field` (the default, and the absent value) — a HITL gate the run is
+   *   blocked on. `submit` resumes it through this panel's approval path.
+   * - `review_comment` — a MARKED artifact-review gate the reader focused. Its
+   *   `submit` takes free TEXT and posts it as a `comment` disposition through
+   *   the card's own decision path; there is no resume path on it at all, which
+   *   is how cinatra#1796's single-resume guard survives the composer binding.
+   *
+   * A consumer that has never heard of this field sees `undefined` and treats
+   * the descriptor as a field gate, which is exactly what every pre-#2566
+   * descriptor was — so the field is additive rather than a fork.
+   */
+  kind?: "field" | "review_comment";
+  /** The focused review card's server-minted opaque ref. `review_comment` only;
+   *  it is how the composer names the gate it is bound to. */
+  cardRef?: string;
+  /**
+   * Submit the gate from the chat prompt-window path. For a `field` gate this
+   * reuses AgenticRunPanel's approval logic verbatim and `value` is either an
+   * object of field values or a bare primitive for a single-field gate. For a
+   * `review_comment` gate `value` MUST be the reader's text; anything else is
+   * refused rather than serialized into a review rationale.
+   *
+   * Rejects (rather than returning) on failure, so a caller that only knows the
+   * pre-#2566 contract still surfaces the reason instead of reporting success.
    */
   submit: (value: Record<string, unknown> | string | number | boolean) => Promise<void>;
 };
@@ -592,6 +619,70 @@ export function AgenticRunPanel({
     [performGateSubmit],
   );
 
+  // cinatra#2566 — the SERVER-MINTED opaque ref a marked review gate carries.
+  // It is the only handle the run card has on the gate: the run panel never
+  // assembles one from ids it happens to hold, because a card ref is minted (and
+  // authenticated-encrypted) at gate emission and every surface that draws a
+  // card must be addressing the same server-issued ticket.
+  const reviewGateCardRef =
+    typeof effectiveHitlContext?.currentValues?.lifecycleCardRef === "string" &&
+    effectiveHitlContext.currentValues.lifecycleCardRef.length > 0
+      ? (effectiveHitlContext.currentValues.lifecycleCardRef as string)
+      : null;
+
+  // cinatra#2566's COMPOSER FOCUS. The store is the surface's, not the panel's:
+  // the review CARD registers the gate (only the card knows the server's
+  // `canComment` answer) and offers the affordance, and the reader's choice
+  // resolves to at most ONE bound gate across every card on screen. The panel
+  // reads that resolution to decide whether ITS gate is the bound one.
+  //
+  // No provider (the run-detail page, which has no chat composer) ⇒ no store ⇒
+  // `none`, and this panel publishes exactly the null it always published.
+  const composerFocusStore = useComposerFocusStore();
+  const composerTarget = useComposerTarget();
+  const composerBoundRef =
+    reviewGateCardRef !== null &&
+    composerTarget.kind === "target" &&
+    composerTarget.ref === reviewGateCardRef
+      ? reviewGateCardRef
+      : null;
+
+  // The FOCUSED review gate's comment submit, for the chat composer.
+  //
+  // cinatra#1796 IS INTACT, and this is the line that keeps it: the descriptor
+  // published below carries NO resume path. It never calls `approveReviewTask`
+  // and never touches `performGateSubmit`; it calls the CARD's own comment
+  // action, which posts a `comment` disposition to the gate-scoped decision
+  // module with the same validation order and the same CAS the review surface
+  // uses. The composer therefore cannot become a second way to resume the run —
+  // it is a second way to reach the ONE decision module, which is what #2566
+  // ratified ("single-decision safety = the CAS, not route binding").
+  //
+  // The action is LOOKED UP at call time, never captured: the card owns the
+  // comment path and re-registers it on every re-resolve, so a closure captured
+  // when the gate opened could outlive the transport it names.
+  const submitFocusedReviewComment = useCallback(
+    async (value: Record<string, unknown> | string | number | boolean): Promise<void> => {
+      const action = composerBoundRef
+        ? composerFocusStore?.getCommentAction(composerBoundRef)
+        : undefined;
+      // A comment is TEXT. A caller that treated this like a field gate and sent
+      // an object or an approval primitive is refused rather than serialized into
+      // a rationale — belt-and-braces behind the `kind` discriminant, so even a
+      // consumer that ignores it cannot turn "approve" into a comment (and still
+      // cannot resume the run: there is no resume path here to reach).
+      if (typeof value !== "string") {
+        throw new Error("A review comment must be text.");
+      }
+      if (!action) {
+        throw new Error("This review is no longer taking comments here.");
+      }
+      const result = await action(value);
+      if (!result.ok) throw new Error(result.message);
+    },
+    [composerFocusStore, composerBoundRef],
+  );
+
   // Signature-gated publish: fire onActiveGateChange ONLY when gate identity
   // or field-shape changes (never on poll-tick re-renders). On gate close
   // (effectiveHitlContext === null) publish null for THIS runId so ChatPage
@@ -602,7 +693,10 @@ export function AgenticRunPanel({
       : `inst-${Math.random().toString(36).slice(2)}-${Date.now()}`,
   );
   const gateSignature = effectiveHitlContext
-    ? `${runId}:${effectiveHitlContext.reviewTaskId}:${effectiveHitlContext.xRenderer}:${effectiveHitlContext.fieldName ?? ""}:${gateFields.map((f) => `${f.name}:${f.type}:${f.required ? 1 : 0}`).join(",")}`
+    ? // The composer binding is PART of the signature: focusing (or releasing) a
+      // review card changes what this panel publishes, and the publish is
+      // otherwise gated on gate identity alone.
+      `${runId}:${effectiveHitlContext.reviewTaskId}:${effectiveHitlContext.xRenderer}:${effectiveHitlContext.fieldName ?? ""}:${gateFields.map((f) => `${f.name}:${f.type}:${f.required ? 1 : 0}`).join(",")}:${composerBoundRef ?? ""}`
     : `${runId}:null`;
   const onActiveGateChangeRef = useRef(onActiveGateChange);
   onActiveGateChangeRef.current = onActiveGateChange;
@@ -613,12 +707,13 @@ export function AgenticRunPanel({
     if (!cb) return;
     const ctx = latestHitlContextRef.current;
     const instanceId = instanceIdRef.current;
+    const boundCardRef = composerBoundRef;
     // cinatra#1796: a MARKED artifact-review gate is NOT a submittable chat gate.
-    // Publishing its descriptor would hand the chat composer a `submit` that calls
-    // approveReviewTask on the paused run — a SECOND resume path that bypasses the
-    // review surface (and could double-resume the gate the worker also resumes).
-    // Publish null for it (as if no gate is active in the composer), so the ONLY
-    // way to decide is the review surface the inline redirect card links to.
+    // Publishing THIS panel's field descriptor for it would hand the chat composer
+    // a `submit` that calls approveReviewTask on the paused run — a SECOND resume
+    // path that bypasses the review surface (and could double-resume the gate the
+    // worker also resumes). That descriptor is still never published for a marked
+    // gate; the branch below publishes a COMMENT-ONLY one instead.
     if (ctx && ctx.xRenderer !== ARTIFACT_REVIEW_REDIRECT_RENDERER_ID) {
       cb(
         runId,
@@ -633,6 +728,33 @@ export function AgenticRunPanel({
         },
         instanceId,
       );
+    } else if (ctx && boundCardRef !== null) {
+      // cinatra#2566's composer-focus deliverable. The marked gate publishes a
+      // descriptor again — but ONLY while the composer is bound to THIS card, and
+      // it is a comment descriptor, not a gate submit.
+      //
+      // WHY THE BINDING GATES THE PUBLISH. With two marked gates open, the chat
+      // registry answers "the latest open gate"; publishing unconditionally would
+      // make the composer route a real decision-module call by registration order.
+      // Publishing only for the bound card means the registry can only ever hold
+      // the gate the resolver picked — explicitly, or because it is the only one.
+      cb(
+        runId,
+        {
+          runId,
+          instanceId,
+          reviewTaskId: ctx.reviewTaskId,
+          xRenderer: ctx.xRenderer,
+          // A review comment has no field shape; it is free text. An empty list
+          // also keeps the classifier from ever finding a field to wrap, on the
+          // path where a consumer ignores `kind`.
+          fields: [],
+          kind: "review_comment",
+          cardRef: boundCardRef,
+          submit: submitFocusedReviewComment,
+        },
+        instanceId,
+      );
     } else {
       cb(runId, null, instanceId);
     }
@@ -643,20 +765,9 @@ export function AgenticRunPanel({
       onActiveGateChangeRef.current?.(runId, null, instanceId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gateSignature, runId, submitActiveGate]);
+  }, [gateSignature, runId, submitActiveGate, submitFocusedReviewComment]);
 
   const currentXRenderer = effectiveHitlContext?.xRenderer ?? null;
-
-  // cinatra#2566 — the SERVER-MINTED opaque ref a marked review gate carries.
-  // It is the only handle the run card has on the gate: the run panel never
-  // assembles one from ids it happens to hold, because a card ref is minted (and
-  // authenticated-encrypted) at gate emission and every surface that draws a
-  // card must be addressing the same server-issued ticket.
-  const reviewGateCardRef =
-    typeof effectiveHitlContext?.currentValues?.lifecycleCardRef === "string" &&
-    effectiveHitlContext.currentValues.lifecycleCardRef.length > 0
-      ? (effectiveHitlContext.currentValues.lifecycleCardRef as string)
-      : null;
 
   // Gate-scoped attachment ref lifetime. Clear `pendingAttachmentsRef` whenever
   // the active gate changes (xRenderer transition) or the gate goes away
@@ -1074,11 +1185,12 @@ export function AgenticRunPanel({
         // client-side handle to the gate. The run rail and the review page are
         // unaffected in that case.
         //
-        // The composer descriptor stays NULL for this gate (see below): the card
-        // owns the decision, and re-publishing a submittable descriptor would be
-        // the second resume path cinatra#1796 closed. Binding the composer to a
-        // FOCUSED card is a separate, deliberate step (#2566's composer-focus
-        // deliverable) and is not smuggled in here.
+        // The composer descriptor for this gate is COMMENT-ONLY, and only while
+        // the reader has this card bound (see the publish effect above). The
+        // panel's own submittable descriptor is still never published for a
+        // marked gate — that would be the second resume path cinatra#1796
+        // closed. What the composer gets is the card's comment action, so the
+        // ONLY way to resolve the gate remains the one decision module.
         reviewGateCardRef ? (
           <>
             <Separator />

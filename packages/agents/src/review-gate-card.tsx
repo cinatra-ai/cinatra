@@ -111,6 +111,17 @@
 // partition, folded into the decision fingerprint). There is no per-item request
 // on any host, which is the #2047-row-8 rule the whole epic is built on.
 //
+// THE COMPOSER BINDS TO A CARD, NOT TO "THE" GATE (cinatra#2566's composer-focus
+// deliverable). On a host that has a chat composer, this card registers its gate
+// with the surface's focus store — but ONLY when the server's own answer says
+// this reader may comment on it — and draws which review a typed message will
+// reach. What the composer then calls is the card's OWN comment action, the same
+// closure the floor's Comment button calls, so there is one comment path rather
+// than a second one that could drift. With several reviews open and none chosen,
+// nothing routes at all and the cards say so: a comment on a single-target
+// automatic gate resolves as `changes_requested`, so guessing which review a
+// message belongs to would send the wrong run into a repair.
+//
 // NO NEW DECISION PRIMITIVE. A decision leaves through a seam that already
 // exists: the page passes the route-bound server action it has always used, and
 // a card with no host action posts its OPAQUE ref to the gate-scoped endpoint,
@@ -121,7 +132,15 @@
 // ---------------------------------------------------------------------------
 
 import { useCallback, useMemo, useState, type ReactElement } from "react";
-import { Check, ClipboardCheck, Maximize2, Minimize2, Sparkles, X } from "lucide-react";
+import {
+  Check,
+  ClipboardCheck,
+  Maximize2,
+  MessageSquare,
+  Minimize2,
+  Sparkles,
+  X,
+} from "lucide-react";
 
 import {
   LIFECYCLE_VIEW_SCHEMA_VERSION,
@@ -141,10 +160,14 @@ import type {
 } from "@/lib/artifacts/review-surface-model";
 
 import {
+  useComposerFocusBinding,
   useLifecycleCardAuth,
   useLifecycleCardFrame,
   useLifecycleCardHost,
   useLifecycleCardState,
+  type ComposerCommentAction,
+  type ComposerCommentResult,
+  type ComposerFocusBinding,
   type LifecycleCardFrame,
 } from "./lifecycle-card-runtime";
 import { ReviewDecisionBar, type SubmitReviewDecisionAction } from "./review-decision-bar";
@@ -270,6 +293,47 @@ function asSubmitOutcome(body: unknown): ReviewSubmitOutcome {
 }
 
 /**
+ * Say back, in one line, what a COMPOSER comment did (cinatra#2566).
+ *
+ * The composer surface has no decision chrome of its own — it appends a line to
+ * a conversation — so the outcome the decision bar draws as a notice has to
+ * become a sentence here. It is written in this file because this is where the
+ * review's copy lives; the card runtime deliberately never learns the review
+ * vocabulary.
+ *
+ * IDENTIFIER-FREE, LIKE EVERY OTHER REFUSAL. The lines below name what happened
+ * to the reader's own message and nothing about the gate, the target or the run:
+ * this text is persisted into the transcript, which is LLM-visible.
+ */
+function composerCommentResult(outcome: ReviewSubmitOutcome): ComposerCommentResult {
+  switch (outcome.kind) {
+    case "changes-requested":
+      // The comment RESOLVED the gate into a repair (#2566's single-target
+      // automatic-gate rule) — the strongest thing a comment can do, and the
+      // reader must be told it was terminal rather than an annotation.
+      return {
+        ok: true,
+        message:
+          outcome.status === "escalated"
+            ? "Changes requested. This review needs a person to pick it up."
+            : "Changes requested. The agent is working on a revision.",
+      };
+    case "decided":
+      return { ok: true, message: "Your comment was recorded with the decision." };
+    case "annotated":
+      return { ok: true, message: "Comment added to the review. It is still open." };
+    case "blocked":
+      return {
+        ok: false,
+        message: "This review is no longer open, so the comment was not added.",
+      };
+    case "not-permitted":
+    case "error":
+      return { ok: false, message: outcome.message };
+  }
+}
+
+/**
  * The REVIEW card. `view` is S1's wire payload — a viewType, a schemaVersion and
  * an opaque ref, and nothing else; every fact drawn below is resolved from the
  * server against the live reader.
@@ -378,6 +442,52 @@ export function ReviewGateCard({
     return outcome;
   };
 
+  // #2566's COMPOSER COMMENT — the card's own comment path, published to the
+  // composer rather than re-implemented by it.
+  //
+  // It is `submitAndRefresh` with `disposition: "comment"`: the same closure the
+  // decision bar's Comment button calls, so it carries this host's credential,
+  // lands in the same decision module with the same validation order, and
+  // re-resolves the card afterwards. A comment resolving as `changes_requested`
+  // therefore settles the card in the transcript exactly as pressing Comment
+  // does — there is no second transport that could drift from the first.
+  //
+  // NO SUGGESTION PARTITION, for the reason the bar states in full: a comment
+  // does not resolve the gate, so it cannot carry terminal per-item choices. The
+  // reader's marks stay on screen and ride the terminal decision they take.
+  const composerComment = useCallback<ComposerCommentAction>(
+    async (text) => {
+      const trimmed = text.trim();
+      // A blank comment is not an annotation; it would post an empty rationale
+      // and read back as a no-op the reader cannot tell from a lost message.
+      if (trimmed.length === 0) {
+        return { ok: false, message: "A review comment needs some text." };
+      }
+      return composerCommentResult(
+        await submitAndRefresh({ disposition: "comment", comment: trimmed }),
+      );
+    },
+    // `submitAndRefresh` is rebuilt every render, but it closes over exactly
+    // these three — so listing them is listing it, and the callback is rebuilt
+    // whenever the transport it would use actually changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [submitAction, refBoundSubmit, refresh],
+  );
+
+  // The gate takes composer input only while the SERVER says it is open to this
+  // reader's comment. `canComment` is the same answer the floor's Comment button
+  // is gated on, so a reader who may look but not respond registers nothing and
+  // the composer can never bind to a gate that would refuse them.
+  const composerEligible =
+    state !== null &&
+    (state.state === "pending" || state.state === "restricted") &&
+    state.canComment;
+  const focusBinding = useComposerFocusBinding({
+    ref: view.ref,
+    eligible: composerEligible,
+    comment: composerComment,
+  });
+
   // Nothing renders until an authorized resolve has answered (S1's contract) —
   // not even a skeleton, because a placeholder that appears and then vanishes is
   // itself an existence oracle.
@@ -458,6 +568,7 @@ export function ReviewGateCard({
         return { ...current, marks: next, cleared: false };
       }),
     partition,
+    focusBinding,
   });
   // The SECOND absence: the reader may not read the target (or there is nothing
   // to read). No panel, no placeholder, no reason — the turn carries only prose.
@@ -491,6 +602,7 @@ function renderState(args: {
   marksCleared: boolean;
   onToggleMark: (id: string) => void;
   partition: SuggestionDecisionPartition | null;
+  focusBinding: ComposerFocusBinding;
 }): ReactElement | null {
   const {
     state,
@@ -503,6 +615,7 @@ function renderState(args: {
     marksCleared,
     onToggleMark,
     partition,
+    focusBinding,
   } = args;
 
   switch (state.state) {
@@ -563,6 +676,10 @@ function renderState(args: {
             marksCleared={marksCleared}
             onToggleMark={state.canDecide ? onToggleMark : undefined}
           />
+          {/* #2566 — the composer binding, drawn immediately above the floor it
+              mirrors: typing in the chat box is the same act as typing in the
+              rationale field and pressing Comment. */}
+          <ComposerFocusRow binding={focusBinding} />
           {/* §II/§IV — ONE gate-level decision floor, however many targets. */}
           <ReviewDecisionBar
             permissions={permissions}
@@ -581,6 +698,86 @@ function renderState(args: {
     case "absent":
       return null;
   }
+}
+
+// ---------------------------------------------------------------------------
+// The COMPOSER BINDING (cinatra#2566's composer-focus deliverable)
+// ---------------------------------------------------------------------------
+
+/**
+ * "Where does what I type go?" — answered on the card, next to the floor.
+ *
+ * THE CARD NAMES THE TARGET, WHICH IS THE WHOLE POINT. #2566: "Typing in the
+ * chat requests changes — and the card names WHICH item your message goes to."
+ * A composer that silently forwarded a message to whichever gate happened to
+ * register last would be routing a real decision-module call on a guess, so the
+ * binding is drawn where the reader can see it and take it back.
+ *
+ * THREE STATES, AND THEY ARE THE RESOLVER'S. Bound (a typed message comments on
+ * THIS review), unbound-and-ambiguous (several reviews are open, nothing routes
+ * until one is chosen), unbound-and-quiet (the binding is elsewhere, or the
+ * reader gave it back). None of them is invented here: each is a branch of
+ * `resolveComposerTarget`, which is also what the composer itself reads, so the
+ * sentence on screen and the behaviour on send cannot disagree.
+ *
+ * THE BINDING IS ALWAYS REFUSABLE. A single open review binds the composer with
+ * no press at all (#2566), and one press gives it back — because a lone review
+ * would otherwise turn every chat message into a comment, and on a single-target
+ * automatic gate a comment resolves as `changes_requested`. The reader must be
+ * able to say "not this" without deciding anything.
+ *
+ * NOTHING AT ALL WITHOUT A COMPOSER. `available` is false on every surface with
+ * no composer to bind — the review page, the run-detail page — and on a gate
+ * this reader may not comment on. A control that named a composer that is not
+ * there, or a comment that would be refused, is a control that fails on press.
+ */
+function ComposerFocusRow({ binding }: { binding: ComposerFocusBinding }): ReactElement | null {
+  if (!binding.available) return null;
+  return (
+    <div
+      data-conformance-id="review-composer-focus"
+      data-composer-bound={binding.bound ? "true" : "false"}
+      data-composer-ambiguous={binding.ambiguous ? "true" : "false"}
+      className="flex flex-wrap items-center gap-2 rounded-control border border-line bg-surface-strong px-4 py-3"
+    >
+      <Button
+        type="button"
+        variant={binding.bound ? "secondary" : "ghost"}
+        size="sm"
+        data-action="focus-review-composer"
+        aria-pressed={binding.bound}
+        onClick={binding.toggleFocus}
+      >
+        <MessageSquare aria-hidden="true" className="size-3.5" />
+        {binding.bound ? "Replying to this review" : "Reply from the chat box"}
+      </Button>
+      {binding.bound ? (
+        <span
+          data-conformance-id="review-composer-bound"
+          className="text-xs leading-relaxed text-muted-foreground"
+        >
+          Your next chat message becomes a comment on this review. Press again to chat normally.
+        </span>
+      ) : binding.ambiguous ? (
+        // The refusal the composer will give, said BEFORE the reader types it.
+        <span
+          role="status"
+          data-conformance-id="review-composer-ambiguous"
+          className="text-xs leading-relaxed text-mustard-ink"
+        >
+          More than one review is waiting. Choose the one you want to reply to — chat messages
+          are not routed until you do.
+        </span>
+      ) : (
+        <span
+          data-conformance-id="review-composer-unbound"
+          className="text-xs leading-relaxed text-muted-foreground"
+        >
+          Chat messages are not going to this review.
+        </span>
+      )}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
