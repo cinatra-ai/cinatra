@@ -1133,6 +1133,35 @@ describe("#2566 composer focus", () => {
     </LifecycleCardSurfaceProvider>
   );
 
+  /**
+   * Wait for the gate to be REGISTERED with the composer — the store's own
+   * truth, which is what a test that then reaches into the store depends on.
+   *
+   * Waiting on the painted row instead is a RACE, and it is the test's race and
+   * not the card's. The card computes `available` (the row) during render and
+   * registers in a passive effect, so the row lands in the commit and the
+   * registration lands in the effect flush that follows it. `waitFor` observes
+   * the DOM through a MutationObserver — a microtask off the commit — and can
+   * therefore return in the window between the two, where `getCommentAction`
+   * is still `undefined` and calling it throws. It is entered rarely and
+   * nondeterministically — measured on this card at 1-2 of 120 renders on an
+   * idle machine, on this branch AND on the code before it — which is why it
+   * surfaced as a single unreproducible CI failure (cinatra#2713, "a blank
+   * comment is refused without a request") rather than as a broken suite.
+   *
+   * The window is not a product defect: it is bounded by React's effect flush,
+   * so no reader can act inside it. The registration itself is on the RIGHT
+   * axis — the server's `canComment`, never the island's load event; the pin
+   * below ("the composer binding is live while the island is still loading")
+   * holds that axis.
+   */
+  async function waitForComposerRegistration(
+    store: ComposerFocusStore,
+    ref: string,
+  ): Promise<void> {
+    await waitFor(() => expect(typeof store.getCommentAction(ref)).toBe("function"));
+  }
+
   it("NO composer on the surface ⇒ no affordance and no registration at all", async () => {
     mockResolve({ state: "pending", canDecide: true, canComment: true });
     // The review page and the run-detail page mount no focus provider.
@@ -1167,9 +1196,7 @@ describe("#2566 composer focus", () => {
   it("ONE open review binds the composer on its own, and the card says so", async () => {
     mockResolve({ state: "pending", canDecide: true, canComment: true });
     const { store, container } = renderWithComposer(card(VIEW));
-    await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="review-composer-focus"]')).not.toBeNull(),
-    );
+    await waitForComposerRegistration(store, VIEW.ref);
     expect(store.getSnapshot().eligible).toEqual([VIEW.ref]);
     const row = container.querySelector('[data-conformance-id="review-composer-focus"]')!;
     expect(row.getAttribute("data-composer-bound")).toBe("true");
@@ -1271,10 +1298,8 @@ describe("#2566 composer focus", () => {
       );
     }) as unknown as typeof fetch;
 
-    const { store, container } = renderWithComposer(card(VIEW));
-    await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="review-composer-focus"]')).not.toBeNull(),
-    );
+    const { store } = renderWithComposer(card(VIEW));
+    await waitForComposerRegistration(store, VIEW.ref);
 
     const result = await store.getCommentAction(VIEW.ref)!("shorten the intro");
     // The SAME gate-scoped entry, the SAME opaque ref, the `comment` disposition
@@ -1295,12 +1320,73 @@ describe("#2566 composer focus", () => {
     expect(result.message).not.toContain(VIEW.ref);
   });
 
+  // cinatra#2713 — the island's load state and the composer binding are
+  // SEPARATE axes, and this pins that they stay separate.
+  //
+  // A preview that has not painted yet is not a reason a reader cannot reply.
+  // The registration hangs off the SERVER's answer (`canComment`) and nothing
+  // else; a later slice that gated it on the island — rendering the row only
+  // once the frame loaded, or moving the binding inside the island's loaded
+  // branch — would leave a reader looking at a skeleton with a composer that
+  // silently refuses their message. The card's own §II rule for the decision
+  // floor ("a preview that did not load is never drawn as a reason the reviewer
+  // cannot decide") applies to replying, identically.
+  it("the composer binding is live while the island is STILL LOADING", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    globalThis.fetch = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+      if (url === LIFECYCLE_VIEW_DECIDE_PATH) {
+        return new Response(
+          JSON.stringify({
+            outcome: { kind: "changes-requested", status: "requested", idempotent: false },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    const { store, container } = renderWithComposer(card(VIEW));
+    await waitForComposerRegistration(store, VIEW.ref);
+
+    // No `load` event has been fired on the iframe, so the island is still on
+    // its skeleton — the state this test is about.
+    expect(
+      container
+        .querySelector('[data-conformance-id="review-target-island"]')!
+        .getAttribute("data-island-load-state"),
+    ).toBe("loading");
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-skeleton"]'),
+    ).not.toBeNull();
+
+    // The affordance is drawn, and drawn BOUND — the reader is told their next
+    // chat message reaches this review while the preview is still arriving.
+    expect(
+      container
+        .querySelector('[data-conformance-id="review-composer-focus"]')!
+        .getAttribute("data-composer-bound"),
+    ).toBe("true");
+
+    // And it is not merely drawn: the registered action posts the comment on
+    // the card's own decision path, from the loading state.
+    const result = await store.getCommentAction(VIEW.ref)!("the intro is too long");
+    expect(result.ok).toBe(true);
+    expect(calls.find((c) => c.url === LIFECYCLE_VIEW_DECIDE_PATH)!.body).toMatchObject({
+      ref: VIEW.ref,
+      disposition: "comment",
+      comment: "the intro is too long",
+    });
+  });
+
   it("a blank comment is refused without a request", async () => {
     const fetchMock = mockResolve({ state: "pending", canDecide: true, canComment: true });
-    const { store, container } = renderWithComposer(card(VIEW));
-    await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="review-composer-focus"]')).not.toBeNull(),
-    );
+    const { store } = renderWithComposer(card(VIEW));
+    await waitForComposerRegistration(store, VIEW.ref);
     const before = fetchMock.mock.calls.length;
     const result = await store.getCommentAction(VIEW.ref)!("   ");
     expect(result.ok).toBe(false);
@@ -1317,10 +1403,8 @@ describe("#2566 composer focus", () => {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;
-    const { store, container } = renderWithComposer(card(VIEW));
-    await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="review-composer-focus"]')).not.toBeNull(),
-    );
+    const { store } = renderWithComposer(card(VIEW));
+    await waitForComposerRegistration(store, VIEW.ref);
     const result = await store.getCommentAction(VIEW.ref)!("please fix the heading");
     expect(result.ok).toBe(false);
     expect(result.message.length).toBeGreaterThan(0);
