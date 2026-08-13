@@ -144,6 +144,28 @@ const HOST_STANDARD_IDS = new Set([
   "review-composer-bound",
   "review-composer-ambiguous",
   "review-composer-unbound",
+  // cinatra#2713 — the island's OWN load state while its iframe document
+  // fetches: a skeleton before the `load` event, and a bounded-timeout retry
+  // panel if it never fires. A THIRD axis, orthogonal to this file's §V
+  // `review-gate-loading` / `review-gate-blocked` (those are the OUTER
+  // gate's own lifecycle; none of `review-gate-blocked`'s reasons is true
+  // when only the preview failed to arrive, which is why the timeout panel
+  // reuses that component's visual shape rather than the component itself —
+  // see the doc comment on `ReviewTargetIsland`).
+  //
+  // NAMED HONESTLY: no dedicated island mockup exists for this window in
+  // either `specs/app-lifecycle-cards.html` or `specs/app-components.html`'s
+  // Skeleton/Spinner section (checked) — the skeleton reuses that section's
+  // generic bar-skeleton language verbatim, and the timeout panel reuses
+  // `ReviewGateBlocked`'s shape. Whether that reuse is sufficient, or this
+  // state is owed its own drawing, is raised for the owner at eng#548 entry
+  // 335 (question 2: "Accept the standard loading pattern for the card?",
+  // recommended yes) — UNANSWERED as of this commit. Listed here, like the
+  // composer anchors above, so render→spec passes on the honestly-reused
+  // primitives while that question is open; if the owner orders a dedicated
+  // drawing instead, these ids move to SPEC_CONFORMANCE under its spec commit.
+  "review-target-island-skeleton",
+  "review-target-island-timeout",
 ]);
 
 function conformanceIdsIn(src: string): string[] {
