@@ -383,6 +383,13 @@ describe("Media route purge gate", () => {
       // artifact write site. It is a pure declarative data module with no
       // import of the write path; excluded like the two inventories above.
       "write-registry.ts",
+      // Dev-only lifecycle seed driver (cinatra#2683, quadruple-fenced
+      // /api/development/lifecycle-seed). It mints its fixtures through the
+      // CANONICAL writer on purpose — the seed exists to run the shipped
+      // createSemanticArtifact call so seeded envelopes are exactly what the
+      // production pipeline produces. Unreachable in production builds; not
+      // an alternate writer.
+      "test-support/lifecycle-seed-drivers.ts",
     ];
     const root = path.join(__dirname, "../../../..");
     const grepFilter = ALLOW_LIST.map((f) => `grep -v "${f}"`).join(" | ");
