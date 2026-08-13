@@ -17,6 +17,10 @@
  */
 
 import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
+import type {
+  ComposerCommentAction,
+  ComposerTargetResolution,
+} from "@cinatra-ai/agents/lifecycle-card-runtime";
 
 export type ClassifyGate = {
   fields: Array<{ name: string; type: string; title?: string; required: boolean }>;
@@ -278,4 +282,99 @@ export function createChatGateRegistry(): ChatGateRegistry {
       return openGates[openGates.length - 1];
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// COMPOSER ROUTING (cinatra#2566's composer-focus deliverable; the program
+// Done-definition is cinatra#2573: "multiple concurrent gates require explicit
+// composer focus").
+//
+// One PURE function decides where a typed message goes, because "which review
+// does this comment belong to" is a question a real decision-module call hangs
+// on, and a rule spread across a 1200-line component cannot be shown to be the
+// rule. Everything it needs is passed in: the focus resolution (the card
+// runtime's own reducer), the gate the chat registry currently holds, and a
+// lookup for a bound gate's comment action.
+// ---------------------------------------------------------------------------
+
+export type ComposerRouting =
+  /** No gate takes this message — normal chat routing, unchanged. */
+  | { kind: "chat" }
+  /** A HITL gate the run is blocked on: classify and submit as before. */
+  | { kind: "field-gate"; gate: ChatGateDescriptor }
+  /** The bound review gate takes the message VERBATIM as a comment. */
+  | { kind: "review-comment"; ref: string; comment: ComposerCommentAction }
+  /** Several reviews could take it and none is chosen: ask, never guess. */
+  | { kind: "refuse-ambiguous"; count: number };
+
+/**
+ * Where a composer message goes.
+ *
+ * THE ORDER IS THE WHOLE CONTRACT:
+ *
+ *  1. AN EXPLICITLY FOCUSED REVIEW WINS OUTRIGHT. The reader pressed a card and
+ *     said "my messages go here"; a field gate opening elsewhere must not
+ *     silently take that back.
+ *
+ *  2. AN OPEN FIELD GATE OUTRANKS AN *IMPLICIT* REVIEW BINDING. A run blocked on
+ *     a field is the binding the composer has always had, and #2566 lets a
+ *     single review bind with no press at all. Where the reader has not spoken,
+ *     the older behaviour is kept exactly — a field gate keeps the composer.
+ *
+ *  3. A SINGLE REVIEW BINDS ON ITS OWN (#2566: "exactly one eligible gate is
+ *     active OR the user explicitly focused a card").
+ *
+ *  4. AMBIGUITY IS REFUSED, NOT RESOLVED. Two or more reviews open, none chosen:
+ *     the message routes NOWHERE and the reader is told to pick a card. It is
+ *     not sent to "the latest" review — that is a decision-module call on a
+ *     coin flip — and it is not quietly turned into an LLM turn either, because
+ *     with reviews waiting the reader's message is most likely meant for one of
+ *     them and losing it into a chat turn is the silent failure this rule
+ *     exists to prevent.
+ *
+ * A resolved TARGET with no reachable comment action (the card unmounted between
+ * the resolve and the send) falls back to the field-gate/chat ladder rather than
+ * inventing a transport — the comment path belongs to the card, and a card that
+ * is gone has none.
+ */
+export function resolveComposerRouting(args: {
+  /** The card runtime's focus resolution, read at SEND time. */
+  target: ComposerTargetResolution;
+  /** What the chat gate registry holds right now. */
+  latestOpenGate: ChatGateDescriptor | undefined;
+  /** The bound card's own comment action, by ref. */
+  commentActionFor: (ref: string) => ComposerCommentAction | undefined;
+}): ComposerRouting {
+  const { target, latestOpenGate, commentActionFor } = args;
+  // A `review_comment` descriptor is NOT a field gate: it carries no fields to
+  // classify and its submit is comment-only. It is read as a review below, by
+  // ref, never fed to the field ladder.
+  const fieldGate =
+    latestOpenGate && latestOpenGate.kind !== "review_comment" ? latestOpenGate : undefined;
+
+  if (target.kind === "target") {
+    const comment = commentActionFor(target.ref);
+    if (comment && (target.explicit || fieldGate === undefined)) {
+      return { kind: "review-comment", ref: target.ref, comment };
+    }
+  }
+  if (fieldGate) return { kind: "field-gate", gate: fieldGate };
+  if (target.kind === "ambiguous") {
+    return { kind: "refuse-ambiguous", count: target.count };
+  }
+  return { kind: "chat" };
+}
+
+/**
+ * The line the composer says back when it refuses to guess. Kept beside the
+ * rule so the refusal and the reason cannot drift, and identifier-free because
+ * it is persisted into an LLM-visible transcript.
+ */
+export function ambiguousComposerRefusal(count: number): string {
+  return (
+    `${count} reviews are waiting for you, so this message was not sent anywhere. ` +
+    `Choose the review you want to reply to — press “Reply from the chat box” on its ` +
+    `card — and send it again. To keep chatting normally, press that control twice ` +
+    `on any one of them.`
+  );
 }

@@ -17,6 +17,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
+import type { ReactNode } from "react";
+
 import type { LifecycleCardState } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
 // The SHIPPED decision chrome uses the app router (`router.refresh()` after a
@@ -27,7 +29,12 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: routerRefresh, push: vi.fn(), replace: vi.fn() }),
 }));
 
-import { LifecycleCardSurfaceProvider } from "../lifecycle-card-runtime";
+import {
+  LifecycleCardSurfaceProvider,
+  LifecycleComposerFocusProvider,
+  createComposerFocusStore,
+  type ComposerFocusStore,
+} from "../lifecycle-card-runtime";
 import {
   LIFECYCLE_VIEW_DECIDE_PATH,
   REVIEW_TARGET_ISLAND_PATH,
@@ -943,5 +950,248 @@ describe("§VIII read-only presentations", () => {
       expect(container.querySelector('[data-conformance-id="review-gate-blocked"]')).not.toBeNull(),
     );
     expect(container.querySelector('[data-conformance-id="suggestion-chips"]')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// COMPOSER FOCUS (cinatra#2566's composer-focus deliverable; the program
+// Done-definition is cinatra#2573 — "multiple concurrent gates require explicit
+// composer focus").
+//
+// The card is the only thing that knows whether the SERVER says this reader may
+// comment, and it owns the comment transport. So it is the card that registers
+// the gate with the composer, and the card that draws which review a typed
+// message will reach. What is pinned here: the affordance exists only where a
+// composer does and only for a gate that would accept the comment; the binding
+// the card SAYS is the binding the resolver computes; and the comment the
+// composer sends travels the card's own decision path.
+// ---------------------------------------------------------------------------
+
+describe("#2566 composer focus", () => {
+  const OTHER_VIEW = {
+    viewType: "artifact_review_gate" as const,
+    schemaVersion: 1,
+    ref: "ref-def-456",
+  };
+
+  function renderWithComposer(
+    ui: ReactNode,
+    store = createComposerFocusStore(),
+  ): { store: ComposerFocusStore; container: HTMLElement } {
+    const { container } = render(
+      <LifecycleComposerFocusProvider store={store}>{ui}</LifecycleComposerFocusProvider>,
+    );
+    return { store, container };
+  }
+
+  const card = (view: typeof VIEW) => (
+    <LifecycleCardSurfaceProvider host="chat_thread">
+      <ReviewGateCard view={view} />
+    </LifecycleCardSurfaceProvider>
+  );
+
+  it("NO composer on the surface ⇒ no affordance and no registration at all", async () => {
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    // The review page and the run-detail page mount no focus provider.
+    const { container } = render(
+      <LifecycleCardSurfaceProvider host="page_gate_region">
+        <ReviewGateCard view={VIEW} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="review-decision-bar"]')).not.toBeNull(),
+    );
+    expect(container.querySelector('[data-conformance-id="review-composer-focus"]')).toBeNull();
+  });
+
+  it("a gate this reader may not COMMENT on registers nothing", async () => {
+    // §IV `restricted` with respond access withheld: the floor's Comment is
+    // dead, so a composer binding would be a control that fails on press.
+    mockResolve({
+      state: "restricted",
+      canDecide: false,
+      canComment: false,
+      reason: "You can view this review but not act on it.",
+    });
+    const { store, container } = renderWithComposer(card(VIEW));
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="review-gate-card"]')).not.toBeNull(),
+    );
+    expect(container.querySelector('[data-conformance-id="review-composer-focus"]')).toBeNull();
+    expect(store.getSnapshot().eligible).toEqual([]);
+  });
+
+  it("ONE open review binds the composer on its own, and the card says so", async () => {
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { store, container } = renderWithComposer(card(VIEW));
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="review-composer-focus"]')).not.toBeNull(),
+    );
+    expect(store.getSnapshot().eligible).toEqual([VIEW.ref]);
+    const row = container.querySelector('[data-conformance-id="review-composer-focus"]')!;
+    expect(row.getAttribute("data-composer-bound")).toBe("true");
+    expect(container.querySelector('[data-conformance-id="review-composer-bound"]')).not.toBeNull();
+    // The control is drawn PRESSED because the composer really is bound — and
+    // the press is what gives the binding back, which is the only escape from a
+    // lone review turning every chat message into a comment.
+    const control = screen.getByRole("button", { name: /replying to this review/i });
+    expect(control.getAttribute("aria-pressed")).toBe("true");
+    fireEvent.click(control);
+    await waitFor(() =>
+      expect(
+        container
+          .querySelector('[data-conformance-id="review-composer-focus"]')!
+          .getAttribute("data-composer-bound"),
+      ).toBe("false"),
+    );
+    expect(store.getSnapshot().released).toBe(true);
+    // Released, not ambiguous: the reader answered, so no prompt is shown.
+    expect(
+      container.querySelector('[data-conformance-id="review-composer-ambiguous"]'),
+    ).toBeNull();
+    expect(container.querySelector('[data-conformance-id="review-composer-unbound"]')).not.toBeNull();
+  });
+
+  it("TWO open reviews: neither is bound, and both say to choose one", async () => {
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { store, container } = renderWithComposer(
+      <>
+        {card(VIEW)}
+        {card(OTHER_VIEW)}
+      </>,
+    );
+    await waitFor(() => expect(store.getSnapshot().eligible).toHaveLength(2));
+    const rows = container.querySelectorAll('[data-conformance-id="review-composer-focus"]');
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.getAttribute("data-composer-bound")).toBe("false");
+      expect(row.getAttribute("data-composer-ambiguous")).toBe("true");
+    }
+    // The refusal the composer will give, said on the cards BEFORE the reader
+    // types it.
+    expect(
+      container.querySelectorAll('[data-conformance-id="review-composer-ambiguous"]'),
+    ).toHaveLength(2);
+    expect(container.querySelector('[data-conformance-id="review-composer-bound"]')).toBeNull();
+  });
+
+  it("pressing one card binds it — explicitly — and unbinds the other", async () => {
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { store, container } = renderWithComposer(
+      <>
+        {card(VIEW)}
+        {card(OTHER_VIEW)}
+      </>,
+    );
+    await waitFor(() => expect(store.getSnapshot().eligible).toHaveLength(2));
+    fireEvent.click(
+      screen.getAllByRole("button", { name: /reply from the chat box/i })[1]!,
+    );
+    await waitFor(() => expect(store.getSnapshot().focused).toBe(OTHER_VIEW.ref));
+
+    const rows = Array.from(
+      container.querySelectorAll('[data-conformance-id="review-composer-focus"]'),
+    );
+    expect(rows[0]!.getAttribute("data-composer-bound")).toBe("false");
+    expect(rows[1]!.getAttribute("data-composer-bound")).toBe("true");
+    // The unbound card no longer says "choose one" — the ambiguity is resolved,
+    // it just is not the chosen one.
+    expect(
+      rows[0]!.querySelector('[data-conformance-id="review-composer-ambiguous"]'),
+    ).toBeNull();
+    expect(rows[0]!.querySelector('[data-conformance-id="review-composer-unbound"]')).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: /replying to this review/i }).getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    // Pressing the bound card again gives the binding back.
+    fireEvent.click(screen.getByRole("button", { name: /replying to this review/i }));
+    await waitFor(() => expect(store.getSnapshot().focused).toBeNull());
+  });
+
+  it("the composer's comment travels the CARD's own decision path", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    globalThis.fetch = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+      if (url === LIFECYCLE_VIEW_DECIDE_PATH) {
+        return new Response(
+          JSON.stringify({
+            outcome: { kind: "changes-requested", status: "requested", idempotent: false },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    const { store, container } = renderWithComposer(card(VIEW));
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="review-composer-focus"]')).not.toBeNull(),
+    );
+
+    const result = await store.getCommentAction(VIEW.ref)!("shorten the intro");
+    // The SAME gate-scoped entry, the SAME opaque ref, the `comment` disposition
+    // the floor's Comment button posts — not a second transport.
+    const decide = calls.find((c) => c.url === LIFECYCLE_VIEW_DECIDE_PATH);
+    expect(decide).toBeDefined();
+    expect(decide!.body).toMatchObject({
+      ref: VIEW.ref,
+      disposition: "comment",
+      comment: "shorten the intro",
+    });
+    // A comment carries NO per-item partition — it does not resolve the gate, so
+    // it cannot carry terminal choices (the decision core refuses that).
+    expect(JSON.stringify(decide!.body)).not.toContain("suggestionDecisions");
+    // A comment that resolved into a repair says so, in a line with no ids.
+    expect(result.ok).toBe(true);
+    expect(result.message).toMatch(/changes requested/i);
+    expect(result.message).not.toContain(VIEW.ref);
+  });
+
+  it("a blank comment is refused without a request", async () => {
+    const fetchMock = mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { store, container } = renderWithComposer(card(VIEW));
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="review-composer-focus"]')).not.toBeNull(),
+    );
+    const before = fetchMock.mock.calls.length;
+    const result = await store.getCommentAction(VIEW.ref)!("   ");
+    expect(result.ok).toBe(false);
+    expect(fetchMock.mock.calls.length).toBe(before);
+  });
+
+  it("a refused comment reports the refusal, and never reads as success", async () => {
+    globalThis.fetch = vi.fn(async (input: unknown) => {
+      if (String(input) === LIFECYCLE_VIEW_DECIDE_PATH) {
+        return new Response("{}", { status: 403 });
+      }
+      return new Response(
+        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+    const { store, container } = renderWithComposer(card(VIEW));
+    await waitFor(() =>
+      expect(container.querySelector('[data-conformance-id="review-composer-focus"]')).not.toBeNull(),
+    );
+    const result = await store.getCommentAction(VIEW.ref)!("please fix the heading");
+    expect(result.ok).toBe(false);
+    expect(result.message.length).toBeGreaterThan(0);
+  });
+
+  it("a card that unmounts takes its composer binding with it", async () => {
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const store = createComposerFocusStore();
+    const { unmount } = render(
+      <LifecycleComposerFocusProvider store={store}>{card(VIEW)}</LifecycleComposerFocusProvider>,
+    );
+    await waitFor(() => expect(store.getSnapshot().eligible).toEqual([VIEW.ref]));
+    unmount();
+    expect(store.getSnapshot().eligible).toEqual([]);
+    expect(store.getCommentAction(VIEW.ref)).toBeUndefined();
   });
 });

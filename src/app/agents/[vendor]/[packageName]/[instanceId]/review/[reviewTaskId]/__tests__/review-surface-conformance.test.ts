@@ -128,6 +128,22 @@ const HOST_STANDARD_IDS = new Set([
   // (the decision core's own rule, said before the press instead of after).
   "suggestion-marks-cleared",
   "suggestion-chips-reject-note",
+  // cinatra#2566's COMPOSER-FOCUS deliverable — the row that says which review
+  // a typed chat message reaches, and the refusal when the reader has not said.
+  //
+  // NAMED HONESTLY: unlike the anchors above, these are NOT fixed by a ratified
+  // drawing. #2566 requires the BEHAVIOUR ("the card names WHICH item your
+  // message goes to"; two open gates route only after explicit focus) and S2
+  // recorded the focused composer as drawn nowhere. The row is therefore
+  // COMPOSED from shipped primitives — the card's own panel treatment and the
+  // shipped Button — and carries no invented pixel; the drawing itself still
+  // owes a design spec. On the review PAGE the row never renders at all (no
+  // composer, so no store, so `available` is false), which is why it appears
+  // here only as source the page's card file contains.
+  "review-composer-focus",
+  "review-composer-bound",
+  "review-composer-ambiguous",
+  "review-composer-unbound",
 ]);
 
 function conformanceIdsIn(src: string): string[] {
