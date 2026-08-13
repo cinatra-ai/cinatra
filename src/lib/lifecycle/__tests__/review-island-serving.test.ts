@@ -14,6 +14,7 @@ const rows = vi.fn();
 const getActiveConnectSiteById = vi.fn();
 const resolveActorGrantsForUserInOrg = vi.fn();
 const readUserIsPlatformAdmin = vi.fn();
+const widgetAuthSessionIsLive = vi.fn();
 
 vi.mock("@/lib/postgres-sync", () => ({
   runPostgresQueriesSync: (...a: unknown[]) => rows(...a),
@@ -34,6 +35,13 @@ vi.mock("@/lib/better-auth-db", () => ({
   readUserIsPlatformAdmin: (...a: unknown[]) => readUserIsPlatformAdmin(...a),
 }));
 vi.mock("@/lib/widget-auth-audit", () => ({ emitWidgetAuthAudit: vi.fn() }));
+// cinatra#2684 — the parent-session leaf. Mocked as a data switch, exactly as
+// the capture probe's suite mocks it, so a SIGN-OUT is expressible here as what
+// it is: the session simply stops being live.
+vi.mock("@/lib/widget-session-binding", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/widget-session-binding")>();
+  return { ...actual, widgetAuthSessionIsLive: (id: unknown) => widgetAuthSessionIsLive(id) };
+});
 
 import { encodeLifecycleGateRef } from "../lifecycle-card-ref";
 import { mintReviewIslandCredential } from "../review-island-credential";
@@ -71,6 +79,8 @@ function tokenRow(overrides: Record<string, unknown> = {}) {
     aud: `${WIDGET_BROKER_ROUTE_PATH} ${WIDGET_LIFECYCLE_READ_ROUTE_PATH}`,
     scope: `${AGENT_SCOPE} ${WIDGET_LIFECYCLE_READ_SCOPE}`,
     credential_version: 3,
+    // The parent sign-in this `cwu_` row belongs to (cinatra#2684).
+    auth_session_id: "sess-1",
     not_expired: true,
     ...overrides,
   };
@@ -102,6 +112,7 @@ beforeEach(() => {
     projectGrants: [],
   });
   readUserIsPlatformAdmin.mockResolvedValue(false);
+  widgetAuthSessionIsLive.mockReturnValue(true);
 });
 
 describe("the happy path", () => {
@@ -177,6 +188,39 @@ describe("LIVE PRINCIPAL — the token row is the revocation handle", () => {
     expect(
       await resolveIslandCredentialReader({ credential: credential(), ref: ref() }),
     ).toBeNull();
+  });
+
+  // cinatra#2684, adopted here at the 2026-08-13 rebase. THIS IS THE CASE THE
+  // ORIGINAL SLICE DISCLOSED AND COULD NOT CLOSE: an ordinary Cinatra sign-out
+  // did not touch the `cwu_` row, so a copied island URL kept painting for the
+  // rest of its 120 seconds. The binding landed separately; the island consults
+  // it, so the sign-out now stops the very next paint.
+  it("REFUSES once the PARENT SIGN-IN is gone — a copied URL dies with the session", async () => {
+    widgetAuthSessionIsLive.mockReturnValue(false); // the sign-out
+    expect(
+      await resolveIslandCredentialReader({ credential: credential(), ref: ref() }),
+    ).toBeNull();
+    // Asked about THIS row's session, not some ambient one.
+    expect(widgetAuthSessionIsLive).toHaveBeenCalledWith("sess-1");
+  });
+
+  it("REFUSES a row that names NO parent session at all", async () => {
+    // The predicate answers `dead` for an unbound row, and the island must not
+    // treat "nobody recorded a session" as "the session is fine".
+    widgetAuthSessionIsLive.mockImplementation((id: unknown) => Boolean(id));
+    setTokenRow(tokenRow({ auth_session_id: null }));
+    expect(
+      await resolveIslandCredentialReader({ credential: credential(), ref: ref() }),
+    ).toBeNull();
+  });
+
+  // The POSITIVE twin, so the two refusals above are not passing vacuously: the
+  // same row with a live parent still resolves a reader.
+  it("but the SAME row with a live parent still paints", async () => {
+    widgetAuthSessionIsLive.mockReturnValue(true);
+    expect(
+      await resolveIslandCredentialReader({ credential: credential(), ref: ref() }),
+    ).not.toBeNull();
   });
 
   it("REFUSES a token that does not carry the LIFECYCLE grant", async () => {

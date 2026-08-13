@@ -52,6 +52,14 @@ const WIDGET_PRINCIPAL: WidgetPrincipal = {
   assistantHandle: "wordpress",
   instancesConfigKey: "wordpress",
   lifecycleRead: true,
+  /**
+   * The reader's REAL platform tier (cinatra#2674, epic #2564 S8e). REQUIRED on
+   * the principal since the widget floor ended, deliberately: a construction
+   * site has to answer the question rather than inherit an answer. This fixture
+   * is an ORDINARY member, which is also the narrow case — the elevated one is
+   * asserted in the platform-parity suites, not by re-running this dispatch.
+   */
+  platformRole: "member",
 };
 
 /** The AG-UI run id of the turn under test — #2687's `run` seal. */

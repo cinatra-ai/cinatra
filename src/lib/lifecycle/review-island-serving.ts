@@ -16,10 +16,19 @@ import "server-only";
 //   2. THE PRINCIPAL MUST STILL BE LIVE. The `cwu_` row is re-read by its `jti`
 //      — the same revocation handle the capture capability uses — and must still
 //      be unexpired, still carry the LIFECYCLE grant (audience AND scope, through
-//      the one vocabulary, not a second copy of the rule), and still be bound to
-//      an active connect site with the same org, origin, client and credential
-//      generation. Signing out, revoking the site or rotating its `cnx_` stops
-//      the island at the next paint.
+//      the one vocabulary, not a second copy of the rule), still have a LIVE
+//      PARENT SIGN-IN (cinatra#2684's binding, the same predicate the capture
+//      probe consults), and still be bound to an active connect site with the
+//      same org, origin, client and credential generation. Signing out, revoking
+//      the site or rotating its `cnx_` stops the island at the next paint.
+//
+//      THE SIGN-OUT HALF OF THAT SENTENCE IS NEW, and it is the correction of a
+//      residual this slice originally disclosed rather than fixed. S8e was
+//      written against a tree where a `cwu_` row outlived an ordinary sign-out,
+//      so a copied island URL stayed usable for the remainder of its 120 s. The
+//      binding that closes it landed separately (#2684); this module adopts it
+//      at the 2026-08-13 rebase, which is why the residual no longer appears
+//      below and must not be re-stated as though it still held.
 //   3. EVERY SEALED BINDING MUST STILL AGREE. Site, client, instance, agent, org
 //      and user are compared one by one against the live row. A re-bound or
 //      re-pointed site cannot keep painting under the old binding.
@@ -55,6 +64,18 @@ import {
 import { getPostgresConnectionString, postgresSchema } from "@/lib/postgres-config";
 import { ensurePostgresSchema } from "@/lib/postgres-schema-init";
 import { quotePostgresIdentifier, runPostgresQueriesSync } from "@/lib/postgres-sync";
+// cinatra#2684 — the parent-sign-in binding. A `cwu_` row belongs to the Better
+// Auth session that authorized it, and anything reading such a row TO AUTHORIZE
+// something must consult that binding. This is the THIRD reader the #2684
+// structural bar was written for, and it is named in that test by anticipation:
+// a surface that cannot present the bearer seals the `jti` instead. Adopting the
+// predicate here is what closes the residual S8e disclosed — that an ordinary
+// Cinatra sign-out left a copied island URL usable for the rest of its life.
+import {
+  normalizeWidgetAuthSessionId,
+  widgetAuthSessionIsLive,
+  WIDGET_AUTH_SESSION_COLUMN,
+} from "@/lib/widget-session-binding";
 import { decodeLifecycleGateRef } from "@/lib/lifecycle/lifecycle-card-ref";
 import { buildWidgetLifecycleRoleHints } from "@/lib/lifecycle/widget-lifecycle-actor";
 import {
@@ -106,6 +127,7 @@ function readLiveIslandPrincipal(jti: string): LiveIslandPrincipal | null {
           text:
             `SELECT user_id, org_id, site_id, client, instance_id, site_origin, ` +
             `agent_slug, aud, scope, credential_version, ` +
+            `${quotePostgresIdentifier(WIDGET_AUTH_SESSION_COLUMN)}, ` +
             `(expires_at > now()) AS not_expired ` +
             `FROM ${qTable(USER_TOKEN_TABLE)} WHERE jti = $1 LIMIT 1`,
           values: [jti],
@@ -134,6 +156,26 @@ function readLiveIslandPrincipal(jti: string): LiveIslandPrincipal | null {
     if (!tokenSetHas(row.scope, WIDGET_LIFECYCLE_READ_SCOPE)) return null;
     const baseScope = widgetUserBaseScope(agentSlug);
     if (!baseScope || !tokenSetHas(row.scope, baseScope)) return null;
+
+    // THE PARENT SIGN-IN, still there (cinatra#2684). A credential derived from
+    // a sign-in must not outlive it, and this is the same predicate, from the
+    // same leaf, in the same position in the order as the capture probe next
+    // door. A row naming no session cannot prove a live parent and is refused
+    // too. READ-ONLY, like the rest of this probe: the token verifier deletes a
+    // dead row, this one only declines to paint from it.
+    //
+    // IT IS WHAT MAKES THE 120-SECOND WINDOW HONEST. Without it a copied island
+    // URL stayed usable for its whole life after the person signed out — the
+    // residual S8e wrote down and could not fix, because the binding did not
+    // exist yet. #2684 landed it; the island adopts it here rather than being
+    // the one reader that kept the old behaviour.
+    if (
+      !widgetAuthSessionIsLive(
+        normalizeWidgetAuthSessionId(row[WIDGET_AUTH_SESSION_COLUMN]),
+      )
+    ) {
+      return null;
+    }
 
     // Live site re-check — revoke / re-bind / rotate kills the island at the
     // next paint, exactly as it kills the token at the next turn.

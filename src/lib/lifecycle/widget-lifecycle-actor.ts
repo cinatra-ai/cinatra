@@ -328,14 +328,26 @@ export async function resolveWidgetLifecycleActorContext(input: {
  * `null` when the credential cannot be expressed (a missing signing key, an
  * out-of-bounds id): the caller renders no island rather than a broken frame.
  *
- * IT HAS NO CALLER IN THIS CHANGE SET, AND THAT IS RECORDED RATHER THAN HIDDEN
- * (codex round 0, finding 1). The consumer is the widget branch of the lifecycle
- * RESOLVE route and the widget lifecycle card host — both of which land in S8d
- * (cinatra#2577, PR #2668), which this slice deliberately does not merge in. So
- * S8e ships the credential, its verification and the island's acceptance of it,
- * and the island paints on a true third-party site once S8d's branch calls this
- * function with the ref it just authorized. Until then island parity holds on
- * same-site and subdomain deployments, exactly as the issue comment recorded.
+ * IT STILL HAS NO CALLER, AND THE REASON CHANGED AT THE 2026-08-13 REBASE ONTO
+ * S8D + S8F — so it is restated rather than left reading as though it were still
+ * true (codex round 0, finding 1 raised the absence originally).
+ *
+ * When S8e was written the consumer did not exist: it was S8d's (cinatra#2577,
+ * PR #2668), which that branch deliberately did not merge in. S8d HAS SINCE
+ * LANDED (8a83cf090), and with it the card's own island addressing — but that
+ * addressing composes the `src` CLIENT-SIDE from the ref plus the frame's two
+ * public disambiguators (`reviewTargetIslandSrc` in
+ * `packages/agents/src/review-gate-card.tsx`). It carries no credential, because
+ * a client cannot mint one. So the seam is still unwired, for a NEW reason: the
+ * resolve route would have to hand the card a server-minted island URL and the
+ * card would have to prefer it, which is a change to the resolve contract and
+ * not part of this rebase.
+ *
+ * WHAT THAT MEANS TODAY, stated plainly: S8e ships the credential, its
+ * verification and the island's ACCEPTANCE of it, and the island paints on a
+ * true third-party site once a caller hands it one. Until then island parity
+ * holds on same-site and subdomain deployments — where the cookie path reaches
+ * it — exactly as the issue comment recorded.
  */
 export function mintWidgetReviewIslandUrl(input: {
   claims: UserTokenClaims;
