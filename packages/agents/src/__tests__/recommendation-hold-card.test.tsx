@@ -516,6 +516,38 @@ describe("the retired poll leaves nothing behind on the hosts (AC-1 / AC-5)", ()
     expect(stepper).toMatch(/<RecommendationHoldCard/);
   });
 
+  it("the run-detail SCREEN has no parallel read, no prefetch and no direct chip-row mount", () => {
+    // THE FOURTH RENDERER (cinatra#2573, epic #2564 D-1; found by the S7
+    // acceptance lane). `instance-screens.tsx` ran its own park read, its own
+    // actor-scoped candidate prefetch and its own confirmed/skipped derivation,
+    // then mounted the row directly — a second implementation of the same
+    // interaction on the one surface where the HELD state has no other host (a
+    // held run is `pending_input`, and `AgenticRunPanel` renders only above that
+    // status). All of it is deleted; what remains is the card under a declared
+    // host, so this screen draws the interaction the way every other host does.
+    const instanceScreens = read("instance-screens.tsx");
+    expect(instanceScreens).not.toMatch(/<RunRecommendationChipRow/);
+    expect(instanceScreens).not.toMatch(/getRunRecommendations\b/);
+    expect(instanceScreens).not.toMatch(/resolveRecommendationCandidateSkillIds/);
+    expect(instanceScreens).not.toMatch(/encodeRecommendationHoldRef/);
+    expect(instanceScreens).not.toMatch(/readRunSelectedSkillRevisions/);
+    expect(instanceScreens).not.toMatch(/hasRunRecommendationSkip/);
+    expect(instanceScreens).not.toMatch(/setInterval/);
+    // The one mount that remains is the card, under its own declared host — and
+    // it is GATED, so the branch whose panel already declares `run_card` does not
+    // draw the row twice (`screenHostsRecommendationCard`, pinned in
+    // `instance-screens-recommendation-host.test.ts`).
+    expect(instanceScreens).toMatch(/<RecommendationHoldCard/);
+    expect(instanceScreens).toMatch(/host="run_card"/);
+    expect(instanceScreens).toMatch(
+      /screenHostsRecommendationCard\(runDetailPanel\)\s*\?\s*\(\s*<LifecycleCardSurfaceProvider host="run_card">\s*<RecommendationHoldCard/,
+    );
+    // The park is still read — for ONE thing: the Run button is withheld while a
+    // hold is live. That is the run's dispatchability, not a rendering of the
+    // interaction, and it is the only surviving use.
+    expect([...instanceScreens.matchAll(/readRecommendationParkForRun/g)]).toHaveLength(2);
+  });
+
   it("the card has no repeating timer — the retired poll cannot come back through it", () => {
     const card = read("run-recommendation-chip-row.tsx");
     // The behavioural half of this invariant ("a successful resolve schedules
