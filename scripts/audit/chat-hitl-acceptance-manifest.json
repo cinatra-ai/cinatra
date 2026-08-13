@@ -427,6 +427,18 @@
      "testName": "draws NO DOM when the widget resolve is rejected (401 — token expired)"
     },
     {
+     "file": "src/app/api/assistants/runs/[runId]/stream/__tests__/route.resume-revocation.test.ts",
+     "testName": "TOKEN: the sign-in behind the resume token ends after the DATA_PART emits — the reconnect fails closed (cinatra#2684)"
+    },
+    {
+     "file": "src/app/api/assistants/runs/[runId]/stream/__tests__/route.resume-revocation.test.ts",
+     "testName": "SITE + LINK: the connect site is suspended, or its credential is rotated, after the DATA_PART emits — the reconnect fails closed (cinatra#2575)"
+    },
+    {
+     "file": "src/app/api/assistants/runs/[runId]/stream/__tests__/route.resume-revocation.test.ts",
+     "testName": "MEMBERSHIP: the org membership is removed after the DATA_PART emits — the reconnect fails closed (cinatra#2575)"
+    },
+    {
      "file": "src/app/api/assistants/runs/[runId]/stream/__tests__/route.resume-token.test.ts",
      "testName": "probes the LIVE session the token names, not just its own signature"
     },
@@ -447,7 +459,7 @@
      "testName": "401s once the sign-in behind the token has ended, and the control streams"
     }
    ],
-   "note": "ALL FOUR cells are proven at the seam that answers each. The fourth — STREAM RESUME after a revocation that lands between the DATA_PART emission and the resume — is answered at the resume seam itself, which is the seam this criterion names: the resume route probes the LIVE session the token seals on EVERY resume rather than trusting its own signature, 401s a perfectly valid run-bound resume token whose widget session has since been withdrawn, 401s once the parent sign-in behind the token has ended, answers a withdrawn session byte-identically to a forged token (no oracle for which it was), and never looks the run's turn row up at all. Those are the cinatra#2575 AC-4 cases in route.resume-token.test.ts (landed `8a83cf090`). The earlier `partial` on this row asked for a test that drives a revocation INTO an open stream; a revoked stream is observed when the reader RESUMES it, so the resume seam is that case rather than a proxy for it. Card refetch, the island paint, capture GET and the decision stay proven where they were."
+   "note": "All four surfaces the criterion names now carry a DIRECT fail-closed proof at their own seam: CARD REFETCH and the island paint (review-island-serving refuses a swept or expired cwu_ row, a dead parent sign-in, a revoked site, a rotated credential generation and a lost membership), CAPTURE GET (capture-capability-serving refuses a gone cwu_ row, a moved binding and a reader who lost run access between mint and fetch), DECISION (the decide route re-runs run READ for the same actor before the decision op and answers a denial byte-identically to a forged ref) and now STREAM RESUME (route.resume-revocation.test.ts, closed for S7 AC-10 2026-08-13): an open broker stream that already delivered a lifecycle DATA_PART, reconnected to after a TOKEN (the sign-in behind the resume token ends, cinatra#2684), a SITE+LINK (site suspended or its credential rotated — collapsed into the one jti-keyed probe that answers both, exactly as widget-broker-liveness.test.ts's own suite collapses them) or a MEMBERSHIP (org role removed) revocation, 401s BEFORE the durable event log is re-read: no replay of the DATA_PART or any later frame, a fixed 'Unauthorized' body carrying no ref/run/reviewTask identifier, and the response is never text/event-stream. Corroborated by route.resume-token.test.ts's cinatra#2575 AC-4 cases at the same seam (landed `8a83cf090`): the resume route probes the LIVE session the token seals on every resume rather than trusting its own signature, 401s a perfectly valid run-bound token whose widget session has since been withdrawn, answers a withdrawn session byte-identically to a forged token (no oracle for which it was), and never looks the run's turn row up for a withdrawn session."
   },
   {
    "criterion": "Wrong-audience and cross-gate/cross-site action capabilities are refused; copied/expired/revoked capture URLs fail.",
