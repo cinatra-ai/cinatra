@@ -62,3 +62,22 @@ Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
 Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
 Assisted-by: Claude Code (claude-sonnet-5)
 Correction-for: df27cbee808f2b21d957fd5dc0d48db7d376ccd7```
+
+---
+
+## Correction for `409b1f2ebf13b24a2ec9d35d4588bad0fdc8339b`
+
+```
+correction: truthful-attribution record for 409b1f2eb
+
+The record on 409b1f2eb ("test(archive): #1943 the live three-role proof — row 15 green, strict RE") is incomplete under the
+ratified record grammar: the Accountable line is missing.
+This commit carries the corrected record verbatim. The change itself was approved,
+gated, and is untouched — this corrects the RECORD only.
+
+Gate-suite: cinatra-core@2026.08.1
+Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Codex (gpt-5.6-sol)
+Correction-for: 409b1f2ebf13b24a2ec9d35d4588bad0fdc8339b```
