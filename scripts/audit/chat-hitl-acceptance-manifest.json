@@ -1,0 +1,562 @@
+{
+ "note": "Chat-HITL PROGRAM ACCEPTANCE manifest (cinatra#2573, epic #2564 S7). One row per LITERAL acceptance criterion in #2573's issue body — 16, verbatim and in order; the gate pins them against its own CANONICAL_CRITERIA so a row can never drift from the issue's wording. `disposition` is the row's honest state: MAPPED (already fully proven by a landed slice's own test — S7 never re-authors what a sibling owns), BUILT (S7's own artifact, because the criterion had no owner), MISSING (not proven; `gap` says why, in a sentence, and `partial` marks a criterion whose clauses are only partly met). Hand-authored against the issue text — there is no regeneration mode and there must not be one, because the rows are claims a human makes, not facts a scanner discovers. Every {file, testName} pair is re-verified against the real tree on every run of the gate.",
+ "issue": 2573,
+ "epic": 2564,
+ "specCommit": "design@6c20871b4108176c1d0193f19ecd2947f6c6355f specs/app-lifecycle-cards.html",
+ "version": 1,
+ "rows": [
+  {
+   "criterion": "Chat-dispatch → typed chip-row hold → confirm → artifact → review card renders island + capture pair → focused-composer comment → `changes_requested` → repair successor in the same chat → verification chip → approve → effects release.",
+   "disposition": "MISSING",
+   "partial": true,
+   "gap": "Every LINK of the chain is proven, and the chain as ONE production-equivalent Playwright journey is not. The links: the hold parks and releases (recommendation-hold.integration), the review card renders the island + the pinned capture pair on all three first-party hosts (review-gate-card), changes_requested closes the base gate and pins a repair successor and approve releases the held effect (lifecycle-repair.integration), the successor mints the verification record (lifecycle-verification.integration). What is NOT proven is the WHOLE walk on one live chat thread, and one step of it is not merely unproven but UNIMPLEMENTED: the 'focused-composer comment'. agentic-run-panel.tsx still publishes a NULL composer descriptor for a marked review gate (the cinatra#1796 single-resume guard) and its own comment records that binding the composer to a FOCUSED card 'is a separate, deliberate step (#2566's composer-focus deliverable)' — that step never landed. The comment IS reachable in chat, from the card's own decision bar; the composer-bound form of it is not. Defect D-2 in the S7 report.",
+   "unitProofs": [
+    {
+     "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
+     "testName": "pending: the target island AND the one gate-level floor, live"
+    },
+    {
+     "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
+     "testName": "draws the SAME card on every first-party host, differing only in the frame"
+    }
+   ],
+   "integrationProofs": [
+    {
+     "file": "packages/agents/src/__tests__/recommendation-hold.integration.test.ts",
+     "testName": "AC-1/AC-2: human-present run PARKS, confirm writes the selection + RELEASES"
+    },
+    {
+     "file": "packages/agents/src/__tests__/lifecycle-repair.integration.test.ts",
+     "testName": "REPAIR: full round-trip — changes_requested closes the attempt + holds the effect; the repair pins a successor gate; approve releases"
+    },
+    {
+     "file": "packages/agents/src/__tests__/lifecycle-verification.integration.test.ts",
+     "testName": "V1 AUTO: a landed repair AUTOMATICALLY writes a verification record bound to the successor gate (the run rail's entry)"
+    }
+   ],
+   "trackingIssue": 2573
+  },
+  {
+   "criterion": "Path-2: background gate pulled into a chat → decided there; the review page gate region renders the same card component.",
+   "disposition": "MAPPED",
+   "unitProofs": [
+    {
+     "file": "src/lib/lifecycle/__tests__/lifecycle-pull-mcp.test.ts",
+     "testName": "renders a review gate as an artifact_review_gate DATA_PART"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/lifecycle-pull-mcp.test.ts",
+     "testName": "lists ONLY the gates whose run the caller may read"
+    },
+    {
+     "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
+     "testName": "uses the HOST's bound action when one is supplied (the review page's unchanged transport)"
+    },
+    {
+     "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
+     "testName": "a HOST action that lands also re-resolves (all three hosts settle alike)"
+    }
+   ],
+   "gateProofs": [
+    {
+     "file": "scripts/audit/chat-hitl-one-card-gate.mjs",
+     "testName": "page-direct-decision-composition"
+    }
+   ]
+  },
+  {
+   "criterion": "Propose → Confirm → scheduled fire; no-fire-without-confirm; token replay + concurrent double-Confirm return the original run; drain crash/retry idempotence incl. arm-before-expose and due-during-drain.",
+   "disposition": "MAPPED",
+   "unitProofs": [
+    {
+     "file": "src/lib/__tests__/trigger-schedule-proposal-token.test.ts",
+     "testName": "gives every mint a DIFFERENT consume identity, so Adjust re-proposing can never collide with what it replaced"
+    },
+    {
+     "file": "packages/agents/src/__tests__/trigger-schedule-install-order.test.ts",
+     "testName": "arms STRICTLY before exposing — the property stated as an index comparison"
+    },
+    {
+     "file": "packages/agents/src/__tests__/trigger-schedule-install-order.test.ts",
+     "testName": "CLOSES rather than re-installs when a schedule we already armed has since fired — codex round-2 finding"
+    }
+   ],
+   "integrationProofs": [
+    {
+     "file": "packages/agents/src/__tests__/trigger-schedule-proposal.integration.test.ts",
+     "testName": "SINGLE USE: a second Confirm on the same proposal creates NO second run and answers with the original"
+    },
+    {
+     "file": "packages/agents/src/__tests__/trigger-schedule-proposal.integration.test.ts",
+     "testName": "REPLAY: confirming an OLD proposal after a newer one was confirmed still yields only its own single run"
+    },
+    {
+     "file": "packages/agents/src/__tests__/trigger-schedule-proposal.integration.test.ts",
+     "testName": "CONCURRENCY: two Confirms racing on one proposal produce exactly one run"
+    },
+    {
+     "file": "packages/agents/src/__tests__/trigger-schedule-proposal.integration.test.ts",
+     "testName": "ARM BEFORE EXPOSE: `armed_at` is stamped before the install is marked done, and a done intent always carries it"
+    },
+    {
+     "file": "packages/agents/src/__tests__/trigger-schedule-proposal.integration.test.ts",
+     "testName": "RECONCILIATION: a crashed drain leaves the intent claimable, and the next pass finishes it"
+    },
+    {
+     "file": "packages/agents/src/__tests__/trigger-schedule-proposal.integration.test.ts",
+     "testName": "ORDERING IS ENFORCED BY THE DATABASE: an unarmed intent cannot be marked done — codex round-1 finding"
+    }
+   ]
+  },
+  {
+   "criterion": "Late stream subscription + reload re-render (decided gate shows resolved state); multiple concurrent gates require explicit composer focus.",
+   "disposition": "MISSING",
+   "partial": true,
+   "gap": "The first clause is fully proven; the second is UNIMPLEMENTED. Late subscription and reload re-render are covered: the run stream answers a late joiner with the CURRENT hold as its first frame and reconstructs it on a Last-Event-ID reconnect, and the card re-resolves the authoritative state on mount/focus so a decided gate settles to the server's answer rather than a stale snapshot. The second clause — 'multiple concurrent gates require explicit composer focus' — has no implementation to test: agentic-run-panel.tsx publishes a NULL composer descriptor for every marked review gate, so no gate is ever composer-bound, focused or otherwise. S2 (#2566) named 'composer focus' as its own deliverable and deferred it in a source comment; it never landed. Defect D-2 in the S7 report.",
+   "unitProofs": [
+    {
+     "file": "src/app/api/agents/runs/[runId]/stream/__tests__/route.recommendation-hold.test.ts",
+     "testName": "emits the CURRENT hold as the first frame for a late joiner"
+    },
+    {
+     "file": "src/app/api/agents/runs/[runId]/stream/__tests__/route.recommendation-hold.test.ts",
+     "testName": "reconstructs the hold on a Last-Event-ID RECONNECT too"
+    },
+    {
+     "file": "src/app/api/agents/runs/[runId]/stream/__tests__/route.recommendation-hold.test.ts",
+     "testName": "DROPS a decided hold replayed out of the log (a re-parked run shows only its current hold)"
+    },
+    {
+     "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
+     "testName": "a landed decision RE-RESOLVES the card, so it settles to the server's answer"
+    },
+    {
+     "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
+     "testName": "settled: 'no longer open' with a Refresh, and NO decision floor"
+    }
+   ],
+   "trackingIssue": 2573
+  },
+  {
+   "criterion": "Island renders build-map, runtime, and floor renderer classes; refuses cross-origin framing.",
+   "disposition": "MAPPED",
+   "unitProofs": [
+    {
+     "file": "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-surface-conformance.test.ts",
+     "testName": "maps build-map→native chip, runtime→marketplace chip, floor→generic-floor anchor"
+    },
+    {
+     "file": "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-surface-conformance.test.ts",
+     "testName": "the representation slot mounts through the host ReviewTargetMount with a generic-floor fallback"
+    },
+    {
+     "file": "src/app/lifecycle/review-island/__tests__/page.test.tsx",
+     "testName": "renders EVERY pinned target as a sibling panel — the gate's whole set"
+    },
+    {
+     "file": "src/lib/__tests__/review-island-frame-ancestors.test.ts",
+     "testName": "names 'self' and nothing else when no widget frame is declared"
+    },
+    {
+     "file": "src/lib/__tests__/review-island-frame-ancestors.test.ts",
+     "testName": "an UNREGISTERED frame (the resolver refuses) gets the first-party wall, not a widened one"
+    },
+    {
+     "file": "src/lib/__tests__/review-island-frame-ancestors.test.ts",
+     "testName": "an attacker-supplied origin in the query is not a policy input"
+    }
+   ]
+  },
+  {
+   "criterion": "Multi-target Comment semantics match the page exactly; same-fingerprint idempotent retry AND different-fingerprint conflict races (page vs card vs widget).",
+   "disposition": "MAPPED",
+   "unitProofs": [
+    {
+     "file": "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-surface-conformance.test.ts",
+     "testName": "the action routes the Comment path to changes_requested ONLY when fenced + a single-target lifecycle gate"
+    },
+    {
+     "file": "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-surface-conformance.test.ts",
+     "testName": "the base Comment path stays byte-identical — a plain comment is still annotated, gate stays pending"
+    },
+    {
+     "file": "src/lib/artifacts/__tests__/artifact-review-decision.test.ts",
+     "testName": "fingerprint is order-independent in the targets (a reordered retry is still idempotent)"
+    },
+    {
+     "file": "src/lib/artifacts/__tests__/artifact-review-decision.test.ts",
+     "testName": "a gate resolved by a DIFFERENT decision (fingerprint mismatch) → gate-conflict, NO commit"
+    },
+    {
+     "file": "src/lib/artifacts/__tests__/artifact-review-decision.test.ts",
+     "testName": "an IDENTICAL resubmission is idempotent — the resolved gate's fingerprint matches"
+    },
+    {
+     "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
+     "testName": "with no host action, posts the OPAQUE REF to the gate-scoped entry"
+    }
+   ],
+   "integrationProofs": [
+    {
+     "file": "packages/agents/src/__tests__/suggestion-decision-cas.integration.test.ts",
+     "testName": "an IDENTICAL resubmission is idempotent and duplicates no row"
+    },
+    {
+     "file": "packages/agents/src/__tests__/suggestion-decision-cas.integration.test.ts",
+     "testName": "a DIFFERENT partition on the resolved gate CONFLICTS and changes nothing"
+    },
+    {
+     "file": "packages/agents/src/__tests__/suggestion-decision-cas.integration.test.ts",
+     "testName": "exactly one commits; the ledger and the intent reflect only the winner"
+    }
+   ]
+  },
+  {
+   "criterion": "Forged/replayed suggestion IDs rejected; persisted refusal payloads contain no lifecycle identifiers (assert on `assistant_turns.content`).",
+   "disposition": "MAPPED",
+   "unitProofs": [
+    {
+     "file": "src/lib/artifacts/__tests__/artifact-review-decision.test.ts",
+     "testName": "S6b — forged / replayed suggestion ids are refused PRE-CAS"
+    },
+    {
+     "file": "src/lib/assistant-runtime/__tests__/ag-ui-sink-adapter.test.ts",
+     "testName": "mints NOTHING on the refusal path, and the persisted result carries no identifiers"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/lifecycle-pull-mcp.test.ts",
+     "testName": "carries no identifier, count or reason — the persisted result is inert"
+    }
+   ],
+   "integrationProofs": [
+    {
+     "file": "packages/agents/src/__tests__/suggestion-decision-cas.integration.test.ts",
+     "testName": "a forged id leaves the gate PENDING and writes nothing"
+    },
+    {
+     "file": "packages/agents/src/__tests__/suggestion-decision-cas.integration.test.ts",
+     "testName": "an id belonging to ANOTHER gate's snapshot is refused (no cross-gate replay)"
+    }
+   ]
+  },
+  {
+   "criterion": "A signed-in reviewer decides a CMS review end-to-end from a real WP/Drupal widget: captures load via signed same-origin URLs; the decision travels from the widget review card into the same decision module; fingerprint/audit identical to in-app.",
+   "disposition": "MAPPED",
+   "unitProofs": [
+    {
+     "file": "packages/chat/src/__tests__/lifecycle-card-widget-host.test.tsx",
+     "testName": "resolves the review card against the server"
+    },
+    {
+     "file": "packages/chat/src/__tests__/lifecycle-card-widget-host.test.tsx",
+     "testName": "sends the broker proof headers and OMITS cookies"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/capture-capability-serving.test.ts",
+     "testName": "serves the capture on the one admissible combination"
+    },
+    {
+     "file": "src/app/api/lifecycle-views/decide/__tests__/route.test.ts",
+     "testName": "decodes the ref server-side and calls the SAME helper with run + gate"
+    }
+   ],
+   "e2eProofs": [
+    {
+     "file": "evidence/2577-parity/proof/complete/README.md",
+     "testName": "V6-widget-card-decided.png"
+    },
+    {
+     "file": "evidence/2577-parity/proof/complete/README.md",
+     "testName": "V7-db-readback.png"
+    }
+   ],
+   "note": "The live half is MAPPED to the S8d/#2577 recorded proof round on host2 — the SHIPPED WordPress plugin in wp-admin framing the real /embed/assistant, gates written by the shipped store, decided from the widget card, read back beside a first-party-decided twin (V7-audit-rows.json). S7 re-verifies the code paths, not the photograph; the photograph is a landed artifact of the slice that owns the criterion."
+  },
+  {
+   "criterion": "The widget renders and operates the full lifecycle card set identically to first-party chat — same components, same human decisions, and the same audit contract; the authenticated principal is derived from the validated widget session and cannot be selected or overridden by the embedding site.",
+   "disposition": "MAPPED",
+   "unitProofs": [
+    {
+     "file": "packages/chat/src/__tests__/lifecycle-card-widget-host.test.tsx",
+     "testName": "resolves the SAME kinds on the widget as on the chat thread"
+    },
+    {
+     "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
+     "testName": "the SITE WIDGET is a full host: the card resolves and draws the same floor as chat"
+    },
+    {
+     "file": "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
+     "testName": "draws IDENTICALLY on every cookie host — the per-surface matrix is gone"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/widget-lifecycle-actor-parity.test.ts",
+     "testName": "ordinary member: the visible sets are IDENTICAL, row for row"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/widget-lifecycle-actor-parity.test.ts",
+     "testName": "the WIDGET lineage resolves through the SAME shared resolver, and nothing else"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/widget-lifecycle-actor-parity.test.ts",
+     "testName": "a PLATFORM ADMIN carries `platform_admin` through the widget, and sees the SAME rows"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/lifecycle-no-decide-primitives.test.ts",
+     "testName": "the widget's reachable lifecycle set EQUALS chat's — parity, both directions"
+    }
+   ],
+   "gateProofs": [
+    {
+     "file": "src/lib/lifecycle/__tests__/lifecycle-surface-matrix-conformance.test.ts",
+     "testName": "gives every host the SAME data-part view set — no host is quietly reduced"
+    }
+   ]
+  },
+  {
+   "criterion": "Revocation-after-emission matrix: link/site/membership/token revoked between DATA_PART emission and stream resume / card refetch / decision / capture GET — each fails closed (no DOM, refusal, 4xx).",
+   "disposition": "MAPPED",
+   "partial": true,
+   "gap": "Three of the four cells are proven at the seam that answers them, and the fourth is proven only INDIRECTLY. Proven directly: CARD REFETCH and the island paint (review-island-serving refuses a swept or expired cwu_ row, a dead parent sign-in, a revoked site, a rotated credential generation and a lost membership), CAPTURE GET (capture-capability-serving refuses a gone cwu_ row, a moved binding and a reader who lost run access between mint and fetch) and DECISION (the decide route re-runs run READ for the same actor before the decision op and answers a denial byte-identically to a forged ref). NOT proven as its own case: STREAM RESUME after a revocation that lands between the DATA_PART emission and the resume — the widget stream auth suite covers resume-token validation, but no test drives a revocation INTO an open stream and asserts the resume closes. Recorded rather than rounded up.",
+   "unitProofs": [
+    {
+     "file": "src/lib/lifecycle/__tests__/review-island-serving.test.ts",
+     "testName": "REFUSES when the row is gone (signed out / swept)"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/review-island-serving.test.ts",
+     "testName": "REFUSES once the PARENT SIGN-IN is gone — a copied URL dies with the session"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/review-island-serving.test.ts",
+     "testName": "REFUSES a revoked site"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/review-island-serving.test.ts",
+     "testName": "REFUSES a ROTATED credential generation — the rotation gate holds here too"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/review-island-serving.test.ts",
+     "testName": "REFUSES a principal who is no longer a member — orgRole IS the membership"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/capture-capability-serving.test.ts",
+     "testName": "REFUSES when the cwu_ row behind the sealed jti is gone (logout / revoke / rotate)"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/capture-capability-serving.test.ts",
+     "testName": "REFUSES a reader who lost run access between the mint and the fetch"
+    },
+    {
+     "file": "src/app/api/lifecycle-views/decide/__tests__/route.test.ts",
+     "testName": "a reader who may not READ the run cannot decide it, even holding a valid ref"
+    },
+    {
+     "file": "packages/chat/src/__tests__/lifecycle-card-widget-host.test.tsx",
+     "testName": "draws NO DOM when the widget resolve is rejected (401 — token expired)"
+    }
+   ],
+   "trackingIssue": 2573
+  },
+  {
+   "criterion": "Wrong-audience and cross-gate/cross-site action capabilities are refused; copied/expired/revoked capture URLs fail.",
+   "disposition": "MAPPED",
+   "unitProofs": [
+    {
+     "file": "src/lib/lifecycle/__tests__/capture-capability-serving.test.ts",
+     "testName": "a capability minted for gate A CANNOT fetch gate B's capture"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/capture-capability-serving.test.ts",
+     "testName": "REFUSES a missing, empty, forged or EXPIRED capability"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/capture-capability-serving.test.ts",
+     "testName": "REFUSES a pasted link — a top-level navigation is dest=document, site=none"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/capture-capability-serving.test.ts",
+     "testName": "REFUSES the CMS site mounting the URL cross-origin"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/capture-capability-serving.test.ts",
+     "testName": "REFUSES when the live binding has MOVED under the capability"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/capture-capability-serving.test.ts",
+     "testName": "REFUSES a revision the capability did not seal (no swapping revisions in-gate)"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/review-island-serving.test.ts",
+     "testName": "REFUSES a genuine credential presented with ANOTHER gate's genuine ref"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/review-island-serving.test.ts",
+     "testName": "REFUSES a site re-bound to another org or origin"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/capture-capability-serving.test.ts",
+     "testName": "every refusal is byte-identical — the result carries no reason at all"
+    }
+   ]
+  },
+  {
+   "criterion": "Carrier-run exclusion proven: a widget content-editor carrier run emits no recommendation hold and no trigger interaction; the surface-matrix conformance test fails if any lifecycle interaction kind appears on a broker surface outside the matrix.",
+   "disposition": "BUILT",
+   "gateProofs": [
+    {
+     "file": "src/lib/lifecycle/__tests__/lifecycle-surface-matrix-conformance.test.ts",
+     "testName": "THE CONFORMANCE CLAUSE: no lifecycle interaction kind appears on a broker surface"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/lifecycle-surface-matrix-conformance.test.ts",
+     "testName": "BY CONSTRUCTION: neither carrier-run creation site sets humanPresent"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/lifecycle-surface-matrix-conformance.test.ts",
+     "testName": "no trigger MUTATION primitive is reachable on either widget kind"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/lifecycle-surface-matrix-conformance.test.ts",
+     "testName": "a widget delegation reaches its OWN content-editor primitive plus the read-only pulls, and nothing else"
+    }
+   ],
+   "unitProofs": [
+    {
+     "file": "packages/agents/src/__tests__/recommendation-hold.test.ts",
+     "testName": "a HEADLESS run never parks (never evaluates)"
+    },
+    {
+     "file": "packages/agents/src/__tests__/recommendation-hold.test.ts",
+     "testName": "a null-presence run (pre-backfill / worker origin) never parks"
+    }
+   ]
+  },
+  {
+   "criterion": "`/embed/assistant` renders captures with NO island and refuses a nested island by ancestry.",
+   "disposition": "MISSING",
+   "partial": true,
+   "gap": "The criterion's FIRST clause is SUPERSEDED by a later sub-issue of this same epic and can no longer be proven, because the product deliberately does the opposite. S8e (cinatra#2674, merged as d7ff228f8) gave the island a second reader path — a short-lived, ref-bound ISLAND CREDENTIAL derived from the widget principal — precisely so the island DOES paint inside /embed/assistant on a genuinely cross-site deployment, where a SameSite-bound cookie is never sent into the frame. The epic's 2026-08-11 correction is the reason: the widget is a full-parity surface and a reduced capture-only tier was the removed premise. The landed behaviour is photographed in evidence/2577-parity (V2r-widget-review-card-island-painting.png). The SECOND clause is live and IS proven: the island's frame-ancestors wall admits 'self' plus the ONE server-resolved registered origin, an unregistered ancestor gets the first-party wall, no wildcard is ever emitted, and an attacker-supplied origin in the query is not a policy input. Recorded as MISSING rather than rewritten: changing an acceptance criterion to match what shipped is the coordinator's ruling to make, not this lane's.",
+   "unitProofs": [
+    {
+     "file": "src/lib/__tests__/review-island-frame-ancestors.test.ts",
+     "testName": "admits exactly the verified ancestor chain"
+    },
+    {
+     "file": "src/lib/__tests__/review-island-frame-ancestors.test.ts",
+     "testName": "an UNREGISTERED frame (the resolver refuses) gets the first-party wall, not a widened one"
+    },
+    {
+     "file": "src/lib/__tests__/review-island-frame-ancestors.test.ts",
+     "testName": "never emits a wildcard"
+    },
+    {
+     "file": "src/lib/__tests__/review-island-frame-ancestors.test.ts",
+     "testName": "an attacker-supplied origin in the query is not a policy input"
+    },
+    {
+     "file": "src/lib/embed/__tests__/frame-ancestors.server.test.ts",
+     "testName": "B7: an unknown/forged assistant → 'none' (no DB read)"
+    }
+   ],
+   "trackingIssue": 2573
+  },
+  {
+   "criterion": "EXACTLY ONE card implementation per interaction across /chat, embed/widget, run card, and the review gate region — the parallel renderers (redirect card, panel chip-row mount, review-page direct composition) are gone (grep-gated).",
+   "disposition": "MISSING",
+   "partial": true,
+   "gap": "The gate is BUILT and the three named parallel renderers are checked, but the criterion is not met: a FOURTH renderer of the recommendation interaction survives on the run-detail surface. packages/agents/src/instance-screens.tsx does its own recommendation-park read, its own candidate prefetch, and mounts <RunRecommendationChipRow holdRef={…}> directly — bypassing RecommendationHoldCard, the LifecycleCardSurfaceProvider host declaration and the card's authoritative-refetch contract. S4 (#2568) recorded it as 'deliberately unchanged by this branch'. It is not cosmetic: AgenticRunPanel (which mounts the card correctly under host=\"run_card\") renders only for run.status !== 'pending_input', and a HELD run IS pending_input — so on the run-detail page the HELD state is drawn ONLY by the parallel path. It is allowlisted BY NAME in the gate with this justification so the gate reports the truth; deleting that allowlist entry is the fix. Defect D-1 in the S7 report. The redirect card and the review-page direct decision composition ARE gone and stay gone.",
+   "gateProofs": [
+    {
+     "file": "scripts/audit/chat-hitl-one-card-gate.mjs",
+     "testName": "one card implementation per interaction, every mount host-declared"
+    },
+    {
+     "file": "scripts/audit/__tests__/chat-hitl-one-card-gate.test.mjs",
+     "testName": "a SECOND review-gate card definition outside its owner module fails R1"
+    }
+   ],
+   "unitProofs": [
+    {
+     "file": "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
+     "testName": "the run panel has no interval and no direct chip-row mount"
+    },
+    {
+     "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
+     "testName": "draws the SAME card on every first-party host, differing only in the frame"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/suggestion-chips-one-renderer.test.ts",
+     "testName": "only the card defines a chip-row component"
+    },
+    {
+     "file": "src/lib/lifecycle/__tests__/suggestion-chips-one-renderer.test.ts",
+     "testName": "the card is what the review PAGE and the run panel both mount"
+    }
+   ],
+   "trackingIssue": 2573
+  },
+  {
+   "criterion": "Conformance vs the S0 spec matrix (per surface, per card, per state) on a production-equivalent build with recorded screenshots.",
+   "disposition": "MISSING",
+   "partial": true,
+   "gap": "The STRUCTURAL conformance is proven bidirectionally against the pinned S0 spec commit (design@6c20871b4108176c1d0193f19ecd2947f6c6355f specs/app-lifecycle-cards.html): every spec anchor is rendered, and every anchor the route renders is in the spec's closed set. The per-(surface × card × state) RECORDED SCREENSHOT sweep on a production-equivalent build is NOT delivered by this lane. What exists is the S8d/#2577 photograph set (10 views on host2 against the shipped WordPress plugin, dev build) and the S2/#2566 set (6 views); together they cover the review card on chat / widget / review page across pending, settled and absent, plus the verification card in advisory — not the full 4 cards x 4 surfaces x 6 states cross-product, and not on a `next build && next start` image. The two blockers are named in the S7 report: the host2 lane budget, and the three states that need a live LLM-backed chat dispatch to reach.",
+   "unitProofs": [
+    {
+     "file": "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-surface-conformance.test.ts",
+     "testName": "every data-conformance-id the route renders is a spec anchor (or a documented host-standard panel)"
+    },
+    {
+     "file": "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-surface-conformance.test.ts",
+     "testName": "render→spec: every run-embedded render site carries ONLY anchors in the revised spec's closed set (no invented affordance)"
+    },
+    {
+     "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
+     "testName": "neither absence is ever drawn as a DISABLED card"
+    }
+   ],
+   "e2eProofs": [
+    {
+     "file": "evidence/2577-parity/proof/complete/README.md",
+     "testName": "V4-widget-review-card.png"
+    },
+    {
+     "file": "evidence/2566-s2/README.md",
+     "testName": "s2-06-settled-no-longer-open.png"
+    }
+   ],
+   "trackingIssue": 2573
+  },
+  {
+   "criterion": "Production-boundary retirement identity greps stay zero (exact-identity constructions); the stale trigger-agent fixtures are gone.",
+   "disposition": "BUILT",
+   "gateProofs": [
+    {
+     "file": "scripts/audit/chat-hitl-retirement-gate.mjs",
+     "testName": "retired identities at zero on the "
+    },
+    {
+     "file": "scripts/audit/__tests__/chat-hitl-retirement-gate.test.mjs",
+     "testName": "the boundary pattern DISCRIMINATES against every retained look-alike"
+    },
+    {
+     "file": "scripts/audit/__tests__/chat-hitl-retirement-gate.test.mjs",
+     "testName": "the SLUG construction needs its LEFT boundary — the naive version would swallow the retained packages"
+    }
+   ],
+   "unitProofs": [
+    {
+     "file": "packages/agents/src/__tests__/reviewer-auditor-retirement-identity.test.ts",
+     "testName": "ZERO (boundary-exact PCRE, the #2047 annex construction): no line matches either identity"
+    },
+    {
+     "file": "packages/agents/src/__tests__/reviewer-auditor-retirement-identity.test.ts",
+     "testName": "the retirement is COMPLETE — neither package is a declared dev extension or a lock pin"
+    },
+    {
+     "file": "src/lib/__tests__/legacy-auditor-proposal-writer-retired.test.ts",
+     "testName": "NO production module writes `auditor_proposal_snapshots` — the owning store included"
+    }
+   ]
+  }
+ ]
+}

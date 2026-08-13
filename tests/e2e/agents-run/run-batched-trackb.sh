@@ -19,11 +19,13 @@ fi
 # Batch groupings — HITL fixtures grouped together so the dev server is
 # fresh when driving multi-gate flows. Non-HITL fixtures bundled in
 # subsequent batches since they're faster.
-BATCH1_FILTER="@cinatra-ai/(trigger-agent)"
-BATCH2_FILTER="@cinatra-ai/(web-scrape-agent|web-research-agent|media-feed-lister-agent|media-transcript-agent)"
-BATCH3_FILTER="@cinatra-ai/(blog-idea-generator-agent|blog-draft-writer-agent|blog-image-prompt-agent)"
-BATCH4_FILTER="@cinatra-ai/(company-discovery-agent|contact-discovery-agent|planner-agent)"
-BATCH5_FILTER="@cinatra-ai/(code-reviewer-agent|security-reviewer-agent|lint-policy-agent)"
+# cinatra#2573 (epic #2564 S7): the trigger-agent batch was removed with the
+# retirement — the package is archived and in neither extension lock, so the
+# batch matched no test title. The remaining batches are renumbered.
+BATCH1_FILTER="@cinatra-ai/(web-scrape-agent|web-research-agent|media-feed-lister-agent|media-transcript-agent)"
+BATCH2_FILTER="@cinatra-ai/(blog-idea-generator-agent|blog-draft-writer-agent|blog-image-prompt-agent)"
+BATCH3_FILTER="@cinatra-ai/(company-discovery-agent|contact-discovery-agent|planner-agent)"
+BATCH4_FILTER="@cinatra-ai/(code-reviewer-agent|security-reviewer-agent|lint-policy-agent)"
 
 run_batch() {
   local batch_num="$1"
@@ -47,7 +49,6 @@ if [ -z "$TARGET_BATCH" ] || [ "$TARGET_BATCH" = "1" ]; then run_batch 1 "$BATCH
 if [ -z "$TARGET_BATCH" ] || [ "$TARGET_BATCH" = "2" ]; then run_batch 2 "$BATCH2_FILTER" || OVERALL_RC=1; fi
 if [ -z "$TARGET_BATCH" ] || [ "$TARGET_BATCH" = "3" ]; then run_batch 3 "$BATCH3_FILTER" || OVERALL_RC=1; fi
 if [ -z "$TARGET_BATCH" ] || [ "$TARGET_BATCH" = "4" ]; then run_batch 4 "$BATCH4_FILTER" || OVERALL_RC=1; fi
-if [ -z "$TARGET_BATCH" ] || [ "$TARGET_BATCH" = "5" ]; then run_batch 5 "$BATCH5_FILTER" || OVERALL_RC=1; fi
 
 lsof -ti:3000 2>/dev/null | xargs -r kill -9 2>/dev/null || true
 

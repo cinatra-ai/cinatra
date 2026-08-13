@@ -2,7 +2,7 @@
  * Locked `/agents` (All Agents run-agent picker) inventory + per-agent fixture data for the
  * end-to-end harness.
  *
- * The 16-agent visible set is locked from the canonical `cinatra`
+ * The canonical visible set is locked from the canonical `cinatra`
  * schema on 2026-05-13 — it mirrors `selectHitlRunVisibleTemplates`
  * behavior. If the live filter ever diverges, the `preflight.spec.ts`
  * test will catch the drift on the very first run and tell the operator
@@ -64,8 +64,12 @@ export const CANONICAL_VISIBLE_PACKAGES: ReadonlyArray<{
   packageName: string;
   classification: AgentClassification;
 }> = [
-  // Direct HITL (10). cinatra#1796 / #2047 row 8: auditor-agent left the set
-  // with the retirement teardown.
+  // Direct HITL (9). cinatra#1796 / #2047 row 8: auditor-agent left the set
+  // with the retirement teardown. cinatra#2573 (epic #2564 S7): trigger-agent
+  // left it too — the package is retired (its repo is archived; it is in no
+  // devExtensions map and in neither extension lock), so a fresh instance never
+  // registers it and a fixture that still declared it made this preflight
+  // assert a world nothing has.
   { packageName: "@cinatra-ai/blog-linkedin-publish-agent", classification: "DEFER-EXTERNAL" },
   { packageName: "@cinatra-ai/blog-wordpress-publish-agent", classification: "DEFER-EXTERNAL" },
   { packageName: "@cinatra-ai/email-delivery-agent", classification: "LIVE-WITH-OVERRIDE" },
@@ -75,7 +79,6 @@ export const CANONICAL_VISIBLE_PACKAGES: ReadonlyArray<{
   { packageName: "@cinatra-ai/email-recipient-selection-agent", classification: "LIVE-RUNNABLE" },
   { packageName: "@cinatra-ai/email-test-delivery-agent", classification: "LIVE-WITH-OVERRIDE" },
   { packageName: "@cinatra-ai/list-curator-agent", classification: "DEFER-EXTERNAL" },
-  { packageName: "@cinatra-ai/trigger-agent", classification: "LIVE-RUNNABLE" },
   // Sub-agent descendants (0). cinatra#1796: reviewer-agent was the only one
   // and it left the set with the retirement teardown — every flow that invoked
   // it now holds on its own gate or on the core-opened review gate.
@@ -167,36 +170,12 @@ export type AgentFixture = {
  * Sample fixtures. Confirmed against OAS source 2026-05-13.
  */
 export const AGENT_FIXTURES: ReadonlyArray<AgentFixture> = [
-  {
-    packageName: "@cinatra-ai/trigger-agent",
-    vendor: "cinatra-ai",
-    slug: "trigger-agent",
-    classification: "LIVE-RUNNABLE",
-    // The persist ApiNode calls /api/llm-bridge → cinatra_llm, which
-    // requires a publicly reachable MCP base URL. Without one, the run
-    // fails with `424 Failed Dependency: Error retrieving tool list from
-    // MCP server: 'cinatra'`. Preflight detects state; spec skips if unset.
-    tunnelDependent: true,
-    startInputs: {},
-    hitlScreens: [
-      {
-        kind: "custom-renderer",
-        xRenderer: "@cinatra-ai/trigger-agent:configure",
-        expectedTitle: "Configure trigger",
-        // Minimal valid payload — triggerType immediate + UTC timezone
-        // satisfies the formSchema required[] without needing a future
-        // ISO instant or a 5-field cron string. The persist ApiNode
-        // LLM-bridge call will write a real trigger config row; cost
-        // estimate < $0.05.
-        action: { triggerType: "immediate", timezone: "UTC" },
-        primaryButtonText: "Continue",
-      },
-    ],
-    expectedTerminalStatus: "completed",
-    // LLM-bridge persist node can be slow on cold start; allow 240s to
-    // absorb tail latency without flaking. Real OpenAI calls vary 5-60s.
-    runTimeoutMs: 240_000,
-  },
+  // cinatra#2573 (epic #2564 S7) — the trigger-agent standalone fixture was
+  // DELETED with the retirement. The package is archived and is in neither
+  // extension lock, so no instance can install, dispatch or render it; the
+  // scheduling it used to configure is the host-standard trigger subsystem, and
+  // the in-conversation half is the epic's `trigger_schedule_proposal` card
+  // (propose -> Confirm), which has its own proof (S5, cinatra#2569).
   // ---------------------------------------------------------------------
   // email-recipient-selection-agent: prereq-seeded fixture. Uses `seedFn`
   // because campaignId is required+hidden in the StartNode metadata

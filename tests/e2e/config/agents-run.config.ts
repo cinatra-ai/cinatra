@@ -10,7 +10,7 @@
  * provide. Per the live-test invariant, actual execution happens on the
  * main worktree.
  *
- * The preflight project asserts the 16-agent canonical visible set
+ * The preflight project asserts the canonical visible agent set
  * BEFORE any agent test runs — if we're attached to a feature branch's
  * scoped schema by accident, this fails fast with a clear error
  * instead of pretending the harness is broken.
@@ -172,7 +172,7 @@ export default defineConfig({
       // (seeded content, not a live turn), so unlike chat-mcp/chat-prompt-hitl
       // it is cost-free; still gated here (not per-PR) because it needs the real
       // authenticated app + persistence. Depends on `setup` (auth) ONLY — it
-      // exercises no WayFlow/agent execution, so the 16-agent preflight is not a
+      // exercises no WayFlow/agent execution, so the visible-set preflight is not a
       // precondition.
       name: "chat-render-parity",
       testMatch: /chat-render-parity\.spec\.ts/,

@@ -243,9 +243,6 @@ async function driveCustomRenderer(
   }
 
   switch (screen.xRenderer) {
-    case "@cinatra-ai/trigger-agent:configure":
-      await advanceTriggerAgentConfigure(page, screen.action);
-      break;
     case "@cinatra-ai/agent-builder:schema-field-fallback":
       await advanceSchemaFieldFallback(page, screen.action);
       break;
@@ -559,38 +556,11 @@ async function advanceListCuratorApprove(page: Page): Promise<void> {
   await outerContinue.click();
 }
 
-async function advanceTriggerAgentConfigure(
-  page: Page,
-  action: Record<string, unknown>,
-): Promise<void> {
-  // Renderer source: packages/agents/src/trigger-screen-client.tsx
-  // For triggerType "immediate" the form auto-populates timezone with the
-  // browser's IANA zone (line 213 / 256 in trigger-screen-client.tsx) — no
-  // visible timezone Select for the immediate path. The `timezone` field in
-  // the fixture is documentation-only for the immediate case; the renderer
-  // determines the final value from the browser. We do NOT try to override
-  // the Select for immediate runs (it doesn't exist in the DOM).
-  const triggerType = String(action["triggerType"] ?? "immediate");
-
-  if (triggerType === "immediate") {
-    await page.getByRole("button", { name: "Run right after setup" }).click();
-  } else if (triggerType === "scheduled" || triggerType === "recurring") {
-    // The current samples don't exercise these — fail fast so a fixture
-    // typo doesn't silently fall through. Fixtures that need
-    // scheduled/recurring must extend this function to drive the
-    // timezone-scheduled / timezone-recurring Selects + the cron/date
-    // inputs visible in the corresponding branches.
-    throw new Error(
-      `trigger-agent fixture: triggerType "${triggerType}" not yet supported ` +
-        `by the harness. Extend advanceTriggerAgentConfigure when ` +
-        `scheduled/recurring sample fixtures are added.`,
-    );
-  }
-
-  // Submit. The trigger-screen-client wraps the form; the submit button
-  // text is "Continue" (becomes "Continuing…" briefly).
-  await page.getByRole("button", { name: /^Continue$/ }).first().click();
-}
+// cinatra#2573 (epic #2564 S7): `advanceTriggerAgentConfigure` and its
+// `:configure` renderer case were DELETED with the trigger-agent retirement —
+// the package is archived and in neither extension lock, so no fixture can
+// produce that renderer id. (Same disposition as the reviewer/auditor cases
+// removed by cinatra#1796 / #2047 row 8, recorded above.)
 
 async function driveGenericForm(
   page: Page,
