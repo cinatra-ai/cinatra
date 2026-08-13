@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import type { ReactNode } from "react";
 
@@ -44,6 +44,9 @@ import {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  // cinatra#2713 — a test that installs fake timers to cross the island's
+  // bounded timeout must not leak them into the next test.
+  vi.useRealTimers();
 });
 
 const VIEW = {
@@ -309,6 +312,146 @@ describe("§III the target island", () => {
     const frame = container.querySelector("iframe")!;
     const bar = container.querySelector('[data-conformance-id="review-decision-bar"]')!;
     expect(frame.contains(bar)).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------
+  // cinatra#2713 — the island's OWN load state: loading / loaded / timed-out.
+  // The outer §IV "pending" resolve above is already settled by this point;
+  // these tests are about the SEPARATE window before the iframe's own `load`
+  // event, which used to paint a blank white box (evidence/2674-s8e V5).
+  // ---------------------------------------------------------------------
+
+  function island(container: HTMLElement): HTMLElement {
+    return container.querySelector('[data-conformance-id="review-target-island"]')!;
+  }
+
+  it("loading: a skeleton, not a blank frame, until the iframe's own load event", async () => {
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    expect(island(container).getAttribute("data-island-load-state")).toBe("loading");
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-skeleton"]'),
+    ).not.toBeNull();
+    // No error/refusal panel yet either — the loading and timed-out
+    // presentations are mutually exclusive.
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-timeout"]'),
+    ).toBeNull();
+  });
+
+  it("loaded: the iframe's own `load` event swaps the skeleton for the painted frame", async () => {
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    fireEvent.load(container.querySelector("iframe")!);
+    await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("loaded"));
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-skeleton"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-timeout"]'),
+    ).toBeNull();
+  });
+
+  it("timed-out: a bounded wait with no load event swaps to the retry panel — the decision floor stays live", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+
+    await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("timed-out"));
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-skeleton"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-timeout"]'),
+    ).not.toBeNull();
+    // §II — a preview that failed to load is never drawn as a reason the
+    // reviewer cannot decide; the floor below is untouched.
+    expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false);
+  });
+
+  it("timed-out: Try again remounts the iframe and returns to loading", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+    await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("timed-out"));
+
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+
+    expect(island(container).getAttribute("data-island-load-state")).toBe("loading");
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-skeleton"]'),
+    ).not.toBeNull();
+  });
+
+  it("a late load event self-heals a timed-out island instead of sticking on the retry panel", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+    await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("timed-out"));
+
+    // The ORIGINAL iframe (never remounted — no retry was pressed) finally
+    // fires its load event.
+    fireEvent.load(container.querySelector("iframe")!);
+
+    await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("loaded"));
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-timeout"]'),
+    ).toBeNull();
+  });
+
+  it("no layout shift: loading, loaded and timed-out all hold the SAME clamped height", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    const clamped = (container.querySelector("iframe") as HTMLIFrameElement).style.height;
+    expect(clamped).not.toBe("");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+    await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("timed-out"));
+    // The iframe itself — still mounted underneath the retry panel — keeps its
+    // clamped height; only the overlay on top of it changed.
+    expect((container.querySelector("iframe") as HTMLIFrameElement).style.height).toBe(clamped);
+  });
+
+  it("a card re-pointed at a different gate's island starts loading again, never on the old verdict", async () => {
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container, rerender } = render(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <ReviewGateCard view={VIEW} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    fireEvent.load(container.querySelector("iframe")!);
+    await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("loaded"));
+
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    rerender(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <ReviewGateCard view={{ ...VIEW, ref: "ref-a-different-gate" }} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await waitFor(() =>
+      expect(container.querySelector("iframe")?.getAttribute("src")).toContain("ref-a-different-gate"),
+    );
+    expect(island(container).getAttribute("data-island-load-state")).toBe("loading");
   });
 });
 
@@ -990,6 +1133,35 @@ describe("#2566 composer focus", () => {
     </LifecycleCardSurfaceProvider>
   );
 
+  /**
+   * Wait for the gate to be REGISTERED with the composer — the store's own
+   * truth, which is what a test that then reaches into the store depends on.
+   *
+   * Waiting on the painted row instead is a RACE, and it is the test's race and
+   * not the card's. The card computes `available` (the row) during render and
+   * registers in a passive effect, so the row lands in the commit and the
+   * registration lands in the effect flush that follows it. `waitFor` observes
+   * the DOM through a MutationObserver — a microtask off the commit — and can
+   * therefore return in the window between the two, where `getCommentAction`
+   * is still `undefined` and calling it throws. It is entered rarely and
+   * nondeterministically — measured on this card at 1-2 of 120 renders on an
+   * idle machine, on this branch AND on the code before it — which is why it
+   * surfaced as a single unreproducible CI failure (cinatra#2713, "a blank
+   * comment is refused without a request") rather than as a broken suite.
+   *
+   * The window is not a product defect: it is bounded by React's effect flush,
+   * so no reader can act inside it. The registration itself is on the RIGHT
+   * axis — the server's `canComment`, never the island's load event; the pin
+   * below ("the composer binding is live while the island is still loading")
+   * holds that axis.
+   */
+  async function waitForComposerRegistration(
+    store: ComposerFocusStore,
+    ref: string,
+  ): Promise<void> {
+    await waitFor(() => expect(typeof store.getCommentAction(ref)).toBe("function"));
+  }
+
   it("NO composer on the surface ⇒ no affordance and no registration at all", async () => {
     mockResolve({ state: "pending", canDecide: true, canComment: true });
     // The review page and the run-detail page mount no focus provider.
@@ -1024,9 +1196,7 @@ describe("#2566 composer focus", () => {
   it("ONE open review binds the composer on its own, and the card says so", async () => {
     mockResolve({ state: "pending", canDecide: true, canComment: true });
     const { store, container } = renderWithComposer(card(VIEW));
-    await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="review-composer-focus"]')).not.toBeNull(),
-    );
+    await waitForComposerRegistration(store, VIEW.ref);
     expect(store.getSnapshot().eligible).toEqual([VIEW.ref]);
     const row = container.querySelector('[data-conformance-id="review-composer-focus"]')!;
     expect(row.getAttribute("data-composer-bound")).toBe("true");
@@ -1128,10 +1298,8 @@ describe("#2566 composer focus", () => {
       );
     }) as unknown as typeof fetch;
 
-    const { store, container } = renderWithComposer(card(VIEW));
-    await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="review-composer-focus"]')).not.toBeNull(),
-    );
+    const { store } = renderWithComposer(card(VIEW));
+    await waitForComposerRegistration(store, VIEW.ref);
 
     const result = await store.getCommentAction(VIEW.ref)!("shorten the intro");
     // The SAME gate-scoped entry, the SAME opaque ref, the `comment` disposition
@@ -1152,12 +1320,73 @@ describe("#2566 composer focus", () => {
     expect(result.message).not.toContain(VIEW.ref);
   });
 
+  // cinatra#2713 — the island's load state and the composer binding are
+  // SEPARATE axes, and this pins that they stay separate.
+  //
+  // A preview that has not painted yet is not a reason a reader cannot reply.
+  // The registration hangs off the SERVER's answer (`canComment`) and nothing
+  // else; a later slice that gated it on the island — rendering the row only
+  // once the frame loaded, or moving the binding inside the island's loaded
+  // branch — would leave a reader looking at a skeleton with a composer that
+  // silently refuses their message. The card's own §II rule for the decision
+  // floor ("a preview that did not load is never drawn as a reason the reviewer
+  // cannot decide") applies to replying, identically.
+  it("the composer binding is live while the island is STILL LOADING", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    globalThis.fetch = vi.fn(async (input: unknown, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null });
+      if (url === LIFECYCLE_VIEW_DECIDE_PATH) {
+        return new Response(
+          JSON.stringify({
+            outcome: { kind: "changes-requested", status: "requested", idempotent: false },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ state: { state: "pending", canDecide: true, canComment: true } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    const { store, container } = renderWithComposer(card(VIEW));
+    await waitForComposerRegistration(store, VIEW.ref);
+
+    // No `load` event has been fired on the iframe, so the island is still on
+    // its skeleton — the state this test is about.
+    expect(
+      container
+        .querySelector('[data-conformance-id="review-target-island"]')!
+        .getAttribute("data-island-load-state"),
+    ).toBe("loading");
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-skeleton"]'),
+    ).not.toBeNull();
+
+    // The affordance is drawn, and drawn BOUND — the reader is told their next
+    // chat message reaches this review while the preview is still arriving.
+    expect(
+      container
+        .querySelector('[data-conformance-id="review-composer-focus"]')!
+        .getAttribute("data-composer-bound"),
+    ).toBe("true");
+
+    // And it is not merely drawn: the registered action posts the comment on
+    // the card's own decision path, from the loading state.
+    const result = await store.getCommentAction(VIEW.ref)!("the intro is too long");
+    expect(result.ok).toBe(true);
+    expect(calls.find((c) => c.url === LIFECYCLE_VIEW_DECIDE_PATH)!.body).toMatchObject({
+      ref: VIEW.ref,
+      disposition: "comment",
+      comment: "the intro is too long",
+    });
+  });
+
   it("a blank comment is refused without a request", async () => {
     const fetchMock = mockResolve({ state: "pending", canDecide: true, canComment: true });
-    const { store, container } = renderWithComposer(card(VIEW));
-    await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="review-composer-focus"]')).not.toBeNull(),
-    );
+    const { store } = renderWithComposer(card(VIEW));
+    await waitForComposerRegistration(store, VIEW.ref);
     const before = fetchMock.mock.calls.length;
     const result = await store.getCommentAction(VIEW.ref)!("   ");
     expect(result.ok).toBe(false);
@@ -1174,10 +1403,8 @@ describe("#2566 composer focus", () => {
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }) as unknown as typeof fetch;
-    const { store, container } = renderWithComposer(card(VIEW));
-    await waitFor(() =>
-      expect(container.querySelector('[data-conformance-id="review-composer-focus"]')).not.toBeNull(),
-    );
+    const { store } = renderWithComposer(card(VIEW));
+    await waitForComposerRegistration(store, VIEW.ref);
     const result = await store.getCommentAction(VIEW.ref)!("please fix the heading");
     expect(result.ok).toBe(false);
     expect(result.message.length).toBeGreaterThan(0);
