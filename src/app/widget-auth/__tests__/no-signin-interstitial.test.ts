@@ -159,15 +159,53 @@ describe("the sign-in itself carries the grant", () => {
   const pageSrc = sourceOf(path.join(REPO_ROOT, "src/app/widget-auth/page.tsx"));
   const actionSrc = sourceOf(path.join(REPO_ROOT, "src/app/widget-auth/actions.ts"));
 
-  it("the sign-in screen names every scope the sign-in grants", () => {
-    // Generated from the vocabulary, not hand-written: a grant added to the set
-    // gains its sentence on this screen at the same moment.
-    expect(pageSrc).toContain("WIDGET_SIGNIN_GRANTED_SCOPES.map");
-    expect(pageSrc).toContain("WIDGET_EXTENSION_SCOPES[scope].consentCopy");
-    // ...and it is rendered on the SIGNED-OUT branch, which is the screen a
-    // person actually reads before they hand over credentials.
-    const signedOut = pageSrc.slice(pageSrc.indexOf("if (!session)"));
-    expect(signedOut).toContain("<SignInGrantNotice");
+  // OWNER RULING 2026-08-13 REPLACED THIS BAR, and the replacement is written
+  // here rather than the old one being deleted, because what changed is a
+  // ratified property and the record should say so.
+  //
+  // WAS: the signed-out screen had to render, below the form, a sentence per
+  // granted scope generated from the vocabulary — "a grant cannot reach a token
+  // without its sentence being on this screen".
+  //
+  // IS: the popup shows the sign-in form and nothing else. The owner ruled the
+  // prose off this 460×680 login window, so the bar can no longer be "the
+  // sentences are displayed" — that would be a test asserting something the
+  // product deliberately does not do. It is inverted instead: NO prose may come
+  // back onto this screen, which is the property the ruling actually created and
+  // the one that will decay if it is not pinned. Everything the record-side of
+  // the old bar guaranteed is unchanged and still pinned by the cases below.
+  it("the signed-out screen renders the form and NOTHING else", () => {
+    // Bound the slice at the member branch, then take the LAST return in it:
+    // the earlier one is the neutral mixed-version error card, not the screen.
+    const signedOut = pageSrc.slice(
+      pageSrc.indexOf("if (!session)"),
+      pageSrc.indexOf("const userId"),
+    );
+    const returned = signedOut.slice(signedOut.lastIndexOf("return ("));
+    // The one child of the shell is the sign-in view.
+    expect(returned).toContain("<WidgetAuthLogin");
+    // No scope list, no consent paragraph, no marketing, no sign-up prompt — the
+    // vocabulary's display copy is not reachable from this page at all.
+    expect(pageSrc).not.toContain("SignInGrantNotice");
+    expect(pageSrc).not.toContain("consentCopy");
+    expect(pageSrc).not.toContain("WIDGET_EXTENSION_SCOPES");
+    expect(pageSrc).not.toContain("WIDGET_SIGNIN_GRANTED_SCOPES.map");
+    // ...and nothing else renders text beside the form on that branch. The only
+    // JSX elements the signed-out return may contain are the shell and the view.
+    const elements = [...returned.matchAll(/<([A-Za-z][\w.]*)/g)].map((m) => m[1]);
+    expect([...new Set(elements)].sort()).toEqual(["Shell", "WidgetAuthLogin"]);
+  });
+
+  it("the grant still comes from the vocabulary, recorded by the server", () => {
+    // The half of the old bar that the ruling did NOT touch: the set is still a
+    // server constant, still written onto the transaction by the signed-out
+    // branch, and still the only thing the action can record.
+    const signedOut = pageSrc.slice(
+      pageSrc.indexOf("if (!session)"),
+      pageSrc.indexOf("const userId"),
+    );
+    expect(signedOut).toContain("widgetDisplayedScopesToken(WIDGET_SIGNIN_GRANTED_SCOPES)");
+    expect(actionSrc).toContain("grantedScopes: WIDGET_SIGNIN_GRANTED_SCOPES");
   });
 
   it("the member branch goes straight to the return step", () => {

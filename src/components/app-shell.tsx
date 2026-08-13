@@ -377,6 +377,76 @@ export function useSetupRedirectGate(
   return { confirmation, withholdShell };
 }
 
+/**
+ * The widget sign-in popup (cinatra#2674 follow-up). A 460×680 top-level window
+ * the embed frame opens on the Cinatra origin to complete the credential
+ * exchange; NOT a page of the app.
+ */
+export const WIDGET_AUTH_POPUP_PATH = "/widget-auth";
+
+/** The MCP OAuth handshake pages, driven by external MCP clients. */
+export function isMcpHandshakePathname(pathname: string): boolean {
+  return (
+    pathname.startsWith("/api/mcp/auth/") ||
+    pathname.startsWith("/api/mcp/account/") ||
+    pathname === "/api/mcp/consent"
+  );
+}
+
+/**
+ * WHICH PATHNAMES RENDER WITHOUT THE APP SHELL — no sidebar, no topbar, no
+ * breadcrumbs, no notifications bell. Exported as a pure function so both
+ * contexts can be pinned by a test that does not have to mount the whole shell.
+ *
+ * EVERY ARM IS A PATHNAME. Nothing here reads a query parameter, a header or any
+ * other request-borne value, and that is the anti-spoof property: no URL a
+ * caller can construct turns an ordinary app route into a chromeless one, and
+ * none turns `/sign-in` into anything other than what it already is. (The one
+ * remaining query-driven bypass, the LEGACY `?embed=1` section-embed mode, is
+ * composed at the call site and predates this; it is not reachable from any
+ * route below.)
+ */
+export function bypassesAppShellForPathname(pathname: string): boolean {
+  return (
+    // Auth surfaces — these already rendered chromeless before the widget popup
+    // joined the list, and this function must keep them byte-identical.
+    pathname === "/permissions" ||
+    pathname.startsWith("/permissions/") ||
+    pathname === "/sign-in" ||
+    pathname === "/sign-up" ||
+    isMcpHandshakePathname(pathname) ||
+    // The first-run setup wizard owns its own frame.
+    pathname === "/setup" ||
+    pathname.startsWith("/setup/") ||
+    // cinatra#1221 S5 Lane B (§2/§3) — the Cinatra-served embed page is framed by
+    // a cross-origin CMS as the SOLE AG-UI session owner. It MUST render
+    // CHROMELESS: no sidebar/topbar and no user-derived shell state. Its own
+    // hardened postMessage bridge (embed-bridge.client) is the ONLY parent<->frame
+    // channel. Bypassing the shell keeps the page dataless before its bootstrap
+    // (identical posture to the other bypassed public pages).
+    pathname === "/embed/assistant" ||
+    // cinatra#2566 (epic #2564 S2) — the review-target ISLAND is a same-origin,
+    // authenticated, display-only document embedded INSIDE a review card. It is a
+    // fragment, not a page, and a sidebar inside a card's iframe would be
+    // nonsense. It is NOT public — the bypass is presentation only; the island's
+    // own session + per-row access checks are what authorize it.
+    pathname === "/lifecycle/review-island" ||
+    // OWNER RULING 2026-08-13 — the widget sign-in popup shows the sign-in form
+    // and nothing else. A sidebar, a breadcrumb bar and a notifications bell
+    // inside a login window are chrome for an app the person is not in yet, and
+    // the bell links somewhere the popup must never navigate.
+    //
+    // Keyed on the pathname of a DEDICATED route. `/sign-in` is a different route
+    // and no query a caller appends to it reaches this arm; `/widget-auth` cannot
+    // serve the normal app sign-in, because the page renders nothing but a
+    // neutral error card unless `?txn=` resolves to a live, SERVER-HELD
+    // transaction created by `/api/widget-auth/frame/init`. The flow marker is
+    // server-verified before any sign-in surface renders at all; this arm only
+    // decides whether the shell wraps it.
+    pathname === WIDGET_AUTH_POPUP_PATH
+  );
+}
+
 export function AppShell({
   children,
   connectionReady,
@@ -428,36 +498,13 @@ export function AppShell({
   const pathname = usePathname();
   const router = useRouter();
   authClient.useSession();
-  // MCP OAuth handshake pages (sign-in / account / consent) are driven by
-  // external MCP clients and must render clean, without the app sidebar/chrome.
-  const isMcpHandshakePath =
-    pathname.startsWith("/api/mcp/auth/") ||
-    pathname.startsWith("/api/mcp/account/") ||
-    pathname === "/api/mcp/consent";
-  const isAuthPath =
-    pathname === "/permissions" ||
-    pathname.startsWith("/permissions/") ||
-    pathname === "/sign-in" ||
-    pathname === "/sign-up" ||
-    isMcpHandshakePath;
-  const isSetupWizardPath = pathname === "/setup" || pathname.startsWith("/setup/");
-  // cinatra#1221 S5 Lane B (§2/§3) — the Cinatra-served embed page is framed by a
-  // cross-origin CMS as the SOLE AG-UI session owner. It MUST render CHROMELESS:
-  // no sidebar/topbar, no user-derived shell state, and NOT the legacy
-  // `cinatra:embed:submit` EmbedMessageListener (that only mounts under the
-  // distinct `?embed=1` section-embed mode). Its own hardened postMessage bridge
-  // (embed-bridge.client) is the ONLY parent<->iframe channel. Bypassing the
-  // shell keeps the page dataless before its bootstrap (identical posture to the
-  // other bypassed public pages).
+  // The pathname-keyed chromeless surfaces — auth pages, the MCP handshake, the
+  // setup wizard, the embed frame, the review island and the widget sign-in
+  // popup — live in `bypassesAppShellForPathname` above, where each arm carries
+  // its own reason. The two flags below are the ones OTHER code in this
+  // component still needs individually.
+  const isMcpHandshakePath = isMcpHandshakePathname(pathname);
   const isEmbedAssistantPath = pathname === "/embed/assistant";
-  // cinatra#2566 (epic #2564 S2) — the review-target ISLAND is a same-origin,
-  // authenticated, display-only document embedded INSIDE a review card (in a
-  // chat turn, a run card, or the review page's gate region). It must render
-  // CHROMELESS for the same reason the embed page does: it is a fragment, not a
-  // page, and a sidebar/topbar inside a card's iframe would be nonsense. It is
-  // NOT public — the shell bypass is presentation only; the island's own session
-  // + per-row access checks are what authorize it.
-  const isReviewIslandPath = pathname === "/lifecycle/review-island";
   const [isEmbedMode] = useState(() => {
     if (typeof window !== "undefined") {
       return new URLSearchParams(window.location.search).get("embed") === "1";
@@ -511,8 +558,7 @@ export function AppShell({
   const snapshotSaysSetupIncomplete = !connectionReady && !isSetupPath;
   const activeHeader = pageHeaders.find((entry) => entry.match(pathname));
   const hideShellPageHeader = pathname === "/chat" || pathname.startsWith("/chat/");
-  const shouldBypassShell =
-    isAuthPath || isSetupWizardPath || isEmbedMode || isEmbedAssistantPath || isReviewIslandPath;
+  const shouldBypassShell = bypassesAppShellForPathname(pathname) || isEmbedMode;
 
   useEffect(() => {
     const onScroll = () => setScrollOffset(document.body.scrollTop || document.documentElement.scrollTop);
