@@ -147,7 +147,15 @@ describe("/chat's conversation column is byte-identical after the extraction (#2
     // default would hand `chat_thread`, a COOKIE host, to any mount that forgot
     // its adapter). It is the first-party cookie surface, so the list keeps
     // `chat_thread` and the link policy stays same-tab.
-    expect(mount).toContain("host={CHAT_THREAD_HOST}");
+    //
+    // Since cinatra#2566 the adapter is COMPOSED — the exported constant plus
+    // this page's per-mount composer-focus store, which cannot live in a module
+    // constant. The invariant is unchanged and asserted in two halves: the mount
+    // names the composed adapter, and the adapter is built by SPREADING the
+    // exported constant rather than by writing a host literal a second time.
+    expect(mount).toContain("host={chatHostAdapter}");
+    expect(CHAT_PAGE).toContain("...CHAT_THREAD_HOST");
+    expect(CHAT_PAGE).not.toMatch(/lifecycleSurface:\s*\{\s*host:/);
   });
 
   it("keeps the lazy boundary — now inside the column, so BOTH hosts get it", () => {

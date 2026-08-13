@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { ChatGateDescriptor } from "@cinatra-ai/agents/client-entry";
+import type { ComposerCommentAction } from "@cinatra-ai/agents/lifecycle-card-runtime";
 import {
+  ambiguousComposerRefusal,
   classifyPromptForGate,
   createChatGateRegistry,
+  resolveComposerRouting,
   resolveExtractedGateValues,
   type ClassifyGate,
 } from "../inline-hitl-classify";
@@ -247,5 +251,156 @@ describe("createChatGateRegistry", () => {
     // The live instance's clear removes it.
     reg.handleActiveGateChange("run-1", null, "new-instance");
     expect(reg.getLatestOpenGate()).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// COMPOSER ROUTING (cinatra#2566's composer-focus deliverable; the program
+// Done-definition is cinatra#2573 — "multiple concurrent gates require explicit
+// composer focus").
+//
+// This is the send-time decision: does a typed message go to a HITL field gate,
+// to a FOCUSED review card as a comment, nowhere (because the reader has not
+// said which review), or to the model. The dangerous outcome is a comment
+// landing on a review nobody chose — on a single-target automatic gate a
+// nonempty comment resolves as `changes_requested`, so a wrong guess sends the
+// wrong run into a repair.
+// ---------------------------------------------------------------------------
+
+const reviewComment: ComposerCommentAction = async () => ({ ok: true, message: "ok" });
+const commentFor =
+  (...refs: string[]) =>
+  (ref: string): ComposerCommentAction | undefined =>
+    refs.includes(ref) ? reviewComment : undefined;
+const noComments = () => undefined;
+
+/** A field gate, as AgenticRunPanel publishes one (only the read fields). */
+const fieldGate = (runId: string): ChatGateDescriptor =>
+  ({ runId, instanceId: `${runId}-i`, fields: [] }) as unknown as ChatGateDescriptor;
+/** A #2566 review-comment descriptor — comment-only, no resume path. */
+const reviewGate = (runId: string, cardRef: string): ChatGateDescriptor =>
+  ({
+    runId,
+    instanceId: `${runId}-i`,
+    fields: [],
+    kind: "review_comment",
+    cardRef,
+  }) as unknown as ChatGateDescriptor;
+
+describe("resolveComposerRouting", () => {
+  it("no review, no gate → normal chat routing", () => {
+    expect(
+      resolveComposerRouting({
+        target: { kind: "none" },
+        latestOpenGate: undefined,
+        commentActionFor: noComments,
+      }),
+    ).toEqual({ kind: "chat" });
+  });
+
+  it("no review, an open field gate → the field gate, exactly as before #2566", () => {
+    const gate = fieldGate("run-1");
+    expect(
+      resolveComposerRouting({
+        target: { kind: "none" },
+        latestOpenGate: gate,
+        commentActionFor: noComments,
+      }),
+    ).toEqual({ kind: "field-gate", gate });
+  });
+
+  it("ONE review open and nothing else → the message is that review's comment", () => {
+    const routing = resolveComposerRouting({
+      target: { kind: "target", ref: "ref-a", explicit: false },
+      latestOpenGate: reviewGate("run-1", "ref-a"),
+      commentActionFor: commentFor("ref-a"),
+    });
+    expect(routing).toMatchObject({ kind: "review-comment", ref: "ref-a" });
+  });
+
+  it("TWO reviews and no focus → REFUSED, and nothing is routed", () => {
+    const routing = resolveComposerRouting({
+      target: { kind: "ambiguous", count: 2 },
+      latestOpenGate: reviewGate("run-2", "ref-b"),
+      commentActionFor: commentFor("ref-a", "ref-b"),
+    });
+    expect(routing).toEqual({ kind: "refuse-ambiguous", count: 2 });
+    // The message is NOT quietly turned into an LLM turn either: with reviews
+    // waiting, silently sending it to the model loses what the reader wrote.
+    expect(routing.kind).not.toBe("chat");
+  });
+
+  it("the refusal names how many and how to fix it, with no identifiers", () => {
+    const line = ambiguousComposerRefusal(2);
+    expect(line).toContain("2 reviews");
+    expect(line).toContain("Reply from the chat box");
+    // Identifier-free: this line is persisted into an LLM-visible transcript.
+    expect(line).not.toMatch(/ref-|run-|[0-9a-f]{8}-[0-9a-f]{4}/);
+  });
+
+  it("an EXPLICIT focus outranks an open field gate — the reader said so", () => {
+    const routing = resolveComposerRouting({
+      target: { kind: "target", ref: "ref-a", explicit: true },
+      latestOpenGate: fieldGate("run-9"),
+      commentActionFor: commentFor("ref-a"),
+    });
+    expect(routing).toMatchObject({ kind: "review-comment", ref: "ref-a" });
+  });
+
+  it("an IMPLICIT single review does NOT outrank an open field gate", () => {
+    // The reader has not spoken, so the composer keeps the binding it has always
+    // had: a run blocked on a field.
+    const gate = fieldGate("run-9");
+    expect(
+      resolveComposerRouting({
+        target: { kind: "target", ref: "ref-a", explicit: false },
+        latestOpenGate: gate,
+        commentActionFor: commentFor("ref-a"),
+      }),
+    ).toEqual({ kind: "field-gate", gate });
+  });
+
+  it("a review_comment descriptor is NEVER fed to the field-gate ladder", () => {
+    // It carries no fields and its submit is comment-only; classifying it would
+    // read an approval word as a bare-gate submit.
+    const routing = resolveComposerRouting({
+      target: { kind: "none" },
+      latestOpenGate: reviewGate("run-1", "ref-a"),
+      commentActionFor: commentFor("ref-a"),
+    });
+    expect(routing).toEqual({ kind: "chat" });
+  });
+
+  it("a target whose card is GONE falls back rather than inventing a transport", () => {
+    const gate = fieldGate("run-9");
+    expect(
+      resolveComposerRouting({
+        target: { kind: "target", ref: "ref-a", explicit: true },
+        latestOpenGate: gate,
+        commentActionFor: noComments,
+      }),
+    ).toEqual({ kind: "field-gate", gate });
+    expect(
+      resolveComposerRouting({
+        target: { kind: "target", ref: "ref-a", explicit: true },
+        latestOpenGate: undefined,
+        commentActionFor: noComments,
+      }),
+    ).toEqual({ kind: "chat" });
+  });
+
+  it("the comment carried out is the CARD's own action, not a rebuilt one", async () => {
+    const action = vi.fn(async (text: string) => ({ ok: true, message: `said: ${text}` }));
+    const routing = resolveComposerRouting({
+      target: { kind: "target", ref: "ref-a", explicit: true },
+      latestOpenGate: undefined,
+      commentActionFor: (ref) => (ref === "ref-a" ? action : undefined),
+    });
+    if (routing.kind !== "review-comment") throw new Error("expected a review comment");
+    expect(await routing.comment("shorten the intro")).toEqual({
+      ok: true,
+      message: "said: shorten the intro",
+    });
+    expect(action).toHaveBeenCalledTimes(1);
   });
 });

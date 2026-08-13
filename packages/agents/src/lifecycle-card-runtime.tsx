@@ -1,8 +1,9 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// The lifecycle card RUNTIME — host declaration + authoritative refetch
-// (cinatra#2566, epic #2564 S2; moved verbatim out of S1's
+// The lifecycle card RUNTIME — host declaration + authoritative refetch +
+// composer focus (cinatra#2566, epic #2564 S2; the first two moved verbatim
+// out of S1's
 // `packages/chat/src/renderable-views/lifecycle-card.tsx`, which re-exports it).
 // Design: design@6c20871b4108176c1d0193f19ecd2947f6c6355f
 // `specs/app-lifecycle-cards.html` §IV, §IX.
@@ -16,7 +17,9 @@
 // package both sides can already import, and chat re-exports it so S1's public
 // surface (and its tests) are untouched. The BEHAVIOUR is byte-for-byte S1's.
 //
-// Two properties this module owns, restated because every host depends on them:
+// Three properties this module owns, restated because every host depends on
+// them (the third is #2566's composer-focus deliverable, documented at its own
+// section below):
 //
 //  1. FAIL-CLOSED SURFACE GATING. A host opts IN via
 //     `LifecycleCardSurfaceProvider`. With no provider there is no host, and a
@@ -38,6 +41,7 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -220,6 +224,340 @@ export function useCookieSessionSurface(): boolean {
 
 export function useLifecycleCardHost(): LifecycleCardHost | null {
   return useContext(LifecycleCardSurfaceContext);
+}
+
+// ---------------------------------------------------------------------------
+// COMPOSER FOCUS — which review card the chat composer is bound to
+// (cinatra#2566's composer-focus deliverable; the program Done-definition is
+// cinatra#2573: "multiple concurrent gates require explicit composer focus").
+//
+// WHY IT LIVES HERE. It is the same shape as the host declaration above and it
+// has the same two-sided reach problem: the CARD (this package) offers the focus
+// affordance and the COMPOSER (`@cinatra-ai/chat`, which depends on this
+// package and never the other way round) reads the binding. This module is
+// already the one both sides import, so the focus state sits beside the host
+// declaration rather than in a third module neither could reach.
+//
+// WHAT FOCUS IS FOR. #2566: "composer routing engages only when exactly one
+// eligible gate is active OR the user explicitly focused a card". A comment
+// typed into the chat box is a real decision-module call against ONE gate, so
+// the composer must never pick a gate for the reader. Two gates and no explicit
+// focus is not "use the latest one" — it is a question the surface has to ask.
+//
+// ELIGIBILITY IS THE SERVER'S ANSWER, NOT A GUESS. A card registers itself only
+// after its authoritative resolve says the gate is open AND this reader may
+// comment on it (`canComment`). A reader who may read but not respond registers
+// nothing, so the composer can never bind to a gate whose comment would be
+// refused — the control does not exist rather than failing on press.
+//
+// FAIL-CLOSED, LIKE THE HOST. A surface with NO provider (the review page, the
+// run-detail page — neither has a chat composer) has no store, so its cards
+// register nothing and draw no focus affordance at all. Composer focus cannot
+// appear on a surface that has not opted in.
+// ---------------------------------------------------------------------------
+
+/**
+ * What a composer comment answers with. Deliberately NOT the review outcome
+ * union: this module is the generic card runtime and must not learn the review
+ * vocabulary. The CARD maps its own outcome to this, so the sentence the reader
+ * reads in the transcript is written once, where the review copy already lives.
+ */
+export type ComposerCommentResult = {
+  /** The comment reached the decision module and was recorded. */
+  ok: boolean;
+  /** The one line the composer surface shows back. Never carries identifiers. */
+  message: string;
+};
+
+/**
+ * The comment path of ONE card — the card's own action, handed to the composer
+ * rather than re-implemented by it. That is what makes "a typed comment goes
+ * through the same path the card's decision bar uses" true by construction: the
+ * composer calls the very closure the bar calls, with the card's credential and
+ * the card's post-decision re-resolve already inside it.
+ */
+export type ComposerCommentAction = (comment: string) => Promise<ComposerCommentResult>;
+
+/** What the composer knows about the review gates on screen right now. */
+export type ComposerFocusSnapshot = {
+  /**
+   * The refs of the gates that may currently take a composer comment, in the
+   * order their cards registered. The ORDER is not a priority — nothing reads
+   * "the latest one"; it exists only so the snapshot is stable and printable.
+   */
+  eligible: readonly string[];
+  /** The ref the reader explicitly focused, or `null` if they have not. */
+  focused: string | null;
+  /**
+   * The reader took the composer BACK — they pressed the bound card's control
+   * to release it.
+   *
+   * This exists because the single-gate case binds with no press at all, and
+   * without a release there would be no way out of it: a lone open review would
+   * turn every chat message into a comment (which on a single-target automatic
+   * gate resolves as `changes_requested` and sends the run into a repair) with
+   * no affordance to stop. A binding the reader cannot decline is not a binding,
+   * it is a capture.
+   */
+  released: boolean;
+};
+
+/** Where a composer message goes — the ONE answer every caller reads. */
+export type ComposerTargetResolution =
+  /** No review gate is taking composer input; the composer behaves as before. */
+  | { kind: "none" }
+  /**
+   * The composer is bound to exactly this gate. `explicit` distinguishes the
+   * reader's own choice from the single-gate case #2566 allows to bind on its
+   * own, because only an EXPLICIT choice may outrank an open field gate.
+   */
+  | { kind: "target"; ref: string; explicit: boolean }
+  /** Several gates could take it and the reader has not said which. */
+  | { kind: "ambiguous"; count: number };
+
+const EMPTY_FOCUS_SNAPSHOT: ComposerFocusSnapshot = {
+  eligible: [],
+  focused: null,
+  released: false,
+};
+
+/**
+ * The focus reducer — PURE, so the one rule the whole deliverable rests on is
+ * testable without a browser.
+ *
+ * Precedence, in order:
+ *  1. no eligible gate               → `none` (the composer is untouched);
+ *  2. an explicit focus that is still eligible → that gate, explicitly;
+ *  3. the reader RELEASED the composer → `none`, and no ambiguity prompt: they
+ *     have answered the question the prompt asks;
+ *  4. exactly one eligible gate      → that gate, implicitly (#2566);
+ *  5. otherwise                      → `ambiguous`.
+ *
+ * A STALE EXPLICIT FOCUS IS NOT A TARGET. A ref the reader focused that is no
+ * longer eligible (decided elsewhere, access lost, the card unmounted) falls
+ * through to the rules below it, so a comment can never land on a gate the
+ * reader focused a while ago and the surface no longer shows as open.
+ */
+export function resolveComposerTarget(
+  snapshot: ComposerFocusSnapshot,
+): ComposerTargetResolution {
+  const eligible = snapshot.eligible;
+  if (eligible.length === 0) return { kind: "none" };
+  if (snapshot.focused !== null && eligible.includes(snapshot.focused)) {
+    return { kind: "target", ref: snapshot.focused, explicit: true };
+  }
+  if (snapshot.released) return { kind: "none" };
+  if (eligible.length === 1) return { kind: "target", ref: eligible[0]!, explicit: false };
+  return { kind: "ambiguous", count: eligible.length };
+}
+
+/**
+ * The focus store. An EXTERNAL store rather than component state so a focus
+ * press re-renders the cards that subscribe and nothing else — the chat page
+ * that owns it reads the binding imperatively at send time and never re-renders
+ * a transcript because a card was focused.
+ */
+export type ComposerFocusStore = {
+  subscribe: (listener: () => void) => () => void;
+  getSnapshot: () => ComposerFocusSnapshot;
+  /**
+   * Declare a gate able to take a composer comment, WITH the action that takes
+   * it. Returns the un-register.
+   *
+   * REF-COUNTED: the same gate can legitimately be mounted twice (a run card and
+   * a thread card for one gate, React's development double-invoke), and one
+   * unmount must not strike an identity another mount is still showing. The
+   * LATEST registration owns the action, so a re-registering card replaces its
+   * own closure rather than accumulating stale ones.
+   */
+  registerEligible: (ref: string, comment: ComposerCommentAction) => () => void;
+  /** The comment path of an eligible gate, or `undefined` if it is not one. */
+  getCommentAction: (ref: string) => ComposerCommentAction | undefined;
+  /** The reader chose this card. */
+  focus: (ref: string) => void;
+  /** The reader took the binding back; the composer is a chat box again. */
+  clearFocus: () => void;
+};
+
+export function createComposerFocusStore(): ComposerFocusStore {
+  const entries = new Map<string, { count: number; comment: ComposerCommentAction }>();
+  let focused: string | null = null;
+  let released = false;
+  // Cached because `useSyncExternalStore` compares snapshots by identity: a
+  // fresh object per read would loop forever.
+  let snapshot: ComposerFocusSnapshot = EMPTY_FOCUS_SNAPSHOT;
+  const listeners = new Set<() => void>();
+
+  const publish = (): void => {
+    snapshot = { eligible: Array.from(entries.keys()), focused, released };
+    for (const listener of listeners) listener();
+  };
+
+  return {
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    getSnapshot() {
+      return snapshot;
+    },
+    getCommentAction(ref) {
+      return entries.get(ref)?.comment;
+    },
+    registerEligible(ref, comment) {
+      const existing = entries.get(ref);
+      // A release is scoped to the reviews that were open when the reader made
+      // it. When the last one closes and a NEW one arrives later, the composer
+      // is offered again — otherwise one release early in a thread would
+      // silently disable the binding for every review after it.
+      if (entries.size === 0) released = false;
+      entries.set(ref, { count: (existing?.count ?? 0) + 1, comment });
+      publish();
+      let unregistered = false;
+      return () => {
+        // Idempotent: a double-call must not decrement another mount's count.
+        if (unregistered) return;
+        unregistered = true;
+        const current = entries.get(ref);
+        if (!current) return;
+        if (current.count > 1) entries.set(ref, { ...current, count: current.count - 1 });
+        else entries.delete(ref);
+        // The focus is deliberately LEFT pointing at a ref that just went away.
+        // A card re-registers on every re-resolve, and clearing here would drop
+        // the reader's choice on a refresh they never saw. `resolveComposerTarget`
+        // already refuses to treat a non-eligible focus as a target, so the
+        // stale value can never route a comment.
+        publish();
+      };
+    },
+    focus(ref) {
+      if (focused === ref && !released) return;
+      focused = ref;
+      released = false;
+      publish();
+    },
+    clearFocus() {
+      if (focused === null && released) return;
+      focused = null;
+      released = true;
+      publish();
+    },
+  };
+}
+
+const ComposerFocusContext = createContext<ComposerFocusStore | null>(null);
+
+/**
+ * Declare that this subtree's review cards may bind a composer. Mounted by the
+ * chat page around the transcript; every other surface mounts nothing and its
+ * cards therefore offer no focus affordance.
+ */
+export function LifecycleComposerFocusProvider({
+  store,
+  children,
+}: {
+  store: ComposerFocusStore;
+  children: ReactNode;
+}): ReactElement {
+  return (
+    <ComposerFocusContext.Provider value={store}>{children}</ComposerFocusContext.Provider>
+  );
+}
+
+export function useComposerFocusStore(): ComposerFocusStore | null {
+  return useContext(ComposerFocusContext);
+}
+
+const NOOP_UNSUBSCRIBE = (): void => {};
+const noopSubscribe = (): (() => void) => NOOP_UNSUBSCRIBE;
+const emptySnapshot = (): ComposerFocusSnapshot => EMPTY_FOCUS_SNAPSHOT;
+
+/** Subscribe to the focus binding. With no provider this is always empty. */
+export function useComposerFocusSnapshot(): ComposerFocusSnapshot {
+  const store = useComposerFocusStore();
+  return useSyncExternalStore(
+    store?.subscribe ?? noopSubscribe,
+    store?.getSnapshot ?? emptySnapshot,
+    emptySnapshot,
+  );
+}
+
+/** The resolved composer binding for this subtree. */
+export function useComposerTarget(): ComposerTargetResolution {
+  return resolveComposerTarget(useComposerFocusSnapshot());
+}
+
+/** What one card knows about its own composer binding. */
+export type ComposerFocusBinding = {
+  /** There is a composer to bind at all AND this gate may take a comment. */
+  available: boolean;
+  /**
+   * The composer currently routes to THIS gate — whether because the reader
+   * chose it or because it is the only one open. This is what the card must
+   * SAY, because it is what a typed message will actually do.
+   */
+  bound: boolean;
+  /** The reader chose this card themselves (the pressed state). */
+  explicit: boolean;
+  /** Several gates are open and none is chosen: nothing routes until one is. */
+  ambiguous: boolean;
+  /** Take the binding, or give it back if this card already holds it. */
+  toggleFocus: () => void;
+};
+
+/**
+ * Register THIS card's gate as able to take a composer comment for as long as
+ * `eligible` holds, and report how the composer is currently bound.
+ *
+ * The registered closure is a STABLE delegator over a ref-held `comment`, and
+ * that is load-bearing rather than tidy. Registering the caller's closure
+ * directly would put its identity in the effect's dependencies, so a host whose
+ * action is rebuilt each render (any card whose credential or submit prop is an
+ * inline object) would re-register on every render — and since registering
+ * publishes, and publishing re-renders every subscribed card, that is a render
+ * loop, not a bit of churn. Holding the action in a ref also means the composer
+ * always calls the CURRENT one rather than the one captured when the gate opened.
+ */
+export function useComposerFocusBinding(params: {
+  ref: string;
+  eligible: boolean;
+  comment: ComposerCommentAction;
+}): ComposerFocusBinding {
+  const { ref, eligible, comment } = params;
+  const store = useComposerFocusStore();
+  const snapshot = useComposerFocusSnapshot();
+  const commentRef = useRef(comment);
+  commentRef.current = comment;
+  const stableComment = useCallback<ComposerCommentAction>(
+    (text) => commentRef.current(text),
+    [],
+  );
+  useEffect(() => {
+    if (!store || !eligible) return;
+    return store.registerEligible(ref, stableComment);
+  }, [store, eligible, ref, stableComment]);
+  const target = resolveComposerTarget(snapshot);
+  const bound = target.kind === "target" && target.ref === ref;
+  // The press is a TOGGLE on the binding as the reader sees it, not on the
+  // explicit flag underneath: a card bound because it is the only one open
+  // releases on the first press, rather than needing two (one to make the
+  // implicit binding explicit, one to drop it) — which would read as a control
+  // that did nothing.
+  const boundNow = bound;
+  const toggleFocus = useCallback(() => {
+    if (!store) return;
+    if (boundNow) store.clearFocus();
+    else store.focus(ref);
+  }, [store, ref, boundNow]);
+  return {
+    available: store !== null && eligible,
+    bound,
+    explicit: bound && target.kind === "target" && target.explicit,
+    ambiguous: target.kind === "ambiguous",
+    toggleFocus,
+  };
 }
 
 /**
