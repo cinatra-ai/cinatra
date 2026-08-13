@@ -695,6 +695,26 @@ export const ORG_WRITE_REGISTRY: readonly OrgWriteRegistryEntry[] = [
       "src/lib/object-history/merge-proposals.ts",
       "src/lib/objects/artifact-row-promotion.ts",
       "src/lib/object-history/index.ts",
+      // cinatra#2683 (epic #2564 S8f) — the in-process lifecycle SEED path's
+      // change-set fixture. A DESIGN EVENT, so state it rather than let it pass
+      // as housekeeping. WHY IT NEEDS THIS WRITER: the undo chip's §VI gate reads
+      // a CLOSED, restorable `change_set` AND ITS MEMBER EVENTS, and an
+      // event-less set satisfies that gate (`bool_and` over zero rows is not
+      // `false`) — so the evidence capture for that chip is only honest if a real
+      // object write sits under the set. Nothing above this writer produces one
+      // under a CALLER-HELD change-set handle, which is the shape the fixture
+      // stands in for (a run rolling its mutations up under one set).
+      // WHAT BOUNDS IT: the file is reachable only from
+      // /api/development/lifecycle-seed, behind four independent fences (explicit
+      // development runtime under a non-production build, the scripted provider's
+      // own gate, a high-entropy per-launch capability whose ABSENCE is the
+      // default, and a JSON/same-site/local-chain/loopback request). The call
+      // itself is create-only, `reversible-internal`, with a PINNED type and a
+      // PINNED payload — no caller-supplied row content reaches it — and the
+      // authority is minted by `verifySessionAuthority`, i.e. a live membership
+      // read that throws for a non-member, after the named run has been proved to
+      // belong to the same org and to be readable by the same subject.
+      "src/lib/test-support/lifecycle-seed-drivers.ts",
     ],
   },
   {

@@ -116,6 +116,7 @@ export async function issueWidgetAuthCodeAction(
       presentedNonceHash: widgetScreenNonceHash(screenNonce),
       expectedNoScreenToken: widgetNoSignInScreenToken(
         widgetSessionFingerprint(session.session?.id),
+        WIDGET_SIGNIN_GRANTED_SCOPES,
       ),
     })
   ) {

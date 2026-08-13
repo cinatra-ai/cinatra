@@ -8,6 +8,8 @@ import {
   isScriptedTestProviderEnabled,
   runScriptedStream,
   runScriptedWidgetAssistantTurn,
+  scriptedTurnNamesAgentRun,
+  scriptedTurnNamesLifecycleRef,
 } from "../scripted-test-provider";
 
 type Captured = {
@@ -161,6 +163,117 @@ describe("runScriptedWidgetAssistantTurn (unified /api/assistants/chat widget se
     expect(captured.toolCalls[0].name).toBe("drupal_content_editor_run");
     const parsed = JSON.parse(captured.toolResults[0].result);
     expect("nodeId" in parsed).toBe(true);
+  });
+});
+
+describe("a turn that NAMES a lifecycle card ref (cinatra#2683, S8f)", () => {
+  // WHY THIS ARM EXISTS. `artifact_review_gates_list` answers with the OLDEST few
+  // gates a caller may read, and a VERIFICATION reading exists only for a target
+  // that has actually been repaired — so on any real backlog the head of that
+  // list is almost never the item with a reading, and a provider that can only
+  // render `refs[0]` can never show one. Naming the item is what a model asked
+  // about a specific item does, and it is the same stand-in the run card already
+  // makes. It grants nothing: the ref is opaque, and the REAL primitive decodes
+  // it and re-runs the whole access ladder.
+  const REF = "Zm9vYmFyLXNlYWxlZC1yZWYtdGhhdC1pcy1sb25nLWVub3VnaC10by1tYXRjaA";
+
+  type WCaptured = {
+    toolCalls: Array<{ id: string; name: string }>;
+    toolResults: Array<{ id: string; name: string; result: string }>;
+  };
+  function makeSink(): {
+    sink: Omit<Parameters<typeof runScriptedWidgetAssistantTurn>[0], "instructions">;
+    captured: WCaptured;
+    dispatched: Array<{ name: string; args: Record<string, unknown> }>;
+  } {
+    const captured: WCaptured = { toolCalls: [], toolResults: [] };
+    const dispatched: Array<{ name: string; args: Record<string, unknown> }> = [];
+    return {
+      captured,
+      dispatched,
+      sink: {
+        assistantHandle: "wordpress",
+        onText: () => {},
+        onToolCall: (call) => captured.toolCalls.push(call),
+        onToolResult: (r) => captured.toolResults.push(r),
+        callSelfMcpTool: async (call) => {
+          dispatched.push(call as { name: string; args: Record<string, unknown> });
+          return JSON.stringify({ ok: true });
+        },
+      },
+    };
+  }
+
+  it("recognises a sealed ref and NOT a run id, a word, or a sentence", () => {
+    expect(scriptedTurnNamesLifecycleRef(`Show me the verification for ${REF}`)).toBe(REF);
+    // A run id is 40 characters at most — below the ref floor — so the two
+    // readings can never collide.
+    expect(
+      scriptedTurnNamesLifecycleRef("Show me the agent run run-ff2087fd-0872-4745-ae8b-f576d41f35aa"),
+    ).toBeNull();
+    expect(scriptedTurnNamesLifecycleRef("Which reviews are waiting for me?")).toBeNull();
+    expect(scriptedTurnNamesLifecycleRef("verification")).toBeNull();
+  });
+
+  it("leaves the run-card reading untouched — a named run is still a named run", () => {
+    const runPrompt = "Show me the agent run run-ff2087fd-0872-4745-ae8b-f576d41f35aa";
+    expect(scriptedTurnNamesAgentRun(runPrompt)).toBe(
+      "run-ff2087fd-0872-4745-ae8b-f576d41f35aa",
+    );
+    expect(scriptedTurnNamesLifecycleRef(runPrompt)).toBeNull();
+  });
+
+  it("renders the NAMED ref with verification_record_render, ONCE, and does not list", async () => {
+    const { sink, captured, dispatched } = makeSink();
+    await runScriptedWidgetAssistantTurn({
+      ...sink,
+      instructions: `Show me the verification reading for ${REF}`,
+    });
+    expect(dispatched).toEqual([
+      { name: "verification_record_render", args: { ref: REF } },
+    ]);
+    expect(captured.toolCalls.map((c) => c.name)).toEqual(["verification_record_render"]);
+    expect(captured.toolResults[0].id).toBe(captured.toolCalls[0].id);
+    expect(captured.toolResults[0].result).toBe(JSON.stringify({ ok: true }));
+  });
+
+  it("renders a named ref with the GATE tool when the turn is not a verification question", async () => {
+    const { sink, dispatched } = makeSink();
+    await runScriptedWidgetAssistantTurn({
+      ...sink,
+      instructions: `Show me the review gate ${REF}`,
+    });
+    expect(dispatched).toEqual([{ name: "artifact_review_gate_render", args: { ref: REF } }]);
+  });
+
+  it("still LISTS when no ref is named — the discovery path is unchanged", async () => {
+    const { sink, dispatched } = makeSink();
+    sink.callSelfMcpTool = async (call) => {
+      dispatched.push(call as { name: string; args: Record<string, unknown> });
+      return call.name === "artifact_review_gates_list"
+        ? JSON.stringify({ refs: ["ref-from-the-list"] })
+        : JSON.stringify({ ok: true });
+    };
+    await runScriptedWidgetAssistantTurn({
+      ...sink,
+      instructions: "Which reviews are waiting for me?",
+    });
+    expect(dispatched.map((d) => d.name)).toEqual([
+      "artifact_review_gates_list",
+      "artifact_review_gate_render",
+    ]);
+    expect(dispatched[1].args).toEqual({ ref: "ref-from-the-list" });
+  });
+
+  it("FORWARDS a refusal verbatim and mints nothing of its own", async () => {
+    const { sink, captured } = makeSink();
+    sink.callSelfMcpTool = async () => "That is not available to you.";
+    await runScriptedWidgetAssistantTurn({
+      ...sink,
+      instructions: `Show me the verification reading for ${REF}`,
+    });
+    expect(captured.toolResults).toHaveLength(1);
+    expect(captured.toolResults[0].result).toBe("That is not available to you.");
   });
 });
 

@@ -16,7 +16,28 @@ vi.mock("../pending-call-actions", () => ({
     decidePendingToolCall(id as never, action as never, token as never),
 }));
 
-import { PendingToolConfirmationCards } from "../pending-tool-confirmation-card";
+import { PendingToolConfirmationCards as RawPendingToolConfirmationCards } from "../pending-tool-confirmation-card";
+import { LifecycleCardSurfaceProvider } from "@cinatra-ai/agents/lifecycle-card-runtime";
+
+/**
+ * The card, mounted in the context it really has (cinatra#2683, epic #2564 S8f).
+ *
+ * These cards ask the server with whichever credential the host declared, so
+ * they must be mounted under a declaration. Every case below is the COOKIE case
+ * — the server-action path `/chat` has always used — so the declaration is
+ * folded into one wrapper here. The BROKER case (the route, with the host's
+ * headers and no cookie) and the refused case (no request at all) are the matrix
+ * in `cookie-bound-affordances-fail-closed.test.tsx`.
+ */
+function PendingToolConfirmationCards(
+  props: React.ComponentProps<typeof RawPendingToolConfirmationCards>,
+) {
+  return (
+    <LifecycleCardSurfaceProvider host="chat_thread">
+      <RawPendingToolConfirmationCards {...props} />
+    </LifecycleCardSurfaceProvider>
+  );
+}
 
 function pendingRow(overrides: Record<string, unknown> = {}) {
   return {

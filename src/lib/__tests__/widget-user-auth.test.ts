@@ -90,6 +90,9 @@ import {
   WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
   WIDGET_LIFECYCLE_READ_ROUTE_PATH,
   WIDGET_LIFECYCLE_READ_SCOPE,
+  WIDGET_CHAT_THREADS_ROUTE_PATH,
+  WIDGET_CONVERSATION_READ_SCOPE,
+  WIDGET_CONVERSATION_WRITE_SCOPE,
   displayedScopesAgree,
   screenRecordAdmitsArrival,
   widgetDisplayedScopesToken,
@@ -928,6 +931,76 @@ describe("lifecycle-read scope + audience (cinatra#2574)", () => {
     ).toBe(true);
   });
 
+  // -------------------------------------------------------------------------
+  // THE WRITE HALF's grant control (cinatra#2683 item 1). ONE audience, two
+  // verbs, two scopes — so "granted the read, not the write" is a state the
+  // system can actually be in, and this is it.
+  // -------------------------------------------------------------------------
+  it("a session granted only conversation.READ can restore a transcript and cannot append to one", () => {
+    const minted = mintTokenWithGrant([WIDGET_CONVERSATION_READ_SCOPE]);
+    const ask = (requiredScopes: readonly WidgetExtensionScope[]) =>
+      consumeUserWidgetToken({
+        token: minted.token,
+        agentSlug: "wordpress-content-editor",
+        routePath: WIDGET_CHAT_THREADS_ROUTE_PATH,
+        requestOrigin: SITE_A.siteOrigin,
+        requiredScopes,
+      });
+    // POSITIVE CONTROL: the READ at this audience is admitted, so the refusal
+    // below is attributable to the SCOPE and to nothing else — not to the
+    // audience, not to the origin, not to the token.
+    expect(ask([WIDGET_CONVERSATION_READ_SCOPE]).ok).toBe(true);
+    // ...and the WRITE at the SAME audience, with the SAME token, is refused.
+    expect(ask([WIDGET_CONVERSATION_WRITE_SCOPE])).toEqual({
+      ok: false,
+      reason: "scope_mismatch",
+    });
+  });
+
+  it("the write scope admits the threads audience — a full grant reaches both verbs", () => {
+    // The other direction of the same pair: a session granted the whole set
+    // (what a sign-in mints today) reaches the write, so the refusal above is a
+    // property of the GRANT rather than of an audience nobody can ever reach.
+    const minted = mintTokenWithGrant(WIDGET_SIGNIN_GRANTED_SCOPES);
+    const bothVerbs: readonly WidgetExtensionScope[] = [
+      WIDGET_CONVERSATION_READ_SCOPE,
+      WIDGET_CONVERSATION_WRITE_SCOPE,
+    ];
+    for (const scope of bothVerbs) {
+      expect(
+        consumeUserWidgetToken({
+          token: minted.token,
+          agentSlug: "wordpress-content-editor",
+          routePath: WIDGET_CHAT_THREADS_ROUTE_PATH,
+          requestOrigin: SITE_A.siteOrigin,
+          requiredScopes: [scope],
+        }).ok,
+      ).toBe(true);
+    }
+  });
+
+  it("a PRE-EXTENSION token reaches neither verb of the threads audience", () => {
+    // AC-1 for this pair: an authorization recorded before the conversation
+    // grants existed keeps behaving exactly as it did — the widget writes
+    // nothing and restores nothing until the person signs in again.
+    const minted = mintTokenWithGrant(undefined);
+    const bothVerbs: readonly WidgetExtensionScope[] = [
+      WIDGET_CONVERSATION_READ_SCOPE,
+      WIDGET_CONVERSATION_WRITE_SCOPE,
+    ];
+    for (const scope of bothVerbs) {
+      expect(
+        consumeUserWidgetToken({
+          token: minted.token,
+          agentSlug: "wordpress-content-editor",
+          routePath: WIDGET_CHAT_THREADS_ROUTE_PATH,
+          requestOrigin: SITE_A.siteOrigin,
+          requiredScopes: [scope],
+        }).ok,
+      ).toBe(false);
+    }
+  });
+
   it("a required scope this build does not define is REFUSED, not matched", () => {
     // codex round 0, finding 4: `requiredScopes` is only TypeScript-constrained
     // at the call site. At runtime an unrecognized requirement must fail closed
@@ -1235,7 +1308,10 @@ describe("resolveVerifiedSiteFromCredential", () => {
 // ---------------------------------------------------------------------------
 /** The no-screen token one session would earn. */
 function noScreenTokenFor(sessionId: string): string {
-  return widgetNoSignInScreenToken(widgetSessionFingerprint(sessionId));
+  return widgetNoSignInScreenToken(
+    widgetSessionFingerprint(sessionId),
+    WIDGET_SIGNIN_GRANTED_SCOPES,
+  );
 }
 
 /** Insert a Better Auth session ROW; the DATABASE stamps when it did so. */
@@ -1721,7 +1797,9 @@ describe("widgetSessionFingerprint — one session, one name", () => {
   it("names nothing for an unusable id, so no token can be built from one", () => {
     for (const bad of ["", "   ", null, undefined, 42, {}]) {
       expect(widgetSessionFingerprint(bad)).toBe("");
-      expect(widgetNoSignInScreenToken(widgetSessionFingerprint(bad))).toBe("");
+      expect(
+        widgetNoSignInScreenToken(widgetSessionFingerprint(bad), WIDGET_SIGNIN_GRANTED_SCOPES),
+      ).toBe("");
     }
   });
 

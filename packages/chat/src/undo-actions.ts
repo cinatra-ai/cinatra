@@ -1,27 +1,25 @@
 "use server";
 
-import { requireAuthSession } from "@/lib/auth-session";
-import { listChangeSets } from "@/lib/object-history";
-import { isSessionEligibleForTargetedRestore } from "@/lib/object-history/restore-eligibility";
+import { requireAuthSession, resolveOrgRoleForSession } from "@/lib/auth-session";
+import { actorFromSession } from "@/lib/authz/build-actor-context";
+import { recentUndoableChangeSetFor } from "@/lib/chat/undo-candidate-surface";
 
-// Chat-side undo. After an agent_run tool
-// call, the chat polls for a recent CLOSED, restorable change-set produced by
-// that run (closedAtAfter avoids surfacing in-flight mutations — a race
-// mitigation). Returns the change-set id so the chip can deep-link to the
-// URL-addressable restore modal (?openRestore=1), which enforces its own
-// per-event restore authz on open + confirm. Org-scoped; orgless → null.
+// The COOKIE entry to the chat-side undo read. After an `agent_run` tool call
+// the chip asks whether that run left a recent CLOSED, restorable change-set
+// this reader may reverse, and deep-links to the URL-addressable restore modal
+// (?openRestore=1) — which enforces its own per-event restore authz on open and
+// on confirm. Org-scoped; orgless → null.
 //
-// §VI eligibility (design@94cfbcf5): the chip renders ONLY for an actor
-// eligible to restore the candidate change-set — per-object-authorized for
-// every affected object, no administrator bypass. An ineligible actor (incl.
-// an admin lacking per-object authz for some object) is returned null so no
-// chip appears and no deep-link can dead-end on the not-authorized panel.
+// §VI eligibility (design@94cfbcf5): the chip renders ONLY for an actor eligible
+// to restore the candidate change-set — per-object-authorized for every affected
+// object, no administrator bypass. An ineligible actor is returned null, so no
+// chip appears and no deep link can dead-end on the not-authorized panel.
 //
-// Kept in a dedicated module (not actions.ts) so its import graph stays light
-// — only @/lib/auth-session + @/lib/object-history — and unit-testable under
-// the chat package's vitest (actions.ts pulls @cinatra-ai/agents/auth-policy,
-// which the chat vitest alias can't resolve as a subpath).
-const CHAT_UNDO_WINDOW_MINUTES = 5;
+// cinatra#2683 (epic #2564 S8f) MOVED THE LOGIC OUT and left the door, for the
+// reason its sibling states: the widget renders the same chip and cannot present
+// a cookie. The window, the query and the eligibility gate live in
+// `@/lib/chat/undo-candidate-surface`; the widget's door is
+// `/api/chat/undo-candidate`. One gate, two credentials.
 
 export async function recentUndoableChangeSetForRunAction(input: {
   runId: string;
@@ -29,18 +27,11 @@ export async function recentUndoableChangeSetForRunAction(input: {
   const session = await requireAuthSession();
   const orgId = session.session?.activeOrganizationId ?? null;
   if (!orgId) return null;
-  const closedAtAfter = new Date(
-    Date.now() - CHAT_UNDO_WINDOW_MINUTES * 60_000,
-  ).toISOString();
-  const items = listChangeSets({
-    orgId,
+  const orgRole = await resolveOrgRoleForSession(session);
+  return recentUndoableChangeSetFor({
     runId: input.runId,
-    closedAtAfter,
-    restorable: true,
-    limit: 1,
+    orgId,
+    actor: actorFromSession(session),
+    roleHints: orgRole ? { orgRole } : undefined,
   });
-  const cs = items[0];
-  if (!cs) return null;
-  const eligible = await isSessionEligibleForTargetedRestore(cs.id);
-  return eligible ? { changeSetId: cs.id } : null;
 }

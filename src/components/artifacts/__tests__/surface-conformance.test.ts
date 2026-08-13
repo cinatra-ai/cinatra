@@ -109,8 +109,17 @@ describe("§IV — targeted-restore entry affordances deep-link to the console's
     expect(CHIP).toMatch(/undoDeepLink\(changeSetId\)/);
     expect(CHIP).toMatch(/data-conformance-id="artifacts-undo-entry"/);
     // The chip only appears when the shared per-object check returns eligible.
-    expect(CHIP_ACTION).toMatch(/isSessionEligibleForTargetedRestore\(cs\.id\)/);
-    expect(CHIP_ACTION).toMatch(/eligible \? \{ changeSetId: cs\.id \} : null/);
+    // cinatra#2683 moved the candidate read + eligibility gate into ONE module
+    // (`undo-candidate-surface`) so the cookie action and the widget door run
+    // the same §VI gate with their own principals; the entries must delegate,
+    // never re-implement.
+    const UNDO_GATE = read("src/lib/chat/undo-candidate-surface.ts");
+    const WIDGET_DOOR = read("src/app/api/chat/undo-candidate/route.ts");
+    expect(CHIP_ACTION).toMatch(/recentUndoableChangeSetFor\(\{/);
+    expect(WIDGET_DOOR).toMatch(/recentUndoableChangeSetFor\(\{/);
+    expect(UNDO_GATE).toMatch(/loadAuthorizedTargetedRestoreForActor\(\{/);
+    expect(UNDO_GATE).toMatch(/changeSetId: cs\.id,/);
+    expect(UNDO_GATE).toMatch(/eligible \? \{ changeSetId: cs\.id \} : null/);
   });
 });
 

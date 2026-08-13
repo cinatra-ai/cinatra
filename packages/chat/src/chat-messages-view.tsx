@@ -47,7 +47,9 @@ import {
   LifecycleCardSurfaceProvider,
   RenderableViewCard,
   RenderableViewFallback,
+  type ApplyIntentRef,
 } from "./renderable-views";
+import { AppRouteLink } from "./app-route-link";
 import { buildChartView } from "@cinatra-ai/agent-ui-protocol/renderable-views/chart";
 import { FriendlyErrorBody } from "./chat-error-display"; // friendly error card (#534)
 import { InlineAgentRunCard } from "./inline-agent-run-card";
@@ -63,6 +65,33 @@ import {
 import { resolveAssistantDisplayName } from "./assistant-display-name";
 import type { ChatWidgetRuntime, DetectedWidget } from "./widget-runtime";
 import type { UiMessage, UiThoughtGroup } from "./types";
+
+/**
+ * The host declaration this conversation list wraps its cards in
+ * (cinatra#2683, epic #2564 S8f).
+ *
+ * Derived from the provider's OWN props rather than restated, so the host/auth/
+ * frame contract can never drift from `LifecycleCardSurfaceProvider` — including
+ * its fail-closed credential rule (a non-cookie host without
+ * `credentials: "omit"` declares no host at all, so the subtree draws no card
+ * DOM and issues no request).
+ *
+ * WHY THIS IS A PROP AND NOT A CONSTANT. Before S8f the declaration was written
+ * into this module as a literal `host="chat_thread"`, which was correct while
+ * `/chat` was the only consumer. The widget conversation column now mounts the
+ * SAME list, and a hardcoded `chat_thread` there would be the exact defect the
+ * provider was hardened against: `chat_thread` is a cookie-session host, so the
+ * declaration would have re-enabled ambient-cookie resolves INSIDE the broker
+ * surface — answering, and deciding, as whoever else is signed in on that
+ * browser. The host now says who it is; the default keeps `/chat` unchanged.
+ */
+export type LifecycleSurfaceDeclaration = Omit<
+  Parameters<typeof LifecycleCardSurfaceProvider>[0],
+  "children"
+>;
+
+/** `/chat`'s declaration — the literal this module used to hardcode. */
+const CHAT_THREAD_LIFECYCLE_SURFACE: LifecycleSurfaceDeclaration = { host: "chat_thread" };
 
 // ---------------------------------------------------------------------------
 // Icons
@@ -195,8 +224,15 @@ function OrderedPartsSection({
           // Skip pure-whitespace text parts (they're separator artifacts).
           if (!raw.replace(/\s+/g, "").length) return null;
           return (
+            // `data-embed-content` is the stable assistant-content hook the
+            // render-parity harness scrapes (one per assistant-text part). It
+            // used to exist ONLY on the embed's own bespoke content block; the
+            // widget now renders through THIS list, so the hook lives with the
+            // content it names and both surfaces expose it identically.
+            // Passive test observability — it drives no behaviour.
             <div
               key={`text-${idx}`}
+              data-embed-content
               className="max-w-none text-[15px] leading-relaxed text-foreground [&_table]:my-0"
               dangerouslySetInnerHTML={{ __html: renderMarkdown(raw, theme, detectWidgets) }}
             />
@@ -295,7 +331,11 @@ function ErrorCard({ error, errorRaw }: { error: string; errorRaw?: string }) {
   }
 
   return (
-    <div className="max-w-full overflow-hidden rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3">
+    // `data-chat-error-card` is the stable presence hook the two-surface
+    // regression suite reads (cinatra#2683) — passive test observability on the
+    // SHARED card, so "the widget shows the friendly error body, not a reduced
+    // banner" is checked against the same DOM `/chat` produces.
+    <div data-chat-error-card className="max-w-full overflow-hidden rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3">
       <div className="flex items-start gap-2.5">
         <svg viewBox="0 0 20 20" fill="currentColor" className="mt-0.5 h-4 w-4 shrink-0 text-destructive">
           <path fillRule="evenodd" d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM8.28 7.22a.75.75 0 0 0-1.06 1.06L8.94 10l-1.72 1.72a.75.75 0 1 0 1.06 1.06L10 11.06l1.72 1.72a.75.75 0 1 0 1.06-1.06L11.06 10l1.72-1.72a.75.75 0 0 0-1.06-1.06L10 8.94 8.28 7.22Z" clipRule="evenodd" />
@@ -790,11 +830,27 @@ function MessageChartEmbeds({
  * than crashing the transcript; a lifecycle card renders nothing until its
  * authoritative refetch succeeds.
  */
-function MessageRenderableViews({ message }: { message: UiMessage }) {
+function MessageRenderableViews({
+  message,
+  onApplyIntent,
+}: {
+  message: UiMessage;
+  /** §6e (cinatra#1221 S5 Lane B) apply-intent gesture seam, threaded through
+   *  the SHARED list by cinatra#2683. It lived only on the embed's own reduced
+   *  renderer, so mounting this list on the widget would have SILENTLY dropped
+   *  the one gesture that surface owns. Absent (`/chat`) ⇒ the proposal card
+   *  stays display-only, exactly as before — the seam adds a gesture, it never
+   *  changes which card renders. */
+  onApplyIntent?: (ref: ApplyIntentRef) => void;
+}) {
   const views = message.dataParts ?? [];
   if (views.length === 0) return null;
   return views.map((view, i) => (
-    <RenderableViewCard key={`view-${message.id}-${i}`} data={view} />
+    <RenderableViewCard
+      key={`view-${message.id}-${i}`}
+      data={view}
+      {...(onApplyIntent ? { onApplyIntent } : {})}
+    />
   ));
 }
 
@@ -866,7 +922,18 @@ export type ChatMessagesViewProps = {
    *  resolved server-side from the generated `cinatra.views` map. Defaults to
    *  empty — the `chart` viewType then renders the never-blank fallback. */
   chatViews: ChatViewComponents;
+  /** §6e apply-intent gesture seam (cinatra#2683) — see MessageRenderableViews. */
+  onApplyIntent?: (ref: ApplyIntentRef) => void;
+  /** The lifecycle-card host this list declares (cinatra#2683). Omitted ⇒
+   *  `/chat`'s own `{ host: "chat_thread" }` — byte-identical to the literal
+   *  this module carried before the widget mounted the same list. */
+  lifecycleSurface?: LifecycleSurfaceDeclaration;
 };
+
+/** The list renderer's component type — the shape a host hands the ONE column
+ *  (directly, or wrapped in its own `next/dynamic` lazy boundary, which yields a
+ *  `ComponentType` rather than a bare function). */
+export type ChatMessagesViewComponent = ComponentType<ChatMessagesViewProps>;
 
 export function ChatMessagesView({
   messages,
@@ -896,6 +963,8 @@ export function ChatMessagesView({
   pendingExternalHandle,
   typingIndicators,
   chatViews,
+  onApplyIntent,
+  lifecycleSurface = CHAT_THREAD_LIFECYCLE_SURFACE,
 }: ChatMessagesViewProps) {
   // cinatra#2020 S5 (PR-4): bump the confirmation-cards refresh whenever a
   // turn carried a parked destructive call (stable §2.1 prefix). BEST-EFFORT
@@ -1001,13 +1070,19 @@ export function ChatMessagesView({
   }, []);
 
   return (
-    /* cinatra#2565 — `/chat` DECLARES itself as a lifecycle-card host. The
+    /* cinatra#2565 — the surface DECLARES itself as a lifecycle-card host. The
        declaration is opt-in with no default: a surface that has not been
-       reviewed for lifecycle cards (the site widget, whose enablement is S8d's)
-       renders none, rather than inheriting them silently. */
-    <LifecycleCardSurfaceProvider host="chat_thread">
+       reviewed for lifecycle cards renders none, rather than inheriting them
+       silently. cinatra#2683 turns the literal into a prop so the widget can
+       mount this same list under ITS host + broker credential (S8d enabled the
+       widget host); `/chat` passes nothing and keeps `chat_thread`. */
+    <LifecycleCardSurfaceProvider {...lifecycleSurface}>
     {/* gap-8 (was gap-5): action row clears next turn's header on same-side turns (#504) */}
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4">
+    {/* `data-conversation-list` is the stable presence hook for the shared list
+        (cinatra#2683) — the column mounts this module behind a lazy boundary, so
+        a test needs one signal that says "the list is here" on every surface and
+        every fixture. Passive test observability; it drives no behaviour. */}
+    <div data-conversation-list className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4">
       {messages.map((message) => {
         const isUser = message.role === "user";
         if (isSlackMode) {
@@ -1050,13 +1125,13 @@ export function ChatMessagesView({
                   return (
                     <>
                       {profileHref ? (
-                        <Link href={profileHref} className={cn("shrink-0", animating && "animate-slack-avatar-fade-in")}>{avatarEl}</Link>
+                        <AppRouteLink href={profileHref} className={cn("shrink-0", animating && "animate-slack-avatar-fade-in")}>{avatarEl}</AppRouteLink>
                       ) : (
                         <span className={cn("shrink-0", animating && "animate-slack-avatar-fade-in")}>{avatarEl}</span>
                       )}
                       <div className={cn("group/name flex items-center gap-1", animating && "animate-slack-name-fade-in")}>
                         {profileHref ? (
-                          <Link href={profileHref} className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline">{displayName}</Link>
+                          <AppRouteLink href={profileHref} className="text-xs font-medium text-muted-foreground hover:text-foreground hover:underline">{displayName}</AppRouteLink>
                         ) : (
                           <span className="text-xs font-medium text-muted-foreground">{displayName}</span>
                         )}
@@ -1173,7 +1248,7 @@ export function ChatMessagesView({
                         />
                         <MessageMermaidEmbeds message={message} />
                         <MessageChartEmbeds message={message} chatViews={chatViews} />
-                        <MessageRenderableViews message={message} />
+                        <MessageRenderableViews message={message} onApplyIntent={onApplyIntent} />
                         <MessageCitations message={message} />
                         {isStreaming(message.id) && shouldShowLiveProgressStatus(message) && (
                           <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />
@@ -1182,6 +1257,7 @@ export function ChatMessagesView({
                     ) : message.content ? (
                       <>
                         <div
+                          data-embed-content
                           className="max-w-none text-[15px] leading-relaxed text-foreground [&_table]:my-0"
                           dangerouslySetInnerHTML={{ __html: renderMarkdown(
                             isStreaming(message.id)
@@ -1201,7 +1277,7 @@ export function ChatMessagesView({
                         />
                         <MessageMermaidEmbeds message={message} />
                         <MessageChartEmbeds message={message} chatViews={chatViews} />
-                        <MessageRenderableViews message={message} />
+                        <MessageRenderableViews message={message} onApplyIntent={onApplyIntent} />
                         <MessageCitations message={message} />
                         {isStreaming(message.id) && shouldShowLiveProgressStatus(message) && (
                           <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />
@@ -1312,7 +1388,7 @@ export function ChatMessagesView({
                     />
                     <MessageMermaidEmbeds message={message} />
                     <MessageChartEmbeds message={message} chatViews={chatViews} />
-                    <MessageRenderableViews message={message} />
+                    <MessageRenderableViews message={message} onApplyIntent={onApplyIntent} />
                     <MessageCitations message={message} />
                     {isStreaming(message.id) && shouldShowLiveProgressStatus(message) && (
                       <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />
@@ -1321,6 +1397,7 @@ export function ChatMessagesView({
                 ) : message.content ? (
                   <>
                     <div
+                      data-embed-content
                       className="max-w-none text-[15px] leading-relaxed text-foreground [&_table]:my-0"
                       dangerouslySetInnerHTML={{ __html: renderMarkdown(
                         // While streaming, trim incomplete embed prefixes so partial
@@ -1343,7 +1420,7 @@ export function ChatMessagesView({
                     />
                     <MessageMermaidEmbeds message={message} />
                     <MessageChartEmbeds message={message} chatViews={chatViews} />
-                    <MessageRenderableViews message={message} />
+                    <MessageRenderableViews message={message} onApplyIntent={onApplyIntent} />
                     {message.role === "assistant" && <MessageCitations message={message} />}
                     {isStreaming(message.id) && shouldShowLiveProgressStatus(message) && (
                       <ThinkingIndicator className="mt-2" label={getLiveProgressStatus(message)} />

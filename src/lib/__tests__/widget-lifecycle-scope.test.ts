@@ -21,6 +21,11 @@ import {
   WIDGET_LIFECYCLE_READ_ROUTE_PATH,
   WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH,
   WIDGET_LIFECYCLE_DECIDE_SCOPE,
+  WIDGET_CONVERSATION_READ_SCOPE,
+  WIDGET_CONVERSATION_WRITE_SCOPE,
+  WIDGET_TOOL_CONFIRM_SCOPE,
+  WIDGET_CHAT_SETTINGS_ROUTE_PATH,
+  WIDGET_CHAT_UPLOAD_ROUTE_PATH,
   WIDGET_LIFECYCLE_READ_SCOPE,
   formatTokenSet,
   grantedExtensionScopesFromScopeColumn,
@@ -117,11 +122,67 @@ describe("the mint", () => {
     expect(WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH).toBe("/api/lifecycle-views/decide");
   });
 
-  it("a sign-in grants BOTH lifecycle scopes — reading and deciding, as in the app", () => {
+  it("a sign-in grants the whole set this build defines — nothing more, nothing less", () => {
+    // The two LIFECYCLE grants (reading work that waits on you, and deciding it)
+    // plus the three CONVERSATION grants cinatra#2683 added, which are what let
+    // the widget's conversation column behave like `/chat`: reading your own
+    // conversation, writing to it, and confirming a paused action.
+    //
+    // Pinned as an exact set on purpose. A grant that joined the sign-in without
+    // this list changing is a capability a person was never shown a sentence
+    // for — and the consent copy is generated from the same map, so this check
+    // and that screen move together or not at all.
     expect([...WIDGET_SIGNIN_GRANTED_SCOPES].sort()).toEqual([
+      WIDGET_CONVERSATION_READ_SCOPE,
+      WIDGET_CONVERSATION_WRITE_SCOPE,
       WIDGET_LIFECYCLE_DECIDE_SCOPE,
       WIDGET_LIFECYCLE_READ_SCOPE,
+      WIDGET_TOOL_CONFIRM_SCOPE,
     ]);
+  });
+
+  it("every granted scope carries a sentence AND at least one audience", () => {
+    // The map is the single definition of "what does this grant let the token
+    // reach", and the sign-in screen renders one sentence per granted scope from
+    // it. A grant with no copy would be a capability nobody was told about; a
+    // grant with no audience would be a scope that unlocks nothing.
+    for (const scope of WIDGET_SIGNIN_GRANTED_SCOPES) {
+      const entry = WIDGET_EXTENSION_SCOPES[scope];
+      expect(entry.consentCopy.trim().length).toBeGreaterThan(20);
+      expect(entry.audiences.length).toBeGreaterThan(0);
+      for (const audience of entry.audiences) {
+        // An audience is admissible ONLY through a scope this token carries, so
+        // the derivation is re-checked rather than trusted from the column.
+        const aud = mintWidgetTokenAudience([scope]);
+        const carriedScope = mintWidgetTokenScope("wordpress-content-editor", [scope]);
+        expect(tokenAudienceAdmits(carriedScope, aud, audience)).toBe(true);
+        // …and NOT through a token that carries a different grant.
+        const otherScope = mintWidgetTokenScope("wordpress-content-editor", []);
+        expect(tokenAudienceAdmits(otherScope, aud, audience)).toBe(false);
+      }
+    }
+  });
+
+  it("the conversation grants split READ from WRITE from CONFIRM", () => {
+    // One route can serve two operations (the autosave setting does), so the
+    // audience admits the surface and the SCOPE admits the verb. A session that
+    // may read the setting must not be able to write it, and neither of those
+    // may confirm a parked destructive call.
+    const readOnly = mintWidgetTokenScope("wordpress-content-editor", [
+      WIDGET_CONVERSATION_READ_SCOPE,
+    ]);
+    const readAud = mintWidgetTokenAudience([WIDGET_CONVERSATION_READ_SCOPE]);
+    expect(tokenSetHas(readOnly, WIDGET_CONVERSATION_READ_SCOPE)).toBe(true);
+    expect(tokenSetHas(readOnly, WIDGET_CONVERSATION_WRITE_SCOPE)).toBe(false);
+    expect(tokenSetHas(readOnly, WIDGET_TOOL_CONFIRM_SCOPE)).toBe(false);
+    // The settings route IS reachable for a read…
+    expect(
+      tokenAudienceAdmits(readOnly, readAud, WIDGET_CHAT_SETTINGS_ROUTE_PATH),
+    ).toBe(true);
+    // …and the upload route is not reachable at all without the write grant.
+    expect(
+      tokenAudienceAdmits(readOnly, readAud, WIDGET_CHAT_UPLOAD_ROUTE_PATH),
+    ).toBe(false);
   });
 
   it("the lifecycle grant adds its scope AND its audience together", () => {
@@ -293,7 +354,9 @@ describe("the displayed-scope token", () => {
     expect(isNoSignInScreenToken(record)).toBe(false);
     expect(record.startsWith(WIDGET_NO_SIGNIN_SCREEN_PREFIX)).toBe(false);
     expect(
-      widgetNoSignInScreenToken("a".repeat(32)).startsWith(WIDGET_DISPLAYED_SCREEN_PREFIX),
+      widgetNoSignInScreenToken("a".repeat(32), WIDGET_SIGNIN_GRANTED_SCOPES).startsWith(
+        WIDGET_DISPLAYED_SCREEN_PREFIX,
+      ),
     ).toBe(false);
   });
 
@@ -312,8 +375,8 @@ describe("the displayed-scope token", () => {
     // displayed one. But "no screen rendered" is a fact about ONE arrival: a
     // sentinel earned by somebody else's session says nothing about this caller
     // (codex rework round 5, finding 1), so it refuses.
-    const mine = widgetNoSignInScreenToken("a".repeat(32));
-    const theirs = widgetNoSignInScreenToken("b".repeat(32));
+    const mine = widgetNoSignInScreenToken("a".repeat(32), WIDGET_SIGNIN_GRANTED_SCOPES);
+    const theirs = widgetNoSignInScreenToken("b".repeat(32), WIDGET_SIGNIN_GRANTED_SCOPES);
     expect(mine).not.toBe(theirs);
     expect(displayedScopesAgree(mine, WIDGET_SIGNIN_GRANTED_SCOPES, mine)).toBe(true);
     expect(displayedScopesAgree(mine, [], mine)).toBe(true);
@@ -346,11 +409,35 @@ describe("the displayed-scope token", () => {
     // a caller that could not identify its session neither writes nor admits a
     // sentinel.
     for (const bad of ["", "   ", "not-hex", "abc", "A".repeat(32), "a".repeat(200)]) {
-      expect(widgetNoSignInScreenToken(bad)).toBe("");
+      expect(widgetNoSignInScreenToken(bad, WIDGET_SIGNIN_GRANTED_SCOPES)).toBe("");
     }
-    expect(widgetNoSignInScreenToken("f".repeat(32))).toBe(
-      `${WIDGET_NO_SIGNIN_SCREEN_PREFIX}${"f".repeat(32)})`,
+    expect(widgetNoSignInScreenToken("f".repeat(32), [])).toBe(
+      `${WIDGET_NO_SIGNIN_SCREEN_PREFIX}${"f".repeat(32)}:)`,
     );
+  });
+
+  it("names the SET it was written for, so a rollout cannot widen it silently", () => {
+    // cinatra#2683, codex round 1, finding 1. A no-screen claim used to say only
+    // "no screen rendered for this session", which outlives the set it was made
+    // under: during the one deploy that ADDS a grant, an old node stamps the
+    // sentinel and a new node admits it — granting a capability nobody was shown.
+    // Tolerable while the additions only read; not once one of them CONFIRMS A
+    // DESTRUCTIVE ACTION. So the set is part of the token, and a token written
+    // for a different set is refused.
+    const fp = "a".repeat(32);
+    const older = widgetNoSignInScreenToken(fp, [WIDGET_LIFECYCLE_READ_SCOPE]);
+    const current = widgetNoSignInScreenToken(fp, WIDGET_SIGNIN_GRANTED_SCOPES);
+    expect(older).not.toBe(current);
+    expect(displayedScopesAgree(older, WIDGET_SIGNIN_GRANTED_SCOPES, current)).toBe(false);
+    // A PRE-BINDING token (the shape an older node writes) is refused too — the
+    // same fail-closed the unclassified value and the pre-column NULL get.
+    const legacy = `${WIDGET_NO_SIGNIN_SCREEN_PREFIX}${fp})`;
+    expect(displayedScopesAgree(legacy, WIDGET_SIGNIN_GRANTED_SCOPES, current)).toBe(false);
+    // Order is not membership: reordering the constant must not invalidate a
+    // token somebody is holding.
+    expect(
+      widgetNoSignInScreenToken(fp, [...WIDGET_SIGNIN_GRANTED_SCOPES].reverse()),
+    ).toBe(current);
   });
 
   it("REFUSES null — a transaction that predates the mechanism knows nothing", () => {

@@ -566,6 +566,22 @@ export type DriveAssistantChatTurnOptions = {
    *  to its assistant from its first persisted moment. DISTINCT from
    *  {@link assistant}, which picks the PRODUCER of this one turn. */
   chatContainer?: ChatTurnContainerRef;
+  // ----- Broker-transport seams (cinatra#2683, epic #2564 S8f) — ADDITIVE.
+  // `streamAssistantTurn` has carried these since S5 Lane B (#1221 §9.1); this
+  // driver did not, so the embed could not use it and drove the wire itself
+  // with a reduced single-turn state. Threading them here is what lets ONE turn
+  // driver serve both surfaces: the widget conversation column gets the whole
+  // `/chat` turn lifecycle (empty-bubble insert, per-fold projection,
+  // retry-once, AbortError silence, transport-error surfacing on the bubble)
+  // instead of a second implementation of it. Absent ⇒ byte-identical
+  // cookie-session behaviour. ---------------------------------------------
+  /** A `token-broker` header provider. Applied to the TURN POST exactly as
+   *  `streamAssistantTurn` applies it; NEVER to the resume GET (its audience is
+   *  distinct — see `resumeAuthHeaders` there). */
+  authHeaders?: () => Record<string, string>;
+  /** `"omit"` on a broker surface so an ambient Cinatra cookie cannot create a
+   *  silent session fallback (§B11). Absent/`"include"` = cookie session. */
+  credentialsMode?: "include" | "omit";
 };
 
 /**
@@ -621,6 +637,14 @@ export async function driveAssistantChatTurn(
         // Same reason: a retry must assert the SAME container, or the retried
         // turn would home the thread in the default instead (cinatra#2650).
         ...(options.chatContainer ? { chatContainer: options.chatContainer } : {}),
+        // Same reason again, and it is the load-bearing one on a broker surface
+        // (cinatra#2683): a retry that silently dropped the credential would
+        // re-issue the turn with NO proof — and, without `credentials: "omit"`
+        // carried alongside, would re-issue it under whatever ambient Cinatra
+        // cookie happens to be in that browser. Both travel together, on every
+        // attempt, or neither does.
+        ...(options.authHeaders ? { authHeaders: options.authHeaders } : {}),
+        ...(options.credentialsMode ? { credentialsMode: options.credentialsMode } : {}),
         signal,
         onState: (state) => {
           anyEventSeen = true;
@@ -823,6 +847,19 @@ export type UploadChatAttachmentsOptions = {
    *  Omitted (or absent thread) means no thread context is captured; the upload
    *  still succeeds. */
   threadId?: string;
+  /**
+   * The BROKER seam (cinatra#2683, epic #2564 S8f) — the same pair the turn
+   * driver takes, for the same reason, so an attachment and the turn it rides on
+   * prove who is asking in exactly one way.
+   *
+   * Absent ⇒ the first-party cookie upload, byte-identical to before.
+   * Present ⇒ the headers are built AT CALL TIME from the host's closure-held
+   * tokens and `credentialsMode: "omit"` is load-bearing: this endpoint is
+   * same-origin to the embed frame, so an ambient cookie would file the reader's
+   * attachment into whoever else's account is signed in on that browser.
+   */
+  authHeaders?: () => Record<string, string>;
+  credentialsMode?: "include" | "omit";
 };
 
 /** Upload picked files to /api/artifacts/upload.
@@ -846,13 +883,15 @@ export async function uploadChatAttachments(
     try {
       const r = await fetch("/api/artifacts/upload", {
         method: "POST",
-        credentials: "include",
+        credentials: options.credentialsMode ?? "include",
         headers: {
           "Content-Type": file.type || "application/octet-stream",
           "X-Artifact-Filename": file.name,
           "X-Artifact-Title": file.name,
           // Opt-in chat-context signal — only when a thread id is known.
           ...(threadId ? { "X-Artifact-Chat-Thread-Id": threadId } : {}),
+          // Built at call time, never held — see the options doc.
+          ...(options.authHeaders?.() ?? {}),
         },
         body: file,
       });

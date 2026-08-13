@@ -4,26 +4,32 @@
 // activeThreadId-keyed reset, "scrolled up in thread A" leaked into thread B
 // and a newly opened thread rendered at an arbitrary position instead of its
 // latest message — the lock was only ever released on stream completion.
+//
+// MECHANICAL REPOINT (cinatra#2683, epic #2564 S8f): the scroll container, the
+// lock and both of its releases moved OUT of chat-page.tsx and into the ONE
+// conversation column, which the site widget now mounts too. The behaviour is
+// unchanged — so is this pin, aimed at the file that holds it. The reset is a
+// standalone effect there rather than folded into the thread-sync effect,
+// because the column has no activeThreadIdRef to fold it into; what still
+// matters, and is still asserted, is that it runs BEFORE the scroll effect.
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const PKG_ROOT = path.resolve(__dirname, "..", "..");
-const src = readFileSync(path.join(PKG_ROOT, "src", "chat-page.tsx"), "utf8");
+const src = readFileSync(path.join(PKG_ROOT, "src", "conversation-column.tsx"), "utf8");
 
 describe("chat auto-scroll lock across thread switches", () => {
-  it("releases the scroll lock when the active thread changes (inside the thread-sync effect)", () => {
-    // Folded into the existing activeThreadIdRef sync effect — the file is a
-    // baselined file-size-ratchet bottleneck, so no standalone effect.
+  it("releases the scroll lock when the active thread changes", () => {
     expect(src).toMatch(
-      /useEffect\(\(\) => \{\s*activeThreadIdRef\.current = activeThreadId;\s*userScrolledUpRef\.current = false;\s*\}, \[activeThreadId\]\);/,
+      /useEffect\(\(\) => \{\s*userScrolledUpRef\.current = false;\s*\}, \[activeThreadId\]\);/,
     );
   });
 
   it("runs the release BEFORE the scroll effect so a same-render (cached) thread switch scrolls", () => {
     const resetIdx = src.search(
-      /activeThreadIdRef\.current = activeThreadId;\s*userScrolledUpRef\.current = false;/,
+      /userScrolledUpRef\.current = false;\s*\}, \[activeThreadId\]\);/,
     );
     const scrollEffectIdx = src.search(
       /scrollToBottom\(\);\s*\}, \[messages, streamingCount, pendingExternalHandle, typingIndicators, scrollToBottom\]\);/,

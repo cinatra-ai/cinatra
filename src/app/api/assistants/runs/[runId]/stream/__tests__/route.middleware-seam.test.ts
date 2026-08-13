@@ -212,12 +212,19 @@ describe("#1881 seam — AC-1 REJECT (middleware open, handler is the fail-close
 
 describe("#1881 seam — NARROWNESS (a cookieless sibling stays 307'd by the middleware)", () => {
   it("a cookieless sibling assistants run sub-route is NOT public (matcher must end at /stream)", async () => {
+    // NOTE (cinatra#2683 S8f): `/api/assistants/list` USED to sit in this list.
+    // It left because it earned its own public-path entry — the composer's
+    // @-mention directory is a read the widget makes with `credentials:"omit"`,
+    // so a 307 to /sign-in was followed by `fetch` and parsed as an empty
+    // directory. It is public REACHABILITY only: the handler still places the
+    // caller (session, or the conversation door) and 401s one it cannot. The
+    // narrowness this test protects is unchanged — the /stream matcher must not
+    // spill onto its siblings — and every path below still proves it.
     for (const p of [
       `/api/assistants/runs/${RUN}/cancel`,
       `/api/assistants/runs/${RUN}`,
       `/api/assistants/runs/${RUN}/stream/extra`,
       "/api/assistants/runs/not-a-uuid/stream",
-      "/api/assistants/list",
     ]) {
       const guard = await guardAppRoute(middlewareRequest(p));
       expect(guard.status, `${p} must stay session-guarded`).toBe(307);

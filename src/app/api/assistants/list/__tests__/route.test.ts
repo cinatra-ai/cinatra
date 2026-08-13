@@ -73,6 +73,13 @@ vi.mock("drizzle-orm", () => ({
 
 import { GET } from "../route";
 
+/**
+ * A COOKIE-SESSION GET — no widget headers, so the route's cinatra#2683 branch
+ * discriminant is absent and every check below reads the first-party path,
+ * exactly as it did before the widget branch existed.
+ */
+const cookieGet = () => new Request("https://app.test/api/assistants/list");
+
 describe("GET /api/assistants/list", () => {
   beforeEach(() => {
     h.whereCalls.length = 0;
@@ -84,7 +91,7 @@ describe("GET /api/assistants/list", () => {
 
   it("401s with no session", async () => {
     h.getSession.mockResolvedValue(null);
-    const res = await GET();
+    const res = await GET(cookieGet());
     expect(res.status).toBe(401);
     expect(h.whereCalls.length).toBe(0);
   });
@@ -102,7 +109,7 @@ describe("GET /api/assistants/list", () => {
     ];
     h.state.handles = { asst: "cinatra" }; // registry handle → picker surfaces the assistant
 
-    const res = await GET();
+    const res = await GET(cookieGet());
     expect(res.status).toBe(200);
 
     // The caller's own membership in the active org was probed.
@@ -148,7 +155,7 @@ describe("GET /api/assistants/list", () => {
     h.state.rows = [{ id: "asst", username: "cinatra", userType: "assistant" }];
     h.state.handles = { asst: "cinatra" };
 
-    const res = await GET();
+    const res = await GET(cookieGet());
     expect(res.status).toBe(200);
 
     // No co-org subquery was built (only the membership probe hit the member table).
@@ -169,7 +176,7 @@ describe("GET /api/assistants/list", () => {
     h.state.rows = [{ id: "asst", username: "cinatra", userType: "assistant" }];
     h.state.handles = { asst: "cinatra" };
 
-    const res = await GET();
+    const res = await GET(cookieGet());
     expect(res.status).toBe(200);
     // No member table access at all.
     expect(h.whereCalls.find((c) => c.table === h.betterAuthMembers)).toBeUndefined();
@@ -187,7 +194,7 @@ describe("GET /api/assistants/list", () => {
     ];
     h.state.handles = { asst: "cinatra" }; // asst-new not yet backfilled
 
-    const res = await GET();
+    const res = await GET(cookieGet());
     expect(res.status).toBe(200);
     const body = (await res.json()) as { assistants: Array<{ id: string; handle: string }> };
     expect(body.assistants.map((a) => a.id)).toEqual(["asst"]);

@@ -71,6 +71,9 @@ const NONCE_B = nonceOf("person-B");
 const noScreenFor = (sessionId: string) =>
   widgetNoSignInScreenToken(
     createHash("sha256").update(sessionId).digest("hex").slice(0, 32),
+    // The set the token is written for (cinatra#2683): a sentinel earned under a
+    // different set is refused, so the helper states this build's.
+    WIDGET_SIGNIN_GRANTED_SCOPES,
   );
 
 const TXN = {

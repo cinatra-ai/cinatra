@@ -65,7 +65,18 @@ export type WidgetAuthAuditEvent =
   // investigation of a suspicious decision does not have to read every read
   // (codex round 0, finding 6). Same seam, same fields, same scrubbing.
   | "widget_lifecycle_decide_authorized"
-  | "widget_lifecycle_decide_rejected";
+  | "widget_lifecycle_decide_rejected"
+  // cinatra#2683 (epic #2564 S8f) — the same DECISION, for the conversation
+  // column's own data paths on the widget. One pair per GRANT rather than one
+  // pair for the whole slice, for the reason the lifecycle pair is split: an
+  // investigation of "who confirmed that destructive call from a website" must
+  // not have to read every thread-history read to find it.
+  | "widget_conversation_read_authorized"
+  | "widget_conversation_read_rejected"
+  | "widget_conversation_write_authorized"
+  | "widget_conversation_write_rejected"
+  | "widget_tool_confirm_authorized"
+  | "widget_tool_confirm_rejected";
 
 export type WidgetAuthAuditFields = {
   actor?: string | null; // userId (never an email/secret)

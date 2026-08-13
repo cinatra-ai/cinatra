@@ -72,6 +72,13 @@ function patchReq(bodyObj: unknown, headers: Record<string, string> = {}): Reque
   });
 }
 
+/**
+ * A COOKIE-SESSION GET — no widget headers, so the route's cinatra#2683 branch
+ * discriminant is absent and every check below reads the first-party path,
+ * exactly as it did before the widget branch existed.
+ */
+const cookieGet = () => new Request("https://app.test/api/assistants/autosave");
+
 describe("assistants/autosave route handler (chat-capture config gate)", () => {
   beforeEach(() => {
     logAuditEventStrict.mockResolvedValue({ id: "audit-1" });
@@ -83,14 +90,14 @@ describe("assistants/autosave route handler (chat-capture config gate)", () => {
   it("GET 401 when unauthenticated", async () => {
     getActorContext.mockResolvedValue(undefined);
     const { GET } = await import("../route");
-    const res = await GET();
+    const res = await GET(cookieGet());
     expect(res.status).toBe(401);
   });
 
   it("GET 200 for any authenticated actor", async () => {
     getActorContext.mockResolvedValue(orgAdmin());
     const { GET } = await import("../route");
-    const res = await GET();
+    const res = await GET(cookieGet());
     expect(res.status).toBe(200);
   });
 
@@ -142,7 +149,7 @@ describe("assistants/autosave route handler (chat-capture config gate)", () => {
     getActorContext.mockResolvedValue(orgAdmin());
     readSkillAutosaveUserPref.mockReturnValueOnce({ chatCaptureEnabled: false });
     const { GET } = await import("../route");
-    const res = await GET();
+    const res = await GET(cookieGet());
     expect(res.status).toBe(200);
     const body = (await res.json()) as { userChatCaptureEnabled: boolean | null };
     expect(body.userChatCaptureEnabled).toBe(false);

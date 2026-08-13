@@ -54,15 +54,24 @@ export const SEL = {
   // never bootstraps), so waiting on `embedActive` is ALSO the live
   // frame-ancestors check.
   embedActive: '[data-embed-assistant][data-phase="active"]',
-  embedComposerInput: 'input[aria-label="Message"]',
-  // The embed composer's Send control. It is a JS-driven `type="button"` (NOT a
-  // form submit): the embed runs inside the CMS widget's
-  // `sandbox="allow-scripts allow-same-origin"` iframe, which grants no
-  // `allow-forms`, so a native form submission is blocked and never fires — the
-  // composer sends via onClick/Enter instead (embed-assistant-client.tsx). Target
-  // the stable `data-embed-composer-submit` hook, not a `type` that no longer
-  // means "submit".
-  embedComposerSubmit: "[data-embed-composer-submit]",
+  // cinatra#2683 (epic #2564 S8f): the embed's bespoke single-line `<input>` is
+  // gone. The widget now mounts the SAME composer `/chat` mounts (`PromptField`,
+  // a contenteditable editor with the circular icon send control), so these
+  // selectors are the shared composer's own hooks — identical on both surfaces,
+  // which is the point of the slice.
+  embedComposerInput: '[data-testid="chat-prompt-input"]',
+  // The send control is STILL a JS-driven `type="button"`, not a form submit:
+  // the embed runs inside the CMS widget's `sandbox="allow-scripts
+  // allow-same-origin"` iframe, which grants no `allow-forms`, so a native form
+  // submission is blocked and never fires. PromptField submits from onClick /
+  // Enter inside a plain <div>, so nothing depends on form submission being
+  // permitted. While a turn runs the SAME control becomes "Stop generating".
+  //
+  // PRESENCE hook: `sendPrompt` submits with Enter rather than by clicking this,
+  // because in the dev server the composer's bottom-right corner is under the
+  // Next.js dev-overlay portal — see the note there.
+  embedComposerSubmit: 'button[aria-label="Send message"]',
+  embedComposerStop: 'button[aria-label="Stop generating"]',
   // One `[data-embed-content]` per assistant-text part (the S3 renderer output).
   embedAssistant: "[data-embed-content]",
   // The embed container mirrors the reduced conversation status; "finished" is a
@@ -326,8 +335,26 @@ export async function sendPrompt(page: Page, text: string): Promise<void> {
   // The composer lives INSIDE the sandboxed cross-origin embed iframe now; type
   // + submit through the frame (openWidget() has already waited it `active`).
   const frame = page.frameLocator(SEL.frame);
-  await frame.locator(SEL.embedComposerInput).fill(text);
-  await frame.locator(SEL.embedComposerSubmit).click();
+  // A contenteditable is filled, not `.fill()`-ed like an <input> — Playwright's
+  // fill() works on contenteditable too and dispatches the `input` event the
+  // composer learns its value from, so this stays one call.
+  const editor = frame.locator(SEL.embedComposerInput);
+  await editor.fill(text);
+  // SUBMIT WITH ENTER, NOT BY CLICKING THE SEND CONTROL (cinatra#2683).
+  //
+  // Since S8f the widget mounts the SAME composer `/chat` mounts, whose send
+  // control is a circular icon button pinned to the composer's bottom-right
+  // corner. In the DEV server this suite drives, that corner is exactly where
+  // Next.js parks its dev-overlay portal — so the click retried for 30s against
+  // "<nextjs-portal> … intercepts pointer events" while the button itself was
+  // visible, enabled and stable. Nothing about the widget was wrong; the overlay
+  // was on top of it.
+  //
+  // Enter is the same submit path (`PromptField` handles the keydown itself) and
+  // is the gesture a reader actually uses. It is also still sandbox-safe: the
+  // composer is a contenteditable in a plain <div>, never a <form>, so no part of
+  // this depends on `allow-forms`, which the CMS widget's iframe does not grant.
+  await editor.press("Enter");
 }
 
 /**

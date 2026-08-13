@@ -102,6 +102,89 @@ export const WIDGET_LIFECYCLE_DECIDE_SCOPE = "lifecycle.decide";
  */
 export const WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH = "/api/lifecycle-views/decide";
 
+// ---------------------------------------------------------------------------
+// The CONVERSATION grants (cinatra#2683, epic #2564 S8f).
+// ---------------------------------------------------------------------------
+// S8f made `/chat` and the widget render ONE conversation column. Six of its
+// affordances still could not work on the widget, for one reason each time: they
+// read or write through a COOKIE-bound path, and the embed frame is same-origin
+// to the Cinatra app, so a cookie-borne request from it answers as whoever else
+// is signed in on that browser. The column was right; the data paths were
+// first-party-only.
+//
+// These three grants are what the widget session presents instead. They follow
+// the lifecycle pair's shape exactly — a (route audience, required scope) pair,
+// re-derived at consume, AC-1 by construction — and they are split the way the
+// lifecycle pair is split, by WHAT THE PERSON IS CONSENTING TO rather than by
+// which endpoint happens to serve it:
+//
+//   · `conversation.read`  — show me my own conversation and the things around
+//     it: my earlier messages, who I can @-mention, the actions parked waiting
+//     for my confirmation, and whether a run's changes can still be undone.
+//   · `conversation.write` — let me attach files to it and change my own chat
+//     settings from here.
+//   · `tools.confirm`      — let me confirm or reject a parked destructive tool
+//     call. Its OWN grant, and deliberately not folded into `conversation.write`:
+//     attaching a file and executing a parked destructive action are not the
+//     same thing to consent to, which is the same reason `lifecycle.decide` is
+//     not part of `lifecycle.read`.
+//
+// EVERY ONE OF THEM CARRIES THE PERSON'S OWN STANDING AND NOTHING MORE. The
+// server re-resolves the reader's live org role, teams and project grants (the
+// S8a full actor) on every request and runs the SAME per-row authorization the
+// in-app surface runs. The site holds no credential and gains no reach: a widget
+// reader sees and does exactly what they see and do inside Cinatra.
+//
+// THE AUDIENCE IS PER ROUTE, THE SCOPE IS PER OPERATION. `/api/assistants/autosave`
+// is declared by BOTH conversation grants because one route serves the read and
+// the write; which of the two a request needs is decided by the METHOD at the
+// branch, against `requiredScopes`. That is the same two-gate model the lifecycle
+// pair uses, applied to a route that carries two operations.
+
+/** Read the conversation's own surrounding data (history, participants, parked
+ *  calls, undo candidate). Never a mutation. */
+export const WIDGET_CONVERSATION_READ_SCOPE = "conversation.read";
+
+/** Write the things the composer owns: an attachment, and the caller's own chat
+ *  settings. Never another person's row, and never a tool execution. */
+export const WIDGET_CONVERSATION_WRITE_SCOPE = "conversation.write";
+
+/** Decide a parked destructive tool call — the highest-stakes thing in this
+ *  column, so it is its own grant. */
+export const WIDGET_TOOL_CONFIRM_SCOPE = "tools.confirm";
+
+/**
+ * The thread-read audience. The route is `/api/assistants/threads/[threadId]`;
+ * the audience names the SURFACE (`/api/assistants/threads`) rather than one
+ * rendered path, because a token cannot be minted per thread and an audience
+ * that had to be is an audience nobody could check. The thread a caller may read
+ * is decided by the per-row ownership matrix, never by this string.
+ */
+export const WIDGET_CHAT_THREADS_ROUTE_PATH = "/api/assistants/threads";
+
+/** The @-mention participant list — the SAME directory reader `/chat` uses. */
+export const WIDGET_CHAT_PARTICIPANTS_ROUTE_PATH = "/api/assistants/list";
+
+/** The Skill-autosave account setting — one route, two operations (see above). */
+export const WIDGET_CHAT_SETTINGS_ROUTE_PATH = "/api/assistants/autosave";
+
+/** The attachment upload. The artifact it creates is owned by the WIDGET
+ *  principal and private to them, exactly as an in-app upload is. */
+export const WIDGET_CHAT_UPLOAD_ROUTE_PATH = "/api/artifacts/upload";
+
+/**
+ * The parked destructive tool calls — list AND decide, on one route with one
+ * auth branch per credential, mirroring `/api/lifecycle-views/decide`. Declared
+ * by `conversation.read` (the list) and by `tools.confirm` (the decision), so a
+ * token holding only the read reaches the surface and is refused the operation.
+ */
+export const WIDGET_CHAT_PENDING_CALLS_ROUTE_PATH = "/api/chat/pending-tool-calls";
+
+/** The undo chip's read — "did this run leave a change set I could still undo?".
+ *  The UNDO ITSELF is not here: it happens on the first-party restore surface the
+ *  chip deep-links to, under the reader's own session. */
+export const WIDGET_CHAT_UNDO_ROUTE_PATH = "/api/chat/undo-candidate";
+
 /**
  * The grammar of a single set member. Deliberately strict and whitespace-free:
  * the set encoding IS the whitespace, so a value carrying any is not one member
@@ -200,14 +283,42 @@ export const WIDGET_SIGNIN_SCREEN_UNCLASSIFIED = "(unclassified)";
 export const WIDGET_NO_SIGNIN_SCREEN_PREFIX = "(no-screen:";
 
 /**
- * The no-screen token for ONE session. Empty fingerprint → empty token, which
- * every consumer treats as "no token": a caller that could not identify the
- * session it is looking at may neither write the sentinel nor match one.
+ * The no-screen token for ONE session AND ONE GRANTED SET. Empty fingerprint →
+ * empty token, which every consumer treats as "no token": a caller that could
+ * not identify the session it is looking at may neither write the sentinel nor
+ * match one.
+ *
+ * IT NAMES THE SET IT WAS WRITTEN FOR (cinatra#2683, codex round 1, finding 1).
+ * The no-screen claim used to say only "no screen rendered for this session",
+ * which is a statement that outlives the set it was made under — so during the
+ * one rolling deploy that ADDS a grant, an old node could stamp the sentinel and
+ * a new node would admit it and record the larger set. Whoever signed in that
+ * way was shown nothing and granted more than the build they met would have
+ * granted. That was tolerable while the added grants only READ; S8f adds one
+ * that CONFIRMS A DESTRUCTIVE ACTION, and a silent widening of that is not.
+ *
+ * Binding the set makes the mixed-version window fail closed in both directions,
+ * exactly as `(unclassified)` and the pre-column NULL already do: an old node's
+ * bare token is not equal to this build's, so it is refused, and the person
+ * opens the assistant login again — which, on a current node, writes the token
+ * this build admits. It costs one extra round trip during a rollout and closes a
+ * silent escalation.
+ *
+ * IT IS STILL NEVER A SOURCE. Nothing is granted because this token says so; the
+ * recorded set is always the server constant. The token can only cause a
+ * REFUSAL.
+ *
+ * The set is REQUIRED, not optional. An optional argument is one a call site can
+ * forget, and a forgotten one here reopens exactly the window it closes.
  */
-export function widgetNoSignInScreenToken(sessionFingerprint: string): string {
+export function widgetNoSignInScreenToken(
+  sessionFingerprint: string,
+  grantedScopes: readonly string[],
+): string {
   const fingerprint = String(sessionFingerprint ?? "").trim();
   if (!/^[a-f0-9]{16,128}$/.test(fingerprint)) return "";
-  return `${WIDGET_NO_SIGNIN_SCREEN_PREFIX}${fingerprint})`;
+  const canonical = [...grantedScopes].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return `${WIDGET_NO_SIGNIN_SCREEN_PREFIX}${fingerprint}:${formatTokenSet(canonical)})`;
 }
 
 /** Is this recorded value a no-screen claim (whoever it names)? */
@@ -454,6 +565,57 @@ export const WIDGET_EXTENSION_SCOPES = {
     consentCopy:
       "Let you approve, reject or comment on those work items from this site — the same decision, with the same permissions, as inside Cinatra.",
   },
+  [WIDGET_CONVERSATION_READ_SCOPE]: {
+    audiences: [
+      WIDGET_CHAT_THREADS_ROUTE_PATH,
+      WIDGET_CHAT_PARTICIPANTS_ROUTE_PATH,
+      WIDGET_CHAT_SETTINGS_ROUTE_PATH,
+      WIDGET_CHAT_PENDING_CALLS_ROUTE_PATH,
+      WIDGET_CHAT_UNDO_ROUTE_PATH,
+    ] as readonly string[],
+    /**
+     * The sentence the hosted SIGN-IN screen shows for this grant.
+     *
+     * It names every surface the grant reaches, because the map is what the
+     * screen is generated from — a grant cannot gain an audience without the
+     * sentence that admits to it changing in the same edit.
+     */
+    consentCopy:
+      "Show your own conversation with this assistant — your earlier messages, the people and assistants you can mention, the actions waiting for your confirmation, and whether a run can still be undone — using the same permissions you have in Cinatra.",
+  },
+  [WIDGET_CONVERSATION_WRITE_SCOPE]: {
+    audiences: [
+      WIDGET_CHAT_UPLOAD_ROUTE_PATH,
+      WIDGET_CHAT_SETTINGS_ROUTE_PATH,
+      // cinatra#2683 item 1, WRITE HALF. The transcript restore reads this same
+      // route path under `conversation.read`; keeping the conversation is the
+      // write that makes there be something to read. One audience, two verbs,
+      // two scopes — the audience admits the surface, the scope admits the verb.
+      WIDGET_CHAT_THREADS_ROUTE_PATH,
+    ] as readonly string[],
+    /**
+     * The sentence the hosted SIGN-IN screen shows for this grant. It says whose
+     * account the write lands in, because that is the question a reader on
+     * somebody else's website is actually asking.
+     *
+     * The first clause is new with the thread-write audience above: a grant
+     * cannot gain an audience without the sentence that admits to it changing in
+     * the same edit, and "your conversation is kept" is the one thing a reader
+     * would be surprised by if it were not said.
+     */
+    consentCopy:
+      "Keep your conversation with this assistant, so it is still there when you come back to this page. Let you attach files to it and change your own chat settings from this site. The conversation and the files are saved to your Cinatra account and stay private to you.",
+  },
+  [WIDGET_TOOL_CONFIRM_SCOPE]: {
+    audiences: [WIDGET_CHAT_PENDING_CALLS_ROUTE_PATH] as readonly string[],
+    /**
+     * The sentence the hosted SIGN-IN screen shows for this grant. It is a
+     * separate grant because it is a separate thing to agree to: the others show
+     * you your conversation, this one runs an action that changes something.
+     */
+    consentCopy:
+      "Let you confirm or reject an action the assistant paused for your approval — the same decision, with the same permissions, as inside Cinatra.",
+  },
 } as const satisfies Record<
   string,
   { audiences: readonly string[]; consentCopy: string }
@@ -476,6 +638,14 @@ export type WidgetExtensionScope = keyof typeof WIDGET_EXTENSION_SCOPES;
 export const WIDGET_SIGNIN_GRANTED_SCOPES: readonly WidgetExtensionScope[] = [
   WIDGET_LIFECYCLE_READ_SCOPE,
   WIDGET_LIFECYCLE_DECIDE_SCOPE,
+  // cinatra#2683 (epic #2564 S8f) — the conversation column's own data paths.
+  // A session minted before this slice carries none of them and its widget keeps
+  // behaving exactly as it did (AC-1): the affordances stay absent until the
+  // person opens the assistant login again. That is the designed cutover, not a
+  // regression — an already-minted token never acquires a grant.
+  WIDGET_CONVERSATION_READ_SCOPE,
+  WIDGET_CONVERSATION_WRITE_SCOPE,
+  WIDGET_TOOL_CONFIRM_SCOPE,
 ];
 
 export function isKnownWidgetExtensionScope(

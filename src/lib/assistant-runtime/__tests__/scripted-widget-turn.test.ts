@@ -8,12 +8,18 @@
 //   2. PROD-MODE CONFORMANCE PIN — with the flag OFF, the widget path is
 //      UNCHANGED: it still resolves the default adapter and (when none) fails with
 //      "No LLM provider configured." (adapter resolution untouched).
-//   3. SCOPE — the short-circuit is gated to the widget path; the cookie-session
-//      `@cinatra` path (no widget principal) is NEVER short-circuited even with
-//      the flag on, so its host-`stream()` scripted seam is unaffected.
+//   3. SCOPE — the CMS stand-in is gated to the widget path; a cookie-session
+//      `@cinatra` turn (no widget principal) is NEVER short-circuited for it, even
+//      with the flag on, so its host-`stream()` scripted seam is unaffected.
+//   4. THE `/chat` LIFECYCLE BRANCH (cinatra#2683) — the one cookie-session turn
+//      that DOES short-circuit: a lifecycle question the provider itself claims.
+//      It drives the real primitives through the chat-bearer dispatcher, and the
+//      reserved producer label rides ONLY what that dispatcher reported.
 //
 // The heavy import graph is mocked; the REAL `@cinatra-ai/llm/scripted-test-provider`
-// seam runs (not mocked) so this is a genuine seam test.
+// seam runs (not mocked) so this is a genuine seam test. The widget dispatcher is
+// real too — only the CHAT dispatcher is replaced, because its transport is the
+// one thing a unit test cannot stand up (a live self-MCP server).
 
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 
@@ -89,6 +95,31 @@ vi.mock("@cinatra-ai/llm", () => ({
   resolveChatExternalMcpTools: vi.fn(async () => []),
   buildLlmMcpServerToolForChat: vi.fn(async () => ({ type: "mcp", name: "cinatra" })),
   buildLlmMcpServerToolForWidget: vi.fn(async () => ({ type: "mcp", name: "cinatra" })),
+}));
+
+// The CHAT dispatcher, replaced. Its widget twin stays REAL (the module is
+// imported for real and only this one export is swapped), so the widget scenarios
+// below keep constructing the shipped dispatcher exactly as they did.
+const { chatDispatchScript, createChatDispatchSpy } = vi.hoisted(() => {
+  const chatDispatchScript = {
+    /** What the "real" primitive answers, keyed by tool name. */
+    answers: {} as Record<string, string>,
+    /** Whether the dispatcher REPORTS its answer as genuinely dispatched. */
+    report: true,
+  };
+  const createChatDispatchSpy = vi.fn(
+    (params: { onDispatched?: (t: string) => void }) => async (call: { name: string }) => {
+      const text = chatDispatchScript.answers[call.name] ?? "{}";
+      if (chatDispatchScript.report) params.onDispatched?.(text);
+      return text;
+    },
+  );
+  return { chatDispatchScript, createChatDispatchSpy };
+});
+vi.mock("../scripted-self-mcp-dispatch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../scripted-self-mcp-dispatch")>()),
+  createScriptedChatSelfMcpDispatch: (p: { onDispatched?: (t: string) => void }) =>
+    createChatDispatchSpy(p),
 }));
 
 import { runAssistantTurn } from "../runtime";
@@ -256,7 +287,7 @@ describe("runAssistantTurn scripted-provider short-circuit (widget path)", () =>
     expect((actor as { jti: string }).jti).not.toBe("run-widget");
   });
 
-  it("SCOPE: the cookie-session path (no widget principal) is NEVER short-circuited, even with the flag on", async () => {
+  it("SCOPE: a cookie-session turn the provider does NOT claim is never short-circuited, even with the flag on", async () => {
     process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
     process.env.CINATRA_RUNTIME_MODE = "development";
     resolveDefaultAdapter.mockResolvedValueOnce(null);
@@ -266,9 +297,158 @@ describe("runAssistantTurn scripted-provider short-circuit (widget path)", () =>
       buildCinatraAssistantRuntimeConfig(),
       argsWith((e, d) => frames.push({ event: e, data: d }), null, "Please rewrite the title."),
     );
-    // The @cinatra path resolves the adapter as usual (host stream() owns its own
-    // scripted seam); the widget short-circuit did not fire.
+    // An edit request is not a lifecycle question, so the @cinatra path resolves
+    // the adapter as usual (host stream() owns its own scripted seam) — neither
+    // short-circuit fired, and no chat dispatcher was even built.
     expect(resolveDefaultAdapter).toHaveBeenCalledTimes(1);
+    expect(createChatDispatchSpy).not.toHaveBeenCalled();
     expect(frames.some((f) => f.event === "text")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE `/chat` LIFECYCLE BRANCH (cinatra#2683, epic #2564 S8f).
+// ---------------------------------------------------------------------------
+const LIST_TOOL = "artifact_review_gates_list";
+const RENDER_TOOL = "artifact_review_gate_render";
+const REAL_LIST_ANSWER = JSON.stringify({ refs: ["REF-ONE"] });
+const REAL_ENVELOPE = JSON.stringify({
+  $cinatraLifecycleView: 1,
+  viewType: "artifact_review_gate",
+  ref: "REF-ONE",
+});
+
+describe("runAssistantTurn scripted-provider short-circuit (/chat lifecycle branch)", () => {
+  beforeEach(() => {
+    resolveDefaultAdapter.mockClear();
+    resolveBoundDefaultAdapter.mockClear();
+    stream.mockClear();
+    createChatDispatchSpy.mockClear();
+    chatDispatchScript.answers = {
+      [LIST_TOOL]: REAL_LIST_ANSWER,
+      [RENDER_TOOL]: REAL_ENVELOPE,
+    };
+    chatDispatchScript.report = true;
+  });
+
+  it("REAL SEAM: a lifecycle question drives the real primitives with the SESSION's own identity, never resolving an adapter", async () => {
+    process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
+    process.env.CINATRA_RUNTIME_MODE = "development";
+
+    const frames: Array<{ event: string; data: unknown }> = [];
+    await runAssistantTurn(
+      buildCinatraAssistantRuntimeConfig(),
+      argsWith(
+        (e, d) => frames.push({ event: e, data: d }),
+        null,
+        "Which reviews are waiting for me right now?",
+      ),
+    );
+
+    expect(resolveDefaultAdapter).not.toHaveBeenCalled();
+    expect(stream).not.toHaveBeenCalled();
+    // The bearer is minted for THIS session's user, org and role — passed
+    // through, never floored, widened or invented by the branch.
+    expect(createChatDispatchSpy).toHaveBeenCalledTimes(1);
+    expect(createChatDispatchSpy.mock.calls[0][0]).toMatchObject({
+      userId: "u1",
+      orgId: "o1",
+      platformRole: "member",
+    });
+    // The pull the producer prescribes: LIST, then RENDER one listed ref.
+    const toolCalls = frames
+      .filter((f) => f.event === "tool_call")
+      .map((f) => (f.data as { name: string }).name);
+    expect(toolCalls).toEqual([LIST_TOOL, RENDER_TOOL]);
+    const results = frames
+      .filter((f) => f.event === "tool_result")
+      .map((f) => f.data as { name: string; result: string; serverLabel?: string });
+    expect(results.map((r) => r.result)).toEqual([REAL_LIST_ANSWER, REAL_ENVELOPE]);
+    // THE LABEL IS EARNED: it rides the results the dispatcher reported.
+    expect(results.every((r) => r.serverLabel === "cinatra")).toBe(true);
+  });
+
+  it("ANTI-FABRICATION: a result the dispatcher never reported reaches the sink UNLABELLED", async () => {
+    process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
+    process.env.CINATRA_RUNTIME_MODE = "development";
+    // The same bytes — a perfectly-formed envelope — with the one thing that
+    // cannot be forged missing: this frame's own record that a real dispatch
+    // returned it. The sink's recognizer then refuses it and no card mints.
+    chatDispatchScript.report = false;
+
+    const frames: Array<{ event: string; data: unknown }> = [];
+    await runAssistantTurn(
+      buildCinatraAssistantRuntimeConfig(),
+      argsWith(
+        (e, d) => frames.push({ event: e, data: d }),
+        null,
+        "Which reviews are waiting for me right now?",
+      ),
+    );
+
+    const results = frames
+      .filter((f) => f.event === "tool_result")
+      .map((f) => f.data as { result: string; serverLabel?: string });
+    expect(results).toHaveLength(2);
+    expect(results.some((r) => r.result === REAL_ENVELOPE)).toBe(true);
+    expect(results.every((r) => r.serverLabel === undefined)).toBe(true);
+  });
+
+  it("THE REFUSAL TRAVELS: an empty list ends the turn with no card and no invention", async () => {
+    process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
+    process.env.CINATRA_RUNTIME_MODE = "development";
+    chatDispatchScript.answers = { [LIST_TOOL]: JSON.stringify({ refs: [] }) };
+
+    const frames: Array<{ event: string; data: unknown }> = [];
+    await runAssistantTurn(
+      buildCinatraAssistantRuntimeConfig(),
+      argsWith(
+        (e, d) => frames.push({ event: e, data: d }),
+        null,
+        "Which reviews are waiting for me right now?",
+      ),
+    );
+
+    const results = frames.filter((f) => f.event === "tool_result");
+    expect(results).toHaveLength(1);
+    expect((results[0].data as { result: string }).result).toBe(JSON.stringify({ refs: [] }));
+  });
+
+  it("PROD-MODE CONFORMANCE PIN: flag OFF → a lifecycle question resolves the adapter like any other chat turn", async () => {
+    delete process.env.CINATRA_TEST_LLM_PROVIDER;
+    resolveDefaultAdapter.mockResolvedValueOnce(null);
+
+    const frames: Array<{ event: string; data: unknown }> = [];
+    await runAssistantTurn(
+      buildCinatraAssistantRuntimeConfig(),
+      argsWith(
+        (e, d) => frames.push({ event: e, data: d }),
+        null,
+        "Which reviews are waiting for me right now?",
+      ),
+    );
+
+    expect(createChatDispatchSpy).not.toHaveBeenCalled();
+    expect(resolveDefaultAdapter).toHaveBeenCalledTimes(1);
+    expect(frames).toContainEqual({
+      event: "error",
+      data: { message: "No LLM provider configured." },
+    });
+  });
+
+  it("THE PRODUCTION FENCE COVERS THIS BRANCH: the flag set outside a development runtime fails LOUD", async () => {
+    process.env.CINATRA_TEST_LLM_PROVIDER = "scripted";
+    process.env.CINATRA_RUNTIME_MODE = "production";
+
+    // The same throw `stream()` already raises for a scripted flag outside
+    // development — now raised BEFORE the branch can be entered, so no scripted
+    // frame can precede it on either path.
+    await expect(
+      runAssistantTurn(
+        buildCinatraAssistantRuntimeConfig(),
+        argsWith(() => {}, null, "Which reviews are waiting for me right now?"),
+      ),
+    ).rejects.toThrow(/must NEVER run outside development/);
+    expect(createChatDispatchSpy).not.toHaveBeenCalled();
   });
 });

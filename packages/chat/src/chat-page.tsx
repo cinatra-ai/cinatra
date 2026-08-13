@@ -9,17 +9,18 @@
 //   - ./ag-ui-chat-client  — the headless AG-UI turn driver + thread
 //     CRUD-over-fetch helpers (the unified assistant stream, cinatra#1218)
 //   - ./chat-routing       — pure client-side routing decisions
-//   - ./chat-messages-view — the conversation renderer, mounted via
-//     next/dynamic so the heavy renderers (marked/katex via markdown-render,
-//     recharts via chart-embed, the mermaid/shiki wrappers) load in their own
-//     chunk and stop riding the initial /chat bundle.
+//   - ./conversation-column — THE conversation column (cinatra#2683): the
+//     message list, the composer and the scroll behaviour between them, which
+//     the site widget mounts too. It owns the next/dynamic boundary for the
+//     heavy renderers (marked/katex via markdown-render, the mermaid/shiki
+//     wrappers, the extension view dispatch), so they still load in their own
+//     chunk and still stay off the initial /chat bundle.
 // The bespoke chat-stream-events wire and its `CHAT_STREAM_WIRE` kill-switch
 // were deleted by the cinatra#1218 delete stage — the AG-UI stream is the
 // ONLY wire; a failed S1 handshake is a fail-closed turn error, never a
 // fallback.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import dynamic from "next/dynamic";
 import { authClient } from "@/lib/auth-client";
 import { useTheme } from "next-themes";
 import type { ThemeName } from "./syntax-highlight";
@@ -80,18 +81,17 @@ import {
   ensureAssistantChatWireNegotiated,
 } from "./ag-ui-chat-client";
 import { useChatAttachments } from "./use-chat-attachments";
+import {
+  fetchChatCaptureConfig,
+  fetchMentionables,
+  patchChatCaptureConfig,
+} from "./conversation-services";
 import { SkillBadgeCloud } from "./skill-badge-cloud";
 import { selectChatBadges, chatEmptyStateCaption, isPinnedBadgePrefill, getGreeting, DEFAULT_GREETING } from "./chat-badges";
 import { fingerprintMessages, isRealActivity } from "./thread-activity";
 import { publishChatThreadTitle } from "@/lib/chat-shell-bus";
 import { DancingRobot } from "./dancing-robot";
 
-// The conversation renderer is the LAZY BOUNDARY for the chat route's heavy
-// renderers (marked/katex/recharts/mermaid/shiki all sit behind it). ssr:false
-// is deliberate: a default-SSR dynamic() here tripped a latent Turbopack
-// async-module-cycle in unrelated SSR chunks and broke `next build`; the view
-// SSR'd an empty container anyway (messages are fetched client-side), so
-// client-only rendering of the list is visually equivalent.
 // Extension-provided chat renderable-view components (viewType → component),
 // resolved server-side from the generated `cinatra.views` map and passed in as
 // a prop (RSC client references). Empty default: the `chart` viewType then
@@ -100,10 +100,19 @@ import { DancingRobot } from "./dancing-robot";
 // in ./chat-page-props.
 const EMPTY_CHAT_VIEWS: ChatViewComponents = {};
 
-const ChatMessagesView = dynamic(
-  () => import("./chat-messages-view").then((m) => m.ChatMessagesView),
-  { ssr: false, loading: () => null },
-);
+// The CONVERSATION COLUMN (cinatra#2683, epic #2564 S8f) — the message list, the
+// composer and the scroll behaviour that ties them together, lifted OUT of this
+// file so the site widget mounts the same component instead of an impoverished
+// copy of it. `/chat` is unchanged by the move: the JSX, the class names, the
+// handlers and the effect dependency lists went across verbatim, and a DOM-shape
+// assertion pins that. Everything still in this file is FRAME — the app shell,
+// the thread drawer, the empty-state start screen, thread CRUD and URL sync.
+//
+// The `next/dynamic` wrapper that used to sit here for the message list moved
+// INTO the column, which now owns that boundary for every host: the heavy
+// renderers still load in their own chunk, and there is no list component to
+// hand in — so no way for a second surface to hand in a different one.
+import { ConversationColumn, CHAT_THREAD_HOST } from "./conversation-column";
 
 // Empty-state badge + caption selection live in ./chat-badges (pure +
 // unit-tested). The component imports `selectChatBadges` +
@@ -148,12 +157,10 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   const [autosaveVisible, setAutosaveVisible] = useState(false);
   const [autosaveCanToggle, setAutosaveCanToggle] = useState(false);
   const [widgetRefreshKey, setWidgetRefreshKey] = useState(0);
-  const messagesContainerRef = useRef<HTMLDivElement>(null);
-  // Scroll lock: true when user has scrolled up intentionally. Auto-scroll is suppressed until
-  // streaming ends OR user scrolls back to the bottom.
-  const userScrolledUpRef = useRef(false);
-  // Marks scrolls driven by scrollToBottom() so onScroll ignores them instead of clearing the lock.
-  const isProgrammaticScrollRef = useRef(false);
+  // The scroll container, the auto-scroll lock and the scroll-to-bottom effects
+  // moved WITH the column (cinatra#2683) — they are column behaviour, and the
+  // widget needs them too. `promptRef` stays here because BOTH mounts share it:
+  // the empty-state start screen below and the column's composer.
   const promptRef = useRef<PromptFieldHandle>(null);
   const [promptValue, setPromptValue] = useState<string>("");
   const [mentionables, setMentionables] = useState<Mentionable[]>([]);
@@ -251,26 +258,22 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     void fetchThreadList().then(setThreads);
     setGreeting(getGreeting());
 
-    void fetch("/api/assistants/autosave")
-      .then((r) => r.json())
-      .then((config: { enabled?: boolean; userCanConfigure?: boolean; userCanSeeIndicator?: boolean }) => {
-        setAutosaveEnabled(Boolean(config.enabled));
-        setAutosaveCanToggle(Boolean(config.userCanConfigure));
-        setAutosaveVisible(Boolean(config.userCanSeeIndicator) || Boolean(config.userCanConfigure));
-      })
-      .catch(() => {});
+    // Both reads go through the SHARED conversation services (cinatra#2683,
+    // epic #2564 S8f) — the same functions the widget calls, with no transport
+    // argument, so this surface sends exactly the cookie request it always sent.
+    // One implementation of each read means the widget cannot be given a
+    // different answer than `/chat` by accident.
+    void fetchChatCaptureConfig().then((config) => {
+      if (!config) return;
+      setAutosaveEnabled(config.enabled);
+      setAutosaveCanToggle(config.userCanConfigure);
+      setAutosaveVisible(config.userCanSeeIndicator || config.userCanConfigure);
+    });
 
     let mentionablesCancelled = false;
-    void fetch("/api/assistants/list")
-      .then((r) => (r.ok ? r.json() : { assistants: [] }))
-      .then((data: { assistants?: { id: string; handle: string }[] }) => {
-        if (!mentionablesCancelled && Array.isArray(data.assistants)) {
-          setMentionables(data.assistants.map((a) => ({ ...a, displayName: a.handle })));
-        }
-      })
-      .catch((err) => {
-        console.error("[chat] failed to load assistants for @-mention flyout:", err);
-      });
+    void fetchMentionables().then((list) => {
+      if (!mentionablesCancelled) setMentionables(list);
+    });
 
     function resetSlackMode() {
       setIsSlackMode(false);
@@ -330,10 +333,10 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   }, [messages]);
 
   // Keep activeThreadIdRef in sync so streamResponse can detect thread switches.
-  // Also release the auto-scroll lock — it leaked across thread switches (#1702).
+  // (The auto-scroll lock release that used to sit here moved into
+  // ConversationColumn with the lock itself — cinatra#2683.)
   useEffect(() => {
     activeThreadIdRef.current = activeThreadId;
-    userScrolledUpRef.current = false;
   }, [activeThreadId]);
 
   // Notify ChatThreadPanel of the active thread so it can highlight without router navigation.
@@ -475,31 +478,6 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   useEffect(() => {
     window.dispatchEvent(new CustomEvent("cinatra:chat:threads-changed", { detail: threads }));
   }, [threads]);
-
-  const scrollToBottom = useCallback(() => {
-    if (messagesContainerRef.current && !userScrolledUpRef.current) {
-      isProgrammaticScrollRef.current = true;
-      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
-      // Clear the flag after the scroll event fired by this assignment has been processed.
-      requestAnimationFrame(() => { isProgrammaticScrollRef.current = false; });
-    }
-  }, []);
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, streamingCount, pendingExternalHandle, typingIndicators, scrollToBottom]);
-
-  // Re-enable auto-scroll when streaming completes so the next response scrolls normally.
-  const prevHasActiveStreamRef = useRef(false);
-  useEffect(() => {
-    if (prevHasActiveStreamRef.current && !hasActiveStream) userScrolledUpRef.current = false;
-    prevHasActiveStreamRef.current = hasActiveStream;
-  }, [hasActiveStream]);
-
-  // Return focus to the prompt input after streaming completes.
-  useEffect(() => {
-    if (!hasActiveStream) promptRef.current?.focus();
-  }, [hasActiveStream]);
 
   // Pre-fill prompt with ?mention=handle when navigating from a profile "Chat now" button.
   useEffect(() => {
@@ -1090,11 +1068,7 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
     canToggle: autosaveCanToggle,
     onToggle: (enabled: boolean) => {
       setAutosaveEnabled(enabled);
-      void fetch("/api/assistants/autosave", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
+      void patchChatCaptureConfig(enabled);
     },
   } : undefined;
 
@@ -1158,79 +1132,50 @@ export function ChatPage({ initialThreadId, initialAssistantPackage, initialInst
   // ----- Conversation state -----
   return (
     <div className="flex h-full">
-      <div className="relative flex min-h-0 flex-1 flex-col">
-
-        <div
-          ref={messagesContainerRef}
-          className="min-h-0 flex-1 overflow-y-auto pb-24 pt-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          onScroll={() => {
-            // Ignore scroll events caused by scrollToBottom() itself — only react to user input.
-            if (isProgrammaticScrollRef.current) return;
-            const el = messagesContainerRef.current;
-            if (!el) return;
-            const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-            // 5px threshold: engage lock on any meaningful upward scroll, release when back at bottom.
-            userScrolledUpRef.current = distanceFromBottom > 5;
-          }}
-        >
-          <ChatMessagesView
-            messages={messages}
-            isSlackMode={isSlackMode}
-            animating={animating}
-            theme={theme}
-            userId={userId}
-            sessionUser={session?.user}
-            activeThreadId={activeThreadId}
-            activeAssistantHandle={activeAssistantHandle}
-            assistantHandleMap={assistantHandleMap}
-            taggedAssistantUserIds={taggedAssistantUserIds}
-            mentionables={mentionables}
-            pausedParticipants={pausedParticipants}
-            onTogglePause={handleTogglePause}
-            requestEditMessageId={requestEditMessageId}
-            onRequestEditMessage={setRequestEditMessageId}
-            onEditStarted={handleEditStarted}
-            hasActiveStream={hasActiveStream}
-            isStreaming={isStreaming}
-            onEditAndResend={(id, content) => void editAndResend(id, content)}
-            onActivateResource={(resourceType, resourceId) => void activateResource(resourceType, resourceId)}
-            widgetRuntime={widgetRuntime}
-            widgetSubmitRef={widgetSubmitRef}
-            widgetRefreshKey={widgetRefreshKey}
-            onActiveGateChange={handleActiveGateChange}
-            pendingExternalHandle={pendingExternalHandle}
-            typingIndicators={typingIndicators}
-            chatViews={chatViews}
-          />
-        </div>
-
-        {/* Zero-height relative anchor — constrains input bar to max-w-3xl+px-4 exactly as messages content */}
-        <div className="relative mx-auto w-full max-w-3xl px-4">
-          <div className="absolute bottom-0 left-4 right-4 bg-background pb-3 pt-0">
-            {refusalNotice}
-            <PromptField
-              ref={promptRef}
-              editorTestId="chat-prompt-input"
-              placeholder={hasActiveEmbed ? "Press Enter to save, or type a message..." : "Type a message..."}
-              storageKey={`cinatra_thread_prompt_${activeThreadId}`}
-              rows={1}
-              canSubmitEmpty={hasActiveEmbed}
-              onSubmit={(value) => void sendMessage(value)}
-              submitAriaLabel={hasActiveEmbed ? "Save form" : "Send message"}
-              pending={isSlackMode ? false : (hasActiveStream || !!pendingExternalHandle)}
-              onStop={() => {
-                for (const c of streamingAbortControllersRef.current.values()) c.abort();
-              }}
-              stopAriaLabel="Stop generating"
-              showStatusMessage={false}
-              mentionables={mentionables}
-              onAttachmentsSelected={handleAttachmentsSelected}
-              autosave={autosaveProp}
-              remoteChat={remoteChat}
-            />
-          </div>
-        </div>
-      </div>
+      <ConversationColumn
+        // `/chat` states its host EXPLICITLY: the first-party cookie surface.
+        host={CHAT_THREAD_HOST}
+        messages={messages}
+        isSlackMode={isSlackMode}
+        animating={animating}
+        theme={theme}
+        userId={userId}
+        sessionUser={session?.user}
+        activeThreadId={activeThreadId}
+        activeAssistantHandle={activeAssistantHandle}
+        assistantHandleMap={assistantHandleMap}
+        taggedAssistantUserIds={taggedAssistantUserIds}
+        mentionables={mentionables}
+        pausedParticipants={pausedParticipants}
+        onTogglePause={handleTogglePause}
+        requestEditMessageId={requestEditMessageId}
+        onRequestEditMessage={setRequestEditMessageId}
+        onEditStarted={handleEditStarted}
+        streamingCount={streamingCount}
+        isStreaming={isStreaming}
+        onEditAndResend={(id, content) => void editAndResend(id, content)}
+        onActivateResource={(resourceType, resourceId) => void activateResource(resourceType, resourceId)}
+        widgetRuntime={widgetRuntime}
+        widgetSubmitRef={widgetSubmitRef}
+        widgetRefreshKey={widgetRefreshKey}
+        onActiveGateChange={handleActiveGateChange}
+        pendingExternalHandle={pendingExternalHandle}
+        typingIndicators={typingIndicators}
+        chatViews={chatViews}
+        promptRef={promptRef}
+        placeholder={hasActiveEmbed ? "Press Enter to save, or type a message..." : "Type a message..."}
+        promptStorageKey={`cinatra_thread_prompt_${activeThreadId}`}
+        canSubmitEmpty={hasActiveEmbed}
+        onSubmit={(value) => void sendMessage(value)}
+        submitAriaLabel={hasActiveEmbed ? "Save form" : "Send message"}
+        onStop={() => {
+          for (const c of streamingAbortControllersRef.current.values()) c.abort();
+        }}
+        onAttachmentsSelected={handleAttachmentsSelected}
+        autosave={autosaveProp}
+        remoteChat={remoteChat}
+        composerNotice={refusalNotice}
+      />
     </div>
   );
 }

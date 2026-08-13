@@ -120,6 +120,169 @@ export async function handleSaveAssistantThread(request: Request): Promise<Respo
   return Response.json({ ok: true });
 }
 
+/**
+ * POST /api/assistants/threads — the SAME upsert, for a WIDGET principal
+ * (cinatra#2683, epic #2564 S8f item 1, WRITE HALF).
+ *
+ * WHY IT EXISTS. The read half restored a widget's transcript after a reload —
+ * and restored nothing, because nothing had ever been written. A widget turn
+ * streams, renders, and then the frame reloads and the conversation is gone: the
+ * turn's own durable rows are the RUN's rows (`run_id` set), and the payload
+ * reconstruction reads only the legacy-mirror rows (`id LIKE 'legacy:%' AND
+ * run_id IS NULL`) that this upsert writes. `/chat` writes them on every turn
+ * through its cookie-bound writer; the widget could not, because the embed frame
+ * is same-origin to the Cinatra app and a cookie request from it is answered as
+ * whoever else is signed in on that browser. So the reader's own conversation was
+ * the last thing the widget could show but not keep.
+ *
+ * ONE PAYLOAD CONTRACT, ONE PERSISTENCE CALL. The body is the same object
+ * `/chat` posts and the persistence is the same `upsertChatThreadInDatabase` with
+ * the same mirror anchoring, so the rows this produces are the rows the
+ * reconstruction already knows how to assemble. Nothing about the read changed to
+ * accommodate the writer — which is the point: the read is proven, and this makes
+ * it have something to answer with.
+ *
+ * WHAT IS NARROWER THAN THE FIRST-PARTY WRITER, and deliberately:
+ *
+ *   · PLATFORM STANDING IS FLOORED. There is no admin branch at all. A platform
+ *     admin writing through a widget writes as a member — the same floor every
+ *     other widget path imposes, and the floor can only narrow.
+ *   · THE TOKEN'S ORG IS A HARD WALL, and it is EXTRA. A `cwu_` is minted for ONE
+ *     org and cannot leave it, so a thread anchored in another org is refused
+ *     even when its owner is this very person. Mirrors the read exactly.
+ *   · ONLY THE CALLER'S OWN PERSONAL THREAD. A team-owned thread mirrors with a
+ *     NULL org anchor by policy and is therefore not READABLE through a widget;
+ *     it is not writable either. A legacy UNOWNED thread is public to read, so
+ *     letting a widget append to one would let a site-embedded surface put text
+ *     into a conversation anybody can read. Both are refused rather than
+ *     inherited — the narrowing direction, stated rather than discovered.
+ *   · IT CANNOT CREATE A THREAD (codex round 0, MEDIUM 2). An id with no row is
+ *     refused, exactly like an id with somebody else's row — which is what makes
+ *     the refusals INDISTINGUISHABLE. The first draft created on an absent row,
+ *     and that made the endpoint a clean existence oracle: POST a guessed id,
+ *     read 404 for "taken by someone else" and 200 for "free, and now yours".
+ *     Nothing is lost by refusing, because the TURN already created the row —
+ *     `streamAgUiChatTurn` binds the structured row before the first token, with
+ *     this same principal and this same org — so by the time there is a
+ *     transcript to keep, there is a row to keep it on. A conversation is
+ *     started by talking, never by saving.
+ *   · THE BODY IS AN ALLOW-LIST, not a strip-list (codex round 0, LOW). Only the
+ *     six transcript fields are forwarded. A deny-list left every OTHER
+ *     server-decided column the mirror reads — `projectId`, `contextId`,
+ *     `instanceId`, `assistantPackage`, `titleSlug` — writable from a public
+ *     website, and each new column would have silently joined them.
+ *   · A REFUSAL IS A 404, not a 403. The first-party writer answers 403 because
+ *     its caller already proved they hold a session in this tenant. This caller
+ *     did not, so distinguishing "exists but not yours" from "does not exist"
+ *     would make the endpoint an oracle for other people's thread ids — exactly
+ *     what the widget READ refuses to be. One answer for every refusal.
+ *
+ * NO AMBIENT FALLBACK: the route decides the branch from the presented
+ * credential, and a failed consume 401s at the door rather than dropping to a
+ * cookie. This function never reads a session at all — it cannot, there is no
+ * `getAuthSession()` in it, which is the property the guard test pins.
+ *
+ * THE RESIDUALS, STATED.
+ *
+ *   · THE READ AND THE WRITE ARE TWO ROUND TRIPS (codex round 0, HIGH; round 1
+ *     confirmed it as narrowed rather than closed). What the gap can still carry
+ *     is ONE case and it is remote: the row this caller owns is DELETED and a
+ *     different principal recreates the same thread id in the window between
+ *     them. It cannot carry the case codex first constructed — a row appearing
+ *     where there was none — because an absent row is refused rather than
+ *     created, and it cannot carry an ownership change, because `owner_user_id`
+ *     and the mirror's `org_id` anchor are SET-ONCE on an existing row. Closing
+ *     it properly means one atomic authorize-and-write, which is a change to the
+ *     SHARED upsert both surfaces use; it is not smuggled in behind a widget.
+ *   · A TURN THAT NEVER REACHED THE SERVER LEAVES NOTHING TO KEEP (codex round
+ *     1). The row is bound by the turn, so a turn that failed before it was
+ *     accepted — no provider, an unreachable app, an immediate abort — has no
+ *     row, and this refuses the save with the same 404. On screen the reader
+ *     still sees their message and the error; after a reload, neither is there.
+ *     That is the honest reading of "a conversation is started by talking": if
+ *     the talking never arrived, there is no conversation to restore. It is
+ *     stated rather than papered over with a create path, because the create
+ *     path is exactly what made this endpoint an existence oracle.
+ */
+export async function handleSaveAssistantThreadForWidget(
+  request: Request,
+  principal: { userId: string; orgId: string },
+): Promise<Response> {
+  if (!principal.userId || !principal.orgId) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
+
+  let body: ({ id?: unknown } & Record<string, unknown>) | null = null;
+  try {
+    body = (await request.json()) as { id?: unknown } & Record<string, unknown>;
+  } catch {
+    return Response.json({ error: "Missing thread id" }, { status: 400 });
+  }
+  const threadId = typeof body?.id === "string" ? body.id : "";
+  if (!threadId) {
+    return Response.json({ error: "Missing thread id" }, { status: 400 });
+  }
+
+  // The EXISTING row decides, never the body — the same order the first-party
+  // writer and the read path use, so a caller can never write a thread they
+  // could not read. ALL FOUR refusals below answer identically.
+  const anchored = getAssistantThread(threadId);
+  const writable =
+    anchored !== null &&
+    // The org wall: a `cwu_` is minted for ONE org and cannot leave it.
+    anchored.orgId === principal.orgId &&
+    // Personal AND this caller's. An ownerless row is the legacy-unowned shape
+    // (public to read); a row carrying a team is team-owned even when an owner
+    // axis is also set, and neither is a widget's to write.
+    anchored.teamId === null &&
+    anchored.ownerUserId === principal.userId;
+  if (!writable) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
+
+  // OMISSION IS A MUTATION HERE, so the fields this caller does not own are
+  // CARRIED FORWARD rather than left out (codex round 1). The mirror upsert
+  // writes `project_id` and `scalars` WHOLESALE from the payload — they are
+  // projections, not set-once axes — so a body that simply omitted them would
+  // NULL the thread's project and erase its `/chat` render state (the tagged
+  // assistants, the Slack mode) on every widget turn. The values come from the
+  // PERSISTED row, never from the request: the caller cannot set them and
+  // cannot clear them.
+  const persisted = reconstructThreadPayload(threadId);
+  const carried: Record<string, unknown> = {};
+  if (anchored.projectId) carried.projectId = anchored.projectId;
+  if (Array.isArray(persisted?.taggedAssistantUserIds)) {
+    carried.taggedAssistantUserIds = persisted.taggedAssistantUserIds;
+  }
+  if (typeof persisted?.slackMode === "boolean") carried.slackMode = persisted.slackMode;
+
+  // THE ALLOW-LIST. Everything the mirror reads and this caller does not decide
+  // is simply not carried: ownership, org anchoring and container scope are the
+  // server's, and a field that is never forwarded cannot be spoofed by a body
+  // that names it.
+  const thread: { id: string } & Record<string, unknown> = {
+    ...carried,
+    id: threadId,
+    ownerUserId: principal.userId,
+    ...(typeof body.title === "string" ? { title: body.title } : {}),
+    ...(Array.isArray(body.messages) ? { messages: body.messages } : {}),
+    ...(typeof body.createdAt === "string" ? { createdAt: body.createdAt } : {}),
+    ...(typeof body.updatedAt === "string" ? { updatedAt: body.updatedAt } : {}),
+    ...(typeof body.activeAssistantHandle === "string"
+      ? { activeAssistantHandle: body.activeAssistantHandle }
+      : {}),
+  };
+
+  // BOTH orgs are the TOKEN's org: the pin-sync scope and the structured
+  // mirror's set-once anchor. The anchor already equals this value (the check
+  // above proved it), so this states the invariant rather than moving anything.
+  upsertChatThreadInDatabase(thread, {
+    orgId: principal.orgId,
+    assistantMirrorOrgId: principal.orgId,
+  });
+  return Response.json({ ok: true });
+}
+
 /** GET /api/assistants/threads — the caller's own, ORG-SCOPED thread list.
  * Mirrors the deleted legacy GET /api/chat/threads. Team threads belong in the
  * team panel, not this list.
@@ -230,10 +393,77 @@ export async function handleGetAssistantThreadById(threadId: string): Promise<Re
   if (!session) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
+  return readAssistantThreadForActor({
+    threadId,
+    actorUserId: session.user.id,
+    isPlatformAdmin: isPlatformAdmin(session),
+  });
+}
 
-  const actorUserId = session.user.id;
-  const admin = isPlatformAdmin(session);
+/**
+ * The thread read for a WIDGET principal (cinatra#2683, epic #2564 S8f).
+ *
+ * WHY IT EXISTS. Reloading the frame used to empty the widget's transcript: the
+ * shared column seeds from `initialMessages`, and the only way to fill them is
+ * this read — which was cookie-bound, so the widget could not ask. Restoring the
+ * conversation is the last thing the widget did differently from `/chat`.
+ *
+ * IT IS THE SAME MATRIX, NOT A WIDGET MATRIX. The ownership/tenant evaluation
+ * below is the shared one, run with the widget principal as the actor: personal
+ * → owner-only; team → member of the owning org; a missing row and a denial are
+ * both 404 so a thread's existence is never disclosed across tenants. The widget
+ * turn already binds its threads with exactly this principal
+ * (`authorizeThreadForTurn`, `isAdmin: false`), so a reader gets back precisely
+ * the threads they were allowed to create.
+ *
+ * PLATFORM STANDING IS FLOORED, matching every other widget path: a platform
+ * admin reading through a widget reads as a member. The floor can only narrow.
+ */
+export async function handleGetAssistantThreadByIdForWidget(
+  threadId: string,
+  principal: { userId: string; orgId: string },
+): Promise<Response> {
+  if (!principal.userId || !principal.orgId) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
+  // THE TOKEN'S ORG IS A HARD WALL, and it is EXTRA — the shared matrix runs
+  // first and this can only refuse more (codex round 1, finding 1 on the routes).
+  //
+  // A cookie session has an active org it can switch; a `cwu_` is minted for ONE
+  // org and cannot leave it. Without this, a person who belongs to two orgs
+  // could read a thread anchored in org B through a widget signed in for org A —
+  // the reader is entitled to that thread IN THE APP, but not through a
+  // credential bound elsewhere, and the site framing that widget has standing in
+  // neither.
+  //
+  // A thread with NO org anchor is refused rather than allowed: the anchor is
+  // what proves the row belongs to this token's org, and a widget's own threads
+  // always carry one (its turns bind the mirror to the widget principal's org).
+  // Team-owned threads mirror with a NULL anchor by policy, so they are not
+  // readable through a widget — the narrowing direction, stated rather than
+  // discovered.
+  const anchored = getAssistantThread(threadId);
+  if (!anchored || anchored.orgId !== principal.orgId) {
+    return Response.json({ error: "Not found" }, { status: 404 });
+  }
+  return readAssistantThreadForActor({
+    threadId,
+    actorUserId: principal.userId,
+    isPlatformAdmin: false,
+  });
+}
 
+/**
+ * THE read, for whichever actor proved themselves at the door. One access
+ * evaluation and one reconstruction, so the two credentials cannot drift into
+ * disagreeing about who may read a thread.
+ */
+async function readAssistantThreadForActor(input: {
+  threadId: string;
+  actorUserId: string;
+  isPlatformAdmin: boolean;
+}): Promise<Response> {
+  const { threadId, actorUserId, isPlatformAdmin: admin } = input;
   const info = loadChatThreadForActorAccess({ threadId, actorUserId, isPlatformAdmin: admin });
   const allowed =
     info !== null &&

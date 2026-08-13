@@ -76,6 +76,17 @@ export default defineConfig({
         root,
         "packages/agents/src/review-gate-card.tsx",
       ),
+      // cinatra#2683 — the conversation column mounts the REAL message list in
+      // a DOM test, so the leaves that list reaches must resolve here as they do
+      // in tsconfig.json. Subpath keys, so they stay above the bare entry.
+      "@cinatra-ai/agents/client-entry": path.join(
+        root,
+        "packages/agents/src/client-entry.ts",
+      ),
+      "@cinatra-ai/agents/llm-provider-policy": path.join(
+        root,
+        "packages/agents/src/llm-provider-policy.ts",
+      ),
       "@cinatra-ai/agents": path.join(
         root,
         "packages/agents/src/index.ts",
@@ -96,6 +107,16 @@ export default defineConfig({
         "packages/notifications/src/flyout-state.ts",
       ),
       "@/lib/notifications": path.join(root, "src/lib/notifications.ts"),
+      // cinatra#2683 — the conversation column's NARROW sdk-ui subpaths (the
+      // composer + the widget contract), mirroring tsconfig.json. They MUST
+      // precede any bare `@cinatra-ai/sdk-ui` entry: vite prefix-matches a
+      // string `find`. Importing the barrel instead would drag the page
+      // chrome's graph — which reaches host server modules — into a DOM test.
+      "@cinatra-ai/sdk-ui/prompt-field": path.join(
+        root,
+        "packages/sdk-ui/src/prompt-field.tsx",
+      ),
+      "@cinatra-ai/sdk-ui/widget": path.join(root, "packages/sdk-ui/src/widget.tsx"),
       // Pin React to the root workspace copy so react-dom and react match
       // (avoids "Invalid hook call" from two resolved copies in a pnpm workspace).
       // Resolve via the stable top-level `node_modules/react(-dom)` symlink

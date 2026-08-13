@@ -93,6 +93,55 @@ export function resolveInstanceFrameAncestor(input: {
 }
 
 /**
+ * Read-only: the REGISTERED SITE URL for `{assistant, instanceId}` — the stored
+ * value, not the origin the CSP is built from (cinatra#2683, codex round 1,
+ * finding 4).
+ *
+ * The composer's "Remote chat" jump-out is built by the first-party destination
+ * builder, which APPENDS a ratified path to the recorded `siteUrl` and so
+ * preserves a subdirectory install (`https://example.com/blog/` →
+ * `…/blog/wp-admin/`). Feeding it the CSP's origin-only value silently dropped
+ * that path and pointed the widget's row somewhere `/chat`'s row does not.
+ *
+ * SAME NARROWING, SAME FAIL-CLOSED as the frame-ancestor resolver above: the
+ * assistant maps through the CLOSED binding table, zero or duplicate matching
+ * rows resolve to null, a non-http(s) or wildcard-shaped value resolves to null,
+ * and any throw resolves to null. It is authorization-UNUSABLE — it selects a
+ * link's destination, never a write target — and it reads no session and no user
+ * data, so the embed shell stays dataless.
+ */
+export function resolveRegisteredInstanceSiteUrl(input: {
+  assistant: string | null | undefined;
+  instanceId: string | null | undefined;
+}): string | null {
+  try {
+    const binding = resolveAssistantWidgetBinding(String(input.assistant ?? ""));
+    if (!binding) return null;
+    const instanceId = String(input.instanceId ?? "").trim();
+    if (!instanceId) return null;
+    const config = readConnectorConfigFromDatabase<{ instances?: unknown }>(
+      binding.instancesConfigKey,
+      { instances: [] },
+    );
+    const instances: StoredInstanceRow[] = Array.isArray(config?.instances)
+      ? (config.instances.filter((r) => r && typeof r === "object") as StoredInstanceRow[])
+      : [];
+    const matches = instances.filter(
+      (r) => typeof r.id === "string" && r.id.trim() === instanceId,
+    );
+    if (matches.length !== 1) return null;
+    const siteUrl = typeof matches[0].siteUrl === "string" ? matches[0].siteUrl.trim() : "";
+    // The stored value is operator-supplied, so it is re-validated here: the
+    // ORIGIN must normalize concretely (no wildcard, no non-http(s)) before the
+    // full URL — path included — is handed on.
+    if (!normalizeConcreteOrigin(siteUrl)) return null;
+    return siteUrl;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The full CSP `frame-ancestors` directive VALUE for `/embed/assistant?assistant
  * =…&instanceId=…`. Returns `'none'` on every failure; on success returns the
  * single registered origin with NO `'self'` (the policy is "ONLY the registered

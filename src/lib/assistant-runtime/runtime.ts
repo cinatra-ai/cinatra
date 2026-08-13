@@ -81,8 +81,14 @@ import {
 import {
   assertScriptedProviderNotProduction,
   isScriptedTestProviderEnabled,
+  runScriptedChatAssistantTurn,
   runScriptedWidgetAssistantTurn,
+  scriptedTurnAsksForLifecyclePull,
 } from "@cinatra-ai/llm/scripted-test-provider";
+// The reserved producer label the sink's recognizer requires. Stamped by THIS
+// module, on THIS module's own record of what it actually dispatched — never by
+// the provider, which holds no provenance.
+import { LIFECYCLE_PRODUCER_SERVER_LABEL } from "./lifecycle-view-envelope";
 import {
   observeSurfaceExecutionDispatches,
   resolveSurfaceExecutionBinding,
@@ -90,6 +96,13 @@ import {
 import { evaluateExecutionProvenance } from "@cinatra-ai/llm/execution-plane";
 import { issueChatMcpActorToken } from "@/lib/chat-mcp-actor-token";
 import { issueWidgetMcpActorToken } from "@/lib/widget-mcp-actor-token";
+// The scripted widget turn's REAL self-MCP dispatcher (cinatra#2683). Imported
+// unconditionally (a module, not a side effect); CONSTRUCTED only inside the
+// scripted branch, which is fenced to an explicit development runtime.
+import {
+  createScriptedChatSelfMcpDispatch,
+  createScriptedSelfMcpDispatch,
+} from "./scripted-self-mcp-dispatch";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import {
@@ -592,22 +605,63 @@ export async function runAssistantTurn(
   // the real turn uses — text → sentinel; an edit intent → a
   // `*_content_editor_run` tool_call + tool_result — then finish.
   //
-  // SCOPE: gated to the widget path (`widgetPrincipal` present) so the
-  // cookie-session `@cinatra` chat-mcp e2e — which DOES configure a provider and
-  // relies on the host `stream()`'s own scripted seam for tool orchestration —
-  // is UNAFFECTED (its adapter resolves; `stream()` short-circuits there). And
-  // fail-loud outside an explicit development runtime
-  // (assertScriptedProviderNotProduction): a no-op unless the env flag is set,
-  // so PRODUCTION is byte-identical — the scripted branch is never reachable
-  // there.
-  if (widgetPrincipal && isScriptedTestProviderEnabled()) {
-    assertScriptedProviderNotProduction();
-    const lastUser = [...messages].reverse().find((m) => m.role === "user");
-    const instructions =
-      typeof lastUser?.content === "string" ? lastUser.content : "";
+  // SCOPE. The CMS stand-in above stays gated to the widget path
+  // (`widgetPrincipal` present); the cookie-session `@cinatra` chat-mcp e2e —
+  // which DOES configure a provider and relies on the host `stream()`'s own
+  // scripted seam for tool orchestration — keeps resolving its adapter. The ONE
+  // cookie-session turn that short-circuits here is the lifecycle question the
+  // provider itself claims (`scriptedTurnAsksForLifecyclePull`), added by
+  // cinatra#2683 so the proof can photograph the SAME primitive on `/chat` and in
+  // the widget; every other chat turn under the flag is byte-identical to before.
+  //
+  // ONE PRODUCTION FENCE, BOTH BRANCHES. `assertScriptedProviderNotProduction`
+  // runs before either can be entered: a no-op unless the env flag is set, so
+  // PRODUCTION is byte-identical and neither scripted branch is reachable there.
+  assertScriptedProviderNotProduction();
+  const scriptedProviderEnabled = isScriptedTestProviderEnabled();
+  const scriptedInstructions = scriptedProviderEnabled
+    ? (() => {
+        const lastUser = [...messages].reverse().find((m) => m.role === "user");
+        return typeof lastUser?.content === "string" ? lastUser.content : "";
+      })()
+    : "";
+  if (widgetPrincipal && scriptedProviderEnabled) {
+    const instructions = scriptedInstructions;
+    // THE TOOL LAYER IS REAL ON THIS PATH (cinatra#2683, epic #2564 S8f).
+    //
+    // The provider decides WHICH primitive to call and with what arguments — the
+    // one thing a real model decides here — and this dispatcher performs the call
+    // against the REAL self-MCP server, over the real transport, carrying a real
+    // `cinatra.widget.mcp-obo` token minted from the SERVER-VERIFIED principal.
+    // Every check downstream of that is the shipped one: the transport's token
+    // verification, the closed kind-keyed widget tool policy, the handler's own
+    // caller resolution through S8a's live-standing actor, the per-row access
+    // check, the S1 authorization ladder, and the producer's own envelope mint.
+    //
+    // THE LABEL IS EARNED, NOT ASSERTED. `serverLabel` is the provenance half of
+    // the sink's recognizer, so it may only ride a result this frame KNOWS came
+    // back from the cinatra self-MCP. `dispatchedResults` is that knowledge:
+    // every string the dispatcher actually returned, recorded by the dispatcher
+    // itself. A result the provider composed — the content-editor stand-in, or a
+    // hypothetical invented envelope — is not in that set and is emitted with NO
+    // label, so `recognizeLifecycleViewEnvelope` refuses it and no card mints.
+    // The anti-fabrication property is therefore structural: the provider cannot
+    // put a lifecycle card on screen, only the producer can.
+    const dispatchedResults = new Set<string>();
+    const callSelfMcpTool = createScriptedSelfMcpDispatch({
+      widgetPrincipal,
+      // The `run` seal (cinatra#2687) — THIS turn's AG-UI run id, the same value
+      // the production mint below passes. The scripted path carries the SHIPPED
+      // sealed credential or it carries nothing that works: the authorization
+      // layer refuses an unsealed token, so an omission here would 401 every
+      // call and photograph an empty panel.
+      turnRunId: args.turnIdentity.runId,
+      onDispatched: (resultText) => dispatchedResults.add(resultText),
+    });
     await runScriptedWidgetAssistantTurn({
       instructions,
       assistantHandle: widgetPrincipal.assistantHandle,
+      callSelfMcpTool,
       onText: (content) => send("text", { content }),
       onToolCall: (call) =>
         send("tool_call", { id: call.id, name: call.name, status: "running" }),
@@ -616,6 +670,71 @@ export async function runAssistantTurn(
           id: result.id,
           name: result.name,
           status: "completed",
+          ...(dispatchedResults.has(result.result)
+            ? { serverLabel: LIFECYCLE_PRODUCER_SERVER_LABEL }
+            : {}),
+          resultLabel: deriveResultLabel(result.name, result.result),
+          result: result.result,
+        }),
+    });
+    return;
+  }
+
+  // THE SAME GATE, ON `/chat` (cinatra#2683, epic #2564 S8f — the parity proof's
+  // comparison view).
+  //
+  // The widget branch above proved the primitive answers a widget reader. The
+  // proof's V5 asks for the OTHER half of the same sentence: the identical
+  // primitive, on the first-party cookie-session surface, so the two cards can be
+  // read side by side. The obstacle was never authorization — the delegated-chat
+  // policy has reached these three primitives since S3 — it was that a keyless
+  // dev stack has no model to CHOOSE the tool. This branch supplies exactly that
+  // choice and nothing else.
+  //
+  // NARROW BY CONSTRUCTION, in three ways that are each checkable:
+  //   · the provider decides (`scriptedTurnAsksForLifecyclePull`) — the runtime
+  //     invents no intent of its own, and a turn it declines falls through to the
+  //     real adapter path below, untouched;
+  //   · the dispatcher carries the SHIPPED chat bearer for THIS session's user,
+  //     so the transport applies the delegated-CHAT policy and every downstream
+  //     check — run access, the S1 ladder, the producer's own mint — is the one a
+  //     real chat turn gets. A reader who may not read a gate sees the same fixed
+  //     refusal here as anywhere else;
+  //   · `serverLabel` rides only what `dispatchedResults` recorded, exactly as on
+  //     the widget path. A string the provider composed reaches the sink
+  //     unlabelled and `recognizeLifecycleViewEnvelope` refuses it, so this
+  //     branch can no more fabricate a card than its twin can.
+  //
+  // `userId` is required and unfaked: without a signed-in human there is no chat
+  // identity to delegate, so the turn falls through to the adapter path, whose
+  // own guard answers with the authenticated-user error.
+  if (
+    !widgetPrincipal &&
+    scriptedProviderEnabled &&
+    userId &&
+    scriptedTurnAsksForLifecyclePull(scriptedInstructions)
+  ) {
+    const dispatchedResults = new Set<string>();
+    const callSelfMcpTool = createScriptedChatSelfMcpDispatch({
+      userId,
+      orgId: sessionOrgId,
+      platformRole,
+      onDispatched: (resultText) => dispatchedResults.add(resultText),
+    });
+    await runScriptedChatAssistantTurn({
+      instructions: scriptedInstructions,
+      callSelfMcpTool,
+      onText: (content) => send("text", { content }),
+      onToolCall: (call) =>
+        send("tool_call", { id: call.id, name: call.name, status: "running" }),
+      onToolResult: (result) =>
+        send("tool_result", {
+          id: result.id,
+          name: result.name,
+          status: "completed",
+          ...(dispatchedResults.has(result.result)
+            ? { serverLabel: LIFECYCLE_PRODUCER_SERVER_LABEL }
+            : {}),
           resultLabel: deriveResultLabel(result.name, result.result),
           result: result.result,
         }),

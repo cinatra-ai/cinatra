@@ -1,4 +1,9 @@
 import { getAuthSession } from "@/lib/auth-session";
+import {
+  authenticateWidgetConversationRequest,
+  isWidgetBranchRequest,
+} from "@/lib/widget-conversation-door";
+import { WIDGET_ATTACHMENT_UPLOAD_GRANT } from "@/lib/widget-conversation-grants";
 import { createUploadedArtifact } from "@/lib/artifacts/artifact-service";
 // `ArtifactCreationDisabledError` is not an expected upload failure; upload
 // creation is enabled on the semantic model. BlobTooLargeError remains as the
@@ -6,8 +11,20 @@ import { createUploadedArtifact } from "@/lib/artifacts/artifact-service";
 import { BlobTooLargeError } from "@cinatra-ai/artifacts";
 
 // Upload ingestion API. Node runtime is required for fs and streaming support.
-// The route is session-gated and origin-gated, and must not be added to the
-// public-path allowlist. The 50 MiB hard cap is streamed, not buffered.
+// The route is CREDENTIAL-gated (session OR the widget branch below) and
+// origin-gated. The 50 MiB hard cap is streamed, not buffered.
+//
+// It IS on the route-guard's public-path list, and that sentence used to say the
+// opposite — corrected in cinatra#2683 rather than left to contradict the guard.
+// The old wording was true while "gated" meant "a Better-Auth cookie": the guard
+// entry could then only ever weaken the route. Once S8f gave this route a second
+// auth branch whose whole point is that it holds NO cookie, the redirect stopped
+// being a wall and became a way to LOSE an upload silently — a 307 the browser
+// follows as a GET, bytes dropped, no error the caller can name. The entry
+// removes that redirect and nothing else; the gate is the credential branch in
+// `resolveUploader` plus `isAllowedOrigin`, both unchanged and both still first
+// in the handler. See the entry in src/lib/auth-route-guard.ts for the full
+// reasoning.
 export const runtime = "nodejs";
 
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
@@ -47,18 +64,53 @@ async function* webStreamToAsyncIterable(
   }
 }
 
+// TWO AUTH BRANCHES (cinatra#2683, epic #2564 S8f opened the second), on the
+// pattern `/api/lifecycle-views/resolve` established.
+//
+// WHY THE WIDGET NEEDED ONE. The shared composer's upload row is prop-gated, and
+// the widget passed no handler for one reason: `uploadChatAttachments` posted
+// here with `credentials: "include"`, and the embed frame is SAME-ORIGIN to the
+// app — so an attachment picked inside somebody's website would have been filed
+// into whichever Cinatra account that browser happened to be signed into.
+//
+// The fix is not a widget upload path. It is this door: the widget presents its
+// `cwu_`, the WIDGET PRINCIPAL becomes the owner, and the artifact is created by
+// the same service call with the same private, user-owned visibility an in-app
+// upload gets. There is no widget-shaped artifact.
+//
+// The branch is decided by the presented credential and never falls back.
+async function resolveUploader(
+  request: Request,
+): Promise<{ orgId: string | null | undefined; userId: string | undefined } | null> {
+  if (isWidgetBranchRequest(request)) {
+    const authed = await authenticateWidgetConversationRequest(
+      request,
+      WIDGET_ATTACHMENT_UPLOAD_GRANT,
+    );
+    if (!authed) return null;
+    // The org the TOKEN is bound to, and the user it names. Never a session's
+    // active org — the widget has no business reading one.
+    return { orgId: authed.claims.orgId, userId: authed.claims.userId };
+  }
+  const session = await getAuthSession();
+  if (!session) return null;
+  return {
+    orgId: session.session?.activeOrganizationId,
+    // The uploading user — owner of the upload (private, #1885 C1) AND the
+    // recipient of the refusal advisory (cinatra#1890).
+    userId: session.user?.id ?? undefined,
+  };
+}
+
 export async function POST(request: Request): Promise<Response> {
   if (!isAllowedOrigin(request)) {
     return Response.json({ ok: false, error: "Forbidden" }, { status: 403 });
   }
-  const session = await getAuthSession();
-  if (!session) {
+  const uploader = await resolveUploader(request);
+  if (!uploader) {
     return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
   }
-  const orgId = session.session?.activeOrganizationId;
-  // The uploading user — owner of the upload (private, #1885 C1) AND the
-  // recipient of the refusal advisory (cinatra#1890).
-  const userId = session.user?.id ?? undefined;
+  const { orgId, userId } = uploader;
   if (!orgId) {
     return Response.json(
       { ok: false, error: "No active organization" },
