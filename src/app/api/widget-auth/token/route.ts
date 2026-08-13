@@ -1,154 +1,55 @@
 import { NextResponse } from "next/server";
 
-import { resolveWidgetStreamAgentUnion } from "@/lib/widget-stream-agents.server";
-import {
-  redeemUserAuthCode,
-  resolveVerifiedSiteFromCredential,
-} from "@/lib/widget-user-auth";
-import { allowConnectTokenRequest } from "@/lib/connect-rate-limit";
 import { emitWidgetAuthAudit } from "@/lib/widget-auth-audit";
-import { sha256Base64Url } from "@/lib/connect-provisioning";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // ---------------------------------------------------------------------------
-// cinatra#407 — POST /api/widget-auth/token
+// RETIRED — POST /api/widget-auth/token (cinatra#2674, epic #2564 S8e).
 //
-// SITE-TOKEN-AUTHENTICATED redeem of a user authorization code for a SHORT-LIVED
-// OPAQUE user widget token (`cwu_`). The CMS BACKEND (broker) calls this
-// server-to-server: it presents the per-site `cnx_` credential (Authorization),
-// the auth code (postMessage'd from the hosted page to the widget, relayed to
-// its backend), and the PKCE code_verifier.
+// WHAT THIS ROUTE USED TO DO. It was the site-mediated redemption: a CMS backend
+// presented its `cnx_` credential and an authorization code, and the response
+// carried the user's `cwu_` bearer back to that backend. The parent page then
+// composed the bearer pair into the iframe. That is precisely the possession
+// S8e ends — a person's widget credential is between them and Cinatra, and a
+// website that hosts the chat is not a party to it.
 //
-// The opaque token is delivered through the TRUSTED backend, never minted by a
-// browser holding the `cnx_`. The redeem CROSS-CHECKS that the code was minted
-// for the SAME site as the presenting credential (a code minted for site A
-// cannot be redeemed through site B's `cnx_`). Generic `invalid_grant` on any
-// failure — no oracle. No CORS headers (server-to-server only). Mirrors the
-// /api/connect/token redeem posture.
+// SO IT IS GONE, AND IT FAILS CLOSED RATHER THAN DEGRADING. There is no
+// compatibility mode, no env flag and no bounded window on THIS route, because
+// every one of those is a way for a site to keep receiving a bearer. The
+// migration rule of #2674 is satisfied by the other branch it allows: an
+// unmigrated widget's sign-in FAILS and the person signs in again, inside the
+// frame, through the flow that keeps the credential on the Cinatra origin. There
+// is no path from here back to parent credential delivery.
 //
-// Path is on the middleware public-path allowlist so the session redirect is
-// suppressed; self-authentication (the `cnx_` credential) runs INSIDE here.
+// 410 GONE, not 404: the route exists and is deliberately withdrawn, which is
+// what an integrator debugging an old plugin needs to learn. The body carries
+// the same generic `invalid_grant` every failure of the old contract carried, so
+// a legacy client's error handling still works, and it carries NOTHING about the
+// code presented — a retired endpoint must not become an oracle for whether a
+// code was real.
+//
+// The path stays on the middleware public-path allowlist so a legacy caller gets
+// this answer instead of a session redirect that would look like a network
+// problem.
 // ---------------------------------------------------------------------------
 
-type TokenBody = {
-  grantType?: unknown;
-  client?: unknown;
-  agentSlug?: unknown;
-  code?: unknown;
-  codeVerifier?: unknown;
-};
-
-const INVALID_GRANT = { error: "invalid_grant" } as const;
-
-function clientIp(request: Request): string {
-  const fwd = request.headers.get("x-forwarded-for");
-  if (fwd) return fwd.split(",")[0]?.trim() || "unknown";
-  return request.headers.get("x-real-ip")?.trim() || "unknown";
-}
+/** What a retired credential-bearing contract answers, always, to everyone. */
+const RETIRED = {
+  error: "invalid_grant",
+  reason: "widget_auth_site_redemption_retired",
+} as const;
 
 export async function POST(request: Request): Promise<Response> {
-  const ip = clientIp(request);
-  const ua = request.headers.get("user-agent");
-  const requestOrigin = request.headers.get("Origin");
-
-  // 1. Auth FIRST: the `cnx_` site credential.
-  const authHeader = request.headers.get("Authorization");
-  const credential = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
-  if (!credential) {
-    emitWidgetAuthAudit("redeem_failure", { ip, ua, reason: "missing_credential" });
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  let body: TokenBody;
-  try {
-    const parsed = await request.json();
-    if (!parsed || typeof parsed !== "object") {
-      return NextResponse.json(INVALID_GRANT, { status: 400 });
-    }
-    body = parsed as TokenBody;
-  } catch {
-    return NextResponse.json(INVALID_GRANT, { status: 400 });
-  }
-
-  const grantType = typeof body.grantType === "string" ? body.grantType : "";
-  const client = typeof body.client === "string" ? body.client : "";
-  const agentSlug = typeof body.agentSlug === "string" ? body.agentSlug : "";
-  const code = typeof body.code === "string" ? body.code : "";
-  const codeVerifier = typeof body.codeVerifier === "string" ? body.codeVerifier : "";
-
-  if (grantType !== "authorization_code") {
-    return NextResponse.json(INVALID_GRANT, { status: 400 });
-  }
-
-  // Rate limit per IP and per code-hash (never the plaintext code).
-  const codeKey = code ? sha256Base64Url(code) : "no-code";
-  if (!allowConnectTokenRequest({ ip, codeKey })) {
-    emitWidgetAuthAudit("redeem_failure", { ip, ua, client, reason: "rate_limited" });
-    return NextResponse.json(INVALID_GRANT, { status: 429 });
-  }
-
-  // 2. Resolve agent (union: build-time map ∪ admin-approved, serve-time-
-  // re-verified runtime entries — widget-stream runtime trust, slice 2) +
-  // verify the client matches the agent's client.
-  const resolved = await resolveWidgetStreamAgentUnion(agentSlug);
-  const entry = resolved?.entry ?? null;
-  if (!entry) {
-    emitWidgetAuthAudit("redeem_failure", { ip, ua, client, agentSlug, reason: "unknown_agent" });
-    return NextResponse.json({ error: "Unknown agent" }, { status: 404 });
-  }
-  const expectedClient = entry.auth.instancesConfigKey;
-  if (!client || client !== expectedClient) {
-    emitWidgetAuthAudit("redeem_failure", { ip, ua, client, agentSlug, reason: "client_mismatch" });
-    return NextResponse.json(INVALID_GRANT, { status: 400 });
-  }
-
-  // 3. Validate the `cnx_` credential and resolve the verified site context.
-  const site = resolveVerifiedSiteFromCredential({
-    credential,
-    requestOrigin,
-    expectedClient,
+  // Audited as a redeem FAILURE so the existing series shows the migration
+  // happening — a site still calling this is a plugin that needs its update.
+  // Nothing from the request body is read: refusing before parsing means a
+  // retired route cannot be used to probe anything.
+  emitWidgetAuthAudit("redeem_failure", {
+    ip: request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+    ua: request.headers.get("user-agent"),
+    reason: "legacy_site_redemption_retired",
   });
-  if (!site) {
-    emitWidgetAuthAudit("redeem_failure", { ip, ua, client, agentSlug, reason: "invalid_credential" });
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  // 4. Redeem: atomic single-use consume + PKCE verify + cross-site binding
-  // check + mint the opaque user token. Generic invalid_grant on any failure.
-  const issuerBaseUrl = new URL(request.url).origin;
-  const redeemed = redeemUserAuthCode({ code, codeVerifier, site, issuerBaseUrl });
-  if (!redeemed.ok) {
-    emitWidgetAuthAudit("redeem_failure", {
-      ip,
-      ua,
-      client,
-      agentSlug,
-      siteId: site.siteId,
-      orgId: site.orgId,
-      reason: redeemed.reason,
-    });
-    return NextResponse.json(INVALID_GRANT, { status: 400 });
-  }
-
-  emitWidgetAuthAudit("redeem_success", {
-    ip,
-    ua,
-    client,
-    agentSlug,
-    siteId: site.siteId,
-    orgId: site.orgId,
-    siteOrigin: site.siteOrigin,
-  });
-
-  return NextResponse.json(
-    {
-      token: redeemed.token,
-      tokenType: redeemed.tokenType,
-      expiresIn: redeemed.expiresIn,
-      scope: redeemed.scope,
-    },
-    { status: 200 },
-  );
+  return NextResponse.json(RETIRED, { status: 410 });
 }

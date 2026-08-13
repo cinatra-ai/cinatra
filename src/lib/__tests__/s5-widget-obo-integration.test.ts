@@ -424,14 +424,20 @@ describe("T4 — kind binding (G9)", () => {
 });
 
 // ===========================================================================
-// T5 — platform-admin floor: member all the way through the chain.
+// T5 — the platform tier, end to end (G5; the floor removed by cinatra#2674).
 // ===========================================================================
-describe("T5 — platform-admin floor (G5)", () => {
-  it("a token smuggling prole:'platform_admin' still resolves member end to end", async () => {
-    const smuggled = signClaims(baseClaims({ prole: "platform_admin" }));
-    const actor = boundaryVerify(smuggled);
-    expect(actor!.platformRole).toBe("member");
-    // The floored actor carries through the frame projection + carrier run.
+describe("T5 — the platform tier travels the whole chain (cinatra#2674)", () => {
+  it("a token WITHOUT the claim resolves member end to end — nothing was widened", async () => {
+    const ordinary = signClaims(baseClaims());
+    expect(boundaryVerify(ordinary)!.platformRole).toBe("member");
+  });
+
+  it("a token carrying the SERVER-RESOLVED tier resolves platform_admin end to end", async () => {
+    const elevated = signClaims(baseClaims({ prole: "platform_admin" }));
+    const actor = boundaryVerify(elevated);
+    expect(actor!.platformRole).toBe("platform_admin");
+    // …and the elevated actor carries through the frame projection + carrier run
+    // WITHOUT changing anything else about the dispatch.
     await withWidgetFrame(actor!, async () => {
       await dispatchContentEditorViaA2A({
         agentUrl: "http://agent",
@@ -447,9 +453,10 @@ describe("T5 — platform-admin floor (G5)", () => {
         preCreateAuthorize: async () => true,
       });
     });
-    // sourceType public_site_widget on the carrier run is what suppresses the
-    // platform-admin bypass at the downstream bridge (belt-and-braces to the
-    // mint-time floor).
+    // The carrier run still RECORDS its class — the source type is the audit
+    // fact it always was. Since cinatra#2674 it no longer suppresses anything:
+    // the widget carrier resolves the same standing any other carrier does for
+    // the same person (asserted in agent-run-actor-resolve.test.ts).
     expect(lastRunInput().sourceType).toBe("public_site_widget");
   });
 });

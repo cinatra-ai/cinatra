@@ -7,12 +7,16 @@
 // launcher/panel chrome + the bridge peer). It:
 //   1. installs the iframe-side bridge and posts READY, transferring one
 //      MessageChannel endpoint to the expected parent origin (§3a/§12b);
-//   2. accepts the ONE inbound BOOTSTRAP — over the retained port (the hardened
-//      transport) or, during the negotiated transition, the legacy window path
-//      (origin + source-window + schema + nonce + assistant/instance agreement,
-//      all in `embed-bridge.client` / §4-6/§12b). `requirePort` is intentionally
-//      left at its default (false) here so the embed still interoperates with an
-//      as-yet-unmigrated widget; it flips to true once both widgets have migrated;
+//   2. accepts the ONE inbound CONTEXT message — PUBLIC SELECTORS ONLY since
+//      cinatra#2674 (protocol 2) — over the retained port (the hardened
+//      transport) or the window path (origin + source-window + schema + nonce +
+//      assistant/instance agreement, all in `embed-bridge.client` / §4-6/§12b);
+//   2b. RUNS ITS OWN SIGN-IN (cinatra#2674, epic #2564 S8e). The credential is
+//      acquired by THIS document, on the Cinatra origin, through
+//      `runFrameSignIn` — a frame-held PKCE verifier, a top-level Cinatra popup,
+//      and an authorization code delivered by `postMessage` to this origin
+//      alone. The parent page and the CMS backend are not parties to it and
+//      receive nothing;
 //   3. negotiates the stream contract CLIENT-SIDE (§8) — mounts the wire ONLY on
 //      `ok`, else renders the honest GATED state (Lane-A interlock);
 //   4. mounts the SHARED conversation column, which drives the turn against
@@ -38,10 +42,22 @@
 // epic's rule, and the reason a future conversation affordance cannot land on
 // one surface and miss the other.
 //
-// TOKEN NON-DISCLOSURE (§6i): the `cit_`/`cwu_` tokens live ONLY in a ref closure
-// — never in React state (no render/serialization exposure), never logged, never
-// in the URL, never in an uplink. A neutral "waiting"/"gated"/"error" card is the
-// ONLY thing shown before a valid, negotiated bootstrap — no oracle to the parent.
+// TOKEN NON-DISCLOSURE (§6i): the credential pair lives ONLY in a ref closure —
+// never in React state (no render/serialization exposure), never logged, never
+// in the URL, never in an uplink, and never in a message to the parent. What
+// changed at S8e is WHERE IT CAME FROM: it is minted for this frame rather than
+// handed in, so there is no longer any party outside this document that ever
+// held it. A neutral "waiting"/"sign-in"/"gated"/"error" card is the ONLY thing
+// shown before a negotiated session — no oracle to the parent.
+//
+// THE TWO HALVES MEET HERE, AND NEITHER IS A SEPARATE SURFACE. S8f's rule is
+// that `/embed/assistant` renders the SAME `ConversationColumn` `/chat` renders;
+// S8e's rule is that the credential is the frame's own. They compose exactly
+// once, in this file: the sign-in produces the credential, the credential
+// produces the broker transport, and the transport is what the ONE shared column
+// is handed. There is no widget-shaped conversation component and no
+// sign-in-shaped conversation component — the phases above the column decide
+// WHETHER it mounts, never WHAT it renders.
 // ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -76,7 +92,15 @@ import {
   installEmbedBridge,
   type EmbedBridge,
 } from "@/lib/embed/embed-bridge.client";
-import type { EmbedBootstrap } from "@/lib/embed/bridge-protocol";
+import type { EmbedContext } from "@/lib/embed/bridge-protocol";
+// cinatra#2674 (epic #2564 S8e) — the frame's OWN sign-in. The only place in the
+// widget where a credential is ever created, and it is created HERE, inside the
+// Cinatra-served document, from a PKCE verifier no other party sees.
+import {
+  runFrameSignIn,
+  type FrameWidgetCredential,
+} from "@/lib/embed/frame-widget-session.client";
+import { Button } from "@/components/ui/button";
 import { negotiateEmbedChatContract } from "./embed-chat-negotiate";
 // cinatra#2577 (epic #2564 S8d) — the host declaration that turns lifecycle
 // cards on for this surface. Until then the embed declared nothing and a card
@@ -89,13 +113,15 @@ import { negotiateEmbedChatContract } from "./embed-chat-negotiate";
 import type { LifecycleCardAuth } from "@cinatra-ai/agents/lifecycle-card-runtime";
 
 type Phase =
-  | { kind: "waiting" } // pre-bootstrap: neutral "waiting for host"
+  | { kind: "waiting" } // pre-context: neutral "waiting for host"
+  | { kind: "signin" } // context in hand, no credential yet — the person signs in
+  | { kind: "authorizing" } // the hosted sign-in is open
   | { kind: "gated"; reason: string } // handshake fail-closed (Lane-A interlock)
-  | { kind: "error" } // bootstrap rejected / turn transport failure
+  | { kind: "error" } // context rejected / turn transport failure
   | { kind: "active" }; // negotiated + mounted
 
 /** The non-secret session context the mounted column needs. Deliberately NOT
- *  the bootstrap: the tokens stay in the ref closure and never enter state. */
+ *  the credential: the tokens stay in the ref closure and never enter state. */
 type MountedSession = { threadId: string; assistant: string };
 
 export type EmbedAssistantClientProps = {
@@ -123,7 +149,7 @@ export type EmbedAssistantClientProps = {
    *  ONLY when the server-side `EMBED_PARITY_SEAM` gate is on (resolved in
    *  page.tsx from a non-public server env, never a client/URL value), so prod is
    *  INERT. When set, the embed — AFTER reaching `active` via the REAL mount path
-   *  (parent bootstrap + broker negotiation + column mount) — renders a seeded
+   *  (parent context + frame sign-in + broker negotiation + column mount) — renders a seeded
    *  thread's assistant message deterministically IN PLACE OF a live LLM turn. It
    *  CANNOT bypass auth (reaching `active` still requires the real handshake) and
    *  is not user-controllable in prod (the server gate is off → this is null). */
@@ -171,18 +197,24 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // which settle it.
   const [historySettled, setHistorySettled] = useState(false);
 
-  // Tokens + session context held ONLY here (never state / log / URL / uplink).
-  const bootstrapRef = useRef<EmbedBootstrap | null>(null);
+  // Session context (PUBLIC SELECTORS) and the CREDENTIAL, held ONLY here —
+  // never state, never a log, never a URL, never an uplink to the parent. They
+  // are two refs rather than one because they now have two different origins:
+  // the context comes from the parent and carries nothing secret; the credential
+  // comes from this frame's own sign-in and never leaves it.
+  const contextRef = useRef<EmbedContext | null>(null);
+  const credentialRef = useRef<FrameWidgetCredential | null>(null);
   const bridgeRef = useRef<EmbedBridge | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
-  // §9.1 broker headers derived from the closure-held tokens.
+  // §9.1 broker headers derived from the closure-held credential.
   const authHeaders = useCallback((): Record<string, string> => {
-    const b = bootstrapRef.current;
-    if (!b) return {};
+    const credential = credentialRef.current;
+    const ctx = contextRef.current;
+    if (!credential || !ctx) return {};
     return {
-      Authorization: `Bearer ${b.auth.citToken}`,
-      "X-Cinatra-Widget-User-Token": b.auth.cwuToken,
+      Authorization: `Bearer ${credential.transportToken}`,
+      "X-Cinatra-Widget-User-Token": credential.userToken,
       // The bound assistant handle. The TURN carries it in its body, so this
       // header used to belong only to the capability negotiation; the lifecycle
       // refetch (cinatra#2577) has no body field for it and needs it here, and
@@ -190,7 +222,7 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       // slightly different ones. It is a SELECTOR, never an authority: the
       // server re-checks `agent_slug` inside both token consumes, so a forged
       // value fails closed.
-      "X-Cinatra-Widget-Assistant": b.session.assistant,
+      "X-Cinatra-Widget-Assistant": ctx.session.assistant,
       // The turn POST is SAME-ORIGIN to the Cinatra app, so the browser `Origin`
       // is the Cinatra origin — NOT the CMS site origin the cit_/cwu_ tokens are
       // bound to (and JS cannot set the forbidden `Origin`). Forward the
@@ -254,7 +286,8 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
   // render it deterministically through the mounted column (no live LLM turn).
   // Gated OFF in prod (`paritySeam` is null unless the server env is set), so
   // this fetch never runs for a real user. It cannot bypass auth — it runs only
-  // AFTER the real bootstrap + broker negotiation reached `active`.
+  // AFTER the real handshake + frame sign-in + broker negotiation reached
+  // `active`.
   const loadParitySeed = useCallback(
     async (threadId: string) => {
       // THROUGH THE BROKER, like everything else this surface asks (codex round
@@ -295,47 +328,46 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
     [authHeaders],
   );
 
-  const onBootstrap = useCallback(
-    (bootstrap: EmbedBootstrap) => {
-      bootstrapRef.current = bootstrap;
-      // §8 client-side handshake — mount ONLY on ok, else the honest gated state.
-      // The negotiator is itself fail-closed, but a defensive catch guarantees an
-      // unexpected rejection can NEVER leave a permanent "waiting" (fail-closed to
-      // gated, never fail-open to a mounted wire).
-      void (async () => {
-        try {
-          const negotiation = await negotiateEmbedChatContract(authHeaders, {
-            assistant: bootstrap.session.assistant, // "wordpress" | "drupal"
-            parentOrigin: props.expectedParentOrigin, // the CMS-origin the tokens bind
-          });
-          if (!negotiation.ok) {
-            setPhase({ kind: "gated", reason: negotiation.reason });
-            return;
-          }
-          setSession({
-            threadId: bootstrap.session.threadId,
-            assistant: bootstrap.session.assistant,
-          });
-          setPhase({ kind: "active" });
-          // TEST-ONLY seam (gated OFF in prod): render the seeded corpus here in
-          // place of a live turn, through the same mounted column.
-          if (props.paritySeam) {
-            // The seam supplies the transcript, so it settles the history too.
-            void loadParitySeed(props.paritySeam.threadId).finally(() =>
-              setHistorySettled(true),
-            );
-          } else {
-            // The REAL restore. Best-effort by design: a new thread, a denied
-            // read and a transport failure are all "nothing to restore", and all
-            // three leave the reader in the empty conversation they would have
-            // had anyway. Nothing is reported to the page — a restore that told
-            // the host whether a thread exists would be an oracle.
-            void restoreThread(bootstrap.session.threadId);
-          }
-        } catch {
-          setPhase({ kind: "gated", reason: "handshake_failed" });
+  // §8 client-side handshake, then the COLUMN mount — only on `ok`, else the
+  // honest gated state. The negotiator is itself fail-closed, but a defensive
+  // catch guarantees an unexpected rejection can NEVER leave a permanent
+  // "waiting" (fail-closed to gated, never fail-open to a mounted wire).
+  //
+  // Everything below the negotiation is S8f's, unchanged: the same session, the
+  // same restore, the same one-round-trip settle before the ONE shared column
+  // mounts. The sign-in changed WHERE the credential comes from, and nothing
+  // about what a reader then sees.
+  const negotiateAndMount = useCallback(
+    async (session: MountedSession) => {
+      try {
+        const negotiation = await negotiateEmbedChatContract(authHeaders, {
+          assistant: session.assistant, // "wordpress" | "drupal"
+          parentOrigin: props.expectedParentOrigin, // the CMS origin the pair binds
+        });
+        if (!negotiation.ok) {
+          setPhase({ kind: "gated", reason: negotiation.reason });
+          return;
         }
-      })();
+        setSession(session);
+        setPhase({ kind: "active" });
+        // TEST-ONLY seam (gated OFF in prod): render the seeded corpus here in
+        // place of a live turn, through the same mounted column.
+        if (props.paritySeam) {
+          // The seam supplies the transcript, so it settles the history too.
+          void loadParitySeed(props.paritySeam.threadId).finally(() =>
+            setHistorySettled(true),
+          );
+        } else {
+          // The REAL restore. Best-effort by design: a new thread, a denied
+          // read and a transport failure are all "nothing to restore", and all
+          // three leave the reader in the empty conversation they would have
+          // had anyway. Nothing is reported to the page — a restore that told
+          // the host whether a thread exists would be an oracle.
+          void restoreThread(session.threadId);
+        }
+      } catch {
+        setPhase({ kind: "gated", reason: "handshake_failed" });
+      }
     },
     [
       authHeaders,
@@ -346,6 +378,46 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
     ],
   );
 
+  // THE SIGN-IN THIS FRAME OWNS (cinatra#2674). Started by an explicit gesture,
+  // because opening the hosted window is a navigation a person must have asked
+  // for — a popup opened without a click is blocked by every browser, and a
+  // sign-in nobody asked for is not a sign-in. The credential lands in the ref
+  // and nowhere else; a failure returns to the same neutral card.
+  const startSignIn = useCallback(() => {
+    const ctx = contextRef.current;
+    if (!ctx) return;
+    setPhase({ kind: "authorizing" });
+    void (async () => {
+      const result = await runFrameSignIn({
+        // The HANDLE, not an agent slug. The server maps it to the agent through
+        // its own closed table, so the frame cannot name one (codex round 0,
+        // finding 1 — and `?assistant` was never a slug to begin with).
+        assistant: ctx.session.assistant,
+        instanceId: props.instanceId,
+        siteId: ctx.site?.siteId ?? null,
+      });
+      if (!result.ok) {
+        // Neutral: the person may try again. No reason is surfaced and none is
+        // sent anywhere — a failed sign-in must not become an oracle about which
+        // site, org or agent exists.
+        setPhase({ kind: "signin" });
+        return;
+      }
+      credentialRef.current = result.credential;
+      await negotiateAndMount({
+        threadId: ctx.session.threadId,
+        assistant: ctx.session.assistant,
+      });
+    })();
+  }, [props.instanceId, negotiateAndMount]);
+
+  const onContext = useCallback((context: EmbedContext) => {
+    // Selectors only — this cannot mount a wire on its own. The frame now needs
+    // a credential, and it goes and gets one itself.
+    contextRef.current = context;
+    setPhase({ kind: "signin" });
+  }, []);
+
   // Install the bridge + post READY once. The expected parent origin gates the
   // whole handshake; with none resolvable, render the error card and post
   // nothing (§3/§7).
@@ -355,7 +427,7 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       expectedParentOrigin: props.expectedParentOrigin,
       expectedAssistant: props.assistant,
       expectedInstanceId: props.instanceId,
-      onBootstrap,
+      onContext,
       onReject: () => setPhase({ kind: "error" }),
     });
     bridgeRef.current = bridge;
@@ -363,7 +435,7 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
     return () => {
       bridge.dispose();
     };
-  }, [props.expectedParentOrigin, props.assistant, props.instanceId, onBootstrap]);
+  }, [props.expectedParentOrigin, props.assistant, props.instanceId, onContext]);
 
   // §5 resize uplink: mirror the content height to the parent so it can size the
   // panel (the parent additionally CLAMPS to its cap). Observed, not polled — a
@@ -403,6 +475,28 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       {phase.kind === "waiting" && (
         <div className="p-4 text-sm text-muted-foreground" data-embed-state="waiting">
           Waiting for the host…
+        </div>
+      )}
+      {phase.kind === "signin" && (
+        <div className="p-4" data-embed-state="signin">
+          <p className="text-sm text-muted-foreground">
+            Sign in to Cinatra to use the assistant here.
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mt-3"
+            data-embed-signin
+            onClick={startSignIn}
+          >
+            Sign in
+          </Button>
+        </div>
+      )}
+      {phase.kind === "authorizing" && (
+        <div className="p-4 text-sm text-muted-foreground" data-embed-state="authorizing">
+          Waiting for the Cinatra sign-in window…
         </div>
       )}
       {phase.kind === "gated" && (

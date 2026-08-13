@@ -252,27 +252,35 @@ describe("connector-instance write authority (cinatra#409)", () => {
     );
   });
 
-  it("DENIES (throws) a platform-admin on the public-site-widget path — defensive, BEFORE the instance read", async () => {
-    trusted(actor({ platformRole: "platform_admin" }));
+  it("cinatra#2674: a platform-admin on the WIDGET path is treated exactly as one in the app", async () => {
+    // The widget-only deny is gone. PARITY, not a widening: the delegated
+    // decision actor below is built from scratch with `platformRole` STRIPPED on
+    // EVERY path, so platform standing decides no content write here for anyone.
+    // What changed is that a widget platform admin is no longer REFUSED
+    // something an in-app platform admin is allowed.
     wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" };
-    await expect(
-      wpGuard()({
-        instanceId: "wp-1",
-        primitiveName: "wordpress_post_update",
-        sourceType: "public_site_widget",
-      }),
-    ).rejects.toMatchObject({ reason: "platform_admin_on_public_widget" });
-    // The defensive deny short-circuits BEFORE the instance read + package policy.
-    expect(authoritySpy).not.toHaveBeenCalled();
-    expect(auditSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        decision: "denied",
-        metadata: expect.objectContaining({
-          reason: "platform_admin_on_public_widget",
-          sourceType: "public_site_widget",
-        }),
-      }),
-    );
+    resolveOrgRoleForUserMock.mockResolvedValue("member");
+
+    trusted(actor({ platformRole: "platform_admin" }));
+    await wpGuard()({
+      instanceId: "wp-1",
+      primitiveName: "wordpress_post_update",
+      sourceType: "public_site_widget",
+    });
+    const widgetCall = authoritySpy.mock.calls.at(-1);
+
+    // The same actor on the NON-widget (in-app) path…
+    authoritySpy.mockClear();
+    trusted(actor({ platformRole: "platform_admin" }));
+    await wpGuard()({ instanceId: "wp-1", primitiveName: "wordpress_post_update" });
+    const inAppCall = authoritySpy.mock.calls.at(-1);
+
+    // …reaches the package authority with the SAME sanitized actor. Parity, and
+    // platform standing is absent from BOTH.
+    expect(widgetCall).toBeDefined();
+    expect(inAppCall).toBeDefined();
+    expect(JSON.stringify(widgetCall)).toEqual(JSON.stringify(inAppCall));
+    expect(JSON.stringify(widgetCall)).not.toContain("platform_admin");
   });
 
   // ---------------------------------------------------------------------------
@@ -316,7 +324,10 @@ describe("connector-instance write authority (cinatra#409)", () => {
     );
   });
 
-  it("DENIES a platform-admin with NO org membership when sourceType is EXPLICITLY public_site_widget — via the defensive widget deny (still fail-closed)", async () => {
+  it("STILL DENIES a platform-admin with NO org membership on the widget path — the membership gate is untouched by cinatra#2674", async () => {
+    // The removal of the widget-only deny did not remove the universal one: a
+    // platform admin who is not a live member of the org is refused here on the
+    // widget path exactly as on every other, and by the SAME reason code.
     trusted(actor({ platformRole: "platform_admin", orgRole: undefined, organizationId: "org-1" }));
     wpRows["wp-1"] = { id: "wp-1", orgId: "org-1" };
     resolveOrgRoleForUserMock.mockResolvedValue(undefined);
@@ -326,7 +337,7 @@ describe("connector-instance write authority (cinatra#409)", () => {
         primitiveName: "wordpress_post_update",
         sourceType: "public_site_widget",
       }),
-    ).rejects.toMatchObject({ reason: "platform_admin_on_public_widget" });
+    ).rejects.toMatchObject({ reason: "platform_admin_without_org_membership" });
     expect(authoritySpy).not.toHaveBeenCalled();
   });
 

@@ -105,14 +105,10 @@ export function WidgetAuthGrant({ txnId, nonce }: { txnId: string; nonce: string
   const outcome = state?.txnId === txnId ? state.result : null;
 
   if (outcome?.ok) {
-    return (
-      <WidgetAuthSuccess
-        key={txnId}
-        code={outcome.code}
-        state={outcome.state}
-        siteOrigin={outcome.siteOrigin}
-      />
-    );
+    // The site origin the action also returns is NOT passed on (cinatra#2674):
+    // the authorization result is delivered to the Cinatra origin only, and the
+    // success step derives that from where it is running rather than from data.
+    return <WidgetAuthSuccess key={txnId} code={outcome.code} state={outcome.state} />;
   }
 
   if (outcome) {

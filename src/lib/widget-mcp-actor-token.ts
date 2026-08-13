@@ -39,11 +39,14 @@ import {
 //   4. `knd` (assistant/connector KIND) is REQUIRED and FAIL-CLOSED — binds the
 //      token to `wordpress` | `drupal`; a `wordpress` token can never drive a
 //      `drupal_content_editor_run` and vice versa (G9).
-//   5. `prole` is DELIBERATELY OMITTED — the verifier hard-codes
-//      `platformRole: "member"` on the resolved actor. A widget user is NEVER
-//      `platform_admin` at the boundary; the platform-admin short-circuit is
-//      suppressed at MINT time (defense-in-depth to the hop-1 belt-and-braces
-//      `platform_admin_on_public_widget` deny) (G5).
+//   5. `prole` carries the user's REAL platform tier (cinatra#2674, epic #2564
+//      S8e). It used to be DELIBERATELY OMITTED so the verifier could hard-code
+//      `platformRole: "member"` — a floor whose one justification was that the
+//      embedding site possessed the widget bearer, which S8e ends. The tier is
+//      resolved server-side from the user record at the route, exactly like the
+//      org binding, and is never a value the browser or the CMS can influence.
+//      An ABSENT `prole` still resolves to `member`, so a token minted before
+//      this slice keeps its old, narrower meaning (G5).
 //   6. SHORT TTL (120 s) + a per-turn `jti`. The widget turn is a SINGLE
 //      blocking CMS-edit dispatch, not a 60-90 s multi-validate chat turn, so
 //      the chat token's 30 min is far too loose for a cross-origin public
@@ -116,13 +119,6 @@ export type WidgetMcpActor = {
    */
   turnRunId: string;
   /**
-   * ALWAYS `"member"` — hard-coded by the verifier because the token omits
-   * `prole`. A widget user is NEVER `platform_admin` at the boundary; this
-   * union-narrowed literal makes the `mcp-boundary` immediate-allow for
-   * platform admins un-triggerable for a widget delegation.
-   */
-  platformRole: "member";
-  /**
    * Did the `cwu_` that authorized THIS turn carry the `lifecycle.read` grant
    * (cinatra#2577, epic #2564 S8d)? Minted as `lcr: true` ONLY when the route's
    * consumed user token already granted it; ABSENT otherwise, and the verifier
@@ -138,13 +134,24 @@ export type WidgetMcpActor = {
    * live against the reader's real standing.
    */
   lifecycleRead: boolean;
+  /**
+   * The user's REAL platform tier (cinatra#2674, epic #2564 S8e). `member`
+   * unless the token carries `prole: "platform_admin"`, so a token minted before
+   * this slice — or one whose claim is anything but the exact literal — resolves
+   * narrow. It was a hard-coded `"member"` literal until S8e, a floor whose one
+   * justification was that the embedding site possessed the widget bearer.
+   */
+  platformRole: WidgetMcpPlatformRole;
 };
 
+/** The platform tier a widget OBO token may carry. */
+export type WidgetMcpPlatformRole = "platform_admin" | "member";
+
 /**
- * The server-built inputs the seam feeds the issuer. `platformRole` is
- * intentionally NOT an input — it is floored to `"member"` at mint by OMITTING
- * `prole` from the token entirely (there is no way to mint a platform-admin
- * widget token).
+ * The server-built inputs the seam feeds the issuer. `platformRole` is a
+ * SERVER-RESOLVED input (cinatra#2674): the chat route reads the user's real
+ * tier from the user record after the full dual-token sequence, and nothing the
+ * browser or the CMS sends can reach it. Omitted → `member`.
  */
 export type WidgetMcpActorTokenInput = {
   userId: string;
@@ -162,6 +169,12 @@ export type WidgetMcpActorTokenInput = {
    * mints no claim, which reads back as "no lifecycle grant".
    */
   lifecycleRead?: boolean;
+  /**
+   * cinatra#2674 (S8e) — the SERVER-RESOLVED real platform tier. Omitting it
+   * mints no `prole` claim, which reads back as `member`, so a caller that does
+   * not set it can only ever narrow.
+   */
+  platformRole?: WidgetMcpPlatformRole;
 };
 
 type WidgetMcpActorTokenClaims = {
@@ -186,7 +199,9 @@ type WidgetMcpActorTokenClaims = {
   iss: string;
   iat: number;
   exp: number;
-  // NOTE: `prole` is deliberately ABSENT — floored to "member" at verify.
+  /** The user's real platform tier. ABSENT means `member` — which is what every
+   *  token minted before cinatra#2674 means, so an old token cannot elevate. */
+  prole?: WidgetMcpPlatformRole;
 };
 
 export const WIDGET_MCP_TOKEN_TYPE = "cinatra.widget.mcp-obo";
@@ -265,6 +280,11 @@ export function issueWidgetMcpActorToken(input: WidgetMcpActorTokenInput): strin
     iss: issueIssuer(),
     iat: now,
     exp: now + TOKEN_TTL_SECONDS,
+    // Only ever the elevated literal is written; `member` is the ABSENCE of the
+    // claim, so the narrow case has exactly one representation on the wire.
+    ...(input.platformRole === "platform_admin"
+      ? { prole: "platform_admin" as const }
+      : {}),
   };
 
   const signingInput = `${base64urlJson(header)}.${base64urlJson(payload)}`;
@@ -422,9 +442,12 @@ export function verifyWidgetMcpActorToken(input: {
       jti: payload.jti,
       parentJti: payload.pjti,
       turnRunId: payload.run,
-      // Floored at mint: the token omits `prole`, so a widget user is ALWAYS
-      // resolved as `member` here — never `platform_admin` at the boundary.
-      platformRole: "member",
+      // The real tier, and ONLY on the exact literal: anything else — absent,
+      // misspelled, a non-string, a truthy object — is `member`. The narrow
+      // answer is the default, so nothing but a deliberate, correctly-signed
+      // elevation elevates (cinatra#2674).
+      platformRole:
+        payload.prole === "platform_admin" ? "platform_admin" : "member",
       // STRICT `=== true`: an absent claim, and any other shape a tampered or
       // older payload could carry, resolve to NO grant (cinatra#2577).
       lifecycleRead: payload.lcr === true,

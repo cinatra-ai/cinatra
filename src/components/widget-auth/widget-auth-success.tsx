@@ -2,38 +2,38 @@
 
 import { useEffect } from "react";
 
-// cinatra#407 — success step of the hosted /widget-auth flow.
+// The return step of the hosted /widget-auth flow (cinatra#407; rewritten by
+// cinatra#2674, epic #2564 S8e).
 //
-// Once the server has issued the user auth code for the signed-in member
-// (cinatra#2631: the sign-in itself authorizes it — there is no consent step),
-// this component postMessage's the code + state to ONLY the verified opener
-// origin (`siteOrigin`, NEVER "*"), then attempts to close the popup. The
-// targetOrigin is the server-pinned, transaction-bound site origin — a hostile
-// page cannot receive the code because the browser enforces the exact-origin
-// targetOrigin on postMessage.
+// WHERE THE AUTHORIZATION RESULT GOES, AND WHY IT IS THE WHOLE SLICE. Until S8e
+// this component posted the code to the CMS SITE's origin, because the site's
+// backend was the party that would redeem it. That is what made the site a
+// holder of the person's credential. Now the code is posted to the CINATRA
+// ORIGIN and to nothing else — `window.location.origin`, this document's own —
+// so the only window that can receive it is a Cinatra-origin one: the embed
+// iframe that opened this popup.
 //
-// The code/state are the only things crossing the boundary; the raw Cinatra
-// credentials never left the Cinatra-hosted page. The widget relays the code to
-// its OWN backend, which redeems it (server-to-server, cnx_-authed) for the
-// opaque user token.
-export function WidgetAuthSuccess({
-  code,
-  state,
-  siteOrigin,
-}: {
-  code: string;
-  state: string;
-  siteOrigin: string;
-}) {
+// THIS IS THE LOAD-BEARING CONTROL OF THE WHOLE FLOW, and it is the browser's,
+// not ours. `postMessage` with an exact target origin is enforced by the user
+// agent: a CMS page listening for this message receives nothing, no matter what
+// it claims, what headers it forges or what it opened. Every server-side check
+// in S8e is defense in depth behind this one line.
+//
+// `window.location.origin` rather than a value passed in as a prop, deliberately.
+// A prop is data that travelled; this component runs ON the Cinatra origin, so
+// the correct target is a property of where it is, which nothing upstream can
+// influence. There is no configuration here to get wrong and none to tamper with.
+//
+// The code and state are the only things crossing the boundary, and they cross
+// it inside one origin. The raw Cinatra credentials never left this page.
+export function WidgetAuthSuccess({ code, state }: { code: string; state: string }) {
   useEffect(() => {
     try {
-      // Exact-origin targeting: the browser drops the message if the opener's
-      // origin does not match siteOrigin. We never use "*".
-      if (window.opener && siteOrigin) {
-        window.opener.postMessage(
-          { type: "cinatra-widget-auth", code, state },
-          siteOrigin,
-        );
+      // Exact-origin targeting, and the origin is OURS. The browser drops the
+      // message unless the opener is a Cinatra-origin document. Never "*".
+      const target = window.location.origin;
+      if (window.opener && target && target !== "null") {
+        window.opener.postMessage({ type: "cinatra-widget-auth", code, state }, target);
       }
     } catch {
       /* opener gone / cross-origin access denied — fall through to manual close */

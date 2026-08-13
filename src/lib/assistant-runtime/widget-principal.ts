@@ -16,8 +16,11 @@
 //
 // AUTH INVARIANT: instance binding is preserved EXACTLY; `instanceId` here is
 // the SERVER-DERIVED canonical row (the verified-origin re-pin), never a
-// forgeable body field. `platformRole` is DELIBERATELY ABSENT — a widget user
-// is floored to `member` at the OBO token mint, never elevated at the boundary.
+// forgeable body field. `platformRole` is now PRESENT and SERVER-RESOLVED
+// (cinatra#2674, epic #2564 S8e): the floor to `member` existed because the
+// embedding site possessed the widget bearer, and S8e ends that possession. Like
+// every other field here it is read server-side after the full dual-token
+// sequence — the browser and the CMS have no channel to it.
 // ---------------------------------------------------------------------------
 
 export type WidgetPrincipal = {
@@ -68,5 +71,14 @@ export type WidgetPrincipal = {
    * read-only lifecycle primitives read it as their grant.
    */
   lifecycleRead: boolean;
-  // NOTE: platformRole is deliberately ABSENT — floored to "member" at mint.
+  /**
+   * The end user's REAL platform tier, resolved server-side from the user record
+   * (cinatra#2674, epic #2564 S8e). It used to be deliberately ABSENT — floored
+   * to "member" at mint — because the embedding site possessed the widget
+   * bearer; S8e ends that possession, so the real tier travels. `member` for
+   * almost everyone and for every uncertain case — an unreadable role resolves
+   * narrow, never elevated. REQUIRED for the same reason `lifecycleRead` is: a
+   * new construction site must answer the question rather than inherit it.
+   */
+  platformRole: "platform_admin" | "member";
 };

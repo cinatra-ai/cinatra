@@ -416,10 +416,18 @@ const nextConfig: NextConfig = {
         // Router page: it forces `Cache-Control: no-cache, must-revalidate`
         // unconditionally in dev, with no config able to opt out (see the
         // longer note in src/app/lifecycle/review-island/page.tsx).
+        // `Referrer-Policy: no-referrer` — TIGHTENED from `same-origin` by
+        // cinatra#2674 (codex round 0, finding 3). Since S8e the island URL can
+        // carry a short-lived, ref-bound island credential in `?ic=`, and a
+        // `same-origin` policy still forwards the WHOLE URL — credential
+        // included — on any same-origin request this document initiates. There
+        // is nothing the island needs a referrer for, so it sends none. This is
+        // the same posture the hosted sign-in already takes with its
+        // authorization code, for the same reason.
         source: "/lifecycle/review-island",
         headers: [
           { key: "Cache-Control", value: "no-store" },
-          { key: "Referrer-Policy", value: "same-origin" },
+          { key: "Referrer-Policy", value: "no-referrer" },
         ],
       },
     ];

@@ -39,42 +39,64 @@ function rolesIncludeAdmin(roleField: string | null | undefined): boolean {
     .includes("admin");
 }
 
-// cinatra#408 — run source types whose actor must NEVER resolve to
-// `platform_admin`. The public-site widget path carries a logged-in END USER's
-// identity (`runBy = userId`); a platform admin who is ALSO a widget user must
-// be gated by their per-user/per-connector rights (cinatra#409), NOT waved
-// through by the platform-admin immediate-allow at the MCP boundary
-// (mcp-boundary.ts:207). Suppressing the bypass HERE — at the single mint-time
-// resolver — means the actor never carries `platform_admin` for this path, so
-// the boundary's immediate-allow is never reached (resolver-only suppression,
-// codex-converged O2; the load-bearing proof is the end-to-end actor assertion).
-const PLATFORM_ADMIN_SUPPRESSED_SOURCE_TYPES = new Set<string>(["public_site_widget"]);
+// THE PLATFORM-ADMIN FLOOR IS GONE; THE MEMBERSHIP REQUIREMENT IS NOT
+// (cinatra#2674, epic #2564 S8e; sharpened by codex round 0, finding 2).
+//
+// cinatra#408 SUPPRESSED the `platform_admin` short-circuit for the
+// `public_site_widget` source type, so a widget carrier run could never resolve
+// to platform admin at all. The justification was possession — the embedding
+// site held the widget bearer — and S8e ends that, so the ROLE floor ends with
+// it: a widget carrier now resolves the person's real tier.
+//
+// BUT THE SUPPRESSION WAS DOING A SECOND JOB, and dropping it wholesale would
+// have thrown that away. The admin short-circuit returns BEFORE the membership
+// row is read, so a platform admin resolves whether or not they are a member of
+// the run's org. That is deliberate for an in-app carrier: an operator acts
+// across orgs they do not belong to. It is WRONG for a widget carrier, whose
+// whole existence rests on a `cwu_` that required live org membership and whose
+// contract is that membership is re-checked live. Without the requirement below,
+// a platform admin who started a widget run and was then REMOVED from the org
+// would keep resolving — the run's next step would still authorize — where an
+// ordinary member would be denied at the next read. That is a revocation
+// bypass, not parity, and #2674 says in terms that removing the floor must not
+// widen "membership/revocation checks".
+//
+// So the widget path REQUIRES A LIVE MEMBERSHIP ROW, and then carries the real
+// tier. An admin member resolves `platform_admin`; an admin who is no longer a
+// member resolves nothing at all. The distinction is not a floored axis — the
+// tier is carried in full — it is the widget path keeping the live-membership
+// contract it has always had.
+//
+// Everything else on the path is untouched: the widget turn that STARTS such a
+// run still passes the full dual-token sequence, and the MCP boundary's
+// per-instance pin, origin binding, closed tool policy, TTL and replay
+// containment all stand.
+const WIDGET_SOURCE_TYPE = "public_site_widget";
 
 /**
  * Live-resolve the AgentRunMcpActor for a (runBy, orgId, runId) triple.
  *
  * Returns:
- * - actor with `platformRole: "platform_admin"` when the user row carries
- *   the admin role (irrespective of membership) — UNLESS `sourceType` is in
- *   `PLATFORM_ADMIN_SUPPRESSED_SOURCE_TYPES` (the public-site widget path),
- *   in which case the admin short-circuit is suppressed and resolution falls
- *   through to the live `member`-row check (cinatra#408)
+ * - actor with `platformRole: "platform_admin"` when the user row carries the
+ *   admin role. On every source type EXCEPT the widget this is irrespective of
+ *   membership (an operator acts across orgs); on the WIDGET path a live
+ *   `public.member` row is required first (cinatra#2674 — the tier is carried,
+ *   the live-membership contract is not weakened)
  * - actor with `platformRole: "member"` when a `public.member` row exists
  *   for (userId = runBy, organizationId = orgId)
  * - `null` otherwise (caller falls back to the machine token; boundary
- *   denies with `not_org_member` — never elevates). For a suppressed source
- *   type, an admin who is NOT a live org member also resolves to `null` →
- *   denied (never an elevation).
+ *   denies with `not_org_member` — never elevates). On the widget path that
+ *   includes a platform admin who is no longer a member.
  */
 export async function resolveAgentRunMcpActor(input: {
   runId: string;
   runBy: string;
   orgId: string;
   /**
-   * The carrier run's `source_type`. When it is a platform-admin-suppressed
-   * source (`public_site_widget`), the `platform_admin` short-circuit is
-   * skipped so a widget user can never resolve to `platform_admin` (cinatra#408).
-   * Absent / any other value → unchanged behavior.
+   * The carrier run's `source_type`. It no longer suppresses the platform tier
+   * (cinatra#2674) — but on the WIDGET path it still requires a live membership
+   * row before ANY actor is returned, because that path's contract is live
+   * membership and an admin short-circuit would step around it.
    */
   sourceType?: string | null;
   // Returns the actor IDENTITY (no `oboCeiling`): the scope-ceiling chain is not
@@ -84,16 +106,14 @@ export async function resolveAgentRunMcpActor(input: {
   // single responsibility (live identity + platform-role) intact.
 }): Promise<Omit<AgentRunMcpActor, "oboCeiling"> | null> {
   if (!input.runBy || !input.orgId || !input.runId) return null;
-  const suppressPlatformAdmin =
-    typeof input.sourceType === "string" &&
-    PLATFORM_ADMIN_SUPPRESSED_SOURCE_TYPES.has(input.sourceType);
   const [userRow] = await betterAuthDb
     .select({ id: betterAuthUsers.id, role: betterAuthUsers.role })
     .from(betterAuthUsers)
     .where(eq(betterAuthUsers.id, input.runBy))
     .limit(1);
   if (!userRow) return null;
-  if (!suppressPlatformAdmin && rolesIncludeAdmin(userRow.role)) {
+  const isWidgetCarrier = input.sourceType === WIDGET_SOURCE_TYPE;
+  if (!isWidgetCarrier && rolesIncludeAdmin(userRow.role)) {
     return {
       delegation: "agent_run",
       userId: input.runBy,
@@ -118,7 +138,12 @@ export async function resolveAgentRunMcpActor(input: {
     userId: input.runBy,
     orgId: input.orgId,
     runId: input.runId,
-    platformRole: "member",
+    // The membership row is now proven, so the WIDGET carrier's real tier can be
+    // carried here without stepping around the live check (cinatra#2674 + codex
+    // round 0, finding 2). For every other source type an admin has already
+    // returned above, so this line reads `member` there exactly as before.
+    platformRole:
+      isWidgetCarrier && rolesIncludeAdmin(userRow.role) ? "platform_admin" : "member",
   };
 }
 
@@ -218,12 +243,11 @@ export async function resolveAssignedSkillsActorForRun(
       sourceType: run.sourceType,
     });
     if (!liveActor) return undefined;
-    // Carry the gate's suppression-aware platformRole. buildActorContextFromRun
-    // resolves `platform_admin` for any global admin owner; for a suppressed
-    // source (public_site_widget) the gate floored it to `member`, and THAT is
-    // what must reach the scoped-skill visibility filter so the widget carrier
-    // never admin-bypasses it (cinatra#408). For every other source the two
-    // agree.
+    // Carry the GATE's platformRole — the freshest read — into the actor. Since
+    // cinatra#2674 the gate suppresses nothing, so this is the person's real
+    // standing on every source type including the widget, and the scoped-skill
+    // visibility filter sees the same actor it would for the same person in the
+    // app (the #2574 parity criterion, assigned-skill leg).
     return { ...actor, platformRole: liveActor.platformRole };
   } catch (err) {
     // Fail-closed: a membership-resolution failure delivers only the actor-less

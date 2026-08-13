@@ -17,10 +17,13 @@
 //   • A run matrix that reaches every axis the degraded runtime context drops:
 //     a team-visible run, a project-visible run, an org-admin-visible run.
 //
-// The two lineages then differ in exactly one intended way — the widget's
-// platform-role floor — and this file asserts BOTH halves of that: identical
-// sets for an ordinary principal, and a strict SUBSET (never a superset) for a
-// principal who happens to be a platform admin.
+// The two lineages now differ in NO way at all (cinatra#2674, epic #2564 S8e).
+// S8a left exactly one intended divergence — the widget's platform-role floor —
+// and this file asserted a strict SUBSET for a platform admin. S8e removed that
+// floor in the change set that removed its justification (the embedding site's
+// possession of the widget bearer), so the assertion is now EQUALITY on every
+// principal, platform admins included. A re-introduced floor and an escalation
+// both turn this file red, which is what the #2574 parity criterion asks for.
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -103,6 +106,13 @@ vi.mock("@/lib/auth-session", () => ({
 
 vi.mock("@/lib/widget-user-auth", () => ({
   consumeUserWidgetToken: () => ({ ok: true, claims: claimsForToken() }),
+}));
+// The platform tier the widget lineage resolves live (cinatra#2674). It reads
+// the SAME `sessionRole` the in-app lineage's session carries, so the two
+// lineages are being asked about one person with one standing — which is the
+// only way an equality assertion between them means anything.
+vi.mock("@/lib/better-auth-db", () => ({
+  readUserIsPlatformAdmin: async () => sessionRole === "admin",
 }));
 vi.mock("@/lib/widget-auth-audit", () => ({ emitWidgetAuthAudit: () => {} }));
 
@@ -377,19 +387,45 @@ describe("the shared resolution lineage", () => {
   });
 });
 
-describe("the one intended divergence — the platform-role floor", () => {
-  it("a PLATFORM ADMIN sees a strict SUBSET through the widget, never a superset", async () => {
+// ---------------------------------------------------------------------------
+// cinatra#2674 (epic #2564 S8e) — THE LAST FLOORED AXIS IS GONE.
+//
+// The AC: "A platform-admin widget user retains `platform_admin` through the
+// verified widget principal … The #2574 parity criterion holds with no floored
+// axis." The two cases below are the read-surface leg of that; the OBO-token,
+// request-frame, carrier-run and assigned-skill legs are asserted in
+// `widget-platform-parity.test.ts`.
+//
+// NEGATIVE CONTROL FIRST: the fixture must still be able to tell the two tiers
+// apart, or an equality assertion would pass for the wrong reason.
+// ---------------------------------------------------------------------------
+describe("cinatra#2674 — the platform tier is carried, not floored", () => {
+  it("the fixture DISCRIMINATES: platform standing unlocks a row an ordinary member cannot see", async () => {
+    sessionRole = null;
+    const memberSet = await visibleSet(await inAppActor());
+    sessionRole = "admin";
+    const adminSet = await visibleSet(await inAppActor());
+    expect(memberSet).not.toContain("run-owner-other");
+    expect(adminSet).toContain("run-owner-other");
+  });
+
+  it("a PLATFORM ADMIN carries `platform_admin` through the widget, and sees the SAME rows", async () => {
     sessionRole = "admin";
     const [inApp, widget] = await Promise.all([inAppActor(), widgetActor()]);
     expect(inApp.roleHints?.platformRole).toBe("platform_admin");
-    expect(widget.roleHints?.platformRole).toBe("member");
+    expect(widget.roleHints?.platformRole).toBe("platform_admin");
 
     const a = await visibleSet(inApp);
     const b = await visibleSet(widget);
-    // Subset, and the difference is exactly the rows platform standing unlocks.
-    for (const id of b) expect(a).toContain(id);
-    expect(a.length).toBeGreaterThan(b.length);
-    expect(a).toContain("run-owner-other");
-    expect(b).not.toContain("run-owner-other");
+    expect(b).toEqual(a);
+    // The row platform standing unlocks is visible on BOTH surfaces now.
+    expect(b).toContain("run-owner-other");
+  });
+
+  it("an ORDINARY member is NOT elevated — the removal did not turn into a grant", async () => {
+    sessionRole = null;
+    const widget = await widgetActor();
+    expect(widget.roleHints?.platformRole).toBe("member");
+    expect(await visibleSet(widget)).not.toContain("run-owner-other");
   });
 });

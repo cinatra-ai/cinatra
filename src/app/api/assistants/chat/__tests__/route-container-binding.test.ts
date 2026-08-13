@@ -45,6 +45,10 @@ vi.mock("@/app/api/chat/runner", () => ({
 }));
 vi.mock("@/lib/better-auth-db", () => ({
   resolveAssistantHandles: (...a: unknown[]) => resolveAssistantHandles(...a),
+  // cinatra#2674 — the widget branch resolves the person's real platform tier
+  // here. `false` is the ordinary case; the elevated one is asserted in the
+  // parity suites, not by re-running the whole route.
+  readUserIsPlatformAdmin: async () => false,
 }));
 vi.mock("@/lib/assistant-registry-reader", () => ({
   isBuiltinAssistantByPackage: () => Promise.resolve(false),

@@ -5,8 +5,9 @@
  * `/api/agents/{slug}/stream` relay onto `/api/assistants/chat`. From the
  * validated dual-token pair the route builds a server-verified widget principal
  * and mints THIS `cinatra.widget.mcp-obo` OBO token so the CMS write authorizes
- * AS THE END USER against the pinned canonical instance, with platform-admin
- * floored to `member` — no privilege widening.
+ * AS THE END USER against the pinned canonical instance — with the person's REAL
+ * platform tier since cinatra#2674 (epic #2564 S8e), which removed the floor in
+ * the change set that removed its justification.
  *
  * These tests pin the token half of the S5-W1 negative-test contract:
  *  - round-trip: a fresh token verifies for the audience/issuer it was minted
@@ -19,9 +20,11 @@
  *  - `knd` is REQUIRED and FAIL-CLOSED — a token re-signed without / with an
  *    unknown `knd` is rejected even under a valid HMAC (G9)
  *  - `src` fixed discriminator, `jti` required
- *  - `prole` OMITTED → the verifier hard-codes `platformRole: "member"`, and a
- *    hand-crafted token that SMUGGLES `prole: "platform_admin"` still resolves
- *    to `member` (the platform-admin floor is imposed at verify) (G5)
+ *  - `prole` carries the SERVER-RESOLVED tier (cinatra#2674): omitted → `member`
+ *    (so every token minted before the slice keeps its narrow meaning), the
+ *    exact elevated literal → `platform_admin`, and any other value → `member`.
+ *    A "smuggled" claim is not a threat model here: forging one requires the
+ *    HMAC secret, and with that secret every other claim is forgeable too (G5)
  *  - cross-type forgery: a chat / agent-run token does NOT verify here (and a
  *    widget token does NOT verify under the chat verifier)
  */
@@ -183,7 +186,7 @@ describe("widget-mcp-actor-token mint", () => {
     // The two seals (cinatra#2687) ride the token as their own claims.
     expect(p.pjti).toBe("cwu-row-jti-1");
     expect(p.run).toBe("run-of-this-turn");
-    // prole is DELIBERATELY not minted — the floor is imposed at verify.
+    // prole is omitted for the ordinary (member) input — see the tier suite.
     expect(p).not.toHaveProperty("prole");
   });
 });
@@ -420,21 +423,37 @@ describe("widget-mcp-actor-token verify — src / org fail-closed", () => {
   });
 });
 
-describe("widget-mcp-actor-token verify — platform-admin floor (G5)", () => {
-  it("resolves platformRole to `member` for a normal token (prole omitted)", () => {
+describe("widget-mcp-actor-token — the platform tier (G5, cinatra#2674)", () => {
+  it("omitting the tier still means `member` — a pre-S8e token cannot elevate", () => {
     const token = issueWidgetMcpActorToken(WIDGET_INPUT);
+    // The claim is not written at all for the narrow case, so `member` has
+    // exactly one representation on the wire.
+    const payload = JSON.parse(
+      Buffer.from(token.split(".")[1], "base64url").toString("utf8"),
+    );
+    expect(payload).not.toHaveProperty("prole");
     expect(verify(token)?.platformRole).toBe("member");
   });
 
-  it("resolves to `member` even when a token SMUGGLES prole:'platform_admin'", () => {
-    // Defense-in-depth: even a validly-HMAC-signed token carrying a rogue
-    // `prole: "platform_admin"` claim is floored — the verifier IGNORES any
-    // role claim and hard-codes `member`. A widget user is NEVER platform_admin
-    // at the boundary, so the mcp-boundary immediate-allow can't trigger.
-    const smuggled = signClaims(baseClaims({ prole: "platform_admin" }));
-    const verified = verify(smuggled);
-    expect(verified).not.toBeNull();
-    expect(verified?.platformRole).toBe("member");
+  it("CARRIES `platform_admin` when the server resolved it", () => {
+    const token = issueWidgetMcpActorToken({
+      ...WIDGET_INPUT,
+      platformRole: "platform_admin",
+    });
+    expect(verify(token)?.platformRole).toBe("platform_admin");
+  });
+
+  it("resolves NARROW for any claim value that is not the exact literal", () => {
+    for (const prole of ["PLATFORM_ADMIN", "admin", " platform_admin", 1, true, {}, null]) {
+      const verified = verify(signClaims(baseClaims({ prole })));
+      expect(verified).not.toBeNull();
+      expect(verified?.platformRole).toBe("member");
+    }
+    // NEGATIVE CONTROL: the exact literal, through the same signing path, DOES
+    // resolve elevated — so the cases above are narrow for the right reason.
+    expect(verify(signClaims(baseClaims({ prole: "platform_admin" })))?.platformRole).toBe(
+      "platform_admin",
+    );
   });
 });
 

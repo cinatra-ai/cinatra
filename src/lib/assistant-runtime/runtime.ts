@@ -1103,6 +1103,10 @@ export async function runAssistantTurn(
           // cinatra#2577 (S8d) — the route's own reading of the consumed `cwu_`.
           // The runtime never re-derives it: one observation, carried.
           lifecycleRead: widgetPrincipal.lifecycleRead,
+          // The person's real tier, resolved at the route (cinatra#2674). The
+          // widget path no longer floors it, because the site no longer holds
+          // the credential that made flooring necessary.
+          platformRole: widgetPrincipal.platformRole,
         },
         issueWidgetMcpActorToken,
       )

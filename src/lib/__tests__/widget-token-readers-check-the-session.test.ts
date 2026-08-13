@@ -47,6 +47,8 @@ const NOT_A_READER: Record<string, string> = {
   "src/lib/widget-session-binding.ts": "the leaf that DEFINES the liveness predicate",
   "src/lib/org-write/write-registry.ts":
     "the org-write registry names the table as the write target of the mint/verify exports it catalogues; it performs no read of its own",
+  "src/lib/postgres-sync-inventory.ts":
+    "the sync-bridge inventory names the table INSIDE a per-file justification string — it is prose describing what another module reads, holds no query and authorizes nothing. cinatra#2674 put the table's name in it by classifying review-island-serving.ts, which is itself a real reader and consults the predicate on its own line",
 };
 
 function walk(dir: string, out: string[] = []): string[] {

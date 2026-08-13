@@ -379,6 +379,50 @@ export function getActiveConnectSiteById(siteId: string): ConnectSiteRow | null 
 }
 
 /**
+ * Every ACTIVE connect-site row bound to one {client, widgetOrigin} pair
+ * (cinatra#2674).
+ *
+ * WHY A LIST AND NOT A ROW. The caller (`widget-frame-auth.ts`) re-derives the
+ * authoritative site for a widget frame that presents no site credential, and it
+ * must fail closed when the answer is ambiguous. Returning "the first match"
+ * here would move that decision into a store helper and hide it: two rows for
+ * one origin is a configuration the server cannot resolve, and the caller has to
+ * see both to refuse. So this returns everything that matches and decides
+ * nothing.
+ *
+ * Ordered by `site_id` so the result is stable across calls — a stable list is
+ * testable; an unordered one makes an ambiguity assertion flaky.
+ */
+export function listActiveConnectSitesForClientOrigin(input: {
+  client: string;
+  widgetOrigin: string;
+}): ConnectSiteRow[] {
+  const client = typeof input.client === "string" ? input.client.trim() : "";
+  const widgetOrigin =
+    typeof input.widgetOrigin === "string" ? input.widgetOrigin.trim() : "";
+  if (!client || !widgetOrigin) return [];
+  ensurePostgresSchema();
+  const schema = schemaIdent();
+  const [result] = runPostgresQueriesSync({
+    connectionString: getPostgresConnectionString(),
+    queries: [
+      {
+        text: `
+          SELECT site_id, client, widget_origin, callback_origin, credential_hash,
+                 credential_version, webhook_secret_hash, admin_user_id, org_id,
+                 created_at, last_exchanged_at, last_used_at, revoked_at, revoked_by
+          FROM ${schema}.connect_sites
+          WHERE revoked_at IS NULL AND client = $1 AND widget_origin = $2
+          ORDER BY site_id
+        `,
+        values: [client, widgetOrigin],
+      },
+    ],
+  });
+  return ((result?.rows ?? []) as RawSiteRow[]).map(mapSiteRow);
+}
+
+/**
  * Active widget origins for the CORS allowlist union. When `client` is
  * supplied the result is SCOPED to that client (codex adversarial Medium): the
  * WordPress widget-stream allowlist must not be broadened by a Drupal-connected

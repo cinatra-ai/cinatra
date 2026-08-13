@@ -10,7 +10,7 @@ import {
 import { runAssistantTurn } from "@/lib/assistant-runtime/runtime";
 import { resolveAssistantRuntimeConfigByPrincipal } from "@/lib/assistant-runtime/resolve-runtime-config";
 import { resolveChatContainerForCurrentActor } from "@/lib/chat-route-resolver";
-import { resolveAssistantHandles } from "@/lib/better-auth-db";
+import { readUserIsPlatformAdmin, resolveAssistantHandles } from "@/lib/better-auth-db";
 import { isBuiltinAssistantByPackage } from "@/lib/assistant-registry-reader";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import type { WidgetPrincipal } from "@/lib/assistant-runtime/widget-principal";
@@ -376,6 +376,20 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
   // instance + connector kind + `public_site_widget` discriminator that ride the
   // widget OBO token across the MCP boundary. `instanceId` is the server-derived
   // canonical re-pin (== claims.instanceId, asserted above), never a body field.
+  // The person's REAL platform tier (cinatra#2674, epic #2564 S8e). Resolved
+  // HERE, server-side, from the user record — after the whole dual-token
+  // sequence and the live membership re-check have already passed, so it is read
+  // for a principal this route has fully verified. `readUserIsPlatformAdmin`
+  // fails closed to `false` on any read error, so an unreadable role narrows.
+  //
+  // This is the axis #2574 had to floor while the embedding site possessed the
+  // widget bearer. S8e ends that possession in the same change set, which is why
+  // the tier is read at all: through the widget a person has the rights they
+  // have inside Cinatra, on every axis.
+  const widgetPlatformRole = (await readUserIsPlatformAdmin(claims.userId))
+    ? ("platform_admin" as const)
+    : ("member" as const);
+
   const widgetPrincipal: WidgetPrincipal = {
     kind: "public_site_widget",
     userId: claims.userId,
@@ -402,6 +416,10 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     lifecycleRead:
       Array.isArray(claims.grantedScopes) &&
       claims.grantedScopes.includes(WIDGET_LIFECYCLE_READ_SCOPE),
+    // cinatra#2674 (epic #2564 S8e) — the REAL platform tier, resolved
+    // server-side above from the user record after the whole dual-token
+    // sequence. Nothing the browser or the CMS sends can reach it.
+    platformRole: widgetPlatformRole,
   };
 
   emitWidgetAuthAudit("assistant_chat_widget_dispatch_authorized", {
@@ -414,13 +432,16 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     instanceId: reResolvedInstance,
   });
 
-  // Thread binding — UNCHANGED. The widget user is the caller; floored to
-  // non-admin (isAdmin: false) and its own org. authorizeThreadForTurn's
-  // persisted-ownership matrix is byte-identical.
+  // Thread binding. The widget user is the caller, in its own org, and — since
+  // cinatra#2674 (codex round 0, finding 5) — with its REAL admin standing. The
+  // `isAdmin: false` that stood here was the last of the widget floors: it would
+  // have refused a platform admin a thread they can continue in the app, which is
+  // an under-grant and therefore still a divergence. `authorizeThreadForTurn`'s
+  // persisted-ownership matrix is otherwise byte-identical.
   const authz = authorizeThreadForTurn({
     threadId: parsed.data.threadId,
     callerId: widgetPrincipal.userId,
-    isAdmin: false,
+    isAdmin: widgetPrincipal.platformRole === "platform_admin",
     sessionOrgId: widgetPrincipal.orgId,
   });
   if (!authz.ok) {
@@ -493,11 +514,18 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
   }
   const runtimeConfig = resolvedConfig.runtimeConfig;
 
-  // A MINIMAL, FLOORED ActorContext for the widget user — G5: platformRole is
-  // hard-coded `member` (NEVER resolved live), so a widget user who is also a
-  // platform admin gets no elevated standing on any downstream authz. The OBO
-  // token independently floors the MCP boundary; this floors the runtime's own
-  // actor dimension. Least-privilege: no team/project grants are carried.
+  // A MINIMAL, LEAST-PRIVILEGE ActorContext for the CHAT TURN — narrow on every
+  // axis: no team or project grants, `member` org role, `member` platform tier.
+  //
+  // THE SENTENCE THAT USED TO BE HERE IS NO LONGER TRUE and has been corrected
+  // (cinatra#2674, codex confirming round): it said the OBO token "independently
+  // floors the MCP boundary". It does not — since S8e the OBO token carries the
+  // person's real tier, as do the selector audience, the thread gate and the
+  // carrier run. What survives is THIS context, and it is not the widget floor:
+  // it is the turn actor's own ceiling, applied to org role and grants exactly as
+  // to the platform tier, and barred from every lifecycle read by a structural
+  // test. Widget-vs-app asymmetry on permission-bearing surfaces is gone; a
+  // deliberately narrow actor for driving an LLM turn is not that asymmetry.
   //
   // DEGRADED_WIDGET_RUNTIME_ACTOR — LIFECYCLE-BARRED (cinatra#2574, epic #2564
   // S8a). This context is correct for a CHAT TURN, where the floor is the point,
@@ -516,6 +544,15 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     teamIds: [],
     projectGrants: [],
     projectIds: [],
+    // EVERY axis here is floored, and that is what this context IS (cinatra#2674,
+    // codex round 0, finding 5, considered and kept). This is NOT the widget
+    // platform floor S8e removed: that one was widget-vs-app asymmetry on
+    // permission-bearing surfaces — the lifecycle actor, the OBO token, the
+    // carrier run, the selector audience, the thread gate — and every one of them
+    // now carries the person's real tier. THIS is the chat turn's own
+    // least-privilege actor, narrow on org role, teams and projects alike, and a
+    // structural test bars it from every lifecycle read for exactly that reason.
+    // Raising one of its axes would widen the turn actor, not close a gap.
     platformRole: "member",
     orgRole: "member",
     authSource: "a2a",
@@ -532,7 +569,11 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
       messages,
       actorContext: degradedWidgetRuntimeActorContext,
       userId: widgetPrincipal.userId,
-      platformRole: "member",
+      // The runtime consumes this argument on its COOKIE-CHAT branch only (it
+      // builds the chat OBO token); the widget branch builds its own token from
+      // `widgetPrincipal`. Passing the real tier rather than a literal keeps a
+      // reader from having to work out whether a `"member"` here is a floor.
+      platformRole: widgetPrincipal.platformRole,
       sessionOrgId: widgetPrincipal.orgId,
       send,
       signal,
@@ -548,7 +589,11 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     mirrorOrgId: authz.mirrorOrgId,
     needsStructuredRow: authz.needsStructuredRow,
     userId: widgetPrincipal.userId,
-    isAdmin: false,
+    // The SAME real standing the thread gate above uses (cinatra#2674, codex
+    // round 0, finding 5). This one decides the concurrent-turn ownership race;
+    // a widget platform admin losing it where an in-app one would not is the
+    // same under-grant, in a place that is even harder to notice.
+    isAdmin: widgetPrincipal.platformRole === "platform_admin",
     runProducer,
     // cinatra#2650 — the widget's container comes from the SERVER-VERIFIED
     // principal this branch already built (the CLOSED widget binding's reserved

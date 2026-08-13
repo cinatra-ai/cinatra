@@ -96,12 +96,20 @@ export type DelegatedMcpActor =
        */
       jti: string;
       /**
-       * ALWAYS `"member"` — union-narrowed, NEVER `platform_admin`. The widget
-       * OBO token omits the role claim and the verifier hard-codes `member`, so
-       * the platform-admin immediate-allow at the boundary is un-triggerable for
-       * a widget delegation (the platform-admin suppression, imposed at mint).
+       * The end user's REAL platform tier (cinatra#2674, epic #2564 S8e).
+       *
+       * It used to be union-narrowed to `"member"` — a floor whose ONE
+       * justification was that the embedding site possessed the widget bearer.
+       * S8e ends that possession: the credential is minted for the Cinatra frame
+       * and is never held by the CMS backend or the parent page. So the widget
+       * carries the person's real standing here, exactly as their in-app session
+       * does, which is the epic's parity rule with no floored axis.
+       *
+       * `member` remains the default in every uncertain case: the claim is
+       * absent on a token minted before this slice and on any token whose claim
+       * is not the exact elevated literal.
        */
-      platformRole: "member";
+      platformRole: "platform_admin" | "member";
       /**
        * Did the `cwu_` that authorized this turn carry the `lifecycle.read`
        * grant (cinatra#2577, epic #2564 S8d)? A signed claim on the widget OBO

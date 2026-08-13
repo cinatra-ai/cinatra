@@ -137,6 +137,9 @@ const wpPrincipal: WidgetPrincipal = {
   instanceId: "wp-canonical",
   verifiedOrigin: "https://wp.example.test",
   assistantHandle: "wordpress",
+  // cinatra#2674 — the tier is a required, server-resolved field now. `member`
+  // is the ordinary value; the elevated case is covered by the parity suites.
+  platformRole: "member",
   instancesConfigKey: "wordpress_instances",
   // cinatra#2577 — a widget turn whose sign-in granted no lifecycle read.
   lifecycleRead: false,
