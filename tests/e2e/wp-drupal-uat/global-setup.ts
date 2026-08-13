@@ -16,11 +16,13 @@ import { request as playwrightRequest } from "@playwright/test";
 // container is unreachable the setup throws with a clear message — the UAT
 // suite must NOT silently pass against an unseeded stack.
 //
-// cinatra#410 — the shipped widget streams behind a REAL per-site
-// `cnx_` connect-site credential + a per-user hosted-PKCE `cwu_` login. This
-// setup ALSO (1) asserts dev-auto-setup pushed a real `cnx_` (not a legacy UUID)
-// into the CMS widget config, and (2) signs the deterministic dev UAT user in
-// and saves a storageState so the hosted-login popup lands directly on consent.
+// cinatra#410 / cinatra#2674 — the CMS side still holds a REAL per-site `cnx_`
+// connect-site credential (backend-only, server-to-server, never in the browser),
+// and at protocol 2 the per-user sign-in belongs entirely to the Cinatra frame.
+// This setup ALSO (1) asserts dev-auto-setup pushed a real `cnx_` (not a legacy
+// UUID) into the CMS widget config, (2) signs the deterministic dev UAT user in
+// and saves a storageState for the Cinatra origin, and (3) warms the protocol-2
+// ceremony routes so a cold compile cannot spend the popup's user activation.
 // ---------------------------------------------------------------------------
 
 export const WP_CONTAINER = process.env.UAT_WP_CONTAINER ?? "cinatra-wordpress-1";
@@ -214,11 +216,18 @@ function readDevActor(): DevActor {
 
 /**
  * Sign the deterministic dev UAT user IN against the cinatra dev server and save
- * a storageState. Both Playwright projects load this state, so the widget's
- * hosted `/widget-auth` login popup inherits the Cinatra session and lands
- * directly on the consent step (no manual credentials in the popup) — exercising
- * the REAL #410 login gate deterministically. The user + org are seeded
- * server-side by dev-auto-setup; here we only sign in (never sign up).
+ * a storageState. The user + org are seeded server-side by dev-auto-setup; here
+ * we only sign in (never sign up).
+ *
+ * WHAT THE SAVED SESSION IS FOR AT PROTOCOL 2. Its cookies are scoped to the
+ * CINATRA instance origin — where the FRAME's sign-in popup opens — never to the
+ * CMS admin origin the specs navigate to. So a popup opened by the frame may
+ * land already authenticated and return itself without presenting a form. The
+ * drive (`helpers.finishFrameSignIn`) handles BOTH outcomes and types the same
+ * actor's credentials from `.uat/dev-actor.json` when the form does appear, so
+ * neither path is assumed and the ceremony is real either way. The state is also
+ * what lets the render-parity leg's same-site seam fetch read a thread it seeded
+ * as this user.
  */
 async function establishCinatraSession(actor: DevActor): Promise<void> {
   const ctx = await playwrightRequest.newContext({ baseURL: CINATRA_BASE });
@@ -270,9 +279,11 @@ async function establishCinatraSession(actor: DevActor): Promise<void> {
 }
 
 /**
- * Warm every dev-server route on the widget's dual-token path BEFORE the specs
- * run, so Next.js dev-mode first-compile latency is absorbed here instead of
- * inside a spec's assertion window.
+ * Warm every dev-server route the widget's ceremony + turn touch BEFORE the
+ * specs run, so Next.js dev-mode first-compile latency is absorbed here instead
+ * of inside a spec's assertion window — or, at protocol 2, inside the browser's
+ * transient user activation (see the frame-route block below, which is the one
+ * warm here that a spec cannot compensate for).
  *
  * Why this exists (observed on the 2026-07-11 dispatch run): under dev
  * cold-compile the first `POST /api/agents/{slug}/token` took 10.0s — at/over
@@ -296,11 +307,28 @@ async function warmDevRoutes(): Promise<void> {
   const ctx = await playwrightRequest.newContext({ baseURL: CINATRA_BASE });
   try {
     const targets: Array<{ label: string; run: () => Promise<{ status(): number }> }> = [];
-    // Shared widget-auth surface (init route, hosted page, redeem route).
+    // PROTOCOL-2 CEREMONY SURFACE (cinatra#2674) — the FRAME's own routes, the
+    // hosted authorize page, and the sign-in page its popup lands on.
+    //
+    // THIS WARM IS LOAD-BEARING, NOT A TIMING NICETY. `runFrameSignIn` awaits
+    // `POST /api/widget-auth/frame/init` and THEN calls `window.open`. A browser
+    // grants transient user activation for a couple of seconds after the click,
+    // so a cold first compile of that route SPENDS the activation and the popup
+    // is BLOCKED outright — the frame reports `popup_blocked`, drops back to its
+    // signed-out card, and the ceremony fails with no HTTP error anywhere to
+    // explain it. Measured on the host2 lane: a cold
+    // `/api/widget-auth/frame/token` took 22.4s. Warming these here moves that
+    // compile out of the activation window.
+    //
+    // The RETIRED pair (`/api/widget-auth/{init,token}`) is deliberately NOT
+    // warmed: it answers 410 Gone, nothing in the suite may call it, and warming
+    // a route the drive must never touch would only make a regression that DID
+    // touch it faster rather than louder.
     targets.push(
-      { label: "POST /api/widget-auth/init", run: () => ctx.post("/api/widget-auth/init", { data: {}, failOnStatusCode: false, timeout: 120_000 }) },
-      { label: "GET /widget-auth", run: () => ctx.get("/widget-auth", { failOnStatusCode: false, timeout: 120_000 }) },
-      { label: "POST /api/widget-auth/token", run: () => ctx.post("/api/widget-auth/token", { data: {}, failOnStatusCode: false, timeout: 120_000 }) },
+      { label: "POST /api/widget-auth/frame/init", run: () => ctx.post("/api/widget-auth/frame/init", { data: {}, failOnStatusCode: false, timeout: 120_000 }) },
+      { label: "POST /api/widget-auth/frame/token", run: () => ctx.post("/api/widget-auth/frame/token", { data: {}, failOnStatusCode: false, timeout: 120_000 }) },
+      { label: "GET /widget-auth", run: () => ctx.get("/widget-auth?txn=warmup", { failOnStatusCode: false, timeout: 120_000 }) },
+      { label: "GET /sign-in", run: () => ctx.get("/sign-in", { failOnStatusCode: false, timeout: 120_000 }) },
     );
     // S5 unified assistant-broker surface (cinatra#1221/#1998/#2029) — the routes
     // the cutover widget actually drives. Warm the client-side negotiate GET, the

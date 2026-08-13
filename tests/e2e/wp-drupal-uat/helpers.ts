@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { expect, type FrameLocator, type Page } from "@playwright/test";
 
-import type { UatSeed } from "./global-setup";
+import type { DevActor, UatSeed } from "./global-setup";
 
 export const WP_BASE = process.env.UAT_WP_BASE_URL ?? "http://localhost:8080";
 export const DRUPAL_BASE = process.env.UAT_DRUPAL_BASE_URL ?? "http://localhost:8082";
@@ -15,14 +15,30 @@ export const DRUPAL_ADMIN_USER = process.env.UAT_DRUPAL_ADMIN_USER ?? "admin";
 export const DRUPAL_ADMIN_PASS = process.env.UAT_DRUPAL_ADMIN_PASS ?? "cinatra";
 
 // Widget DOM contract after the S5 iframe cutover (wordpress-plugin/drupal-module
-// #1221). The CMS-origin bundle still mounts on #cinatra-root and builds the
-// launcher/panel chrome + the required-login gate as .cw-* shadow-DOM elements —
-// BUT the conversation itself is no longer rendered by the bundle. It mounts the
+// #1221) and the PROTOCOL-2 cutover (cinatra#2674; wordpress-plugin #108 /
+// drupal-module #100, both on their mains). The CMS-origin bundle still mounts on
+// #cinatra-root and builds the launcher/panel chrome as .cw-* shadow-DOM elements
+// — BUT the conversation itself is no longer rendered by the bundle. It mounts the
 // Cinatra-served AG-UI surface (`/embed/assistant`) in a sandboxed cross-origin
-// <iframe class="cw-frame">; the textarea + submit + streaming render now live
-// INSIDE that iframe. The retired shadow-DOM composer selectors (.cw-textarea /
-// .cw-submit / .cw-msg-assistant) no longer exist in the shell — reach the
-// composer/output through page.frameLocator(SEL.frame) instead (see EMBED below).
+// <iframe class="cw-frame">; the composer + streaming render live INSIDE that
+// iframe. The retired shadow-DOM composer selectors (.cw-textarea / .cw-submit /
+// .cw-msg-assistant) no longer exist in the shell — reach the composer/output
+// through page.frameLocator(SEL.frame) instead (see EMBED below).
+//
+// WHAT PROTOCOL 2 RETIRED IN THIS CONTRACT, and why the old selectors are gone
+// rather than merely unused. At protocol 1 the panel opened in a parent-owned
+// 'login' mode: the CMS bundle rendered `.cw-login` + `.cw-login-btn`, ran the
+// hosted PKCE handshake through same-origin CMS relays, received the `cwu_`
+// per-user bearer AND minted a `cit_`, then composed both into a postMessage
+// BOOTSTRAP — the iframe was not mounted until it held those tokens. The plugins'
+// current mains do none of that: the panel mounts the sandboxed iframe on the
+// FIRST OPEN (`openWidget` → `mountBridgeIframe`, lazily and unconditionally),
+// the parent posts ONE `cinatra.embed.context` carrying public selectors only,
+// and the FRAME owns the whole sign-in on the Cinatra origin in a top-level popup
+// it opens itself. `.cw-login` / `.cw-login-btn` therefore no longer exist in the
+// shell at all, and the relays they drove answer 410 Gone
+// (`/api/widget-auth/{init,token}`). The sign-in affordance is IN-FRAME:
+// `[data-embed-state="signin"]` + `[data-embed-signin]`.
 //
 // Post-#87 (design#87): the live diff card is RETIRED — the unified
 // /api/assistants/chat AG-UI stream carries no field-level `changes` payload, so
@@ -32,23 +48,30 @@ export const SEL = {
   root: "#cinatra-root",
   circle: ".cw-circle",
   panel: ".cw-panel",
-  // The sandboxed cross-origin embed iframe (`/embed/assistant`) mounted into the
-  // panel body once a valid per-user token is held. Playwright pierces the open
-  // shadow root to locate it; page.frameLocator(SEL.frame) drives its contents.
+  // The sandboxed cross-origin embed iframe (`/embed/assistant`). At protocol 2
+  // it is mounted by the FIRST panel open — before any sign-in — because the
+  // frame is the party that signs in. Playwright pierces the open shadow root to
+  // locate it; page.frameLocator(SEL.frame) drives its contents.
   frame: ".cw-frame",
-  // cinatra#410 required-login gate: the panel opens in 'login' mode (no valid
-  // per-user token) showing a "Sign in with Cinatra" button until the hosted
-  // PKCE login mints a `cwu_`; the iframe is not mounted behind it.
-  login: ".cw-login",
-  loginBtn: ".cw-login-btn",
-  // Consent button on the hosted /widget-auth page (popup).
-  consentSubmit: "button[type=submit]",
   // ---- IN-FRAME selectors (drive via page.frameLocator(SEL.frame)) ----
+  // The FRAME's own signed-out card + its sign-in control (protocol 2). Clicking
+  // it opens a TOP-LEVEL Cinatra popup (the sandbox carries `allow-popups
+  // allow-popups-to-escape-sandbox` exactly so this can happen); the parent page
+  // is not a party to it and never sees the credential.
+  embedSignedOut: '[data-embed-state="signin"]',
+  embedSignInBtn: "[data-embed-signin]",
+  // The frame while the popup is open. A ceremony that fails neutrally (a blocked
+  // popup, a cancelled sign-in) drops BACK to `embedSignedOut` from here — which
+  // is why the drive below waits on `embedActive` and fails on its own budget
+  // rather than waiting out a silent return to the signed-out card.
+  embedAuthorizing: '[data-embed-state="authorizing"]',
   // The embed page's own composer + render contract
   // (src/app/embed/assistant/embed-assistant-client.tsx).
   //
-  // The embed reaches `active` only after the parent READY→BOOTSTRAP bridge +
-  // the client-side capability negotiation both succeed — which additionally
+  // At protocol 2 the embed reaches `active` only after ALL of: the parent
+  // READY→CONTEXT bridge delivered its public selectors, the FRAME's own sign-in
+  // ceremony redeemed a credential (`/api/widget-auth/frame/{init,token}`), and
+  // the client-side capability negotiation succeeded — which additionally
   // requires the `/embed/assistant` frame-ancestors CSP to have resolved a REAL
   // registered origin (a `'none'` resolution renders the neutral error card and
   // never bootstraps), so waiting on `embedActive` is ALSO the live
@@ -131,6 +154,73 @@ function agUiStreamHasToolCall(body: string, expectedTool: string): boolean {
 export function readSeed(): UatSeed {
   const file = path.join(__dirname, ".uat", "seed.json");
   return JSON.parse(readFileSync(file, "utf8")) as UatSeed;
+}
+
+/**
+ * The deterministic dev UAT actor, as `dev-auto-setup`'s `ensureDevConnectActor`
+ * seeds it on every dev-server boot (global-setup asserts the file exists before
+ * any spec runs). At protocol 2 these are the credentials the FRAME's sign-in
+ * popup is driven with when it presents its own sign-in screen — the popup is a
+ * top-level Cinatra document, so this is a first-party sign-in on the Cinatra
+ * origin and the CMS page is not a party to it.
+ */
+export function readDevActor(): DevActor {
+  const file = path.join(__dirname, ".uat", "dev-actor.json");
+  try {
+    return JSON.parse(readFileSync(file, "utf8")) as DevActor;
+  } catch (error) {
+    throw new Error(
+      `[wp-drupal-uat] dev UAT actor not found at ${file} — the protocol-2 sign-in ` +
+        `popup has no credentials to type. dev-auto-setup (ensureDevConnectActor) ` +
+        `writes it on the dev-server boot; global-setup reads it too, so if this ` +
+        `throws the setup did not run. Cause: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+/**
+ * THE CEREMONY BUDGET (cinatra#2708).
+ *
+ * The protocol-2 sign-in ceremony — panel open → frame signed-out card → popup →
+ * credentials → `active` — was MEASURED at 19.7s uninstrumented on a warm dev
+ * server (host2, matrix-chromium, both CMSes). Every wait inside `openWidget` is
+ * therefore bounded by what is LEFT of this budget rather than by its own
+ * generous ceiling: a ceremony that stalls fails with a named budget error naming
+ * the phase it died in, instead of drifting to the 120s per-test timeout (or, in
+ * the egress spec, to whatever ceiling that spec sets) with no diagnosis.
+ *
+ * 60s is 3x the measured baseline — headroom for a CI runner that is slower than
+ * a warm workstation, while still failing loud well inside the per-test ceiling
+ * so the failure names the ceremony rather than the runner. Raise it with
+ * UAT_CEREMONY_BUDGET_MS on a host that genuinely needs more; do not raise the
+ * per-test timeout instead, which is what re-hides the hang this bound exists to
+ * surface.
+ */
+export const CEREMONY_BUDGET_MS = Number(process.env.UAT_CEREMONY_BUDGET_MS ?? 60_000);
+
+/** A monotonic countdown over the ceremony budget; throws the moment it is out. */
+function ceremonyDeadline(): { left: (phase: string) => number; elapsed: () => number } {
+  const startedAt = Date.now();
+  return {
+    left(phase: string): number {
+      const remaining = startedAt + CEREMONY_BUDGET_MS - Date.now();
+      if (remaining <= 0) {
+        throw new Error(
+          `[wp-drupal-uat] the protocol-2 sign-in ceremony exceeded its ` +
+            `${CEREMONY_BUDGET_MS}ms budget at phase "${phase}" (cinatra#2708 — the ` +
+            `measured uninstrumented baseline is ~19.7s). This is a REAL failure of the ` +
+            `ceremony, not a harness timeout: the drive is bounded on purpose so a stall ` +
+            `is named here instead of hanging to the per-test ceiling. Raise ` +
+            `UAT_CEREMONY_BUDGET_MS only if the host is genuinely slower.`,
+        );
+      }
+      return remaining;
+    },
+    elapsed(): number {
+      return Date.now() - startedAt;
+    },
+  };
 }
 
 export async function loginWordPress(page: Page): Promise<void> {
@@ -219,55 +309,92 @@ export async function loginDrupal(page: Page): Promise<void> {
 }
 
 /**
- * Open the assistant panel, drive the cinatra#410 required-login gate, and return
- * a FrameLocator for the mounted `/embed/assistant` iframe with its composer live.
+ * Open the assistant panel, drive the PROTOCOL-2 sign-in ceremony, and return a
+ * FrameLocator for the mounted `/embed/assistant` iframe with its composer live.
  *
- * After clicking the circle the panel opens. A fresh page load always mounts in
- * 'login' mode (the `cwu_` per-user token is in-memory only, lost on navigation),
- * so the conversation iframe is absent until the handshake mints one: we assert
- * the `.cw-login` gate, click "Sign in with Cinatra", open the hosted
- * `/widget-auth` PKCE popup (which goes straight to its return step, because
- * the browser context carries the dev user's Cinatra session and cinatra#2631
- * made signing in the grant), and wait for the popup to close itself + the
- * `cwu_` to mint. Nothing in the popup is clicked. `enterConversation()` then pre-mints
- * the short-lived `cit_` site token and mounts the sandboxed cross-origin
- * `<iframe class="cw-frame">`. We wait for that iframe to attach, then for its
- * embed page to reach the negotiated `active` phase and expose the composer.
+ * THE CEREMONY (cinatra#2674; wordpress-plugin #108 / drupal-module #100 on their
+ * mains), phase by phase — every wait keys on a REAL state transition:
  *
- * Every wait keys on a REAL state transition (login → grant → token → iframe
- * mount → embed active), not a blanket retry/timeout. The `embedActive` wait
- * doubles as the live frame-ancestors check (a `'none'` resolution renders the
- * embed's neutral error card and never bootstraps — see SEL.embedActive).
+ *   1. `#cinatra-root` attaches and the bundle's IIFE marks `data-cinatra-mounted`.
+ *   2. The launcher circle is clicked. The panel opens AND — new at protocol 2 —
+ *      the sandboxed `<iframe class="cw-frame">` is mounted right there, on the
+ *      first open, before anyone has signed in. The parent posts ONE
+ *      `cinatra.embed.context` carrying PUBLIC selectors (which site, which
+ *      agent, which resource); it composes no bearer and holds none.
+ *   3. The FRAME renders its own signed-out card (`[data-embed-state="signin"]`).
+ *      This is the transition the retired drive could never reach: at protocol 1
+ *      the parent rendered `.cw-login` and the iframe did not exist yet.
+ *   4. Clicking the frame's `[data-embed-signin]` opens a TOP-LEVEL Cinatra popup
+ *      that the FRAME opened (`window.open` on the authorize URL from
+ *      `/api/widget-auth/frame/init`). The popup is first-party on the Cinatra
+ *      origin, which is why the sign-in works in browsers that block third-party
+ *      cookies outright.
+ *   5. The popup is driven to completion (see `finishFrameSignIn`) and closes
+ *      itself; the frame redeems the code at `/api/widget-auth/frame/token` and
+ *      holds the credential pair in a closure. NOTHING is handed to the parent.
+ *   6. The embed negotiates capabilities and reaches `active` with the shared
+ *      composer mounted.
+ *
+ * The whole thing is bounded by {@link CEREMONY_BUDGET_MS} (cinatra#2708), not by
+ * per-wait ceilings: a ceremony that dies neutrally — a blocked popup drops the
+ * frame back to its signed-out card and reports nothing — is named here, at the
+ * phase it died in, rather than running out the per-test timeout.
+ *
+ * The `embedActive` wait doubles as the live frame-ancestors check (a `'none'`
+ * resolution renders the embed's neutral error card and never bootstraps — see
+ * SEL.embedActive).
  */
 export async function openWidget(page: Page): Promise<FrameLocator> {
+  const budget = ceremonyDeadline();
+
   // #cinatra-root is the Shadow-DOM host mount — a zero-size div, never
   // "visible" (the widget UI renders position:fixed inside its shadow root), so
   // wait for it ATTACHED, not visible.
-  await page.waitForSelector(SEL.root, { state: "attached", timeout: 30_000 });
+  await page.waitForSelector(SEL.root, { state: "attached", timeout: budget.left("widget mount") });
   // Wait for the IIFE to mark the mount before interacting.
   await page.waitForFunction(
     (sel) => document.querySelector(sel)?.getAttribute("data-cinatra-mounted") === "true"
       || (document.querySelector(sel) as HTMLElement | null)?.dataset?.cinatraMounted === "true",
     SEL.root,
-    { timeout: 30_000 },
+    { timeout: budget.left("widget mount") },
   );
   // The circle lives in the shadow root (Playwright pierces open shadow DOM).
-  await page.waitForSelector(SEL.circle, { state: "visible", timeout: 30_000 });
+  await page.waitForSelector(SEL.circle, { state: "visible", timeout: budget.left("launcher") });
   await page.click(SEL.circle);
-  await page.waitForSelector(SEL.panel, { timeout: 15_000 });
+  await page.waitForSelector(SEL.panel, { timeout: budget.left("panel open") });
 
-  // Conversation iframe already mounted? (cwu_ already valid for this context.)
-  // On a fresh page load it never is (the token is in-memory), so drive login.
-  const frameMounted = (await page.locator(SEL.frame).count()) > 0;
-  if (!frameMounted) {
-    await completeRequiredLogin(page);
+  // Protocol 2: the iframe is mounted BY the open, unconditionally — no token is
+  // held and none is needed to mount it.
+  await page.waitForSelector(SEL.frame, {
+    state: "attached",
+    timeout: budget.left("frame mount"),
+  });
+  const frame = page.frameLocator(SEL.frame);
+
+  // The frame's OWN signed-out card. If the frame is already `active` (a context
+  // that still holds a live frame session — not the case on a fresh document,
+  // where the credential died with the previous document) there is nothing to
+  // sign in to; the active wait below is then immediate.
+  const signedOut = frame.locator(SEL.embedSignedOut);
+  const active = frame.locator(SEL.embedActive);
+  // ONE wait on the union, never a Promise.race of two waits: the loser of a race
+  // keeps running and rejects into an unhandled rejection long after the test has
+  // moved on. A CSS selector list settles on whichever card renders first.
+  await frame
+    .locator(`${SEL.embedSignedOut}, ${SEL.embedActive}`)
+    .first()
+    .waitFor({ state: "visible", timeout: budget.left("frame signed-out card") });
+
+  if (await signedOut.isVisible().catch(() => false)) {
+    const popup = await startFrameSignIn(page, frame, budget.left("sign-in popup"));
+    await finishFrameSignIn(popup, readDevActor(), budget.left("popup sign-in"));
   }
 
-  // The iframe mounts only after enterConversation() pre-mints the cit_ token.
-  await page.waitForSelector(SEL.frame, { state: "attached", timeout: 30_000 });
-  const frame = page.frameLocator(SEL.frame);
-  await frame.locator(SEL.embedActive).waitFor({ state: "visible", timeout: 30_000 });
-  await frame.locator(SEL.embedComposerInput).waitFor({ state: "visible", timeout: 30_000 });
+  await active.waitFor({ state: "visible", timeout: budget.left("embed active") });
+  await frame
+    .locator(SEL.embedComposerInput)
+    .waitFor({ state: "visible", timeout: budget.left("composer") });
+  console.log(`[wp-drupal-uat] protocol-2 ceremony reached active in ${budget.elapsed()}ms`);
   return frame;
 }
 
@@ -277,59 +404,136 @@ export function embedFrame(page: Page): FrameLocator {
 }
 
 /**
- * Drive the cinatra#410 hosted-login popup to mint a `cwu_` user token. Asserts
- * the login gate, clicks the popup open, and waits for the popup to close
- * (success path) — after which the widget swaps to conversation mode and mounts
- * the embed iframe (openWidget then waits it active).
+ * Click the FRAME's own sign-in control and return the top-level Cinatra popup it
+ * opens.
  *
- * cinatra#2631 — THERE IS NOTHING TO CLICK IN THE POPUP. The hosted login used
- * to render a consent step ("Continue to the assistant" + a Continue button)
- * that this helper pressed. The owner ruled that step out: signing in IS the
- * grant, so the popup records it and closes itself. The helper now asserts the
- * return state and the self-close instead of driving a control — which is also
- * the assertion that no interstitial has crept back, because a step that waited
- * for a press would hang here.
+ * The popup grant is not incidental: the plugin's iframe sandbox carries exactly
+ * `allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox`,
+ * and the last two exist so this `window.open` is possible at all and so the
+ * window it opens is an ORDINARY top-level document (a popup that merely
+ * inherited the sandbox would have no forms and could not complete a sign-in).
+ * A `popup` event that never arrives therefore means one of two real defects —
+ * the sandbox lost a token, or the frame's `/api/widget-auth/frame/init` was slow
+ * enough to spend the browser's transient user activation before `window.open`
+ * (which is why global-setup warms that route). Both fail here, loudly.
  */
-async function completeRequiredLogin(page: Page): Promise<void> {
-  // The login gate must be the reason the iframe is not yet mounted — assert it loud.
-  await page.waitForSelector(SEL.login, { state: "visible", timeout: 15_000 });
-
-  // Clicking "Sign in with Cinatra" opens the hosted /widget-auth popup.
+async function startFrameSignIn(
+  page: Page,
+  frame: FrameLocator,
+  timeout: number,
+): Promise<Page> {
   const [popup] = await Promise.all([
-    page.waitForEvent("popup", { timeout: 30_000 }),
-    page.click(SEL.loginBtn),
+    page.waitForEvent("popup", { timeout }),
+    frame.locator(SEL.embedSignInBtn).click({ timeout }),
   ]);
-  await popup.waitForLoadState("domcontentloaded");
+  // A popup that already holds a Cinatra session can post its code back and
+  // CLOSE ITSELF before this settles; that is the fast success path, not a
+  // failure, and every wait on a closed page throws. Swallow it and let
+  // `finishFrameSignIn` decide from the popup's state.
+  await popup.waitForLoadState("domcontentloaded").catch(() => {});
+  return popup;
+}
 
-  // The browser context carries the dev user's Cinatra session, so the hosted
-  // page goes straight to the return step and hands the code back. Wait for the
-  // close it performs on its own. If the popup is already gone by the time we
-  // look, that is the same success — race, not failure.
+/**
+ * Drive the Cinatra-origin popup to completion and wait for it to close itself.
+ *
+ * TWO LEGITIMATE PATHS, and the drive must not assume either.
+ *   • The popup presents Cinatra's own sign-in screen. It is typed with the
+ *     seeded dev actor's credentials — a FIRST-PARTY sign-in on the Cinatra
+ *     origin. The CMS page cannot see this window's contents at all.
+ *   • The popup lands already authenticated (this suite's storageState carries a
+ *     Cinatra session for the same actor, scoped to the instance origin where the
+ *     popup opens). It then goes straight to its return step and closes itself.
+ * The drive polls for whichever arrives, so a config with or without a saved
+ * session both exercise the real journey and neither wastes the budget waiting
+ * for a screen that will not appear.
+ *
+ * TYPE, NEVER `fill()` — the lesson the s8e lane paid for. `fill()` sets the
+ * value and fires ONE synthetic `input`; the popup's controlled inputs did not
+ * register that under Firefox, so the form came back "Email is invalid /
+ * Password is required" and the ceremony stalled with the frame sitting correctly
+ * at `authorizing`. That read as an engine failure and was not one — no request
+ * ever 4xx'd. Typing key-by-key drives the same events a person does, in every
+ * engine.
+ *
+ * The password is checked by LENGTH ONLY. Never assert on its value: a failed
+ * assertion prints the expected value into the report.
+ */
+async function finishFrameSignIn(
+  popup: Page,
+  actor: DevActor,
+  timeout: number,
+): Promise<void> {
+  const deadline = Date.now() + timeout;
+  const email = popup.locator('input[name="email"], input[type="email"]').first();
+
+  let sawForm = false;
+  while (Date.now() < deadline) {
+    if (popup.isClosed()) return; // it had a session and returned itself
+    if (await email.isVisible().catch(() => false)) {
+      sawForm = true;
+      break;
+    }
+    // A PLAIN timer, never `popup.waitForTimeout` — the popup can close DURING
+    // this pause (the already-authenticated path returns itself in well under a
+    // second), and every wait on a closed page throws. A wait that dies because
+    // the thing it is waiting for succeeded is the worst kind of flake: it fails
+    // exactly on the fast path.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  if (!sawForm) {
+    if (popup.isClosed()) return;
+    throw new Error(
+      `[wp-drupal-uat] the Cinatra sign-in popup neither presented its sign-in form ` +
+        `nor returned itself within the ceremony budget (still open at ${popup.url()}). ` +
+        `The frame is left at [data-embed-state="authorizing"] and would never reach active.`,
+    );
+  }
+
+  const password = popup.locator('input[name="password"], input[type="password"]').first();
+  await email.click();
+  await email.pressSequentially(actor.email, { delay: 12 });
+  await password.click();
+  await password.pressSequentially(actor.password, { delay: 12 });
+
+  // Both fields must really hold what we typed before the submit is meaningful.
+  await expect(email).toHaveValue(actor.email);
+  expect(
+    (await password.inputValue()).length,
+    "the password field did not receive the typed value",
+  ).toBe(actor.password.length);
+
+  const labelled = popup
+    .locator('button[type="submit"]')
+    .filter({ hasText: /log ?in|sign ?in/i });
+  const submit =
+    (await labelled.count()) > 0 ? labelled.first() : popup.locator('button[type="submit"]').first();
+  await submit.click();
+
+  // The return step posts {code, state} to the CINATRA ORIGIN — to the frame that
+  // opened it, never to the CMS page — and closes itself.
   if (!popup.isClosed()) {
     await popup
-      .getByText("Returning to the assistant", { exact: false })
-      .waitFor({ state: "visible", timeout: 30_000 })
+      .waitForEvent("close", { timeout: Math.max(1_000, deadline - Date.now()) })
       .catch(() => {
-        /* the popup may close before this resolves — the close below decides */
+        /* the return step may already have closed it — the active wait decides */
       });
-    if (!popup.isClosed()) {
-      await popup.waitForEvent("close", { timeout: 30_000 });
-    }
   }
 }
 
 // NO in-session re-mount helper (collapse→resume) exists: grounding against the
 // LIVE plugin (wordpress-plugin `assets/cinatra-widget.js` / drupal-module
 // `js/cinatra-widget.js`, current mains) disproved that model — `collapseWidget`
-// only toggles `cwWidget.style.display`, it NEVER tears the conversation iframe
-// down (only `forceReLogin`→`teardownBridge` does, and that drops the token), and
-// re-opening merely un-hides the SAME already-bootstrapped frame. The iframe is
+// only toggles `cwWidget.style.display`, it NEVER tears the frame down, and
+// re-opening merely un-hides the SAME already-mounted frame. The iframe is
 // mounted exactly once per document (`mountBridgeIframe`'s `if (iframeEl) return`
-// guard, reached only from a post-login `enterConversation`), so a held `cwu_`
-// cannot be re-used to mount a second frame. A fresh embed iframe (fresh nonce +
-// fresh `parityThread` src) therefore requires a full document reload + real
-// hosted login — {@link openWidget} on a freshly-`goto`'d host page (see
-// render-parity.ts `renderFixtureFresh`).
+// guard, reached from the first `openWidget` panel open), so nothing in a live
+// session produces a second frame. A fresh embed iframe (fresh nonce + fresh
+// `parityThread` src) therefore requires a full document reload — which at
+// protocol 2 also re-runs the sign-in, because the frame's credential lives in a
+// closure and dies with its document (the documented, deliberate cost of holding
+// it there instead of in a cookie). {@link openWidget} on a freshly-`goto`'d host
+// page is that path (see render-parity.ts `renderFixtureFresh`).
 
 export async function sendPrompt(page: Page, text: string): Promise<void> {
   // The composer lives INSIDE the sandboxed cross-origin embed iframe now; type
@@ -478,25 +682,56 @@ export function trackNoDirectCmsEgress(
   };
 }
 
+// The protocol-2 frame-owned ceremony's two routes, and the RETIRED site-mediated
+// pair they replaced. Matched by exact pathname on the CINATRA origin: the retired
+// names are prefixes of nothing, but `/api/widget-auth/frame/init` contains
+// `widget-auth`, so a loose substring match would confuse the two — and confusing
+// them is precisely the regression this tracker exists to catch.
+const FRAME_INIT_PATHNAME = "/api/widget-auth/frame/init";
+const FRAME_TOKEN_PATHNAME = "/api/widget-auth/frame/token";
+const RETIRED_AUTH_PATHNAMES = ["/api/widget-auth/init", "/api/widget-auth/token"] as const;
+
+function pathnameOf(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return "";
+  }
+}
+
 /**
- * cinatra#410 — install network listeners that assert the REAL dual-
- * token auth path is healthy, so the suite fails LOUD on a genuine auth
+ * cinatra#2674 (protocol 2) — install network listeners that assert the REAL
+ * frame-owned auth path is healthy, so the suite fails LOUD on a genuine auth
  * regression instead of timing out silently on "Thinking…"/(no response):
- *   - the same-origin broker relays for /widget-auth/{init,token} succeed (2xx),
+ *   - the FRAME's own same-origin ceremony routes succeed (2xx):
+ *     `POST /api/widget-auth/frame/init` (transaction start, no credential
+ *     presented) and `POST /api/widget-auth/frame/token` (PKCE redeem),
+ *   - the RETIRED site-mediated pair is never called at all,
  *   - the assistant chat POST is NOT 401 AND carries the per-user token header.
  *
- * Post-#87 the widget streams the turn to the unified `/api/assistants/chat`
- * broker-auth endpoint (not the legacy `/agents/{slug}/stream` relay); the
- * dual-token posture is byte-identical — a `cit_` site Bearer plus the per-user
- * `cwu_` on `X-Cinatra-Widget-User-Token`, fail-closed 401 on either.
+ * WHY THE RETIRED-PAIR ASSERTION IS PART OF THE HEALTH CHECK, not decoration.
+ * `/api/widget-auth/{init,token}` answer 410 Gone. A drive that still called them
+ * would fail somewhere downstream with a confusing symptom — the frame sitting at
+ * `authorizing`, a panel that never activates — and a reader would spend the
+ * failure hunting the widget. Asserting the retired pair was NOT touched names
+ * that regression at its cause: something (the plugin, or this suite) is still
+ * running the site-mediated ceremony.
+ *
+ * The dual-token posture ON THE TURN is unchanged by protocol 2 — a `cit_` site
+ * Bearer plus the per-user `cwu_` on `X-Cinatra-Widget-User-Token`, fail-closed
+ * 401 on either. What changed is WHO HOLDS THEM: the frame mints and keeps both
+ * in a closure on the Cinatra origin; the CMS page composes neither and sees
+ * neither. Both requests are issued BY THE FRAME, and page-level listeners
+ * observe subframe requests, so this tracker still sees them.
  *
  * Returns a `verify()` to call after a round-trip; it throws if any expected
  * call was missing or unhealthy. Call BEFORE openWidget()/sendPrompt() so the
  * init/token/chat requests are observed.
  */
-export function trackAuthPath(page: Page): { verify: () => void } {
-  let initOk: boolean | null = null;
-  let tokenOk: boolean | null = null;
+export function trackFrameAuthPath(page: Page): { verify: () => void } {
+  let frameInitOk: boolean | null = null;
+  let frameTokenOk: boolean | null = null;
+  const retiredCalls: string[] = [];
   let streamSeen = false;
   let streamUnauthorized = false;
   let streamHadUserToken = false;
@@ -504,10 +739,12 @@ export function trackAuthPath(page: Page): { verify: () => void } {
   page.on("response", (resp) => {
     const url = resp.url();
     const status = resp.status();
-    // The widget talks to the SAME-ORIGIN CMS broker (cinatra/v1/widget-auth/*);
-    // match on the path segment so WP (REST) and Drupal (controller) both count.
-    if (/\/widget-auth\/init\b/.test(url)) initOk = status >= 200 && status < 300;
-    else if (/\/widget-auth\/token\b/.test(url)) tokenOk = status >= 200 && status < 300;
+    const pathname = pathnameOf(url);
+    if (pathname === FRAME_INIT_PATHNAME) frameInitOk = status >= 200 && status < 300;
+    else if (pathname === FRAME_TOKEN_PATHNAME) frameTokenOk = status >= 200 && status < 300;
+    else if ((RETIRED_AUTH_PATHNAMES as readonly string[]).includes(pathname)) {
+      retiredCalls.push(`${resp.request().method()} ${pathname} -> ${status}`);
+    }
     // EXACT chat-turn endpoint + POST only — never the sibling `/chat/capabilities`
     // negotiation, which carries no cwu_ header and would poison these signals.
     else if (isChatTurnUrl(url) && resp.request().method().toUpperCase() === "POST") {
@@ -520,8 +757,21 @@ export function trackAuthPath(page: Page): { verify: () => void } {
 
   return {
     verify() {
-      expect(initOk, "POST /widget-auth/init must succeed (cnx_ broker init)").toBe(true);
-      expect(tokenOk, "POST /widget-auth/token must succeed (cwu_ mint)").toBe(true);
+      expect(
+        frameInitOk,
+        "POST /api/widget-auth/frame/init must succeed (the FRAME starts its own PKCE " +
+          "transaction, same-origin, presenting no credential)",
+      ).toBe(true);
+      expect(
+        frameTokenOk,
+        "POST /api/widget-auth/frame/token must succeed (the FRAME redeems the code with " +
+          "the verifier that never left its closure)",
+      ).toBe(true);
+      expect(
+        retiredCalls,
+        "the RETIRED site-mediated auth pair (/api/widget-auth/init, /api/widget-auth/token — " +
+          "410 Gone since cinatra#2674) must not be called by anything in this flow",
+      ).toEqual([]);
       expect(streamSeen, "the assistant chat POST (/api/assistants/chat) must have been issued").toBe(true);
       expect(streamUnauthorized, "the assistant chat POST (/api/assistants/chat) must NOT be 401").toBe(false);
       expect(

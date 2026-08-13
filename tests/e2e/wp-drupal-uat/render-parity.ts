@@ -7,8 +7,9 @@
 // suite; this is target 3 — the one #1216's verifier recorded as the residual
 // "renders identically from /chat and a CMS embed" with NO live comparison. It
 // frames the SAME `/embed/assistant` INSIDE the LIVE WordPress / Drupal admin
-// (through the REAL plugin's launcher → required-login → sandboxed cross-origin
-// `<iframe class="cw-frame">` bootstrap — `openWidget`), renders the 11-fixture
+// (through the REAL plugin's launcher → sandboxed cross-origin
+// `<iframe class="cw-frame">` mount → the FRAME's own protocol-2 sign-in
+// ceremony — `openWidget`), renders the 11-fixture
 // corpus through the deterministic (b) corpus-render SEAM, and DOM-normalizes /
 // compares each rendered content block against the S3 packaged-renderer reference
 // — the SAME reference the committed goldens and target 1 are anchored to.
@@ -17,34 +18,29 @@
 // Rendering the next fixture needs a NEW embed iframe (a new `parityThread` src +
 // a fresh single-use bridge nonce), and the LIVE plugin (wordpress-plugin
 // `assets/cinatra-widget.js` @ current main, drupal-module `js/cinatra-widget.js`
-// @ current main) mounts that iframe EXACTLY ONCE per document: `mountBridgeIframe`
-// is guarded `if (iframeEl) return` and is reached ONLY from `enterConversation`,
-// itself reached ONLY from `redeemCode` right after a hosted-login handshake. The
-// launcher circle / close-button `collapseWidget` merely toggles
-// `cwWidget.style.display` — it NEVER tears the iframe down (only `forceReLogin`
-// does, via `teardownBridge`, and that drops the token too), and re-opening just
-// un-hides the SAME already-bootstrapped frame. So there is NO in-session re-mount
-// affordance: a held `cwu_` cannot be re-used to mount a second frame. The only
-// paths to a fresh iframe are a full document reload or a re-login — both re-drive
-// the hosted-login handshake (the `cwu_`/`cit_` tokens are in-memory only,
-// dropped on navigation). An earlier form of this leg tried collapse→re-open to
-// re-mount within one session; grounding against the real plugin (cinatra#1998
-// issuecomment) disproved it — the launcher toggle never produced a second
-// `/embed/assistant` mount and the click hung unbounded. So each fixture reloads
-// the CMS host page, re-stages its seam, and re-drives the launcher → required-
-// login → sandboxed cross-origin `<iframe class="cw-frame">` bootstrap (the exact
+// @ current main) mounts that iframe EXACTLY ONCE per document:
+// `mountBridgeIframe` is guarded `if (iframeEl) return` and is reached from the
+// FIRST panel open. The launcher circle / close-button `collapseWidget` merely
+// toggles `cwWidget.style.display` — it NEVER tears the iframe down, and
+// re-opening just un-hides the SAME already-mounted frame. So there is NO
+// in-session re-mount affordance. The only path to a fresh iframe is a full
+// document reload, which at protocol 2 also re-runs the FRAME's sign-in (the
+// credential lives in the frame's closure and dies with its document). An earlier
+// form of this leg tried collapse→re-open to re-mount within one session;
+// grounding against the real plugin (cinatra#1998 issuecomment) disproved it —
+// the launcher toggle never produced a second `/embed/assistant` mount and the
+// click hung unbounded. So each fixture reloads the CMS host page, re-stages its
+// seam, and re-drives launcher → frame mount → frame-owned sign-in (the exact
 // path fixture 0 already proved live). That reload DOES re-charge the connect-
-// token limiter (connect-rate-limit.ts), which has TWO buckets. The BINDING one is
-// the per-code-key bucket: `/widget-auth/init` keys it on the FIXED per-CMS site
-// credential hash, so all 22 reloads share ONE bucket capped at 5/min — the
-// tightest limit (the 30/min per-IP bucket is slacker: `/widget-auth/token` keys
-// its code bucket on the unique per-login PKCE code, never binding). The limiter
-// is the real security control and is left UNTOUCHED; instead the leg PACES fixture
-// starts (MIN_FIXTURE_INTERVAL_MS ≥ 15s ⇒ ≤4 inits/min, under 5, with the 30/min
-// IP bucket well clear too), so reload-per-fixture never triggers the 429 storm a
-// prior form produced. (We never re-`goto` the embed frame in place: the parent
-// bootstrap is bound to a single-use nonce, so a bare embed reload's READY is
-// ignored by design — bridge-protocol.ts.)
+// token limiter (connect-rate-limit.ts), which has TWO buckets, and the ceremony
+// that charges it is now the FRAME's: `/api/widget-auth/frame/init` starts a
+// transaction per reload and `/api/widget-auth/frame/token` redeems it. The
+// pacing below (MIN_FIXTURE_INTERVAL_MS ≥ 15s ⇒ ≤4 ceremonies/min) is kept
+// UNCHANGED and stays the conservative side of every bucket the route family
+// keys on; the limiter is the real security control and is left UNTOUCHED. (We
+// never re-`goto` the embed frame in place: the parent bridge is bound to a
+// single-use nonce, so a bare embed reload's READY is ignored by design —
+// bridge-protocol.ts.)
 //
 // HOW THE CORPUS REACHES THE CMS IFRAME (the three moving parts, all landed):
 //   (a) Lane A — `/api/assistants/chat/capabilities` advertises `token-broker`
