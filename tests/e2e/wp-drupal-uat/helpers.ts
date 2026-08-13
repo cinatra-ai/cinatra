@@ -426,7 +426,11 @@ async function startFrameSignIn(
     page.waitForEvent("popup", { timeout }),
     frame.locator(SEL.embedSignInBtn).click({ timeout }),
   ]);
-  await popup.waitForLoadState("domcontentloaded");
+  // A popup that already holds a Cinatra session can post its code back and
+  // CLOSE ITSELF before this settles; that is the fast success path, not a
+  // failure, and every wait on a closed page throws. Swallow it and let
+  // `finishFrameSignIn` decide from the popup's state.
+  await popup.waitForLoadState("domcontentloaded").catch(() => {});
   return popup;
 }
 
@@ -470,7 +474,12 @@ async function finishFrameSignIn(
       sawForm = true;
       break;
     }
-    await popup.waitForTimeout(250);
+    // A PLAIN timer, never `popup.waitForTimeout` — the popup can close DURING
+    // this pause (the already-authenticated path returns itself in well under a
+    // second), and every wait on a closed page throws. A wait that dies because
+    // the thing it is waiting for succeeded is the worst kind of flake: it fails
+    // exactly on the fast path.
+    await new Promise((resolve) => setTimeout(resolve, 250));
   }
   if (!sawForm) {
     if (popup.isClosed()) return;
