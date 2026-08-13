@@ -113,8 +113,8 @@ carries `PARTIAL` in its name.
 
 # The seed wave — V9r and V13 are REAL, and the blocker is gone
 
-Captured 2026-08-13 on host2, on the SAME stack, at
-`lane/2683-s8f-parity` with the in-process seed path. The two views the previous
+Captured 2026-08-13 on host2, on the SAME stack, at `lane/2683-s8f-parity`
+**head `e8aca4acf`** with the in-process seed path. The two views the previous
 section listed as NOT DELIVERED and PARTIAL are now delivered, and the reason
 they could not be is closed rather than worked around.
 
@@ -147,18 +147,15 @@ whose own trigger minted the record. The seed's answer, read back through the
 shipped read port:
 
 ```
-successorGateId  f790a65f-5185-47b5-b075-9439dab03140
+successorGateId            b7613839-f997-4b1d-96dc-0fde7ce2f3f0
+successorTaskId            lifecycle-review:repair:9e8e8b2c-24c1-41fa-a7c7-7b96448b7a7a:1
 verificationRecordPresent  true
 verificationOutcome        drifted
 ```
 
-and the row itself, joined to its gate:
-
-```
-verify:f790a65f-…  outcome=drifted  gate_status=pending
-run-ff2087fd-0872-4745-ae8b-f576d41f35aa
-lifecycle-review:repair:b3863564-…:1
-```
+An earlier run of the same fixture, on the same stack one commit back, answered
+identically apart from its ids (`verify:f790a65f-…`, outcome `drifted`, gate
+`pending`, on `run-ff2087fd-…`) — so the pipeline is repeatable, not a one-off.
 
 **The verdict is `drifted`, not `verified`, and that is reported rather than
 tuned.** The seed does not choose it: `computeVerificationVerdict` projects the
@@ -179,16 +176,16 @@ ladder. This is the same stand-in the run card already makes for a named run.
 
 ## V13 — the undo chip, on a change-set that really exists
 
-`openChangeSet` -> `historyAwareUpsert` -> `closeChangeSet`, seeded 14 seconds
-before the capture opened. The seed's answer:
+`openChangeSet` -> `historyAwareUpsert` -> `closeChangeSet`, seeded immediately
+before the capture opened — well inside the chip's five-minute window. The seed's answer:
 
 ```
-changeSetId       cs_8b8ee5db-cfe7-4f63-967c-3fec6d3e9bd0
+changeSetId       cs_15f8b014-9de0-4ca9-80ef-1ae1f414bd5e
 objectType        @cinatra-ai/text-artifact:artifact
 memberEventCount  1
 effectRollup      reversible-internal
 restorable        true
-closedAt          2026-08-12T23:45:06.100Z
+closedAt          2026-08-13T00:30:07.250Z
 ```
 
 **`memberEventCount: 1` is the whole point.** The previous wave refused to
@@ -201,7 +198,7 @@ The panel's own network record for the captured turn:
 
 ```
 GET /api/chat/undo-candidate?runId=run-671960a9-35e0-4fc1-80e2-2333fc23e28c
-  -> 200 {"changeSetId":"cs_8b8ee5db-cfe7-4f63-967c-3fec6d3e9bd0"}
+  -> 200 {"changeSetId":"cs_15f8b014-9de0-4ca9-80ef-1ae1f414bd5e"}
 ```
 
 byte-identical to the id the seed returned. On screen: the inline run card
