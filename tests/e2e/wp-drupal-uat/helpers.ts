@@ -404,6 +404,35 @@ export function embedFrame(page: Page): FrameLocator {
 }
 
 /**
+ * cinatra#2713 — bounded wait for a review card's §III island to have
+ * PAINTED before a proof-capture screenshot fires.
+ *
+ * `ReviewTargetIsland` (packages/agents/src/review-gate-card.tsx) marks its
+ * own load state on the SAME element the design's conformance anchor already
+ * names — `data-conformance-id="review-target-island"` gains
+ * `data-island-load-state`: `"loading"` while its skeleton shows, `"loaded"`
+ * once the nested iframe's `load` event lands, `"timed-out"` past the card's
+ * own bound. A screenshot taken without this wait can catch the FIRST of
+ * those — the bare white box the 333 proof round photographed
+ * (evidence/2674-s8e V5 vs V6, same session, both CMSes) and the owner caught.
+ *
+ * Waits for `"loaded"` SPECIFICALLY, not merely "away from loading": a capture
+ * round that reaches `"timed-out"` instead is a real regression worth failing
+ * the run on, not a state worth a "painted" screenshot. Call this immediately
+ * before any screenshot/proof capture of a card that carries a review-target
+ * island (the review gate card, on any host — chat thread, run card, page
+ * gate region, or here, the site widget).
+ */
+export async function waitForIslandPaint(frame: FrameLocator, timeoutMs = 20_000): Promise<void> {
+  await expect(
+    frame.locator('[data-conformance-id="review-target-island"]'),
+    "the review card's §III island did not reach " +
+      'data-island-load-state="loaded" in time — a screenshot taken now would ' +
+      "recreate the V5 blank-frame defect (cinatra#2713)",
+  ).toHaveAttribute("data-island-load-state", "loaded", { timeout: timeoutMs });
+}
+
+/**
  * Click the FRAME's own sign-in control and return the top-level Cinatra popup it
  * opens.
  *
