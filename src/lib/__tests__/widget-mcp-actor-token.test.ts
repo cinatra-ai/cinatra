@@ -73,6 +73,8 @@ const EXPECTED_ACTOR: WidgetMcpActor = {
   parentJti: "cwu-row-jti-1",
   turnRunId: "run-of-this-turn",
   platformRole: "member",
+  // cinatra#2577 — WIDGET_INPUT mints no `lcr`, so the grant reads false.
+  lifecycleRead: false,
 };
 
 const CHAT_ACTOR: ChatMcpActor = {
@@ -467,5 +469,71 @@ describe("widget-mcp-actor-token verify — cross-type forgery protection", () =
       "base64url",
     );
     expect(verify(`${header}.${mutated}.${signature}`)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2577 (epic #2564 S8d) — the `lcr` lifecycle-read GRANT claim.
+//
+// The `cwu_` never crosses the MCP boundary; this token does, and it carries the
+// grant the route already established from that `cwu_`'s own consume. Everything
+// here is about the claim being STRICT and the no-grant token being the
+// unchanged one — so a session that predates the grant, an older node's token,
+// and a tampered payload all resolve to "no grant" by the same reading.
+// ---------------------------------------------------------------------------
+
+describe("widget-mcp-actor-token — the lifecycle-read grant (S8d)", () => {
+  it("mints `lcr: true` only when the grant is genuinely held", () => {
+    const granted = decodePayload(
+      issueWidgetMcpActorToken({ ...WIDGET_INPUT, lifecycleRead: true }),
+    );
+    expect(granted.lcr).toBe(true);
+  });
+
+  it("mints NO claim at all when the grant is absent — the token is unchanged", () => {
+    // Not `lcr: false`. A no-grant token is byte-identical to a pre-S8d one, so
+    // the absent claim has exactly one fail-closed reading everywhere.
+    for (const input of [
+      WIDGET_INPUT,
+      { ...WIDGET_INPUT, lifecycleRead: false },
+    ]) {
+      const payload = decodePayload(issueWidgetMcpActorToken(input));
+      expect("lcr" in payload).toBe(false);
+    }
+    expect(issueWidgetMcpActorToken({ ...WIDGET_INPUT, lifecycleRead: false })).toBe(
+      issueWidgetMcpActorToken(WIDGET_INPUT),
+    );
+  });
+
+  it("round-trips the grant through verify", () => {
+    const actor = verify(issueWidgetMcpActorToken({ ...WIDGET_INPUT, lifecycleRead: true }));
+    expect(actor?.lifecycleRead).toBe(true);
+  });
+
+  it("reads an ABSENT claim as no grant", () => {
+    expect(verify(issueWidgetMcpActorToken(WIDGET_INPUT))?.lifecycleRead).toBe(false);
+  });
+
+  it.each([["true"], [1], [{}], [null], [false], [["lifecycle.read"]]])(
+    "reads a validly-SIGNED `lcr` of %p as no grant (strict === true)",
+    (value) => {
+      // The claim-shape attack: a valid signature must not defeat the reading.
+      // Anything other than the literal `true` grants nothing.
+      const base = decodePayload(issueWidgetMcpActorToken(WIDGET_INPUT));
+      const actor = verify(signClaims({ ...base, lcr: value }));
+      expect(actor).not.toBeNull();
+      expect(actor?.lifecycleRead).toBe(false);
+    },
+  );
+
+  it("the grant is not a way around any OTHER fail-closed claim", () => {
+    // It is an additive grant, never a bypass: a token that fails the kind, the
+    // instance pin or the type check is still null, grant or no grant.
+    const base = decodePayload(
+      issueWidgetMcpActorToken({ ...WIDGET_INPUT, lifecycleRead: true }),
+    );
+    expect(verify(signClaims({ ...base, inst: "" }))).toBeNull();
+    expect(verify(signClaims({ ...base, knd: "joomla" }))).toBeNull();
+    expect(verify(signClaims({ ...base, t: "cinatra.chat.mcp-obo" }))).toBeNull();
   });
 });

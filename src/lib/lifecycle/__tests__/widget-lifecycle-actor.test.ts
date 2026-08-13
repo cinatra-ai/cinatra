@@ -28,6 +28,7 @@ import {
   WIDGET_LIFECYCLE_READ_REQUIRED_SCOPES,
   buildWidgetLifecycleRoleHints,
   resolveWidgetLifecycleActorContext,
+  resolveWidgetLifecycleActorForFrame,
 } from "../widget-lifecycle-actor";
 import {
   WIDGET_LIFECYCLE_READ_ROUTE_PATH,
@@ -202,5 +203,89 @@ describe("the audit trail", () => {
     expect(event).toBe("widget_lifecycle_read_rejected");
     expect(fields.reason).toBe("aud_mismatch");
     expect(JSON.stringify(fields)).not.toContain("cwu_");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The MCP-FRAME entry (cinatra#2577, epic #2564 S8d).
+//
+// The `cwu_` does not cross the MCP boundary; the widget OBO token does, and it
+// carries the grant as a signed claim the route minted from that same `cwu_`
+// consume. So step 1 of the ladder is satisfied by a different signed artifact
+// and steps 2 and 3 are literally the same code. What these assertions pin is
+// that "different artifact" did not quietly become "weaker actor": the live
+// standing is still resolved, the platform floor still holds, and a membership
+// that has since gone still refuses.
+// ---------------------------------------------------------------------------
+
+describe("the MCP-frame entry", () => {
+  const FRAME = { userId: "user-1", orgId: "org-A", kind: "wordpress" };
+
+  it("never touches the cwu_ verifier — there is no token on this path", () => {
+    void resolveWidgetLifecycleActorForFrame(FRAME);
+    expect(consumeUserWidgetToken).not.toHaveBeenCalled();
+  });
+
+  it("resolves the live standing in the FRAME's org", async () => {
+    await resolveWidgetLifecycleActorForFrame(FRAME);
+    expect(resolveActorGrantsForUserInOrg).toHaveBeenCalledWith("user-1", "org-A");
+  });
+
+  it("produces the SAME actor the token entry does for the same person", async () => {
+    // The property that keeps the two surfaces from drifting: one reader, one
+    // standing, whichever door they came through.
+    const viaToken = await call();
+    const viaFrame = await resolveWidgetLifecycleActorForFrame(FRAME);
+    expect(viaToken.ok && viaFrame.ok).toBe(true);
+    if (!viaToken.ok || !viaFrame.ok) return;
+    expect(viaFrame.actorCtx).toEqual(viaToken.actorCtx);
+  });
+
+  it("carries the resolved team + project axes, not an empty floor", async () => {
+    const result = await resolveWidgetLifecycleActorForFrame(FRAME);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.actorCtx.roleHints?.teamIds).toEqual(GRANTS.teamIds);
+    expect(result.actorCtx.roleHints?.projectGrants).toEqual(GRANTS.projectGrants);
+  });
+
+  it("keeps the PLATFORM floor — a platform admin reads as a member here", async () => {
+    resolveActorGrantsForUserInOrg.mockResolvedValue({
+      ...GRANTS,
+      orgRole: "org_owner" as const,
+    });
+    const result = await resolveWidgetLifecycleActorForFrame(FRAME);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.actorCtx.roleHints?.platformRole).toBe("member");
+    // The ORG standing is the person's real one — the floor is platform-only.
+    expect(result.actorCtx.roleHints?.orgRole).toBe("org_owner");
+  });
+
+  it("refuses when membership is gone (revoked between consent and this read)", async () => {
+    resolveActorGrantsForUserInOrg.mockResolvedValue({ orgRole: undefined });
+    const result = await resolveWidgetLifecycleActorForFrame(FRAME);
+    expect(result).toEqual({ ok: false, reason: "not_org_member" });
+    expect(emitWidgetAuthAudit).toHaveBeenCalledWith(
+      "widget_lifecycle_read_rejected",
+      expect.objectContaining({ reason: "not_org_member" }),
+    );
+  });
+
+  it.each([
+    { userId: "", orgId: "org-A" },
+    { userId: "user-1", orgId: "" },
+  ])("refuses a frame with no attributable principal (%o)", async (partial) => {
+    const result = await resolveWidgetLifecycleActorForFrame({ ...FRAME, ...partial });
+    expect(result).toEqual({ ok: false, reason: "unbound_principal" });
+    expect(resolveActorGrantsForUserInOrg).not.toHaveBeenCalled();
+  });
+
+  it("audits an authorized frame read", async () => {
+    await resolveWidgetLifecycleActorForFrame(FRAME);
+    expect(emitWidgetAuthAudit).toHaveBeenCalledWith(
+      "widget_lifecycle_read_authorized",
+      expect.objectContaining({ actor: "user-1", orgId: "org-A" }),
+    );
   });
 });

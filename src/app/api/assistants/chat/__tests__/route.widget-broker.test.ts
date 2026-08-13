@@ -254,10 +254,56 @@ describe("broker-auth happy path — builds the WidgetPrincipal and drives the s
       verifiedOrigin: ORIGIN,
       assistantHandle: "wordpress",
       instancesConfigKey: "wordpress",
+      // cinatra#2577 (S8d) — the lifecycle grant, read off THIS consume's own
+      // claims. This fixture's `cwu_` carries none, so the widget turn's OBO
+      // token mints no `lcr` and its lifecycle reads refuse generically.
+      lifecycleRead: false,
     });
     // CORS reflected onto the streamed response for the cross-origin widget.
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
     expect(runChatTurn).not.toHaveBeenCalled();
+  });
+
+  it("cinatra#2577 (S8d): a cwu_ carrying `lifecycle.read` sets the grant on the principal", async () => {
+    // The grant is read off THIS consume's own claims — one observation,
+    // carried — so it can never disagree with the identity it travels with.
+    consumeUserWidgetToken.mockReturnValue({
+      ok: true,
+      claims: {
+        userId: "user-7",
+        orgId: "org-3",
+        siteId: "site-1",
+        client: "wordpress",
+        siteOrigin: ORIGIN,
+        agentSlug: "wordpress-content-editor",
+        instanceId: "inst-42",
+        jti: "u1",
+        grantedScopes: ["lifecycle.read"],
+      },
+    });
+    expect((await POST(widgetReq({ cit: "cit_abc", cwu: "cwu_xyz" }))).status).toBe(200);
+    await streamAgUiChatTurn.mock.calls[0][0].runProducer(vi.fn(), undefined);
+    expect(runAssistantTurn.mock.calls[0][1].widgetPrincipal.lifecycleRead).toBe(true);
+  });
+
+  it("cinatra#2577: an UNKNOWN granted scope is not the lifecycle grant", async () => {
+    consumeUserWidgetToken.mockReturnValue({
+      ok: true,
+      claims: {
+        userId: "user-7",
+        orgId: "org-3",
+        siteId: "site-1",
+        client: "wordpress",
+        siteOrigin: ORIGIN,
+        agentSlug: "wordpress-content-editor",
+        instanceId: "inst-42",
+        jti: "u1",
+        grantedScopes: ["lifecycle.write", "something.else"],
+      },
+    });
+    expect((await POST(widgetReq({ cit: "cit_abc", cwu: "cwu_xyz" }))).status).toBe(200);
+    await streamAgUiChatTurn.mock.calls[0][0].runProducer(vi.fn(), undefined);
+    expect(runAssistantTurn.mock.calls[0][1].widgetPrincipal.lifecycleRead).toBe(false);
   });
 
   it("consumes BOTH tokens against the FORWARDED CMS origin, not the same-origin embed browser Origin (S5 iframe turn)", async () => {

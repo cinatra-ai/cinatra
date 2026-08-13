@@ -136,8 +136,9 @@ describe("one run of the hosted flow records the whole grant", () => {
     await issueWidgetAuthCodeAction("txn-1", NONCE_A);
     const issued = emitWidgetAuthAudit.mock.calls.find(([e]) => e === "code_issued");
     expect(issued).toBeDefined();
+    // The whole grant, space-delimited in the order the build declares it.
     expect((issued as [string, Record<string, unknown>])[1].grantedScopes).toBe(
-      WIDGET_LIFECYCLE_READ_SCOPE,
+      WIDGET_SIGNIN_GRANTED_SCOPES.join(" "),
     );
   });
 });

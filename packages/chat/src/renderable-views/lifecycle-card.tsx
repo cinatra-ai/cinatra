@@ -30,16 +30,15 @@
 //
 //  4. FAIL-CLOSED SURFACE GATING. The host declares itself via
 //     `LifecycleCardSurfaceProvider`. With NO provider there is no host, and a
-//     card renders nothing — so a surface that has not been reviewed for
-//     lifecycle cards (the site widget, whose enablement is S8d's) cannot start
-//     drawing them by inheriting a default. §IX's presence matrix is then
-//     consulted per (kind, host).
+//     card renders nothing — so a surface that has not been wired for lifecycle
+//     cards cannot start drawing them by inheriting a default. That declaration
+//     is now the ONLY gate: every declared host draws every kind (cinatra#2577,
+//     owner ruling 2026-08-11 — the per-surface restriction matrix is gone).
 // ---------------------------------------------------------------------------
 
 import { type ReactElement } from "react";
 
 import {
-  LIFECYCLE_CARD_PRESENCE,
   type LifecycleCardState,
   type LifecycleDataPartViewType,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
@@ -106,9 +105,10 @@ export function LifecycleCard({
   view: { viewType: LifecycleDataPartViewType; schemaVersion: number; ref: string };
 }): ReactElement | null {
   const host = useLifecycleCardHost();
-  // §IX presence: no declared host, or a host this kind does not appear on →
-  // the card is not part of this surface at all.
-  const present = host !== null && LIFECYCLE_CARD_PRESENCE[view.viewType][host];
+  // The one surface gate: a subtree that declared no host is not a lifecycle
+  // surface, so the card is not part of it. Every DECLARED host draws every
+  // kind — the per-surface restriction matrix is gone (owner ruling 2026-08-11).
+  const present = host !== null;
   const state = useLifecycleCardState({
     viewType: view.viewType,
     ref: view.ref,

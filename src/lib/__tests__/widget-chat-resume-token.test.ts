@@ -56,6 +56,10 @@ import {
 // Pinned literal of the private issuer constant (the module can never drift from
 // this without failing the round-trip below).
 const RESUME_ISSUER = "cinatra:widget-chat-resume";
+/** The `cwu_` session id + connect site the resume token now carries (cinatra#2575). */
+const WIDGET_JTI = "cwu-jti-abc123";
+const SITE_ID = "site-abc123";
+
 const RUN_ID = "run-abc-uuid";
 
 const RESUME_INPUT: WidgetChatResumeTokenInput = {
@@ -65,7 +69,8 @@ const RESUME_INPUT: WidgetChatResumeTokenInput = {
   kind: "wordpress",
   runId: RUN_ID,
   jti: "run-nonce-abc123",
-  parentJti: "parent-jti-1",
+  parentJti: WIDGET_JTI,
+  siteId: SITE_ID,
 };
 
 const EXPECTED_ACTOR: WidgetChatResumeActor = {
@@ -76,7 +81,8 @@ const EXPECTED_ACTOR: WidgetChatResumeActor = {
   kind: "wordpress",
   runId: RUN_ID,
   jti: "run-nonce-abc123",
-  parentJti: "parent-jti-1",
+  parentJti: WIDGET_JTI,
+  siteId: SITE_ID,
   platformRole: "member",
 };
 
@@ -155,7 +161,8 @@ function baseClaims(overrides: Record<string, unknown> = {}) {
     run: RUN_ID,
     src: "public_site_widget",
     jti: "run-nonce-abc123",
-    pjti: "parent-jti-1",
+    pjti: WIDGET_JTI,
+    sid: SITE_ID,
     scope: "chat:resume",
     aud: WIDGET_CHAT_RESUME_ROUTE_PATH,
     iss: RESUME_ISSUER,
@@ -294,7 +301,7 @@ describe("widget-chat-resume-token verify — TTL / reconnect window", () => {
   // what lets the resume route ask whether that sign-in is still there. Without
   // the claim there is nothing to ask about, so it fails closed here.
   it("carries the PARENT widget token's jti, and refuses a token without one", () => {
-    expect(verify(signClaims(baseClaims()))?.parentJti).toBe("parent-jti-1");
+    expect(verify(signClaims(baseClaims()))?.parentJti).toBe(WIDGET_JTI);
     const { pjti: _drop, ...noParent } = baseClaims();
     expect(verify(signClaims(noParent))).toBeNull();
     expect(verify(signClaims(baseClaims({ pjti: "" })))).toBeNull();
@@ -304,6 +311,25 @@ describe("widget-chat-resume-token verify — TTL / reconnect window", () => {
   it("the issuer seals the parent jti it was handed", () => {
     const token = issueWidgetChatResumeToken({ ...RESUME_INPUT, parentJti: "cwu-jti-9" });
     expect(verify(token)?.parentJti).toBe("cwu-jti-9");
+  });
+
+  // cinatra#2575 — the SAME row, plus the site it was authenticated for. The
+  // broker re-probe refuses a token whose claimed site is not the one the row
+  // names, so a token that carries no site cannot be re-checked at all.
+  it("carries the connect SITE, and refuses a token without one", () => {
+    expect(verify(signClaims(baseClaims()))?.siteId).toBe(SITE_ID);
+    const { sid: _drop, ...noSite } = baseClaims();
+    expect(verify(signClaims(noSite))).toBeNull();
+    expect(verify(signClaims(baseClaims({ sid: "" })))).toBeNull();
+    expect(verify(signClaims(baseClaims({ sid: "   " })))).toBeNull();
+  });
+
+  // ONE handle, one name: the `cwu_` row's jti is `pjti` and nothing else. A
+  // token that names the row under the retired S8b spelling carries no `pjti`
+  // and is refused — the rename cannot leave a second accepted shape behind.
+  it("does NOT accept the retired `wjti` spelling as the parent handle", () => {
+    const { pjti: _drop, ...renamed } = baseClaims();
+    expect(verify(signClaims({ ...renamed, wjti: WIDGET_JTI }))).toBeNull();
   });
 });
 

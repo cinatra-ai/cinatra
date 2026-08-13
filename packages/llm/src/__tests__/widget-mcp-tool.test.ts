@@ -37,6 +37,8 @@ const ACTOR: WidgetMcpActor = {
   // package only carries them to the injected issuer.
   parentJti: "cwu-row-1",
   turnRunId: "run-1",
+  // cinatra#2577 — the S8d grant flag; this fixture is a NO-grant turn.
+  lifecycleRead: false,
 };
 
 describe("buildLlmMcpServerToolForWidget (S5)", () => {

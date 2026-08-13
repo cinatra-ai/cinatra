@@ -981,6 +981,9 @@ export async function runAssistantTurn(
           // the mint invents nothing and nothing downstream can widen them.
           parentJti: widgetPrincipal.parentTokenJti,
           turnRunId: args.turnIdentity.runId,
+          // cinatra#2577 (S8d) — the route's own reading of the consumed `cwu_`.
+          // The runtime never re-derives it: one observation, carried.
+          lifecycleRead: widgetPrincipal.lifecycleRead,
         },
         issueWidgetMcpActorToken,
       )

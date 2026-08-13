@@ -7,6 +7,7 @@ import { evaluateChatThreadAccess } from "@/lib/chat-thread-access";
 import { subscribeToAgUiEventsWithId } from "@cinatra-ai/agent-ui-protocol/server";
 import { verifyWidgetChatResumeToken } from "@/lib/widget-chat-resume-token";
 import { readWidgetTokenParentLiveness } from "@/lib/widget-session-binding";
+import { isWidgetBrokerSessionLive } from "@/lib/widget-broker-liveness";
 import { listAssistantWidgetBindings } from "@/lib/assistant-widget-handles";
 import {
   resolveWidgetStreamAgentUnion,
@@ -156,14 +157,38 @@ export async function GET(request: Request, context: RouteContext) {
     if (!resumeActor) {
       return new Response("Unauthorized", { status: 401, headers: corsHeaders });
     }
-    // cinatra#2684 — AND THE SIGN-IN BEHIND IT MUST STILL BE THERE. This token
-    // is derived from one `cwu_` row, and a run is a ten-minute tail: without
-    // this, somebody who signed out could keep reading the assistant's output
-    // for the rest of that window. The check is the same predicate every other
-    // widget verifier uses, asked from the parent `jti` the token seals, and it
-    // refuses on `unknown` as well as `dead` — a store that cannot answer does
-    // not get to authorize.
+    // NO STANDALONE-TOKEN TRUST. The signature proves who minted this token and
+    // for which run; it says nothing about NOW. TWO live questions are asked of
+    // the ONE `cwu_` row the token seals (`parentJti`), and neither subsumes the
+    // other — so both are asked, in the cheap-first order.
+    //
+    // cinatra#2684 — IS THE SIGN-IN BEHIND IT STILL THERE. A run is a
+    // ten-minute tail: without this, somebody who signed out could keep reading
+    // the assistant's output for the rest of that window. The check is the same
+    // predicate every other widget verifier uses, and it refuses on `unknown`
+    // as well as `dead` — a store that cannot answer does not get to authorize.
+    // The broker re-probe below does NOT cover this: a `cwu_` row survives its
+    // Better Auth session's sign-out.
     if (readWidgetTokenParentLiveness(resumeActor.parentJti) !== "live") {
+      return new Response("Unauthorized", { status: 401, headers: corsHeaders });
+    }
+    // cinatra#2575 (epic #2564 S8b) — AND IS THE ROW STILL BOUND AS CLAIMED,
+    // HELD BY A MEMBER. The `cwu_` row must still be alive and still bound to
+    // the same person, org, site and canonical instance, its connect site must
+    // still be active with the same credential generation, and the person must
+    // still be a member of that org. Suspending or re-keying the site, revoking
+    // the connection and removing a membership therefore all stop the stream at
+    // the next reconnect — none of which the sign-in predicate above can see.
+    // Refused with the SAME 401 as a bad token — a resumer learns nothing about
+    // which of the three it was.
+    const sessionLive = await isWidgetBrokerSessionLive({
+      widgetJti: resumeActor.parentJti,
+      siteId: resumeActor.siteId,
+      userId: resumeActor.userId,
+      orgId: resumeActor.orgId,
+      instanceId: resumeActor.instanceId,
+    });
+    if (!sessionLive) {
       return new Response("Unauthorized", { status: 401, headers: corsHeaders });
     }
     // The run-bound token IS the authorization (minted only after the broker-auth

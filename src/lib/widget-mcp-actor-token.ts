@@ -122,6 +122,22 @@ export type WidgetMcpActor = {
    * platform admins un-triggerable for a widget delegation.
    */
   platformRole: "member";
+  /**
+   * Did the `cwu_` that authorized THIS turn carry the `lifecycle.read` grant
+   * (cinatra#2577, epic #2564 S8d)? Minted as `lcr: true` ONLY when the route's
+   * consumed user token already granted it; ABSENT otherwise, and the verifier
+   * reads an absent claim as `false`. FAIL-CLOSED in every direction: a token
+   * minted before the grant existed, a session whose consent predates it, and a
+   * tampered claim of any other shape all resolve to `false`.
+   *
+   * It is a CLAIM rather than a second consume because the `cwu_` bearer does
+   * not cross the MCP boundary — the widget OBO token does, and it is
+   * turn-bound, 120 s-lived and signed, which is the same carrier the instance
+   * pin and the connector kind already ride. The lifecycle handlers treat it as
+   * the GRANT only; the actor and the per-row access check are still resolved
+   * live against the reader's real standing.
+   */
+  lifecycleRead: boolean;
 };
 
 /**
@@ -140,6 +156,12 @@ export type WidgetMcpActorTokenInput = {
   parentJti: string;
   /** The AG-UI run id of the turn this token is minted for (#2687). */
   turnRunId: string;
+  /**
+   * cinatra#2577 (S8d) — mint the `lcr` grant claim. The caller passes the
+   * answer it already has (the consumed `cwu_`'s granted scopes); omitting it
+   * mints no claim, which reads back as "no lifecycle grant".
+   */
+  lifecycleRead?: boolean;
 };
 
 type WidgetMcpActorTokenClaims = {
@@ -152,6 +174,13 @@ type WidgetMcpActorTokenClaims = {
   jti: string; // per-turn nonce (audit handle)
   pjti: string; // the parent cwu_ token's jti — the revocation handle (#2687)
   run: string; // the minting turn's AG-UI run id — the turn seal (#2687)
+  /**
+   * cinatra#2577 (S8d) — the `lifecycle.read` grant the authorizing `cwu_`
+   * carried. OPTIONAL and only ever minted as the literal `true`; absent means
+   * no grant, and the verifier accepts nothing else (so a `"true"` string or a
+   * `1` from a tampered payload reads as absent → no grant).
+   */
+  lcr?: true;
   scope: "mcp:connect";
   aud: string;
   iss: string;
@@ -227,6 +256,10 @@ export function issueWidgetMcpActorToken(input: WidgetMcpActorTokenInput): strin
     jti: input.jti,
     pjti: input.parentJti,
     run: input.turnRunId,
+    // Minted ONLY when the grant is genuinely held — never `lcr: false`, so the
+    // "no grant" token is byte-identical to a pre-S8d one and the absent claim
+    // is the single fail-closed reading of it.
+    ...(input.lifecycleRead === true ? { lcr: true as const } : {}),
     scope: TOKEN_SCOPE,
     aud: issueAudience(),
     iss: issueIssuer(),
@@ -392,6 +425,9 @@ export function verifyWidgetMcpActorToken(input: {
       // Floored at mint: the token omits `prole`, so a widget user is ALWAYS
       // resolved as `member` here — never `platform_admin` at the boundary.
       platformRole: "member",
+      // STRICT `=== true`: an absent claim, and any other shape a tampered or
+      // older payload could carry, resolve to NO grant (cinatra#2577).
+      lifecycleRead: payload.lcr === true,
     };
   } catch {
     return null;

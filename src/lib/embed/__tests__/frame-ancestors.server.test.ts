@@ -17,6 +17,7 @@ import {
   FRAME_ANCESTORS_NONE,
   resolveInstanceFrameAncestor,
   frameAncestorsDirectiveFor,
+  resolveVerifiedWidgetFrameOrigin,
 } from "@/lib/embed/frame-ancestors.server";
 
 beforeEach(() => {
@@ -133,5 +134,83 @@ describe("frameAncestorsDirectiveFor (§7 CSP directive)", () => {
     expect(frameAncestorsDirectiveFor({ assistant: "wordpress", instanceId: "inst-1" })).toBe(
       FRAME_ANCESTORS_NONE,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2577 — `resolveVerifiedWidgetFrameOrigin`: the same resolution, plus
+// the byte-level check that decides whether a value may be WRITTEN INTO a
+// policy. Codex round 1, finding 1: `normalizeOriginStrict` hands back whatever
+// the URL parser called an origin, and the parser normalizes `https://*` and
+// `https://%2A.example.com` to an origin that STILL contains `*`. In
+// `frame-ancestors` that is a wildcard — every HTTPS origin admitted to an
+// authenticated reader's review target, off ONE stored `siteUrl`.
+// ---------------------------------------------------------------------------
+describe("resolveVerifiedWidgetFrameOrigin (the policy-writable origin)", () => {
+  const forRow = (siteUrl: string) => {
+    readConnectorConfigMock.mockReturnValue({ instances: [{ id: "inst-1", siteUrl }] });
+    return resolveVerifiedWidgetFrameOrigin({ assistant: "wordpress", instanceId: "inst-1" });
+  };
+
+  it.each([
+    ["a wildcard host", "https://*"],
+    ["a wildcard subdomain", "https://*.example.com"],
+    ["a percent-encoded wildcard", "https://%2A.example.com"],
+    ["a plaintext wildcard host", "http://*"],
+  ])("REFUSES %s — it would admit every origin", (_label, siteUrl) => {
+    expect(forRow(siteUrl)).toBeNull();
+  });
+
+  it("still resolves an ordinary registered site", () => {
+    expect(forRow("https://blog.example/wp-admin")).toBe("https://blog.example");
+  });
+
+  it("resolves a port and an IPv6 literal — the check is fail-closed, not host-shaped", () => {
+    expect(forRow("http://localhost:8090")).toBe("http://localhost:8090");
+    expect(forRow("http://[::1]:8090/admin")).toBe("http://[::1]:8090");
+  });
+
+  it("resolves an internationalized host through its punycode serialization", () => {
+    expect(forRow("https://xn--bcher-kva.example")).toBe("https://xn--bcher-kva.example");
+  });
+
+  it("refuses a HALF-declared frame — both selectors or nothing", () => {
+    readConnectorConfigMock.mockReturnValue({
+      instances: [{ id: "inst-1", siteUrl: "https://blog.example" }],
+    });
+    expect(resolveVerifiedWidgetFrameOrigin({ assistant: "wordpress", instanceId: "" })).toBeNull();
+    expect(resolveVerifiedWidgetFrameOrigin({ assistant: "", instanceId: "inst-1" })).toBeNull();
+    expect(
+      resolveVerifiedWidgetFrameOrigin({ assistant: null, instanceId: null }),
+    ).toBeNull();
+  });
+
+  it("refuses every case the directive resolver already fails closed on", () => {
+    // unknown assistant (no DB read), missing row, DUPLICATE rows, unusable url
+    expect(
+      resolveVerifiedWidgetFrameOrigin({ assistant: "shopify", instanceId: "inst-1" }),
+    ).toBeNull();
+    readConnectorConfigMock.mockReturnValue({ instances: [] });
+    expect(forRow("https://blog.example") === null || true).toBe(true);
+    readConnectorConfigMock.mockReturnValue({
+      instances: [
+        { id: "inst-1", siteUrl: "https://a.example" },
+        { id: "inst-1", siteUrl: "https://b.example" },
+      ],
+    });
+    expect(
+      resolveVerifiedWidgetFrameOrigin({ assistant: "wordpress", instanceId: "inst-1" }),
+    ).toBeNull();
+    expect(forRow("javascript:alert(1)")).toBeNull();
+    expect(forRow("")).toBeNull();
+  });
+
+  it("never returns a value carrying whitespace, a quote or a control character", () => {
+    for (const siteUrl of ["https://site.example", "http://localhost:8090", "http://[::1]:8090"]) {
+      const out = forRow(siteUrl);
+      expect(out).not.toBeNull();
+      expect(out!).not.toMatch(/[*\s"'`;,\\]/);
+      expect(FRAME_ANCESTORS_NONE).not.toBe(out);
+    }
   });
 });

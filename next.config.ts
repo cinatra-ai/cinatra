@@ -383,16 +383,24 @@ const nextConfig: NextConfig = {
       },
       {
         // cinatra#2566 (epic #2564 S2): the review-target ISLAND is embedded in
-        // a review card as a same-origin iframe, so its response has to say two
-        // things for itself.
+        // a review card as a same-origin iframe, so its response has to say
+        // something about framing for itself.
         //
-        // `frame-ancestors 'self'` — only this origin may frame it. The island
-        // renders an authenticated reader's pinned review target; a third-party
-        // site must never be able to put it in a frame it controls, whatever a
-        // user's session happens to be. The header is fixed rather than
-        // per-request because the answer never varies: the island is a
-        // first-party fragment and has no legitimate cross-origin embedder.
-        // `X-Frame-Options` rides along for user agents that predate CSP2.
+        // THE FRAMING HEADERS ARE NO LONGER HERE (cinatra#2577). They used to
+        // be the fixed pair `Content-Security-Policy: frame-ancestors 'self'` +
+        // `X-Frame-Options: SAMEORIGIN`, on the stated ground that "the island
+        // is a first-party fragment and has no legitimate cross-origin
+        // embedder". S8d made that false: the widget draws the SAME card, so
+        // the island is nested inside `/embed/assistant`, which the registered
+        // site frames — two ancestors, one of them cross-origin. A `'self'`-only
+        // wall refuses to render there, which is what made the island blank on
+        // the widget while it drew perfectly first-party. The wall is now
+        // computed PER REQUEST in `applyReviewIslandFraming`
+        // (src/lib/auth-route-guard.ts), because the answer now varies with the
+        // request; a config header set HERE would also merge with the
+        // per-request one and two CSP headers INTERSECT — re-blocking the very
+        // frame the fix admits. Everything below stays fixed because it does not
+        // vary.
         //
         // `Cache-Control: no-store` — the document is reader-scoped. A shared
         // cache holding it would be a way for the next reader on the same proxy
@@ -410,8 +418,6 @@ const nextConfig: NextConfig = {
         // longer note in src/app/lifecycle/review-island/page.tsx).
         source: "/lifecycle/review-island",
         headers: [
-          { key: "Content-Security-Policy", value: "frame-ancestors 'self'" },
-          { key: "X-Frame-Options", value: "SAMEORIGIN" },
           { key: "Cache-Control", value: "no-store" },
           { key: "Referrer-Policy", value: "same-origin" },
         ],

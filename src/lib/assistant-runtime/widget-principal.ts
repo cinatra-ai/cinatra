@@ -55,5 +55,18 @@ export type WidgetPrincipal = {
   assistantHandle: "wordpress" | "drupal";
   /** The instances-config key ("wordpress" | "drupal") from the cit_ entry auth. */
   instancesConfigKey: string;
+  /**
+   * Did the `cwu_` this principal was built from carry the `lifecycle.read`
+   * grant (cinatra#2577, epic #2564 S8d)? Read off the SAME consume that built
+   * the rest of this principal — never a second, later observation of the token,
+   * so the grant cannot disagree with the identity it travels with.
+   *
+   * REQUIRED, deliberately: an omitted flag would default to "no grant", which
+   * is the safe direction but a SILENT one. Making it explicit means a new
+   * construction site has to answer the question rather than inherit an answer.
+   * It rides the widget OBO token's `lcr` claim to the MCP boundary, where the
+   * read-only lifecycle primitives read it as their grant.
+   */
+  lifecycleRead: boolean;
   // NOTE: platformRole is deliberately ABSENT — floored to "member" at mint.
 };

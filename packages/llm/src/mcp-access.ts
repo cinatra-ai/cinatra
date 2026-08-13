@@ -173,6 +173,14 @@ export type WidgetMcpActor = {
   parentJti: string;
   /** The AG-UI run id of the turn this token is minted for. */
   turnRunId: string;
+  /**
+   * cinatra#2577 (epic #2564 S8d) — did the `cwu_` that authorized this turn
+   * carry the `lifecycle.read` grant? Passed straight through to the injected
+   * issuer, which mints it as the token's `lcr` claim (and mints nothing when
+   * it is false, so the no-grant token stays byte-identical to a pre-S8d one).
+   * This package neither derives nor interprets it.
+   */
+  lifecycleRead: boolean;
 };
 
 export type WidgetMcpActorTokenIssuer = (actor: WidgetMcpActor) => string;

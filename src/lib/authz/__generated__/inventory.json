@@ -315,12 +315,12 @@
     {
       "primitiveName": "artifact_review_gate_render",
       "file": "src/lib/lifecycle/lifecycle-pull-mcp.ts",
-      "line": 384
+      "line": 448
     },
     {
       "primitiveName": "artifact_review_gates_list",
       "file": "src/lib/lifecycle/lifecycle-pull-mcp.ts",
-      "line": 376
+      "line": 440
     },
     {
       "primitiveName": "artifact_source_compile",
@@ -1085,7 +1085,7 @@
     {
       "primitiveName": "schedule_proposal_render",
       "file": "src/lib/lifecycle/schedule-proposal-mcp.ts",
-      "line": 201
+      "line": 216
     },
     {
       "primitiveName": "skill_source_compile",
@@ -1250,7 +1250,7 @@
     {
       "primitiveName": "verification_record_render",
       "file": "src/lib/lifecycle/lifecycle-pull-mcp.ts",
-      "line": 393
+      "line": 457
     },
     {
       "primitiveName": "wordpress_site_tool_call",

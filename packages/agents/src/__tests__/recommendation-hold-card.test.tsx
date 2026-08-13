@@ -128,6 +128,8 @@ const HELD: HoldState = {
 async function mountCard(props: {
   wireRef?: string | null;
   host?: "run_card" | "chat_thread" | "site_widget" | "page_gate_region" | null;
+  /** The host's credential declaration, when it has one (cinatra#2577). */
+  auth?: { headers: () => Record<string, string>; credentials: RequestCredentials };
 }) {
   const { RecommendationHoldCard } = await import("../run-recommendation-chip-row");
   const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
@@ -143,7 +145,9 @@ async function mountCard(props: {
     host === null ? (
       card
     ) : (
-      <LifecycleCardSurfaceProvider host={host}>{card}</LifecycleCardSurfaceProvider>
+      <LifecycleCardSurfaceProvider host={host} auth={props.auth}>
+        {card}
+      </LifecycleCardSurfaceProvider>
     ),
   );
 }
@@ -390,14 +394,54 @@ describe("RecommendationHoldCard — host gating and the drawn states (AC-5)", (
     expect(holdStateMock).not.toHaveBeenCalled();
   });
 
-  it("renders NO DOM on a host §IX withholds this kind from (the site widget)", async () => {
+  it("draws nothing on a host that declares a CREDENTIAL — its actions cannot carry one", async () => {
+    // codex round 0, finding 4. This card's state read and its Confirm/Skip are
+    // cookie-bound server actions. On a broker surface (same-origin to the app)
+    // a drawn card would read and act as whoever else is signed in on that
+    // browser — the ambient-session fallback the contract forbids. Fail closed
+    // until the broker-aware entry lands; the guard keys on the CREDENTIAL, not
+    // on the surface, so it disappears with that slice rather than with a matrix.
     holdStateMock.mockImplementation(async () => HELD);
-    const { container } = await mountCard({ wireRef: "hold-ref-1", host: "site_widget" });
+    const { container } = await mountCard({
+      wireRef: "hold-ref-1",
+      host: "site_widget",
+      auth: { headers: () => ({ "X-Cinatra-Widget-User-Token": "cwu_x" }), credentials: "omit" },
+    });
     await act(async () => {
       await Promise.resolve();
     });
     expect(container.innerHTML).toBe("");
     expect(holdStateMock).not.toHaveBeenCalled();
+  });
+
+  it("draws IDENTICALLY on every cookie host — the per-surface matrix is gone", async () => {
+    // The removed rule said "a widget visitor never shapes a run's skills", and
+    // it made this kind FALSE on `site_widget` in a presence table. The table is
+    // gone: what a host draws is no longer a property of which host it is. The
+    // widget's own remaining gate is the credential guard above, not a matrix.
+    holdStateMock.mockImplementation(async () => HELD);
+    const widget = await mountCard({ wireRef: "hold-ref-1", host: "page_gate_region" });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(holdStateMock).toHaveBeenCalled();
+    // React mints a fresh `useId` per mount, so the two renders differ in their
+    // generated ARIA ids and in nothing else. Normalising them is what makes
+    // "the same drawing" a byte comparison instead of a spot check.
+    const stripGeneratedIds = (html: string) =>
+      html.replaceAll(/radix-_r_[0-9a-z]+_/g, "radix-_r_ID_");
+    const widgetHtml = stripGeneratedIds(widget.container.innerHTML);
+    expect(widgetHtml).not.toBe("");
+    expect(widgetHtml).toContain('data-action="confirm-run-recommendation"');
+    expect(widgetHtml).toContain('data-action="skip-run-recommendation"');
+
+    cleanup();
+    holdStateMock.mockClear();
+    const chat = await mountCard({ wireRef: "hold-ref-1", host: "chat_thread" });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(stripGeneratedIds(chat.container.innerHTML)).toBe(widgetHtml);
   });
 
   it("draws nothing before the first authorized resolve answers", async () => {

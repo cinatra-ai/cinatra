@@ -15,6 +15,7 @@ import { isBuiltinAssistantByPackage } from "@/lib/assistant-registry-reader";
 import { POLICY_VERSION, type ActorContext } from "@/lib/authz/actor-context";
 import type { WidgetPrincipal } from "@/lib/assistant-runtime/widget-principal";
 import { WIDGET_BROKER_ROUTE_PATH } from "@/lib/widget-broker-route";
+import { WIDGET_LIFECYCLE_READ_SCOPE } from "@/lib/widget-lifecycle-scope";
 import { resolveAssistantWidgetBinding, listAssistantWidgetBindings } from "@/lib/assistant-widget-handles";
 import {
   isSelectedAssistantVisible,
@@ -388,6 +389,19 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
     verifiedOrigin: verifiedOrigin ?? "",
     assistantHandle: binding.handle,
     instancesConfigKey: entry.auth.instancesConfigKey,
+    // cinatra#2577 (epic #2564 S8d) — the lifecycle READ grant, read off THIS
+    // consume's own claims. `grantedScopes` is the verifier's narrowing of the
+    // stored scope column to the extension scopes this build knows, so an
+    // unknown or withdrawn entry can never appear here. A session that signed in
+    // before the grant existed carries none, and the widget's lifecycle
+    // primitives refuse it generically (AC-1 of S8a, enforced at S8d's reads).
+    // ABSENCE IS NO GRANT, read defensively rather than trusted from the type:
+    // a pre-#2574 row, a rollback, or any consume that could not populate the
+    // narrowed set yields `false` here instead of throwing mid-turn — the same
+    // fail-closed reading the `lcr` claim gets at the far end.
+    lifecycleRead:
+      Array.isArray(claims.grantedScopes) &&
+      claims.grantedScopes.includes(WIDGET_LIFECYCLE_READ_SCOPE),
   };
 
   emitWidgetAuthAudit("assistant_chat_widget_dispatch_authorized", {
@@ -558,12 +572,16 @@ async function handleWidgetBrokerTurn(request: Request, citToken: string): Promi
         kind: widgetPrincipal.assistantHandle,
         runId,
         jti: randomUUID(),
-        // cinatra#2684 — the `cwu_` row this turn authenticated against. The
-        // resume route re-asks whether that row's sign-in is still there before
-        // it streams a byte. Read from the principal since #2687: the OBO token
-        // needs the same handle, so it stopped being one credential's private
-        // business and became a property of the turn.
+        // cinatra#2684 + cinatra#2575 (epic #2564 S8b). The resume token names
+        // the `cwu_` row this turn authenticated against and the site it was
+        // authenticated for, so the resume seam can re-probe LIVE state instead
+        // of trusting a ten-minute signature: sign the person out, suspend or
+        // re-key the site, or remove their membership, and the next reconnect
+        // stops. Read from the principal since #2687: the OBO token needs the
+        // same handle, so it stopped being one credential's private business
+        // and became a property of the turn.
         parentJti: widgetPrincipal.parentTokenJti,
+        siteId: claims.siteId,
       }),
   });
   // Reflect CORS onto the streamed response so the cross-origin widget can read

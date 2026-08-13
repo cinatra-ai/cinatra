@@ -59,27 +59,152 @@ export const LIFECYCLE_VIEW_RESOLVE_PATH = "/api/lifecycle-views/resolve";
 const LifecycleCardSurfaceContext = createContext<LifecycleCardHost | null>(null);
 
 /**
+ * How a host proves who is asking, when a cookie cannot (cinatra#2577, epic
+ * #2564 S8d). Returns the headers to put on the resolve request and the
+ * credentials mode to send it with.
+ *
+ * The first-party hosts declare NOTHING here and keep the cookie: they are
+ * cookie-session surfaces and their identity travels by itself. The site widget
+ * declares one, because it has no session — its reader is proven by the `cwu_`
+ * broker token the embed already holds in a closure, and `credentials: "omit"`
+ * is load-bearing on that surface: the embed iframe is same-origin to the
+ * Cinatra app, so an ambient Cinatra cookie belonging to WHOEVER ELSE uses this
+ * browser would otherwise ride along and answer as them.
+ *
+ * The token itself never enters React state, a prop, a log or the DOM — only
+ * this call does, at the moment a request is built, exactly like the turn POST.
+ */
+export type LifecycleCardAuth = {
+  headers: () => Record<string, string>;
+  credentials: RequestCredentials;
+};
+
+/**
+ * The EMBEDDING CONTEXT a non-first-party host renders in (cinatra#2577).
+ *
+ * A card on the site widget is drawn inside `/embed/assistant`, which is itself
+ * framed by the registered site. So the review card's §III island — a nested
+ * first-party document — has TWO ancestors, and a `frame-ancestors` wall that
+ * names only `'self'` refuses to render it (Chrome: "Framing '<app origin>'
+ * violates the following Content Security Policy directive: frame-ancestors
+ * 'self'. The request has been blocked."). The island was blank on the widget
+ * for exactly that reason.
+ *
+ * These are the SAME two disambiguators the embed page itself carries in its
+ * URL, and they are passed on to the island for the SAME reason: so the SERVER
+ * can re-derive the one registered origin from its own records. They are
+ * opaque selectors, never an origin — nothing a caller writes here can put an
+ * origin into a policy. `frameAncestorsDirectiveFor` maps them through the
+ * CLOSED host-side binding table and the stored instance row, and fails closed
+ * to `'self'`-only for anything it cannot resolve to exactly one registered
+ * site.
+ */
+export type LifecycleCardFrame = {
+  /** == the embed's `?assistant` == the `cit_`-bound kind. */
+  assistant: string;
+  /** == the embed's `?instanceId` — the connector instance disambiguator. */
+  instanceId: string;
+};
+
+const LifecycleCardAuthContext = createContext<LifecycleCardAuth | null>(null);
+const LifecycleCardFrameContext = createContext<LifecycleCardFrame | null>(null);
+
+/**
+ * The hosts whose identity travels by COOKIE. Every other host must declare a
+ * credential, and the provider refuses to mount without one.
+ *
+ * WHY THIS IS A CLOSED LIST AND NOT AN `auth?:` DEFAULT (codex round 0, finding
+ * 2). `auth` used to be optional for every host, so
+ * `<LifecycleCardSurfaceProvider host="site_widget">` — one dropped prop, one
+ * refactor, one second widget mount — would have sent both the resolve and the
+ * DECISION same-origin with an ambient cookie. On a surface that is same-origin
+ * to the app, that is the forbidden fallback in its worst form: the server
+ * would answer, and record a decision, as whoever else uses that browser. The
+ * unsafe shape is removed rather than documented.
+ */
+const COOKIE_SESSION_HOSTS: ReadonlySet<LifecycleCardHost> =
+  new Set<LifecycleCardHost>(["chat_thread", "run_card", "page_gate_region"]);
+
+/**
  * Declare the host a subtree renders lifecycle cards on. A host opts IN; there
- * is no default. S8d turns the widget on by wrapping the embed transcript in
- * `<LifecycleCardSurfaceProvider host="site_widget">` — until then the embed
- * declares nothing and renders no lifecycle card DOM at all.
+ * is no default. S8d (cinatra#2577) turns the widget on: the embed wraps its
+ * transcript in `<LifecycleCardSurfaceProvider host="site_widget" auth={…}>`,
+ * and a surface that declares nothing still renders no lifecycle card DOM at
+ * all.
+ *
+ * FAIL-CLOSED ON THE CREDENTIAL. A cookie-session host must declare no `auth`
+ * and keeps S1's exact same-origin request. Any other host MUST declare one, and
+ * it must be `credentials: "omit"` — a broker surface that sent cookies would be
+ * asking the server to pick between two identities. A violation declares NO host
+ * at all, so the subtree renders no lifecycle card DOM and issues no request:
+ * the same silence as a surface that never opted in.
  */
 export function LifecycleCardSurfaceProvider({
   host,
+  auth,
+  frame,
   children,
 }: {
   host: LifecycleCardHost;
+  auth?: LifecycleCardAuth;
+  /** The embedding context, for a host that renders inside another frame. A
+   *  cookie-session host is first-party and declares none; one declared there
+   *  is IGNORED rather than trusted, so a stray prop can never widen a
+   *  first-party wall. */
+  frame?: LifecycleCardFrame;
   children: ReactNode;
 }): ReactElement {
+  const cookieHost = COOKIE_SESSION_HOSTS.has(host);
+  const credentialOk = cookieHost
+    ? auth === undefined
+    : auth !== undefined && auth.credentials === "omit";
+  // Both fields must be present and non-empty; a half-declared frame is no
+  // frame, so the island falls back to the first-party wall rather than being
+  // asked to resolve half a binding.
+  const frameOk =
+    !cookieHost &&
+    frame !== undefined &&
+    typeof frame.assistant === "string" &&
+    frame.assistant.length > 0 &&
+    typeof frame.instanceId === "string" &&
+    frame.instanceId.length > 0;
   return (
-    <LifecycleCardSurfaceContext.Provider value={host}>
-      {children}
+    <LifecycleCardSurfaceContext.Provider value={credentialOk ? host : null}>
+      <LifecycleCardAuthContext.Provider value={credentialOk ? (auth ?? null) : null}>
+        <LifecycleCardFrameContext.Provider
+          value={credentialOk && frameOk ? (frame ?? null) : null}
+        >
+          {children}
+        </LifecycleCardFrameContext.Provider>
+      </LifecycleCardAuthContext.Provider>
     </LifecycleCardSurfaceContext.Provider>
   );
 }
 
 export function useLifecycleCardHost(): LifecycleCardHost | null {
   return useContext(LifecycleCardSurfaceContext);
+}
+
+/**
+ * The host's credential declaration, or `null` on a cookie-session host.
+ *
+ * Read by every card request that is NOT the resolve — today the review card's
+ * ref-bound decision POST (cinatra#2577 / #2575). One declaration serves both,
+ * deliberately: a surface that proves itself one way to read and another way to
+ * decide is a surface where the two can disagree, and on the widget the
+ * disagreement would be an ambient cookie deciding as somebody else.
+ */
+export function useLifecycleCardAuth(): LifecycleCardAuth | null {
+  return useContext(LifecycleCardAuthContext);
+}
+
+/**
+ * The host's embedding context, or `null` on a first-party host. Read by the
+ * review card when it addresses the §III island, so the server can re-derive
+ * the ancestor origin the island must admit.
+ */
+export function useLifecycleCardFrame(): LifecycleCardFrame | null {
+  return useContext(LifecycleCardFrameContext);
 }
 
 // ---------------------------------------------------------------------------
@@ -108,6 +233,10 @@ export function useLifecycleCardState(params: {
   reloadToken?: number;
 }): LifecycleCardState | null {
   const { viewType, ref, enabled, reloadToken = 0 } = params;
+  // The host's credential declaration (cinatra#2577). Read here so the resolve
+  // callback closes over ONE value; a host that declares none keeps S1's exact
+  // same-origin cookie request.
+  const auth = useContext(LifecycleCardAuthContext);
   // State is stored WITH the identity it was resolved for, and read back only
   // when that identity still matches. A passive reset effect is not enough: on
   // the render where `ref` changes, the effect has not run yet, so the previous
@@ -154,9 +283,9 @@ export function useLifecycleCardState(params: {
       try {
         const response = await fetch(LIFECYCLE_VIEW_RESOLVE_PATH, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...(auth?.headers() ?? {}) },
           body: JSON.stringify({ viewType, ref }),
-          credentials: "same-origin",
+          credentials: auth?.credentials ?? "same-origin",
           signal,
         });
         if (!response.ok) return;
@@ -171,7 +300,7 @@ export function useLifecycleCardState(params: {
         // Aborted or transport-failed — stay silent (see the doc above).
       }
     },
-    [viewType, ref, identity],
+    [viewType, ref, identity, auth],
   );
 
   // Mount + focus load, mirroring `PendingToolConfirmationCards` — the chat

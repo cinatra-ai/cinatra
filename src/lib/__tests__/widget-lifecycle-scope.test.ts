@@ -19,6 +19,8 @@ import {
   widgetNoSignInScreenToken,
   WIDGET_EXTENSION_SCOPES,
   WIDGET_LIFECYCLE_READ_ROUTE_PATH,
+  WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH,
+  WIDGET_LIFECYCLE_DECIDE_SCOPE,
   WIDGET_LIFECYCLE_READ_SCOPE,
   formatTokenSet,
   grantedExtensionScopesFromScopeColumn,
@@ -65,7 +67,11 @@ describe("the set codec", () => {
 describe("the grant vocabulary", () => {
   it("knows only the scopes it declares", () => {
     expect(isKnownWidgetExtensionScope(WIDGET_LIFECYCLE_READ_SCOPE)).toBe(true);
-    expect(isKnownWidgetExtensionScope("lifecycle.decide")).toBe(false);
+    // cinatra#2575 (corrected 2026-08-11) — the DECIDE grant now exists, so the
+    // widget can decide from its own review card. Its unknown-scope role in this
+    // assertion is taken over by a name this build genuinely does not declare.
+    expect(isKnownWidgetExtensionScope(WIDGET_LIFECYCLE_DECIDE_SCOPE)).toBe(true);
+    expect(isKnownWidgetExtensionScope("lifecycle.administer")).toBe(false);
     expect(isKnownWidgetExtensionScope("toString")).toBe(false); // no prototype hits
     expect(isKnownWidgetExtensionScope(null)).toBe(false);
   });
@@ -98,6 +104,26 @@ describe("the mint", () => {
     expect(mintWidgetTokenAudience([])).toBe(WIDGET_BROKER_ROUTE_PATH);
   });
 
+  it("the DECIDE grant adds its scope AND the ONE decision endpoint together", () => {
+    // cinatra#2575 (corrected): the widget decides through the SAME
+    // `/api/lifecycle-views/decide` the first-party review card posts to — there
+    // is no widget-only decision endpoint, and no confirmation surface.
+    const scope = mintWidgetTokenScope("wordpress-content-editor", [
+      WIDGET_LIFECYCLE_DECIDE_SCOPE,
+    ]);
+    const aud = mintWidgetTokenAudience([WIDGET_LIFECYCLE_DECIDE_SCOPE]);
+    expect(tokenSetHas(scope, WIDGET_LIFECYCLE_DECIDE_SCOPE)).toBe(true);
+    expect(tokenSetHas(aud, WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH)).toBe(true);
+    expect(WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH).toBe("/api/lifecycle-views/decide");
+  });
+
+  it("a sign-in grants BOTH lifecycle scopes — reading and deciding, as in the app", () => {
+    expect([...WIDGET_SIGNIN_GRANTED_SCOPES].sort()).toEqual([
+      WIDGET_LIFECYCLE_DECIDE_SCOPE,
+      WIDGET_LIFECYCLE_READ_SCOPE,
+    ]);
+  });
+
   it("the lifecycle grant adds its scope AND its audience together", () => {
     const scope = mintWidgetTokenScope("wordpress-content-editor", [
       WIDGET_LIFECYCLE_READ_SCOPE,
@@ -110,10 +136,10 @@ describe("the mint", () => {
   });
 
   it("an unknown grant unlocks no scope and no audience", () => {
-    expect(mintWidgetTokenScope("wordpress-content-editor", ["lifecycle.decide"])).toBe(
+    expect(mintWidgetTokenScope("wordpress-content-editor", ["lifecycle.administer"])).toBe(
       "wordpress-content-editor.user",
     );
-    expect(mintWidgetTokenAudience(["lifecycle.decide"])).toBe(WIDGET_BROKER_ROUTE_PATH);
+    expect(mintWidgetTokenAudience(["lifecycle.administer"])).toBe(WIDGET_BROKER_ROUTE_PATH);
   });
 
   it("the chat audience is in EVERY token — a grant never costs the base surface", () => {

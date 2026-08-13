@@ -1,8 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { isDelegatedWidgetMcpToolAllowed } from "../delegated-widget-tool-policy";
+import { isDelegatedChatMcpToolAllowed } from "../delegated-chat-tool-policy";
+import {
+  DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
+  carriesDelegatedWidgetDeniedVerb,
+  delegatedWidgetAllowedToolNames,
+  isDelegatedWidgetMcpToolAllowed,
+  type WidgetDelegationKind,
+} from "../delegated-widget-tool-policy";
 
 // S5-W1 §4.1 / §5 — the CLOSED, KIND-KEYED `public_site_widget` tool policy.
-// Covers the T3 (blast radius) and T4 (kind binding / G9) negative contract.
+// Covers the T3 (blast radius) and T4 (kind binding / G9) negative contract,
+// and — since cinatra#2577 (epic #2564 S8d) — the ONE widening: the three
+// read-only lifecycle pull primitives, and nothing that resolves a lifecycle
+// interaction.
+
+const KINDS: WidgetDelegationKind[] = ["wordpress", "drupal"];
+
+/**
+ * Every lifecycle PULL primitive the platform registers — the union both
+ * delegated perimeters are compared against. Literal names on purpose: this file
+ * is the drift detector, so it must not read its expectation from either policy.
+ */
+const LIFECYCLE_PULL_PRIMITIVES = [
+  "artifact_review_gates_list",
+  "artifact_review_gate_render",
+  "verification_record_render",
+  "schedule_proposal_render",
+] as const;
 
 describe("isDelegatedWidgetMcpToolAllowed — delegated-widget closed policy", () => {
   it("allows ONLY the bound kind's *_content_editor_run (positive)", () => {
@@ -64,5 +88,156 @@ describe("isDelegatedWidgetMcpToolAllowed — delegated-widget closed policy", (
       // deliberately pass an unknown kind through the typed boundary
       isDelegatedWidgetMcpToolAllowed("mystery" as "wordpress", "wordpress_content_editor_run"),
     ).toBe(false);
+    for (const tool of DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS) {
+      expect(isDelegatedWidgetMcpToolAllowed("mystery" as "wordpress", tool)).toBe(false);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2577 (epic #2564 S8d) — THE WIDENING, AND ITS LIMIT
+// ---------------------------------------------------------------------------
+
+describe("S8d — the read-only lifecycle primitives, on BOTH kinds", () => {
+  it.each(KINDS)("%s: every pull primitive is allowed", (kind) => {
+    for (const tool of DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS) {
+      expect(isDelegatedWidgetMcpToolAllowed(kind, tool), tool).toBe(true);
+    }
+  });
+
+  it("the widget pull set EQUALS the chat pull set — first-party parity, not a subset", () => {
+    // THE CORRECTED CONTRACT (cinatra#2577, owner ruling 2026-08-11). The widget
+    // reaches every lifecycle pull primitive first-party chat reaches. Asserted
+    // as an equality against the CHAT policy's own allowlist rather than a
+    // literal list, so a primitive added to chat and forgotten here is a red
+    // test instead of a silent widget reduction.
+    // Both directions, through the CHAT policy's own predicate:
+    //   · everything the widget reaches, chat reaches (no widget-only surface);
+    //   · everything chat reaches of this family, the widget reaches (no
+    //     widget reduction — the half the correction is about).
+    for (const tool of DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS) {
+      expect(isDelegatedChatMcpToolAllowed(tool), tool).toBe(true);
+    }
+    const chatLifecyclePulls = LIFECYCLE_PULL_PRIMITIVES.filter((name) =>
+      isDelegatedChatMcpToolAllowed(name),
+    );
+    expect([...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS].sort()).toEqual(
+      [...chatLifecyclePulls].sort(),
+    );
+  });
+
+  it("the pull set is EXACTLY the four producer names — no more, no fewer", () => {
+    // Pinned against the producers' own registration names. A rename in
+    // `lifecycle-pull-mcp.ts` / `schedule-proposal-mcp.ts` without an edit here
+    // fails CLOSED (the tool simply stops being reachable from the widget), and
+    // this assertion is what turns that silent withdrawal into a red test.
+    expect([...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS].sort()).toEqual([
+      "artifact_review_gate_render",
+      "artifact_review_gates_list",
+      "schedule_proposal_render",
+      "verification_record_render",
+    ]);
+  });
+
+  it.each(KINDS)("%s: the WHOLE declared set is the editor plus the reads", (kind) => {
+    // The complete contents, asserted as a set: an addition fails as loudly as
+    // a removal, so widening this policy cannot happen quietly.
+    expect(delegatedWidgetAllowedToolNames(kind)).toEqual(
+      [`${kind}_content_editor_run`, ...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS].sort(),
+    );
+  });
+
+  it("kind-independence is deliberate: the pulls address no CMS instance", () => {
+    // Stated as a test so the asymmetry with the editor primitive is a decision
+    // on the record rather than an oversight: the editor is kind-bound (G9)
+    // because it writes to a CMS instance; a lifecycle read addresses the
+    // caller's own cinatra work through the caller's own standing.
+    for (const tool of DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS) {
+      expect(isDelegatedWidgetMcpToolAllowed("wordpress", tool)).toBe(true);
+      expect(isDelegatedWidgetMcpToolAllowed("drupal", tool)).toBe(true);
+    }
+  });
+});
+
+describe("S8d — no lifecycle DECIDE/MUTATE primitive, by construction", () => {
+  const FORBIDDEN = [
+    "artifact_review_gate_decide",
+    "artifact_review_gate_approve",
+    "artifact_review_gate_reject",
+    "artifact_review_gate_resume",
+    "artifact_review_gate_comment_submit",
+    "verification_record_approve",
+    "recommendation_hold_confirm",
+    "recommendation_hold_skip",
+    "trigger_schedule_proposal_confirm",
+    "trigger_schedule_arm",
+    "lifecycle_gate_decide",
+  ];
+
+  it.each(FORBIDDEN)("'%s' is denied for BOTH widget kinds", (tool) => {
+    for (const kind of KINDS) {
+      expect(isDelegatedWidgetMcpToolAllowed(kind, tool), `${kind}: ${tool}`).toBe(false);
+    }
+  });
+
+  it("the verb backstop catches the class, not a hand-kept list of names", () => {
+    for (const verb of [
+      "decide",
+      "approve",
+      "reject",
+      "resume",
+      "confirm",
+      "arm",
+      "create",
+      "update",
+      "delete",
+    ]) {
+      expect(carriesDelegatedWidgetDeniedVerb(`artifact_review_gate_${verb}`), verb).toBe(true);
+    }
+  });
+
+  it("the backstop matches WHOLE tokens — the allowed surface survives it", () => {
+    for (const allowed of [
+      "wordpress_content_editor_run",
+      "drupal_content_editor_run",
+      ...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
+    ]) {
+      expect(carriesDelegatedWidgetDeniedVerb(allowed), allowed).toBe(false);
+    }
+  });
+
+  // ---- THE NEGATIVE CONTROL --------------------------------------------------
+  // The assertions above would all pass against a policy with NO backstop at
+  // all, simply because no decide primitive is on the allowlist. That makes them
+  // a statement about today's list, not about the rule. So: drive the rule
+  // directly against a SYNTHETIC widened policy — the exact one-line edit this
+  // test exists to stop — and prove it refuses. If someone deletes the backstop,
+  // this is the test that goes red while every list-shaped assertion stays green.
+  it("NEGATIVE CONTROL: a decide primitive ADDED to the allowlist is still refused", () => {
+    const widened = new Set<string>([
+      "wordpress_content_editor_run",
+      ...DELEGATED_WIDGET_LIFECYCLE_READ_TOOLS,
+      "artifact_review_gate_decide", // the edit under test
+    ]);
+    // The allowlist alone would say yes …
+    expect(widened.has("artifact_review_gate_decide")).toBe(true);
+    // … and the rule the real policy applies says no anyway.
+    expect(carriesDelegatedWidgetDeniedVerb("artifact_review_gate_decide")).toBe(true);
+    // Every legitimate member of that same widened set survives the rule, so the
+    // refusal is aimed at the class and not at the set.
+    for (const name of widened) {
+      if (name === "artifact_review_gate_decide") continue;
+      expect(carriesDelegatedWidgetDeniedVerb(name), name).toBe(false);
+    }
+  });
+
+  it("NEGATIVE CONTROL: the set assertion itself fails on an added primitive", () => {
+    // The second half of the guarantee. The backstop covers the DECISION class;
+    // this covers everything else a widening could add (a connector read, an
+    // export, a cross-org lookup) — the declared-contents assertion above is the
+    // thing that catches it, and here is the proof that it does.
+    const declared = new Set(delegatedWidgetAllowedToolNames("wordpress"));
+    const smuggled = new Set([...declared, "objects_list"]);
+    expect([...smuggled].sort()).not.toEqual(delegatedWidgetAllowedToolNames("wordpress"));
   });
 });

@@ -26,7 +26,7 @@
 // ONLY thing shown before a valid, negotiated bootstrap — no oracle to the parent.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConversationTurn } from "@cinatra-ai/chat/renderer/ag-ui-interactive";
 import { renderMarkdown, type ThemeName } from "@cinatra-ai/chat/renderer";
 import {
@@ -45,6 +45,16 @@ import type { EmbedBootstrap } from "@/lib/embed/bridge-protocol";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { negotiateEmbedChatContract } from "./embed-chat-negotiate";
+// cinatra#2577 (epic #2564 S8d) — the host declaration that turns lifecycle
+// cards on for this surface. Until now the embed declared nothing and a card
+// rendered no DOM whatever the transcript carried. It now draws the SAME
+// lifecycle cards as first-party chat — review, verification, recommendation and
+// schedule proposal — because a signed-in widget reader is the same person with
+// the same rights as inside Cinatra. Only this frame differs.
+import {
+  LifecycleCardSurfaceProvider,
+  type LifecycleCardAuth,
+} from "@cinatra-ai/agents/lifecycle-card-runtime";
 
 type Phase =
   | { kind: "waiting" } // pre-bootstrap: neutral "waiting for host"
@@ -119,6 +129,14 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
     return {
       Authorization: `Bearer ${b.auth.citToken}`,
       "X-Cinatra-Widget-User-Token": b.auth.cwuToken,
+      // The bound assistant handle. The TURN carries it in its body, so this
+      // header used to belong only to the capability negotiation; the lifecycle
+      // refetch (cinatra#2577) has no body field for it and needs it here, and
+      // sending it on every broker call keeps ONE seam rather than three
+      // slightly different ones. It is a SELECTOR, never an authority: the
+      // server re-checks `agent_slug` inside both token consumes, so a forged
+      // value fails closed.
+      "X-Cinatra-Widget-Assistant": b.session.assistant,
       // The turn POST is SAME-ORIGIN to the Cinatra app, so the browser `Origin`
       // is the Cinatra origin — NOT the CMS site origin the cit_/cwu_ tokens are
       // bound to (and JS cannot set the forbidden `Origin`). Forward the
@@ -129,6 +147,32 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       "X-Cinatra-Widget-Origin": props.expectedParentOrigin,
     };
   }, [props.expectedParentOrigin]);
+
+  // The lifecycle card's credential (cinatra#2577). The card resolves its own
+  // authoritative state server-side, and on this surface that request carries the
+  // SAME broker proof the turn does — built at call time from the closure-held
+  // tokens, never held in state or a prop. `credentials: "omit"` matters here as
+  // much as it does on the turn: the embed is same-origin to the Cinatra app, so
+  // an ambient cookie from another Cinatra user of this browser would otherwise
+  // answer the resolve as THEM.
+  const lifecycleCardAuth = useMemo<LifecycleCardAuth>(
+    () => ({ headers: authHeaders, credentials: "omit" }),
+    [authHeaders],
+  );
+
+  // The lifecycle card's EMBEDDING CONTEXT (cinatra#2577). The review card's
+  // §III island is a nested first-party document, so inside this widget it has
+  // two ancestors — this frame and the registered site framing it — and a
+  // `frame-ancestors 'self'` wall refuses to render it (the island was blank on
+  // the widget for exactly that reason). These are the page's OWN server-read
+  // query disambiguators, passed on so the island's guard can re-derive the one
+  // registered origin from the same closed binding the embed's own wall uses.
+  // Not a credential and not an origin: they select a row, they do not assert
+  // anything.
+  const lifecycleCardFrame = useMemo(
+    () => ({ assistant: props.assistant, instanceId: props.instanceId }),
+    [props.assistant, props.instanceId],
+  );
 
   // Render assistant text through the S3 packaged renderer (`renderMarkdown`),
   // the EXACT content path `/chat` and the render-parity reference target render
@@ -294,7 +338,13 @@ export function EmbedAssistantClient(props: EmbedAssistantClientProps) {
       )}
       {phase.kind === "active" && (
         <div className="p-4" data-embed-state="active">
-          <ConversationTurn state={convo} renderers={{ onApplyIntent, renderText }} />
+          <LifecycleCardSurfaceProvider
+            host="site_widget"
+            auth={lifecycleCardAuth}
+            frame={lifecycleCardFrame}
+          >
+            <ConversationTurn state={convo} renderers={{ onApplyIntent, renderText }} />
+          </LifecycleCardSurfaceProvider>
           <EmbedComposer onSend={(text) => void runTurn([{ role: "user", content: text }])} />
         </div>
       )}

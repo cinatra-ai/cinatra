@@ -6,8 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // dependency boundaries mocked (the SAME boundaries the turn endpoint's
 // route.widget-broker.test.ts mocks), asserting:
 //   - the advertised auth modes now include BOTH "session" and "token-broker"
-//     (so `negotiateEmbedChatContract` can reach ok:true), renderableViews stays
-//     empty (no oracle beyond the static contract metadata).
+//     (so `negotiateEmbedChatContract` can reach ok:true), and renderableViews is
+//     SURFACE-SCOPED — §IX's chat_thread row for a session, §IX's site_widget row
+//     for the broker branch (no oracle beyond the static contract metadata; the
+//     shape is fixed per surface CLASS, never per caller).
 //   - session GET/POST are byte-unchanged (401 without a session; served with).
 //   - a valid cit_/cwu_ broker caller is SERVED the advertisement sessionlessly.
 //   - every fail-closed rung (cwu_ missing / unknown handle / cit_ reject / cwu_
@@ -129,15 +131,23 @@ describe("GET — broker-auth advertisement (Lane A)", () => {
     );
   });
 
-  it("cinatra#2565: the WIDGET branch advertises NO lifecycle view until S8d", async () => {
+  it("cinatra#2577 (corrected): the WIDGET branch advertises the SAME set as first-party chat", async () => {
     primeHappyBroker();
     const res = await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" }));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.renderableViews).toEqual([]);
+    expect([...body.renderableViews].sort()).toEqual([
+      "artifact_review_gate",
+      "trigger_schedule_proposal",
+      "verification_summary",
+    ]);
   });
 
-  it("cinatra#2565: the two auth branches DIFFER in what they advertise", async () => {
+  it("cinatra#2577 (corrected): the two auth branches advertise the SAME lifecycle views", async () => {
+    // The correction, as an equality. This assertion previously said the two
+    // branches must DIFFER, which is exactly the reduced-widget premise the
+    // owner rejected: a widget session is the person's own cinatra
+    // authentication, so it is offered the same set.
     getAuthSession.mockResolvedValue({ user: { id: "u1" } });
     const sessionBody = await (
       await GET(new Request("https://app.test/api/assistants/chat/capabilities"))
@@ -147,8 +157,25 @@ describe("GET — broker-auth advertisement (Lane A)", () => {
     const widgetBody = await (
       await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" }))
     ).json();
-    expect(sessionBody.renderableViews).not.toEqual(widgetBody.renderableViews);
-    expect(widgetBody.renderableViews).toEqual([]);
+    expect([...widgetBody.renderableViews].sort()).toEqual(
+      [...sessionBody.renderableViews].sort(),
+    );
+  });
+
+  it("the recommendation hold is advertised to NEITHER branch — carriage, not restriction", async () => {
+    // It rides an INTERRUPT, so it has no advertised viewType anywhere. Pinned
+    // so this absence is never read as a surviving per-surface reduction.
+    getAuthSession.mockResolvedValue({ user: { id: "u1" } });
+    const sessionBody = await (
+      await GET(new Request("https://app.test/api/assistants/chat/capabilities"))
+    ).json();
+    vi.clearAllMocks();
+    primeHappyBroker();
+    const widgetBody = await (
+      await GET(brokerGet({ cit: "cit_a", cwu: "cwu_b", origin: ORIGIN, assistant: "wordpress" }))
+    ).json();
+    expect(sessionBody.renderableViews).not.toContain("recommendation_hold");
+    expect(widgetBody.renderableViews).not.toContain("recommendation_hold");
   });
 
   it("401s when the cwu_ user token is missing (no anonymous broker read)", async () => {

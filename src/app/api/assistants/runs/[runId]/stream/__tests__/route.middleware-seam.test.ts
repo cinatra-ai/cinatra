@@ -50,6 +50,15 @@ vi.mock("@/lib/assistant-thread-store", () => ({
 vi.mock("@/lib/chat-thread-store", () => ({
   loadChatThreadForActorAccess: (i: unknown) => loadChatThreadForActorAccess(i),
 }));
+const isWidgetBrokerSessionLive = vi.fn();
+// cinatra#2575 (epic #2564 S8b) — the resume seam now re-probes the widget
+// session LIVE (no standalone-token trust). These suites are about the token and
+// the transport, so the probe is doubled here; the WITHDRAWN case is exercised
+// below and the probe's own refusals live with the module.
+vi.mock("@/lib/widget-broker-liveness", () => ({
+  isWidgetBrokerSessionLive: (...args: unknown[]) => isWidgetBrokerSessionLive(...args),
+}));
+
 vi.mock("@cinatra-ai/agent-ui-protocol/server", () => ({
   subscribeToAgUiEventsWithId: (runId: string, opts: unknown) =>
     subscribeToAgUiEventsWithId(runId, opts),
@@ -107,7 +116,11 @@ function mintResume(runId: string): string {
     kind: "wordpress",
     runId,
     jti: "run-nonce-seam",
-    parentJti: "parent-jti-1",
+    // cinatra#2684 + cinatra#2575 — the resume token names the ONE `cwu_` row
+    // it was minted inside and the site it was authenticated for, so the seam
+    // can re-probe LIVE state on reconnect.
+    parentJti: "cwu-jti-seam",
+    siteId: "site-seam",
   });
 }
 
@@ -123,8 +136,10 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // Default: the person who started the run is still signed in.
+  // Default: the person who started the run is still signed in, and the `cwu_`
+  // row is still live and still bound as the token claims.
   parentLiveness.mockReturnValue("live");
+  isWidgetBrokerSessionLive.mockResolvedValue(true);
   // Cookieless broker path: no session.
   getAuthSession.mockResolvedValue(null);
   isPlatformAdmin.mockReturnValue(false);

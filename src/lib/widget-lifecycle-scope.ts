@@ -64,6 +64,45 @@ export const WIDGET_LIFECYCLE_READ_SCOPE = "lifecycle.read";
 export const WIDGET_LIFECYCLE_READ_ROUTE_PATH = "/api/lifecycle-views/resolve";
 
 /**
+ * The lifecycle DECIDE grant (cinatra#2575, epic #2564 S8b; corrected
+ * 2026-08-11).
+ *
+ * WHAT IT IS. Deciding, from the widget, with the rights the person already has
+ * in Cinatra. A signed-in widget reviewer presses Approve / Reject / Comment in
+ * the SAME review card they would press inside the app, and the decision travels
+ * the SAME core decision module with the SAME validation order, the same gate
+ * CAS and the same fingerprint/audit contract.
+ *
+ * WHAT IT IS NOT. It is not a second decision path, and it is not permission the
+ * SITE holds. The grant rides the person's own `cwu_`, minted by the hosted PKCE
+ * sign-in against their Better-Auth session; every request is re-authorized
+ * against their LIVE org standing, and the decision op is checked by the one
+ * decision module, not by this scope. The scope's whole job is AC-1: a widget
+ * session that signed in before deciding existed carries neither this scope nor
+ * its audience, and fails closed at the endpoint.
+ *
+ * WHY IT IS SEPARATE FROM `lifecycle.read`. Reading shows you work waiting on
+ * you; deciding changes org state. Those are different things to consent to, so
+ * they are different grants — not because the widget is less trusted than the
+ * app, but because consent is per capability everywhere.
+ *
+ * REMOVED IN THE CORRECTION: an earlier revision of this slice made this scope
+ * mean "may ASK for a confirmation", routed decisions through a single-use
+ * action capability and a hosted confirmation window, and told the person at
+ * sign-in that every decision would prompt again. All of that rested on the
+ * invented premise that the embedding site holds the user's token. It is gone.
+ */
+export const WIDGET_LIFECYCLE_DECIDE_SCOPE = "lifecycle.decide";
+
+/**
+ * Where a widget decision is submitted — the ONE gate-scoped decision entry the
+ * first-party review card already posts to (`/api/lifecycle-views/decide`). The
+ * widget does not get an endpoint of its own; it gets an auth BRANCH on the
+ * endpoint that already exists, exactly as the refetch does.
+ */
+export const WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH = "/api/lifecycle-views/decide";
+
+/**
  * The grammar of a single set member. Deliberately strict and whitespace-free:
  * the set encoding IS the whitespace, so a value carrying any is not one member
  * but several, and a member assembled from an attacker-influenced string could
@@ -403,6 +442,18 @@ export const WIDGET_EXTENSION_SCOPES = {
     consentCopy:
       "Show you work items that are waiting on you — reviews and their outcomes — using the same permissions you have in Cinatra.",
   },
+  [WIDGET_LIFECYCLE_DECIDE_SCOPE]: {
+    audiences: [WIDGET_LIFECYCLE_DECIDE_ROUTE_PATH] as readonly string[],
+    /**
+     * The sentence the hosted SIGN-IN screen shows for this grant.
+     *
+     * It promises exactly what ships: deciding here IS deciding in Cinatra —
+     * same card, same rights, same one decision. It names no extra step, because
+     * there is none.
+     */
+    consentCopy:
+      "Let you approve, reject or comment on those work items from this site — the same decision, with the same permissions, as inside Cinatra.",
+  },
 } as const satisfies Record<
   string,
   { audiences: readonly string[]; consentCopy: string }
@@ -424,6 +475,7 @@ export type WidgetExtensionScope = keyof typeof WIDGET_EXTENSION_SCOPES;
  */
 export const WIDGET_SIGNIN_GRANTED_SCOPES: readonly WidgetExtensionScope[] = [
   WIDGET_LIFECYCLE_READ_SCOPE,
+  WIDGET_LIFECYCLE_DECIDE_SCOPE,
 ];
 
 export function isKnownWidgetExtensionScope(

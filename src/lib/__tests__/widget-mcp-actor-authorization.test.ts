@@ -116,6 +116,10 @@ describe("a live turn under a live sign-in authorizes, unchanged", () => {
       parentJti: "cwu-row-1",
       turnRunId: "run-of-this-turn",
       platformRole: "member",
+      // cinatra#2577 (S8d) — the `lcr` grant claim. This INPUT mints none, so
+      // the verifier reads it as NO grant; the authorization layer neither
+      // widens nor consults it.
+      lifecycleRead: false,
     });
   });
 
@@ -161,6 +165,7 @@ describe("the transport-shaped resolver", () => {
       kind: "wordpress",
       jti: "turn-nonce-1",
       platformRole: "member",
+      lifecycleRead: false,
       connectorInstancePin: { connectorKey: "wordpress", instanceId: "inst-canonical" },
     });
     // The seals authorized the call; they are not a capability the frame carries.
