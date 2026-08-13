@@ -7,8 +7,8 @@ import {
   openWidget,
   readSeed,
   sendPrompt,
-  trackAuthPath,
   trackContentEditRun,
+  trackFrameAuthPath,
   trackNoDirectCmsEgress,
   waitForEditTurnFinished,
 } from "../helpers";
@@ -47,21 +47,25 @@ test.describe("WordPress assistant UAT", () => {
   test("3. clicking the button mounts the panel and the in-frame composer becomes active", async ({ page }) => {
     const seed = readSeed();
     await page.goto(`${WP_BASE}${seed.wordpress.editUrl}`);
-    // Post-cutover: openWidget drives the login handshake, mounts the sandboxed
-    // /embed/assistant iframe, and returns its FrameLocator once the embed is
-    // active (which also proves frame-ancestors resolved a real origin).
+    // Protocol 2 (cinatra#2674): the panel open mounts the sandboxed
+    // /embed/assistant iframe immediately, the FRAME renders its own signed-out
+    // card, and openWidget drives the frame-owned sign-in ceremony (popup on the
+    // Cinatra origin, seeded actor's credentials) to `active` inside a measured
+    // budget. Reaching active also proves frame-ancestors resolved a real origin.
     const frame = await openWidget(page);
     await expect(page.locator(SEL.panel)).toBeVisible();
     await expect(frame.locator(SEL.embedComposerInput)).toBeVisible();
   });
 
-  test("4. a prompt streams an SSE assistant reply (scripted sentinel) over the real dual-token auth path", async ({ page }) => {
+  test("4. a prompt streams an SSE assistant reply (scripted sentinel) over the real frame-owned auth path", async ({ page }) => {
     const seed = readSeed();
-    // Assert the REAL #410 auth path (cnx_ init + cwu_ mint + user-token-bearing
-    // non-401 stream) is exercised, not just the DOM — a genuine auth regression
-    // fails loud instead of timing out on "Thinking…". The chat POST now fires
-    // from the iframe; page-level hooks observe subframe requests, so this holds.
-    const auth = trackAuthPath(page);
+    // Assert the REAL protocol-2 auth path (the FRAME's own
+    // /api/widget-auth/frame/init + /frame/token, the retired site-mediated pair
+    // untouched, and a user-token-bearing non-401 turn) is exercised, not just
+    // the DOM — a genuine auth regression fails loud instead of timing out on
+    // "Thinking…". Both the ceremony and the chat POST fire from the iframe;
+    // page-level hooks observe subframe requests, so this holds.
+    const auth = trackFrameAuthPath(page);
     await page.goto(`${WP_BASE}${seed.wordpress.editUrl}`);
     const frame = await openWidget(page);
     await sendPrompt(page, "Hello, what can you do here?");
