@@ -49,3 +49,66 @@ screenshots". Three cells are real and on a production build; the full
 4 cards × 4 surfaces × 6 states cross-product is not. The acceptance manifest row
 for that criterion is `MISSING` with `partial: true` and this gap written out —
 it is not marked green.
+
+---
+
+# Second round — the PRIMARY host, 2026-08-13
+
+A second capture, on a **different host and a different build**, recorded in the
+same structure and tagged `round: "primary"` in `results.json` so the two rounds
+are never conflated. Build: `pnpm build` exit 0 (Next.js "Compiled successfully
+in 78s", TypeScript clean at `--max-old-space-size=8192`) then `next start` —
+`NODE_ENV=production`. Preview head under test:
+**`579819c25edd79b724d30836cb2d9c8f87ad1f72`** = `origin/main` +
+`origin/2573-d1` + `origin/2573-d2`, all three verified as ancestors.
+
+Stack: `docker compose -p s7-visuals` (postgres, redis, verdaccio, nango-db,
+nango-server) on **fresh volumes**; DB provisioned by `cinatra instance setup
+dev` run from a `cinatra-cli` **origin/main** worktree; the actor is a first-run
+admin registered through the app's own `/setup/account` form. Unlike the host2
+round, this instance had **no pre-existing lifecycle rows** — every cell below
+had to be produced, not merely photographed.
+
+## Cell DELIVERED
+
+| Cell | What the DOM asserted |
+|---|---|
+| `A3__run-detail__ordinary-non-held-run.png` | The run-detail screen for a real, ordinary (non-held) run created through the UI's own Run control. HTTP 200, **zero page errors**, `run-surface` present, the agentic panel drawn. **`recommendationChipRows: 0`** and **`decidedSummaryOccurrences: 0`** — the screen draws nothing where D-1 (#2710) deleted its parallel `RunRecommendationChipRow` mount, and the decided summary is not double-drawn on the agentic branch. This is the S7 visual round's evidence **A3**. |
+
+## Cells NOT delivered — the AC-15 cells this round was sent to close
+
+**The chat-host cells are not merely unattempted. They are UNREACHABLE on a
+production-equivalent build, by two shipped fences**, and this supersedes the
+first round's "Not attempted" line for them:
+
+- `assertScriptedProviderNotProduction` (`packages/llm/src/scripted-test-provider.ts`)
+  throws unless `CINATRA_RUNTIME_MODE === "development"` **and**
+  `NODE_ENV !== "production"`.
+- `lifecycleSeedEnvVerdict` FENCE 1a (`src/lib/test-support/lifecycle-seed-fence.ts`)
+  returns `404 production-build` on `NODE_ENV === "production"` before it reads
+  any other gate.
+
+`next start` sets `NODE_ENV=production`, and Next inlines `process.env.NODE_ENV`
+into the server bundle at build time, so neither fence can be lifted by an env
+var at start. **A production-equivalent build and a scripted-provider dispatch
+are mutually exclusive by construction on this branch** — so #2573's AC-15, which
+asks for the chat-host cells *on a production-equivalent build*, cannot be
+satisfied as written. The two honest routes are (1) write the gate rows on a
+development runtime and photograph them under `next start` (the shape THIS
+file's first round used, where the capture writes nothing), or (2) accept the
+chat-host cells on a development runtime and say so on the cell.
+
+| Cell | Why not delivered |
+|---|---|
+| `review-card__chat_thread__pending` | The fence above. A review card reaches chat only as a `DATA_PART` renderable view produced by an assistant turn. |
+| `review-card__chat_thread__decided` | Same fence — the decided state is reached by deciding a card that was never mountable here. |
+| `review-card__run_card__live-run` | The `run_card` host IS declared and drawn on this round (`AgenticRunPanel` renders for `status !== "pending_input"` — the delivered cell above is on that branch), but no lifecycle gate is bound to the run, so there is nothing for the host to mount: `lifecycleHosts: []`, `lifecycleCardStates: []`. This is a strictly better answer than the first round's, where the panel never mounted at all. |
+| `recommendation-hold__run_card__held` | MEASURED: `cinatra.agent_assigned_skills` count = **0** against 28 registered skills. `maybeParkCheckpoint` parks only when the scorer returns a candidate, and candidates are bounded to the agent's already-assigned deliverable set, so every run returns `held:false, reason:"no recommendation candidates"`. No agent-level assignment control ships on the `/skills` detail page on this branch. |
+
+## Honest summary for this round
+
+One cell delivered, four named with measured reasons. The round's material
+contribution is not the pixel but the **fence finding**: the AC-15 chat-host
+cells are structurally unreachable under the criterion's own "production-
+equivalent build" wording, which is a defect in the criterion, not a gap in the
+capture. The acceptance manifest row stays `MISSING` with `partial: true`.

@@ -135,6 +135,78 @@
       "lifecycleCardStates": [],
       "islandFrames": [],
       "pageErrors": []
+    },
+    {
+      "id": "run-detail__ordinary-non-held-run",
+      "round": "primary",
+      "card": "recommendation_hold",
+      "surface": "run_card",
+      "state": "absent",
+      "url": "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/36fbc571-ad51-4df9-bd31-701ea869164f",
+      "waitFor": "[data-conformance-id=\"run-surface\"], main",
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/36fbc571-ad51-4df9-bd31-701ea869164f",
+      "screenshot": "evidence/2573-s7-conformance/A3__run-detail__ordinary-non-held-run.png",
+      "heading": "Blog Draft Writer Agent (1)",
+      "conformanceAnchors": [
+        "run-surface",
+        "sidebar-assistants-entry"
+      ],
+      "lifecycleCardStates": [],
+      "lifecycleHosts": [],
+      "recommendationChipRows": 0,
+      "decidedSummaryOccurrences": 0,
+      "islandFrames": [],
+      "pageErrors": [],
+      "note": "D-1 (#2710) evidence A3. The screen draws NOTHING where its parallel RunRecommendationChipRow mount was deleted, and the decided summary is drawn zero times on the agentic branch."
+    },
+    {
+      "id": "review-card__chat_thread__pending",
+      "round": "primary",
+      "card": "artifact_review_gate",
+      "surface": "chat_thread",
+      "state": "pending",
+      "delivered": false,
+      "screenshot": null,
+      "reason": "UNREACHABLE ON A PRODUCTION-EQUIVALENT BUILD, BY CONSTRUCTION. A review card reaches the chat surface only as a DATA_PART renderable view produced by an assistant turn (packages/chat/src/renderable-views/registry.tsx maps artifact_review_gate -> ReviewGateCard), so the cell needs an LLM-backed dispatch. On this stack that is the scripted provider, and BOTH assertScriptedProviderNotProduction (packages/llm/src/scripted-test-provider.ts: throws unless CINATRA_RUNTIME_MODE===\"development\" AND NODE_ENV!==\"production\") and lifecycleSeedEnvVerdict FENCE 1a (src/lib/test-support/lifecycle-seed-fence.ts: returns 404 production-build on NODE_ENV===\"production\") hard-refuse. next start sets NODE_ENV=production and Next inlines process.env.NODE_ENV into the server bundle at build time, so no env var at start can lift either fence. A production-equivalent build and a scripted-provider dispatch are mutually exclusive on this branch."
+    },
+    {
+      "id": "review-card__chat_thread__decided",
+      "round": "primary",
+      "card": "artifact_review_gate",
+      "surface": "chat_thread",
+      "state": "decided",
+      "delivered": false,
+      "screenshot": null,
+      "reason": "Same fence as review-card__chat_thread__pending — the decided state is reached by deciding a card that was never mountable on this build."
+    },
+    {
+      "id": "review-card__run_card__live-run",
+      "round": "primary",
+      "card": "artifact_review_gate",
+      "surface": "run_card",
+      "state": "pending",
+      "delivered": false,
+      "screenshot": null,
+      "reason": "The run_card host IS declared and drawn on this round (AgenticRunPanel renders for status !== \"pending_input\" — see run-detail__ordinary-non-held-run, which is on that branch), but no lifecycle gate is bound to the run, so there is no review card for the host to mount: lifecycleHosts=[] and lifecycleCardStates=[]. Binding a gate to a live run needs the same dispatch the chat rows above are fenced from."
+    },
+    {
+      "id": "recommendation-hold__run_card__held",
+      "round": "primary",
+      "card": "recommendation_hold",
+      "surface": "run_card",
+      "state": "pending",
+      "delivered": false,
+      "screenshot": null,
+      "reason": "NOT reachable on a fresh instance. maybeParkCheckpoint parks only when the request-aware scorer returns a candidate, and candidates are bounded to the agent's already-assigned deliverable set (resolveRecommendationCandidateSkillIds). MEASURED on this stack: cinatra.agent_assigned_skills count = 0 against 28 registered skills, so every run returns held:false reason:\"no recommendation candidates\" and goes straight to its field gate (the run captured here is pending_approval, not pending_input). No agent-level skill-assignment control ships on the /skills detail page on this branch."
     }
-  ]
+  ],
+  "primaryHostRound": {
+    "host": "primary",
+    "capturedAt": "2026-08-13T16:08:16.538Z",
+    "build": "pnpm build (exit 0, TypeScript clean at --max-old-space-size=8192) + next start — NODE_ENV=production",
+    "previewHead": "579819c25edd79b724d30836cb2d9c8f87ad1f72",
+    "previewComposition": "origin/main + origin/2573-d1 + origin/2573-d2 (all three verified ancestors)",
+    "stack": "docker compose -p s7-visuals (postgres, redis, verdaccio, nango-db, nango-server), fresh volumes; DB provisioned by cinatra instance setup dev from a cinatra-cli origin/main worktree; admin actor registered through the app's own /setup/account form"
+  }
 }
