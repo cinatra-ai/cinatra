@@ -475,29 +475,37 @@ describe("strictVerdict — the FULL strict-mode pass condition", () => {
     expect(verdict.rowFailures).toHaveLength(1);
   });
 
-  it("the real committed manifest is honestly NOT READY under strict mode today — all 14 code-level rows are green and verified; only the 3-role live proof remains", () => {
+  it("the real committed manifest is READY under strict mode — all 15 rows green and structurally verified", () => {
+    // This case previously asserted the opposite, and its comment said the
+    // 3-role live proof was "blocked on product code that does not exist yet
+    // — cinatra#1942's Danger-zone Archive/Unarchive affordance (verified
+    // absent)". CORRECTION, recorded where the false claim lived: that rested
+    // on a PATH-SCOPED grep of `src/app` and `src/components`. The affordance
+    // had already shipped with #2273 (V5), in `packages/dashboards/src/` —
+    // organization-archive-danger-form.tsx, the archive/unarchive cards in
+    // organization-manage-panel.tsx, and the gate-aware `archiveControl`
+    // computation in screens/organization-settings.tsx. The grep looked in two
+    // directories the surface does not live in. Nothing was missing; the
+    // search was.
+    //
+    // What was genuinely missing was the live proof of that surface, which now
+    // exists (tests/e2e/rbac/rbac-org-archive-live.spec.ts) and RUNS: it lives
+    // under tests/e2e/rbac/, which this row's ciDependency job (`e2e-rbac`)
+    // globs, so no workflow change was needed to execute it. #2704 supplied
+    // the last structural piece — the `needs: e2e-rbac` edge on this gate's
+    // own job — so `strictCheckRow` can now verify the green claim instead of
+    // reporting it unverifiable.
+    //
+    // THIS ASSERTION IS THE V6 PRECONDITION ITSELF (v-1942 Decision 10), so
+    // treat a failure here as exactly that: not a stale expectation to relax,
+    // but #1943's own claim to be DONE having regressed. `rowFailures` names
+    // the row and the reason.
     const manifest = loadManifest();
     const verdict = strictVerdict(manifest);
-    expect(verdict.ready).toBe(false);
-    // Every criterion #1943 can prove with code is green and structurally
-    // verified: the mint/seam/registry rows in the root and packages/agents
-    // tiers, and the raced-Postgres rows in the DB tiers. The ONE row that
-    // stays honestly red is the 3-role live Playwright proof, which is
-    // blocked on product code that does not exist yet: cinatra#1942's
-    // Danger-zone Archive/Unarchive affordance (verified absent — no
-    // src/app or src/components surface references archiveOrganization /
-    // unarchiveOrganization). No test can drive "owner archives/unarchives"
-    // through an affordance that has not been built, so this row must not be
-    // flipped by this slice. Its ciDependency names build-image.yml's
-    // `e2e-rbac` job — the production-equivalent Playwright job — so the spec
-    // becomes strict-verifiable the moment it lands under tests/e2e/rbac/
-    // (that suite's config globs the directory; no workflow change is needed
-    // to RUN it, only the one-line `needs: e2e-rbac` edge on this gate's own
-    // job, which is workflow-scoped and therefore its own PR).
-    expect(verdict.notYetGreen).toEqual([
-      "3-role live Playwright proof (owner archives/unarchives; admin/member read-only; non-member 404) on a production-equivalent build",
-    ]);
+    expect(verdict.shapeErrors).toEqual([]);
     expect(verdict.rowFailures).toEqual([]);
+    expect(verdict.notYetGreen).toEqual([]);
+    expect(verdict.ready).toBe(true);
   });
 });
 

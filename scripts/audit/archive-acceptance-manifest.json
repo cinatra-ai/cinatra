@@ -277,12 +277,57 @@
     {
       "criterion": "3-role live Playwright proof (owner archives/unarchives; admin/member read-only; non-member 404) on a production-equivalent build",
       "owner": "self",
+      "e2eProof": [
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "the owner archives the organization from the Danger zone and it goes read-only"
+        },
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "the owner unarchives the organization and it is restored"
+        },
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "an org admin is read-only on the archived organization and gets no archive control"
+        },
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "an ordinary member sees the organization as archived, with no management or archive control"
+        },
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "the same archive submission is refused by the action when it carries an org admin's or a member's session"
+        },
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "a non-member gets a 404 on the archived organization's settings surface"
+        }
+      ],
+      "negativeControl": [
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "negative control: with the activation gate off, the same owner's same archive submission renders nothing and lands nothing"
+        },
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "negative control: on the active organization the same admin and member see the state invert"
+        },
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "negative control: the same admin session lands the same submission once its membership row says owner"
+        },
+        {
+          "file": "tests/e2e/rbac/rbac-org-archive-live.spec.ts",
+          "testName": "negative control: the same non-member reaches the same organization once their membership row exists"
+        }
+      ],
       "ciDependency": {
         "workflow": "build-image.yml",
         "job": "e2e-rbac"
       },
-      "status": "red",
-      "trackingIssue": 1942
+      "status": "green",
+      "trackingIssue": 1942,
+      "note": "GREEN as of the live proof's first passing e2e-rbac run. Read the sequence, because this row is the one the whole #1943 suite could not fake: the spec (tests/e2e/rbac/rbac-org-archive-live.spec.ts) drives the REAL #1942 Danger-zone surface — which had already shipped in packages/dashboards/src/ with #2273, contrary to the path-scoped grep recorded in #2703 — through a production build with three seeded roles and a non-member. It lives in tests/e2e/rbac/, which tests/e2e/config/rbac.config.ts globs, so build-image.yml's e2e-rbac job runs it with no workflow change; #2704 supplied the one structural piece that was missing, the `needs: e2e-rbac` edge on this gate's own job, and staged its --strict step to start blocking the moment this word changed. It has. The activation gate is armed ONLY inside that harness — an ephemeral database, behind a loopback fence, snapshotted and restored byte-exactly — so nothing here advances #1942's owner-run production flip, which remains the V6 closeout's call."
     }
   ]
 }

@@ -43,8 +43,27 @@ export default defineConfig({
   // retry-budget exhaustion (per-test 120s × retries × hydration waits)
   // can naturally consume the workflow's 25-min shell timeout — observed
   // a ~30 min CI stall even though the post-merge run on main passed
-  // in ~9 min. 10 min is generous over the typical ~7 min suite runtime.
-  globalTimeout: process.env.CI ? 10 * 60_000 : undefined,
+  // in ~9 min. 10 min was generous over the then-typical ~7 min runtime.
+  //
+  // Raised to 12 min for cinatra#1943 row 15 (rbac-org-archive-live.spec.ts):
+  // ten tests over four seeded identities, ~15 navigations against a prebuilt
+  // production server, and ~30s of deterministic waiting it cannot avoid —
+  // two 11s waits for the 10s `readConnectorConfigFromDatabase` TTL (the only
+  // way the running server observes a gate flip written straight to the
+  // database) plus roughly one 10s Better Auth sign-up window, whose limiter
+  // is 3 per 10s and is live because this job serves a production build. That
+  // is ~2 min added to a ~7 min typical (~9 min worst observed) suite.
+  //
+  // Be honest about what this number is: at 12 min it is a GRACEFUL-FAILURE
+  // boundary, not headroom. The job wraps the suite in
+  // `timeout --kill-after=60 780` (13 min), and a signal-killed Playwright
+  // uploads no report — so the cap has to sit under 13 min, and raising it
+  // further would only trade a diagnosable timeout for a silent kill. The
+  // real headroom levers are elsewhere: the new file runs `retries: 0` of its
+  // own so this cap never absorbs a serial-mode re-run of the whole group,
+  // and every assertion in it is server-rendered markup or a database read
+  // rather than a wait.
+  globalTimeout: process.env.CI ? 12 * 60_000 : undefined,
 
   reporter: process.env.CI
     ? [["github"], ["list"], ["html", { open: "never", outputFolder: repoPath("playwright-report") }]]
