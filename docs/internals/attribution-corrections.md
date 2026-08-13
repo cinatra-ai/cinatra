@@ -26,3 +26,21 @@ Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
 Assisted-by: Claude Code (claude-sonnet-5)
 Assisted-by: Codex (gpt-5.6-sol)
 Correction-for: faacc2445befd72822a95e53d356b110e7db0a59```
+
+---
+
+## Correction for `7a997e1dd87d6e1e6a7cc1c8f6c30e0e76174f7d`
+
+```
+correction: truthful-attribution record for 7a997e1dd
+
+The record on 7a997e1dd ("test(archive): #1943 the acceptance manifest reaches 14/15 with a red ha") is incomplete under the
+ratified record grammar: the Accountable line is missing.
+This commit carries the corrected record verbatim. The change itself was approved,
+gated, and is untouched — this corrects the RECORD only.
+
+Gate-suite: cinatra-core@2026.08.1
+Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Codex (gpt-5.6-sol)
+Correction-for: 7a997e1dd87d6e1e6a7cc1c8f6c30e0e76174f7d```
