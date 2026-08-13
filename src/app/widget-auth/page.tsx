@@ -11,7 +11,6 @@ import {
   widgetSessionFingerprint,
 } from "@/lib/widget-user-auth";
 import {
-  WIDGET_EXTENSION_SCOPES,
   WIDGET_SIGNIN_GRANTED_SCOPES,
   WIDGET_SIGNIN_SCREEN_UNCLASSIFIED,
   screenRecordAdmitsArrival,
@@ -37,29 +36,49 @@ export const dynamic = "force-dynamic";
 // and the widget NEVER sees raw credentials (they are typed into this
 // Cinatra-origin page, not the CMS-origin DOM).
 //
-// The page is driven by a TRANSACTION (?txn=...) created by the
-// site-token-authenticated POST /api/widget-auth/init — the verified context
+// The page is driven by a TRANSACTION (?txn=...) created by the same-origin
+// POST /api/widget-auth/frame/init (cinatra#2674) — the verified context
 // (org / siteOrigin / agent / instance) lives in the transaction, NOT the URL.
+// That is also what makes `?txn=` a SERVER-VERIFIED flow marker rather than a
+// query flag: an id that does not resolve to a live transaction row renders the
+// neutral error card and no sign-in surface at all.
 //
 // cinatra#2631 — OWNER RULING (2026-08-10): "treat sign in as consent." The
 // separate consent step this page used to render — a card headed "Continue to
 // the assistant" with a Continue button — is GONE. Signing in is the whole
-// authorization: the sign-in screen names what it grants, and a signed-in member
-// goes straight to the return step, which records the grant and hands the code
-// back to the site.
+// authorization: a signed-in member goes straight to the return step, which
+// records the grant and hands the code back to the site.
+//
+// OWNER RULING (2026-08-13) — THE POPUP SHOWS THE FORM AND NOTHING ELSE. This
+// page is a 460×680 login window, and it now renders the sign-in form under the
+// brand mark with no prose around it: the paragraph and scope list this screen
+// used to carry BELOW the form are removed, and the app shell no longer wraps
+// the route at all (see `isWidgetAuthPopupPath` in app-shell.tsx — no sidebar,
+// no breadcrumb bar, no notifications bell).
+//
+// WHAT THAT DID AND DID NOT CHANGE, stated exactly because the difference is
+// easy to blur. The displayed-scopes RECORD stays, unchanged, and every
+// mixed-version property built on it below still holds: the record still pins
+// which BUILD's scope set a transaction belongs to, and the nonce still pins
+// which ARRIVAL may redeem it, so an older node's screen can neither admit this
+// build's larger set nor be redeemed by somebody else's browser. What the record
+// no longer carries is the older, stronger reading — that the sentences for
+// those scopes were on the screen the person read. They are not on any screen
+// now. The record is a build/arrival provenance token, not evidence of what was
+// displayed, and this comment says so rather than leaving the old claim standing.
 //
 // SAID PRECISELY, because it is easy to overstate: a grant is acquired by
 // running THIS FLOW again, and this flow shows the sign-in screen only when
 // there is no Cinatra session. A person who already holds one is not
-// re-authenticated — their existing session authorizes, and they never read the
-// sentences below. What is guaranteed is narrower and still the point of AC-1:
-// an ALREADY-MINTED widget token never gains a grant. The grant lives on the
-// authorization code, and only a new run of this flow mints one.
+// re-authenticated — their existing session authorizes. What is guaranteed is
+// narrower and still the point of AC-1: an ALREADY-MINTED widget token never
+// gains a grant. The grant lives on the authorization code, and only a new run
+// of this flow mints one.
 //
 // States:
 //   • invalid/expired txn → neutral error card (no oracle).
-//   • no session          → login-only AuthView, naming the sentences this
-//                           sign-in grants (redirects back here on login).
+//   • no session          → login-only AuthView, nothing else (redirects back
+//                           here on login).
 //   • session, non-member → deny card (not a member of the txn's org).
 //   • session, member     → record the grant → postMessage to opener.
 //
@@ -76,11 +95,6 @@ export const dynamic = "force-dynamic";
 // visitor is NOT 307'd to /sign-in (it must render the login form here); a
 // PRESENT session is still read normally via getAuthSession().
 // ---------------------------------------------------------------------------
-
-const CLIENT_LABELS: Record<string, string> = {
-  wordpress: "WordPress",
-  drupal: "Drupal",
-};
 
 type Props = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
@@ -117,28 +131,6 @@ function ErrorCard({ message }: { message: string }) {
   );
 }
 
-// What signing in grants, in the person's own words, ON the screen they sign in
-// on. The list is GENERATED from the scope vocabulary and the server action
-// records that same constant, so a grant cannot reach a token without its
-// sentence being on this screen.
-function SignInGrantNotice({ clientLabel }: { clientLabel: string }) {
-  if (WIDGET_SIGNIN_GRANTED_SCOPES.length === 0) return null;
-  return (
-    <div className="mt-5 grid w-full gap-2">
-      <p className="text-xs leading-5 text-muted-foreground">
-        Signing in connects the assistant on your {clientLabel} site to this
-        account. It follows the permissions you already have in Cinatra, and it
-        will be allowed to:
-      </p>
-      <ul className="grid list-disc gap-1 pl-4 text-xs leading-5 text-muted-foreground">
-        {WIDGET_SIGNIN_GRANTED_SCOPES.map((scope) => (
-          <li key={scope}>{WIDGET_EXTENSION_SCOPES[scope].consentCopy}</li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 export default async function WidgetAuthPage({ searchParams }: Props) {
   const sp = await searchParams;
   const txnId = first(sp.txn);
@@ -150,8 +142,6 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
       <ErrorCard message="This sign-in request is invalid or has expired. Open the assistant login again from your site." />
     );
   }
-
-  const clientLabel = CLIENT_LABELS[txn.client] ?? txn.client;
 
   // THE ARRIVAL'S OWN NONCE (cinatra#2631, codex rework round 7, finding 1).
   //
@@ -265,9 +255,10 @@ export default async function WidgetAuthPage({ searchParams }: Props) {
     return (
       <Shell>
         {/* The sign-in returns to the URL this arrival is already on, so the
-            nonce survives the credential round trip. */}
+            nonce survives the credential round trip. It is the ONLY child:
+            owner ruling 2026-08-13 — the popup shows the form and nothing else
+            below it. */}
         <WidgetAuthLogin redirectTo={urlFor(presentedNonce)} />
-        <SignInGrantNotice clientLabel={clientLabel} />
       </Shell>
     );
   }

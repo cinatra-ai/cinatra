@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { guardAppRoute } from "@/lib/auth-route-guard";
+import { bypassesAppShellForPathname } from "@/components/app-shell";
 import type { NextRequest } from "next/server";
 
 const GUARD_PATH = path.resolve(__dirname, "..", "..", "auth-route-guard.ts");
@@ -67,9 +68,16 @@ describe("AppShell — /embed/assistant renders CHROMELESS (§2/§3)", () => {
     "utf-8",
   );
   it("bypasses the app shell for /embed/assistant (no sidebar/topbar/user chrome)", () => {
-    expect(shellSrc).toMatch(/isEmbedAssistantPath\s*=\s*pathname === "\/embed\/assistant"/);
-    // The bypass gate must actually include the embed path.
-    expect(shellSrc).toMatch(/shouldBypassShell\s*=[^;]*isEmbedAssistantPath/);
+    // The decision moved into an exported pure function when the widget sign-in
+    // popup joined the chromeless list (owner ruling 2026-08-13). The property
+    // this case guards is unchanged, and it is now checked by CALLING the
+    // decision rather than by matching the shape of the expression that made it —
+    // which is strictly stronger than the regex it replaces.
+    expect(bypassesAppShellForPathname("/embed/assistant")).toBe(true);
+    // ...and the shell must actually route its bypass through that decision.
+    expect(shellSrc).toMatch(
+      /shouldBypassShell\s*=\s*bypassesAppShellForPathname\(pathname\)/,
+    );
   });
 
   it("a caller-supplied ?embed=1 can NOT activate the legacy cinatra:embed:submit listener on /embed/assistant", () => {
