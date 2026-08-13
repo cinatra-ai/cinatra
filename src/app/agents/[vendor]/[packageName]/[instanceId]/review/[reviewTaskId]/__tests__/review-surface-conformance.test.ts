@@ -157,13 +157,12 @@ const HOST_STANDARD_IDS = new Set([
   // either `specs/app-lifecycle-cards.html` or `specs/app-components.html`'s
   // Skeleton/Spinner section (checked) — the skeleton reuses that section's
   // generic bar-skeleton language verbatim, and the timeout panel reuses
-  // `ReviewGateBlocked`'s shape. Whether that reuse is sufficient, or this
-  // state is owed its own drawing, is raised for the owner at eng#548 entry
-  // 335 (question 2: "Accept the standard loading pattern for the card?",
-  // recommended yes) — UNANSWERED as of this commit. Listed here, like the
-  // composer anchors above, so render→spec passes on the honestly-reused
-  // primitives while that question is open; if the owner orders a dedicated
-  // drawing instead, these ids move to SPEC_CONFORMANCE under its spec commit.
+  // `ReviewGateBlocked`'s shape. The owner ruled the catalog's standard
+  // loading pattern IS the drawing of record for this state (the ruling is
+  // recorded with cinatra#2713's closing trail). Listed here, like the
+  // composer anchors above, on the honestly-reused primitives; if a dedicated
+  // drawing ever supersedes the catalog pattern, these ids move to
+  // SPEC_CONFORMANCE under its spec commit.
   "review-target-island-skeleton",
   "review-target-island-timeout",
 ]);
