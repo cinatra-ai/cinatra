@@ -154,24 +154,26 @@ export const RETIRED_PARALLELS = Object.freeze([
     // WHETHER the row appears, WHICH state it is in, and WHEN it re-reads.
     re: /<\s*RunRecommendationChipRow\b/g,
     allow: [
-      // The card that composes the shipped row — the one legitimate mount.
-      "packages/agents/src/run-recommendation-chip-row.tsx",
-      // ⚠ KNOWN DEVIATION, allowlisted so the gate reports the truth rather
-      // than a red that nobody may fix in this lane (cinatra#2573 S7, defect
-      // D-1). `instance-screens.tsx` is the run-DETAIL screen and it still
-      // renders the recommendation interaction ITSELF: its own park read, its
-      // own candidate prefetch, and a direct `<RunRecommendationChipRow
-      // holdRef={…}>` — bypassing `RecommendationHoldCard`, the host
-      // declaration and the card's authoritative-refetch contract. S4 (#2568)
-      // recorded it as "deliberately unchanged by this branch"; the criterion
-      // this gate enforces does not exempt it. It MATTERS rather than being
+      // The card that composes the shipped row — the one legitimate mount, and
+      // now the ONLY one.
+      //
+      // HISTORY, kept because an empty-looking allowlist hides what it cost.
+      // S7 first shipped this rule with `packages/agents/src/instance-screens.tsx`
+      // allowlisted BY NAME: the run-DETAIL screen rendered the recommendation
+      // interaction ITSELF — its own park read, its own candidate prefetch and a
+      // direct `<RunRecommendationChipRow holdRef={…}>` — bypassing
+      // `RecommendationHoldCard`, the host declaration and the card's
+      // authoritative-refetch contract. That was defect D-1, and it was not
       // cosmetic: `AgenticRunPanel` (which mounts the card correctly under
       // `host="run_card"`) renders only for `run.status !== "pending_input"`,
-      // and a HELD run IS `pending_input` — so on the run-detail page the HELD
-      // state is drawn ONLY by this parallel path, never by the one card.
-      // Removing it is product work and belongs to a routed fix, not to the
-      // acceptance lane. Delete this entry with that fix.
-      "packages/agents/src/instance-screens.tsx",
+      // and a HELD run IS `pending_input`, so the HELD state on the run-detail
+      // page was drawn ONLY by the parallel path. cinatra#2710 (`7123d2bf1`)
+      // deleted that path: the screen now mounts `RecommendationHoldCard`
+      // inside its own `<LifecycleCardSurfaceProvider host="run_card">`,
+      // branch-selected by `runDetailPanelKind` / `screenHostsRecommendationCard`
+      // so exactly one renderer draws on every branch. The allowlist entry was
+      // deleted with it, which is what makes this gate's pass mean the criterion.
+      "packages/agents/src/run-recommendation-chip-row.tsx",
     ],
     fix: "Mount <RecommendationHoldCard> under a declared host; the card composes the row.",
   },

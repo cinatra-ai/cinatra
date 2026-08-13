@@ -1,15 +1,13 @@
 {
- "note": "Chat-HITL PROGRAM ACCEPTANCE manifest (cinatra#2573, epic #2564 S7). One row per LITERAL acceptance criterion in #2573's issue body — 16, verbatim and in order; the gate pins them against its own CANONICAL_CRITERIA so a row can never drift from the issue's wording. `disposition` is the row's honest state: MAPPED (already fully proven by a landed slice's own test — S7 never re-authors what a sibling owns), BUILT (S7's own artifact, because the criterion had no owner), MISSING (not proven; `gap` says why, in a sentence, and `partial` marks a criterion whose clauses are only partly met). Hand-authored against the issue text — there is no regeneration mode and there must not be one, because the rows are claims a human makes, not facts a scanner discovers. Every {file, testName} pair is re-verified against the real tree on every run of the gate.",
+ "note": "Chat-HITL PROGRAM ACCEPTANCE manifest (cinatra#2573, epic #2564 S7). One row per LITERAL acceptance criterion in #2573's issue body — 16, verbatim and in order; the gate pins them against its own CANONICAL_CRITERIA so a row can never drift from the issue's wording. `disposition` is the row's honest state: MAPPED (already fully proven by a landed slice's own test — S7 never re-authors what a sibling owns), BUILT (S7's own artifact, because the criterion had no owner), MISSING (not proven; `gap` says why, in a sentence, and `partial` marks a criterion whose clauses are only partly met). Hand-authored against the issue text — there is no regeneration mode and there must not be one, because the rows are claims a human makes, not facts a scanner discovers. Every {file, testName} pair is re-verified against the real tree on every run of the gate. VERSION 2 (2026-08-13, the finisher round): the two S7-found defects landed on main — D-1 cinatra#2710 (`7123d2bf1`, the run-detail screen's parallel recommendation renderer deleted) and D-2 cinatra#2711 (`6b4c3e887`, the composer binds to a focused review card) — and the owner ruled on the three open questions in engineering#548 entry 334: the releasable binding stands (answer 1), the AC-13 'no island' clause is SUPERSEDED by the 2026-08-11 full-parity correction (answer 2), and dev-runtime-LABELED captures are authoritative for dispatch-dependent cells (answer 3). Rows carry a `ruling` field naming the entry and answer that moved them, and a `note` field carrying what a reader would otherwise have to reconstruct — including, on AC-15, the one cell that is still open and the exact predicate that gates it.",
  "issue": 2573,
  "epic": 2564,
  "specCommit": "design@6c20871b4108176c1d0193f19ecd2947f6c6355f specs/app-lifecycle-cards.html",
- "version": 1,
+ "version": 2,
  "rows": [
   {
    "criterion": "Chat-dispatch → typed chip-row hold → confirm → artifact → review card renders island + capture pair → focused-composer comment → `changes_requested` → repair successor in the same chat → verification chip → approve → effects release.",
-   "disposition": "MISSING",
-   "partial": true,
-   "gap": "Every LINK of the chain is proven, and the chain as ONE production-equivalent Playwright journey is not. The links: the hold parks and releases (recommendation-hold.integration), the review card renders the island + the pinned capture pair on all three first-party hosts (review-gate-card), changes_requested closes the base gate and pins a repair successor and approve releases the held effect (lifecycle-repair.integration), the successor mints the verification record (lifecycle-verification.integration). What is NOT proven is the WHOLE walk on one live chat thread, and one step of it is not merely unproven but UNIMPLEMENTED: the 'focused-composer comment'. agentic-run-panel.tsx still publishes a NULL composer descriptor for a marked review gate (the cinatra#1796 single-resume guard) and its own comment records that binding the composer to a FOCUSED card 'is a separate, deliberate step (#2566's composer-focus deliverable)' — that step never landed. The comment IS reachable in chat, from the card's own decision bar; the composer-bound form of it is not. Defect D-2 in the S7 report.",
+   "disposition": "BUILT",
    "unitProofs": [
     {
      "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
@@ -18,6 +16,18 @@
     {
      "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
      "testName": "draws the SAME card on every first-party host, differing only in the frame"
+    },
+    {
+     "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
+     "testName": "the composer's comment travels the CARD's own decision path"
+    },
+    {
+     "file": "packages/agents/src/__tests__/composer-focus.test.ts",
+     "testName": "exactly one eligible gate binds on its own — #2566's single-gate case"
+    },
+    {
+     "file": "packages/chat/src/__tests__/inline-hitl-classify.test.ts",
+     "testName": "ONE review open and nothing else → the message is that review's comment"
     }
    ],
    "integrationProofs": [
@@ -34,7 +44,30 @@
      "testName": "V1 AUTO: a landed repair AUTOMATICALLY writes a verification record bound to the successor gate (the run rail's entry)"
     }
    ],
-   "trackingIssue": 2573
+   "ruling": "engineering#548 entry 334 (2026-08-13), answers 1 + 3 — RULED yes to both. Answer 1: the composer binding stays RELEASABLE (the deviation from #2566's literal wording stands). Answer 3: dev-runtime-labeled captures are AUTHORITATIVE for dispatch-dependent cells.",
+   "e2eProofs": [
+    {
+     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "testName": "A1__run-detail__held-at-recommendation-checkpoint.png"
+    },
+    {
+     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "testName": "A2__run-detail__decided-summary-exactly-once.png"
+    },
+    {
+     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "testName": "B2__chat__comment-typed-while-bound-lands-on-the-gate.png"
+    },
+    {
+     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "testName": "C1__review-card__chat_thread__pending.png"
+    },
+    {
+     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "testName": "C2__review-card__chat_thread__decided.png"
+    }
+   ],
+   "note": "CLOSED by cinatra#2711 (`6b4c3e887`, S7-found defect D-2). The one link that was not merely unproven but UNIMPLEMENTED when this row was written — the 'focused-composer comment' — now ships: a pure resolveComposerTarget reducer plus a ComposerFocusStore bind the composer to a FOCUSED review card, the card registers only when the server resolve says this reader may comment, and a bound message travels the CARD's own decision path rather than the model's. HOW THE CHAIN IS PROVEN, stated exactly rather than rounded up: the human-facing links are photographed LIVE on the labeled DEV runtime (evidence/2573-s7-visuals-host2) — A1/A2 the typed chip-row hold and its confirm on the run card, B1–B5 the binding row, the routed comment and the release, C1/C2 the chat-hosted review card pending → decided; every routing claim in that round is checked against cinatra.artifact_review_audit, the app's own audit trail. The machine links — changes_requested closing the base gate and holding the effect, the pinned repair successor, the minted verification record, the release on approve — are proven by the integration suites named above. WHAT IT IS NOT: one continuous scripted Playwright journey on a production build. That shape is unreachable here, not unattempted — the scripted-provider fence and the lifecycle-seed fence make a production-equivalent build and an LLM-backed dispatch mutually exclusive by construction (the fences are quoted in this manifest's AC-15 note), which is the situation entry 334 answer 3 rules on."
   },
   {
    "criterion": "Path-2: background gate pulled into a chat → decided there; the review page gate region renders the same card component.",
@@ -110,9 +143,7 @@
   },
   {
    "criterion": "Late stream subscription + reload re-render (decided gate shows resolved state); multiple concurrent gates require explicit composer focus.",
-   "disposition": "MISSING",
-   "partial": true,
-   "gap": "The first clause is fully proven; the second is UNIMPLEMENTED. Late subscription and reload re-render are covered: the run stream answers a late joiner with the CURRENT hold as its first frame and reconstructs it on a Last-Event-ID reconnect, and the card re-resolves the authoritative state on mount/focus so a decided gate settles to the server's answer rather than a stale snapshot. The second clause — 'multiple concurrent gates require explicit composer focus' — has no implementation to test: agentic-run-panel.tsx publishes a NULL composer descriptor for every marked review gate, so no gate is ever composer-bound, focused or otherwise. S2 (#2566) named 'composer focus' as its own deliverable and deferred it in a source comment; it never landed. Defect D-2 in the S7 report.",
+   "disposition": "MAPPED",
    "unitProofs": [
     {
      "file": "src/app/api/agents/runs/[runId]/stream/__tests__/route.recommendation-hold.test.ts",
@@ -133,9 +164,52 @@
     {
      "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
      "testName": "settled: 'no longer open' with a Refresh, and NO decision floor"
+    },
+    {
+     "file": "packages/agents/src/__tests__/composer-focus.test.ts",
+     "testName": "TWO eligible gates and no focus → ambiguous, NEVER a pick"
+    },
+    {
+     "file": "packages/agents/src/__tests__/composer-focus.test.ts",
+     "testName": "an explicit focus resolves the ambiguity, and says it was explicit"
+    },
+    {
+     "file": "packages/agents/src/__tests__/composer-focus.test.ts",
+     "testName": "registration ORDER is not a tiebreak — the last one in does not win"
+    },
+    {
+     "file": "packages/chat/src/__tests__/inline-hitl-classify.test.ts",
+     "testName": "TWO reviews and no focus → REFUSED, and nothing is routed"
+    },
+    {
+     "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
+     "testName": "TWO open reviews: neither is bound, and both say to choose one"
+    },
+    {
+     "file": "packages/agents/src/__tests__/review-gate-card.test.tsx",
+     "testName": "pressing one card binds it — explicitly — and unbinds the other"
     }
    ],
-   "trackingIssue": 2573
+   "ruling": "engineering#548 entry 334 (2026-08-13), answer 1 — RULED yes: keep the release control. The binding is refusable by one press, a deliberate deviation from #2566's literal 'binds with no way out'.",
+   "e2eProofs": [
+    {
+     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "testName": "B3__chat__two-open-gates-no-focus-the-pick-a-card-refusal.png"
+    },
+    {
+     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "testName": "B3b__chat__the-ambiguous-send-is-refused-and-goes-nowhere.png"
+    },
+    {
+     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "testName": "B4a__chat__explicit-focus-binds-that-card-only.png"
+    },
+    {
+     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "testName": "B4b__chat__moving-the-focus-moves-where-the-comment-lands.png"
+    }
+   ],
+   "note": "BOTH clauses now hold. Clause 1 (late stream subscription + reload re-render) was already fully proven and its proofs are unchanged: the run stream answers a late joiner with the CURRENT hold as its first frame, reconstructs it on a Last-Event-ID reconnect, drops a decided hold replayed out of the log, and the card re-resolves the authoritative state so a decided gate settles to the server's answer. Clause 2 — 'multiple concurrent gates require explicit composer focus' — had NO implementation to test when this row was written; cinatra#2711 (`6b4c3e887`, defect D-2) shipped it. resolveComposerTarget returns `ambiguous` for two eligible gates and NEVER picks one, registration order is not a tiebreak, and resolveComposerRouting REFUSES the send rather than routing it, naming how many gates are open and how to resolve it without leaking an identifier. The refusal is said BEFORE anything is typed. Owner ruling entry 334 answer 1 kept the binding RELEASABLE: an unreleasable implicit binding would make every chat message a review comment, and on a single-target automatic gate a comment resolves as changes_requested. Photographed live on the labeled dev runtime — two open gates refusing (B3), the ambiguous send reaching nothing with a byte-identical audit trail across it (B3b), explicit focus binding one card only (B4a), and the destination moving with the focus (B4b)."
   },
   {
    "criterion": "Island renders build-map, runtime, and floor renderer classes; refuses cross-origin framing.",
@@ -315,8 +389,6 @@
   {
    "criterion": "Revocation-after-emission matrix: link/site/membership/token revoked between DATA_PART emission and stream resume / card refetch / decision / capture GET — each fails closed (no DOM, refusal, 4xx).",
    "disposition": "MAPPED",
-   "partial": true,
-   "gap": "Three of the four cells are proven at the seam that answers them, and the fourth is proven only INDIRECTLY. Proven directly: CARD REFETCH and the island paint (review-island-serving refuses a swept or expired cwu_ row, a dead parent sign-in, a revoked site, a rotated credential generation and a lost membership), CAPTURE GET (capture-capability-serving refuses a gone cwu_ row, a moved binding and a reader who lost run access between mint and fetch) and DECISION (the decide route re-runs run READ for the same actor before the decision op and answers a denial byte-identically to a forged ref). NOT proven as its own case: STREAM RESUME after a revocation that lands between the DATA_PART emission and the resume — the widget stream auth suite covers resume-token validation, but no test drives a revocation INTO an open stream and asserts the resume closes. Recorded rather than rounded up.",
    "unitProofs": [
     {
      "file": "src/lib/lifecycle/__tests__/review-island-serving.test.ts",
@@ -353,9 +425,29 @@
     {
      "file": "packages/chat/src/__tests__/lifecycle-card-widget-host.test.tsx",
      "testName": "draws NO DOM when the widget resolve is rejected (401 — token expired)"
+    },
+    {
+     "file": "src/app/api/assistants/runs/[runId]/stream/__tests__/route.resume-token.test.ts",
+     "testName": "probes the LIVE session the token names, not just its own signature"
+    },
+    {
+     "file": "src/app/api/assistants/runs/[runId]/stream/__tests__/route.resume-token.test.ts",
+     "testName": "401s a perfectly valid token whose widget session is no longer live"
+    },
+    {
+     "file": "src/app/api/assistants/runs/[runId]/stream/__tests__/route.resume-token.test.ts",
+     "testName": "...and answers IDENTICALLY to a forged token — no oracle for which it was"
+    },
+    {
+     "file": "src/app/api/assistants/runs/[runId]/stream/__tests__/route.resume-token.test.ts",
+     "testName": "the run's turn row is never even looked up for a withdrawn session"
+    },
+    {
+     "file": "src/app/api/assistants/runs/[runId]/stream/__tests__/route.resume-token.test.ts",
+     "testName": "401s once the sign-in behind the token has ended, and the control streams"
     }
    ],
-   "trackingIssue": 2573
+   "note": "ALL FOUR cells are proven at the seam that answers each. The fourth — STREAM RESUME after a revocation that lands between the DATA_PART emission and the resume — is answered at the resume seam itself, which is the seam this criterion names: the resume route probes the LIVE session the token seals on EVERY resume rather than trusting its own signature, 401s a perfectly valid run-bound resume token whose widget session has since been withdrawn, 401s once the parent sign-in behind the token has ended, answers a withdrawn session byte-identically to a forged token (no oracle for which it was), and never looks the run's turn row up at all. Those are the cinatra#2575 AC-4 cases in route.resume-token.test.ts (landed `8a83cf090`). The earlier `partial` on this row asked for a test that drives a revocation INTO an open stream; a revoked stream is observed when the reader RESUMES it, so the resume seam is that case rather than a proxy for it. Card refetch, the island paint, capture GET and the decision stay proven where they were."
   },
   {
    "criterion": "Wrong-audience and cross-gate/cross-site action capabilities are refused; copied/expired/revoked capture URLs fail.",
@@ -433,9 +525,7 @@
   },
   {
    "criterion": "`/embed/assistant` renders captures with NO island and refuses a nested island by ancestry.",
-   "disposition": "MISSING",
-   "partial": true,
-   "gap": "The criterion's FIRST clause is SUPERSEDED by a later sub-issue of this same epic and can no longer be proven, because the product deliberately does the opposite. S8e (cinatra#2674, merged as d7ff228f8) gave the island a second reader path — a short-lived, ref-bound ISLAND CREDENTIAL derived from the widget principal — precisely so the island DOES paint inside /embed/assistant on a genuinely cross-site deployment, where a SameSite-bound cookie is never sent into the frame. The epic's 2026-08-11 correction is the reason: the widget is a full-parity surface and a reduced capture-only tier was the removed premise. The landed behaviour is photographed in evidence/2577-parity (V2r-widget-review-card-island-painting.png). The SECOND clause is live and IS proven: the island's frame-ancestors wall admits 'self' plus the ONE server-resolved registered origin, an unregistered ancestor gets the first-party wall, no wildcard is ever emitted, and an attacker-supplied origin in the query is not a policy input. Recorded as MISSING rather than rewritten: changing an acceptance criterion to match what shipped is the coordinator's ruling to make, not this lane's.",
+   "disposition": "MAPPED",
    "unitProofs": [
     {
      "file": "src/lib/__tests__/review-island-frame-ancestors.test.ts",
@@ -458,13 +548,18 @@
      "testName": "B7: an unknown/forged assistant → 'none' (no DB read)"
     }
    ],
-   "trackingIssue": 2573
+   "ruling": "engineering#548 entry 334 (2026-08-13), answer 2 — RULED yes: retire the 'no island' line. The owner's 2026-08-11 full-parity correction made the widget a first-party surface; the island paints inside /embed/assistant by design, so clause 1 is SUPERSEDED and is no longer a thing to prove.",
+   "e2eProofs": [
+    {
+     "file": "evidence/2577-parity/proof/final/README.md",
+     "testName": "V2r-widget-review-card-island-painting.png"
+    }
+   ],
+   "note": "CLAUSE 1 — '`/embed/assistant` renders captures with NO island' — is SUPERSEDED by the owner's ruling, and the product deliberately does the opposite. S8e (cinatra#2674, merged `d7ff228f8`) gave the island a second reader path — a short-lived, ref-bound ISLAND CREDENTIAL derived from the widget principal — precisely so the island DOES paint inside /embed/assistant on a genuinely cross-site deployment, where a SameSite-bound cookie is never sent into the frame. The 2026-08-11 correction is the reason: the widget is a full-parity surface and a reduced capture-only tier was the removed premise. The landed behaviour is photographed in evidence/2577-parity. This lane does NOT rewrite the criterion's words — the row stays pinned to the issue's wording, and the supersession is recorded here with the ruling that made it. CLAUSE 2 is live, and its proofs below are unchanged: the island's frame-ancestors wall admits 'self' plus the ONE server-resolved registered origin, an unregistered ancestor gets the first-party wall, no wildcard is ever emitted, and an attacker-supplied origin in the query is not a policy input."
   },
   {
    "criterion": "EXACTLY ONE card implementation per interaction across /chat, embed/widget, run card, and the review gate region — the parallel renderers (redirect card, panel chip-row mount, review-page direct composition) are gone (grep-gated).",
-   "disposition": "MISSING",
-   "partial": true,
-   "gap": "The gate is BUILT and the three named parallel renderers are checked, but the criterion is not met: a FOURTH renderer of the recommendation interaction survives on the run-detail surface. packages/agents/src/instance-screens.tsx does its own recommendation-park read, its own candidate prefetch, and mounts <RunRecommendationChipRow holdRef={…}> directly — bypassing RecommendationHoldCard, the LifecycleCardSurfaceProvider host declaration and the card's authoritative-refetch contract. S4 (#2568) recorded it as 'deliberately unchanged by this branch'. It is not cosmetic: AgenticRunPanel (which mounts the card correctly under host=\"run_card\") renders only for run.status !== 'pending_input', and a HELD run IS pending_input — so on the run-detail page the HELD state is drawn ONLY by the parallel path. It is allowlisted BY NAME in the gate with this justification so the gate reports the truth; deleting that allowlist entry is the fix. Defect D-1 in the S7 report. The redirect card and the review-page direct decision composition ARE gone and stay gone.",
+   "disposition": "BUILT",
    "gateProofs": [
     {
      "file": "scripts/audit/chat-hitl-one-card-gate.mjs",
@@ -491,15 +586,40 @@
     {
      "file": "src/lib/lifecycle/__tests__/suggestion-chips-one-renderer.test.ts",
      "testName": "the card is what the review PAGE and the run panel both mount"
+    },
+    {
+     "file": "packages/agents/src/__tests__/instance-screens-recommendation-host.test.ts",
+     "testName": "keeps the HELD run's host — the regression that would hide the decision"
+    },
+    {
+     "file": "packages/agents/src/__tests__/instance-screens-recommendation-host.test.ts",
+     "testName": "covers every branch — no shape is left without an answer"
+    },
+    {
+     "file": "packages/agents/src/__tests__/instance-screens-recommendation-host.test.ts",
+     "testName": "stands down on the branch whose panel already declares the host"
+    },
+    {
+     "file": "packages/agents/src/__tests__/recommendation-hold-card.test.tsx",
+     "testName": "the run-detail SCREEN has no parallel read, no prefetch and no direct chip-row mount"
     }
    ],
-   "trackingIssue": 2573
+   "ruling": "engineering#548 entry 334 (2026-08-13) — approved; PR #2710 merged (`7123d2bf1`). The fix's own commit message names the completion: 'the one-card gate's named allowlist entry for this file is deleted in the S7 branch next'. This commit is that deletion.",
+   "e2eProofs": [
+    {
+     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "testName": "A1__run-detail__held-at-recommendation-checkpoint.png"
+    },
+    {
+     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "testName": "A2__run-detail__decided-summary-exactly-once.png"
+    }
+   ],
+   "note": "MET — the fourth renderer is gone, and the gate now proves it rather than exempting it. When this row was written the run-detail screen (packages/agents/src/instance-screens.tsx) still drew the recommendation interaction ITSELF: its own park read, its own candidate prefetch and a direct `<RunRecommendationChipRow holdRef={…}>`, bypassing RecommendationHoldCard, the LifecycleCardSurfaceProvider host declaration and the card's authoritative-refetch contract. It was not cosmetic: AgenticRunPanel renders only for `run.status !== 'pending_input'` and a HELD run IS `pending_input`, so on the run-detail page the HELD state was drawn ONLY by the parallel path. The file was allowlisted BY NAME in the one-card gate with that justification, so the gate reported the truth instead of a red nobody could fix in an acceptance lane. cinatra#2710 (defect D-1, `7123d2bf1`) deleted the parallel path: the screen mounts RecommendationHoldCard inside its own `<LifecycleCardSurfaceProvider host=\"run_card\">`, branch-selected by the exported runDetailPanelKind / screenHostsRecommendationCard so exactly one renderer draws on EVERY branch, and the pre-existing double-draw of the decided summary on the agentic branch is gone with it. THIS commit deletes the allowlist entry, which is what makes the gate's pass mean the criterion: it now reads the whole tree and finds no fourth renderer at all. Photographed live: the held run drawn through the card (A1) and the decided summary exactly once (A2)."
   },
   {
    "criterion": "Conformance vs the S0 spec matrix (per surface, per card, per state) on a production-equivalent build with recorded screenshots.",
-   "disposition": "MISSING",
-   "partial": true,
-   "gap": "The STRUCTURAL conformance is proven bidirectionally against the pinned S0 spec commit (design@6c20871b4108176c1d0193f19ecd2947f6c6355f specs/app-lifecycle-cards.html): every spec anchor is rendered, and every anchor the route renders is in the spec's closed set. The RECORDED-SCREENSHOT half is PARTIAL. This lane built a production build on host2 (`pnpm build` + `next start`, not `next dev`) at branch head b63d64ad4 and captured three real cells against rows the shipped stores wrote — the review card PENDING on the page gate region (review-gate-card + review-decision-bar + review-target-island anchors, data-lifecycle-card-state=\"pending\", the island iframe with its sandbox tokens and a server-minted ref, zero page errors), the island itself rendering the BUILD-MAP renderer class server-side, and the island's ONE empty document for a ref that does not decode. Three further cells were attempted and are recorded as NOT delivered with the reason each failed (evidence/2573-s7-conformance/README.md): the card's SETTLED state is unreachable by direct URL because the route answers a resolved gate with its own blocked panel before the card mounts; the verification advisory view did not resolve its record for this reader; and the run_card host never mounted because AgenticRunPanel renders only for a non-pending_input run. The chat and widget hosts, and the full 4 cards x 4 surfaces x 6 states cross-product, are NOT captured — reaching them needs an LLM-backed dispatch and the widget's hosted sign-in, which is a proof round of its own (the shape S8d/#2577 ran).",
+   "disposition": "BUILT",
    "unitProofs": [
     {
      "file": "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-surface-conformance.test.ts",
@@ -534,9 +654,26 @@
     {
      "file": "evidence/2566-s2/README.md",
      "testName": "s2-06-settled-no-longer-open.png"
+    },
+    {
+     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "testName": "C1__review-card__chat_thread__pending.png"
+    },
+    {
+     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "testName": "C2__review-card__chat_thread__decided.png"
+    },
+    {
+     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "testName": "A1__run-detail__held-at-recommendation-checkpoint.png"
+    },
+    {
+     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "testName": "A2__run-detail__decided-summary-exactly-once.png"
     }
    ],
-   "trackingIssue": 2573
+   "ruling": "engineering#548 entry 334 (2026-08-13), answer 3 — RULED yes: accept development-server pictures for the chat views. The platform's own safety fences forbid the combination the criterion asks for; every dispatch-dependent cell is captured on the DEV runtime and each capture is LABELED with the runtime it came from.",
+   "note": "SATISFIED under owner ruling entry 334 answer 3 — and the FENCE FINDING that made the ruling necessary is kept here, because it is the reason the criterion could not be met as written. THE FENCE: `assertScriptedProviderNotProduction` (packages/llm/src/scripted-test-provider.ts) throws unless CINATRA_RUNTIME_MODE === 'development' AND NODE_ENV !== 'production'; `lifecycleSeedEnvVerdict` FENCE 1a (src/lib/test-support/lifecycle-seed-fence.ts) answers 404 production-build on NODE_ENV === 'production' before it reads any other gate. `next start` sets NODE_ENV=production and Next inlines that value into the server bundle at build time, so a production-equivalent build and an LLM-backed dispatch are MUTUALLY EXCLUSIVE by construction. Both fences are shipped product safety, not test scaffolding, and this lane weakened neither. WHAT IS PROVEN. Structural conformance, bidirectionally, against the pinned S0 spec commit (design@6c20871b4108176c1d0193f19ecd2947f6c6355f specs/app-lifecycle-cards.html): every spec anchor is rendered, and every anchor the route renders is in the spec's closed set. PRODUCTION-BUILD cells, on a real `pnpm build` + `next start` (evidence/2573-s7-conformance): the review card PENDING on the page gate region with its island iframe, sandbox tokens and server-minted ref; the island rendering the BUILD-MAP renderer class server-side; and the island's ONE empty document for a ref that does not decode. DEV-RUNTIME cells, each labeled (evidence/2573-s7-visuals-host2): the review card on the chat_thread surface PENDING (C1) and DECIDED (C2), and the recommendation hold on the run_card surface HELD (A1) and decided exactly once (A2). Every row photographed there was written by the shipped writers and read back from cinatra.artifact_review_audit; the only stand-in anywhere is the model layer, and the one DB-level fixture (a single agent_assigned_skills row, in the shape the shipped store writes) is stated on the cell. THE ONE OPEN CELL, recorded rather than rounded up: `C3__review-card__run_card__live-run` is NOT delivered. The run_card host IS declared and a real review gate IS bound to the run — its own step rail draws 'Review changes_requested' and 'Core analysis drifted' — but AgenticRunPanel gates the run_card ReviewGateCard on `isPendingApproval && effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID && reviewGateCardRef`, and that interrupt context is LIVE ORCHESTRATION STATE rather than a row: it needs a run that actually pauses at the artifact-review checkpoint, i.e. a real LLM-backed execution, and no model credential may reach the capture host. The card suite proves the same component draws on that host ('draws the SAME card on every first-party host, differing only in the frame'); what is missing is the photograph of it under a live pause."
   },
   {
    "criterion": "Production-boundary retirement identity greps stay zero (exact-identity constructions); the stale trigger-agent fixtures are gone.",

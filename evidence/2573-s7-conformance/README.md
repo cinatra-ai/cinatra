@@ -111,4 +111,91 @@ One cell delivered, four named with measured reasons. The round's material
 contribution is not the pixel but the **fence finding**: the AC-15 chat-host
 cells are structurally unreachable under the criterion's own "production-
 equivalent build" wording, which is a defect in the criterion, not a gap in the
-capture. The acceptance manifest row stays `MISSING` with `partial: true`.
+capture. At the close of this round the acceptance manifest row stayed `MISSING`
+with `partial: true`; the **finisher round below** is where it changes, and it
+changes on an owner ruling rather than on a rewrite.
+
+---
+
+# Third round — the FINISHER, 2026-08-13
+
+This round captures no pixels of its own. It closes #2573 by applying what
+landed and what the owner ruled, and it is recorded here so the manifest's green
+rows can be read back to their causes.
+
+## What landed on `main` between round two and this one
+
+| Change | Commit | What it closed |
+|---|---|---|
+| cinatra#2710 — the held run renders through the one recommendation card | `7123d2bf1` | **Defect D-1.** `packages/agents/src/instance-screens.tsx` no longer draws the recommendation interaction itself. It mounts `RecommendationHoldCard` inside its own `<LifecycleCardSurfaceProvider host="run_card">`, branch-selected by the exported `runDetailPanelKind` / `screenHostsRecommendationCard`, so exactly one renderer draws on every branch. The parallel park read, the candidate prefetch and the direct `<RunRecommendationChipRow>` mount are deleted, and the decided summary's pre-existing double-draw on the agentic branch is gone with them. |
+| cinatra#2711 — the composer binds to a focused review card | `6b4c3e887` | **Defect D-2.** #2566's deferred composer-focus deliverable ships: a pure `resolveComposerTarget` reducer, a `ComposerFocusStore` and a fail-closed provider; the card registers only when the server resolve says this reader may comment; routing orders explicit focus > open field gate > implicit single review > **ambiguity refusal** > chat; the binding is releasable. |
+| cinatra#2712 — the CI suite speaks protocol 2 | `3fb56aef3` | The widget check's own scripts, which still drove the retired dual-token sign-in. It is why D-2 could go green. |
+
+## The owner's rulings, and where each one lands
+
+All three answers in **engineering#548 entry 334** (2026-08-13), plus entry 335:
+
+| Ruling | Answer | Where it lands |
+|---|---|---|
+| 334 answer 1 — keep the release control | **yes** | The composer binding is refusable by one press. A deliberate deviation from #2566's literal "binds with no way out": without a release every chat message becomes a review comment, and on a single-target automatic gate a comment resolves as `changes_requested`. Cited on manifest rows **AC-1** and **AC-4**. |
+| 334 answer 2 — retire the "no island" line | **yes** | **AC-13 clause 1 is SUPERSEDED.** The owner's 2026-08-11 full-parity correction made the widget a first-party surface, and cinatra#2674 (`d7ff228f8`) gave the island a ref-bound island credential so it *does* paint inside `/embed/assistant`. Clause 2 — the frame-ancestors wall — is live and its proofs are untouched. The criterion's words are not rewritten; the ruling is recorded against them. |
+| 334 answer 3 — accept development-server pictures for the chat views | **yes** | **AC-15.** The fence finding of round two is not withdrawn: it is the reason the ruling exists. Dispatch-dependent cells are captured on the DEV runtime and every capture is labeled with the runtime it came from. |
+| 335 answer 1 — confirm the clean sign-in form | **(a)** | The #2631 consent-display rule is retired **knowingly**. It touches no #2573 row; recorded here so the record is complete. |
+
+## The visual evidence this round cites
+
+The finisher cites the host2 visual round, imported into this repository at
+[`evidence/2573-s7-visuals-host2/`](../2573-s7-visuals-host2/) with its
+`capture-results.json` beside the pixels. That round ran on the **DEV runtime**
+against `preview/2573-visuals` @ `579819c25` (= `origin/main` + `origin/2573-d1`
++ `origin/2573-d2`), and its README states the runtime first, because the
+runtime is the whole reason the round exists.
+
+- **A1, A2** — the run-detail screen: a run **held** at the recommendation
+  checkpoint drawn through the card, and the decided summary exactly **once**.
+- **B1–B5** — the composer binding in `/chat`: the binding row above the
+  decision floor, a bound comment landing on exactly one gate, the pick-a-card
+  refusal on two open gates, the ambiguous send reaching nothing, focus moving
+  the destination with it, and the release returning plain chat.
+- **C1, C2** — the review card on the `chat_thread` surface, pending and decided.
+- **C3 — NOT delivered, and named with the predicate that gates it.** See below.
+
+## The one cell still open
+
+`C3__review-card__run_card__live-run`. The `run_card` host **is** declared and a
+real review gate **is** bound to the run — the run's own step rail draws it — but
+`AgenticRunPanel` gates the `run_card` `ReviewGateCard` on
+
+```
+isPendingApproval
+  && effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID
+  && reviewGateCardRef
+```
+
+and that interrupt context is **live orchestration state, not a row**. It needs a
+run that actually pauses at the artifact-review checkpoint — a real LLM-backed
+execution — and no model credential may reach the capture host. The card's own
+suite proves the same component draws on that host; what is missing is the
+photograph of it under a live pause. The manifest's AC-15 note carries this
+verbatim rather than rounding the row up silently.
+
+## Gates, at this branch head
+
+| Gate | Result |
+|---|---|
+| `pnpm gate:chat-hitl-one-card` | **clean** — one card implementation per interaction, every mount host-declared. The named allowlist entry for `packages/agents/src/instance-screens.tsx` is **deleted** in this commit, so the pass now means the criterion: the gate reads the whole tree and finds no fourth renderer at all. |
+| `pnpm gate:chat-hitl-retirement` | **clean** — 3 retired identities at zero on the production boundary, and no stale fixture declares one. |
+| `pnpm gate:chat-hitl-acceptance` | **honest** — 16 rows (11 MAPPED, 5 BUILT, 0 MISSING); every named proof exists in the tree. |
+| `pnpm gate:chat-hitl-acceptance:strict` | **READY — 16/16 criteria proven, none partial.** |
+
+The pinned test that asserted `--strict` reports **NOT READY** is inverted in this
+commit. That was its purpose: it existed so no lane could flip a row green in
+passing, and its own comment named the day it would have to change. It changed
+only after both defects had landed on `main` and the rulings were cast, and it
+now fails the moment any row regresses to `MISSING` or `partial`.
+
+## Full-suite verification
+
+Recorded in the commit message and the lane report: the root vitest suite was run
+in full at this branch head on a host separate from the one that authored it, so
+the counts are not a self-report from the editing machine.

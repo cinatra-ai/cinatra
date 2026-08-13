@@ -14,8 +14,17 @@
 //      MISSING or partial rows — it is not satisfied by "no false claim found".
 //      An all-red manifest is the case that must never read as clean.
 //   3. THE REAL MANIFEST is honest right now: audit passes, every referenced
-//      test really exists, and strict correctly reports the program NOT READY
-//      with the exact rows that are open.
+//      test really exists, and strict reports the program READY — every one of
+//      the sixteen criteria MAPPED or BUILT, none partial.
+//
+//      That last expectation was deliberately the OPPOSITE until the finisher
+//      round (2026-08-13): it asserted NOT READY so that no lane could flip a
+//      row green in passing. Flipping it is the conscious act that comment
+//      demanded, and it happened only once the two S7-found defects had LANDED
+//      ON MAIN — D-1 cinatra#2710 (`7123d2bf1`) and D-2 cinatra#2711
+//      (`6b4c3e887`) — and the owner had ruled on the three open questions
+//      (engineering#548 entry 334). If a row ever goes back to MISSING or
+//      partial, this test is what turns red first.
 
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -184,15 +193,29 @@ describe("the REAL manifest", () => {
     expect(res.status).toBe(0);
   });
 
-  it("the CLI's --strict mode reports the program NOT READY, and says which rows", () => {
-    // This is the honest state of #2573 at this commit, and it is asserted so
-    // that flipping a row to green silently is impossible: the day the program
-    // really is done, this expectation is what a lane must consciously change.
+  it("the CLI's --strict mode reports the program READY — all sixteen, none partial", () => {
+    // The honest state of #2573 at this commit. This expectation was NOT READY
+    // until the finisher round; changing it is the conscious act the previous
+    // comment demanded, and it is only correct because the two defects the
+    // acceptance round found are merged to main and the owner's rulings are
+    // cast. It stays here, inverted, for the same reason it existed before: a
+    // row that regresses to MISSING or partial fails this test immediately.
     const res = spawnSync(process.execPath, [GATE, "--strict"], {
       cwd: REPO_ROOT,
       encoding: "utf8",
     });
-    expect(res.status).toBe(1);
-    expect(res.stderr).toMatch(/NOT READY/);
+    expect(res.stdout + res.stderr).toMatch(/READY — 16\/16 criteria proven, none partial/);
+    expect(res.status).toBe(0);
+  });
+
+  it("every row carries the ruling that moved it, wherever one did", () => {
+    // A row amended by an owner ruling must SAY which ruling, so the record can
+    // be audited without reading a chat log. Rows that were never contested
+    // carry no `ruling` and must not invent one.
+    const ruled = manifest().rows.filter((r) => r.ruling);
+    expect(ruled.length).toBeGreaterThan(0);
+    for (const r of ruled) {
+      expect(r.ruling, r.criterion.slice(0, 50)).toMatch(/engineering#548 entry \d+/);
+    }
   });
 });
