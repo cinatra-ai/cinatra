@@ -100,3 +100,24 @@ Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
 Assisted-by: Claude Code (claude-opus-5)
 Assisted-by: Codex (gpt-5.6-sol)
 Correction-for: 8a83cf09002bd28e545dbe357298eef7902275e1```
+
+---
+
+## Correction for `d7ff228f89addacb8ead2d63832863d7f4b7b3ff`
+
+```
+correction: truthful-attribution record for d7ff228f8
+
+The record on d7ff228f8 ("feat(chat-hitl): #2674 the iframe owns the widget sign-in") asserts a
+Gate-suite arm at cinatra-core@2026.08.2. That claim cannot verify: the branch forked
+before the engine-pin move (#2706), so its required-context runs reference the prior
+pin — the gate arm is structurally unverifiable for a pin-transition-spanning merge.
+The merge WAS gated (all required contexts green at the reviewed head) and humanly
+approved; the corrected record carries the human arm only, per the pin-advance
+precedent. The change itself is untouched — this corrects the RECORD only.
+
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Codex (gpt-5.6-sol)
+Correction-for: d7ff228f89addacb8ead2d63832863d7f4b7b3ff
+```
