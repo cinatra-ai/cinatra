@@ -120,8 +120,8 @@
 // is the CAS, never the route the decision came in on.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useMemo, useState, type ReactElement } from "react";
-import { Check, ClipboardCheck, Maximize2, Minimize2, Sparkles, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from "react";
+import { Check, CircleX, ClipboardCheck, Maximize2, Minimize2, Sparkles, X } from "lucide-react";
 
 import {
   LIFECYCLE_VIEW_SCHEMA_VERSION,
@@ -208,6 +208,38 @@ const HOST_FRAME: Record<LifecycleCardHost, string> = {
 /** Clamped island height (§ the issue's clamp + internal scroll + expand). */
 const ISLAND_HEIGHT_CLAMPED = 380;
 const ISLAND_HEIGHT_EXPANDED = 760;
+
+// ---------------------------------------------------------------------------
+// The island's OWN load state (cinatra#2713). The island is a same-origin,
+// authenticated iframe — its `load` event is a real network round trip (auth
+// ladder + content fetch + decode), never a component mount — so the window
+// between mount and that event is not nothing. It is a THIRD axis the §IV
+// ladder above does not know about, because it lives entirely inside the
+// `pending`/`restricted` branch that already decided to draw the island. A
+// bare `<iframe>` left that window painting the page's own white, which is
+// what the 333 proof round photographed (evidence/2674-s8e V5 vs V6) and what
+// this fixes.
+// ---------------------------------------------------------------------------
+
+type IslandLoadState = "loading" | "loaded" | "timed-out";
+
+/**
+ * Bounded wait for the iframe's `load` event before treating a hang as a
+ * failure. Long enough that a normal authenticated round trip never misfires
+ * into a false timeout; short enough that a genuine failure (an auth loop, a
+ * 5xx, a hung renderer) does not strand the reviewer on a skeleton forever.
+ * Restarted on every retry and on every new `src` — a different target
+ * document gets its own full budget, never the remainder of the last one's.
+ *
+ * KNOWN RESIDUAL: the iframe below keeps `loading="lazy"` (a chat thread can
+ * mount several of these off screen at once), so a card that never scrolls
+ * into view can reach this bound before the browser has even started
+ * fetching it. The bug this slice fixes is the ON-SCREEN island painting
+ * blank while it loads (the proof round's evidence); gating the timer on
+ * real intersection is a further refinement the acceptance criteria here do
+ * not ask for, and is left as a follow-up rather than folded in silently.
+ */
+const ISLAND_LOAD_TIMEOUT_MS = 12_000;
 
 export type ReviewGateCardView = {
   viewType: "artifact_review_gate";
@@ -855,6 +887,29 @@ function ReviewGateHeader({ pending }: { pending: boolean }): ReactElement {
  * must not be able to push the rest of the conversation off screen, and reading
  * a height back out of the frame would need a message channel the display-only
  * posture deliberately does not have.
+ *
+ * cinatra#2713 — the region draws THREE states while the iframe's own document
+ * loads, layered over the same clamped box so the card never resizes under the
+ * reviewer: a skeleton (the shipped `ReviewGateLoading` bar motif, extended
+ * into this taller box — no dedicated island mockup exists in
+ * `specs/app-lifecycle-cards.html` or `app-components.html`'s Skeleton/Spinner
+ * section for THIS iframe's own load window, only the generic bar-skeleton
+ * language this reuses); the painted iframe once `onLoad` fires; and, past the
+ * bound, a retry panel. The panel deliberately does NOT mount the shipped
+ * `ReviewGateBlocked` component: that component's `ReviewBlockedReason` is a
+ * closed set about the GATE's own lifecycle (no longer pending / mismatched /
+ * revision not live) that `review-surface-model.ts` shares with the review
+ * page server-side — none of its three reasons is true here (the gate is
+ * exactly as open as it was; only the PREVIEW failed to arrive), and drawing
+ * one anyway would tell the reviewer something false. What IS reused,
+ * verbatim, is that component's established VISUAL shape — the destructive
+ * icon circle, the title/body pairing, the `link` retry button — so the card
+ * still has exactly one "this didn't work" drawing language, just not the
+ * gate-scoped component whose props don't fit.
+ *
+ * Applies identically on every host this card mounts on: nothing here reads
+ * `host`, so the chat thread, the run card, the page gate region and the site
+ * widget all get the same three states from the one code path.
  */
 function ReviewTargetIsland({
   src,
@@ -865,12 +920,37 @@ function ReviewTargetIsland({
   expanded: boolean;
   onToggleExpanded: () => void;
 }): ReactElement {
+  // One state bag KEYED BY `src`, reset IN-RENDER rather than in an effect —
+  // the same shape `useLifecycleCardState` uses above for the identical
+  // reason: an effect-based reset would leave one committed frame in which
+  // the PREVIOUS target's loaded/timed-out verdict paints under the new src.
+  const [load, setLoad] = useState({ src, attempt: 0, loaded: false, timedOut: false });
+  if (load.src !== src) {
+    setLoad({ src, attempt: 0, loaded: false, timedOut: false });
+  }
+
+  useEffect(() => {
+    if (load.loaded) return;
+    const timer = setTimeout(() => {
+      setLoad((current) => (current.loaded ? current : { ...current, timedOut: true }));
+    }, ISLAND_LOAD_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [load.src, load.attempt, load.loaded]);
+
+  const state: IslandLoadState = load.loaded ? "loaded" : load.timedOut ? "timed-out" : "loading";
+  const height = expanded ? ISLAND_HEIGHT_EXPANDED : ISLAND_HEIGHT_CLAMPED;
+
   return (
     <div
       data-conformance-id="review-target-island"
-      className="overflow-hidden rounded-control border border-line bg-surface-strong"
+      data-island-load-state={state}
+      className="relative overflow-hidden rounded-control border border-line bg-surface-strong"
     >
       <iframe
+        // Keyed by src+attempt so a retry (or a genuinely new target) forces a
+        // real remount — a re-render alone would leave the SAME iframe element
+        // sitting on whatever connection already stalled or failed.
+        key={`${load.src}:${load.attempt}`}
         src={src}
         title="Review target"
         // NOT an isolation boundary — see the module header. These tokens
@@ -879,9 +959,37 @@ function ReviewTargetIsland({
         sandbox="allow-scripts allow-same-origin"
         referrerPolicy="same-origin"
         loading="lazy"
-        className="w-full border-0 bg-surface-strong"
-        style={{ height: expanded ? ISLAND_HEIGHT_EXPANDED : ISLAND_HEIGHT_CLAMPED }}
+        className={`w-full border-0 bg-surface-strong transition-opacity duration-200 ${
+          load.loaded ? "opacity-100" : "pointer-events-none opacity-0"
+        }`}
+        style={{ height }}
+        onLoad={() =>
+          setLoad((current) => (current.src === src ? { ...current, loaded: true } : current))
+        }
       />
+      {/* Overlays the iframe's own box exactly (same height) — never the
+          footer below, so neither state changes the card's footprint. The
+          iframe stays mounted underneath while timed out: a late `onLoad`
+          self-heals the display instead of leaving a reviewer stuck on a
+          retry panel for content that did, eventually, arrive. */}
+      {state !== "loaded" ? (
+        <div className="absolute inset-x-0 top-0" style={{ height }}>
+          {state === "loading" ? (
+            <IslandLoadingSkeleton />
+          ) : (
+            <IslandLoadTimedOut
+              onRetry={() =>
+                setLoad((current) => ({
+                  ...current,
+                  attempt: current.attempt + 1,
+                  loaded: false,
+                  timedOut: false,
+                }))
+              }
+            />
+          )}
+        </div>
+      ) : null}
       <div className="flex items-center justify-end border-t border-line px-2 py-1">
         <Button
           type="button"
@@ -897,6 +1005,75 @@ function ReviewTargetIsland({
             <Maximize2 aria-hidden="true" className="size-3.5" />
           )}
           {expanded ? "Collapse" : "Expand"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The island's loading skeleton (cinatra#2713). Extends the SHIPPED
+ * `ReviewGateLoading` bar language (review-gate-states.tsx) — `bg-surface-muted`
+ * bars in the same card tokens — into the island's taller box, with a minimal
+ * `animate-pulse`: no dedicated island mockup exists to draw from (checked
+ * `specs/app-components.html`'s Skeleton/Spinner section and
+ * `specs/app-lifecycle-cards.html`'s own card drawings), so this reuses the
+ * one bar-skeleton language the card family already ships rather than
+ * inventing a second one.
+ */
+function IslandLoadingSkeleton(): ReactElement {
+  return (
+    <div
+      aria-busy="true"
+      data-conformance-id="review-target-island-skeleton"
+      className="h-full animate-pulse space-y-4 p-4"
+    >
+      <div className="space-y-1.5 border-b border-line pb-3">
+        <div className="h-2.5 w-1/3 rounded bg-surface-muted" />
+        <div className="h-1.5 w-1/4 rounded bg-surface-muted" />
+      </div>
+      <div className="space-y-2">
+        <div className="h-1.5 w-11/12 rounded bg-surface-muted" />
+        <div className="h-1.5 w-4/5 rounded bg-surface-muted" />
+        <div className="h-1.5 w-full rounded bg-surface-muted" />
+        <div className="h-1.5 w-2/3 rounded bg-surface-muted" />
+        <div className="h-1.5 w-3/4 rounded bg-surface-muted" />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The island's past-the-bound presentation (cinatra#2713) — reuses
+ * `ReviewGateBlocked`'s exact visual shape (icon circle, title/body, `link`
+ * retry) rather than the component itself; see the doc above
+ * `ReviewTargetIsland` for why the reason enum does not fit. The decision
+ * floor below is untouched and still live — a preview that did not load is
+ * never drawn as a reason the reviewer cannot decide.
+ */
+function IslandLoadTimedOut({ onRetry }: { onRetry: () => void }): ReactElement {
+  return (
+    <div
+      data-conformance-id="review-target-island-timeout"
+      className="grid h-full place-items-center px-4 text-center"
+    >
+      <div>
+        <div className="mx-auto mb-2.5 grid size-9 place-items-center rounded-lg bg-destructive/10 text-destructive">
+          <CircleX aria-hidden="true" className="size-[18px]" />
+        </div>
+        <p className="font-sans text-sm font-semibold text-foreground">The preview did not load</p>
+        <p className="mx-auto mt-1 max-w-[46ch] text-xs text-muted-foreground">
+          This does not block your decision below — try again, or continue without it.
+        </p>
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="mt-1"
+          data-action="retry-review-target-island -> reload"
+          onClick={onRetry}
+        >
+          Try again
         </Button>
       </div>
     </div>

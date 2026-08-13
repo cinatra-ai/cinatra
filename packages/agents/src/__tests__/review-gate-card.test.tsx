@@ -15,7 +15,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import type { LifecycleCardState } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
@@ -37,6 +37,9 @@ import {
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  // cinatra#2713 — a test that installs fake timers to cross the island's
+  // bounded timeout must not leak them into the next test.
+  vi.useRealTimers();
 });
 
 const VIEW = {
@@ -302,6 +305,146 @@ describe("§III the target island", () => {
     const frame = container.querySelector("iframe")!;
     const bar = container.querySelector('[data-conformance-id="review-decision-bar"]')!;
     expect(frame.contains(bar)).toBe(false);
+  });
+
+  // ---------------------------------------------------------------------
+  // cinatra#2713 — the island's OWN load state: loading / loaded / timed-out.
+  // The outer §IV "pending" resolve above is already settled by this point;
+  // these tests are about the SEPARATE window before the iframe's own `load`
+  // event, which used to paint a blank white box (evidence/2674-s8e V5).
+  // ---------------------------------------------------------------------
+
+  function island(container: HTMLElement): HTMLElement {
+    return container.querySelector('[data-conformance-id="review-target-island"]')!;
+  }
+
+  it("loading: a skeleton, not a blank frame, until the iframe's own load event", async () => {
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    expect(island(container).getAttribute("data-island-load-state")).toBe("loading");
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-skeleton"]'),
+    ).not.toBeNull();
+    // No error/refusal panel yet either — the loading and timed-out
+    // presentations are mutually exclusive.
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-timeout"]'),
+    ).toBeNull();
+  });
+
+  it("loaded: the iframe's own `load` event swaps the skeleton for the painted frame", async () => {
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    fireEvent.load(container.querySelector("iframe")!);
+    await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("loaded"));
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-skeleton"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-timeout"]'),
+    ).toBeNull();
+  });
+
+  it("timed-out: a bounded wait with no load event swaps to the retry panel — the decision floor stays live", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+
+    await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("timed-out"));
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-skeleton"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-timeout"]'),
+    ).not.toBeNull();
+    // §II — a preview that failed to load is never drawn as a reason the
+    // reviewer cannot decide; the floor below is untouched.
+    expect(isDisabled(screen.getByRole("button", { name: /approve/i }))).toBe(false);
+  });
+
+  it("timed-out: Try again remounts the iframe and returns to loading", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+    await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("timed-out"));
+
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+
+    expect(island(container).getAttribute("data-island-load-state")).toBe("loading");
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-skeleton"]'),
+    ).not.toBeNull();
+  });
+
+  it("a late load event self-heals a timed-out island instead of sticking on the retry panel", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+    await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("timed-out"));
+
+    // The ORIGINAL iframe (never remounted — no retry was pressed) finally
+    // fires its load event.
+    fireEvent.load(container.querySelector("iframe")!);
+
+    await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("loaded"));
+    expect(
+      container.querySelector('[data-conformance-id="review-target-island-timeout"]'),
+    ).toBeNull();
+  });
+
+  it("no layout shift: loading, loaded and timed-out all hold the SAME clamped height", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container } = renderOn("chat_thread");
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    const clamped = (container.querySelector("iframe") as HTMLIFrameElement).style.height;
+    expect(clamped).not.toBe("");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+    await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("timed-out"));
+    // The iframe itself — still mounted underneath the retry panel — keeps its
+    // clamped height; only the overlay on top of it changed.
+    expect((container.querySelector("iframe") as HTMLIFrameElement).style.height).toBe(clamped);
+  });
+
+  it("a card re-pointed at a different gate's island starts loading again, never on the old verdict", async () => {
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    const { container, rerender } = render(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <ReviewGateCard view={VIEW} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    fireEvent.load(container.querySelector("iframe")!);
+    await waitFor(() => expect(island(container).getAttribute("data-island-load-state")).toBe("loaded"));
+
+    mockResolve({ state: "pending", canDecide: true, canComment: true });
+    rerender(
+      <LifecycleCardSurfaceProvider host="chat_thread">
+        <ReviewGateCard view={{ ...VIEW, ref: "ref-a-different-gate" }} />
+      </LifecycleCardSurfaceProvider>,
+    );
+    await waitFor(() =>
+      expect(container.querySelector("iframe")?.getAttribute("src")).toContain("ref-a-different-gate"),
+    );
+    expect(island(container).getAttribute("data-island-load-state")).toBe("loading");
   });
 });
 
