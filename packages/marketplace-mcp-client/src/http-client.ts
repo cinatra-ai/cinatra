@@ -164,6 +164,92 @@ function authHeaders(token?: string): Record<string, string> {
 }
 
 /**
+ * Ceiling for ONE anonymous public-catalog request (cinatra#2539).
+ *
+ * A bare `fetch` inherits the runtime's own ceiling — undici's 300 s headers
+ * timeout — so a storefront that accepts the connection and then stalls used to
+ * pin `/configuration/marketplace` for up to five minutes per page, inside a
+ * server render the viewer cannot cancel. Browse is a page-blocking read of an
+ * external WordPress host, so it gets an explicit, short bound: a storefront
+ * that has not answered in 15 s is down as far as rendering is concerned, and
+ * the render must SAY so rather than hang. Generous enough that a
+ * slow-but-healthy storefront never trips it (measured on the live storefront:
+ * ~0.7 s for a 100-item page).
+ */
+const DEFAULT_PUBLIC_CATALOG_TIMEOUT_MS = 15_000;
+
+/**
+ * Resolve the public-catalog request ceiling. The env override exists for tests
+ * and for operators on a deliberately slow link; a non-finite or non-positive
+ * value falls back to the default rather than disabling the bound — an
+ * unbounded browse read is the defect, so it must not be reachable by
+ * misconfiguration.
+ */
+function publicCatalogTimeoutMs(): number {
+  const raw = Number(process.env.MARKETPLACE_PUBLIC_CATALOG_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_PUBLIC_CATALOG_TIMEOUT_MS;
+}
+
+/**
+ * Raised when a public-catalog read exceeds {@link publicCatalogTimeoutMs}.
+ *
+ * DELIBERATELY NOT a {@link MarketplaceMcpError}: that class means "the
+ * marketplace answered", and `classifyMarketplaceFailure` maps it to
+ * `"peer-response"`. A blown bound proves nothing about the peer, and the
+ * classifier's own vocabulary names a timeout `"indeterminate"` — which is
+ * exactly where a plain `Error` subclass lands. Nor is it branded
+ * {@link MARKETPLACE_CONNECT_FAILURE}: that brand is reserved as proof the
+ * request never produced a response, and a stall does not prove that either.
+ * So this error can neither relax a gate that may only relax on a proven-down
+ * marketplace, nor be mistaken for a storefront verdict.
+ */
+export class MarketplacePublicCatalogTimeoutError extends Error {
+  readonly url: string;
+  readonly timeoutMs: number;
+
+  constructor(url: string, timeoutMs: number, what: string, options?: { cause?: unknown }) {
+    super(`${what}: no response within ${timeoutMs}ms (${url}).`, options);
+    this.name = "MarketplacePublicCatalogTimeoutError";
+    this.url = url;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/**
+ * GET a public-catalog URL under {@link publicCatalogTimeoutMs} and return the
+ * response together with its body text.
+ *
+ * The timeout signal stays attached across the body read, so a slow-trickle
+ * body is bounded too — not just the connect/headers phase. ONLY a blown bound
+ * is re-mapped (to {@link MarketplacePublicCatalogTimeoutError}); every other
+ * rejection propagates byte-for-byte as before, so the existing failure
+ * taxonomy — including the connect-failure brand that is the sole evidence for
+ * `"unreachable"` — is untouched. HTTP status handling stays with the caller:
+ * this helper only bounds the wait.
+ */
+async function getPublicCatalogText(
+  url: URL,
+  what: string,
+): Promise<{ response: Response; body: string }> {
+  const timeoutMs = publicCatalogTimeoutMs();
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    return { response, body: await response.text() };
+  } catch (err) {
+    if ((err as { name?: string } | null)?.name === "TimeoutError") {
+      throw new MarketplacePublicCatalogTimeoutError(url.toString(), timeoutMs, what, {
+        cause: err,
+      });
+    }
+    throw err;
+  }
+}
+
+/**
  * Fetch one anonymous public catalog page. This is intentionally REST, not MCP:
  * published extension browse must work without a bearer and without MCP session
  * creation. The response shape is the same as `extension_list`.
@@ -181,11 +267,10 @@ export async function fetchPublicMarketplaceExtensionList(
     }
   }
 
-  const response = await fetch(url, {
-    method: "GET",
-    headers: { Accept: "application/json" },
-  });
-  const body = await response.text();
+  const { response, body } = await getPublicCatalogText(
+    url,
+    "Marketplace public extension catalog",
+  );
   if (!response.ok) {
     throw new MarketplaceMcpError(
       `Marketplace public extension catalog returned HTTP ${response.status}`,
@@ -232,11 +317,10 @@ export async function fetchPublicMarketplaceExtensionDetail(
     `${baseUrl}${PUBLIC_EXTENSIONS_ROUTE}/${encodeURIComponent(scope)}/${encodeURIComponent(name)}`,
   );
 
-  const response = await fetch(url, {
-    method: "GET",
-    headers: { Accept: "application/json" },
-  });
-  const body = await response.text();
+  const { response, body } = await getPublicCatalogText(
+    url,
+    "Marketplace public extension detail",
+  );
   if (!response.ok) {
     throw new MarketplaceMcpError(
       `Marketplace public extension detail returned HTTP ${response.status}`,

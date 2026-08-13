@@ -27,6 +27,12 @@ vi.mock("@/lib/instance-identity-store", () => ({
 }));
 vi.mock("@/lib/instance-identity-cache", () => ({
   invalidateInstanceIdentityCache: () => invalidateInstanceIdentityCache(),
+  // cinatra#2539 — the module now also owns the READ side of the identity
+  // cache. Stubbed as a permanent MISS so every `readInstanceIdentity()` in
+  // this suite still reaches the mocked database, exactly as before the cache
+  // existed.
+  readInstanceIdentityCacheEntry: () => null,
+  storeInstanceIdentityCacheEntry: () => {},
 }));
 vi.mock("@cinatra-ai/marketplace-mcp-client/http-client", () => ({
   createHttpMarketplaceMcpClient: vi.fn(() => ({})),

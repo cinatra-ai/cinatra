@@ -34,7 +34,11 @@ import {
 } from "@/lib/database";
 // Cache lives in a SEPARATE module so vi.mock can spy on the call without
 // same-module mocking unreliability.
-import { invalidateInstanceIdentityCache } from "@/lib/instance-identity-cache";
+import {
+  invalidateInstanceIdentityCache,
+  readInstanceIdentityCacheEntry,
+  storeInstanceIdentityCacheEntry,
+} from "@/lib/instance-identity-cache";
 import { decryptSecret, encryptSecret } from "@/lib/instance-secrets";
 import { withInstanceIdentityWriteLock } from "@/lib/instance-identity-write-lock";
 import {
@@ -376,7 +380,61 @@ const METADATA_KEY = "instance_identity";
  * between "never configured" and "configured" by checking the null sentinel.
  */
 export function readInstanceIdentity(): InstanceIdentity | null {
+  return normalizeInstanceIdentityRow(readInstanceIdentityRow());
+}
+
+/**
+ * The row read that ALWAYS goes to Postgres, bypassing (and refreshing) the
+ * in-process cache. Reserved for the write paths, whose freeze check and
+ * durable-field merge must be derived from the authoritative row — a
+ * cross-process write inside the cache TTL would otherwise be merged away.
+ */
+function readInstanceIdentityUncached(): InstanceIdentity | null {
+  return normalizeInstanceIdentityRow(readInstanceIdentityRowFromDatabase());
+}
+
+/**
+ * Read the raw `instance_identity` row through the in-process cache
+ * (cinatra#2539). A miss falls through to Postgres and publishes the result.
+ *
+ * Cloned on the way OUT of the cache and on the way IN: the entry is shared by
+ * every later reader in this process, so neither the caller's row nor the
+ * cached row may be the same object.
+ */
+function readInstanceIdentityRow(): Record<string, unknown> | null {
+  const cached = readInstanceIdentityCacheEntry();
+  if (cached) {
+    return cloneInstanceIdentityRow(cached.value as Record<string, unknown> | null);
+  }
+  return readInstanceIdentityRowFromDatabase();
+}
+
+/** Read the raw row from Postgres and publish it to the in-process cache. */
+function readInstanceIdentityRowFromDatabase(): Record<string, unknown> | null {
   const raw = readMetadataValueFromDatabase<Record<string, unknown> | null>(METADATA_KEY, null);
+  storeInstanceIdentityCacheEntry(cloneInstanceIdentityRow(raw));
+  return raw;
+}
+
+/**
+ * Structural copy of a raw identity row. The row is parsed JSON (strings,
+ * numbers, booleans, nulls, plain objects/arrays), so a structured clone is
+ * total over its value space.
+ */
+function cloneInstanceIdentityRow(
+  row: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  return row === null ? null : (structuredClone(row) as Record<string, unknown>);
+}
+
+/**
+ * Project a raw metadata row onto the {@link InstanceIdentity} shape, applying
+ * the legacy-key back-compat shim. Extracted from `readInstanceIdentity` so the
+ * cached and authoritative reads share ONE normalization.
+ */
+function normalizeInstanceIdentityRow(
+  raw: Record<string, unknown> | null,
+): InstanceIdentity | null {
   if (!raw) return null;
 
   // Back-compat shim: prefer new key, fall back to legacy key for deployed rows.
@@ -573,8 +631,10 @@ export function writeInstanceIdentity(
 ): void {
   // Re-read the persisted row once. We need it for the namespace-freeze check
   // AND for durable-field preservation; doing one combined read avoids a
-  // double round-trip.
-  const current = readInstanceIdentity();
+  // double round-trip. UNCACHED deliberately (cinatra#2539): both derivations
+  // must see the authoritative row, never a value another process may have
+  // superseded inside the read cache's TTL.
+  const current = readInstanceIdentityUncached();
   if (!options?.allowNamespaceRename) {
     if (
       current &&
@@ -654,7 +714,15 @@ export function compareAndSwapInstanceIdentity(
   next: Record<string, unknown>,
   expectedRaw: string,
 ): boolean {
-  return compareAndSwapMetadataValueFromDatabase(METADATA_KEY, next, expectedRaw);
+  const swapped = compareAndSwapMetadataValueFromDatabase(METADATA_KEY, next, expectedRaw);
+  if (swapped) {
+    // A landed swap makes any cached row stale. The CAS drivers
+    // (`updateInstanceIdentityRegistries`, the provisioning write) already
+    // invalidate via their `onSwapped` hook; invalidating here as well covers
+    // the direct callers and is idempotent (cinatra#2539).
+    invalidateInstanceIdentityCache();
+  }
+  return swapped;
 }
 
 /** The non-optional shape of `InstanceIdentity.registries` (both slots optional). */
@@ -1006,7 +1074,14 @@ export function buildFreshInstanceIdentityDurableFields(): {
  */
 export async function ensureInstanceId(): Promise<EnsuredInstanceIdentity | null> {
   return withInstanceIdentityWriteLock(async () => {
-    const before = readInstanceIdentity();
+    // UNCACHED (cinatra#2539): this section decides whether to mint durable
+    // fields, so it must read the authoritative row — a cached value could
+    // still show the pre-mint shape after another process won the race. The
+    // post-CAS re-read below is equally fresh: the CAS branch invalidates
+    // before re-reading, and the no-CAS branch returns `before` itself. The
+    // read refreshes the cache rather than clearing it, so an untouched
+    // instance stays a strict no-op (no SQL beyond this read, no invalidation).
+    const before = readInstanceIdentityUncached();
     if (!before) return null;
     if (isEnsuredInstanceIdentity(before)) return before;
 
