@@ -5,7 +5,6 @@ import { Main } from "@/components/layout/main";
 import {
   getAuthSession,
   isPlatformAdmin,
-  requireActorContext,
   resolveOrgRoleForSession,
 } from "@/lib/auth-session";
 import {
@@ -23,21 +22,9 @@ import { listReviewGatesForRun, readVerificationRecordsForGates } from "./artifa
 import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
 import { buildRunStepRail, type RailMessage } from "./run-step-rail";
 import { RunStepRailPanel } from "./run-step-rail-panel";
-import {
-  encodeRecommendationHoldRef,
-  readRecommendationParkForRun,
-  resolveRecommendationCandidateSkillIds,
-} from "./recommendation-hold";
-import { getRunRecommendations } from "./recommendation-interception";
-import {
-  readRunSelectedSkillRevisions,
-  hasRunRecommendationSkip,
-} from "@/lib/run-selected-skill-revisions";
-import {
-  RunRecommendationChipRow,
-  type RunRecommendationDecision,
-} from "./run-recommendation-chip-row";
-import type { RecommendedSkillForChip } from "./server-actions";
+import { readRecommendationParkForRun } from "./recommendation-hold";
+import { RecommendationHoldCard } from "./run-recommendation-chip-row";
+import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
 import { AuthzError } from "@/lib/authz";
 import type { PrimitiveActorContext } from "@cinatra-ai/mcp-client";
 // agent_run mounts the generic ExtensionPermissionsClient.
@@ -113,6 +100,58 @@ export function shouldShowFinishedRunNotice(
   runStatus: string | null | undefined,
 ): boolean {
   return trigger !== null && isTerminalRunStatus(runStatus);
+}
+
+// ---------------------------------------------------------------------------
+// WHICH run panel the run-detail body mounts — and therefore which surface owns
+// the `run_card` lifecycle host (cinatra#2573, epic #2564 D-1).
+//
+// The branch itself is not new; it is lifted out of the JSX because a SECOND
+// reader now depends on it. `AgenticRunPanel` (reached through
+// `SetupCompletionWatcher`) declares `LifecycleCardSurfaceProvider host="run_card"`
+// and mounts `RecommendationHoldCard` itself, so the screen must NOT mount a
+// second one on that branch — a duplicate decided summary is exactly the
+// four-renderer defect this slice retires. Keeping the branch inline in two
+// places is how the two would drift back apart.
+// ---------------------------------------------------------------------------
+
+/** The three shapes the run-detail right column can take. */
+export type RunDetailPanelKind = "none" | "stepper" | "agentic";
+
+/**
+ * Resolve the run-detail panel branch from the run + template shape.
+ *
+ * `"none"` is the PENDING_INPUT case: neither panel renders, because there is no
+ * execution to show yet. That is the case the recommendation hold lives in — a
+ * held run IS `pending_input` — which is why the screen has to host the card
+ * itself rather than leaving it to a panel that is not on the page.
+ *
+ * Exported so the regression test can pin the branch table (and the host
+ * ownership derived from it) without a DB, a session or a Next.js render.
+ */
+export function runDetailPanelKind(params: {
+  runStatus: string | null | undefined;
+  templateType: string | null | undefined;
+  sourceType: string | null | undefined;
+  stepperStepCount: number;
+}): RunDetailPanelKind {
+  const { runStatus, templateType, sourceType, stepperStepCount } = params;
+  if (runStatus == null || runStatus === "pending_input") return "none";
+  const stepper =
+    (templateType === "orchestrator" || templateType === "flow" || stepperStepCount > 0) &&
+    sourceType !== "external";
+  return stepper ? "stepper" : "agentic";
+}
+
+/**
+ * Does the run-detail SCREEN mount the one `recommendation_hold` card itself?
+ *
+ * TRUE unless the panel below already declares `run_card` and draws it. There is
+ * no third answer: every branch draws the card exactly once, either here or in
+ * the panel, so the interaction has ONE renderer on this surface at all times.
+ */
+export function screenHostsRecommendationCard(panel: RunDetailPanelKind): boolean {
+  return panel !== "agentic";
 }
 
 type ScreenProps = {
@@ -416,84 +455,37 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     : { entries: [], activeOrdinal: null };
   const reviewHrefBase = run ? `/agents/${agentId}/${encodeURIComponent(run.id)}/review` : "";
 
-  // ── Run-start recommendation chip-row (cinatra#2067, epic #2037 C3) ──────
-  // The chip-row appears ONLY when the run holds at the recommendation
-  // interception (a parked continuation) — or, once decided, as a read-only
-  // summary (a released park). No park ⇒ no row (policy-forbidden / skipped /
-  // empty-candidate / headless runs proceed with nothing shown). The park is a
-  // plain run-scoped read behind the access door already cleared above.
-  const recommendationPark = run ? await readRecommendationParkForRun(run.id) : null;
-  const recommendationHeld = recommendationPark?.status === "parked";
-  // The hold instance this row is showing (cinatra#2568) — handed back on
-  // confirm/skip so a decision cannot be applied to a LATER hold of the same run.
-  const recommendationHoldRef =
-    run && recommendationHeld && recommendationPark
-      ? (encodeRecommendationHoldRef({ runId: run.id, holdId: recommendationPark.id }) ?? undefined)
-      : undefined;
-  let recommendationDecision: RunRecommendationDecision | null = null;
-  let initialRecommendations: RecommendedSkillForChip[] = [];
-  if (run && recommendationPark) {
-    if (recommendationHeld) {
-      // Server-prefetch the candidates so the chip-row renders them immediately.
-      recommendationDecision = { kind: "pending" };
-      const packageName = template.packageName ?? undefined;
-      if (packageName) {
-        try {
-          // Run-actor-scoped candidate seam (cinatra#2148 finding 1): the same
-          // set the hold decision fired on, so an org/workspace-assigned skill
-          // actually appears as a chip instead of being filtered out by an
-          // actor-free resolve — INTERSECTED with THIS viewer's own entitlement
-          // so the actor threading never widens what a run-READ-only reader can
-          // learn about the owner's scoped skills. For the owner (the actor the
-          // chip-row's decision requires) the two sets coincide. FAIL-CLOSED: an
-          // unresolvable viewer scope renders no chips.
-          const viewer = await requireActorContext().catch(() => null);
-          const assigned = viewer
-            ? await resolveRecommendationCandidateSkillIds({
-                run,
-                packageName,
-                viewer: {
-                  principalId: viewer.principalId,
-                  teamIds: viewer.teamIds ?? [],
-                  projectIds: viewer.projectIds ?? [],
-                  organizationId: viewer.organizationId ?? undefined,
-                },
-              })
-            : [];
-          let intentPromptText = "";
-          try {
-            intentPromptText = JSON.stringify(run.inputParams ?? {});
-          } catch {
-            intentPromptText = "";
-          }
-          const recs = await getRunRecommendations({
-            agentId: packageName,
-            intent: { promptText: intentPromptText },
-            restrictToSkillIds: assigned,
-          });
-          initialRecommendations = recs.map((r) => ({
-            skillId: r.skillId,
-            skillRevisionId: r.skillRevisionId,
-            name: r.name,
-            score: r.score,
-            rank: r.rank,
-            recommended: r.recommended,
-            scoredFeatures: r.scoredFeatures,
-          }));
-        } catch {
-          initialRecommendations = [];
-        }
-      }
-    } else {
-      // Released — a decided hold. Confirmed (selection rows) vs skipped.
-      const selected = readRunSelectedSkillRevisions(run.id);
-      if (selected.length > 0) {
-        recommendationDecision = { kind: "confirmed", skillNames: selected.map((s) => s.skillId) };
-      } else if (hasRunRecommendationSkip(run.id)) {
-        recommendationDecision = { kind: "skipped" };
-      }
-    }
-  }
+  // ── Run-start recommendation hold — through the ONE card (cinatra#2573) ───
+  //
+  // WHAT USED TO BE HERE. This screen was a FOURTH renderer of the
+  // recommendation interaction: its own park read, its own actor-scoped
+  // candidate prefetch, its own decided-summary derivation, and a DIRECT
+  // `RunRecommendationChipRow` mount. S4 (cinatra#2568) made
+  // `RecommendationHoldCard` THE renderer of `recommendation_hold` — host-gated,
+  // and resolved by ONE authoritative server action that re-runs the run-access
+  // door and intersects the candidate set against the VIEWER (cinatra#2148) —
+  // and moved the run panel and the stepper's dev preview onto it. All of that
+  // machinery is deleted here rather than kept in parallel: a second read of the
+  // same park, computing the same states through a different code path, is how
+  // the two drift and how a held run ends up drawn twice, differently.
+  //
+  // WHAT THE PARK READ IS STILL FOR, AND ONLY THAT. The Run button is withheld
+  // while a hold is LIVE — the human decides the skills first, and it is the
+  // confirm/skip inside the card that dispatches the run. That is a property of
+  // the run's DISPATCHABILITY, not a rendering of the interaction, so it stays
+  // server-side and reads nothing but the park's status. Nothing is prefetched,
+  // no candidates are resolved, and no decision state is derived here.
+  const recommendationHeld =
+    (run ? await readRecommendationParkForRun(run.id) : null)?.status === "parked";
+
+  // WHICH panel the right column mounts — and therefore whether the card is
+  // hosted by this screen or by the panel. See `runDetailPanelKind`.
+  const runDetailPanel = runDetailPanelKind({
+    runStatus: run?.status ?? null,
+    templateType: template.type,
+    sourceType: template.sourceType,
+    stepperStepCount: stepperSteps.length,
+  });
 
   return (
     <Main className="min-h-screen">
@@ -540,33 +532,47 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                 reviewHrefBase={reviewHrefBase}
               />
             )}
-            <div className="min-w-0 flex-1">
-              {/* Run-start recommendation chip-row (cinatra#2067, C3). A held run
-                  (parked recommendation continuation) shows the interactive
-                  confirm/adjust/skip chip-row at the run-start position, before
-                  any work; a released hold shows the read-only decided summary. */}
-              {recommendationDecision && template.packageName ? (
-                <div className="mb-4">
-                  <RunRecommendationChipRow
+            {/* A COLUMN with a GAP, not a margin on the row above. The card
+                below resolves its own state on the client and renders NO DOM at
+                all when there is no hold — the overwhelmingly common case — so a
+                wrapper carrying `mb-4` would leave a 1rem hole above the panel on
+                every ordinary run. A flex gap only ever applies BETWEEN rendered
+                children, which is the spacing that was actually meant. */}
+            <div className="flex min-w-0 flex-1 flex-col gap-4">
+              {/* Run-start recommendation hold, through the ONE card
+                  (cinatra#2573, epic #2564 D-1). A held run draws the interactive
+                  confirm/adjust/skip row at the run-start position, before any
+                  work; a decided hold draws the read-only summary; an unheld run
+                  draws nothing at all.
+
+                  THIS SCREEN IS A HOST because a HELD run is `pending_input`, and
+                  the panel that carries the card below (`AgenticRunPanel`, via
+                  `SetupCompletionWatcher`) renders only for
+                  `status !== "pending_input"`. Without this mount the hold would
+                  be invisible on the very page the human is asked to decide it
+                  on. On the branch where that panel DOES render it declares
+                  `run_card` and draws the card itself, so this mount stands down
+                  — see `screenHostsRecommendationCard`.
+
+                  `wireRef` is NULL: this server-rendered mount has no run stream
+                  of its own. It costs nothing here — the card resolves on mount,
+                  on focus and when its own decision lands, the hold is already
+                  parked before this page is served, and the confirm/skip taken IN
+                  the row is the only transition out of it (which also fires
+                  `router.refresh()`, re-rendering this tree). */}
+              {screenHostsRecommendationCard(runDetailPanel) ? (
+                <LifecycleCardSurfaceProvider host="run_card">
+                  <RecommendationHoldCard
                     runId={run.id}
-                    agentPackageName={template.packageName}
-                    promptText={(() => {
-                      try {
-                        return JSON.stringify(run.inputParams ?? {});
-                      } catch {
-                        return "";
-                      }
-                    })()}
-                    initialRecommendations={initialRecommendations}
-                    holdRef={recommendationHoldRef}
-                    decision={recommendationDecision}
+                    agentPackageName={template.packageName ?? ""}
+                    wireRef={null}
                   />
-                </div>
+                </LifecycleCardSurfaceProvider>
               ) : null}
               {/* Render setup INTERRUPT events inline on the Setup tab.
                   Only rendered once the run has been triggered (status !== pending_input). */}
-              {run.status !== "pending_input" && (
-                ((template.type === "orchestrator" || template.type === "flow") || stepperSteps.length > 0) && template.sourceType !== "external" ? (
+              {runDetailPanel !== "none" && (
+                runDetailPanel === "stepper" ? (
                   <OrchestratorStepperPanel
                     runId={run.id}
                     initialStatus={run.status}
