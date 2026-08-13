@@ -400,10 +400,15 @@ export async function seedRestorableChangeSet(
     );
   }
 
-  const { openChangeSet, closeChangeSet, loadChangeSet } = await import(
+  // THROUGH THE BARREL, and REGISTERED. `historyAwareUpsert` sits inside the
+  // org-write perimeter, so this file carries a reviewed `allowedImporters` row
+  // in `src/lib/org-write/write-registry.ts` — a new caller of a perimeter writer
+  // is a design event, and the kernel's boundary gate made it one. It follows the
+  // re-export, so the barrel is not a way around it; the barrel is used only
+  // because the other three change-set calls already come from there.
+  const { openChangeSet, closeChangeSet, loadChangeSet, historyAwareUpsert } = await import(
     "@/lib/object-history"
   );
-  const { historyAwareUpsert } = await import("@/lib/object-history/canonical-writer");
   const { verifySessionAuthority } = await import("@/lib/org-write/authority");
 
   // The org-write authority is MINTED from a LIVE membership read. A caller that

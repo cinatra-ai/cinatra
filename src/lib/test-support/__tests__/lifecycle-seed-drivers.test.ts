@@ -148,8 +148,6 @@ vi.mock("@/lib/object-history", () => ({
   openChangeSet: (...a: unknown[]) => (openChangeSet as unknown as (...x: unknown[]) => unknown)(...a),
   closeChangeSet: (...a: unknown[]) => (closeChangeSet as unknown as (...x: unknown[]) => unknown)(...a),
   loadChangeSet: (...a: unknown[]) => (loadChangeSet as unknown as (...x: unknown[]) => unknown)(...a),
-}));
-vi.mock("@/lib/object-history/canonical-writer", () => ({
   historyAwareUpsert: (...a: unknown[]) =>
     (historyAwareUpsert as unknown as (...x: unknown[]) => unknown)(...a),
 }));
@@ -453,6 +451,7 @@ describe("the drivers module holds no persistence and no caller-shaped content",
       "INSERT INTO",
       "UPDATE ",
       "DELETE FROM",
+      "canonical-writer",
       "runPostgresQueriesSync",
       "getPostgresConnectionString",
       "postgresSchema",
