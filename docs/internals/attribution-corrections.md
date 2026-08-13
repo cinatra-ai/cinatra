@@ -81,3 +81,22 @@ Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
 Assisted-by: Claude Code (claude-opus-5)
 Assisted-by: Codex (gpt-5.6-sol)
 Correction-for: 409b1f2ebf13b24a2ec9d35d4588bad0fdc8339b```
+
+---
+
+## Correction for `8a83cf09002bd28e545dbe357298eef7902275e1`
+
+```
+correction: truthful-attribution record for 8a83cf090
+
+The record on 8a83cf090 ("feat(chat-hitl): #2577 + #2575 — the widget is a full-parity lifecycle s") is incomplete under the
+ratified record grammar: the Accountable line is missing, and one Assisted-by line names a serving alias (claude-opus-5[1m]) instead of the model id.
+This commit carries the corrected record verbatim. The change itself was approved,
+gated, and is untouched — this corrects the RECORD only.
+
+Gate-suite: cinatra-core@2026.08.1
+Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-opus-5)
+Assisted-by: Codex (gpt-5.6-sol)
+Correction-for: 8a83cf09002bd28e545dbe357298eef7902275e1```
