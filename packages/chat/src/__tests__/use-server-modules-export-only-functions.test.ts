@@ -30,7 +30,25 @@ function packageSourceFiles(): string[] {
 
 /** The directive must be the module's first statement to take effect. */
 function isUseServerModule(source: string): boolean {
-  return /^\s*(?:\/\/[^\n]*\n|\/\*[\s\S]*?\*\/\s*)*["']use server["'];/.test(source);
+  // Leading trivia is stripped iteratively — a single regex over the comment
+  // run backtracks catastrophically on long non-matching preambles (js/redos).
+  let s = source;
+  for (;;) {
+    const trimmed = s.replace(/^[\t\n\r ]+/, "");
+    if (trimmed.startsWith("//")) {
+      const nl = trimmed.indexOf("\n");
+      if (nl === -1) return false;
+      s = trimmed.slice(nl + 1);
+    } else if (trimmed.startsWith("/*")) {
+      const end = trimmed.indexOf("*/");
+      if (end === -1) return false;
+      s = trimmed.slice(end + 2);
+    } else {
+      s = trimmed;
+      break;
+    }
+  }
+  return /^["']use server["'];/.test(s);
 }
 
 /**
