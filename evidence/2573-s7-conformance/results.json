@@ -178,7 +178,7 @@
       "state": "decided",
       "delivered": false,
       "screenshot": null,
-      "reason": "Same fence as review-card__chat_thread__pending — the decided state is reached by deciding a card that was never mountable on this build."
+      "reason": "Same fence as review-card__chat_thread__pending \u2014 the decided state is reached by deciding a card that was never mountable on this build."
     },
     {
       "id": "review-card__run_card__live-run",
@@ -188,7 +188,7 @@
       "state": "pending",
       "delivered": false,
       "screenshot": null,
-      "reason": "The run_card host IS declared and drawn on this round (AgenticRunPanel renders for status !== \"pending_input\" — see run-detail__ordinary-non-held-run, which is on that branch), but no lifecycle gate is bound to the run, so there is no review card for the host to mount: lifecycleHosts=[] and lifecycleCardStates=[]. Binding a gate to a live run needs the same dispatch the chat rows above are fenced from."
+      "reason": "The run_card host IS declared and drawn on this round (AgenticRunPanel renders for status !== \"pending_input\" \u2014 see run-detail__ordinary-non-held-run, which is on that branch), but no lifecycle gate is bound to the run, so there is no review card for the host to mount: lifecycleHosts=[] and lifecycleCardStates=[]. Binding a gate to a live run needs the same dispatch the chat rows above are fenced from."
     },
     {
       "id": "recommendation-hold__run_card__held",
@@ -199,14 +199,112 @@
       "delivered": false,
       "screenshot": null,
       "reason": "NOT reachable on a fresh instance. maybeParkCheckpoint parks only when the request-aware scorer returns a candidate, and candidates are bounded to the agent's already-assigned deliverable set (resolveRecommendationCandidateSkillIds). MEASURED on this stack: cinatra.agent_assigned_skills count = 0 against 28 registered skills, so every run returns held:false reason:\"no recommendation candidates\" and goes straight to its field gate (the run captured here is pending_approval, not pending_input). No agent-level skill-assignment control ships on the /skills detail page on this branch."
+    },
+    {
+      "id": "review-card__chat_thread__pending",
+      "card": "artifact_review_gate",
+      "surface": "chat_thread",
+      "state": "pending",
+      "round": "host2-dev",
+      "runtime": "DEV runtime (pnpm dev, CINATRA_RUNTIME_MODE=development, NODE_ENV!=production, CINATRA_TEST_LLM_PROVIDER=scripted). NOT a production build - see the round's note.",
+      "delivered": true,
+      "screenshot": "review-card__chat_thread__pending__host2-dev.png",
+      "conformanceAnchors": [
+        "review-composer-bound",
+        "review-composer-focus",
+        "review-decision-bar",
+        "review-gate-card",
+        "review-target-island",
+        "sidebar-assistants-entry"
+      ],
+      "lifecycleCardStates": [
+        "pending"
+      ],
+      "lifecycleHosts": [
+        "chat_thread"
+      ],
+      "pageErrors": [],
+      "reason": "The gate was written by the shipped writers in the earlier S8f round and reached /chat as a DATA_PART renderable view produced by a real assistant turn; only the model layer is stood in for."
+    },
+    {
+      "id": "review-card__chat_thread__decided",
+      "card": "artifact_review_gate",
+      "surface": "chat_thread",
+      "state": "decided",
+      "round": "host2-dev",
+      "runtime": "DEV runtime (as above).",
+      "delivered": true,
+      "screenshot": "review-card__chat_thread__decided__host2-dev.png",
+      "conformanceAnchors": [
+        "review-gate-card",
+        "sidebar-assistants-entry"
+      ],
+      "lifecycleCardStates": [
+        "settled"
+      ],
+      "lifecycleHosts": [
+        "chat_thread"
+      ],
+      "pageErrors": [],
+      "reason": "The SAME chat-hosted card after the reader approved it on the card's own decision floor: data-lifecycle-card-state flips pending -> settled and the composer-binding row disappears with the decision (composerFocusRows: 0)."
+    },
+    {
+      "id": "recommendation-hold__run_card__held",
+      "card": "recommendation_hold",
+      "surface": "run_card",
+      "state": "held",
+      "round": "host2-dev",
+      "runtime": "DEV runtime (as above). No LLM dispatch is involved in this cell - the hold parks at run START, before dispatch.",
+      "delivered": true,
+      "screenshot": "recommendation-hold__run_card__held__host2-dev.png",
+      "conformanceAnchors": [
+        "run-chip-row",
+        "run-surface",
+        "sidebar-assistants-entry"
+      ],
+      "recommendationChipRows": 1,
+      "decidedSummaryOccurrences": 0,
+      "offeredChips": [
+        "@cinatra-ai/chat:blog-content"
+      ],
+      "pageErrors": [],
+      "dbFixture": "cinatra.agent_assigned_skills was EMPTY and no first-party agent-level assignment control ships on this branch, so ONE row was inserted in the shape the shipped store writes: ('@cinatra-ai/blog-draft-writer-agent', '@cinatra-ai/chat:blog-content', position 1, created_by 'c3c8e333-6f94-4ca5-9334-963b9bce75e0'). A first attempt naming '@cinatra-ai/blog-writing-skill:blog-writing' was WITHHELD by the shipped revalidation (':not-installed', logged by the server) and deleted. The hold below parks through the REAL request-aware scorer over a REAL assignable skill.",
+      "reason": "RecommendationHoldCard is THE renderer of recommendation_hold and the agentic panel mounts it inside LifecycleCardSurfaceProvider host=\"run_card\". The run row is status=pending_input with a 'recommendation' park in lifecycle_continuation_park."
+    },
+    {
+      "id": "review-card__run_card__live-run",
+      "card": "artifact_review_gate",
+      "surface": "run_card",
+      "state": "live-run",
+      "round": "host2-dev",
+      "runtime": "DEV runtime (as above).",
+      "delivered": false,
+      "screenshot": "review-card__run_card__live-run__host2-dev.png",
+      "conformanceAnchors": [
+        "run-step-rail",
+        "run-surface",
+        "sidebar-assistants-entry"
+      ],
+      "lifecycleHosts": [],
+      "lifecycleCardStates": [],
+      "pageErrors": [],
+      "reason": "STRICTLY SHARPER THAN BOTH EARLIER ROUNDS. The run_card host IS declared and drawn, AND a real review gate is now bound to this run - emitted through the shipped writers by the app's own capability-gated POST /api/development/lifecycle-seed (fixture repairVerification), and the run's own step rail draws it ('Review CHANGES_REQUESTED', 'Core analysis DRIFTED'). The card still does not mount because AgenticRunPanel gates the run_card ReviewGateCard on isPendingApproval && effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID && reviewGateCardRef. That interrupt context is LIVE ORCHESTRATION STATE, not a row: it needs a run that actually pauses at the artifact-review checkpoint, i.e. a real LLM-backed execution. No credential may reach host2, so it is out of reach here."
     }
   ],
   "primaryHostRound": {
     "host": "primary",
     "capturedAt": "2026-08-13T16:08:16.538Z",
-    "build": "pnpm build (exit 0, TypeScript clean at --max-old-space-size=8192) + next start — NODE_ENV=production",
+    "build": "pnpm build (exit 0, TypeScript clean at --max-old-space-size=8192) + next start \u2014 NODE_ENV=production",
     "previewHead": "579819c25edd79b724d30836cb2d9c8f87ad1f72",
     "previewComposition": "origin/main + origin/2573-d1 + origin/2573-d2 (all three verified ancestors)",
     "stack": "docker compose -p s7-visuals (postgres, redis, verdaccio, nango-db, nango-server), fresh volumes; DB provisioned by cinatra instance setup dev from a cinatra-cli origin/main worktree; admin actor registered through the app's own /setup/account form"
+  },
+  "host2DevRound": {
+    "capturedAt": "2026-08-13T17:05:00Z",
+    "host": "host2 (ordnas@192.168.0.36)",
+    "branch": "preview/2573-visuals @ 579819c25edd79b724d30836cb2d9c8f87ad1f72",
+    "runtime": "DEV runtime - pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted (MODEL LAYER ONLY), CINATRA_TURBOPACK_DEV_FS_CACHE=0",
+    "productionFence": "This round is NOT on a production-equivalent build and cannot be: assertScriptedProviderNotProduction throws unless NODE_ENV!=='production', and lifecycleSeedEnvVerdict FENCE 1a answers 404 production-build first. AC-15 as written asks for both at once and is unsatisfiable; these cells are offered on the development runtime and labelled as such on every row.",
+    "fullVisualRound": "https://github.com/cinatra-ai/cinatra/tree/evidence/2573-s7-visuals-host2/2573-s7-visuals-host2"
   }
 }

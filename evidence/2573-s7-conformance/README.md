@@ -111,13 +111,85 @@ One cell delivered, four named with measured reasons. The round's material
 contribution is not the pixel but the **fence finding**: the AC-15 chat-host
 cells are structurally unreachable under the criterion's own "production-
 equivalent build" wording, which is a defect in the criterion, not a gap in the
-capture. At the close of this round the acceptance manifest row stayed `MISSING`
-with `partial: true`; the **finisher round below** is where it changes, and it
-changes on an owner ruling rather than on a rewrite.
+capture. The acceptance manifest row stays `MISSING` with `partial: true`.
 
 ---
 
-# Third round — the FINISHER, 2026-08-13
+# Third round — **host2**, on the DEV runtime, 2026-08-13
+
+A third capture, tagged `round: "host2-dev"` in `results.json` so it is never
+conflated with the two rounds above it. Preview head under test:
+**`579819c25edd79b724d30836cb2d9c8f87ad1f72`** = `origin/main` + `origin/2573-d1`
++ `origin/2573-d2`, all three verified as ancestors.
+
+## THE RUNTIME LABEL, SAID BEFORE THE CELLS
+
+This round is on the **DEV runtime** — `pnpm dev` (Next.js 16.2.10, Turbopack),
+`CINATRA_RUNTIME_MODE=development`, `NODE_ENV != production`,
+`CINATRA_TEST_LLM_PROVIDER=scripted`, `CINATRA_TURBOPACK_DEV_FS_CACHE=0`.
+**It is NOT a production-equivalent build, and it cannot be.** The second round's
+fence finding stands unchanged and this round takes it as its premise rather than
+re-deriving it: `assertScriptedProviderNotProduction` throws unless
+`NODE_ENV !== "production"`, and `lifecycleSeedEnvVerdict` FENCE 1a answers
+`404 production-build` before reading any other gate. AC-15 asks for the
+chat-host cells *on a production-equivalent build* and that conjunction is
+unsatisfiable on this branch.
+
+So these cells take **route (2)** of the two the second round named: they are
+accepted on a development runtime **and every row says so**. What is stood in for
+is the **model layer and nothing else** — the gates were written by the shipped
+writers in the S8d/S8f rounds, the cards are the shipped `ReviewGateCard`, the
+decisions go through the one decision module, and every routing claim is checked
+against `cinatra.artifact_review_audit`.
+
+## Cells DELIVERED on the development runtime
+
+| Cell | What the DOM asserted |
+|---|---|
+| `review-card__chat_thread__pending__host2-dev.png` | `artifact_review_gate` on the **chat_thread** surface: `data-lifecycle-card-state="pending"`, `data-lifecycle-card-host="chat_thread"`, with `review-gate-card`, `review-target-island`, `review-decision-bar` and the composer-binding row. Zero page errors. It reached the thread as a `DATA_PART` renderable view produced by a real assistant turn. |
+| `review-card__chat_thread__decided__host2-dev.png` | The SAME card after the reader pressed **Approve** on the card's own floor: `data-lifecycle-card-state="settled"`, and `composerFocusRows: 0` — the binding row goes with the decision. |
+| `recommendation-hold__run_card__held__host2-dev.png` | `recommendation_hold` on the **run_card** surface: `run-chip-row` present, `recommendationChipRows: 1`, one offered chip (`@cinatra-ai/chat:blog-content`), `decidedSummaryOccurrences: 0`. `RecommendationHoldCard` is THE renderer of `recommendation_hold`, mounted by the agentic panel inside `LifecycleCardSurfaceProvider host="run_card"`. The run row is `pending_input` with a `recommendation` park. This cell needs **no** LLM dispatch: the hold parks at run START, before dispatch. |
+
+### The one DB fixture behind the hold, written out
+
+`cinatra.agent_assigned_skills` was empty and **no first-party agent-level
+assignment control ships on this branch**, so one row was inserted in the shape
+the shipped store writes:
+
+```sql
+INSERT INTO cinatra.agent_assigned_skills (agent_package_name, skill_id, "position", created_by)
+VALUES ('@cinatra-ai/blog-draft-writer-agent', '@cinatra-ai/chat:blog-content', 1,
+        'c3c8e333-6f94-4ca5-9334-963b9bce75e0');
+```
+
+A first attempt naming `@cinatra-ai/blog-writing-skill:blog-writing` was
+**refused by the shipped revalidation** (`withheld … ':not-installed'`, logged by
+the server) and deleted. The hold therefore parks through the REAL request-aware
+scorer over a REAL assignable skill — the fixture supplies only the assignment a
+settings screen would have written. That missing surface is a residual for the
+epic, not a property of this capture.
+
+## Cell NOT delivered — with a strictly sharper reason than either earlier round
+
+| Cell | What actually happened |
+|---|---|
+| `review-card__run_card__live-run__host2-dev.png` | The `run_card` host IS declared and drawn, **and a real review gate is now bound to this run** — emitted through the shipped writers by the app's own capability-gated `POST /api/development/lifecycle-seed` (`fixture: "repairVerification"`), and the run's own step rail draws it ("Review CHANGES_REQUESTED", "Core analysis DRIFTED"). The card still does not mount, and the predicate is now named exactly: `AgenticRunPanel` gates the `run_card` `ReviewGateCard` on `isPendingApproval && effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID && reviewGateCardRef`. That interrupt context is **live orchestration state, not a row** — it needs a run that actually pauses at the artifact-review checkpoint, i.e. an LLM-backed execution. No credential may reach host2, so it is out of reach here. This supersedes both earlier answers ("the panel never mounted"; "no gate is bound to the run"). |
+
+## Honest summary for this round
+
+Three AC-15 cells are now real, on a labelled development runtime; one is still
+open and its blocker is a named predicate rather than a guess. The
+production-equivalent-build wording of AC-15 remains unsatisfiable as written, so
+**the acceptance manifest row stays `MISSING` with `partial: true`** — this round
+narrows the gap and documents it; it does not close the criterion.
+
+The rest of the visual round for #2710 and #2711 (A1/A2 and the complete B-set,
+nine more cells) is on
+[`evidence/2573-s7-visuals-host2`](https://github.com/cinatra-ai/cinatra/tree/evidence/2573-s7-visuals-host2/2573-s7-visuals-host2).
+
+---
+
+# Fourth round — the FINISHER, 2026-08-13
 
 This round captures no pixels of its own. It closes #2573 by applying what
 landed and what the owner ruled, and it is recorded here so the manifest's green
