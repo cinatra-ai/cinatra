@@ -44,3 +44,21 @@ Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
 Assisted-by: Claude Code (claude-opus-5)
 Assisted-by: Codex (gpt-5.6-sol)
 Correction-for: 7a997e1dd87d6e1e6a7cc1c8f6c30e0e76174f7d```
+
+---
+
+## Correction for `df27cbee808f2b21d957fd5dc0d48db7d376ccd7`
+
+```
+correction: truthful-attribution record for df27cbee8
+
+The record on df27cbee8 ("ci: the archive-acceptance gate honors its dependencies and stages stric") is incomplete under the
+ratified record grammar: the Accountable line is missing.
+This commit carries the corrected record verbatim. The change itself was approved,
+gated, and is untouched — this corrects the RECORD only.
+
+Gate-suite: cinatra-core@2026.08.1
+Accountable: Sandro Groganz <sandro@cinatra.ai> (@groganz)
+Reviewed-by: Sandro Groganz <sandro@cinatra.ai> (@groganz, tier=maintainer)
+Assisted-by: Claude Code (claude-sonnet-5)
+Correction-for: df27cbee808f2b21d957fd5dc0d48db7d376ccd7```
