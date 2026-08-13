@@ -205,7 +205,7 @@ rows can be read back to their causes.
 
 ## The owner's rulings, and where each one lands
 
-All three answers in **engineering#548 entry 334** (2026-08-13), plus entry 335:
+All three answers in **coordination-tracker entry 334** (2026-08-13), plus entry 335:
 
 | Ruling | Answer | Where it lands |
 |---|---|---|

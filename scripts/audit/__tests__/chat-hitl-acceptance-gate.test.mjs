@@ -23,7 +23,7 @@
 //      demanded, and it happened only once the two S7-found defects had LANDED
 //      ON MAIN — D-1 cinatra#2710 (`7123d2bf1`) and D-2 cinatra#2711
 //      (`6b4c3e887`) — and the owner had ruled on the three open questions
-//      (engineering#548 entry 334). If a row ever goes back to MISSING or
+//      (coordination-tracker entry 334). If a row ever goes back to MISSING or
 //      partial, this test is what turns red first.
 
 import { describe, expect, it } from "vitest";
@@ -215,7 +215,10 @@ describe("the REAL manifest", () => {
     const ruled = manifest().rows.filter((r) => r.ruling);
     expect(ruled.length).toBeGreaterThan(0);
     for (const r of ruled) {
-      expect(r.ruling, r.criterion.slice(0, 50)).toMatch(/engineering#548 entry \d+/);
+      expect(r.ruling, r.criterion.slice(0, 50)).toMatch(/coordination-tracker entry \d+/);
+      // The tracker lives in a private repo: its name must never appear in this
+      // public manifest (the source-leak gate enforces the same rule repo-wide).
+      expect(r.ruling, r.criterion.slice(0, 50)).not.toMatch(/eng(ineering)?#\d+/);
     }
   });
 });
