@@ -55,7 +55,7 @@ const WAYFLOW_HEALTH_URL =
   process.env.E2E_WAYFLOW_HEALTH_URL ?? "http://localhost:3010/.health";
 
 test.describe("preflight", () => {
-  test("/agents renders the canonical 16-agent visible set", async ({ page }) => {
+  test("/agents renders the canonical visible agent set", async ({ page }) => {
     await page.goto("/agents");
 
     // Confirm the page mounted.
@@ -66,10 +66,13 @@ test.describe("preflight", () => {
     // We don't pin to specific row markup because future reshuffling could
     // change the row chrome — package name is the stable contract.
     //
-    // Note: this asserts "at least the canonical 16 are present", not
-    // "exactly 16 with no extras". Detecting unexpected extras would
+    // Note: this asserts "at least the canonical set is present", not
+    // "exactly that set with no extras". Detecting unexpected extras would
     // require parsing the row markup, which is more brittle and not
-    // needed for the harness's primary concern.
+    // needed for the harness's primary concern. The set's SIZE is read from
+    // CANONICAL_VISIBLE_PACKAGES rather than written here as a literal —
+    // cinatra#2573 found a hard-coded count that had been wrong since the
+    // #1796 retirement removed two entries and nobody re-counted.
     const html = await page.content();
     const missing: string[] = [];
 

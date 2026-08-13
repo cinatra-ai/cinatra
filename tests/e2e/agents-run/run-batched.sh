@@ -31,9 +31,11 @@ fi
 # `test.describe('agents-run :: <packageName>')` in agents-run.spec.ts.
 # Fixtures grouped to balance wall-clock + load per batch.
 
-BATCH1_FILTER="@cinatra-ai/(trigger-agent)"
-BATCH2_FILTER="@cinatra-ai/(email-recipient-selection-agent)"
-BATCH3_FILTER="@cinatra-ai/(email-drafting-agent|email-follow-up-agent|email-test-delivery-agent)"
+# cinatra#2573 (epic #2564 S7): the trigger-agent batch was removed with the
+# retirement — the package is archived and in neither extension lock, so the
+# batch matched no test title. The remaining batches are renumbered.
+BATCH1_FILTER="@cinatra-ai/(email-recipient-selection-agent)"
+BATCH2_FILTER="@cinatra-ai/(email-drafting-agent|email-follow-up-agent|email-test-delivery-agent)"
 
 run_batch() {
   local batch_num="$1"
@@ -60,9 +62,6 @@ if [ -z "$TARGET_BATCH" ] || [ "$TARGET_BATCH" = "1" ]; then
 fi
 if [ -z "$TARGET_BATCH" ] || [ "$TARGET_BATCH" = "2" ]; then
   run_batch 2 "$BATCH2_FILTER" || OVERALL_RC=1
-fi
-if [ -z "$TARGET_BATCH" ] || [ "$TARGET_BATCH" = "3" ]; then
-  run_batch 3 "$BATCH3_FILTER" || OVERALL_RC=1
 fi
 
 # Final cleanup.

@@ -1,0 +1,310 @@
+{
+  "base": "http://localhost:3000",
+  "capturedAt": "2026-08-13T14:05:42.678Z",
+  "results": [
+    {
+      "id": "__session",
+      "finalUrl": "http://localhost:3000/agents",
+      "signedIn": true,
+      "usedSavedState": true
+    },
+    {
+      "id": "review-card__page_gate_region__pending",
+      "card": "artifact_review_gate",
+      "surface": "page_gate_region",
+      "state": "pending",
+      "url": "http://localhost:3000/agents/proof/tmpl-s8f-41f7b2ca-0413-4988-94e0-5ec0040081ac/run-ff2087fd-0872-4745-ae8b-f576d41f35aa/review/lifecycle-review%3Arepair%3A9e8e8b2c-24c1-41fa-a7c7-7b96448b7a7a%3A1",
+      "waitFor": "[data-conformance-id=\"review-gate-card\"], [data-conformance-id=\"review-target\"]",
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/agents/proof/tmpl-s8f-41f7b2ca-0413-4988-94e0-5ec0040081ac/run-ff2087fd-0872-4745-ae8b-f576d41f35aa/review/lifecycle-review%3Arepair%3A9e8e8b2c-24c1-41fa-a7c7-7b96448b7a7a%3A1",
+      "screenshot": "/tmp/s7-conformance/review-card__page_gate_region__pending.png",
+      "heading": "Review",
+      "conformanceAnchors": [
+        "review-decision-bar",
+        "review-gate-card",
+        "review-prompt-window",
+        "review-target-island",
+        "sidebar-assistants-entry"
+      ],
+      "lifecycleCardStates": [
+        "pending"
+      ],
+      "islandFrames": [
+        {
+          "src": "/lifecycle/review-island?ref=X-Pis9gDSv5VvUQiRlIYpghRXFpjWRN1mScEPtzl7R2X5YslGyoCsB_DEKTo1l2qwQwgBsNfH3ikp9O3LHvHHnyWpdOl5dJCX2DEuj_yMuCJusHCG9aXNu_nwUaBFjYhHurpX6nJYKwZzlr8y98KnwuxAS5Dzrho_k4JVHQvNO1T9sMssIdw0OuYhHB0O8lxGw",
+          "sandbox": "allow-scripts allow-same-origin"
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "id": "review-card__page_gate_region__settled",
+      "card": "artifact_review_gate",
+      "surface": "page_gate_region",
+      "state": "settled",
+      "url": "http://localhost:3000/agents/proof/tmpl-s8f-41f7b2ca-0413-4988-94e0-5ec0040081ac/run-ff2087fd-0872-4745-ae8b-f576d41f35aa/review/s8f-seed-review-a8817589-ab60-4838-8145-1a53960dbe2e",
+      "waitFor": "[data-conformance-id=\"review-gate-blocked\"], [data-conformance-id=\"review-gate-card\"], main",
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/agents/proof/tmpl-s8f-41f7b2ca-0413-4988-94e0-5ec0040081ac/run-ff2087fd-0872-4745-ae8b-f576d41f35aa/review/s8f-seed-review-a8817589-ab60-4838-8145-1a53960dbe2e",
+      "screenshot": "/tmp/s7-conformance/review-card__page_gate_region__settled.png",
+      "heading": "Review",
+      "conformanceAnchors": [
+        "review-gate-blocked",
+        "sidebar-assistants-entry"
+      ],
+      "lifecycleCardStates": [],
+      "islandFrames": [],
+      "pageErrors": []
+    },
+    {
+      "id": "verification-card__page_gate_region__advisory",
+      "card": "verification_summary",
+      "surface": "page_gate_region",
+      "state": "advisory",
+      "url": "http://localhost:3000/agents/proof/tmpl-s8f-41f7b2ca-0413-4988-94e0-5ec0040081ac/run-ff2087fd-0872-4745-ae8b-f576d41f35aa/review/lifecycle-review%3Arepair%3A9e8e8b2c-24c1-41fa-a7c7-7b96448b7a7a%3A1?view=verification",
+      "waitFor": "main",
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/agents/proof/tmpl-s8f-41f7b2ca-0413-4988-94e0-5ec0040081ac/run-ff2087fd-0872-4745-ae8b-f576d41f35aa/review/lifecycle-review%3Arepair%3A9e8e8b2c-24c1-41fa-a7c7-7b96448b7a7a%3A1?view=verification",
+      "screenshot": "/tmp/s7-conformance/verification-card__page_gate_region__advisory.png",
+      "heading": "Review",
+      "conformanceAnchors": [
+        "run-surface",
+        "sidebar-assistants-entry"
+      ],
+      "lifecycleCardStates": [],
+      "islandFrames": [],
+      "pageErrors": []
+    },
+    {
+      "id": "island__first_party__server_rendered",
+      "card": "artifact_review_gate",
+      "surface": "review_target_island",
+      "state": "rendered",
+      "url": "http://localhost:3000/lifecycle/review-island?ref=X-Pis9gDSv5VvUQiRlIYpghRXFpjWRN1mScEPtzl7R2X5YslGyoCsB_DEKTo1l2qwQwgBsNfH3ikp9O3LHvHHnyWpdOl5dJCX2DEuj_yMuCJusHCG9aXNu_nwUaBFjYhHurpX6nJYKwZzlr8y98KnwuxAS5Dzrho_k4JVHQvNO1T9sMssIdw0OuYhHB0O8lxGw",
+      "waitFor": "[data-conformance-id=\"review-target-island-body\"], [data-conformance-id=\"review-target-island-empty\"], body",
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/lifecycle/review-island?ref=X-Pis9gDSv5VvUQiRlIYpghRXFpjWRN1mScEPtzl7R2X5YslGyoCsB_DEKTo1l2qwQwgBsNfH3ikp9O3LHvHHnyWpdOl5dJCX2DEuj_yMuCJusHCG9aXNu_nwUaBFjYhHurpX6nJYKwZzlr8y98KnwuxAS5Dzrho_k4JVHQvNO1T9sMssIdw0OuYhHB0O8lxGw",
+      "screenshot": "/tmp/s7-conformance/island__first_party__server_rendered.png",
+      "heading": "Command Palette",
+      "conformanceAnchors": [
+        "review-provenance-native",
+        "review-target",
+        "review-target-island-body"
+      ],
+      "lifecycleCardStates": [],
+      "islandFrames": [
+        {
+          "src": "/api/artifacts/bca29d2a-e5ee-4b7c-85ed-c0e6f589083f/versions/d35d6904-8a29-4622-8efb-7e0a8bd72fdb/preview",
+          "sandbox": ""
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "id": "island__forged_ref__empty",
+      "card": "artifact_review_gate",
+      "surface": "review_target_island",
+      "state": "absent",
+      "url": "http://localhost:3000/lifecycle/review-island?ref=not-a-real-ref",
+      "waitFor": "body",
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/lifecycle/review-island?ref=not-a-real-ref",
+      "screenshot": "/tmp/s7-conformance/island__forged_ref__empty.png",
+      "heading": "Command Palette",
+      "conformanceAnchors": [
+        "review-target-island-empty"
+      ],
+      "lifecycleCardStates": [],
+      "islandFrames": [],
+      "pageErrors": []
+    },
+    {
+      "id": "review-card__run_card__host",
+      "card": "artifact_review_gate",
+      "surface": "run_card",
+      "state": "host-render",
+      "url": "http://localhost:3000/agents/proof/tmpl-s8f-41f7b2ca-0413-4988-94e0-5ec0040081ac/run-ff2087fd-0872-4745-ae8b-f576d41f35aa",
+      "waitFor": "[data-conformance-id=\"run-surface\"], main",
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/agents/proof/tmpl-s8f-41f7b2ca-0413-4988-94e0-5ec0040081ac/run-ff2087fd-0872-4745-ae8b-f576d41f35aa/trigger",
+      "screenshot": "/tmp/s7-conformance/review-card__run_card__host.png",
+      "heading": "s8f-proof-7778d0dd (1)",
+      "conformanceAnchors": [
+        "sidebar-assistants-entry"
+      ],
+      "lifecycleCardStates": [],
+      "islandFrames": [],
+      "pageErrors": []
+    },
+    {
+      "id": "run-detail__ordinary-non-held-run",
+      "round": "primary",
+      "card": "recommendation_hold",
+      "surface": "run_card",
+      "state": "absent",
+      "url": "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/36fbc571-ad51-4df9-bd31-701ea869164f",
+      "waitFor": "[data-conformance-id=\"run-surface\"], main",
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/agents/cinatra-ai/blog-draft-writer-agent/36fbc571-ad51-4df9-bd31-701ea869164f",
+      "screenshot": "evidence/2573-s7-conformance/A3__run-detail__ordinary-non-held-run.png",
+      "heading": "Blog Draft Writer Agent (1)",
+      "conformanceAnchors": [
+        "run-surface",
+        "sidebar-assistants-entry"
+      ],
+      "lifecycleCardStates": [],
+      "lifecycleHosts": [],
+      "recommendationChipRows": 0,
+      "decidedSummaryOccurrences": 0,
+      "islandFrames": [],
+      "pageErrors": [],
+      "note": "D-1 (#2710) evidence A3. The screen draws NOTHING where its parallel RunRecommendationChipRow mount was deleted, and the decided summary is drawn zero times on the agentic branch."
+    },
+    {
+      "id": "review-card__chat_thread__pending",
+      "round": "primary",
+      "card": "artifact_review_gate",
+      "surface": "chat_thread",
+      "state": "pending",
+      "delivered": false,
+      "screenshot": null,
+      "reason": "UNREACHABLE ON A PRODUCTION-EQUIVALENT BUILD, BY CONSTRUCTION. A review card reaches the chat surface only as a DATA_PART renderable view produced by an assistant turn (packages/chat/src/renderable-views/registry.tsx maps artifact_review_gate -> ReviewGateCard), so the cell needs an LLM-backed dispatch. On this stack that is the scripted provider, and BOTH assertScriptedProviderNotProduction (packages/llm/src/scripted-test-provider.ts: throws unless CINATRA_RUNTIME_MODE===\"development\" AND NODE_ENV!==\"production\") and lifecycleSeedEnvVerdict FENCE 1a (src/lib/test-support/lifecycle-seed-fence.ts: returns 404 production-build on NODE_ENV===\"production\") hard-refuse. next start sets NODE_ENV=production and Next inlines process.env.NODE_ENV into the server bundle at build time, so no env var at start can lift either fence. A production-equivalent build and a scripted-provider dispatch are mutually exclusive on this branch."
+    },
+    {
+      "id": "review-card__chat_thread__decided",
+      "round": "primary",
+      "card": "artifact_review_gate",
+      "surface": "chat_thread",
+      "state": "decided",
+      "delivered": false,
+      "screenshot": null,
+      "reason": "Same fence as review-card__chat_thread__pending \u2014 the decided state is reached by deciding a card that was never mountable on this build."
+    },
+    {
+      "id": "review-card__run_card__live-run",
+      "round": "primary",
+      "card": "artifact_review_gate",
+      "surface": "run_card",
+      "state": "pending",
+      "delivered": false,
+      "screenshot": null,
+      "reason": "The run_card host IS declared and drawn on this round (AgenticRunPanel renders for status !== \"pending_input\" \u2014 see run-detail__ordinary-non-held-run, which is on that branch), but no lifecycle gate is bound to the run, so there is no review card for the host to mount: lifecycleHosts=[] and lifecycleCardStates=[]. Binding a gate to a live run needs the same dispatch the chat rows above are fenced from."
+    },
+    {
+      "id": "recommendation-hold__run_card__held",
+      "round": "primary",
+      "card": "recommendation_hold",
+      "surface": "run_card",
+      "state": "pending",
+      "delivered": false,
+      "screenshot": null,
+      "reason": "NOT reachable on a fresh instance. maybeParkCheckpoint parks only when the request-aware scorer returns a candidate, and candidates are bounded to the agent's already-assigned deliverable set (resolveRecommendationCandidateSkillIds). MEASURED on this stack: cinatra.agent_assigned_skills count = 0 against 28 registered skills, so every run returns held:false reason:\"no recommendation candidates\" and goes straight to its field gate (the run captured here is pending_approval, not pending_input). No agent-level skill-assignment control ships on the /skills detail page on this branch."
+    },
+    {
+      "id": "review-card__chat_thread__pending",
+      "card": "artifact_review_gate",
+      "surface": "chat_thread",
+      "state": "pending",
+      "round": "host2-dev",
+      "runtime": "DEV runtime (pnpm dev, CINATRA_RUNTIME_MODE=development, NODE_ENV!=production, CINATRA_TEST_LLM_PROVIDER=scripted). NOT a production build - see the round's note.",
+      "delivered": true,
+      "screenshot": "review-card__chat_thread__pending__host2-dev.png",
+      "conformanceAnchors": [
+        "review-composer-bound",
+        "review-composer-focus",
+        "review-decision-bar",
+        "review-gate-card",
+        "review-target-island",
+        "sidebar-assistants-entry"
+      ],
+      "lifecycleCardStates": [
+        "pending"
+      ],
+      "lifecycleHosts": [
+        "chat_thread"
+      ],
+      "pageErrors": [],
+      "reason": "The gate was written by the shipped writers in the earlier S8f round and reached /chat as a DATA_PART renderable view produced by a real assistant turn; only the model layer is stood in for."
+    },
+    {
+      "id": "review-card__chat_thread__decided",
+      "card": "artifact_review_gate",
+      "surface": "chat_thread",
+      "state": "decided",
+      "round": "host2-dev",
+      "runtime": "DEV runtime (as above).",
+      "delivered": true,
+      "screenshot": "review-card__chat_thread__decided__host2-dev.png",
+      "conformanceAnchors": [
+        "review-gate-card",
+        "sidebar-assistants-entry"
+      ],
+      "lifecycleCardStates": [
+        "settled"
+      ],
+      "lifecycleHosts": [
+        "chat_thread"
+      ],
+      "pageErrors": [],
+      "reason": "The SAME chat-hosted card after the reader approved it on the card's own decision floor: data-lifecycle-card-state flips pending -> settled and the composer-binding row disappears with the decision (composerFocusRows: 0)."
+    },
+    {
+      "id": "recommendation-hold__run_card__held",
+      "card": "recommendation_hold",
+      "surface": "run_card",
+      "state": "held",
+      "round": "host2-dev",
+      "runtime": "DEV runtime (as above). No LLM dispatch is involved in this cell - the hold parks at run START, before dispatch.",
+      "delivered": true,
+      "screenshot": "recommendation-hold__run_card__held__host2-dev.png",
+      "conformanceAnchors": [
+        "run-chip-row",
+        "run-surface",
+        "sidebar-assistants-entry"
+      ],
+      "recommendationChipRows": 1,
+      "decidedSummaryOccurrences": 0,
+      "offeredChips": [
+        "@cinatra-ai/chat:blog-content"
+      ],
+      "pageErrors": [],
+      "dbFixture": "cinatra.agent_assigned_skills was EMPTY and no first-party agent-level assignment control ships on this branch, so ONE row was inserted in the shape the shipped store writes: ('@cinatra-ai/blog-draft-writer-agent', '@cinatra-ai/chat:blog-content', position 1, created_by 'c3c8e333-6f94-4ca5-9334-963b9bce75e0'). A first attempt naming '@cinatra-ai/blog-writing-skill:blog-writing' was WITHHELD by the shipped revalidation (':not-installed', logged by the server) and deleted. The hold below parks through the REAL request-aware scorer over a REAL assignable skill.",
+      "reason": "RecommendationHoldCard is THE renderer of recommendation_hold and the agentic panel mounts it inside LifecycleCardSurfaceProvider host=\"run_card\". The run row is status=pending_input with a 'recommendation' park in lifecycle_continuation_park."
+    },
+    {
+      "id": "review-card__run_card__live-run",
+      "card": "artifact_review_gate",
+      "surface": "run_card",
+      "state": "live-run",
+      "round": "host2-dev",
+      "runtime": "DEV runtime (as above).",
+      "delivered": false,
+      "screenshot": "review-card__run_card__live-run__host2-dev.png",
+      "conformanceAnchors": [
+        "run-step-rail",
+        "run-surface",
+        "sidebar-assistants-entry"
+      ],
+      "lifecycleHosts": [],
+      "lifecycleCardStates": [],
+      "pageErrors": [],
+      "reason": "STRICTLY SHARPER THAN BOTH EARLIER ROUNDS. The run_card host IS declared and drawn, AND a real review gate is now bound to this run - emitted through the shipped writers by the app's own capability-gated POST /api/development/lifecycle-seed (fixture repairVerification), and the run's own step rail draws it ('Review CHANGES_REQUESTED', 'Core analysis DRIFTED'). The card still does not mount because AgenticRunPanel gates the run_card ReviewGateCard on isPendingApproval && effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID && reviewGateCardRef. That interrupt context is LIVE ORCHESTRATION STATE, not a row: it needs a run that actually pauses at the artifact-review checkpoint, i.e. a real LLM-backed execution. No credential may reach host2, so it is out of reach here."
+    }
+  ],
+  "primaryHostRound": {
+    "host": "primary",
+    "capturedAt": "2026-08-13T16:08:16.538Z",
+    "build": "pnpm build (exit 0, TypeScript clean at --max-old-space-size=8192) + next start \u2014 NODE_ENV=production",
+    "previewHead": "579819c25edd79b724d30836cb2d9c8f87ad1f72",
+    "previewComposition": "origin/main + origin/2573-d1 + origin/2573-d2 (all three verified ancestors)",
+    "stack": "docker compose -p s7-visuals (postgres, redis, verdaccio, nango-db, nango-server), fresh volumes; DB provisioned by cinatra instance setup dev from a cinatra-cli origin/main worktree; admin actor registered through the app's own /setup/account form"
+  },
+  "host2DevRound": {
+    "capturedAt": "2026-08-13T17:05:00Z",
+    "host": "host2 (ordnas@192.168.0.36)",
+    "branch": "preview/2573-visuals @ 579819c25edd79b724d30836cb2d9c8f87ad1f72",
+    "runtime": "DEV runtime - pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted (MODEL LAYER ONLY), CINATRA_TURBOPACK_DEV_FS_CACHE=0",
+    "productionFence": "This round is NOT on a production-equivalent build and cannot be: assertScriptedProviderNotProduction throws unless NODE_ENV!=='production', and lifecycleSeedEnvVerdict FENCE 1a answers 404 production-build first. AC-15 as written asks for both at once and is unsatisfiable; these cells are offered on the development runtime and labelled as such on every row.",
+    "fullVisualRound": "https://github.com/cinatra-ai/cinatra/tree/evidence/2573-s7-visuals-host2/2573-s7-visuals-host2"
+  }
+}

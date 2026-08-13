@@ -52,17 +52,10 @@ const REVIEW_OAS_JSON =
 
 export const CHAT_MCP_FIXTURES: ReadonlyArray<ChatMcpFixture> = [
   // -- HITL-bearing visible agents (Track A + Track B parity) --
-  {
-    packageName: "@cinatra-ai/trigger-agent",
-    // Explicit tool name nudge — `cinatra_trigger-agent` is registered as a
-    // function tool, but the LLM sometimes prefers `agent_run_trigger_set`
-    // for the "schedule a trigger" intent. Naming the tool unambiguously
-    // forces the right dispatch.
-    prompt:
-      "Invoke the cinatra_trigger-agent tool to configure an immediate trigger. The agent will pause on its configure HITL gate for me to confirm.",
-    agentFixture: fixtureFor("@cinatra-ai/trigger-agent"),
-    runTimeoutMs: 1_200_000,
-  },
+  // cinatra#2573 (epic #2564 S7) — the trigger-agent chat fixture was DELETED
+  // with the retirement (archived package, in neither extension lock). The chat
+  // path's scheduling interaction is now the epic's `trigger_schedule_proposal`
+  // card, proven by S5 (cinatra#2569), not by a dispatched helper agent.
   // -- Non-HITL agents (Track B only — no /agents run-agent surface) --
   //
   // These complete without pausing for HITL. The chat path passes the
