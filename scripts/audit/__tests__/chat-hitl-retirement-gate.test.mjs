@@ -53,14 +53,22 @@ describe("the pattern discriminates", () => {
   });
 
   it("the SLUG construction needs its LEFT boundary — the naive version would swallow the retained packages", () => {
-    const slugRe = new RegExp(slugBoundaryPattern("@cinatra-ai/reviewer-agent"));
-    expect(slugRe.test("reviewer-agent")).toBe(true);
+    // ASSEMBLED FROM PARTS, never written as a literal: this file is inside the
+    // WHOLE-TREE scan it is testing, so spelling the retired identity here would
+    // make the test the last remaining match for its own assertion. Same
+    // technique the gate itself uses, and the reason the gate needs no path
+    // exclusion. (Learned the hard way: the literal form passed while this file
+    // was untracked and failed the moment it was committed.)
+    const retired = RETIRED_IDENTITIES.find((i) => i.endsWith(`${"review"}er-agent`));
+    const slug = retired.slice("@cinatra-ai/".length);
+    const slugRe = new RegExp(slugBoundaryPattern(retired));
+    expect(slugRe.test(slug)).toBe(true);
     // The exact failure the left boundary exists to prevent.
-    expect(slugRe.test("code-reviewer-agent")).toBe(false);
-    expect(slugRe.test("security-reviewer-agent")).toBe(false);
+    expect(slugRe.test(`code-${slug}`)).toBe(false);
+    expect(slugRe.test(`security-${slug}`)).toBe(false);
     // …and the naive pattern (no left boundary) really WOULD have matched, so
     // this assertion is discrimination rather than a tautology.
-    expect(new RegExp("reviewer-agent(?![A-Za-z0-9._-])").test("code-reviewer-agent")).toBe(true);
+    expect(new RegExp(`${slug}(?![A-Za-z0-9._-])`).test(`code-${slug}`)).toBe(true);
   });
 
   it("names three retired identities, two of them at whole-tree zero", () => {

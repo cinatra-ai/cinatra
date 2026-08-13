@@ -499,7 +499,7 @@
    "criterion": "Conformance vs the S0 spec matrix (per surface, per card, per state) on a production-equivalent build with recorded screenshots.",
    "disposition": "MISSING",
    "partial": true,
-   "gap": "The STRUCTURAL conformance is proven bidirectionally against the pinned S0 spec commit (design@6c20871b4108176c1d0193f19ecd2947f6c6355f specs/app-lifecycle-cards.html): every spec anchor is rendered, and every anchor the route renders is in the spec's closed set. The per-(surface × card × state) RECORDED SCREENSHOT sweep on a production-equivalent build is NOT delivered by this lane. What exists is the S8d/#2577 photograph set (10 views on host2 against the shipped WordPress plugin, dev build) and the S2/#2566 set (6 views); together they cover the review card on chat / widget / review page across pending, settled and absent, plus the verification card in advisory — not the full 4 cards x 4 surfaces x 6 states cross-product, and not on a `next build && next start` image. The two blockers are named in the S7 report: the host2 lane budget, and the three states that need a live LLM-backed chat dispatch to reach.",
+   "gap": "The STRUCTURAL conformance is proven bidirectionally against the pinned S0 spec commit (design@6c20871b4108176c1d0193f19ecd2947f6c6355f specs/app-lifecycle-cards.html): every spec anchor is rendered, and every anchor the route renders is in the spec's closed set. The RECORDED-SCREENSHOT half is PARTIAL. This lane built a production build on host2 (`pnpm build` + `next start`, not `next dev`) at branch head b63d64ad4 and captured three real cells against rows the shipped stores wrote — the review card PENDING on the page gate region (review-gate-card + review-decision-bar + review-target-island anchors, data-lifecycle-card-state=\"pending\", the island iframe with its sandbox tokens and a server-minted ref, zero page errors), the island itself rendering the BUILD-MAP renderer class server-side, and the island's ONE empty document for a ref that does not decode. Three further cells were attempted and are recorded as NOT delivered with the reason each failed (evidence/2573-s7-conformance/README.md): the card's SETTLED state is unreachable by direct URL because the route answers a resolved gate with its own blocked panel before the card mounts; the verification advisory view did not resolve its record for this reader; and the run_card host never mounted because AgenticRunPanel renders only for a non-pending_input run. The chat and widget hosts, and the full 4 cards x 4 surfaces x 6 states cross-product, are NOT captured — reaching them needs an LLM-backed dispatch and the widget's hosted sign-in, which is a proof round of its own (the shape S8d/#2577 ran).",
    "unitProofs": [
     {
      "file": "src/app/agents/[vendor]/[packageName]/[instanceId]/review/[reviewTaskId]/__tests__/review-surface-conformance.test.ts",
@@ -515,6 +515,18 @@
     }
    ],
    "e2eProofs": [
+    {
+     "file": "evidence/2573-s7-conformance/README.md",
+     "testName": "review-card__page_gate_region__pending.png"
+    },
+    {
+     "file": "evidence/2573-s7-conformance/README.md",
+     "testName": "island__first_party__server_rendered.png"
+    },
+    {
+     "file": "evidence/2573-s7-conformance/README.md",
+     "testName": "island__forged_ref__empty.png"
+    },
     {
      "file": "evidence/2577-parity/proof/complete/README.md",
      "testName": "V4-widget-review-card.png"

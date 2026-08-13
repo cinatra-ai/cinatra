@@ -1,0 +1,140 @@
+{
+  "base": "http://localhost:3000",
+  "capturedAt": "2026-08-13T14:05:42.678Z",
+  "results": [
+    {
+      "id": "__session",
+      "finalUrl": "http://localhost:3000/agents",
+      "signedIn": true,
+      "usedSavedState": true
+    },
+    {
+      "id": "review-card__page_gate_region__pending",
+      "card": "artifact_review_gate",
+      "surface": "page_gate_region",
+      "state": "pending",
+      "url": "http://localhost:3000/agents/proof/tmpl-s8f-41f7b2ca-0413-4988-94e0-5ec0040081ac/run-ff2087fd-0872-4745-ae8b-f576d41f35aa/review/lifecycle-review%3Arepair%3A9e8e8b2c-24c1-41fa-a7c7-7b96448b7a7a%3A1",
+      "waitFor": "[data-conformance-id=\"review-gate-card\"], [data-conformance-id=\"review-target\"]",
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/agents/proof/tmpl-s8f-41f7b2ca-0413-4988-94e0-5ec0040081ac/run-ff2087fd-0872-4745-ae8b-f576d41f35aa/review/lifecycle-review%3Arepair%3A9e8e8b2c-24c1-41fa-a7c7-7b96448b7a7a%3A1",
+      "screenshot": "/tmp/s7-conformance/review-card__page_gate_region__pending.png",
+      "heading": "Review",
+      "conformanceAnchors": [
+        "review-decision-bar",
+        "review-gate-card",
+        "review-prompt-window",
+        "review-target-island",
+        "sidebar-assistants-entry"
+      ],
+      "lifecycleCardStates": [
+        "pending"
+      ],
+      "islandFrames": [
+        {
+          "src": "/lifecycle/review-island?ref=X-Pis9gDSv5VvUQiRlIYpghRXFpjWRN1mScEPtzl7R2X5YslGyoCsB_DEKTo1l2qwQwgBsNfH3ikp9O3LHvHHnyWpdOl5dJCX2DEuj_yMuCJusHCG9aXNu_nwUaBFjYhHurpX6nJYKwZzlr8y98KnwuxAS5Dzrho_k4JVHQvNO1T9sMssIdw0OuYhHB0O8lxGw",
+          "sandbox": "allow-scripts allow-same-origin"
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "id": "review-card__page_gate_region__settled",
+      "card": "artifact_review_gate",
+      "surface": "page_gate_region",
+      "state": "settled",
+      "url": "http://localhost:3000/agents/proof/tmpl-s8f-41f7b2ca-0413-4988-94e0-5ec0040081ac/run-ff2087fd-0872-4745-ae8b-f576d41f35aa/review/s8f-seed-review-a8817589-ab60-4838-8145-1a53960dbe2e",
+      "waitFor": "[data-conformance-id=\"review-gate-blocked\"], [data-conformance-id=\"review-gate-card\"], main",
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/agents/proof/tmpl-s8f-41f7b2ca-0413-4988-94e0-5ec0040081ac/run-ff2087fd-0872-4745-ae8b-f576d41f35aa/review/s8f-seed-review-a8817589-ab60-4838-8145-1a53960dbe2e",
+      "screenshot": "/tmp/s7-conformance/review-card__page_gate_region__settled.png",
+      "heading": "Review",
+      "conformanceAnchors": [
+        "review-gate-blocked",
+        "sidebar-assistants-entry"
+      ],
+      "lifecycleCardStates": [],
+      "islandFrames": [],
+      "pageErrors": []
+    },
+    {
+      "id": "verification-card__page_gate_region__advisory",
+      "card": "verification_summary",
+      "surface": "page_gate_region",
+      "state": "advisory",
+      "url": "http://localhost:3000/agents/proof/tmpl-s8f-41f7b2ca-0413-4988-94e0-5ec0040081ac/run-ff2087fd-0872-4745-ae8b-f576d41f35aa/review/lifecycle-review%3Arepair%3A9e8e8b2c-24c1-41fa-a7c7-7b96448b7a7a%3A1?view=verification",
+      "waitFor": "main",
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/agents/proof/tmpl-s8f-41f7b2ca-0413-4988-94e0-5ec0040081ac/run-ff2087fd-0872-4745-ae8b-f576d41f35aa/review/lifecycle-review%3Arepair%3A9e8e8b2c-24c1-41fa-a7c7-7b96448b7a7a%3A1?view=verification",
+      "screenshot": "/tmp/s7-conformance/verification-card__page_gate_region__advisory.png",
+      "heading": "Review",
+      "conformanceAnchors": [
+        "run-surface",
+        "sidebar-assistants-entry"
+      ],
+      "lifecycleCardStates": [],
+      "islandFrames": [],
+      "pageErrors": []
+    },
+    {
+      "id": "island__first_party__server_rendered",
+      "card": "artifact_review_gate",
+      "surface": "review_target_island",
+      "state": "rendered",
+      "url": "http://localhost:3000/lifecycle/review-island?ref=X-Pis9gDSv5VvUQiRlIYpghRXFpjWRN1mScEPtzl7R2X5YslGyoCsB_DEKTo1l2qwQwgBsNfH3ikp9O3LHvHHnyWpdOl5dJCX2DEuj_yMuCJusHCG9aXNu_nwUaBFjYhHurpX6nJYKwZzlr8y98KnwuxAS5Dzrho_k4JVHQvNO1T9sMssIdw0OuYhHB0O8lxGw",
+      "waitFor": "[data-conformance-id=\"review-target-island-body\"], [data-conformance-id=\"review-target-island-empty\"], body",
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/lifecycle/review-island?ref=X-Pis9gDSv5VvUQiRlIYpghRXFpjWRN1mScEPtzl7R2X5YslGyoCsB_DEKTo1l2qwQwgBsNfH3ikp9O3LHvHHnyWpdOl5dJCX2DEuj_yMuCJusHCG9aXNu_nwUaBFjYhHurpX6nJYKwZzlr8y98KnwuxAS5Dzrho_k4JVHQvNO1T9sMssIdw0OuYhHB0O8lxGw",
+      "screenshot": "/tmp/s7-conformance/island__first_party__server_rendered.png",
+      "heading": "Command Palette",
+      "conformanceAnchors": [
+        "review-provenance-native",
+        "review-target",
+        "review-target-island-body"
+      ],
+      "lifecycleCardStates": [],
+      "islandFrames": [
+        {
+          "src": "/api/artifacts/bca29d2a-e5ee-4b7c-85ed-c0e6f589083f/versions/d35d6904-8a29-4622-8efb-7e0a8bd72fdb/preview",
+          "sandbox": ""
+        }
+      ],
+      "pageErrors": []
+    },
+    {
+      "id": "island__forged_ref__empty",
+      "card": "artifact_review_gate",
+      "surface": "review_target_island",
+      "state": "absent",
+      "url": "http://localhost:3000/lifecycle/review-island?ref=not-a-real-ref",
+      "waitFor": "body",
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/lifecycle/review-island?ref=not-a-real-ref",
+      "screenshot": "/tmp/s7-conformance/island__forged_ref__empty.png",
+      "heading": "Command Palette",
+      "conformanceAnchors": [
+        "review-target-island-empty"
+      ],
+      "lifecycleCardStates": [],
+      "islandFrames": [],
+      "pageErrors": []
+    },
+    {
+      "id": "review-card__run_card__host",
+      "card": "artifact_review_gate",
+      "surface": "run_card",
+      "state": "host-render",
+      "url": "http://localhost:3000/agents/proof/tmpl-s8f-41f7b2ca-0413-4988-94e0-5ec0040081ac/run-ff2087fd-0872-4745-ae8b-f576d41f35aa",
+      "waitFor": "[data-conformance-id=\"run-surface\"], main",
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/agents/proof/tmpl-s8f-41f7b2ca-0413-4988-94e0-5ec0040081ac/run-ff2087fd-0872-4745-ae8b-f576d41f35aa/trigger",
+      "screenshot": "/tmp/s7-conformance/review-card__run_card__host.png",
+      "heading": "s8f-proof-7778d0dd (1)",
+      "conformanceAnchors": [
+        "sidebar-assistants-entry"
+      ],
+      "lifecycleCardStates": [],
+      "islandFrames": [],
+      "pageErrors": []
+    }
+  ]
+}
