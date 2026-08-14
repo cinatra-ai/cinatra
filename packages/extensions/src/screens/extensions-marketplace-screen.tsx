@@ -25,6 +25,7 @@ import { resolveInstallPanelAvailability } from "./install-panel-availability";
 // Per-card node composition (cinatra#2539) — the grid's RSC payload shape.
 import { buildMarketplaceCardNodes } from "./marketplace-card-nodes";
 import type { MarketplaceCardData } from "./marketplace-card-model";
+import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";

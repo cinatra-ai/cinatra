@@ -89,7 +89,7 @@ function encodeElement(element: ReactElement, opts: FlightEncodeOptions): unknow
     return ["$", type, key ?? null, encodeProps(props, opts)];
   }
 
-  if (type === REACT_FRAGMENT) {
+  if ((type as unknown) === REACT_FRAGMENT) {
     return ["$", "", key ?? null, encodeProps(props, opts)];
   }
 
