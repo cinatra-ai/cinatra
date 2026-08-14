@@ -97,9 +97,6 @@ const ICON_BY_SLUG = new Map<string, ReactNode>([
   ["mcp-client-connector", <McpIcon key="mcp-client" className="h-5 w-5" aria-hidden="true" />],
   ["gmail-connector", <SiGmail key="gmail" size={20} color="default" aria-hidden="true" />],
   ["google-calendar-connector", <SiGooglecalendar key="google-calendar" size={20} color="default" aria-hidden="true" />],
-  // Appointment schedules are a Google Calendar feature (cinatra#2367), so the
-  // extracted connector carries the same brand mark on the /connectors grid.
-  ["google-appointment-schedules-connector", <SiGooglecalendar key="google-appointment-schedules" size={20} color="default" aria-hidden="true" />],
   ["apollo-connector", <ApolloIcon key="apollo" />],
   ["apify-connector", <ApifyIcon key="apify" />],
   ["linkedin-connector", <FaLinkedin key="linkedin" size={20} color="#0A66C2" aria-hidden="true" />],
