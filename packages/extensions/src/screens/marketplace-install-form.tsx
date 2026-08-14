@@ -29,9 +29,13 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/cinatra-toast";
 import { isRedirectError } from "./is-redirect-error";
-import { appendDiagnosticReference } from "./marketplace-failure-copy";
+import {
+  appendDiagnosticReference,
+  buildMarketplaceFailureCopy,
+  marketplaceFailureCopy,
+} from "./marketplace-failure-copy";
 import type {
-  MarketplaceFailureCategory,
+  MarketplaceFailureOperation,
   MarketplaceInstallActionResult,
 } from "./marketplace-failure-copy";
 
@@ -45,27 +49,28 @@ type MarketplaceInstallFormProps = {
    */
   action: () => Promise<MarketplaceInstallActionResult | void>;
   /**
-   * Per-category, operation-specific, NON-technical end-user copy. The screen
-   * builds this with the extension's display name; we pick `[category]` for the
-   * classified failure (cinatra#685).
+   * The lifecycle operation this form performs, and the extension's display
+   * name — the two inputs the classified failure copy is a PURE function of
+   * (cinatra#685). The copy map used to be built on the server and shipped per
+   * card; since the builder is pure and already in this client module's graph,
+   * the identical strings are derived HERE and ~1.4 KiB per card leaves the
+   * route's RSC payload (cinatra#2539).
    */
-  failureCopyByCategory: Record<MarketplaceFailureCategory, string>;
-  /**
-   * Last-resort copy used when the action throws (no category available) or
-   * returns an unexpected category. Operation-specific, still non-technical.
-   */
-  defaultFailureMessage: string;
+  operation: MarketplaceFailureOperation;
+  displayName: string;
   className?: string;
   children: ReactNode;
 };
 
 export function MarketplaceInstallForm({
   action,
-  failureCopyByCategory,
-  defaultFailureMessage,
+  operation,
+  displayName,
   className,
   children,
 }: MarketplaceInstallFormProps) {
+  const failureCopyByCategory = buildMarketplaceFailureCopy(operation, displayName);
+  const defaultFailureMessage = marketplaceFailureCopy("unrecoverable", operation, displayName);
   async function handleSubmit() {
     try {
       const result = await action();

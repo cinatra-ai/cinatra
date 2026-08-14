@@ -209,6 +209,13 @@ export default defineConfig({
       // deps), mapped to real source so the §I/§II byline tests exercise it.
       "@/lib/vendor-presentation": path.join(__dirname, "../../src/lib/vendor-presentation.ts"),
       "@/lib/utils": path.join(__dirname, "../../src/lib/utils.ts"),
+      // §VI installed-extensions card (cinatra#2539 payload-weight suite): a
+      // pure presentational server component — mapped to real source so the
+      // measurement counts the card the screen actually renders.
+      "@/components/extensions/installed-extension-card": path.join(
+        __dirname,
+        "../../src/components/extensions/installed-extension-card.tsx",
+      ),
     },
   },
   test: {
