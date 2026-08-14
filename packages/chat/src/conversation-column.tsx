@@ -93,6 +93,7 @@ import {
   generateId,
   type AssistantTurnRequestMessage,
 } from "./ag-ui-chat-client";
+import { startScrollSettlePin, type ScrollSettlePass } from "./scroll-settle";
 import dynamic from "next/dynamic";
 import type { UiMessage } from "./types";
 import type { ApplyIntentRef } from "./renderable-views";
@@ -313,6 +314,59 @@ export function ConversationColumn({
   useEffect(() => {
     scrollToBottom();
   }, [messages, streamingCount, pendingExternalHandle, typingIndicators, scrollToBottom]);
+
+  // -------------------------------------------------------------------------
+  // The COLD-LOAD settle pass (cinatra#2740).
+  // -------------------------------------------------------------------------
+  // The effect above is a SINGLE shot on a static reload: the thread's messages
+  // are fetched asynchronously, so it fires once, when the list populates — with
+  // the message elements mounted but their content not yet laid out. Markdown,
+  // highlighted code, run panels and the auto-sized textareas all grow after
+  // that, so the height it read was short and the pin landed near the top of a
+  // long thread. A streaming turn hides the defect, because its per-chunk
+  // re-fire re-measures a taller container each time.
+  //
+  // So the initial load gets a bounded settle pass on top of that one shot: it
+  // re-pins while the container's content height is still moving and ends when
+  // the layout goes quiet (see `./scroll-settle`). It is armed ONCE per thread,
+  // which is why streaming is untouched — the pass has long ended by the time a
+  // turn runs, and the per-chunk effect keeps doing exactly what it did.
+  const settleArmedRef = useRef(true);
+  const settlePassRef = useRef<ScrollSettlePass | null>(null);
+
+  useEffect(() => {
+    // A new thread is a new cold load: end the old pass and re-arm.
+    settlePassRef.current?.stop();
+    settlePassRef.current = null;
+    settleArmedRef.current = true;
+  }, [activeThreadId]);
+
+  useEffect(() => {
+    if (!settleArmedRef.current) return;
+    const container = messagesContainerRef.current;
+    // Stay armed until there is a transcript to pin to — on a cold load the
+    // messages arrive well after mount, which is the whole point.
+    if (!container || messages.length === 0) return;
+    settleArmedRef.current = false;
+    settlePassRef.current = startScrollSettlePin({
+      container,
+      pin: scrollToBottom,
+      // The lock is read at call time, so a reader who scrolls up mid-settle
+      // ends the pass instead of fighting it.
+      isLocked: () => userScrolledUpRef.current,
+    });
+    // No cleanup keyed on these deps: an unrelated re-render must not cut a
+    // settle pass short. The pass ends on its own deadline, on the thread
+    // switch above, or on the unmount below.
+  }, [activeThreadId, messages, scrollToBottom]);
+
+  useEffect(
+    () => () => {
+      settlePassRef.current?.stop();
+      settlePassRef.current = null;
+    },
+    [],
+  );
 
   // Re-enable auto-scroll when streaming completes so the next response scrolls normally.
   const prevHasActiveStreamRef = useRef(false);

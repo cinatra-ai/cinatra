@@ -47,3 +47,40 @@ describe("chat auto-scroll lock across thread switches", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------
+// The COLD-LOAD settle pass rides the same reset (cinatra#2740).
+// ---------------------------------------------------------------------------
+// The single-shot pin above is correct only if the height it reads is final, and
+// on a cold reload it is not: the messages arrive asynchronously and their
+// content lays out after mount. The column answers with a bounded settle pass
+// (`../scroll-settle`), whose BEHAVIOUR — re-pinning until the height holds, the
+// reader's lock winning, the re-arm, the disconnect — is measured on a mounted
+// surface in `cold-reload-scroll-pin.test.tsx`.
+//
+// What belongs HERE is the one thing that is an ORDERING fact about this file
+// and invisible at runtime until it is wrong: the pass is re-armed AFTER the
+// lock reset. React runs effects in definition order, so a pass armed before the
+// reset would read the OUTGOING thread's lock and decline to pin the incoming
+// one — the #1702 symptom, re-introduced through a new door.
+describe("chat cold-load settle pass", () => {
+  it("re-arms the pass AFTER the thread-switch lock reset", () => {
+    const resetIdx = src.search(
+      /userScrolledUpRef\.current = false;\s*\}, \[activeThreadId\]\);/,
+    );
+    const rearmIdx = src.search(/settleArmedRef\.current = true;/);
+    expect(resetIdx).toBeGreaterThan(-1);
+    expect(rearmIdx).toBeGreaterThan(-1);
+    expect(rearmIdx).toBeGreaterThan(resetIdx);
+  });
+
+  it("reads the lock at call time, so a mid-settle scroll-up ends the pass", () => {
+    expect(src).toMatch(/isLocked: \(\) => userScrolledUpRef\.current,/);
+  });
+
+  it("bounds the pass — stopped on the thread switch and on unmount", () => {
+    // Two stop sites: the activeThreadId effect and the unmount cleanup.
+    const stops = src.match(/settlePassRef\.current\?\.stop\(\);/g) ?? [];
+    expect(stops.length).toBeGreaterThanOrEqual(2);
+  });
+});
