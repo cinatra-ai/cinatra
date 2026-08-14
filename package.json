@@ -246,8 +246,8 @@
     "lint": "eslint",
     "knip": "knip",
     "knip:report": "knip --no-exit-code --reporter markdown",
-    "typecheck": "tsgo --noEmit",
-    "typecheck:slow": "tsc --noEmit",
+    "typecheck": "node node_modules/typescript7/bin/tsc --noEmit",
+    "typecheck:slow": "node node_modules/typescript/bin/tsc --noEmit",
     "check:fresh-schema": "node --env-file=.env.local --import tsx scripts/check-fresh-schema-ddl.mjs",
     "extensions:signature-readiness": "node --conditions=react-server --env-file=.env.local --import tsx scripts/extensions/signature-readiness.mjs",
     "authz:inventory": "node scripts/build-authz-inventory.mjs",
@@ -412,7 +412,6 @@
     "@types/node": "^24.13.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
-    "@typescript/native-preview": "7.0.0-dev.20260516.1",
     "esbuild": "0.25.12",
     "eslint": "10.7.0",
     "eslint-config-next": "16.2.10",
@@ -423,6 +422,7 @@
     "tar": "^7.5.16",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
+    "typescript7": "npm:typescript@7.0.2",
     "vitest": "^4.1.10"
   },
   "packageManager": "pnpm@11.1.2+sha512.415a1cc25974731e75455c1468371be74c5aa5fb7621b50d4056d222451609f11412f23fd602e6169f1e060466641f798597e1be961a10688836a67b16569499"
