@@ -96,6 +96,13 @@ export type ParkRunOnHumanGateOptions = {
   readonly attempts?: number;
   /** Delay between read-back attempts in ms (default 250). Tests inject 0. */
   readonly delayMs?: number;
+  /**
+   * Per-attempt read-back budget in ms (default 3000). An unreachable event log
+   * queues the read behind an indefinite reconnect, so an unbounded read-back
+   * would HANG the worker job rather than land the run. A blown budget counts as
+   * a miss.
+   */
+  readonly readBackTimeoutMs?: number;
   /** Injectable sleep so tests never wall-clock. */
   readonly sleep?: (ms: number) => Promise<void>;
 };
@@ -110,6 +117,10 @@ export type ParkRunOnHumanGateResult =
 
 const DEFAULT_ATTEMPTS = 6;
 const DEFAULT_DELAY_MS = 250;
+const DEFAULT_READ_BACK_TIMEOUT_MS = 3000;
+
+/** Sentinel for a read-back that blew its per-attempt budget. */
+const READ_BACK_TIMED_OUT = Symbol("read-back-timed-out");
 
 function describe(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -142,7 +153,29 @@ export async function parkRunOnHumanGate(
   } = options;
   const attempts = Math.max(1, options.attempts ?? DEFAULT_ATTEMPTS);
   const delayMs = Math.max(0, options.delayMs ?? DEFAULT_DELAY_MS);
+  const readBackTimeoutMs = Math.max(
+    0,
+    options.readBackTimeoutMs ?? DEFAULT_READ_BACK_TIMEOUT_MS,
+  );
   const sleep = options.sleep ?? defaultSleep;
+
+  // Bounded read-back: an unreachable event log queues the read behind an
+  // indefinite reconnect, and an unbounded wait would hang the worker job — the
+  // exact silent stall this seam exists to remove.
+  const readBackBounded = async (): Promise<ReadBackGate | typeof READ_BACK_TIMED_OUT> => {
+    if (readBackTimeoutMs === 0) return readBackGate(runId);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        readBackGate(runId),
+        new Promise<typeof READ_BACK_TIMED_OUT>((resolve) => {
+          timer = setTimeout(() => resolve(READ_BACK_TIMED_OUT), readBackTimeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  };
 
   const fail = async (reason: string): Promise<ParkRunOnHumanGateResult> => {
     const error = `${HUMAN_GATE_ARTIFACT_FAILURE} for ${gateLabel}: ${reason}`;
@@ -169,11 +202,15 @@ export async function parkRunOnHumanGate(
   let lastMiss = "no approval prompt is readable on the run event log";
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (attempt > 0 && delayMs > 0) await sleep(delayMs);
-    let seen: ReadBackGate;
+    let seen: ReadBackGate | typeof READ_BACK_TIMED_OUT;
     try {
-      seen = await readBackGate(runId);
+      seen = await readBackBounded();
     } catch (err) {
       lastMiss = `the run event log could not be read (${describe(err)})`;
+      continue;
+    }
+    if (seen === READ_BACK_TIMED_OUT) {
+      lastMiss = `the run event log did not answer within ${readBackTimeoutMs}ms`;
       continue;
     }
     if (!seen) {
