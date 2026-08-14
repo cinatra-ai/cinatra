@@ -12,9 +12,13 @@ import { describe, it, expect } from "vitest";
 
 import {
   applyJustSubmittedSuppression,
+  classifyRunWaitInterrupt,
+  isSetupInterruptTaskId,
   mapInterruptToHitlContext,
   resolveStreamFirst,
+  runStatusBadgeLabel,
   statusBadgeVariant,
+  AWAITING_INPUT_BADGE_LABEL,
   type HitlGateContext,
 } from "../run-surface-status";
 
@@ -47,6 +51,94 @@ describe("statusBadgeVariant", () => {
   it("maps the trigger-run statuses (AgenticRunPanel surface)", () => {
     expect(statusBadgeVariant("pending_trigger")).toBe("outline");
     expect(statusBadgeVariant("armed")).toBe("secondary");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Human-wait presentation discriminator (input pause vs genuine review gate).
+//
+// The point of these cases: BOTH inputs below are runs on `pending_approval`,
+// so the status and the `RunHumanWaitReason` enum are identical for both. Only
+// the SEMANTIC signal carried by the interrupt itself separates them.
+// ---------------------------------------------------------------------------
+
+/** The setup-field INPUT pause: synthetic `setup-<runId>` identity + fieldName. */
+const SETUP_INPUT_INTERRUPT: HitlGateContext = {
+  xRenderer: "@cinatra-ai/agent-builder:schema-field",
+  childRunId: null,
+  reviewTaskId: "setup-run-42",
+  inputSchema: { type: "object", properties: { idea: { type: "string" } } },
+  currentValues: {},
+  fieldName: "idea",
+};
+
+/** A GENUINE review gate: a real (non-`setup-`) task identity, no fieldName. */
+const REVIEW_GATE_INTERRUPT: HitlGateContext = {
+  xRenderer: "@cinatra-ai/x:review",
+  childRunId: null,
+  reviewTaskId: "9f1c2f0e-6f1a-4a1b-9f2e-0c3d4e5f6a7b",
+  inputSchema: { type: "object" },
+  currentValues: { draft: "…" },
+};
+
+describe("classifyRunWaitInterrupt", () => {
+  it("classifies a setup-field interrupt as an INPUT pause, a review gate as an APPROVAL", () => {
+    expect(classifyRunWaitInterrupt(SETUP_INPUT_INTERRUPT)).toBe("input");
+    expect(classifyRunWaitInterrupt(REVIEW_GATE_INTERRUPT)).toBe("approval");
+  });
+
+  it("reads the synthetic setup task identity even with no fieldName (poll fallback)", () => {
+    // deriveRunHitlContext's setup fallback emits `setup-<runId>` with no
+    // fieldName — it must still classify as input.
+    expect(classifyRunWaitInterrupt({ reviewTaskId: "setup-run-42" })).toBe("input");
+    expect(isSetupInterruptTaskId("setup-run-42")).toBe(true);
+    expect(isSetupInterruptTaskId("wayflow-task-7")).toBe(false);
+    expect(isSetupInterruptTaskId(null)).toBe(false);
+  });
+
+  it("reads the setup payload kind (fieldName) even when the task id is opaque", () => {
+    expect(classifyRunWaitInterrupt({ reviewTaskId: "rt-1", fieldName: "idea" })).toBe("input");
+  });
+
+  it("fails CLOSED to approval — an absent, empty or fieldName-less interrupt keeps the old copy", () => {
+    expect(classifyRunWaitInterrupt(null)).toBe("approval");
+    expect(classifyRunWaitInterrupt(undefined)).toBe("approval");
+    expect(classifyRunWaitInterrupt({})).toBe("approval");
+    expect(classifyRunWaitInterrupt({ reviewTaskId: "rt-1", fieldName: "  " })).toBe("approval");
+    // A WayFlow gate's synthetic identity is NOT a setup identity.
+    expect(classifyRunWaitInterrupt({ reviewTaskId: "wayflow-task-7" })).toBe("approval");
+  });
+});
+
+describe("runStatusBadgeLabel — run-card badge copy fixtures", () => {
+  it("a setup-field INPUT pause reads 'Awaiting input', never 'pending approval'", () => {
+    const label = runStatusBadgeLabel("pending_approval", SETUP_INPUT_INTERRUPT);
+    expect(label).toBe(AWAITING_INPUT_BADGE_LABEL);
+    expect(label).toBe("Awaiting input");
+    expect(label.toLowerCase()).not.toContain("approval");
+  });
+
+  it("a genuine review gate keeps the unchanged approval copy", () => {
+    expect(runStatusBadgeLabel("pending_approval", REVIEW_GATE_INTERRUPT)).toBe("pending approval");
+    // No interrupt in hand → unchanged copy (fail-closed).
+    expect(runStatusBadgeLabel("pending_approval", null)).toBe("pending approval");
+  });
+
+  it("leaves every other status' label byte-identical to the previous humanization", () => {
+    for (const status of [
+      "queued",
+      "running",
+      "completed",
+      "failed",
+      "stopped",
+      "pending_input",
+      "pending_trigger",
+      "armed",
+    ]) {
+      expect(runStatusBadgeLabel(status, SETUP_INPUT_INTERRUPT)).toBe(
+        status.replace(/_/g, " "),
+      );
+    }
   });
 });
 

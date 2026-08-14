@@ -51,6 +51,13 @@ import type {
   RunHumanWaitReason,
   RunWaitNotifier,
 } from "@cinatra-ai/agents";
+// The human-wait presentation discriminator, imported from the PURE leaf
+// subpath (not the package index) so the builder below stays trivially
+// unit-testable and pulls no agents service graph onto a cold import.
+import {
+  classifyRunWaitInterrupt,
+  type RunWaitInterruptDescriptor,
+} from "@cinatra-ai/agents/run-surface-status";
 import {
   RUN_AWAITING_HUMAN_CATEGORY,
   RUN_FAILED_CATEGORY,
@@ -133,23 +140,45 @@ export function buildAutoGateOpenNotificationInput(input: {
  * feed's row-shell "Open" action routes the viewer straight to the gate; the
  * per-run `dedupeKey` collapses repeat writes to ONE row; the
  * `metadata.runAwaitingHuman` payload tags the category + reason for the feed.
+ *
+ * COPY SELECTION. `reason` alone cannot pick the copy: a setup-field INPUT
+ * pause and a genuine review gate BOTH enter as `pending_approval`, and telling
+ * the user a run "is awaiting your approval" when it only wants the Idea field
+ * filled in is the defect this builder shares with the run-card badge. So the
+ * optional `interrupt` descriptor is classified by the SAME shared, semantic
+ * discriminator the badge uses (`classifyRunWaitInterrupt` — the synthetic
+ * `setup-<runId>` gate identity or the setup payload's `fieldName`), and BOTH
+ * surfaces therefore say the same thing about the same wait.
+ *
+ * Presentation only. `metadata.runAwaitingHuman.reason` still carries the
+ * unmodified `RunHumanWaitReason`, so no consumer's state, filter, or route
+ * changes; with no `interrupt` in hand the classifier fails closed to the
+ * pre-existing approval copy.
  */
 export function buildRunAwaitingHumanNotificationInput(input: {
   runId: string;
   reason: RunHumanWaitReason;
   runTitle?: string | null;
   href?: string;
+  interrupt?: RunWaitInterruptDescriptor | null;
 }): NotificationInput {
   const name = input.runTitle?.trim();
   const subject = name ? `"${name}"` : "A run";
-  const title =
-    input.reason === "pending_approval"
-      ? `${subject} is awaiting your approval`
-      : `${subject} is waiting on you to continue`;
-  const body =
-    input.reason === "pending_approval"
-      ? "Open the run to review and approve the pending step."
-      : "Open the run to resolve the gate so it can continue.";
+  const awaitingInput =
+    input.reason === "pending_approval" &&
+    classifyRunWaitInterrupt(input.interrupt) === "input";
+  let title: string;
+  let body: string;
+  if (awaitingInput) {
+    title = `${subject} needs your input`;
+    body = "Open the run to fill in the requested fields.";
+  } else if (input.reason === "pending_approval") {
+    title = `${subject} is awaiting your approval`;
+    body = "Open the run to review and approve the pending step.";
+  } else {
+    title = `${subject} is waiting on you to continue`;
+    body = "Open the run to resolve the gate so it can continue.";
+  }
   return {
     title,
     body,
@@ -246,6 +275,21 @@ export const runWaitNotifier: RunWaitNotifier = {
       // a gate by the time we resolve it, skip the insert entirely — this closes
       // the common "already resolved before we emitted" case.
       if (!isRunWaitStatus(run.status)) return;
+      // Semantic input-vs-approval discriminator for the COPY (see the builder
+      // doc). `deriveRunHitlContext` is the canonical read of "which gate is
+      // this run paused on" — the same derivation the run panel polls — and it
+      // reproduces the synthetic `setup-<runId>` identity for a setup-field
+      // pause. Best-effort like the rest of this path: an unreadable context
+      // classifies as an approval, i.e. the pre-existing copy.
+      // `.then(...)` (not a bare call) so a synchronous throw is caught too:
+      // the copy refinement must never be able to suppress the notification.
+      const agents = await import("@cinatra-ai/agents");
+      const interrupt =
+        reason === "pending_approval"
+          ? await Promise.resolve()
+              .then(() => agents.deriveRunHitlContext(run))
+              .catch(() => null)
+          : null;
       const { resolveAgentRunHref, createNotificationForRecipient } =
         await import("@cinatra-ai/notifications/server");
       // Canonical run deep-link (templateId → packageName). Undefined for an
@@ -258,6 +302,7 @@ export const runWaitNotifier: RunWaitNotifier = {
           reason,
           runTitle: run.title,
           href,
+          interrupt,
         }),
       );
     } catch (err) {

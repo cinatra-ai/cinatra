@@ -100,7 +100,7 @@ import {
   wrapPrimitiveSetupPayload,
 } from "./hitl-gate-submit";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
-import { statusBadgeVariant } from "./run-surface-status";
+import { runStatusBadgeLabel, statusBadgeVariant } from "./run-surface-status";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { fieldRendererRegistry } from "./field-renderer-registry";
 import type { FieldRendererContext } from "./field-renderer-registry";
@@ -1970,7 +1970,11 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
       <section className="soft-panel rounded-card px-6 py-5 flex flex-col gap-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-foreground">Agentic Run Progress</h2>
-          <Badge variant={statusBadgeVariant(status)}>{status.replace(/_/g, " ")}</Badge>
+          {/* A setup-field INPUT pause must not read as "pending approval" —
+              the discriminator is the interrupt itself, never the status. */}
+          <Badge variant={statusBadgeVariant(status)}>
+            {runStatusBadgeLabel(status, effectiveInterruptContext)}
+          </Badge>
         </div>
         {status === "pending_approval" && effectiveInterruptContext !== null && (
           <Separator />

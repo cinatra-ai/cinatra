@@ -54,6 +54,7 @@ import {
   applyJustSubmittedSuppression,
   mapInterruptToHitlContext,
   resolveStreamFirst,
+  runStatusBadgeLabel,
   statusBadgeVariant,
   type HitlGateContext as HitlContext,
 } from "./run-surface-status";
@@ -1152,7 +1153,9 @@ export function AgenticRunPanel({
         <h2 className="text-sm font-semibold text-foreground">Agentic Run Progress</h2>
         <Badge variant={statusBadgeVariant(status)} className="inline-flex items-center gap-1">
           {statusIcon(status)}
-          <span>{status.replace(/_/g, " ")}</span>
+          {/* A setup-field INPUT pause must not read as "pending approval" —
+              the discriminator is the interrupt itself, never the status. */}
+          <span>{runStatusBadgeLabel(status, effectiveHitlContext)}</span>
         </Badge>
       </div>
 

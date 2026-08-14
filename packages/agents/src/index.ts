@@ -108,6 +108,23 @@ export type {
   RunHumanWaitReason,
   RunWaitClassification,
 } from "./run-wait-notifier";
+// Human-wait PRESENTATION discriminator: input pause vs genuine review gate.
+// Semantic (reads the interrupt, not the status/reason enum) and shared by the
+// run-card badge and the host's awaiting-human notification builder, so the two
+// surfaces can never disagree about what a run is waiting for. Also reachable
+// as the `@cinatra-ai/agents/run-surface-status` leaf subpath, which the pure
+// notification builder uses to stay off this index's import graph.
+export {
+  classifyRunWaitInterrupt,
+  isSetupInterruptTaskId,
+  runStatusBadgeLabel,
+  AWAITING_INPUT_BADGE_LABEL,
+  SETUP_GATE_TASK_ID_PREFIX,
+} from "./run-surface-status";
+export type {
+  RunWaitInterruptKind,
+  RunWaitInterruptDescriptor,
+} from "./run-surface-status";
 export {
   runAgentBuilderExecutionJob,
   assertOrchestratorReady,
