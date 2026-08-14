@@ -1219,7 +1219,18 @@ function DynamicSelectRow({
   const [options, setOptions] = useState<FetchedOption[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [value, setValue] = useState<string | undefined>(undefined);
+  // Seeded with the HYDRATED saved value (cinatra#1082 item 4). The options
+  // load can fail, hang, or come back empty — in every one of those states no
+  // picker renders, so the user cannot have chosen anything and the hidden
+  // input must still carry the saved value. Submitting an empty value from a
+  // field nobody could touch asks the connector to rewrite saved configuration
+  // (the openai `listModels` case: the options action calls the live provider
+  // and fails on a rejected key, yet the form is still saveable).
+  const [value, setValue] = useState<string | undefined>(initialValue || undefined);
+  // Whether the USER has chosen an option. Their in-flight choice outranks the
+  // hydrated value while a (re)load is running — only an unpicked field
+  // re-syncs to a newly hydrated value below.
+  const picked = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -1230,23 +1241,33 @@ function DynamicSelectRow({
       if (!active) return;
       setLoading(true);
       setError(null);
+      // A fresh options load starts from the CURRENT hydrated value, so a
+      // re-render carrying newly hydrated values never submits the previous
+      // one while the load is in flight (or hangs indefinitely).
+      if (!picked.current) setValue(initialValue || undefined);
       const r = await invokeAction(installId, field.optionsAction, {});
       if (!active) return;
       setLoading(false);
       if (!r.ok) {
         setOptions([]);
         setError(r.error ?? "Could not load options.");
+        // Keep the saved value: an unloadable picker must not rewrite it. Set
+        // it (rather than only relying on the seed) so a re-run after the
+        // hydrated value changed still carries the CURRENT saved value.
+        setValue(initialValue || undefined);
         return;
       }
       const opts = optionsFromResult(r.result);
       setOptions(opts);
-      // Choose the initial value only from the fetched options: the saved value,
-      // else the declared defaultValue, else the first option.
+      // Choose the selected value only from the fetched options: the saved value,
+      // else the declared defaultValue, else the first option. With NO servable
+      // option the saved value is kept as-is rather than cleared — the empty
+      // state renders no picker either.
       const pick =
         (initialValue && opts.some((o) => o.value === initialValue) && initialValue) ||
         (field.defaultValue && opts.some((o) => o.value === field.defaultValue) && field.defaultValue) ||
         opts[0]?.value;
-      setValue(pick || undefined);
+      setValue(pick || initialValue || undefined);
     })();
     return () => {
       active = false;
@@ -1269,7 +1290,13 @@ function DynamicSelectRow({
           {field.placeholder ?? "No options available."}
         </FieldDescription>
       ) : (
-        <Select value={value} onValueChange={setValue}>
+        <Select
+          value={value}
+          onValueChange={(v) => {
+            picked.current = true;
+            setValue(v);
+          }}
+        >
           <SelectTrigger id={field.key} aria-label={field.label}>
             <SelectValue placeholder={field.placeholder ?? field.label} />
           </SelectTrigger>
