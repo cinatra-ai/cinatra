@@ -34,7 +34,11 @@ const read = (rel: string) =>
 // reads and the chrome). Every wiring invariant below is a property of the
 // SURFACE, so it is pinned against both halves.
 const SCREEN =
-  read("../extensions-marketplace-screen.tsx") + "\n" + read("../marketplace-card-nodes.tsx");
+  read("../extensions-marketplace-screen.tsx") +
+  "\n" +
+  read("../marketplace-card-nodes.tsx") +
+  "\n" +
+  read("../marketplace-card-shell.tsx");
 const MODAL = read("../marketplace-detail-modal.tsx");
 const PANEL = read("../extension-install-scope-panel.tsx");
 
@@ -42,6 +46,7 @@ describe("marketplace screen wiring", () => {
   it("mounts the IN-CARD panel for connector/artifact/workflow installs — no popup on the card path", () => {
     expect(SCREEN).toMatch(/isInstallAccessTargetKind\(card\.kindSlug\)/);
     expect(SCREEN).toMatch(/<CardFaceSwitcher/);
+    expect(SCREEN).toMatch(/<MarketplaceCardInstallShell/);
     expect(SCREEN).toMatch(/<ExtensionInstallScopePanel/);
     // The card's own CTA opens the panel; it never renders a popup.
     expect(SCREEN).toMatch(/<InstallPanelOpenButton>Install now<\/InstallPanelOpenButton>/);
@@ -66,10 +71,11 @@ describe("marketplace screen wiring", () => {
   });
 
   it("passes the UNBOUND action so the panel threads accessTarget itself", () => {
-    // The screen injects the UNBOUND action into the composition, which hands
-    // it to the panel unbound (the bound `.bind()` variants are the form CTAs).
+    // The screen publishes the UNBOUND action to the grid-level install context
+    // (cinatra#2539); the panel reads it from there and threads accessTarget
+    // itself. The bound `.bind()` variants remain the form CTAs' actions.
     expect(SCREEN).toMatch(/installAction: installExtensionPackageFormAction/);
-    expect(SCREEN).toMatch(/installAction=\{installFormAction\}/);
+    expect(SCREEN).toMatch(/<InstallPanelScopeProvider/);
   });
 });
 
