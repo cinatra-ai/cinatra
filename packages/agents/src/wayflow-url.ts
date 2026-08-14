@@ -109,9 +109,11 @@ export function describeWayflowDispatchError(
     `Could not reach the agent runtime at ${wayflowUrl} — fetch failed${reason}. ` +
     `Check that the WayFlow runtime is running and reachable (e.g. the dev ` +
     `tunnel/Funnel and WAYFLOW_BASE_URL). On a local dev install the runtime ` +
-    `is profile-gated and does NOT start by default: start it with ` +
-    `\`cinatra instance wayflow start\` (or: \`docker compose --profile wayflow ` +
-    `up -d --build wayflow\` with docker/wayflow/.wayflow.env generated).`
+    `is profile-gated and does NOT start by default. If your cinatra-cli is ` +
+    `newer than v0.1.8, try \`cinatra instance wayflow start\`. Otherwise, from ` +
+    `the checkout root: \`source .env.local && node scripts/gen-wayflow-env.mjs ` +
+    `--require-bridge-token && docker compose -p cinatra_cinatra -f docker-compose.yml ` +
+    `-f docker-compose.dev.yml --profile wayflow up -d --build wayflow\`.`
   );
 }
 

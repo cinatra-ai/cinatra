@@ -22,6 +22,19 @@ describe("describeWayflowDispatchError (#562)", () => {
     // install never starts the profile-gated runtime, so the connectivity
     // failure must tell the operator how to start it.
     expect(out).toContain("cinatra instance wayflow start");
+    // The CLI command is only real on cinatra-cli newer than the last
+    // release (v0.1.8 lacks it) — the message must caveat it, not assert it
+    // unconditionally as a phantom command.
+    expect(out).toContain("newer than v0.1.8");
+    // The docker fallback must be complete and pinned to the live stack's
+    // compose project, or it forks a separate `cinatra` project that can't
+    // see the running network (the exact footgun this text used to cause).
+    expect(out).toContain("-p cinatra_cinatra");
+    expect(out).toContain("docker-compose.yml");
+    expect(out).toContain("docker-compose.dev.yml");
+    // The bridge-token env file must be generated before compose comes up,
+    // or the wayflow container refuses to boot.
+    expect(out).toContain("gen-wayflow-env.mjs --require-bridge-token");
     // No longer the bare, undebuggable message.
     expect(out).not.toBe("fetch failed");
   });
