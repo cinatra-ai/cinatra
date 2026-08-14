@@ -78,13 +78,39 @@ export async function deriveRunHitlContext(
       : {};
 
   if (interrupt) {
+    // NORMALIZATION BOUNDARY. A setup-loop interrupt is the one
+    // interrupt shape that legitimately arrives WITHOUT a review-task identity:
+    // setup gates have no review_task row at all (the synthetic `setup-<runId>`
+    // id exists to bypass them), so `reviewTaskId` is synthesized below. The
+    // same run must stay actionable when the interrupt is equally thin in its
+    // OTHER two fields — an absent renderer, or a renderer with an empty schema
+    // to render. Without this, a setup run whose stored interrupt lost its
+    // schema derives a context that passes the panel's "has xRenderer" gate and
+    // then renders an empty form: present, but not actionable.
+    //
+    // Deliberately narrow: only setup-loop runs (no a2aTaskId — a WayFlow gate
+    // has its own schema source), and the schema is only substituted for the
+    // GENERIC setup renderer. A gate that names its own renderer keeps whatever
+    // schema it emitted, empty included — those renderers drive themselves off
+    // `currentValues` and must not be handed the template's input schema.
+    const isSetupLoopGate = !run.a2aTaskId;
+    const interruptSchema = interrupt.schema ?? {};
+    const xRenderer =
+      interrupt.xRenderer || (isSetupLoopGate ? SETUP_FALLBACK_RENDERER : "");
+    const needsTemplateSchema =
+      isSetupLoopGate &&
+      xRenderer === SETUP_FALLBACK_RENDERER &&
+      Object.keys(interruptSchema).length === 0;
+
     return {
-      xRenderer: interrupt.xRenderer,
+      xRenderer,
       childRunId: null,
       reviewTaskId:
         interrupt.reviewTaskId ||
         (run.a2aTaskId ? `wayflow-${run.a2aTaskId}` : `setup-${run.id}`),
-      inputSchema: interrupt.schema ?? {},
+      inputSchema: needsTemplateSchema
+        ? await readTemplateInputSchema(run, options)
+        : interruptSchema,
       // Run input params first so live interrupt values win on key collisions.
       currentValues: { ...runInputParams, ...(interrupt.values ?? {}) },
       ...(interrupt.fieldName ? { fieldName: interrupt.fieldName } : {}),
@@ -105,18 +131,29 @@ export async function deriveRunHitlContext(
 
   // Setup-loop run (paused before any execution started): generic approval
   // form over the template's input schema.
-  const template =
-    options?.template !== undefined
-      ? options.template
-      : await readAgentTemplateById(run.templateId);
   return {
     xRenderer: SETUP_FALLBACK_RENDERER,
     childRunId: null,
     reviewTaskId: `setup-${run.id}`,
-    inputSchema:
-      template?.inputSchema && typeof template.inputSchema === "object"
-        ? (template.inputSchema as Record<string, unknown>)
-        : {},
+    inputSchema: await readTemplateInputSchema(run, options),
     currentValues: runInputParams,
   };
+}
+
+/**
+ * The template's input schema — the schema source for BOTH generic setup-form
+ * paths (no readable interrupt, and a readable interrupt that carries none).
+ * Reuses a template the caller already loaded; only reads on the rare fallback.
+ */
+async function readTemplateInputSchema(
+  run: AgentRunRecord,
+  options?: { template?: AgentTemplateRecord | null },
+): Promise<Record<string, unknown>> {
+  const template =
+    options?.template !== undefined
+      ? options.template
+      : await readAgentTemplateById(run.templateId).catch(() => null);
+  return template?.inputSchema && typeof template.inputSchema === "object"
+    ? (template.inputSchema as Record<string, unknown>)
+    : {};
 }
