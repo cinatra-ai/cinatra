@@ -281,13 +281,16 @@ export const runWaitNotifier: RunWaitNotifier = {
       // reproduces the synthetic `setup-<runId>` identity for a setup-field
       // pause. Best-effort like the rest of this path: an unreadable context
       // classifies as an approval, i.e. the pre-existing copy.
+      // DESTRUCTURED, like every other dynamic import on this path: a namespace
+      // import of this barrel is opaque to the org-write boundary gate, which
+      // then has to assume the module's writers are reachable from here.
       // `.then(...)` (not a bare call) so a synchronous throw is caught too:
       // the copy refinement must never be able to suppress the notification.
-      const agents = await import("@cinatra-ai/agents");
+      const { deriveRunHitlContext } = await import("@cinatra-ai/agents");
       const interrupt =
         reason === "pending_approval"
           ? await Promise.resolve()
-              .then(() => agents.deriveRunHitlContext(run))
+              .then(() => deriveRunHitlContext(run))
               .catch(() => null)
           : null;
       const { resolveAgentRunHref, createNotificationForRecipient } =
