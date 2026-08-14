@@ -1016,6 +1016,9 @@ importers:
       '@cinatra-ai/sdk-extensions':
         specifier: workspace:*
         version: link:../../../packages/sdk-extensions
+      server-only:
+        specifier: ^0.0.1
+        version: 0.0.1
     devDependencies:
       '@typescript-eslint/parser':
         specifier: 8.65.0
