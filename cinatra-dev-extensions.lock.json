@@ -245,12 +245,12 @@
     {
       "packageName": "@cinatra-ai/google-appointment-schedules-connector",
       "repo": "cinatra-ai/google-appointment-schedules-connector",
-      "resolvedSha": "b9c1b5072b78580a4ab3d08d91a18bd2a13d5610"
+      "resolvedSha": "1307415dc983629bad7cd24718a589b697463607"
     },
     {
       "packageName": "@cinatra-ai/google-calendar-connector",
       "repo": "cinatra-ai/google-calendar-connector",
-      "resolvedSha": "680a36c1c1e3a3a7bbbd3e37996f81e8f38efab5"
+      "resolvedSha": "55723f95811141b01ddbeaefec93ec732ba83a0f"
     },
     {
       "packageName": "@cinatra-ai/google-oauth-connector",
