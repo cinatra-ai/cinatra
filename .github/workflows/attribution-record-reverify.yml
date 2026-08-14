@@ -150,7 +150,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: cinatra-ai/ci
-          ref: bf9852181490703b181c291317b62663d91b308c
+          ref: fdc26811b97f435bbf8a754247631db39267a197
           path: .truthful-attribution-gate
           persist-credentials: false
 
