@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>issue 2724 — component-level proof</title>
+<style>
+  :root{
+    --background:#f1f1ed; --foreground:#15213a; --surface:#f7f7f3; --surface-strong:#ffffff;
+    --muted:#5a6477; --line:rgba(21,33,58,0.14); --warning:#a6384f; --r-card:1rem;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:28px;background:var(--background);color:var(--foreground);
+    font-family:ui-sans-serif,-apple-system,"Segoe UI",Inter,system-ui,sans-serif;}
+  h1{font-size:15px;margin:0 0 4px;letter-spacing:.01em}
+  .sub{font-size:12px;color:var(--muted);margin:0 0 22px}
+  h2{font-size:13px;margin:26px 0 10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .col > .tag{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+    display:inline-block;padding:2px 8px;border-radius:999px;margin-bottom:8px}
+  .before .tag{background:rgba(166,56,79,.12);color:#a6384f}
+  .after .tag{background:rgba(54,78,129,.12);color:#364e81}
+  .case{font-size:11px;color:var(--muted);margin:10px 0 6px}
+
+  /* Run-card header — the real panel chrome (soft-panel rounded-card px-6 py-5). */
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-card);
+    padding:20px 24px;box-shadow:0 1px 3px rgba(0,0,0,.07)}
+  .panel-head{display:flex;align-items:center;justify-content:space-between;gap:16px}
+  .panel-title{font-size:14px;font-weight:600}
+  /* Badge, variant="outline" (h-5, rounded-4xl, px-2, text-xs, font-medium). */
+  .badge{display:inline-flex;height:20px;align-items:center;gap:4px;border-radius:28px;
+    border:1px solid var(--line);color:var(--foreground);padding:2px 8px;font-size:12px;
+    font-weight:500;white-space:nowrap}
+  .badge svg{width:12px;height:12px}
+  .hl{outline:2px solid #a6384f;outline-offset:3px;border-radius:28px}
+  .hl-ok{outline:2px solid #2f6f4f;outline-offset:3px;border-radius:28px}
+
+  /* Notification row shell. */
+  .row{display:flex;gap:12px;align-items:flex-start;background:var(--surface-strong);
+    border:1px solid var(--line);border-radius:var(--r-card);padding:14px 16px;
+    box-shadow:0 1px 3px rgba(0,0,0,.07)}
+  .glyph{flex:0 0 auto;width:32px;height:32px;border-radius:10px;display:flex;
+    align-items:center;justify-content:center;background:rgba(166,56,79,.10);color:#a6384f}
+  .row-title{font-size:14px;font-weight:600;display:block}
+  .row-body{margin:2px 0 0;font-size:14px;line-height:20px;color:var(--muted)}
+  .row-meta{margin:4px 0 0;font-size:12px;color:var(--muted)}
+  .note{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;
+    background:rgba(21,33,58,.06);padding:1px 5px;border-radius:5px}
+</style>
+</head>
+<body>
+<h1>cinatra issue 2724 — component-level proof (both surfaces, both states)</h1>
+<p class="sub">Copy strings are produced by the shipped functions
+  <code>runStatusBadgeLabel</code> and <code>buildRunAwaitingHumanNotificationInput</code>,
+  not typed by hand. Left = before this change, right = after.</p>
+
+<h2>Surface A · run-card badge</h2>
+<div class="cols">
+  <div class="col before">
+    <span class="tag">before</span>
+    <p class="case">Setup-field INPUT pause (agent collecting the “Idea” field)</p>
+    <div class="panel"><div class="panel-head">
+      <span class="panel-title">Agentic Run Progress</span>
+      <span class="badge hl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>pending approval</span>
+    </div></div>
+    <p class="case">Genuine review gate (human approves work already done)</p>
+    <div class="panel"><div class="panel-head">
+      <span class="panel-title">Agentic Run Progress</span>
+      <span class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>pending approval</span>
+    </div></div>
+    <p class="note">Both waits sit on <code>pending_approval</code>, so the status — and the
+      <code>RunHumanWaitReason</code> enum — render the same string for both. Nothing is being
+      approved in the first case.</p>
+  </div>
+  <div class="col after">
+    <span class="tag">after</span>
+    <p class="case">Setup-field INPUT pause (agent collecting the “Idea” field)</p>
+    <div class="panel"><div class="panel-head">
+      <span class="panel-title">Agentic Run Progress</span>
+      <span class="badge hl-ok"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Awaiting input</span>
+    </div></div>
+    <p class="case">Genuine review gate (human approves work already done)</p>
+    <div class="panel"><div class="panel-head">
+      <span class="panel-title">Agentic Run Progress</span>
+      <span class="badge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>pending approval</span>
+    </div></div>
+    <p class="note">The discriminator reads the interrupt: the synthetic
+      <code>setup-&lt;runId&gt;</code> identity or the setup payload’s <code>fieldName</code>.
+      The review gate is untouched.</p>
+  </div>
+</div>
+
+<h2>Surface B · awaiting-human notification row</h2>
+<div class="cols">
+  <div class="col before">
+    <span class="tag">before</span>
+    <p class="case">Setup-field INPUT pause</p>
+    <div class="row">
+      <span class="glyph"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 17h.01"/></svg></span>
+      <div>
+        <span class="row-title">"Blog draft" is awaiting your approval</span>
+        <p class="row-body">Open the run to review and approve the pending step.</p>
+        <p class="row-meta">Blog draft writer · 2 minutes ago</p>
+      </div>
+    </div>
+    <p class="case">Genuine review gate</p>
+    <div class="row">
+      <span class="glyph"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 17h.01"/></svg></span>
+      <div>
+        <span class="row-title">"Nightly sync" is awaiting your approval</span>
+        <p class="row-body">Open the run to review and approve the pending step.</p>
+        <p class="row-meta">Nightly sync · 5 minutes ago</p>
+      </div>
+    </div>
+    <p class="note">Fixing only the badge would leave this row telling the user to approve a run
+      that just wants a field filled in.</p>
+  </div>
+  <div class="col after">
+    <span class="tag">after</span>
+    <p class="case">Setup-field INPUT pause</p>
+    <div class="row">
+      <span class="glyph"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 17h.01"/></svg></span>
+      <div>
+        <span class="row-title">"Blog draft" needs your input</span>
+        <p class="row-body">Open the run to fill in the requested fields.</p>
+        <p class="row-meta">Blog draft writer · 2 minutes ago</p>
+      </div>
+    </div>
+    <p class="case">Genuine review gate</p>
+    <div class="row">
+      <span class="glyph"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 17h.01"/></svg></span>
+      <div>
+        <span class="row-title">"Nightly sync" is awaiting your approval</span>
+        <p class="row-body">Open the run to review and approve the pending step.</p>
+        <p class="row-meta">Nightly sync · 5 minutes ago</p>
+      </div>
+    </div>
+    <p class="note">Same classifier as the badge, so the two surfaces can never disagree.
+      The row keeps its dedupe key, its kind, and its
+      <code>runAwaitingHuman.reason</code> payload.</p>
+  </div>
+</div>
+</body>
+</html>
