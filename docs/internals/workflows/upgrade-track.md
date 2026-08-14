@@ -504,6 +504,36 @@ still preview-only).
   — a workaround retired by this major, tracked here per the cross-cutting
   obsolete-on-upgrade check.
 
+#### 8.1.1 Addendum (cinatra#2720) — the CHECK path is on stable 7.0.2; the
+tooling `typescript` stays on 6
+
+The half of the TS 7 hop that is NOT upstream-gated has landed. The
+type-**check** path never needed the programmatic compiler API — it only runs a
+CLI — so it moved to the GA release ahead of the coupled-group hop:
+
+- **GA packaging, grounded on npm + the release announcement.** The stable
+  native compiler ships as the mainstream **`typescript`** package (`latest` =
+  `7.0.2`), whose sole bin is **`tsc`**; the Go binary arrives through
+  per-platform optional deps (`@typescript/typescript-<os>-<arch>`). There is no
+  `@typescript/native` package and no stable dist-tag on
+  `@typescript/native-preview` — that channel froze at
+  `7.0.0-dev.20260707.2` and is superseded by `typescript@next`. So `tsc` from
+  `typescript@7.0.2`, not `tsgo`, is the canonical CLI type checker.
+- **Both majors coexist by alias.** Root `devDependencies` keep
+  `typescript: "^6.0.3"` (unchanged — `@typescript-eslint` still peers
+  `<6.1.0`, and the editor/API consumers need it) and add
+  `typescript7: "npm:typescript@7.0.2"`.
+- **Both check scripts invoke their binary by PATH, never by bare name.**
+  `typecheck` runs `node node_modules/typescript7/bin/tsc --noEmit`;
+  `typecheck:slow` runs `node node_modules/typescript/bin/tsc --noEmit`. This is
+  load-bearing: both packages declare a bin named `tsc`, so `node_modules/.bin/tsc`
+  is a collision that pnpm resolves silently (observed: the alias wins). A bare
+  `tsc` in a script would therefore be a coin-flip between the two majors.
+  Anything added later that must pin a major has to path-invoke it the same way.
+- **Still gated:** the coupled-group hop — moving the `typescript` dependency
+  itself to 7 — remains blocked on a TS-7-aware `@typescript-eslint` line (the
+  API returns in 7.1). The row above stands for that half.
+
 Obsolete-on-upgrade note for the TS 7 lane: also re-check the ESLint-10
 react-version workaround in `eslint.config.mjs` (§4.5) — the `eslint-plugin-react`
 / `@typescript-eslint` versions the TS 7 bump drags may change whether that
