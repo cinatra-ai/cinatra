@@ -33,21 +33,33 @@ import { createPermissionsPrimitiveHandlers } from "@cinatra-ai/permissions/mcp-
 import { createTriggerHandlers } from "@cinatra-ai/trigger";
 import { createExtensionsPrimitiveHandlers } from "@cinatra-ai/extensions/mcp-handlers";
 
-// Structural data contract for the calendar appointment-schedule surface —
-// resolved by SLUG through the manifest entry-module loader (the host names no
-// connector package). The export shape below is the host↔connector contract.
+// Structural data contract for the appointment-schedule surface — resolved by
+// SLUG through the manifest entry-module loader (the host names no connector
+// package). The export shape below is the host↔connector contract, fixed by
+// the connector package and mirrored here (cinatra#2367).
+//
+// ONE NAME, ONE OWNER: the connector owns `appointment_schedule_list` (its own
+// MCP tool, spread in below through loadConnectorPrimitiveHandlers). The core
+// keeps exactly ONE bridge — `appointment_schedule_add` — as an
+// extension-backed facade, because the assistant's add flow needs the
+// invoking-user identity the host holds. There is deliberately no core list
+// bridge: a second registration under an `appointment_schedule_*` name would be
+// silently overwritten by the spread order below
+// (appointment-schedule-primitive-ownership.test.ts pins that).
 type AppointmentScheduleModule = {
-  getStoredGoogleCalendarAppointments: (userId?: string) => unknown;
-  addGoogleCalendarAppointmentSchedule: (url: string) => Promise<unknown>;
-  addUserGoogleCalendarAppointmentSchedule: (userId: string, url: string) => Promise<unknown>;
+  getStoredGoogleAppointmentSchedules: (userId: string) => unknown;
+  addUserGoogleAppointmentSchedule: (
+    userId: string,
+    url: string,
+    calendarId?: string,
+  ) => Promise<unknown>;
 };
 
-const APPOINTMENT_SCHEDULE_SLUG = "google-calendar-connector";
+const APPOINTMENT_SCHEDULE_SLUG = "google-appointment-schedules-connector";
 
 const APPOINTMENT_SCHEDULE_EXPORTS = [
-  "getStoredGoogleCalendarAppointments",
-  "addGoogleCalendarAppointmentSchedule",
-  "addUserGoogleCalendarAppointmentSchedule",
+  "getStoredGoogleAppointmentSchedules",
+  "addUserGoogleAppointmentSchedule",
 ] as const;
 
 async function loadAppointmentScheduleModule(): Promise<AppointmentScheduleModule> {
@@ -108,22 +120,43 @@ export async function collectAllPrimitiveHandlers() {
     ...(await loadConnectorPrimitiveHandlers()),
     ...createPermissionsPrimitiveHandlers(),
     ...createTriggerHandlers(),
-    "calendar_appointments_list": async () => {
-      const calendar = await loadAppointmentScheduleModule();
-      return calendar.getStoredGoogleCalendarAppointments();
-    },
-    "calendar_appointments_add": async (request: unknown) => {
-      const { input } = request as { input?: Record<string, unknown> };
+    // The ONE retained core appointment-schedule bridge (cinatra#2367). The
+    // list side is the connector's own tool, spread in above — do NOT add a
+    // core `appointment_schedule_list` back.
+    //
+    // `calendarId` is OPTIONAL: omitted, the connector resolves the account's
+    // PRIMARY calendar (the ratified default-calendar exception); supplied, the
+    // connector validates it against a fresh account-scoped calendar list and
+    // derives `calendarSummary` server-side. Neither the calendar name nor the
+    // user id is ever taken from agent input.
+    "appointment_schedule_add": async (request: unknown) => {
+      const { input, actor } = (request ?? {}) as {
+        input?: Record<string, unknown>;
+        actor?: { userId?: string } | null;
+      };
       const url = typeof input?.url === "string" ? input.url : "";
       if (!url) return { error: "A booking page URL is required." };
-      const invokingUserId = typeof input?._userId === "string" ? input._userId : undefined;
-      const calendar = await loadAppointmentScheduleModule();
-      if (invokingUserId) {
-        await calendar.addUserGoogleCalendarAppointmentSchedule(invokingUserId, url);
-        return calendar.getStoredGoogleCalendarAppointments(invokingUserId);
+      // Schedules are stored PER USER, so the invoking human must be known.
+      // `actor` is the TRUSTED host-built context (the run row / session), never
+      // agent-supplied `input` — there is no spoofing surface here.
+      const invokingUserId =
+        typeof actor?.userId === "string" && actor.userId.trim().length > 0
+          ? actor.userId
+          : undefined;
+      if (!invokingUserId) {
+        return {
+          error:
+            "Appointment schedules are saved per user, and this call carries no invoking user.",
+        };
       }
-      await calendar.addGoogleCalendarAppointmentSchedule(url);
-      return calendar.getStoredGoogleCalendarAppointments();
+      const rawCalendarId = typeof input?.calendarId === "string" ? input.calendarId.trim() : "";
+      const schedules = await loadAppointmentScheduleModule();
+      await schedules.addUserGoogleAppointmentSchedule(
+        invokingUserId,
+        url,
+        rawCalendarId.length > 0 ? rawCalendarId : undefined,
+      );
+      return schedules.getStoredGoogleAppointmentSchedules(invokingUserId);
     },
   };
 }

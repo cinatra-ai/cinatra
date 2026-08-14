@@ -44,9 +44,15 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 // keeps the vendored primitives clear of the `@/` import-ban (which is itself
 // kind-agnostic). Nothing below is connector-specific.
 const VENDOR_MANIFEST = [
+  // google-calendar-connector shed its appointment-schedule form with the
+  // extraction (cinatra#2367): field/input-group/label/separator/input/textarea
+  // went with it, leaving `button` as the only design-registry primitive the
+  // retained connection UI (Connect/Disconnect + its confirm dialog) imports
+  // directly. `dialog.tsx` / `link.tsx` are the connector's OWN components, not
+  // registry items, so they are outside this channel.
   {
     extensionDir: "extensions/cinatra-ai/google-calendar-connector",
-    uiItems: ["alert", "button", "field", "input-group"],
+    uiItems: ["button"],
   },
   {
     extensionDir: "extensions/cinatra-ai/twenty-connector",

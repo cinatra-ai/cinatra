@@ -88,6 +88,7 @@
       "@cinatra-ai/gemini-connector": "https://github.com/cinatra-ai/gemini-connector.git",
       "@cinatra-ai/github-connector": "https://github.com/cinatra-ai/github-connector.git",
       "@cinatra-ai/gmail-connector": "https://github.com/cinatra-ai/gmail-connector.git",
+      "@cinatra-ai/google-appointment-schedules-connector": "https://github.com/cinatra-ai/google-appointment-schedules-connector.git",
       "@cinatra-ai/google-calendar-connector": "https://github.com/cinatra-ai/google-calendar-connector.git",
       "@cinatra-ai/google-oauth-connector": "https://github.com/cinatra-ai/google-oauth-connector.git",
       "@cinatra-ai/hitl-prompt-drive-skill": "https://github.com/cinatra-ai/hitl-prompt-drive-skill.git",

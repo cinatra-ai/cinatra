@@ -342,6 +342,7 @@ const nextConfig: NextConfig = {
     "@cinatra-ai/gemini-connector",
     "@cinatra-ai/gmail-connector",
     "@cinatra-ai/google-calendar-connector",
+    "@cinatra-ai/google-appointment-schedules-connector",
     "@cinatra-ai/nango-connector",
     "@cinatra-ai/google-oauth-connection",
     "@cinatra-ai/mcp-server",

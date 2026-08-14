@@ -620,15 +620,14 @@ export async function saveDevExtensionsSettingsAction(formData: FormData) {
 // wires it (pinned by set-default-providers-skill-write-removed.test.ts).
 // ---------------------------------------------------------------------------
 
-// Gmail send-as refresh/clear + Google Calendar appointment-schedule mutations
-// are owned by the connectors: the manage-gated extension actions
-// (gmail-connector/src/actions.ts +
-// google-calendar-connector/src/setup-actions.ts, each
-// `requireExtensionAction(pkg,"manage")`-first) are the ONLY path. Likewise the
-// Google OAuth client-credential save lives in
-// google-oauth-connector/src/actions.ts behind the same manage gate. No
-// lower-privilege copies live here, so there is no reach-around to the same
-// mutations.
+// Gmail send-as refresh/clear is owned by its connector: the gated extension
+// action (gmail-connector/src/actions.ts, `requireExtensionAction(pkg,…)`-first)
+// is the ONLY path. Likewise the Google OAuth client-credential save lives in
+// google-oauth-connector/src/actions.ts behind the same gate, and adding an
+// appointment schedule is a host-dispatched named action on the
+// google-appointment-schedules connector (the host resolves and authorizes the
+// actor before the handler runs — cinatra#2367). No lower-privilege copies live
+// here, so there is no reach-around to the same mutations.
 
 // Silence unused-import warnings for helpers kept as safety shims.
 void createNotification;

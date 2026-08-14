@@ -92,10 +92,14 @@ describe("provenance — vendored files match registry source modulo rewrite", (
     }
   });
 
-  it("vendors at least the google-calendar primitive closure", () => {
+  // The appointment-schedule extraction (cinatra#2367) took the connector's
+  // form with it, so google-calendar-connector's DIRECT registry imports shrank
+  // to `button` alone (the retained Connect/Disconnect UI). Pinned exactly —
+  // `arrayContaining` would not catch a silent re-widening, and the form's old
+  // primitives must NOT come back with it.
+  it("vendors exactly the google-calendar connection-UI closure (button only)", () => {
     expect(VENDOR_MANIFEST[0].extensionDir).toContain("google-calendar-connector");
-    expect(VENDOR_MANIFEST[0].uiItems).toEqual(
-      expect.arrayContaining(["alert", "button", "field", "input-group"]),
-    );
+    expect(VENDOR_MANIFEST[0].uiItems).toEqual(["button"]);
+    expect(resolveUiClosure(VENDOR_MANIFEST[0].uiItems)).toEqual(["button"]);
   });
 });
