@@ -1037,3 +1037,172 @@ describe("closure mode — review r3: builtin recognition is EXACT", () => {
     expect(result.mode).toBe("passthrough");
   });
 });
+
+// ---------------------------------------------------------------------------
+// cinatra#2747 — the INLINE-mode prune runs on EVERY emit path, and the packed
+// manifest can never leave the builder in a shape the host installer refuses.
+//
+// Before this fix only the `bundled` path pruned. `none` (no serverEntry) and
+// `passthrough` (already-built entry) copied the SOURCE manifest verbatim, so
+// their published tarballs declared runtime dependencies with nothing bundled
+// beside them — the exact shape the package-store gate refuses forever
+// ("runtime dependencies are neither bundled in the tarball nor covered by a
+// signed materialization plan"). These tests pin the closed hole and prove the
+// pack dir is installable by round-tripping it through the REAL materializer.
+// ---------------------------------------------------------------------------
+
+async function packDirInstallsIntoStore(packDir: string, name: string, version: string, storeRoot: string) {
+  const staging = await tempDir("bse-2747-tar-");
+  const out = path.join(staging, "pkg.tgz");
+  await tar.c({ gzip: true, cwd: path.dirname(packDir), file: out }, [path.basename(packDir)]);
+  const bytes = await readFile(out);
+  return materializePackageToStore(
+    {
+      packageName: name,
+      version,
+      expectedIntegrity: sriForBytes(bytes, "sha512"),
+      registryUrl: "https://registry.cinatra.ai",
+      storeRoot,
+    },
+    {
+      fetchTarball: async () => ({ bytes, integrity: sriForBytes(bytes, "sha512") }),
+      now: () => "2026-08-14T00:00:00.000Z",
+    },
+  );
+}
+
+describe("cinatra#2747 — inline mode prunes on every emit path", () => {
+  const NO_ENTRY_MANIFEST: FixtureManifest = {
+    name: "@cinatra-test/no-entry-fixture",
+    version: "0.0.1",
+    type: "module",
+    files: ["src", "cinatra"],
+    dependencies: { "fixture-dep": "1.0.0", recharts: "^3.8.1" },
+    peerDependencies: { "@cinatra-ai/sdk-extensions": "*" },
+    cinatra: { apiVersion: "cinatra.ai/v1", kind: "artifact" },
+  };
+
+  it("`none` (no cinatra.serverEntry): the packed manifest is PRUNED — the shape that was published unusable", async () => {
+    const src = path.join(await tempDir("bse-2747-none-"), "pkg");
+    await writeFixture(src, NO_ENTRY_MANIFEST, { "src/index.ts": "export {};\n" });
+    const sourceBefore = await readFile(path.join(src, "package.json"), "utf8");
+
+    const result = await buildServerEntryPack({ packageDir: src });
+    tempDirs.push(path.dirname(result.packDir));
+    expect(result.mode).toBe("none");
+    expect(result.dependencyMode).toBe("inline");
+    expect(result.declaredDependencies).toEqual(["fixture-dep", "recharts"]);
+    expect(result.prunedDependencies).toEqual(["fixture-dep", "recharts"]);
+
+    const packed = JSON.parse(await readFile(path.join(result.packDir, "package.json"), "utf8"));
+    expect(packed.dependencies).toBeUndefined();
+    // peerDependencies are NEVER touched (host-supplied / optional).
+    expect(packed.peerDependencies).toEqual({ "@cinatra-ai/sdk-extensions": "*" });
+    // The SOURCE tree is never mutated — the rewrite is pack-dir only.
+    expect(await readFile(path.join(src, "package.json"), "utf8")).toBe(sourceBefore);
+
+    // …and the pack dir now installs through the REAL materializer.
+    const storeRoot = await tempDir("bse-2747-store-none-");
+    const mat = await packDirInstallsIntoStore(result.packDir, NO_ENTRY_MANIFEST.name as string, "0.0.1", storeRoot);
+    expect(mat.storeDir).toContain("artifact");
+  });
+
+  it("`passthrough` (already-built entry): the packed manifest is PRUNED and the pack dir installs", async () => {
+    const src = path.join(await tempDir("bse-2747-pass-"), "pkg");
+    await writeFixture(
+      src,
+      {
+        name: "@cinatra-test/passthrough-fixture",
+        version: "0.0.1",
+        type: "module",
+        dependencies: { "fixture-dep": "1.0.0" },
+        cinatra: { kind: "connector", serverEntry: "./register.mjs" },
+      },
+      {
+        // A prebuilt entry that imports NOTHING beyond node builtins + an
+        // in-package module: legal for a standalone inline artifact.
+        "register.mjs": 'import { createHash } from "node:crypto";\nimport { tag } from "./impl.mjs";\nexport function register(ctx) { ctx.logger.info(`${tag}${typeof createHash}`); }\n',
+        "impl.mjs": 'export const tag = "built";\n',
+        "node_modules/fixture-dep/package.json": JSON.stringify({ name: "fixture-dep", version: "1.0.0", main: "index.js" }),
+        "node_modules/fixture-dep/index.js": 'exports.dep = "unused";\n',
+      },
+    );
+
+    const result = await buildServerEntryPack({ packageDir: src });
+    tempDirs.push(path.dirname(result.packDir));
+    expect(result.mode).toBe("passthrough");
+    expect(result.prunedDependencies).toEqual(["fixture-dep"]);
+    const packed = JSON.parse(await readFile(path.join(result.packDir, "package.json"), "utf8"));
+    expect(packed.dependencies).toBeUndefined();
+    // The prebuilt entry is passed through BYTE-FOR-BYTE (never re-bundled).
+    expect(await readFile(path.join(result.packDir, "register.mjs"), "utf8")).toBe(
+      await readFile(path.join(src, "register.mjs"), "utf8"),
+    );
+
+    const storeRoot = await tempDir("bse-2747-store-pass-");
+    const mat = await packDirInstallsIntoStore(result.packDir, "@cinatra-test/passthrough-fixture", "0.0.1", storeRoot);
+    expect(mat.storeDir).toContain("connector");
+  });
+
+  it("`passthrough` in INLINE mode is residual-VALIDATED first: pruning never converts a loud refusal into an activation-time ERR_MODULE_NOT_FOUND", async () => {
+    const src = path.join(await tempDir("bse-2747-pass-bad-"), "pkg");
+    await writeFixture(
+      src,
+      {
+        name: "@cinatra-test/passthrough-unresolvable",
+        version: "0.0.1",
+        type: "module",
+        dependencies: { "left-pad": "^1.3.0" },
+        cinatra: { kind: "connector", serverEntry: "./register.mjs" },
+      },
+      { "register.mjs": 'import leftPad from "left-pad";\nexport function register() { return leftPad("x", 3); }\n' },
+    );
+    await expect(buildServerEntryPack({ packageDir: src })).rejects.toThrow(
+      /the prebuilt server entry "\.\/register\.mjs" imports "left-pad" at runtime, which is not a node builtin\. Inline mode publishes a STANDALONE artifact/,
+    );
+  });
+
+  it("CLOSURE mode is unchanged on both paths: declarations are KEPT (the signed-plan basis)", async () => {
+    const src = path.join(await tempDir("bse-2747-closure-none-"), "pkg");
+    await writeFixture(
+      src,
+      { ...NO_ENTRY_MANIFEST, cinatra: { ...(NO_ENTRY_MANIFEST.cinatra as Record<string, unknown>), dependencyMode: "closure" } },
+      { "src/index.ts": "export {};\n" },
+    );
+    const result = await buildServerEntryPack({ packageDir: src });
+    tempDirs.push(path.dirname(result.packDir));
+    expect(result.mode).toBe("none");
+    expect(result.dependencyMode).toBe("closure");
+    expect(result.prunedDependencies).toEqual([]);
+    const packed = JSON.parse(await readFile(path.join(result.packDir, "package.json"), "utf8"));
+    expect(packed.dependencies).toEqual({ "fixture-dep": "1.0.0", recharts: "^3.8.1" });
+  });
+
+  it("a host ABI peer in `dependencies` can never reach a PUBLISHED manifest in either mode (the install gate's own refusal branch, kept unreachable)", async () => {
+    const hostPeerDeps = {
+      name: "@cinatra-test/hostpeer-in-deps",
+      version: "0.0.1",
+      type: "module",
+      dependencies: { "@cinatra-ai/sdk-extensions": "^2.0.0" },
+    };
+    // CLOSURE: refused outright — a host peer is never a closure library.
+    const closureSrc = path.join(await tempDir("bse-2747-hostpeer-closure-"), "pkg");
+    await writeFixture(
+      closureSrc,
+      { ...hostPeerDeps, cinatra: { kind: "connector", dependencyMode: "closure" } },
+      { "src/index.ts": "export {};\n" },
+    );
+    await expect(buildServerEntryPack({ packageDir: closureSrc })).rejects.toThrow(
+      /host ABI peer\(s\) declared in "dependencies" \(@cinatra-ai\/sdk-extensions\)/,
+    );
+
+    // INLINE: pruned out with every other runtime declaration, so the packed
+    // manifest the installer reads never carries it.
+    const inlineSrc = path.join(await tempDir("bse-2747-hostpeer-inline-"), "pkg");
+    await writeFixture(inlineSrc, { ...hostPeerDeps, cinatra: { kind: "connector" } }, { "src/index.ts": "export {};\n" });
+    const result = await buildServerEntryPack({ packageDir: inlineSrc });
+    tempDirs.push(path.dirname(result.packDir));
+    const packed = JSON.parse(await readFile(path.join(result.packDir, "package.json"), "utf8"));
+    expect(packed.dependencies).toBeUndefined();
+  });
+});

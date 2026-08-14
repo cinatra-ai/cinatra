@@ -35,10 +35,23 @@
 // applies in both modes.
 //
 // DEPENDENCY MODES (cinatra#181 — library dependency closure):
-//   - `cinatra.dependencyMode` absent or "inline" (the DEFAULT — today's
-//     behavior, byte-identical): every runtime dependency reachable from the
-//     entry is INLINED into the bundle and `dependencies` is PRUNED from the
-//     packed manifest. The published artifact stands alone.
+//   - `cinatra.dependencyMode` absent or "inline" (the DEFAULT): every runtime
+//     dependency reachable from the entry is INLINED into the bundle and
+//     `dependencies` is PRUNED from the packed manifest. The published artifact
+//     stands alone.
+//     cinatra#2747: the prune now runs on ALL THREE emit paths, not just the
+//     bundled one. `none` (no serverEntry — nothing in the store is ever
+//     imported, so the declarations are build-time inputs) and `passthrough`
+//     (already-built entry, whose import graph is residual-VALIDATED first so
+//     the prune can never turn a loud install refusal into an opaque
+//     activation-time ERR_MODULE_NOT_FOUND) previously copied the SOURCE
+//     manifest verbatim and published runtime declarations with nothing
+//     bundled beside them — a shape the host installer refuses forever
+//     ("runtime dependencies are neither bundled in the tarball nor covered by
+//     a signed materialization plan"). Every path now ends in the packed-
+//     manifest self-check `assertPackedDependenciesAreSatisfiable`, the
+//     publish-time mirror of the host gate: the builder cannot emit a pack dir
+//     the installer would reject.
 //   - `cinatra.dependencyMode: "closure"` (declare-and-closure): declared
 //     runtime `dependencies` stay EXTERNAL in the bundle and are KEPT in the
 //     packed manifest — at install time the host materializes them from the
@@ -450,7 +463,7 @@ export function resolveDependencyMode(cinatra, modeOverride, packageName) {
  *    passthrough scan), so an unresolvable one is a build/scan error, never a
  *    silent allowance (review r0 finding 1).
  */
-function classifyClosureResidualImport(imp, { declaredDeps }) {
+function classifyClosureResidualImport(imp, { declaredDeps, dependencyMode = "closure" }) {
   const specifier = imp.path;
   if (isNodeBuiltin(specifier)) return null;
   const base = basePackageOfSpecifier(specifier);
@@ -490,11 +503,95 @@ function classifyClosureResidualImport(imp, { declaredDeps }) {
       `"${base}" (Node would resolve it outside that package)`
     );
   }
+  if (dependencyMode !== "closure") {
+    // INLINE mode (cinatra#2747): nothing ships beside the entry and the packed
+    // manifest's runtime `dependencies` are pruned, so a declared dep is NOT a
+    // satisfier here — only node builtins and in-package modules are.
+    return (
+      `imports "${specifier}" at runtime, which is not a node builtin. Inline mode publishes a ` +
+      `STANDALONE artifact (the packed manifest's runtime "dependencies" are pruned and the tarball ` +
+      `carries no node_modules), so a prebuilt entry may import only node builtins and in-package ` +
+      `modules — bundle it into the entry, or publish the source entry and let the builder inline it`
+    );
+  }
   return (
     `imports "${specifier}" at runtime, which is neither a node builtin nor a declared runtime ` +
     `dependency — declare it in "dependencies" (the signed materialization plan must cover it) ` +
     `or inline it`
   );
+}
+
+/**
+ * INLINE-mode dependency prune, applied IN PLACE to a pack dir's manifest
+ * (cinatra#2747). Returns the pruned names (sorted), or `[]` in closure mode /
+ * when the manifest declares none.
+ *
+ * The `bundled` path performs its prune inside its own single manifest rewrite
+ * (it also rewrites `cinatra.serverEntry` + `files`); this helper is the SAME
+ * prune for the two paths that copy the tree verbatim — `none` (no serverEntry)
+ * and `passthrough` (already-built entry). Before cinatra#2747 those two paths
+ * shipped the SOURCE declarations into the published manifest with nothing
+ * bundled beside them, which the host's install gate refuses forever.
+ */
+async function pruneInlineDependencies(packDir, dependencyMode) {
+  if (dependencyMode === "closure") return [];
+  const manifestPath = path.join(packDir, "package.json");
+  const packedPkg = JSON.parse(await readFile(manifestPath, "utf8"));
+  const pruned = Object.keys(packedPkg.dependencies ?? {}).sort();
+  if (pruned.length === 0) return [];
+  delete packedPkg.dependencies;
+  await writeFile(manifestPath, `${JSON.stringify(packedPkg, null, 2)}\n`);
+  return pruned;
+}
+
+/**
+ * PUBLISH-TIME MIRROR of the host installer's bundled-deps gate
+ * (`validateBundledDependencies`, src/lib/extension-package-store-core.ts) —
+ * cinatra#2747. Refuses to EMIT a pack dir whose packed manifest the host would
+ * refuse to materialize, so a violating package can never reach a registry:
+ *
+ *  - a HOST-PROVIDED SDK peer in `dependencies` is refused in EVERY dependency
+ *    mode (it belongs in `peerDependencies`; a bundled duplicate breaks ABI
+ *    identity) — the mirror of the gate's `hostProvidedInDeps` branch;
+ *  - in INLINE mode every declared runtime dependency must be PHYSICALLY
+ *    present under the pack's own `node_modules/` — the mirror of the gate's
+ *    `missing` branch. Inline mode inlines-and-prunes, so a surviving
+ *    declaration means the artifact is not standalone.
+ *
+ * CLOSURE mode's second satisfier (the signed materialization plan) is NOT
+ * checkable here: no plan exists at build time — the publish-time plan builder
+ * and its v2 signer have not shipped (see the DEPENDENCY MODES note above), so
+ * the host gate stays the authority for that mode and this check limits itself
+ * to what it can actually verify.
+ */
+async function assertPackedDependenciesAreSatisfiable(packDir, packageName, dependencyMode) {
+  const packedPkg = JSON.parse(await readFile(path.join(packDir, "package.json"), "utf8"));
+  const declared = Object.keys(packedPkg.dependencies ?? {});
+  if (declared.length === 0) return;
+  const hostPeers = declared.filter((n) => HOST_PROVIDED_PEERS.includes(n));
+  if (hostPeers.length > 0) {
+    throw new Error(
+      `[build-server-entry] ${packageName}: the packed manifest declares host-provided SDK package(s) ` +
+        `${hostPeers.map((s) => `"${s}"`).join(", ")} in "dependencies". These are host-internal peers — ` +
+        `declare them in "peerDependencies" and never bundle a copy (a duplicate SDK instance breaks ABI ` +
+        `identity). The installer refuses this tarball; refusing to emit the pack dir.`,
+    );
+  }
+  if (dependencyMode === "closure") return;
+  const missing = [];
+  for (const dep of declared) {
+    const entry = await statOrNull(path.join(packDir, "node_modules", ...dep.split("/")));
+    if (!entry?.isDirectory()) missing.push(dep);
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `[build-server-entry] ${packageName}: the packed manifest still declares runtime dependenc(y|ies) ` +
+        `${missing.map((s) => `"${s}"`).join(", ")} that the tarball does not carry. The installer never runs ` +
+        `npm/pnpm install, so the host refuses such a package at EVERY install ("runtime dependencies are ` +
+        `neither bundled in the tarball nor covered by a signed materialization plan"). Inline mode must ` +
+        `inline-and-prune every runtime dependency; refusing to emit a non-installable pack dir.`,
+    );
+  }
 }
 
 /** Valid npm package name (scoped or not) — the alias-target shape gate. */
@@ -694,6 +791,17 @@ export async function buildServerEntryPack({ packageDir, outDir, esbuildDir, mod
   // its declared deps; the signed plan alone covers them).
   if (!serverEntry) {
     await copyPackageTree(pkgDir, packDir);
+    // cinatra#2747 — INLINE mode prunes on THIS path too. A package with no
+    // `cinatra.serverEntry` has NO module the runtime store ever imports, so
+    // its runtime `dependencies` are build-time inputs (client-renderer
+    // bundles, codegen) that the tarball does not and need not carry. Keeping
+    // them declared made the PUBLISHED artifact permanently uninstallable:
+    // the installer never runs npm/pnpm install, so the store dir has no
+    // node_modules and the host's bundled-deps gate refuses every install with
+    // "runtime dependencies are neither bundled in the tarball nor covered by
+    // a signed materialization plan". Pruning is the honest packed shape.
+    const prunedDependencies = await pruneInlineDependencies(packDir, dependencyMode);
+    await assertPackedDependenciesAreSatisfiable(packDir, name, dependencyMode);
     return {
       mode: "none",
       dependencyMode,
@@ -701,7 +809,7 @@ export async function buildServerEntryPack({ packageDir, outDir, esbuildDir, mod
       packageName: name,
       entryRel: null,
       inlinedPackages: [],
-      prunedDependencies: [],
+      prunedDependencies,
       declaredDependencies,
     };
   }
@@ -741,20 +849,29 @@ export async function buildServerEntryPack({ packageDir, outDir, esbuildDir, mod
   // peers refused) so a closure passthrough that could never activate fails
   // HERE, at build time, with the same rule the bundle check applies.
   if (cls === "importable") {
-    if (dependencyMode === "closure") {
-      const esbuild = await loadEsbuild(esbuildDir);
-      await validateClosureEntryImports({
-        esbuild,
-        entryAbs,
-        pkgDir,
-        packageName: name,
-        entryRel: rel,
-        declaredDeps: new Set(declaredDependencies),
-        selfName: typeof pkg.name === "string" ? pkg.name : null,
-        exportsMap: pkg.exports,
-      });
-    }
+    // cinatra#2747 — the prebuilt entry's import graph is residual-VALIDATED in
+    // BOTH dependency modes now. Closure mode allows declared deps (the signed
+    // plan materializes them); INLINE mode allows node builtins + in-package
+    // modules ONLY, exactly like the inline bundle check, because inline mode
+    // publishes a STANDALONE artifact and the prune below removes the
+    // declarations. Validating first is what keeps that prune honest: without
+    // it, pruning would turn a LOUD install refusal into an opaque
+    // activation-time ERR_MODULE_NOT_FOUND.
+    const esbuild = await loadEsbuild(esbuildDir);
+    await validateClosureEntryImports({
+      esbuild,
+      entryAbs,
+      pkgDir,
+      packageName: name,
+      entryRel: rel,
+      dependencyMode,
+      declaredDeps: dependencyMode === "closure" ? new Set(declaredDependencies) : new Set(),
+      selfName: typeof pkg.name === "string" ? pkg.name : null,
+      exportsMap: pkg.exports,
+    });
     await copyPackageTree(pkgDir, packDir);
+    const prunedDependencies = await pruneInlineDependencies(packDir, dependencyMode);
+    await assertPackedDependenciesAreSatisfiable(packDir, name, dependencyMode);
     return {
       mode: "passthrough",
       dependencyMode,
@@ -762,7 +879,7 @@ export async function buildServerEntryPack({ packageDir, outDir, esbuildDir, mod
       packageName: name,
       entryRel: rel,
       inlinedPackages: [],
-      prunedDependencies: [],
+      prunedDependencies,
       declaredDependencies,
     };
   }
@@ -963,6 +1080,10 @@ export async function buildServerEntryPack({ packageDir, outDir, esbuildDir, mod
         `built-artifacts-only contract after rewrite. Refusing to emit a non-installable pack dir.`,
     );
   }
+  // cinatra#2747 — the SECOND half of the packed-manifest self-check: the
+  // bundled-deps contract. A builder bug that left a runtime declaration
+  // behind must fail HERE, never at a customer's install.
+  await assertPackedDependenciesAreSatisfiable(packDir, name, dependencyMode);
 
   return {
     mode: "bundled",
@@ -999,7 +1120,17 @@ export async function buildServerEntryPack({ packageDir, outDir, esbuildDir, mod
  *
  * Throws with the offending specifier on the first violation.
  */
-async function validateClosureEntryImports({ esbuild, entryAbs, pkgDir, packageName, entryRel, declaredDeps, selfName, exportsMap }) {
+async function validateClosureEntryImports({
+  esbuild,
+  entryAbs,
+  pkgDir,
+  packageName,
+  entryRel,
+  declaredDeps,
+  selfName,
+  exportsMap,
+  dependencyMode = "closure",
+}) {
   // Self-references resolve INTO the graph through the PINNED resolver
   // semantics (the same exact-key/one-level-conditional language the store
   // and loader apply) — esbuild's own (full-Node) exports resolution must not
@@ -1044,14 +1175,14 @@ async function validateClosureEntryImports({ esbuild, entryAbs, pkgDir, packageN
     });
   } catch (err) {
     throw new Error(
-      `[build-server-entry] ${packageName}: closure-mode validation could not trace the prebuilt ` +
+      `[build-server-entry] ${packageName}: ${dependencyMode}-mode validation could not trace the prebuilt ` +
         `server entry "${entryRel}": ${err instanceof Error ? err.message : String(err)}`,
     );
   }
   for (const output of Object.values(result.metafile.outputs)) {
     for (const imp of output.imports ?? []) {
       if (imp.external !== true) continue;
-      const refusal = classifyClosureResidualImport(imp, { declaredDeps });
+      const refusal = classifyClosureResidualImport(imp, { declaredDeps, dependencyMode });
       if (refusal !== null) {
         throw new Error(`[build-server-entry] ${packageName}: the prebuilt server entry "${entryRel}" ${refusal}.`);
       }

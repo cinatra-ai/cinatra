@@ -122,9 +122,41 @@ the `--mode` CLI flag overrides it for TESTS ONLY.
 | esbuild externals | host ABI peers only | host ABI peers + declared runtime `dependencies` (incl. subpaths) |
 | packed `dependencies` | PRUNED | KEPT (basis of the signed plan; PLAIN registry range/tag specs only — ALL `npm:` aliases refused because `cinatra-materialization-plan/v1` carries one identity per node (placement name == registry name); git/file/link/workspace/URL specs refused) |
 | residual-import rule | node builtins ONLY | node builtins ∪ declared `dependencies`; host peers refused; self-references traced INTO the scanned graph (never blanket-allowed) |
-| already-importable entry | verbatim passthrough | verbatim passthrough + residual VALIDATION (never re-bundled) |
-| no `serverEntry` | verbatim copy | verbatim copy (legal — the plan alone covers the deps) |
+| already-importable entry | verbatim passthrough + residual VALIDATION, then PRUNE (never re-bundled) | verbatim passthrough + residual VALIDATION (never re-bundled) |
+| no `serverEntry` | verbatim copy, then PRUNE | verbatim copy (legal — the plan alone covers the deps) |
 | built `register.mjs` + packed-manifest self-check | mandatory | mandatory |
+
+**The prune is unconditional in inline mode (cinatra#2747).** It runs on ALL
+THREE emit paths — `bundled`, `passthrough`, and `none` — not only the bundled
+one. The two verbatim-copy paths used to publish the SOURCE manifest's runtime
+`dependencies` with nothing bundled beside them, which the install-time gate
+below refuses forever (`runtime dependencies are neither bundled in the tarball
+nor covered by a signed materialization plan (…)`); any such package was
+permanently uninstallable through the marketplace. Two rules keep the prune
+honest:
+
+- an inline `passthrough` entry's import graph is residual-VALIDATED first
+  (node builtins + in-package modules ONLY — a declared dependency is not a
+  satisfier in inline mode). Pruning an unvalidated prebuilt entry would trade
+  a loud install-time refusal for an opaque activation-time
+  `ERR_MODULE_NOT_FOUND`;
+- every path ends in `assertPackedDependenciesAreSatisfiable`, the PUBLISH-TIME
+  MIRROR of the host's `validateBundledDependencies` gate: a host-provided SDK
+  peer in `dependencies` is refused, and in inline mode every surviving runtime
+  declaration must be physically present under the pack dir's `node_modules/`.
+  The builder cannot emit a pack dir the installer would reject.
+
+`bundledDependencies` is NOT part of this contract, in either mode: the install
+gate reads the tarball's PHYSICAL top-level `node_modules/` (plus, in closure
+mode, the signed plan's roots) and never consults that manifest field.
+
+Companion change: `build-server-entry.mjs` is the CANONICAL copy; the release
+pipeline runs the byte-synced placement copy in
+[cinatra-ai/.github `scripts/v622/templates/release/`](https://github.com/cinatra-ai/.github/tree/main/scripts/v622/templates/release).
+A change here only reaches publishers once that copy is re-synced, and the
+reusable release workflow must run the builder for a `none`-shaped package too
+(it currently skips the build step when no `cinatra.serverEntry` is declared and
+packs the source tree, which is exactly the shape this rule closes).
 
 In closure mode the dependencies are materialized at INSTALL time from the
 package's publish-time **signed canonical materialization plan** (exact node
