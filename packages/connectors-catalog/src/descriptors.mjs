@@ -82,7 +82,18 @@ const RAW_DESCRIPTORS = [
   {
     slug: "google-calendar-connector",
     displayName: "Google Calendar",
-    mcpPrimitivePrefixes: ["google_calendar_", "appointment_schedule_"],
+    mcpPrimitivePrefixes: ["google_calendar_"],
+    setupSubroute: "setup",
+  },
+  {
+    // Appointment schedules are their own connector since cinatra#2367: the
+    // `appointment_schedule_` prefix MOVED off the google-calendar entry above
+    // (one owner per primitive name). This connector declares a REQUIRED
+    // runtime dependency on google-calendar-connector, so installing it pulls
+    // the calendar connector in dependency-first.
+    slug: "google-appointment-schedules-connector",
+    displayName: "Google Appointment Schedules",
+    mcpPrimitivePrefixes: ["appointment_schedule_"],
     setupSubroute: "setup",
   },
   {

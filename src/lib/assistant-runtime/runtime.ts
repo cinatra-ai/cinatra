@@ -233,7 +233,7 @@ const HIDDEN_TOOL_NAMES = new Set([
   "email_outreach_campaign_get_workflow_state",
   "email_outreach_async_operation_status",
   "email_outreach_campaign_async_operation_status",
-  "calendar_appointments_list",
+  "appointment_schedule_list",
 ]);
 
 function isHiddenTool(name: string) {

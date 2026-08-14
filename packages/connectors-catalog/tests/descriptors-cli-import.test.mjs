@@ -31,8 +31,8 @@ const MCP_LESS_CONNECTOR_SLUGS = new Set([
 ]);
 
 describe("connector descriptors (CLI-safe surface)", () => {
-  it("ships the canonical 22-entry catalog", () => {
-    expect(CONNECTOR_DESCRIPTORS).toHaveLength(22);
+  it("ships the canonical 23-entry catalog", () => {
+    expect(CONNECTOR_DESCRIPTORS).toHaveLength(23);
   });
 
   it("every descriptor has the required fields with non-empty values", () => {

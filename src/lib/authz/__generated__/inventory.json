@@ -248,6 +248,11 @@
       "line": 18
     },
     {
+      "primitiveName": "appointment_schedule_list",
+      "file": "extensions/cinatra-ai/google-appointment-schedules-connector/src/mcp/registry.ts",
+      "line": 8
+    },
+    {
       "primitiveName": "approvals_decide",
       "file": "src/lib/approvals/approvals-mcp.ts",
       "line": 339
@@ -811,11 +816,6 @@
       "primitiveName": "gmail_status",
       "file": "extensions/cinatra-ai/gmail-connector/src/mcp/registry.ts",
       "line": 16
-    },
-    {
-      "primitiveName": "google_calendar_appointments_list",
-      "file": "extensions/cinatra-ai/google-calendar-connector/src/mcp/registry.ts",
-      "line": 5
     },
     {
       "primitiveName": "linkedin_accounts_list",

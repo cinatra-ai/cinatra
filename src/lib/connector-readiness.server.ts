@@ -111,17 +111,26 @@ const BUILT_IN_PROBES: Record<string, ConnectorReadinessProbe> = {
   // oauthClient table), so the probe needs nothing from the extension.
   "mcp-client-connector": async () => countReadiness(await countExternalMcpOAuthClients()),
   "gmail-connector": async (ctx) => connectedWhen(Boolean(userConnections(ctx)?.gmail)),
-  "google-calendar-connector": async (ctx) => {
+  // PURE NANGO since cinatra#2367: appointment schedules left this connector
+  // (they are their own connector below), so the calendar card's connection
+  // signal is exactly the saved Google Calendar Nango connection — nothing
+  // else. The old "N appt" label went with the schedules.
+  "google-calendar-connector": async (ctx) =>
+    connectedWhen(Boolean(userConnections(ctx)?.googleCalendar)),
+  // Appointment schedules (cinatra#2367): connected ⇔ the viewer has at least
+  // one SAVED schedule. Without this entry the new card would read
+  // "Not connected" forever — the connector holds no Nango connection of its
+  // own (it borrows the calendar connection through the shared google-oauth
+  // service), so its stored rows ARE its readiness signal. Schedules are
+  // per-user, so an anonymous context is not connected.
+  "google-appointment-schedules-connector": async (ctx) => {
+    if (!ctx.userId) return connectedWhen(false);
     const mod = await loadConnectorModule<{
-      getStoredGoogleCalendarAppointments: (userId: string) => { appointments: unknown[] };
-    }>("google-calendar-connector");
-    const appointmentsCount = ctx.userId
-      ? (mod?.getStoredGoogleCalendarAppointments(ctx.userId).appointments.length ?? 0)
-      : 0;
-    return {
-      connected: Boolean(userConnections(ctx)?.googleCalendar) || appointmentsCount > 0,
-      connectedLabel: appointmentsCount > 0 ? `${appointmentsCount} appt` : undefined,
-    };
+      getStoredGoogleAppointmentSchedules: (userId: string) => { schedules: unknown[] };
+    }>("google-appointment-schedules-connector");
+    return countReadiness(
+      mod?.getStoredGoogleAppointmentSchedules(ctx.userId).schedules.length ?? 0,
+    );
   },
   "linkedin-connector": async (ctx) => connectedWhen(Boolean(userConnections(ctx)?.linkedin)),
   "youtube-connector": async (ctx) => connectedWhen(Boolean(userConnections(ctx)?.youtube)),

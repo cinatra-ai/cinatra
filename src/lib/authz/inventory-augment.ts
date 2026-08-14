@@ -311,8 +311,11 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   gmail_email_send:      { resourceType: "connector_instance", action: "execute", status: "enforced" },
   gmail_status:          { resourceType: "connector_instance", action: "read",    status: "enforced" },
 
-  // ───── google_calendar (connector_instance) ─────
-  google_calendar_appointments_list: { resourceType: "connector_instance", action: "execute", status: "enforced" },
+  // ───── appointment schedules (connector_instance) ─────
+  // Renamed with the extraction (cinatra#2367): the tool moved off
+  // google-calendar-connector to its own connector, and the primitive it
+  // registers is `appointment_schedule_list` — one name, one owner.
+  appointment_schedule_list: { resourceType: "connector_instance", action: "execute", status: "enforced" },
 
   // ───── linkedin (connector_instance) ─────
   linkedin_accounts_list:     { resourceType: "connector_instance", action: "list",    status: "enforced" },
