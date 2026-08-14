@@ -108,6 +108,8 @@ import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
   SCHEMA_FIELD_FALLBACK_RENDERER_ID,
 } from "./agent-builder-ids";
+import type { RunStepRailEntry } from "./run-step-rail";
+import { RailExtraEntry } from "./run-step-rail-extra-entry";
 
 // Inlined to avoid importing ./orchestrator-execution (server-only chain:
 // store → background-jobs → bullmq → worker_threads) into the client bundle.
@@ -117,6 +119,9 @@ const TERMINAL_STATUSES = new Set(["completed", "failed", "stopped"]);
 // Map() on every render (which would cause the sync useEffect to loop).
 const EMPTY_SUBMISSION_MAP = new Map<number, SubmissionMapEntry>();
 const EMPTY_SUBMISSION_ENTRIES: SubmissionMapEntries = [];
+// Stable empty rail-extras list — same reason as above: a fresh [] default on
+// every render would be a new prop identity each time.
+const EMPTY_RAIL_EXTRAS: readonly RunStepRailEntry[] = [];
 
 // statusBadgeVariant is shared with AgenticRunPanel — see ./run-surface-status.
 
@@ -195,6 +200,13 @@ export type OrchestratorStepperPanelProps = {
     // buildSubmissionMapByStepIndex reads it via stepFiresRendererGate.
     firesRendererGate?: boolean;
   }>;
+  /** cinatra#2739 — the merged rail's NON-spine entries (review gates, their
+   *  verifications, lifecycle policy decisions), server-built by
+   *  `buildRunStepRail` and threaded down so THIS panel's rail carries the
+   *  review deep links the retired page-level rail used to own. */
+  railExtras?: readonly RunStepRailEntry[];
+  /** Deep-link base for those rows: `/agents/<slug>/<runId>/review`. */
+  reviewHrefBase?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -1088,7 +1100,23 @@ function CancelledCard({
 }
 
 // ---------------------------------------------------------------------------
-// StepperColumn helper
+// StepperColumn helper — THE run detail's step rail (cinatra#2739)
+//
+// This column is the ONE step rail on a flow/orchestrator run detail. It used to
+// be the second: the screen mounted the page-level `RunStepRailPanel` beside the
+// panel, and both drew the same policy-step spine (both project it through
+// `buildRunStepperSteps`), so the run detail showed five steps twice, side by
+// side. Owner ruling 2026-08-14: exactly one column.
+//
+// WHY THIS ONE SURVIVED — verified in code, not assumed. Its `activeStep`,
+// `isPaused`, `isResuming` and `status` come from the panel's LIVE run stream
+// state; the ⓘ tooltip, the completed-step replay click, the active-step exit
+// click and the dev stepper are all client handlers wired to that state. A
+// server-rendered rail cannot carry any of it. What the page rail owned that
+// this one did not — the review DEEP LINKS (gates, verifications, lifecycle
+// decisions) — travels down as `railExtras` and renders through the SAME
+// `RailExtraEntry` component the page rail uses. So the surviving rail carries
+// the union.
 // ---------------------------------------------------------------------------
 
 function StepperColumn({
@@ -1101,6 +1129,8 @@ function StepperColumn({
   onDevStepClick,
   onCompletedStepClick,
   onActiveStepClick,
+  railExtras = EMPTY_RAIL_EXTRAS,
+  reviewHrefBase = "",
 }: {
   stepperSteps: StepperStep[];
   activeStep: number;
@@ -1116,13 +1146,29 @@ function StepperColumn({
   // Read-only HITL replay — invoked when the user clicks the active step while in replay
   // mode, allowing them to exit replay and return to the live HITL gate.
   onActiveStepClick?: (step: StepperStep) => void;
+  // The merged rail's NON-spine entries (cinatra#2739): review gates, their
+  // verifications, and lifecycle policy decisions — the rows that carry the
+  // deep links into the run-embedded review surface.
+  railExtras?: readonly RunStepRailEntry[];
+  reviewHrefBase?: string;
 }) {
   const isLoadingStatus =
     status === "running" || status === "pending_input" || status === "queued";
 
+  // Nothing to draw ⇒ NO rail element at all. The dev-preview child panel mounts
+  // this component with an empty step list, and an empty rail element would put
+  // a second `data-run-step-rail` in the DOM — the very defect this closes.
+  if (stepperSteps.length === 0 && railExtras.length === 0) return null;
+
   return (
     <TooltipProvider>
-      <div className="flex shrink-0 flex-col pt-1">
+      <div
+        data-run-step-rail=""
+        data-conformance-id="run-step-rail"
+        data-action="open-run-step -> step-detail"
+        aria-label="Agent run steps"
+        className="flex shrink-0 flex-col pt-1"
+      >
         <Stepper
           value={activeStep}
           orientation="vertical"
@@ -1133,8 +1179,15 @@ function StepperColumn({
               const isActive = s.index === activeStep;
               const isCompleted = s.index < activeStep;
               const isLoading = isActive && (isLoadingStatus || isResuming);
-              const isLast = i === stepperSteps.length - 1;
+              const isLast = i === stepperSteps.length - 1 && railExtras.length === 0;
               const showPauseIcon = isPaused && !isCompleted && !isResuming;
+              // The replay affordance this row actually carries — asserted by
+              // the single-rail regression test (cinatra#2739).
+              const replayAffordance = isCompleted && onCompletedStepClick
+                ? "open"
+                : isActive && onActiveStepClick
+                  ? "exit"
+                  : undefined;
               return (
                 <StepperItem
                   key={s.index}
@@ -1144,7 +1197,13 @@ function StepperColumn({
                   disabled={devStepperMode ? false : s.index > activeStep}
                   className="items-start !flex-none"
                 >
-                  <div className="flex items-center gap-1">
+                  <div
+                    className="flex items-center gap-1"
+                    data-rail-kind="step"
+                    data-rail-step-number={s.stepNumber}
+                    data-rail-status={isCompleted ? "completed" : isActive ? "pending" : "upcoming"}
+                    data-rail-replay={replayAffordance}
+                  >
                     <StepperTrigger
                       className="gap-2 px-0 py-0.5"
                       // Read-only HITL replay — completed steps open replay; active step exits replay.
@@ -1172,6 +1231,7 @@ function StepperColumn({
                           <span
                             role="button"
                             tabIndex={-1}
+                            data-rail-step-info=""
                             className="shrink-0 text-muted-foreground/50 hover:text-muted-foreground transition-colors cursor-default"
                             onClick={(e) => e.stopPropagation()}
                           >
@@ -1184,6 +1244,32 @@ function StepperColumn({
                       </Tooltip>
                     )}
                   </div>
+                  {!isLast && <StepperSeparator className="ms-3 !h-2 bg-border" />}
+                </StepperItem>
+              );
+            })}
+            {/* The merged rail's trailing rows (cinatra#2739) — review gates,
+                their verifications, and lifecycle policy decisions. These are
+                the DEEP LINKS the page-level rail used to be mounted for; they
+                render here through the shared `RailExtraEntry`, which is why
+                retiring that second mount loses nothing. They trail the spine
+                in the exact order `buildRunStepRail` sorted them into. */}
+            {railExtras.map((entry, i) => {
+              const displayStep = stepperSteps.length + i + 1;
+              const isLast = i === railExtras.length - 1;
+              return (
+                <StepperItem
+                  key={entry.key}
+                  step={displayStep}
+                  completed={entry.status === "completed" || entry.status === "resolved"}
+                  data-rail-skipped={entry.status === "skipped" ? "true" : undefined}
+                  className="items-start !flex-none"
+                >
+                  <RailExtraEntry
+                    entry={entry}
+                    reviewHrefBase={reviewHrefBase}
+                    displayStep={displayStep}
+                  />
                   {!isLast && <StepperSeparator className="ms-3 !h-2 bg-border" />}
                 </StepperItem>
               );
@@ -1382,6 +1468,8 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
     embedMode = false,
     submissionMap: initialSubmissionEntries = EMPTY_SUBMISSION_ENTRIES,
     policySteps,
+    railExtras = EMPTY_RAIL_EXTRAS,
+    reviewHrefBase = "",
   } = props;
 
   const router = useRouter();
@@ -2067,6 +2155,8 @@ export function OrchestratorStepperPanel(props: OrchestratorStepperPanelProps) {
           setReplayStepIndex(s.index);
         }}
         onActiveStepClick={replayStepIndex !== null ? () => setReplayStepIndex(null) : undefined}
+        railExtras={railExtras}
+        reviewHrefBase={reviewHrefBase}
       />
       <div className="flex min-w-0 flex-1 flex-col gap-6">{rightColumn}</div>
     </div>
