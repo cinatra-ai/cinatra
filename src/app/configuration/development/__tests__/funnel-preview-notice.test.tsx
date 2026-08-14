@@ -28,6 +28,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
+  DEV_MAIN_DECLARATION_VAR,
+  DEV_MAIN_ENDPOINT_PLACEHOLDER,
   FUNNEL_PREVIEW_IDENTITY_CONFLICT,
   FUNNEL_PREVIEW_NO_TAILNET,
   FUNNEL_PREVIEW_UNREGISTERED_IDENTITY,
@@ -117,6 +119,87 @@ describe("selectFunnelPreviewNotice (#2534)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// The unregistered branch used to offer ONE remediation — "run this instance
+// as a clone or a worktree" — which describes the MULTI-instance case. A plain
+// single canonical install classifies `unregistered` too, and for it the fix
+// is the explicit declaration the connector already computes one layer down.
+// These pin both branches, and pin that the jargon is explained.
+// ---------------------------------------------------------------------------
+describe("the unregistered-identity remediation", () => {
+  const unregistered = (mainDatabaseEndpoint?: string | null) =>
+    selectFunnelPreviewNotice({
+      funnelUrlPreview: null,
+      reason: FUNNEL_PREVIEW_UNREGISTERED_IDENTITY,
+      mainDatabaseEndpoint,
+    })!;
+
+  it("names the declaration that fixes a canonical main install", () => {
+    const { message } = unregistered();
+    expect(message).toContain(DEV_MAIN_DECLARATION_VAR);
+    // the VARIABLE alone is not the remediation — the assignment is
+    expect(message).toContain(`${DEV_MAIN_DECLARATION_VAR}=`);
+    // and it must say where the line goes, or the operator cannot act on it
+    expect(message).toMatch(/\.env\.local/);
+  });
+
+  it("renders the value format when no endpoint is reported", () => {
+    expect(unregistered().message).toContain(
+      `${DEV_MAIN_DECLARATION_VAR}=${DEV_MAIN_ENDPOINT_PLACEHOLDER}`,
+    );
+    // an empty/blank report is the same as none — never an empty assignment
+    expect(unregistered(null).message).toContain(DEV_MAIN_ENDPOINT_PLACEHOLDER);
+    expect(unregistered("   ").message).toContain(DEV_MAIN_ENDPOINT_PLACEHOLDER);
+  });
+
+  it("renders the resolved endpoint when one IS reported", () => {
+    const { message } = unregistered("127.0.0.1:5434/postgres");
+    expect(message).toContain(`${DEV_MAIN_DECLARATION_VAR}=127.0.0.1:5434/postgres`);
+    expect(message).not.toContain(DEV_MAIN_ENDPOINT_PLACEHOLDER);
+  });
+
+  it("explains 'sanctioned Tailscale identity' instead of assuming the term", () => {
+    const { message } = unregistered();
+    expect(message).toMatch(/no sanctioned Tailscale identity/i);
+    // the three identities that ARE sanctioned, named where the term is used
+    expect(message).toMatch(/registered clone/i);
+    expect(message).toMatch(/worktree/i);
+    expect(message).toMatch(/dev main/i);
+  });
+
+  it("keeps the clone/worktree advice, but as the multi-instance branch", () => {
+    const { message } = unregistered();
+    expect(message).toMatch(/clone or a worktree/i);
+    // it is no longer offered as the ONLY remedy — it is conditioned on the
+    // situation it actually fits
+    expect(message).toMatch(/several instances/i);
+  });
+
+  it("leaves the other branches' remediation untouched", () => {
+    // The declaration belongs to the unregistered branch only. The conflict
+    // branch's instance already HAS signals; telling it to add another would
+    // deepen the conflict it is being asked to resolve.
+    const conflict = selectFunnelPreviewNotice({
+      funnelUrlPreview: null,
+      reason: FUNNEL_PREVIEW_IDENTITY_CONFLICT,
+    })!;
+    expect(conflict.message).not.toContain(`${DEV_MAIN_DECLARATION_VAR}=`);
+    expect(conflict.message).toMatch(/exactly one of clone, worktree or main/i);
+
+    const noTailnet = selectFunnelPreviewNotice({
+      funnelUrlPreview: null,
+      reason: FUNNEL_PREVIEW_NO_TAILNET,
+    })!;
+    expect(noTailnet.message).not.toContain(DEV_MAIN_DECLARATION_VAR);
+  });
+
+  it("still does not recommend reconnecting as the remedy", () => {
+    const notice = unregistered("127.0.0.1:5434/postgres");
+    expect(notice.reconnectHelps).toBe(false);
+    expect(notice.message).toMatch(/will not change that/i);
+  });
+});
+
 describe("PublicBaseUrlForm flyout copy (#2534)", () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const mounted: Root[] = [];
@@ -176,6 +259,19 @@ describe("PublicBaseUrlForm flyout copy (#2534)", () => {
     expect(text).not.toMatch(/tailnet not resolved yet/i);
     expect(text).toMatch(/no sanctioned Tailscale identity/i);
     expect(text).toMatch(/will not change that/i);
+  });
+
+  it("puts the declaration remediation in front of the operator", () => {
+    // The seam is only worth changing if the sentence actually reaches the
+    // flyout the operator opens.
+    const host = openFlyout({
+      tailscaleUrl: null,
+      tailscaleUrlReason: FUNNEL_PREVIEW_UNREGISTERED_IDENTITY,
+    });
+    const text = host.textContent ?? "";
+    expect(text).toContain(`${DEV_MAIN_DECLARATION_VAR}=${DEV_MAIN_ENDPOINT_PLACEHOLDER}`);
+    expect(text).toMatch(/\.env\.local/);
+    expect(text).toMatch(/several instances/i);
   });
 
   it("offers the pickable URL — and no notice — when a preview exists", () => {
