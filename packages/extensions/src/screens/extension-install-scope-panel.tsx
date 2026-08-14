@@ -50,7 +50,6 @@ import {
   buildMarketplaceFailureCopy,
   installAccessStageFailureCopy,
   marketplaceFailureCopy,
-  type MarketplaceFailureCategory,
   type MarketplaceInstallActionResult,
 } from "./marketplace-failure-copy";
 

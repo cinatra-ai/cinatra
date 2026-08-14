@@ -284,7 +284,6 @@ describe("marketplace browse grid — RSC payload weight (cinatra#2539)", () => 
       const nodes = await buildGrid(count);
       const total = gridBytes(nodes);
       const a = attribute(nodes);
-      // eslint-disable-next-line no-console
       console.log(
         `[payload] catalog=${count} → grid ${KB(total)} (${Math.round(total / count)} B/card)\n` +
           `          visible idle faces        ${KB(a.idle)}\n` +
@@ -329,7 +328,6 @@ describe("marketplace browse grid — RSC payload weight (cinatra#2539)", () => 
     const a = attribute(nodes);
     const before = after - a.installShellOverhead + legacyExtraBytes(88);
     const saved = before - after;
-    // eslint-disable-next-line no-console
     console.log(
       `[payload] 88-card catalog: before ${KB(before)} → after ${KB(after)} ` +
         `(-${KB(saved)}, -${((saved / before) * 100).toFixed(1)}%)`,

@@ -100,7 +100,6 @@ describe("installed-extensions list — RSC payload weight (cinatra#2539)", () =
     for (const count of [49, 88]) {
       const rows = Array.from({ length: count }, (_, i) => buildRow(i));
       const total = rows.reduce((sum, row) => sum + flightBytes(row as never, CLIENTS), 0);
-      // eslint-disable-next-line no-console
       console.log(
         `[payload] installed rows=${count} → list ${KB(total)} (${Math.round(total / count)} B/row)`,
       );
