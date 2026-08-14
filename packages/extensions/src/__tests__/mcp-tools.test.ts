@@ -479,6 +479,26 @@ describe("extensions MCP tool handlers", () => {
     );
   });
 
+  it("extensions_search passes NO lossy registry bound (cinatra#2539)", async () => {
+    // `fetchTimeoutMs` and `hydrationBudgetMs` degrade a slow packument into a
+    // DROPPED package. A page render accepts that trade; a search tool must
+    // not, because a silently incomplete result set is worse than a slow one.
+    // The cost that used to make this stance expensive — a whole-registry
+    // packument fan-out to return `limit` rows — is bounded inside
+    // `listExtensionPackages` by demand instead, so the complete-answer
+    // contract no longer buys extra reads. Adding either bound here would
+    // reintroduce silent omission.
+    listExtensionPackages.mockResolvedValueOnce([]);
+
+    const handlers = createExtensionsPrimitiveHandlers();
+    await handlers.extensions_search({ query: "anything", limit: 50 });
+
+    const [options] = listExtensionPackages.mock.calls.at(-1) as [Record<string, unknown>];
+    expect(options).not.toHaveProperty("fetchTimeoutMs");
+    expect(options).not.toHaveProperty("hydrationBudgetMs");
+    expect(options.limit).toBe(50);
+  });
+
   // -------------------------------------------------------------------------
   // Lifecycle management tool dispatch tests
   // -------------------------------------------------------------------------
