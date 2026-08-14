@@ -158,6 +158,26 @@ describe("classifyNangoSyncFailure", () => {
     // The reassurance is the whole point of the ordering fix: nothing was lost.
     expect(copy).toContain("saved on this instance");
   });
+
+  // cinatra#2727. The common cause is a VALUE mismatch after a Nango reset, not
+  // a malformed key: the reported key was itself a valid UUID v4. The copy must
+  // LEAD with the mismatch and name the recourse, and keep the UUID-v4 format as
+  // a parenthetical secondary branch. The previous ordering sent the operator to
+  // check a shape that was already correct.
+  it("leads the 401 copy with the value mismatch and its recourse", () => {
+    const copy = describeNangoSyncFailure("secret-key-rejected");
+    expect(copy).toContain("does not match your Nango environment's secret key");
+    expect(copy).toContain("If you reset Nango, re-copy the environment's secret key into NANGO_SECRET_KEY");
+  });
+
+  it("demotes the UUID-v4 format to a parenthetical secondary branch", () => {
+    const copy = describeNangoSyncFailure("secret-key-rejected");
+    // The mismatch sentence comes FIRST; the format qualifier comes after it.
+    expect(copy.indexOf("does not match")).toBeLessThan(copy.indexOf("UUID v4"));
+    // …and the format branch is parenthesised and conditional, not an instruction.
+    expect(copy).toContain("(The bundled local Nango also requires a UUID v4");
+    expect(copy).toContain("only matters if the value is malformed");
+  });
 });
 
 describe("saveGoogleOAuthSettings ordering (the cinatra#2545 data-loss defect)", () => {
