@@ -29,7 +29,12 @@ import { installAccessStageFailureCopy } from "../marketplace-failure-copy";
 const read = (rel: string) =>
   readFileSync(path.resolve(__dirname, rel), "utf-8");
 
-const SCREEN = read("../extensions-marketplace-screen.tsx");
+// The browse surface is TWO files since cinatra#2539 split the per-card node
+// composition out of the screen (a verbatim move — the screen kept the auth/DB
+// reads and the chrome). Every wiring invariant below is a property of the
+// SURFACE, so it is pinned against both halves.
+const SCREEN =
+  read("../extensions-marketplace-screen.tsx") + "\n" + read("../marketplace-card-nodes.tsx");
 const MODAL = read("../marketplace-detail-modal.tsx");
 const PANEL = read("../extension-install-scope-panel.tsx");
 
@@ -61,7 +66,10 @@ describe("marketplace screen wiring", () => {
   });
 
   it("passes the UNBOUND action so the panel threads accessTarget itself", () => {
-    expect(SCREEN).toMatch(/installAction=\{installExtensionPackageFormAction\}/);
+    // The screen injects the UNBOUND action into the composition, which hands
+    // it to the panel unbound (the bound `.bind()` variants are the form CTAs).
+    expect(SCREEN).toMatch(/installAction: installExtensionPackageFormAction/);
+    expect(SCREEN).toMatch(/installAction=\{installFormAction\}/);
   });
 });
 

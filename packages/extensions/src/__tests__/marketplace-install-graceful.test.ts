@@ -185,7 +185,10 @@ describe("#2333 — the no-category fallbacks render the real escalation copy", 
 
 describe("wiring — the marketplace screen renders the graceful form, not the crashing plain form", () => {
   const wrapperSrc = read("marketplace-install-form.tsx");
-  const screenSrc = read("extensions-marketplace-screen.tsx");
+  // cinatra#2539 split the per-card composition out of the screen (verbatim
+  // move); the CTA wiring asserted below lives in that half.
+  const screenSrc =
+    read("extensions-marketplace-screen.tsx") + "\n" + read("marketplace-card-nodes.tsx");
 
   it("the wrapper is a client component that re-throws the redirect sentinel and toasts otherwise", () => {
     expect(wrapperSrc).toMatch(/^"use client";/);
