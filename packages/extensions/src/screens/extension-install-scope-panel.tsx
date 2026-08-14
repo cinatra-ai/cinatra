@@ -30,7 +30,7 @@
  * `MarketplaceListingCardInstallFace`.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -47,7 +47,9 @@ import {
 import type { InstallPanelAvailability } from "./install-panel-availability";
 import {
   appendDiagnosticReference,
+  buildMarketplaceFailureCopy,
   installAccessStageFailureCopy,
+  marketplaceFailureCopy,
   type MarketplaceFailureCategory,
   type MarketplaceInstallActionResult,
 } from "./marketplace-failure-copy";
@@ -63,11 +65,19 @@ export type ExtensionScopedInstallAction = (input: {
   accessTarget: { level: InstallTargetLevel; id: string };
 }) => Promise<MarketplaceInstallActionResult | void>;
 
-export type ExtensionInstallScopePanelProps = {
-  packageName: string;
-  packageVersion: string;
-  /** Display name for panel copy + toasts (falls back to packageName). */
-  displayName: string;
+/**
+ * The CARD-INVARIANT half of the panel's inputs (cinatra#2539).
+ *
+ * The picker rows, the entity-name lookup, the active org and the availability
+ * verdict are ONE server computation for the whole grid — they do not vary by
+ * card — and the install action is a single unbound reference. Every card used
+ * to carry its own copy of all five as props, so the browse route's RSC payload
+ * repeated the same ~1.4 KiB once per install-capable card (measured: 61.9 KiB
+ * of an 88-card catalog's 742.7 KiB). They travel ONCE through this context
+ * instead. The values are unchanged, so every rendered row, its enabled state
+ * and its tooltip are identical.
+ */
+export type InstallPanelScopeContextValue = {
   /** SERVER-COMPUTED — single source of truth for enabled/disabled state. */
   installTargets: InstallTarget[];
   /** value → display name lookup (e.g. "team:abc" → "Engineering"). */
@@ -75,11 +85,43 @@ export type ExtensionInstallScopePanelProps = {
   activeOrgId: string;
   /** Discriminated availability state, resolved server-side in fixed order. */
   availability: InstallPanelAvailability;
-  /** Per-category NON-technical failure copy (built server-side). */
-  failureCopyByCategory: Record<MarketplaceFailureCategory, string>;
-  /** Last-resort copy when the action throws / returns an unknown shape. */
-  defaultFailureMessage: string;
   installAction: ExtensionScopedInstallAction;
+};
+
+const InstallPanelScopeContext = createContext<InstallPanelScopeContextValue | null>(null);
+
+/**
+ * Publishes the card-invariant install context to every panel below it. The
+ * provider renders NO DOM of its own — it is a serialization boundary, not a
+ * layout element.
+ */
+export function InstallPanelScopeProvider({
+  value,
+  children,
+}: {
+  value: InstallPanelScopeContextValue;
+  children: ReactNode;
+}) {
+  return (
+    <InstallPanelScopeContext.Provider value={value}>{children}</InstallPanelScopeContext.Provider>
+  );
+}
+
+export function useInstallPanelScope(): InstallPanelScopeContextValue {
+  const ctx = useContext(InstallPanelScopeContext);
+  if (!ctx) {
+    throw new Error(
+      "useInstallPanelScope must be used inside an <InstallPanelScopeProvider> — the install panel reads its picker rows, availability and install action from the grid-level context.",
+    );
+  }
+  return ctx;
+}
+
+export type ExtensionInstallScopePanelProps = {
+  packageName: string;
+  packageVersion: string;
+  /** Display name for panel copy + toasts (falls back to packageName). */
+  displayName: string;
 };
 
 /**
@@ -107,14 +149,15 @@ export function ExtensionInstallScopePanel({
   packageName,
   packageVersion,
   displayName,
-  installTargets,
-  ownerEntityNames,
-  activeOrgId,
-  availability,
-  failureCopyByCategory,
-  defaultFailureMessage,
-  installAction,
 }: ExtensionInstallScopePanelProps) {
+  const { installTargets, ownerEntityNames, activeOrgId, availability, installAction } =
+    useInstallPanelScope();
+  // The classified copy is a PURE function of the failure taxonomy and this
+  // card's display name (#685/#1539). Building it here produces the identical
+  // strings the server used to build and ship per card — the copy contract is
+  // unchanged; only its ~1 KiB-per-card place in the payload is gone.
+  const failureCopyByCategory = buildMarketplaceFailureCopy("install", displayName);
+  const defaultFailureMessage = marketplaceFailureCopy("unrecoverable", "install", displayName);
   const { idPrefix, closePanel } = useCardFace();
   const pickerId = `${idPrefix}-install-scope-picker`;
   const labelId = `${idPrefix}-install-scope-label`;

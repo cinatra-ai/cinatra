@@ -26,7 +26,21 @@
 
 import { describe, it, expect, vi } from "vitest";
 
-import { flightBytes, valueBytes } from "./flight-payload-model";
+import {
+  ExtensionCardIconImage,
+  MarketplaceCardIcon,
+} from "@/components/extension-card-icon-image";
+
+import { createElement } from "react";
+
+import { deriveExtensionAccent } from "@/lib/extension-accent";
+
+import { encodeFlight, flightBytes, valueBytes } from "./flight-payload-model";
+import {
+  buildMarketplaceFailureCopy,
+  marketplaceFailureCopy,
+} from "../marketplace-failure-copy";
+import { MarketplaceListingCardInstallFace } from "../marketplace-listing-card";
 
 // The "use client" halves of the composition are stood in as same-named,
 // same-props stubs. Flight NEVER renders a client component — it emits a module
@@ -41,6 +55,7 @@ const ExtensionInstallScopePanel = vi.fn();
 const MarketplaceInstallForm = vi.fn();
 const MarketplaceInstallSubmit = vi.fn();
 const InstallPanelScopeProvider = vi.fn();
+const MarketplaceCardInstallShell = vi.fn();
 
 vi.mock("../marketplace-detail-modal", () => ({ MarketplaceDetailModal }));
 vi.mock("../card-face-switcher", () => ({
@@ -52,12 +67,18 @@ vi.mock("../extension-install-scope-panel", () => ({
   ExtensionInstallScopePanel,
   InstallPanelScopeProvider,
 }));
+vi.mock("../marketplace-card-shell", () => ({ MarketplaceCardInstallShell }));
 vi.mock("../marketplace-install-form", () => ({
   MarketplaceInstallForm,
   MarketplaceInstallSubmit,
 }));
 
+// The card's icon chain is a REAL client component (`"use client"` in
+// extension-card-icon-image.tsx) reached from the server card body, so flight
+// stops at it too — it is a boundary, not a rendered subtree.
 const CLIENTS = new Set<unknown>([
+  ExtensionCardIconImage,
+  MarketplaceCardIcon,
   MarketplaceDetailModal,
   CardFaceSwitcher,
   InstallPanelOpenButton,
@@ -66,6 +87,7 @@ const CLIENTS = new Set<unknown>([
   MarketplaceInstallForm,
   MarketplaceInstallSubmit,
   InstallPanelScopeProvider,
+  MarketplaceCardInstallShell,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -104,7 +126,11 @@ function buildCatalog(count: number) {
       iconUrl: null,
       vendorLogoUrl: null,
       vendor: { name: "Cinatra", slug: "cinatra", storeUrl: null },
-      sdkAbiRange: "^1.0.0",
+      // "*" is a DECLARED, satisfiable range → the compatible verdict, so the
+      // CTA resolves to the live "Install now" state (the production case for a
+      // fresh instance browsing the catalog). A range the host cannot satisfy
+      // would grey every card out and measure the LIGHTEST composition.
+      sdkAbiRange: "*",
     };
   });
 }
@@ -162,10 +188,6 @@ async function buildGrid(count: number) {
     cards: buildCatalog(count) as never,
     installedVersionByName: new Map(),
     registryConnected: true,
-    installTargets: INSTALL_TARGETS,
-    ownerEntityNames: OWNER_ENTITY_NAMES,
-    activeOrgId: "org_01HZY",
-    installPanelAvailability: AVAILABILITY,
     installAction: noopAction,
     updateAction: noopAction,
     restoreAction: noopAction,
@@ -178,41 +200,140 @@ function gridBytes(nodes: Array<{ node: unknown }>): number {
 
 const KB = (bytes: number) => `${(bytes / 1024).toFixed(1)} KiB`;
 
+function isElement(v: unknown): v is { type: unknown; props: Record<string, unknown> } {
+  return typeof v === "object" && v !== null && "props" in v && "type" in v;
+}
+
+/** Per-card attribution: what the grid actually spends its bytes on. */
+function attribute(nodes: Array<{ node: unknown }>) {
+  let idle = 0;
+  let installShellOverhead = 0;
+  let installCapable = 0;
+
+  for (const { node } of nodes) {
+    if (!isElement(node)) continue;
+    if (node.type === MarketplaceCardInstallShell) {
+      installCapable += 1;
+      const idleBytes = flightBytes(node.props.idleFace as never, CLIENTS);
+      idle += idleBytes;
+      installShellOverhead += flightBytes(node as never, CLIENTS) - idleBytes;
+    } else {
+      idle += flightBytes(node as never, CLIENTS);
+    }
+  }
+  return { idle, installShellOverhead, installCapable };
+}
+
+/**
+ * The pre-fix composition, re-measured rather than remembered: the SAME cards,
+ * with the install face server-composed per card (the real face shell + the
+ * panel carrying the card-invariant picker context) and the classified failure
+ * copy shipped as props on every form CTA — exactly what the browse screen
+ * emitted before cinatra#2539.
+ */
+function legacyExtraBytes(count: number): number {
+  const cards = buildCatalog(count);
+  let bytes = 0;
+  for (const card of cards) {
+    if (["connector", "artifact"].includes(card.kindSlug)) {
+      // The never-shown install face, server-composed per card.
+      const face = createElement(
+        MarketplaceListingCardInstallFace as never,
+        {
+          card,
+          accentColor: deriveExtensionAccent(card.packageName),
+          closeControl: createElement(InstallPanelCloseButton as never, null),
+        } as never,
+        createElement(ExtensionInstallScopePanel as never, {
+          packageName: card.packageName,
+          packageVersion: card.packageVersion,
+          displayName: card.displayName,
+          installTargets: INSTALL_TARGETS,
+          ownerEntityNames: OWNER_ENTITY_NAMES,
+          activeOrgId: "org_01HZY",
+          availability: AVAILABILITY,
+          failureCopyByCategory: buildMarketplaceFailureCopy("install", card.displayName),
+          defaultFailureMessage: marketplaceFailureCopy(
+            "unrecoverable",
+            "install",
+            card.displayName,
+          ),
+          installAction: noopAction,
+        } as never),
+      );
+      bytes += flightBytes(face as never, CLIENTS);
+    } else {
+      // The form CTA's classified copy, shipped instead of derived.
+      bytes +=
+        valueBytes({
+          failureCopyByCategory: buildMarketplaceFailureCopy("install", card.displayName),
+          defaultFailureMessage: marketplaceFailureCopy(
+            "unrecoverable",
+            "install",
+            card.displayName,
+          ),
+        }) - valueBytes({ operation: "install", displayName: card.displayName });
+    }
+  }
+  return bytes;
+}
+
 describe("marketplace browse grid — RSC payload weight (cinatra#2539)", () => {
-  it("reports the per-card and whole-grid payload for a production-sized catalog", async () => {
+  it("attributes the grid payload for a production-sized catalog", async () => {
     for (const count of [49, 88]) {
       const nodes = await buildGrid(count);
       const total = gridBytes(nodes);
+      const a = attribute(nodes);
       // eslint-disable-next-line no-console
       console.log(
-        `[payload] catalog=${count} cards → grid flight payload ${KB(total)} ` +
-          `(${Math.round(total / count)} B/card)`,
+        `[payload] catalog=${count} → grid ${KB(total)} (${Math.round(total / count)} B/card)\n` +
+          `          visible idle faces        ${KB(a.idle)}\n` +
+          `          install-shell overhead    ${KB(a.installShellOverhead)} over ${a.installCapable} cards` +
+          ` (${a.installCapable ? Math.round(a.installShellOverhead / a.installCapable) : 0} B/card)`,
       );
       expect(nodes).toHaveLength(count);
     }
   });
 
-  it("keeps the card-invariant install context OUT of the per-card payload", async () => {
-    // The picker context is one server computation shared by every panel. It
-    // must be serialized ONCE for the grid, not once per install-capable card:
-    // duplicating it is O(cards x targets) bytes for data that never differs.
-    const sharedContextBytes =
-      valueBytes(INSTALL_TARGETS) + valueBytes(OWNER_ENTITY_NAMES) + valueBytes(AVAILABILITY);
-
+  it("ships NO install-panel context in the grid payload", async () => {
+    // The picker rows, the entity-name lookup and the classified failure copy
+    // are card-invariant or derivable; none of them belongs in a per-card row.
+    // Asserting on the serialized payload keeps the guarantee independent of
+    // how the composition is spelled.
     const nodes = await buildGrid(88);
-    const total = gridBytes(nodes);
-    const installCapable = nodes.filter((c) =>
-      ["connector", "artifact"].includes(c.meta.kind as string),
-    ).length;
+    const payload = JSON.stringify(
+      nodes.map((c) => encodeFlight(c.node as never, { clients: CLIENTS })),
+    );
+    expect(payload).not.toContain("Workspace: Admins only");
+    expect(payload).not.toContain("ownerEntityNames");
+    expect(payload).not.toContain("installTargets");
+    expect(payload).not.toContain("failureCopyByCategory");
+    expect(payload).not.toContain("You are not an administrator of this project.");
+  });
 
+  it("costs an install-capable card no more than its own card data", async () => {
+    // The install face is composed on the CLIENT when it opens, so the only
+    // thing an install-capable card adds to the payload is the card data its
+    // header band re-uses — not a second serialized card.
+    const nodes = await buildGrid(88);
+    const a = attribute(nodes);
+    expect(a.installCapable).toBeGreaterThan(0);
+    const perCard = a.installShellOverhead / a.installCapable;
+    // The legacy composition cost 5088 B/card for the same face.
+    expect(perCard).toBeLessThan(1400);
+  });
+
+  it("beats the pre-fix composition by the measured margin", async () => {
+    const nodes = await buildGrid(88);
+    const after = gridBytes(nodes);
+    const a = attribute(nodes);
+    const before = after - a.installShellOverhead + legacyExtraBytes(88);
+    const saved = before - after;
     // eslint-disable-next-line no-console
     console.log(
-      `[payload] shared install context ${KB(sharedContextBytes)}; ` +
-        `${installCapable} install-capable cards; grid total ${KB(total)}`,
+      `[payload] 88-card catalog: before ${KB(before)} → after ${KB(after)} ` +
+        `(-${KB(saved)}, -${((saved / before) * 100).toFixed(1)}%)`,
     );
-
-    // If the context were repeated per card it would account for this much:
-    const duplicatedIfPerCard = sharedContextBytes * installCapable;
-    expect(total).toBeLessThan(duplicatedIfPerCard);
+    expect(saved / before).toBeGreaterThan(0.2);
   });
 });

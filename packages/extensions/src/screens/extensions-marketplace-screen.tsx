@@ -20,6 +20,7 @@ import {
   ExtensionsMarketplaceClient,
   MarketplaceGridLoadingFallback,
 } from "./extensions-marketplace-client";
+import { InstallPanelScopeProvider } from "./extension-install-scope-panel";
 import { resolveInstallPanelAvailability } from "./install-panel-availability";
 // Per-card node composition (cinatra#2539) — the grid's RSC payload shape.
 import { buildMarketplaceCardNodes } from "./marketplace-card-nodes";
@@ -129,10 +130,6 @@ export async function ExtensionsMarketplaceScreen({
     cards,
     installedVersionByName,
     registryConnected,
-    installTargets,
-    ownerEntityNames,
-    activeOrgId,
-    installPanelAvailability,
     installAction: installExtensionPackageFormAction,
     updateAction: updateExtensionPackageFormAction,
     restoreAction: restoreExtensionPackageFormAction,
@@ -170,9 +167,25 @@ export async function ExtensionsMarketplaceScreen({
             </AlertDescription>
           </Alert>
         )}
-        <Suspense fallback={<MarketplaceGridLoadingFallback />}>
-          <ExtensionsMarketplaceClient cards={renderedCards} />
-        </Suspense>
+        {/* The card-invariant install context travels ONCE for the whole grid
+            (cinatra#2539) instead of once per install-capable card. The
+            provider renders no DOM — the picker rows, their enabled state and
+            their tooltips are the SAME server-computed values as before. */}
+        <InstallPanelScopeProvider
+          value={{
+            installTargets,
+            ownerEntityNames,
+            activeOrgId,
+            availability: installPanelAvailability,
+            // UNBOUND action — the identifiers travel as arguments, so the one
+            // panel component serves every card.
+            installAction: installExtensionPackageFormAction,
+          }}
+        >
+          <Suspense fallback={<MarketplaceGridLoadingFallback />}>
+            <ExtensionsMarketplaceClient cards={renderedCards} />
+          </Suspense>
+        </InstallPanelScopeProvider>
       </PageContent>
     </Main>
   );

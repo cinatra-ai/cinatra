@@ -26,16 +26,12 @@
 // (pacote/child_process reach), which a client component must never pull into
 // the browser graph. These four modules are client-safe (pure model helpers +
 // "use client" components).
-import {
-  MarketplaceListingCard,
-  MarketplaceListingCardInstallFace,
-} from "@cinatra-ai/extensions/screens/marketplace-listing-card";
-import {
-  CardFaceSwitcher,
-  InstallPanelCloseButton,
-  InstallPanelOpenButton,
-} from "@cinatra-ai/extensions/screens/card-face-switcher";
-import { ExtensionInstallScopePanel } from "@cinatra-ai/extensions/screens/extension-install-scope-panel";
+import { MarketplaceListingCard } from "@cinatra-ai/extensions/screens/marketplace-listing-card";
+import { InstallPanelOpenButton } from "@cinatra-ai/extensions/screens/card-face-switcher";
+// The REAL install-capable card shell (cinatra#2539): it owns the face switch
+// and composes the install face on the client, exactly as the live grid does.
+import { MarketplaceCardInstallShell } from "@cinatra-ai/extensions/screens/marketplace-card-shell";
+import { InstallPanelScopeProvider } from "@cinatra-ai/extensions/screens/extension-install-scope-panel";
 import { resolveInstallPanelAvailability } from "@cinatra-ai/extensions/screens/install-panel-availability";
 import { isInstallAccessTargetKind } from "@cinatra-ai/extensions/install-access-target";
 import {
@@ -46,10 +42,6 @@ import {
   resolveMarketplaceCardCta,
   type MarketplaceCardData,
 } from "@cinatra-ai/extensions/screens/marketplace-card-model";
-import {
-  buildMarketplaceFailureCopy,
-  marketplaceFailureCopy,
-} from "@cinatra-ai/extensions/screens/marketplace-failure-copy";
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -135,8 +127,8 @@ function ConformanceCard({ fixture }: { fixture: ConformanceCardFixture }) {
     cta.state === "restore" ? (
       <MarketplaceInstallForm
         action={lifecycleAction}
-        failureCopyByCategory={buildMarketplaceFailureCopy("restore", card.displayName)}
-        defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "restore", card.displayName)}
+        operation="restore"
+        displayName={card.displayName}
       >
         <MarketplaceInstallSubmit variant="outline" pendingLabel="Restoring…">
           Restore
@@ -160,8 +152,8 @@ function ConformanceCard({ fixture }: { fixture: ConformanceCardFixture }) {
       ) : (
         <MarketplaceInstallForm
           action={lifecycleAction}
-          failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
-          defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "install", card.displayName)}
+          operation="install"
+          displayName={card.displayName}
         >
           <MarketplaceInstallSubmit pendingLabel="Installing…">
             Install now
@@ -171,8 +163,8 @@ function ConformanceCard({ fixture }: { fixture: ConformanceCardFixture }) {
     ) : cta.state === "update" ? (
       <MarketplaceInstallForm
         action={lifecycleAction}
-        failureCopyByCategory={buildMarketplaceFailureCopy("update", card.displayName)}
-        defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "update", card.displayName)}
+        operation="update"
+        displayName={card.displayName}
       >
         <MarketplaceInstallSubmit pendingLabel="Updating…">
           Update now
@@ -214,33 +206,24 @@ function ConformanceCard({ fixture }: { fixture: ConformanceCardFixture }) {
       className="h-full"
     >
       {usesInstallPanel ? (
-        <CardFaceSwitcher
-          idleFace={idleFace}
-          installFace={
-            <MarketplaceListingCardInstallFace
-              card={card}
-              accentColor={accentColor}
-              closeControl={<InstallPanelCloseButton />}
-            >
-              <ExtensionInstallScopePanel
-                packageName={card.packageName}
-                packageVersion={card.packageVersion}
-                displayName={card.displayName}
-                installTargets={CONFORMANCE_INSTALL_PANEL_TARGETS}
-                ownerEntityNames={CONFORMANCE_INSTALL_PANEL_ENTITY_NAMES}
-                activeOrgId={CONFORMANCE_INSTALL_PANEL_ACTIVE_ORG_ID}
-                availability={availability}
-                failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
-                defaultFailureMessage={marketplaceFailureCopy(
-                  "unrecoverable",
-                  "install",
-                  card.displayName,
-                )}
-                installAction={scopedInstallAction}
-              />
-            </MarketplaceListingCardInstallFace>
-          }
-        />
+        // The card-invariant install context travels through the grid-level
+        // provider on the live screen; the harness mounts one per fixture card
+        // so each fixture keeps its own lifecycle action.
+        <InstallPanelScopeProvider
+          value={{
+            installTargets: CONFORMANCE_INSTALL_PANEL_TARGETS,
+            ownerEntityNames: CONFORMANCE_INSTALL_PANEL_ENTITY_NAMES,
+            activeOrgId: CONFORMANCE_INSTALL_PANEL_ACTIVE_ORG_ID,
+            availability,
+            installAction: scopedInstallAction,
+          }}
+        >
+          <MarketplaceCardInstallShell
+            idleFace={idleFace}
+            card={card}
+            accentColor={accentColor}
+          />
+        </InstallPanelScopeProvider>
       ) : (
         idleFace
       )}

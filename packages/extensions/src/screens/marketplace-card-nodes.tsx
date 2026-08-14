@@ -19,30 +19,16 @@ import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { deriveExtensionAccent } from "@/lib/extension-accent";
 import { deriveExtensionCompatState } from "@/lib/extension-compat-badge";
-import type { InstallTarget } from "@cinatra-ai/agents/install-targets";
 
 import { isInstallAccessTargetKind } from "../install-access-target";
-import {
-  CardFaceSwitcher,
-  InstallPanelCloseButton,
-  InstallPanelOpenButton,
-} from "./card-face-switcher";
-import { ExtensionInstallScopePanel } from "./extension-install-scope-panel";
-import type { InstallPanelAvailability } from "./install-panel-availability";
+import { InstallPanelOpenButton } from "./card-face-switcher";
+import { MarketplaceCardInstallShell } from "./marketplace-card-shell";
 import type { MarketplaceCardData } from "./marketplace-card-model";
 import { resolveMarketplaceCardCta } from "./marketplace-card-model";
 import { MarketplaceDetailModal } from "./marketplace-detail-modal";
-import type { InstallTargetLevel } from "./install-picker-target";
-import {
-  buildMarketplaceFailureCopy,
-  marketplaceFailureCopy,
-} from "./marketplace-failure-copy";
 import type { MarketplaceInstallActionResult } from "./marketplace-failure-copy";
 import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
-import {
-  MarketplaceListingCard,
-  MarketplaceListingCardInstallFace,
-} from "./marketplace-listing-card";
+import { MarketplaceListingCard } from "./marketplace-listing-card";
 
 /** Lightweight filter metadata the client grid keys its tab/search on. */
 export type MarketplaceCardMeta = {
@@ -59,16 +45,17 @@ export type BuildMarketplaceCardNodesArgs = {
   /** packageName → installed version + archived flag (the install-state read model). */
   installedVersionByName: Map<string, { version: string; isArchived: boolean }>;
   registryConnected: boolean;
-  /** SERVER-COMPUTED picker rows — card-invariant, shared by every panel. */
-  installTargets: InstallTarget[];
-  ownerEntityNames: Record<string, string>;
-  activeOrgId: string;
-  installPanelAvailability: InstallPanelAvailability;
-  /** The three marketplace form actions (injected so this module stays pure). */
+  /**
+   * The three marketplace form actions (injected so this module stays pure).
+   *
+   * The install panel's own UNBOUND action, its picker rows, the entity-name
+   * lookup, the active org and the availability verdict are card-INVARIANT and
+   * travel once through InstallPanelScopeProvider (cinatra#2539) — they are not
+   * per-card props any more.
+   */
   installAction: (input: {
     packageName: string;
     packageVersion: string;
-    accessTarget?: { level: InstallTargetLevel; id: string };
   }) => Promise<MarketplaceInstallActionResult | void>;
   updateAction: (input: {
     packageName: string;
@@ -83,10 +70,6 @@ export function buildMarketplaceCardNodes({
   cards,
   installedVersionByName,
   registryConnected,
-  installTargets,
-  ownerEntityNames,
-  activeOrgId,
-  installPanelAvailability,
   installAction: installFormAction,
   updateAction: updateFormAction,
   restoreAction: restoreFormAction,
@@ -135,12 +118,8 @@ export function buildMarketplaceCardNodes({
         // claim in either direction (#2333).
         <MarketplaceInstallForm
           action={restoreAction}
-          failureCopyByCategory={buildMarketplaceFailureCopy("restore", card.displayName)}
-          defaultFailureMessage={marketplaceFailureCopy(
-            "unrecoverable",
-            "restore",
-            card.displayName,
-          )}
+          operation="restore"
+          displayName={card.displayName}
         >
           <MarketplaceInstallSubmit variant="outline" pendingLabel="Restoring…">
             Restore
@@ -188,12 +167,8 @@ export function buildMarketplaceCardNodes({
           // no "registry"/HTTP jargon, no asserting a usually-wrong cause (#685).
           <MarketplaceInstallForm
             action={installAction}
-            failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
-            defaultFailureMessage={marketplaceFailureCopy(
-              "unrecoverable",
-              "install",
-              card.displayName,
-            )}
+            operation="install"
+            displayName={card.displayName}
           >
             <MarketplaceInstallSubmit pendingLabel="Installing…">
               Install now
@@ -208,12 +183,8 @@ export function buildMarketplaceCardNodes({
         ) : (
           <MarketplaceInstallForm
             action={updateAction}
-            failureCopyByCategory={buildMarketplaceFailureCopy("update", card.displayName)}
-            defaultFailureMessage={marketplaceFailureCopy(
-              "unrecoverable",
-              "update",
-              card.displayName,
-            )}
+            operation="update"
+            displayName={card.displayName}
           >
             <MarketplaceInstallSubmit pendingLabel="Updating…">
               Update now
@@ -251,38 +222,11 @@ export function buildMarketplaceCardNodes({
 
     // ONE opaque node per extension, exactly as the filter-only client grid
     // has always received. For an access-target install the node is the client
-    // face switcher over TWO server-rendered faces; exactly one of them is
-    // mounted at any time, so a hidden face can never retain a stale panel.
+    // shell that owns the face switch: exactly one face is mounted at any time,
+    // and the install face is COMPOSED ON THE CLIENT when it opens instead of
+    // being server-serialized into every render (cinatra#2539).
     const node = usesInstallPanel ? (
-      <CardFaceSwitcher
-        idleFace={idleFace}
-        installFace={
-          <MarketplaceListingCardInstallFace
-            card={card}
-            accentColor={accentColor}
-            closeControl={<InstallPanelCloseButton />}
-          >
-            <ExtensionInstallScopePanel
-              packageName={card.packageName}
-              packageVersion={card.packageVersion}
-              displayName={card.displayName}
-              installTargets={installTargets}
-              ownerEntityNames={ownerEntityNames}
-              activeOrgId={activeOrgId}
-              availability={installPanelAvailability}
-              failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
-              defaultFailureMessage={marketplaceFailureCopy(
-                "unrecoverable",
-                "install",
-                card.displayName,
-              )}
-              // UNBOUND action — the identifiers travel as arguments, so the
-              // one panel component serves every card.
-              installAction={installFormAction}
-            />
-          </MarketplaceListingCardInstallFace>
-        }
-      />
+      <MarketplaceCardInstallShell idleFace={idleFace} card={card} accentColor={accentColor} />
     ) : (
       idleFace
     );
