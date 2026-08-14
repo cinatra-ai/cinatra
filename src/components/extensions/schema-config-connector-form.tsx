@@ -182,6 +182,20 @@ function bannerNameFromResult(result: unknown): string | null {
   return null;
 }
 
+/**
+ * The server's OWN text on an action result (`{ message }`) — the dynamic
+ * explanation a handler sends alongside its banner name (cinatra#2752). Schema
+ * banner variants carry STATIC messages, so this is the only channel a handler
+ * has for "why": it must never be discarded on a non-success outcome.
+ */
+function messageFromResult(result: unknown): string | null {
+  if (result && typeof result === "object" && "message" in result) {
+    const m = (result as { message?: unknown }).message;
+    return typeof m === "string" && m.trim() ? m.trim() : null;
+  }
+  return null;
+}
+
 // A schema-declared banner tone → the cinatraToast variant it toasts as. The
 // schema-declared banner variants are the STATIC toast messages an action result
 // surfaces (cinatra#1109): a `{ banner: "<name>" }` result toasts that variant's
@@ -250,21 +264,57 @@ export function SchemaConfigConnectorForm({
 
   const onActionResult = useCallback(
     (result: ActionResult) => {
-      if (!result.ok) {
-        // Prefer the schema-declared "error" banner variant's static message;
-        // otherwise toast the action's own error text.
-        const v = bannerVariants["error"];
-        if (v) toast[TONE_TO_TOAST[v.tone]](v.message);
-        else toast.error(result.error ?? "Action failed.");
+      // EVERY non-success outcome funnels through here (cinatra#2752): a
+      // transport failure, a schema-declared error banner, AND any banner name
+      // the surface never declared. The text preference is server-first —
+      // the handler's own `message`, then the schema-declared "error" variant's
+      // static message, then the action's transport error, then a generic
+      // fallback. The tone is the declared "error" variant's tone when it has
+      // one, but NEVER a success tone: a failure may not be dressed as one.
+      const fail = (message?: string | null) => {
+        const declared = bannerVariants["error"];
+        const tone = declared && TONE_TO_TOAST[declared.tone] !== "success"
+          ? TONE_TO_TOAST[declared.tone]
+          : "error";
+        toast[tone](message ?? declared?.message ?? result.error ?? "Action failed.");
         setListEpoch((e) => e + 1);
+      };
+
+      // The handler's own text, whether it arrived on a transport failure body
+      // or inside an `ok` result carrying an error banner.
+      const serverMessage = messageFromResult(result.result);
+      if (!result.ok) {
+        fail(serverMessage);
         return;
       }
-      // A `{ banner: "<name>" }` result toasts that variant's static message;
-      // otherwise a generic success confirmation.
+      // An `ok` transport says only that the ACTION RAN — not that it
+      // succeeded. A handler that returns `{ banner: "error", message }`
+      // instead of throwing (the appointment-schedules `addSchedule` shape)
+      // used to land on `toast.success("Done.")` with its message discarded,
+      // so every failed Add read as success. So:
+      //   - a `{ banner: "<name>" }` result the surface DECLARES toasts that
+      //     variant's tone (its static message, or the server's when it sent
+      //     one on the error path);
+      //   - a banner name the surface does NOT declare is an outcome this
+      //     shell cannot interpret — it FAILS SAFE to the error path and never
+      //     claims success;
+      //   - a result with no banner name at all is the plain confirmation.
       const name = bannerNameFromResult(result.result);
       const v = name ? bannerVariants[name] : undefined;
-      if (v) toast[TONE_TO_TOAST[v.tone]](v.message);
-      else toast.success("Done.");
+      if (name && !v) {
+        fail(serverMessage);
+        return;
+      }
+      if (v) {
+        // A declared variant OWNS its tone. Its static message is the default;
+        // on the non-success tones the handler's own message wins, because
+        // that is where the "why" lives and a static string cannot carry it.
+        const tone = TONE_TO_TOAST[v.tone];
+        const text = tone === "error" || tone === "warning" ? (serverMessage ?? v.message) : v.message;
+        toast[tone](text);
+      } else {
+        toast.success("Done.");
+      }
       // Any successful write may have changed the underlying rows — refresh lists.
       setListEpoch((e) => e + 1);
     },
