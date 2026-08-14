@@ -808,6 +808,24 @@ export const CATALOG_PACKUMENT_TIMEOUT_MS = 8_000;
  */
 export const CATALOG_HYDRATION_BUDGET_MS = 12_000;
 
+/**
+ * Chunk sizing for the demand-bounded packument fan-out (cinatra#2539).
+ *
+ * `listExtensionPackages` hydrates the sorted candidate list in chunks and
+ * stops as soon as `offset + limit` VISIBLE packages exist — the answer can
+ * never contain more than that, so hydrating further is pure waste. These two
+ * numbers only shape the ROUND TRIPS, never the answer:
+ *
+ *   - MIN: the floor on the first chunk, so a tiny `limit` still issues a
+ *     usefully parallel first batch instead of a near-serial trickle.
+ *   - MAX: the ceiling once chunks double, so the pathological case (a long
+ *     alphabetical prefix of packages this viewer cannot see) converges in a
+ *     handful of round trips rather than one giant burst that would re-create
+ *     the unbounded fan-out this replaced.
+ */
+const CATALOG_HYDRATION_MIN_CHUNK = 16;
+const CATALOG_HYDRATION_MAX_CHUNK = 128;
+
 /** Raised when a catalog read is cut short by its caller-supplied budget. */
 export class RegistryCatalogBudgetExceededError extends Error {
   constructor(budgetMs: number) {
@@ -1153,70 +1171,123 @@ async function listExtensionPackagesWithin(
   // caller asking for `limit: 20` always sees up to 20 visible rows even
   // when the first N alphabetical packages are all foreign-private.
 
-  // Bounded packument fan-out (cinatra#2539). This loop reads ONE FULL
-  // packument per package in the registry — the `limit` slice happens AFTER
-  // the visibility filter below, so it does not bound the network work. With an
-  // unresponsive registry the previous shape could therefore hold a page render
-  // for `packageNames.length / maxSockets × 5 min`. Two bounds, both degrading
-  // to the SAME "unhydrated package" outcome the `allSettled` already produced
-  // for a per-package failure:
-  //   1. a short per-request timeout, and
-  //   2. one shared wall-clock budget across the whole fan-out.
+  // DEMAND-BOUNDED packument fan-out (cinatra#2539 residual).
+  //
+  // This function reads ONE FULL packument per candidate package, and the
+  // `limit` slice happens AFTER the visibility filter — so a naive fan-out over
+  // every candidate makes the network work O(registry size) no matter how few
+  // rows the caller asked for. Measured on a 200-package registry, a
+  // `limit: 20` search read 200 packuments / 1.58 MiB to return 20 rows.
+  //
+  // A wall-clock budget bounds that for a PAGE RENDER, but it is lossy — which
+  // is exactly why `extensions_search` (which must never silently drop a
+  // matching package) could not opt into it, and stayed unbounded.
+  //
+  // The bound here is NOT lossy. The answer is `visible.slice(offset, offset +
+  // limit)` over the SORTED candidate list, so only the first `offset + limit`
+  // VISIBLE packages can ever appear in it. Hydrating in sorted chunks and
+  // stopping as soon as that many visible packages exist yields the byte-
+  // identical result for strictly less work: same order, same rows, same
+  // drop-on-failure behaviour. Reads become O(offset + limit) in the ordinary
+  // case instead of O(registry size).
+  //
+  // The worst case — a long alphabetical prefix of packages the viewer may not
+  // see — still walks far into the catalog. That is inherent: visibility lives
+  // inside the packument, so a package cannot be ruled out without reading it.
+  // Chunks grow geometrically so that case costs a handful of extra round
+  // trips, not a serialized per-package walk.
   const fetchTimeoutMs = options.fetchTimeoutMs;
-  const results = await settleWithinBudget(
-    packageNames.map((packageName) =>
-      getPublishedExtensionSummary(
-        { packageName, ...(fetchTimeoutMs === undefined ? {} : { fetchTimeoutMs }), signal },
+  const need = offset + limit;
+  const visible: AgentPackageSummary[] = [];
+  let cursor = 0;
+  let attempted = 0;
+  let unhydrated = 0;
+  let chunkSize = Math.max(need, CATALOG_HYDRATION_MIN_CHUNK);
+
+  while (cursor < packageNames.length && visible.length < need) {
+    const batch = packageNames.slice(cursor, cursor + chunkSize);
+    cursor += batch.length;
+    const results = await settleWithinBudget(
+      batch.map((packageName) =>
+        getPublishedExtensionSummary(
+          { packageName, ...(fetchTimeoutMs === undefined ? {} : { fetchTimeoutMs }), signal },
+          resolvedConfig,
+        ).then((summary) => ({ packageName, summary })),
+      ),
+      remainingBudgetMs(),
+    );
+    attempted += batch.length;
+    for (const result of results) {
+      if (result.status !== "fulfilled") {
+        unhydrated += 1;
+        continue;
+      }
+      const summary = toPackageSummary(
+        result.value.packageName,
+        result.value.summary,
         resolvedConfig,
-      ).then((summary) => ({ packageName, summary })),
-    ),
-    remainingBudgetMs(),
-  );
-  const unhydrated = results.filter((r) => r.status !== "fulfilled").length;
+      );
+      if (isPackageVisible(summary, options.viewerScope)) visible.push(summary);
+    }
+    // Stop when the budget this call was given is spent, or when the shared
+    // abort has fired: further chunks would only produce budget-rejected reads.
+    const budgetLeft = remainingBudgetMs();
+    if (budgetLeft !== null && budgetLeft <= 0) break;
+    if (signal.aborted) break;
+    // The ceiling is never below the caller's own demand: a deliberate
+    // full-sweep caller (marketplace-sync asks for 10_000) must not fall from
+    // one wide batch to a 128-at-a-time crawl after its first chunk.
+    chunkSize = Math.min(chunkSize * 2, Math.max(CATALOG_HYDRATION_MAX_CHUNK, need));
+  }
+
   if (unhydrated > 0) {
     console.warn(
-      `[registries] extension catalog: ${unhydrated}/${packageNames.length} packages were not ` +
+      `[registries] extension catalog: ${unhydrated}/${attempted} packages were not ` +
         "hydrated within the registry budget — their rows render from their local descriptors.",
     );
   }
-  const summaries = results.flatMap((result) => {
-    if (result.status !== "fulfilled") return [];
-    const { packageName, summary } = result.value;
-    const manifest = summary.manifest ?? {};
-    const payload = ((manifest as { cinatra?: Record<string, unknown> }).cinatra ?? {}) as Record<string, unknown>;
-    const m = manifest as Record<string, unknown>;
-    const authorRaw = m.author;
-    const authorString: string | null =
-      typeof authorRaw === "string"
-        ? authorRaw
-        : authorRaw && typeof authorRaw === "object" && "name" in (authorRaw as object)
-          ? String((authorRaw as { name?: unknown }).name)
-          : null;
-    const sum: AgentPackageSummary = {
-      packageName,
-      packageVersion: summary.resolvedVersion ?? "",
-      title: (m.title as string | undefined) ?? packageName,
-      description: (m.description as string | undefined) ?? null,
-      changelog: null,
-      riskLevel: "low",
-      hasApprovalGates: false,
-      toolAccess: [],
-      executionMode: "agentic",
-      ownerOrgId: null,
-      publishedAt: "",
-      registryUrl: resolvedConfig.registryUrl,
-      registryUiUrl: resolvedConfig.uiUrl ?? resolvedConfig.registryUrl,
-      deprecated: false,
-      author: authorString ? authorString.slice(0, 120) : null,
-      kind: summary.kind,
-      origin: extractOriginFromCinatraPayload(payload, packageName),
-    };
-    return [sum];
-  });
-  // Apply the visibility filter BEFORE limit/offset so the caller gets up
-  // to `limit` actually-visible packages.
-  const visible = summaries.filter((s) => isPackageVisible(s, options.viewerScope));
   return visible.slice(offset, offset + limit);
+}
+
+/**
+ * Build the caller-facing summary from one packument read. Extracted from the
+ * fan-out so the incremental hydration loop maps a chunk's results the same way
+ * the single-shot fan-out did.
+ */
+function toPackageSummary(
+  packageName: string,
+  summary: PublishedExtensionSummary,
+  resolvedConfig: VerdaccioConfig,
+): AgentPackageSummary {
+  const manifest = summary.manifest ?? {};
+  const payload = ((manifest as { cinatra?: Record<string, unknown> }).cinatra ?? {}) as Record<string, unknown>;
+  const m = manifest as Record<string, unknown>;
+  const authorRaw = m.author;
+  const authorString: string | null =
+    typeof authorRaw === "string"
+      ? authorRaw
+      : authorRaw && typeof authorRaw === "object" && "name" in (authorRaw as object)
+        ? String((authorRaw as { name?: unknown }).name)
+        : null;
+  return {
+    packageName,
+    packageVersion: summary.resolvedVersion ?? "",
+    title: (m.title as string | undefined) ?? packageName,
+    description: (m.description as string | undefined) ?? null,
+    changelog: null,
+    riskLevel: "low",
+    hasApprovalGates: false,
+    toolAccess: [],
+    executionMode: "agentic",
+    ownerOrgId: null,
+    publishedAt: "",
+    registryUrl: resolvedConfig.registryUrl,
+    registryUiUrl: resolvedConfig.uiUrl ?? resolvedConfig.registryUrl,
+    deprecated: false,
+    author: authorString ? authorString.slice(0, 120) : null,
+    kind: summary.kind,
+    origin: extractOriginFromCinatraPayload(payload, packageName),
+  };
 }
 
 /**
