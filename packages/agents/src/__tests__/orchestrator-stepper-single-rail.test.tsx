@@ -233,6 +233,28 @@ describe("the flow-agent run detail renders ONE step rail, never two (cinatra#27
     });
   }
 
+  it("draws NO rail on the step-less branch — even carrying railExtras — because the SCREEN keeps its rail there", async () => {
+    // THE MUTUAL-EXCLUSION INVARIANT, closed end to end. The two halves of this
+    // fix are tested apart: `screenHostsStepRail` decides for the screen, this
+    // panel decides for itself. They are only jointly correct if they never both
+    // say yes, and there is exactly one branch where that could happen —
+    // `panel === "stepper"` with ZERO policy steps. There the screen KEEPS the
+    // page-level rail (asserted in instance-screens-single-step-rail.test.ts,
+    // deliberately, so a flow run whose policy fired no renderer gate does not
+    // lose its review links), so this panel must draw none.
+    //
+    // The dangerous input is a NON-EMPTY railExtras: that is precisely when
+    // drawing a rail here looks right in isolation ("we have rows, show them"),
+    // and `StepperColumn`'s own guard admits that shape. The panel's step-less
+    // section returns before the column is ever reached, and this pins it — the
+    // duplicate rail cannot come back through that door.
+    const { OrchestratorStepperPanel } = await import("../orchestrator-stepper-panel");
+    render(
+      <OrchestratorStepperPanel {...baseProps({ stepperSteps: [], railExtras: RAIL_EXTRAS })} />,
+    );
+    expect(rails().length).toBe(0);
+  });
+
   it("adds no second rail when the dev preview inlines a child panel", async () => {
     // The child panel mounts in embedMode with an EMPTY step list. An empty rail
     // element would be a second `[data-run-step-rail]` in the DOM — the exact
