@@ -39,6 +39,7 @@ import {
   fetchPublicMarketplaceExtensionDetail,
   fetchPublicMarketplaceExtensionList,
   resolveMarketplaceBaseUrl,
+  MarketplacePublicCatalogTimeoutError,
   MARKETPLACE_BASE_URL,
 } from "../src/http-client";
 import { MARKETPLACE_CONNECT_FAILURE, MarketplaceMcpError } from "../src/client";
@@ -1223,5 +1224,120 @@ describe("resolveMarketplaceBaseUrl", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("MARKETPLACE_BASE_URL", "http://evil.test");
     expect(resolveMarketplaceBaseUrl()).toBe(MARKETPLACE_BASE_URL);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// cinatra#2539 — the anonymous public catalog reads are BOUNDED.
+//
+// `/configuration/marketplace` renders server-side off these two helpers, so an
+// unbounded `fetch` let a storefront that accepts the connection and then
+// stalls pin the render for undici's 300 s default — a page the viewer cannot
+// cancel. Each test drives the REAL `AbortSignal.timeout` (shortened via the
+// env override) against a fetch stub that only settles when the signal fires,
+// so what is proven is the whole chain: the bound is attached, it trips, and it
+// is mapped to a failure the taxonomy classifies honestly.
+// ---------------------------------------------------------------------------
+describe("public catalog reads are bounded (cinatra#2539)", () => {
+  /** A fetch that NEVER answers on its own — it settles only when aborted. */
+  function stallingFetch() {
+    return vi.fn((_url: URL, init: RequestInit) => {
+      const signal = init.signal as AbortSignal;
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason));
+      });
+    });
+  }
+
+  const previousTimeout = process.env.MARKETPLACE_PUBLIC_CATALOG_TIMEOUT_MS;
+
+  beforeEach(() => {
+    process.env.MARKETPLACE_PUBLIC_CATALOG_TIMEOUT_MS = "25";
+  });
+
+  afterEach(() => {
+    if (previousTimeout === undefined) {
+      delete process.env.MARKETPLACE_PUBLIC_CATALOG_TIMEOUT_MS;
+    } else {
+      process.env.MARKETPLACE_PUBLIC_CATALOG_TIMEOUT_MS = previousTimeout;
+    }
+    vi.unstubAllGlobals();
+  });
+
+  it("attaches an abort signal to the catalog request", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ items: [], total: 0 }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchPublicMarketplaceExtensionList({}, { baseUrl: "https://mk.test" });
+
+    const [, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    // The bound must not change what the request IS — still anonymous, still GET.
+    expect(init.method).toBe("GET");
+    expect(init.headers).toEqual({ Accept: "application/json" });
+  });
+
+  it("a stalled storefront fails fast on the catalog read instead of hanging", async () => {
+    vi.stubGlobal("fetch", stallingFetch());
+
+    await expect(
+      fetchPublicMarketplaceExtensionList({}, { baseUrl: "https://mk.test" }),
+    ).rejects.toBeInstanceOf(MarketplacePublicCatalogTimeoutError);
+  });
+
+  it("a stalled storefront fails fast on the detail read too", async () => {
+    vi.stubGlobal("fetch", stallingFetch());
+
+    await expect(
+      fetchPublicMarketplaceExtensionDetail(
+        { packageName: "@scope/name" },
+        { baseUrl: "https://mk.test" },
+      ),
+    ).rejects.toBeInstanceOf(MarketplacePublicCatalogTimeoutError);
+  });
+
+  it("classifies a blown bound as indeterminate — never as a peer response, never as unreachable", async () => {
+    vi.stubGlobal("fetch", stallingFetch());
+
+    const err = await fetchPublicMarketplaceExtensionList({}, { baseUrl: "https://mk.test" })
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    // A timeout proves nothing about the marketplace: it neither answered
+    // (peer-response) nor was shown to be unreachable. Anything that may only
+    // relax a gate on a PROVEN-down marketplace must keep refusing.
+    expect(classifyMarketplaceFailure(err)).toBe("indeterminate");
+  });
+
+  it("leaves non-timeout transport failures — and their connect-failure brand — untouched", async () => {
+    const connectFailure = new TypeError("fetch failed");
+    Object.defineProperty(connectFailure, MARKETPLACE_CONNECT_FAILURE, { value: true });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(connectFailure));
+
+    const err = await fetchPublicMarketplaceExtensionList({}, { baseUrl: "https://mk.test" })
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect(err).toBe(connectFailure);
+    expect(classifyMarketplaceFailure(err)).toBe("unreachable");
+  });
+
+  it("falls back to the default ceiling when the override is not a positive number", async () => {
+    // An unbounded browse read is the defect, so misconfiguration must not be
+    // able to switch the bound off.
+    process.env.MARKETPLACE_PUBLIC_CATALOG_TIMEOUT_MS = "0";
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ items: [], total: 0 }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchPublicMarketplaceExtensionList({}, { baseUrl: "https://mk.test" });
+
+    const [, init] = fetchMock.mock.calls[0] as [URL, RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect((init.signal as AbortSignal).aborted).toBe(false);
   });
 });

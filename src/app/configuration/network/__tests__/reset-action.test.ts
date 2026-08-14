@@ -42,6 +42,13 @@ vi.mock("@/lib/instance-identity-store", () => {
 });
 vi.mock("@/lib/instance-identity-cache", () => ({
   invalidateInstanceIdentityCache: vi.fn(),
+  // cinatra#2539 — the module now also owns the READ side of the identity
+  // cache. Stubbed as a permanent MISS so every `readInstanceIdentity()` in
+  // this suite still reaches the mocked database, exactly as before the cache
+  // existed; the cache's own behaviour is covered in
+  // src/lib/__tests__/instance-identity-cache.test.ts.
+  readInstanceIdentityCacheEntry: vi.fn(() => null),
+  storeInstanceIdentityCacheEntry: vi.fn(),
 }));
 vi.mock("@/lib/registry-credentials", () => ({
   writeRegistryCredential: vi.fn(),
