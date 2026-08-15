@@ -1,0 +1,7 @@
+cinatra#2701 (d) — the chat 'Undo last action' chip's candidate read, live.
+The chip renders ONLY when this answers with a change-set id, and that id is
+what becomes the /configuration/artifacts/restore/... deep link. A non-admin
+must get the empty answer, which is byte-identical to 'nothing to undo'.
+
+member: HTTP 200  body: {"changeSetId":null}
+admin: HTTP 200  body: {"changeSetId":null}

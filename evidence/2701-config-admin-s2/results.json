@@ -1,0 +1,134 @@
+[
+  {
+    "surface": "roles",
+    "asserts": "the two sessions, as the database records them",
+    "rows": [
+      {
+        "id": "37be6937-2b74-42e7-a789-884b8f1372d3",
+        "email": "gate-admin@local.test",
+        "role": "admin"
+      },
+      {
+        "id": "cb770fba-93d9-4fee-bb21-e727378c7758",
+        "email": "gate-member@local.test",
+        "role": "user"
+      }
+    ]
+  },
+  {
+    "surface": "seed",
+    "asserts": "a pre-existing author notification row EXISTS in the database, href and all, for both viewers",
+    "rows": [
+      {
+        "id": "s2-uat-notif-admin",
+        "href": "/configuration/agents/approvals/s2-uat-approval-row"
+      },
+      {
+        "id": "s2-uat-notif-member",
+        "href": "/configuration/agents/approvals/s2-uat-approval-row"
+      }
+    ]
+  },
+  {
+    "surface": "sign-in",
+    "role": "member",
+    "httpStatus": 200
+  },
+  {
+    "surface": "sign-in",
+    "role": "admin",
+    "httpStatus": 200
+  },
+  {
+    "surface": "d-undo-chip-gate",
+    "asserts": "the chip's live read answers empty for both roles here (no seeded change-set); the ADMIN-ONLY branch is pinned by fixture",
+    "file": "/tmp/proof-2701/undo-candidate-gate.txt"
+  },
+  {
+    "surface": "a-command-menu",
+    "role": "member",
+    "file": "/tmp/proof-2701/member-a-command-menu.png",
+    "asserts": "the palette lists NO Configuration group and no /configuration destination",
+    "groupsRendered": [
+      "Navigate",
+      "Theme"
+    ],
+    "configurationGroupPresent": false,
+    "itemCount": 10,
+    "itemsMentioningConfiguration": []
+  },
+  {
+    "surface": "b-development-toolbar",
+    "role": "member",
+    "file": "/tmp/proof-2701/member-b-development-toolbar.png",
+    "asserts": "the toolbar still renders for a member, WITHOUT the 'All development administration' link",
+    "toolbarRenders": true,
+    "configurationDevelopmentLinks": 0
+  },
+  {
+    "surface": "c-notifications-feed",
+    "role": "member",
+    "file": "/tmp/proof-2701/member-c-notifications-feed.png",
+    "asserts": "the pre-existing 'Agent proposal approved' row renders with NO link into /configuration",
+    "approvalNotificationRowFound": true,
+    "configurationLinksInThatRow": 0,
+    "configurationLinksAnywhereOnPage": 0
+  },
+  {
+    "surface": "d-restore-surface",
+    "role": "member",
+    "file": "/tmp/proof-2701/member-d-restore-surface.png",
+    "asserts": "the destination the undo affordance used to offer — the member lands on not-authorized, which is exactly why the affordance is withheld",
+    "status": 200,
+    "finalPath": "/not-authorized",
+    "h1": "Not authorized"
+  },
+  {
+    "surface": "a-command-menu",
+    "role": "admin",
+    "file": "/tmp/proof-2701/admin-a-command-menu.png",
+    "asserts": "the palette lists the Configuration group and every /configuration destination, unchanged",
+    "groupsRendered": [
+      "Navigate",
+      "Configuration",
+      "Theme"
+    ],
+    "configurationGroupPresent": true,
+    "itemCount": 17,
+    "itemsMentioningConfiguration": [
+      "Artifacts — Restore objects",
+      "AI Providers (LLM / API keys)",
+      "MCP Server",
+      "Permissions",
+      "Skills administration",
+      "Environment",
+      "Development"
+    ]
+  },
+  {
+    "surface": "b-development-toolbar",
+    "role": "admin",
+    "file": "/tmp/proof-2701/admin-b-development-toolbar.png",
+    "asserts": "the toolbar renders for an admin WITH the link, unchanged",
+    "toolbarRenders": true,
+    "configurationDevelopmentLinks": 1
+  },
+  {
+    "surface": "c-notifications-feed",
+    "role": "admin",
+    "file": "/tmp/proof-2701/admin-c-notifications-feed.png",
+    "asserts": "the same pre-existing row renders WITH its link, unchanged",
+    "approvalNotificationRowFound": true,
+    "configurationLinksInThatRow": 1,
+    "configurationLinksAnywhereOnPage": 2
+  },
+  {
+    "surface": "d-restore-surface",
+    "role": "admin",
+    "file": "/tmp/proof-2701/admin-d-restore-surface.png",
+    "asserts": "the admin reaches the restore surface, unchanged",
+    "status": 200,
+    "finalPath": "/configuration/artifacts/restore/s2-uat-no-such-change-set",
+    "h1": "Restore this change?"
+  }
+]
