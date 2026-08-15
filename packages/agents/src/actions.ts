@@ -1592,7 +1592,7 @@ export type LaunchedRun = {
 
 export async function createAgentRunForLaunchFrame(input: {
   /** The VERIFIED actor envelope. Two readers, and no others:
-   *  `./chat-launch-origin` derives the launch origin from it, and the
+   *  `isChatLaunchFrame` above derives the launch origin from it, and the
    *  authority resolver below reads the authority it already carries. */
   frame: unknown;
   create: LaunchFrameCreateInput;
