@@ -1796,6 +1796,20 @@ export async function compileOasAgentJson(opts: {
       propShape.properties = subProperties;
       if (Array.isArray(subRequired)) propShape.required = subRequired;
     }
+    // PRESENTATION HINTS authored on the input's own `json_schema` ride through
+    // verbatim. `x-…` is the extension hint namespace: every consumer that does
+    // not know a given key ignores it (jsonSchemaToZod reads only type /
+    // properties / required / items), so one generic copy carries the whole
+    // namespace — today `x-object-text-property`, `x-multiline`,
+    // `x-placeholder` — instead of one bespoke lift per hint. Copied BEFORE the
+    // metadata-derived hints below so `metadata.cinatra` stays authoritative on
+    // the keys it owns (`x-renderer`, `x-data-source`, `x-hidden`).
+    const inputHints = prop.json_schema as Record<string, unknown> | undefined;
+    if (inputHints && typeof inputHints === "object" && !Array.isArray(inputHints)) {
+      for (const [hintKey, hintValue] of Object.entries(inputHints)) {
+        if (hintKey.startsWith("x-")) propShape[hintKey] = hintValue;
+      }
+    }
     if (startRenderers[title]) propShape["x-renderer"] = startRenderers[title];
     if (startDataSources[title]) propShape["x-data-source"] = startDataSources[title];
     if (startHidden.includes(title)) propShape["x-hidden"] = true;

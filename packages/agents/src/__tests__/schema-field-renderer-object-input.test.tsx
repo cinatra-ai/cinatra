@@ -3,7 +3,7 @@
  * cinatra#2484 — an `object`-typed Setup input must never be a free-text box
  * that accepts a bare string.
  *
- * Two legs, both covered here:
+ * Three legs, all covered here:
  *
  *  (a) VALIDATION regardless of schema — a `{type:"object"}` input with NO
  *      `json_schema.properties` (blog-draft-writer@0.1.2's `idea`) renders a
@@ -14,6 +14,11 @@
  *      `{title, summary, outline}` shape (required: [title]) renders real
  *      sub-fields (the `outline` array uses the repo's existing
  *      one-value-per-line list input) and submits a real OBJECT.
+ *  (c) ONE CONTROL when `x-object-text-property` is declared — the shape
+ *      blog-draft-writer-agent ships. One visible editable control named after
+ *      the FIELD ("Idea"), still emitting a real object. Leg (b) is what an
+ *      object input renders as WITHOUT that hint, and it stays pinned for the
+ *      extensions that want a real form.
  *
  *   pnpm --filter @cinatra-ai/agents exec vitest run \
  *     src/__tests__/schema-field-renderer-object-input.test.tsx
@@ -43,6 +48,7 @@ import {
   OBJECT_INPUT_EMPTY_ERROR,
   parseJsonObjectInput,
   collectObjectSchemaErrors,
+  objectTextPropertyRequiredError,
 } from "../schema-field-renderer";
 
 const BASE_CONTEXT = { connectedApps: [] as string[] };
@@ -50,8 +56,16 @@ const BASE_CONTEXT = { connectedApps: [] as string[] };
 /** blog-draft-writer@0.1.2 — object-typed, NO json_schema at all. */
 const SCHEMALESS_OBJECT_SCHEMA = { type: "object", title: "idea" };
 
-/** blog-draft-writer's declared shape (the merged agent-side manifest fix). */
-const DECLARED_OBJECT_SCHEMA = {
+/**
+ * The GENERIC structured-object shape: declared `properties`, and NO
+ * single-text hint. This is what an object input renders as when the extension
+ * wants a real form (one control per key).
+ *
+ * It is deliberately no longer named after blog-draft-writer. That agent's
+ * `idea` now ships `x-object-text-property` and renders ONE control — see
+ * `SHIPPED_IDEA_SCHEMA` and leg (c) below, which is the pin for its shape.
+ */
+const STRUCTURED_OBJECT_SCHEMA = {
   type: "object",
   title: "idea",
   properties: {
@@ -60,6 +74,26 @@ const DECLARED_OBJECT_SCHEMA = {
     outline: { type: "array", items: { type: "string" } },
   },
   required: ["title"],
+};
+
+/**
+ * blog-draft-writer-agent's SHIPPED `idea` shape: the same sub-properties, plus
+ * the hint that collapses them into ONE control. Kept byte-identical to the
+ * compiled property the agent's `cinatra/oas.json` produces (pinned through the
+ * real compiler in `single-idea-field-contract.test.ts`).
+ */
+const SHIPPED_IDEA_SCHEMA = {
+  type: "object",
+  title: "idea",
+  properties: {
+    title: { type: "string" },
+    summary: { type: "string" },
+    outline: { type: "array", items: { type: "string" } },
+  },
+  required: ["title"],
+  "x-object-text-property": "title",
+  "x-multiline": true,
+  "x-placeholder": "What should this post be about?",
 };
 
 function renderObjectField(
@@ -330,15 +364,15 @@ describe("object-typed input WITHOUT json_schema (cinatra#2484 leg a)", () => {
 // Leg (b) — structured rendering from json_schema.properties
 // ---------------------------------------------------------------------------
 describe("object-typed input WITH json_schema.properties (cinatra#2484 leg b)", () => {
-  it("renders one sub-field per declared property, required-first", () => {
-    renderObjectField(DECLARED_OBJECT_SCHEMA);
+  it("renders one sub-field per declared property, required-first (NO single-text hint)", () => {
+    renderObjectField(STRUCTURED_OBJECT_SCHEMA);
     expect(screen.getByLabelText(/title \*/i)).toBeTruthy();
     expect(screen.getByLabelText(/summary/i)).toBeTruthy();
     expect(screen.getByLabelText(/outline/i)).toBeTruthy();
   });
 
   it("renders an array sub-property with the repo's one-value-per-line list input", () => {
-    const { container } = renderObjectField(DECLARED_OBJECT_SCHEMA);
+    const { container } = renderObjectField(STRUCTURED_OBJECT_SCHEMA);
     const outline = container.querySelector("#field-outline") as HTMLElement;
     expect(outline.tagName.toLowerCase()).toBe("textarea");
     expect(screen.getByText(/One value per line/i)).toBeTruthy();
@@ -346,7 +380,7 @@ describe("object-typed input WITH json_schema.properties (cinatra#2484 leg b)", 
 
   it("submits a REAL object assembled from the sub-fields", async () => {
     const onChange = vi.fn();
-    const { container } = renderObjectField(DECLARED_OBJECT_SCHEMA, { onChange });
+    const { container } = renderObjectField(STRUCTURED_OBJECT_SCHEMA, { onChange });
 
     fireEvent.change(container.querySelector("#field-title")!, {
       target: { value: "Human purpose in an age of agentic AI" },
@@ -369,7 +403,7 @@ describe("object-typed input WITH json_schema.properties (cinatra#2484 leg b)", 
 
   it("omits blank OPTIONAL sub-values instead of sending empty strings", async () => {
     const onChange = vi.fn();
-    const { container } = renderObjectField(DECLARED_OBJECT_SCHEMA, { onChange });
+    const { container } = renderObjectField(STRUCTURED_OBJECT_SCHEMA, { onChange });
     fireEvent.change(container.querySelector("#field-title")!, {
       target: { value: "Only a title" },
     });
@@ -381,7 +415,7 @@ describe("object-typed input WITH json_schema.properties (cinatra#2484 leg b)", 
 
   it("blocks submit and names the missing REQUIRED sub-field", async () => {
     const onChange = vi.fn();
-    const { container } = renderObjectField(DECLARED_OBJECT_SCHEMA, { onChange });
+    const { container } = renderObjectField(STRUCTURED_OBJECT_SCHEMA, { onChange });
     fireEvent.change(container.querySelector("#field-summary")!, {
       target: { value: "summary only, no title" },
     });
@@ -396,7 +430,7 @@ describe("object-typed input WITH json_schema.properties (cinatra#2484 leg b)", 
   it("grouped-form flush emits the assembled object (not a string)", async () => {
     const onChange = vi.fn();
     let flush: (() => Promise<void>) | undefined;
-    const { container } = renderObjectField(DECLARED_OBJECT_SCHEMA, {
+    const { container } = renderObjectField(STRUCTURED_OBJECT_SCHEMA, {
       onChange,
       hideSubmit: true,
       registerFlush: (fn) => { flush = fn; },
@@ -469,7 +503,7 @@ describe("object-typed input WITH json_schema.properties (cinatra#2484 leg b)", 
   });
 
   it("seeds sub-fields ONLY from keys this object declares", () => {
-    const { container } = renderObjectField(DECLARED_OBJECT_SCHEMA, {
+    const { container } = renderObjectField(STRUCTURED_OBJECT_SCHEMA, {
       value: { title: "seeded", tone: "informative", length: "medium" },
     });
     expect((container.querySelector("#field-title") as HTMLInputElement).value).toBe("seeded");
@@ -482,7 +516,7 @@ describe("object-typed input WITH json_schema.properties (cinatra#2484 leg b)", 
 // ---------------------------------------------------------------------------
 describe("object-typed input seeding + compositional validation (cinatra#2484, codex round 1)", () => {
   it("seeds sub-fields from the field's OWN object", () => {
-    const { container } = renderObjectField(DECLARED_OBJECT_SCHEMA, {
+    const { container } = renderObjectField(STRUCTURED_OBJECT_SCHEMA, {
       value: { title: "the real sub-value", summary: "s" },
     });
     expect((container.querySelector("#field-title") as HTMLInputElement).value).toBe(
@@ -713,7 +747,7 @@ describe("StructuredObjectField re-syncs when the PARENT changes `value`", () =>
     const utils = render(
       <SchemaFieldRenderer
         fieldName="idea"
-        schema={DECLARED_OBJECT_SCHEMA}
+        schema={STRUCTURED_OBJECT_SCHEMA}
         value={value}
         onChange={onChange}
         required
@@ -724,7 +758,7 @@ describe("StructuredObjectField re-syncs when the PARENT changes `value`", () =>
       utils.rerender(
         <SchemaFieldRenderer
           fieldName="idea"
-          schema={DECLARED_OBJECT_SCHEMA}
+          schema={STRUCTURED_OBJECT_SCHEMA}
           value={next}
           onChange={onChange}
           required
@@ -922,5 +956,166 @@ describe("an OPTIONAL structured object can be skipped entirely (PR #2510 review
     await waitFor(() => expect(flush).toBeTypeOf("function"));
     await flush!();
     expect(onChange).toHaveBeenCalledWith(undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Leg (c) — ONE control from `x-object-text-property`
+//
+// The owner-specified presentation for blog-draft-writer-agent's `idea`: one
+// visible editable control named after the FIELD. The three sub-controls that
+// leg (b) renders must be absent, and what leaves the control is still a real
+// OBJECT — the cinatra#2484 invariant is not relaxed to get one box back.
+// ---------------------------------------------------------------------------
+describe("object-typed input WITH x-object-text-property — ONE Idea control", () => {
+  it("renders exactly ONE visible editable control, labelled Idea", () => {
+    const { container } = renderObjectField(SHIPPED_IDEA_SCHEMA);
+
+    const controls = container.querySelectorAll("input, textarea, select");
+    expect(controls.length).toBe(1);
+
+    const control = controls[0] as HTMLTextAreaElement;
+    expect(control.id).toBe("field-idea");
+    expect(control.disabled).toBe(false);
+    expect(control.readOnly).toBe(false);
+    expect(screen.getByLabelText(/^idea\s*\*?$/i)).toBe(control);
+
+    // The three sub-controls leg (b) draws are GONE.
+    expect(container.querySelector("#field-title")).toBeNull();
+    expect(container.querySelector("#field-summary")).toBeNull();
+    expect(container.querySelector("#field-outline")).toBeNull();
+    expect(screen.queryByText(/One value per line/i)).toBeNull();
+  });
+
+  it("carries the authored placeholder onto that one control", () => {
+    const { container } = renderObjectField(SHIPPED_IDEA_SCHEMA);
+    expect(
+      (container.querySelector("#field-idea") as HTMLTextAreaElement).placeholder,
+    ).toBe("What should this post be about?");
+  });
+
+  it("submits the MINIMUM VALID OBJECT — never a bare string", async () => {
+    const onChange = vi.fn();
+    const { container } = renderObjectField(SHIPPED_IDEA_SCHEMA, { onChange });
+    fireEvent.change(container.querySelector("#field-idea")!, {
+      target: { value: "  human purpose in an age of agentic AI  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(onChange.mock.calls[0][0]).toEqual({
+      title: "human purpose in an age of agentic AI",
+    });
+    expect(typeof onChange.mock.calls[0][0]).toBe("object");
+  });
+
+  it("refuses an EMPTY submission with a visible error that names Idea", async () => {
+    const onChange = vi.fn();
+    renderObjectField(SHIPPED_IDEA_SCHEMA, { onChange });
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(objectTextPropertyRequiredError("Idea"))).toBeTruthy(),
+    );
+    // The message NAMES the field the user can see, not a sub-key it hides.
+    expect(objectTextPropertyRequiredError("Idea")).toMatch(/\bIdea\b/);
+    expect(objectTextPropertyRequiredError("Idea")).not.toMatch(/\btitle\b/);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("clears the empty-submission error as soon as the user types", async () => {
+    const { container } = renderObjectField(SHIPPED_IDEA_SCHEMA);
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    await waitFor(() =>
+      expect(screen.getByText(objectTextPropertyRequiredError("Idea"))).toBeTruthy(),
+    );
+    fireEvent.change(container.querySelector("#field-idea")!, {
+      target: { value: "a" },
+    });
+    await waitFor(() =>
+      expect(screen.queryByText(objectTextPropertyRequiredError("Idea"))).toBeNull(),
+    );
+  });
+
+  it("grouped-form flush pushes the object; an empty box pushes one WITHOUT the key", async () => {
+    const onChange = vi.fn();
+    let flush: (() => Promise<void>) | undefined;
+    const { container } = renderObjectField(SHIPPED_IDEA_SCHEMA, {
+      onChange,
+      hideSubmit: true,
+      registerFlush: (fn) => { flush = fn; },
+    });
+    await waitFor(() => expect(flush).toBeTypeOf("function"));
+
+    // Empty: the Zod layer must see `title` missing and refuse independently.
+    await flush!();
+    expect(onChange).toHaveBeenLastCalledWith({});
+    await waitFor(() =>
+      expect(screen.getByText(objectTextPropertyRequiredError("Idea"))).toBeTruthy(),
+    );
+
+    fireEvent.change(container.querySelector("#field-idea")!, {
+      target: { value: "a real idea" },
+    });
+    await flush!();
+    expect(onChange).toHaveBeenLastCalledWith({ title: "a real idea" });
+  });
+
+  it("SEEDS from the object's own text property and keeps the companions on submit", async () => {
+    const onChange = vi.fn();
+    const { container } = renderObjectField(SHIPPED_IDEA_SCHEMA, {
+      onChange,
+      value: {
+        title: "seeded from an upstream producer",
+        summary: "a pitch the producer wrote",
+        outline: ["one", "two"],
+      },
+    });
+    const control = container.querySelector("#field-idea") as HTMLTextAreaElement;
+    expect(control.value).toBe("seeded from an upstream producer");
+    // The companions are not shown, and editing the one field must not delete
+    // them — that would silently discard the upstream producer's work.
+    fireEvent.change(control, { target: { value: "an edited idea" } });
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledTimes(1));
+    expect(onChange.mock.calls[0][0]).toEqual({
+      summary: "a pitch the producer wrote",
+      outline: ["one", "two"],
+      title: "an edited idea",
+    });
+  });
+
+  it("seeds a STRING value verbatim rather than blanking the box", () => {
+    const { container } = renderObjectField(SHIPPED_IDEA_SCHEMA, {
+      value: "text a previous rendering stored",
+    });
+    expect((container.querySelector("#field-idea") as HTMLTextAreaElement).value).toBe(
+      "text a previous rendering stored",
+    );
+  });
+
+  it("a DECLARED-OPTIONAL empty field submits undefined instead of trapping the user", async () => {
+    const onChange = vi.fn();
+    render(
+      <SchemaFieldRenderer
+        fieldName="idea"
+        schema={SHIPPED_IDEA_SCHEMA}
+        value={undefined}
+        onChange={onChange}
+        required={false}
+        context={BASE_CONTEXT}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith(undefined));
+  });
+
+  it("an UNUSABLE hint degrades to the structured form rather than a wrong control", () => {
+    const { container } = renderObjectField({
+      ...STRUCTURED_OBJECT_SCHEMA,
+      "x-object-text-property": "outline", // declared, but an array
+    });
+    expect(container.querySelector("#field-title")).not.toBeNull();
+    expect(container.querySelector("#field-summary")).not.toBeNull();
   });
 });
