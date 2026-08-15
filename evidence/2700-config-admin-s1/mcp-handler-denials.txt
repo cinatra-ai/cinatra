@@ -1,0 +1,27 @@
+cinatra#2700 — the six /configuration MCP route-handler methods, probed with a
+NON-ADMIN member session on a lane host's dev server. Handlers never pass
+through a layout, so each denial below is the handler's own.
+
+POST /configuration/mcp/llm-access
+  -> HTTP 403
+  -> body: {"error":"Forbidden"}
+
+DELETE /configuration/mcp/llm-access
+  -> HTTP 403
+  -> body: {"error":"Forbidden"}
+
+POST /configuration/mcp/llm-access/test
+  -> HTTP 401
+  -> body: {"error":"Unauthorized"}
+
+POST /configuration/mcp/connectivity-check
+  -> HTTP 303  location: http://localhost:3010/not-authorized
+  -> body: (empty)
+
+POST /configuration/mcp/public-url
+  -> HTTP 303  location: http://localhost:3010/not-authorized
+  -> body: (empty)
+
+POST /configuration/mcp/self-client
+  -> HTTP 303  location: http://localhost:3010/not-authorized
+  -> body: (empty)
