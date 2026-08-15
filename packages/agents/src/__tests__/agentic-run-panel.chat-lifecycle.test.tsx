@@ -247,7 +247,7 @@ describe("a run that finishes in the conversation shows its artifact there", () 
 
 
 // ---------------------------------------------------------------------------
-// THE CORE'S REVIEW LIFECYCLE TAKES OVER (cinatra#2729 review round 3)
+// THE CORE'S REVIEW LIFECYCLE TAKES OVER (cinatra#2729)
 // ---------------------------------------------------------------------------
 //
 // When a run produces an artifact that needs review, `execution.ts` mints the
