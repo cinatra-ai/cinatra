@@ -42,3 +42,8 @@ export { AgenticRunPanel } from "./agentic-run-panel";
 export type { SerializedAgentRunMessage } from "./agentic-run-panel";
 // Chat prompt-window HITL gate descriptor types.
 export type { ChatGateDescriptor, ChatGateField } from "./agentic-run-panel";
+// The panel's gate-context shape, so the chat wrapper can type the run API's
+// `hitlContext` it forwards as the panel's first-paint seed. TYPE-only, and
+// from the pure leaf `agentic-run-panel` already imports — no module joins the
+// client graph for it.
+export type { HitlGateContext } from "./run-surface-status";

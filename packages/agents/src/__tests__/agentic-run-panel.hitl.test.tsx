@@ -314,20 +314,18 @@ describe("AgenticRunPanel field-assist prompt surface gate (cinatra#767)", () =>
 });
 
 // ---------------------------------------------------------------------------
-// engineering#416 — chat step-0 input gate auto-satisfy.
+// cinatra#2729 — EVERY surface carries the gate's own Continue.
 //
 // A `setup-<runId>` reviewTaskId is the structural identity of the StartNode
 // step-0 read-only input gate (the setup-interrupt loop is its only emitter;
-// oas-compiler hardcodes it riskClass:"read_only", skipLlm:true). In chat the
-// human supplies the inputs inline (= approval), so the per-field renderer's
-// own "Continue" button is a redundant second approval ON TOP of the inline
-// input form. The panel must pass hideSubmit=true to the field renderer for a
-// chat-surface setup gate, suppressing that button. On the /agents/* run-detail
-// surface (default "agent-detail") the explicit Continue stays. A non-`setup-`
-// (side-effect / WayFlow) gate is never treated as a setup gate, so it keeps
-// its approval affordance on every surface.
+// oas-compiler hardcodes it riskClass:"read_only", skipLlm:true). The chat card
+// used to pass hideSubmit=true for that gate and expect the composer to resume
+// the run: the form was visible, the submit was not, and nothing said so. The
+// owner ruled the run lifecycle plays IN the conversation, which means the card
+// shows the control that continues it — so no surface hides the submit now, and
+// the composer path stays beside it as a second entrance to the same resume.
 // ---------------------------------------------------------------------------
-describe("AgenticRunPanel chat step-0 setup gate hides redundant Continue (engineering#416)", () => {
+describe("AgenticRunPanel setup gate keeps its Continue on every surface (cinatra#2729)", () => {
   const SETUP_RENDERER_ID = SCHEMA_FIELD_FALLBACK_RENDERER_ID;
   const SETUP_CONTINUE_LABEL = /Setup Continue button/i;
 
@@ -409,16 +407,16 @@ describe("AgenticRunPanel chat step-0 setup gate hides redundant Continue (engin
     );
   }
 
-  it('suppresses the per-field Continue button for a setup gate when surface="chat"', async () => {
+  it('renders the per-field Continue button for a setup gate when surface="chat"', async () => {
     await renderSetupGate({
       surface: "chat",
       reviewTaskId: "setup-run-1",
       xRenderer: SETUP_RENDERER_ID,
     });
-    // The input form renderer still mounts (the user supplies inputs inline);
-    // only the redundant Continue button is gone.
+    // The chat card carries the affordance that continues the run — the whole
+    // lifecycle plays here, so the reader never has to leave to act on it.
     expect(await screen.findByTestId("stub-setup-renderer")).not.toBeNull();
-    expect(screen.queryByText(SETUP_CONTINUE_LABEL)).toBeNull();
+    expect(screen.queryByText(SETUP_CONTINUE_LABEL)).not.toBeNull();
   });
 
   it("keeps the per-field Continue button for a setup gate on the default agent-detail surface", async () => {

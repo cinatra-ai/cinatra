@@ -297,7 +297,29 @@ export const runWaitNotifier: RunWaitNotifier = {
         await import("@cinatra-ai/notifications/server");
       // Canonical run deep-link (templateId → packageName). Undefined for an
       // unresolvable run → a still-durable but link-less notification.
-      const href = await resolveAgentRunHref({ runId });
+      const runHref = await resolveAgentRunHref({ runId });
+      // WHERE THIS NOTIFICATION LANDS (cinatra#2729).
+      //
+      // A run started in a conversation plays its whole lifecycle there, so
+      // "needs your input" has to return the reader to that conversation and
+      // its live card; the run page is a second copy of the same gate. ONLY the
+      // input wait lands there — an approval gate is a review, and the run page
+      // is where a review is taken.
+      //
+      // Best-effort, like every other refinement on this path: no resolvable
+      // conversation (a run started outside chat, a turn not yet persisted, a
+      // store that cannot answer) keeps the run page, the pre-existing
+      // destination.
+      let href = runHref;
+      if (classifyRunWaitInterrupt(interrupt) === "input") {
+        const { findChatConversationPathForAgentRun } = await import(
+          "@/lib/assistant-thread-store"
+        );
+        const conversationHref = await Promise.resolve()
+          .then(() => findChatConversationPathForAgentRun(runId))
+          .catch(() => null);
+        if (conversationHref) href = conversationHref;
+      }
       await createNotificationForRecipient(
         { kind: "user", userId },
         buildRunAwaitingHumanNotificationInput({
