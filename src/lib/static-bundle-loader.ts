@@ -214,10 +214,14 @@ export async function reactivateBundledFallbackInProcess(
       const { fireExtensionCapabilityTeardown } = await import("@cinatra-ai/extensions");
       await fireExtensionCapabilityTeardown(packageName);
     } catch (err) {
+      // CONSTANT format string with %s placeholders: the package name reaches the
+      // log as an ARGUMENT, never in the format position. It is already bounded
+      // here (it matched a bundled record above), and the repo keeps this shape
+      // everywhere so no caller can turn a log line into a format string.
       console.warn(
-        `[static-bundle-loader] capability teardown before bundled reactivation of ` +
-          `"${packageName}" threw (continuing):`,
-        err instanceof Error ? err.message : err,
+        "[static-bundle-loader] capability teardown before bundled reactivation of %s threw (continuing): %s",
+        record.packageName,
+        err instanceof Error ? err.message : String(err),
       );
     }
     const loaderRecord: LoaderRecord = {
