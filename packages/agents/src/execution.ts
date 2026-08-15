@@ -2559,9 +2559,15 @@ async function runAgentBuilderExecutionJobInner(
           ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
         }),
       parkRun: () =>
-        transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority),
+        transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority).catch((e) => {
+          if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
+          throw e;
+        }),
       failRun: (error) =>
-        transitionRunStatus(runId, "queued", "failed", { error }, executionAuthority),
+        transitionRunStatus(runId, "queued", "failed", { error }, executionAuthority).catch((e) => {
+          if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
+          throw e;
+        }),
     });
     return;
   } else {
@@ -2643,9 +2649,15 @@ async function runAgentBuilderExecutionJobInner(
           ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
         }),
       parkRun: () =>
-        transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority),
+        transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority).catch((e) => {
+          if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
+          throw e;
+        }),
       failRun: (error) =>
-        transitionRunStatus(runId, "queued", "failed", { error }, executionAuthority),
+        transitionRunStatus(runId, "queued", "failed", { error }, executionAuthority).catch((e) => {
+          if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
+          throw e;
+        }),
     });
     return;
   }
