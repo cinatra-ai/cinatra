@@ -23,6 +23,10 @@ import { getPostgresConnectionString, postgresSchema } from "@/lib/database";
 // only a scalar→array coercion on read.
 import { AgentAuthPolicySchema, type AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy-types";
 import type { ExtensionOwnerContext } from "@cinatra-ai/extensions/enforce-extension-access";
+// The `__platform__` sentinel the workspace-fallback arm keys on — read from the
+// canonical types module (constants + types only, no runtime import graph, so it
+// is safe in this sync render path) rather than re-spelled as a literal here.
+import { PLATFORM_OWNER_SENTINEL } from "@cinatra-ai/extensions/canonical-types";
 import {
   isResolvedConnectorAccessDeclaration,
   type ResolvedConnectorAccessDeclaration,
@@ -58,8 +62,31 @@ export type ConnectorCanonicalResult =
 
 /**
  * Resolve the canonical connector access inputs for (orgId, packageId)
- * synchronously. Never throws in the sync render path — DB failures surface as
+ * synchronously, ORG-ROW FIRST WITH A WORKSPACE FALLBACK (cinatra#2694 /
+ * S3 #2697). Never throws in the sync render path — DB failures surface as
  * `{status:"error"}` so the caller can fail closed.
+ *
+ * Resolution order (identical to the async resolver's, see
+ * `resolveConnectorResource` in @cinatra-ai/extensions):
+ *   1. the ORGANIZATION's own row `(organization_id = orgId, owner_level
+ *      'organization', owner_id = orgId)` — where it exists it WINS for that
+ *      org, byte-identically to the pre-#2697 behavior;
+ *   2. otherwise the WORKSPACE-ANCHORED row `(organization_id IS NULL,
+ *      owner_level 'workspace', owner_id '__platform__')` — one row that serves
+ *      EVERY organization, since it names no owning org to be fenced by.
+ *
+ * Both arms are ONE query with a deterministic preference ordering rather than
+ * two round trips: this runs inside a SYNCHRONOUS render/filter path, where a
+ * second sequential round trip would be paid on every miss. `ORDER BY
+ * (organization_id IS NULL)` puts the org row (false) ahead of the workspace row
+ * (true); `LIMIT 1` then yields exactly the winner.
+ *
+ * The org-LESS caller is unchanged (`absent`): S3's contract is that the
+ * workspace row serves every ORGANIZATION.
+ *
+ * Status is NOT filtered here — exactly as before #2697. The row's lifecycle
+ * state is the caller's concern; this resolver answers "which row's access
+ * governs this package for this org".
  */
 export function resolveConnectorCanonicalAccessSync(
   orgId: string | undefined,
@@ -75,10 +102,14 @@ export function resolveConnectorCanonicalAccessSync(
         {
           text: `SELECT id, owner_level, owner_id, organization_id, access_declaration
                  FROM "${schemaQ}"."installed_extension"
-                 WHERE organization_id = $1 AND owner_level = 'organization'
-                   AND owner_id = $1 AND package_name = $2 AND kind = 'connector'
+                 WHERE package_name = $2 AND kind = 'connector'
+                   AND (
+                     (organization_id = $1 AND owner_level = 'organization' AND owner_id = $1)
+                     OR (organization_id IS NULL AND owner_level = 'workspace' AND owner_id = $3)
+                   )
+                 ORDER BY (organization_id IS NULL)
                  LIMIT 1`,
-          values: [orgId, packageId],
+          values: [orgId, packageId, PLATFORM_OWNER_SENTINEL],
         },
       ],
     });

@@ -26,7 +26,9 @@ import {
 import { deleteExtensionPermissions } from "./permissions-store";
 import { isNonFinalizedLiveRowAware } from "./non-finalized-row";
 import { isStaticBundleAnchorSource } from "./static-bundle-anchor";
+import { isWorkspaceAnchoredRow } from "./canonical-types";
 import {
+  PLATFORM_OWNER_SENTINEL,
   DESTRUCTIVE_OPS,
   LOCKED_REJECTED_OPS,
   isResolvedConnectorAccessDeclaration,
@@ -199,18 +201,32 @@ export async function installExtensionManifest(
       { sourceErrors },
     );
   }
-  // Connector org-anchor invariant (cinatra#1125): connector installs are
-  // organization-owned by invariant — the canonical connector resolver
-  // (connector-access-resolver.ts / extension-resource-identity.ts) reads a
-  // connector ONLY at owner_level='organization' with owner_id =
-  // organization_id, so a connector row at any other anchor is resolver-
-  // invisible. Reject it at the single install chokepoint. The one legitimate
-  // non-org connector shape is a platform/workspace STATIC-BUNDLE anchor (the
-  // boot seeder's bundled-provenance anchor/tombstone rows) — allowed through
-  // ONLY when the source is actually a static-bundle anchor, so a non-bundled
-  // platform/workspace connector (e.g. a verdaccio install) cannot slip past
-  // as resolver-invisible. The M1 migration (core__0017) normalizes any
-  // pre-existing stray rows; this guard keeps the invariant closed going forward.
+  // Connector anchor invariant (cinatra#1125, RELAXED by cinatra#2697/S3).
+  //
+  // #1125: connector installs were organization-owned by invariant — the
+  // canonical connector resolvers (connector-access-resolver.ts /
+  // extension-resource-identity.ts) read a connector ONLY at
+  // owner_level='organization' with owner_id = organization_id, so a connector
+  // row at any other anchor was resolver-INVISIBLE. That is why this chokepoint
+  // refused every non-bundled non-org connector: the row would have been
+  // unreachable, not merely unusual.
+  //
+  // #2697 (S3) removes the premise for exactly ONE more shape. Both canonical
+  // resolvers (and the runtime card record's trust anchor + discovery query)
+  // now resolve ORG-ROW-FIRST WITH A WORKSPACE FALLBACK, so a row at the
+  // PRODUCT-INSTALL workspace anchor — the exact S1 (#2695) contract tuple
+  // owner_level='workspace' / organization_id NULL / owner_id='__platform__',
+  // which the DB's platform-invariant CHECK already admits — is fully visible
+  // and serves every organization. It is therefore admitted here regardless of
+  // source type: a "Workspace: All" marketplace install of a connector is a
+  // verdaccio source, not a static bundle.
+  //
+  // UNCHANGED: bundled/system rows keep their existing path (a platform/
+  // workspace STATIC-BUNDLE anchor — the boot seeder's bundled-provenance
+  // anchor/tombstone rows), and every OTHER non-org anchor is still refused —
+  // notably a non-bundled owner_level='platform' connector, and a 'workspace'
+  // row carrying an owning org or a non-sentinel owner (neither is the S1
+  // contract, and neither is a shape the resolvers' fallback arm keys on).
   if (row.kind === "connector") {
     const isBundleAnchor =
       (row.ownerLevel === "platform" || row.ownerLevel === "workspace") &&
@@ -219,11 +235,14 @@ export async function installExtensionManifest(
       row.ownerLevel === "organization" &&
       row.organizationId != null &&
       row.ownerId === row.organizationId;
-    if (!isBundleAnchor && !isOrgAnchor) {
+    const isWorkspaceProductAnchor = isWorkspaceAnchoredRow(row);
+    if (!isBundleAnchor && !isOrgAnchor && !isWorkspaceProductAnchor) {
       throw new LifecycleTransitionError(
         "INVALID_INPUT",
         `connector install must be organization-anchored (owner_level='organization', ` +
-          `owner_id = organization_id) or a static-bundle platform/workspace anchor; got ` +
+          `owner_id = organization_id), workspace-anchored (owner_level='workspace', ` +
+          `organization_id NULL, owner_id='${PLATFORM_OWNER_SENTINEL}'), or a static-bundle ` +
+          `platform/workspace anchor; got ` +
           `owner_level='${row.ownerLevel}', owner_id='${row.ownerId}', ` +
           `organization_id='${row.organizationId ?? "null"}', source.type='${
             (row.source as { type?: string } | null)?.type ?? "null"
@@ -566,22 +585,35 @@ export async function sourceSwitchExtension(
       { sourceErrors },
     );
   }
-  // Connector org-anchor invariant (cinatra#1125) — enforced on source-switch
-  // too, not just install. A source-switch preserves the row's ANCHOR
-  // (owner_level / owner_id / organization_id) but REPLACES its provenance, so
-  // switching an existing platform/workspace static-bundle connector to a
-  // non-bundle source (verdaccio / local / github) would recreate exactly the
-  // resolver-invisible non-bundled connector the install chokepoint rejects:
-  // the canonical connector resolver (src/lib/connector-access-resolver.ts,
-  // extension-resource-identity.ts) reads a connector ONLY at
-  // owner_level='organization' with owner_id = organization_id. Evaluate the
-  // SAME invariant against {existing anchor + NEW source}: the result must
-  // remain either an organization anchor or a platform/workspace static-bundle
-  // anchor. Legitimate connector switches pass — the boot seeder refreshes a
-  // platform anchor to another bundled source (still a bundle anchor), and
-  // recordProvenance / dev-recompile switch an ORG-anchored connector's
-  // provenance (the org anchor is preserved). A bundled-connector→verdaccio/
-  // local switch is the invariant break and is refused here.
+  // Connector anchor invariant (cinatra#1125) — enforced on source-switch too,
+  // not just install. A source-switch preserves the row's ANCHOR (owner_level /
+  // owner_id / organization_id) but REPLACES its provenance, so switching an
+  // existing platform static-bundle connector to a non-bundle source
+  // (verdaccio / local / github) would recreate exactly the resolver-invisible
+  // non-bundled connector the install chokepoint rejects. Evaluate the SAME
+  // invariant against {existing anchor + NEW source}: the result must remain an
+  // organization anchor, the #2697 workspace product anchor, or a platform/
+  // workspace static-bundle anchor. Legitimate connector switches pass — the
+  // boot seeder refreshes a platform anchor to another bundled source (still a
+  // bundle anchor), and recordProvenance / dev-recompile switch an ORG-anchored
+  // connector's provenance (the org anchor is preserved). A bundled-connector→
+  // verdaccio/local switch is the invariant break and is refused here.
+  //
+  // cinatra#2697 (S3): the workspace PRODUCT anchor is admitted for the same
+  // reason the install chokepoint now admits it — it is resolver-VISIBLE via
+  // the org-first/workspace-fallback arm. This is not an extra allowance but a
+  // REQUIREMENT of the relaxed install: the install pipeline records provenance
+  // through this very function (`recordProvenance` → sourceSwitchExtension, the
+  // only sanctioned provenance writer), so refusing here would leave every
+  // "Workspace: All" connector install failing one step after the row landed.
+  //
+  // A product row and a BUNDLED workspace anchor are indistinguishable by tuple
+  // (both are workspace / NULL / '__platform__'), so the discriminator is the
+  // row's EXISTING provenance: a row that is currently a static-bundle anchor is
+  // a bundled/system row and keeps the #1125 rule verbatim (it may only switch
+  // to another bundle source — a bundled-connector→verdaccio/local rewrite is
+  // still the invariant break). A workspace row whose current source is a real
+  // pipeline source is a product install and may re-record its provenance.
   if (ext.kind === "connector") {
     const isBundleAnchor =
       (ext.ownerLevel === "platform" || ext.ownerLevel === "workspace") &&
@@ -590,11 +622,15 @@ export async function sourceSwitchExtension(
       ext.ownerLevel === "organization" &&
       ext.organizationId != null &&
       ext.ownerId === ext.organizationId;
-    if (!isBundleAnchor && !isOrgAnchor) {
+    const isWorkspaceProductAnchor =
+      isWorkspaceAnchoredRow(ext) && !isStaticBundleAnchorSource(ext.source);
+    if (!isBundleAnchor && !isOrgAnchor && !isWorkspaceProductAnchor) {
       throw new LifecycleTransitionError(
         "INVALID_INPUT",
-        `connector source-switch would break the org-anchor invariant — a connector must remain ` +
-          `organization-anchored (owner_level='organization', owner_id = organization_id) or a ` +
+        `connector source-switch would break the connector-anchor invariant — a connector must ` +
+          `remain organization-anchored (owner_level='organization', owner_id = organization_id), ` +
+          `workspace-anchored (owner_level='workspace', organization_id NULL, ` +
+          `owner_id='${PLATFORM_OWNER_SENTINEL}'), or a ` +
           `static-bundle platform/workspace anchor; row is owner_level='${ext.ownerLevel}', ` +
           `owner_id='${ext.ownerId}', organization_id='${ext.organizationId ?? "null"}' and the new ` +
           `source.type='${

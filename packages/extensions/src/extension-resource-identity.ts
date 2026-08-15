@@ -20,6 +20,7 @@ import {
 } from "./canonical-store";
 import type { InstalledExtension } from "./canonical-types";
 import type { ExtensionOwnerContext } from "./enforce-extension-access";
+import { workspaceAnchorIdentity } from "./canonical-types";
 
 export type ResolvedExtensionResource = {
   /** The polymorphic resource_id = installed_extension.id. */
@@ -36,24 +37,51 @@ function toOwnerContext(row: InstalledExtension): ExtensionOwnerContext {
 }
 
 /**
- * Resolve the canonical org-scoped connector install row → resource identity.
- * Returns null when the org has no installed connector row for the package
- * (the connector shim then falls back to the legacy connector_access_policy
- * read — absence-only fallback).
+ * Resolve the canonical connector install row → resource identity, ORG-ROW
+ * FIRST WITH A WORKSPACE FALLBACK (cinatra#2694 / S3 #2697).
+ *
+ * Resolution order — the rule shared by all three connector-resolution seams:
+ *   1. the ORGANIZATION's own row `(organizationId, 'organization',
+ *      organizationId, packageName)` — where it exists it WINS for that org,
+ *      byte-identically to the pre-#2697 behavior;
+ *   2. otherwise the WORKSPACE-ANCHORED row `(NULL, 'workspace',
+ *      '__platform__', packageName)` — one row that serves EVERY organization,
+ *      because it names no owning org for the cross-org guard to fence.
+ *
+ * A row of the wrong KIND fails closed at whichever arm resolved it (the auth
+ * gate must never evaluate a non-connector as a connector), and an org row of
+ * the wrong kind does NOT fall through to the workspace arm: the org's own
+ * identity already answered for that package name.
+ *
+ * Returns null when neither row exists (the connector shim then falls back to
+ * the legacy connector_access_policy read — absence-only fallback).
+ *
+ * The org-LESS caller (`organizationId` null/undefined) is unchanged: it
+ * resolves nothing. S3's contract is that the workspace row serves every
+ * ORGANIZATION; widening it to an actor with no active organization is not this
+ * slice's mandate and no caller needs it (the sync resolver's `!orgId` arm has
+ * the identical posture).
  */
 export async function resolveConnectorResource(
   organizationId: string | null | undefined,
   packageName: string,
 ): Promise<ResolvedExtensionResource | null> {
   if (!organizationId) return null;
-  const row = await readInstalledExtensionByIdentity({
+  const orgRow = await readInstalledExtensionByIdentity({
     organizationId,
     ownerLevel: "organization",
     ownerId: organizationId,
     packageName,
   });
-  if (!row || row.kind !== "connector") return null;
-  return { resourceId: row.id, owner: toOwnerContext(row) };
+  if (orgRow) {
+    if (orgRow.kind !== "connector") return null;
+    return { resourceId: orgRow.id, owner: toOwnerContext(orgRow) };
+  }
+  const workspaceRow = await readInstalledExtensionByIdentity(
+    workspaceAnchorIdentity(packageName),
+  );
+  if (!workspaceRow || workspaceRow.kind !== "connector") return null;
+  return { resourceId: workspaceRow.id, owner: toOwnerContext(workspaceRow) };
 }
 
 /**

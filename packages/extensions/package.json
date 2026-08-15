@@ -52,6 +52,7 @@
     "./screens/extension-install-scope-panel": "./src/screens/extension-install-scope-panel.tsx",
     "./screens/install-panel-availability": "./src/screens/install-panel-availability.ts",
     "./install-access-target": "./src/install-access-target.ts",
+    "./extension-resource-identity": "./src/extension-resource-identity.ts",
     "./mcp-module": "./src/mcp/module.ts",
     "./components/publish-destination-picker": "./src/components/publish-destination-picker.tsx",
     "./components/license-warning-dialog": "./src/components/license-warning-dialog.tsx"

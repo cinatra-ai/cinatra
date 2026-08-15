@@ -5,6 +5,7 @@
 // runs without a Postgres connection.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PLATFORM_OWNER_SENTINEL } from "../canonical-types";
 import type { InstalledExtension } from "../canonical-types";
 
 vi.mock("server-only", () => ({}));
@@ -359,6 +360,90 @@ describe("installExtensionManifest", () => {
         ),
       ).resolves.toBeDefined();
     });
+
+    // cinatra#2694 / S3 #2697 — THE RELAXATION. The #1125 refusal existed
+    // because a non-org connector row was resolver-INVISIBLE. S3 makes all
+    // three connector-resolution seams org-first-with-workspace-fallback, so
+    // the PRODUCT-INSTALL workspace anchor (the exact S1 contract tuple) is
+    // visible and is admitted here — while every other non-org anchor, and
+    // every workspace shape that is NOT the contract tuple, still is not.
+    const verdaccioSource = {
+      type: "verdaccio" as const,
+      registryUrl: "http://localhost:4873",
+      packageName: "@cinatra-ai/some-connector",
+      version: "0.1.0",
+      integrity: "sha512-x",
+    };
+
+    it("ACCEPTS the product-install WORKSPACE anchor with a verdaccio source (#2697)", async () => {
+      await expect(
+        installExtensionManifest(
+          connectorRow({
+            ownerLevel: "workspace",
+            ownerId: PLATFORM_OWNER_SENTINEL,
+            organizationId: null,
+            source: verdaccioSource,
+          }) as never,
+          OPTS,
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it("ACCEPTS the workspace anchor spelled with a null owner_id (the store platformizes it)", async () => {
+      await expect(
+        installExtensionManifest(
+          connectorRow({
+            ownerLevel: "workspace",
+            ownerId: null,
+            organizationId: null,
+            source: verdaccioSource,
+          }) as never,
+          OPTS,
+        ),
+      ).resolves.toBeDefined();
+    });
+
+    it("REJECTS a workspace connector carrying an owning organization (not the contract tuple)", async () => {
+      await expect(
+        installExtensionManifest(
+          connectorRow({
+            ownerLevel: "workspace",
+            ownerId: PLATFORM_OWNER_SENTINEL,
+            organizationId: "org_1",
+            source: verdaccioSource,
+          }) as never,
+          OPTS,
+        ),
+      ).rejects.toBeInstanceOf(LifecycleTransitionError);
+    });
+
+    it("REJECTS a workspace connector whose owner_id is not the platform sentinel", async () => {
+      await expect(
+        installExtensionManifest(
+          connectorRow({
+            ownerLevel: "workspace",
+            ownerId: "org_1",
+            organizationId: null,
+            source: verdaccioSource,
+          }) as never,
+          OPTS,
+        ),
+      ).rejects.toBeInstanceOf(LifecycleTransitionError);
+    });
+
+    it("REJECTS a non-bundled PLATFORM connector still (bundled/system tier unchanged)", async () => {
+      await expect(
+        installExtensionManifest(
+          connectorRow({
+            ownerLevel: "platform",
+            ownerId: null,
+            organizationId: null,
+            source: verdaccioSource,
+          }) as never,
+          OPTS,
+        ),
+      ).rejects.toBeInstanceOf(LifecycleTransitionError);
+    });
   });
 
   // required-in-prod → locked at the lowest write point.
@@ -544,6 +629,38 @@ describe("sourceSwitchExtension", () => {
       await expect(
         sourceSwitchExtension("ext-conn", connSource.local, OPTS),
       ).resolves.toBeDefined();
+    });
+
+    // cinatra#2694 / S3 #2697 — the source-switch half of the relaxation. A
+    // product workspace row and a BUNDLED workspace anchor share the same
+    // tuple, so the discriminator is the row's EXISTING provenance.
+    it("ACCEPTS re-recording provenance on a PRODUCT workspace connector (#2697 recordProvenance path)", async () => {
+      vi.mocked(store.readInstalledExtensionById).mockResolvedValue(
+        connectorRow({
+          ownerLevel: "workspace",
+          ownerId: PLATFORM_OWNER_SENTINEL,
+          organizationId: null,
+          source: connSource.verdaccio,
+        }),
+      );
+      await expect(
+        sourceSwitchExtension("ext-conn", { ...connSource.verdaccio, version: "1.1.0" }, OPTS),
+      ).resolves.toBeDefined();
+    });
+
+    it("still REJECTS rewriting a BUNDLED workspace connector to local (bundled tier unchanged)", async () => {
+      vi.mocked(store.readInstalledExtensionById).mockResolvedValue(
+        connectorRow({
+          ownerLevel: "workspace",
+          ownerId: PLATFORM_OWNER_SENTINEL,
+          organizationId: null,
+          source: connSource.bundled,
+        }),
+      );
+      await expect(
+        sourceSwitchExtension("ext-conn", connSource.local, OPTS),
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      expect(store._internalUpdateInstalledExtensionSource).not.toHaveBeenCalled();
     });
 
     it("REJECTS an organization connector whose owner_id != organization_id switching provenance", async () => {

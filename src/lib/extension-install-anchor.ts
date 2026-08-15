@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { ExtensionKind } from "@cinatra-ai/extensions/canonical-types";
+import { isWorkspaceAnchoredRow } from "@cinatra-ai/extensions/canonical-types";
 
 // The TRUSTED install-record resolver — closes the runtime-loader loop.
 //
@@ -196,6 +197,47 @@ export function pickSingleLiveRowAcrossOrgs<
 }
 
 /**
+ * WORKSPACE-ANCHOR pick (cinatra#2694 / S3 #2697): the SINGLE live (active|
+ * locked) canonical row at the PRODUCT-INSTALL WORKSPACE ANCHOR —
+ * `owner_level='workspace'`, `organization_id IS NULL`, `owner_id='__platform__'`
+ * — or null when none exists OR more than one does.
+ *
+ * This is the FALLBACK arm of the runtime card record's trust-anchor
+ * resolution: an organization actor whose own org holds no row for the package
+ * still resolves the ONE workspace-anchored row that serves every organization.
+ *
+ * It is deliberately NARROWER than `pickSingleActiveRow(rows, null)`, which
+ * would also match `owner_level='platform'` bundled/system anchors at the same
+ * org-NULL scope — and, where a platform anchor and a workspace row coexist for
+ * one package (the DB's org-NULL identity index keys on `owner_level`, so it
+ * permits that), would fail closed on the ambiguity instead of resolving the
+ * workspace row. Bundled/system rows keep their existing path; this pick sees
+ * only the product-installed workspace tier. Same exact-one-default rule as the
+ * other picks.
+ */
+export function pickSingleWorkspaceAnchoredActiveRow<
+  T extends {
+    status: string;
+    organizationId: string | null;
+    ownerLevel?: string;
+    ownerId?: string | null;
+    isDefault?: boolean;
+  },
+>(rows: readonly T[]): T | null {
+  const matching = rows.filter(
+    (r) =>
+      (r.status === "active" || r.status === "locked") &&
+      isWorkspaceAnchoredRow({
+        ownerLevel: r.ownerLevel ?? "",
+        ownerId: r.ownerId ?? null,
+        organizationId: r.organizationId ?? null,
+      }),
+  );
+  const defaults = matching.filter((r) => r.isDefault !== false);
+  return defaults.length === 1 ? defaults[0] : null;
+}
+
+/**
  * Resolve the trusted anchor for a package, or null when it has no active
  * real-pipeline install record.
  *
@@ -307,8 +349,20 @@ export async function resolveInstallAnchor(
  *    RuntimePackageLoader BOOT pass (one process, no per-org boot context)
  *    so an org-scoped hot install is still picked up after a restart — the
  *    platform-global load constraint. Fails closed on >1 live row across orgs.
+ *  - `"org-then-workspace"` (cinatra#2694 / S3 #2697): `exact-org` FIRST, and
+ *    only when that org holds no live row, the PRODUCT-INSTALL WORKSPACE ANCHOR
+ *    (`owner_level='workspace'`, `organization_id IS NULL`) — the grant/journal
+ *    then bind org NULL, i.e. exactly the workspace row's own scope, never the
+ *    actor's org. Used by the runtime connector CARD record so a workspace-
+ *    installed connector resolves its trust anchor for an actor in ANY
+ *    organization. Never crosses into another ORG's row: the fallback arm is
+ *    org-NULL only, so one org's source can still never be resolved against
+ *    another org's journal/grant.
  */
-export type InstallAnchorResolutionScope = "exact-org" | "platform-global";
+export type InstallAnchorResolutionScope =
+  | "exact-org"
+  | "platform-global"
+  | "org-then-workspace";
 
 /**
  * Build the default boot resolver: reads the canonical store + grant store.
@@ -335,6 +389,11 @@ export async function makeDefaultInstallAnchorResolver(
     // exact-org mode the org is the fixed `orgId`. Resolve it once per package so
     // the grant/journal reads bind the SAME org as the row.
     let derivedOrgId: string | null = orgId;
+    // cinatra#2697 (S3): set once the org-then-workspace fallback arm engaged,
+    // so the row pick below selects the WORKSPACE anchor specifically (not any
+    // org-NULL row — a bundled platform anchor at the same scope must not be
+    // picked, nor make the pick ambiguous).
+    let workspaceFallback = false;
     if (scope === "platform-global") {
       const rows = await readInstalledExtensionsByPackageName(packageName);
       const live = pickSingleLiveRowAcrossOrgs(rows);
@@ -342,6 +401,22 @@ export async function makeDefaultInstallAnchorResolver(
       // multi-org install) → refuse rather than trust an arbitrary owner's row.
       if (!live) return null;
       derivedOrgId = live.organizationId ?? null;
+    } else if (scope === "org-then-workspace") {
+      // ORG-ROW-FIRST: only when the actor's org holds no live row for this
+      // package does the workspace-anchored row serve. The org arm is evaluated
+      // with the SAME pick the exact-org scope uses, so an org that has its own
+      // row is byte-identically unchanged by this mode.
+      const rows = await readInstalledExtensionsByPackageName(packageName);
+      if (
+        pickSingleActiveRow(rows, orgId) === null &&
+        pickSingleWorkspaceAnchoredActiveRow(rows) !== null
+      ) {
+        workspaceFallback = true;
+        // The grant + install-op bind the WORKSPACE row's own scope (org NULL),
+        // never the actor's org: the row was installed platform-wide, so its
+        // journal/grant were written there.
+        derivedOrgId = null;
+      }
     }
     return resolveInstallAnchor(packageName, {
       orgId: derivedOrgId,
@@ -351,8 +426,11 @@ export async function makeDefaultInstallAnchorResolver(
         // closed on 0 or >1 (ambiguous owner scope) so the trust gate never
         // resolves one owner's source against another's journal/grant. In
         // platform-global mode `oid` is the DERIVED org of the single live row, so
-        // this still resolves exactly that one row.
-        const active = pickSingleActiveRow(rows, oid);
+        // this still resolves exactly that one row. Under an ENGAGED #2697
+        // workspace fallback the pick is narrowed to the workspace anchor.
+        const active = workspaceFallback
+          ? pickSingleWorkspaceAnchoredActiveRow(rows)
+          : pickSingleActiveRow(rows, oid);
         return active
           ? {
               id: active.id,

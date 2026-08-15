@@ -577,3 +577,104 @@ export function resolveInstallRowAnchor(
 export function isWorkspaceRowAnchor(anchor: InstallRowOwnership): boolean {
   return anchor.ownerLevel === "workspace" && (anchor.organizationId ?? null) === null;
 }
+
+/**
+ * The WORKSPACE ANCHOR tuple — the app-wide row identity the two workspace
+ * targets resolve to. `organizationId` is NULL by construction, which is
+ * exactly what makes the row reach every organization: the cross-org guard in
+ * enforceExtensionAccess only fences rows that HAVE an owning org, so an
+ * org-NULL anchor is evaluated on its audience tier alone (the same mechanism
+ * the system's bundled workspace-tier extensions already ride).
+ *
+ * The DB admits this shape today — no schema change: the platform-invariant
+ * CHECK `installed_extension_platform_invariant_chk` explicitly allows
+ * `owner_level='workspace' AND organization_id IS NULL AND
+ * owner_id='__platform__'` (src/lib/drizzle-store.ts), and the org-NULL
+ * partial identity / one-default indexes
+ * (`installed_extension_identity_platform_v_idx`,
+ * `installed_extension_one_default_platform_idx`, both `WHERE organization_id
+ * IS NULL`, keyed on `owner_level`) key workspace rows apart from
+ * platform-bundled ones (src/lib/extension-grant-schema.ts).
+ *
+ * `ownerId` is the `__platform__` sentinel EXPLICITLY rather than null: the
+ * canonical store would normalize null at this tier anyway
+ * (`platformizeOwnerId`), but the CHECK constraint names the sentinel, so the
+ * contract states it rather than depending on a downstream normalization.
+ */
+export const WORKSPACE_ANCHOR_ROW_OWNERSHIP: InstallRowOwnership = Object.freeze({
+  ownerLevel: "workspace",
+  ownerId: PLATFORM_OWNER_SENTINEL,
+  organizationId: null,
+});
+
+// ---------------------------------------------------------------------------
+// The WORKSPACE-ANCHORED ROW predicate + identity (cinatra#2694 / S3 #2697).
+//
+// S1 (#2695) declared the target→ownership contract and S2 (#2696) made the
+// write path persist it, so a "Workspace: All" / "Workspace: Admins only"
+// install now lands a canonical row at the WORKSPACE ANCHOR:
+//
+//     owner_level = 'workspace'   organization_id IS NULL   owner_id = '__platform__'
+//
+// S3 is the READ half — the connector substrate. Four seams have to recognize
+// that exact shape (the install chokepoint, the two canonical connector-access
+// resolvers, and the runtime card record's trust-anchor + discovery path), so
+// the recognition rule lives HERE (with the canonical row identity, so the
+// locked route graphs do not grow by a module) instead of being re-spelled:
+// a re-spelling that drifted would either fence the workspace row out of one
+// surface or admit a shape the DB's platform-invariant CHECK refuses.
+//
+// PURE (no IO, no server-only) so every seam — including the sync connector
+// resolver and the pure row picks — can import it.
+// ---------------------------------------------------------------------------
+
+/** The row/tuple fields the anchor predicate reads (DI-friendly, kind-agnostic). */
+export type WorkspaceAnchorRowView = {
+  ownerLevel: string;
+  ownerId: string | null;
+  organizationId: string | null;
+};
+
+/**
+ * Is this row/tuple the PRODUCT-INSTALLED workspace anchor — the exact S1
+ * contract tuple ({@link WORKSPACE_ANCHOR_ROW_OWNERSHIP})?
+ *
+ * `ownerId` is accepted as `null` OR the `__platform__` sentinel because the
+ * canonical store platformizes a null owner at this tier on write
+ * (`platformizeOwnerId`), so both spellings denote the same persisted row. Any
+ * OTHER ownerId is refused: the DB's platform-invariant CHECK names the
+ * sentinel for an org-NULL row, so a workspace row "owned" by something else is
+ * not a shape that can exist — never a shape a read seam should honor.
+ *
+ * DELIBERATELY NARROW: `owner_level='platform'` is NOT this anchor. Platform
+ * rows are the bundled/system tier (the boot seeder's static-bundle anchors and
+ * tombstones), whose path S3 leaves exactly as it is.
+ */
+export function isWorkspaceAnchoredRow(row: WorkspaceAnchorRowView): boolean {
+  return (
+    row.ownerLevel === WORKSPACE_ANCHOR_ROW_OWNERSHIP.ownerLevel &&
+    (row.organizationId ?? null) === null &&
+    (row.ownerId === null || row.ownerId === PLATFORM_OWNER_SENTINEL)
+  );
+}
+
+/**
+ * The canonical IDENTITY a workspace-anchored row for `packageName` reads back
+ * at — `(organization_id NULL, owner_level 'workspace', owner_id '__platform__',
+ * package_name)`. The WORKSPACE-FALLBACK arm of the org-first resolution passes
+ * this to `readInstalledExtensionByIdentity`, so the fallback key can never
+ * drift from the anchor the write path persists.
+ */
+export function workspaceAnchorIdentity(packageName: string): {
+  organizationId: null;
+  ownerLevel: "workspace";
+  ownerId: string;
+  packageName: string;
+} {
+  return {
+    organizationId: null,
+    ownerLevel: "workspace",
+    ownerId: PLATFORM_OWNER_SENTINEL,
+    packageName,
+  };
+}
