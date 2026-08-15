@@ -97,6 +97,11 @@ export function detectExplicitDispatchDirective(
     "If dispatch returns a structured rejection (e.g. `WAYFLOW_AGENT_NOT_REGISTERED`),",
     "surface the `error` verbatim to the user and stop.",
     "",
+    "**Never write a run URL yourself.** The run plays out on a live card in this",
+    "conversation, so the user needs no link to act on it. A path you compose",
+    "from a run id does not exist and 404s. If a link is genuinely useful, use",
+    "the `runHref` the dispatch result returns, verbatim, and nothing else.",
+    "",
     "---",
     "",
   ].join("\n");

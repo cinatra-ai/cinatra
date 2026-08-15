@@ -41,8 +41,16 @@ const deriveRunHitlContext =
     (run: unknown) => Promise<{ reviewTaskId?: string; fieldName?: string } | null>
   >();
 
+// The chat-side "which conversation is this run playing out in" lookup
+// (cinatra#2729). Default null == no conversation resolvable, which is the
+// fallback-to-the-run-page case.
+const findChatConversationPathForAgentRun = vi.fn<(runId: string) => string | null>();
+
 // Side-effect host-adapter registration — a no-op in the test.
 vi.mock("@/lib/notifications-host", () => ({}));
+vi.mock("@/lib/assistant-thread-store", () => ({
+  findChatConversationPathForAgentRun,
+}));
 vi.mock("@cinatra-ai/agents", () => ({ readAgentRunById, deriveRunHitlContext }));
 vi.mock("@cinatra-ai/notifications/server", () => ({
   createNotificationForRecipient,
@@ -69,6 +77,8 @@ beforeEach(() => {
   deleteNotificationsByDedupeKeyForUser.mockReset();
   resolveAgentRunHref.mockReset();
   resolveAgentRunHref.mockResolvedValue("/agents/acme/sales/R1");
+  findChatConversationPathForAgentRun.mockReset();
+  findChatConversationPathForAgentRun.mockReturnValue(null);
 });
 
 afterEach(() => {
@@ -267,6 +277,60 @@ describe("runWaitNotifier.onEnterHumanWait — emit-on-wait", () => {
     await runWaitNotifier.onEnterHumanWait({ runId: "R1", reason: "pending_input" });
 
     expect(deriveRunHitlContext).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // WHERE THE NOTIFICATION LANDS (cinatra#2729)
+  // -------------------------------------------------------------------------
+  it("returns an INPUT wait to the conversation the run is playing out in", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: "Blog draft", status: "pending_approval" });
+    deriveRunHitlContext.mockResolvedValue({ reviewTaskId: "setup-R1", fieldName: "idea" });
+    findChatConversationPathForAgentRun.mockReturnValue(
+      "/chat/cinatra-ai/cinatra-assistant/blog-draft",
+    );
+
+    await runWaitNotifier.onEnterHumanWait({ runId: "R1", reason: "pending_approval" });
+
+    const input = (createNotificationForRecipient.mock.calls as any[])[0][1];
+    expect(findChatConversationPathForAgentRun).toHaveBeenCalledWith("R1");
+    expect(input.href).toBe("/chat/cinatra-ai/cinatra-assistant/blog-draft");
+  });
+
+  it("keeps the run page for an input wait with no resolvable conversation", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: "Blog draft", status: "pending_approval" });
+    deriveRunHitlContext.mockResolvedValue({ reviewTaskId: "setup-R1", fieldName: "idea" });
+    findChatConversationPathForAgentRun.mockReturnValue(null);
+
+    await runWaitNotifier.onEnterHumanWait({ runId: "R1", reason: "pending_approval" });
+
+    const input = (createNotificationForRecipient.mock.calls as any[])[0][1];
+    expect(input.href).toBe("/agents/acme/sales/R1");
+  });
+
+  it("sends a genuine APPROVAL gate to the run page, never to a conversation", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: "Nightly sync", status: "pending_approval" });
+    deriveRunHitlContext.mockResolvedValue({ reviewTaskId: "wayflow-task-7" });
+    findChatConversationPathForAgentRun.mockReturnValue("/chat/cinatra-ai/cinatra-assistant/t1");
+
+    await runWaitNotifier.onEnterHumanWait({ runId: "R1", reason: "pending_approval" });
+
+    const input = (createNotificationForRecipient.mock.calls as any[])[0][1];
+    expect(findChatConversationPathForAgentRun).not.toHaveBeenCalled();
+    expect(input.href).toBe("/agents/acme/sales/R1");
+  });
+
+  it("still emits when the conversation lookup throws (best-effort)", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: "Blog draft", status: "pending_approval" });
+    deriveRunHitlContext.mockResolvedValue({ reviewTaskId: "setup-R1", fieldName: "idea" });
+    findChatConversationPathForAgentRun.mockImplementation(() => {
+      throw new Error("store down");
+    });
+
+    await runWaitNotifier.onEnterHumanWait({ runId: "R1", reason: "pending_approval" });
+
+    expect(createNotificationForRecipient).toHaveBeenCalledTimes(1);
+    const input = (createNotificationForRecipient.mock.calls as any[])[0][1];
+    expect(input.href).toBe("/agents/acme/sales/R1");
   });
 
   it("never throws when the notification write fails (best-effort)", async () => {

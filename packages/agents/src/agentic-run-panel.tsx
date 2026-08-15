@@ -151,6 +151,21 @@ type AgenticRunPanelProps = {
   // Default "agent-detail" keeps the prompt under /agents/*; "chat" suppresses
   // the whole HitlConversationPanel.
   surface?: "chat" | "agent-detail";
+  /**
+   * SERVER-DERIVED gate context for the very first paint.
+   *
+   * The panel used to start every mount with a null gate context and fill it
+   * only from an SSE INTERRUPT frame or a poll tick. A run that is ALREADY
+   * paused when the page is served therefore rendered the formless "awaiting
+   * human approval" banner until one of those arrived — a different screen for
+   * the same run depending on which entry path the reader took, and a full poll
+   * interval of it on the surfaces with no live stream.
+   *
+   * The seed removes the gap: every entry path renders the run's own actionable
+   * form on first paint. It is an INITIAL value only — the poll and the stream
+   * still own every later value, so a gate that moves on is never pinned here.
+   */
+  initialHitlContext?: HitlContext | null;
 };
 
 export type ChatGateField = {
@@ -307,6 +322,7 @@ export function AgenticRunPanel({
   initialStreamedText,
   onActiveGateChange,
   surface = "agent-detail",
+  initialHitlContext,
 }: AgenticRunPanelProps) {
   // SOURCE B binding registration (cinatra#151 Stage 5): fetch + register the
   // bindings of RUNTIME-installed agent packages; re-renders on arrival so
@@ -319,7 +335,12 @@ export function AgenticRunPanel({
   const [pollStatus, setPollStatus] = useState(initialStatus);
   const [pollError, setPollError] = useState<string | null>(initialError);
   const [messages, setMessages] = useState<SerializedAgentRunMessage[]>(initialMessages);
-  const [hitlContext, setHitlContext] = useState<HitlContext | null>(null);
+  // Seeded from the server when the caller already derived the gate (see
+  // `initialHitlContext`), so a run that is paused before the page is served
+  // paints its form immediately instead of the formless banner.
+  const [hitlContext, setHitlContext] = useState<HitlContext | null>(
+    initialHitlContext ?? null,
+  );
   // What the LAST derived-context hydration attempt did.
   // `hitlContext` alone cannot tell "not yet" from "never": both are null. This
   // carries the attempt count and the last failure so a paused run without a
@@ -927,6 +948,11 @@ export function AgenticRunPanel({
   useEffect(() => {
     if (!isPollLive && !isPollPendingApproval) return;
     const intervalMs = isPollLive ? 2000 : 5000;
+    // LEADING tick. A bare interval asks its first question only after a full
+    // period, so a run that is already paused when the panel mounts held the
+    // formless banner for 5s before its form could appear. The read is the same
+    // one the interval makes; it just happens now.
+    void refetchDerivedContext();
     const interval = window.setInterval(() => {
       void refetchDerivedContext();
     }, intervalMs);
@@ -1242,11 +1268,21 @@ export function AgenticRunPanel({
   );
   const approvalActionsRow: ReactNode = renderApprovalActionsRow();
 
-  // cinatra#2482 — the terminal `completed` rendering. Restricted to the
-  // agent-detail surface: the chat mount embeds the run inside a thread that
-  // carries its own continuation, and "Start new run" there would navigate the
-  // user out of the conversation.
-  const showCompletionCard = status === "completed" && surface !== "chat";
+  // cinatra#2482 — the terminal `completed` rendering, now on BOTH surfaces.
+  //
+  // The chat mount used to suppress it, so a run that finished in a
+  // conversation ended with nothing: no output, no artifact, no next step. The
+  // owner ruled the finished work renders as a reviewable artifact INSIDE the
+  // conversation, which is exactly what this card carries — each produced
+  // output linked to its artifact page, or a plain statement that the run
+  // produced none.
+  //
+  // What stays surface-bound is "Start new run": it navigates out of the
+  // conversation, so the chat mount withholds the template slug the button
+  // needs and the card leaves it out (its documented behaviour for callers
+  // without a slug). The rest of the card is identical on both surfaces.
+  const showCompletionCard = status === "completed";
+  const completionAgentId = surface === "chat" ? undefined : agentId;
 
   return (
     <>
@@ -1365,34 +1401,21 @@ export function AgenticRunPanel({
                 const isGroupedSetup = isGroupedSetupRenderer(
                   effectiveHitlContext.xRenderer,
                 );
-                // Chat-surface step-0 input gate (engineering#416). A `setup-`
-                // reviewTaskId is the STRUCTURAL identity of the StartNode
-                // step-0 input gate: oas-compiler hardcodes it
-                // `{stepNumber:0, riskClass:"read_only", skipLlm:true}` and the
-                // setup-interrupt loop in execution.ts is the ONLY emitter of
-                // synthetic `setup-<runId>` ids — it pauses purely to COLLECT
-                // missing inputs, never as a side-effect checkpoint (the real
-                // side-effect gates run through inferStepSideEffects /
-                // SIDE_EFFECT_PATTERNS with their own non-`setup-` ids). So
-                // `setup-` ⇔ "step-0 read_only, !inferStepSideEffects" without
-                // any drift-prone riskClass string match. In chat the human
-                // supplies the inputs inline — that IS the approval — so the
-                // per-field renderer's own "Continue" button is a redundant
-                // second click ON TOP of the inline input form (and the chat
-                // composer also drives the gate via gate.submit). Suppress it
-                // for the chat surface only via hideSubmit; the field still
-                // submits on Enter and through the composer. Strictly scoped to
-                // surface==="chat": /agents/* run-detail (default
-                // "agent-detail") keeps its explicit Continue. Grouped-setup
-                // and mid-run gates are untouched (they own their own single
-                // submit / Continue). A non-`setup-` side-effect gate never
-                // reaches this branch as a setup gate, so it always still
-                // prompts.
-                const isChatSetupGate =
-                  surface === "chat" &&
-                  isSetupGateTaskId(effectiveHitlContext.reviewTaskId);
-                const hideSetupSubmitInChat =
-                  isChatSetupGate && !isMidRunHitl && !isGroupedSetup;
+                // THE CHAT CARD CARRIES ITS OWN CONTINUE.
+                //
+                // The chat setup gate used to pass `hideSubmit`: the form was
+                // there, the submit was not, and the run was expected to resume
+                // through Enter or the chat composer. Nothing on the card said
+                // so, so a paused run read as un-actionable and the reader went
+                // looking for a run page to act on. The owner ruled the whole
+                // run lifecycle plays IN the conversation, which means the card
+                // shows the affordance that continues it.
+                //
+                // So no surface hides the submit any more. Both run surfaces
+                // render the same one control, and the composer path
+                // (onActiveGateChange -> gate.submit) is unchanged beside it —
+                // it resumes through this panel's own approval path, so the two
+                // affordances are one resume path with two entrances, not two.
                 return (
                   <>
                     <RendererComponent
@@ -1430,7 +1453,6 @@ export function AgenticRunPanel({
                         effectiveHitlContext.fieldName,
                         hitlRendererEntry.fieldSchema,
                       )}
-                      hideSubmit={hideSetupSubmitInChat}
                       onChange={isMidRunHitl ? async (next: unknown) => {
                         // Compute nextBuffered synchronously, pass to performGateSubmit
                         // for grouped-setup immediate-submit, then setState for the visual update.
@@ -1725,12 +1747,15 @@ export function AgenticRunPanel({
       {/* cinatra#2482 — terminal `completed` state. Without this the panel's
           only terminal rendering was the "No messages yet." line below, which
           says nothing about the run being over, offers no output and no next
-          action: the immediate-trigger flow's dead end. Restricted to the
-          agent-detail surface — the chat mount embeds the run inside a thread
-          that carries its own continuation, and "Start new run" there would
-          navigate the user out of the conversation. */}
+          action: the immediate-trigger flow's dead end. The chat card now shows
+          it too, so a run that finishes in a conversation hands the reader its
+          produced artifact there (see `showCompletionCard` above). */}
       {showCompletionCard && (
-        <RunCompletionCard runId={runId} agentId={agentId} outputHint="transcript" />
+        <RunCompletionCard
+          runId={runId}
+          agentId={completionAgentId}
+          outputHint="transcript"
+        />
       )}
 
       {messages.length > 0 ? (

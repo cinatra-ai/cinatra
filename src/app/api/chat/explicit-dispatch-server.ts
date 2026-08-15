@@ -519,7 +519,17 @@ export async function serverSideExplicitDispatch(input: {
     }
     const runId = out.runId;
     const status = out.status ?? "queued";
-    const resultJson = JSON.stringify({ runId, status });
+    // THE ONE RUN URL, BUILT BY THE PLATFORM (cinatra#2729 defect 1).
+    //
+    // The dispatch result used to carry `{ runId, status }` and nothing else,
+    // so a model that wanted to link the run had to invent a path — and it
+    // invented `/agents/runs/<runId>`, an API path with no page behind it. The
+    // canonical page path is built here, by the same builder the notification
+    // writer uses, and travels with the result. The chat card renders the run
+    // itself, so this stays a secondary affordance; what it removes is the
+    // reason to guess.
+    const runHref = buildAgentInstancePath(packageName, runId);
+    const resultJson = JSON.stringify({ runId, status, runHref });
     send("tool_result", {
       id: SYNTHETIC_TOOL_CALL_ID,
       name: "agent_run",
@@ -543,7 +553,7 @@ export async function serverSideExplicitDispatch(input: {
       input.actor.principalId
     ) {
       const recipient = { kind: "user" as const, userId: input.actor.principalId };
-      const href = buildAgentInstancePath(packageName, runId);
+      const href = runHref;
       void safeEmitAgentCreationProgress({
         recipient,
         runId,

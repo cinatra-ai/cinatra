@@ -10,11 +10,12 @@
  * `schema-field-renderer-object-input.test.tsx` leg (c); the payload contract
  * lives in `single-idea-field-contract.test.ts`.
  *
- * The two surfaces differ ONLY in the Continue affordance: the chat setup gate
- * passes `hideSubmit` today, because the chat composer drives the gate. That
- * difference is deliberately asserted rather than assumed, so a change to it is
- * visible here, and it does not affect the count of editable Idea controls,
- * which is what the owner ruled on.
+ * Since cinatra#2729 the two surfaces do NOT differ: both carry the field's own
+ * Continue button. The chat card used to hide it and expect the composer to
+ * drive the gate; the owner ruled the run lifecycle plays IN the conversation,
+ * so the card shows the control that continues it. The pin below states that
+ * for both surfaces, and it does not affect the count of editable Idea
+ * controls, which is what the owner ruled on earlier.
  *
  * Harness mirrors agentic-run-panel-hitl-field-label.test.tsx.
  *
@@ -218,25 +219,23 @@ describe.each([["agent-detail" as const], ["chat" as const]])(
   },
 );
 
-describe("the two surfaces differ ONLY in the Continue affordance", () => {
+describe("both surfaces carry the Continue affordance (cinatra#2729)", () => {
+  function hasContinueButton(): boolean {
+    return Array.from(document.querySelectorAll("button")).some((b) =>
+      /continue/i.test(b.textContent ?? ""),
+    );
+  }
+
   it("the run page carries the field's own Continue button", async () => {
     const view = await renderPanel("agent-detail");
     await waitFor(() => expect(view.container.querySelector("#field-idea")).not.toBeNull());
-    expect(
-      Array.from(document.querySelectorAll("button")).some((b) =>
-        /continue/i.test(b.textContent ?? ""),
-      ),
-    ).toBe(true);
+    expect(hasContinueButton()).toBe(true);
   });
 
-  it("the chat card suppresses it — the chat composer drives the gate", async () => {
+  it("the chat card carries it too — the run is continued in the conversation", async () => {
     const view = await renderPanel("chat");
     await waitFor(() => expect(view.container.querySelector("#field-idea")).not.toBeNull());
-    expect(
-      Array.from(document.querySelectorAll("button")).some((b) =>
-        /continue/i.test(b.textContent ?? ""),
-      ),
-    ).toBe(false);
+    expect(hasContinueButton()).toBe(true);
     // The control itself is unaffected: still exactly one, still named Idea.
     expect(editableControls()).toHaveLength(1);
   });

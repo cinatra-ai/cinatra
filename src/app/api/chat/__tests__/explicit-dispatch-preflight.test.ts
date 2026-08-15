@@ -175,7 +175,15 @@ describe("serverSideExplicitDispatch — pin INACTIVE (default)", () => {
     });
     // No terminal failure SSE.
     const toolResult = events.find((e) => e.event === "tool_result");
-    expect(toolResult?.data.result).toBe(JSON.stringify({ runId: "r-1", status: "queued" }));
+    // The result also carries the PLATFORM-BUILT run path (cinatra#2729), so
+    // the chat never has to compose one.
+    expect(toolResult?.data.result).toBe(
+      JSON.stringify({
+        runId: "r-1",
+        status: "queued",
+        runHref: "/agents/cinatra-ai/planner-agent/r-1",
+      }),
+    );
   });
 });
 
