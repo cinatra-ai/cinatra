@@ -457,7 +457,14 @@ import {
   publishA2UiEvent,
   DualAdapterDispatch,
   enrichSchemaWithResolvedData,
+  readLatestAgUiInterrupt,
 } from "@cinatra-ai/agent-ui-protocol/server";
+// The ONE seam that parks a run on a human approval gate. It materializes the
+// gate artifact, READS IT BACK through the same reader the approval surfaces
+// use, and only then transitions the run into `pending_approval`; an
+// unmaterializable gate lands the run `failed` with a named error instead of
+// stranding it in a phantom wait.
+import { parkRunOnHumanGate } from "./human-gate-park";
 import {
   buildA2UiMidRunTranslatorResolver,
   resolveRendererIdForKind,
@@ -1524,26 +1531,51 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
       ...(wayflowStepNumber !== null ? { stepNumber: wayflowStepNumber } : {}),
       ...(interruptOutput !== undefined ? { output: interruptOutput } : {}),
     };
-    const wayflowSchemaToSend = await enrichSchemaWithResolvedData(
-      (wayflowSchema ?? interruptPayload) as Record<string, unknown>,
-      enrichmentContextFor(run.runBy),
-    );
-    adapter.onInterrupt(
-      wayflowSchemaToSend,
-      wayflowXRenderer,
-      enrichedValues,
-      `wayflow-${task.id}`,
-    );
-    // Multi-gate idempotency — already in pending_approval, the AG-UI re-emit above
-    // is enough; transitionRunStatus would throw illegal_transition.
-    if (fromStatus === "pending_approval") {
-      return;
-    }
-    // Otherwise (initial-dispatch path: fromStatus === "running"), perform the
-    // legal running -> pending_approval transition.
-    await transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority).catch((e) => {
-      if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
-      throw e;
+    // This legacy in-panel gate writes NO row: the AG-UI INTERRUPT frame is its
+    // only human-answerable artifact, and the approval surfaces read it back
+    // through `deriveRunHitlContext`. So the frame is emitted, read back, and
+    // only THEN does the run enter `pending_approval` — an unreadable frame
+    // lands the run `failed` with a named error rather than parking it on a gate
+    // that renders as an empty, unanswerable shell.
+    //
+    // Multi-gate re-emit (`fromStatus === "pending_approval"`) performs no
+    // transition on success — `pending_approval -> pending_approval` is not a
+    // legal edge — but an unverified re-emit still fails the run: a gate that
+    // lost its artifact strands the run exactly as hard on the second visit as
+    // on the first.
+    const wayflowGateId = `wayflow-${task.id}`;
+    await parkRunOnHumanGate({
+      runId,
+      gateLabel: `WayFlow gate ${wayflowGateId}`,
+      alreadyParked: fromStatus === "pending_approval",
+      buildArtifact: async () => ({
+        schema: await enrichSchemaWithResolvedData(
+          (wayflowSchema ?? interruptPayload) as Record<string, unknown>,
+          enrichmentContextFor(run.runBy),
+        ),
+        xRenderer: wayflowXRenderer,
+        values: enrichedValues,
+        reviewTaskId: wayflowGateId,
+      }),
+      emitInterrupt: (artifact) => {
+        adapter.onInterrupt(
+          artifact.schema,
+          artifact.xRenderer,
+          artifact.values,
+          artifact.reviewTaskId,
+        );
+      },
+      readBackGate: (id) => readLatestAgUiInterrupt(id),
+      parkRun: () =>
+        transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority).catch((e) => {
+          if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
+          throw e;
+        }),
+      failRun: (error) =>
+        transitionRunStatus(runId, fromStatus, "failed", { error }, authority).catch((e) => {
+          if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
+          throw e;
+        }),
     });
     return;
   }
@@ -2446,10 +2478,10 @@ async function runAgentBuilderExecutionJobInner(
       (fieldSchema as { "x-renderer"?: string })["x-renderer"]
         ?? SCHEMA_FIELD_FALLBACK_RENDERER_ID;
 
-    await transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority);
-
-    // No DB writes — use synthetic ID so approveReviewTaskInternal
-    // routes to the "setup-" branch, which re-enqueues AGENT_BUILDER_EXECUTION.
+    // No DB rows — the synthetic ID routes approveReviewTaskInternal to the
+    // "setup-" branch, which re-enqueues AGENT_BUILDER_EXECUTION. The gate's
+    // ONLY artifact is therefore the AG-UI INTERRUPT frame, so the park seam
+    // below verifies that frame is readable BEFORE the run leaves `queued`.
     const syntheticId = `setup-${runId}`;
 
     const adapter = new DualAdapterDispatch(
@@ -2463,32 +2495,49 @@ async function runAgentBuilderExecutionJobInner(
         buildA2UiMidRunTranslatorResolver(),
       ),
     );
-    // The composite forwards all 5 args (including fieldName) to both children.
-    // A2UiAdapter.onInterrupt declares only 4 params — the 5th is silently ignored at
-    // runtime. A2UI ignores the extra fieldName argument; composite
-    // uniformly forwards it. No behavioral change for A2UI.
-    // Wrap in an object-schema envelope so the enricher can match the field
-    // by name against the whitelist. Without the envelope, schema-enricher.ts
-    // short-circuits at the `properties` guard and emits no enum.
-    const fieldSchemaEnvelope = {
-      type: "object" as const,
-      properties: { [fieldName]: fieldSchema as Record<string, unknown> },
-    };
-    const enrichedEnvelope = await enrichSchemaWithResolvedData(fieldSchemaEnvelope, enrichmentContextFor(run.runBy));
-    const enrichedFieldSchema =
-      (enrichedEnvelope.properties as Record<string, Record<string, unknown>>)[fieldName]
-      ?? (fieldSchema as Record<string, unknown>);
-    adapter.onInterrupt(
-      enrichedFieldSchema,
-      xRenderer,
-      run.inputParams,
-      syntheticId,
-      fieldName,
-    );
-
-    console.log(
-      `[setup-interrupt-loop] run ${runId} paused on field '${fieldName}' (syntheticId=${syntheticId})`,
-    );
+    await parkRunOnHumanGate({
+      runId,
+      gateLabel: `setup field '${fieldName}'`,
+      alreadyParked: false,
+      buildArtifact: async () => {
+        // Wrap in an object-schema envelope so the enricher can match the field
+        // by name against the whitelist. Without the envelope, schema-enricher.ts
+        // short-circuits at the `properties` guard and emits no enum.
+        const fieldSchemaEnvelope = {
+          type: "object" as const,
+          properties: { [fieldName]: fieldSchema as Record<string, unknown> },
+        };
+        const enrichedEnvelope = await enrichSchemaWithResolvedData(fieldSchemaEnvelope, enrichmentContextFor(run.runBy));
+        const enrichedFieldSchema =
+          (enrichedEnvelope.properties as Record<string, Record<string, unknown>>)[fieldName]
+          ?? (fieldSchema as Record<string, unknown>);
+        return {
+          schema: enrichedFieldSchema,
+          xRenderer,
+          values: run.inputParams as Record<string, unknown>,
+          reviewTaskId: syntheticId,
+          fieldName,
+        };
+      },
+      // The composite forwards all 5 args (including fieldName) to both children.
+      // A2UiAdapter.onInterrupt declares only 4 params — the 5th is silently ignored at
+      // runtime. A2UI ignores the extra fieldName argument; composite
+      // uniformly forwards it. No behavioral change for A2UI.
+      emitInterrupt: (artifact) => {
+        adapter.onInterrupt(
+          artifact.schema,
+          artifact.xRenderer,
+          artifact.values,
+          artifact.reviewTaskId,
+          artifact.fieldName,
+        );
+      },
+      readBackGate: (id) => readLatestAgUiInterrupt(id),
+      parkRun: () =>
+        transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority),
+      failRun: (error) =>
+        transitionRunStatus(runId, "queued", "failed", { error }, executionAuthority),
+    });
     return;
   } else {
     // GROUPED path — length >= 2 AND agent opts in.
@@ -2516,10 +2565,8 @@ async function runAgentBuilderExecutionJobInner(
 
     const xRenderer = GROUPED_SETUP_FORM_RENDERER_ID;
 
-    await transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority);
-
-    // No DB writes — use synthetic ID so approveReviewTaskInternal
-    // routes to the "setup-" branch, which re-enqueues AGENT_BUILDER_EXECUTION.
+    // No DB rows — see the per-field branch above: the AG-UI INTERRUPT frame is
+    // this gate's only artifact, so it is verified before the run is parked.
     const syntheticId = `setup-${runId}`;
 
     const adapter = new DualAdapterDispatch(
@@ -2533,20 +2580,36 @@ async function runAgentBuilderExecutionJobInner(
         buildA2UiMidRunTranslatorResolver(),
       ),
     );
-    const enrichedGroupedSchema = await enrichSchemaWithResolvedData(
-      groupedSchema as unknown as Record<string, unknown>,
-      enrichmentContextFor(run.runBy),
-    );
-    adapter.onInterrupt(
-      enrichedGroupedSchema,
-      xRenderer,
-      run.inputParams,
-      syntheticId,
-    );
-
-    console.log(
-      `[setup-interrupt-loop] run ${runId} paused on grouped setup (${pendingFields.length} required fields: ${pendingFields.join(", ")}) (syntheticId=${syntheticId})`,
-    );
+    await parkRunOnHumanGate({
+      runId,
+      gateLabel: `grouped setup (${pendingFields.length} required fields: ${pendingFields.join(", ")})`,
+      alreadyParked: false,
+      buildArtifact: async () => {
+        const enrichedGroupedSchema = await enrichSchemaWithResolvedData(
+          groupedSchema as unknown as Record<string, unknown>,
+          enrichmentContextFor(run.runBy),
+        );
+        return {
+          schema: enrichedGroupedSchema,
+          xRenderer,
+          values: run.inputParams as Record<string, unknown>,
+          reviewTaskId: syntheticId,
+        };
+      },
+      emitInterrupt: (artifact) => {
+        adapter.onInterrupt(
+          artifact.schema,
+          artifact.xRenderer,
+          artifact.values,
+          artifact.reviewTaskId,
+        );
+      },
+      readBackGate: (id) => readLatestAgUiInterrupt(id),
+      parkRun: () =>
+        transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority),
+      failRun: (error) =>
+        transitionRunStatus(runId, "queued", "failed", { error }, executionAuthority),
+    });
     return;
   }
 
