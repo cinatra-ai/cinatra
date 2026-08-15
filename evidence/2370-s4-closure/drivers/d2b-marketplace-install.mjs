@@ -10,7 +10,7 @@ import { writeFileSync } from "node:fs";
 import { authenticate, ensureDir, shot, BASE, withDb } from "./lib-auth.mjs";
 
 const STAGE = process.argv[2] ?? "install";
-const OUT = ensureDir(process.env.S4_OUT ?? `/Users/ordnas/cinatra-lanes/2370-out/d2b-${STAGE}`);
+const OUT = ensureDir(process.env.S4_OUT ?? `<lane-out>/2370-out/d2b-${STAGE}`);
 const APPT_PKG = "@cinatra-ai/google-appointment-schedules-connector";
 const APPT_SETTINGS =
   "/configuration/extensions/settings/connector/%40cinatra-ai/google-appointment-schedules-connector";

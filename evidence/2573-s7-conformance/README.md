@@ -1,6 +1,6 @@
 # cinatra#2573 S7 — conformance capture on a production-equivalent build
 
-Captured 2026-08-13 on host2 (`ordnas@192.168.0.36`) against a **real production
+Captured 2026-08-13 on a lane host (`<lane-host>`) against a **real production
 build** of this branch: `pnpm build` (Next.js 16.2.10, "Compiled successfully in
 4.4min", TypeScript clean) followed by `next start` on `:3000` — not `next dev`.
 Branch head under test: **`b63d64ad4ca4ad751cbf7b2359f9e8686cc15575`**.
@@ -65,7 +65,7 @@ in 78s", TypeScript clean at `--max-old-space-size=8192`) then `next start` —
 Stack: `docker compose -p s7-visuals` (postgres, redis, verdaccio, nango-db,
 nango-server) on **fresh volumes**; DB provisioned by `cinatra instance setup
 dev` run from a `cinatra-cli` **origin/main** worktree; the actor is a first-run
-admin registered through the app's own `/setup/account` form. Unlike the host2
+admin registered through the app's own `/setup/account` form. Unlike the a lane host
 round, this instance had **no pre-existing lifecycle rows** — every cell below
 had to be produced, not merely photographed.
 
@@ -115,9 +115,9 @@ capture. The acceptance manifest row stays `MISSING` with `partial: true`.
 
 ---
 
-# Third round — **host2**, on the DEV runtime, 2026-08-13
+# Third round — **a lane host**, on the DEV runtime, 2026-08-13
 
-A third capture, tagged `round: "host2-dev"` in `results.json` so it is never
+A third capture, tagged `round: "a lane host-dev"` in `results.json` so it is never
 conflated with the two rounds above it. Preview head under test:
 **`579819c25edd79b724d30836cb2d9c8f87ad1f72`** = `origin/main` + `origin/2573-d1`
 + `origin/2573-d2`, all three verified as ancestors.
@@ -146,9 +146,9 @@ against `cinatra.artifact_review_audit`.
 
 | Cell | What the DOM asserted |
 |---|---|
-| `review-card__chat_thread__pending__host2-dev.png` | `artifact_review_gate` on the **chat_thread** surface: `data-lifecycle-card-state="pending"`, `data-lifecycle-card-host="chat_thread"`, with `review-gate-card`, `review-target-island`, `review-decision-bar` and the composer-binding row. Zero page errors. It reached the thread as a `DATA_PART` renderable view produced by a real assistant turn. |
-| `review-card__chat_thread__decided__host2-dev.png` | The SAME card after the reader pressed **Approve** on the card's own floor: `data-lifecycle-card-state="settled"`, and `composerFocusRows: 0` — the binding row goes with the decision. |
-| `recommendation-hold__run_card__held__host2-dev.png` | `recommendation_hold` on the **run_card** surface: `run-chip-row` present, `recommendationChipRows: 1`, one offered chip (`@cinatra-ai/chat:blog-content`), `decidedSummaryOccurrences: 0`. `RecommendationHoldCard` is THE renderer of `recommendation_hold`, mounted by the agentic panel inside `LifecycleCardSurfaceProvider host="run_card"`. The run row is `pending_input` with a `recommendation` park. This cell needs **no** LLM dispatch: the hold parks at run START, before dispatch. |
+| `review-card__chat_thread__pending__lane-dev.png` | `artifact_review_gate` on the **chat_thread** surface: `data-lifecycle-card-state="pending"`, `data-lifecycle-card-host="chat_thread"`, with `review-gate-card`, `review-target-island`, `review-decision-bar` and the composer-binding row. Zero page errors. It reached the thread as a `DATA_PART` renderable view produced by a real assistant turn. |
+| `review-card__chat_thread__decided__lane-dev.png` | The SAME card after the reader pressed **Approve** on the card's own floor: `data-lifecycle-card-state="settled"`, and `composerFocusRows: 0` — the binding row goes with the decision. |
+| `recommendation-hold__run_card__held__lane-dev.png` | `recommendation_hold` on the **run_card** surface: `run-chip-row` present, `recommendationChipRows: 1`, one offered chip (`@cinatra-ai/chat:blog-content`), `decidedSummaryOccurrences: 0`. `RecommendationHoldCard` is THE renderer of `recommendation_hold`, mounted by the agentic panel inside `LifecycleCardSurfaceProvider host="run_card"`. The run row is `pending_input` with a `recommendation` park. This cell needs **no** LLM dispatch: the hold parks at run START, before dispatch. |
 
 ### The one DB fixture behind the hold, written out
 
@@ -173,7 +173,7 @@ epic, not a property of this capture.
 
 | Cell | What actually happened |
 |---|---|
-| `review-card__run_card__live-run__host2-dev.png` | The `run_card` host IS declared and drawn, **and a real review gate is now bound to this run** — emitted through the shipped writers by the app's own capability-gated `POST /api/development/lifecycle-seed` (`fixture: "repairVerification"`), and the run's own step rail draws it ("Review CHANGES_REQUESTED", "Core analysis DRIFTED"). The card still does not mount, and the predicate is now named exactly: `AgenticRunPanel` gates the `run_card` `ReviewGateCard` on `isPendingApproval && effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID && reviewGateCardRef`. That interrupt context is **live orchestration state, not a row** — it needs a run that actually pauses at the artifact-review checkpoint, i.e. an LLM-backed execution. No credential may reach host2, so it is out of reach here. This supersedes both earlier answers ("the panel never mounted"; "no gate is bound to the run"). |
+| `review-card__run_card__live-run__lane-dev.png` | The `run_card` host IS declared and drawn, **and a real review gate is now bound to this run** — emitted through the shipped writers by the app's own capability-gated `POST /api/development/lifecycle-seed` (`fixture: "repairVerification"`), and the run's own step rail draws it ("Review CHANGES_REQUESTED", "Core analysis DRIFTED"). The card still does not mount, and the predicate is now named exactly: `AgenticRunPanel` gates the `run_card` `ReviewGateCard` on `isPendingApproval && effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID && reviewGateCardRef`. That interrupt context is **live orchestration state, not a row** — it needs a run that actually pauses at the artifact-review checkpoint, i.e. an LLM-backed execution. No credential may reach a lane host, so it is out of reach here. This supersedes both earlier answers ("the panel never mounted"; "no gate is bound to the run"). |
 
 ## Honest summary for this round
 
@@ -185,7 +185,7 @@ narrows the gap and documents it; it does not close the criterion.
 
 The rest of the visual round for #2710 and #2711 (A1/A2 and the complete B-set,
 nine more cells) is on
-[`evidence/2573-s7-visuals-host2`](https://github.com/cinatra-ai/cinatra/tree/evidence/2573-s7-visuals-host2/2573-s7-visuals-host2).
+[`evidence/2573-s7-visuals-a lane host`](https://github.com/cinatra-ai/cinatra/tree/evidence/2573-s7-visuals-a lane host/2573-s7-visuals-a lane host).
 
 ---
 
@@ -216,8 +216,8 @@ All three answers in **coordination-tracker entry 334** (2026-08-13), plus entry
 
 ## The visual evidence this round cites
 
-The finisher cites the host2 visual round, imported into this repository at
-[`evidence/2573-s7-visuals-host2/`](../2573-s7-visuals-host2/) with its
+The finisher cites the a lane host visual round, imported into this repository at
+[`evidence/2573-s7-visuals-a lane host/`](../2573-s7-visuals-a lane host/) with its
 `capture-results.json` beside the pixels. That round ran on the **DEV runtime**
 against `preview/2573-visuals` @ `579819c25` (= `origin/main` + `origin/2573-d1`
 + `origin/2573-d2`), and its README states the runtime first, because the

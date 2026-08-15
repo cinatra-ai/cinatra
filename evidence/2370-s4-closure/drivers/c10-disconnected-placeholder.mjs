@@ -6,7 +6,7 @@ import { chromium } from "@playwright/test";
 import { writeFileSync } from "node:fs";
 import { authenticate, ensureDir, shot, BASE } from "./lib-auth.mjs";
 
-const OUT = ensureDir(process.env.S4_OUT ?? "/Users/ordnas/cinatra-lanes/2370c-out/c10");
+const OUT = ensureDir(process.env.S4_OUT ?? "<lane-out>/2370c-out/c10");
 const APPT = "/connectors/cinatra-ai/google-appointment-schedules-connector/setup";
 const EXPECTED =
   "No connected calendars yet — connect Google Calendar at /connectors/cinatra-ai/google-calendar-connector/setup to see your calendars here.";

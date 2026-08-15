@@ -403,3 +403,27 @@ export function isDelegatedChatMcpToolAllowed(name: string): boolean {
   if (tokens.some((t) => DENIED_VERB_TOKENS.has(t))) return false;
   return ALLOWED_EXACT.has(normalized);
 }
+
+/**
+ * The EXACT set of primitive names a delegated CHAT request may see + call,
+ * sorted. The widget policy's `delegatedWidgetAllowedToolNames(kind)` twin
+ * (`delegated-widget-tool-policy.ts`) — chat had no equivalent until now.
+ *
+ * Why an accessor and not a read of `ALLOWED_EXACT` (cinatra#2776): the
+ * authoritative answer is BOTH allowlists. `ALLOWED_PROPOSAL_OVERRIDE` is
+ * accepted independently, above the verb backstop, so a consumer that inspects
+ * `ALLOWED_EXACT` alone MISSES every proposal-path primitive and would, for
+ * instance, let a serializer flatten `workflow_draft_create` into an inline
+ * function schema without any gate noticing. Both sets are unioned here and
+ * then run BACK through `isDelegatedChatMcpToolAllowed`, so the family-deny and
+ * verb rules apply to the projection exactly as they apply to a live decision:
+ * a name that the decision function would refuse can never appear here, however
+ * an allowlist is edited.
+ *
+ * Declarative only. Never used to MAKE an authorization decision — that stays
+ * `isDelegatedChatMcpToolAllowed`.
+ */
+export function delegatedChatAllowedToolNames(): readonly string[] {
+  const union = new Set<string>([...ALLOWED_EXACT, ...ALLOWED_PROPOSAL_OVERRIDE]);
+  return [...union].filter((name) => isDelegatedChatMcpToolAllowed(name)).sort();
+}

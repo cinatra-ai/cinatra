@@ -223,9 +223,12 @@ function messageOf(err: unknown): string {
  *    assistant turn immediately after setup's Continue, before the reconcile
  *    worker caught up. The copy says it is usually transient and points at
  *    Administration for the sync state.
- *  - MCP-MODE REJECTION (`anthropic_function_tool_skill_forbidden` /
- *    `native_mcp_capability_required`) — a `function-tools` remnant on the
- *    connector. The copy names the setting and where to fix it.
+ *  - MCP-MODE REJECTION (`anthropic_function_tool_skill_forbidden`) — a
+ *    `function-tools` remnant on the connector. The copy names the setting and
+ *    where to fix it.
+ *  - NATIVE-MCP REFUSAL (`native_mcp_capability_required`, cinatra#2776) — the
+ *    turn pinned native MCP for the self-MCP catalog and the connector could
+ *    not deliver it that way. Its own ruled copy, below.
  */
 export function classifyAssistantRuntimeError(
   err: unknown,
@@ -243,7 +246,6 @@ export function classifyAssistantRuntimeError(
           `Anthropic skill sync in ${ADMIN_LLM_POINTER}.`,
       };
     case "anthropic_function_tool_skill_forbidden":
-    case "native_mcp_capability_required":
       return {
         code,
         message:
@@ -251,6 +253,22 @@ export function classifyAssistantRuntimeError(
           "skills over native MCP (a 'function-tools' mode remnant). Re-run AI setup — " +
           "committing Anthropic migrates the mode to native — or switch the Anthropic " +
           `connector's MCP mode to native in ${ADMIN_LLM_POINTER}, then try again.`,
+      };
+    // cinatra#2776 — its OWN copy now, because the refusal it renders is no
+    // longer only the skill-delivery remnant above. Chat and widget turns PIN
+    // `capabilityRequired: "native_mcp"` on every turn that carries the Cinatra
+    // self-MCP toolbox, so this code is what the person sees whenever the
+    // connector cannot deliver that catalog as ONE hosted MCP reference —
+    // function-tools mode, or a native request that failed. The adapter refuses
+    // before egress; this is the terminal SSE error frame's text on both
+    // surfaces (`runAssistantTurn` converts the throw).
+    case "native_mcp_capability_required":
+      return {
+        code,
+        message:
+          "This chat requires Anthropic native MCP, but the connector is configured " +
+          "for function-tools or the native MCP request failed. Switch the Anthropic " +
+          "MCP mode to native or re-run AI setup, then retry.",
       };
     case "anthropic_skill_cap_exceeded":
       return {

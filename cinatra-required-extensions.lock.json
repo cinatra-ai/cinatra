@@ -5,9 +5,9 @@
     {
       "packageName": "@cinatra-ai/anthropic-connector",
       "repo": "cinatra-ai/anthropic-connector",
-      "resolvedSha": "ecb86f7372a5209d900d8a1b86bec69875e41bb7",
+      "resolvedSha": "53e27b41c2f415419c455c3fea1ebe124a300f38",
       "packageVersion": "0.1.5",
-      "treeSha256": "efce775f937bb78efc2b448fa8d7eb2983b1ad080a54aa96c5279bbe81f53766"
+      "treeSha256": "5da50d79582a7bad7f0daae13e97c9f455b35270bd7784ce2a2122e483c8004f"
     },
     {
       "packageName": "@cinatra-ai/audio-artifact",

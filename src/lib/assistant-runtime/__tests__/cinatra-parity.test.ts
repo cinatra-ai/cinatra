@@ -62,6 +62,11 @@ vi.mock("@/lib/wizard-manifest-registry", () => ({
 vi.mock("@/lib/chat-mcp-actor-token", () => ({
   issueChatMcpActorToken: vi.fn(),
 }));
+// cinatra#2776: the widget arm below drives the SAME runtime through the
+// widget-principal branch, so its token issuer has to be stubbed too.
+vi.mock("@/lib/widget-mcp-actor-token", () => ({
+  issueWidgetMcpActorToken: vi.fn(),
+}));
 vi.mock("@/lib/instance-identity-store", () => ({
   // No instance identity → buildInstanceContext returns "".
   readInstanceIdentity: () => null,
@@ -101,8 +106,20 @@ vi.mock("@cinatra-ai/llm", () => ({
       exposure: [],
     })),
   })),
+  // cinatra#2776: the Gemini (conversation-only) arm below reaches the inline
+  // skill mechanism, so the seam has to exist on the mock.
+  deliverInjectedSkillsInline: vi.fn(async () => ({
+    systemContext: "",
+    exposure: [],
+    dropped: [],
+  })),
   resolveChatExternalMcpTools: vi.fn(async () => []),
   buildLlmMcpServerToolForChat: vi.fn(async () => ({
+    type: "mcp",
+    name: "cinatra",
+    serverLabel: "cinatra",
+  })),
+  buildLlmMcpServerToolForWidget: vi.fn(async () => ({
     type: "mcp",
     name: "cinatra",
     serverLabel: "cinatra",
@@ -115,7 +132,7 @@ vi.mock("@cinatra-ai/llm", () => ({
 }));
 
 import { runAssistantTurn } from "../runtime";
-import { resolveChatExternalMcpTools } from "@cinatra-ai/llm";
+import { resolveChatExternalMcpTools, resolveBoundDefaultAdapter } from "@cinatra-ai/llm";
 import {
   buildCinatraAssistantRuntimeConfig,
   CINATRA_ASSISTANT_SKILL_BUNDLE,
@@ -221,6 +238,71 @@ describe("runAssistantTurn(cinatra) → stream() byte-parity on the covered path
     expect(vi.mocked(resolveChatExternalMcpTools)).toHaveBeenCalledWith("openai", {
       surface: "chat",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2776 (owner ruling 2026-08-15) — the self-MCP toolbox is ALWAYS
+// dispatched under `capabilityRequired: "native_mcp"`, so a connector that
+// cannot deliver the catalog as one hosted MCP reference REFUSES the turn
+// instead of flattening it into inline function schemas. The pin rides the
+// toolbox: a provider that is never handed the toolbox is never handed the
+// requirement either.
+// ---------------------------------------------------------------------------
+describe("the self-MCP toolbox pins native_mcp on the stream input (cinatra#2776)", () => {
+  beforeEach(() => {
+    capturedStreamInput = null;
+  });
+
+  it("OpenAI: capabilityRequired 'native_mcp' rides beside skipMcpInjection", async () => {
+    const send = vi.fn();
+    await runAssistantTurn(buildCinatraAssistantRuntimeConfig(), makeArgs(send));
+    expect(capturedStreamInput!.skipMcpInjection).toBe(true);
+    expect(capturedStreamInput!.capabilityRequired).toBe("native_mcp");
+  });
+
+  it("Anthropic: same pin — the ruling covers every native-MCP provider", async () => {
+    vi.mocked(resolveBoundDefaultAdapter).mockResolvedValueOnce({
+      provider: "anthropic",
+      defaultModel: "claude-sonnet-4-6",
+    } as never);
+    const send = vi.fn();
+    await runAssistantTurn(buildCinatraAssistantRuntimeConfig(), makeArgs(send));
+    expect(capturedStreamInput!.capabilityRequired).toBe("native_mcp");
+  });
+
+  it("the WIDGET surface pins it too — both chat surfaces carry the same toolbox", async () => {
+    const send = vi.fn();
+    await runAssistantTurn(buildCinatraAssistantRuntimeConfig(), {
+      ...makeArgs(send),
+      sessionOrgId: "o1",
+      widgetPrincipal: {
+        kind: "public_site_widget",
+        userId: "u1",
+        orgId: "o1",
+        parentTokenJti: "cwu-row-1",
+        instanceId: "wp-canonical",
+        verifiedOrigin: "https://wp.example.test",
+        assistantHandle: "wordpress",
+        platformRole: "member",
+        instancesConfigKey: "wordpress_instances",
+        lifecycleRead: false,
+      },
+    } as never);
+    expect(capturedStreamInput!.capabilityRequired).toBe("native_mcp");
+  });
+
+  it("Gemini: NO self-MCP toolbox ⇒ NO requirement (the field is absent, not undefined)", async () => {
+    vi.mocked(resolveBoundDefaultAdapter).mockResolvedValueOnce({
+      provider: "gemini",
+      defaultModel: "gemini-2.5-flash",
+    } as never);
+    const send = vi.fn();
+    await runAssistantTurn(buildCinatraAssistantRuntimeConfig(), makeArgs(send));
+    // Conversation-only: no tools at all, and the adapter input keeps exactly
+    // the field set it had before #2776.
+    expect(capturedStreamInput!.tools).toEqual([]);
+    expect("capabilityRequired" in (capturedStreamInput as object)).toBe(false);
   });
 });
 
