@@ -51,7 +51,7 @@ export type MarketplaceFailureOperation = "install" | "update" | "restore";
  * value is not masked by Next.js production builds (only THROWN errors are), so
  * the category reliably reaches the client where a thrown message would not.
  */
-export type MarketplaceInstallActionResult = {
+export type MarketplaceInstallFailureResult = {
   ok: false;
   category: MarketplaceFailureCategory;
   /**
@@ -83,6 +83,33 @@ export type MarketplaceInstallActionResult = {
    */
   stage?: "install" | "access" | "access-partial" | "access-required";
 };
+
+/**
+ * The THIRD install outcome (cinatra#2761): the install COMMITTED. The
+ * real-integrity pipeline finalized and the canonical row is real and anchorable,
+ * but in-process hot-activation was refused this call, so the extension starts
+ * working after the next restart.
+ *
+ * It is a SUCCESS with a caveat, so it carries NO category and NO diagnostic
+ * reference: minting a support reference for an install that landed is exactly
+ * what made the old surface lie. The client renders the caveat plus the next
+ * step instead of the failure copy.
+ */
+export type MarketplaceInstallDeferredResult = {
+  ok: true;
+  activation: "deferred";
+};
+
+/**
+ * What a marketplace lifecycle FORM action returns to the client when it does
+ * NOT take the plain-success redirect: a classified FAILURE, or the committed
+ * install whose activation is deferred. A fully-activated success still returns
+ * nothing (it `redirect()`s), so `undefined` continues to mean "installed and
+ * running".
+ */
+export type MarketplaceInstallActionResult =
+  | MarketplaceInstallFailureResult
+  | MarketplaceInstallDeferredResult;
 
 /**
  * TS mirror of `InstallFailureTaxonomy::MAP` — public coarse code → the PHP
@@ -545,6 +572,25 @@ export function installAccessStageFailureCopy(
     return `${displayName} can't be installed without choosing who can access it. Select an access scope and try again.`;
   }
   return `${displayName} was installed, but the selected access couldn't be applied — it currently uses the default access for everyone in your workspace. Contact your administrator if that's not what you want.`;
+}
+
+/**
+ * Copy for the committed-but-not-yet-active outcome (cinatra#2761).
+ *
+ * It states the two facts the operator needs and nothing else: the extension IS
+ * installed, and it starts working after the next restart. It names NO cause, it
+ * carries NO support reference, and it never says "couldn't", because the install
+ * landed. The restart is described as the next step, not as an action the
+ * product can perform: there is no in-product restart control, so promising one
+ * would be a claim the surface cannot keep (the same honesty rule the tunnel and
+ * execution-mode restart notices already follow).
+ */
+export function installActivationDeferredCopy(
+  operation: MarketplaceFailureOperation,
+  displayName: string,
+): string {
+  const { gerund } = OP_LABEL[operation];
+  return `${displayName} was ${gerund}. It starts working after the next restart of the app.`;
 }
 
 /**
