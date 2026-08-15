@@ -54,16 +54,27 @@ describe("classifyAssistantRuntimeError — the S5 scenarios", () => {
     expect(classified.message).not.toContain("skill_exec");
   });
 
-  it("MCP-MODE REMNANT (native_mcp fail-closed): same remedy under its own code (cross-realm by .code)", () => {
+  it("NATIVE-MCP REFUSAL: the ruled copy, verbatim, under its own code (cross-realm by .code)", () => {
     // The class itself is not re-exported from the package root — recognition
     // is by `.code`, which is exactly how it crosses module realms.
+    //
+    // cinatra#2776: chat + widget turns PIN `native_mcp` whenever they carry
+    // the self-MCP toolbox, so this is no longer only the skill-delivery
+    // remnant's twin — it is the refusal a person reads when the connector
+    // cannot deliver that catalog as one hosted MCP reference. The ruled text
+    // is asserted verbatim, not by fragment, because it IS the contract.
     const err = Object.assign(new Error("native MCP path failed"), {
       code: "native_mcp_capability_required",
     });
     const classified = classifyAssistantRuntimeError(err);
     expect(classified.code).toBe("native_mcp_capability_required");
-    expect(classified.message).toContain("native MCP");
-    expect(classified.message).toContain("/configuration/llm");
+    expect(classified.message).toBe(
+      "This chat requires Anthropic native MCP, but the connector is configured " +
+        "for function-tools or the native MCP request failed. Switch the Anthropic " +
+        "MCP mode to native or re-run AI setup, then retry.",
+    );
+    // The raw provider/internal text never reaches the person.
+    expect(classified.message).not.toContain("native MCP path failed");
   });
 
   it("recognizes CROSS-REALM copies by `.code`, never instanceof", () => {
