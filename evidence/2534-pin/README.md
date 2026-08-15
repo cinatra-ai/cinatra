@@ -19,10 +19,10 @@ two arms, and it alone decides which branch renders.
 
 ## Surface
 
-- Host: host2 (`ordnas@192.168.0.36`, macOS 15.4.1, **x86_64**) — installed
-  fresh per `~/cinatra-lanes/RECIPE.md`; no artifact was copied from an arm64
+- Host: a lane host (`<lane-host>`, macOS 15.4.1, **x86_64**) — installed
+  fresh per `<lane-checkout>/RECIPE.md`; no artifact was copied from an arm64
   machine.
-- Checkout: `~/cinatra-lanes/lane-2534` at this branch's commit
+- Checkout: `<lane-checkout>/lane-2534` at this branch's commit
   `1bd786fa6952437e131337303c577bda2059b2f7`.
 - Companion tree: `node scripts/ci/sync-dev-extensions.mjs --pinned` →
   `111/111`, `extensions/cinatra-ai/tailscale-connector` detached at
@@ -164,7 +164,7 @@ Two environment facts about the run, stated plainly:
   `tests/e2e/config/render-smoke.config.ts`) and it clears only the setup-wizard
   redirect; it does not authenticate, and it touches nothing on the tunnel tab.
   It is required here because completing the wizard for real needs an LLM
-  provider key, and no credential may exist on host2.
+  provider key, and no credential may exist on a lane host.
 - `BETTER_AUTH_URL` was pointed at the lane port so Better Auth's origin check
   accepts requests on 3534 instead of 3000.
 

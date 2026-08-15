@@ -47,27 +47,27 @@
    "ruling": "coordination-tracker entry 334 (2026-08-13), answers 1 + 3 — RULED yes to both. Answer 1: the composer binding stays RELEASABLE (the deviation from #2566's literal wording stands). Answer 3: dev-runtime-labeled captures are AUTHORITATIVE for dispatch-dependent cells.",
    "e2eProofs": [
     {
-     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "file": "evidence/2573-s7-visuals-lane/README.md",
      "testName": "A1__run-detail__held-at-recommendation-checkpoint.png"
     },
     {
-     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "file": "evidence/2573-s7-visuals-lane/README.md",
      "testName": "A2__run-detail__decided-summary-exactly-once.png"
     },
     {
-     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "file": "evidence/2573-s7-visuals-lane/README.md",
      "testName": "B2__chat__comment-typed-while-bound-lands-on-the-gate.png"
     },
     {
-     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "file": "evidence/2573-s7-visuals-lane/README.md",
      "testName": "C1__review-card__chat_thread__pending.png"
     },
     {
-     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "file": "evidence/2573-s7-visuals-lane/README.md",
      "testName": "C2__review-card__chat_thread__decided.png"
     }
    ],
-   "note": "CLOSED by cinatra#2711 (`6b4c3e887`, S7-found defect D-2). The one link that was not merely unproven but UNIMPLEMENTED when this row was written — the 'focused-composer comment' — now ships: a pure resolveComposerTarget reducer plus a ComposerFocusStore bind the composer to a FOCUSED review card, the card registers only when the server resolve says this reader may comment, and a bound message travels the CARD's own decision path rather than the model's. HOW THE CHAIN IS PROVEN, stated exactly rather than rounded up: the human-facing links are photographed LIVE on the labeled DEV runtime (evidence/2573-s7-visuals-host2) — A1/A2 the typed chip-row hold and its confirm on the run card, B1–B5 the binding row, the routed comment and the release, C1/C2 the chat-hosted review card pending → decided; every routing claim in that round is checked against cinatra.artifact_review_audit, the app's own audit trail. The machine links — changes_requested closing the base gate and holding the effect, the pinned repair successor, the minted verification record, the release on approve — are proven by the integration suites named above. WHAT IT IS NOT: one continuous scripted Playwright journey on a production build. That shape is unreachable here, not unattempted — the scripted-provider fence and the lifecycle-seed fence make a production-equivalent build and an LLM-backed dispatch mutually exclusive by construction (the fences are quoted in this manifest's AC-15 note), which is the situation entry 334 answer 3 rules on."
+   "note": "CLOSED by cinatra#2711 (`6b4c3e887`, S7-found defect D-2). The one link that was not merely unproven but UNIMPLEMENTED when this row was written — the 'focused-composer comment' — now ships: a pure resolveComposerTarget reducer plus a ComposerFocusStore bind the composer to a FOCUSED review card, the card registers only when the server resolve says this reader may comment, and a bound message travels the CARD's own decision path rather than the model's. HOW THE CHAIN IS PROVEN, stated exactly rather than rounded up: the human-facing links are photographed LIVE on the labeled DEV runtime (evidence/2573-s7-visuals-lane) — A1/A2 the typed chip-row hold and its confirm on the run card, B1–B5 the binding row, the routed comment and the release, C1/C2 the chat-hosted review card pending → decided; every routing claim in that round is checked against cinatra.artifact_review_audit, the app's own audit trail. The machine links — changes_requested closing the base gate and holding the effect, the pinned repair successor, the minted verification record, the release on approve — are proven by the integration suites named above. WHAT IT IS NOT: one continuous scripted Playwright journey on a production build. That shape is unreachable here, not unattempted — the scripted-provider fence and the lifecycle-seed fence make a production-equivalent build and an LLM-backed dispatch mutually exclusive by construction (the fences are quoted in this manifest's AC-15 note), which is the situation entry 334 answer 3 rules on."
   },
   {
    "criterion": "Path-2: background gate pulled into a chat → decided there; the review page gate region renders the same card component.",
@@ -193,19 +193,19 @@
    "ruling": "coordination-tracker entry 334 (2026-08-13), answer 1 — RULED yes: keep the release control. The binding is refusable by one press, a deliberate deviation from #2566's literal 'binds with no way out'.",
    "e2eProofs": [
     {
-     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "file": "evidence/2573-s7-visuals-lane/README.md",
      "testName": "B3__chat__two-open-gates-no-focus-the-pick-a-card-refusal.png"
     },
     {
-     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "file": "evidence/2573-s7-visuals-lane/README.md",
      "testName": "B3b__chat__the-ambiguous-send-is-refused-and-goes-nowhere.png"
     },
     {
-     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "file": "evidence/2573-s7-visuals-lane/README.md",
      "testName": "B4a__chat__explicit-focus-binds-that-card-only.png"
     },
     {
-     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "file": "evidence/2573-s7-visuals-lane/README.md",
      "testName": "B4b__chat__moving-the-focus-moves-where-the-comment-lands.png"
     }
    ],
@@ -619,11 +619,11 @@
    "ruling": "coordination-tracker entry 334 (2026-08-13) — approved; PR #2710 merged (`7123d2bf1`). The fix's own commit message names the completion: 'the one-card gate's named allowlist entry for this file is deleted in the S7 branch next'. This commit is that deletion.",
    "e2eProofs": [
     {
-     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "file": "evidence/2573-s7-visuals-lane/README.md",
      "testName": "A1__run-detail__held-at-recommendation-checkpoint.png"
     },
     {
-     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "file": "evidence/2573-s7-visuals-lane/README.md",
      "testName": "A2__run-detail__decided-summary-exactly-once.png"
     }
    ],
@@ -668,24 +668,24 @@
      "testName": "s2-06-settled-no-longer-open.png"
     },
     {
-     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "file": "evidence/2573-s7-visuals-lane/README.md",
      "testName": "C1__review-card__chat_thread__pending.png"
     },
     {
-     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "file": "evidence/2573-s7-visuals-lane/README.md",
      "testName": "C2__review-card__chat_thread__decided.png"
     },
     {
-     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "file": "evidence/2573-s7-visuals-lane/README.md",
      "testName": "A1__run-detail__held-at-recommendation-checkpoint.png"
     },
     {
-     "file": "evidence/2573-s7-visuals-host2/README.md",
+     "file": "evidence/2573-s7-visuals-lane/README.md",
      "testName": "A2__run-detail__decided-summary-exactly-once.png"
     }
    ],
    "ruling": "coordination-tracker entry 334 (2026-08-13), answer 3 — RULED yes: accept development-server pictures for the chat views. The platform's own safety fences forbid the combination the criterion asks for; every dispatch-dependent cell is captured on the DEV runtime and each capture is LABELED with the runtime it came from.",
-   "note": "SATISFIED under owner ruling entry 334 answer 3 — and the FENCE FINDING that made the ruling necessary is kept here, because it is the reason the criterion could not be met as written. THE FENCE: `assertScriptedProviderNotProduction` (packages/llm/src/scripted-test-provider.ts) throws unless CINATRA_RUNTIME_MODE === 'development' AND NODE_ENV !== 'production'; `lifecycleSeedEnvVerdict` FENCE 1a (src/lib/test-support/lifecycle-seed-fence.ts) answers 404 production-build on NODE_ENV === 'production' before it reads any other gate. `next start` sets NODE_ENV=production and Next inlines that value into the server bundle at build time, so a production-equivalent build and an LLM-backed dispatch are MUTUALLY EXCLUSIVE by construction. Both fences are shipped product safety, not test scaffolding, and this lane weakened neither. WHAT IS PROVEN. Structural conformance, bidirectionally, against the pinned S0 spec commit (design@6c20871b4108176c1d0193f19ecd2947f6c6355f specs/app-lifecycle-cards.html): every spec anchor is rendered, and every anchor the route renders is in the spec's closed set. PRODUCTION-BUILD cells, on a real `pnpm build` + `next start` (evidence/2573-s7-conformance): the review card PENDING on the page gate region with its island iframe, sandbox tokens and server-minted ref; the island rendering the BUILD-MAP renderer class server-side; and the island's ONE empty document for a ref that does not decode. DEV-RUNTIME cells, each labeled (evidence/2573-s7-visuals-host2): the review card on the chat_thread surface PENDING (C1) and DECIDED (C2), and the recommendation hold on the run_card surface HELD (A1) and decided exactly once (A2). Every row photographed there was written by the shipped writers and read back from cinatra.artifact_review_audit; the only stand-in anywhere is the model layer, and the one DB-level fixture (a single agent_assigned_skills row, in the shape the shipped store writes) is stated on the cell. THE ONE OPEN CELL, recorded rather than rounded up: `C3__review-card__run_card__live-run` is NOT delivered. The run_card host IS declared and a real review gate IS bound to the run — its own step rail draws 'Review changes_requested' and 'Core analysis drifted' — but AgenticRunPanel gates the run_card ReviewGateCard on `isPendingApproval && effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID && reviewGateCardRef`, and that interrupt context is LIVE ORCHESTRATION STATE rather than a row: it needs a run that actually pauses at the artifact-review checkpoint, i.e. a real LLM-backed execution, and no model credential may reach the capture host. The card suite proves the same component draws on that host ('draws the SAME card on every first-party host, differing only in the frame'); what is missing is the photograph of it under a live pause."
+   "note": "SATISFIED under owner ruling entry 334 answer 3 — and the FENCE FINDING that made the ruling necessary is kept here, because it is the reason the criterion could not be met as written. THE FENCE: `assertScriptedProviderNotProduction` (packages/llm/src/scripted-test-provider.ts) throws unless CINATRA_RUNTIME_MODE === 'development' AND NODE_ENV !== 'production'; `lifecycleSeedEnvVerdict` FENCE 1a (src/lib/test-support/lifecycle-seed-fence.ts) answers 404 production-build on NODE_ENV === 'production' before it reads any other gate. `next start` sets NODE_ENV=production and Next inlines that value into the server bundle at build time, so a production-equivalent build and an LLM-backed dispatch are MUTUALLY EXCLUSIVE by construction. Both fences are shipped product safety, not test scaffolding, and this lane weakened neither. WHAT IS PROVEN. Structural conformance, bidirectionally, against the pinned S0 spec commit (design@6c20871b4108176c1d0193f19ecd2947f6c6355f specs/app-lifecycle-cards.html): every spec anchor is rendered, and every anchor the route renders is in the spec's closed set. PRODUCTION-BUILD cells, on a real `pnpm build` + `next start` (evidence/2573-s7-conformance): the review card PENDING on the page gate region with its island iframe, sandbox tokens and server-minted ref; the island rendering the BUILD-MAP renderer class server-side; and the island's ONE empty document for a ref that does not decode. DEV-RUNTIME cells, each labeled (evidence/2573-s7-visuals-lane): the review card on the chat_thread surface PENDING (C1) and DECIDED (C2), and the recommendation hold on the run_card surface HELD (A1) and decided exactly once (A2). Every row photographed there was written by the shipped writers and read back from cinatra.artifact_review_audit; the only stand-in anywhere is the model layer, and the one DB-level fixture (a single agent_assigned_skills row, in the shape the shipped store writes) is stated on the cell. THE ONE OPEN CELL, recorded rather than rounded up: `C3__review-card__run_card__live-run` is NOT delivered. The run_card host IS declared and a real review gate IS bound to the run — its own step rail draws 'Review changes_requested' and 'Core analysis drifted' — but AgenticRunPanel gates the run_card ReviewGateCard on `isPendingApproval && effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID && reviewGateCardRef`, and that interrupt context is LIVE ORCHESTRATION STATE rather than a row: it needs a run that actually pauses at the artifact-review checkpoint, i.e. a real LLM-backed execution, and no model credential may reach the capture host. The card suite proves the same component draws on that host ('draws the SAME card on every first-party host, differing only in the frame'); what is missing is the photograph of it under a live pause."
   },
   {
    "criterion": "Production-boundary retirement identity greps stay zero (exact-identity constructions); the stale trigger-agent fixtures are gone.",

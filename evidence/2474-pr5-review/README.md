@@ -34,7 +34,7 @@ tests. Re-surfacing them later is a render change in
 
 ## The re-capture
 
-Host2 (`ordnas@192.168.0.36`), real dev server, the **same** PR5 fixture database
+Host2 (`<lane-host>`), real dev server, the **same** PR5 fixture database
 as the original walk (same organization, same `PR5 Walk Team`, same `pr5mgr` /
 `pr5member` rows), signed in as `pr5mgr` through the real sign-in endpoint. No
 credential or secret was placed on that host. Viewport 1440x900.

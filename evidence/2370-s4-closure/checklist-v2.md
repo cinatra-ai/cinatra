@@ -25,8 +25,8 @@ S3 #2369, S4 #2370.
 | Next BUILD_ID | `vu4XdHaOOtpvSAnRO31ly` |
 | Build class | production-equivalent — `CI=true pnpm build` (Next 16.2.10) then `pnpm start` (`next start`). No dev server. |
 | Build result | exit 0, `.next` written 09:18 CEST; boot readiness `ready` on every start |
-| Host | host2 `ordnas@192.168.0.36` (macOS, x86_64, 16 GB) — the lane host, no credentials placed on it |
-| Checkout | `~/cinatra-lanes/s3-2722`, detached at origin/main |
+| Host | a lane host (macOS, x86_64, 16 GB), no credentials placed on it |
+| Checkout | `<lane-checkout>/s3-2722`, detached at origin/main |
 | Extension closure | `scripts/ci/sync-dev-extensions.mjs --pinned` → 112/112 at the committed lock shas |
 | Static-bundle appointment connector | dev lock `00d15367805e` = **0.1.0** (already carries the banner vocabulary; 0.1.1 is that same tree plus the version bump and the release-workflow pin) |
 | Static-bundle calendar connector | `55723f958111` = 0.1.3 (post-S2 extraction) |
@@ -44,7 +44,7 @@ S3 #2369, S4 #2370.
 | `BETTER_AUTH_URL` | `http://localhost:3001` | **new this run.** `.env.local` ships `http://localhost:3000`; at this sha Better Auth rejects the lane origin (`ERROR [Better Auth]: Invalid origin: http://localhost:3001`) and every sign-in 403s. Setting it to the port actually served fixes it. |
 | `CINATRA_E2E_SETUP_BYPASS` | `true` | documented browser-e2e switch (the wizard's Model step needs an LLM key this lane has none of) |
 | `CINATRA_EXTENSION_DATA_ROOT` | `<checkout>/data/extensions` | the prior run's D-5: a host `next start` has no `/data`, so every install dies at `mkdir '/data'` |
-| `CINATRA_GATEKEPT_INSTALL` | `true` | **new this run, and load-bearing — see item 1c.** With the flag OFF the install read goes straight to `registry.cinatra.ai` and 401s (`Unable to authenticate, need: Basic, Bearer`) because this lane holds no registry token. With it ON the read routes through the marketplace broker on the instance's existing consumer attachment and succeeds. No credential was added to host2 to make this work. |
+| `CINATRA_GATEKEPT_INSTALL` | `true` | **new this run, and load-bearing — see item 1c.** With the flag OFF the install read goes straight to `registry.cinatra.ai` and 401s (`Unable to authenticate, need: Basic, Bearer`) because this lane holds no registry token. With it ON the read routes through the marketplace broker on the instance's existing consumer attachment and succeeds. No credential was added to a lane host to make this work. |
 | `BULLMQ_QUEUE_NAME` | `appt-s4c-lane` | lane-scoped queue |
 | `NODE_OPTIONS` | `--max-old-space-size=4096` | memory rail on a 16 GB shared host |
 | node / pnpm | v24.19.0 / 11.1.2 | host toolchain |
@@ -214,14 +214,14 @@ interesting negative is recorded as observation N-4 rather than as a result.
 | 5c | No "N appt" probe label anywhere in the connectors grid | PASS | **PASS** | F16 — `/\d+\s*appt/i` does not match page-wide |
 | 5d | The google-calendar card's Connected reflects Nango state | PARTIAL (negative half) | **PARTIAL (negative half), unchanged** | F22 — with no Nango connection the badge reads "Not connected"; the positive half is NEEDS-LIVE-ACCOUNT |
 | 5e | The installed google-calendar manifest carries no appointment copy | PASS | **PASS** | F10 — the settings page description is the post-extraction text |
-| 5f | No appointment traces on the google-calendar MARKETPLACE surfaces | FAIL (D-3) | **FAIL — expected, waits on marketplace#250** | F03 |
+| 5f | No appointment traces on the google-calendar MARKETPLACE surfaces | FAIL (D-3) | **FAIL — expected, waits on an internal storefront follow-up** | F03 |
 
 **5f** is unchanged and stays FAIL by design: the storefront listing for
 `@cinatra-ai/google-calendar-connector` is still the pre-extraction 0.1.3 copy
 ("Stores users' public appointment-schedule booking links (calendar.app.google)…",
 capability bullets naming `google_calendar_appointments_list` and the
 appointment-schedules capability). The published package has not been
-republished/refreshed; that is marketplace#250's job. Everything the CODE owns is
+republished/refreshed; that is an internal storefront follow-up's job. Everything the CODE owns is
 clean (5a, 5b, 5e).
 
 ### 6. Screenshots + checklist
@@ -311,7 +311,7 @@ clean (5a, 5b, 5e).
 |---|---|
 | D-1 — the published connector cannot be installed (deps neither bundled nor signed-planned) | **FIXED** by the republish: 0.1.1's installable manifest has no `dependencies` block and materializes cleanly. Note the fleet-wide control run from the prior lane (`mcp-server-connector`) was not repeated — other packages published by the old path are presumably still affected. |
 | D-2 — every "Add schedule" failure reported as success ("Done.") | **FIXED** by #2756 + the connector's declared banner vocabulary. See item 3c and the banner table. |
-| D-3 — the google-calendar marketplace listing still sells appointment schedules | **UNCHANGED** — waits on marketplace#250 (item 5f). |
+| D-3 — the google-calendar marketplace listing still sells appointment schedules | **UNCHANGED** — waits on an internal storefront follow-up (item 5f). |
 | D-4 — `/configuration/extensions` 500s when the instance namespace is unset | not re-checked (this instance has a namespace). |
 | D-5 — a host `next start` cannot install anything without `CINATRA_EXTENSION_DATA_ROOT` | **UNCHANGED** — the toggle was set from the start this run precisely because of D-5. |
 
@@ -321,13 +321,13 @@ clean (5a, 5b, 5e).
 |---|---|
 | 1d, 1e | A base image built WITHOUT `@cinatra-ai/google-calendar-connector` in the static bundle, so the dependency is a real organization-scoped runtime install. Then 1d is "install the appointment connector where google-calendar cannot materialize" and 1e is "archive google-calendar while the dependent is active". |
 | 2f, 2g, 3a, 3b, 3c (invalid-id branch), 4c, 4d, 4e, 5d (positive half) | A connectable dev Google account: a Google OAuth client saved at `/connectors/cinatra-ai/google-oauth-connector/setup`, then Connect on `/connectors/cinatra-ai/google-calendar-connector/setup`. 4d additionally needs the WayFlow runtime and a configured LLM model. |
-| 5f | marketplace#250 — republish / refresh the `@cinatra-ai/google-calendar-connector` storefront listing with the post-extraction copy. |
+| 5f | an internal storefront follow-up — republish / refresh the `@cinatra-ai/google-calendar-connector` storefront listing with the post-extraction copy. |
 | 6c | CI-side check of the four sub-issues' gates at head. |
 | N-1, N-2, N-3 | Coordinator routing (nothing filed by this lane). |
 
 ## Host2 restoration
 
-The lane left host2 as it found it: the app process it started was stopped, the
+The lane left a lane host as it found it: the app process it started was stopped, the
 shared `base-cinatra` compose stack was never touched, the shadowing 0.1.1 row
 and the seeded fixture key were removed from the lane DB, and nothing was
 installed on the host. See the final report for pids and the post-run probe.
