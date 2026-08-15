@@ -1450,6 +1450,73 @@ jobs:
       - name: projects unit suite (1 file / 24 tests, 0.8s)
         run: cd packages/projects && pnpm test
 
+  # THE HOSTED-MCP WIRE GATE (cinatra#2776). The composed, end-to-end assertion
+  # that the Cinatra self-MCP catalog reaches EVERY provider as ONE hosted MCP
+  # reference and never as inline function schemas — driven through the real
+  # chat/widget runtime, the real connector adapters (resolved through the
+  # `llm-provider-adapter` capability registry), the real provider SDKs, and
+  # captured at `globalThis.fetch`, the SDKs' own serialization boundary.
+  #
+  # Why it needs a job of its own. The gate lives under `src/lib/assistant-runtime/
+  # __tests__/`, which the ROOT vitest config includes — and no workflow runs the
+  # root suite wholesale; CI pins root files step by step (see rbac-authz-unit,
+  # auth-schema-drift). Without this step the gate would exist and execute
+  # nowhere, which is precisely the failure #2776 was opened about.
+  #
+  # It DOES need the companion-extension clone, unlike skills-unit / a2a-unit:
+  # the whole point is to run the CONNECTORS' real adapter code at the pins this
+  # tree commits (cinatra-required-extensions.lock.json for OpenAI + Anthropic,
+  # cinatra-dev-extensions.lock.json for Gemini). `clone-extensions` materializes
+  # them at exactly those shas, so this job measures the pinned tree — the same
+  # tree the image is built from — never a main-tip drift.
+  #
+  # REQUIRED STRUCTURALLY, not via branch protection: the `build` job `needs` it
+  # and its "Guard prerequisite gates" step hard-fails the
+  # (branch-protection-required) `build` if this job did not succeed — the exact
+  # mechanism behind `test` / `skills-unit` / `a2a-unit` / `execution-plane-unit`,
+  # so NO branch-protection contexts change is needed and this job's own context
+  # stays non-required. Docs-only / draft PRs skip it through `detect`, which is
+  # the repository's definition of participation in the required set.
+  #
+  # Measured: ~3s of vitest (17 tests) on top of checkout + clone + install.
+  hosted-mcp-wire-gate:
+    name: Hosted-MCP wire gate
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      # The PINNED companion trees — the connectors whose serialization this
+      # gate measures. Materialized BEFORE install so the workspace links
+      # resolve to the pinned adapter source.
+      - name: Clone companion extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Hosted-MCP wire gate (chat + both widget kinds, all providers)
+        run: pnpm exec vitest run src/lib/assistant-runtime/__tests__/hosted-mcp-wire-gate.test.ts --no-coverage
+
+      # The runtime-side companions of the same invariant: the `native_mcp` pin
+      # on the stream input, the refusal copy, and the tool-array parity the
+      # gate's wire assertions rest on.
+      - name: Assistant-runtime suite (the gate's runtime-side companions)
+        run: pnpm exec vitest run src/lib/assistant-runtime --no-coverage
+
   # Dev-mode build performance invariants — gates the locked measurement
   # contract + the chokepoint-narrowing invariants. Runs the 4 test files under
   # scripts/__tests__/ that are the structural gates: (1) route-graph
@@ -2888,7 +2955,7 @@ jobs:
     # packages — packages/llm, packages/chat, packages/objects,
     # packages/registries and the rest — which until this change executed in no
     # workflow at all.
-    needs: [detect, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites]
+    needs: [detect, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, hosted-mcp-wire-gate]
     # Run even when a prerequisite (`detect`/`test`/`skills-unit`/`a2a-unit`/`execution-plane-unit`/`package-unit-suites`) FAILED, so the guard step
     # below reports a definitive job FAILURE instead of a SKIP. GitHub can count a
     # skipped required check as successful, so a failed `test` merely *skipping*
@@ -2918,10 +2985,10 @@ jobs:
       # Hard-fail the build (definitive RED, never a non-failing "skip") when a
       # prerequisite gate did not pass — the type-safety enforcement for the
       # CI-only in-build-tsc skip (see the `test` job). No-ops on the success path.
-      - name: Guard prerequisite gates (detect + test + skills-unit + a2a-unit + execution-plane-unit + package-unit-suites)
-        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' || needs['a2a-unit'].result != 'success' || needs['execution-plane-unit'].result != 'success' || needs['package-unit-suites'].result != 'success' }}
+      - name: Guard prerequisite gates (detect + test + skills-unit + a2a-unit + execution-plane-unit + package-unit-suites + hosted-mcp-wire-gate)
+        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' || needs['a2a-unit'].result != 'success' || needs['execution-plane-unit'].result != 'success' || needs['package-unit-suites'].result != 'success' || needs['hosted-mcp-wire-gate'].result != 'success' }}
         run: |
-          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }} a2a-unit=${{ needs['a2a-unit'].result }} execution-plane-unit=${{ needs['execution-plane-unit'].result }} package-unit-suites=${{ needs['package-unit-suites'].result }}. Refusing to build the image."
+          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }} a2a-unit=${{ needs['a2a-unit'].result }} execution-plane-unit=${{ needs['execution-plane-unit'].result }} package-unit-suites=${{ needs['package-unit-suites'].result }} hosted-mcp-wire-gate=${{ needs['hosted-mcp-wire-gate'].result }}. Refusing to build the image."
           exit 1
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
