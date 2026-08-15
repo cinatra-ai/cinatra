@@ -50,8 +50,15 @@ vi.mock("@/lib/database", () => dbMock);
 // to decide whether the self-approval SoD guard applies. Default to 1 (another
 // admin exists → guard stays on / SoD preserved); single-admin tests override
 // to 0.
+//
+// `readUserIsPlatformAdmin` answers the RECIPIENT question added by
+// cinatra#2701 (epic #2699 S2): the decision notification's deep link addresses
+// `/configuration/agents/approvals/<id>`, which is admin-only, so a NEW row
+// carries the href only when the author who receives it is themselves an admin.
+// Default false — the ordinary author is a member.
 const betterAuthDbMock = vi.hoisted(() => ({
   countOtherPlatformAdmins: vi.fn(async () => 1),
+  readUserIsPlatformAdmin: vi.fn(async () => false),
 }));
 vi.mock("@/lib/better-auth-db", () => betterAuthDbMock);
 
@@ -199,6 +206,9 @@ describe("agent_creation_request handlers", () => {
     // EXACT packageName. `vi.clearAllMocks()` does not touch a Map.
     storeReadMock.templateRowsByPackageName.clear();
     betterAuthDbMock.countOtherPlatformAdmins.mockResolvedValue(1);
+    // cinatra#2701 — the ordinary author is a MEMBER; the admin-recipient and
+    // read-failure cases override this per test.
+    betterAuthDbMock.readUserIsPlatformAdmin.mockResolvedValue(false);
   });
 
   describe("propose", () => {
@@ -344,6 +354,9 @@ describe("agent_creation_request handlers", () => {
       // countOtherPlatformAdmins fails CLOSED at the source; here we simulate a
       // resolved value of 1 (its error fallback) and assert the guard holds.
       betterAuthDbMock.countOtherPlatformAdmins.mockResolvedValue(1);
+    // cinatra#2701 — the ordinary author is a MEMBER; the admin-recipient and
+    // read-failure cases override this per test.
+    betterAuthDbMock.readUserIsPlatformAdmin.mockResolvedValue(false);
       storeMock.readAgentCreationRequestById.mockReturnValue({
         id: "req-1", authorId: "user-admin", status: "proposed", snapshotHash: "fakehash",
         packageName: "@test/test-agent", proposalSnapshot: SAMPLE_INPUT,
@@ -897,9 +910,12 @@ describe("agent_creation_request handlers", () => {
       expect(input.body).toContain("@test/test-agent");
       expect(input.body).toContain("stored reason");
       expect(input.body).not.toContain("caller raw reason");
-      // #1555: the decision notification now deep-links to the request detail
-      // route (E2 opened it to author read access), enabling mark-read-on-nav.
-      expect(input.href).toBe("/configuration/agents/approvals/req-1");
+      // #1555 wrote a deep link to the request detail route for every author.
+      // cinatra#2701 (epic #2699 S2) re-scoped it: that route is admin-only
+      // again, and this author is a member — so the row carries NO href, and
+      // the outcome + reason still reach them in the body above.
+      expect(input.href).toBeUndefined();
+      expect("href" in input).toBe(false);
       // Dedupe key is decision-cycle-stable: decidedAt is part of the key, so
       // a later re-decision (after an author edit) mints a fresh key.
       expect(input.dedupeKey).toBe(
@@ -941,8 +957,8 @@ describe("agent_creation_request handlers", () => {
       expect(recipient).toEqual({ kind: "user", userId: "user-author" });
       expect(input.title).toMatch(/approved/i);
       expect(input.kind).toBe("success");
-      // #1555: deep-link to the (now author-readable) request detail route.
-      expect(input.href).toBe("/configuration/agents/approvals/req-1");
+      // cinatra#2701: member author → no deep link into `/configuration`.
+      expect(input.href).toBeUndefined();
       // approve persists no rejection reason — the body must not invent one
       // from raw caller input.
       expect(input.body).not.toMatch(/reason/i);
@@ -950,6 +966,50 @@ describe("agent_creation_request handlers", () => {
         id: "req-1", orgId: "org-1",
         decision: "approved", claimedAt: "2026-06-10T12:00:01.000Z",
       });
+    });
+
+    // ── cinatra#2701 (epic #2699 S2) — the recipient decides the href ──────
+    it("an ADMIN author's notification KEEPS the deep link", async () => {
+      betterAuthDbMock.readUserIsPlatformAdmin.mockResolvedValueOnce(true);
+      storeMock.readAgentCreationRequestById.mockReturnValue(PROPOSED_ROW);
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({
+        ...DECIDED_ROW, status: "rejected", rejectionReason: "stored reason",
+      });
+      await handleAgentCreationRequestDecide(
+        req("agent_creation_request_decide",
+          { id: "req-1", decision: "reject", expectedSnapshotHash: "fakehash" },
+          ADMIN),
+      );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const [, input] = (notificationsMock.createNotificationForRecipient.mock.calls as any[])[0];
+      expect(input.href).toBe("/configuration/agents/approvals/req-1");
+      // The recipient is asked about — never the DECIDER.
+      expect(betterAuthDbMock.readUserIsPlatformAdmin).toHaveBeenCalledWith("user-author");
+    });
+
+    it("an unreadable recipient role fails CLOSED — notification sent, no href", async () => {
+      betterAuthDbMock.readUserIsPlatformAdmin.mockRejectedValueOnce(new Error("db down"));
+      storeMock.readAgentCreationRequestById.mockReturnValue(PROPOSED_ROW);
+      storeMock.decideAgentCreationRequestCas.mockReturnValue({
+        ...DECIDED_ROW, status: "approved",
+      });
+      innerHandlersMock.createAgentBuilderPrimitiveHandlers.mockReturnValue({
+        agent_source_write: vi.fn(async () => ({ written: true })),
+        agent_source_write_files: vi.fn(async () => ({ written: true })),
+        agent_source_compile: vi.fn(async () => ({ compiled: true })),
+        agent_source_publish: vi.fn(async () => ({ published: true })),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any);
+      await handleAgentCreationRequestDecide(
+        req("agent_creation_request_decide",
+          { id: "req-1", decision: "approve", expectedSnapshotHash: "fakehash", accessTarget: { level: "organization", id: "org-1" } },
+          ADMIN),
+      );
+      expect(notificationsMock.createNotificationForRecipient).toHaveBeenCalledTimes(1);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const [, input] = (notificationsMock.createNotificationForRecipient.mock.calls as any[])[0];
+      expect(input.href).toBeUndefined();
+      expect(input.title).toMatch(/approved/i);
     });
 
     it("a notification write failure never fails the decide (best-effort)", async () => {

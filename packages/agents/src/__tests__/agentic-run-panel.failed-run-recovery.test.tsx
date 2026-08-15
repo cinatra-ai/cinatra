@@ -154,14 +154,22 @@ describe("AgenticRunPanel — failed-run recovery (cinatra#2412)", () => {
 
   it("mounts Retry (and Start new run) for the previously-special-cased OpenAI-key error too", async () => {
     const { AgenticRunPanel } = await import("../agentic-run-panel");
+    const { ViewerAdminProvider } = await import("@/components/viewer-admin-context");
     render(
-      <AgenticRunPanel
-        {...baseProps({
-          agentId: "cinatra-ai/blog-draft-writer-agent",
-          initialError:
-            "401 Incorrect API key provided: sk-proj-****. You can find your API key at https://platform.openai.com/account/api-keys.",
-        })}
-      />,
+      // The key-settings CTA points into `/configuration/llm`, which is
+      // admin-only (cinatra#2700, epic #2699). Since cinatra#2701 the panel
+      // reads the viewer's standing from the root-published context, so this
+      // case states the ADMIN viewer it has always been about; the member's
+      // linkless variant is the case below.
+      <ViewerAdminProvider value>
+        <AgenticRunPanel
+          {...baseProps({
+            agentId: "cinatra-ai/blog-draft-writer-agent",
+            initialError:
+              "401 Incorrect API key provided: sk-proj-****. You can find your API key at https://platform.openai.com/account/api-keys.",
+          })}
+        />
+      </ViewerAdminProvider>,
     );
 
     // The pre-existing OpenAI-key CTA still renders...
@@ -175,6 +183,28 @@ describe("AgenticRunPanel — failed-run recovery (cinatra#2412)", () => {
     expect(
       screen.queryByText(/the run failed before completing\. retry, or start a new run\./i),
     ).toBeNull();
+  });
+
+  // cinatra#2701 (epic #2699 S2) — aligned affordance.
+  it("gives a NON-ADMIN viewer the same diagnosis WITHOUT the /configuration link", async () => {
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    render(
+      <AgenticRunPanel
+        {...baseProps({
+          agentId: "cinatra-ai/blog-draft-writer-agent",
+          initialError:
+            "401 Incorrect API key provided: sk-proj-****. You can find your API key at https://platform.openai.com/account/api-keys.",
+        })}
+      />,
+    );
+
+    // No link — and no substitute destination either.
+    expect(screen.queryByRole("link", { name: /update your openai api key/i })).toBeNull();
+    expect(document.querySelector('a[href^="/configuration"]')).toBeNull();
+    // The error text and the recovery controls are untouched.
+    expect(screen.queryByText(/ask an administrator to update the openai api key\./i)).not.toBeNull();
+    expect(screen.queryByRole("button", { name: /^retry$/i })).not.toBeNull();
+    expect(screen.queryByTestId("start-new-run-stub")).not.toBeNull();
   });
 
   it("omits Start new run (but keeps Retry) when the caller has no agentId", async () => {

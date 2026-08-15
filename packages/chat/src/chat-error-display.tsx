@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { useViewerIsAdmin } from "@/components/viewer-admin-context";
 import { AppRouteLink } from "./app-route-link";
 
 // Pure helpers for the chat error card (#534). Mirrors the established
@@ -107,6 +108,10 @@ export function isOpenAiKeyError(text: string): boolean {
 // in-app key-settings CTA for recognized OpenAI key errors. Mirrors the
 // agent-run panel.
 export function FriendlyErrorBody({ error }: { error: string }) {
+  // The key-settings CTA lands on `/configuration/llm`, which is admin-only
+  // (cinatra#2700, epic #2699). A member gets the same diagnosis in words, with
+  // the next step named as a request rather than a link that bounces.
+  const viewerIsAdmin = useViewerIsAdmin();
   return (
     <>
       <p className="text-sm font-medium text-destructive">Something went wrong</p>
@@ -142,14 +147,19 @@ export function FriendlyErrorBody({ error }: { error: string }) {
           ),
         )}
       </p>
-      {isOpenAiKeyError(error) && (
-        <AppRouteLink
-          href={LLM_PROVIDER_SETTINGS_HREF}
-          className="mt-2 inline-flex text-xs font-medium text-destructive underline underline-offset-2"
-        >
-          Update your OpenAI API key →
-        </AppRouteLink>
-      )}
+      {isOpenAiKeyError(error) &&
+        (viewerIsAdmin ? (
+          <AppRouteLink
+            href={LLM_PROVIDER_SETTINGS_HREF}
+            className="mt-2 inline-flex text-xs font-medium text-destructive underline underline-offset-2"
+          >
+            Update your OpenAI API key →
+          </AppRouteLink>
+        ) : (
+          <p className="mt-2 text-xs font-medium text-destructive/80">
+            Ask an administrator to update the OpenAI API key.
+          </p>
+        ))}
     </>
   );
 }

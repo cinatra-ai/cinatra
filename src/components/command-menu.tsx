@@ -16,6 +16,8 @@ import {
   CommandSeparator,
 } from "@/components/ui/command";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useViewerIsAdmin } from "@/components/viewer-admin-context";
+import { isConfigurationHref } from "@/lib/configuration-href";
 
 /** Exported for tests: titles must be unique within each group (React keys). */
 export const navGroups = [
@@ -48,10 +50,35 @@ export const navGroups = [
   },
 ];
 
+/**
+ * The nav groups this viewer may actually be offered (cinatra#2701, epic #2699).
+ *
+ * `/configuration` is admin-only end to end, so every command-menu entry that
+ * points there is dropped for a non-admin — including the "Artifacts — Restore
+ * objects" entry in the Navigate group, which the issue text's two examples
+ * (`/configuration/llm`, `/configuration/development`) predate. A group left
+ * with no items is dropped with them rather than rendering an empty heading.
+ *
+ * Pure and exported so the per-producer fixture can assert both directions
+ * without mounting the dialog.
+ */
+export function navGroupsForViewer(viewerIsAdmin: boolean): typeof navGroups {
+  if (viewerIsAdmin) return navGroups;
+  return navGroups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => !isConfigurationHref(item.href)),
+    }))
+    .filter((group) => group.items.length > 0);
+}
+
 export function CommandMenu() {
   const router = useRouter();
   const { setTheme } = useTheme();
   const { open, setOpen } = useSearch();
+  // Discoverability gate only — `/configuration` stays server-side admin-gated.
+  const viewerIsAdmin = useViewerIsAdmin();
+  const groups = React.useMemo(() => navGroupsForViewer(viewerIsAdmin), [viewerIsAdmin]);
 
   const runCommand = React.useCallback(
     (command: () => unknown) => {
@@ -68,7 +95,7 @@ export function CommandMenu() {
       <CommandList>
         <ScrollArea type="hover" className="h-72 pe-1">
           <CommandEmpty>No results found.</CommandEmpty>
-          {navGroups.map((group) => (
+          {groups.map((group) => (
             <CommandGroup key={group.heading} heading={group.heading}>
               {group.items.map((item) => (
                 <CommandItem

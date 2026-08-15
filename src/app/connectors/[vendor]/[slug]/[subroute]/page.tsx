@@ -346,7 +346,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
             />
           ) : (
             <>
-              <InstallActivateCta displayName={displayName} />
+              <InstallActivateCta displayName={displayName} canInstall={isAdmin} />
               {sharingSection}
             </>
           )}
@@ -383,7 +383,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
           />
         ) : (
           <>
-            <InstallActivateCta displayName={displayName} />
+            <InstallActivateCta displayName={displayName} canInstall={isAdmin} />
             {sharingSection}
           </>
         )}

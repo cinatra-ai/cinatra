@@ -1,6 +1,6 @@
 "use server";
 
-import { requireAdminSession } from "@/lib/auth-session";
+import { getAuthSession, isPlatformAdmin, requireAdminSession } from "@/lib/auth-session";
 import {
   loadChangeSet,
   resolveExternalFreshness,
@@ -105,8 +105,26 @@ export async function restoreChangeSetAction(input: {
 // client toast can render its Undo affordance ONLY for an eligible actor
 // (per-object-authorized, still restorable, no admin bypass). Delegates to the
 // shared gate so it can never diverge from the confirm path's authorization.
+//
+// It now reports TWO facts, not one (cinatra#2701, epic #2699 S2). The Undo
+// affordance deep-links into `/configuration/artifacts/...`, which is admin-only,
+// and `restoreChangeSetAction` above refuses a non-admin outright — so a
+// non-admin must be offered no link. But "no link" is not the same as "no
+// feedback": the epic's aligned-affordances rule is that the toast INFORMS
+// without a link, rather than the save going silent. `admin` is what lets the
+// toast tell those two states apart, and it is resolved HERE, server-side, from
+// the session — never asserted by the client.
+//
+// `eligible` keeps its exact meaning and stays admin-independent in spirit: for
+// a non-admin it is false because the surface is unreachable, and for an admin
+// the §VI per-object gate decides exactly as before (no admin bypass).
 export async function canRestoreChangeSetAction(input: {
   changeSetId: string;
-}): Promise<{ eligible: boolean }> {
-  return { eligible: await isSessionEligibleForTargetedRestore(input.changeSetId) };
+}): Promise<{ eligible: boolean; admin: boolean }> {
+  const admin = isPlatformAdmin(await getAuthSession());
+  if (!admin) return { eligible: false, admin: false };
+  return {
+    eligible: await isSessionEligibleForTargetedRestore(input.changeSetId),
+    admin: true,
+  };
 }

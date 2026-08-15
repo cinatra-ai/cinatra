@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
+import { useViewerIsAdmin } from "@/components/viewer-admin-context";
 import {
   linkifyErrorText,
   isOpenAiKeyError,
@@ -324,6 +325,9 @@ export function AgenticRunPanel({
   surface = "agent-detail",
   initialHitlContext,
 }: AgenticRunPanelProps) {
+  // May this viewer reach `/configuration`? Drives the two config CTAs in the
+  // error block below (cinatra#2701, epic #2699 S2).
+  const viewerIsAdmin = useViewerIsAdmin();
   // SOURCE B binding registration (cinatra#151 Stage 5): fetch + register the
   // bindings of RUNTIME-installed agent packages; re-renders on arrival so
   // resolution below picks them up.
@@ -1644,25 +1648,40 @@ export function AgenticRunPanel({
               ),
             )}
           </pre>
-          {isOpenAiKeyError(error) && (
-            <Link
-              href={LLM_PROVIDER_SETTINGS_HREF}
-              className="mt-2 inline-flex text-xs font-medium text-primary underline underline-offset-2"
-            >
-              Update your OpenAI API key →
-            </Link>
-          )}
+          {/* The two config CTAs below land under `/configuration`, which is
+              admin-only (cinatra#2700, epic #2699). A member keeps the full
+              diagnosis and is told who can fix it, instead of being handed a
+              link that ends on the not-authorized panel (cinatra#2701). */}
+          {isOpenAiKeyError(error) &&
+            (viewerIsAdmin ? (
+              <Link
+                href={LLM_PROVIDER_SETTINGS_HREF}
+                className="mt-2 inline-flex text-xs font-medium text-primary underline underline-offset-2"
+              >
+                Update your OpenAI API key →
+              </Link>
+            ) : (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Ask an administrator to update the OpenAI API key.
+              </p>
+            ))}
           {/* Hosted-MCP 424: the provider could not reach this instance's public
               MCP URL to load the cinatra toolbox. Link to the MCP config so the
               user can fix the public URL / tunnel. (#500) */}
-          {isMcpUnreachableError(error) && !isOpenAiKeyError(error) && (
-            <Link
-              href={MCP_CONFIG_HREF}
-              className="mt-2 inline-flex text-xs font-medium text-primary underline underline-offset-2"
-            >
-              Check your MCP server configuration →
-            </Link>
-          )}
+          {isMcpUnreachableError(error) &&
+            !isOpenAiKeyError(error) &&
+            (viewerIsAdmin ? (
+              <Link
+                href={MCP_CONFIG_HREF}
+                className="mt-2 inline-flex text-xs font-medium text-primary underline underline-offset-2"
+              >
+                Check your MCP server configuration →
+              </Link>
+            ) : (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Ask an administrator to check the MCP server configuration.
+              </p>
+            ))}
           {/* Generic fallback text ("WayFlow task failed") carries no cause and no
               next step on its own — pair it with plain-language guidance. Failures
               that already have an actionable link above (OpenAI key, MCP) don't
