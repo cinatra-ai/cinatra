@@ -20,8 +20,10 @@ import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 
-import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
-import { REVIEW_TARGET_SHELL_CLASS } from "../run-completion-affordances";
+import {
+  ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
+  SCHEMA_FIELD_FALLBACK_RENDERER_ID,
+} from "../agent-builder-ids";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 
 vi.mock("@cinatra-ai/sdk-ui", () => ({
@@ -213,9 +215,7 @@ describe("a run that finishes in the conversation shows its artifact there", () 
   beforeEach(() => {
     readRunOutputEvidence.mockResolvedValue({
       ok: true,
-      outputs: [
-        { id: "art-1", type: "blog-post", title: "Draft: human purpose" },
-      ],
+      outputs: [{ id: "art-1", title: "Draft: human purpose" }],
       hasTranscript: false,
       hasStepResults: false,
       outputsUnavailable: false,
@@ -226,39 +226,8 @@ describe("a run that finishes in the conversation shows its artifact there", () 
   it("renders the completion card with the produced artifact link in chat", async () => {
     await renderCompleted("chat");
 
-    await screen.findByText("Draft: human purpose");
-    const link = document.querySelector('[data-run-output-link="art-1"]');
-    expect(link).not.toBeNull();
-    expect(link!.getAttribute("href")).toBe("/artifacts/art-1");
-  });
-
-  // The owner's review-round finding: in a conversation the produced artifact
-  // must look like the review lifecycle's target, not like a second card
-  // species. The shell classes are pinned against the canonical component by
-  // src/lib/__tests__/run-completion-review-shell.test.ts; here we pin that the
-  // chat surface actually MOUNTS that shell.
-  it("draws it as the core's review target — anchor, shell, type pill", async () => {
-    await renderCompleted("chat");
-
-    await screen.findByText("Draft: human purpose");
-    const target = document.querySelector(
-      '[data-conformance-id="review-target"]',
-    );
-    expect(target).not.toBeNull();
-    expect(target!.className).toBe(REVIEW_TARGET_SHELL_CLASS);
-    expect(target!.getAttribute("data-run-output-target")).toBe("art-1");
-    // The type pill carries the core model's label for the artifact type.
-    expect(screen.queryByText("Blog Post")).not.toBeNull();
-  });
-
-  it("keeps the run page on the shipped panel card — no anchor there", async () => {
-    await renderCompleted("agent-detail");
-
-    await screen.findByText("Draft: human purpose");
-    expect(
-      document.querySelector('[data-conformance-id="review-target"]'),
-    ).toBeNull();
-    expect(document.querySelector("[data-run-completion]")).not.toBeNull();
+    const link = await screen.findByText("Draft: human purpose");
+    expect(link.getAttribute("href")).toBe("/artifacts/art-1");
   });
 
   it("leaves out Start new run in chat — it navigates out of the conversation", async () => {
@@ -271,7 +240,126 @@ describe("a run that finishes in the conversation shows its artifact there", () 
   it("keeps Start new run on the run page", async () => {
     await renderCompleted("agent-detail");
 
-    await screen.findAllByText("Draft: human purpose");
+    await screen.findByText("Draft: human purpose");
     expect(screen.queryByText(/Start new run/i)).not.toBeNull();
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE CORE'S REVIEW LIFECYCLE TAKES OVER (cinatra#2729 review round 3)
+// ---------------------------------------------------------------------------
+//
+// When a run produces an artifact that needs review, `execution.ts` mints the
+// gate's server-side `lifecycleCardRef` and emits the marked artifact-review
+// interrupt; the run parks on it. From that moment the presentation is the
+// CORE's: every first-party host draws `ReviewGateCard`, which resolves the
+// gate from the ref and brings its own surfaces with it — the target through
+// the island, the suggestion chips, the decision floor.
+//
+// The conversation is one of those hosts. Nothing here draws a review of its
+// own, and nothing here strips what the card brings: the panel's job is to
+// mount the core card under the `run_card` host and get out of the way. These
+// pins are on the CORE component's own anchors, not on any copy of its markup.
+const ARTIFACT_REVIEW_GATE = {
+  xRenderer: ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
+  childRunId: null,
+  reviewTaskId: "review-task-2729",
+  inputSchema: { type: "object" },
+  currentValues: {
+    reviewTaskId: "review-task-2729",
+    reviewSurfaceUrl:
+      "/agents/cinatra-ai/blog-draft-writer-agent/run-2729/review/review-task-2729",
+    // The server-minted ref. The card is only ever addressed by this.
+    lifecycleCardRef: "lcr-opaque-2729",
+    targetCount: 1,
+    agentSummary: "",
+  },
+};
+
+describe("the core's review lifecycle takes over in the conversation", () => {
+  /**
+   * The card resolves its own gate from the ref, through the lifecycle resolve
+   * route, and draws nothing before the server answers — so the pin has to let
+   * the core's own request succeed rather than assert against a half-mounted
+   * card. This is the same stub the core's own lifecycle-card suite uses.
+   */
+  function mockResolve() {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            state: { state: "pending", canDecide: true, canComment: true },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  async function renderGate(surface: "chat" | "agent-detail") {
+    mockResolve();
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    return render(
+      <AgenticRunPanel
+        runId="run-2729"
+        initialStatus="pending_approval"
+        initialError={null}
+        initialMessages={[]}
+        agUiEnabled={false}
+        templateId="tmpl-2729"
+        surface={surface}
+        initialHitlContext={ARTIFACT_REVIEW_GATE}
+      />,
+    );
+  }
+
+  it.each([["chat" as const], ["agent-detail" as const]])(
+    'surface="%s" mounts the CORE review gate card',
+    async (surface) => {
+      await renderGate(surface);
+
+      const card = await waitFor(() => {
+        const el = document.querySelector(
+          '[data-conformance-id="review-gate-card"]',
+        );
+        if (!el) throw new Error("core card not mounted");
+        return el;
+      });
+      expect(card.getAttribute("data-lifecycle-card")).toBe(
+        "artifact_review_gate",
+      );
+    },
+  );
+
+  it("declares the run_card lifecycle host, so the card knows its surface", async () => {
+    await renderGate("chat");
+
+    const card = await waitFor(() => {
+      const el = document.querySelector(
+        '[data-conformance-id="review-gate-card"]',
+      );
+      if (!el) throw new Error("core card not mounted");
+      return el;
+    });
+    expect(card.getAttribute("data-lifecycle-card-host")).toBe("run_card");
+  });
+
+  it("draws NO review of its own beside the core card", async () => {
+    await renderGate("chat");
+
+    await waitFor(() => {
+      if (!document.querySelector('[data-conformance-id="review-gate-card"]')) {
+        throw new Error("core card not mounted");
+      }
+    });
+    // No completion card, no output list, no hand-built target: at a gate the
+    // conversation shows the core's screen and nothing else.
+    expect(document.querySelector("[data-run-completion]")).toBeNull();
+    expect(document.querySelector("[data-run-outputs]")).toBeNull();
+    expect(document.querySelector("[data-run-output-target]")).toBeNull();
+    // And not the formless approval banner either.
+    expect(screen.queryByText(BANNER_TEXT)).toBeNull();
   });
 });

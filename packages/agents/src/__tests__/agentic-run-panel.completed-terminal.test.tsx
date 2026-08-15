@@ -180,7 +180,7 @@ describe("AgenticRunPanel — terminal completed state (cinatra#2482)", () => {
   // next step — and the owner ruled the finished work renders as a reviewable
   // artifact INSIDE the conversation. What stays surface-bound is "Start new
   // run", which would navigate the reader out of the thread.
-  it("shows the produced artifact on the chat mount, in the review shell", async () => {
+  it("shows the completion card on the chat mount, with the produced artifact", async () => {
     readRunOutputEvidenceMock.mockResolvedValueOnce({
       ok: true,
       outputs: [{ id: "obj-draft", type: "blog_post", title: "The draft" }],
@@ -191,22 +191,11 @@ describe("AgenticRunPanel — terminal completed state (cinatra#2482)", () => {
     render(<AgenticRunPanel {...baseProps({ surface: "chat" })} />);
 
     await waitFor(() =>
-      expect(
-        document.querySelector('[data-run-output-link="obj-draft"]'),
-      ).not.toBeNull(),
+      expect(screen.queryByRole("link", { name: "The draft" })).not.toBeNull(),
     );
-    // In a conversation the artifact is drawn as the review lifecycle's target
-    // (cinatra#2729 review round), so the panel-card attribute is absent and
-    // the review anchor is present.
+    expect(document.querySelector("[data-run-completion]")).not.toBeNull();
     expect(
-      document.querySelector('[data-conformance-id="review-target"]'),
-    ).not.toBeNull();
-    expect(document.querySelector("[data-run-completion]")).toBeNull();
-    expect(screen.queryByText("The draft")).not.toBeNull();
-    expect(
-      document
-        .querySelector('[data-run-output-link="obj-draft"]')!
-        .getAttribute("href"),
+      screen.getByRole("link", { name: "The draft" }).getAttribute("href"),
     ).toBe("/artifacts/obj-draft");
     expect(screen.queryByText(/no messages yet/i)).toBeNull();
   });
@@ -215,12 +204,8 @@ describe("AgenticRunPanel — terminal completed state (cinatra#2482)", () => {
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     render(<AgenticRunPanel {...baseProps({ surface: "chat" })} />);
 
-    // No produced output on this mock, so the chat surface draws the terminal
-    // statement in the same review shell.
     await waitFor(() =>
-      expect(
-        document.querySelector('[data-conformance-id="review-target"]'),
-      ).not.toBeNull(),
+      expect(document.querySelector("[data-run-completion]")).not.toBeNull(),
     );
     expect(screen.queryByText(/Start new run/i)).toBeNull();
   });
