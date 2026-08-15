@@ -59,9 +59,20 @@ import {
 } from "./install-access-target";
 // cinatra#2696: the dispatcher-side half of the contract — the anchor an
 // install actually writes at, and the org-NULL workspace discriminator the
-// rollback needs (a workspace-anchored row cannot be addressed by the org-pinned
-// lifecycle resolver; that is S4 #2698).
+// rollback needs.
+//
+// cinatra#2698 (S4) has since made a workspace-anchored row addressable by the
+// lifecycle resolver, so the reason S2 gave for the rollback's row-scoped
+// inverse no longer holds. The rollback is DELIBERATELY LEFT AS IT IS: it is
+// S2's shipped decision, it is the fail-closed inverse of a write this same
+// action just made (it needs no resolution at all, and no standing round-trip
+// on an error path), and re-routing it through the resolver would be a change
+// this slice was not asked for. This note is the cross-reference, not a TODO.
 import { isWorkspaceRowAnchor } from "./install-access-target";
+// cinatra#2698 (S4): the operator's explicit row choice. TYPE-ONLY here — the
+// resolver module itself is lazy-imported inside the actions that need it, so
+// the no-selector paths pay nothing.
+import type { LifecycleRowSelector } from "./lifecycle-target-resolver";
 
 // ---------------------------------------------------------------------------
 // Operator-side failure logging (cinatra#685). The end user only ever sees a
@@ -513,6 +524,13 @@ export async function updateExtensionPackage(
   packageName: string,
   packageVersion: string,
   actor: Actor,
+  /** cinatra#2698 (S4): the operator's explicit row choice, where a package
+   *  carries more than one addressable canonical row (an org-anchored row and
+   *  an app-wide workspace-anchored one). It travels to the dispatcher, which
+   *  resolves the EXISTING row through it and rewrites that row's version in
+   *  place. Absent — every caller today — the addressing rule resolves the
+   *  actor's single row and refuses `ambiguous_target` where it cannot. */
+  rowSelector?: LifecycleRowSelector | null,
 ): Promise<{
   success: boolean;
   error?: string;
@@ -534,6 +552,7 @@ export async function updateExtensionPackage(
       reference,
     };
   }
+  const selector = await normalizeSelector(rowSelector);
   try {
     // #1039 Option B (update-time slice): on the dev/non-gatekept path route the
     // update THROUGH the dependency planner/batch (rootAction:'update') instead
@@ -552,16 +571,31 @@ export async function updateExtensionPackage(
         typeId,
         { registryUrl: "", packageName, version: packageVersion },
         actor,
+        { rowSelector: selector },
       );
     } else {
       const { installExtensionWithDependencies } = await import(
         "@/lib/extension-install-batch"
+      );
+      // cinatra#2698 (S4, change 2): the batch plans EVERY member at the ROOT's
+      // anchor (S2's dependency-anchor rule), so an update routed through it
+      // must hand it the root row's OWN anchor — otherwise a workspace-anchored
+      // root's newly-required dependencies would land org-anchored in the
+      // updating admin's organization while the root itself stayed app-wide, and
+      // the org-anchored copies would be invisible to every other organization
+      // the root serves. `null` (no addressable row) keeps the batch's
+      // actor-derived default, exactly as before this slice.
+      const rootRowAnchor = await resolveRowAnchorForLifecycle(
+        packageName,
+        actor,
+        selector,
       );
       const batch = await installExtensionWithDependencies({
         packageName,
         version: packageVersion,
         actor,
         rootAction: "update",
+        ...(rootRowAnchor ? { rowOwnership: rootRowAnchor } : {}),
       });
       // #2761: same third outcome on the update path.
       if (batchDeferredCarries(batch, packageName)) {
@@ -637,6 +671,60 @@ export async function uninstallExtensionPackage(
 }
 
 // ---------------------------------------------------------------------------
+// The RESOLVED ROW's own anchor (cinatra#2694 / S4 #2698).
+//
+// The action layer needs the target row's anchor for the two lifecycle
+// operations that RECREATE rather than transition in place:
+//   - update routed through the dependency batch, whose members are all planned
+//     at the ROOT's anchor (S2's dependency-anchor rule);
+//   - reinstall, which is uninstall THEN install — the install leg must land at
+//     the anchor the uninstalled row had, or the reinstall silently re-anchors
+//     an app-wide workspace install into the operator's organization.
+//
+// Reads through the SAME addressing rule the dispatcher enforces with (and the
+// same operator row selector), so the anchor the action plans and the row the
+// dispatcher targets can never be two different rows. TOTAL — an unresolvable
+// or ambiguous target yields null and the caller keeps its pre-#2698
+// actor-derived default; the dispatcher's own fail-closed refusal is still the
+// enforcement boundary. Not exported: a "use server" module exports only its
+// actions.
+// ---------------------------------------------------------------------------
+async function resolveRowAnchorForLifecycle(
+  packageName: string,
+  actor: Actor,
+  selector?: LifecycleRowSelector | null,
+): Promise<InstallRowOwnership | null> {
+  try {
+    const { readInstalledExtensionsByPackageName } = await import("./canonical-store");
+    const { resolveLifecycleScope, lifecycleRowAnchor } = await import(
+      "./lifecycle-target-resolver"
+    );
+    const resolution = resolveLifecycleScope(
+      await readInstalledExtensionsByPackageName(packageName),
+      actor,
+      selector,
+    );
+    return resolution.ok ? lifecycleRowAnchor(resolution.row) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every exported action in this module is a "use server" export, so its
+ * arguments arrive from the CLIENT. The selector is shape-checked here before
+ * it reaches the addressing rule (cinatra#2698). It can never widen reach — the
+ * addressable set is recomputed from the actor — but an unrecognized value must
+ * read as "no selector", not as a filter nothing matches.
+ */
+async function normalizeSelector(
+  input: LifecycleRowSelector | null | undefined,
+): Promise<LifecycleRowSelector | null> {
+  const { normalizeLifecycleRowSelector } = await import("./lifecycle-target-resolver");
+  return normalizeLifecycleRowSelector(input);
+}
+
+// ---------------------------------------------------------------------------
 // Core dispatchers for archive/restore/reinstall/forceDelete.
 // ---------------------------------------------------------------------------
 
@@ -644,6 +732,9 @@ export async function archiveExtensionPackage(
   packageName: string,
   packageVersion: string,
   actor: Actor,
+  /** cinatra#2698 (S4): the operator's explicit row choice — see
+   *  {@link updateExtensionPackage}. */
+  rowSelector?: LifecycleRowSelector | null,
 ): Promise<{
   success: boolean;
   error?: string;
@@ -665,6 +756,7 @@ export async function archiveExtensionPackage(
       typeId,
       { registryUrl: "", packageName, version: packageVersion },
       actor,
+      { rowSelector: await normalizeSelector(rowSelector) },
     );
     return { success: true };
   } catch (err) {
@@ -682,6 +774,10 @@ export async function archiveExtensionPackage(
 export async function restoreExtensionPackage(
   packageName: string,
   actor: Actor,
+  /** cinatra#2698 (S4): the operator's explicit row choice — see
+   *  {@link updateExtensionPackage}. The restore re-activates the RESOLVED
+   *  row and re-registers it at THAT row's anchor. */
+  rowSelector?: LifecycleRowSelector | null,
 ): Promise<{ success: boolean; error?: string; failureCategory?: MarketplaceFailureCategory }> {
   "use server";
   await requireAdminSession();
@@ -692,6 +788,7 @@ export async function restoreExtensionPackage(
       typeId,
       { registryUrl: "", packageName, version: "" },
       actor,
+      { rowSelector: await normalizeSelector(rowSelector) },
     );
     return { success: true };
   } catch (err) {
@@ -716,9 +813,14 @@ export async function restoreExtensionPackage(
 export async function reinstallLatestExtensionPackage(
   packageName: string,
   actor: Actor,
+  /** cinatra#2698 (S4): the operator's explicit row choice — see
+   *  {@link updateExtensionPackage}. Both legs (the uninstall and the
+   *  re-install) address the SAME row through it. */
+  rowSelector?: LifecycleRowSelector | null,
 ): Promise<{ success: boolean; error?: string }> {
   "use server";
   await requireAdminSession();
+  const selector = await normalizeSelector(rowSelector);
   try {
     // Resolve the latest version FIRST and bail out before any destructive
     // uninstall step if the registry is unreachable or returns a package
@@ -757,21 +859,43 @@ export async function reinstallLatestExtensionPackage(
         typeId,
         { registryUrl: "", packageName, version: latestVersion },
         actor,
+        { rowSelector: selector },
       );
       return { success: true };
     }
+    // cinatra#2698 (S4, change 2): CAPTURE THE ROW'S OWN ANCHOR BEFORE THE
+    // UNINSTALL. A reinstall is the one lifecycle operation that genuinely
+    // destroys and RE-CREATES the canonical row (for an unused extension the
+    // uninstall is a hard delete), and the install leg used to derive its anchor
+    // from the ACTOR — so reinstalling an app-wide, workspace-anchored install
+    // from an org-scoped platform-admin session would have brought it back as an
+    // ORG-anchored row: the extension would silently stop reaching every other
+    // organization, with nothing in the UI saying so. Reading the anchor first
+    // and threading it into the install leg keeps the identity
+    // `(organization_id, owner_level, owner_id)` exactly where it was.
+    //
+    // null (no addressable row — e.g. a package the actor's scope never
+    // installed) keeps the dispatcher's actor-derived anchor, byte-identically
+    // to the pre-#2698 path.
+    const priorRowAnchor = await resolveRowAnchorForLifecycle(
+      packageName,
+      actor,
+      selector,
+    );
     // Step 1: uninstall (archive or hard-delete per predicate)
     await extensionRegistry.uninstall(
       typeId,
       { registryUrl: "", packageName, version: latestVersion },
       actor,
+      { rowSelector: selector },
     );
-    // Step 2: install at the latest resolved version
+    // Step 2: install at the latest resolved version, AT THE PRIOR ROW'S ANCHOR
     try {
       await extensionRegistry.install(
         typeId,
         { registryUrl: "", packageName, version: latestVersion },
         actor,
+        ...(priorRowAnchor ? [{ rowOwnership: priorRowAnchor }] : []),
       );
     } catch (installErr) {
       // Surface the underlying install error so the user can act on it

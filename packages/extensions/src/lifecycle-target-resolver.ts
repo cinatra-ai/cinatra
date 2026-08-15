@@ -18,13 +18,21 @@ import "server-only";
 // standing only (closing the P3 read predicate's "NULL-org row is addressable by
 // any authenticated actor" branch for WRITES; reads are unchanged).
 //
-// The resolution is org-equality ONLY (no fallthrough to another org's row and
-// no NULL-org fallback for an org actor). The standing check is a defense-in-
-// depth safety net UNDER the resolver — the resolver is the primary bound.
+// The resolution is org-equality (no fallthrough to another org's row and no
+// NULL-org fallback for an ORG-SCOPED actor), with ONE addition in cinatra#2698:
+// a PLATFORM ADMIN whose own scope holds no row falls back to the org-NULL rows,
+// so the app-wide workspace-anchored row a platform admin installs is also a row
+// a platform admin can manage. Where more than one row is addressable, the
+// operator's explicit `LifecycleRowSelector` (an `owner_level` tier — the full
+// row identity's discriminator) picks one; without it the resolver REFUSES
+// `ambiguous_target` rather than guessing by package name. The standing check is
+// a defense-in-depth safety net UNDER the resolver — the resolver is the primary
+// bound.
 // ---------------------------------------------------------------------------
 
 import type { Actor } from "@cinatra-ai/extension-types";
-import type { InstalledExtension } from "./canonical-types";
+import { EXTENSION_OWNER_LEVELS } from "./canonical-types";
+import type { ExtensionOwnerLevel, InstalledExtension } from "./canonical-types";
 
 // ---------------------------------------------------------------------------
 // Errors — all fail-closed refusals. The dispatcher lets them propagate as the
@@ -165,6 +173,90 @@ function scopeLabel(actor: Actor): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * The ROW SELECTOR (cinatra#2694 / S4 #2698) — the operator's explicit choice of
+ * WHICH canonical row a lifecycle operation targets, where more than one is
+ * addressable.
+ *
+ * Under S1 one package may carry BOTH an org-anchored row and an org-NULL
+ * WORKSPACE-anchored row (and, for a bundled package, an org-NULL PLATFORM
+ * anchor as well) — the DB's org-NULL identity index keys on `owner_level`, so
+ * that coexistence is a shape the store permits. `owner_level` is therefore the
+ * discriminator, and it is the WHOLE selector: it names a TIER, never an id, so
+ * the value is safe to round-trip through a client surface and safe to log. It
+ * is also never TRUSTED input — the resolver recomputes the addressable set from
+ * the actor server-side and then filters it by this tier, so a forged selector
+ * can only ever narrow an actor to a row they could already address, never widen
+ * them to one they could not.
+ *
+ * ABSENT selector = today's behaviour exactly: the actor's own scope resolves,
+ * and a genuine multi-row scope refuses `ambiguous_target` rather than guessing.
+ * "Nothing is guessed by package name" is enforced by that refusal.
+ */
+export type LifecycleRowSelector = {
+  /** The target row's own anchor tier (`organization` / `workspace` /
+   *  `platform` / …) — see {@link LifecycleRowSelector}. */
+  ownerLevel: ExtensionOwnerLevel;
+};
+
+/**
+ * The ADDRESSABLE SET — every canonical row `actor` may operate a lifecycle op
+ * on, split into its two arms (cinatra#2694 / S4 #2698).
+ *
+ * Two arms, and the split between them is load-bearing:
+ *
+ *  1. OWN SCOPE — rows whose `organizationId` equals `actor.orgId ?? null`.
+ *     This is the pre-S4 rule, untouched: an org actor sees exactly their org's
+ *     rows (never another org's, never a platform row — F1 / F5), a NULL-org
+ *     actor sees exactly the org-NULL rows (never an org row — F7).
+ *
+ *  2. ORG-NULL FALLBACK, PLATFORM ADMIN ONLY — the org-NULL rows, for an actor
+ *     whose own scope holds NONE. This is the slice's widening, and it is
+ *     exactly the epic's sentence "platform admins can address org-NULL rows;
+ *     org-scoped actors keep exactly their org rows": a platform admin with an
+ *     ACTIVE ORGANIZATION could not previously address the app-wide
+ *     workspace-anchored row at all (`no_addressable_row`), which left such a
+ *     row lifecycle-UNMANAGEABLE for the very principal who installed it — a
+ *     "Workspace: All" install is platform-admin-only. An ORG-SCOPED actor is
+ *     NOT given this arm: the workspace row serves every organization, so
+ *     archiving/updating it from one org would reach into every other one — the
+ *     cross-org destructive-auth breach this module exists to prevent.
+ *
+ * WITHOUT an explicit selector, arm 2 is consulted ONLY when arm 1 is empty, so
+ * it can never REPLACE a row the actor resolves today: every actor whose own
+ * scope holds a row resolves that row, byte-identically to before this slice,
+ * and arm 2 only ever converts a REFUSAL into a resolution — for a platform
+ * admin only.
+ *
+ * WITH a selector the two arms are ONE set: the operator has named a tier, and
+ * the whole point of naming it is to reach the app-wide row from a session whose
+ * own organization ALSO holds a row for the package. That is the coexistence
+ * case this slice exists for, so a preference order there would defeat it.
+ */
+export function addressableLifecycleRows(
+  rows: readonly InstalledExtension[],
+  actor: Actor,
+): {
+  /** The actor's OWN scope — the pre-S4 candidate set, arm 1. */
+  own: readonly InstalledExtension[];
+  /** Arm 2, PLATFORM ADMIN ONLY and org-scoped sessions only: the org-NULL rows
+   *  the actor's own scope does not already contain. Empty for everyone else. */
+  platformFallback: readonly InstalledExtension[];
+  /** Everything addressable, own-scope first and duplicate-free. */
+  all: readonly InstalledExtension[];
+} {
+  const actorOrgId = actor.orgId ?? null;
+  const own = rows.filter((r) => (r.organizationId ?? null) === actorOrgId);
+  // A NULL-org session's own scope IS the org-NULL rows, so the fallback is
+  // empty there — otherwise `all` would carry each row twice and an explicit
+  // selector would read the duplicate as an ambiguity.
+  const platformFallback =
+    actorOrgId !== null && isPlatformAdminActor(actor)
+      ? rows.filter((r) => (r.organizationId ?? null) === null)
+      : [];
+  return { own, platformFallback, all: [...own, ...platformFallback] };
+}
+
+/**
  * The addressing rule, expressed ONCE as a total (non-throwing) verdict
  * (cinatra#2416). Both consumers read this SAME function:
  *   • the ENFORCEMENT path — {@link pickLifecycleTargetRow}, a thin throwing
@@ -174,14 +266,16 @@ function scopeLabel(actor: Actor): string {
  * There is deliberately no second implementation of "which row may this actor
  * address" anywhere in the codebase, and none on the client at all.
  *
- * `actorOrgId = actor.orgId ?? null`; the target is the row whose
- * `organizationId === actorOrgId`:
- *   - a NULL active-org selects ONLY NULL-org (platform) rows — never falls
- *     through to an org row (F7);
- *   - a non-null org selects ONLY that org's row — never another org's or the
- *     platform row (F1 / F5).
- * Zero matches → `no_addressable_row`; more than one → `ambiguous_target` (F6).
- * Pure + DB-free (unit-testable).
+ * The candidate set is {@link addressableLifecycleRows} (org-equality, plus the
+ * platform-admin org-NULL fallback when the actor's own scope is empty). An
+ * explicit {@link LifecycleRowSelector} then narrows that set to ONE ANCHOR
+ * TIER — the FULL row identity, `owner_level` included, which is what tells a
+ * product-installed workspace row apart from a bundled platform anchor at the
+ * same org-NULL scope (cinatra#2694 / S4 #2698).
+ *
+ * Zero matches → `no_addressable_row`; more than one → `ambiguous_target` (F6),
+ * which is the deliberate refusal that makes the operator pick a row instead of
+ * the system guessing one from the package name. Pure + DB-free.
  *
  * This does NOT check standing — resolve first, then gate on standing over the
  * resolved row (the dispatcher order; standing is the safety net, resolution is
@@ -201,11 +295,20 @@ export type LifecycleScopeResolution =
 export function resolveLifecycleScope(
   rows: readonly InstalledExtension[],
   actor: Actor,
+  selector?: LifecycleRowSelector | null,
 ): LifecycleScopeResolution {
-  const actorOrgId = actor.orgId ?? null;
-  const candidates = rows.filter(
-    (r) => (r.organizationId ?? null) === actorOrgId,
-  );
+  const addressable = addressableLifecycleRows(rows, actor);
+  const candidates = selector
+    ? // NAMED TIER → the whole addressable set, filtered to it. This is how an
+      // operator reaches the app-wide workspace row from a session whose own
+      // organization also holds a row for the package.
+      addressable.all.filter((r) => r.ownerLevel === selector.ownerLevel)
+    : // NO SELECTOR → the actor's own scope, and only if it is empty the
+      // platform-admin org-NULL fallback. Byte-identical to the pre-S4 rule
+      // wherever the actor's own scope holds a row.
+      addressable.own.length > 0
+      ? addressable.own
+      : addressable.platformFallback;
   if (candidates.length === 0) {
     return {
       ok: false,
@@ -237,8 +340,9 @@ export function resolveLifecycleScope(
 export function pickLifecycleTargetRow(
   rows: readonly InstalledExtension[],
   actor: Actor,
+  selector?: LifecycleRowSelector | null,
 ): InstalledExtension {
-  const resolution = resolveLifecycleScope(rows, actor);
+  const resolution = resolveLifecycleScope(rows, actor, selector);
   if (resolution.ok) return resolution.row;
   if (resolution.code === "no_addressable_row") {
     throw new NoAddressableRowError(resolution.packageName, resolution.scope);
@@ -277,10 +381,11 @@ export function assertActorWriteStandingOverRow(
 export async function resolveLifecycleTargetRow(
   packageName: string,
   actor: Actor,
+  selector?: LifecycleRowSelector | null,
 ): Promise<InstalledExtension> {
   const { readInstalledExtensionsByPackageName } = await import("./canonical-store");
   const rows = await readInstalledExtensionsByPackageName(packageName);
-  const row = pickLifecycleTargetRow(rows, actor);
+  const row = pickLifecycleTargetRow(rows, actor, selector);
   assertActorWriteStandingOverRow(actor, row);
   return row;
 }
@@ -302,6 +407,58 @@ export function resolvedRowIdentity(row: InstalledExtension): ResolvedRowIdentit
     ownerLevel: row.ownerLevel,
     ownerId: row.ownerId,
   };
+}
+
+/**
+ * The resolved row's OWN ANCHOR as the install-write tuple (cinatra#2698).
+ *
+ * This is the "recreate preserves the row's own anchor" primitive: the update
+ * and reinstall paths used to hand the dispatcher the ACTOR's scope, so an
+ * update of a workspace-anchored row would have written its new version against
+ * an org-anchored row (a silent re-anchor that would have FORKED the app-wide
+ * install into one organization's). Feeding the row's own tuple back in keeps
+ * the identity — `(organization_id, owner_level, owner_id)` — exactly where it
+ * was.
+ */
+export function lifecycleRowAnchor(row: InstalledExtension): {
+  ownerLevel: ExtensionOwnerLevel;
+  ownerId: string | null;
+  organizationId: string | null;
+} {
+  return {
+    ownerLevel: row.ownerLevel,
+    ownerId: row.ownerId,
+    organizationId: row.organizationId,
+  };
+}
+
+/**
+ * Normalize an UNTRUSTED selector (a server-action argument, an MCP input) to
+ * either a valid selector or null.
+ *
+ * The selector cannot widen anyone's reach — the addressable set is recomputed
+ * from the actor server-side and the selector only filters it — but a "use
+ * server" export takes its arguments from the client, so the SHAPE is checked
+ * here rather than trusted from a TypeScript annotation that does not exist at
+ * runtime. An unrecognized tier yields null, which means "no selector": the
+ * addressing rule then resolves the actor's single row, or refuses.
+ */
+export function normalizeLifecycleRowSelector(
+  input: unknown,
+): LifecycleRowSelector | null {
+  if (input == null || typeof input !== "object") return null;
+  const level = (input as { ownerLevel?: unknown }).ownerLevel;
+  return typeof level === "string" &&
+    (EXTENSION_OWNER_LEVELS as readonly string[]).includes(level)
+    ? { ownerLevel: level as ExtensionOwnerLevel }
+    : null;
+}
+
+/** The row's own {@link LifecycleRowSelector} — so a multi-step operation
+ *  (reinstall = uninstall THEN install) re-addresses the SAME row on its second
+ *  leg instead of re-resolving from scratch and possibly landing elsewhere. */
+export function lifecycleRowSelectorFor(row: InstalledExtension): LifecycleRowSelector {
+  return { ownerLevel: row.ownerLevel };
 }
 
 // ---------------------------------------------------------------------------
@@ -407,10 +564,16 @@ export type LifecycleCapabilityDescription = {
 // reads as though clearing the active organization is sufficient — it is not:
 // a platform-scoped, non-platform-admin caller is refused identically. Both
 // refusals now share ONE reason naming the actual discriminator: the principal
-// who CAN act (a platform administrator with no active organization), not the
-// session shape that gets refused.
+// who CAN act, not the session shape that gets refused.
+//
+// cinatra#2698: the "with no active organization" clause is GONE. It described
+// the pre-S4 addressing rule, where an org-NULL row was addressable only from a
+// NULL-org session; a platform admin now addresses an org-NULL row from ANY
+// session (addressableLifecycleRows arm 2), so the clause would send an
+// administrator to clear their active organization for no reason. The principal
+// named is unchanged: a platform administrator.
 const REASON_PLATFORM_ROW_REQUIRES_PLATFORM_ADMIN =
-  "Installed for the whole platform. Only a platform administrator with no active organization can act on it.";
+  "Installed for the whole platform. Only a platform administrator can act on it.";
 const REASON_ORG_ROW_FROM_PLATFORM_SESSION =
   "Installed by an organization — a platform-scoped session can't act on it.";
 const REASON_NOT_IN_SCOPE = "Not installed in your current scope.";
@@ -461,13 +624,14 @@ export function evaluateLifecycleCapability(
   rows: readonly InstalledExtension[],
   actor: Actor,
   op: LifecycleCapabilityOp,
+  selector?: LifecycleRowSelector | null,
 ): LifecycleCapability {
   if (op === "force_delete") {
     return isPlatformAdminActor(actor)
       ? allow(op)
       : deny(op, "platform_admin_required", REASON_PLATFORM_ADMIN);
   }
-  const resolution = resolveLifecycleScope(rows, actor);
+  const resolution = resolveLifecycleScope(rows, actor, selector);
   if (!resolution.ok) {
     return resolution.code === "no_addressable_row"
       ? deny(op, "no_addressable_row", noAddressableRowReason(rows, actor))
@@ -493,12 +657,13 @@ export function evaluateLifecycleCapability(
 export function evaluateLifecycleCapabilities(
   rows: readonly InstalledExtension[],
   actor: Actor,
+  selector?: LifecycleRowSelector | null,
 ): LifecycleCapabilityMap {
   return {
-    archive: evaluateLifecycleCapability(rows, actor, "archive"),
-    activate: evaluateLifecycleCapability(rows, actor, "activate"),
-    uninstall: evaluateLifecycleCapability(rows, actor, "uninstall"),
-    force_delete: evaluateLifecycleCapability(rows, actor, "force_delete"),
+    archive: evaluateLifecycleCapability(rows, actor, "archive", selector),
+    activate: evaluateLifecycleCapability(rows, actor, "activate", selector),
+    uninstall: evaluateLifecycleCapability(rows, actor, "uninstall", selector),
+    force_delete: evaluateLifecycleCapability(rows, actor, "force_delete", selector),
   };
 }
 
@@ -516,6 +681,7 @@ export function evaluateLifecycleCapabilities(
 export async function describeLifecycleCapabilities(
   packageName: string,
   actor: Actor,
+  selector?: LifecycleRowSelector | null,
 ): Promise<LifecycleCapabilityDescription> {
   const { readInstalledExtensionsByPackageName } = await import("./canonical-store");
   let rows: InstalledExtension[] | null = null;
@@ -551,10 +717,10 @@ export async function describeLifecycleCapabilities(
     };
   }
   return {
-    resolution: resolveLifecycleScope(rows, actor),
+    resolution: resolveLifecycleScope(rows, actor, selector),
     // Scope-blind ON PURPOSE — mirrors assertNoLockedCanonicalRow.
     lockedRow: rows.find((r) => r.status === "locked") ?? null,
-    byOp: evaluateLifecycleCapabilities(rows, actor),
+    byOp: evaluateLifecycleCapabilities(rows, actor, selector),
   };
 }
 

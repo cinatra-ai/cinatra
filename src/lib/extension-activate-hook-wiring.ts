@@ -42,16 +42,23 @@ import { bumpActivationGeneration } from "@/lib/extension-activation-generation"
  * `setExtensionActivateHook(null)`).
  */
 export function wireExtensionActivateHook(): void {
-  setExtensionActivateHook(async (packageName, orgId, version) => {
+  setExtensionActivateHook(async (packageName, orgId, version, anchor) => {
     const { runHostExtensionInstallAndActivate } = await import("@/lib/extension-runtime-activate");
     // Forward the REQUESTED install/target version (the dispatcher passes
     // `ref.version`) so an UPDATE installs the NEW version, not the stale version
     // still recorded on the canonical row. `runHostExtensionInstallAndActivate`
     // falls back to the row's version when this is undefined; forward it ONLY when
     // defined so a legacy 2-arg invocation stays a 2-arg downstream call.
-    return version === undefined
-      ? runHostExtensionInstallAndActivate(packageName, orgId ?? null)
-      : runHostExtensionInstallAndActivate(packageName, orgId ?? null, version);
+    //
+    // cinatra#2698: `anchor` (the target row's owner-level tier) travels the same
+    // way — forwarded only when the dispatcher supplied it, so every pre-#2698
+    // call shape reaches the host unchanged.
+    if (version === undefined) {
+      return runHostExtensionInstallAndActivate(packageName, orgId ?? null);
+    }
+    return anchor === undefined
+      ? runHostExtensionInstallAndActivate(packageName, orgId ?? null, version)
+      : runHostExtensionInstallAndActivate(packageName, orgId ?? null, version, anchor);
   });
 
   // Wire the install-op JOURNAL-phase reader so the dispatcher's rollback + re-run

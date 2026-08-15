@@ -140,8 +140,13 @@ describe("cinatra#2696 — the dispatcher writes the row at the THREADED anchor"
       ownerId: PLATFORM_OWNER_SENTINEL,
       organizationId: null,
     });
-    // The pipeline resolves the SAME (package, org) row — org-NULL, not org-1.
-    expect(fireExtensionActivate).toHaveBeenCalledWith("@v/ws-artifact", null, "1.0.0");
+    // The pipeline resolves the SAME row — org-NULL, not org-1 — and since
+    // cinatra#2698 it is handed the anchor TIER as well: at the org-NULL scope
+    // a product-installed workspace row and a bundled platform anchor share an
+    // `organization_id`, so the org alone no longer identifies the row.
+    expect(fireExtensionActivate).toHaveBeenCalledWith("@v/ws-artifact", null, "1.0.0", {
+      ownerLevel: "workspace",
+    });
   });
 
   it("the workspace row is resolved from ANOTHER organization's actor — one row, app-wide", async () => {
