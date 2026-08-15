@@ -185,15 +185,7 @@ const INVENTORY: Record<string, Entry> = {
 
   // ── not a renderer ────────────────────────────────────────────────────────
   "src/lib/auth-redirect-target.ts": {
-    why: "The shared predicate this whole sweep is built on.",
-    disposition: "not-a-renderer",
-  },
-  "src/app/notifications/feed-view-model.ts": {
-    why: "Applies the predicate; mints no href of its own.",
-    disposition: "not-a-renderer",
-  },
-  "src/lib/approvals/approvals-mcp.ts": {
-    why: "Applies the predicate to the public row whitelist; mints no href of its own.",
+    why: "Home of the shared predicate this whole sweep is built on (with the other pure path predicates); mints no href.",
     disposition: "not-a-renderer",
   },
   "src/app/providers.tsx": {
