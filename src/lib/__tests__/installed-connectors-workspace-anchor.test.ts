@@ -22,11 +22,16 @@ let listCalls: Array<{ kind?: string; organizationId?: string | null }> = [];
 let allRows: InstalledExtension[] = [];
 /** Package names whose card record passes the (stubbed) trust gate. */
 let trustedCards = new Set<string>();
+/** When set, the Nth discovery read throws (canonical-store outage). */
+let throwOnListCall: number | null = null;
 
 vi.mock("@cinatra-ai/extensions/canonical-store", () => ({
   readInstalledExtensionsByPackageNames: async () => new Map(),
   listInstalledExtensions: async (filters: { kind?: string; organizationId?: string | null }) => {
     listCalls.push(filters);
+    if (throwOnListCall !== null && listCalls.length === throwOnListCall) {
+      throw new Error("canonical store outage");
+    }
     // Mirror the store's real filter semantics: `organizationId: null` means
     // `organization_id IS NULL`; a string means exact equality.
     return allRows.filter((r) => {
@@ -84,6 +89,7 @@ const actor = (organizationId: string | null) =>
 beforeEach(() => {
   listCalls = [];
   allRows = [];
+  throwOnListCall = null;
   trustedCards = new Set([RUNTIME_ONLY]);
 });
 
@@ -142,11 +148,15 @@ describe("listRuntimeOnlyConnectorCards — org-NULL workspace rows are discover
     expect(await listRuntimeOnlyConnectorCards(actor(ORG_A))).toEqual([]);
   });
 
-  it("a canonical-store outage on either read still yields no cards (fail closed)", async () => {
-    allRows = [workspaceRow()];
-    const { listInstalledExtensions } = await import("@cinatra-ai/extensions/canonical-store");
-    const spy = vi.mocked(listInstalledExtensions).mockRejectedValueOnce(new Error("outage"));
-    expect(await listRuntimeOnlyConnectorCards(actor(ORG_A))).toEqual([]);
-    spy.mockRestore();
+  it("a canonical-store outage on EITHER read still yields no cards (fail closed)", async () => {
+    // Both reads are awaited together, so an outage on either arm must take the
+    // whole discovery down to the unchanged fail-closed posture.
+    for (const failing of [1, 2]) {
+      listCalls = [];
+      allRows = [workspaceRow()];
+      throwOnListCall = failing;
+      expect(await listRuntimeOnlyConnectorCards(actor(ORG_A)), `read ${failing}`).toEqual([]);
+      throwOnListCall = null;
+    }
   });
 });

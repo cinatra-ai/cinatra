@@ -115,6 +115,12 @@ function memberActor(orgId: string) {
 beforeAll(async () => {
   if (!HAS_DB) return;
   process.env.SUPABASE_SCHEMA = TEST_SCHEMA;
+  // The install-time access contract validates its policy through
+  // @cinatra-ai/agents/auth-policy, whose import graph asserts an auth secret is
+  // configured at module load. Nothing in this fixture authenticates anybody —
+  // a placeholder satisfies the load-time assertion so the ACCESS WRITE can be
+  // exercised against the real DB.
+  process.env.BETTER_AUTH_SECRET ||= "test-only-placeholder-2697";
 
   const admin = new Client({ connectionString: DB_URL });
   await admin.connect();
