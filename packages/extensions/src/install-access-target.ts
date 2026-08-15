@@ -10,11 +10,18 @@
 //
 // Semantics (deliberate — see issue #805):
 //  - The canonical `installed_extension` row for connector/artifact/workflow
-//    stays ORG-ANCHORED (ownerLevel "organization") — the row identity is a
-//    lookup key (resolveConnectorResource hard-codes it) and there is no
-//    "project" owner level. The chosen audience is carried by the ACCESS
-//    POLICY visibility tiers, which enforceExtensionAccess already evaluates
-//    ("team:<id>" / "project:<id>" / workspace).
+//    stays ORG-ANCHORED (ownerLevel "organization") for the organization /
+//    team / project targets — the row identity is a lookup key
+//    (resolveConnectorResource hard-codes it) and there is no "project" owner
+//    level. The chosen audience is carried by the ACCESS POLICY visibility
+//    tiers, which enforceExtensionAccess already evaluates ("team:<id>" /
+//    "project:<id>" / workspace).
+//    SUPERSEDED FOR THE TWO WORKSPACE TARGETS (cinatra#2694/#2695): the
+//    `workspace` and `admin` targets resolve to the WORKSPACE ANCHOR tuple
+//    (ownerLevel "workspace", organizationId NULL, ownerId
+//    PLATFORM_OWNER_SENTINEL) — see accessTargetToRowOwnership below. Those
+//    two targets are therefore NOT org-anchored; every other target is
+//    unchanged.
 //  - organization target → the kind's install default: return undefined so
 //    setExtensionInstallAccess applies it — workspace for artifact/workflow,
 //    and for a CONNECTOR the policy derived from its own cinatra/config.json
@@ -25,6 +32,9 @@
 
 import { z } from "zod";
 import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy-types";
+
+import { PLATFORM_OWNER_SENTINEL } from "./canonical-types";
+import type { ExtensionOwnerLevel } from "./canonical-types";
 
 // ---------------------------------------------------------------------------
 // Server-action boundary rule (cinatra#1602 — the enforced picker contract).
@@ -125,5 +135,111 @@ export function accessTargetToInstallPolicy(
     runDataVisibility: [visibility],
     runExecuteVisibility: [visibility],
     allowRunSharing: false,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Target → ROW-OWNERSHIP contract (cinatra#2694 / S1 #2695).
+//
+// The second half of the target mapping: which canonical `installed_extension`
+// row identity an install at each target ANCHORS to. Structurally the
+// `RowOwnership` tuple the dependency planner / install batch thread
+// (`src/lib/extension-dependency-plan.ts`) — declared here independently so
+// this module stays PURE (no server-only import chain).
+//
+// This module is the CONTRACT only. The write path that persists the tuple
+// end-to-end (install action → dependency batch → registry/dispatcher) is S2
+// (#2696); the connector substrate is S3 (#2697); lifecycle ops are S4
+// (#2698). Nothing here writes a row.
+// ---------------------------------------------------------------------------
+
+/**
+ * The canonical row-identity tuple an install anchors to —
+ * `(organizationId, ownerLevel, ownerId)`. Named `rowOwnership` upstream
+ * (NEVER "scope"): this is WHO OWNS the installed row, not who may USE it
+ * (that is the audience policy above).
+ */
+export type InstallRowOwnership = {
+  ownerLevel: ExtensionOwnerLevel;
+  ownerId: string | null;
+  organizationId: string | null;
+};
+
+/**
+ * The WORKSPACE ANCHOR tuple — the app-wide row identity the two workspace
+ * targets resolve to. `organizationId` is NULL by construction, which is
+ * exactly what makes the row reach every organization: the cross-org guard in
+ * enforceExtensionAccess only fences rows that HAVE an owning org, so an
+ * org-NULL anchor is evaluated on its audience tier alone (the same mechanism
+ * the system's bundled workspace-tier extensions already ride).
+ *
+ * The DB admits this shape today — no schema change: the platform-invariant
+ * CHECK `installed_extension_platform_invariant_chk` explicitly allows
+ * `owner_level='workspace' AND organization_id IS NULL AND
+ * owner_id='__platform__'` (src/lib/drizzle-store.ts), and the org-NULL
+ * partial identity / one-default indexes
+ * (`installed_extension_identity_platform_v_idx`,
+ * `installed_extension_one_default_platform_idx`, both `WHERE organization_id
+ * IS NULL`, keyed on `owner_level`) key workspace rows apart from
+ * platform-bundled ones (src/lib/extension-grant-schema.ts).
+ *
+ * `ownerId` is the `__platform__` sentinel EXPLICITLY rather than null: the
+ * canonical store would normalize null at this tier anyway
+ * (`platformizeOwnerId`), but the CHECK constraint names the sentinel, so the
+ * contract states it rather than depending on a downstream normalization.
+ */
+export const WORKSPACE_ANCHOR_ROW_OWNERSHIP: InstallRowOwnership = Object.freeze({
+  ownerLevel: "workspace",
+  ownerId: PLATFORM_OWNER_SENTINEL,
+  organizationId: null,
+});
+
+/**
+ * Map the validated target to the canonical row-ownership tuple.
+ *
+ *  - workspace / admin → {@link WORKSPACE_ANCHOR_ROW_OWNERSHIP}. The
+ *    installer's active organization is IGNORED (so is `target.id`, which the
+ *    picker stamps with the active org id — a client-forged id cannot move the
+ *    anchor). These two targets are the ONLY ones whose row is not org-anchored.
+ *  - organization / team / project → UNCHANGED: the canonical default derived
+ *    from the installer's active organization, byte-identical to
+ *    `defaultRowOwnership(activeOrganizationId)` in
+ *    src/lib/extension-dependency-plan.ts (an org install is
+ *    `organization`-owned; a null-org install is `platform`-owned with a null
+ *    ownerId the canonical store platformizes on write). A team / project
+ *    target narrows the AUDIENCE, never the row anchor — there is no team or
+ *    project owner level on this path.
+ */
+export function accessTargetToRowOwnership(
+  target: InstallAccessTarget,
+  activeOrganizationId: string | null,
+): InstallRowOwnership {
+  if (target.level === "workspace" || target.level === "admin") {
+    return { ...WORKSPACE_ANCHOR_ROW_OWNERSHIP };
+  }
+  const orgId = activeOrganizationId ?? null;
+  return {
+    ownerLevel: orgId ? "organization" : "platform",
+    ownerId: orgId ?? null,
+    organizationId: orgId ?? null,
+  };
+}
+
+/**
+ * The whole target→ownership contract in one call: the row anchor plus the
+ * audience policy the install persists. This is the seam S2 (#2696) threads
+ * end-to-end; callers that need only one half keep using
+ * {@link accessTargetToRowOwnership} / {@link accessTargetToInstallPolicy}.
+ *
+ * `policy: undefined` keeps its established meaning — the organization target
+ * defers to the kind's install default (see accessTargetToInstallPolicy).
+ */
+export function resolveInstallAccessTargetContract(
+  target: InstallAccessTarget,
+  activeOrganizationId: string | null,
+): { rowOwnership: InstallRowOwnership; policy: AgentAuthPolicy | undefined } {
+  return {
+    rowOwnership: accessTargetToRowOwnership(target, activeOrganizationId),
+    policy: accessTargetToInstallPolicy(target),
   };
 }

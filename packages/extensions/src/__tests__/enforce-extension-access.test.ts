@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 
 import {
   evaluateExtensionAccess,
+  hasAdminStandingOverExtension,
   type EvaluateExtensionAccessInput,
   type ExtensionOwnerContext,
 } from "../enforce-extension-access";
@@ -207,6 +208,117 @@ describe("evaluateExtensionAccess — owner-aware admin tier", () => {
         }),
       ).allowed,
     ).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2695 S1 — WORKSPACE-ANCHORED rows (owner_level 'workspace',
+// organization_id NULL, owner_id '__platform__'): the anchor a "Workspace: All"
+// / "Workspace: Admins only" install resolves to. Enforcement is UNCHANGED by
+// that slice; these pin the two properties the slice depends on, so a later
+// change to the guard or the standing rule cannot silently move them.
+// ---------------------------------------------------------------------------
+describe("evaluateExtensionAccess — workspace-anchored (org-NULL) rows", () => {
+  const workspaceAnchor: ExtensionOwnerContext = {
+    ownerLevel: "workspace",
+    ownerId: "__platform__",
+    organizationId: null,
+  };
+
+  it("the cross-org guard does NOT fence an org-NULL row — the workspace tier reads APP-WIDE", () => {
+    for (const org of [ORG, OTHER_ORG]) {
+      for (const op of ["list", "read", "use", "execute"] as const) {
+        expect(
+          evaluateExtensionAccess(
+            base({
+              owner: workspaceAnchor,
+              actor: human("m", { organizationId: org, orgRole: "member" }),
+              policy: policy({
+                runListVisibility: "workspace",
+                runDataVisibility: "workspace",
+                runExecuteVisibility: "workspace",
+              }),
+              op,
+            }),
+          ),
+        ).toEqual({ allowed: true });
+      }
+    }
+  });
+
+  it("ADMIN standing over an org-NULL row is PLATFORM ADMINS ONLY (fails closed for org admins)", () => {
+    const adminPolicy = policy({
+      runListVisibility: "admin",
+      runDataVisibility: "admin",
+      runExecuteVisibility: "admin",
+    });
+    for (const org of [ORG, OTHER_ORG]) {
+      expect(
+        hasAdminStandingOverExtension(
+          human("oa", { organizationId: org, orgRole: "org_admin" }),
+          workspaceAnchor,
+        ),
+      ).toBe(false);
+      expect(
+        hasAdminStandingOverExtension(
+          human("oo", { organizationId: org, orgRole: "org_owner" }),
+          workspaceAnchor,
+        ),
+      ).toBe(false);
+      expect(
+        hasAdminStandingOverExtension(
+          human("pa", { organizationId: org, platformRole: "platform_admin" }),
+          workspaceAnchor,
+        ),
+      ).toBe(true);
+      // …and the same standing rule decides the admin AUDIENCE tier.
+      expect(
+        evaluateExtensionAccess(
+          base({
+            owner: workspaceAnchor,
+            actor: human("oa", { organizationId: org, orgRole: "org_admin" }),
+            policy: adminPolicy,
+            op: "read",
+          }),
+        ),
+      ).toEqual({ allowed: false, reason: "not_visible" });
+      expect(
+        evaluateExtensionAccess(
+          base({
+            owner: workspaceAnchor,
+            actor: human("pa", { organizationId: org, platformRole: "platform_admin" }),
+            policy: adminPolicy,
+            op: "read",
+          }),
+        ).allowed,
+      ).toBe(true);
+    }
+  });
+
+  it("MANAGE over an org-NULL row is refused to an org admin of any organization", () => {
+    for (const org of [ORG, OTHER_ORG]) {
+      expect(
+        evaluateExtensionAccess(
+          base({
+            owner: workspaceAnchor,
+            actor: human("oa", { organizationId: org, orgRole: "org_admin" }),
+            op: "manage",
+          }),
+        ),
+      ).toEqual({ allowed: false, reason: "manage_requires_admin" });
+    }
+  });
+
+  it("an ORG-ANCHORED row is UNCHANGED — a different-org member is still fenced", () => {
+    expect(
+      evaluateExtensionAccess(
+        base({
+          owner: orgOwnerCtx,
+          actor: human("m", { organizationId: OTHER_ORG, orgRole: "member" }),
+          op: "use",
+        }),
+      ),
+    ).toEqual({ allowed: false, reason: "cross_org" });
   });
 });
 
