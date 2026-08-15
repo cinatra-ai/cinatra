@@ -33,8 +33,14 @@
 //
 // This module inverts the order and closes the gap:
 //
-//     build → emit → READ BACK (bounded retry) → park            (verified)
+//     build → emit → READ BACK (bounded retry) → persist → park  (verified)
 //                                             ↘ fail with a name (unverified)
+//
+// The `persist` step (cinatra#2748) writes the DURABLE fallback row for the
+// verified artifact. The event log expires; the row does not. Redis stays the
+// hot path and the row answers only when the frame is gone. The step is
+// deliberately NON-FATAL: the frame has already been proven readable, so a store
+// blip must not lose an otherwise healthy run.
 //
 // The read-back deliberately goes through the very reader the UI uses, so
 // "verified" means "the human will actually see a gate", not "we called a
@@ -88,6 +94,22 @@ export type ParkRunOnHumanGateOptions = {
   readonly emitInterrupt: (artifact: HumanGateArtifact) => void | Promise<void>;
   /** Reads the run's latest readable gate back out of the event log. */
   readonly readBackGate: (runId: string) => Promise<ReadBackGate>;
+  /**
+   * Persists the DURABLE fallback row for the gate (cinatra#2748). Called ONCE,
+   * after the emitted artifact has been read back and verified, and never on a
+   * path that fails the run — so a row exists exactly when a human really was
+   * shown a gate.
+   *
+   * NON-FATAL by design. The event-log frame is the hot path and has ALREADY
+   * been verified readable at this point, so the gate is answerable with or
+   * without the row. Failing the run because its safety net could not be written
+   * would turn a store blip into a lost run, which is a worse outcome than the
+   * expiry the row protects against. A failure is logged loudly instead.
+   *
+   * Optional so callers with no durable store (tests, and any future gate whose
+   * artifact already lives in a table) stay unchanged.
+   */
+  readonly persistArtifact?: (artifact: HumanGateArtifact) => Promise<void>;
   /** `from -> pending_approval`. Only ever called after a verified read-back. */
   readonly parkRun: () => Promise<void>;
   /** `from -> failed`, carrying the named error. */
@@ -150,6 +172,7 @@ export async function parkRunOnHumanGate(
     readBackGate,
     parkRun,
     failRun,
+    persistArtifact,
   } = options;
   const attempts = Math.max(1, options.attempts ?? DEFAULT_ATTEMPTS);
   const delayMs = Math.max(0, options.delayMs ?? DEFAULT_DELAY_MS);
@@ -231,6 +254,21 @@ export async function parkRunOnHumanGate(
     if (!seen.xRenderer) {
       lastMiss = "the readable approval prompt carries no renderer";
       continue;
+    }
+    // VERIFIED. The durable fallback row is written here — after the read-back
+    // proves the artifact reached the event log, and before the run is parked —
+    // so the row and the frame carry the SAME verified gate. A re-emit writes
+    // too: its row is idempotent on the gate identity and monotonic on time.
+    if (persistArtifact) {
+      try {
+        await persistArtifact(artifact);
+      } catch (err) {
+        console.error(
+          `[human-gate-park] run=${runId} could not persist the durable gate row ` +
+            `for ${gateLabel} (${describe(err)}); the verified event-log frame ` +
+            `remains the gate's artifact`,
+        );
+      }
     }
     if (alreadyParked) {
       console.log(
