@@ -2,35 +2,35 @@
   "note": "Route-graph ratchet baseline (no-new-rot ratchet). Each entry is the CURRENT reachable-first-party-module-count ceiling for a LOCKED FIXED_ROUTES route (the primary dev-perf 'first-party graph pressure' metric from scripts/route-graph.mjs). The gate fails when a tracked route's count grows BEYOND its ceiling and when the committed baseline raises any ceiling vs the base branch WITHOUT a matching absorb record. Counts are captured WITH the companion extension repos cloned pinned (exactly as CI does via clone-extensions) so they reproduce in CI. Regenerate with `node scripts/audit/route-graph-ratchet.mjs --write-baseline` after cloning the extensions — a ceiling should only ever be LOWERED as barrel imports are narrowed, and is never raised SILENTLY. A sanctioned raise must be ANNOTATED: a sibling `absorbs` record `route -> { from, to, reason, pr }` whose from/to exactly match the raise vs the base branch (from = the base ceiling, to = the new committed ceiling, reason = why the growth is accepted, pr = the PR carrying the absorbed change). The gate validates records strictly (malformed/stale/orphan records fail closed; a carried-forward record may not be deleted while its raised ceiling is kept) and prints a LOUD NOTICE line for every absorbed raise. The tracked route set is route-graph.mjs FIXED_ROUTES; change it there, then regenerate.",
   "routes": {
     "/sign-in": 218,
-    "/api/mcp": 1712,
-    "/chat": 1791,
-    "/api/a2a": 1717,
-    "/api/llm-bridge": 1727
+    "/api/mcp": 1713,
+    "/chat": 1792,
+    "/api/a2a": 1718,
+    "/api/llm-bridge": 1728
   },
   "absorbs": {
     "/api/a2a": {
-      "from": 1716,
-      "to": 1717,
-      "pr": 2796,
-      "reason": "cinatra#2766 (PR #2796 carries this record; the reason names the issue): the required Nango connector pin moves from 182e542b to 61e91277 so every Google connector card shows the authorized Google account instead of the app login (nango-connector#62); that connector commit adds ONE reachable first-party module (src/google-account-identity.ts, imported by src/nango.ts on the register path), so every locked route that reaches the connector barrel grows by exactly one module. Bisected: the connector at fba9afe (the commit before #62) is at-ceiling; at 61e91277 it is +1 on these four routes and unchanged on /sign-in. Not a barrel-widening in the app: the app imports nothing new."
+      "from": 1717,
+      "to": 1718,
+      "pr": 2798,
+      "reason": "cinatra#2701 (PR #2798 carries this record; the reason names the issue): the /configuration admin-only rule gains ONE shared, pure predicate module (src/lib/configuration-href.ts: isConfigurationHref / configurationHrefForViewer) that the approvals MCP output, the notifications feed view-model and the command menu all apply, so no member surface mints a /configuration link a non-admin cannot follow. The approvals MCP output is on the MCP registry graph, so the module is reachable from every locked route that mounts the registry: +1 on these four routes, /sign-in unchanged. Measured with the pinned extension tree; the alternative homes (an auth module = high-risk path; the client-only viewer context = a client module on a server graph; three inline copies = the drift the inventory test exists to prevent) were rejected."
     },
     "/api/llm-bridge": {
-      "from": 1726,
-      "to": 1727,
-      "pr": 2796,
-      "reason": "cinatra#2766 (PR #2796 carries this record; the reason names the issue): the required Nango connector pin moves from 182e542b to 61e91277 so every Google connector card shows the authorized Google account instead of the app login (nango-connector#62); that connector commit adds ONE reachable first-party module (src/google-account-identity.ts, imported by src/nango.ts on the register path), so every locked route that reaches the connector barrel grows by exactly one module. Bisected: the connector at fba9afe (the commit before #62) is at-ceiling; at 61e91277 it is +1 on these four routes and unchanged on /sign-in. Not a barrel-widening in the app: the app imports nothing new."
+      "from": 1727,
+      "to": 1728,
+      "pr": 2798,
+      "reason": "cinatra#2701 (PR #2798 carries this record; the reason names the issue): the /configuration admin-only rule gains ONE shared, pure predicate module (src/lib/configuration-href.ts: isConfigurationHref / configurationHrefForViewer) that the approvals MCP output, the notifications feed view-model and the command menu all apply, so no member surface mints a /configuration link a non-admin cannot follow. The approvals MCP output is on the MCP registry graph, so the module is reachable from every locked route that mounts the registry: +1 on these four routes, /sign-in unchanged. Measured with the pinned extension tree; the alternative homes (an auth module = high-risk path; the client-only viewer context = a client module on a server graph; three inline copies = the drift the inventory test exists to prevent) were rejected."
     },
     "/api/mcp": {
-      "from": 1711,
-      "to": 1712,
-      "pr": 2796,
-      "reason": "cinatra#2766 (PR #2796 carries this record; the reason names the issue): the required Nango connector pin moves from 182e542b to 61e91277 so every Google connector card shows the authorized Google account instead of the app login (nango-connector#62); that connector commit adds ONE reachable first-party module (src/google-account-identity.ts, imported by src/nango.ts on the register path), so every locked route that reaches the connector barrel grows by exactly one module. Bisected: the connector at fba9afe (the commit before #62) is at-ceiling; at 61e91277 it is +1 on these four routes and unchanged on /sign-in. Not a barrel-widening in the app: the app imports nothing new."
+      "from": 1712,
+      "to": 1713,
+      "pr": 2798,
+      "reason": "cinatra#2701 (PR #2798 carries this record; the reason names the issue): the /configuration admin-only rule gains ONE shared, pure predicate module (src/lib/configuration-href.ts: isConfigurationHref / configurationHrefForViewer) that the approvals MCP output, the notifications feed view-model and the command menu all apply, so no member surface mints a /configuration link a non-admin cannot follow. The approvals MCP output is on the MCP registry graph, so the module is reachable from every locked route that mounts the registry: +1 on these four routes, /sign-in unchanged. Measured with the pinned extension tree; the alternative homes (an auth module = high-risk path; the client-only viewer context = a client module on a server graph; three inline copies = the drift the inventory test exists to prevent) were rejected."
     },
     "/chat": {
-      "from": 1790,
-      "to": 1791,
-      "pr": 2796,
-      "reason": "cinatra#2766 (PR #2796 carries this record; the reason names the issue): the required Nango connector pin moves from 182e542b to 61e91277 so every Google connector card shows the authorized Google account instead of the app login (nango-connector#62); that connector commit adds ONE reachable first-party module (src/google-account-identity.ts, imported by src/nango.ts on the register path), so every locked route that reaches the connector barrel grows by exactly one module. Bisected: the connector at fba9afe (the commit before #62) is at-ceiling; at 61e91277 it is +1 on these four routes and unchanged on /sign-in. Not a barrel-widening in the app: the app imports nothing new."
+      "from": 1791,
+      "to": 1792,
+      "pr": 2798,
+      "reason": "cinatra#2701 (PR #2798 carries this record; the reason names the issue): the /configuration admin-only rule gains ONE shared, pure predicate module (src/lib/configuration-href.ts: isConfigurationHref / configurationHrefForViewer) that the approvals MCP output, the notifications feed view-model and the command menu all apply, so no member surface mints a /configuration link a non-admin cannot follow. The approvals MCP output is on the MCP registry graph, so the module is reachable from every locked route that mounts the registry: +1 on these four routes, /sign-in unchanged. Measured with the pinned extension tree; the alternative homes (an auth module = high-risk path; the client-only viewer context = a client module on a server graph; three inline copies = the drift the inventory test exists to prevent) were rejected."
     }
   }
 }

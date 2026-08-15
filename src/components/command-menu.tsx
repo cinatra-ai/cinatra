@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/command";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useViewerIsAdmin } from "@/components/crumb-epoch-context";
-import { isConfigurationHref } from "@/lib/auth-redirect-target";
+import { isConfigurationHref } from "@/lib/configuration-href";
 
 /** Exported for tests: titles must be unique within each group (React keys). */
 export const navGroups = [

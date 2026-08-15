@@ -21,7 +21,7 @@
 // carried as `actionable` + `decideKind`. See {@link isApprovalActionable}.
 // ---------------------------------------------------------------------------
 
-import { configurationHrefForViewer } from "@/lib/auth-redirect-target";
+import { configurationHrefForViewer } from "@/lib/configuration-href";
 import type { UnifiedFeedItem } from "@/lib/approvals/unified-feed";
 import type { AppNotification } from "@cinatra-ai/notifications/types";
 import type { RowEligibility } from "@/lib/approvals/sources/types";

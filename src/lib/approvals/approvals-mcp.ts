@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { McpRuntimeToolServer } from "@cinatra-ai/mcp-server";
 import { mcpRequestContextStorage } from "@cinatra-ai/mcp-server";
 
-import { configurationHrefForViewer } from "@/lib/auth-redirect-target";
+import { configurationHrefForViewer } from "@/lib/configuration-href";
 import { approvalSourceRegistry } from "./sources/registry";
 import type {
   ApprovalAction,
