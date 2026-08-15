@@ -1,15 +1,27 @@
 /**
- * Author-scoped READ-ONLY access to the agent-creation request detail surface
- * (Part of #1549; #1552). The request's own author (a non-admin) may VIEW their
- * request's detail read-only; a non-admin non-author is refused with the SAME
- * response as a non-existent id (404-hide); the decide affordances render only
- * for an admin. The WEB route now applies the same admin-or-author READ RULE as
- * the MCP read predicate in mcp/agent-creation-request-handlers.ts — parity is
- * on the ACCESS RULE. The web route ADDITIONALLY 404-hides the non-author case
- * (a missing id and an existing-but-not-yours id are byte-identical), a stronger
- * leak-hiding guarantee the token-gated MCP surface does not currently make
- * (see the handler test's note on that current, out-of-#1552-scope
- * divergence).
+ * Access to the agent-creation request detail surface — the SCREEN's read rule
+ * (Part of #1549; #1552) and the WEB ROUTE's gate (#2700).
+ *
+ * THE WEB ROUTE IS PLATFORM-ADMIN ONLY since cinatra#2700 (epic #2699). The page
+ * stays at `/configuration/agents/approvals/[id]` and falls under the
+ * `/configuration` gate like every other route in the segment. The epic states
+ * the consequence plainly: a non-admin author loses the approval-status read
+ * they had, and S2 removes the member-facing links that used to mint a path
+ * here, so nothing dead-ends. The last describe block below pins that gate — it
+ * asserts the gate's PRESENCE where it used to assert its absence.
+ *
+ * THE SCREEN KEEPS ITS OWN admin-or-author READ RULE, deliberately: it is the
+ * layer that reads the request row (and thus its authorId), and the SAME rule
+ * serves the token-gated MCP read predicate in
+ * mcp/agent-creation-request-handlers.ts — parity is on the ACCESS RULE, and
+ * that predicate is not reached through the web route at all. The screen
+ * ADDITIONALLY 404-hides the non-author case (a missing id and an
+ * existing-but-not-yours id are byte-identical), a stronger leak-hiding
+ * guarantee the token-gated MCP surface does not currently make (see the handler
+ * test's note on that current, out-of-#1552-scope divergence). Its author arm is
+ * now unreachable THROUGH THE PAGE — the route gate refuses a non-admin first —
+ * but the rule stays stated where the row is read, so no surface that mounts the
+ * screen can widen it.
  *
  * Strategy: file-grep source-invariant assertions scoped to the
  * AgentApprovalDetailScreen body — matching this package's render-test pattern
@@ -58,10 +70,11 @@ function detailScreen(): string {
 }
 
 describe("AgentApprovalDetailScreen author-scoped read access (#1552)", () => {
-  it("author-read-allow: gates on an authenticated session (not the admin-only gate) and derives admin + author from the row", () => {
+  it("author-read-allow: the SCREEN gates on an authenticated session and derives admin + author from the row", () => {
     const body = detailScreen();
-    // The blanket admin gate is gone; only an authenticated session is required
-    // at the screen boundary (the outer page gate can't know the authorId).
+    // The screen boundary requires only an authenticated session (it cannot
+    // decide author-ness before it reads the row). The ROUTE that mounts it is
+    // admin-only since #2700 — pinned in the last describe block below.
     expect(body).toMatch(/requireAuthSession\(\)/);
     expect(body).not.toMatch(/requireAdminSession\(/);
     // isAdmin from the session; isAuthor from the READ row's authorId vs the
@@ -105,12 +118,19 @@ describe("AgentApprovalDetailScreen author-scoped read access (#1552)", () => {
   });
 });
 
-describe("the host route gate (#1552)", () => {
-  it("requires only an authenticated session — the author-or-admin decision lives in the screen where the row is read", () => {
+describe("the host route gate (#1552 → #2700)", () => {
+  it("requires the PLATFORM-ADMIN session — /configuration is the admin area throughout", () => {
     const page = readFileSync(pagePath, "utf8");
-    // Unauthenticated callers are still redirected to /sign-in by
-    // requireAuthSession(); the admin-only gate is loosened to auth-only.
-    expect(page).toMatch(/requireAuthSession\(\)/);
-    expect(page).not.toMatch(/requireAdminSession/);
+    // #2700 reversed the #1552 carve-out: the page no longer settles for an
+    // authenticated session. An unauthenticated caller is still redirected to
+    // /sign-in; a signed-in non-admin now lands on /not-authorized.
+    expect(page).toMatch(/await requireAdminSession\(\)/);
+    expect(page).not.toMatch(/requireAuthSession/);
+  });
+
+  it("states the consequence the epic decided: a non-admin author loses this read", () => {
+    const page = readFileSync(pagePath, "utf8");
+    expect(page).toMatch(/cinatra#2700/);
+    expect(page).toMatch(/non-admin author/);
   });
 });

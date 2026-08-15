@@ -1,6 +1,6 @@
 "use server";
 
-import { requireAuthSession } from "@/lib/auth-session";
+import { requireAdminSession } from "@/lib/auth-session";
 import {
   loadChangeSet,
   resolveExternalFreshness,
@@ -30,7 +30,14 @@ export async function restoreChangeSetAction(input: {
   | { ok: true; restoreChangeSetId: string; appliedEventCount: number }
   | { ok: false; reason: string }
 > {
-  const session = await requireAuthSession();
+  // PLATFORM-ADMIN gate (cinatra#2700, epic #2699). Restore is a
+  // `/configuration/artifacts` capability, and the whole segment is admin-only,
+  // so member self-service restore retires HERE — at the action — not only on
+  // the page: a server action never passes through the segment layout, and the
+  // affordances S2 removes must not stay invokable underneath. The per-object
+  // authorization below is unchanged and still runs on top of this gate (an
+  // admin is NOT granted a per-object bypass).
+  const session = await requireAdminSession();
   const orgId = session.session?.activeOrganizationId ?? null;
   if (!orgId) {
     return { ok: false, reason: "no active organization on session" };

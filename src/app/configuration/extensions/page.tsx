@@ -4,9 +4,15 @@ import { InstanceSetupRequiredCard } from "@/components/instance-setup-required-
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
+import { requireAdminSession } from "@/lib/auth-session";
 import { readInstanceIdentity } from "@/lib/instance-identity-store";
 
 /**
+ * The extensions list is part of the platform-admin area (cinatra#2700, epic
+ * #2699): the screen keeps every affordance it renders (Upload, per-entry
+ * Settings), and those affordances stop dead-ending because only an admin —
+ * who may open their admin-gated destinations — now reaches this page.
+ *
  * On an unconfigured host, `loadInstalledCardRows` (inside
  * `RegistryCatalogScreen`) awaits `loadVerdaccioConfigForReads()` unguarded,
  * which throws `InstanceNamespaceNotConfiguredError` — a hard 500 (cinatra#2753).
@@ -22,6 +28,8 @@ export default async function ExtensionsPage({
 }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
+  await requireAdminSession();
+
   const identity = readInstanceIdentity();
 
   if (!identity || !identity.instanceNamespace) {

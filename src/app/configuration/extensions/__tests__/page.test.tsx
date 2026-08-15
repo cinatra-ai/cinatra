@@ -18,6 +18,20 @@ vi.mock("@/lib/instance-identity-store", () => ({
   readInstanceIdentity: vi.fn(),
 }));
 
+// The page opens with the platform-admin gate (cinatra#2700, epic #2699), whose
+// real implementation reads `headers()` and so cannot run outside a request
+// scope. This suite is about the #2753 setup-required BRANCH, not about
+// authorization, so it runs as an admin and lets the branch under test be
+// reached. The gate itself is pinned in
+// src/app/configuration/__tests__/configuration-admin-gate.test.ts, and its
+// live denial in tests/e2e/rbac/rbac-authorization.spec.ts.
+vi.mock("@/lib/auth-session", () => ({
+  requireAdminSession: vi.fn(async () => ({
+    user: { id: "user_admin", role: "user,admin" },
+    session: { activeOrganizationId: "org_1" },
+  })),
+}));
+
 // A mocked async server "component" that is JSX-rendered (`<RegistryCatalogScreen ... />`),
 // not directly invoked by ExtensionsPage — matching how the real page composes
 // it. React (or a real renderer) resolves it at render time, so this test

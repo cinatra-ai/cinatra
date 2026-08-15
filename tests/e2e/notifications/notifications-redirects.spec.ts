@@ -40,7 +40,15 @@ test.describe("§VII — E8 legacy approvals routes redirect to the unified surf
     expect(await landsOn(page, "/configuration/approvals/marketplace")).toBe("/notifications");
   });
 
-  test("§VII · the old detail shape → the SURVIVING /configuration/agents/approvals/[id] (before the wildcard)", async ({
+  // The surviving detail route is PLATFORM-ADMIN ONLY since cinatra#2700 (epic
+  // #2699): `/configuration` is the admin area throughout, so the old
+  // author-readable carve-out on this page is gone. The expectation below still
+  // reads "lands on the detail path" because THIS suite's viewer is a platform
+  // admin (tests/e2e/notifications/auth.setup.ts promotes it before sign-in).
+  // A non-admin session following the same deep link is redirected once more,
+  // to /not-authorized — the redirect rule under test here is unchanged, only
+  // who may see the destination is.
+  test("§VII · the old detail shape → the SURVIVING /configuration/agents/approvals/[id] (before the wildcard), for the admin viewer", async ({
     page,
   }) => {
     expect(await landsOn(page, "/configuration/approvals/agents/acr-uat-inbox-1")).toBe(
