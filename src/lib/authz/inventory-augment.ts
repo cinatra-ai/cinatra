@@ -247,6 +247,17 @@ export const PRIMITIVE_CLASSIFICATIONS: Record<string, PrimitiveClassification> 
   context_list_eligible_assertions: { resourceType: "artifact", action: "list", status: "enforced" },
   context_resolve:                  { resourceType: "artifact", action: "read", status: "enforced" },
 
+  // ───── connector inventory (connector_instance) ─────
+  // cinatra#2723 — the platform's read-only connector inventory. connector_instance
+  // /list (effect read, requiredPermission connector.read) is the same coarse
+  // Posture-B class every other connector LIST primitive carries. The REAL
+  // authority is per-row: each `nango_connection` row runs through the canonical
+  // per-connection `use` gate (decideConnectionUse) before it can be projected,
+  // so an unauthorized row never serializes even for a caller who clears this
+  // boundary. Classified on connector_instance also keeps the W4 cannot-express
+  // posture (an agent-run OBO with a sub-org ceiling denies fail-closed).
+  connector_inventory_list: { resourceType: "connector_instance", action: "list", status: "enforced" },
+
   // ───── crm (connector_instance) ─────
   crm_account_create:        { resourceType: "connector_instance", action: "execute", status: "enforced" },
   crm_account_get:           { resourceType: "connector_instance", action: "read",    status: "enforced" },

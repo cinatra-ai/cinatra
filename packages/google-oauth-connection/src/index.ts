@@ -186,11 +186,18 @@ export function describeNangoSyncFailure(
   options?: { hasConnectedAccount?: boolean },
 ): string {
   const cause = {
+    // ORDERING IS THE FIX (cinatra#2727). This copy used to LEAD with the
+    // UUID-v4 format requirement. In the common case the key IS a valid UUID v4
+    // and the real cause is a VALUE mismatch: `NANGO_SECRET_KEY` does not equal
+    // the secret key Nango minted for this environment, which is what a Nango
+    // data reset leaves behind. Leading with the format sent the operator to
+    // check the shape, find it valid, and get stuck. Lead with the mismatch and
+    // keep the format as a parenthetical secondary branch.
     "secret-key-rejected":
       "The connection service (Nango) rejected this instance's API secret key, so the Google OAuth " +
-      "client could not be stored there. Set NANGO_SECRET_KEY to the secret key of your Nango " +
-      "environment — the bundled local Nango additionally requires it to be a UUID v4, and rejects " +
-      "anything else as an invalid secret-key format.",
+      "client could not be stored there. This secret key does not match your Nango environment's " +
+      "secret key. If you reset Nango, re-copy the environment's secret key into NANGO_SECRET_KEY. " +
+      "(The bundled local Nango also requires a UUID v4, which only matters if the value is malformed.)",
     unreachable:
       "The connection service (Nango) could not be reached, so the Google OAuth client could not be " +
       "stored there. Check that the Nango server is running and that NANGO_SERVER_URL points at it.",

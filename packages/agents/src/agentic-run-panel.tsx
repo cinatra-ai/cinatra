@@ -58,6 +58,19 @@ import {
   statusBadgeVariant,
   type HitlGateContext as HitlContext,
 } from "./run-surface-status";
+// Pending-approval recovery book-keeping — pure classification
+// of each derived-context hydration attempt, plus the BOUNDED predicates that
+// gate the recovery state and its telemetry.
+import {
+  classifyHitlDerivation,
+  describeHitlInvariantViolation,
+  hitlRecoveryReason,
+  isHitlRecoveryVisible,
+  reduceHitlDerivation,
+  INITIAL_HITL_DERIVATION_STATE,
+  type HitlDerivationOutcome,
+  type HitlDerivationState,
+} from "./hitl-recovery-state";
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { hasMidRunHitlBinding } from "./orchestrator-mid-run-hitl";
 import { useRuntimeFieldRendererBindings } from "./use-runtime-field-renderer-bindings";
@@ -307,6 +320,14 @@ export function AgenticRunPanel({
   const [pollError, setPollError] = useState<string | null>(initialError);
   const [messages, setMessages] = useState<SerializedAgentRunMessage[]>(initialMessages);
   const [hitlContext, setHitlContext] = useState<HitlContext | null>(null);
+  // What the LAST derived-context hydration attempt did.
+  // `hitlContext` alone cannot tell "not yet" from "never": both are null. This
+  // carries the attempt count and the last failure so a paused run without a
+  // context can offer a real recovery state instead of a dead-end banner.
+  const [derivation, setDerivation] = useState<HitlDerivationState>(
+    INITIAL_HITL_DERIVATION_STATE,
+  );
+  const [isRechecking, setIsRechecking] = useState(false);
   const [isApproving, setIsApproving] = useState(false);
   // cinatra#2444 — bare-gate inline Reject. Tracks WHICH decision is in
   // flight so the Approve button doesn't flip to its pending label while a
@@ -827,16 +848,30 @@ export function AgenticRunPanel({
     setBufferedHitlValue({});
   }
 
-  useEffect(() => {
-    if (!isPollLive && !isPollPendingApproval) return;
-    const intervalMs = isPollLive ? 2000 : 5000;
-
-    const tick = async () => {
-      try {
-        if (taskId) {
-          // A2A transport path
-          const snapshot = await getAgentBuilderTask(taskId);
-          if (!("cinatraStatus" in snapshot)) return;
+  // THE derived-context refetch. Lifted out of the interval so
+  // the 5s tick and the recovery state's explicit "Re-check" run the SAME path
+  // — same transports, same state writes, same classification. The only thing
+  // that changed inside it is that each attempt now produces an OUTCOME: the
+  // early returns that used to swallow a dead transport ("not found" snapshot,
+  // non-ok response, rejected fetch) still leave the run state untouched, but
+  // they no longer leave the reader with nothing to act on.
+  const refetchDerivedContext = useCallback(async () => {
+    let outcome: HitlDerivationOutcome;
+    try {
+      if (taskId) {
+        // A2A transport path
+        const snapshot = await getAgentBuilderTask(taskId);
+        if (!snapshot || !("cinatraStatus" in snapshot)) {
+          // The action answered with `{ error }` (unauthorized / not found —
+          // its ownership check is STRICTER than the run page's own read, so a
+          // run whose page renders can still be invisible here) or with
+          // nothing. Never a status, never a context.
+          const reason =
+            snapshot && typeof (snapshot as { error?: unknown }).error === "string"
+              ? `the run snapshot could not be read (${(snapshot as { error: string }).error})`
+              : "the run snapshot could not be read";
+          outcome = { kind: "transport_failed", reason };
+        } else {
           const s = snapshot as TaskSnapshot;
           // When stream is enabled: poll updates messages + HITL only; SSE owns status/error.
           // When stream is disabled: poll updates everything.
@@ -846,35 +881,102 @@ export function AgenticRunPanel({
           }
           // Single setHitlContext call avoids double React render per tick.
           setMessages(s.messages);
-          setHitlContext(
-            s.cinatraStatus === "pending_approval" ? (s.hitlContext ?? null) : null,
-          );
-          return;
+          const next =
+            s.cinatraStatus === "pending_approval" ? (s.hitlContext ?? null) : null;
+          setHitlContext(next);
+          outcome = classifyHitlDerivation(s.cinatraStatus, next);
         }
+      } else {
         // Fallback path for runs with no a2a_task_id.
         const response = await fetch(
           `/api/agents/runs/${encodeURIComponent(runId)}`,
           { cache: "no-store" },
         );
-        if (!response.ok) return;
-        const data = (await response.json()) as RunPollResponse;
-        if (!streamEnabled) {
-          if (data?.status) {
-            setPollStatus(data.status);
-            if (data.status !== "pending_approval") setHitlContext(null);
+        if (!response.ok) {
+          outcome = {
+            kind: "transport_failed",
+            reason: `the run could not be read (HTTP ${response.status})`,
+          };
+        } else {
+          const data = (await response.json()) as RunPollResponse;
+          if (!streamEnabled) {
+            if (data?.status) {
+              setPollStatus(data.status);
+              if (data.status !== "pending_approval") setHitlContext(null);
+            }
+            if (data?.error !== undefined) setPollError(data.error);
           }
-          if (data?.error !== undefined) setPollError(data.error);
+          if (Array.isArray(data?.messages)) setMessages(data.messages);
+          if (data?.hitlContext !== undefined) setHitlContext(data.hitlContext ?? null);
+          outcome = classifyHitlDerivation(
+            typeof data?.status === "string" ? data.status : null,
+            data?.hitlContext ?? null,
+          );
         }
-        if (Array.isArray(data?.messages)) setMessages(data.messages);
-        if (data?.hitlContext !== undefined) setHitlContext(data.hitlContext ?? null);
-      } catch {
-        // Ignore polling errors — next tick will retry
       }
-    };
+    } catch (err) {
+      // The tick keeps its retry semantics; the reader keeps the reason.
+      outcome = {
+        kind: "transport_failed",
+        reason: `the run could not be reached (${err instanceof Error ? err.message : "unknown error"})`,
+      };
+    }
+    setDerivation((prev) => reduceHitlDerivation(prev, outcome));
+  }, [runId, taskId, streamEnabled]);
 
-    const interval = window.setInterval(tick, intervalMs);
+  useEffect(() => {
+    if (!isPollLive && !isPollPendingApproval) return;
+    const intervalMs = isPollLive ? 2000 : 5000;
+    const interval = window.setInterval(() => {
+      void refetchDerivedContext();
+    }, intervalMs);
     return () => window.clearInterval(interval);
-  }, [runId, taskId, isPollLive, isPollPendingApproval, streamEnabled]);
+  }, [isPollLive, isPollPendingApproval, refetchDerivedContext]);
+
+  // The recovery state's explicit re-check. Runs the same refetch the tick
+  // runs, and additionally DROPS the just-submitted suppression: that guard
+  // exists only to stop a stale gate flashing back for a moment after a submit,
+  // and a reader who is asking for a fresh read has already outlived its
+  // purpose. Sequential setup fields share one xRenderer, so the guard cannot
+  // clear itself on the next gate in that flow.
+  const handleRecheckDerivedContext = useCallback(async () => {
+    setIsRechecking(true);
+    justSubmittedXRendererRef.current = null;
+    try {
+      await refetchDerivedContext();
+    } finally {
+      setIsRechecking(false);
+    }
+  }, [refetchDerivedContext]);
+
+  // Is this paused run degraded (no usable gate context) rather than merely
+  // hydrating? Bounded — see hitl-recovery-state.ts.
+  const hitlRecoveryVisible = isHitlRecoveryVisible({
+    isPendingApproval,
+    hasContext: effectiveHitlContext !== null,
+    state: derivation,
+  });
+
+  // BOUNDED telemetry. `hitlContext` is null on every healthy
+  // first paint, so logging "no context" on sight would report normal
+  // hydration. This fires on the same bound the recovery state uses — after a
+  // server-side derivation failure, a dead transport, or enough silent
+  // attempts — and at most once per mount.
+  const hitlInvariantLoggedRef = useRef(false);
+  useEffect(() => {
+    if (hitlInvariantLoggedRef.current) return;
+    const violation = describeHitlInvariantViolation({
+      isPendingApproval,
+      hasContext: effectiveHitlContext !== null,
+      state: derivation,
+    });
+    if (!violation) return;
+    hitlInvariantLoggedRef.current = true;
+    console.warn(
+      "[hitl-invariant] pending_approval run has no actionable gate context",
+      { runId, taskId: taskId ?? null, ...violation },
+    );
+  }, [isPendingApproval, effectiveHitlContext, derivation, runId, taskId]);
 
   // Resolve the STATE_SNAPSHOT override before falling through to DispatchRenderer.
   // Gated only on presentationHint — passing agentPackageName (possibly undefined)
@@ -1438,6 +1540,46 @@ export function AgenticRunPanel({
               approveLabel: "Approve",
               approvingLabel: "Approving…",
             })}
+            {/* THE INVARIANT. Above this line the branch renders
+                an inline decision ONLY while a gate context exists; without one
+                renderApprovalActionsRow renders nothing and the banner used to
+                end here — a paused run with a single link out to a feed whose
+                row links straight back, and no way to act on either surface.
+                The run page now always carries an inline action here: a
+                "Re-check" that re-runs the very same derived-context hydration
+                the panel runs every 5s, and — once the run is degraded rather
+                than merely hydrating — an explicit recovery state that names
+                the reason instead of leaving a silent null. The deep-link
+                above is untouched: it stays the out-of-band escape until this
+                recovery path is proven in the field. */}
+            {!effectiveHitlContext ? (
+              <div
+                className="flex flex-col gap-2 pt-2 border-t border-line"
+                data-testid="hitl-recovery-state"
+              >
+                {hitlRecoveryVisible ? (
+                  <p className="text-xs text-muted-foreground">
+                    This run is paused, but its approval step could not be
+                    loaded: {hitlRecoveryReason(derivation)}. Re-check to try
+                    again, or open the notifications feed.
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Loading the approval step for this run…
+                  </p>
+                )}
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={isRechecking}
+                    onClick={handleRecheckDerivedContext}
+                  >
+                    {isRechecking ? "Re-checking…" : "Re-check"}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </>
       ) : null}

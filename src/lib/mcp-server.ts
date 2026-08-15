@@ -19,6 +19,7 @@ import { createApprovalsMcpModule } from "@/lib/approvals/approvals-mcp";
 import { createLifecyclePullMcpModule } from "@/lib/lifecycle/lifecycle-pull-mcp";
 import { createScheduleProposalMcpModule } from "@/lib/lifecycle/schedule-proposal-mcp";
 import { createProjectSeamMcpModule } from "@/lib/project-seam-mcp";
+import { createConnectorInventoryMcpModule } from "@/lib/connector-inventory-mcp";
 import { createAssistantMcpModule } from "@/lib/assistant-mcp";
 import { createProjectsModule } from "@cinatra-ai/projects/module";
 import { createBlogContentModule } from "@/lib/blog/integration/module";
@@ -94,6 +95,14 @@ const preConnectorPlatformModules = [
   createObjectsModule(),
   createProjectsModule(),
   createBlogContentModule(),
+  // cinatra#2723 — `connector_inventory_list`, the platform's own read-only
+  // "which connectors are live for this caller?" primitive. Deliberately in the
+  // PRE-connector block: platform inventory is a HOST capability, not any one
+  // connector's, so the host claims the name BEFORE the manifest-discovered
+  // connector modules register. A connector that later claimed the same name
+  // would fail the registration pass loudly rather than shadow the host tool,
+  // and the ownership test pins the single owner against the real tree.
+  createConnectorInventoryMcpModule(),
 ];
 
 const postConnectorPlatformModules = [

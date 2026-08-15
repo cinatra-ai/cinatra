@@ -36,9 +36,16 @@ import {
   InstallPanelCloseButton,
   InstallPanelOpenButton,
 } from "@cinatra-ai/extensions/screens/card-face-switcher";
-import { ExtensionInstallScopePanel } from "@cinatra-ai/extensions/screens/extension-install-scope-panel";
+import {
+  ExtensionInstallScopePanel,
+  InstallPanelScopeProvider,
+} from "@cinatra-ai/extensions/screens/extension-install-scope-panel";
+import type { InstallPanelScopeContextValue } from "@cinatra-ai/extensions/screens/extension-install-scope-panel";
 import type { InstallPanelAvailability } from "@cinatra-ai/extensions/screens/install-panel-availability";
-import type { MarketplaceInstallActionResult } from "@cinatra-ai/extensions/screens/marketplace-failure-copy";
+import {
+  buildMarketplaceFailureCopy,
+  type MarketplaceInstallActionResult,
+} from "@cinatra-ai/extensions/screens/marketplace-failure-copy";
 
 const ORG_ID = "org-acme";
 
@@ -78,12 +85,12 @@ const ENTITY_NAMES = {
   "team:team-rev": "Revenue",
 };
 
-const FAILURE_COPY = {
-  "not-found": "not-found copy",
-  unavailable: "unavailable copy",
-  incompatible: "incompatible copy",
-  unrecoverable: "We could not install Ledger Sync. Ask an administrator to try again.",
-} as unknown as Record<string, string>;
+// cinatra#2539: the panel no longer receives the classified copy as props — it
+// derives the identical strings from the operation + display name through the
+// SAME pure builder the server used to call. The expectations below therefore
+// read the builder's own output for this fixture's display name, so the copy
+// contract (#685/#1539) is still pinned, at its real source.
+const FAILURE_COPY = buildMarketplaceFailureCopy("install", "Ledger Sync");
 
 function Panel({
   availability,
@@ -97,24 +104,21 @@ function Panel({
   }) => Promise<MarketplaceInstallActionResult | void>;
 }) {
   return (
-    <ExtensionInstallScopePanel
-      packageName="@cinatra-fixtures/ledger-sync"
-      packageVersion="2.0.0"
-      displayName="Ledger Sync"
-      installTargets={TARGETS}
-      ownerEntityNames={ENTITY_NAMES}
-      activeOrgId={ORG_ID}
-      availability={availability}
-      failureCopyByCategory={
-        FAILURE_COPY as Parameters<
-          typeof ExtensionInstallScopePanel
-        >[0]["failureCopyByCategory"]
-      }
-      defaultFailureMessage={FAILURE_COPY.unrecoverable}
-      installAction={
-        installAction as Parameters<typeof ExtensionInstallScopePanel>[0]["installAction"]
-      }
-    />
+    <InstallPanelScopeProvider
+      value={{
+        installTargets: TARGETS,
+        ownerEntityNames: ENTITY_NAMES,
+        activeOrgId: ORG_ID,
+        availability,
+        installAction: installAction as InstallPanelScopeContextValue["installAction"],
+      }}
+    >
+      <ExtensionInstallScopePanel
+        packageName="@cinatra-fixtures/ledger-sync"
+        packageVersion="2.0.0"
+        displayName="Ledger Sync"
+      />
+    </InstallPanelScopeProvider>
   );
 }
 
@@ -437,26 +441,24 @@ describe("committability gate — non-committable selections cannot install", ()
         installFace={
           <div>
             <InstallPanelCloseButton />
-            <ExtensionInstallScopePanel
-              packageName="@cinatra-fixtures/ledger-sync"
-              packageVersion="2.0.0"
-              displayName="Ledger Sync"
-              installTargets={targets}
-              ownerEntityNames={ENTITY_NAMES}
-              activeOrgId={ORG_ID}
-              availability={
-                { state: "ready", defaultValue: `org:${ORG_ID}` } as InstallPanelAvailability
-              }
-              failureCopyByCategory={
-                FAILURE_COPY as Parameters<
-                  typeof ExtensionInstallScopePanel
-                >[0]["failureCopyByCategory"]
-              }
-              defaultFailureMessage={FAILURE_COPY.unrecoverable}
-              installAction={
-                installAction as Parameters<typeof ExtensionInstallScopePanel>[0]["installAction"]
-              }
-            />
+            <InstallPanelScopeProvider
+              value={{
+                installTargets: targets,
+                ownerEntityNames: ENTITY_NAMES,
+                activeOrgId: ORG_ID,
+                availability: {
+                  state: "ready",
+                  defaultValue: `org:${ORG_ID}`,
+                } as InstallPanelAvailability,
+                installAction: installAction as InstallPanelScopeContextValue["installAction"],
+              }}
+            >
+              <ExtensionInstallScopePanel
+                packageName="@cinatra-fixtures/ledger-sync"
+                packageVersion="2.0.0"
+                displayName="Ledger Sync"
+              />
+            </InstallPanelScopeProvider>
           </div>
         }
       />

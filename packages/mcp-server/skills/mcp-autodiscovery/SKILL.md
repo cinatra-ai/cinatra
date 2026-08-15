@@ -102,6 +102,19 @@ Each agent template declares a `riskClass` and `requiresApproval` field in its m
 
 When `requiresApproval` is true, build your workflow to always call `agent_run_resume` before considering the run complete.
 
+## Connector inventory: answering "what is connected?"
+
+`connector_inventory_list` is the read-only inventory of this workspace's connectors. Call it whenever a user asks which connectors are connected, live, configured, or available. It takes **no arguments**: scope and identity come from the request context, never from your input.
+
+Each row carries the connector key, its display name, `hasAuthorizedConnection`, and the connection ids you are authorized to use.
+
+Rules for reading the result:
+
+- **Never report the negative from a missing tool.** Do not answer "no connectors are connected" because a connector exposes no operational tool of its own. Several connectors (OpenAI, Tailscale, Google OAuth, and others) are connect-only. They have no `*_list` or `*_send` tool at all, and they are still connected. `connector_inventory_list` is how you see them.
+- `hasAuthorizedConnection: false` means **"no connection you are authorized to use"**. It does not mean nobody connected it. Say the first, never the second.
+- The inventory is a catalog answer, not a health check. It reports authorized-connection presence, not whether the remote service responded. It also does not list a connector installed at runtime with no build-time catalog entry.
+- The ids it returns are authorized targets, not credentials. Every later use is re-authorized server-side.
+
 ## Dashboard cubes (drizzle-cube semantic layer)
 
 Four MCP tools expose Cinatra's analytics semantic layer for read-only,

@@ -20,39 +20,16 @@ import {
   ExtensionsMarketplaceClient,
   MarketplaceGridLoadingFallback,
 } from "./extensions-marketplace-client";
-// NOTE: there is no pre-install popup on this surface any more. The card path
-// moved to the in-card panel below (cinatra#2373) — Install now swaps the card
-// body — and the §II detail modal, the popup's only other consumer, is
-// details-only by owner ruling (2026-08-04, cinatra#2406). cinatra#2374 deleted
-// the now-unreachable component, so the panel is the single scoped install
-// surface here.
-import {
-  CardFaceSwitcher,
-  InstallPanelCloseButton,
-  InstallPanelOpenButton,
-} from "./card-face-switcher";
-import { ExtensionInstallScopePanel } from "./extension-install-scope-panel";
+import { InstallPanelScopeProvider } from "./extension-install-scope-panel";
 import { resolveInstallPanelAvailability } from "./install-panel-availability";
-import { isInstallAccessTargetKind } from "../install-access-target";
-import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
-import { MarketplaceDetailModal } from "./marketplace-detail-modal";
-import {
-  buildMarketplaceFailureCopy,
-  marketplaceFailureCopy,
-} from "./marketplace-failure-copy";
+// Per-card node composition (cinatra#2539) — the grid's RSC payload shape.
+import { buildMarketplaceCardNodes } from "./marketplace-card-nodes";
 import type { MarketplaceCardData } from "./marketplace-card-model";
-import { resolveMarketplaceCardCta } from "./marketplace-card-model";
-import {
-  MarketplaceListingCard,
-  MarketplaceListingCardInstallFace,
-} from "./marketplace-listing-card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
-import { deriveExtensionAccent } from "@/lib/extension-accent";
-import { deriveExtensionCompatState } from "@/lib/extension-compat-badge";
 import { readRegistryPolicy } from "../registry-policy";
 
 // ---------------------------------------------------------------------------
@@ -147,202 +124,18 @@ export async function ExtensionsMarketplaceScreen({
     }
   }
 
-  const renderedCards = cards.map((card) => {
-    const installedInfo = installedVersionByName.get(card.packageName);
-    // Six-state CTA resolved by the pure helper (semver-correct update
-    // detection; Install/Update disabled when the registry is down; a
-    // not-installed listing whose declared ABI this host cannot satisfy
-    // resolves to the greyed "incompatible" state — never softer than the
-    // install gate).
-    const compatState = deriveExtensionCompatState(card.sdkAbiRange);
-    const cta = resolveMarketplaceCardCta(card, installedInfo, registryConnected, compatState);
-
-    // The in-card install panel (cinatra#2373) mounts for exactly the kinds
-    // that HAVE an access target and only in the live "install" CTA state:
-    // agents/skills have no audience to choose and keep their direct
-    // zero-argument bound form, and update/restore/installed/incompatible are
-    // untouched CTA states.
-    const usesInstallPanel =
-      cta.state === "install" &&
-      !cta.disabled &&
-      isInstallAccessTargetKind(card.kindSlug);
-
-    // Per-row .bind() — install identifiers come straight from the catalog entry
-    // ({packageName, packageVersion}); install resolves the typeId + tarball from
-    // Verdaccio independent of the browse source (so Install Now actually installs).
-    const installAction = installExtensionPackageFormAction.bind(null, {
-      packageName: card.packageName,
-      packageVersion: card.packageVersion,
-    });
-    const updateAction = updateExtensionPackageFormAction.bind(null, {
-      packageName: card.packageName,
-      packageVersion: card.packageVersion,
-    });
-    const restoreAction = restoreExtensionPackageFormAction.bind(null, {
-      packageName: card.packageName,
-    });
-
-    const ctaControl =
-      cta.state === "restore" ? (
-        // Restore re-activates an already-installed (archived) template. A failure
-        // — a DB/auth/state race, or one of the stages that DO reach the registry
-        // (kind resolve, runtime activate) — is surfaced as a toast, not a page
-        // crash (#356). The category→copy map keeps the toast actionable +
-        // non-technical (#685); the restore copy collapses the marketplace-shaped
-        // categories to one administrator-escalation message and makes no retry
-        // claim in either direction (#2333).
-        <MarketplaceInstallForm
-          action={restoreAction}
-          failureCopyByCategory={buildMarketplaceFailureCopy("restore", card.displayName)}
-          defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "restore", card.displayName)}
-        >
-          <MarketplaceInstallSubmit variant="outline" pendingLabel="Restoring…">
-            Restore
-          </MarketplaceInstallSubmit>
-        </MarketplaceInstallForm>
-      ) : cta.state === "incompatible" ? (
-        // The greyed six-state "Incompatible" CTA (spec §IV): the declared ABI
-        // range of the CATALOG version is unsatisfiable on this host, so the
-        // install/update gate would refuse it — grey the action out (opacity
-        // .4, not-allowed cursor, spec title) instead of offering an action
-        // that cannot succeed. The label names the blocked action (Install
-        // now for a not-installed listing, Update now for an installed-older
-        // one whose newer catalog version is incompatible). The
-        // pointer-events override keeps the native title tooltip reachable on
-        // a disabled button. The red-triangle Incompatible verdict renders as
-        // the plain footer-meta row (CompatMeta in marketplace-listing-card.tsx —
-        // spec §IV L631 is not a badge).
-        <Button
-          size="sm"
-          disabled
-          className="cursor-not-allowed disabled:pointer-events-auto disabled:opacity-40"
-          title="Requires a newer Cinatra version"
-        >
-          {cta.blockedAction === "update" ? "Update now" : "Install now"}
-        </Button>
-      ) : cta.state === "install" ? (
-        // Install fetches the tarball from the registry — a live CTA only
-        // when the registry is connected; otherwise a disabled button so
-        // we never present an Install that cannot actually install.
-        cta.disabled ? (
-          <Button size="sm" disabled title="Connect the package registry to install">
-            Install now
-          </Button>
-        ) : usesInstallPanel ? (
-          // connector / artifact / workflow: the pre-install access selector
-          // (cinatra#805) now lives IN the card (cinatra#2373, spec §I.1) —
-          // this CTA swaps the card body to the install face instead of
-          // opening a dialog. The chosen AUDIENCE is authorized server-side
-          // and persisted via setExtensionInstallAccess exactly as before.
-          <InstallPanelOpenButton>Install now</InstallPanelOpenButton>
-        ) : (
-          // A failed install toasts instead of crashing the route (#356). The
-          // message is now classified per the merged install-failure taxonomy
-          // (marketplace#152) into actionable, NON-technical end-user copy —
-          // no "registry"/HTTP jargon, no asserting a usually-wrong cause (#685).
-          <MarketplaceInstallForm
-            action={installAction}
-            failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
-            defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "install", card.displayName)}
-          >
-            <MarketplaceInstallSubmit pendingLabel="Installing…">
-              Install now
-            </MarketplaceInstallSubmit>
-          </MarketplaceInstallForm>
-        )
-      ) : cta.state === "update" ? (
-        cta.disabled ? (
-          <Button size="sm" disabled title="Connect the package registry to update">
-            Update now
-          </Button>
-        ) : (
-          <MarketplaceInstallForm
-            action={updateAction}
-            failureCopyByCategory={buildMarketplaceFailureCopy("update", card.displayName)}
-            defaultFailureMessage={marketplaceFailureCopy("unrecoverable", "update", card.displayName)}
-          >
-            <MarketplaceInstallSubmit pendingLabel="Updating…">
-              Update now
-            </MarketplaceInstallSubmit>
-          </MarketplaceInstallForm>
-        )
-      ) : (
-        // Installed — the disabled secondary pill at spec opacity .9.
-        <Button size="sm" variant="secondary" disabled className="disabled:opacity-90">
-          Installed
-        </Button>
-      );
-
-    const accentColor = deriveExtensionAccent(card.packageName);
-
-    const idleFace = (
-      <MarketplaceListingCard
-        card={card}
-        accentColor={accentColor}
-        ctaControl={ctaControl}
-        // Conformance contract (cinatra#985): expose the resolved six-state
-        // CTA identity on the card's CTA slot (data-cta-state).
-        ctaState={cta.state}
-        detailsControl={
-          // More details opens the in-app extension-detail modal (embedding
-          // the marketplace listing detail) instead of navigating to the
-          // full-page route; the trigger renders as the centred underlined
-          // link button of spec §IV. cinatra#2406 (owner ruling): the modal
-          // renders no footer — details-only. Install/update/restore stay on
-          // the card's own `ctaControl` above.
-          <MarketplaceDetailModal card={card} />
-        }
-      />
-    );
-
-    // ONE opaque node per extension, exactly as the filter-only client grid
-    // has always received. For an access-target install the node is the client
-    // face switcher over TWO server-rendered faces; exactly one of them is
-    // mounted at any time, so a hidden face can never retain a stale panel.
-    const node = usesInstallPanel ? (
-      <CardFaceSwitcher
-        idleFace={idleFace}
-        installFace={
-          <MarketplaceListingCardInstallFace
-            card={card}
-            accentColor={accentColor}
-            closeControl={<InstallPanelCloseButton />}
-          >
-            <ExtensionInstallScopePanel
-              packageName={card.packageName}
-              packageVersion={card.packageVersion}
-              displayName={card.displayName}
-              installTargets={installTargets}
-              ownerEntityNames={ownerEntityNames}
-              activeOrgId={activeOrgId}
-              availability={installPanelAvailability}
-              failureCopyByCategory={buildMarketplaceFailureCopy("install", card.displayName)}
-              defaultFailureMessage={marketplaceFailureCopy(
-                "unrecoverable",
-                "install",
-                card.displayName,
-              )}
-              // UNBOUND action — the identifiers travel as arguments, so the
-              // one panel component serves every card.
-              installAction={installExtensionPackageFormAction}
-            />
-          </MarketplaceListingCardInstallFace>
-        }
-      />
-    ) : (
-      idleFace
-    );
-
-    return {
-      meta: {
-        packageName: card.packageName,
-        title: card.displayName,
-        description: card.description,
-        kind: card.kindSlug,
-      },
-      node,
-    };
+  // Per-card node composition (cinatra#2539): extracted verbatim into
+  // ./marketplace-card-nodes so the grid's RSC payload shape is a pure,
+  // measurable function. The screen keeps the auth/DB reads and the chrome.
+  const renderedCards = buildMarketplaceCardNodes({
+    cards,
+    installedVersionByName,
+    registryConnected,
+    installAction: installExtensionPackageFormAction,
+    updateAction: updateExtensionPackageFormAction,
+    restoreAction: restoreExtensionPackageFormAction,
   });
+
 
   return (
     <Main className="min-h-screen">
@@ -375,9 +168,25 @@ export async function ExtensionsMarketplaceScreen({
             </AlertDescription>
           </Alert>
         )}
-        <Suspense fallback={<MarketplaceGridLoadingFallback />}>
-          <ExtensionsMarketplaceClient cards={renderedCards} />
-        </Suspense>
+        {/* The card-invariant install context travels ONCE for the whole grid
+            (cinatra#2539) instead of once per install-capable card. The
+            provider renders no DOM — the picker rows, their enabled state and
+            their tooltips are the SAME server-computed values as before. */}
+        <InstallPanelScopeProvider
+          value={{
+            installTargets,
+            ownerEntityNames,
+            activeOrgId,
+            availability: installPanelAvailability,
+            // UNBOUND action — the identifiers travel as arguments, so the one
+            // panel component serves every card.
+            installAction: installExtensionPackageFormAction,
+          }}
+        >
+          <Suspense fallback={<MarketplaceGridLoadingFallback />}>
+            <ExtensionsMarketplaceClient cards={renderedCards} />
+          </Suspense>
+        </InstallPanelScopeProvider>
       </PageContent>
     </Main>
   );

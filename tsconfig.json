@@ -324,6 +324,7 @@
       "@cinatra-ai/extensions/screens/extensions-marketplace-client": ["./packages/extensions/src/screens/extensions-marketplace-client.tsx"],
       "@cinatra-ai/extensions/screens/installed-empty-states": ["./packages/extensions/src/screens/installed-empty-states.tsx"],
       "@cinatra-ai/extensions/screens/card-face-switcher": ["./packages/extensions/src/screens/card-face-switcher.tsx"],
+      "@cinatra-ai/extensions/screens/marketplace-card-shell": ["./packages/extensions/src/screens/marketplace-card-shell.tsx"],
       "@cinatra-ai/extensions/screens/extension-install-scope-panel": ["./packages/extensions/src/screens/extension-install-scope-panel.tsx"],
       "@cinatra-ai/extensions/screens/install-panel-availability": ["./packages/extensions/src/screens/install-panel-availability.ts"],
       "@cinatra-ai/extensions/install-access-target": ["./packages/extensions/src/install-access-target.ts"],

@@ -171,6 +171,19 @@ function deriveFullSchemaFromOas(
       prop.properties = inputProperties;
       if (Array.isArray(inputRequired)) prop.required = inputRequired;
     }
+    // PRESENTATION HINTS (`x-…`) authored on the input's own `json_schema` ride
+    // through verbatim, exactly as `oas-compiler.ts` step 7 does for the
+    // persisted compiled inputSchema. The two pipelines must agree: a row with
+    // an empty DB inputSchema resolves through HERE, and a hint that survived
+    // only one of the paths would render one form on a freshly compiled
+    // template and a different one on a derived template.
+    if (inputJsonSchema && typeof inputJsonSchema === "object" && !Array.isArray(inputJsonSchema)) {
+      for (const [hintKey, hintValue] of Object.entries(
+        inputJsonSchema as Record<string, unknown>,
+      )) {
+        if (hintKey.startsWith("x-")) prop[hintKey] = hintValue;
+      }
+    }
     properties[input.title] = prop;
   }
 

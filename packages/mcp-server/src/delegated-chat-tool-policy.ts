@@ -209,6 +209,36 @@ const ALLOWED_EXACT = new Set<string>([
   "email_outreach_campaign_list",
   "email_outreach_campaign_get",
   "media_feeds_list",
+
+  // cinatra#2723 — the platform's READ-ONLY connector inventory. Every other
+  // connector-shaped entry on this allowlist is a PER-CONNECTOR OPERATIONAL
+  // tool scoped to one already-bound connection, so the chat could never answer
+  // "which connectors are connected?" and implied the negative instead. This is
+  // the missing inventory read, and it is safe on the injection-hardened
+  // perimeter for three reasons:
+  //
+  //   1. FIELD ALLOWLIST. The result is a fixed, snapshot-tested projection —
+  //      connector key, display name, authorized-connection presence, and the
+  //      POST-AUTHORIZATION connection ids. Never a credential, token, secret
+  //      ref, owner identity, organization id, or the raw Nango connection
+  //      identifier (the token-vault address). The projector is the only
+  //      constructor of a result row and a field-allowlist test fails on any
+  //      added field, so widening the model-facing surface cannot happen
+  //      silently (src/lib/connector-inventory.server.ts).
+  //   2. NO SCOPE OR ACTOR INPUT. The schema is empty and strict; identity comes
+  //      from the trusted MCP request frame. A prompt-injected LLM has nothing
+  //      to ask another tenant's inventory WITH.
+  //   3. PER-ROW AUTHORIZATION, NOT ID SECRECY. The underlying reader returns
+  //      the whole org's live connection rows (fine for the page's aggregate
+  //      math, a leak if serialized), so every row passes the canonical
+  //      per-connection `use` gate before it can be emitted. Returning ids the
+  //      caller is authorized to use is deliberate — the invoker re-authorizes
+  //      every call live, and the assistants directory already returns
+  //      authorized instance ids by design.
+  //
+  // Read-only: it writes nothing, and its name carries no denied verb token.
+  "connector_inventory_list",
+
   "gmail_aliases_list",
   "linkedin_accounts_list",
   "drupal_instances_list",

@@ -533,6 +533,11 @@
       "line": 12
     },
     {
+      "primitiveName": "connector_inventory_list",
+      "file": "src/lib/connector-inventory-mcp.ts",
+      "line": 68
+    },
+    {
       "primitiveName": "context_list_eligible_assertions",
       "file": "src/lib/artifacts/context-mcp.ts",
       "line": 294

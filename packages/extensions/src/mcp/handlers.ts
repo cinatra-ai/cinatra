@@ -203,6 +203,16 @@ export function createExtensionsPrimitiveHandlers() {
       // is decided INSIDE listExtensionPackages via `viewerScope` so
       // `limit` slices AFTER filtering — otherwise the first N foreign-
       // private packages could fill the result and hide visible ones.
+      //
+      // No `fetchTimeoutMs` / `hydrationBudgetMs` here, DELIBERATELY: both are
+      // LOSSY bounds that turn a slow packument into a dropped result, and a
+      // search that silently omits a matching package is worse than a slow one
+      // (cinatra#2539). What used to make that stance expensive — the fan-out
+      // reading one packument for EVERY package in the registry to return
+      // `limit` rows — is fixed inside `listExtensionPackages` itself: it now
+      // hydrates the sorted candidates on demand and stops once `limit` visible
+      // packages exist. Same answer, work proportional to `limit`, so the
+      // complete-answer contract costs no extra reads.
       const packages = await listExtensionPackages({
         query: input.query,
         limit: input.limit ?? 20,

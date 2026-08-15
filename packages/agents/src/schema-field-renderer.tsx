@@ -81,6 +81,8 @@ function isLikelyMultiline(schema: Record<string, unknown>): boolean {
 // string where its prompt required `{title, summary, outline}`). Two shapes
 // replace that, both of which emit a REAL object (or refuse to submit):
 //
+//   - `x-object-text-property` declared → ONE text control
+//     (`SingleTextObjectField`). See its own docblock below.
 //   - `json_schema.properties` declared → STRUCTURED sub-fields
 //     (`StructuredObjectField`). Each sub-field re-uses the existing
 //     schema-driven rendering, so `array` sub-fields get the repo's
@@ -89,6 +91,63 @@ function isLikelyMultiline(schema: Record<string, unknown>): boolean {
 //     → a JSON textarea (`JsonObjectField`) whose only accepted value is a
 //     parseable JSON object. A plain string is refused with a visible message.
 // ---------------------------------------------------------------------------
+
+/**
+ * The OAS-authorable hint that collapses an object input to ONE text control.
+ *
+ * An extension writes it on the input's own `json_schema`, naming ONE declared
+ * `string` sub-property:
+ *
+ *     "json_schema": {
+ *       "x-object-text-property": "title",
+ *       "properties": { "title": {"type": "string"}, … },
+ *       "required": ["title"]
+ *     }
+ *
+ * Both inputSchema pipelines (`oas-compiler.ts` step 7 and
+ * `input-schema-resolver.ts` `deriveFullSchemaFromOas`) copy every `x-…` key
+ * from `json_schema` onto the compiled property verbatim, so no new plumbing is
+ * needed per hint.
+ *
+ * The hint is a PRESENTATION statement, never a contract change: the emitted
+ * value is still a real object. It exists because a structured object form is
+ * the wrong surface for an input a human writes as one thought — an "idea", a
+ * "brief" — while the DOWNSTREAM contract stays an object the rest of the
+ * pipeline can fill key by key.
+ */
+export const OBJECT_TEXT_PROPERTY_KEY = "x-object-text-property";
+
+/**
+ * Resolve the single-text property for an object schema, or `null`.
+ *
+ * FAILS SAFE: the hint is honored only when it names a declared `string`
+ * sub-property. A hint pointing at an undeclared key, at a non-string, or at
+ * nothing leaves the object on the structured/JSON legs rather than rendering a
+ * control that would emit a value the schema rejects.
+ */
+export function resolveObjectTextProperty(
+  schema: Record<string, unknown>,
+): string | null {
+  const declared = (schema as Record<string, unknown>)[OBJECT_TEXT_PROPERTY_KEY];
+  if (typeof declared !== "string" || declared.trim() === "") return null;
+  const properties = (schema as {
+    properties?: Record<string, Record<string, unknown>>;
+  }).properties;
+  if (!properties || typeof properties !== "object") return null;
+  const target = properties[declared] as { type?: string } | undefined;
+  if (!target || target.type !== "string") return null;
+  return declared;
+}
+
+/**
+ * Shown when the single-text object control is submitted empty. Names the FIELD
+ * — "Idea is required." — because the whole point of this leg is that the user
+ * sees one field with one name; an error mentioning a sub-key they were never
+ * shown ("title is required") would point at something that is not on screen.
+ */
+export function objectTextPropertyRequiredError(label: string): string {
+  return `${label} is required.`;
+}
 
 /** Always-visible guidance under a schema-less object input. */
 export const OBJECT_INPUT_JSON_HINT =
@@ -475,6 +534,14 @@ export function SchemaFieldRenderer(props: Props) {
       hideSubmit,
       registerFlush,
     };
+    // An extension may declare that this object is written as ONE thought. The
+    // hint is checked FIRST because it is a narrower statement than "has
+    // properties" — and it is honored only when it names a declared string
+    // sub-property, so an unusable hint degrades to the structured leg below.
+    const textProperty = resolveObjectTextProperty(schema);
+    if (textProperty) {
+      return <SingleTextObjectField {...shared} textProperty={textProperty} />;
+    }
     if (objectProperties && Object.keys(objectProperties).length > 0) {
       return <StructuredObjectField {...shared} />;
     }
@@ -693,6 +760,207 @@ type ObjectFieldProps = {
   hideSubmit?: boolean;
   registerFlush?: (fn: () => Promise<void>) => void;
 };
+
+/**
+ * SINGLE-TEXT object input — the `x-object-text-property` leg.
+ *
+ * ONE visible editable control, named after the FIELD (not after a sub-key),
+ * whose text becomes one declared string property of a real object. The
+ * downstream contract is unchanged: what leaves this control is
+ * `{…carried, [textProperty]: text}`, never a bare string, so the cinatra#2484
+ * invariant ("an object-typed input never submits a string") holds here exactly
+ * as it does on the structured and JSON legs.
+ *
+ * Three behaviours are worth naming:
+ *
+ *   - COMPANION KEYS SURVIVE. A run seeded from an upstream producer can arrive
+ *     with the whole object (`{title, summary, outline}`). Emitting only the
+ *     text property would silently DELETE the companions, so the incoming
+ *     declared keys are carried and only the text property is overwritten. A
+ *     fresh setup form (no incoming value) therefore emits exactly the minimum
+ *     object — the one the schema declares required.
+ *   - EMPTY FAILS LOUD. A blank box on a field that is not declared-optional
+ *     does not submit: Continue shows a visible error naming the field, and the
+ *     grouped-form flush pushes the object WITHOUT the text property so the Zod
+ *     layer refuses it independently. Same two-layer refusal as JsonObjectField.
+ *   - DECLARED-OPTIONAL STILL OMITS. `required === false` is a declaration that
+ *     the field may be skipped, so a blank box submits `undefined` and the key
+ *     is absent. Absence of the prop is NOT such a declaration — see
+ *     `isDeclaredOptional`.
+ */
+function SingleTextObjectField(props: ObjectFieldProps & { textProperty: string }) {
+  const {
+    fieldName, schema, value, onChange, disabled, required, error,
+    label, description, hideSubmit, registerFlush, textProperty,
+  } = props;
+
+  const properties = useMemo(
+    () =>
+      ((schema as { properties?: Record<string, Record<string, unknown>> })
+        .properties ?? {}) as Record<string, Record<string, unknown>>,
+    [schema],
+  );
+
+  /**
+   * The declared companion keys this control must not destroy. Filtered to
+   * DECLARED properties (a stray extra key is not this field's to forward) and
+   * with the text property removed — that one is always rewritten from the box.
+   */
+  const carried = useMemo(() => {
+    if (!isPlainObject(value)) return {} as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(value).filter(
+        ([k]) => k in properties && k !== textProperty && !isDeeplyBlankValue(value[k]),
+      ),
+    );
+  }, [value, properties, textProperty]);
+
+  /**
+   * What the box shows. An object value shows its own text property; a STRING
+   * value shows verbatim, so a half-typed entry (or a value the pre-hint
+   * rendering stored) is visible and correctable rather than vanishing.
+   */
+  const seed = useMemo(() => {
+    if (typeof value === "string") return value;
+    if (isPlainObject(value)) {
+      const own = value[textProperty];
+      return typeof own === "string" ? own : "";
+    }
+    return "";
+  }, [value, textProperty]);
+
+  const [text, setText] = useState<string>(seed);
+  const textRef = useRef(text);
+  useEffect(() => { textRef.current = text; }, [text]);
+
+  // Re-sync only when the EXTERNAL value changes (mirrors the string branch).
+  // Typing never moves `seed`, so this cannot fight the user mid-sentence.
+  const syncedSeedRef = useRef(seed);
+  useEffect(() => {
+    if (seed === syncedSeedRef.current) return;
+    syncedSeedRef.current = seed;
+    setText(seed);
+  }, [seed]);
+
+  const onChangeRef = useRef(onChange);
+  useEffect(() => { onChangeRef.current = onChange; }, [onChange]);
+  // Requiredness decides what an EMPTY box emits and can change without a
+  // remount, so read it through a ref rather than the mount-time closure
+  // (mirrors JsonObjectField and StructuredObjectField).
+  const requiredRef = useRef(required);
+  useEffect(() => { requiredRef.current = required; }, [required]);
+
+  const buildValue = useCallback(
+    (raw: string): Record<string, unknown> => {
+      const trimmed = raw.trim();
+      const out: Record<string, unknown> = { ...carried };
+      if (trimmed !== "") out[textProperty] = trimmed;
+      return out;
+    },
+    [carried, textProperty],
+  );
+  const buildValueRef = useRef(buildValue);
+  useEffect(() => { buildValueRef.current = buildValue; }, [buildValue]);
+
+  const [showRequired, setShowRequired] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const isEmpty = text.trim() === "";
+  const displayError =
+    error ?? (isEmpty && showRequired ? objectTextPropertyRequiredError(label) : null);
+
+  useEffect(() => {
+    if (!registerFlush) return;
+    registerFlush(async () => {
+      const raw = textRef.current;
+      if (raw.trim() === "") {
+        if (isDeclaredOptional(requiredRef.current)) {
+          onChangeRef.current(undefined);
+          return;
+        }
+        // Push the object WITHOUT the text property: the Zod layer sees the
+        // required key missing and refuses to advance, and the local message
+        // below tells the user which field it was.
+        setShowRequired(true);
+        onChangeRef.current(buildValueRef.current(""));
+        return;
+      }
+      onChangeRef.current(buildValueRef.current(raw));
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registerFlush]); // stable — refs always read the latest text AND requiredness
+
+  const handleContinue = async () => {
+    const raw = textRef.current;
+    if (raw.trim() === "") {
+      if (!isDeclaredOptional(required)) {
+        setShowRequired(true);
+        return;
+      }
+      setShowRequired(false);
+      setSubmitting(true);
+      setSubmitError(null);
+      try {
+        await onChange(undefined);
+      } catch (err) {
+        setSubmitError(err instanceof Error ? err.message : "Could not submit. Please try again.");
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+    setShowRequired(false);
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await onChange(buildValue(raw));
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "Could not submit. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const placeholder = (schema as { ["x-placeholder"]?: string })["x-placeholder"];
+  const multiline = isLikelyMultiline(schema);
+  const controlProps = {
+    id: `field-${fieldName}`,
+    value: text,
+    onChange: (e: { target: { value: string } }) => {
+      setText(e.target.value);
+      if (showRequired) setShowRequired(false);
+    },
+    disabled: disabled || submitting,
+    placeholder,
+    className: "border-line",
+    "aria-invalid": displayError ? true : undefined,
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Label htmlFor={`field-${fieldName}`} className="text-foreground">
+        {label}
+        {required ? " *" : <span className="ml-1 font-normal text-muted-foreground">(optional)</span>}
+      </Label>
+      {multiline ? (
+        <Textarea {...controlProps} rows={4} />
+      ) : (
+        <Input {...controlProps} type="text" />
+      )}
+      {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
+      {displayError ? <p className="text-xs text-destructive">{displayError}</p> : null}
+      {submitError ? <p className="text-xs text-destructive">{submitError}</p> : null}
+      {!hideSubmit && (
+        <div>
+          <Button size="sm" disabled={disabled || submitting} onClick={() => void handleContinue()}>
+            {submitting ? "Submitting…" : "Continue"}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * STRUCTURED object input — the `json_schema.properties` leg.

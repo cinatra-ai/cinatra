@@ -154,6 +154,37 @@ export function screenHostsRecommendationCard(panel: RunDetailPanelKind): boolea
   return panel !== "agentic";
 }
 
+/**
+ * Does the run-detail SCREEN mount the page-level step rail (`RunStepRailPanel`)
+ * itself? (cinatra#2739)
+ *
+ * THE DEFECT THIS CLOSES. The screen mounted `RunStepRailPanel` unconditionally
+ * beside the right-hand panel, and on the `stepper` branch that panel mounts a
+ * rail of its OWN (`StepperColumn`). Both project the same approval policy
+ * through `buildRunStepperSteps` — the screen's rail spine literally IS
+ * `hitlSteps` — so a flow-agent run detail drew the same five steps TWICE, side
+ * by side: the left column plain, the right one with the ⓘ tooltips. Owner
+ * ruling 2026-08-14: exactly ONE column.
+ *
+ * WHICH RAIL OWNS IT. The panel's column, whenever it draws one. Its active
+ * step, pause state, replay clicks, dev stepper and ⓘ tooltips are all bound to
+ * the panel's live run-stream state, which a server-rendered rail cannot carry;
+ * the deep links the page rail owned move DOWN into it as `railExtras`. So the
+ * screen stands down exactly when the panel raises a rail — the stepper branch
+ * WITH steps. A stepper panel with NO steps renders no column at all (it
+ * returns the step-less "Agentic Run Progress" section), so the screen keeps the
+ * rail there: suppressing it would drop the run's review links entirely.
+ *
+ * Exported so the regression test can pin the whole branch table without a DB,
+ * a session or a Next.js render.
+ */
+export function screenHostsStepRail(params: {
+  panel: RunDetailPanelKind;
+  stepperStepCount: number;
+}): boolean {
+  return !(params.panel === "stepper" && params.stepperStepCount > 0);
+}
+
 type ScreenProps = {
   agentId: string;          // template slug from URL
   instanceId: string;       // runId or "new"
@@ -454,6 +485,19 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       })
     : { entries: [], activeOrdinal: null };
   const reviewHrefBase = run ? `/agents/${agentId}/${encodeURIComponent(run.id)}/review` : "";
+  // cinatra#2739 — the merged rail's NON-SPINE entries: review gates, their
+  // verifications, lifecycle policy decisions, and any surplus stepResult row
+  // past the policy spine. On the stepper branch the panel's own LIVE column is
+  // the rail and it draws the spine itself — from the same `hitlSteps`
+  // projection this rail's spine is built from — so only these trailing rows
+  // were missing from it. They travel down and the page-level rail stands down.
+  //
+  // "Non-spine" is decided by KEY, not by kind: the spine entries are exactly
+  // `step:<stepNumber>` for the step numbers the panel renders. A surplus
+  // stepResult row is also `kind: "step"` and is NOT on the spine, so it must
+  // come along — dropping it would lose a step the merged rail showed.
+  const spineEntryKeys = new Set(stepperSteps.map((s) => `step:${s.stepNumber}`));
+  const railExtras = rail.entries.filter((e) => !spineEntryKeys.has(e.key));
 
   // ── Run-start recommendation hold — through the ONE card (cinatra#2573) ───
   //
@@ -525,7 +569,10 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
           // and not looked up from `activeTab`.
           <AgentPanelBody role="frame">
           <div className="flex items-start gap-6" data-run-detail-contract="" data-conformance-id="run-surface">
-            {run.status !== "pending_input" && rail.entries.length > 0 && (
+            {run.status !== "pending_input" && rail.entries.length > 0 && screenHostsStepRail({
+              panel: runDetailPanel,
+              stepperStepCount: stepperSteps.length,
+            }) && (
               <RunStepRailPanel
                 entries={rail.entries}
                 activeOrdinal={rail.activeOrdinal}
@@ -587,6 +634,12 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     templateName={template.name}
                     submissionMap={submissionMap}
                     policySteps={policySteps as ReadonlyArray<{ stepNumber: number; gateCount?: number; hitlOwnedBy?: string; xRenderer?: string; firesRendererGate?: boolean }>}
+                    // cinatra#2739: this panel's column is THE step rail on this
+                    // branch, so the merged rail's trailing rows — review gates,
+                    // verifications, lifecycle decisions — ride down into it
+                    // instead of being drawn by a second column beside it.
+                    railExtras={railExtras}
+                    reviewHrefBase={reviewHrefBase}
                   />
                 ) : (
                   <SetupCompletionWatcher
