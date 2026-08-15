@@ -1755,6 +1755,10 @@ export function AgenticRunPanel({
           runId={runId}
           agentId={completionAgentId}
           outputHint="transcript"
+          // In the conversation the produced draft is part of the review
+          // lifecycle, so it is drawn the way the lifecycle draws a target —
+          // the core's shell, not a second card species in the same thread.
+          presentation={surface === "chat" ? "review-lifecycle" : "panel"}
         />
       )}
 

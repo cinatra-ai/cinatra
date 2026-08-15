@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 
 import { SCHEMA_FIELD_FALLBACK_RENDERER_ID } from "../agent-builder-ids";
+import { REVIEW_TARGET_SHELL_CLASS } from "../run-completion-affordances";
 import { ensureDefaultFieldRenderersRegistered } from "../register-default-renderers";
 
 vi.mock("@cinatra-ai/sdk-ui", () => ({
@@ -212,7 +213,9 @@ describe("a run that finishes in the conversation shows its artifact there", () 
   beforeEach(() => {
     readRunOutputEvidence.mockResolvedValue({
       ok: true,
-      outputs: [{ id: "art-1", title: "Draft: human purpose" }],
+      outputs: [
+        { id: "art-1", type: "blog-post", title: "Draft: human purpose" },
+      ],
       hasTranscript: false,
       hasStepResults: false,
       outputsUnavailable: false,
@@ -223,8 +226,39 @@ describe("a run that finishes in the conversation shows its artifact there", () 
   it("renders the completion card with the produced artifact link in chat", async () => {
     await renderCompleted("chat");
 
-    const link = await screen.findByText("Draft: human purpose");
-    expect(link.getAttribute("href")).toBe("/artifacts/art-1");
+    await screen.findByText("Draft: human purpose");
+    const link = document.querySelector('[data-run-output-link="art-1"]');
+    expect(link).not.toBeNull();
+    expect(link!.getAttribute("href")).toBe("/artifacts/art-1");
+  });
+
+  // The owner's review-round finding: in a conversation the produced artifact
+  // must look like the review lifecycle's target, not like a second card
+  // species. The shell classes are pinned against the canonical component by
+  // src/lib/__tests__/run-completion-review-shell.test.ts; here we pin that the
+  // chat surface actually MOUNTS that shell.
+  it("draws it as the core's review target — anchor, shell, type pill", async () => {
+    await renderCompleted("chat");
+
+    await screen.findByText("Draft: human purpose");
+    const target = document.querySelector(
+      '[data-conformance-id="review-target"]',
+    );
+    expect(target).not.toBeNull();
+    expect(target!.className).toBe(REVIEW_TARGET_SHELL_CLASS);
+    expect(target!.getAttribute("data-run-output-target")).toBe("art-1");
+    // The type pill carries the core model's label for the artifact type.
+    expect(screen.queryByText("Blog Post")).not.toBeNull();
+  });
+
+  it("keeps the run page on the shipped panel card — no anchor there", async () => {
+    await renderCompleted("agent-detail");
+
+    await screen.findByText("Draft: human purpose");
+    expect(
+      document.querySelector('[data-conformance-id="review-target"]'),
+    ).toBeNull();
+    expect(document.querySelector("[data-run-completion]")).not.toBeNull();
   });
 
   it("leaves out Start new run in chat — it navigates out of the conversation", async () => {
@@ -237,7 +271,7 @@ describe("a run that finishes in the conversation shows its artifact there", () 
   it("keeps Start new run on the run page", async () => {
     await renderCompleted("agent-detail");
 
-    await screen.findByText("Draft: human purpose");
+    await screen.findAllByText("Draft: human purpose");
     expect(screen.queryByText(/Start new run/i)).not.toBeNull();
   });
 });
