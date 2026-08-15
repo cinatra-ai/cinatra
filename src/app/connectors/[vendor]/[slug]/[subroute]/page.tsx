@@ -61,7 +61,7 @@ import { SchemaConfigConnectorForm } from "@/components/extensions/schema-config
 import { ConnectorStatusProbeCard } from "@/components/extensions/connector-status-probe-card";
 import { SearchParamToast, type SearchParamToastConfig } from "@/components/search-param-toast";
 import { InstallActivateCta } from "@/components/extensions/install-activate-cta";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { NotYetActiveNotice } from "@/components/extensions/not-yet-active-notice";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
@@ -323,13 +323,7 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
       resolveAction: resolveExtensionUiAction,
     });
     const notYetActiveBanner = notYetActive ? (
-      <Alert data-testid="connector-not-yet-active">
-        <AlertTitle>{displayName} is installed but not active yet</AlertTitle>
-        <AlertDescription>
-          It starts working after the next restart of the app. Until then this page
-          cannot load or save its settings.
-        </AlertDescription>
-      </Alert>
+      <NotYetActiveNotice displayName={displayName} />
     ) : null;
     if (statusProbeActionId) {
       // Model-A chrome (design/specs/app-connectors.html §II, "One connection"):
