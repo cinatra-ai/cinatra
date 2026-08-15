@@ -35,6 +35,10 @@ import type { AgentAuthPolicy } from "@cinatra-ai/agents/auth-policy-types";
 
 import { PLATFORM_OWNER_SENTINEL } from "./canonical-types";
 import type { ExtensionOwnerLevel } from "./canonical-types";
+import type { InstallRowOwnership } from "./canonical-types";
+
+export type { InstallRowOwnership };
+export { actorDerivedRowAnchor, resolveInstallRowAnchor, isWorkspaceRowAnchor } from "./canonical-types";
 
 // ---------------------------------------------------------------------------
 // Server-action boundary rule (cinatra#1602 — the enforced picker contract).
@@ -153,17 +157,6 @@ export function accessTargetToInstallPolicy(
 // (#2698). Nothing here writes a row.
 // ---------------------------------------------------------------------------
 
-/**
- * The canonical row-identity tuple an install anchors to —
- * `(organizationId, ownerLevel, ownerId)`. Named `rowOwnership` upstream
- * (NEVER "scope"): this is WHO OWNS the installed row, not who may USE it
- * (that is the audience policy above).
- */
-export type InstallRowOwnership = {
-  ownerLevel: ExtensionOwnerLevel;
-  ownerId: string | null;
-  organizationId: string | null;
-};
 
 /**
  * The WORKSPACE ANCHOR tuple — the app-wide row identity the two workspace
