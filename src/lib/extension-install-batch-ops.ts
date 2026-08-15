@@ -137,12 +137,19 @@ export type InstallBatchMember = {
   /**
    * cinatra#1039: the resolved ROW-OWNERSHIP tuple this member was
    * installed/updated at — the ROOT install's tuple, forced onto every member
-   * (decision 4). STAMPED by the executor so the ledger records WHO OWNS each
-   * row for compensation/recovery. Rides the existing JSONB `members` column —
-   * NO schema change. OPTIONAL: absent on legacy rows (pre-#1039) and on the
-   * root-only fast path; a reader that needs it derives the canonical default
-   * (`ownerLevel: orgId ? "organization" : "platform"`). Behavior-neutral for
-   * the extension path (equals the batch's org scope).
+   * (decision 4; refined for a workspace-anchored root by cinatra#2696, whose
+   * AGENT dependencies stay org-anchored). STAMPED by the executor so the ledger
+   * records WHO OWNS each row for compensation/recovery. Rides the existing
+   * JSONB `members` column — NO schema change.
+   *
+   * LIVE since cinatra#2696: the executor no longer discards it. It is the
+   * anchor the member's canonical row is written at, and the scope the member's
+   * pre-state read, creation-provenance capture, install-op journal read and
+   * BOTH compensation paths (live abort + boot sweep) address. OPTIONAL: absent
+   * on legacy rows (pre-#1039) and on the root-only fast path; a reader that
+   * needs it falls back to the batch's org scope
+   * (`ownerLevel: orgId ? "organization" : "platform"`) — which, for every
+   * org-anchored install, is the same value the tuple carries.
    */
   rowOwnership?: RowOwnership;
   /**
