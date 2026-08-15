@@ -7,8 +7,11 @@
 // runs top-level probing + process.exit side effects on import, so it isn't
 // unit-importable itself).
 //
-// The WayFlow runtime is profile-gated and never starts by default on a
-// fresh dev install. `cinatra instance wayflow start` is not on every
+// cinatra#2654: an install that owns a local compose stack now starts the
+// runtime with it, so a down runtime means it was stopped, deliberately
+// opted out (--no-wayflow / NO_WAYFLOW=1), or the install predates that
+// change. The remediation is the same either way.
+// `cinatra instance wayflow start` is not on every
 // released cinatra-cli yet, so the hint caveats it instead of asserting it
 // unconditionally, and gives a complete fallback: the docker invocation must
 // be pinned to the live stack's compose project (`-p cinatra_cinatra`) or it
