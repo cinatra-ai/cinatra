@@ -7,7 +7,7 @@
 import "server-only";
 
 import type { ExtensionToolboxBuildContext } from "@cinatra-ai/sdk-extensions";
-import type { LlmProvider, LlmMcpServerTool } from "./types";
+import type { LlmProvider, LlmMcpServerTool, LlmTool } from "./types";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import {
   loadExternalMcpToolboxBySlug,
@@ -148,6 +148,217 @@ export type AgentRunMcpActor = {
 export type AgentRunMcpActorTokenIssuer = (actor: AgentRunMcpActor) => string;
 
 export type ChatMcpActorTokenIssuer = (actor: ChatMcpActor) => string;
+
+// ---------------------------------------------------------------------------
+// Canonical self-MCP tool-name projection for the chat surface.
+//
+// WHY. Every chat turn ships one hosted-MCP reference, and the provider bills
+// the catalog it fetches on our behalf as input tokens. The delegated-chat
+// policy makes 83 primitives reachable, so a turn that needs none of them
+// still pays for all 83 schemas. That fixed prefix sets the COLD-TURN FLOOR:
+// caching amortizes a warm turn, it never makes the first one cheap. The only
+// deterministic, zero-model-cost way to lower the floor is to expose fewer
+// primitives on the SAME hosted reference, never by inlining schemas.
+//
+// TIERS, NOT PER-TURN RELEVANCE. The tool block is part of the cacheable
+// prefix, so an allowlist that moves per turn fragments the cache and trades a
+// smaller prefix for a worse hit rate. The tiers below are therefore STATIC
+// and CANONICAL: a stable core an arbitrary turn plausibly needs, plus
+// long-tail tiers that are enabled by workspace state, not by the question
+// being asked. Two turns with the same enabled tiers produce a byte-identical
+// tool block.
+//
+// AUTHORITY. This projection is an ADVISORY narrowing hint carried on the
+// provider request. It never widens anything: the authoritative gate stays
+// server-side at MCP-runtime-server construction (registration-time filtering
+// plus a call-time handler guard keyed off the VERIFIED actor), so a provider
+// that ignores the hint changes nothing about what is callable. Every name
+// here is asserted to be chat-reachable under that authoritative policy by
+// the projection parity test. A name that drifts out of the policy fails CI
+// rather than silently becoming an unresolvable hint.
+// ---------------------------------------------------------------------------
+
+/**
+ * A named, static slice of the delegated-chat primitive surface.
+ *
+ * `core` is always on. Every other tier is long-tail: deep per-connector or
+ * per-domain operational primitives that a turn only needs when the matching
+ * capability is actually live in the workspace.
+ */
+export type ChatMcpToolTier =
+  | "core"
+  | "artifact_lifecycle"
+  | "agent_authoring"
+  | "metrics_detail"
+  | "crm"
+  | "dashboard_analytics"
+  | "site_content"
+  | "connector_accounts"
+  | "skills_detail"
+  | "platform_admin";
+
+/**
+ * The stable core tier: discovery, dispatch, run polling, and the shallow
+ * reads an arbitrary chat turn plausibly needs. Deliberately excludes every
+ * deep per-connector operational primitive.
+ */
+const CHAT_MCP_TIER_CORE: readonly string[] = [
+  // Generic screen / extension / connector discovery.
+  "system_screen_lookup",
+  "extensions_search",
+  "connector_inventory_list",
+  // Agent discovery + dispatch + run status (the chat's core purpose).
+  "agent_list",
+  "agent_get",
+  "agent_run",
+  "agent_run_get",
+  "agent_run_list",
+  "agent_run_messages_list",
+  "agent_run_stop",
+  // Artifact authoring + the shallow reads that confirm an emission back.
+  "artifact_extension_search",
+  "artifact_authoring_emit",
+  "artifacts_list",
+  "artifacts_get",
+  // The conversational lifecycle PULL (render-only; resolves nothing).
+  "artifact_review_gates_list",
+  "artifact_review_gate_render",
+  "verification_record_render",
+  "schedule_proposal_render",
+  // Shallow shared-object context surfaced in conversation.
+  "objects_list",
+  "objects_get",
+  "projects_list",
+  "projects_get",
+  "campaigns_list",
+  "campaigns_get",
+  "blog_project_list",
+  "blog_project_get",
+  // Skill discovery (catalog level only).
+  "skills_catalog_list",
+  "skills_library_list",
+  "skills_installed_list",
+  "skills_personal_list",
+  // Dashboard catalog + the two headline cost/usage reads.
+  "dashboards_list",
+  "dashboards_get",
+  "metric_cost_summary",
+  "metric_usage_summary",
+];
+
+/**
+ * The long-tail tiers. Each is enabled by workspace state (a connector family
+ * being connected, installed and authorized; an operator holding platform
+ * admin), never by per-turn relevance.
+ */
+const CHAT_MCP_TIERS: Readonly<Record<ChatMcpToolTier, readonly string[]>> = Object.freeze({
+  core: CHAT_MCP_TIER_CORE,
+  artifact_lifecycle: [
+    "artifact_extension_get",
+    "artifact_authoring_chain_get",
+    "artifact_assertion_list",
+    "artifact_assertion_get",
+    "artifact_representation_list",
+    "artifact_representation_get",
+    "artifact_representation_latest",
+  ],
+  agent_authoring: [
+    "agent_registry_list",
+    "agent_version_list",
+    "agent_version_get",
+    "agent_version_diff",
+    "agent_creation_request_propose",
+    "agent_creation_request_edit",
+    "agent_creation_request_list",
+    "agent_creation_request_get",
+  ],
+  metrics_detail: [
+    "metric_cost_by_provider",
+    "metric_cost_by_agent",
+    "metric_cost_recent_events",
+    "metric_cost_budget_get",
+    "metric_cost_timeseries",
+    "metric_usage_events",
+  ],
+  crm: [
+    "crm_list_search",
+    "crm_list_get",
+    "crm_list_members_get",
+    "crm_account_search",
+    "crm_account_get",
+    "crm_contact_search",
+    "crm_contact_get",
+    "crm_contact_find_by_email",
+    "email_outreach_campaign_list",
+    "email_outreach_campaign_get",
+    "media_feeds_list",
+  ],
+  dashboard_analytics: [
+    "dashboards_cube_discover",
+    "dashboards_cube_validate",
+    "dashboards_cube_load",
+    "dashboards_cube_chart",
+    "dashboards_create",
+    "dashboards_update",
+  ],
+  site_content: ["wordpress_site_tool_call", "wordpress_site_tools_list"],
+  connector_accounts: ["gmail_aliases_list", "linkedin_accounts_list", "drupal_instances_list"],
+  skills_detail: [
+    "skills_installed_get",
+    "skills_installed_resolve_for_agent",
+    "skills_personal_list_for_agent",
+    "skills_personal_get",
+  ],
+  platform_admin: ["extensions_purge", "extensions_purge_execute"],
+});
+
+/** Every tier name, in a fixed order, so callers can enumerate deterministically. */
+export const CHAT_MCP_TOOL_TIER_NAMES: readonly ChatMcpToolTier[] = Object.freeze([
+  "core",
+  "artifact_lifecycle",
+  "agent_authoring",
+  "metrics_detail",
+  "crm",
+  "dashboard_analytics",
+  "site_content",
+  "connector_accounts",
+  "skills_detail",
+  "platform_admin",
+] as const);
+
+/** The names in one tier, for parity tests and host-side tier resolution. */
+export function chatMcpToolTierNames(tier: ChatMcpToolTier): readonly string[] {
+  return CHAT_MCP_TIERS[tier];
+}
+
+/**
+ * Project the enabled tiers to the canonical allowlist carried on the hosted
+ * MCP reference.
+ *
+ * DETERMINISTIC BY CONSTRUCTION: `core` is always included, the result is
+ * deduplicated and sorted lexicographically, and the input tier order is
+ * irrelevant. The same enabled-tier SET therefore always yields a
+ * byte-identical array, which is the precondition for the tool block being a
+ * stable cacheable prefix across turns.
+ */
+export function projectChatMcpAllowedTools(
+  enabledTiers: Iterable<ChatMcpToolTier> = [],
+): string[] {
+  const names = new Set<string>(CHAT_MCP_TIERS.core);
+  for (const tier of enabledTiers) {
+    const tierNames = CHAT_MCP_TIERS[tier];
+    // Ignore an unknown tier rather than throwing: a narrowing hint must never
+    // be able to fail a turn.
+    if (!tierNames) continue;
+    for (const name of tierNames) names.add(name);
+  }
+  return [...names].sort();
+}
+
+/** The union of every tier: the full chat-reachable projection. */
+export function projectAllChatMcpAllowedTools(): string[] {
+  return projectChatMcpAllowedTools(CHAT_MCP_TOOL_TIER_NAMES);
+}
 
 /**
  * Server-built inputs for the public-site widget → MCP delegated OBO token
@@ -309,6 +520,14 @@ export async function buildLlmMcpServerToolForChat(
   provider: Extract<LlmProvider, "openai" | "anthropic">,
   actor: ChatMcpActor,
   issueActorToken: ChatMcpActorTokenIssuer,
+  // The long-tail tiers this workspace has earned, on top of the always-on
+  // core. Resolved from state the host already holds (a connector family that
+  // is connected AND installed AND authorized; an actor holding platform
+  // admin), never from the question being asked, so the tool block stays a
+  // stable cacheable prefix across turns. Defaulting to no extra tiers means a
+  // caller that passes nothing gets the core tier, which is the narrowest
+  // correct answer rather than the widest.
+  options: { enabledTiers?: Iterable<ChatMcpToolTier> } = {},
 ): Promise<LlmMcpServerTool | null> {
   const serverUrl = getPublicMcpServerUrl();
   if (!serverUrl) return null;
@@ -317,6 +536,7 @@ export async function buildLlmMcpServerToolForChat(
     return buildCinatraMcpServerTool(
       serverUrl,
       `Bearer ${issueActorToken(actor)}`,
+      projectChatMcpAllowedTools(options.enabledTiers ?? []),
     );
   } catch (err) {
     console.warn(
@@ -696,4 +916,103 @@ export async function buildExternalMcpServerTools(
     );
     return [];
   }
+}
+
+// ---------------------------------------------------------------------------
+// Canonical cacheable-prefix projection (cinatra#2771).
+//
+// WHY A PROJECTION AND NOT AN ASSERTION. Prompt caching is a PREFIX MATCH: a
+// provider reuses the longest byte-identical head of a request, so a single
+// byte that moves per turn stops every cache read after that point. "Is our
+// prefix stable?" is therefore a question about BYTES, and the honest way to
+// ask it is to reduce a turn to exactly the bytes that are supposed to be
+// stable and compare two turns' reductions. That is this function.
+//
+// WHAT IT DELIBERATELY DROPS, and why each is not a defect being hidden:
+//   • CREDENTIAL MATERIAL: `headers` / `authorization` on any MCP tool. These
+//     carry a freshly minted, wall-clock-stamped bearer token. They must never
+//     be written to a log, a snapshot or a test fixture, so the projection
+//     zeroes them by construction rather than trusting a caller to redact.
+//   • CONVERSATION INPUT: `messages`. It varies by definition and sits after
+//     the prefix, so it is not part of the question.
+//
+// WHAT IT KEEPS AND NORMALIZES: the system text and the tool block, which are
+// the two things a provider actually renders ahead of the conversation. Tools
+// are projected to a stable identity per kind and SORTED, so a tool set that
+// differs only in registration order (extension capability providers iterate a
+// Map in insertion order, which is boot-dependent) projects identically.
+//
+// READING THE RESULT, the important caveat. A stable projection proves the
+// content WE control is stable. It does NOT prove the wire prefix is stable,
+// because the projection excludes exactly the credential material that today
+// changes on every turn. Treat a stable projection as a necessary condition,
+// never as evidence of a cache hit; the sufficient evidence is
+// `cached_input_tokens` on the usage row.
+// ---------------------------------------------------------------------------
+
+/** The reduced, comparable form of one turn's intended cacheable prefix. */
+export type CacheablePrefixProjection = {
+  /** The system text exactly as it would be rendered, or `""` when absent. */
+  system: string;
+  /**
+   * One stable identity line per tool, sorted. Credential material is never
+   * present. The shape is `<kind>:<identity>` plus, for an MCP reference, the
+   * sorted allowlist that narrows it.
+   */
+  tools: string[];
+};
+
+function projectToolIdentity(tool: LlmTool): string {
+  switch (tool.type) {
+    case "mcp": {
+      // `serverUrl` is an origin+path the operator configured, never a secret,
+      // and it is load-bearing for identity: the same label pointed at a
+      // different host is a different tool block.
+      const allowed = tool.allowedTools ? [...tool.allowedTools].sort() : null;
+      const narrowing = allowed ? `allowed=${allowed.join(",")}` : "allowed=*";
+      return `mcp:${tool.serverLabel}:${tool.serverUrl}:${narrowing}`;
+    }
+    case "web_search":
+      return "web_search:";
+    case "container_skills": {
+      const t = tool as { skills?: Array<{ skillId?: string; version?: string }> };
+      const skills = (t.skills ?? [])
+        .map((s) => `${s.skillId ?? ""}@${s.version ?? ""}`)
+        .sort();
+      return `container_skills:${skills.join(",")}`;
+    }
+    default: {
+      // Function, shell and sandbox tools are identified by their model-facing
+      // name. Anything without one still projects deterministically by kind.
+      const named = tool as { type: string; name?: string };
+      return `${named.type}:${named.name ?? ""}`;
+    }
+  }
+}
+
+/**
+ * Reduce a turn's system text and tool block to the canonical projection.
+ *
+ * Pure and total: it never throws, never reads a clock, and never returns
+ * credential material, so it is safe to call from a test, a gate or a
+ * measurement script.
+ */
+export function projectCacheablePrefix(input: {
+  system?: string;
+  tools?: LlmTool[];
+}): CacheablePrefixProjection {
+  return {
+    system: input.system ?? "",
+    tools: (input.tools ?? []).map(projectToolIdentity).sort(),
+  };
+}
+
+/**
+ * A stable string form of the projection, for byte-equality comparison across
+ * turns and for recording in evidence.
+ */
+export function serializeCacheablePrefixProjection(
+  projection: CacheablePrefixProjection,
+): string {
+  return JSON.stringify(projection, null, 2);
 }
