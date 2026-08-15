@@ -156,7 +156,10 @@ describe("canPublishToMarketplace (§V — one-way Publish)", () => {
 // verdict — with it, every pre-#2416 expectation below must hold UNCHANGED.
 const cap = (
   op: LifecycleCapabilityOp,
-  denial?: { code: "no_addressable_row" | "platform_admin_required"; reason: string },
+  denial?: {
+    code: "no_addressable_row" | "no_write_standing" | "platform_admin_required";
+    reason: string;
+  },
 ): LifecycleCapability =>
   denial
     ? { op, allowed: false, code: denial.code, reason: denial.reason }
