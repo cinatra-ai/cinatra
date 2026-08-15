@@ -205,10 +205,10 @@
       "card": "artifact_review_gate",
       "surface": "chat_thread",
       "state": "pending",
-      "round": "host2-dev",
+      "round": "a lane host-dev",
       "runtime": "DEV runtime (pnpm dev, CINATRA_RUNTIME_MODE=development, NODE_ENV!=production, CINATRA_TEST_LLM_PROVIDER=scripted). NOT a production build - see the round's note.",
       "delivered": true,
-      "screenshot": "review-card__chat_thread__pending__host2-dev.png",
+      "screenshot": "review-card__chat_thread__pending__lane-dev.png",
       "conformanceAnchors": [
         "review-composer-bound",
         "review-composer-focus",
@@ -231,10 +231,10 @@
       "card": "artifact_review_gate",
       "surface": "chat_thread",
       "state": "decided",
-      "round": "host2-dev",
+      "round": "a lane host-dev",
       "runtime": "DEV runtime (as above).",
       "delivered": true,
-      "screenshot": "review-card__chat_thread__decided__host2-dev.png",
+      "screenshot": "review-card__chat_thread__decided__lane-dev.png",
       "conformanceAnchors": [
         "review-gate-card",
         "sidebar-assistants-entry"
@@ -253,10 +253,10 @@
       "card": "recommendation_hold",
       "surface": "run_card",
       "state": "held",
-      "round": "host2-dev",
+      "round": "a lane host-dev",
       "runtime": "DEV runtime (as above). No LLM dispatch is involved in this cell - the hold parks at run START, before dispatch.",
       "delivered": true,
-      "screenshot": "recommendation-hold__run_card__held__host2-dev.png",
+      "screenshot": "recommendation-hold__run_card__held__lane-dev.png",
       "conformanceAnchors": [
         "run-chip-row",
         "run-surface",
@@ -276,10 +276,10 @@
       "card": "artifact_review_gate",
       "surface": "run_card",
       "state": "live-run",
-      "round": "host2-dev",
+      "round": "a lane host-dev",
       "runtime": "DEV runtime (as above).",
       "delivered": false,
-      "screenshot": "review-card__run_card__live-run__host2-dev.png",
+      "screenshot": "review-card__run_card__live-run__lane-dev.png",
       "conformanceAnchors": [
         "run-step-rail",
         "run-surface",
@@ -288,7 +288,7 @@
       "lifecycleHosts": [],
       "lifecycleCardStates": [],
       "pageErrors": [],
-      "reason": "STRICTLY SHARPER THAN BOTH EARLIER ROUNDS. The run_card host IS declared and drawn, AND a real review gate is now bound to this run - emitted through the shipped writers by the app's own capability-gated POST /api/development/lifecycle-seed (fixture repairVerification), and the run's own step rail draws it ('Review CHANGES_REQUESTED', 'Core analysis DRIFTED'). The card still does not mount because AgenticRunPanel gates the run_card ReviewGateCard on isPendingApproval && effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID && reviewGateCardRef. That interrupt context is LIVE ORCHESTRATION STATE, not a row: it needs a run that actually pauses at the artifact-review checkpoint, i.e. a real LLM-backed execution. No credential may reach host2, so it is out of reach here."
+      "reason": "STRICTLY SHARPER THAN BOTH EARLIER ROUNDS. The run_card host IS declared and drawn, AND a real review gate is now bound to this run - emitted through the shipped writers by the app's own capability-gated POST /api/development/lifecycle-seed (fixture repairVerification), and the run's own step rail draws it ('Review CHANGES_REQUESTED', 'Core analysis DRIFTED'). The card still does not mount because AgenticRunPanel gates the run_card ReviewGateCard on isPendingApproval && effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID && reviewGateCardRef. That interrupt context is LIVE ORCHESTRATION STATE, not a row: it needs a run that actually pauses at the artifact-review checkpoint, i.e. a real LLM-backed execution. No credential may reach a lane host, so it is out of reach here."
     }
   ],
   "primaryHostRound": {
@@ -301,10 +301,10 @@
   },
   "host2DevRound": {
     "capturedAt": "2026-08-13T17:05:00Z",
-    "host": "host2 (ordnas@192.168.0.36)",
+    "host": "a lane host (<lane-host>)",
     "branch": "preview/2573-visuals @ 579819c25edd79b724d30836cb2d9c8f87ad1f72",
     "runtime": "DEV runtime - pnpm dev (Next.js 16.2.10, Turbopack), CINATRA_RUNTIME_MODE=development, NODE_ENV != production, CINATRA_TEST_LLM_PROVIDER=scripted (MODEL LAYER ONLY), CINATRA_TURBOPACK_DEV_FS_CACHE=0",
     "productionFence": "This round is NOT on a production-equivalent build and cannot be: assertScriptedProviderNotProduction throws unless NODE_ENV!=='production', and lifecycleSeedEnvVerdict FENCE 1a answers 404 production-build first. AC-15 as written asks for both at once and is unsatisfiable; these cells are offered on the development runtime and labelled as such on every row.",
-    "fullVisualRound": "https://github.com/cinatra-ai/cinatra/tree/evidence/2573-s7-visuals-host2/2573-s7-visuals-host2"
+    "fullVisualRound": "https://github.com/cinatra-ai/cinatra/tree/evidence/2573-s7-visuals-a lane host/2573-s7-visuals-a lane host"
   }
 }

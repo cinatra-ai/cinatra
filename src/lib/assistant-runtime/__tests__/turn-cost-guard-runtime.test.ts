@@ -432,6 +432,10 @@ describe("cinatra#2580 — the request envelope is unchanged", () => {
     expect(Object.keys(capturedStreamInput!).sort()).toEqual(
       [
         "actorContext",
+        // cinatra#2776 — the ONE field added since: the native-MCP requirement
+        // the self-MCP toolbox is dispatched under. It rides beside
+        // `skipMcpInjection` and is absent on a conversation-only turn.
+        "capabilityRequired",
         "logLabel",
         "maxSteps",
         "messages",

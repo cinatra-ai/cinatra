@@ -1226,6 +1226,104 @@ export function findAssistantTurnByRunId(runId: string): AssistantTurn | null {
   return row ? mapAssistantTurnRow(row) : null;
 }
 
+// ---------------------------------------------------------------------------
+// WHICH CONVERSATION IS THIS AGENT RUN PLAYING OUT IN (cinatra#2729)
+// ---------------------------------------------------------------------------
+//
+// A chat-started agent run does its whole lifecycle inside the conversation
+// that started it, so a notification about that run has to bring the reader
+// BACK to the conversation — not to a separate page carrying a second copy of
+// the same card.
+//
+// `agent_runs` has no conversation column, and this lookup deliberately does
+// not ask for one: the link already exists, durably, on the chat side. A turn
+// that dispatched an agent persists the run card's own part
+// (`{ kind: "tool_call", name: "agent_run", runId }`) inside `content`, which
+// is exactly how a reloaded thread re-mounts the card. Reading it back is
+// reading the record the chat already keeps, in the direction the notifier
+// needs it.
+//
+// Containment (`@>`) over the JSONB column matches an array element that
+// carries BOTH keys, so a run id appearing in some other shape cannot match.
+// The read is best-effort by construction — a turn persisted after the run
+// paused, a thread the reader cannot address, or a store that cannot answer
+// all return null, and the caller falls back to the run page.
+
+/**
+ * Build a thread's `/chat` path.
+ *
+ * The grammar is the codec's (`packages/chat/src/chat-path-codec.ts`):
+ * `/chat/<vendor>/<slug>[/<instance>]/<titleSlug-or-threadId>`, and the
+ * unbound-thread rule is this module's own
+ * {@link IMPLICIT_DEFAULT_ASSISTANT_PACKAGE}. It is rebuilt here rather than
+ * imported because the codec lives in the chat PACKAGE, which this server leaf
+ * does not depend on — the same call `packages/notifications` makes for the
+ * agent-run path builder. A unit test pins the output against the codec's.
+ */
+function buildChatThreadPath(thread: {
+  id: string;
+  assistantPackage: string | null;
+  instanceId: string | null;
+  titleSlug: string | null;
+}): string | null {
+  const pkg = thread.assistantPackage ?? IMPLICIT_DEFAULT_ASSISTANT_PACKAGE;
+  const match = pkg.match(/^@([^/]+)\/(.+)$/);
+  if (!match) return null;
+  const segments = [match[1], match[2]];
+  // An instance segment belongs to a bound container only — an unbound thread
+  // is addressed in the default container, which has no instance.
+  if (thread.assistantPackage && thread.instanceId) {
+    segments.push(thread.instanceId);
+  }
+  // A thread is addressable by its id before its title slug is minted; the
+  // route resolver tries the id first, then the slug.
+  segments.push(thread.titleSlug ?? thread.id);
+  return `/chat/${segments.join("/")}`;
+}
+
+/**
+ * Resolve the `/chat` path of the conversation that started an agent run, or
+ * null when there is none to resolve.
+ */
+export function findChatConversationPathForAgentRun(
+  agentRunId: string,
+): string | null {
+  const id = typeof agentRunId === "string" ? agentRunId.trim() : "";
+  if (!id || id.length > 128) return null;
+  let row: Record<string, unknown> | undefined;
+  try {
+    ensurePostgresSchema();
+    const schema = schemaIdent();
+    const [res] = runPostgresQueriesSync({
+      connectionString: getPostgresConnectionString(),
+      queries: [
+        {
+          text: `SELECT th.id, th.assistant_package, th.instance_id, th.title_slug
+                 FROM "${schema}"."assistant_turns" tt
+                 JOIN "${schema}"."assistant_threads" th ON th.id = tt.thread_id
+                 WHERE tt.content @> $1::jsonb
+                 ORDER BY tt.created_at DESC, tt.id
+                 LIMIT 1`,
+          values: [
+            JSON.stringify({ parts: [{ name: "agent_run", runId: id }] }),
+          ],
+        },
+      ],
+    });
+    row = res?.rows?.[0] as Record<string, unknown> | undefined;
+  } catch {
+    return null;
+  }
+  if (!row) return null;
+  return buildChatThreadPath({
+    id: String(row.id),
+    assistantPackage:
+      typeof row.assistant_package === "string" ? row.assistant_package : null,
+    instanceId: typeof row.instance_id === "string" ? row.instance_id : null,
+    titleSlug: typeof row.title_slug === "string" ? row.title_slug : null,
+  });
+}
+
 /**
  * IS THIS TURN STILL RUNNING — and if not, is that a fact or an outage?
  *

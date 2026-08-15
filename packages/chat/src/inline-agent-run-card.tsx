@@ -27,13 +27,33 @@
  */
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   AgenticRunPanel,
   type SerializedAgentRunMessage,
   type ChatGateDescriptor,
+  type HitlGateContext,
 } from "@cinatra-ai/agents/client-entry";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAgentCreationProgress } from "./use-agent-creation-progress";
+
+/**
+ * Parse a scoped npm package name into the `/agents/[vendor]/[packageName]/
+ * [instanceId]` run-page path. A verbatim copy of the host's pure
+ * `src/lib/agent-url.ts:buildAgentInstancePath`, duplicated here for the same
+ * reason `packages/notifications/src/agent-run-href.ts` duplicates it: four
+ * lines with zero dependencies, and the four routes this card is reachable from
+ * carry a locked reachable-module budget that one more leaf would grow. A unit
+ * test pins this output against the host builder's, so the two cannot drift.
+ */
+function buildAgentInstancePath(
+  agentPackageName: string,
+  instanceId: string,
+): string {
+  const match = agentPackageName.match(/^@([^/]+)\/(.+)$/);
+  if (match) return `/agents/${match[1]}/${match[2]}/${instanceId}`;
+  return `/agents/${agentPackageName}/${instanceId}`;
+}
 
 /**
  * Append-only creation-progress timeline.
@@ -78,6 +98,14 @@ type SeedData = {
   taskId: string | null;
   traceId: string | null;
   messages: SerializedAgentRunMessage[];
+  /**
+   * The run's OPEN gate, as the run API already derives it. The seed used to
+   * drop this field on the floor and let the panel re-discover the gate on its
+   * own poll, which is why a chat card could sit on the formless "awaiting
+   * approval" banner while the actionable form was one already-answered request
+   * away. It is read off the same response as every other seed value.
+   */
+  hitlContext?: HitlGateContext | null;
 };
 
 type LoadFailureReason = "not-found" | "forbidden" | "transient";
@@ -187,6 +215,19 @@ export function InlineAgentRunCard({
     );
   }
 
+  // PLATFORM-BUILT, never model-authored (cinatra#2729 defect 1). The run page
+  // lives at `/agents/<vendor>/<packageName>/<runId>`; the chat used to carry
+  // whatever URL the model wrote for it, which was `/agents/runs/<runId>` — an
+  // API path with no page behind it, so the one link out of the conversation
+  // 404'd. The href is built here by the SAME builder the notification writer
+  // uses, from the package name the run API returned, so it cannot be guessed
+  // and cannot drift. Absent package name -> no link at all, rather than a
+  // fabricated one. The link is SECONDARY: the card above it already carries
+  // everything needed to act on the run.
+  const runPageHref = seed.agentPackageName
+    ? buildAgentInstancePath(seed.agentPackageName, runId)
+    : null;
+
   return (
     <div className="my-2">
       <CreationProgressTimeline runId={runId} />
@@ -201,9 +242,21 @@ export function InlineAgentRunCard({
         traceId={seed.traceId ?? undefined}
         inputParams={seed.inputParams}
         templateId={seed.templateId}
+        initialHitlContext={seed.hitlContext ?? null}
         onActiveGateChange={onActiveGateChange}
         surface="chat"
       />
+      {runPageHref ? (
+        <div className="mt-1 flex justify-end">
+          <Link
+            href={runPageHref}
+            data-testid="inline-run-page-link"
+            className="text-xs text-muted-foreground underline underline-offset-2"
+          >
+            Open the run page
+          </Link>
+        </div>
+      ) : null}
     </div>
   );
 }

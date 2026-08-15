@@ -35,9 +35,12 @@ check:
 # indexer container starts with the key the operator actually configured instead
 # of the empty shell interpolation it used to get. Non-fatal: a keyless or
 # not-yet-reachable database reports "indexing OFF" and the bring-up continues.
+# The `wayflow` profile brings up the agent runtime with the stack (cinatra#2654):
+# agent runs hit it on :3010 and fail with ECONNREFUSED when it is absent, so it
+# belongs to the default bring-up, not to an undocumented extra command.
 dev:
 	-npm run --silent gen:graphiti-env
-	docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+	docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile wayflow up -d
 	pnpm dev
 
 # Stop infrastructure (keeps data).

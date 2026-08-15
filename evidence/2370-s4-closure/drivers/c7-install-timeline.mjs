@@ -5,7 +5,7 @@ import { chromium } from "@playwright/test";
 import { writeFileSync } from "node:fs";
 import { authenticate, ensureDir, shot, BASE, withDb } from "./lib-auth.mjs";
 
-const OUT = ensureDir(process.env.S4_OUT ?? "/Users/ordnas/cinatra-lanes/2370c-out/c7");
+const OUT = ensureDir(process.env.S4_OUT ?? "<lane-out>/2370c-out/c7");
 const CARD_TITLE = "Google Appointment Schedules";
 const steps = [];
 const timeline = [];

@@ -1,6 +1,6 @@
-# cinatra#2573 S7 — the visual round on **host2**, on the DEV runtime
+# cinatra#2573 S7 — the visual round on **a lane host**, on the DEV runtime
 
-Captured 2026-08-13 on host2 (`ordnas@192.168.0.36`) against
+Captured 2026-08-13 on a lane host (`<lane-host>`) against
 `preview/2573-visuals` @ **`579819c25edd79b724d30836cb2d9c8f87ad1f72`**
 (= `origin/main` + `origin/2573-d1` + `origin/2573-d2`, all three verified as
 ancestors of that head).
@@ -96,7 +96,7 @@ anywhere is the **model layer**.
 
 | Cell | What actually happened |
 |---|---|
-| `C3__review-card__run_card__live-run.png` | **NOT delivered.** The `run_card` host IS declared and drawn, and a real review gate IS now bound to this run — the run's own step rail draws it ("Review CHANGES_REQUESTED", "Core analysis DRIFTED"), seeded through the shipped writers. The card still does not mount, and this round can name why exactly: `AgenticRunPanel` gates the `run_card` `ReviewGateCard` on `isPendingApproval && effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID && reviewGateCardRef`. That interrupt context is **live orchestration state, not a row** — it needs a run that actually pauses at the artifact-review checkpoint, i.e. a real LLM-backed execution. No credential may reach host2, so it is out of reach here. This supersedes both earlier answers ("the panel never mounted" / "no gate is bound to the run"): the panel mounts, the gate is bound, and the missing thing is the run's own pause. |
+| `C3__review-card__run_card__live-run.png` | **NOT delivered.** The `run_card` host IS declared and drawn, and a real review gate IS now bound to this run — the run's own step rail draws it ("Review CHANGES_REQUESTED", "Core analysis DRIFTED"), seeded through the shipped writers. The card still does not mount, and this round can name why exactly: `AgenticRunPanel` gates the `run_card` `ReviewGateCard` on `isPendingApproval && effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID && reviewGateCardRef`. That interrupt context is **live orchestration state, not a row** — it needs a run that actually pauses at the artifact-review checkpoint, i.e. a real LLM-backed execution. No credential may reach a lane host, so it is out of reach here. This supersedes both earlier answers ("the panel never mounted" / "no gate is bound to the run"): the panel mounts, the gate is bound, and the missing thing is the run's own pause. |
 
 ## About the visible ref in B3–B5
 

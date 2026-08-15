@@ -221,6 +221,14 @@ export async function requestMarketplacePublishAction(formData: FormData): Promi
  * fields — so it cannot roll back a token a concurrent rotation just wrote.
  */
 export async function readMarketplaceVendorStatus(): Promise<MarketplaceVendorStatusView | null> {
+  // Platform-admin gate (cinatra#2700, epic #2699) — found by the sweep clause.
+  // This is the one export in this module that carried no gate, and it is not a
+  // pure read: it spends the instance token against the marketplace and then
+  // reconciles `registries.remote` into the instance identity. Both of its call
+  // sites (the Environment → Registries card and the extension Settings screen)
+  // are admin-gated already, so the gate changes nothing for them — it closes
+  // the direct-invocation path a server action always exposes.
+  await requireAdminSession();
   if (!resolveInstanceToken() || detectMarketplaceEnvConflict()) {
     return null;
   }

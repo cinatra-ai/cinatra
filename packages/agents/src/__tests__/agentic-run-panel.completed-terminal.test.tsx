@@ -175,12 +175,38 @@ describe("AgenticRunPanel — terminal completed state (cinatra#2482)", () => {
     expect(screen.queryByText(/no messages yet/i)).not.toBeNull();
   });
 
-  it("does not change the chat mount — that thread carries its own continuation", async () => {
+  // cinatra#2729: the chat mount shows the card too. A run that finishes in a
+  // conversation used to end there with nothing — no output, no artifact, no
+  // next step — and the owner ruled the finished work renders as a reviewable
+  // artifact INSIDE the conversation. What stays surface-bound is "Start new
+  // run", which would navigate the reader out of the thread.
+  it("shows the completion card on the chat mount, with the produced artifact", async () => {
+    readRunOutputEvidenceMock.mockResolvedValueOnce({
+      ok: true,
+      outputs: [{ id: "obj-draft", type: "blog_post", title: "The draft" }],
+      hasTranscript: false,
+      hasStepResults: false,
+    });
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     render(<AgenticRunPanel {...baseProps({ surface: "chat" })} />);
 
-    expect(document.querySelector("[data-run-completion]")).toBeNull();
-    expect(screen.queryByText(/no messages yet/i)).not.toBeNull();
-    expect(readRunOutputEvidenceMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.queryByRole("link", { name: "The draft" })).not.toBeNull(),
+    );
+    expect(document.querySelector("[data-run-completion]")).not.toBeNull();
+    expect(
+      screen.getByRole("link", { name: "The draft" }).getAttribute("href"),
+    ).toBe("/artifacts/obj-draft");
+    expect(screen.queryByText(/no messages yet/i)).toBeNull();
+  });
+
+  it("leaves Start new run off the chat mount — it navigates out of the thread", async () => {
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    render(<AgenticRunPanel {...baseProps({ surface: "chat" })} />);
+
+    await waitFor(() =>
+      expect(document.querySelector("[data-run-completion]")).not.toBeNull(),
+    );
+    expect(screen.queryByText(/Start new run/i)).toBeNull();
   });
 });

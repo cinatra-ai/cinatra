@@ -10,6 +10,7 @@ set -euo pipefail
 #                                           #   profiles + demo profile + seed
 #   SEED=1|0        bash scripts/setup.sh   # skip the sample-data prompt
 #   YES=1           bash scripts/setup.sh   # accept all defaults (MODE=dev, SEED=0)
+#   NO_WAYFLOW=1    bash scripts/setup.sh   # do not start the WayFlow agent runtime
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -80,6 +81,21 @@ elif [ -z "${MODE:-}" ] && [ -f .env.local ] && grep -q '^CINATRA_INSTALL_PROFIL
   DEMO=1
   INSTALL_PROFILE="demo"
   info "Existing .env.local pins CINATRA_INSTALL_PROFILE=demo — keeping the demo overlay on this run."
+fi
+
+# ── WayFlow agent runtime (cinatra#2654) ─────────────────────────────────────
+# This script OWNS the local compose stack it starts, so it starts the WayFlow
+# agent runtime with it. Before, the runtime was profile-gated and no setup path
+# activated the profile: a fresh install had nothing on :3010 and every agent run
+# died with ECONNREFUSED. The compose profile stays exactly where it is and
+# remains the opt-out mechanism; this script simply activates it by default.
+# `NO_WAYFLOW=1` is the opt-out, for a deliberately lean install.
+WAYFLOW=1
+WAYFLOW_RUNTIME_MODE="local"
+if [ "${NO_WAYFLOW:-}" = "1" ]; then
+  WAYFLOW=0
+  WAYFLOW_RUNTIME_MODE="off"
+  warn "NO_WAYFLOW=1 — the WayFlow agent runtime will NOT be started. Agent runs fail until you start it."
 fi
 
 RESOLVED_MODE=""
@@ -183,10 +199,57 @@ else
 fi
 info "Install profile: $INSTALL_PROFILE (CINATRA_INSTALL_PROFILE=$INSTALL_PROFILE)."
 
+# ── WayFlow runtime decision (cinatra#2654) ──────────────────────────────────
+# Record what THIS run decided, the same key `cinatra install` writes, so
+# `cinatra doctor` can tell a deliberate opt-out apart from a runtime that
+# should be up and is not. Idempotent: rewrite-if-present, append-if-absent.
+if grep -q '^CINATRA_WAYFLOW_RUNTIME=' .env.local; then
+  if [ "$(uname)" = "Darwin" ]; then
+    sed -i '' "s|^CINATRA_WAYFLOW_RUNTIME=.*|CINATRA_WAYFLOW_RUNTIME=$WAYFLOW_RUNTIME_MODE|" .env.local
+  else
+    sed -i "s|^CINATRA_WAYFLOW_RUNTIME=.*|CINATRA_WAYFLOW_RUNTIME=$WAYFLOW_RUNTIME_MODE|" .env.local
+  fi
+else
+  printf '\n# WayFlow agent runtime for this install (cinatra#2654): local | off | external.\nCINATRA_WAYFLOW_RUNTIME=%s\n' "$WAYFLOW_RUNTIME_MODE" >> .env.local
+fi
+
+# ── WayFlow bridge-token env (cinatra#2075, #2654) ───────────────────────────
+# The shared `wayflow` agent-runtime container authenticates every callback to
+# /api/llm-bridge with CINATRA_BRIDGE_TOKEN, which it reads from the NARROW
+# generated file docker/wayflow/.wayflow.env (its `env_file`, `required:
+# false`). Generate it on EVERY install (not only demo), from the per-install
+# random token minted into .env.local above — never a shared constant, never
+# printed. `--require-bridge-token` turns a missing token into a loud,
+# actionable failure instead of a silent 403.
+#
+# This runs BEFORE the bring-up now: the runtime starts WITH the stack, so the
+# file has to be correct by then. Generating it afterwards (the old order) meant
+# the very first start read no token and agent_loader.py crash-looped.
+info "Provisioning the WayFlow bridge-token env (docker/wayflow/.wayflow.env) from .env.local..."
+node scripts/gen-wayflow-env.mjs --require-bridge-token
+
 # ── Docker infrastructure ─────────────────────────────────────────────────────
 
-info "Starting infrastructure (Postgres + Redis)..."
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+# cinatra#2654: the WayFlow agent runtime comes up WITH the stack. Its image
+# builds from ./docker/wayflow (there is no registry image), so build it as its
+# OWN step first: a broken build then fails setup by name and stays cheap to
+# retry, instead of surfacing as a generic `up` error after everything else
+# already started.
+COMPOSE_PROFILE_ARGS=""
+WAYFLOW_LABEL=""
+if [ "$WAYFLOW" = "1" ]; then
+  COMPOSE_PROFILE_ARGS="--profile wayflow"
+  WAYFLOW_LABEL=" + the WayFlow agent runtime"
+  info "Building the WayFlow agent-runtime image (first build is slow; later runs hit the layer cache)..."
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile wayflow build wayflow \
+    || error "The WayFlow agent-runtime image failed to build. Setup stopped here rather than reporting a ready install whose agent runs would all fail. Fix the build error and re-run \`bash scripts/setup.sh\` (it reconciles in place), or re-run with NO_WAYFLOW=1 to set up without the agent runtime."
+fi
+
+info "Starting infrastructure (Postgres + Redis$WAYFLOW_LABEL)..."
+# COMPOSE_PROFILE_ARGS is empty or the deliberate `--profile wayflow` flag pair,
+# so the word split below is intended.
+# shellcheck disable=SC2086
+docker compose -f docker-compose.yml -f docker-compose.dev.yml $COMPOSE_PROFILE_ARGS up -d
 
 info "Waiting for Postgres to be ready..."
 until docker compose exec -T postgres pg_isready -U postgres >/dev/null 2>&1; do
@@ -206,25 +269,24 @@ until curl -sf http://127.0.0.1:3003/health >/dev/null 2>&1; do
 done
 info "Nango is ready."
 
-# ── WayFlow bridge-token env (cinatra#2075, #2654) ───────────────────────────
-# The shared `wayflow` agent-runtime container authenticates every callback to
-# /api/llm-bridge with CINATRA_BRIDGE_TOKEN, which it reads from the NARROW
-# generated file docker/wayflow/.wayflow.env (its `env_file`, `required:
-# false`). `npm run services` regenerates that file on every bring-up
-# (gen-wayflow-env.mjs); the setup path once did not, so a fresh `make
-# setup-demo` started wayflow with NO token and agent_loader.py crash-looped
-# ("FATAL: CINATRA_BRIDGE_TOKEN is unset or empty") — widget agent replies then
-# stayed empty until the token was populated by hand (cinatra#2075).
-#
-# Generate the file on EVERY install (not only demo), from the per-install
-# random token minted into .env.local above (never a shared constant, never
-# printed). The runtime is profile-gated and a dev install does not start it
-# here, but the file must already be correct the moment the operator runs
-# `cinatra instance wayflow start` (#2654). `--require-bridge-token` mirrors
-# `npm run services` and turns a missing token into a loud, actionable failure
-# instead of a silent 403.
-info "Provisioning the WayFlow bridge-token env (docker/wayflow/.wayflow.env) from .env.local..."
-node scripts/gen-wayflow-env.mjs --require-bridge-token
+# ── WayFlow runtime readiness (cinatra#2654) ─────────────────────────────────
+# The loader mounts every installed agent on a cold start, so the compose
+# healthcheck allows it ~2 minutes. Wait for it here, BOUNDED and NON-FATAL: a
+# still-mounting loader is "check again in a minute", not a failed setup.
+if [ "$WAYFLOW" = "1" ]; then
+  info "Waiting for the WayFlow agent runtime to report healthy..."
+  WAYFLOW_DEADLINE=$(( $(date +%s) + 180 ))
+  until curl -sf http://127.0.0.1:3010/.health >/dev/null 2>&1; do
+    if [ "$(date +%s)" -ge "$WAYFLOW_DEADLINE" ]; then
+      warn "The WayFlow agent runtime is not answering yet. It mounts every installed agent on a cold start. Check \`docker compose logs wayflow\` if agent runs keep failing."
+      break
+    fi
+    sleep 3
+  done
+  if curl -sf http://127.0.0.1:3010/.health >/dev/null 2>&1; then
+    info "WayFlow agent runtime is ready (http://localhost:3010)."
+  fi
+fi
 
 # ── Demo app profiles (cinatra#1238) ─────────────────────────────────────────
 # On a demo install, bring up the four bundled app profiles and wait for each to
@@ -239,7 +301,12 @@ if [ "$DEMO" = "1" ]; then
   # The `wordpress` + `drupal` profiles below ALSO bring up the shared `wayflow`
   # runtime container (docker-compose.yml: the wayflow service declares
   # `profiles: [wayflow, drupal, wordpress]`); its bridge-token env file was
-  # generated above.
+  # generated above. That membership is why NO_WAYFLOW=1 cannot hold on a demo
+  # install: say so rather than let the operator believe an opt-out that the CMS
+  # profiles override.
+  if [ "$WAYFLOW" = "0" ]; then
+    warn "NO_WAYFLOW=1 does not apply to a demo install: the wordpress and drupal profiles include the shared WayFlow runtime, so it starts anyway."
+  fi
   info "Bringing up the four demo app profiles (wordpress, drupal, twenty, plane)..."
   docker compose -f docker-compose.yml -f docker-compose.dev.yml \
     --profile wordpress --profile drupal --profile twenty --profile plane up -d
@@ -474,11 +541,14 @@ echo ""
 echo "  The first user to register becomes the admin."
 echo "  After that, you can (re-)load sample data with: pnpm seed"
 echo ""
-echo "  Agent runtime: agent runs execute in the WayFlow container (:3010)."
-echo "  It is profile-gated and does NOT start by default: agent runs fail"
-echo "  with ECONNREFUSED until you start it:"
-echo "      cinatra instance wayflow start"
-echo "  (or: docker compose --profile wayflow up -d --build wayflow)"
+if [ "$WAYFLOW" = "1" ]; then
+  echo "  Agent runtime: the WayFlow container (:3010) started with the stack."
+  echo "  Agents work out of the box. Stop it with: cinatra instance wayflow stop"
+else
+  echo "  Agent runtime: NOT started (NO_WAYFLOW=1). Agent runs fail with"
+  echo "  ECONNREFUSED until you start it:"
+  echo "      cinatra instance wayflow start"
+fi
 echo ""
 echo "  Knowledge graph: after you connect OpenAI in the app (/configuration/llm),"
 echo "  run 'npm run kg:refresh' to hand that key to the indexer container."

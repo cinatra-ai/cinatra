@@ -76,6 +76,12 @@ const ALLOWED_FILES = [
   // exercise the install/rollback ordering through the public dispatch path. They
   // never perform a real write — same pattern as the teardown test above.
   "packages/extensions/src/__tests__/dispatcher-install-ordering.test.ts",
+  // Row-anchor dispatcher test (cinatra#2696) — the same fixture class as the
+  // ordering test above: it mocks the canonical-store writers (incl.
+  // _internalDeleteInstalledExtension) in vi.mock fixtures to prove the install
+  // writes its row at the THREADED anchor and rolls the org-NULL placeholder
+  // back. Never a real write.
+  "packages/extensions/src/__tests__/dispatcher-install-row-anchor.test.ts",
   "src/lib/__tests__/extension-dispatch-public-path.test.ts",
   // Static-bundle anchor lifecycle tests — mock the canonical-store writers
   // (incl. _internalUpdateInstalledExtensionStatus) in vi.mock fixtures to
