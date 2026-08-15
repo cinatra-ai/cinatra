@@ -29,7 +29,7 @@ import {
   type RuntimeConnectorCardRecord,
 } from "@/lib/extension-install-resolution";
 import { isConnectorInstalledFromRuntime } from "@cinatra-ai/extensions/connector-installed-predicate";
-import { isWorkspaceAnchoredRow } from "@cinatra-ai/extensions/workspace-connector-anchor";
+import { isWorkspaceAnchoredRow } from "@cinatra-ai/extensions/canonical-types";
 import {
   readInstalledExtensionsByPackageNames,
   listInstalledExtensions,

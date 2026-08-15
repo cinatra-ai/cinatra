@@ -20,7 +20,7 @@ import {
 } from "./canonical-store";
 import type { InstalledExtension } from "./canonical-types";
 import type { ExtensionOwnerContext } from "./enforce-extension-access";
-import { workspaceAnchorIdentity } from "./workspace-connector-anchor";
+import { workspaceAnchorIdentity } from "./canonical-types";
 
 export type ResolvedExtensionResource = {
   /** The polymorphic resource_id = installed_extension.id. */

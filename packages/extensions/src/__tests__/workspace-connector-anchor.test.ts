@@ -9,7 +9,7 @@ import { describe, it, expect } from "vitest";
 import {
   isWorkspaceAnchoredRow,
   workspaceAnchorIdentity,
-} from "../workspace-connector-anchor";
+} from "../canonical-types";
 import { WORKSPACE_ANCHOR_ROW_OWNERSHIP } from "../install-access-target";
 import { PLATFORM_OWNER_SENTINEL } from "../canonical-types";
 

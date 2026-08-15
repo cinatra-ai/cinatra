@@ -1,7 +1,7 @@
 import "server-only";
 
 import type { ExtensionKind } from "@cinatra-ai/extensions/canonical-types";
-import { isWorkspaceAnchoredRow } from "@cinatra-ai/extensions/workspace-connector-anchor";
+import { isWorkspaceAnchoredRow } from "@cinatra-ai/extensions/canonical-types";
 
 // The TRUSTED install-record resolver — closes the runtime-loader loop.
 //

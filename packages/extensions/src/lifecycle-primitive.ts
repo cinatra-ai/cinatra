@@ -26,7 +26,7 @@ import {
 import { deleteExtensionPermissions } from "./permissions-store";
 import { isNonFinalizedLiveRowAware } from "./non-finalized-row";
 import { isStaticBundleAnchorSource } from "./static-bundle-anchor";
-import { isWorkspaceAnchoredRow } from "./workspace-connector-anchor";
+import { isWorkspaceAnchoredRow } from "./canonical-types";
 import {
   PLATFORM_OWNER_SENTINEL,
   DESTRUCTIVE_OPS,
