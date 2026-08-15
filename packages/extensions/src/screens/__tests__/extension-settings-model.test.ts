@@ -170,7 +170,7 @@ const ALLOW_ALL: LifecycleCapabilityMap = {
 };
 
 const SCOPE_REASON =
-  "Installed for the whole platform — an organization-scoped session can't act on it.";
+  "Installed for the whole platform. Only a platform administrator with no active organization can act on it.";
 
 /** The exact verdict #2416 reports: a platform-anchored row, org-active session. */
 const PLATFORM_ROW_FROM_ORG_SESSION: LifecycleCapabilityMap = {
@@ -179,6 +179,21 @@ const PLATFORM_ROW_FROM_ORG_SESSION: LifecycleCapabilityMap = {
   uninstall: cap("uninstall", { code: "no_addressable_row", reason: SCOPE_REASON }),
   // force_delete takes no row resolver — platform standing is its only gate.
   force_delete: cap("force_delete"),
+};
+
+/** The second refused session shape: a platform-scoped session (no active
+ *  org) that still lacks platform-admin standing over the SAME platform row.
+ *  Denied through `no_write_standing` rather than `no_addressable_row`, but
+ *  the reason text must read IDENTICALLY — the settings page must never
+ *  suggest that clearing the active org alone would let this session act. */
+const PLATFORM_ROW_NO_STANDING_SESSION: LifecycleCapabilityMap = {
+  archive: cap("archive", { code: "no_write_standing", reason: SCOPE_REASON }),
+  activate: cap("activate", { code: "no_write_standing", reason: SCOPE_REASON }),
+  uninstall: cap("uninstall", { code: "no_write_standing", reason: SCOPE_REASON }),
+  force_delete: cap("force_delete", {
+    code: "platform_admin_required",
+    reason: "Requires platform admin.",
+  }),
 };
 
 describe("resolveSettingsAffordances (§V — locked/system + complementary Archive/Activate)", () => {
@@ -256,6 +271,29 @@ describe("resolveSettingsAffordances — the server capability (cinatra#2416)", 
       archive: SCOPE_REASON,
       activate: SCOPE_REASON,
       reinstall: SCOPE_REASON,
+    });
+  });
+
+  it("a platform-anchored row + a platform-scoped, non-admin session reads the SAME reason as the org-active session", () => {
+    const a = resolveSettingsAffordances({
+      canonical: ext({ status: "active" }),
+      lockedRow: null,
+      isArchived: false,
+      versionKnown: true,
+      capabilities: PLATFORM_ROW_NO_STANDING_SESSION,
+    });
+    expect(a.archiveDisabled).toBe(SCOPE_REASON);
+    expect(a.activateDisabled).toBe(SCOPE_REASON);
+    expect(a.reinstallDisabled).toBe(SCOPE_REASON);
+    // This session also lacks platform-admin standing, so unlike the
+    // org-active session (which stays live on Force-delete), Force-delete is
+    // ALSO denied here — correctly, on its own platform-admin-only gate.
+    expect(a.forceDeleteDisabled).toBe("Requires platform admin.");
+    expect(a.capabilityReasons).toEqual({
+      archive: SCOPE_REASON,
+      activate: SCOPE_REASON,
+      reinstall: SCOPE_REASON,
+      forceDelete: "Requires platform admin.",
     });
   });
 
