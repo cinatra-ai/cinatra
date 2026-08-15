@@ -3,7 +3,7 @@ import { Inter, Manrope, Geist, Archivo, JetBrains_Mono } from "next/font/google
 import { getGoogleOAuthSettings } from "@cinatra-ai/google-oauth-connection";
 import { AppShell } from "@/components/app-shell";
 import { CrumbEpochProvider } from "@/components/crumb-epoch-context";
-import { ViewerAdminProvider } from "@/components/viewer-admin-context";
+import { ViewerAdminProvider } from "@/components/crumb-epoch-context";
 import { buildCanDoOptsFromSession, getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 import { crumbEpoch as crumbEpochValue } from "@/lib/crumb-epoch";
 import { canDo } from "@/lib/authz";

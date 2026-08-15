@@ -123,3 +123,39 @@ export function buildSetupSignUpPath(nextPath?: string | null): string {
 export function resolvePostAuthDestination(nextPath?: string | null): string {
   return sanitizeNextPath(nextPath) ?? "/";
 }
+
+// ---------------------------------------------------------------------------
+// /configuration href predicates (cinatra#2701). The render-time half of the
+// admin-only rule for the /configuration segment: a member-facing producer
+// keeps a /configuration href only for an admin viewer. Pure, client-safe;
+// lives here with the other path predicates so the locked route graphs do not
+// grow by a module.
+// ---------------------------------------------------------------------------
+
+/** True when `href` addresses the admin-only `/configuration` segment. */
+export function isConfigurationHref(href: string | null | undefined): boolean {
+  if (typeof href !== "string") return false;
+  // Only same-origin, root-relative paths can reach the segment; an absolute
+  // URL or a `/configurations…` sibling is not it.
+  return href === "/configuration" || href.startsWith("/configuration/") ||
+    href.startsWith("/configuration?") || href.startsWith("/configuration#");
+}
+
+/**
+ * The href this viewer should be offered: the original for a platform admin,
+ * `undefined` for everyone else when it points into `/configuration`.
+ *
+ * Returning `undefined` (rather than a substitute destination) is deliberate:
+ * every consumer already has a no-href rendering — the notifications feed's
+ * href-less card species, the approvals actions menu without its Details link,
+ * the MCP row without the field. A substitute would invent a destination the
+ * epic never decided on.
+ */
+export function configurationHrefForViewer(
+  href: string | null | undefined,
+  viewerIsAdmin: boolean,
+): string | undefined {
+  if (typeof href !== "string" || href.length === 0) return undefined;
+  if (viewerIsAdmin) return href;
+  return isConfigurationHref(href) ? undefined : href;
+}

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { useViewerIsAdmin } from "@/components/viewer-admin-context";
+import { useViewerIsAdmin } from "@/components/crumb-epoch-context";
 import { AppRouteLink } from "./app-route-link";
 
 // Pure helpers for the chat error card (#534). Mirrors the established

@@ -154,7 +154,7 @@ describe("AgenticRunPanel — failed-run recovery (cinatra#2412)", () => {
 
   it("mounts Retry (and Start new run) for the previously-special-cased OpenAI-key error too", async () => {
     const { AgenticRunPanel } = await import("../agentic-run-panel");
-    const { ViewerAdminProvider } = await import("@/components/viewer-admin-context");
+    const { ViewerAdminProvider } = await import("@/components/crumb-epoch-context");
     render(
       // The key-settings CTA points into `/configuration/llm`, which is
       // admin-only (cinatra#2700, epic #2699). Since cinatra#2701 the panel

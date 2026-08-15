@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { useViewerIsAdmin } from "@/components/viewer-admin-context";
+import { useViewerIsAdmin } from "@/components/crumb-epoch-context";
 import {
   linkifyErrorText,
   isOpenAiKeyError,
