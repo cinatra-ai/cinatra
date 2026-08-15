@@ -185,6 +185,13 @@ export type SurfaceMountOptions = {
    * measures the column's own gate rather than one surface's wiring.
    */
   withoutComposerInputs?: boolean;
+  /**
+   * Mount the CHAT arm on a named thread instead of the fixture thread
+   * (cinatra#2740). A re-render with a different id is a thread switch, which is
+   * what the cold-load settle pass re-arms on. The widget arm resolves its own
+   * thread through the shared turn engine and ignores this.
+   */
+  threadId?: string;
 };
 
 /**
@@ -202,6 +209,7 @@ export function chatSurfaceElement(options: SurfaceMountOptions = {}): ReactElem
     catalog?.widgets ?? EMPTY_WIDGETS,
     catalog?.manifests ?? EMPTY_WIDGET_MANIFESTS,
   );
+  const threadId = options.threadId ?? FIXTURE_THREAD_ID;
   return (
     <div data-parity-surface="chat">
       <ConversationColumn
@@ -212,7 +220,7 @@ export function chatSurfaceElement(options: SurfaceMountOptions = {}): ReactElem
         theme="github-light"
         userId="user-1"
         sessionUser={options.sessionUser ?? PARITY_SESSION_USER}
-        activeThreadId={FIXTURE_THREAD_ID}
+        activeThreadId={threadId}
         assistantHandleMap={new Map()}
         taggedAssistantUserIds={[]}
         mentionables={options.mentionables ?? PARITY_MENTIONABLES}
@@ -234,7 +242,7 @@ export function chatSurfaceElement(options: SurfaceMountOptions = {}): ReactElem
         chatViews={options.withCatalog ? PARITY_CHAT_VIEWS : {}}
         promptRef={{ current: null }}
         placeholder="Type a message..."
-        promptStorageKey={`cinatra_thread_prompt_${FIXTURE_THREAD_ID}`}
+        promptStorageKey={`cinatra_thread_prompt_${threadId}`}
         onSubmit={() => {}}
         submitAriaLabel="Send message"
         onStop={() => {}}
