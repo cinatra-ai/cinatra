@@ -1,14 +1,16 @@
 /**
- * THE CHAT'S RUN LINK IS BUILT BY THE PLATFORM (cinatra#2729 defect 1).
+ * NO MODEL-AUTHORED RUN URL (cinatra#2729 defect 1).
  *
- * The dispatch result used to be `{ runId, status }`, so a model that wanted to
- * link the run had to compose a path — and it composed `/agents/runs/<runId>`,
- * an API path with no page behind it, which 404s. These pins state the two
- * halves of the fix:
+ * The only run link in a conversation used to be whatever the model wrote for
+ * it, and what it wrote was `/agents/runs/<runId>` — an API path with no page
+ * behind it, which 404s. Two pins hold the fix:
  *
- *   1. the dispatch result carries `runHref`, and it EQUALS the canonical
- *      builder's output for the same package and run, and
- *   2. the model directive forbids writing a run URL at all.
+ *   1. the dispatch wire offers no path to copy or complete, and
+ *   2. the model directive forbids composing one at all.
+ *
+ * The link the reader actually gets is built by the chat card from the run
+ * API's package name, pinned in `inline-agent-run-card-canonical-link.test.tsx`
+ * against the same builder the notification writer uses.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -84,7 +86,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("serverSideExplicitDispatch — the run href on the wire", () => {
+describe("serverSideExplicitDispatch — no run path on the wire", () => {
   async function dispatch() {
     mocks.invokePrimitive.mockResolvedValueOnce({
       runId: RUN_ID,
@@ -97,34 +99,26 @@ describe("serverSideExplicitDispatch — the run href on the wire", () => {
       send,
     });
     const toolResult = events.find((e) => e.event === "tool_result");
-    return JSON.parse(String(toolResult?.data.result)) as {
-      runId: string;
-      status: string;
-      runHref?: string;
+    const raw = String(toolResult?.data.result);
+    return {
+      raw,
+      result: JSON.parse(raw) as Record<string, unknown>,
     };
   }
 
-  it("carries the CANONICAL path the shared builder produces", async () => {
-    const result = await dispatch();
-
-    expect(result.runHref).toBe(buildAgentInstancePath(PACKAGE, RUN_ID));
-    expect(result.runHref).toBe(
-      `/agents/cinatra-ai/blog-draft-writer-agent/${RUN_ID}`,
-    );
-  });
-
-  it("never emits the API-shaped path the model used to guess", async () => {
-    const result = await dispatch();
-
-    expect(result.runHref).not.toBe(`/agents/runs/${RUN_ID}`);
-    expect(result.runHref?.startsWith("/agents/runs/")).toBe(false);
-  });
-
   it("keeps the run id and status the chat already relied on", async () => {
-    const result = await dispatch();
+    const { result } = await dispatch();
 
     expect(result.runId).toBe(RUN_ID);
     expect(result.status).toBe("pending_approval");
+  });
+
+  it("puts NO run path on the wire — not the canonical one, not a guessed one", async () => {
+    const { result, raw } = await dispatch();
+
+    expect(Object.keys(result).sort()).toEqual(["runId", "status"]);
+    expect(raw).not.toContain("/agents/");
+    expect(raw).not.toContain(buildAgentInstancePath(PACKAGE, RUN_ID));
   });
 });
 
@@ -135,6 +129,6 @@ describe("the dispatch directive forbids a model-authored run URL", () => {
     ]);
 
     expect(directive).toContain("Never write a run URL yourself");
-    expect(directive).toContain("runHref");
+    expect(directive).toContain("404");
   });
 });

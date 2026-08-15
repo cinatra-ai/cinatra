@@ -948,11 +948,11 @@ export function AgenticRunPanel({
   useEffect(() => {
     if (!isPollLive && !isPollPendingApproval) return;
     const intervalMs = isPollLive ? 2000 : 5000;
-    // LEADING tick. A bare interval asks its first question only after a full
-    // period, so a run that is already paused when the panel mounts held the
-    // formless banner for 5s before its form could appear. The read is the same
-    // one the interval makes; it just happens now.
-    void refetchDerivedContext();
+    // NO leading tick on purpose. A run that is already paused when its surface
+    // mounts is handed its gate as a seed (`initialHitlContext`), so the first
+    // paint needs nothing from this loop; and asking immediately would spend the
+    // recovery state's "has it even tried yet?" tolerance on the very first
+    // frame, which is the one moment a paused run must not be called degraded.
     const interval = window.setInterval(() => {
       void refetchDerivedContext();
     }, intervalMs);

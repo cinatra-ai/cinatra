@@ -519,17 +519,13 @@ export async function serverSideExplicitDispatch(input: {
     }
     const runId = out.runId;
     const status = out.status ?? "queued";
-    // THE ONE RUN URL, BUILT BY THE PLATFORM (cinatra#2729 defect 1).
-    //
-    // The dispatch result used to carry `{ runId, status }` and nothing else,
-    // so a model that wanted to link the run had to invent a path — and it
-    // invented `/agents/runs/<runId>`, an API path with no page behind it. The
-    // canonical page path is built here, by the same builder the notification
-    // writer uses, and travels with the result. The chat card renders the run
-    // itself, so this stays a secondary affordance; what it removes is the
-    // reason to guess.
-    const runHref = buildAgentInstancePath(packageName, runId);
-    const resultJson = JSON.stringify({ runId, status, runHref });
+    // The dispatch result stays `{ runId, status }` (cinatra#2729 defect 1).
+    // The run's page path is NOT put on this wire: the conversation renders the
+    // run card itself, and the one link beside it is built by the card from the
+    // package name the run API returns. Nothing here should read as an
+    // invitation to compose a run URL — the model's `/agents/runs/<runId>`
+    // guess, which has no page behind it, is what this issue is about.
+    const resultJson = JSON.stringify({ runId, status });
     send("tool_result", {
       id: SYNTHETIC_TOOL_CALL_ID,
       name: "agent_run",
@@ -553,7 +549,7 @@ export async function serverSideExplicitDispatch(input: {
       input.actor.principalId
     ) {
       const recipient = { kind: "user" as const, userId: input.actor.principalId };
-      const href = runHref;
+      const href = buildAgentInstancePath(packageName, runId);
       void safeEmitAgentCreationProgress({
         recipient,
         runId,
