@@ -43,6 +43,7 @@ import {
 } from "../runtime-discovery-host";
 import { listInstalledExtensions } from "../canonical-store";
 import type { ExtensionKind, InstalledExtension } from "../canonical-types";
+import { applyInstallRowPrecedence } from "../static-bundle-anchor";
 import { sourceVersion } from "../lifecycle-ui";
 import { isRegistryUnreachable } from "./registry-failure-class";
 import { resolveInstalledVendorName } from "./installed-vendor";
@@ -512,9 +513,31 @@ export async function loadInstalledCardRows(
   // identity is locked, the card carries the locked indicator). requiredInProd
   // ORs across the visible identities.
   const STATUS_RANK: Record<string, number> = { locked: 0, active: 1, archived: 2 };
+  // SOURCE PRECEDENCE (the shared policy): when a package ships in the image and
+  // also has a marketplace install, both rows are live, and which one the card
+  // represents decides which version Archive / Activate / Reinstall act on. The
+  // Settings card must name the SAME row setup, action dispatch and the provider
+  // writer resolve. Applied over the LIVE rows only, so the archived-tombstone
+  // collapse below is untouched. Precedence dropping every candidate (two
+  // competing marketplace defaults) leaves the live rows out of the map, and the
+  // card falls back to its archived identity rather than naming an arbitrary one.
+  // Precedence is a PER-PACKAGE policy, so the live rows are grouped by the same
+  // kind::packageName key the card map uses before it is applied.
+  const liveByKey = new Map<string, InstalledExtension[]>();
+  for (const row of canonicalRows) {
+    if (!manifestVisibleToScope(row, scope)) continue;
+    if (STATUS_RANK[row.status] >= 2) continue;
+    const key = rowKey(row.kind, row.packageName);
+    liveByKey.set(key, [...(liveByKey.get(key) ?? []), row]);
+  }
+  const rankedLiveIds = new Set<string>();
+  for (const rows of liveByKey.values()) {
+    for (const row of applyInstallRowPrecedence(rows)) rankedLiveIds.add(row.id);
+  }
   const canonicalByKey = new Map<string, { row: InstalledExtension; requiredInProd: boolean }>();
   for (const row of canonicalRows) {
     if (!manifestVisibleToScope(row, scope)) continue;
+    if (STATUS_RANK[row.status] < 2 && !rankedLiveIds.has(row.id)) continue;
     const key = rowKey(row.kind, row.packageName);
     const existing = canonicalByKey.get(key);
     if (!existing) {

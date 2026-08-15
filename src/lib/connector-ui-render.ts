@@ -58,17 +58,19 @@ export function chooseConnectorUiRender(
 }
 
 // ---------------------------------------------------------------------------
-// NOT-YET-ACTIVE detection (cinatra#2762).
+// UNSERVED-PACKAGE detection.
 //
 // A live canonical install row makes a connector's setup page addressable, but
 // the package only SERVES its named actions once it has registered in this
-// process. An install can commit and stay un-activated until the next restart
-// (the runtime loader refused its anchor), and in that state every action POST
-// 404s: option lists cannot load, record lists cannot load, saves cannot run.
+// process. Install and boot now both refuse before leaving a live row that
+// cannot serve, so this state is no longer produced. It is retained as the
+// detector the boot RECONCILIATION uses to decide whether an override row it
+// just loaded is actually effective: trust only admits an import, and the
+// success criterion is that the package registered.
 //
-// Without an explicit statement the page reads as broken. These two pure
-// helpers give the route the signal it needs, and they read the SAME registry
-// the action route reads, so the banner can never disagree with the 404s.
+// It reads the SAME registry the action dispatch route reads, so "the package
+// is serving" can never mean one thing to the reconciler and another to a
+// request.
 // ---------------------------------------------------------------------------
 
 /**
@@ -98,8 +100,8 @@ export function collectDeclaredActionIds(surface: SchemaConfigSurface): string[]
 }
 
 /**
- * Whether the addressed install is present but its package registered NOTHING
- * in this process.
+ * Whether an install row is present but its package registered NOTHING in this
+ * process, i.e. the row is live but serves nothing.
  *
  * FAIL-QUIET in both directions that matter:
  *  - no install row: the route already renders its Install/Activate CTA, so
@@ -108,7 +110,7 @@ export function collectDeclaredActionIds(surface: SchemaConfigSurface): string[]
  *    simply has no actions is never flagged;
  *  - ANY declared action resolving: the package IS registered here, so a single
  *    missing action id is a surface/package mismatch, not an inactive package,
- *    and it must not be reported as one.
+ *    and it must not be treated as one.
  */
 export function isInstalledButNotActive(input: {
   installId: string | null;

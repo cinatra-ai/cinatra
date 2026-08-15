@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { ExtensionKind } from "@cinatra-ai/extensions/canonical-types";
+import { applyInstallRowPrecedence } from "@cinatra-ai/extensions/static-bundle-anchor";
 
 // The TRUSTED install-record resolver — closes the runtime-loader loop.
 //
@@ -185,13 +186,25 @@ export function pickSingleActiveRow<
  * (>1 live row across orgs) — the trust gate must resolve exactly one row.
  */
 export function pickSingleLiveRowAcrossOrgs<
-  T extends { status: string; organizationId: string | null; isDefault?: boolean },
+  T extends {
+    status: string;
+    organizationId: string | null;
+    isDefault?: boolean;
+    source?: { type?: string } | null;
+  },
 >(rows: readonly T[]): T | null {
   const matching = rows.filter((r) => r.status === "active" || r.status === "locked");
+  // SOURCE PRECEDENCE (the shared policy): a package that ships in the image AND
+  // has a marketplace install holds two live default rows at once. That pair used
+  // to read as ambiguity and return null, so the boot loader resolved no anchor,
+  // logged "no trusted install record", and NEITHER version activated. The
+  // marketplace row is the override and wins; the bundled row remains the
+  // fallback underneath it. Two competing marketplace defaults still fail closed.
+  const ranked = applyInstallRowPrecedence(matching);
   // Same exact-one-default rule as pickSingleActiveRow (cinatra#1040 S3): a
   // non-default side-by-side version row must not un-anchor (or replace) the
   // default at boot; zero live defaults stays fail-closed.
-  const defaults = matching.filter((r) => r.isDefault !== false);
+  const defaults = ranked.filter((r) => r.isDefault !== false);
   return defaults.length === 1 ? defaults[0] : null;
 }
 

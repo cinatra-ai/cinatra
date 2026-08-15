@@ -1247,16 +1247,25 @@ export async function discoverSupersededStoreDirsForPackage(
 
 /**
  * The install pipeline's `verifyActivatableBeforeFinalize` DEFAULT (the
- * HOT-UPDATE pre-finalize probe). Detects supersession — any materialized
- * store dir for this package that is NOT the just-installed current digest =
- * a prior digest (an UPDATE); a fresh install has none → no pre-finalize gate
- * (`supersedes:false`). A superseding update probes that the NEW digest
- * imports + integrity-verifies + its `register(ctx)` succeeds against an
- * inert probe ctx. cinatra#793: a NEW manifest that declares NO serverEntry
- * (a metadata-only agent/skill/artifact payload) skips the import/register
- * probe — nothing to import; the integrity re-verify remains the gate, and
- * the post-commit durable rollback stays the safety boundary for
- * module-shipping kinds (connector).
+ * pre-finalize activation probe). It proves the just-materialized digest
+ * imports, integrity-verifies and completes `register(ctx)` against an inert
+ * probe ctx BEFORE the pipeline mutates any durable state.
+ *
+ * It now runs for a FRESH install as well as an update. It used to
+ * short-circuit on `supersedes:false` (no prior digest = a fresh install) and
+ * verify nothing, which is what let a fresh install commit and only then fail
+ * to activate, leaving a live finalized row that could never serve. There is no
+ * reason a fresh install should be proved less than an update: the probe is
+ * read-only and the caller aborts before the first durable write either way.
+ *
+ * `supersedes` is retained because the caller's error copy and its store-dir GC
+ * decision differ between the two cases: an update must leave the previous
+ * digest as the sole survivor, a fresh install leaves nothing behind.
+ *
+ * cinatra#793: a manifest that declares NO serverEntry (a metadata-only
+ * agent/skill/artifact payload) has nothing to import, so `metadataOnlyOk`
+ * passes it on its integrity re-verify alone. Module-bearing kinds run the full
+ * import/register probe.
  */
 export async function probeUpdateActivatableBeforeFinalize(i: {
   packageName: string;
@@ -1266,11 +1275,10 @@ export async function probeUpdateActivatableBeforeFinalize(i: {
   contentHash: string;
   approvedPorts: readonly string[];
   storeRoot?: string;
-}): Promise<{ supersedes: false } | { supersedes: true; ok: true } | { supersedes: true; ok: false; reason: string }> {
+}): Promise<{ supersedes: boolean; ok: boolean; reason?: string }> {
   const storeRoot =
     i.storeRoot ?? (await import("@/lib/extension-data-root")).resolveExtensionDataRoot();
   const superseded = await discoverSupersededStoreDirsForPackage(i.packageName, storeRoot, i.storeDir);
-  if (superseded.length === 0) return { supersedes: false };
   const verdict = await verifyDigestImportsAndRegisters(
     i.packageName,
     storeRoot,
@@ -1282,7 +1290,10 @@ export async function probeUpdateActivatableBeforeFinalize(i: {
     },
     { metadataOnlyOk: true },
   );
-  return verdict.ok ? { supersedes: true, ok: true } : { supersedes: true, ok: false, reason: verdict.reason };
+  const supersedes = superseded.length > 0;
+  return verdict.ok
+    ? { supersedes, ok: true }
+    : { supersedes, ok: false, reason: verdict.reason };
 }
 
 /**

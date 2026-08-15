@@ -218,55 +218,6 @@ function classifyAndLogInstallFailure(
   return { category, reference };
 }
 
-// The THIRD install outcome's operator line (cinatra#2761). Deliberately NOT a
-// `classify-failed` line and deliberately WITHOUT a diagnostic reference: the
-// install COMMITTED, so it is not a failure and there is no support case to
-// correlate. It is logged at info level so an operator can still see that the
-// process is serving a package it has not loaded yet. Same CWE-117/CWE-134
-// discipline as the chokepoint above: constant format string, sanitized args.
-function logInstallActivationDeferredForOperator(
-  operation: string,
-  packageName: string,
-  packageVersion: string,
-): void {
-  console.info(
-    "[marketplace-install] %s committed pkg=%s version=%s activation=deferred-to-next-restart",
-    operation,
-    sanitizeForLog(packageName),
-    packageVersion ? sanitizeForLog(packageVersion) : "(none)",
-  );
-}
-
-/**
- * Whether a thrown install carries the STABLE activation-deferred code
- * (cinatra#2761). The install COMMITTED (the real-integrity pipeline finalized,
- * so the canonical row is real and anchorable) and only its in-process
- * hot-activation was refused this call.
- *
- * DUCK-TYPED over the `cause` chain rather than `instanceof`: the error crosses
- * dynamic-import boundaries and may be wrapped, so identity is unreliable here
- * (cinatra#2416 established this rule for the lifecycle codes above). Bounded
- * depth so a cyclic cause chain can never loop forever.
- */
-function isActivationDeferredError(err: unknown, depth = 0): boolean {
-  if (depth > 6 || err == null || typeof err !== "object") return false;
-  const obj = err as { code?: unknown; cause?: unknown };
-  if (obj.code === "INSTALL_ACTIVATION_DEFERRED") return true;
-  return "cause" in obj ? isActivationDeferredError(obj.cause, depth + 1) : false;
-}
-
-// Whether the dependency batch reported THIS package as committed-but-not-
-// activated. Tolerates a result without the field (the batch is reached through
-// a dynamic import). An absent list means "nothing deferred", the pre-#2761
-// meaning, so the surface degrades to plain success rather than throwing.
-function batchDeferredCarries(batch: unknown, packageName: string): boolean {
-  const list = (batch as { activationDeferred?: unknown } | null)?.activationDeferred;
-  if (!Array.isArray(list)) return false;
-  return list.some(
-    (m) => (m as { packageName?: unknown } | null)?.packageName === packageName,
-  );
-}
-
 // A missing/empty version is rejected BEFORE any install request is made
 // (cinatra#1539 AC6): the request cannot succeed, and the resulting contract
 // error would be a bad-input (`invalid_version`) that must not surface as a
@@ -344,18 +295,6 @@ export async function installExtensionPackage(
   error?: string;
   failureCategory?: MarketplaceFailureCategory;
   reference?: string;
-  /**
-   * The THIRD install outcome (cinatra#2761). `success` is true AND this is
-   * true when the real-integrity pipeline COMMITTED the install. The canonical
-   * row is real, finalized and anchorable, but in-process hot-activation was
-   * refused this call, so the package activates on the next restart.
-   *
-   * It is deliberately a flag ON a success, not a fourth failure category: the
-   * install landed, so the operator must not be told it failed, and no support
-   * reference is minted for it. The caller renders the caveat and the next step
-   * ("installed; activates on the next restart") instead of the generic error.
-   */
-  activationDeferred?: boolean;
 }> {
   "use server";
   await requireAdminSession();
@@ -383,29 +322,9 @@ export async function installExtensionPackage(
     const { installExtensionWithDependencies } = await import(
       "@/lib/extension-install-batch"
     );
-    const batch = await installExtensionWithDependencies({
-      packageName,
-      version: packageVersion,
-      actor,
-    });
-    // #2761: the batch kept a member that COMMITTED but did not hot-activate.
-    // Report the caveat on the success, never a failure. Read defensively: the
-    // batch crosses a dynamic-import boundary, so an older/partial result shape
-    // must degrade to "fully activated", never throw over a missing field.
-    if (batchDeferredCarries(batch, packageName)) {
-      logInstallActivationDeferredForOperator("install", packageName, packageVersion);
-      return { success: true, activationDeferred: true };
-    }
+    await installExtensionWithDependencies({ packageName, version: packageVersion, actor });
     return { success: true };
   } catch (err) {
-    // #2761: a COMMITTED install whose hot-activation was refused reaches here
-    // only on a path that bypasses the batch's own handling. It is still not a
-    // failure, because the row is finalized and anchorable, so it never reaches the
-    // failure classifier and never mints a support reference.
-    if (isActivationDeferredError(err)) {
-      logInstallActivationDeferredForOperator("install", packageName, packageVersion);
-      return { success: true, activationDeferred: true };
-    }
     // Classify from the REAL error object here, BEFORE it is stringified — this
     // is the only place that still has the `cause` chain / MarketplaceMcpError
     // `responseBody` + `httpStatus` the taxonomy classifier reads (cinatra#685).
@@ -435,8 +354,6 @@ export async function updateExtensionPackage(
   error?: string;
   failureCategory?: MarketplaceFailureCategory;
   reference?: string;
-  /** See `installExtensionPackage`. The same third outcome, for an update. */
-  activationDeferred?: boolean;
 }> {
   "use server";
   await requireAdminSession();
@@ -474,26 +391,15 @@ export async function updateExtensionPackage(
       const { installExtensionWithDependencies } = await import(
         "@/lib/extension-install-batch"
       );
-      const batch = await installExtensionWithDependencies({
+      await installExtensionWithDependencies({
         packageName,
         version: packageVersion,
         actor,
         rootAction: "update",
       });
-      // #2761: same third outcome on the update path.
-      if (batchDeferredCarries(batch, packageName)) {
-        logInstallActivationDeferredForOperator("update", packageName, packageVersion);
-        return { success: true, activationDeferred: true };
-      }
     }
     return { success: true };
   } catch (err) {
-    // #2761: the GATEKEPT update path calls the registry directly, so a
-    // committed-but-not-activated update surfaces as the typed throw here.
-    if (isActivationDeferredError(err)) {
-      logInstallActivationDeferredForOperator("update", packageName, packageVersion);
-      return { success: true, activationDeferred: true };
-    }
     // Classify from the real error before stringification (cinatra#685); emit
     // the #1539 sanitized chokepoint diagnostics + correlating reference.
     const { category, reference } = classifyAndLogInstallFailure(
@@ -866,7 +772,7 @@ export async function installExtensionPackageFormAction(input: {
     const outcome = await withInstallLock(
       input.packageName,
       async (): Promise<
-        MarketplaceInstallActionResult | "installed" | "installed-activation-deferred"
+        MarketplaceInstallActionResult | "installed"
       > => {
         const { readInstalledExtensionByIdentity } = await import(
           "./canonical-store"
@@ -890,10 +796,6 @@ export async function installExtensionPackageFormAction(input: {
           input.packageVersion,
           actor,
         );
-        // #2761: the install COMMITTED but did not hot-activate this call. It is
-        // a success with a caveat, so it flows to the SAME "installed" outcome
-        // and only changes which copy the client renders.
-        const activationDeferred = result.activationDeferred === true;
         if (!result.success) {
           // cinatra#685: RETURN the classified category (see legacy path note).
           const category = result.failureCategory ?? "unrecoverable";
@@ -929,7 +831,7 @@ export async function installExtensionPackageFormAction(input: {
             ...(policy ? { policy } : {}),
             installedByUserId: session.user.id,
           });
-          return activationDeferred ? "installed-activation-deferred" : "installed";
+          return "installed";
         } catch (accessErr) {
           logMarketplaceFailureForOperator(
             "install-access",
@@ -979,12 +881,6 @@ export async function installExtensionPackageFormAction(input: {
         }
       },
     );
-    if (outcome === "installed-activation-deferred") {
-      // A committed install that activates on the next restart. Returned (not
-      // redirected) so the client can render the caveat; a plain success still
-      // redirects below.
-      return { ok: true, activation: "deferred" };
-    }
     if (outcome !== "installed") {
       return outcome;
     }
@@ -1029,7 +925,7 @@ export async function installExtensionPackageFormAction(input: {
     const outcome = await withInstallLock(
       input.packageName,
       async (): Promise<
-        MarketplaceInstallActionResult | "installed" | "installed-activation-deferred"
+        MarketplaceInstallActionResult | "installed"
       > => {
         const {
           readInstalledExtensionByIdentity,
@@ -1060,10 +956,6 @@ export async function installExtensionPackageFormAction(input: {
           input.packageVersion,
           actor,
         );
-        // #2761: the install COMMITTED but did not hot-activate this call. It is
-        // a success with a caveat, so it flows to the SAME "installed" outcome
-        // and only changes which copy the client renders.
-        const activationDeferred = result.activationDeferred === true;
         if (!result.success) {
           // cinatra#685: RETURN the classified category instead of throwing. A
           // thrown server-action message is masked in production (digest only) so
@@ -1126,7 +1018,7 @@ export async function installExtensionPackageFormAction(input: {
 
         if (!requiresAccessTarget) {
           // Non-access kind — legacy direct path, unchanged outcome.
-          return activationDeferred ? "installed-activation-deferred" : "installed";
+          return "installed";
         }
 
         // #1602: an access-target (or unverifiable) kind was installed with NO
@@ -1192,12 +1084,6 @@ export async function installExtensionPackageFormAction(input: {
         };
       },
     );
-    if (outcome === "installed-activation-deferred") {
-      // A committed install that activates on the next restart. Returned (not
-      // redirected) so the client can render the caveat; a plain success still
-      // redirects below.
-      return { ok: true, activation: "deferred" };
-    }
     if (outcome !== "installed") {
       return outcome;
     }

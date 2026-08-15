@@ -323,6 +323,16 @@ export type InstallPipelineDeps = {
    * wires the host probe). DO NOT chase probe-vs-live fidelity here — the rollback is
    * the boundary.
    */
+  /**
+   * The host's trusted activation hosts and the unsigned-bootstrap lever.
+   *
+   * Injectable so a unit test can state the host policy it is testing instead of
+   * reaching into deployment configuration through the environment. Production
+   * callers omit both and the real config readers are used. The classifier
+   * itself is NEVER injectable: what counts as trusted is not a test fixture.
+   */
+  trustedActivationHosts?: () => string[];
+  allowMarketplaceBootstrapTrust?: () => boolean;
   verifyActivatableBeforeFinalize: (input: {
     packageName: string;
     orgId: string | null;
@@ -331,13 +341,15 @@ export type InstallPipelineDeps = {
     contentHash: string;
     approvedPorts: readonly string[];
     storeRoot?: string;
-  }) => Promise<{ supersedes: false } | { supersedes: true; ok: true } | { supersedes: true; ok: false; reason: string }>;
+  }) => Promise<{ supersedes: boolean; ok: boolean; reason?: string }>;
   /**
    * GC a single just-materialized (failed) store dir + its sibling `.tgz`. Called
-   * ONLY when `verifyActivatableBeforeFinalize` rejects a NEW update digest, so a
-   * bad new digest never lingers on disk to trip the boot duplicate-name gate
-   * against the (intact) previous install. Best-effort. Optional (the default
-   * factory wires `rm`).
+   * by every pre-finalize refusal that owns the dir: the host-compat gate, the
+   * untrusted-install gate, and a rejected activation probe (for a fresh install
+   * as well as an update), so failed bytes never linger on disk to trip the boot
+   * duplicate-name gate against an intact previous install. Never called when the
+   * materialized dir IS the live install's dir. Best-effort. Optional (the
+   * default factory wires `rm`).
    */
   gcStoreDir: (storeDir: string) => Promise<void>;
   /**
@@ -483,6 +495,41 @@ function emitDurableRestoreFailure(
  * `pending` until an admin approves it — so a bootstrap/untrusted package, even
  * when materialized, never self-grants host ports.
  */
+/**
+ * The stable code an untrusted-install refusal carries. Duck-typed by callers
+ * across dynamic-import boundaries (the same rule the lifecycle codes use), so
+ * the marketplace surface can render the EXACT trust verdict instead of the
+ * generic "anchor-refused" summary.
+ */
+export const UNTRUSTED_INSTALL_REFUSED = "UNTRUSTED_INSTALL_REFUSED" as const;
+
+/**
+ * A marketplace install refused BEFORE any durable mutation because the trust
+ * classifier did not admit the package for in-process import.
+ *
+ * It is the honest end of the install: nothing was journaled, granted, recorded
+ * or finalized, the materialized bytes are gone, and the implementation bundled
+ * in the image is still in service. `verdictReason` is the classifier's own
+ * words, carried out so the operator learns WHICH condition failed.
+ */
+export class UntrustedInstallRefusedError extends Error {
+  readonly code = UNTRUSTED_INSTALL_REFUSED;
+  constructor(
+    public readonly packageName: string,
+    public readonly packageVersion: string,
+    public readonly verdictReason: string,
+    public readonly operation: "install" | "update",
+  ) {
+    super(
+      `${operation} of ${packageName}@${packageVersion} was refused before anything was ` +
+        `committed: ${verdictReason}. No install-op journal, host-port grant or provenance ` +
+        `was written, the materialized bytes were removed, and the version bundled in the ` +
+        `image stays in service.`,
+    );
+    this.name = "UntrustedInstallRefusedError";
+  }
+}
+
 export async function installExtensionFromRegistry(
   input: InstallPipelineInput,
   deps: InstallPipelineDeps,
@@ -712,8 +759,10 @@ export async function installExtensionFromRegistry(
     // carries a plan the verdict is NEVER undefined and a non-true verdict
     // already refused the install before any write (cinatra#181).
     signatureVerified,
-    trustedActivationHosts: trustedActivationHosts(),
-    allowMarketplaceBootstrapTrust: allowMarketplaceBootstrapTrust(),
+    trustedActivationHosts: (deps.trustedActivationHosts ?? trustedActivationHosts)(),
+    allowMarketplaceBootstrapTrust: (
+      deps.allowMarketplaceBootstrapTrust ?? allowMarketplaceBootstrapTrust
+    )(),
   });
 
   // Capability split: auto-granting privileged host ports AND
@@ -723,6 +772,44 @@ export async function installExtensionFromRegistry(
   // admin and its declared migrations do NOT auto-run. An admin can later approve
   // the pending grant out-of-band.
   const autoGrantPrivileged = verdict.tier === "trusted-signed";
+
+  // UNTRUSTED-INSTALL GATE. An install whose trust verdict is NOT trusted can
+  // never activate in this process: the loader refuses the import. Letting it
+  // continue is what produced the committed-but-unactivated state: the journal,
+  // grant and provenance were all written, the row finalized live, and the
+  // refusal only surfaced afterwards, leaving a package that shadowed the
+  // working bundled implementation and served nothing.
+  //
+  // It refuses HERE instead, before `beginInstallOp` and therefore before any
+  // durable mutation, with the SAME inertness contract as the host-compat gate
+  // above: a prior install's journal stays `finalized`, its grant and provenance
+  // are untouched, and the just-materialized dir is GC'd unless it IS the live
+  // install's dir (the same-digest re-install guard).
+  //
+  // The failure names the EXACT verdict the classifier produced (an unverifiable
+  // signature, an absent signature with bootstrap disabled, a registry host that
+  // is not allow-listed). The generic "anchor-refused" summary hid which of those
+  // it was, which is the one thing an operator needs in order to act.
+  //
+  // Nothing here loosens the classifier. The safe fallback for a package that
+  // fails it is the implementation bundled in the image, never a weaker trust
+  // decision for the new bytes.
+  if (!verdict.trusted) {
+    const isLiveDigest = priorOp?.phase === "finalized" && priorOp.digest === mat.digest;
+    if (deps.gcStoreDir && !isLiveDigest) {
+      try {
+        await deps.gcStoreDir(mat.storeDir);
+      } catch {
+        /* best-effort GC: a leftover dir is recovered by a later retry's gate. */
+      }
+    }
+    throw new UntrustedInstallRefusedError(
+      input.packageName,
+      resolvedVersion,
+      verdict.reason,
+      priorOp?.phase === "finalized" ? "update" : "install",
+    );
+  }
 
   // HOT-UPDATE pre-finalize activation gate. If the
   // just-materialized digest SUPERSEDES an existing one (an UPDATE), PROVE the new
@@ -776,7 +863,7 @@ export async function installExtensionFromRegistry(
   // untrusted update's REAL safety boundary is unchanged — the post-commit
   // hot-update activation runs under the loader's trust gate (which refuses
   // the import) and the durable rollback restores the OLD install.
-  if (deps.verifyActivatableBeforeFinalize && verdict.trusted) {
+  if (deps.verifyActivatableBeforeFinalize) {
     // EFFECTIVE ports the new digest will activate with (see the block comment):
     // a `trusted-signed` install self-grants its requested ports; otherwise the
     // probe must equal what activation will grant AFTER `recordRequestedGrant` +
@@ -808,7 +895,7 @@ export async function installExtensionFromRegistry(
       approvedPorts: probeApprovedPorts,
       ...(input.storeRoot ? { storeRoot: input.storeRoot } : {}),
     });
-    if (gate.supersedes && !gate.ok) {
+    if (!gate.ok) {
       // GC the failed new digest so two dirs never coexist for the boot
       // duplicate-name gate (the previous install's dir is the sole survivor).
       if (deps.gcStoreDir) {
@@ -827,9 +914,14 @@ export async function installExtensionFromRegistry(
       // the bad new digest is already GC'd above; the throw below is the
       // authoritative failure signal.
       throw new Error(
-        `update of ${input.packageName}@${input.version} could not activate the new digest ` +
-          `(${gate.reason}) — the previous install is left durably intact (journal, grant, ` +
-          `provenance + store dir unchanged) and the failed new digest was GC'd; no finalize.`,
+        gate.supersedes
+          ? `update of ${input.packageName}@${input.version} could not activate the new digest ` +
+            `(${gate.reason}): the previous install is left durably intact (journal, grant, ` +
+            `provenance and store dir unchanged) and the failed new digest was GC'd; no finalize.`
+          : `install of ${input.packageName}@${input.version} could not activate ` +
+            `(${gate.reason}): nothing was committed. The materialized bytes were GC'd, no ` +
+            `install-op journal, grant or provenance was written, and the implementation ` +
+            `bundled in the image stays in service.`,
       );
     }
   }

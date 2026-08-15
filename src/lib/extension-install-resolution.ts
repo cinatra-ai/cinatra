@@ -20,6 +20,7 @@ import {
 import { readFile, readdir, stat } from "node:fs/promises";
 import { readInstalledExtensionsByPackageName } from "@cinatra-ai/extensions/canonical-store";
 import type { InstalledExtension } from "@cinatra-ai/extensions/canonical-types";
+import { applyInstallRowPrecedence } from "@cinatra-ai/extensions/static-bundle-anchor";
 import type { ActorContext } from "@/lib/authz/actor-context";
 import type { ConnectorUiManifest } from "@/lib/connector-ui-render";
 import {
@@ -175,7 +176,13 @@ export function pickActiveInstall<T extends InstallRowForPick>(
     actor.organizationId !== null &&
     row.organizationId !== actor.organizationId;
   const preferred = live.filter((row) => !isCrossOrg(row));
-  return preferred[0] ?? live[0];
+  // SOURCE PRECEDENCE (the shared policy): when a package ships in the image and
+  // also has a marketplace install, both rows are live and addressable. Setup and
+  // action dispatch must address the SAME row every other seam does, or the page
+  // renders one version's surface and posts to the other one's id.
+  const rankedPreferred = applyInstallRowPrecedence(preferred);
+  const rankedLive = applyInstallRowPrecedence(live);
+  return rankedPreferred[0] ?? rankedLive[0] ?? null;
 }
 
 /** Back-compat thin wrapper: the picked row's id, or null (delegates to `pickActiveInstall`). */

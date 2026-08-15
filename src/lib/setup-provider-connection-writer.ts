@@ -29,6 +29,7 @@ import "server-only";
 
 import { readInstalledExtensionsByPackageName } from "@cinatra-ai/extensions/canonical-store";
 import { canExtensionAccess } from "@cinatra-ai/extensions/enforce-extension-access";
+import { applyInstallRowPrecedence } from "@cinatra-ai/extensions/static-bundle-anchor";
 import { dispatchExtensionUiAction } from "@/lib/extension-action-dispatch";
 import { resolveExtensionUiAction } from "@/lib/extension-ui-registry";
 import { resolveVersionKeyedUiAction } from "@/lib/extension-version-keyed-serving";
@@ -153,9 +154,13 @@ export async function saveSetupProviderConnection(
   }
   // The DEFAULT live install row is the addressable identity (a non-default
   // side-by-side version is never the setup surface's target).
-  const install = rows.find(
-    (row) => LIVE_STATUSES.has(row.status) && row.isDefault !== false,
-  );
+  // SOURCE PRECEDENCE (the shared policy): a bare first-live-default `.find()`
+  // would write the connection against whichever of the bundled and marketplace
+  // rows the query returned first. The writer must target the same row setup and
+  // settings resolve, so the override wins here too.
+  const install = applyInstallRowPrecedence(
+    rows.filter((row) => LIVE_STATUSES.has(row.status)),
+  ).find((row) => row.isDefault !== false);
   if (!install) {
     return {
       ok: false,

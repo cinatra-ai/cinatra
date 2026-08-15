@@ -43,11 +43,7 @@ import { resolveConnectorSetupRedirect } from "@/lib/connector-setup-redirect";
 import { createExtensionHostContext } from "@/lib/extension-host-context";
 import { STATIC_EXTENSION_MANIFEST } from "@/lib/generated/extensions.server";
 import { isDegradedExtensionLoad } from "@/lib/extension-load-guard";
-import {
-  chooseConnectorUiRender,
-  collectDeclaredActionIds,
-  isInstalledButNotActive,
-} from "@/lib/connector-ui-render";
+import { chooseConnectorUiRender } from "@/lib/connector-ui-render";
 import {
   resolveActiveInstallForActor,
   resolveActiveInstallIdForActor,
@@ -61,7 +57,6 @@ import { SchemaConfigConnectorForm } from "@/components/extensions/schema-config
 import { ConnectorStatusProbeCard } from "@/components/extensions/connector-status-probe-card";
 import { SearchParamToast, type SearchParamToastConfig } from "@/components/search-param-toast";
 import { InstallActivateCta } from "@/components/extensions/install-activate-cta";
-import { NotYetActiveNotice } from "@/components/extensions/not-yet-active-notice";
 import { Main } from "@/components/layout/main";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
@@ -303,28 +298,6 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
     // Install/Activate CTA state keeps the header rule.
     const hasTabs = !!render.surface.tabs && render.surface.tabs.length > 0;
     const headerDivider = !(installId && hasTabs);
-    // NOT-YET-ACTIVE state (cinatra#2762).
-    //
-    // A live install row makes this page addressable, but the package only
-    // serves its named actions once it has REGISTERED in this process. An
-    // install can commit and stay un-activated until the next restart, and in
-    // that state every action POST 404s. Without a banner the page reads as
-    // broken: the operator sees a setup form whose fields cannot load and no
-    // statement of why.
-    //
-    // The check is the same registry the action route reads, so it cannot
-    // disagree with it: if NONE of the surface's declared actions resolve while
-    // the surface declares at least one, the package is installed but not
-    // active here. A connector that declares no actions is never flagged.
-    const notYetActive = isInstalledButNotActive({
-      installId,
-      packageName: packageId,
-      declaredActionIds: collectDeclaredActionIds(render.surface),
-      resolveAction: resolveExtensionUiAction,
-    });
-    const notYetActiveBanner = notYetActive ? (
-      <NotYetActiveNotice displayName={displayName} />
-    ) : null;
     if (statusProbeActionId) {
       // Model-A chrome (design/specs/app-connectors.html §II, "One connection"):
       // the connection-status badge that once sat top-right of the header now
@@ -352,7 +325,6 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
           divider={headerDivider}
           className="flex flex-col gap-6 pb-8"
         >
-          {notYetActiveBanner}
           {installId ? (
             <SchemaConfigConnectorForm
               installId={installId}
@@ -400,7 +372,6 @@ export default async function ConnectorDispatchPage(props: DispatchPageProps) {
         <Suspense fallback={null}>
           <SearchParamToast toasts={CONNECTOR_SETUP_FLASH_TOASTS} />
         </Suspense>
-        {notYetActiveBanner}
         {installId ? (
           <SchemaConfigConnectorForm
             installId={installId}

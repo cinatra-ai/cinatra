@@ -24,7 +24,6 @@
 
 import type { ReactNode } from "react";
 import { useFormStatus } from "react-dom";
-import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -33,7 +32,6 @@ import { isRedirectError } from "./is-redirect-error";
 import {
   appendDiagnosticReference,
   buildMarketplaceFailureCopy,
-  installActivationDeferredCopy,
   marketplaceFailureCopy,
 } from "./marketplace-failure-copy";
 import type {
@@ -73,21 +71,9 @@ export function MarketplaceInstallForm({
 }: MarketplaceInstallFormProps) {
   const failureCopyByCategory = buildMarketplaceFailureCopy(operation, displayName);
   const defaultFailureMessage = marketplaceFailureCopy("unrecoverable", operation, displayName);
-  const router = useRouter();
   async function handleSubmit() {
     try {
       const result = await action();
-      // #2761, the THIRD outcome. The install COMMITTED and only its
-      // in-process activation is deferred, so this is a SUCCESS toast with the
-      // caveat and the next step: never the failure copy, and never a support
-      // reference (there is no failed install to reference). The action does not
-      // redirect on this path, so navigate to the installed list ourselves.
-      // The operator must land where the new row is visible.
-      if (result && result.ok === true) {
-        toast.success(installActivationDeferredCopy(operation, displayName));
-        router.push("/configuration/extensions");
-        return;
-      }
       // Failure path: the action returned a classified category. Show the
       // mapped, actionable, non-technical copy — never the raw error.
       if (result && result.ok === false) {
@@ -97,8 +83,7 @@ export function MarketplaceInstallForm({
         // server log. The reference carries no technical detail itself.
         toast.error(appendDiagnosticReference(base, result.reference));
       }
-      // A fully-activated success returns undefined (the action redirect()s,
-      // which throws below).
+      // Success returns undefined (the action redirect()s, which throws below).
     } catch (error) {
       // Success path: redirect() sentinel — re-throw so Next.js navigates.
       if (isRedirectError(error)) throw error;
