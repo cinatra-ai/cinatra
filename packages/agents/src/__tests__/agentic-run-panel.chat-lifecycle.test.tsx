@@ -18,7 +18,7 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 import {
   ARTIFACT_REVIEW_REDIRECT_RENDERER_ID,
@@ -92,16 +92,25 @@ vi.mock("../agent-ui-override-registry", () => ({
   agentUIOverrideRegistry: { resolve: () => null },
 }));
 
-const { readRunOutputEvidence, getRunRecommendationHoldStateAction } = vi.hoisted(
-  () => ({
-    readRunOutputEvidence: vi.fn(),
-    getRunRecommendationHoldStateAction: vi.fn(),
-  }),
-);
+const {
+  readRunOutputEvidence,
+  getRunRecommendationHoldStateAction,
+  confirmRunRecommendationAction,
+  skipRunRecommendationAction,
+} = vi.hoisted(() => ({
+  readRunOutputEvidence: vi.fn(),
+  getRunRecommendationHoldStateAction: vi.fn(),
+  confirmRunRecommendationAction: vi.fn(
+    async (_input: Record<string, unknown>) => ({ ok: true, dispatched: true }),
+  ),
+  skipRunRecommendationAction: vi.fn(
+    async (_input: Record<string, unknown>) => ({ ok: true, dispatched: true }),
+  ),
+}));
 vi.mock("../run-recommendation-actions", () => ({
   getRunRecommendationHoldStateAction,
-  confirmRunRecommendationAction: vi.fn(async () => ({ ok: true })),
-  skipRunRecommendationAction: vi.fn(async () => ({ ok: true })),
+  confirmRunRecommendationAction,
+  skipRunRecommendationAction,
 }));
 vi.mock("../run-actions", () => ({
   resetAgentRun: vi.fn(async () => ({ ok: true })),
@@ -409,13 +418,17 @@ describe("the core's review lifecycle takes over in the conversation", () => {
 // Neither pin invents a gate. They state the core's own decision and prove the
 // conversation mount does not narrow it.
 //
-// NOT pinned here, because it is the core's to rule on: a chat-started run is
-// never PARKED for the recommendation. The chat pre-router creates its run
-// through the `agent_run` primitive (mcp/handlers.ts createAgentRun), which
-// stamps no `humanPresent` and never calls `maybeHoldRunForRecommendation`, so
-// the decision short-circuits at recommendation-hold.ts's
-// `run.humanPresent !== true` headless branch. The mount below is ready for the
-// hold; today nothing hands it one on this path.
+// A CHAT-STARTED RUN NOW REACHES THIS MOUNT. This note used to say the
+// opposite, and it was true when it was written: the chat pre-router created
+// its run through `agent_run`, which stamped no `humanPresent` and never called
+// `maybeHoldRunForRecommendation`, so the decision short-circuited at the
+// headless branch and the mount below sat ready for a hold nothing handed it.
+//
+// The primitive now derives the launch origin from the verified frame, creates
+// a chat-started run `pending_input`, and evaluates the hold BEFORE dispatch —
+// so a held chat run arrives here parked, in a conversation. The pin at the
+// bottom of this block covers that state, and the handler's own state path is
+// proved in chat-origin-recommendation-hold.test.ts.
 const HELD_RECOMMENDATION = {
   state: "held" as const,
   agentPackageName: "@cinatra-ai/blog-draft-writer-agent",
@@ -432,12 +445,15 @@ describe("the skill-recommendation screen reaches the conversation", () => {
     getRunRecommendationHoldStateAction.mockResolvedValue(HELD_RECOMMENDATION);
   });
 
-  async function renderRun(surface: "chat" | "agent-detail") {
+  async function renderRun(
+    surface: "chat" | "agent-detail",
+    initialStatus = "running",
+  ) {
     const { AgenticRunPanel } = await import("../agentic-run-panel");
     return render(
       <AgenticRunPanel
         runId="run-2729"
-        initialStatus="running"
+        initialStatus={initialStatus}
         initialError={null}
         initialMessages={[]}
         agUiEnabled={false}
@@ -472,6 +488,66 @@ describe("the skill-recommendation screen reaches the conversation", () => {
     });
     expect(getRunRecommendationHoldStateAction).toHaveBeenCalledWith({
       runId: "run-2729",
+    });
+  });
+
+  // The state a chat-started run now actually arrives in. The primitive creates
+  // it `pending_input`, evaluates the hold, and — when it fires — leaves it
+  // there with nothing queued behind it. So the card has to draw for THAT
+  // status, in a conversation, and its two buttons have to reach the canonical
+  // release rather than any chat-local shortcut. Confirm and Skip both go to
+  // the same server actions the run page uses, which is what makes the run
+  // dispatch through `triggerAgentRun` once the park is released.
+  it("draws the held card for a chat-started run parked in pending_input", async () => {
+    await renderRun("chat", "pending_input");
+
+    await waitFor(() => {
+      if (!document.querySelector('[data-conformance-id="run-chip-row"]')) {
+        throw new Error("recommendation card not drawn for a parked chat run");
+      }
+    });
+    expect(screen.queryByText(/Confirm the skills for this run/i)).not.toBeNull();
+  });
+
+  it("resolves Confirm through the canonical release action", async () => {
+    await renderRun("chat", "pending_input");
+
+    await waitFor(() => {
+      if (!screen.queryByRole("button", { name: /^Confirm$/ })) {
+        throw new Error("Confirm not drawn");
+      }
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Confirm$/ }));
+
+    await waitFor(() => {
+      if (confirmRunRecommendationAction.mock.calls.length === 0) {
+        throw new Error("Confirm did not reach the release action");
+      }
+    });
+    expect(confirmRunRecommendationAction.mock.calls[0]?.[0]).toMatchObject({
+      runId: "run-2729",
+      holdRef: "hold-ref-2729",
+    });
+  });
+
+  it("resolves Skip through the canonical release action", async () => {
+    await renderRun("chat", "pending_input");
+
+    await waitFor(() => {
+      if (!screen.queryByRole("button", { name: /^Skip$/ })) {
+        throw new Error("Skip not drawn");
+      }
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Skip$/ }));
+
+    await waitFor(() => {
+      if (skipRunRecommendationAction.mock.calls.length === 0) {
+        throw new Error("Skip did not reach the release action");
+      }
+    });
+    expect(skipRunRecommendationAction.mock.calls[0]?.[0]).toMatchObject({
+      runId: "run-2729",
+      holdRef: "hold-ref-2729",
     });
   });
 

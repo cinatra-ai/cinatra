@@ -47,6 +47,19 @@ function chatActorToPrimitive(actor: ActorContext): PrimitiveActorContext {
     source: "mcp",
     platformRole: actor.platformRole,
     tokenScopes: actor.tokenScopes,
+    // THE ONE STAMP SITE for the in-process launch origin (see
+    // `PrimitiveActorContext.launchOrigin`). This bridge is reached only from
+    // the hard pre-router below, which runs inside the authenticated chat
+    // route with the kernel Principal already resolved — so "this run was
+    // started from a conversation" is a fact of the call frame here, not a
+    // claim anyone made. It is a CONSTANT: no request field, no primitive
+    // input, and nothing the model emits can influence it.
+    //
+    // The remote MCP chat frame is stamped nowhere near here — it carries the
+    // transport-verified `delegatedRestricted` instead, deliberately, so there
+    // is exactly one carrier per path and neither one is re-derivable from
+    // model-reachable data.
+    launchOrigin: "chat",
   };
 }
 
@@ -534,8 +547,19 @@ export async function serverSideExplicitDispatch(input: {
       resultLabel: `runId: ${runId}, status: ${status}`,
       result: resultJson,
     });
+    // A chat-started run may PARK before it dispatches: the server evaluates
+    // the run-start recommendation hold, and a held run stays `pending_input`
+    // with nothing queued behind it. Saying "the agent is running" there is
+    // simply false, and it is the line that would send the reader off to wait
+    // for progress that cannot arrive until they decide. The card is already in
+    // this conversation — the run card above this text draws the recommendation
+    // card and carries its Confirm and Skip — so the text points AT the card
+    // rather than describing a run.
+    const heldForRecommendation = status === "pending_input";
     send("text", {
-      content: `Dispatched \`${packageName}\` (runId: \`${runId}\`, status: \`${status}\`). The agent is running — I'll keep polling for its progress.`,
+      content: heldForRecommendation
+        ? `Dispatched \`${packageName}\` (runId: \`${runId}\`, status: \`${status}\`). The run is paused for your decision — confirm or skip the recommended skills on the run card above, and it starts.`
+        : `Dispatched \`${packageName}\` (runId: \`${runId}\`, status: \`${status}\`). The agent is running — I'll keep polling for its progress.`,
     });
 
     // Append-only creation-progress emits, fired fire-and-forget. Recipient
@@ -543,8 +567,14 @@ export async function serverSideExplicitDispatch(input: {
     // caller-controlled, never an admin/team/org fanout vector). Non-human
     // actors silently skip the emit (chat dispatch from a service account
     // etc.).
+    //
+    // A HELD run emits nothing here. The milestone is literally `"queued"`, and
+    // the run is not: it is parked on a decision, with no job behind it. The
+    // decision's own release drives the run through the canonical trigger path,
+    // which is where a truthful queued milestone belongs.
     if (
       isCreationFlow &&
+      !heldForRecommendation &&
       input.actor.principalType === "HumanUser" &&
       input.actor.principalId
     ) {
