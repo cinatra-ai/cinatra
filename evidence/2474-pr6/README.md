@@ -20,7 +20,7 @@ complete.
 
 ## What ran, and where
 
-Every leg ran on **host2** (`ordnas@192.168.0.36`, macOS x86_64) against
+Every leg ran on **a lane host** (`<lane-host>`, macOS x86_64) against
 `lane/2474-pr6-cleanup` on a real dev boot — real Postgres, a real Better Auth
 session, real Chromium. **No credential or secret was placed on that host**: the
 proof account's password was generated locally there with `crypto.randomBytes`

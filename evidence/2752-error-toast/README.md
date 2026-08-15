@@ -1,6 +1,6 @@
 # cinatra#2752 — the schema-config add-failure toast, before and after
 
-Captured on host2 against a **production-equivalent build** (`CI=true pnpm build`
+Captured on a lane host against a **production-equivalent build** (`CI=true pnpm build`
 + `next start`, Next.js 16.2.10) of the appointment-schedules setup page
 `/connectors/cinatra-ai/google-appointment-schedules-connector/setup`, signed in
 as the platform-admin UAT account. Both repros are the ones evidenced by the
@@ -60,4 +60,4 @@ handler's own text on `error` (the server message wins over the static one).
 ## Drivers
 
 `.s2752drivers/e2752-add-failure.mjs` and `.s2752drivers/e2752-undeclared-success.mjs`
-on host2 (`~/cinatra-lanes/s3-2722/`), sharing the #2370 S4 lane's `lib-auth.mjs`.
+on a lane host (`<lane-checkout>/s3-2722/`), sharing the #2370 S4 lane's `lib-auth.mjs`.
