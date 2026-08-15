@@ -316,6 +316,7 @@
     { "alias": "@cinatra-ai/extensions/screens/extension-install-scope-panel", "target": "./packages/extensions/src/screens/extension-install-scope-panel.tsx" },
     { "alias": "@cinatra-ai/extensions/screens/install-panel-availability", "target": "./packages/extensions/src/screens/install-panel-availability.ts" },
     { "alias": "@cinatra-ai/extensions/install-access-target", "target": "./packages/extensions/src/install-access-target.ts" },
+    { "alias": "@cinatra-ai/extensions/workspace-connector-anchor", "target": "./packages/extensions/src/workspace-connector-anchor.ts" },
     { "alias": "@cinatra-ai/extensions/screens/extension-source-label", "target": "./packages/extensions/src/screens/extension-source-label.ts" },
     { "alias": "@cinatra-ai/extensions/screens/extension-settings-view", "target": "./packages/extensions/src/screens/extension-settings-view.tsx" },
     { "alias": "@cinatra-ai/extensions/screens/extension-access-control", "target": "./packages/extensions/src/screens/extension-access-control.tsx" },
