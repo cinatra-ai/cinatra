@@ -33,10 +33,17 @@ const deleteNotificationsByDedupeKeyForUser = vi.fn(
   (_args: { userId: string; dedupeKey: string }): void => {},
 );
 const resolveAgentRunHref = vi.fn(async (_jobData: unknown) => "/agents/acme/sales/R1");
+// The canonical "which gate is this run paused on" derivation. The notifier
+// reads it purely to pick INPUT-vs-APPROVAL copy; null (its default here) is
+// the fail-closed case that keeps the pre-existing approval wording.
+const deriveRunHitlContext =
+  vi.fn<
+    (run: unknown) => Promise<{ reviewTaskId?: string; fieldName?: string } | null>
+  >();
 
 // Side-effect host-adapter registration — a no-op in the test.
 vi.mock("@/lib/notifications-host", () => ({}));
-vi.mock("@cinatra-ai/agents", () => ({ readAgentRunById }));
+vi.mock("@cinatra-ai/agents", () => ({ readAgentRunById, deriveRunHitlContext }));
 vi.mock("@cinatra-ai/notifications/server", () => ({
   createNotificationForRecipient,
   deleteNotificationsByDedupeKeyForUser,
@@ -55,6 +62,8 @@ import {
 
 beforeEach(() => {
   readAgentRunById.mockReset();
+  deriveRunHitlContext.mockReset();
+  deriveRunHitlContext.mockResolvedValue(null);
   createNotificationForRecipient.mockReset();
   createNotificationForRecipient.mockResolvedValue([{ id: "notif-1" }]);
   deleteNotificationsByDedupeKeyForUser.mockReset();
@@ -99,6 +108,64 @@ describe("buildRunAwaitingHumanNotificationInput — pure shape", () => {
     const input = buildRunAwaitingHumanNotificationInput({ runId: "R1", reason: "pending_input" });
     expect(input.title).toBe("A run is waiting on you to continue");
     expect(input.href).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Notification-surface COPY fixtures for the input-vs-approval discriminator.
+//
+// Both cases below carry reason `pending_approval` — the enum cannot separate
+// them. Only the interrupt's semantics can, and the row must not tell a user to
+// "approve" a run that is merely collecting a missing field.
+// ---------------------------------------------------------------------------
+describe("buildRunAwaitingHumanNotificationInput — input vs approval copy", () => {
+  const SETUP_INPUT_INTERRUPT = { reviewTaskId: "setup-R1", fieldName: "idea" };
+  const REVIEW_GATE_INTERRUPT = { reviewTaskId: "9f1c2f0e-6f1a-4a1b-9f2e-0c3d4e5f6a7b" };
+
+  it("a setup-field INPUT pause asks for input, never for approval", () => {
+    const input = buildRunAwaitingHumanNotificationInput({
+      runId: "R1",
+      reason: "pending_approval",
+      runTitle: "Blog draft",
+      interrupt: SETUP_INPUT_INTERRUPT,
+    });
+    expect(input.title).toBe('"Blog draft" needs your input');
+    expect(input.body).toBe("Open the run to fill in the requested fields.");
+    expect(`${input.title} ${input.body}`.toLowerCase()).not.toContain("approv");
+  });
+
+  it("a genuine review gate keeps the unchanged approval copy", () => {
+    const input = buildRunAwaitingHumanNotificationInput({
+      runId: "R1",
+      reason: "pending_approval",
+      runTitle: "Nightly sync",
+      interrupt: REVIEW_GATE_INTERRUPT,
+    });
+    expect(input.title).toBe('"Nightly sync" is awaiting your approval');
+    expect(input.body).toBe("Open the run to review and approve the pending step.");
+  });
+
+  it("leaves the reason payload untouched — copy only, no state or enum change", () => {
+    const input = buildRunAwaitingHumanNotificationInput({
+      runId: "R1",
+      reason: "pending_approval",
+      interrupt: SETUP_INPUT_INTERRUPT,
+    });
+    expect(input.metadata).toMatchObject({
+      runAwaitingHuman: { runId: "R1", reason: "pending_approval" },
+    });
+    expect(input.dedupeKey).toBe("run-awaiting-human:R1");
+    expect(input.kind).toBe("warning");
+  });
+
+  it("the stop-run-hitl pending_input row is unaffected by the discriminator", () => {
+    const input = buildRunAwaitingHumanNotificationInput({
+      runId: "R1",
+      reason: "pending_input",
+      interrupt: SETUP_INPUT_INTERRUPT,
+    });
+    expect(input.title).toBe("A run is waiting on you to continue");
+    expect(input.body).toBe("Open the run to resolve the gate so it can continue.");
   });
 });
 
@@ -157,6 +224,49 @@ describe("runWaitNotifier.onEnterHumanWait — emit-on-wait", () => {
 
     const input = (createNotificationForRecipient.mock.calls as any[])[0][1];
     expect(input.metadata.runAwaitingHuman.reason).toBe("pending_input");
+  });
+
+  it("threads the DERIVED interrupt into the copy — a setup pause reads as input", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: "Blog draft", status: "pending_approval" });
+    deriveRunHitlContext.mockResolvedValue({ reviewTaskId: "setup-R1", fieldName: "idea" });
+
+    await runWaitNotifier.onEnterHumanWait({ runId: "R1", reason: "pending_approval" });
+
+    const input = (createNotificationForRecipient.mock.calls as any[])[0][1];
+    expect(input.title).toBe('"Blog draft" needs your input');
+    expect(input.body).toBe("Open the run to fill in the requested fields.");
+    // Still the same durable row identity + reason — presentation only.
+    expect(input.dedupeKey).toBe("run-awaiting-human:R1");
+    expect(input.metadata.runAwaitingHuman.reason).toBe("pending_approval");
+  });
+
+  it("keeps the approval copy for a genuine review gate", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: "Nightly sync", status: "pending_approval" });
+    deriveRunHitlContext.mockResolvedValue({ reviewTaskId: "wayflow-task-7" });
+
+    await runWaitNotifier.onEnterHumanWait({ runId: "R1", reason: "pending_approval" });
+
+    const input = (createNotificationForRecipient.mock.calls as any[])[0][1];
+    expect(input.title).toBe('"Nightly sync" is awaiting your approval');
+  });
+
+  it("still emits when the gate derivation fails (copy refinement is best-effort)", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: "Nightly sync", status: "pending_approval" });
+    deriveRunHitlContext.mockRejectedValue(new Error("redis down"));
+
+    await runWaitNotifier.onEnterHumanWait({ runId: "R1", reason: "pending_approval" });
+
+    expect(createNotificationForRecipient).toHaveBeenCalledTimes(1);
+    const input = (createNotificationForRecipient.mock.calls as any[])[0][1];
+    expect(input.title).toBe('"Nightly sync" is awaiting your approval');
+  });
+
+  it("does not derive a gate context for the pending_input wait", async () => {
+    readAgentRunById.mockResolvedValue({ id: "R1", runBy: "U1", title: null, status: "pending_input" });
+
+    await runWaitNotifier.onEnterHumanWait({ runId: "R1", reason: "pending_input" });
+
+    expect(deriveRunHitlContext).not.toHaveBeenCalled();
   });
 
   it("never throws when the notification write fails (best-effort)", async () => {

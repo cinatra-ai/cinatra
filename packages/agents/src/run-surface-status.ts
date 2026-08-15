@@ -47,6 +47,106 @@ export function statusBadgeVariant(
   return "secondary";
 }
 
+// ---------------------------------------------------------------------------
+// Human-wait PRESENTATION discriminator (input vs approval).
+//
+// A run parks on `pending_approval` for TWO semantically different reasons, and
+// the status column cannot tell them apart:
+//
+//   1. A SETUP-FIELD INPUT pause — the agent has not started yet and is
+//      collecting a missing required input (the "Idea" field of the blog-draft
+//      agent). Nothing is being approved.
+//   2. A GENUINE REVIEW GATE — a WayFlow / langgraph mid-run interrupt where a
+//      human approves or rejects work the agent already did.
+//
+// Labelling (1) "pending approval" is the defect this discriminator fixes.
+//
+// WHY NOT `RunHumanWaitReason`: that enum classifies BOTH of the above as
+// `pending_approval` (see `run-wait-notifier.ts` — every entry into the status
+// is one "reason"), so it carries no signal here. The discriminator must be
+// SEMANTIC, read off the interrupt itself:
+//
+//   - the synthetic `setup-<runId>` reviewTaskId, which the setup-interrupt
+//     loop in `execution.ts` is the ONLY emitter of (and which
+//     `deriveRunHitlContext` reproduces on the poll path), or
+//   - the setup payload kind: a `fieldName` on the interrupt, set ONLY by that
+//     same setup loop (a WayFlow gate or output renderer never carries one).
+//
+// PRESENTATION ONLY. Nothing here feeds the state machine, the wait-reason
+// enum, the resume path, or any authorization decision — it selects copy.
+// ---------------------------------------------------------------------------
+
+/**
+ * Prefix of the synthetic setup-gate task identity (`setup-<runId>`). The ONE
+ * home for this literal; `hitl-gate-submit.isSetupGateTaskId` reads it too.
+ */
+export const SETUP_GATE_TASK_ID_PREFIX = "setup-";
+
+/** Which flavour of human wait an interrupt represents, for COPY selection. */
+export type RunWaitInterruptKind = "input" | "approval";
+
+/**
+ * Structural minimum the classifier needs. Satisfied by `HitlGateContext`
+ * (poll path), `StreamInterruptContext` (SSE path) and the host's
+ * `deriveRunHitlContext` result alike, so every surface classifies identically.
+ */
+export type RunWaitInterruptDescriptor = {
+  reviewTaskId?: string | null;
+  fieldName?: string | null;
+};
+
+/** True for the synthetic `setup-<runId>` gate identity. */
+export function isSetupInterruptTaskId(
+  reviewTaskId: string | null | undefined,
+): boolean {
+  return (
+    typeof reviewTaskId === "string" &&
+    reviewTaskId.startsWith(SETUP_GATE_TASK_ID_PREFIX)
+  );
+}
+
+/**
+ * PURE. Classify an interrupt as an INPUT pause or an APPROVAL gate.
+ *
+ * Fails CLOSED to `"approval"`: with no interrupt in hand (a wait whose context
+ * is not yet readable) the pre-existing approval copy is kept, so this change
+ * can never relabel a genuine review gate.
+ */
+export function classifyRunWaitInterrupt(
+  interrupt: RunWaitInterruptDescriptor | null | undefined,
+): RunWaitInterruptKind {
+  if (!interrupt) return "approval";
+  if (
+    typeof interrupt.fieldName === "string" &&
+    interrupt.fieldName.trim().length > 0
+  ) {
+    return "input";
+  }
+  return isSetupInterruptTaskId(interrupt.reviewTaskId) ? "input" : "approval";
+}
+
+/** Badge copy for a setup-field INPUT pause. */
+export const AWAITING_INPUT_BADGE_LABEL = "Awaiting input";
+
+/**
+ * Status → badge LABEL for both run surfaces. Every status keeps its previous
+ * humanized rendering (`pending_approval` → "pending approval", …); ONLY a
+ * `pending_approval` that the discriminator reads as an input pause changes,
+ * to "Awaiting input".
+ */
+export function runStatusBadgeLabel(
+  status: string,
+  interrupt?: RunWaitInterruptDescriptor | null,
+): string {
+  if (
+    status === "pending_approval" &&
+    classifyRunWaitInterrupt(interrupt) === "input"
+  ) {
+    return AWAITING_INPUT_BADGE_LABEL;
+  }
+  return status.replace(/_/g, " ");
+}
+
 /**
  * The panel-side HITL gate context — the poll endpoint
  * (`/api/agents/runs/[runId]` → hitlContext) already returns this shape;

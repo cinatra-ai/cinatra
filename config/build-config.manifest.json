@@ -64,6 +64,7 @@
     { "alias": "@cinatra-ai/agents/schema", "target": "./packages/agents/src/schema.ts" },
     { "alias": "@cinatra-ai/agents/execution-config", "target": "./packages/agents/src/execution-config.ts" },
     { "alias": "@cinatra-ai/agents/run-status", "target": "./packages/agents/src/run-status.ts" },
+    { "alias": "@cinatra-ai/agents/run-surface-status", "target": "./packages/agents/src/run-surface-status.ts" },
     { "alias": "@cinatra-ai/agents/owner-containment-port", "target": "./packages/agents/src/owner-containment-port.ts" },
     { "alias": "@cinatra-ai/agents/mcp-client", "target": "./packages/agents/src/mcp/client/deterministic-client.ts" },
     { "alias": "@cinatra-ai/agents/db", "target": "./packages/agents/src/db.ts" },

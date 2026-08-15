@@ -19,6 +19,7 @@
 import type { LlmAttachmentRef } from "@cinatra-ai/llm";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
 import { HITL_PLACEHOLDER_FIELD_NAME } from "./humanize-field-name";
+import { isSetupInterruptTaskId } from "./run-surface-status";
 import { wrapUserResponseWithAttachments } from "./wayflow-user-response-envelope";
 
 // ---------------------------------------------------------------------------
@@ -38,7 +39,7 @@ import { wrapUserResponseWithAttachments } from "./wayflow-user-response-envelop
  * grouped keys against inputSchema.properties and would reject extras.
  */
 export function isSetupGateTaskId(reviewTaskId: string): boolean {
-  return reviewTaskId.startsWith("setup-");
+  return isSetupInterruptTaskId(reviewTaskId);
 }
 
 /**
