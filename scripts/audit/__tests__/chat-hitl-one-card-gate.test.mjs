@@ -16,6 +16,15 @@
 //   4. The gate exits 0 on the real tree — which is also what makes it RUN in
 //      CI, since `scripts/audit/__tests__/**` is inside the root vitest include.
 //
+// The S9 round adds the other half of the claim: that each interaction has ONE
+// renderer, not merely no more than one. The completeness fixtures below hold
+// every way a kind could LOOK owned while drawing nothing — an empty stub, an
+// owner that only returns null, an owner that ignores the body it was handed, an
+// anchor parked in a branch that can never run, a placeholder row left stale
+// after its card landed, a duplicate host mount and a missing host adapter. The
+// proper-owner fixture beside each one is what keeps the rules from being
+// satisfiable by refusing everything.
+//
 // The matcher is IMPORTED from the gate rather than re-implemented, so a fixture
 // can never assert a rule that differs from what CI enforces.
 
@@ -32,10 +41,22 @@ import {
   REGISTRY_MODULE,
   REGISTRY_KINDS,
   HOST_PROVIDED_BY_PARENT,
+  LIFECYCLE_CARD_CONTRACTS,
+  LIFECYCLE_CARD_KINDS,
+  LIFECYCLE_CARD_HOSTS,
+  PENDING_RETIREMENT,
+  auditContracts,
+  collectContractViolations,
   collectViolations,
+  emitsAnchor,
+  extractComponentBody,
   isExempt,
+  placeholderKinds,
+  scanHostMounts,
   scanModule,
+  scanOwnerModule,
   scanRegistry,
+  stripUnreachable,
 } from "../chat-hitl-one-card-gate.mjs";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -86,7 +107,9 @@ describe("R2 — each retired parallel renderer is banned by name", () => {
         "review-redirect-card": "return <ArtifactReviewRedirectCard gate={g} />;",
         "direct-chip-row-mount": "return <RunRecommendationChipRow runId={id} />;",
         "page-direct-decision-composition": "return <ReviewDecisionBar action={a} />;",
+        "verification-page-view": "return <VerificationView record={r} />;",
       }[parallel.id];
+      expect(sample, `no fixture for '${parallel.id}'`).toBeTypeOf("string");
       const hits = scanModule("src/app/new-surface/page.tsx", sample);
       expect(hits.map((h) => h.rule)).toContain("R2");
       expect(hits.find((h) => h.rule === "R2").detail).toContain(parallel.id);
@@ -157,6 +180,307 @@ describe("R4 — one registry row per data-part kind", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// The completeness rules — R5 to R9
+// ---------------------------------------------------------------------------
+//
+// These are the rules that answer "is there ONE?" rather than "is there more
+// than one?". Every fixture below is a way a kind could LOOK owned while
+// drawing nothing, because that is precisely how the previous round passed with
+// two undrawn cards.
+
+/** A proper owner: it reads its validated body, and it draws its anchors. */
+const PROPER_OWNER = [
+  "export function ProperCard({ view }: { view: CardView }) {",
+  "  const state = useCardState({ ref: view.ref });",
+  "  if (state === null) return null;",
+  "  return (",
+  '    <div data-conformance-id="proper-card" data-state={state.state}>',
+  "      {state.title}",
+  '      <div data-conformance-id="proper-floor">{state.actions}</div>',
+  "    </div>",
+  "  );",
+  "}",
+].join("\n");
+
+const PROPER_CONTRACT = {
+  status: "DRAWN",
+  design: "§X (a fixture)",
+  component: "ProperCard",
+  owner: "packages/fixture/proper-card.tsx",
+  composes: [],
+  body: { validator: "useCardState", params: ["view"], fields: ["state", "title", "actions"] },
+  anchors: ["proper-card", "proper-floor"],
+  hosts: {
+    chat_thread: [{ module: "packages/fixture/registry.tsx", kind: "registry", why: "the fixture transcript dispatch, named here" }],
+    site_widget: null,
+    run_card: [{ module: "packages/fixture/panel.tsx", kind: "mount", why: "the fixture run card, named here so a second one is visible" }],
+    page_gate_region: null,
+  },
+  hostGap: "The fixture declares two hosts only; the other two are out of the fixture's scope on purpose.",
+  renderedProof: { file: "packages/fixture/__tests__/proper-card.test.tsx", testName: "draws" },
+};
+
+const own = (source) => ({ [PROPER_CONTRACT.owner]: source });
+
+describe("R5 — every kind has ONE named owner, and a placeholder says so", () => {
+  it("the real contract covers exactly the protocol's closed set of kinds", () => {
+    expect(Object.keys(LIFECYCLE_CARD_CONTRACTS).sort()).toEqual([...LIFECYCLE_CARD_KINDS].sort());
+    // …and the mirrored list really is the protocol's list, which is the only
+    // thing that keeps a fifth kind from being added there and forgotten here.
+    const protocolSource = read(
+      "packages/agent-ui-protocol/src/renderable-views/lifecycle-cards.ts",
+    );
+    const block = /export const LIFECYCLE_CARD_KINDS = \[([\s\S]*?)\] as const;/.exec(protocolSource);
+    expect(block, "the protocol no longer declares LIFECYCLE_CARD_KINDS").not.toBeNull();
+    const declared = [...block[1].matchAll(/"([a-z_]+)"/g)].map((m) => m[1]);
+    expect(declared.sort()).toEqual([...LIFECYCLE_CARD_KINDS].sort());
+  });
+
+  it("the typed-INTERRUPT recommendation kind is covered — a DATA_PART-keyed rule would miss it", () => {
+    expect(LIFECYCLE_CARD_CONTRACTS.recommendation_hold.status).toBe("DRAWN");
+    expect(LIFECYCLE_CARD_CONTRACTS.recommendation_hold.owner).toBeTruthy();
+    expect(REGISTRY_KINDS).not.toContain("recommendation_hold");
+  });
+
+  it("REJECTS one component serving two kinds — the exact shape that passed before", () => {
+    const shared = { ...PROPER_CONTRACT, status: "PLACEHOLDER", owner: null, gap: "x".repeat(60) };
+    const hits = auditContracts({ a: PROPER_CONTRACT, b: shared });
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/both name ProperCard/);
+  });
+
+  it("REJECTS a placeholder row that claims an owner", () => {
+    const lying = { ...PROPER_CONTRACT, status: "PLACEHOLDER", gap: "x".repeat(60) };
+    const hits = auditContracts({ trigger_schedule_proposal: lying });
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/may not claim an owner/);
+  });
+
+  it("REJECTS a placeholder row with no sentence saying what is absent", () => {
+    const silent = { ...PROPER_CONTRACT, status: "PLACEHOLDER", owner: null, gap: "todo" };
+    const hits = auditContracts({ verification_summary: silent });
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/must say what is absent/);
+  });
+
+  it("REJECTS a DRAWN row pointing at the S1 shell — the placeholder-as-owner trick", () => {
+    const shell = {
+      ...PROPER_CONTRACT,
+      component: "LifecycleCard",
+      owner: "packages/chat/src/renderable-views/lifecycle-card.tsx",
+    };
+    const hits = auditContracts({ verification_summary: shell });
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/pointing at the S1 shell/);
+  });
+
+  it("the placeholder claim must be true the OTHER way too — a drawn card with a stale row fails", () => {
+    const placeholder = {
+      ...PROPER_CONTRACT,
+      status: "PLACEHOLDER",
+      owner: null,
+      gap: "The card is not drawn; the registry still dispatches this kind to the shell.",
+    };
+    const files = ["packages/fixture/proper-card.tsx"];
+    const sources = { "/repo/packages/fixture/proper-card.tsx": PROPER_OWNER };
+    const hits = collectContractViolations({
+      contracts: { trigger_schedule_proposal: placeholder },
+      files,
+      repoRoot: "/repo",
+      readFileImpl: (p) => sources[p] ?? "",
+    });
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/flip the row, or delete the component/);
+  });
+});
+
+describe("R6 — the owner consumes its authorized body", () => {
+  it("PASSES a proper owner", () => {
+    expect(scanOwnerModule("fixture", PROPER_CONTRACT, own(PROPER_OWNER))).toEqual([]);
+  });
+
+  it("REJECTS an UNUSED body parameter — the card would draw what nobody authorized", () => {
+    const source = PROPER_OWNER.replace("useCardState({ ref: view.ref })", "useCardState({ ref: RUN_ID })");
+    const hits = scanOwnerModule("fixture", PROPER_CONTRACT, own(source));
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/body parameter 'view' and never reads it/);
+  });
+
+  it("REJECTS an owner that never validates the body it draws", () => {
+    const source = PROPER_OWNER.replace(/useCardState/g, "JSON.parse");
+    const hits = scanOwnerModule("fixture", PROPER_CONTRACT, own(source));
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/never reads its authorized body through useCardState/);
+  });
+
+  it("REJECTS an owner that ignores a required body field", () => {
+    const source = PROPER_OWNER.replace("{state.title}", "{\"a fixed string\"}");
+    const hits = scanOwnerModule("fixture", PROPER_CONTRACT, own(source));
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/body field 'title' is never consumed/);
+  });
+});
+
+describe("R7 — the owner emits its ratified anchors, from code that runs", () => {
+  it("REJECTS an EMPTY STUB owner", () => {
+    const hits = scanOwnerModule("fixture", PROPER_CONTRACT, own("export function ProperCard() {}"));
+    expect(hits.map((h) => h.rule)).toContain("R7");
+  });
+
+  it("REJECTS an owner that only ever returns null", () => {
+    const source = [
+      "export function ProperCard({ view }: { view: CardView }) {",
+      "  const state = useCardState({ ref: view.ref });",
+      "  void state.title; void state.actions; void state.state;",
+      "  return null;",
+      "}",
+    ].join("\n");
+    const hits = scanOwnerModule("fixture", PROPER_CONTRACT, own(source));
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/never returns drawn DOM/);
+  });
+
+  it("REJECTS an anchor that only exists in a branch which can never run", () => {
+    const source = PROPER_OWNER.replace(
+      '<div data-conformance-id="proper-floor">{state.actions}</div>',
+      '{false && (<div data-conformance-id="proper-floor">{state.actions}</div>)}',
+    );
+    const hits = scanOwnerModule("fixture", PROPER_CONTRACT, own(source));
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(
+      /anchor 'proper-floor' is emitted only from a branch that can never run/,
+    );
+  });
+
+  it("REJECTS a missing anchor outright", () => {
+    const source = PROPER_OWNER.replace('data-conformance-id="proper-floor"', 'className="floor"');
+    const hits = scanOwnerModule("fixture", PROPER_CONTRACT, own(source));
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/ratified anchor 'proper-floor' is never emitted/);
+  });
+
+  it("the dead-branch stripper removes only what can never run", () => {
+    expect(stripUnreachable('if (false) { a("x"); } b();')).toBe(" b();");
+    expect(stripUnreachable("if (ready) { a(); } b();")).toBe("if (ready) { a(); } b();");
+    // A brace inside a string does not end the block early.
+    expect(stripUnreachable('if (false) { a("}"); } b();')).toBe(" b();");
+  });
+
+  it("reads a component body out of both declaration forms", () => {
+    expect(extractComponentBody("export function A(p) { return 1; }", "A")).toContain("return 1;");
+    expect(extractComponentBody("const A = (p) => { return 2; };", "A")).toContain("return 2;");
+    expect(extractComponentBody("export function B() {}", "A")).toBeNull();
+  });
+
+  it("an anchor match is EXACT — a longer id that starts the same does not count", () => {
+    expect(emitsAnchor('<i data-conformance-id="proper-card-skeleton" />', "proper-card")).toBe(false);
+    expect(emitsAnchor('<i data-conformance-id="proper-card" />', "proper-card")).toBe(true);
+  });
+
+  it("every DRAWN kind names a rendered owner test that reads its anchors back", () => {
+    for (const [kind, c] of Object.entries(LIFECYCLE_CARD_CONTRACTS)) {
+      if (c.status !== "DRAWN") continue;
+      const proof = read(c.renderedProof.file);
+      expect(proof, `${kind}: the rendered owner test is gone`).toContain(c.renderedProof.testName);
+      for (const anchor of c.anchors) {
+        expect(proof, `${kind}: ${anchor} is never read back in the rendered test`).toContain(anchor);
+      }
+    }
+  });
+});
+
+describe("R8 — one declared mount set per host", () => {
+  const registry = ["const M = {", "  fixture: ProperCard,", "};"].join("\n");
+
+  it("PASSES the declared set", () => {
+    const hits = scanHostMounts("fixture", PROPER_CONTRACT, ["packages/fixture/panel.tsx"], registry);
+    expect(hits).toEqual([]);
+  });
+
+  it("REJECTS a DUPLICATE host mount — a second production mount nobody declared", () => {
+    const hits = scanHostMounts(
+      "fixture",
+      PROPER_CONTRACT,
+      ["packages/fixture/panel.tsx", "packages/fixture/second-panel.tsx"],
+      registry,
+    );
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/duplicate host mount/);
+  });
+
+  it("REJECTS a MISSING host adapter — a declared module that stopped mounting", () => {
+    const hits = scanHostMounts("fixture", PROPER_CONTRACT, [], registry);
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/missing host adapter/);
+  });
+
+  it("REJECTS a registry-served host whose registry row points somewhere else", () => {
+    const wrongRow = ["const M = {", "  fixture: LifecycleCard,", "};"].join("\n");
+    const hits = scanHostMounts("fixture", PROPER_CONTRACT, ["packages/fixture/panel.tsx"], wrongRow);
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/does not dispatch this kind to ProperCard/);
+  });
+
+  it("REJECTS more than one module on a host when an entry gives no reason", () => {
+    const vague = {
+      ...PROPER_CONTRACT,
+      hosts: {
+        ...PROPER_CONTRACT.hosts,
+        run_card: [
+          { module: "packages/fixture/panel.tsx", kind: "mount", why: "the fixture run card, named here" },
+          { module: "packages/fixture/other.tsx", kind: "mount", why: "" },
+        ],
+      },
+    };
+    const hits = scanHostMounts("fixture", vague, ["packages/fixture/panel.tsx", "packages/fixture/other.tsx"], registry);
+    expect(hits.map((h) => h.detail).join(" ")).toMatch(/does not say why/);
+  });
+
+  it("every real host key is one of the protocol's four", () => {
+    for (const c of Object.values(LIFECYCLE_CARD_CONTRACTS)) {
+      expect(Object.keys(c.hosts).sort()).toEqual([...LIFECYCLE_CARD_HOSTS].sort());
+    }
+  });
+});
+
+describe("R9 — the parallel core renderer is banned, and its exception expires", () => {
+  it("flags a NEW module drawing the retired verification view", () => {
+    const hits = scanModule("src/app/somewhere/else/page.tsx", "return <VerificationView record={r} />;");
+    expect(hits.map((h) => h.rule)).toContain("R2");
+  });
+
+  it("flags a second DEFINITION of it anywhere", () => {
+    const hits = scanModule("packages/agents/src/x.tsx", "export function CompactVerificationView() { return null; }");
+    expect(hits.map((h) => h.rule)).toContain("R2");
+  });
+
+  it("does NOT flag the unrelated identifiers that merely start the same way", () => {
+    const src = "const isVerificationView = sp.view === 'verification';\nexport interface VerificationViewProps { a: 1 }";
+    expect(scanModule("src/app/x/page.tsx", src)).toEqual([]);
+  });
+
+  it("the recorded modules really carry it — the exception is not vacuous", () => {
+    for (const rel of PENDING_RETIREMENT.modules) {
+      expect(read(rel), rel).toMatch(/VerificationView/);
+    }
+  });
+
+  it("the exception EXPIRES the moment the verification kind is drawn", () => {
+    const drawn = { ...PROPER_CONTRACT, component: "VerificationSummaryCard" };
+    const hits = auditContracts({ verification_summary: drawn });
+    expect(hits.map((h) => h.rule)).toContain("R9");
+    expect(hits.find((h) => h.rule === "R9").detail).toMatch(/must be gone/);
+  });
+});
+
+describe("the two modes on the real tree", () => {
+  it("names the two kinds that are still placeholders", () => {
+    expect(placeholderKinds().map((p) => p.kind).sort()).toEqual([
+      "trigger_schedule_proposal",
+      "verification_summary",
+    ]);
+  });
+
+  it("default mode is clean: no false claim, and the placeholders are recorded", () => {
+    expect(collectContractViolations()).toEqual([]);
+  });
+
+  it("--complete FAILS today and NAMES both undrawn kinds", () => {
+    const res = spawnSync(process.execPath, [GATE, "--complete"], { cwd: REPO_ROOT, encoding: "utf8" });
+    const out = res.stdout + res.stderr;
+    expect(res.status).toBe(1);
+    expect(out).toMatch(/'trigger_schedule_proposal' has no card of its own/);
+    expect(out).toMatch(/'verification_summary' has no card of its own/);
+  });
+});
+
 describe("exemptions and the live tree", () => {
   it("tests, fixtures, evidence and docs are exempt — they may name anything", () => {
     for (const rel of [
@@ -174,9 +498,13 @@ describe("exemptions and the live tree", () => {
     expect(collectViolations()).toEqual([]);
   });
 
-  it("the CLI exits 0 on the real tree", () => {
+  it("the CLI's default mode exits 0 on the real tree — no false claim", () => {
     const res = spawnSync(process.execPath, [GATE], { cwd: REPO_ROOT, encoding: "utf8" });
-    expect(res.stdout + res.stderr).toMatch(/clean/);
+    const out = res.stdout + res.stderr;
+    expect(out).toMatch(/no false claim/);
+    // Exit 0 means "nothing overclaimed", never "the program is finished": the
+    // same run says out loud which kinds are still placeholders.
+    expect(out).toMatch(/STILL A PLACEHOLDER/);
     expect(res.status).toBe(0);
   });
 });
