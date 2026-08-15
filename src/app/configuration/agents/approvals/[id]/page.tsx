@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
-import { requireAuthSession } from "@/lib/auth-session";
+import { requireAdminSession } from "@/lib/auth-session";
 import { AgentApprovalDetailScreen } from "@cinatra-ai/agents/screens";
 import { SearchParamToast } from "@/components/search-param-toast";
 import { APPROVAL_DECISION_TOASTS } from "./approval-decision-flash";
@@ -12,11 +12,18 @@ export default async function ApprovalDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  // Author-or-admin authorization is enforced inside AgentApprovalDetailScreen,
-  // where the request row (and thus its authorId) is read; this outer gate can
-  // only require an authenticated session. An unauthenticated caller is still
-  // redirected to /sign-in by requireAuthSession().
-  await requireAuthSession();
+  // Platform-admin only (cinatra#2700, epic #2699): the page stays at this URL
+  // and falls under the `/configuration` gate like every other route in the
+  // segment. The stated consequence of the epic is that a non-admin author
+  // loses the read they had — S2 removes the member-facing links that used to
+  // mint a path here, so nothing dead-ends. An unauthenticated caller is still
+  // redirected to /sign-in; a signed-in non-admin lands on /not-authorized.
+  //
+  // AgentApprovalDetailScreen keeps its own author-or-admin read rule (it is
+  // the layer that reads the row, and the SAME rule serves the token-gated MCP
+  // surface) — it is simply no longer reachable by a non-admin through this
+  // page.
+  await requireAdminSession();
   const { id } = await params;
   // The post-decision redirect result (?status=/?error=) surfaces via the
   // codes-only <SearchParamToast> island mounted HERE (cinatra#391 → toast

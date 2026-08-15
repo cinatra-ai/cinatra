@@ -1,28 +1,28 @@
 /**
  * `/configuration/artifacts/restore/[changeSetId]` — the targeted single
  * change-set restore surface, nested under the Artifacts console (cinatra#1786,
- * spec design@923fa0d8 §IV). Reversing ONE change set is authorized PER OBJECT,
- * so this route is reachable by any authorized actor of ANY role — NOT
- * admin-gated. The two entry affordances (the in-chat "Undo last action" chip
- * and the "Saved … · Undo" toast) deep-link here.
+ * spec design@923fa0d8 §IV). The two entry affordances (the in-chat "Undo last
+ * action" chip and the "Saved … · Undo" toast) deep-link here.
  *
- * Eligibility holds to the SAME per-object gate the affordances and the confirm
- * path use (`loadAuthorizedTargetedRestore` → `canActorRestoreChangeSet`, no
- * administrator bypass): an authorized actor sees the "Restore this change?"
- * confirmation (the addressed change set, modal auto-opened); anyone else — a
- * signed-in actor not authorized for some affected object, a missing/foreign
- * change set, or a newly-non-restorable one — sees the standard not-authorized
- * state. A rendered control therefore never dead-ends here.
+ * PLATFORM-ADMIN ONLY since cinatra#2700 (epic #2699): the page stays at this
+ * URL and falls under the `/configuration` gate like every other route in the
+ * segment. Member self-service restore retires with it — at the ACTION level
+ * too (`restoreChangeSetAction`), not merely in the UI — and S2 removes the
+ * member-facing affordances that used to mint a path here.
+ *
+ * The per-object eligibility check REMAINS on top of the admin gate: an admin
+ * addressing a missing/foreign change set, or one that is no longer restorable,
+ * still sees the graceful denied state rather than a broken confirmation
+ * (`loadAuthorizedTargetedRestore` → `canActorRestoreChangeSet`, unchanged).
  */
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
 import Link from "next/link";
 import { Lock } from "lucide-react";
 
 import { Main } from "@/components/layout/main";
 import { PageContent } from "@/components/page-content";
 import { PageHeader } from "@/components/page-header";
-import { getAuthSession } from "@/lib/auth-session";
+import { requireAdminSession } from "@/lib/auth-session";
 import { loadAuthorizedTargetedRestore } from "@/lib/object-history/restore-eligibility";
 import { TargetedRestoreMode } from "@/components/artifacts/targeted-restore-mode";
 
@@ -34,8 +34,7 @@ type PageProps = {
 };
 
 export default async function TargetedRestorePage({ params }: PageProps) {
-  const session = await getAuthSession();
-  if (!session) redirect("/sign-in");
+  await requireAdminSession();
 
   const { changeSetId } = await params;
   const loaded = await loadAuthorizedTargetedRestore(changeSetId);
@@ -50,8 +49,7 @@ export default async function TargetedRestorePage({ params }: PageProps) {
             data-conformance-id="artifacts-restore-route"
           >
             <p className="mb-3 max-w-xl text-sm text-muted-foreground">
-              You are authorized to restore every affected object — no
-              administrator role required.
+              You are authorized to restore every affected object.
             </p>
             <TargetedRestoreMode loaded={loaded} />
           </div>
