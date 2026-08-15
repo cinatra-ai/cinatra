@@ -215,8 +215,12 @@ const CHAT_MCP_TIER_CORE: readonly string[] = [
   "agent_run_list",
   "agent_run_messages_list",
   "agent_run_stop",
+  // Declared as a chat dependency by the shipped chat skills, so it belongs in
+  // core rather than behind a tier the host has not learned to enable yet.
+  "agent_registry_list",
   // Artifact authoring + the shallow reads that confirm an emission back.
   "artifact_extension_search",
+  "artifact_extension_get",
   "artifact_authoring_emit",
   "artifacts_list",
   "artifacts_get",
@@ -234,6 +238,8 @@ const CHAT_MCP_TIER_CORE: readonly string[] = [
   "campaigns_get",
   "blog_project_list",
   "blog_project_get",
+  // A read-only per-connector list the chat skills declare a dependency on.
+  "drupal_instances_list",
   // Skill discovery (catalog level only).
   "skills_catalog_list",
   "skills_library_list",
@@ -254,7 +260,6 @@ const CHAT_MCP_TIER_CORE: readonly string[] = [
 const CHAT_MCP_TIERS: Readonly<Record<ChatMcpToolTier, readonly string[]>> = Object.freeze({
   core: CHAT_MCP_TIER_CORE,
   artifact_lifecycle: [
-    "artifact_extension_get",
     "artifact_authoring_chain_get",
     "artifact_assertion_list",
     "artifact_assertion_get",
@@ -263,7 +268,6 @@ const CHAT_MCP_TIERS: Readonly<Record<ChatMcpToolTier, readonly string[]>> = Obj
     "artifact_representation_latest",
   ],
   agent_authoring: [
-    "agent_registry_list",
     "agent_version_list",
     "agent_version_get",
     "agent_version_diff",
@@ -302,7 +306,7 @@ const CHAT_MCP_TIERS: Readonly<Record<ChatMcpToolTier, readonly string[]>> = Obj
     "dashboards_update",
   ],
   site_content: ["wordpress_site_tool_call", "wordpress_site_tools_list"],
-  connector_accounts: ["gmail_aliases_list", "linkedin_accounts_list", "drupal_instances_list"],
+  connector_accounts: ["gmail_aliases_list", "linkedin_accounts_list"],
   skills_detail: [
     "skills_installed_get",
     "skills_installed_resolve_for_agent",
