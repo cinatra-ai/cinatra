@@ -67,6 +67,61 @@ export class ExpectedInstalledVersionMismatchError extends Error {
 }
 
 /**
+ * The STABLE, duck-typed code an activation-deferred install carries. Kept as a
+ * bare string literal so a caller that cannot import this module (the host's
+ * install batch, which must not close an import cycle back into this package)
+ * still recognizes the outcome. It is the same no-cross-package-import contract
+ * `REQUIRES_REBUILD` and `AGENT_PACKAGE_CONTRACT_VIOLATION` already use.
+ */
+export const INSTALL_ACTIVATION_DEFERRED = "INSTALL_ACTIVATION_DEFERRED" as const;
+
+// ---------------------------------------------------------------------------
+// ExtensionActivationDeferredError: the THIRD install outcome.
+//
+// The real-integrity pipeline FINALIZED (real provenance recorded + journal
+// finalized), so the canonical row is committed and trusted-anchorable. But
+// in-process hot-activation did not register the package THIS call (the runtime
+// package loader refused the anchor). The package therefore loads on the next
+// boot, and the committed install is deliberately left intact.
+//
+// This is NOT a failure and NOT a plain success. Reporting it as a failure is
+// what made the install surface lie: the operator saw a generic error with a
+// support reference while the install had in fact landed. Reporting it as a
+// plain success would hide that the extension does not work until a restart.
+// The typed error carries a stable `code`. Every layer above this seam (the
+// host install batch, the marketplace server actions, the install form) can
+// route it to its own outcome: "installed; activates on the next restart".
+//
+// Thrown (not returned) on purpose: every existing caller already treats a
+// throw from this seam as "do not report a plain success", so the fail-closed
+// default is preserved for any caller that does not yet know the code.
+// ---------------------------------------------------------------------------
+export class ExtensionActivationDeferredError extends Error {
+  readonly code = INSTALL_ACTIVATION_DEFERRED;
+  constructor(
+    message: string,
+    public readonly packageName: string,
+    public readonly packageVersion?: string,
+  ) {
+    super(message);
+    this.name = "ExtensionActivationDeferredError";
+  }
+}
+
+/**
+ * Duck-typed recognizer for the activation-deferred outcome. Walks the `cause`
+ * chain (bounded depth) because the error crosses dynamic-import boundaries and
+ * may be wrapped by an intermediate layer, so `instanceof` is not reliable here
+ * (cinatra#2416 established the same duck-typing rule for lifecycle codes).
+ */
+export function isActivationDeferredError(err: unknown, depth = 0): boolean {
+  if (depth > 6 || err == null || typeof err !== "object") return false;
+  const obj = err as { code?: unknown; cause?: unknown };
+  if (obj.code === INSTALL_ACTIVATION_DEFERRED) return true;
+  return "cause" in obj ? isActivationDeferredError(obj.cause, depth + 1) : false;
+}
+
+/**
  * FAIL-CLOSED resolver for the expected-version CAS: given ALL canonical rows
  * for a package and the actor's scope, return the SINGLE live installed version
  * at that scope, or `null` when the precondition cannot be proven (zero or more
@@ -1590,14 +1645,24 @@ class ExtensionRegistryImpl {
     //   register the package this call — which breaks the no-restart invariant for
     //   a connector. Do NOT roll back the committed/finalized install (the row is
     //   real + anchorable; an update left the previous digest intact). THROW so the
-    //   op surfaces the truthful "did not hot-activate" failure rather than a
+    //   op surfaces the truthful "did not hot-activate" outcome rather than a
     //   silent finalized-but-not-loaded success.
+    //
+    //   The throw is TYPED (ExtensionActivationDeferredError, stable
+    //   `code: "INSTALL_ACTIVATION_DEFERRED"`). The message is unchanged, because
+    //   it is the operator-side truth. The code lets every caller above this seam
+    //   tell this outcome apart from a real failure. It is the THIRD install
+    //   outcome: the row is committed and anchorable, so the caller must neither
+    //   roll it back nor report a generic failure; it reports "installed,
+    //   activation deferred to the next restart".
     if (!result.activated) {
-      throw new Error(
+      throw new ExtensionActivationDeferredError(
         `${op} of ${ref.packageName} finalized the real-integrity pipeline but did NOT ` +
           `hot-activate in-process (${result.reason ?? "unknown"}) — the package is anchorable ` +
           `(it will load on the next boot) but did not load without a restart this call. The ` +
           `committed install was left intact.`,
+        ref.packageName,
+        ref.version,
       );
     }
   }

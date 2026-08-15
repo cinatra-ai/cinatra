@@ -74,6 +74,10 @@ function makeHarness(opts: {
   installFail?: string | ((pkg: string) => boolean);
   installRequiresRebuild?: string;
   installContractViolation?: string;
+  /** cinatra#2761: the member COMMITS (its canonical row is created + finalized)
+   *  and then throws the typed activation-deferred error: the dispatcher's
+   *  "finalized but did NOT hot-activate" seam, reproduced faithfully. */
+  installActivationDeferred?: string;
   activeBatches?: InstallBatch[];
   preInstalled?: string[];
   now?: () => number;
@@ -201,6 +205,20 @@ function makeHarness(opts: {
       }
       createRowIfAbsent(m.packageName, opts.batchOrgId ?? null);
       events.push(`install:${m.packageName}`);
+      // cinatra#2761: the row is COMMITTED above; the dispatcher then throws
+      // because in-process hot-activation was refused. The row must survive.
+      if (opts.installActivationDeferred === m.packageName) {
+        events.push(`install-DEFERRED:${m.packageName}`);
+        throw Object.assign(
+          new Error(
+            `install of ${m.packageName} finalized the real-integrity pipeline but did NOT ` +
+              `hot-activate in-process (anchor-refused) — the package is anchorable ` +
+              `(it will load on the next boot) but did not load without a restart this call. ` +
+              `The committed install was left intact.`,
+          ),
+          { code: "INSTALL_ACTIVATION_DEFERRED", packageName: m.packageName },
+        );
+      }
     }),
     updateMemberPackage: vi.fn(async (m, _actor, expectedInstalledVersion) => {
       // #1042 slice-1: record the CAS precondition the batch forwarded.
@@ -2368,5 +2386,78 @@ describe("decideMemberCompensation (cinatra#2415)", () => {
       kind: "refuse",
       reason: "no-durable-provenance",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// cinatra#2761, the THIRD install outcome: COMMITTED but activation-deferred.
+//
+// The dispatcher finalizes the real-integrity pipeline (the canonical row is
+// real and anchorable) and then throws because in-process hot-activation was
+// refused. That is NOT a member failure: the install landed and the package
+// loads on the next boot. The batch must therefore KEEP the row, never
+// compensate, and report the caveat on a SUCCESSFUL result.
+//
+// The invariant these tests pin is the one the operator sees: the committed row
+// and the reported outcome can never disagree.
+// ---------------------------------------------------------------------------
+describe("installExtensionWithDependencies: #2761 committed + activation-deferred", () => {
+  it("ROOT-ONLY fast path: the committed row SURVIVES and the result reports the caveat", async () => {
+    const h = makeHarness({ plan: [member(ROOT)], installActivationDeferred: ROOT });
+    const res = await installExtensionWithDependencies(
+      { packageName: ROOT, version: "1.0.0", actor },
+      h.deps,
+    );
+    // The install is a SUCCESS: it resolved, it did not throw.
+    expect(res.installed.map((m) => m.packageName)).toEqual([ROOT]);
+    // The caveat is reported, naming the package.
+    expect(res.activationDeferred.map((m) => m.packageName)).toEqual([ROOT]);
+    // The committed row was NOT torn down.
+    expect(h.rowIdsFor(ROOT)).toHaveLength(1);
+    expect(h.rowScopedUninstalls).toEqual([]);
+  });
+
+  it("BATCHED path: the deferred member is kept, the batch finalizes, nothing compensates", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
+      installActivationDeferred: ROOT,
+    });
+    const res = await installExtensionWithDependencies(
+      { packageName: ROOT, version: "1.0.0", actor },
+      h.deps,
+    );
+    expect(res.activationDeferred.map((m) => m.packageName)).toEqual([ROOT]);
+    // The batch reached `finalized`. It is a success, not an abort.
+    expect(h.events).toContain("ledger:phase:finalized");
+    expect(h.events).not.toContain("ledger:phase:failed");
+    // The deferred member is ledger-recorded as INSTALLED, never `failed`.
+    expect(h.events).toContain(`ledger:${ROOT}:installed`);
+    expect(h.events).not.toContain(`ledger:${ROOT}:failed`);
+    // Every row this batch created is still there; the dependency stayed too.
+    expect(h.rowIdsFor(ROOT)).toHaveLength(1);
+    expect(h.rowIdsFor("@cinatra-ai/dep-a")).toHaveLength(1);
+    expect(h.rowScopedUninstalls).toEqual([]);
+  });
+
+  it("a fully-activated batch reports an EMPTY caveat list (the outcomes stay distinct)", async () => {
+    const h = makeHarness({ plan: [member("@cinatra-ai/dep-a"), member(ROOT)] });
+    const res = await installExtensionWithDependencies(
+      { packageName: ROOT, version: "1.0.0", actor },
+      h.deps,
+    );
+    expect(res.activationDeferred).toEqual([]);
+  });
+
+  it("a TRUE member failure still aborts + compensates (the deferred path did not weaken it)", async () => {
+    const h = makeHarness({
+      plan: [member("@cinatra-ai/dep-a"), member(ROOT)],
+      installFail: ROOT,
+    });
+    await expect(
+      installExtensionWithDependencies({ packageName: ROOT, version: "1.0.0", actor }, h.deps),
+    ).rejects.toThrow();
+    expect(h.events).toContain("ledger:phase:compensated");
+    // The dependency this batch added was rolled back.
+    expect(h.rowIdsFor("@cinatra-ai/dep-a")).toHaveLength(0);
   });
 });

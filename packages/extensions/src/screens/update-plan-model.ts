@@ -11,7 +11,7 @@
 // server action and the client component.
 // ---------------------------------------------------------------------------
 
-import type { MarketplaceInstallActionResult } from "./marketplace-failure-copy";
+import type { MarketplaceInstallFailureResult } from "./marketplace-failure-copy";
 
 export type UpdatePlanMemberAction = "update" | "install" | "side-by-side" | "rebound";
 
@@ -38,7 +38,9 @@ export type UpdatePlanPreviewDto = {
 /** What the dry-run server action returns: the plan, or a #685 category. */
 export type PlanExtensionUpdateResult =
   | { ok: true; plan: UpdatePlanPreviewDto }
-  | MarketplaceInstallActionResult;
+  // A DRY RUN installs nothing, so it can only succeed with a plan or FAIL.
+  // The committed-but-deferred install outcome is unreachable here.
+  | MarketplaceInstallFailureResult;
 
 /**
  * Rendered name (§II drawing: names are displayNames): the server-resolved
