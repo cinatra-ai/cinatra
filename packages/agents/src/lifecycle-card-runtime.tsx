@@ -47,13 +47,13 @@ import {
 } from "react";
 
 import {
-  lifecycleCardStateSchema,
+  parseLifecycleResolveEnvelope,
   type LifecycleCardHost,
-  type LifecycleCardState,
   type LifecycleDataPartViewType,
+  type LifecycleResolveEnvelopeFor,
 } from "@cinatra-ai/agent-ui-protocol/renderable-views";
 
-/** The server route that re-authorizes a ref and answers with the card state. */
+/** The server route that re-authorizes a ref and answers with the card envelope. */
 export const LIFECYCLE_VIEW_RESOLVE_PATH = "/api/lifecycle-views/resolve";
 
 // ---------------------------------------------------------------------------
@@ -587,26 +587,36 @@ export function useLifecycleCardFrame(): LifecycleCardFrame | null {
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve the authoritative state for one lifecycle ref. Returns `null` until
- * the first resolve completes — the caller renders nothing while it is null.
+ * Resolve the authoritative ANSWER for one lifecycle ref: the state ladder and
+ * the body this kind is authorized to carry. Returns `null` until the first
+ * resolve completes — the caller renders nothing while it is null.
  *
  * A failed request (offline, 5xx, a body that does not validate) leaves the
- * state null rather than inventing one: an unresolvable card is silent, never
+ * answer null rather than inventing one: an unresolvable card is silent, never
  * optimistic. A denial is not an error — the server answers `absent` with a
  * 200, so a reader who may not see the item is indistinguishable from one
  * looking at an item that does not exist.
+ *
+ * THE ENVELOPE IS PARSED, NOT TRUSTED (epic S9, slice S9c). The answer is
+ * `{ kind, state, body }`, and it goes through the protocol's one parse seam
+ * with the kind THIS card asked for. An answer to another kind, an unknown
+ * kind, a body beside `absent`, or a missing body on a kind that must carry one
+ * are all refused — and a refused parse leaves the card exactly where it was
+ * before the first resolve landed, drawing nothing. That is how the two
+ * invariants survive a richer answer: no DOM before an authorized resolve, and
+ * an `absent` that says nothing about the target.
  *
  * `reloadToken` (S2) lets a card force a re-resolve without remounting: after a
  * decision lands, or when the reader presses the §IV "no longer open" Refresh,
  * the card bumps the token and the SAME identity is re-resolved through the
  * same monotonic-request guard.
  */
-export function useLifecycleCardState(params: {
-  viewType: LifecycleDataPartViewType;
+export function useLifecycleCardResolve<K extends LifecycleDataPartViewType>(params: {
+  viewType: K;
   ref: string;
   enabled: boolean;
   reloadToken?: number;
-}): LifecycleCardState | null {
+}): LifecycleResolveEnvelopeFor<K> | null {
   const { viewType, ref, enabled, reloadToken = 0 } = params;
   // The host's credential declaration (cinatra#2577). Read here so the resolve
   // callback closes over ONE value; a host that declares none keeps S1's exact
@@ -639,7 +649,7 @@ export function useLifecycleCardState(params: {
   const identity = `${viewType}\u0000${ref}\u0000${enabled ? "1" : "0"}\u0000${activationRef.current}`;
   const [resolved, setResolved] = useState<{
     identity: string;
-    state: LifecycleCardState;
+    envelope: LifecycleResolveEnvelopeFor<K>;
   } | null>(null);
   // Monotonic request id. Mount and focus can overlap, and a slow earlier
   // answer must never overwrite a fresher one — otherwise a card could settle
@@ -664,13 +674,14 @@ export function useLifecycleCardState(params: {
           signal,
         });
         if (!response.ok) return;
-        const body: unknown = await response.json();
-        const parsed = lifecycleCardStateSchema.safeParse(
-          (body as { state?: unknown } | null)?.state,
-        );
-        if (!parsed.success) return;
+        const payload: unknown = await response.json();
+        // Parsed against the kind THIS request asked for. Anything else — an
+        // answer to another kind, an unknown kind, a body where `absent` allows
+        // none — is refused, and a refused answer never reaches state.
+        const envelope = parseLifecycleResolveEnvelope(viewType, payload);
+        if (envelope === null) return;
         if (signal.aborted || requestId !== latestRequestRef.current) return;
-        setResolved({ identity: requestIdentity, state: parsed.data });
+        setResolved({ identity: requestIdentity, envelope });
       } catch {
         // Aborted or transport-failed — stay silent (see the doc above).
       }
@@ -697,5 +708,5 @@ export function useLifecycleCardState(params: {
     };
   }, [enabled, resolve, reloadToken]);
 
-  return resolved !== null && resolved.identity === identity ? resolved.state : null;
+  return resolved !== null && resolved.identity === identity ? resolved.envelope : null;
 }

@@ -440,7 +440,7 @@ const RESOLVE_RETRY_DELAYS_MS = [400, 1_500, 4_000] as const;
  * a wire change re-resolves WITHOUT blanking the card — the last authorized
  * answer stays on screen until the new one lands. That is deliberate and it is
  * the review card's shipped posture for a forced re-resolve of the same identity
- * (`useLifecycleCardState`'s `reloadToken`, which is likewise excluded from the
+ * (`useLifecycleCardResolve`'s `reloadToken`, which is likewise excluded from the
  * identity): a decision or a re-park settles the row without a frame of
  * blankness. Treating the ref as part of the identity would buy nothing — it is
  * the SAME run and the SAME reader either way — and would cost a blank frame on
@@ -465,7 +465,7 @@ function useRecommendationHoldState(params: {
   } | null>(null);
   // Monotonic request id — mount, a wire change and a focus can overlap, and a
   // slow earlier answer must never overwrite a fresher one. Same guard shape as
-  // `useLifecycleCardState`; the reason is identical (a superseded answer is
+  // `useLifecycleCardResolve`; the reason is identical (a superseded answer is
   // exactly the staleness the refetch exists to prevent).
   const latestRequestRef = useRef(0);
 

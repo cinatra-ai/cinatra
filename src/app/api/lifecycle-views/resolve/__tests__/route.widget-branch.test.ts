@@ -85,7 +85,11 @@ beforeEach(() => {
     agentSlug: "wordpress-content-editor",
   });
   resolveWidgetLifecycleActorContext.mockResolvedValue({ ok: true, actorCtx: WIDGET_ACTOR });
-  resolveLifecycleCardState.mockResolvedValue({ state: "pending", canDecide: true });
+  resolveLifecycleCardState.mockResolvedValue({
+    kind: "artifact_review_gate",
+    state: { state: "pending", canDecide: true },
+    body: null,
+  });
   attachLifecycleSuggestions.mockImplementation(async (state: unknown) => state);
   resolveTriggerScheduleProposalCard.mockResolvedValue({
     state: { state: "pending" },
@@ -94,10 +98,14 @@ beforeEach(() => {
 });
 
 describe("the widget branch is selected by the presented credential", () => {
-  it("serves a review card state to a consented widget reader", async () => {
+  it("serves a review card envelope to a consented widget reader", async () => {
     const res = await POST(widgetPost());
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ state: { state: "pending", canDecide: true } });
+    expect(await res.json()).toEqual({
+      kind: "artifact_review_gate",
+      state: { state: "pending", canDecide: true },
+      body: null,
+    });
   });
 
   it("authorizes through the S8a door, at THIS route's audience", async () => {
@@ -200,6 +208,31 @@ describe("SURFACE PARITY — the widget resolves the SAME view set as first-part
     const res = await POST(widgetPost("trigger_schedule_proposal"));
     expect(res.status).toBe(200);
     expect(resolveTriggerScheduleProposalCard).toHaveBeenCalled();
+  });
+
+  it("answers the schedule kind in the SAME envelope, carrying its §VI body", async () => {
+    // The schedule branch resolves state and body in one pass, and what it
+    // already returned now travels in the one envelope every kind uses.
+    const res = await POST(widgetPost("trigger_schedule_proposal"));
+    expect(await res.json()).toEqual({
+      kind: "trigger_schedule_proposal",
+      state: { state: "pending" },
+      body: { anything: true },
+    });
+  });
+
+  it("answers `absent` with NO body — the privacy contract, on the wire", async () => {
+    resolveLifecycleCardState.mockResolvedValue({
+      kind: "verification_summary",
+      state: { state: "absent" },
+      body: null,
+    });
+    const res = await POST(widgetPost("verification_summary"));
+    expect(await res.json()).toEqual({
+      kind: "verification_summary",
+      state: { state: "absent" },
+      body: null,
+    });
   });
 
   it("no viewType is refused for being asked on the widget rather than in chat", async () => {
