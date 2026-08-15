@@ -246,7 +246,9 @@ if [ "$WAYFLOW" = "1" ]; then
 fi
 
 info "Starting infrastructure (Postgres + Redis$WAYFLOW_LABEL)..."
-# shellcheck disable=SC2086 -- COMPOSE_PROFILE_ARGS is a deliberate word-split flag pair
+# COMPOSE_PROFILE_ARGS is empty or the deliberate `--profile wayflow` flag pair,
+# so the word split below is intended.
+# shellcheck disable=SC2086
 docker compose -f docker-compose.yml -f docker-compose.dev.yml $COMPOSE_PROFILE_ARGS up -d
 
 info "Waiting for Postgres to be ready..."
