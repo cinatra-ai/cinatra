@@ -76,6 +76,15 @@ const member = (orgId: string): Actor => ({
   orgId,
   orgRole: "member",
 });
+/** A PLATFORM-scoped session (no active org) holding NEITHER platform-admin
+ *  standing NOR any org role: the second refused session shape. It is refused
+ *  on a platform row exactly like an org-active session is, just through the
+ *  STANDING gate instead of the scope gate. */
+const noStanding = (): Actor => ({
+  actorType: "human",
+  userId: "u-none",
+  source: "ui",
+});
 
 /** The row-scoped ops — every op whose dispatcher runs the row resolver. */
 const ROW_SCOPED_OPS = ["archive", "activate", "uninstall"] as const;
@@ -86,17 +95,36 @@ const ROW_SCOPED_OPS = ["archive", "activate", "uninstall"] as const;
 
 describe("evaluateLifecycleCapability — platform-anchored row, org-active session", () => {
   const rows = [row("iext-platform", null)];
+  const PLATFORM_ROW_REASON =
+    "Installed for the whole platform. Only a platform administrator with no active organization can act on it.";
 
   it.each(ROW_SCOPED_OPS)(
-    "%s is DENIED with the platform-scope reason (the exact refusal case #2416 reports)",
+    "%s is DENIED with the true-discriminator reason (the exact refusal case #2416 reports)",
     (op) => {
       const cap = evaluateLifecycleCapability(rows, platformAdmin("org-x"), op);
       expect(cap).toEqual({
         op,
         allowed: false,
         code: "no_addressable_row",
-        reason:
-          "Installed for the whole platform — an organization-scoped session can't act on it.",
+        reason: PLATFORM_ROW_REASON,
+      });
+    },
+  );
+
+  // The copy used to blame "an organization-scoped session" as though
+  // clearing the active org were sufficient. It is not: a PLATFORM-scoped
+  // session (orgId null) with no platform-admin standing is refused just as
+  // hard, through the STANDING gate rather than the scope gate. Both session
+  // shapes now read the SAME accurate reason.
+  it.each(ROW_SCOPED_OPS)(
+    "%s is ALSO DENIED for a platform-scoped, non-platform-admin session — the SAME reason",
+    (op) => {
+      const cap = evaluateLifecycleCapability(rows, noStanding(), op);
+      expect(cap).toEqual({
+        op,
+        allowed: false,
+        code: "no_write_standing",
+        reason: PLATFORM_ROW_REASON,
       });
     },
   );
@@ -246,6 +274,8 @@ describe("capability ⇄ enforcement parity", () => {
     ["org admin of org-x", orgAdmin("org-x")],
     ["org admin of org-y", orgAdmin("org-y")],
     ["member of org-x", member("org-x")],
+    // The platform-scoped, no-standing shape the copy fix covers.
+    ["no org, no standing", noStanding()],
   ];
 
   for (const [rowsLabel, rows] of ROW_SETS) {

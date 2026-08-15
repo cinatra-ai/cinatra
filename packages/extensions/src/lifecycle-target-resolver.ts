@@ -398,8 +398,19 @@ export type LifecycleCapabilityDescription = {
 // admin." is the app's EXISTING standing-refusal string (install-targets.ts /
 // the design spec's §V Permissions rows), reused verbatim so the settings page
 // speaks the same language as the access picker.
-const REASON_PLATFORM_ROW_FROM_ORG_SESSION =
-  "Installed for the whole platform — an organization-scoped session can't act on it.";
+//
+// A platform-anchored (NULL-org) row can refuse a caller for TWO
+// separate reasons: the row is out of the caller's ADDRESSABLE scope (their
+// active org does not match), or the row IS addressable but the caller lacks
+// WRITE STANDING over it (not a platform admin). The old copy named only the
+// first refusal ("an organization-scoped session can't act on it"), which
+// reads as though clearing the active organization is sufficient — it is not:
+// a platform-scoped, non-platform-admin caller is refused identically. Both
+// refusals now share ONE reason naming the actual discriminator: the principal
+// who CAN act (a platform administrator with no active organization), not the
+// session shape that gets refused.
+const REASON_PLATFORM_ROW_REQUIRES_PLATFORM_ADMIN =
+  "Installed for the whole platform. Only a platform administrator with no active organization can act on it.";
 const REASON_ORG_ROW_FROM_PLATFORM_SESSION =
   "Installed by an organization — a platform-scoped session can't act on it.";
 const REASON_NOT_IN_SCOPE = "Not installed in your current scope.";
@@ -422,7 +433,7 @@ function noAddressableRowReason(
   const hasPlatformRow = rows.some((r) => (r.organizationId ?? null) === null);
   const hasOrgRow = rows.some((r) => (r.organizationId ?? null) !== null);
   if (actorOrgId !== null && hasPlatformRow) {
-    return REASON_PLATFORM_ROW_FROM_ORG_SESSION;
+    return REASON_PLATFORM_ROW_REQUIRES_PLATFORM_ADMIN;
   }
   if (actorOrgId === null && hasOrgRow) {
     return REASON_ORG_ROW_FROM_PLATFORM_SESSION;
@@ -462,9 +473,20 @@ export function evaluateLifecycleCapability(
       ? deny(op, "no_addressable_row", noAddressableRowReason(rows, actor))
       : deny(op, "ambiguous_target", REASON_AMBIGUOUS);
   }
-  return actorHasWriteStandingOverRow(actor, resolution.row.organizationId)
-    ? allow(op)
-    : deny(op, "no_write_standing", REASON_NO_WRITE_STANDING);
+  if (actorHasWriteStandingOverRow(actor, resolution.row.organizationId)) {
+    return allow(op);
+  }
+  // The row IS in the actor's scope here (a platform-scoped actor
+  // facing a platform row, or an org actor facing their own org's row), so
+  // this is the STANDING refusal, not the scope one. A NULL-org row's standing
+  // requirement is platform-admin ONLY (actorHasWriteStandingOverRow never
+  // grants it on org role); naming "organization owner or admin role" there
+  // would describe a role that can never satisfy this row.
+  const standingReason =
+    resolution.row.organizationId === null
+      ? REASON_PLATFORM_ROW_REQUIRES_PLATFORM_ADMIN
+      : REASON_NO_WRITE_STANDING;
+  return deny(op, "no_write_standing", standingReason);
 }
 
 /** Every op's verdict from one already-read row set (pure). */

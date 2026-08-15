@@ -460,17 +460,17 @@ export default async function ExtensionSettingsFixturePage({
             description: "Currently on version 0.9.1 — up to date.",
             disabledReason: "Already up to date",
           }}
-          archiveDisabled="Installed for the whole platform — an organization-scoped session can't act on it."
-          activateDisabled="Installed for the whole platform — an organization-scoped session can't act on it."
-          reinstallDisabled="Installed for the whole platform — an organization-scoped session can't act on it."
+          archiveDisabled="Installed for the whole platform. Only a platform administrator with no active organization can act on it."
+          activateDisabled="Installed for the whole platform. Only a platform administrator with no active organization can act on it."
+          reinstallDisabled="Installed for the whole platform. Only a platform administrator with no active organization can act on it."
           forceDeleteDisabled={null}
           lifecycleCapabilityReasons={{
             archive:
-              "Installed for the whole platform — an organization-scoped session can't act on it.",
+              "Installed for the whole platform. Only a platform administrator with no active organization can act on it.",
             activate:
-              "Installed for the whole platform — an organization-scoped session can't act on it.",
+              "Installed for the whole platform. Only a platform administrator with no active organization can act on it.",
             reinstall:
-              "Installed for the whole platform — an organization-scoped session can't act on it.",
+              "Installed for the whole platform. Only a platform administrator with no active organization can act on it.",
           }}
           isPublic={false}
           isRegisteredVendor={false}

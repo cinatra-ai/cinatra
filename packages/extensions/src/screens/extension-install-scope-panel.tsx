@@ -49,8 +49,10 @@ import {
   appendDiagnosticReference,
   buildMarketplaceFailureCopy,
   installAccessStageFailureCopy,
+  installActivationDeferredCopy,
   marketplaceFailureCopy,
   type MarketplaceInstallActionResult,
+  type MarketplaceInstallFailureResult,
 } from "./marketplace-failure-copy";
 
 /**
@@ -240,7 +242,7 @@ export function ExtensionInstallScopePanel({
   });
 
   const failureMessageForResult = (
-    result: MarketplaceInstallActionResult,
+    result: MarketplaceInstallFailureResult,
   ): string => {
     if (
       result.stage === "access" ||
@@ -280,10 +282,23 @@ export function ExtensionInstallScopePanel({
         packageVersion,
         accessTarget: target,
       });
+      // #2761, the THIRD outcome: the install COMMITTED and only its in-process
+      // activation is deferred to the next restart. Report it as a SUCCESS with
+      // the caveat (never the failure copy, never a support reference), close
+      // the panel exactly as a plain success does, and announce it on the same
+      // live region so a screen-reader user hears the caveat too.
+      if (result && result.ok === true) {
+        const message = installActivationDeferredCopy("install", name);
+        toast.success(message);
+        setLive((prev) => ({ seq: prev.seq + 1, message }));
+        closePanel();
+        return;
+      }
       if (result && result.ok === false) {
         reportFailure(failureMessageForResult(result));
       }
-      // Success returns nothing (the action redirect()s, which throws below).
+      // A fully-activated success returns nothing (the action redirect()s,
+      // which throws below).
     } catch (error) {
       if (isRedirectError(error)) {
         // SUCCESS — toast, return the card to idle, re-throw so Next navigates.
