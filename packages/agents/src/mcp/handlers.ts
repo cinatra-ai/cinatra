@@ -54,7 +54,7 @@ import {
 // imported by that module, not here.
 import { handleEmailTestDeliveryRunSend, handleEmailTestDeliveryParseAction } from "./test-delivery-handlers";
 // The `agent_run` create → decide → dispatch sequence (chat-hitl S9b).
-import { createAgentRunForLaunchFrame } from "../recommendation-hold";
+import { createAgentRunForLaunchFrame } from "../actions";
 import { handleEmailOutreachInitialDraftsUpdate } from "./drafts-persist-handler";
 import { handleEmailOutreachRecipientsUpdate } from "./recipients-persist-handler";
 import { enqueueBackgroundJob } from "@/lib/background-jobs";
@@ -1080,8 +1080,8 @@ async function handleAgentBuilderRun(
   }
 
   try {
-    // CREATE → DECIDE → DISPATCH (../recommendation-hold), which also resolves
-    // the creation authority this frame carries. A chat launch is created parked,
+    // CREATE → DECIDE → DISPATCH (../actions), which also resolves the
+    // creation authority this frame carries. A chat launch is created parked,
     // consults the run-start recommendation hold, then dispatches; every other
     // frame creates and enqueues in one act, as before. The launch origin is
     // SERVER-DERIVED from this frame, never from the primitive's input.

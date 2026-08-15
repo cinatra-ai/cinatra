@@ -78,8 +78,20 @@ import {
   updateShareBinding,
   createAgentTemplateVersionIfChanged,
   rollbackAgentTemplateToVersion,
+  // The run-start path at the end of this file drives the canonical CAS itself.
+  transitionRunStatus,
+  RunTransitionError,
 } from "./store";
-import type { CompiledStep, AgentRunStatus } from "./store";
+import type {
+  CompiledStep,
+  AgentRunStatus,
+  AgentRunRecord,
+  AgentTemplateRecord,
+  CreateAgentRunInput,
+} from "./store";
+import { maybeHoldRunForRecommendation } from "./recommendation-hold";
+import type { AgentRunEnqueueOptions } from "@/lib/agent-run-enqueue";
+import { resolveRunCreationAuthority } from "@/lib/org-write/run-creation-authority";
 import { compileWorkflow } from "./compiler";
 import { collectAllPrimitiveHandlers } from "@/lib/primitive-handlers";
 import { publishAgentPackage } from "./verdaccio/client";
@@ -1455,3 +1467,241 @@ export async function rollbackAgentTemplate(
 }
 
 // importAgentTemplate lives in import-export-actions.ts
+
+// ---------------------------------------------------------------------------
+// THE RUN-START PATH THAT CONSULTS THE HOLD
+// ---------------------------------------------------------------------------
+//
+// Placed in THIS module rather than a new one, and the two constraints that
+// pick the home also agree with each other. `createAgentRun` and
+// `transitionRunStatus` sit inside the org-write perimeter, whose registry
+// enumerates their legitimate callers — this file is already one of them, and a
+// new importer is a reviewed design event, not something a slice decides on the
+// way past. The locked dev-perf routes are budget-pinned on reachable
+// first-party module count, so a new file would have raised four ceilings.
+// This module already owns a create-and-enqueue run-start (`runFromRegistry`
+// below); the sequence here is the same act, generalized over the launch frame.
+//
+// PART 1 — the SERVER-DERIVED chat launch origin for the `agent_run` primitive.
+//
+// `agent_run` is reachable from several launch frames, and only one of them is
+// a person sitting in a conversation. That difference decides whether the run
+// is human-present, and therefore whether it may PAUSE on a lifecycle hold
+// instead of dispatching straight into the queue.
+//
+// The rule `isChatLaunchFrame` exists to enforce is that the answer comes from
+// the verified call frame and NEVER from the call's arguments. A primitive's input
+// is model-authored; if presence were readable from there, any agent could
+// claim a human was watching (or deny that one was) and choose its own
+// supervision. So this function reads two fields, and both of them are stamped
+// exclusively by server-only code the model cannot reach:
+//
+//   • `delegatedRestricted` — the REMOTE MCP carrier. The transport resolves it
+//     from the delegated actor it verified (`delegation === "chat"`), writes it
+//     into the request context, and the agents registry forwards it onto the
+//     model actor. No second remote claim is minted here on purpose: one
+//     verified carrier per path is the whole design, and a parallel one would
+//     only add a thing to forge.
+//   • `launchOrigin` — the IN-PROCESS carrier, for the chat pre-router, which
+//     builds no delegated actor at all and so has no `delegatedRestricted` to
+//     read. Stamped in exactly one place: the chat dispatch boundary's
+//     `chatActorToPrimitive`, as a constant.
+//
+// Everything else — an OBO / agent-as-tool child dispatch, a scheduler fire, an
+// A2A call, a plain machine token — carries neither field and is headless, which
+// is exactly the previous behaviour for those paths.
+//
+// Deliberately typed over a minimal structural shape rather than importing the
+// actor type: it keeps the check honest (it can only look at these two fields)
+// and unit-testable without constructing a transport frame.
+
+
+/** The two server-stamped fields this decision may read. Nothing else. */
+export type ChatLaunchOriginFrame = {
+  /** Remote MCP: transport-verified `delegation === "chat"`. */
+  readonly delegatedRestricted?: unknown;
+  /** In-process chat pre-router: stamped by `chatActorToPrimitive`. */
+  readonly launchOrigin?: unknown;
+};
+
+/**
+ * True when the frame is a verified chat launch — a human started this run from
+ * a conversation, so the run is human-present and may park on a hold.
+ *
+ * Fail-closed by construction: anything that is not one of the two exact
+ * server-stamped values answers false (headless), which is the pre-existing
+ * dispatch behaviour. A missing frame is headless.
+ */
+export function isChatLaunchFrame(frame: unknown): boolean {
+  if (!frame || typeof frame !== "object") return false;
+  // Narrowed HERE and only here. The parameter is `unknown` so that every
+  // caller hands over its whole actor envelope — whatever shape that transport
+  // gives it — and this module remains the single place that decides which
+  // fields the answer may come from.
+  const { delegatedRestricted, launchOrigin } = frame as ChatLaunchOriginFrame;
+  // Strict equality on both, so a truthy-but-wrong value (the string "false",
+  // an object, a 1) cannot widen the check.
+  if (delegatedRestricted === true) return true;
+  return launchOrigin === "chat";
+}
+
+//
+// PART 2 — the `agent_run` CREATE → DECIDE → DISPATCH sequence.
+//
+// Held out of the primitive hub because it is one decision with three possible
+// endings, and reading it as one piece is the only way to see that the endings
+// are exhaustive and that each one reports itself honestly.
+//
+// `agent_run` serves two kinds of caller. A headless one — an OBO / agent-as-tool
+// child dispatch, a scheduler fire, an A2A call — wants creation and dispatch to
+// be the same act, and gets exactly that. A CHAT caller is a person who just
+// asked for something in a conversation, and their run may need to stop and ask
+// before it starts: the run-start recommendation hold.
+//
+// THE ORDERING IS THE WHOLE POINT. A chat-started run is created `pending_input`
+// and dispatched only after the hold declines to fire. The tempting shape —
+// create it `queued` as always, then hold it — STRANDS the run: Confirm and Skip
+// release only the two pre-dispatch waiting states, so a hold applied to an
+// already-queued row is a hold nothing can ever let go of.
+//
+// Three endings, and the status returned is always the one the row is really in:
+//   HELD      → `pending_input`, nothing enqueued, waiting on a person.
+//   DISPATCHED→ `queued`, CAS'd once and enqueued once.
+//   RACED     → someone else moved the run first; this call adds no second job
+//               and claims no state it did not produce.
+//
+// An enqueue failure THROWS after reverting this function's own CAS, so no
+// caller can ever be handed a `queued` result for a run with no job behind it.
+ 
+
+/** The creation inputs the caller owns. Presence and initial status are NOT
+ *  among them: this module derives both from the launch frame, so no caller can
+ *  hand in a presence claim. */
+export type LaunchFrameCreateInput = Omit<
+  CreateAgentRunInput,
+  "initialStatus" | "humanPresent"
+>;
+
+export type LaunchedRun = {
+  run: AgentRunRecord;
+  /** The status this call actually produced — never an optimistic one. */
+  status: string;
+  /** True when the run parked on the hold and is waiting on a human decision. */
+  held: boolean;
+};
+
+export async function createAgentRunForLaunchFrame(input: {
+  /** The VERIFIED actor envelope. Two readers, and no others:
+   *  `./chat-launch-origin` derives the launch origin from it, and the
+   *  authority resolver below reads the authority it already carries. */
+  frame: unknown;
+  create: LaunchFrameCreateInput;
+  template: Pick<AgentTemplateRecord, "packageName"> & { lifecycleConfig?: string | null };
+  enqueueOptions: AgentRunEnqueueOptions;
+}): Promise<LaunchedRun> {
+  const { frame, create, template, enqueueOptions } = input;
+  const actor = (frame ?? {}) as {
+    orgWriteAuthority?: Parameters<typeof createAgentRun>[1];
+    userId?: string;
+  };
+
+  // cinatra#1940 P3 (Decision 2): resolve whichever authority this frame already
+  // carries — a session frame's forwarded orgWriteAuthority (fast path), else
+  // the delegating principal (an OBO/agent-as-tool frame's run-bound authority
+  // never satisfies can("run.execute"), so it falls through by construction).
+  //
+  // ONE authority grounds all three writes below — the create, the dispatch CAS
+  // and its compensation revert. That is deliberate: a compensation that could
+  // not be authorized would leave the very falsely-queued row this function
+  // promises never to produce.
+  const authority = await resolveRunCreationAuthority(create.orgId, {
+    orgWriteAuthority: actor.orgWriteAuthority,
+    userId: actor.userId,
+  });
+
+  // SERVER-DERIVED. A chat launch is human-present and may pause; every other
+  // frame is headless and keeps the create-and-enqueue shape it always had.
+  const launchedFromChat = isChatLaunchFrame(frame);
+
+  const run = await createAgentRun(
+    {
+      ...create,
+      initialStatus: launchedFromChat ? "pending_input" : "queued",
+      humanPresent: launchedFromChat ? true : undefined,
+    },
+    authority,
+  );
+
+  if (launchedFromChat) {
+    // BEST-EFFORT, on the same contract as every other interactive run-start: a
+    // recommendation must never fail a run, so any throw fails OPEN to a normal
+    // dispatch.
+    let heldForRecommendation = false;
+    try {
+      const hold = await maybeHoldRunForRecommendation({
+        run,
+        template: {
+          packageName: template.packageName,
+          lifecycleConfig: template.lifecycleConfig,
+        },
+      });
+      heldForRecommendation = hold.held;
+    } catch (holdErr) {
+      // The run id is a request-influenced value, so it is passed as a discrete
+      // ARGUMENT and never interpolated into the format string — a `%`-bearing
+      // id must not be read as a util.format specifier (CodeQL
+      // js/tainted-format-string).
+      console.warn(
+        "[agent_run] recommendation hold evaluation failed for run",
+        run.id,
+        "— dispatching normally:",
+        holdErr instanceof Error ? holdErr.message : String(holdErr),
+      );
+    }
+    if (heldForRecommendation) {
+      // PARKED. No transition, no enqueue. The run card in the conversation
+      // draws the recommendation card, and its Confirm/Skip releases the park
+      // and dispatches through the canonical trigger path — which performs the
+      // very CAS + enqueue this branch skipped.
+      return { run, status: "pending_input", held: true };
+    }
+
+    try {
+      await transitionRunStatus(run.id, "pending_input", "queued", undefined, authority);
+    } catch (transitionErr) {
+      if (
+        transitionErr instanceof RunTransitionError &&
+        transitionErr.code === "stale_from_status"
+      ) {
+        // A concurrent writer already moved the run off `pending_input`, so it
+        // owns the dispatch. Enqueueing here too would be the second enqueue
+        // this path promises never to make.
+        const current = await readAgentRunById(run.id).catch(() => null);
+        return { run, status: current?.status ?? "pending_input", held: false };
+      }
+      throw transitionErr;
+    }
+  }
+
+  try {
+    await enqueueAgentRun({ runId: run.id }, enqueueOptions);
+  } catch (enqueueErr) {
+    // Compensate this function's OWN CAS so a failed enqueue cannot leave the
+    // run sitting in `queued` with no job behind it. The headless branch made
+    // no transition of its own, so it has nothing to undo.
+    if (launchedFromChat) {
+      await transitionRunStatus(run.id, "queued", "pending_input", undefined, authority).catch(
+        (revertErr) => {
+          console.error(
+            "[agent_run] enqueue compensation revert failed for run",
+            run.id,
+            revertErr,
+          );
+        },
+      );
+    }
+    throw enqueueErr;
+  }
+
+  return { run, status: "queued", held: false };
+}
