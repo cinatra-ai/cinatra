@@ -13,6 +13,7 @@ import {
   updateAgentRunA2ATaskId,
   updateAgentRunA2AContextId,
   setAgentRunTokenHash,
+  writeDurableHitlGateArtifact,
 } from "./store";
 import type { AgentTemplateRecord, AgentRunRecord, AgentRunStatus } from "./store";
 import {
@@ -1566,6 +1567,18 @@ export async function handleWayflowTaskState(args: HandleWayflowTaskStateArgs): 
         );
       },
       readBackGate: (id) => readLatestAgUiInterrupt(id),
+      // The durable fallback for this gate (cinatra#2748). The seam calls it only
+      // after the read-back verified the frame, so the row mirrors a gate a human
+      // really was shown. The event log expires; this row does not.
+      persistArtifact: (artifact) =>
+        writeDurableHitlGateArtifact({
+          runId,
+          reviewTaskId: artifact.reviewTaskId,
+          xRenderer: artifact.xRenderer,
+          inputSchema: artifact.schema,
+          values: artifact.values,
+          ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
+        }),
       parkRun: () =>
         transitionRunStatus(runId, fromStatus, "pending_approval", undefined, authority).catch((e) => {
           if (e instanceof RunTransitionError && e.code === "stale_from_status") return;
@@ -2533,6 +2546,18 @@ async function runAgentBuilderExecutionJobInner(
         );
       },
       readBackGate: (id) => readLatestAgUiInterrupt(id),
+      // The durable fallback for this gate (cinatra#2748). The seam calls it only
+      // after the read-back verified the frame, so the row mirrors a gate a human
+      // really was shown. The event log expires; this row does not.
+      persistArtifact: (artifact) =>
+        writeDurableHitlGateArtifact({
+          runId,
+          reviewTaskId: artifact.reviewTaskId,
+          xRenderer: artifact.xRenderer,
+          inputSchema: artifact.schema,
+          values: artifact.values,
+          ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
+        }),
       parkRun: () =>
         transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority),
       failRun: (error) =>
@@ -2605,6 +2630,18 @@ async function runAgentBuilderExecutionJobInner(
         );
       },
       readBackGate: (id) => readLatestAgUiInterrupt(id),
+      // The durable fallback for this gate (cinatra#2748). The seam calls it only
+      // after the read-back verified the frame, so the row mirrors a gate a human
+      // really was shown. The event log expires; this row does not.
+      persistArtifact: (artifact) =>
+        writeDurableHitlGateArtifact({
+          runId,
+          reviewTaskId: artifact.reviewTaskId,
+          xRenderer: artifact.xRenderer,
+          inputSchema: artifact.schema,
+          values: artifact.values,
+          ...(artifact.fieldName ? { fieldName: artifact.fieldName } : {}),
+        }),
       parkRun: () =>
         transitionRunStatus(runId, "queued", "pending_approval", undefined, executionAuthority),
       failRun: (error) =>

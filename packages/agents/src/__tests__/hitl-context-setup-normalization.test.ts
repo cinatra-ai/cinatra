@@ -20,12 +20,17 @@ import type { AgentRunRecord, AgentTemplateRecord } from "../store";
 
 const readLatestAgUiInterrupt = vi.fn();
 const readAgentTemplateById = vi.fn();
+// The durable gate row (cinatra#2748) is the fallback BELOW the interrupt, so
+// every case here keeps it empty and proves the interrupt path is untouched.
+const readLatestDurableHitlGateArtifact = vi.fn();
 
 vi.mock("@cinatra-ai/agent-ui-protocol/server", () => ({
   readLatestAgUiInterrupt: (...args: unknown[]) => readLatestAgUiInterrupt(...args),
 }));
 vi.mock("../store", () => ({
   readAgentTemplateById: (...args: unknown[]) => readAgentTemplateById(...args),
+  readLatestDurableHitlGateArtifact: (...args: unknown[]) =>
+    readLatestDurableHitlGateArtifact(...args),
 }));
 
 const TEMPLATE_SCHEMA = {
@@ -51,6 +56,7 @@ function setupRun(overrides: Partial<AgentRunRecord> = {}): AgentRunRecord {
 beforeEach(() => {
   vi.clearAllMocks();
   readAgentTemplateById.mockResolvedValue(template);
+  readLatestDurableHitlGateArtifact.mockResolvedValue(null);
 });
 
 describe("deriveRunHitlContext — raw setup interrupt normalization", () => {

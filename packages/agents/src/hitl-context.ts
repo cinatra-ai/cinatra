@@ -14,7 +14,13 @@
 //      poll path cannot rely on the AG-UI SSE stream to deliver the INTERRUPT
 //      because navigation can happen AFTER the worker emitted it — SSE opens
 //      reading from "$" (only-new) and misses the past event.
-//   2. Fall back to a synthetic gate identity when no interrupt is readable:
+//   2. Fall back to the DURABLE gate row (cinatra#2748) when no interrupt is
+//      readable. The Redis log expires, and a paused run whose key is gone used
+//      to lose its only answerable artifact permanently. The park seam writes a
+//      Postgres row for every VERIFIED gate, so the row renders the same form
+//      the frame did. Redis stays first: the row is a fallback, never the
+//      source of truth for a live gate.
+//   3. Fall back to a synthetic gate identity when neither is readable:
 //        - runs with an a2aTaskId  → `wayflow-<a2aTaskId>` (updated per gate
 //          by handleWayflowTaskState, so it is a stable "which gate is the
 //          run paused on" identity), empty schema/renderer.
@@ -29,6 +35,7 @@
 import { readLatestAgUiInterrupt } from "@cinatra-ai/agent-ui-protocol/server";
 import {
   readAgentTemplateById,
+  readLatestDurableHitlGateArtifact,
   type AgentRunRecord,
   type AgentTemplateRecord,
 } from "./store";
@@ -117,9 +124,30 @@ export async function deriveRunHitlContext(
     };
   }
 
+  // DURABLE FALLBACK (cinatra#2748). The event log is gone (expired, evicted, or
+  // the instance restarted), so read the row the park seam wrote when it
+  // verified this gate. A row only exists for a gate that was materialized AND
+  // read back, so what it renders is the same form the frame rendered. A row
+  // that lost its renderer is NOT usable — it would pass the panel's "has
+  // xRenderer" check and then render nothing — so it is treated as no row and
+  // the synthetic identities below take over.
+  const durable = await readLatestDurableHitlGateArtifact(run.id).catch(() => null);
+  if (durable?.xRenderer) {
+    return {
+      xRenderer: durable.xRenderer,
+      childRunId: null,
+      reviewTaskId: durable.reviewTaskId,
+      inputSchema: durable.inputSchema,
+      // Run input params first so the stored gate values win on key collisions,
+      // exactly as they do on the interrupt path above.
+      currentValues: { ...runInputParams, ...durable.values },
+      ...(durable.fieldName ? { fieldName: durable.fieldName } : {}),
+    };
+  }
+
   if (run.a2aTaskId) {
-    // WayFlow gate with no readable interrupt: surface the stable synthetic
-    // gate identity; renderer-specific context is unavailable.
+    // WayFlow gate with no readable interrupt and no durable row: surface the
+    // stable synthetic gate identity; renderer-specific context is unavailable.
     return {
       xRenderer: "",
       childRunId: null,
