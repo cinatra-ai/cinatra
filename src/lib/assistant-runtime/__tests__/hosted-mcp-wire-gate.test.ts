@@ -526,6 +526,10 @@ function registerInertConnectorDeps() {
   registerGeminiConnector({
     readConnectorConfigFromDatabase: <T,>(_id: string, fallback: T) => fallback,
     isAppDevelopmentMode: () => false,
+    // Folded into every Gemini request's headers by
+    // `buildGeminiRequestHeaders`; empty here (the host's self-client headers
+    // are not part of what this gate measures).
+    buildAppMcpSelfClientHeaders: () => ({}),
   } as never);
 }
 
