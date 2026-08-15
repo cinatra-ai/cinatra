@@ -27,8 +27,8 @@ import type { ExtensionDataTeardownContext } from "./data-teardown-hook";
 import type { InstalledExtension } from "./canonical-types";
 // cinatra#2696: the planned row anchor an install writes at (PURE module — the
 // dispatcher-side half of S1's target→ownership contract).
-import { resolveInstallRowAnchor } from "./install-row-anchor";
-import type { InstallRowOwnership } from "./install-row-anchor";
+import { resolveInstallRowAnchor } from "./install-access-target";
+import type { InstallRowOwnership } from "./install-access-target";
 import { isNonFinalizedLiveRowAware } from "./non-finalized-row";
 
 // ---------------------------------------------------------------------------

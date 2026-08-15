@@ -1,5 +1,5 @@
 // The dispatcher-side half of the target→ownership contract (cinatra#2694,
-// S2 #2696) — `install-row-anchor.ts`.
+// S2 #2696) — `install-access-target.ts` (the row-anchor helpers).
 //
 // S1 (#2695) proved the CONTRACT (`accessTargetToRowOwnership`); this pins the
 // RESOLUTION the write path performs with it:
@@ -15,7 +15,7 @@ import {
   actorDerivedRowAnchor,
   isWorkspaceRowAnchor,
   resolveInstallRowAnchor,
-} from "../install-row-anchor";
+} from "../install-access-target";
 import {
   WORKSPACE_ANCHOR_ROW_OWNERSHIP,
   accessTargetToRowOwnership,

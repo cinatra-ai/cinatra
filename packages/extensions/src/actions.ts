@@ -61,7 +61,7 @@ import {
 // install actually writes at, and the org-NULL workspace discriminator the
 // rollback needs (a workspace-anchored row cannot be addressed by the org-pinned
 // lifecycle resolver; that is S4 #2698).
-import { isWorkspaceRowAnchor } from "./install-row-anchor";
+import { isWorkspaceRowAnchor } from "./install-access-target";
 
 // ---------------------------------------------------------------------------
 // Operator-side failure logging (cinatra#685). The end user only ever sees a

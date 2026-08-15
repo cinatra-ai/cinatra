@@ -46,7 +46,7 @@ const PKG = "@cinatra-ai/ws-artifact-2696";
 
 let canonicalStore: typeof import("@cinatra-ai/extensions/canonical-store");
 let lifecycle: typeof import("@cinatra-ai/extensions/lifecycle-primitive");
-let anchors: typeof import("@cinatra-ai/extensions/install-row-anchor");
+let anchors: typeof import("@cinatra-ai/extensions/install-access-target");
 let contract: typeof import("@cinatra-ai/extensions/install-access-target");
 let client: Client;
 
@@ -121,7 +121,7 @@ beforeAll(async () => {
 
   canonicalStore = await import("@cinatra-ai/extensions/canonical-store");
   lifecycle = await import("@cinatra-ai/extensions/lifecycle-primitive");
-  anchors = await import("@cinatra-ai/extensions/install-row-anchor");
+  anchors = await import("@cinatra-ai/extensions/install-access-target");
   contract = await import("@cinatra-ai/extensions/install-access-target");
 
   client = new Client({ connectionString: DB_URL });
