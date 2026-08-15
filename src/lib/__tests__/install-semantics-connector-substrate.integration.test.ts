@@ -48,7 +48,7 @@ const ALL_PKGS = [WS_PKG, BOTH_PKG, BUNDLED_PKG];
 
 let canonicalStore: typeof import("@cinatra-ai/extensions/canonical-store");
 let lifecycle: typeof import("@cinatra-ai/extensions/lifecycle-primitive");
-let anchors: typeof import("@cinatra-ai/extensions/install-row-anchor");
+let anchors: typeof import("@cinatra-ai/extensions/install-access-target");
 let contract: typeof import("@cinatra-ai/extensions/install-access-target");
 let resourceIdentity: typeof import("@cinatra-ai/extensions/extension-resource-identity");
 let syncResolver: typeof import("@/lib/connector-access-resolver");
@@ -144,7 +144,7 @@ beforeAll(async () => {
 
   canonicalStore = await import("@cinatra-ai/extensions/canonical-store");
   lifecycle = await import("@cinatra-ai/extensions/lifecycle-primitive");
-  anchors = await import("@cinatra-ai/extensions/install-row-anchor");
+  anchors = await import("@cinatra-ai/extensions/install-access-target");
   contract = await import("@cinatra-ai/extensions/install-access-target");
   resourceIdentity = await import("@cinatra-ai/extensions/extension-resource-identity");
   accessContract = await import("@cinatra-ai/extensions/install-access-contract");
