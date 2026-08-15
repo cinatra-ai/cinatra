@@ -230,7 +230,7 @@
     {
       "packageName": "@cinatra-ai/gemini-connector",
       "repo": "cinatra-ai/gemini-connector",
-      "resolvedSha": "bea71faba93a0d5c37b9ee0b5cbcbb4f84fbcda0"
+      "resolvedSha": "bc07ce11567ca68cbc9ac27fe4db5b8d04f3667f"
     },
     {
       "packageName": "@cinatra-ai/github-connector",
