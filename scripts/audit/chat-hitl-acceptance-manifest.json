@@ -737,6 +737,6 @@
   "movedOn": "2026-08-15",
   "why": "The rows were pinned to a spec commit the design had already moved past. The ratified drawing adds the full-parity matrix and the composer-binding contract, so a row could read as conformant against a document that no longer states the requirement. The pin above is an IMMUTABLE commit, never a moving head: a pin that follows the head proves nothing, because the document can change under a green claim.",
   "differs": "The ratified commit revises the parity matrix and adds the composer-binding row with its states and anchors. Two card sections it fixes are still undrawn in the tree; the rows for those criteria are MISSING below, and the drawing slices carry them.",
-  "whoRatified": "The owner ratified the drawing in the design repository; this manifest only records which commit the rows are read against."
+  "whoRatified": "The owner ratified the drawing at that commit; this manifest only records which commit the rows are read against."
  }
 }
