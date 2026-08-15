@@ -16,6 +16,17 @@ vi.mock("@cinatra-ai/agent-ui-protocol/server", async (orig) => {
   return {
     ...actual,
     enrichSchemaWithResolvedData: enrichSpy,
+    // The park seam reads the emitted gate back through this reader before a run
+    // may enter `pending_approval`. Serve it from the adapter spy: the suite
+    // stays hermetic (no Redis) and still drives the real verification.
+    readLatestAgUiInterrupt: async () => {
+      const last = onInterruptSpy.mock.calls.at(-1) as
+        | [Record<string, unknown>, string, Record<string, unknown>, string, string?]
+        | undefined;
+      if (!last) return null;
+      const [schema, xRenderer, values, reviewTaskId, fieldName] = last;
+      return { schema, xRenderer, values, reviewTaskId, fieldName };
+    },
     DualAdapterDispatch: class MockDualAdapterDispatch {
       onInterrupt = onInterruptSpy;
       onText = vi.fn();
