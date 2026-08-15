@@ -1,0 +1,203 @@
+[
+  {
+    "step": "row-identity",
+    "asserts": "the canonical rows this package carries in the store — ONE workspace-anchored, org-NULL row",
+    "rows": [
+      {
+        "id": "iext_1964ffd4-cea",
+        "package_name": "@cinatra-ai/youtube-connector",
+        "kind": "connector",
+        "owner_level": "workspace",
+        "owner_id": "__platform__",
+        "organization_id": null,
+        "status": "active",
+        "is_default": true,
+        "version": "0.1.4",
+        "required_in_prod": false
+      }
+    ]
+  },
+  {
+    "step": "actors",
+    "asserts": "one platform admin (platform_role admin) and one org admin (platform_role user, org_role admin); both sessions carry an active organization",
+    "rows": [
+      {
+        "id": "37be6937-2b74-42e7-a789-884b8f1372d3",
+        "email": "gate-admin@local.test",
+        "platform_role": "admin",
+        "org_role": "owner",
+        "session_has_active_org": true
+      },
+      {
+        "id": "cb770fba-93d9-4fee-bb21-e727378c7758",
+        "email": "gate-member@local.test",
+        "platform_role": "user",
+        "org_role": "admin",
+        "session_has_active_org": true
+      }
+    ]
+  },
+  {
+    "step": "sign-in",
+    "role": "platform-admin",
+    "httpStatus": 200
+  },
+  {
+    "step": "after-a-platform-admin-active-org",
+    "asserts": "AFTER (branch): the same platform admin, same active organization, same row — Archive and Reinstall are LIVE",
+    "httpStatus": 200,
+    "finalPath": "/configuration/extensions/settings/connector/@cinatra-ai/youtube-connector",
+    "affordances": [
+      {
+        "row": "Update",
+        "control": "Update",
+        "enabled": false,
+        "disabledReason": "Already up to date",
+        "capabilityReason": null
+      },
+      {
+        "row": "Archive",
+        "control": "Archive",
+        "enabled": true,
+        "disabledReason": null,
+        "capabilityReason": null
+      },
+      {
+        "row": "Activate",
+        "control": "Activate",
+        "enabled": false,
+        "disabledReason": "Already active",
+        "capabilityReason": null
+      },
+      {
+        "row": "Reinstall latest",
+        "control": "Reinstall latest",
+        "enabled": true,
+        "disabledReason": null,
+        "capabilityReason": null
+      },
+      {
+        "row": "Force-delete",
+        "control": "Force-delete…",
+        "enabled": true,
+        "disabledReason": null,
+        "capabilityReason": null
+      }
+    ],
+    "h1": "YouTube",
+    "reasonsOnPage": [],
+    "files": {
+      "file": "after-a-platform-admin-active-org.png",
+      "parts": {
+        "maintenance": "after-a-platform-admin-active-org-maintenance.png",
+        "danger-zone": "after-a-platform-admin-active-org-danger-zone.png"
+      }
+    }
+  },
+  {
+    "step": "roundtrip-archive",
+    "asserts": "the LIVE Archive button ran: the workspace-anchored row is archived and its anchor tuple is unchanged",
+    "rows": [
+      {
+        "id": "iext_1964ffd4-cea",
+        "package_name": "@cinatra-ai/youtube-connector",
+        "kind": "connector",
+        "owner_level": "workspace",
+        "owner_id": "__platform__",
+        "organization_id": null,
+        "status": "archived",
+        "is_default": true,
+        "version": "0.1.4",
+        "required_in_prod": false
+      }
+    ]
+  },
+  {
+    "step": "after-c-platform-admin-archived-row",
+    "asserts": "AFTER (branch): with the workspace-anchored row archived, Activate (restore) is LIVE for the same platform admin",
+    "httpStatus": 200,
+    "finalPath": "/configuration/extensions/settings/connector/@cinatra-ai/youtube-connector",
+    "affordances": [
+      {
+        "row": "Update",
+        "control": "Update",
+        "enabled": false,
+        "disabledReason": "Already up to date",
+        "capabilityReason": null
+      },
+      {
+        "row": "Archive",
+        "control": "Archive",
+        "enabled": false,
+        "disabledReason": "Already archived",
+        "capabilityReason": null
+      },
+      {
+        "row": "Activate",
+        "control": "Activate",
+        "enabled": true,
+        "disabledReason": null,
+        "capabilityReason": null
+      },
+      {
+        "row": "Reinstall latest",
+        "control": "Reinstall latest",
+        "enabled": true,
+        "disabledReason": null,
+        "capabilityReason": null
+      },
+      {
+        "row": "Force-delete",
+        "control": "Force-delete…",
+        "enabled": true,
+        "disabledReason": null,
+        "capabilityReason": null
+      }
+    ],
+    "h1": "YouTube",
+    "reasonsOnPage": [],
+    "files": {
+      "file": "after-c-platform-admin-archived-row.png",
+      "parts": {
+        "maintenance": "after-c-platform-admin-archived-row-maintenance.png",
+        "danger-zone": "after-c-platform-admin-archived-row-danger-zone.png"
+      }
+    }
+  },
+  {
+    "step": "roundtrip-activate",
+    "asserts": "the LIVE Activate button ran: the row is active again and STILL workspace-anchored (no re-anchor to the actor's organization)",
+    "rows": [
+      {
+        "id": "iext_1964ffd4-cea",
+        "package_name": "@cinatra-ai/youtube-connector",
+        "kind": "connector",
+        "owner_level": "workspace",
+        "owner_id": "__platform__",
+        "organization_id": null,
+        "status": "active",
+        "is_default": true,
+        "version": "0.1.4",
+        "required_in_prod": false
+      }
+    ]
+  },
+  {
+    "step": "sign-in",
+    "role": "org-admin",
+    "httpStatus": 200
+  },
+  {
+    "step": "after-b-org-admin",
+    "asserts": "the org admin (not a platform admin) on the SAME row — unchanged by this slice",
+    "httpStatus": 200,
+    "finalPath": "/not-authorized",
+    "affordances": [],
+    "h1": "Not authorized",
+    "reasonsOnPage": [],
+    "files": {
+      "file": "after-b-org-admin.png",
+      "parts": {}
+    }
+  }
+]
