@@ -30,6 +30,7 @@ import {
   parseHostPort,
 } from "./lib/docker-port-drift.mjs";
 import { nangoHealthUrl, probeHttpHealth } from "./lib/nango-health.mjs";
+import { WAYFLOW_DOWN_HINT } from "./lib/wayflow-down-hint.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -178,7 +179,7 @@ const services = [
     // 2xx probeHttpHealth: see probeWayflowHealth.
     probeHealth: probeWayflowHealth,
     note: "agent runtime; serves every installed agent",
-    downHint: "agent runs fail until you run `cinatra instance wayflow start`",
+    downHint: WAYFLOW_DOWN_HINT,
   },
   {
     name: "Cinatra app",
