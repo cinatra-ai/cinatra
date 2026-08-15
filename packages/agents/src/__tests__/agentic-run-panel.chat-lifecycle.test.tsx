@@ -85,14 +85,23 @@ vi.mock("../server-actions", () => ({
   })),
   getSkillsForAgentAction: vi.fn(async () => []),
   confirmRunSkillSelectionAction: vi.fn(async () => ({ ok: true })),
+  getRunRecommendedSkillsAction: vi.fn(async () => []),
 }));
 
 vi.mock("../agent-ui-override-registry", () => ({
   agentUIOverrideRegistry: { resolve: () => null },
 }));
 
-const { readRunOutputEvidence } = vi.hoisted(() => ({
-  readRunOutputEvidence: vi.fn(),
+const { readRunOutputEvidence, getRunRecommendationHoldStateAction } = vi.hoisted(
+  () => ({
+    readRunOutputEvidence: vi.fn(),
+    getRunRecommendationHoldStateAction: vi.fn(),
+  }),
+);
+vi.mock("../run-recommendation-actions", () => ({
+  getRunRecommendationHoldStateAction,
+  confirmRunRecommendationAction: vi.fn(async () => ({ ok: true })),
+  skipRunRecommendationAction: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock("../run-actions", () => ({
   resetAgentRun: vi.fn(async () => ({ ok: true })),
@@ -140,6 +149,11 @@ const BANNER_TEXT = /Run paused — awaiting human approval/i;
 beforeEach(() => {
   ensureDefaultFieldRenderersRegistered();
   readRunOutputEvidence.mockReset();
+  // The recommendation hold is READ on every mount (the card asks the core, on
+  // every host). Default it to "no matching skills" so only the suite that is
+  // about the hold has to say otherwise.
+  getRunRecommendationHoldStateAction.mockReset();
+  getRunRecommendationHoldStateAction.mockResolvedValue({ state: "none" });
   cleanup();
 });
 
@@ -362,4 +376,159 @@ describe("the core's review lifecycle takes over in the conversation", () => {
     // And not the formless approval banner either.
     expect(screen.queryByText(BANNER_TEXT)).toBeNull();
   });
+});
+
+
+// ---------------------------------------------------------------------------
+// THE CORE'S OTHER LIFECYCLE SCREENS REACH THE CONVERSATION TOO (cinatra#2729)
+// ---------------------------------------------------------------------------
+//
+// Two screens the run panel does not own, and must not narrow:
+//
+//   SKILL RECOMMENDATION — the run-start hold. The card is fail-closed on the
+//   HOST DECLARATION and nothing else: "a declared host draws it — the
+//   per-surface matrix that withheld this card from the widget is gone"
+//   (run-recommendation-chip-row.tsx, RecommendationHoldCard). Its one
+//   exception is credential-keyed, not a surface rule, and the state reader is
+//   documented for "the chat-mounted run panel … the SAME shared chip-row
+//   serves chat" (run-recommendation-actions.ts). The panel declares the
+//   `run_card` host unconditionally, so a matching hold draws in a conversation.
+//
+//   AUDIT — "Audit visibility is driven by the auditor-agent flow gate;
+//   renderer is mounted via field-renderer registry" (agentic-run-panel.tsx),
+//   and the panel is forbidden a standalone Audit button of its own
+//   (agentic-run-panel.no-audit-button.test.tsx). So the audit screen arrives
+//   as a FLOW GATE and renders through the shared HITL renderer branch — the
+//   branch below is pinned surface-blind, which is what carries it into chat.
+//
+// Neither pin invents a gate. They state the core's own decision and prove the
+// conversation mount does not narrow it.
+const HELD_RECOMMENDATION = {
+  state: "held" as const,
+  agentPackageName: "@cinatra-ai/blog-draft-writer-agent",
+  promptText: "draft a blog post",
+  recommendations: [
+    { id: "skill-blog", name: "Blog content", description: "", selected: true },
+  ],
+  holdRef: "hold-ref-2729",
+};
+
+describe("the skill-recommendation screen reaches the conversation", () => {
+  beforeEach(() => {
+    getRunRecommendationHoldStateAction.mockReset();
+    getRunRecommendationHoldStateAction.mockResolvedValue(HELD_RECOMMENDATION);
+  });
+
+  async function renderRun(surface: "chat" | "agent-detail") {
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    return render(
+      <AgenticRunPanel
+        runId="run-2729"
+        initialStatus="running"
+        initialError={null}
+        initialMessages={[]}
+        agUiEnabled={false}
+        templateId="tmpl-2729"
+        agentPackageName="@cinatra-ai/blog-draft-writer-agent"
+        surface={surface}
+      />,
+    );
+  }
+
+  it.each([["chat" as const], ["agent-detail" as const]])(
+    'surface="%s" draws the core recommendation card when skills match',
+    async (surface) => {
+      await renderRun(surface);
+
+      await waitFor(() => {
+        if (!document.querySelector('[data-conformance-id="run-chip-row"]')) {
+          throw new Error("recommendation card not drawn");
+        }
+      });
+      expect(screen.queryByText(/Confirm the skills for this run/i)).not.toBeNull();
+    },
+  );
+
+  it("asks the core for the hold on the chat mount, with this run's id", async () => {
+    await renderRun("chat");
+
+    await waitFor(() => {
+      if (getRunRecommendationHoldStateAction.mock.calls.length === 0) {
+        throw new Error("hold not read");
+      }
+    });
+    expect(getRunRecommendationHoldStateAction).toHaveBeenCalledWith({
+      runId: "run-2729",
+    });
+  });
+
+  it("draws nothing when the core reports no matching skills", async () => {
+    getRunRecommendationHoldStateAction.mockResolvedValue({ state: "none" });
+    await renderRun("chat");
+
+    await waitFor(() => {
+      if (getRunRecommendationHoldStateAction.mock.calls.length === 0) {
+        throw new Error("hold not read");
+      }
+    });
+    expect(
+      document.querySelector('[data-conformance-id="run-chip-row"]'),
+    ).toBeNull();
+  });
+});
+
+describe("the audit screen's flow gate renders the same on both surfaces", () => {
+  // The auditor flow gate is an ordinary xRenderer gate; its renderer ships in
+  // the auditor extension, so this stands in for it with the same contract.
+  const AUDITOR_FLOW_RENDERER = "cinatra.auditor-flow-stub";
+
+  function AuditorStub() {
+    return <div data-testid="auditor-flow-screen">Audit</div>;
+  }
+
+  async function renderAuditGate(surface: "chat" | "agent-detail") {
+    const { fieldRendererRegistry } = await import("../field-renderer-registry");
+    fieldRendererRegistry.register({
+      id: AUDITOR_FLOW_RENDERER,
+      priority: 100,
+      condition: (_f, schema) =>
+        (schema as { ["x-renderer"]?: string })["x-renderer"] ===
+        AUDITOR_FLOW_RENDERER,
+      renderer: AuditorStub as unknown as Parameters<
+        typeof fieldRendererRegistry.register
+      >[0]["renderer"],
+    });
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    return render(
+      <AgenticRunPanel
+        runId="run-2729"
+        initialStatus="pending_approval"
+        initialError={null}
+        initialMessages={[]}
+        agUiEnabled={false}
+        templateId="tmpl-2729"
+        surface={surface}
+        initialHitlContext={{
+          xRenderer: AUDITOR_FLOW_RENDERER,
+          childRunId: null,
+          reviewTaskId: "auditor-task-2729",
+          inputSchema: {
+            type: "object",
+            "x-renderer": AUDITOR_FLOW_RENDERER,
+            properties: {},
+          },
+          currentValues: {},
+        }}
+      />,
+    );
+  }
+
+  it.each([["chat" as const], ["agent-detail" as const]])(
+    'surface="%s" mounts the flow gate\'s own renderer',
+    async (surface) => {
+      await renderAuditGate(surface);
+
+      expect(await screen.findByTestId("auditor-flow-screen")).not.toBeNull();
+    },
+  );
 });
