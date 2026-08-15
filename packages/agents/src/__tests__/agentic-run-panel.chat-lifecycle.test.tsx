@@ -394,15 +394,28 @@ describe("the core's review lifecycle takes over in the conversation", () => {
 //   serves chat" (run-recommendation-actions.ts). The panel declares the
 //   `run_card` host unconditionally, so a matching hold draws in a conversation.
 //
-//   AUDIT — "Audit visibility is driven by the auditor-agent flow gate;
-//   renderer is mounted via field-renderer registry" (agentic-run-panel.tsx),
-//   and the panel is forbidden a standalone Audit button of its own
-//   (agentic-run-panel.no-audit-button.test.tsx). So the audit screen arrives
-//   as a FLOW GATE and renders through the shared HITL renderer branch — the
-//   branch below is pinned surface-blind, which is what carries it into chat.
+//   AUDIT — there is no audit screen in this tree to surface, on any host. The
+//   auditor agent is retired at exact zero
+//   (reviewer-auditor-retirement-identity.test.ts), its panel button is
+//   forbidden by a ratchet (agentic-run-panel.no-audit-button.test.tsx), and
+//   the successor lane says plainly that rendering its suggestions is a slice
+//   that has not shipped: "It mints no decision surface … rendering them is
+//   S6c" (lifecycle-suggestion-producer-lane.ts). The panel comment claiming a
+//   field-renderer mount is stale. So the pin below cannot assert an audit
+//   screen; what it holds is the property that would carry one when that slice
+//   lands — the shared gate-renderer branch is surface-BLIND, so a flow gate's
+//   renderer draws identically in a conversation and on the run page.
 //
 // Neither pin invents a gate. They state the core's own decision and prove the
 // conversation mount does not narrow it.
+//
+// NOT pinned here, because it is the core's to rule on: a chat-started run is
+// never PARKED for the recommendation. The chat pre-router creates its run
+// through the `agent_run` primitive (mcp/handlers.ts createAgentRun), which
+// stamps no `humanPresent` and never calls `maybeHoldRunForRecommendation`, so
+// the decision short-circuits at recommendation-hold.ts's
+// `run.humanPresent !== true` headless branch. The mount below is ready for the
+// hold; today nothing hands it one on this path.
 const HELD_RECOMMENDATION = {
   state: "held" as const,
   agentPackageName: "@cinatra-ai/blog-draft-writer-agent",
@@ -477,10 +490,11 @@ describe("the skill-recommendation screen reaches the conversation", () => {
   });
 });
 
-describe("the audit screen's flow gate renders the same on both surfaces", () => {
-  // The auditor flow gate is an ordinary xRenderer gate; its renderer ships in
-  // the auditor extension, so this stands in for it with the same contract.
-  const AUDITOR_FLOW_RENDERER = "cinatra.auditor-flow-stub";
+describe("a flow gate's renderer is surface-blind (what would carry an audit screen)", () => {
+  // There is no audit renderer in this tree to mount (see the header note); a
+  // stand-in gate renderer holds the branch property instead, so the day S6c
+  // ships one, nothing on this surface narrows it.
+  const AUDITOR_FLOW_RENDERER = "cinatra.flow-gate-stub";
 
   function AuditorStub() {
     return <div data-testid="auditor-flow-screen">Audit</div>;
@@ -524,7 +538,7 @@ describe("the audit screen's flow gate renders the same on both surfaces", () =>
   }
 
   it.each([["chat" as const], ["agent-detail" as const]])(
-    'surface="%s" mounts the flow gate\'s own renderer',
+    'surface="%s" mounts the flow gate\'s own renderer, unnarrowed',
     async (surface) => {
       await renderAuditGate(surface);
 
