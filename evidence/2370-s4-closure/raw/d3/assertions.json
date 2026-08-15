@@ -1,0 +1,44 @@
+{
+  "base": "http://localhost:3001",
+  "steps": [
+    "sign-up status=422",
+    "sign-in status=200",
+    "set-active-org status=200 org=appt-s4-org",
+    "metadata columns=[\"key\",\"value\"]",
+    "seeded key=connector_config:google_appointment_schedules_user:6a6bcc44-eed4-4900-b25b-01d8cab13019",
+    "appt card lines=[\"Google Appointment Schedules | Google Calendar | LinkedIn | LinkedIn OAuth\"]",
+    "delete affordance count=1",
+    "stored-after-delete={\"schedules\":[{\"id\":\"s4-evidence-row\",\"title\":\"S4 evidence booking page\",\"description\":\"Seeded store row (fixture) — the add path needs a live Google account.\",\"bookingPageUrl\":\"https://calendar.app.google/s4-evidence-row\",\"calendarId\":\"primary@example.com\",\"calendarSummary\":\"Primary calendar (seeded)\",\"lastFetchedAt\":\"2026-08-15T07:50:27.048Z\"}],\"schedulesSyncedAt\":\"2026-08-15T07:50:27.563Z\"}"
+  ],
+  "assertions": [
+    {
+      "id": "D3.1-probe-counts-stored-rows",
+      "pass": false,
+      "detail": "card lines=[\"Google Appointment Schedules | Google Calendar | LinkedIn | LinkedIn OAuth\"]"
+    },
+    {
+      "id": "D3.2-row-listed",
+      "pass": true,
+      "detail": "record-list shows the stored row"
+    },
+    {
+      "id": "D3.3-calendar-badge",
+      "pass": false,
+      "detail": "per-entry calendar badge rendered (Primary calendar (seeded))"
+    },
+    {
+      "id": "D3.4-delete-through-ui",
+      "pass": false,
+      "detail": "store after delete={\"schedules\":[{\"id\":\"s4-evidence-row\",\"title\":\"S4 evidence booking page\",\"description\":\"Seeded store row (fixture) — the add path needs a live Google account.\",\"bookingPageUrl\":\"https://calendar.app.g"
+    }
+  ],
+  "seeded": {
+    "id": "s4-evidence-row",
+    "title": "S4 evidence booking page",
+    "description": "Seeded store row (fixture) — the add path needs a live Google account.",
+    "bookingPageUrl": "https://calendar.app.google/s4-evidence-row",
+    "calendarId": "primary@example.com",
+    "calendarSummary": "Primary calendar (seeded)",
+    "lastFetchedAt": "2026-08-15T07:50:27.048Z"
+  }
+}

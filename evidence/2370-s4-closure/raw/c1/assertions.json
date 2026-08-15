@@ -1,0 +1,35 @@
+{
+  "base": "http://localhost:3001",
+  "steps": [
+    "sign-up status=422",
+    "sign-in status=200",
+    "set-active-org status=200 org=appt-s4-org",
+    "grid status=200 url=http://localhost:3001/configuration/marketplace",
+    "appt detail status=200 url=http://localhost:3001/configuration/marketplace/cinatra-ai/google-appointment-schedules-connector",
+    "appt detail text=\"INTELLIGENCE Chat Assistants Agents MANAGEMENT Personal Projects Teams Organizations INFORMATION Artifacts Analytics TOOLS Skills Connectors AS Appt S4 UAT Admin appt-s4-uat@local.test Toggle Sidebar Configuration Marketplace Cinatra Ai @cinatra-ai/google-appointment-schedules-connector Toggle theme MARKETPLACE Back to marketplace FREE @cinatra-ai/google-appointment-schedules-connector Compatible Version 0.1.1 Description Google Appointment Schedules Google Appointment Schedules connector for Cinatra. Stores each user's public Google Calendar appointment-schedule booking links (calendar.app.google), each tied to the specific Google Calendar its availability comes from, so agents can share the right booking link without manual link management. Full documentation lives in the Integrations hub at https://docs.cinatra.ai/integrations/google-appointment-schedules/ Works with Cinatra (connector kind: connector) Requires @cinatra-ai/google-calendar-connector (a required runtime dependency) for the live per-user calendar list. This connector consumes that connector's host google-oauth service, not one of its MCP primitives, so the declared-vs-used validator flags the edge as an advisory stale-declaration warning — accepted honestly, not disguised. Capabilities Add, list, and delete per-user appointment schedules on a declarative schema-config setup page — no bundled React, hot-installable Pick the Google Calendar each schedule belongs to from your connected account's live calendar li\"",
+    "gcal detail status=200 url=http://localhost:3001/configuration/marketplace/cinatra-ai/google-calendar-connector",
+    "gcal traces=[\"Stores users' public appointment-schedule booking links (calendar.\",\"ai/integrations/google-calendar/ Works with Cinatra (connector kind: connector) Capabilities Register a Google Calendar appointment-schedule link per workspace user List stored appointment schedules via the google_calend\"]"
+  ],
+  "assertions": [
+    {
+      "id": "C1.1-appt-card-listed",
+      "pass": true,
+      "detail": "card title on the live storefront grid"
+    },
+    {
+      "id": "C1.2-appt-detail-version-0.1.1",
+      "pass": true,
+      "detail": "version token 0.1.1 present=true"
+    },
+    {
+      "id": "C1.3-appt-detail-declares-required-dependency",
+      "pass": true,
+      "detail": "dependency named on the detail page"
+    },
+    {
+      "id": "C1.4-gcal-storefront-listing-clean",
+      "pass": false,
+      "detail": "appointment traces on the google-calendar marketplace detail page: [\"Stores users' public appointment-schedule booking links (calendar.\",\"ai/integrations/google-calendar/ Works with Cinatra (connector kind: connector) Capabilities Register a Google Calendar appointment-schedule link per workspace user List stored appointment schedules via the google_calend\"]"
+    }
+  ]
+}

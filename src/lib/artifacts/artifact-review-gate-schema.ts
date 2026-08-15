@@ -734,3 +734,77 @@ export function lifecycleRepairSchemaQueries(schemaName: string): QueryInput[] {
     },
   ];
 }
+
+// ---------------------------------------------------------------------------
+// agent_run_hitl_gates — the DURABLE human-approval gate artifact (cinatra#2748)
+// ---------------------------------------------------------------------------
+//
+// THE DEFECT THIS TABLE CLOSES. A run parked on `pending_approval` carries ONE
+// human-answerable artifact: the AG-UI INTERRUPT frame in the Redis Streams run
+// event log. That log expires. When the key is gone the artifact is gone from
+// every store, `deriveRunHitlContext` derives a formless `{xRenderer:"",
+// inputSchema:{}}` shell, and the run renders an unanswerable banner forever.
+//
+// The remedy is a durable row written at gate MATERIALIZATION time. Redis stays
+// the hot path; this row is the fallback the poll surfaces read when the frame
+// is gone. It carries exactly what a surface needs to RENDER and ANSWER the
+// gate: the renderer id, the schema, the current values, the review-task id, and
+// the setup-loop field name when the gate declares one.
+//
+// IDENTITY = (run_id, review_task_id), the same gate identity
+// `artifact_review_gates` uses and the same identity the read-back verification
+// in the park seam matches on. It is the PRIMARY KEY, so a re-park of the same
+// gate UPSERTS rather than duplicating. `materialized_at` carries the write's
+// own clock and is the MONOTONIC guard: the upsert only overwrites when the
+// incoming artifact is newer, so a late-landing re-emit of an older artifact can
+// never replace a newer one. A run that walks several gates keeps one row per
+// gate; the reader takes the newest, which is the gate the run is parked on.
+//
+// FK to agent_runs ON DELETE CASCADE (the agent_run_hitl_prompts /
+// agent_run_test_sends sibling precedent, NOT the FK-less artifact_review_gates
+// precedent): this row is meaningless without its run and needs no retention
+// machinery of its own — deleting the run reclaims it.
+//
+// WHY THIS LEAF. The bootstrap DDL for a new table must live in a module
+// `drizzle-store.ts` ALREADY imports: drizzle-store is reachable from every
+// route, so a NEW leaf would add a first-party module to four route budgets the
+// route-graph ratchet locks. This leaf is already in that graph, imports
+// nothing, and already hosts the gate-store DDL (and the routed
+// `run_rejected_recommendations` addition), so the gate artifact joins it.
+//
+// FRESH-INSTALL half. The operator-upgrade twin is
+// migrations/core/core__0093_agent-run-hitl-gate-artifacts.mjs; both are
+// idempotent and are pinned against each other by a DDL-parity suite.
+// ---------------------------------------------------------------------------
+
+/** The table name, shared by the schema builder, the store, and the tests. */
+export const AGENT_RUN_HITL_GATES_TABLE = "agent_run_hitl_gates";
+/** Name of the newest-gate lookup index the fallback reader drives. */
+export const AGENT_RUN_HITL_GATES_LATEST_INDEX = "agent_run_hitl_gates_run_id_materialized_at_idx";
+
+export function agentRunHitlGatesSchemaQueries(schemaName: string): QueryInput[] {
+  const q = schemaName.replaceAll('"', '""'); // identifier
+  return [
+    {
+      text: `CREATE TABLE IF NOT EXISTS "${q}"."${AGENT_RUN_HITL_GATES_TABLE}" (
+  run_id          text NOT NULL REFERENCES "${q}"."agent_runs"(id) ON DELETE CASCADE,
+  review_task_id  text NOT NULL,
+  -- What a surface needs to RENDER the gate.
+  x_renderer      text NOT NULL,
+  input_schema    jsonb NOT NULL,
+  gate_values     jsonb NOT NULL,
+  -- Setup-loop gates only: the single schema property the form writes back.
+  field_name      text,
+  -- The write's own clock. The upsert's monotonic guard reads it, so an older
+  -- artifact can never overwrite a newer one.
+  materialized_at timestamptz NOT NULL DEFAULT now(),
+  created_at      timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (run_id, review_task_id)
+)`,
+    },
+    {
+      text: `CREATE INDEX IF NOT EXISTS ${AGENT_RUN_HITL_GATES_LATEST_INDEX}
+  ON "${q}"."${AGENT_RUN_HITL_GATES_TABLE}" (run_id, materialized_at DESC)`,
+    },
+  ];
+}

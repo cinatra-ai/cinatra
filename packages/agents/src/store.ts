@@ -13,6 +13,9 @@ import { shadowUpsertObject, shadowDeleteObject } from "@/lib/objects-dual-write
 // append the `WHERE agent_runs.project_id = $projectId` clause.
 import { sealedRoomFilterValue } from "@/lib/sealed-room";
 import type { ActorContext } from "@/lib/authz/actor-context";
+// Table name of the durable human-approval gate artifact (cinatra#2748), taken
+// from the bootstrap leaf that declares it so the store and the DDL cannot drift.
+import { AGENT_RUN_HITL_GATES_TABLE } from "@/lib/artifacts/artifact-review-gate-schema";
 import { db, agentBuilderPool } from "./db";
 // The force-delete run pre-clean lives in its own vertical slice; the
 // teardown run-id cap it defines is shared with `purgeAgentTemplateAtomic`.
@@ -2561,6 +2564,146 @@ export async function readAuditEventsByReviewTask(
 // agent_run_hitl_prompts — WayFlow HITL prompt capture: extracted to
 // ./agent-run-hitl-prompts (file-size ratchet #1803 repair); re-exported from
 // ./store at the top of this file alongside the other extracted-seam re-exports.
+
+// ---------------------------------------------------------------------------
+// agent_run_hitl_gates — the DURABLE human-approval gate artifact (cinatra#2748)
+// ---------------------------------------------------------------------------
+//
+// A run parked on `pending_approval` used to carry ONE human-answerable
+// artifact: the AG-UI INTERRUPT frame in the Redis Streams run event log. That
+// log expires. When the key is gone the artifact is gone from every store,
+// `deriveRunHitlContext` derives a formless shell, and the run renders an
+// unanswerable banner forever. These two functions are the durable fallback.
+// Redis stays the HOT path; this row answers only when the frame is gone.
+//
+// The writer runs inside the park seam, AFTER the emitted frame has been read
+// back and verified — so a row exists exactly when a human really was shown a
+// gate, and never for a gate that failed to materialize.
+//
+// WHY THESE LIVE IN ./store RATHER THAN THEIR OWN MODULE. `./hitl-context` (the
+// reader) and the park sites in `./execution` both already import `./store`, and
+// `drizzle-store.ts` reaches every route. A dedicated module would add one
+// first-party module to the four route budgets the route-graph ratchet locks,
+// and this change has no dev-perf budget to spend; `./store` is well under its
+// own file-size ceiling, so the growth is inside the tracked allowance.
+//
+// Raw parameterized SQL over the shared pool, behind a `query` seam, so both the
+// idempotent upsert and the newest-gate read are unit-testable without a
+// database. Table + index names come from the bootstrap leaf that declares them.
+// ---------------------------------------------------------------------------
+
+/** The human-answerable payload of one gate, as the durable row carries it. */
+export type DurableHitlGateArtifact = {
+  readonly runId: string;
+  readonly reviewTaskId: string;
+  readonly xRenderer: string;
+  readonly inputSchema: Record<string, unknown>;
+  readonly values: Record<string, unknown>;
+  /** Setup-loop gates only — the single schema property the form writes back. */
+  readonly fieldName?: string;
+};
+
+/** Minimal parameterized-query seam; tests inject a double. */
+export type HitlGateQuery = <T>(
+  text: string,
+  values: readonly unknown[],
+) => Promise<T[]>;
+
+export type HitlGateStoreDeps = {
+  readonly query?: HitlGateQuery;
+  /** Injectable clock so the monotonic guard is testable without wall time. */
+  readonly now?: () => Date;
+};
+
+/** The app schema, resolved per call so a test can retarget it. */
+function hitlGateTable(): string {
+  const schemaName = process.env.SUPABASE_SCHEMA?.trim() || "cinatra";
+  return `"${schemaName.replaceAll('"', '""')}"."${AGENT_RUN_HITL_GATES_TABLE}"`;
+}
+
+const defaultHitlGateQuery: HitlGateQuery = async <T>(
+  text: string,
+  values: readonly unknown[],
+): Promise<T[]> => {
+  const result = await agentBuilderPool.query(text, values as unknown[]);
+  return result.rows as T[];
+};
+
+/**
+ * Persist (or refresh) the durable row for one materialized gate.
+ *
+ * IDEMPOTENT on the gate identity (run_id, review_task_id) — the primary key —
+ * so a re-park of the same gate updates its row instead of adding a second one.
+ * MONOTONIC on `materialized_at`: the update only lands when the incoming
+ * artifact is newer, so a late-landing re-emit of an older artifact can never
+ * overwrite a newer one.
+ */
+export async function writeDurableHitlGateArtifact(
+  artifact: DurableHitlGateArtifact,
+  deps: HitlGateStoreDeps = {},
+): Promise<void> {
+  const query = deps.query ?? defaultHitlGateQuery;
+  const materializedAt = (deps.now ?? (() => new Date()))();
+  await query(
+    `INSERT INTO ${hitlGateTable()}
+       (run_id, review_task_id, x_renderer, input_schema, gate_values, field_name, materialized_at)
+     VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7)
+     ON CONFLICT (run_id, review_task_id) DO UPDATE SET
+       x_renderer      = EXCLUDED.x_renderer,
+       input_schema    = EXCLUDED.input_schema,
+       gate_values     = EXCLUDED.gate_values,
+       field_name      = EXCLUDED.field_name,
+       materialized_at = EXCLUDED.materialized_at
+     WHERE ${AGENT_RUN_HITL_GATES_TABLE}.materialized_at < EXCLUDED.materialized_at`,
+    [
+      artifact.runId,
+      artifact.reviewTaskId,
+      artifact.xRenderer,
+      JSON.stringify(artifact.inputSchema ?? {}),
+      JSON.stringify(artifact.values ?? {}),
+      artifact.fieldName ?? null,
+      materializedAt,
+    ],
+  );
+}
+
+/**
+ * The newest durable gate row for a run, or null when the run has none.
+ *
+ * A run that walked several gates keeps one row per gate; the newest is the gate
+ * the run is parked on, which is the only one a surface may answer.
+ */
+export async function readLatestDurableHitlGateArtifact(
+  runId: string,
+  deps: HitlGateStoreDeps = {},
+): Promise<DurableHitlGateArtifact | null> {
+  const query = deps.query ?? defaultHitlGateQuery;
+  const rows = await query<{
+    run_id: string;
+    review_task_id: string;
+    x_renderer: string;
+    input_schema: Record<string, unknown> | null;
+    gate_values: Record<string, unknown> | null;
+    field_name: string | null;
+  }>(
+    `SELECT run_id, review_task_id, x_renderer, input_schema, gate_values, field_name
+       FROM ${hitlGateTable()}
+      WHERE run_id = $1
+      ORDER BY materialized_at DESC
+      LIMIT 1`,
+    [runId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    runId: row.run_id,
+    reviewTaskId: row.review_task_id,
+    xRenderer: row.x_renderer,
+    inputSchema: row.input_schema ?? {},
+    values: row.gate_values ?? {},
+    ...(row.field_name ? { fieldName: row.field_name } : {}),
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Note: readReviewTasksByRunId, readPlannedActionByRunAndStep,

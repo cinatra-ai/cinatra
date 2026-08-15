@@ -1,0 +1,27 @@
+{
+  "base": "http://localhost:3001",
+  "steps": [
+    "sign-up status=422",
+    "sign-in status=200",
+    "set-active-org status=200 org=appt-s4-org",
+    "rows-before=[{\"package_name\":\"@cinatra-ai/google-appointment-schedules-connector\",\"version\":\"0.1.0\",\"status\":\"active\"},{\"package_name\":\"@cinatra-ai/google-appointment-schedules-connector\",\"version\":\"0.1.1\",\"status\":\"active\"}]",
+    "settings status=200",
+    "settings text=\"INTELLIGENCE Chat Assistants Agents MANAGEMENT Personal Projects Teams Organizations INFORMATION Artifacts Analytics TOOLS Skills Connectors AS Appt S4 UAT Admin appt-s4-uat@local.test Toggle Sidebar Configuration More @Cinatra Ai Google Appointment Schedules Connector Toggle theme 1 Google Appointment Schedules Connector by Cinatra Permissions Who can access this extension? Workspace: All Marketplace Published on the marketplace. Maintenance Update Currently on version 0.1.0 — up to date. Update Archive Deactivate the extension. It moves to the Archived tab and can be restored. Archive Activate Reactivate an archived extension. Available once the extension is archived. Activate Danger zone Reinstall latest Uninstall → reinstall at the newest version. For an unused extension the uninstall is a hard delete — if the reinstall fails there is nothing to restore. Reinstall latest Force-delete Hard delete + dangling-reference cleanup. Bypasses restore entirely and requires a typed reason for the audit log. Force-delete… Command Palette Search for a command to run...\"",
+    "controls=[{\"text\":\"Update\",\"disabled\":true,\"title\":\"Already up to date\"},{\"text\":\"Archive\",\"disabled\":false,\"title\":null},{\"text\":\"Activate\",\"disabled\":true,\"title\":\"Already active\"},{\"text\":\"Reinstall latest\",\"disabled\":false,\"title\":null},{\"text\":\"Force-delete…\",\"disabled\":false,\"title\":null}]",
+    "toasts=[\"Couldn't archive Google Appointment Schedules. Please try again, and contact your administrator if it keeps happening.\\nCopy\"]",
+    "rows-after-archive=[{\"package_name\":\"@cinatra-ai/google-appointment-schedules-connector\",\"version\":\"0.1.0\",\"status\":\"active\"},{\"package_name\":\"@cinatra-ai/google-appointment-schedules-connector\",\"version\":\"0.1.1\",\"status\":\"active\"}]",
+    "setup form text=\"Setup Help Appointment schedules Booking-page links the assistant can share, each tied to the calendar that owns its availability. Deleting a row is host-authorized. No registered UI action \\\"listAppointmentSchedules\\\" for \\\"@cinatra-ai/google-appointment-schedules-connector\\\". No appointment schedules yet. Paste a booking page link below to add one. Booking page URL A public Google Calendar appointment-schedule link (calendar.app.google/…) — a share link, not a calendar sync. See the Help tab for how to get one. Calendar No registered UI action \\\"listCalendars\\\" for \\\"@cinatra-ai/google-appointment-schedules-connector\\\". The Google Calendar this schedule's availability comes from. Leave unset to use your primary calendar. Add schedule\""
+  ],
+  "assertions": [
+    {
+      "id": "C11.1-runtime-install-has-live-lifecycle-controls",
+      "pass": true,
+      "detail": "Archive present=true disabled=false (org-scoped runtime install, unlike the platform bundle)"
+    },
+    {
+      "id": "C11.2-actions-served-again",
+      "pass": false,
+      "detail": "setup page action state: still 404"
+    }
+  ]
+}
