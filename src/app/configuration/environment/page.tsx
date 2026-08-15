@@ -23,6 +23,7 @@ import { buildTabs, resolveEnvTab } from "./environment-tabs";
 import { loadVerdaccioConfigForReads } from "@/lib/verdaccio-config";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { InstanceSetupRequiredCard } from "@/components/instance-setup-required-card";
 import {
   InstanceNamespaceInput,
   NamespaceValidationProvider,
@@ -65,7 +66,13 @@ export default async function EnvironmentSettingsPage({
     tab === "instance" ? (
       await InstanceTabContent()
     ) : tab === "registries" ? (
-      <RegistriesTabContent params={params} defaultContactEmail={session.user.email ?? null} />
+      // Called directly (not `<RegistriesTabContent ... />`) — same reasoning
+      // as the InstanceTabContent call above: an async server "component"
+      // rendered via JSX stays an unexpanded element boundary for the
+      // render-tree-walking test helpers used across this codebase (see
+      // src/app/configuration/instance/__tests__/page.test.tsx), while a
+      // direct call inlines its resolved element tree here.
+      await RegistriesTabContent({ params, defaultContactEmail: session.user.email ?? null })
     ) : (
       // tab === "mode" (incl. the retired connections/credentials fallback).
       <ModeTabContent
@@ -364,22 +371,11 @@ async function RegistriesTabContent({
   const identity = readInstanceIdentity();
 
   if (!identity || !identity.instanceNamespace) {
-    return (
-      <Card className="border-line bg-surface backdrop-blur-none">
-        <CardHeader>
-          <CardTitle>Setup required</CardTitle>
-          <CardDescription className="max-w-2xl leading-6">
-            Complete instance setup before configuring registry connections. The instance namespace is set during initial
-            setup and is required for both local and remote registries.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Button asChild>
-            <Link href="/configuration/environment?tab=instance">Open instance administration</Link>
-          </Button>
-        </CardContent>
-      </Card>
-    );
+    // Called directly (not `<InstanceSetupRequiredCard />`) so its own
+    // element tree is inline here rather than hidden behind an unexpanded
+    // component boundary — same reasoning as the `await InstanceTabContent()`
+    // call above for the async tab content.
+    return InstanceSetupRequiredCard();
   }
 
   // Catalog count surfaced in the connection card — best-effort fetch so a
