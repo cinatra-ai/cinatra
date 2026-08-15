@@ -1,0 +1,46 @@
+{
+  "base": "http://localhost:3001",
+  "steps": [
+    "sign-up status=422",
+    "sign-in status=200",
+    "set-active-org status=200 org=appt-s4-org",
+    "status=200",
+    "form text=\"Setup Help Appointment schedules Booking-page links the assistant can share, each tied to the calendar that owns its availability. Deleting a row is host-authorized. No appointment schedules yet. Paste a booking page link below to add one. Booking page URL A public Google Calendar appointment-schedule link (calendar.app.google/…) — a share link, not a calendar sync. See the Help tab for how to get one. Calendar No connected calendars yet — connect Google Calendar at /connectors/cinatra-ai/google-calendar-connector/setup to see your calendars here. The Google Calendar this schedule's availability comes from. Leave unset to use your primary calendar. Add schedule\"",
+    "action payloads=[{\"url\":\"bookingPageGuideReady\",\"status\":200,\"body\":\"{\\\"result\\\":{\\\"ready\\\":true}}\"},{\"url\":\"listAppointmentSchedules\",\"status\":200,\"body\":\"{\\\"result\\\":{\\\"items\\\":[]}}\"},{\"url\":\"listCalendars\",\"status\":200,\"body\":\"{\\\"result\\\":{\\\"options\\\":[]}}\"}]",
+    "dom placeholders=[\"https://calendar.app.google/...\"]"
+  ],
+  "assertions": [
+    {
+      "id": "C10.1-guidance-string-rendered",
+      "pass": true,
+      "detail": "expected placeholder present=true"
+    },
+    {
+      "id": "C10.2-calendar-field-label",
+      "pass": true,
+      "detail": "Calendar label present"
+    },
+    {
+      "id": "C10.3-no-crash",
+      "pass": true,
+      "detail": "no error boundary on the disconnected setup page"
+    }
+  ],
+  "payloads": [
+    {
+      "url": "bookingPageGuideReady",
+      "status": 200,
+      "body": "{\"result\":{\"ready\":true}}"
+    },
+    {
+      "url": "listAppointmentSchedules",
+      "status": 200,
+      "body": "{\"result\":{\"items\":[]}}"
+    },
+    {
+      "url": "listCalendars",
+      "status": 200,
+      "body": "{\"result\":{\"options\":[]}}"
+    }
+  ]
+}

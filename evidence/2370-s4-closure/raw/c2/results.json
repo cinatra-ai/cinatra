@@ -1,0 +1,105 @@
+{
+  "base": "http://localhost:3001",
+  "steps": [
+    "sign-up status=422",
+    "sign-in status=200",
+    "set-active-org status=200 org=appt-s4-org"
+  ],
+  "results": [
+    {
+      "id": "C2-1-saved",
+      "body": {
+        "result": {
+          "banner": "saved"
+        }
+      },
+      "expectType": "success",
+      "expectText": "Appointment schedule added.",
+      "note": "declared success variant",
+      "toastText": "Appointment schedule added. Copy",
+      "toastType": "success"
+    },
+    {
+      "id": "C2-2-deleted",
+      "body": {
+        "result": {
+          "banner": "deleted"
+        }
+      },
+      "expectType": "success",
+      "expectText": "Appointment schedule removed.",
+      "note": "declared success variant (second)",
+      "toastText": "Appointment schedule removed. Copy",
+      "toastType": "success"
+    },
+    {
+      "id": "C2-3-error-with-message",
+      "body": {
+        "result": {
+          "banner": "error",
+          "message": "\"not-real\" is not one of your Google calendars. Connect Google Calendar and try again, or omit calendarId to use your primary calendar."
+        }
+      },
+      "expectType": "error",
+      "expectText": "is not one of your Google calendars",
+      "note": "the invalid-calendarId refusal the connector returns (item 3c wording)",
+      "toastText": "\"not-real\" is not one of your Google calendars. Connect Google Calendar and try again, or omit calendarId to use your primary calendar. Copy",
+      "toastType": "error"
+    },
+    {
+      "id": "C2-4-error-no-message",
+      "body": {
+        "result": {
+          "banner": "error"
+        }
+      },
+      "expectType": "error",
+      "expectText": "Couldn't add the appointment schedule.",
+      "note": "declared destructive variant fallback",
+      "toastText": "Couldn't add the appointment schedule. Copy",
+      "toastType": "error"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "C2-1-saved-tone",
+      "pass": true,
+      "detail": "expected tone=success actual=success (declared success variant)"
+    },
+    {
+      "id": "C2-1-saved-text",
+      "pass": true,
+      "detail": "expected text to contain \"Appointment schedule added.\"; actual=\"Appointment schedule added. Copy\""
+    },
+    {
+      "id": "C2-2-deleted-tone",
+      "pass": true,
+      "detail": "expected tone=success actual=success (declared success variant (second))"
+    },
+    {
+      "id": "C2-2-deleted-text",
+      "pass": true,
+      "detail": "expected text to contain \"Appointment schedule removed.\"; actual=\"Appointment schedule removed. Copy\""
+    },
+    {
+      "id": "C2-3-error-with-message-tone",
+      "pass": true,
+      "detail": "expected tone=error actual=error (the invalid-calendarId refusal the connector returns (item 3c wording))"
+    },
+    {
+      "id": "C2-3-error-with-message-text",
+      "pass": true,
+      "detail": "expected text to contain \"is not one of your Google calendars\"; actual=\"\\\"not-real\\\" is not one of your Google calendars. Connect Google Calendar and try again, or omit calendarId to use your primary calendar. Copy\""
+    },
+    {
+      "id": "C2-4-error-no-message-tone",
+      "pass": true,
+      "detail": "expected tone=error actual=error (declared destructive variant fallback)"
+    },
+    {
+      "id": "C2-4-error-no-message-text",
+      "pass": true,
+      "detail": "expected text to contain \"Couldn't add the appointment schedule.\"; actual=\"Couldn't add the appointment schedule. Copy\""
+    }
+  ]
+}

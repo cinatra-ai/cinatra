@@ -1,0 +1,55 @@
+{
+  "name": "@cinatra-ai/google-appointment-schedules-connector",
+  "version": "0.1.1",
+  "dependencies": null,
+  "bundledDependencies": null,
+  "bundleDependencies": null,
+  "files": [
+    "src",
+    "!src/__tests__",
+    "cinatra",
+    "register.mjs"
+  ],
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./register": "./src/register.ts",
+    "./mcp-module": "./src/mcp/module.ts",
+    "./mcp-handlers": "./src/mcp/handlers.ts"
+  },
+  "cinatra.configSchema.banners": [
+    {
+      "kind": "banner",
+      "label": "Result",
+      "variants": [
+        {
+          "name": "saved",
+          "tone": "success",
+          "message": "Appointment schedule added."
+        },
+        {
+          "name": "deleted",
+          "tone": "success",
+          "message": "Appointment schedule removed."
+        },
+        {
+          "name": "error",
+          "tone": "destructive",
+          "message": "Couldn't add the appointment schedule."
+        }
+      ]
+    }
+  ],
+  "cinatra.dependencies": [
+    {
+      "packageName": "@cinatra-ai/google-calendar-connector",
+      "kind": "connector",
+      "edgeType": "runtime",
+      "requirement": "required",
+      "versionConstraint": {
+        "kind": "semver-range",
+        "range": "^0.1.0"
+      }
+    }
+  ]
+}
