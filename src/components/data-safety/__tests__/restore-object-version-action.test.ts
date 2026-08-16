@@ -1,5 +1,12 @@
 // restoreObjectToVersionAction authz + MutationResult coverage.
 //
+// cinatra#2700 (epic #2699): the action's session gate is the PLATFORM-ADMIN
+// gate — `/configuration/artifacts` is admin-only throughout and a server action
+// never passes through the segment layout, so member self-service restore
+// retires HERE, not only on the page. `requireAdminSession` is therefore the
+// mocked entry gate below, and the per-object `object.update` check keeps
+// running on top of it (an admin gets NO per-object bypass).
+//
 // Mirrors the existing test precedent (mock the substrate, exercise the action's
 // guards): orgless caller rejected, not-found hidden, object.update denial
 // surfaced as an error (not a throw), happy path returns the
@@ -22,7 +29,7 @@ const mocks = vi.hoisted(() => {
     }
   }
   return {
-    requireAuthSession: vi.fn(),
+    requireAdminSession: vi.fn(),
     resolveOrgRoleForSession: vi.fn(),
     getObjectById: vi.fn(),
     enforceResourceAccess: vi.fn(),
@@ -39,7 +46,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("@/lib/auth-session", () => ({
-  requireAuthSession: mocks.requireAuthSession,
+  requireAdminSession: mocks.requireAdminSession,
   resolveOrgRoleForSession: mocks.resolveOrgRoleForSession,
 }));
 
@@ -76,10 +83,20 @@ vi.mock("@/lib/org-write/authority", () => ({
 
 import { restoreObjectToVersionAction } from "../restore-object-version-action";
 
+// The gate has already passed by the time the action body runs, so this fixture
+// carries the admin role Better Auth stores as a comma-separated string.
 const SESSION_WITH_ORG = {
-  user: { id: "user_1", role: "user" },
+  user: { id: "user_1", role: "user,admin" },
   session: { activeOrganizationId: "org_1" },
 };
+
+/** What `requireAdminSession()` does to a non-admin caller: redirect, by throw. */
+class NotAuthorizedRedirect extends Error {
+  digest = "NEXT_REDIRECT;replace;/not-authorized";
+  constructor() {
+    super("NEXT_REDIRECT");
+  }
+}
 
 const LIVE_OBJECT = {
   id: "obj_1",
@@ -107,8 +124,18 @@ describe("restoreObjectToVersionAction", () => {
     });
   });
 
+  it("cinatra#2700: a NON-ADMIN session is refused by the gate before any read or write", async () => {
+    mocks.requireAdminSession.mockRejectedValue(new NotAuthorizedRedirect());
+    await expect(
+      restoreObjectToVersionAction({ objectId: "obj_1", targetVersion: 2 }),
+    ).rejects.toMatchObject({ digest: "NEXT_REDIRECT;replace;/not-authorized" });
+    expect(mocks.getObjectById).not.toHaveBeenCalled();
+    expect(mocks.enforceResourceAccess).not.toHaveBeenCalled();
+    expect(mocks.restoreObjectToVersion).not.toHaveBeenCalled();
+  });
+
   it("rejects an orgless session", async () => {
-    mocks.requireAuthSession.mockResolvedValue({
+    mocks.requireAdminSession.mockResolvedValue({
       user: { id: "user_1" },
       session: { activeOrganizationId: null },
     });
@@ -124,7 +151,7 @@ describe("restoreObjectToVersionAction", () => {
   });
 
   it("hides a not-found / cross-org object (returns not-found, not a 403 leak)", async () => {
-    mocks.requireAuthSession.mockResolvedValue(SESSION_WITH_ORG);
+    mocks.requireAdminSession.mockResolvedValue(SESSION_WITH_ORG);
     mocks.getObjectById.mockReturnValue(null);
     const result = await restoreObjectToVersionAction({
       objectId: "obj_other_org",
@@ -136,7 +163,7 @@ describe("restoreObjectToVersionAction", () => {
   });
 
   it("surfaces an object.update denial as an error (not a throw)", async () => {
-    mocks.requireAuthSession.mockResolvedValue(SESSION_WITH_ORG);
+    mocks.requireAdminSession.mockResolvedValue(SESSION_WITH_ORG);
     mocks.enforceResourceAccess.mockRejectedValue(
       new mocks.FakeAuthzError("no object.update"),
     );
@@ -150,7 +177,7 @@ describe("restoreObjectToVersionAction", () => {
   });
 
   it("threads resolved orgRole hints into enforceResourceAccess (no over-deny on org-owned)", async () => {
-    mocks.requireAuthSession.mockResolvedValue(SESSION_WITH_ORG);
+    mocks.requireAdminSession.mockResolvedValue(SESSION_WITH_ORG);
     await restoreObjectToVersionAction({ objectId: "obj_1", targetVersion: 2 });
     expect(mocks.enforceResourceAccess).toHaveBeenCalledWith(
       expect.objectContaining({ resourceType: "object", resourceId: "obj_1" }),
@@ -161,7 +188,7 @@ describe("restoreObjectToVersionAction", () => {
   });
 
   it("happy path returns the MutationResult shape with changeSetId + objectId", async () => {
-    mocks.requireAuthSession.mockResolvedValue(SESSION_WITH_ORG);
+    mocks.requireAdminSession.mockResolvedValue(SESSION_WITH_ORG);
     const result = await restoreObjectToVersionAction({
       objectId: "obj_1",
       targetVersion: 2,
@@ -184,7 +211,7 @@ describe("restoreObjectToVersionAction", () => {
   });
 
   it("surfaces a RestoreNotEligibleError message from the engine as an error", async () => {
-    mocks.requireAuthSession.mockResolvedValue(SESSION_WITH_ORG);
+    mocks.requireAdminSession.mockResolvedValue(SESSION_WITH_ORG);
     mocks.restoreObjectToVersion.mockRejectedValue(
       new Error("object_version_restore: external-source-changed"),
     );

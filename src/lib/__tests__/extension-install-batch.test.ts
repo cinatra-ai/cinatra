@@ -18,7 +18,11 @@ import type {
   InstallBatch,
   InstallBatchMember,
 } from "@/lib/extension-install-batch-ops";
-import type { DependencyInstallPlan, PlannedMember } from "@/lib/extension-dependency-plan";
+import type {
+  DependencyInstallPlan,
+  PlannedMember,
+  RowOwnership,
+} from "@/lib/extension-dependency-plan";
 import type { GatekeptInstallResolution } from "@/lib/gatekept-install";
 import {
   GrantRefreshRefusedError,
@@ -42,12 +46,40 @@ function member(packageName: string, over: Partial<PlannedMember> = {}): Planned
     typeId: "connector",
     edges: [],
     alreadyInstalled: false,
-    // cinatra#1039: the resolved rowOwnership tuple (decision 4). Default to the
-    // platform tuple for the batch harness; overridable per test via `over`.
+    // cinatra#1039: the resolved rowOwnership tuple (decision 4). Defaults to the
+    // platform tuple (the harness's own default batch scope is a null org);
+    // overridable per test via `over`.
+    //
+    // cinatra#2696: the tuple is now LIVE — the executor addresses each member's
+    // row AT ITS OWN anchor — so a harness whose batch runs at an ORG scope must
+    // stamp the matching tuple. `makeHarness` normalizes that below (the real
+    // planner derives the root tuple from the very same orgId, so the two can
+    // never disagree in production).
     rowOwnership: { ownerLevel: "platform", ownerId: null, organizationId: null },
     action: "install",
     ...over,
   };
+}
+
+/**
+ * cinatra#2696: stamp the harness's plan members with the tuple the REAL planner
+ * would derive for this batch's org (`defaultRowOwnership(batchOrgId)`), unless
+ * the test already stamped a non-default one. Without this a fixture could
+ * describe an impossible batch — a plan anchored at platform executing under an
+ * org actor — which the pre-#2696 executor silently ignored (it derived the
+ * scope from the actor) and the live executor now honors.
+ */
+function withBatchAnchor(plan: PlannedMember[], batchOrgId: string | null): PlannedMember[] {
+  const anchor: RowOwnership = {
+    ownerLevel: batchOrgId ? "organization" : "platform",
+    ownerId: batchOrgId ?? null,
+    organizationId: batchOrgId ?? null,
+  };
+  return plan.map((m) =>
+    m.rowOwnership.ownerLevel === "platform" && m.rowOwnership.organizationId === null
+      ? { ...m, rowOwnership: anchor }
+      : m,
+  );
 }
 
 function resolution(over: Partial<GatekeptInstallResolution["authorize"]> = {}): GatekeptInstallResolution {
@@ -167,7 +199,7 @@ function makeHarness(opts: {
     plan: async () => {
       events.push("plan");
       const plan: DependencyInstallPlan = {
-        ordered: opts.plan,
+        ordered: withBatchAnchor(opts.plan, opts.batchOrgId ?? null),
         root: { packageName: ROOT, version: "1.0.0" },
         source: opts.gatekept ? "marketplace-closure" : "manifest-walk",
         memberKinds: new Map(),

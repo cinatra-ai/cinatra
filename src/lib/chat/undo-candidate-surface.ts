@@ -39,6 +39,31 @@ import { loadAuthorizedTargetedRestoreForActor } from "@/lib/object-history/rest
 export const CHAT_UNDO_WINDOW_MINUTES = 5;
 
 /**
+ * Does this principal hold the platform-admin tier? (cinatra#2701, epic #2699.)
+ *
+ * Read tolerantly from BOTH shapes the two doors produce, because they stamp it
+ * differently and neither is wrong: the widget door's S8a actor carries the
+ * trusted `platformRole` claim, while the cookie door's `actorFromSession`
+ * carries the translated `roles` list ("admin" → "platform_admin"). The
+ * `roleHints` a caller forwards is honoured too, for a caller that has already
+ * resolved the tier.
+ *
+ * Deliberately NOT folded into the §VI per-object gate below, which stays
+ * exactly as it was — an admin still gets no per-object bypass there. This is a
+ * separate, additional condition about REACHABILITY of the surface the chip
+ * links to.
+ */
+function isPlatformAdminPrincipal(
+  actor: PrimitiveActorContext,
+  roleHints: ActorRoleHints | undefined,
+): boolean {
+  if (roleHints?.platformRole === "platform_admin") return true;
+  if (actor.platformRole === "platform_admin") return true;
+  const roles = (actor as { roles?: unknown }).roles;
+  return Array.isArray(roles) && roles.includes("platform_admin");
+}
+
+/**
  * The most recent undoable change-set this run produced, for THIS actor — or
  * null, which is what an ineligible actor and an absent change-set both look
  * like. §VI: an ineligible actor renders no chip, so no deep link can dead-end
@@ -52,6 +77,14 @@ export async function recentUndoableChangeSetFor(input: {
   roleHints: ActorRoleHints | undefined;
 }): Promise<{ changeSetId: string } | null> {
   if (!input.runId || !input.orgId) return null;
+  // ALIGNED AFFORDANCE (cinatra#2701, epic #2699 S2). The chip's only act is to
+  // link to `/configuration/artifacts/restore/...`, and that whole segment is
+  // admin-only now (S1, #2700) — so a non-admin must be offered no chip. Gating
+  // HERE keeps the promise this module was built on: one implementation, two
+  // credentials, so the widget and `/chat` can never diverge. It also keeps the
+  // answer's discretion intact — a non-admin still learns nothing about whether
+  // a change-set exists, because "no" looks identical either way.
+  if (!isPlatformAdminPrincipal(input.actor, input.roleHints)) return null;
   const closedAtAfter = new Date(
     Date.now() - CHAT_UNDO_WINDOW_MINUTES * 60_000,
   ).toISOString();
@@ -64,11 +97,14 @@ export async function recentUndoableChangeSetFor(input: {
   });
   const cs = items[0];
   if (!cs) return null;
-  const eligible = await loadAuthorizedTargetedRestoreForActor({
+  const resolution = await loadAuthorizedTargetedRestoreForActor({
     changeSetId: cs.id,
     orgId: input.orgId,
     actor: input.actor,
     roleHints: input.roleHints,
   });
+  // The chip needs the verdict only, never the reason — an entry affordance that
+  // distinguished "gone" from "not yours" would leak what the gate withholds.
+  const eligible = resolution.kind === "authorized";
   return eligible ? { changeSetId: cs.id } : null;
 }

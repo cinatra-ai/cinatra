@@ -6,6 +6,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
+import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 import { SyncAdapterSettingsTab } from "./sync-adapter-settings-tab";
 
 export type ObjectDrawerRow = {
@@ -18,6 +19,11 @@ export type ObjectDrawerRow = {
 };
 
 export async function ObjectDetailDrawer({ object, onCloseHref }: { object: ObjectDrawerRow; onCloseHref: string }) {
+  // ALIGNED AFFORDANCE (cinatra#2701, epic #2699 S2): the History tab's only
+  // control opens `/configuration/artifacts`, which is admin-only (S1, #2700).
+  // A non-admin keeps the explanatory copy and loses the button that would
+  // bounce, rather than being sent to the not-authorized panel.
+  const viewerIsAdmin = isPlatformAdmin(await getAuthSession().catch(() => null));
   return (
     <Sheet open>
       <SheetContent side="right" className="w-full max-w-xl sm:max-w-2xl overflow-y-auto">
@@ -81,12 +87,14 @@ export async function ObjectDetailDrawer({ object, onCloseHref }: { object: Obje
                 every captured change-set, restore prior versions, and undo
                 recent actions.
               </p>
-              <Button asChild variant="outline" size="sm">
-                <Link href="/configuration/artifacts?tab=restore">
-                  <History data-icon="inline-start" />
-                  Open full history
-                </Link>
-              </Button>
+              {viewerIsAdmin ? (
+                <Button asChild variant="outline" size="sm">
+                  <Link href="/configuration/artifacts?tab=restore">
+                    <History data-icon="inline-start" />
+                    Open full history
+                  </Link>
+                </Button>
+              ) : null}
             </div>
           </TabsContent>
         </Tabs>

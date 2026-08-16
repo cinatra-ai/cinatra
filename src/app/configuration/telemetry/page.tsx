@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { requireAdminSession } from "@/lib/auth-session";
 // LLM-connector logging settings resolve through the `llm-provider-surface`
 // capability each connector registers at activation (lazy/guarded host-access
 // cutover). An absent connector's row is simply omitted (degraded). Anthropic
@@ -33,6 +34,10 @@ type Props = {
 };
 
 export default async function SettingsTelemetryPage({ searchParams }: Props) {
+  // Platform-admin only (cinatra#2700, epic #2699) — `/configuration` is the
+  // admin area throughout. The gate sits on the page, not on the segment
+  // layout, because a layout is not re-rendered on a soft navigation.
+  await requireAdminSession();
   const resolved = (await (searchParams ?? Promise.resolve({}))) as Record<string, string | string[] | undefined>;
   const tab = (Array.isArray(resolved.tab) ? resolved.tab[0] : resolved.tab) ?? "logs";
 

@@ -81,6 +81,12 @@ import { updateOpenAIPromptCaching } from "@/lib/openai-connection-store";
 // on every read.
 
 export async function saveOpenAIConnectionAction(formData: FormData) {
+  // Raised from the connector's own `manage` authorization to the PLATFORM-ADMIN
+  // gate (cinatra#2700, epic #2699): the surface this action serves is
+  // `/configuration/llm`, and every `/configuration` write is admin-only. The
+  // connector action's own gate still runs underneath — this is the stricter of
+  // the two, never a replacement.
+  await requireAdminSession();
   // The post-redirect onboarding re-read reflects the freshly-saved OpenAI
   // connection without any invalidation: setup completion is re-derived
   // freshly on every read (S3 cinatra#2388 removed the completion cache).
@@ -90,6 +96,8 @@ export async function saveOpenAIConnectionAction(formData: FormData) {
 }
 
 export async function clearOpenAIConnectionAction() {
+  // Platform-admin, for the same reason as the save above (cinatra#2700).
+  await requireAdminSession();
   const clear = requireLlmProviderSurface("openai").actions?.clearConnection;
   if (!clear) throw new Error("The OpenAI connector exposes no clear-connection action.");
   await clear();
@@ -117,6 +125,10 @@ export async function deleteCampaignAction(_formData: FormData) {
 // ---------------------------------------------------------------------------
 
 export async function saveOpenAIPromptCachingAction(formData: FormData) {
+  // Platform-admin gate (cinatra#2700, epic #2699): this action serves a
+  // `/configuration` surface, and server actions never pass through the
+  // segment layout — so the gate is stated here, before any effect.
+  await requireAdminSession();
   const enabled = formData.get("enabled") === "on" || formData.get("enabled") === "true";
   await updateOpenAIPromptCaching(enabled);
   redirect("/configuration/llm");
@@ -139,6 +151,10 @@ const anthropicConnectorSchema = z.object({
 });
 
 export async function saveAnthropicConnectionAction(formData: FormData) {
+  // Platform-admin gate (cinatra#2700, epic #2699): this action serves a
+  // `/configuration` surface, and server actions never pass through the
+  // segment layout — so the gate is stated here, before any effect.
+  await requireAdminSession();
   const parsed = anthropicConnectorSchema.parse({
     apiKey: formData.get("apiKey") ?? undefined,
   });
@@ -153,6 +169,10 @@ export async function saveAnthropicConnectionAction(formData: FormData) {
 }
 
 export async function clearAnthropicConnectionAction() {
+  // Platform-admin gate (cinatra#2700, epic #2699): this action serves a
+  // `/configuration` surface, and server actions never pass through the
+  // segment layout — so the gate is stated here, before any effect.
+  await requireAdminSession();
   await requireLlmProviderSurface("anthropic").clearAPISettings?.();
   redirect("/configuration/llm/initial-setup");
 }
@@ -169,6 +189,12 @@ export async function clearAnthropicConnectionAction() {
 // that are not exposed by the mcp-client-connector API. Provide stubs
 // that preserve the public signature; the underlying persistence layer only
 // owns apiKey today.
+//
+// The cinatra#2700 sweep deliberately left these three UNGATED: each has no
+// effect whatsoever — the whole body is a redirect to `/configuration/llm`,
+// which is itself admin-gated now, so a non-admin invoking one directly is
+// refused at the destination and nothing happens on the way there. A gate here
+// would guard a no-op.
 export async function saveAnthropicPromptCachingAction(_formData: FormData) {
   redirect("/configuration/llm");
 }
@@ -222,6 +248,11 @@ export async function setDefaultLlmProviderAction(formData: FormData) {
 }
 
 export async function setDefaultImageProviderAction(formData: FormData) {
+  // Platform-admin gate (cinatra#2700, epic #2699) — found by the sweep clause,
+  // not by the named list: this writer had NO gate at all and its surface is
+  // `/configuration/llm`. A server action is a POST endpoint invocable without
+  // its form, so the page's gate never covered it.
+  await requireAdminSession();
   const provider = z.string().min(1).parse(formData.get("provider"));
   writeDefaultImageProviderToDatabase(provider);
   redirect("/configuration/llm");
@@ -534,6 +565,10 @@ export async function deleteExternalMcpServerAction(formData: FormData) {
 // ---------------------------------------------------------------------------
 
 export async function saveDevelopmentLoggingAction(formData: FormData) {
+  // Platform-admin gate (cinatra#2700, epic #2699): this action serves a
+  // `/configuration` surface, and server actions never pass through the
+  // segment layout — so the gate is stated here, before any effect.
+  await requireAdminSession();
   const anthropicLoggingEnabled =
     formData.get("anthropicLoggingEnabled") === "on" ||
     formData.get("anthropicLoggingEnabled") === "true";
@@ -564,11 +599,19 @@ export async function saveDevelopmentLoggingAction(formData: FormData) {
 }
 
 export async function clearDevelopmentLogEntriesAction() {
+  // Platform-admin gate (cinatra#2700, epic #2699): this action serves a
+  // `/configuration` surface, and server actions never pass through the
+  // segment layout — so the gate is stated here, before any effect.
+  await requireAdminSession();
   await clearAllProviderLogEntries();
   redirect("/configuration/development");
 }
 
 export async function saveEmailSystemDevelopmentSettingsAction(formData: FormData) {
+  // Platform-admin gate (cinatra#2700, epic #2699): this action serves a
+  // `/configuration` surface, and server actions never pass through the
+  // segment layout — so the gate is stated here, before any effect.
+  await requireAdminSession();
   // The form posts the field name `developmentModeEnabled`, matching the checkbox
   // `name=` attribute in src/app/configuration/development/page.tsx. Read that
   // exact field so the toggle round-trips.

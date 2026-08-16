@@ -1,7 +1,7 @@
 "use server";
 
 import {
-  requireAuthSession,
+  requireAdminSession,
   resolveOrgRoleForSession,
 } from "@/lib/auth-session";
 import {
@@ -18,7 +18,7 @@ import { verifySessionAuthority } from "@/lib/org-write/authority";
 
 // Server action wrapping the existing object_version_restore
 // MCP engine. Mirrors restoreChangeSetAction's authz
-// pattern: requireAuthSession → org guard → PrimitiveActorContext + orgRole
+// pattern: requireAdminSession → org guard → PrimitiveActorContext + orgRole
 // hints → per-object enforceResourceAccess("object.update") → engine call.
 //
 // The engine (restoreObjectToVersion) owns its own freshness pre-check +
@@ -33,7 +33,12 @@ export async function restoreObjectToVersionAction(input: {
   objectId: string;
   targetVersion: number;
 }): Promise<MutationResult<{ restoreChangeSetId: string; appliedEventCount: number }>> {
-  const session = await requireAuthSession();
+  // PLATFORM-ADMIN gate (cinatra#2700, epic #2699) — the same rule as
+  // `restoreChangeSetAction`: restoring a prior version is a
+  // `/configuration/artifacts` capability, so it is admin-only at the action,
+  // and the per-object `object.update` check below still runs on top (no
+  // per-object bypass for an admin).
+  const session = await requireAdminSession();
   const orgId = session.session?.activeOrganizationId ?? null;
   if (!orgId) {
     return { ok: false, error: "no active organization on session" };

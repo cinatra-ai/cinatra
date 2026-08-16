@@ -8,7 +8,7 @@ import "server-only";
 
 import { sql } from "drizzle-orm";
 import { satisfiesVersionRange } from "@cinatra-ai/registries";
-import { eq, and, inArray, asc } from "drizzle-orm";
+import { eq, and, inArray, asc, or } from "drizzle-orm";
 import { pgSchema } from "drizzle-orm/pg-core";
 import { text, timestamp, jsonb, boolean, integer } from "drizzle-orm/pg-core";
 
@@ -20,11 +20,13 @@ import type {
   ExtensionLifecycleStatus,
   ExtensionOwnerLevel,
   ExtensionSource,
+  InstallRowOwnership,
   InstalledExtension,
+  ReanchorConflict,
   ResolvedDependencyEdge,
   VersionConstraint,
 } from "./canonical-types";
-import { PLATFORM_OWNER_SENTINEL } from "./canonical-types";
+import { PLATFORM_OWNER_SENTINEL, findReanchorConflict } from "./canonical-types";
 
 const schemaName = process.env.SUPABASE_SCHEMA?.trim() || "cinatra";
 const canonicalSchema = pgSchema(schemaName);
@@ -710,6 +712,265 @@ export async function _internalDeleteSideBySideRowIfUnbound(
     await tx.delete(installedExtensionTable).where(eq(installedExtensionTable.id, rowId));
     return { deleted: true, boundDependents: [] };
   });
+}
+
+// ---------------------------------------------------------------------------
+// THE §V RE-ANCHOR (cinatra#2694 / S5 #2802) — the ATOMICITY half.
+//
+// One database transaction carries the WHOLE operation: the destination-slot
+// decision, the anchor move, the S4 supersession, the dependency-edge
+// re-resolution and the access-policy write. Any refusal throws out of the
+// transaction, so a refused re-anchor writes NOTHING — the owner's rule, made
+// structural rather than promised.
+//
+// Why the decision runs INSIDE the transaction: the destination identity/default
+// slots are guarded by partial unique indexes that no reader can hold open. The
+// transaction locks every row of the package first (`FOR NO KEY UPDATE`, id
+// order), then re-reads and decides against that locked snapshot, so a
+// concurrent install cannot take the slot between the check and the move. The
+// lock mode is deliberately NON-KEY: it is the same strength an ordinary UPDATE
+// takes and it stays compatible with the `KEY SHARE` locks a concurrent
+// dependency-edge insert holds on its resolution targets (the deadlock the
+// edge-replacement helper documents).
+//
+// The semantic guards — who may move an anchor, which destination the audience
+// resolves to, the connector ceiling — live in the lifecycle primitive and the
+// permissions action. This function owns atomicity and the index arithmetic.
+// ---------------------------------------------------------------------------
+
+/** Why the store refused a re-anchor. Every code leaves the DB untouched. */
+export type ReanchorStoreRefusal =
+  | { code: "not_found" }
+  | { code: "anchor_conflict"; conflict: ReanchorConflict }
+  | { code: "closure_broken"; brokenBy: string[] };
+
+export type ReanchorStoreResult =
+  | { ok: true; row: InstalledExtension; supersededRowIds: string[] }
+  | ({ ok: false } & ReanchorStoreRefusal);
+
+/** Internal control-flow signal — never escapes this module. */
+class ReanchorRollback extends Error {
+  constructor(public readonly refusal: ReanchorStoreRefusal) {
+    super(`re-anchor refused: ${refusal.code}`);
+  }
+}
+
+/** The declared (resolution-free) projection of a row's persisted edges. */
+function declaredEdgesOf(edges: readonly ResolvedDependencyEdge[]): ExtensionDependency[] {
+  return edges.map(({ resolvedInstallId: _r, resolutionReason: _w, ...declared }) => declared);
+}
+
+/**
+ * The REQUIRED edges of a row that were resolved before and are not after — the
+ * closure a narrowing would break. Optional edges are ignored by design: an
+ * unresolved optional edge is an ordinary state the closure gates already
+ * tolerate.
+ */
+function brokenRequiredEdges(
+  before: readonly ResolvedDependencyEdge[],
+  after: readonly ResolvedDependencyEdge[],
+): string[] {
+  const beforeByName = new Map(before.map((e) => [`${e.packageName} ${e.edgeType}`, e]));
+  const broken: string[] = [];
+  for (const edge of after) {
+    if (edge.requirement !== "required") continue;
+    if (edge.resolvedInstallId !== null) continue;
+    const prior = beforeByName.get(`${edge.packageName} ${edge.edgeType}`);
+    if (prior && prior.resolvedInstallId !== null) broken.push(edge.packageName);
+  }
+  return broken;
+}
+
+/**
+ * Move an install row to `destination`, apply the workspace supersession,
+ * re-resolve the affected dependency edges and write the access policy — ALL in
+ * ONE transaction.
+ *
+ * `supersedeOrganizationRows` is the S4 rule applied at re-anchor time: when the
+ * destination is the workspace anchor, every OTHER `active` organization row of
+ * the package is archived in place (id, permissions, provenance, settings,
+ * secrets, connections and claims all retained — a status change preserves them
+ * by construction). `locked` organization rows are left exactly as they are; the
+ * effective-row rule still makes the workspace row the one in force, and the
+ * lock stays the administrator's own decision to unwind.
+ *
+ * Internal — used only by the lifecycle primitive. Static checks prevent other
+ * callers from importing this function.
+ */
+export async function _internalReanchorInstallRowAtomic(args: {
+  rowId: string;
+  destination: InstallRowOwnership;
+  supersedeOrganizationRows: boolean;
+  policy: { resourceKind: string; value: unknown };
+}): Promise<ReanchorStoreResult> {
+  const { rowId, destination, supersedeOrganizationRows, policy } = args;
+  const db = await getDb();
+  const policyTable = sql.raw(
+    `"${schemaName.replaceAll('"', '""')}"."extension_access_policy"`,
+  );
+  const destOrg = destination.organizationId ?? null;
+  const destOwnerId = platformizeOwnerIdForAnchor(destination);
+
+  try {
+    return await db.transaction(async (tx) => {
+      // 1. LOCK every row of the package (id order — a stable acquisition order
+      //    across concurrent re-anchors of the same package).
+      const head = await tx
+        .select({ packageName: installedExtensionTable.packageName })
+        .from(installedExtensionTable)
+        .where(eq(installedExtensionTable.id, rowId))
+        .limit(1);
+      if (!head[0]) throw new ReanchorRollback({ code: "not_found" });
+      const packageName = head[0].packageName;
+      await tx.execute(sql`
+        SELECT id FROM ${installedExtensionTable}
+        WHERE package_name = ${packageName}
+        ORDER BY id
+        FOR NO KEY UPDATE`);
+
+      // 2. RE-READ under the lock — the snapshot every decision is made on.
+      const lockedRaw = await tx
+        .select()
+        .from(installedExtensionTable)
+        .where(eq(installedExtensionTable.packageName, packageName));
+      const locked = await hydrateInstalledRows(tx, lockedRaw);
+      const moved = locked.find((r) => r.id === rowId);
+      if (!moved) throw new ReanchorRollback({ code: "not_found" });
+
+      // 3. DESTINATION SLOT — identity + one-default, ARCHIVED rows included.
+      const conflict = findReanchorConflict(locked, moved, destination);
+      if (conflict) throw new ReanchorRollback({ code: "anchor_conflict", conflict });
+
+      // 4. The incoming edges pinned to this row — every dependent that names the
+      //    package or currently resolves to this row. Locked in id order too, so
+      //    their edge replacement below runs under the row lock the replacement
+      //    helper's contract requires.
+      const inbound = await tx
+        .select({
+          dependentInstallId: extensionDependencyEdgeTable.dependentInstallId,
+        })
+        .from(extensionDependencyEdgeTable)
+        .where(
+          or(
+            eq(extensionDependencyEdgeTable.declaredPackageName, packageName),
+            eq(extensionDependencyEdgeTable.resolvedInstallId, rowId),
+          ),
+        );
+      const dependentIds = [
+        ...new Set(inbound.map((e) => e.dependentInstallId).filter((id) => id !== rowId)),
+      ].sort();
+      const dependentsBefore =
+        dependentIds.length === 0
+          ? []
+          : await hydrateInstalledRows(
+              tx,
+              await tx
+                .select()
+                .from(installedExtensionTable)
+                .where(inArray(installedExtensionTable.id, dependentIds))
+                .orderBy(asc(installedExtensionTable.id))
+                .for("no key update"),
+            );
+
+      // 5. THE ANCHOR MOVE — same row, same id; only the ownership tuple changes.
+      const movedRaw = await tx
+        .update(installedExtensionTable)
+        .set({
+          ownerLevel: destination.ownerLevel,
+          ownerId: destOwnerId,
+          organizationId: destOrg,
+          updatedAt: new Date(),
+        })
+        .where(eq(installedExtensionTable.id, rowId))
+        .returning();
+      if (!movedRaw[0]) throw new ReanchorRollback({ code: "not_found" });
+
+      // 6. SUPERSESSION (S4's rule, inside THIS transaction).
+      let supersededRowIds: string[] = [];
+      if (supersedeOrganizationRows) {
+        const archived = await tx
+          .update(installedExtensionTable)
+          .set({ status: "archived", updatedAt: new Date() })
+          .where(
+            and(
+              eq(installedExtensionTable.packageName, packageName),
+              eq(installedExtensionTable.status, "active"),
+              sql`${installedExtensionTable.organizationId} IS NOT NULL`,
+              sql`${installedExtensionTable.id} <> ${rowId}`,
+            ),
+          )
+          .returning({ id: installedExtensionTable.id });
+        supersededRowIds = archived.map((r) => r.id).sort();
+      }
+
+      // 7. RE-RESOLUTION — the moved row's own outgoing edges under its NEW
+      //    scope, then every affected dependent's edges under its own scope.
+      await replaceDependencyEdgesInTx(
+        tx,
+        rowId,
+        declaredEdgesOf(moved.dependencyEdges ?? []),
+        destOrg,
+      );
+      for (const dependent of dependentsBefore) {
+        await replaceDependencyEdgesInTx(
+          tx,
+          dependent.id,
+          declaredEdgesOf(dependent.dependencyEdges ?? []),
+          dependent.organizationId,
+        );
+      }
+
+      // 8. REQUIRED-CLOSURE gate — a narrowing that strands a required edge is
+      //    refused, and the whole transaction unwinds with it.
+      const afterRows = await hydrateInstalledRows(
+        tx,
+        await tx
+          .select()
+          .from(installedExtensionTable)
+          .where(inArray(installedExtensionTable.id, [rowId, ...dependentIds])),
+      );
+      const afterById = new Map(afterRows.map((r) => [r.id, r]));
+      const brokenBy: string[] = [];
+      for (const before of [moved, ...dependentsBefore]) {
+        const after = afterById.get(before.id);
+        if (!after) continue;
+        if (
+          brokenRequiredEdges(before.dependencyEdges ?? [], after.dependencyEdges ?? []).length > 0
+        ) {
+          brokenBy.push(before.packageName);
+        }
+      }
+      if (brokenBy.length > 0) {
+        throw new ReanchorRollback({ code: "closure_broken", brokenBy: [...new Set(brokenBy)] });
+      }
+
+      // 9. THE ACCESS POLICY — the same upsert `writeExtensionAccessPolicy`
+      //    performs, executed on THIS transaction's connection so the audience
+      //    and the anchor land together or not at all. `installed_by_user_id` is
+      //    deliberately untouched: a re-anchor never transfers the installer.
+      await tx.execute(sql`
+        INSERT INTO ${policyTable} (resource_kind, resource_id, policy, updated_at)
+        VALUES (${policy.resourceKind}, ${rowId}, ${JSON.stringify(policy.value)}::jsonb, now())
+        ON CONFLICT (resource_kind, resource_id) DO UPDATE
+          SET policy = EXCLUDED.policy, updated_at = now()`);
+
+      const row = await hydrateSingleRow(tx, movedRaw[0]);
+      return { ok: true as const, row, supersededRowIds };
+    });
+  } catch (err) {
+    if (err instanceof ReanchorRollback) return { ok: false as const, ...err.refusal };
+    throw err;
+  }
+}
+
+/**
+ * The owner id an anchor tuple PERSISTS as. The workspace anchor already states
+ * the `__platform__` sentinel the platform-invariant CHECK names; a null owner
+ * at any org-NULL tier is normalized to it exactly as `platformizeOwnerId` does
+ * on insert, so the two write paths persist byte-identical tuples.
+ */
+function platformizeOwnerIdForAnchor(anchor: InstallRowOwnership): string {
+  return anchor.ownerId ?? PLATFORM_OWNER_SENTINEL;
 }
 
 export async function _internalDeleteInstalledExtension(id: string): Promise<void> {

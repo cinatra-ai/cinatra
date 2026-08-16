@@ -386,11 +386,28 @@ async function resolveTrustedRuntimeStoreRecord(
   // OUTSIDE the writable store). Scope the anchor to the actor's active org so a
   // multi-org package never reads one org's record against another org's trust
   // decision. A null anchor = no real-pipeline install → refuse.
+  //
+  // cinatra#2694 / S3 #2697 — ORG-ROW-FIRST WITH WORKSPACE FALLBACK. An org
+  // actor previously resolved the anchor at `exact-org` ONLY, so a connector
+  // installed at "Workspace: All" (owner_level='workspace', organization_id
+  // NULL) resolved a NULL anchor for every organization and its card could
+  // never render — gate (a) admitted the row (the addressability predicate
+  // already treats an org-less row as addressable by any authenticated actor,
+  // see isInstallRowAddressableByActor above) while gate (b) refused it. The
+  // `org-then-workspace` scope closes exactly that: the actor's own org row
+  // still wins where it exists (byte-identical resolution), and only in its
+  // absence does the workspace-anchored row serve — with the grant/journal read
+  // at the workspace row's OWN scope, never the actor's org. Cross-ORG
+  // resolution stays impossible: the fallback arm is org-NULL only.
   const resolveTrustAnchor =
     deps.resolveTrustAnchor ??
     (await (async () => {
       const { makeDefaultInstallAnchorResolver } = await import("@/lib/extension-install-anchor");
-      return makeDefaultInstallAnchorResolver(actor.organizationId ?? null);
+      const orgId = actor.organizationId ?? null;
+      return makeDefaultInstallAnchorResolver(
+        orgId,
+        orgId == null ? "platform-global" : "org-then-workspace",
+      );
     })());
   const anchor = await resolveTrustAnchor(packageName);
   if (!anchor) return null;

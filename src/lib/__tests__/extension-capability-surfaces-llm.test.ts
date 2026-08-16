@@ -8,6 +8,27 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
+// cinatra#2700 (epic #2699): the campaign wrappers exercised in the last
+// describe block now open with the PLATFORM-ADMIN gate (`/configuration/llm` is
+// admin-only, and a server action never passes through the segment layout).
+// This suite is about CAPABILITY RESOLUTION, not authorization, so it runs as an
+// admin and lets each wrapper reach the surface lookup it is here to test. The
+// gate itself is covered per action in
+// src/app/campaigns/__tests__/configuration-actions-admin-gate.test.ts.
+vi.mock("@/lib/auth-session", () => ({
+  requireAdminSession: vi.fn(async () => ({
+    user: { id: "user_1", role: "user,admin" },
+    session: { activeOrganizationId: "org_1" },
+  })),
+  requireAuthSession: vi.fn(async () => ({
+    user: { id: "user_1", role: "user,admin" },
+    session: { activeOrganizationId: "org_1" },
+  })),
+  isPlatformAdmin: vi.fn(() => true),
+  resolveOrgRoleForSession: vi.fn(async () => "org_admin"),
+  getActorContext: vi.fn(async () => ({})),
+}));
+
 import {
   registerCapabilityProvider,
   __resetCapabilityRegistry,

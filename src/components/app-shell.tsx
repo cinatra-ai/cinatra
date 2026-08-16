@@ -979,6 +979,12 @@ export function AppShell({
                         local wipe and optional empty-state push. */}
                   </div>
                 </div>
+                {/* `/configuration/development` is admin-only (cinatra#2700,
+                    epic #2699), so the development toolbar offers this link to
+                    platform admins only — the toolbar itself still renders in a
+                    development build for everyone, minus the link that would
+                    bounce. Discoverability only; the page's own gate decides. */}
+                {isAdmin ? (
                 <div className="mt-1 border-t border-warning/20 px-1 pt-1">
                   <Link
                     href="/configuration/development"
@@ -988,6 +994,7 @@ export function AppShell({
                     All development administration →
                   </Link>
                 </div>
+                ) : null}
               </PopoverContent>
             </Popover>}
             <DropdownMenu>

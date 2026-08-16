@@ -76,12 +76,24 @@ const ALLOWED_FILES = [
   // exercise the install/rollback ordering through the public dispatch path. They
   // never perform a real write — same pattern as the teardown test above.
   "packages/extensions/src/__tests__/dispatcher-install-ordering.test.ts",
+  // Row-anchor dispatcher test (cinatra#2696) — the same fixture class as the
+  // ordering test above: it mocks the canonical-store writers (incl.
+  // _internalDeleteInstalledExtension) in vi.mock fixtures to prove the install
+  // writes its row at the THREADED anchor and rolls the org-NULL placeholder
+  // back. Never a real write.
+  "packages/extensions/src/__tests__/dispatcher-install-row-anchor.test.ts",
   "src/lib/__tests__/extension-dispatch-public-path.test.ts",
   // Static-bundle anchor lifecycle tests — mock the canonical-store writers
   // (incl. _internalUpdateInstalledExtensionStatus) in vi.mock fixtures to
   // exercise the uninstall TOMBSTONE path through the public primitive. They
   // never perform a real write — same pattern as the tests above.
   "packages/extensions/src/__tests__/static-bundle-anchor.test.ts",
+  // Workspace-supersession test (cinatra#2698) — same fixture class again: it
+  // mocks the canonical-store writers (incl.
+  // _internalUpdateInstalledExtensionStatus) so a store refusal can be forced
+  // mid-supersession and the compensation observed. The supersession itself
+  // goes through `transitionExtensionLifecycle`; this file never writes.
+  "packages/extensions/src/__tests__/workspace-supersession.test.ts",
 ];
 
 function findFilesWithPattern(pattern: RegExp): string[] {
@@ -120,9 +132,11 @@ describe("canonical lifecycle status reachability guard", () => {
     () => {
       // The primitive uses the `_internal*` helpers (which contain the
       // canonical write). Any file calling `_internalUpdateInstalledExtensionStatus`
-      // (or its siblings) outside the allow-list is a drift.
+      // (or its siblings — including the §V re-anchor writer of cinatra#2802,
+      // which archives the superseded organization rows inside its transaction)
+      // outside the allow-list is a drift.
       const hits = findFilesWithPattern(
-        /_internalUpdateInstalledExtensionStatus|_internalInsertInstalledExtension|_internalDeleteInstalledExtension|_internalUpdateInstalledExtensionSource|_internalUpdateInstalledExtensionMetadata/,
+        /_internalUpdateInstalledExtensionStatus|_internalInsertInstalledExtension|_internalDeleteInstalledExtension|_internalUpdateInstalledExtensionSource|_internalUpdateInstalledExtensionMetadata|_internalReanchorInstallRowAtomic/,
       );
 
       const offenders = hits.filter((f) => !ALLOWED_FILES.includes(f));

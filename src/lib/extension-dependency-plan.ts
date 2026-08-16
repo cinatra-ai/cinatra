@@ -130,12 +130,18 @@ export type PlannedMember = {
   alreadyInstalled: boolean;
   /**
    * The resolved ROW-OWNERSHIP tuple this member is installed/updated at
-   * (cinatra#1039 decision 4). This is the ROOT install's tuple, forced
-   * IMMUTABLY onto every transitive member — manifests, install callbacks, and
-   * existing-row selection may NEVER override it. The executor STAMPS each
-   * install/update member at this scope. On the extension-saga path it is the
+   * (cinatra#1039 decision 4). This is the ROOT install's tuple, forced onto
+   * every transitive member — manifests, install callbacks, and existing-row
+   * selection may NEVER override it — with ONE refinement (cinatra#2696): for a
+   * WORKSPACE-ANCHORED root, an AGENT-kind dependency stays org-anchored at the
+   * installer's active organization, because the epic keeps agent installs
+   * organization/team/project. See `resolveMemberRowOwnership`.
+   *
+   * The executor STAMPS each install/update member at this tuple — since #2696
+   * it is the LIVE anchor the canonical row is written at, not merely a ledger
+   * record. On the extension-saga path without a workspace target it is the
    * canonical default (`ownerLevel: orgId ? "organization" : "platform"`), so
-   * every existing plan carries the same tuple it already installs at
+   * every pre-existing plan carries the same tuple it already installs at
    * (behavior-neutral); the agent path (Phase 2) threads its real tuple.
    */
   rowOwnership: RowOwnership;
@@ -263,6 +269,49 @@ export function defaultRowOwnership(orgId: string | null): RowOwnership {
     ownerId: orgId ?? null,
     organizationId: orgId ?? null,
   };
+}
+
+/**
+ * THE DEPENDENCY-ANCHOR RULE (cinatra#2694 / S2 #2696).
+ *
+ * cinatra#1039 decision 4 forced the ROOT's tuple, immutably, onto every
+ * transitive member. That is still the rule for every org-anchored install —
+ * but it cannot survive the workspace anchor unqualified: a "Workspace: All"
+ * install would then workspace-anchor an AGENT dependency, and the epic's scope
+ * is explicit that **agent installs remain organization/team/project**
+ * (workspace-installable agents are out of scope). So decision 4 is REFINED,
+ * for a workspace-anchored root only:
+ *
+ *  - NON-AGENT dependencies INHERIT the root's workspace anchor — they are part
+ *    of the app-wide install and must reach every organization with it.
+ *  - AGENT-kind dependencies stay ORG-ANCHORED at the INSTALLER's active
+ *    organization (`defaultRowOwnership(installerOrgId)`), the exact tuple they
+ *    would carry on a plain organization-target install.
+ *  - The ROOT always keeps its own tuple.
+ *
+ * A legacy member with NO declared kind resolves to the agent contract
+ * downstream (`kindToTypeId`'s null→"agent" fallback), so it is treated as an
+ * agent here too — the fail-safe direction: org-anchored, never silently
+ * app-wide.
+ *
+ * For a NON-workspace root this returns the root tuple for EVERY member, so the
+ * pre-#2696 plan is byte-identical.
+ *
+ * Pure + exported so the rule is unit-testable on its own.
+ */
+export function resolveMemberRowOwnership(input: {
+  root: RowOwnership;
+  isRoot: boolean;
+  memberKind: string | null;
+  installerOrgId: string | null;
+}): RowOwnership {
+  const { root, isRoot, memberKind, installerOrgId } = input;
+  if (isRoot) return root;
+  const rootIsWorkspaceAnchored =
+    root.ownerLevel === "workspace" && (root.organizationId ?? null) === null;
+  if (!rootIsWorkspaceAnchored) return root; // decision 4, unchanged
+  const isAgentKind = memberKind === null || memberKind === "agent";
+  return isAgentKind ? defaultRowOwnership(installerOrgId) : root;
 }
 
 /**
@@ -639,6 +688,28 @@ export async function planDependencyInstall(
     ? await deps.resolveScopeAncestry(rowOwnership)
     : defaultOrgPlatformChain(orgId);
 
+  // cinatra#2696: a member whose anchor DIFFERS from the root's (an agent
+  // dependency of a workspace-anchored root — see `resolveMemberRowOwnership`)
+  // must resolve its installed-row conflict basis at ITS OWN scope: an
+  // org-anchored agent dep is checked against the installer's org rows, not
+  // against the org-NULL ladder the workspace root resolves on. Memoized per
+  // anchor org through the SAME injected seam, so the root's chain object is
+  // reused verbatim whenever the anchors agree — which is EVERY member of every
+  // non-workspace install, keeping those plans byte-identical.
+  const chainByAnchorOrg = new Map<string, ResolvedScopeLevel[]>();
+  const chainKey = (o: string | null): string => o ?? "\0platform";
+  chainByAnchorOrg.set(chainKey(rowOwnership.organizationId ?? null), scopeChain);
+  const scopeChainFor = async (member: RowOwnership): Promise<ResolvedScopeLevel[]> => {
+    const key = chainKey(member.organizationId ?? null);
+    const memo = chainByAnchorOrg.get(key);
+    if (memo) return memo;
+    const chain = deps.resolveScopeAncestry
+      ? await deps.resolveScopeAncestry(member)
+      : defaultOrgPlatformChain(member.organizationId ?? null);
+    chainByAnchorOrg.set(key, chain);
+    return chain;
+  };
+
   // DEPENDENCY-CONFUSION GATE (#157 / #103): confine the resolved tree to the
   // ROOT package's own vendor scope + the first-party base scope. The agent
   // resolver this planner SUPERSEDED (the registries "prefer-newer" walker,
@@ -762,6 +833,17 @@ export async function planDependencyInstall(
     let action: PlannedMember["action"] = "install";
     let sideBySideEvidence: PlannedMember["sideBySideEvidence"];
     let sideBySideScopeOrgId: string | null | undefined;
+    // cinatra#2696: THE MEMBER'S OWN anchor, resolved BEFORE the installed-row
+    // check so the conflict basis is read at that anchor's scope. Equals the
+    // root tuple for every member of a non-workspace install (decision 4).
+    const memberRowOwnership = resolveMemberRowOwnership({
+      root: rowOwnership,
+      isRoot: packageName === root.packageName,
+      memberKind: summary.kind,
+      installerOrgId: orgId,
+    });
+    const memberScopeChain =
+      packageName === root.packageName ? scopeChain : await scopeChainFor(memberRowOwnership);
     if (packageName === root.packageName) {
       // #1039 Option B (update-time): the ROOT of an UPDATE is a committed
       // `action:"update"` member on the non-gatekept path. A fresh install
@@ -786,7 +868,7 @@ export async function planDependencyInstall(
       const { rows: scopeRows, index: scopeIndex } = resolveScopeRows(
         installedRows,
         packageName,
-        scopeChain,
+        memberScopeChain,
       );
       const atPin = scopeRows.find((r) => registryVersionOfRow(r) === pin);
       const row = atPin ?? (scopeRows.length > 0 ? defaultLiveRow(scopeRows) : null);
@@ -829,7 +911,7 @@ export async function planDependencyInstall(
           // Resolve the NEW version's own required deps from the conflict row's
           // level downward (decision 2). Behavior-neutral for the extension
           // default (the sub-chain is [organization, platform] or [platform]).
-          depScopeChain: scopeIndex >= 0 ? scopeChain.slice(scopeIndex) : undefined,
+          depScopeChain: scopeIndex >= 0 ? memberScopeChain.slice(scopeIndex) : undefined,
         });
         // Option B execution: a CLEAN dedupe-upward on the non-gatekept path is
         // realized as a committed in-place update, NOT a refusal. `closure` is
@@ -945,10 +1027,13 @@ export async function planDependencyInstall(
       typeId: kindToTypeId(summary.kind, packageName, !alreadyInstalled),
       edges,
       alreadyInstalled,
-      // decision 4: the ROOT install's tuple, forced IMMUTABLY onto EVERY member
-      // (existing-row selection above never overrides it — `row` informs the
-      // conflict class, not the member's ownership).
-      rowOwnership,
+      // decision 4 as REFINED by cinatra#2696: the ROOT install's tuple, forced
+      // onto every member — EXCEPT that an AGENT dependency of a
+      // workspace-anchored root stays org-anchored at the installer's active
+      // organization (the epic keeps agent installs org/team/project). Existing-
+      // row selection above still never overrides it — `row` informs the
+      // conflict class, not the member's ownership.
+      rowOwnership: memberRowOwnership,
       action,
       ...(sideBySideEvidence ? { sideBySideEvidence } : {}),
       ...(sideBySideScopeOrgId !== undefined ? { sideBySideScopeOrgId } : {}),

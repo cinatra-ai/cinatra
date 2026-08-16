@@ -29,6 +29,7 @@ import {
   type RuntimeConnectorCardRecord,
 } from "@/lib/extension-install-resolution";
 import { isConnectorInstalledFromRuntime } from "@cinatra-ai/extensions/connector-installed-predicate";
+import { isWorkspaceAnchoredRow } from "@cinatra-ai/extensions/canonical-types";
 import {
   readInstalledExtensionsByPackageNames,
   listInstalledExtensions,
@@ -115,23 +116,46 @@ export async function resolveInstalledCatalogConnectorIds(
  * trust gate, or whose package name doesn't parse to `@vendor/slug`, is omitted.
  *
  * The union of these with the catalog cards is the complete runtime-sourced card
- * set. Discovery of candidate rows is scoped to the actor's org (the canonical
- * read filter) and re-checked per-row with `pickActiveInstallId` (fail-closed:
- * archived/cross-org/owner-less rows are not addressable). On a canonical-store
- * outage, returns [] (bundled/catalog cards still render; a runtime-only card
- * cannot be proven during the outage → fail closed).
+ * set. Discovery of candidate rows is scoped to the actor's org PLUS the
+ * org-NULL workspace-anchored rows (see below) and re-checked per-row with
+ * `pickActiveInstallId` (fail-closed: archived/cross-org/owner-less rows are not
+ * addressable). On a canonical-store outage, returns [] (bundled/catalog cards
+ * still render; a runtime-only card cannot be proven during the outage → fail
+ * closed).
+ *
+ * cinatra#2694 / S3 #2697 — THE RUNTIME QUERY FILTER WAS THE SOLE GAP. The rest
+ * of this path already admitted a workspace-anchored ("Workspace: All") install:
+ * the addressability predicate treats an org-less row as addressable by any
+ * authenticated actor (`isInstallRowAddressableByActor`,
+ * src/lib/extension-install-resolution.ts lines 136-139: `if
+ * (row.organizationId !== null && row.organizationId !== actor.organizationId)
+ * return false`), and the catalog path above reads BY PACKAGE NAME with no org
+ * filter at all (`readInstalledExtensionsByPackageNames(packageIds)`,
+ * resolveInstalledCatalogConnectorIds). Only THIS discovery read pinned
+ * `organization_id = <actor org>` exactly, so an org-NULL row was never even a
+ * candidate. Verified on this branch — both citations re-read, not inherited.
+ *
+ * The org-NULL arm is narrowed to the WORKSPACE anchor (`isWorkspaceAnchoredRow`
+ * — owner_level='workspace', organization_id NULL, owner_id='__platform__'), so
+ * bundled/system `platform`-anchored rows keep exactly the path they had.
  */
 export async function listRuntimeOnlyConnectorCards(
   actor: ActorContext | undefined | null,
 ): Promise<RuntimeConnectorCardRecord[]> {
   if (!actor) return [];
 
+  const actorOrgId = actor.organizationId ?? null;
   let rows: Awaited<ReturnType<typeof listInstalledExtensions>>;
   try {
-    rows = await listInstalledExtensions({
-      kind: "connector",
-      organizationId: actor.organizationId ?? null,
-    });
+    // An org actor needs BOTH reads; an org-LESS actor's single org-NULL read
+    // already covers the workspace tier, so it stays exactly one query.
+    const [orgRows, workspaceRows] = await Promise.all([
+      listInstalledExtensions({ kind: "connector", organizationId: actorOrgId }),
+      actorOrgId === null
+        ? Promise.resolve([])
+        : listInstalledExtensions({ kind: "connector", organizationId: null }),
+    ]);
+    rows = [...orgRows, ...workspaceRows.filter((r) => isWorkspaceAnchoredRow(r))];
   } catch (err) {
     console.warn(
       "[installed-connectors] runtime-only connector discovery read failed " +

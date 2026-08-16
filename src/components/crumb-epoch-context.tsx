@@ -23,3 +23,30 @@ export function CrumbEpochProvider({
 export function useCrumbEpoch(): string {
   return useContext(CrumbEpochContext);
 }
+
+// ---------------------------------------------------------------------------
+// Viewer-admin context (cinatra#2701). Root-published `isAdmin` for the
+// member-facing producers of /configuration links (command menu, error CTAs,
+// restore affordances): the root layout already computes isAdmin for the
+// topbar cog and publishes it here, next to the crumb epoch, so no member
+// surface mints a link it cannot follow. Lives in this module (not a sibling
+// file) so the locked route graphs do not grow by a module for a 20-line
+// context.
+// ---------------------------------------------------------------------------
+
+const ViewerAdminContext = createContext<boolean>(false);
+
+export function ViewerAdminProvider({
+  value,
+  children,
+}: {
+  value: boolean;
+  children: React.ReactNode;
+}) {
+  return <ViewerAdminContext.Provider value={value}>{children}</ViewerAdminContext.Provider>;
+}
+
+/** True when the viewer holds the platform-admin role — i.e. may reach `/configuration`. */
+export function useViewerIsAdmin(): boolean {
+  return useContext(ViewerAdminContext);
+}

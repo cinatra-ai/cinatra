@@ -108,7 +108,12 @@ export async function loadFeedWindow(
     if (batch === FEED_WALK_MAX_BATCHES - 1) capped = true;
   }
 
-  const vms = buildFeedRowVMs(raw);
+  // The viewer's admin standing rides into the mapper so `/configuration` hrefs
+  // are dropped for a non-admin (cinatra#2701, epic #2699 S2). This is the ONE
+  // place the feed builds its view-model — the server page's first paint and the
+  // client's "load more" both land here — so the suppression cannot be bypassed
+  // by paging.
+  const vms = buildFeedRowVMs(raw, viewer.isAdmin);
   const window = paginateFeed(vms, args.chip, args.page);
 
   // The union merge order is createdAt DESC (unified-feed.ts), and the walk
