@@ -13,8 +13,8 @@ Cinatra is an AI agent platform. Its MCP server exposes agent templates as calla
 
 1. List available agents: call `agent_list` or `agent_source_list` to see what is installed.
 2. Read the agent definition: call `agent_source_read` with the package name to understand its inputs and expected behavior.
-3. Start a run: call `agent_run` with the required inputs. The result contains `{ runId, status: "queued" }`.
-4. Poll for completion: call `agent_run_get` with the `runId` every 3-5 seconds. Stop when `status` is `"completed"`, `"failed"`, or `"pending_approval"`.
+3. Start a run: call `agent_run` with the required inputs. The result contains `{ runId, status: "queued" }` for a normal dispatch, or `{ runId, status: "pending_input" }` when a chat-origin run is held on the in-chat recommendation card, paused for the person to Confirm or Skip before it starts.
+4. Poll for completion: for a `queued` run, call `agent_run_get` with the `runId` every 3-5 seconds. Stop when `status` is `"completed"`, `"failed"`, or `"pending_approval"`. For a `pending_input` run, do not poll it to a terminal state — it has not started, and polling will not change that. Wait for the person's decision at the card; once they decide, the run proceeds and normal polling applies.
 5. Handle HITL if required: when `status === "pending_approval"`, the agent is waiting for a human decision at an A2UI surface. Render the surface and resume via `agent_run_resume` once the user has acted.
 6. Read results: call `agent_run_messages_list` with the `runId` to retrieve the full message history and structured outputs.
 
