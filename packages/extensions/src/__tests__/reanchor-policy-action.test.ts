@@ -49,7 +49,7 @@ vi.mock("@/lib/auth-session", () => ({
 vi.mock("@/lib/better-auth-db", () => ({
   betterAuthDb: { select: vi.fn() },
   betterAuthUsers: {},
-  readOrgsWithTeamsForUserActiveOnly: vi.fn(async () => [
+  readOrgsWithTeamsForUser: vi.fn(async () => [
     { id: ORG_A, name: "A", teams: [] },
     { id: ORG_B, name: "B", teams: [] },
   ]),

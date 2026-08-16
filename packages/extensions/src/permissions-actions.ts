@@ -337,11 +337,15 @@ async function planInstallRowReanchor(
     ]),
   ];
 
-  // The actor's OWN organizations — the same set the §V picker was built from
-  // (readOrgsWithTeamsForUserActiveOnly), so a locus the picker could not offer
-  // is not one the server will honour.
-  const { readOrgsWithTeamsForUserActiveOnly } = await import("@/lib/better-auth-db");
-  const orgs = await readOrgsWithTeamsForUserActiveOnly(userId);
+  // The actor's OWN organizations — every locus the save names has to land
+  // inside one of them, which is what makes a foreign locus unresolvable.
+  //
+  // The UNFILTERED reader on purpose (cinatra#1942, Decision 4): this is an
+  // AUTHZ path, not a scope picker. An archived organization's membership must
+  // still resolve here, or the row an archived organization already holds could
+  // not even have its policy edited at its own anchor.
+  const { readOrgsWithTeamsForUser } = await import("@/lib/better-auth-db");
+  const orgs = await readOrgsWithTeamsForUser(userId);
   const { resolveReanchorDestination } = await import("./lifecycle-target-resolver");
   const resolution = await resolveReanchorDestination(tokens, {
     actorOrganizationIds: orgs.map((o) => o.id),
