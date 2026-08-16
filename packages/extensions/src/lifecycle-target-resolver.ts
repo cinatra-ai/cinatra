@@ -45,8 +45,106 @@ import "server-only";
 // ---------------------------------------------------------------------------
 
 import type { Actor } from "@cinatra-ai/extension-types";
-import { isWorkspaceAnchoredRow } from "./canonical-types";
-import type { ExtensionOwnerLevel, InstalledExtension } from "./canonical-types";
+import {
+  isWorkspaceAnchoredRow,
+  organizationRowAnchor,
+  policyWidensToWorkspaceAnchor,
+  WORKSPACE_ANCHOR_ROW_OWNERSHIP,
+} from "./canonical-types";
+import type {
+  ExtensionOwnerLevel,
+  InstallRowOwnership,
+  InstalledExtension,
+} from "./canonical-types";
+
+
+// ---------------------------------------------------------------------------
+// THE §V RE-ANCHOR DESTINATION (cinatra#2694 / S5 #2802).
+//
+// The picker yields an AUDIENCE, not an anchor. This is the rule that turns one
+// into the other, and it is the whole of change 2's narrowing arithmetic:
+//
+//   - a selection containing `workspace` or `admin` WIDENS — the destination is
+//     the app-wide workspace anchor, whatever loci sit beside it (an org-anchored
+//     row can never deliver those audiences: the cross-org guard fences it);
+//   - otherwise the selection NARROWS to exactly ONE organization, resolved from
+//     the selected organization / team / project loci. An owner-only selection
+//     has no locus of its own, so it uses the platform admin's ACTIVE
+//     organization;
+//   - a missing, foreign or multi-organization destination is refused
+//     `invalid_locus`, and the refusal writes nothing.
+//
+// The team→organization and project→organization walks are injected
+// (`ReanchorLocusLookups`) so the rule stays testable without a database and so
+// this module gains no store edge. The caller passes the actor's OWN
+// organizations, which is what makes a foreign locus unresolvable: a locus that
+// does not land inside one of them is refused rather than silently honoured.
+// ---------------------------------------------------------------------------
+
+/** Parent-organization walks for the collective loci a selection can name. */
+export type ReanchorLocusLookups = {
+  /** The organization a team belongs to, or null when it is not resolvable. */
+  teamOrganization: (teamId: string) => Promise<string | null>;
+  /** The organization a project belongs to, or null when it is not resolvable. */
+  projectOrganization: (projectId: string) => Promise<string | null>;
+};
+
+export type ReanchorDestinationResolution =
+  | { ok: true; anchor: InstallRowOwnership }
+  | { ok: false; code: "invalid_locus" };
+
+/**
+ * Resolve the anchor a saved audience selection re-anchors the row to.
+ *
+ * `actorOrganizationIds` is the set of organizations the saving actor actually
+ * holds — the same set the §V picker was built from. Every named locus must land
+ * inside it; the legacy bare `org` token and any unknown token shape are refused
+ * fail-closed rather than guessed at.
+ */
+export async function resolveReanchorDestination(
+  tokens: readonly string[],
+  ctx: {
+    actorOrganizationIds: readonly string[];
+    actorActiveOrganizationId: string | null;
+    lookups: ReanchorLocusLookups;
+  },
+): Promise<ReanchorDestinationResolution> {
+  if (policyWidensToWorkspaceAnchor(tokens)) {
+    return { ok: true, anchor: WORKSPACE_ANCHOR_ROW_OWNERSHIP };
+  }
+
+  const held = new Set(ctx.actorOrganizationIds);
+  const destinations = new Set<string>();
+  for (const token of tokens) {
+    if (token === "owner") continue; // carries no locus of its own
+    let orgId: string | null = null;
+    if (token.startsWith("org:")) {
+      orgId = token.slice("org:".length);
+    } else if (token.startsWith("team:")) {
+      orgId = await ctx.lookups.teamOrganization(token.slice("team:".length));
+    } else if (token.startsWith("project:")) {
+      orgId = await ctx.lookups.projectOrganization(token.slice("project:".length));
+    } else {
+      // Bare legacy "org" is not a concrete locus, and an unknown token shape is
+      // never guessed at.
+      return { ok: false, code: "invalid_locus" };
+    }
+    if (orgId === null || orgId === "" || !held.has(orgId)) {
+      return { ok: false, code: "invalid_locus" };
+    }
+    destinations.add(orgId);
+  }
+
+  if (destinations.size > 1) return { ok: false, code: "invalid_locus" };
+  const orgId =
+    destinations.size === 1
+      ? [...destinations][0]!
+      : (ctx.actorActiveOrganizationId ?? null);
+  if (orgId === null || orgId === "" || !held.has(orgId)) {
+    return { ok: false, code: "invalid_locus" };
+  }
+  return { ok: true, anchor: organizationRowAnchor(orgId) };
+}
 
 // ---------------------------------------------------------------------------
 // Errors — all fail-closed refusals. The dispatcher lets them propagate as the

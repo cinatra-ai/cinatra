@@ -17,6 +17,7 @@ import "server-only";
 import {
   _internalDeleteInstalledExtension,
   _internalInsertInstalledExtension,
+  _internalReanchorInstallRowAtomic,
   _internalUpdateInstalledExtensionMetadata,
   _internalUpdateInstalledExtensionSource,
   _internalUpdateInstalledExtensionStatus,
@@ -26,7 +27,11 @@ import {
 import { deleteExtensionPermissions } from "./permissions-store";
 import { isNonFinalizedLiveRowAware } from "./non-finalized-row";
 import { isStaticBundleAnchorSource } from "./static-bundle-anchor";
-import { isWorkspaceAnchoredRow } from "./canonical-types";
+import {
+  isWorkspaceAnchoredRow,
+  isWorkspaceRowAnchor,
+  sameRowAnchor,
+} from "./canonical-types";
 import {
   PLATFORM_OWNER_SENTINEL,
   DESTRUCTIVE_OPS,
@@ -36,6 +41,7 @@ import {
   type ExtensionDependency,
   type ExtensionLifecycleStatus,
   type ExtensionSource,
+  type InstallRowOwnership,
   type InstalledExtension,
   type LifecycleTransitionOp,
   type ResolvedConnectorAccessDeclaration,
@@ -457,6 +463,137 @@ export async function supersedeOrganizationRowsForWorkspaceInstall(
       compensated,
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// THE §V RE-ANCHOR (cinatra#2694 / S5 #2802) — the SANCTIONED primitive.
+//
+// Owner ruling 2026-08-16 (entry 350): "§V re-anchors". The settings page's
+// access picker is the widening AND narrowing surface, and saving it must move
+// the canonical row's ANCHOR — not just relabel its audience. Before S5 a save
+// wrote a `workspace` audience onto an organization-anchored row, which the
+// cross-org guard still fenced to that organization: the picker promised
+// app-wide reach and delivered organization reach.
+//
+// This primitive is the ONE sanctioned way that move happens. It holds the
+// package lifecycle lock (so no install/update/uninstall of the package
+// interleaves), then delegates the whole mutation to the store's single
+// transaction, which takes the row locks, decides the destination slot, moves
+// the anchor, applies the S4 supersession, re-resolves the affected dependency
+// edges and writes the audience policy — atomically. Every refusal writes
+// nothing.
+//
+// What it deliberately does NOT do (owner ruling): it never runs the install
+// ACTIVATION hook and never re-registers the package. The package bytes and the
+// in-process capabilities did not change — only which row identity owns the
+// install — so re-running activation would be a second install of something
+// already installed. It also never restores, relocates or deletes a row that
+// occupies the destination: an occupied slot is a refusal, full stop.
+// ---------------------------------------------------------------------------
+
+/** Why a re-anchor was refused. Typed, transport-independent, no-write. */
+export class ReanchorRefusedError extends Error {
+  constructor(
+    public readonly code: "not_found" | "anchor_conflict" | "closure_broken",
+    message: string,
+    public readonly details?: Record<string, unknown>,
+  ) {
+    super(message);
+    this.name = "ReanchorRefusedError";
+  }
+}
+
+export type ReanchorOutcome = {
+  /** The moved row, re-read post-commit. Its `id` is the id it always had. */
+  row: InstalledExtension;
+  /** Organization rows archived in place by the supersession, if any. */
+  supersededRowIds: string[];
+  /** Did the anchor actually change, or was this an ordinary policy edit? */
+  anchorMoved: boolean;
+};
+
+/**
+ * Re-anchor an install row to `destination` and persist `policy`, atomically.
+ *
+ * `destination` is the anchor the audience selection resolved to — the
+ * workspace anchor for a widening selection, the destination organization's
+ * tuple for a narrowing one. When it already equals the row's own anchor this
+ * is an ordinary policy edit: the same transaction runs, the anchor UPDATE is a
+ * no-op rewrite of the same tuple, and nothing is superseded.
+ *
+ * The SUPERSESSION applies only to a genuine widening — moving TO the workspace
+ * anchor. Re-saving the same audience on a row already at that anchor archives
+ * nothing new (the organization rows were archived when it first landed there),
+ * because only `active` organization rows are targets.
+ *
+ * Callers own the authorization decision (only a platform admin may change an
+ * anchor) and the audience validation (the connector ceiling, the locus rules);
+ * this primitive owns the lock, the atomicity and the row-identity arithmetic.
+ */
+export async function reanchorInstallRow(args: {
+  rowId: string;
+  resourceKind: string;
+  destination: InstallRowOwnership;
+  policy: unknown;
+}): Promise<ReanchorOutcome> {
+  const { rowId, resourceKind, destination, policy } = args;
+  const current = await readInstalledExtensionById(rowId);
+  if (!current) {
+    throw new ReanchorRefusedError("not_found", `installed_extension '${rowId}' not found`);
+  }
+  const anchorMoved = !sameRowAnchor(current, destination);
+
+  // The per-package install lock — the SAME lock the install dispatcher, the
+  // workflow saga and the extension handler hold, so a re-anchor can never
+  // interleave with an install/update/uninstall of the same package. It is
+  // re-entrant via AsyncLocalStorage, so a caller that already holds it (none
+  // today) would run inline rather than deadlock.
+  //
+  // Imported from the lock's OWN module rather than the agents barrel: the
+  // barrel would drag the whole agents graph onto every route that can reach a
+  // §V save, and the lock module itself imports only node builtins. Dynamic
+  // import because @cinatra-ai/agents → @cinatra-ai/extensions is a static
+  // cycle (the same reason the dispatcher imports it this way).
+  const { withInstallLock } = await import("@cinatra-ai/agents/materialize-agent-package");
+  return withInstallLock(current.packageName, async () => {
+    const result = await _internalReanchorInstallRowAtomic({
+      rowId,
+      destination,
+      // Only a move TO the workspace anchor supersedes; a narrowing supersedes
+      // nothing (S4's rule is about a workspace install being in force).
+      supersedeOrganizationRows: anchorMoved && isWorkspaceRowAnchor(destination),
+      policy: { resourceKind, value: policy },
+    });
+    if (!result.ok) {
+      if (result.code === "anchor_conflict") {
+        throw new ReanchorRefusedError(
+          "anchor_conflict",
+          `"${current.packageName}" already occupies the destination ` +
+            `${result.conflict.reason === "default" ? "default" : "identity"} slot ` +
+            `(an archived row occupies it just as a live one does) — refusing to ` +
+            `re-anchor; nothing was written.`,
+          { conflictRowId: result.conflict.rowId, reason: result.conflict.reason },
+        );
+      }
+      if (result.code === "closure_broken") {
+        throw new ReanchorRefusedError(
+          "closure_broken",
+          `Re-anchoring "${current.packageName}" would leave a required dependency ` +
+            `unresolved for ${result.brokenBy.join(", ")} — refusing; nothing was written.`,
+          { brokenBy: result.brokenBy },
+        );
+      }
+      throw new ReanchorRefusedError(
+        "not_found",
+        `installed_extension '${rowId}' not found`,
+      );
+    }
+    return {
+      row: result.row,
+      supersededRowIds: result.supersededRowIds,
+      anchorMoved,
+    };
+  });
 }
 
 /**
