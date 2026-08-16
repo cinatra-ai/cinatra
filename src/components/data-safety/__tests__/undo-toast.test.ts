@@ -39,8 +39,13 @@ describe("showUndoToast", () => {
     toastMock.success.mockReset();
     toastMock.error.mockReset();
     eligibilityMock.canRestoreChangeSetAction.mockReset();
-    // Default: eligible — suppression cases pin { eligible: false } explicitly.
-    eligibilityMock.canRestoreChangeSetAction.mockResolvedValue({ eligible: true });
+    // Default: an ELIGIBLE ADMIN — the only shape that still earns an Undo
+    // action after cinatra#2701 (epic #2699 S2). The non-admin and
+    // ineligible-admin cases pin their own shapes explicitly.
+    eligibilityMock.canRestoreChangeSetAction.mockResolvedValue({
+      eligible: true,
+      admin: true,
+    });
   });
 
   it("on ok+changeSetId AND eligible fires a success toast with an Undo action", async () => {
@@ -69,19 +74,57 @@ describe("showUndoToast", () => {
     expect(toastMock.success.mock.calls[0][0]).toBe("Saved Acme");
   });
 
-  it("SUPPRESSES the toast (no Undo affordance) when the actor is INELIGIBLE (§VI, no admin bypass)", async () => {
-    eligibilityMock.canRestoreChangeSetAction.mockResolvedValue({ eligible: false });
+  it("SUPPRESSES the toast (no Undo affordance) when an ADMIN actor is INELIGIBLE (§VI, no admin bypass)", async () => {
+    eligibilityMock.canRestoreChangeSetAction.mockResolvedValue({
+      eligible: false,
+      admin: true,
+    });
     showUndoToast({ ok: true, changeSetId: "cs_1" }, { objectLabel: "Acme" });
     await flush();
     expect(toastMock.success).not.toHaveBeenCalled();
     expect(toastMock.error).not.toHaveBeenCalled();
   });
 
-  it("fails closed (no toast) when the eligibility check throws", async () => {
+  // ── cinatra#2701 (epic #2699 S2) — aligned affordance ────────────────────
+  // The Undo action deep-links into `/configuration/artifacts/...`, which is
+  // admin-only. A non-admin is offered NO link, but the save still reports
+  // itself: the toast INFORMS without a link.
+
+  it("a NON-ADMIN gets an informing toast with NO Undo action (no link into /configuration)", async () => {
+    const onUndo = vi.fn();
+    eligibilityMock.canRestoreChangeSetAction.mockResolvedValue({
+      eligible: false,
+      admin: false,
+    });
+    showUndoToast({ ok: true, changeSetId: "cs_1" }, { objectLabel: "Acme", onUndo });
+    await flush();
+    expect(toastMock.success).toHaveBeenCalledTimes(1);
+    const [title, opts] = toastMock.success.mock.calls[0];
+    expect(title).toBe("Saved Acme");
+    // No second argument at all — no `action`, so no control to click.
+    expect(opts).toBeUndefined();
+    expect(onUndo).not.toHaveBeenCalled();
+    expect(toastMock.error).not.toHaveBeenCalled();
+  });
+
+  it("the non-admin toast never carries a /configuration href in any argument", async () => {
+    eligibilityMock.canRestoreChangeSetAction.mockResolvedValue({
+      eligible: false,
+      admin: false,
+    });
+    showUndoToast({ ok: true, changeSetId: "cs_1" }, { title: "Saved" });
+    await flush();
+    expect(JSON.stringify(toastMock.success.mock.calls)).not.toContain("/configuration");
+  });
+
+  it("fails closed on a throwing check — the toast informs, and carries no Undo link", async () => {
     eligibilityMock.canRestoreChangeSetAction.mockRejectedValue(new Error("boom"));
     showUndoToast({ ok: true, changeSetId: "cs_1" });
     await flush();
-    expect(toastMock.success).not.toHaveBeenCalled();
+    // `admin` cannot be established, so the closed answer is the linkless
+    // toast — never an Undo action.
+    expect(toastMock.success).toHaveBeenCalledTimes(1);
+    expect(toastMock.success.mock.calls[0][1]).toBeUndefined();
   });
 
   it("on ok WITHOUT a changeSetId fires NO toast and never checks eligibility", async () => {

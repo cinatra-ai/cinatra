@@ -170,7 +170,11 @@ function isPlatformAdmin(actor: ActorContext): boolean {
  * that org on `owner.organizationId` (the M1 org-anchor backfill), so keying on
  * `organizationId` covers all three. For a workspace/platform-owned extension
  * with NO organization, only platform admins qualify (there is no org to be an
- * admin of) — fail closed.
+ * admin of) — fail closed. cinatra#2695 KEEPS that fail-closed behavior as the
+ * standing rule for workspace-anchored install rows (admin standing over an
+ * org-NULL row = platform admins only, pinned by test) — no new authz is built
+ * for them: an org admin does not gain manage/admin standing over a row that
+ * reaches every organization.
  *
  * This is the role-derived standing the evaluator short-circuits on: it is
  * independent of the installer pointer, the stored visibility tier, and
@@ -291,7 +295,15 @@ function visibilityAllows(
 ): boolean {
   if (isPlatformAdmin(actor)) return true;
   if (visibility === "owner") return false; // owner handled by short-circuit
-  if (visibility === "workspace") return true; // same-org guaranteed upstream
+  // `workspace` = every actor the guard above admitted. For an ORG-ANCHORED
+  // row that is the owning org's members (the cross-org guard fenced the
+  // rest). For a WORKSPACE-ANCHORED row (owner_level 'workspace',
+  // organization_id NULL — the anchor a "Workspace: All" install resolves to,
+  // cinatra#2694/#2695) there is NO same-org guarantee to inherit: the guard
+  // deliberately does not fence org-NULL rows, so this tier reads APP-WIDE,
+  // exactly as it already does for the system's bundled workspace-tier
+  // extensions. That is the intended reach, not a gap.
+  if (visibility === "workspace") return true;
   if (typeof visibility === "string" && visibility.startsWith("org:")) {
     return actor.organizationId === visibility.slice("org:".length);
   }
@@ -333,6 +345,12 @@ export function evaluateExtensionAccess(
   // closed, matching the kernel (undefined org != owner org). This runs BEFORE
   // the admin-standing / owner / co-owner short-circuits so a cross-org (or
   // org-less) admin / installer / co-owner cannot slip past the guard.
+  //
+  // A row with NO owning org (owner.organizationId === null — the
+  // workspace-anchored anchor of a "Workspace: All" install, cinatra#2694, and
+  // the platform-bundled rows) SKIPS the guard by construction: there is no org
+  // to fence against, so the decision falls entirely to the audience tier
+  // below. That skip is the mechanism that gives such a row app-wide reach.
   if (owner.organizationId && actor.organizationId !== owner.organizationId) {
     return { allowed: false, reason: "cross_org" };
   }

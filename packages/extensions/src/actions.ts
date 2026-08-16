@@ -52,10 +52,29 @@ import {
 // inside the action so the no-target path pays nothing.
 import {
   InstallAccessTargetSchema,
-  accessTargetToInstallPolicy,
   isInstallAccessTargetKind,
+  resolveInstallAccessTargetContract,
   type InstallAccessTarget,
+  type InstallRowOwnership,
 } from "./install-access-target";
+// cinatra#2696: the dispatcher-side half of the contract — the anchor an
+// install actually writes at, and the org-NULL workspace discriminator the
+// rollback needs.
+//
+// cinatra#2698 (S4) has since made a workspace-anchored row addressable by the
+// lifecycle resolver, so the reason S2 gave for the rollback's row-scoped
+// inverse no longer holds. The rollback is DELIBERATELY LEFT AS IT IS: it is
+// S2's shipped decision, it is the fail-closed inverse of a write this same
+// action just made (it needs no resolution at all, and no standing round-trip
+// on an error path), and re-routing it through the resolver would be a change
+// this slice was not asked for. This note is the cross-reference, not a TODO.
+import { isWorkspaceRowAnchor } from "./install-access-target";
+// cinatra#2698 (S4, rework): NO SELECTOR CROSSES THIS BOUNDARY. Every export in
+// this module is a "use server" action, so a selector parameter here would be
+// exactly what the owner ruling of 2026-08-16 removes — a user-facing "pick a
+// row" model. The effective-row rule answers "which row?" server-side, and the
+// anchor-tier selector survives only as machinery inside the dispatcher (a
+// reinstall's second leg re-addressing the row its first leg removed).
 
 // ---------------------------------------------------------------------------
 // Operator-side failure logging (cinatra#685). The end user only ever sees a
@@ -140,6 +159,72 @@ async function buildInstallRollbackActor(
       roleErr,
     );
     return baseActor;
+  }
+}
+
+/**
+ * ROLL BACK a fresh install that was written at the WORKSPACE ANCHOR
+ * (cinatra#2696).
+ *
+ * The org-anchored rollback routes through `uninstallExtensionPackage` →
+ * `extensionRegistry.uninstall`, whose lifecycle target resolution selects rows
+ * BY THE ACTOR'S ORGANIZATION — so it can address neither an `organization_id
+ * NULL` row (no org to match) nor the platform-admin standing that would be
+ * needed to, without taking the package-GLOBAL hard-delete branch that tears
+ * down every other org's row. Teaching the lifecycle ops to target the full row
+ * identity is S4 (#2698) and is deliberately NOT anticipated here.
+ *
+ * So this rollback takes the SAME inverse the install batch's compensation
+ * already uses for exactly this reason (cinatra#2415): a ROW-SCOPED delete of
+ * the single row identified by the install's own anchor identity. It can never
+ * fan out — one row, by id — and it is only ever called when the pre-install
+ * snapshot proved NO live row existed at that identity, so the row it deletes is
+ * provably the one this call created. A pre-existing live row is never reached:
+ * the caller returns `access-partial` before getting here.
+ *
+ * The two refusals the package-scoped uninstall would have applied are applied
+ * FIRST, so this path is not a way around them: a SYSTEM extension
+ * (`assertCanRemoveExtension`) and a package whose own declaration marks it
+ * PROTECTED (`resolveDeclaredProtection`, fail-closed on an unreadable
+ * declaration) are refused, and the caller reports the partial state honestly.
+ *
+ * TOTAL by contract — never throws; a failure is returned in the same shape
+ * `uninstallExtensionPackage` returns so both rollback paths read identically.
+ */
+async function rollbackFreshInstallAtWorkspaceAnchor(
+  identity: {
+    organizationId: string | null;
+    ownerLevel: "user" | "team" | "organization" | "workspace" | "platform";
+    ownerId: string | null;
+    packageName: string;
+  },
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    assertCanRemoveExtension(identity.packageName, "uninstall");
+    const { resolveDeclaredProtection } = await import("./protected-extension");
+    let protectedPackage: boolean;
+    try {
+      protectedPackage = await resolveDeclaredProtection(identity.packageName);
+    } catch {
+      protectedPackage = true; // unreadable declaration ⇒ never torn down
+    }
+    if (protectedPackage) {
+      return {
+        success: false,
+        error:
+          `${identity.packageName} declares itself protected — the rollback of the ` +
+          `workspace-anchored install is refused (the extension stays installed).`,
+      };
+    }
+    const { readInstalledExtensionByIdentity } = await import("./canonical-store");
+    const row = await readInstalledExtensionByIdentity(identity);
+    // No row at the anchor — nothing was created (or it is already gone).
+    if (!row) return { success: true };
+    const { deleteScopedCanonicalRow } = await import("./lifecycle-primitive");
+    await deleteScopedCanonicalRow(row.id);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -339,6 +424,14 @@ export async function installExtensionPackage(
   packageName: string,
   packageVersion: string,
   actor: Actor,
+  /**
+   * cinatra#2696 — the PLANNED canonical row anchor. The install-access target
+   * resolved it (S1's `accessTargetToRowOwnership`); it is threaded into the
+   * dependency batch, which plans, installs, ledgers and compensates every
+   * member at that anchor. ABSENT (every caller without an access target) → the
+   * actor-derived default, unchanged.
+   */
+  rowOwnership?: InstallRowOwnership,
 ): Promise<{
   success: boolean;
   error?: string;
@@ -387,6 +480,9 @@ export async function installExtensionPackage(
       packageName,
       version: packageVersion,
       actor,
+      // cinatra#2696: pass the threaded anchor through. Omitted when absent so
+      // the batch derives its established default (byte-identical plan).
+      ...(rowOwnership ? { rowOwnership } : {}),
     });
     // #2761: the batch kept a member that COMMITTED but did not hot-activate.
     // Report the caveat on the success, never a failure. Read defensively: the
@@ -474,11 +570,21 @@ export async function updateExtensionPackage(
       const { installExtensionWithDependencies } = await import(
         "@/lib/extension-install-batch"
       );
+      // cinatra#2698 (S4, change 2): the batch plans EVERY member at the ROOT's
+      // anchor (S2's dependency-anchor rule), so an update routed through it
+      // must hand it the root row's OWN anchor — otherwise a workspace-anchored
+      // root's newly-required dependencies would land org-anchored in the
+      // updating admin's organization while the root itself stayed app-wide, and
+      // the org-anchored copies would be invisible to every other organization
+      // the root serves. `null` (no addressable row) keeps the batch's
+      // actor-derived default, exactly as before this slice.
+      const rootRowAnchor = await resolveRowAnchorForLifecycle(packageName, actor);
       const batch = await installExtensionWithDependencies({
         packageName,
         version: packageVersion,
         actor,
         rootAction: "update",
+        ...(rootRowAnchor ? { rowOwnership: rootRowAnchor } : {}),
       });
       // #2761: same third outcome on the update path.
       if (batchDeferredCarries(batch, packageName)) {
@@ -550,6 +656,45 @@ export async function uninstallExtensionPackage(
       errorCode: stableErrorCode(err),
       failure: classifyRemovalFailure(err),
     };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The RESOLVED ROW's own anchor (cinatra#2694 / S4 #2698).
+//
+// The action layer needs the target row's anchor for the two lifecycle
+// operations that RECREATE rather than transition in place:
+//   - update routed through the dependency batch, whose members are all planned
+//     at the ROOT's anchor (S2's dependency-anchor rule);
+//   - reinstall, which is uninstall THEN install — the install leg must land at
+//     the anchor the uninstalled row had, or the reinstall silently re-anchors
+//     an app-wide workspace install into the operator's organization.
+//
+// Reads through the SAME addressing rule the dispatcher enforces with — the
+// effective row, superseded organization rows already removed — so the anchor
+// the action plans and the row the dispatcher targets can never be two different
+// rows. TOTAL — an unresolvable
+// or ambiguous target yields null and the caller keeps its pre-#2698
+// actor-derived default; the dispatcher's own fail-closed refusal is still the
+// enforcement boundary. Not exported: a "use server" module exports only its
+// actions.
+// ---------------------------------------------------------------------------
+async function resolveRowAnchorForLifecycle(
+  packageName: string,
+  actor: Actor,
+): Promise<InstallRowOwnership | null> {
+  try {
+    const { readInstalledExtensionsByPackageName } = await import("./canonical-store");
+    const { resolveLifecycleScope, lifecycleRowAnchor } = await import(
+      "./lifecycle-target-resolver"
+    );
+    const resolution = resolveLifecycleScope(
+      await readInstalledExtensionsByPackageName(packageName),
+      actor,
+    );
+    return resolution.ok ? lifecycleRowAnchor(resolution.row) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -677,18 +822,34 @@ export async function reinstallLatestExtensionPackage(
       );
       return { success: true };
     }
+    // cinatra#2698 (S4, change 2): CAPTURE THE ROW'S OWN ANCHOR BEFORE THE
+    // UNINSTALL. A reinstall is the one lifecycle operation that genuinely
+    // destroys and RE-CREATES the canonical row (for an unused extension the
+    // uninstall is a hard delete), and the install leg used to derive its anchor
+    // from the ACTOR — so reinstalling an app-wide, workspace-anchored install
+    // from an org-scoped platform-admin session would have brought it back as an
+    // ORG-anchored row: the extension would silently stop reaching every other
+    // organization, with nothing in the UI saying so. Reading the anchor first
+    // and threading it into the install leg keeps the identity
+    // `(organization_id, owner_level, owner_id)` exactly where it was.
+    //
+    // null (no addressable row — e.g. a package the actor's scope never
+    // installed) keeps the dispatcher's actor-derived anchor, byte-identically
+    // to the pre-#2698 path.
+    const priorRowAnchor = await resolveRowAnchorForLifecycle(packageName, actor);
     // Step 1: uninstall (archive or hard-delete per predicate)
     await extensionRegistry.uninstall(
       typeId,
       { registryUrl: "", packageName, version: latestVersion },
       actor,
     );
-    // Step 2: install at the latest resolved version
+    // Step 2: install at the latest resolved version, AT THE PRIOR ROW'S ANCHOR
     try {
       await extensionRegistry.install(
         typeId,
         { registryUrl: "", packageName, version: latestVersion },
         actor,
+        ...(priorRowAnchor ? [{ rowOwnership: priorRowAnchor }] : []),
       );
     } catch (installErr) {
       // Surface the underlying install error so the user can act on it
@@ -862,6 +1023,13 @@ export async function installExtensionPackageFormAction(input: {
     // destroy it and report the partial state instead.
     // -------------------------------------------------------------------------
     const target = accessTarget;
+    // cinatra#2696 — THE CHOSEN ANCHOR, resolved once from S1's contract. It
+    // decides three things at once: the identity the pre-install snapshot and
+    // the post-install access write key on, the tuple the install writes the
+    // canonical row at (threaded through the dependency batch), and which
+    // rollback the fail-closed compensation may use.
+    const { rowOwnership, policy } = resolveInstallAccessTargetContract(target, orgId);
+    const workspaceAnchored = isWorkspaceRowAnchor(rowOwnership);
     const { withInstallLock } = await import("@cinatra-ai/agents");
     const outcome = await withInstallLock(
       input.packageName,
@@ -871,10 +1039,17 @@ export async function installExtensionPackageFormAction(input: {
         const { readInstalledExtensionByIdentity } = await import(
           "./canonical-store"
         );
+        // cinatra#2696: the identity FOLLOWS THE CHOSEN ANCHOR. It was hard-
+        // coded to the org anchor, which S1 superseded for the two workspace
+        // targets: a "Workspace: All" install writes `owner_level='workspace'`
+        // with `organization_id NULL` and the `__platform__` owner sentinel, so
+        // an org-keyed read would miss BOTH the pre-install snapshot (the
+        // rollback protection) and the post-install row the access policy is
+        // written against. Every other target keeps the org identity verbatim.
         const identity = {
-          organizationId: orgId,
-          ownerLevel: "organization" as const,
-          ownerId: orgId,
+          organizationId: rowOwnership.organizationId,
+          ownerLevel: rowOwnership.ownerLevel,
+          ownerId: rowOwnership.ownerId,
           packageName: input.packageName,
         };
         // Snapshot BEFORE the install (under the lock): an install of an
@@ -889,6 +1064,8 @@ export async function installExtensionPackageFormAction(input: {
           input.packageName,
           input.packageVersion,
           actor,
+          // cinatra#2696: the write path installs AT the chosen anchor.
+          rowOwnership,
         );
         // #2761: the install COMMITTED but did not hot-activate this call. It is
         // a success with a caveat, so it flows to the SAME "installed" outcome
@@ -919,7 +1096,10 @@ export async function installExtensionPackageFormAction(input: {
               `installed kind "${row.kind}" does not accept an install access target`,
             );
           }
-          const policy = accessTargetToInstallPolicy(target);
+          // The audience half of the SAME contract call above (S1) — identical
+          // to the previous `accessTargetToInstallPolicy(target)` value:
+          // `["workspace"]` / `["admin"]` for the workspace targets, undefined
+          // for the organization target (defer to the kind's install default).
           const { setExtensionInstallAccess } = await import(
             "./install-access-contract"
           );
@@ -948,20 +1128,23 @@ export async function installExtensionPackageFormAction(input: {
           }
           // Compensate: roll the fresh install back so a narrower-than-default
           // selection can never silently fail open to workspace access. (Root
-          // package only — auto-installed dependencies are shared and stay.) The
+          // package only — auto-installed dependencies are shared and stay.)
+          //
+          // cinatra#2696: the rollback FOLLOWS THE ANCHOR. An org-anchored
+          // install keeps the established package-scoped uninstall, whose
           // rollback actor carries org-scoped standing so the P5 lifecycle gate
-          // permits removing the org's own row (a role-less actor is refused),
-          // and never platform standing (which would go package-global).
-          const rollbackActor = await buildInstallRollbackActor(
-            session,
-            actor,
-            input.packageName,
-          );
-          const rollback = await uninstallExtensionPackage(
-            input.packageName,
-            input.packageVersion,
-            rollbackActor,
-          );
+          // permits removing the org's own row (a role-less actor is refused)
+          // and never platform standing (which would go package-global). A
+          // WORKSPACE-anchored install has an org-NULL row that the org-pinned
+          // lifecycle resolver cannot address, so it takes the row-scoped
+          // inverse — deleting exactly the row this call created.
+          const rollback = workspaceAnchored
+            ? await rollbackFreshInstallAtWorkspaceAnchor(identity)
+            : await uninstallExtensionPackage(
+                input.packageName,
+                input.packageVersion,
+                await buildInstallRollbackActor(session, actor, input.packageName),
+              );
           if (!rollback.success) {
             logMarketplaceFailureForOperator(
               "install-access-rollback",
@@ -1037,9 +1220,17 @@ export async function installExtensionPackageFormAction(input: {
         } = await import("./canonical-store");
         // Snapshot BEFORE the install (under the lock) so a re-install of an
         // already-installed access-target package is never rolled back by the
-        // fail-closed compensation below. Access-target kinds are ORG-ANCHORED
-        // (install-access-target.ts) — the same identity the access branch uses;
-        // skipped when there is no active org (nothing org-anchored to protect).
+        // fail-closed compensation below.
+        //
+        // This branch has NO access target, so the install can only land at the
+        // ACTOR-DERIVED anchor — the org identity below is exact. (The blanket
+        // "access-target kinds are org-anchored" claim it used to make is no
+        // longer true in general: cinatra#2694/#2695 anchor the two WORKSPACE
+        // targets at `owner_level='workspace'` with `organization_id NULL`, and
+        // the access branch above keys its snapshot on the chosen anchor. A
+        // workspace anchor is unreachable here precisely because it requires a
+        // target, and an absent target is refused below.) Skipped when there is
+        // no active org — nothing org-anchored to protect.
         const identity = orgId
           ? {
               organizationId: orgId,

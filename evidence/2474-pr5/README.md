@@ -23,7 +23,7 @@ is preserved and locked, and the live walk below re-checks it.
 
 ## What is proven, and at which tier
 
-Every heavy leg ran on **host2** (`ordnas@192.168.0.36`, x86_64) against
+Every heavy leg ran on **a lane host** (`<lane-host>`, x86_64) against
 `lane/2474-dashboards-s5`; no credential or secret was placed on that host.
 
 | Tier | Result |
@@ -66,7 +66,7 @@ New coverage this slice:
 
 ## The live walk
 
-Run on **host2** against the real dev server (`pnpm dev`, Next 16 + Turbopack),
+Run on **a lane host** against the real dev server (`pnpm dev`, Next 16 + Turbopack),
 driven with Playwright using `domcontentloaded` + selector waits — never
 `networkidle`.
 
@@ -96,7 +96,7 @@ the template on disk.** The fleet ships none, so the fixture supplies it.
    **admin** of `PR5 Walk Team`) and `pr5member` (org **member**, plain team
    member). `CINATRA_E2E_SETUP_BYPASS=true` — the repo's own, explicit
    browser-e2e affordance — stands in for the LLM-provider setup step, because
-   **no provider credential may exist on host2**.
+   **no provider credential may exist on a lane host**.
 
 ### The results
 

@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { isDelegatedChatMcpToolAllowed } from "../delegated-chat-tool-policy";
+import {
+  isDelegatedChatMcpToolAllowed,
+  delegatedChatAllowedToolNames,
+} from "../delegated-chat-tool-policy";
 
 // Regression table for the delegated chat MCP tool policy.
 // The policy is the authoritative server-side gate for what a chat-delegated
@@ -275,5 +278,47 @@ describe("isDelegatedChatMcpToolAllowed", () => {
     for (const name of allowed) {
       expect(isDelegatedChatMcpToolAllowed(name), name).toBe(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The AUTHORITATIVE allowed-name accessor (cinatra#2776).
+//
+// The hosted-MCP wire gate needs to know which primitive names may NEVER appear
+// as inline function schemas on a provider request. Reading `ALLOWED_EXACT`
+// alone is WRONG: `ALLOWED_PROPOSAL_OVERRIDE` is accepted independently, above
+// the verb backstop, so every proposal-path primitive would be missing from the
+// check. This accessor is the widget policy's `delegatedWidgetAllowedToolNames`
+// twin for chat, and these tests pin the property that makes it authoritative.
+// ---------------------------------------------------------------------------
+describe("delegatedChatAllowedToolNames", () => {
+  it("is the UNION of both allowlists — the proposal overrides are included", () => {
+    const names = delegatedChatAllowedToolNames();
+    // An ALLOWED_EXACT member and an ALLOWED_PROPOSAL_OVERRIDE member (the
+    // latter carries a create/update verb token and is reachable ONLY through
+    // the override branch — the exact class `ALLOWED_EXACT` alone misses).
+    expect(names).toContain("agent_list");
+    expect(names).toContain("agent_run_stop");
+    expect(names).toContain("agent_creation_request_propose");
+  });
+
+  it("agrees with the decision function in BOTH directions", () => {
+    const names = delegatedChatAllowedToolNames();
+    // Nothing the decision function would refuse can appear here.
+    for (const name of names) {
+      expect(isDelegatedChatMcpToolAllowed(name), name).toBe(true);
+    }
+    // And a denied name is absent.
+    for (const denied of ["permissions_grant", "artifact_delete", "approvals_decide"]) {
+      expect(isDelegatedChatMcpToolAllowed(denied), denied).toBe(false);
+      expect(names).not.toContain(denied);
+    }
+  });
+
+  it("is sorted, deduped and non-trivial (a vacuous set would make the gate blind)", () => {
+    const names = delegatedChatAllowedToolNames();
+    expect(names.length).toBeGreaterThan(50);
+    expect([...names]).toEqual([...names].sort());
+    expect(new Set(names).size).toBe(names.length);
   });
 });

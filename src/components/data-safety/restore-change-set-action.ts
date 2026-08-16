@@ -1,6 +1,6 @@
 "use server";
 
-import { requireAuthSession } from "@/lib/auth-session";
+import { getAuthSession, isPlatformAdmin, requireAdminSession } from "@/lib/auth-session";
 import {
   loadChangeSet,
   resolveExternalFreshness,
@@ -30,7 +30,14 @@ export async function restoreChangeSetAction(input: {
   | { ok: true; restoreChangeSetId: string; appliedEventCount: number }
   | { ok: false; reason: string }
 > {
-  const session = await requireAuthSession();
+  // PLATFORM-ADMIN gate (cinatra#2700, epic #2699). Restore is a
+  // `/configuration/artifacts` capability, and the whole segment is admin-only,
+  // so member self-service restore retires HERE — at the action — not only on
+  // the page: a server action never passes through the segment layout, and the
+  // affordances S2 removes must not stay invokable underneath. The per-object
+  // authorization below is unchanged and still runs on top of this gate (an
+  // admin is NOT granted a per-object bypass).
+  const session = await requireAdminSession();
   const orgId = session.session?.activeOrganizationId ?? null;
   if (!orgId) {
     return { ok: false, reason: "no active organization on session" };
@@ -98,8 +105,26 @@ export async function restoreChangeSetAction(input: {
 // client toast can render its Undo affordance ONLY for an eligible actor
 // (per-object-authorized, still restorable, no admin bypass). Delegates to the
 // shared gate so it can never diverge from the confirm path's authorization.
+//
+// It now reports TWO facts, not one (cinatra#2701, epic #2699 S2). The Undo
+// affordance deep-links into `/configuration/artifacts/...`, which is admin-only,
+// and `restoreChangeSetAction` above refuses a non-admin outright — so a
+// non-admin must be offered no link. But "no link" is not the same as "no
+// feedback": the epic's aligned-affordances rule is that the toast INFORMS
+// without a link, rather than the save going silent. `admin` is what lets the
+// toast tell those two states apart, and it is resolved HERE, server-side, from
+// the session — never asserted by the client.
+//
+// `eligible` keeps its exact meaning and stays admin-independent in spirit: for
+// a non-admin it is false because the surface is unreachable, and for an admin
+// the §VI per-object gate decides exactly as before (no admin bypass).
 export async function canRestoreChangeSetAction(input: {
   changeSetId: string;
-}): Promise<{ eligible: boolean }> {
-  return { eligible: await isSessionEligibleForTargetedRestore(input.changeSetId) };
+}): Promise<{ eligible: boolean; admin: boolean }> {
+  const admin = isPlatformAdmin(await getAuthSession());
+  if (!admin) return { eligible: false, admin: false };
+  return {
+    eligible: await isSessionEligibleForTargetedRestore(input.changeSetId),
+    admin: true,
+  };
 }

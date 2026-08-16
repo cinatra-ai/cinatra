@@ -23,6 +23,7 @@ import { readLifecycleDecisionsForRun } from "./lifecycle-policy-store";
 import { buildRunStepRail, type RailMessage } from "./run-step-rail";
 import { RunStepRailPanel } from "./run-step-rail-panel";
 import { readRecommendationParkForRun } from "./recommendation-hold";
+import { deriveRunHitlContext } from "./hitl-context";
 import { RecommendationHoldCard } from "./run-recommendation-chip-row";
 import { LifecycleCardSurfaceProvider } from "./lifecycle-card-runtime";
 import { AuthzError } from "@/lib/authz";
@@ -191,8 +192,17 @@ type ScreenProps = {
   searchParams?: Record<string, string | string[] | undefined>;
 };
 
-function buildExtensionHeaderLink(packageName: string | null | undefined) {
-  if (!packageName) return null;
+/**
+ * The header's "this run came from extension X" link, which addresses the
+ * marketplace listing under `/configuration` — admin-only since cinatra#2700
+ * (epic #2699). `viewerIsAdmin` is therefore required: a member sees the run
+ * screen unchanged, minus a link that would land on not-authorized.
+ */
+function buildExtensionHeaderLink(
+  packageName: string | null | undefined,
+  viewerIsAdmin: boolean,
+) {
+  if (!packageName || !viewerIsAdmin) return null;
   const match = /^@([^/]+)\/(.+)$/.exec(packageName);
   if (!match) return null;
   return {
@@ -397,6 +407,23 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
       completedRunMessages.length > 0 ||
       (run.streamedText ?? "") !== "");
 
+  // THE GATE, DERIVED BEFORE THE PAGE IS SERVED (cinatra#2729 defect 2).
+  //
+  // A paused run's form used to appear only after the client's first stream
+  // frame or poll tick, so the same run showed the formless "awaiting human
+  // approval" banner or its actionable setup-field form depending on which
+  // entry path the reader took and how fast that path hydrated. Everything the
+  // derivation needs is already loaded here, so the panel is handed the gate
+  // for its first paint and every entry path renders the same screen.
+  //
+  // Best-effort and read-only: the derivation reads the run's latest interrupt,
+  // so a Redis hiccup must degrade to the previous client-hydrated behaviour,
+  // never to a failed page render. `deriveRunHitlContext` itself returns null
+  // for any run that is not paused.
+  const initialHitlContext = run
+    ? await deriveRunHitlContext(run, { template }).catch(() => null)
+    : null;
+
   // Pre-generate a unique run name so the title shows immediately on load.
   // Only runs that have started (not pending_input) get a name here; abandoned
   // pending_input runs skip auto-naming to avoid wasting numbered slots.
@@ -404,7 +431,10 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
     run && run.status !== "pending_input"
       ? await ensureRunTitle(run, template.name)
       : run?.title ?? "";
-  const extensionHeaderLink = buildExtensionHeaderLink(template.packageName);
+  const extensionHeaderLink = buildExtensionHeaderLink(
+    template.packageName,
+    isPlatformAdmin(await getAuthSession().catch(() => null)),
+  );
 
   // ── Canonical run view LEFT RAIL (cinatra#2066, C1) ──────────────────────
   // ONE run-detail contract for BOTH template classes: the merged step rail on
@@ -663,6 +693,7 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
                     // and the watcher sent the user straight back.
                     triggerConfigured={trigger !== null}
                     initialStreamedText={run.streamedText ?? ""}
+                    initialHitlContext={initialHitlContext}
                   />
                 )
               )}
@@ -692,7 +723,10 @@ export async function SetupScreen({ agentId, instanceId }: ScreenProps) {
 export async function PermissionsScreen({ agentId, instanceId }: ScreenProps) {
   const template = await resolveTemplateForActor(agentId);
   if (!template) notFound();
-  const extensionHeaderLink = buildExtensionHeaderLink(template.packageName);
+  const extensionHeaderLink = buildExtensionHeaderLink(
+    template.packageName,
+    isPlatformAdmin(await getAuthSession().catch(() => null)),
+  );
 
   const session = await getAuthSession();
   const actorUserId = session?.user?.id ?? null;
@@ -1001,7 +1035,10 @@ export async function TriggerScreen({ agentId, instanceId }: ScreenProps) {
     includeNonPublished: true,
   });
   if (!template) notFound();
-  const extensionHeaderLink = buildExtensionHeaderLink(template.packageName);
+  const extensionHeaderLink = buildExtensionHeaderLink(
+    template.packageName,
+    isPlatformAdmin(await getAuthSession().catch(() => null)),
+  );
 
   // Pass actor + roles so readAgentRunById
   // enforces effectivePolicy (runDataVisibility). The manual co-owner gate

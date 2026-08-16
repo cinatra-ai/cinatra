@@ -1,6 +1,6 @@
 OpenAI Codex v<redacted-for-source-leak-gate>
 --------
-workdir: /Users/ordnas/Code/cinatra-ai/.claude/scratch/worktrees/flip-both
+workdir: <lane-path>
 model: gpt-5.6-sol
 provider: openai
 approval: never

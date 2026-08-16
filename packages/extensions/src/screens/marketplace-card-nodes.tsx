@@ -24,7 +24,7 @@ import { isInstallAccessTargetKind } from "../install-access-target";
 import { InstallPanelOpenButton } from "./card-face-switcher";
 import { MarketplaceCardInstallShell } from "./marketplace-card-shell";
 import type { MarketplaceCardData } from "./marketplace-card-model";
-import { resolveMarketplaceCardCta } from "./marketplace-card-model";
+import { resolveMarketplaceCardCta, workspaceReachLabel } from "./marketplace-card-model";
 import { MarketplaceDetailModal } from "./marketplace-detail-modal";
 import type { MarketplaceInstallActionResult } from "./marketplace-failure-copy";
 import { MarketplaceInstallForm, MarketplaceInstallSubmit } from "./marketplace-install-form";
@@ -42,8 +42,12 @@ export type MarketplaceCardNode = { meta: MarketplaceCardMeta; node: ReactNode }
 
 export type BuildMarketplaceCardNodesArgs = {
   cards: MarketplaceCardData[];
-  /** packageName → installed version + archived flag (the install-state read model). */
-  installedVersionByName: Map<string, { version: string; isArchived: boolean }>;
+  /** packageName → installed version + archived flag + (cinatra#2698) the reach
+   *  of a live workspace install (the effective-row install-state read model). */
+  installedVersionByName: Map<
+    string,
+    { version: string; isArchived: boolean; workspaceReach?: "workspace" | "admin" }
+  >;
   registryConnected: boolean;
   /**
    * The three marketplace form actions (injected so this module stays pure).
@@ -64,6 +68,15 @@ export type BuildMarketplaceCardNodesArgs = {
   restoreAction: (input: {
     packageName: string;
   }) => Promise<MarketplaceInstallActionResult | void>;
+  /**
+   * cinatra#2698 (S4, change 3): whether the viewer may act on an app-wide
+   * workspace row. A platform admin keeps the ordinary CTA states for a
+   * workspace-installed package (they are the principal the lifecycle resolver
+   * addresses that row for); every other administrator sees the disabled
+   * "Installed (Workspace: …)" pill and no install action. Defaults to false —
+   * the fail-closed direction.
+   */
+  viewerIsPlatformAdmin?: boolean;
 };
 
 export function buildMarketplaceCardNodes({
@@ -73,6 +86,7 @@ export function buildMarketplaceCardNodes({
   installAction: installFormAction,
   updateAction: updateFormAction,
   restoreAction: restoreFormAction,
+  viewerIsPlatformAdmin = false,
 }: BuildMarketplaceCardNodesArgs): MarketplaceCardNode[] {
   return cards.map((card) => {
     const installedInfo = installedVersionByName.get(card.packageName);
@@ -82,7 +96,13 @@ export function buildMarketplaceCardNodes({
     // resolves to the greyed "incompatible" state — never softer than the
     // install gate).
     const compatState = deriveExtensionCompatState(card.sdkAbiRange);
-    const cta = resolveMarketplaceCardCta(card, installedInfo, registryConnected, compatState);
+    const cta = resolveMarketplaceCardCta(
+      card,
+      installedInfo,
+      registryConnected,
+      compatState,
+      viewerIsPlatformAdmin,
+    );
 
     // The in-card install panel (cinatra#2373) mounts for exactly the kinds
     // that HAVE an access target and only in the live "install" CTA state:
@@ -192,9 +212,13 @@ export function buildMarketplaceCardNodes({
           </MarketplaceInstallForm>
         )
       ) : (
-        // Installed — the disabled secondary pill at spec opacity .9.
+        // Installed — the disabled secondary pill at spec opacity .9. When the
+        // package's effective row is a live WORKSPACE row the pill states the
+        // reach ("Installed (Workspace: All)" / "Installed (Workspace: Admins
+        // only)") — cinatra#2698 change 3. Same pill, same spec state; only the
+        // label carries the extra clause, so no new control is introduced.
         <Button size="sm" variant="secondary" disabled className="disabled:opacity-90">
-          Installed
+          {cta.workspaceReach ? workspaceReachLabel(cta.workspaceReach) : "Installed"}
         </Button>
       );
 

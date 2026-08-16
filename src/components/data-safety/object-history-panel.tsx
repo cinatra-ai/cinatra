@@ -2,6 +2,7 @@ import Link from "next/link";
 import { format } from "date-fns";
 import { History } from "lucide-react";
 
+import { getAuthSession, isPlatformAdmin } from "@/lib/auth-session";
 import { listEventsForObject, isEventRestoreEligible } from "@/lib/object-history";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -30,11 +31,22 @@ export type ObjectHistoryPanelProps = {
   currentVersion?: number;
 };
 
-export function ObjectHistoryPanel(props: ObjectHistoryPanelProps) {
+export async function ObjectHistoryPanel(props: ObjectHistoryPanelProps) {
   const events = listEventsForObject(props.objectId, {
     limit: props.limit ?? 20,
     orgId: props.orgId,
   });
+  // ALIGNED AFFORDANCES (cinatra#2701, epic #2699 S2). Both of this panel's
+  // outward affordances land in `/configuration/artifacts` — the per-event
+  // "change-set" link, and the restore button whose success toast deep-links to
+  // the targeted-restore route. That segment is admin-only now (S1, #2700) and
+  // `restoreObjectToVersionAction` refuses a non-admin outright, so the panel
+  // withholds both rather than rendering controls that bounce. Resolved here,
+  // server-side, so no caller can forget it: the `canRestore` prop stays the
+  // caller's per-object `object.update` verdict, and this is ANDed on top of it
+  // (an admin still gets no per-object bypass). The history itself is unchanged
+  // — a member still reads every event.
+  const viewerIsAdmin = isPlatformAdmin(await getAuthSession().catch(() => null));
   return (
     <Card className="border-line bg-surface backdrop-blur-none">
       <CardHeader>
@@ -66,15 +78,21 @@ export function ObjectHistoryPanel(props: ObjectHistoryPanelProps) {
                 </div>
                 <div className="text-xs text-muted-foreground">
                   by {event.actorKind ?? "system"}
-                  {event.actorId ? ` (${event.actorId.slice(0, 8)})` : ""} ·{" "}
-                  <Link
-                    href="/configuration/artifacts?tab=restore"
-                    className="text-primary hover:underline"
-                  >
-                    change-set
-                  </Link>
+                  {event.actorId ? ` (${event.actorId.slice(0, 8)})` : ""}
+                  {viewerIsAdmin ? (
+                    <>
+                      {" · "}
+                      <Link
+                        href="/configuration/artifacts?tab=restore"
+                        className="text-primary hover:underline"
+                      >
+                        change-set
+                      </Link>
+                    </>
+                  ) : null}
                 </div>
-                {props.canRestore &&
+                {viewerIsAdmin &&
+                props.canRestore &&
                 props.currentVersion !== undefined &&
                 event.resultVersion !== props.currentVersion &&
                 isEventRestoreEligible(event).eligible ? (

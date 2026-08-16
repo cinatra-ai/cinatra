@@ -519,6 +519,12 @@ export async function serverSideExplicitDispatch(input: {
     }
     const runId = out.runId;
     const status = out.status ?? "queued";
+    // The dispatch result stays `{ runId, status }` (cinatra#2729 defect 1).
+    // The run's page path is NOT put on this wire: the conversation renders the
+    // run card itself, and the one link beside it is built by the card from the
+    // package name the run API returns. Nothing here should read as an
+    // invitation to compose a run URL — the model's `/agents/runs/<runId>`
+    // guess, which has no page behind it, is what this issue is about.
     const resultJson = JSON.stringify({ runId, status });
     send("tool_result", {
       id: SYNTHETIC_TOOL_CALL_ID,

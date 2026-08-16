@@ -21,6 +21,7 @@
 // carried as `actionable` + `decideKind`. See {@link isApprovalActionable}.
 // ---------------------------------------------------------------------------
 
+import { configurationHrefForViewer } from "@/lib/configuration-href";
 import type { UnifiedFeedItem } from "@/lib/approvals/unified-feed";
 import type { AppNotification } from "@cinatra-ai/notifications/types";
 import type { RowEligibility } from "@/lib/approvals/sources/types";
@@ -179,16 +180,39 @@ export function isApprovalActionable(
   return true;
 }
 
-/** Map an E5 `UnifiedFeedItem[]` to the serializable feed view-model. */
-export function buildFeedRowVMs(items: UnifiedFeedItem[]): FeedRowVM[] {
+/**
+ * Map an E5 `UnifiedFeedItem[]` to the serializable feed view-model.
+ *
+ * `viewerIsAdmin` is the epic's aligned-affordances rule applied at RENDER
+ * (cinatra#2701, epic #2699 S2): `/configuration` is admin-only, so an href
+ * pointing there is dropped from the view-model for a non-admin viewer and the
+ * row falls back to its existing href-less species — the approval card without
+ * its whole-card link, the notification card with its mark-read activation.
+ *
+ * Doing it HERE, on the way out, is what covers rows that were written before
+ * the epic: an author's decision notification persisted months ago still holds
+ * `/configuration/agents/approvals/<id>` in the database, and the stored value
+ * is deliberately left alone. Nothing dead-ends because nothing renders it.
+ *
+ * Defaults to `false` so a caller that forgets the argument suppresses rather
+ * than leaks — no overload of this can offer a link it should not.
+ */
+export function buildFeedRowVMs(
+  items: UnifiedFeedItem[],
+  viewerIsAdmin = false,
+): FeedRowVM[] {
   const out: FeedRowVM[] = [];
   for (const item of items) {
     if (item.kind === "notification" && item.notification) {
+      const href = configurationHrefForViewer(item.notification.href, viewerIsAdmin);
       out.push({
         key: `notification:${item.notification.id}`,
         kind: "notification",
         createdAt: item.createdAt,
-        notification: item.notification,
+        notification:
+          href === item.notification.href
+            ? item.notification
+            : { ...item.notification, href },
       });
     } else if (item.kind === "approval" && item.approval) {
       const { row, direction } = item.approval;
@@ -203,7 +227,7 @@ export function buildFeedRowVMs(items: UnifiedFeedItem[]): FeedRowVM[] {
           title: row.title,
           subtitle: row.subtitle,
           status: row.status,
-          href: row.href,
+          href: configurationHrefForViewer(row.href, viewerIsAdmin),
           version: row.version,
           eligibility: row.eligibility,
           direction,

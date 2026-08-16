@@ -80,9 +80,12 @@ export type AgentRunRowModel = {
   unavailable?: {
     /** One plain sentence naming why no run is offered. */
     reason: string;
-    /** Visible button label — never promises more than the target can do. */
-    ctaLabel: string;
-    ctaHref: string;
+    /** Visible button label — never promises more than the target can do.
+     *  `null` when the viewer has no reachable destination (cinatra#2701): the
+     *  recourse lives under `/configuration`, which is admin-only, so a member
+     *  gets the REASON with no button rather than a link that bounces. */
+    ctaLabel: string | null;
+    ctaHref: string | null;
     /** Full accessible name (the visible label alone is not self-explanatory). */
     ctaAriaLabel: string;
   } | null;

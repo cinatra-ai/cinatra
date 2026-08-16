@@ -6,6 +6,12 @@
 // surface); a found row maps to { changeSetId }; an INELIGIBLE actor is
 // suppressed, and the eligibility gate is asked for the ACTOR this session
 // resolves — never for "the current session", which a broker caller has none of.
+//
+// cinatra#2701 (epic #2699 S2) added ONE more condition, in that same shared
+// module: the chip's only act is to deep-link into
+// `/configuration/artifacts/restore/...`, which answers only to a platform-admin
+// session, so a non-admin reader is answered null before anything is queried.
+// The §VI per-object gate is unchanged and still decides for an admin — no bypass.
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
@@ -20,10 +26,17 @@ vi.mock("@/lib/auth-session", () => ({
   requireAuthSession: mocks.requireAuthSession,
   resolveOrgRoleForSession: mocks.resolveOrgRoleForSession,
 }));
+// Mirrors the REAL bridge: Better Auth's "admin" literal becomes the kernel's
+// "platform_admin" in `roles` (src/lib/authz/build-actor-context.ts).
 vi.mock("@/lib/authz/build-actor-context", () => ({
-  actorFromSession: (session: { user: { id: string } }) => ({
+  actorFromSession: (session: { user: { id: string; role?: string | null } }) => ({
     actorType: "human",
     userId: session.user.id,
+    roles: String(session.user.role ?? "")
+      .split(",")
+      .map((r) => r.trim())
+      .filter(Boolean)
+      .map((r) => (r === "admin" ? "platform_admin" : r)),
   }),
 }));
 vi.mock("@/lib/object-history", () => ({ listChangeSets: mocks.listChangeSets }));
@@ -45,15 +58,18 @@ describe("recentUndoableChangeSetForRunAction", () => {
   });
 
   it("returns null for an orgless session (no query)", async () => {
-    mocks.requireAuthSession.mockResolvedValue({ user: { id: "u1" }, session: {} });
+    mocks.requireAuthSession.mockResolvedValue({
+      user: { id: "u1", role: "user,admin" },
+      session: {},
+    });
     const r = await recentUndoableChangeSetForRunAction({ runId: "run_1" });
     expect(r).toBeNull();
     expect(mocks.listChangeSets).not.toHaveBeenCalled();
   });
 
-  it("queries runId + closedAtAfter + restorable:true, returns { changeSetId } for an ELIGIBLE actor", async () => {
+  it("queries runId + closedAtAfter + restorable:true, returns { changeSetId } for an ELIGIBLE ADMIN actor", async () => {
     mocks.requireAuthSession.mockResolvedValue({
-      user: { id: "u1" },
+      user: { id: "u1", role: "user,admin" },
       session: { activeOrganizationId: "org_1" },
     });
     mocks.listChangeSets.mockReturnValue([{ id: "cs_recent" }]);
@@ -72,14 +88,28 @@ describe("recentUndoableChangeSetForRunAction", () => {
     expect(mocks.loadAuthorizedTargetedRestoreForActor).toHaveBeenCalledWith({
       changeSetId: "cs_recent",
       orgId: "org_1",
-      actor: { actorType: "human", userId: "u1" },
+      actor: { actorType: "human", userId: "u1", roles: ["user", "platform_admin"] },
       roleHints: { orgRole: "member" },
     });
   });
 
-  it("SUPPRESSES the chip (returns null) when a candidate exists but the actor is INELIGIBLE (§VI, no admin bypass)", async () => {
+  // cinatra#2701 (epic #2699 S2) — the chip is an admin affordance now.
+  it("SUPPRESSES the chip for a NON-ADMIN reader, before any change-set is queried", async () => {
     mocks.requireAuthSession.mockResolvedValue({
-      user: { id: "u1" },
+      user: { id: "u2", role: "user" },
+      session: { activeOrganizationId: "org_1" },
+    });
+    mocks.listChangeSets.mockReturnValue([{ id: "cs_recent" }]);
+    const r = await recentUndoableChangeSetForRunAction({ runId: "run_1" });
+    expect(r).toBeNull();
+    // A non-admin learns nothing about what exists: no query, no gate call.
+    expect(mocks.listChangeSets).not.toHaveBeenCalled();
+    expect(mocks.loadAuthorizedTargetedRestoreForActor).not.toHaveBeenCalled();
+  });
+
+  it("SUPPRESSES the chip (returns null) when a candidate exists but the ADMIN actor is INELIGIBLE (§VI, no admin bypass)", async () => {
+    mocks.requireAuthSession.mockResolvedValue({
+      user: { id: "u1", role: "user,admin" },
       session: { activeOrganizationId: "org_1" },
     });
     mocks.listChangeSets.mockReturnValue([{ id: "cs_recent" }]);
@@ -90,7 +120,7 @@ describe("recentUndoableChangeSetForRunAction", () => {
 
   it("returns null when no recent restorable change-set exists (no eligibility check)", async () => {
     mocks.requireAuthSession.mockResolvedValue({
-      user: { id: "u1" },
+      user: { id: "u1", role: "user,admin" },
       session: { activeOrganizationId: "org_1" },
     });
     mocks.listChangeSets.mockReturnValue([]);

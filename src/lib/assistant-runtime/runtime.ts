@@ -65,7 +65,7 @@ import {
   buildLlmMcpServerToolForWidget,
   checkPublicMcpReachability,
 } from "@cinatra-ai/llm";
-import type { LlmTool, LlmProvider } from "@cinatra-ai/llm";
+import type { LlmTool, LlmProvider, LlmCapabilityRequirement } from "@cinatra-ai/llm";
 // cinatra#2091 (epic #2086 S4): the assistant runtime routes through the ONE
 // typed injection contract + the provider delivery seam. Its former direct
 // `buildSkillTools` call was the last production bypass of that seam.
@@ -868,6 +868,13 @@ export async function runAssistantTurn(
   }
 
   let tools: LlmTool[] = [];
+  // cinatra#2776 — the capability THIS turn pins on the adapter. Set to
+  // `"native_mcp"` exactly where the Cinatra self-MCP toolbox is handed over
+  // (below, once `chatCinatraMcpTool` has assembled), and left undefined
+  // otherwise. A conversation-only provider (Gemini) never assembles that tool,
+  // so it never carries the requirement either and its request stays
+  // byte-identical to before.
+  let selfMcpCapabilityRequired: LlmCapabilityRequirement | undefined;
   // The provider's skill contribution to the system prompt: an availability cue
   // on a tool-mount/container provider, the EXPANDED skill bodies on an inline
   // provider. Declared out here because both branches below feed it.
@@ -1122,6 +1129,21 @@ export async function runAssistantTurn(
     });
     return;
   }
+  // cinatra#2776 (owner ruling 2026-08-15). The self-MCP catalog is now on this
+  // turn's tool array, and the ONLY shape in which it may reach a model is ONE
+  // provider-hosted MCP reference. Pinning `native_mcp` here makes that a
+  // CONTRACT the adapter must satisfy rather than a property of whichever mode
+  // the connector happens to be configured in: an adapter whose native path is
+  // unavailable — Anthropic's persisted `mcpMode: "function-tools"`, or a
+  // native attempt that failed at runtime — must REFUSE the turn before any
+  // credential-bearing egress instead of flattening the catalog into inline
+  // function schemas (the cost/behavior regression class of cinatra#2771).
+  // Both chat surfaces pin it, because both hand over the same toolbox: the
+  // cookie-session browser chat and the widget principal's turn.
+  // `function-tools` stays reachable only for callers that DECLARE it (the
+  // agent-run LLM bridge forwards an agent's own `capabilityRequired`);
+  // field-absent is not an opt-in.
+  selfMcpCapabilityRequired = "native_mcp";
 
   // cinatra#2019 S4: cookie-chat and widget-principal turns share this
   // external-tool assembly, so the build context carries the REAL surface —
@@ -1527,6 +1549,13 @@ export async function runAssistantTurn(
       // client_credentials token, which resolves as an anonymous machine actor
       // and breaks run-ownership authz.
       skipMcpInjection: true,
+      // cinatra#2776 — present ONLY when the self-MCP toolbox was assembled
+      // (see `selfMcpCapabilityRequired` above). Conditionally spread so a
+      // conversation-only turn's adapter input keeps exactly the field set it
+      // had before this change.
+      ...(selfMcpCapabilityRequired
+        ? { capabilityRequired: selfMcpCapabilityRequired }
+        : {}),
       maxSteps: runtimeConfig.maxToolRounds,
       // Abort on the 120s ceiling OR the caller's signal (client disconnect,
       // #503) OR the no-progress guard (cinatra#2580) so a torn-down or stalled

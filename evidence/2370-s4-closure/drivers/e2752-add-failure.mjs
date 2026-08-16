@@ -1,6 +1,6 @@
 // cinatra#2752 — the schema-config add-failure toast, captured live.
 //
-// Runs on host2 against the production-equivalent build (next build + next
+// Runs on a lane host against the production-equivalent build (next build + next
 // start) of the appointment-schedules setup page. Reproduces the #2370 S4
 // evidence E10 (non-allowlisted URL) and E11 (404 URL) adds and records what
 // the user actually sees: the toast text, its tone, and the server payload the
@@ -12,7 +12,7 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { authenticate, BASE } from "./lib-auth.mjs";
 
 const PHASE = process.env.S2752_PHASE ?? "before";
-const OUT = process.env.S2752_OUT ?? `/Users/ordnas/cinatra-lanes/2752-out/${PHASE}`;
+const OUT = process.env.S2752_OUT ?? `<lane-out>/2752-out/${PHASE}`;
 mkdirSync(OUT, { recursive: true });
 const APPT = "/connectors/cinatra-ai/google-appointment-schedules-connector/setup";
 

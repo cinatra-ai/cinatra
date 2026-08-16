@@ -37,7 +37,11 @@ export function ApprovalInlineActions({
           sourceId={sourceId}
           rowId={rowId}
           expectedVersion={version ?? ""}
-          detailsHref={href ?? "/notifications"}
+          // No fallback destination (cinatra#2701, epic #2699 S2). The row's
+          // href is dropped upstream for a non-admin viewer, and the honest
+          // rendering of "you may not open this" is NO Details link — not a
+          // self-referential hop back to `/notifications`.
+          detailsHref={href}
           onDecided={onDecided}
         />
       );

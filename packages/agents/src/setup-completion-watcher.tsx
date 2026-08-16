@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AgenticRunPanel } from "./agentic-run-panel";
 import type { SerializedAgentRunMessage } from "./agentic-run-panel";
+import type { HitlGateContext } from "./run-surface-status";
 import { useAgUiRunStream } from "./use-ag-ui-run-stream";
 import { GROUPED_SETUP_FORM_RENDERER_ID } from "./agent-builder-ids";
 
@@ -57,6 +58,14 @@ type SetupCompletionWatcherProps = {
    * (parity with RunScreen). Empty/undefined for internal runs.
    */
   initialStreamedText?: string;
+  /**
+   * Server-derived gate context for the first paint (see AgenticRunPanel's
+   * `initialHitlContext`). The screen that mounts this watcher already holds
+   * the run row and its template, so it can derive the open gate before the
+   * page is served — the reader then sees the run's own form on arrival,
+   * whichever entry path brought them here.
+   */
+  initialHitlContext?: HitlGateContext | null;
 };
 
 export function SetupCompletionWatcher({
@@ -76,6 +85,7 @@ export function SetupCompletionWatcher({
   runHasExecuted = false,
   triggerConfigured = false,
   initialStreamedText,
+  initialHitlContext,
 }: SetupCompletionWatcherProps) {
   const router = useRouter();
   const hasFiredRef = useRef(false);
@@ -213,6 +223,7 @@ export function SetupCompletionWatcher({
       taskId={taskId}
       inputParams={initialInputParams ?? undefined}
       initialStreamedText={initialStreamedText}
+      initialHitlContext={initialHitlContext}
     />
   );
 }

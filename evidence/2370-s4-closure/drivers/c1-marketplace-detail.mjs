@@ -4,7 +4,7 @@ import { chromium } from "@playwright/test";
 import { writeFileSync } from "node:fs";
 import { authenticate, ensureDir, shot, BASE } from "./lib-auth.mjs";
 
-const OUT = ensureDir(process.env.S4_OUT ?? "/Users/ordnas/cinatra-lanes/2370c-out/c1");
+const OUT = ensureDir(process.env.S4_OUT ?? "<lane-out>/2370c-out/c1");
 const APPT_DETAIL = "/configuration/marketplace/cinatra-ai/google-appointment-schedules-connector";
 const GCAL_DETAIL = "/configuration/marketplace/cinatra-ai/google-calendar-connector";
 

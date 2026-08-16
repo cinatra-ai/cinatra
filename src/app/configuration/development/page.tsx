@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { requireAdminSession } from "@/lib/auth-session";
 import { getEmailSystemDevelopmentSettings } from "@/lib/email-system";
 import { PageHeader } from "@/components/page-header";
 import { PageContent } from "@/components/page-content";
@@ -30,6 +31,10 @@ type Props = {
 };
 
 export default async function SettingsDevelopmentPage({ searchParams }: Props) {
+  // Platform-admin only (cinatra#2700, epic #2699) — `/configuration` is the
+  // admin area throughout. The gate sits on the page, not on the segment
+  // layout, because a layout is not re-rendered on a soft navigation.
+  await requireAdminSession();
   const resolved = await (searchParams ?? Promise.resolve({} as Record<string, string | string[] | undefined>));
   const requestedTab = (Array.isArray(resolved.tab) ? resolved.tab[0] : resolved.tab) ?? "email";
   const tab = TABS.some((item) => item.value === requestedTab) ? requestedTab : "email";

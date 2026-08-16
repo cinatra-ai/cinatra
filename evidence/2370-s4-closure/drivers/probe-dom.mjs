@@ -2,7 +2,7 @@ import { chromium } from "@playwright/test";
 import { writeFileSync } from "node:fs";
 import { authenticate, ensureDir, BASE } from "./lib-auth.mjs";
 
-const OUT = ensureDir("/Users/ordnas/cinatra-lanes/2370-out/probe");
+const OUT = ensureDir("<lane-out>/2370-out/probe");
 const browser = await chromium.launch();
 const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
 const page = await context.newPage();

@@ -153,6 +153,58 @@ test.describe("RBAC — nav visibility + access clarity + role gate", () => {
   });
 });
 
+/**
+ * cinatra#2700 (epic #2699) — THE GATE SWEEP, live.
+ *
+ * `/configuration` is the platform-admin area throughout. The twelve routes
+ * enumerated below were reachable by any signed-in user before the sweep (the
+ * extensions list, the LLM + Development + Telemetry pages, the five `apps/*`
+ * redirect shims, and the two former carve-outs — the agent-approval detail and
+ * the per-object artifact-restore page). Each must now land the member on
+ * `/not-authorized`, which is the epic's own acceptance wording.
+ *
+ * A redirect SHIM is included deliberately: it must refuse at its own address
+ * rather than forward a member to the destination's refusal.
+ *
+ * The source-level route table (all 34 pages + the 6 handler methods) lives in
+ * src/app/configuration/__tests__/configuration-admin-gate.test.ts; this is the
+ * live half.
+ */
+const SWEPT_ROUTES: Array<[route: string, what: string]> = [
+  ["/configuration/extensions", "the extensions list (was session-only)"],
+  ["/configuration/llm", "the LLM APIs page"],
+  ["/configuration/llm/anthropic", "an LLM connector setup page"],
+  ["/configuration/development", "Development"],
+  ["/configuration/telemetry", "Telemetry"],
+  ["/configuration/apps", "the apps → llm redirect shim"],
+  ["/configuration/apps/apollo", "the apollo redirect shim"],
+  ["/configuration/apps/gmail", "the gmail redirect shim"],
+  ["/configuration/apps/openai", "the openai redirect shim"],
+  ["/configuration/apps/openai-skills", "the openai-skills redirect shim"],
+  [
+    "/configuration/agents/approvals/rbac-uat-no-such-request",
+    "the agent-approval detail (was author-readable)",
+  ],
+  [
+    "/configuration/artifacts/restore/rbac-uat-no-such-change-set",
+    "the artifact-restore page (was per-object only)",
+  ],
+];
+
+test.describe("cinatra#2700 — every swept /configuration route denies a non-admin", () => {
+  for (const [route, what] of SWEPT_ROUTES) {
+    test(`non-admin lands on /not-authorized for ${route} — ${what}`, async ({ page }) => {
+      // No hydration wait: this is a refusal page, and waiting for hydration on
+      // one burned a per-test budget in an earlier run (see the denials above).
+      await page.goto(route, { waitUntil: "domcontentloaded" });
+      expect(new URL(page.url()).pathname).toBe("/not-authorized");
+      await expect(
+        page.getByText("This area is limited to platform admins.", { exact: false }),
+      ).toBeVisible();
+    });
+  }
+});
+
 test.describe("single-org mode", () => {
   // The single-org toggle is read via readConnectorConfigFromDatabase which
   // has a 10s per-process cache. We set the metadata KV directly (no admin
