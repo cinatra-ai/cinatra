@@ -53,7 +53,12 @@ import { AppRouteLink } from "./app-route-link";
 import { buildChartView } from "@cinatra-ai/agent-ui-protocol/renderable-views/chart";
 import { FriendlyErrorBody } from "./chat-error-display"; // friendly error card (#534)
 import { InlineAgentRunCard } from "./inline-agent-run-card";
-import { RecommendationHoldCard } from "@cinatra-ai/agents/client-entry";
+// The ONE §V renderer, reached by its own SUBPATH rather than the client
+// barrel: the barrel drags the whole agents client graph into every consumer
+// (and into every test that mounts this list), while this leaf is all the
+// transcript needs. Same reason `lifecycle-card-runtime` and `review-gate-card`
+// are subpaths.
+import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-card";
 import { UndoActionChip } from "./chat-undo-action-chip";
 import { ResponseActionBar } from "./response-action-bar";
 import {

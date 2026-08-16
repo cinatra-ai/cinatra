@@ -47,9 +47,3 @@ export type { ChatGateDescriptor, ChatGateField } from "./agentic-run-panel";
 // from the pure leaf `agentic-run-panel` already imports — no module joins the
 // client graph for it.
 export type { HitlGateContext } from "./run-surface-status";
-
-// The ONE §V recommendation-hold renderer, re-exported so the chat transcript
-// can mount it on the `chat_thread` host beside the inline run panel (which
-// mounts the same component on `run_card`). One component, two authorized
-// mounts — never a second implementation, and never a registry entry.
-export { RecommendationHoldCard } from "./run-recommendation-chip-row";

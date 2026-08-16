@@ -28,7 +28,13 @@
  */
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, waitFor } from "@testing-library/react";
+import { cleanup, configure, waitFor } from "@testing-library/react";
+
+// The column loads the message list behind a lazy boundary. Alone that resolves
+// in milliseconds; inside the full package run it competes with ~57 other files
+// and can exceed testing-library's 1s default, which would fail the mount for a
+// reason that has nothing to do with the card.
+configure({ asyncUtilTimeout: 15_000 });
 
 import type { UiMessage } from "../types";
 
@@ -86,6 +92,13 @@ vi.mock("../inline-agent-run-card", () => ({
   InlineAgentRunCard: ({ runId }: { runId: string }) => (
     <div data-testid="inline-run-panel" data-run-card-host="" data-run-id={runId} />
   ),
+}));
+
+// The chip row refreshes the router after a decision.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), prefetch: vi.fn() }),
+  usePathname: () => "/chat",
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 vi.mock("../pending-call-actions", () => ({
