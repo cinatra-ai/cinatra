@@ -355,6 +355,17 @@ export function auditManifestIndexBinding({ manifest = loadManifest(), index = l
       );
       continue;
     }
+    // The image must live where the citing proof lives. Without this the row
+    // cites `evidence/A/README.md` while its record points at a screenshot in
+    // `evidence/B`, and the two halves of the claim never meet.
+    const claimDir = claim.file.slice(0, claim.file.lastIndexOf("/"));
+    if (claimDir && !record.screenshot.startsWith(`${claimDir}/`)) {
+      violations.push(
+        `manifest row ${claim.row} cites "${claim.cell}" from ${claim.file}, but its record's ` +
+          `screenshot is ${record.screenshot} — the image must sit with the proof that cites it`,
+      );
+      continue;
+    }
     for (const req of chatThreadRequirementsFor(record.kind)) {
       const found = (record.assertions ?? []).find(
         (a) => a?.selector === req.selector && (a?.frame ?? "main") === req.frame,

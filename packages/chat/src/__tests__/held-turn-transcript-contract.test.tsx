@@ -40,7 +40,7 @@
  */
 
 import React from "react";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
@@ -671,38 +671,62 @@ describe("the mount ratchet does not depend on today's selector NAMES", () => {
   });
 });
 
-describe("the production mount points, read from source", () => {
-  // WHY SOURCE. The inline run panel is replaced in this suite (its graph
+describe("the production mount points, read from the import graph", () => {
+  // WHY SOURCE AT ALL. The inline run panel is replaced in this suite (its graph
   // reaches the server runtime), so a hold card mounted INSIDE that panel would
   // be invisible to every DOM assertion here — the one blind spot of the mock
-  // boundary. These checks watch that spot in the production source instead of
-  // pretending the DOM covers it.
-  const readSource = (rel: string) =>
-    readFileSync(join(__dirname, "..", "..", "..", "..", rel), "utf8");
+  // boundary. This watches that spot instead of pretending the DOM covers it.
+  //
+  // WHY THE IMPORT SPECIFIER, not the identifier. A check for the string
+  // "RecommendationHoldCard" is defeated by `import { RecommendationHoldCard as
+  // RHC }`, and a check on a fixed slice of the render branch is defeated by
+  // moving that branch into a helper component. A MODULE SPECIFIER survives
+  // both: the drawing code has to name the module it comes from, wherever in
+  // this package it ends up living.
+  const CHAT_SRC = join(__dirname, "..");
+  // ONLY the modules of kinds whose chat mount is still owed. `review-gate-card`
+  // is deliberately absent: the review kind's chat mount has LANDED, through the
+  // renderable-views registry, and forbidding it would be forbidding the thing
+  // this program is trying to achieve.
+  const OWED_OWNER_MODULES = ["run-recommendation-chip-row"];
 
-  it("the transcript's agent_run branch mounts the run card and the undo chip, and nothing else", () => {
-    const view = readSource("packages/chat/src/chat-messages-view.tsx");
-    const branch = view.slice(
-      view.indexOf('part.name === "agent_run"'),
-      view.indexOf('part.name === "agent_run"') + 800,
-    );
-    expect(branch).toContain("<InlineAgentRunCard");
-    expect(branch).toContain("<UndoActionChip");
-    // A lifecycle card mounted here would be a chat_thread mount landing in the
-    // transcript. When it lands, this expectation is what forces the obligation
-    // row to be revisited.
-    for (const owner of ["RecommendationHoldCard", "RunRecommendationChipRow"]) {
-      expect(branch, `${owner} is mounted in the transcript's agent_run branch`).not.toContain(
-        owner,
-      );
+  function chatSourceFiles(dir: string, out: string[] = []): string[] {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === "__tests__" || entry.name === "node_modules") continue;
+      const abs = join(dir, entry.name);
+      if (entry.isDirectory()) chatSourceFiles(abs, out);
+      else if (/\.(ts|tsx)$/.test(entry.name)) out.push(abs);
     }
+    return out;
+  }
+
+  it("no production file in the chat package imports an OWED lifecycle card's drawing module", () => {
+    // When the chat mount lands it will import one of these, and this is what
+    // turns red and forces the obligation row to be revisited. It cannot be
+    // aliased away and it does not care where the JSX lives.
+    const offenders: string[] = [];
+    for (const file of chatSourceFiles(CHAT_SRC)) {
+      const source = readFileSync(file, "utf8");
+      for (const mod of OWED_OWNER_MODULES) {
+        if (new RegExp(`from\\s+["'][^"']*${mod}["']`).test(source)) {
+          offenders.push(`${file.slice(CHAT_SRC.length + 1)} → ${mod}`);
+        }
+      }
+    }
+    expect(
+      offenders,
+      "a lifecycle card's drawing module is now imported by chat production code — " +
+        "if that is the chat mount landing, strike the obligation row",
+    ).toEqual([]);
   });
 
-  it("the inline run card does not draw the hold card inside its own subtree", () => {
-    // The forbidden arrangement the mock hides: a chat mount nested in the
-    // run_card host. Caught here rather than not at all.
-    const card = readSource("packages/chat/src/inline-agent-run-card.tsx");
-    expect(card).not.toContain("RecommendationHoldCard");
-    expect(card).not.toContain("RunRecommendationChipRow");
+  it("the transcript's agent_run branch still names the inline run card", () => {
+    // The positive half: the container this gate measures is the one the run
+    // card renders into. If that stops being true the projection is measuring
+    // something else, and this says so.
+    const view = readFileSync(join(CHAT_SRC, "chat-messages-view.tsx"), "utf8");
+    expect(view).toContain('part.name === "agent_run"');
+    expect(view).toContain("<InlineAgentRunCard");
+    expect(view).toContain("<UndoActionChip");
   });
 });

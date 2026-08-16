@@ -124,6 +124,24 @@ describe("the decision-path text ban (defence in depth)", () => {
     expect(findDecisionPathPointers("The run page shows every step it took.")).toEqual([]);
   });
 
+  it("flags the decision written as a NOUN on another surface", () => {
+    // No verb at all, same instruction. An adversarial round found these.
+    expect(
+      findDecisionPathPointers("Use the review screen for approval.").map((h) => h.patternId),
+    ).toContain("another-surface-holds-the-decision");
+    expect(
+      findDecisionPathPointers("The approval controls are available in run details.").map(
+        (h) => h.patternId,
+      ),
+    ).toContain("decision-lives-on-another-surface");
+  });
+
+  it("flags a relocation split across two sentences", () => {
+    expect(
+      findDecisionPathPointers("Go to the agent page. Approve it there."),
+    ).not.toEqual([]);
+  });
+
   it("does NOT flag the deterministic dispatch text main emits today", () => {
     expect(findDecisionPathPointers(CLEAN_DISPATCH_TEXT)).toEqual([]);
     expect(

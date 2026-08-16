@@ -147,6 +147,24 @@ export const DECISION_PATH_POINTER_PATTERNS: readonly DecisionPathPointerPattern
       pattern: new RegExp(`\\b(${DECIDE_VERBS})\\b[^.?!]{0,80}\\b(${ELSEWHERE})\\b`, "i"),
     },
     {
+      // The same relocation written as a NOUN: "the review screen for approval",
+      // "the approval controls are in run details". No verb, same instruction.
+      id: "decision-lives-on-another-surface",
+      why: "puts the decision itself on another surface, as a noun",
+      pattern: new RegExp(
+        `\\b(approval|approvals|confirmation|decision|decisions|sign-?off|selection)\\b[^.?!]{0,80}\\b(on|in|from|at|via|through|using|available\\s+in|available\\s+on)\\s+(the\\s+)?(${SURFACE_NOUNS})\\s+(${SURFACE_PARTS})\\b`,
+        "i",
+      ),
+    },
+    {
+      id: "another-surface-holds-the-decision",
+      why: "names another surface as the place the decision lives, before naming the decision",
+      pattern: new RegExp(
+        `\\b(${SURFACE_NOUNS})\\s+(${SURFACE_PARTS})\\b[^.?!]{0,40}\\b(for|to)\\b[^.?!]{0,40}\\b(approval|confirmation|decision|sign-?off|${DECIDE_VERBS})\\b`,
+        "i",
+      ),
+    },
+    {
       id: "run-url-in-prose",
       why: "hands the human a URL to another surface instead of mounting the card",
       pattern: /(^|[\s(\[`"'])\/agents\/[A-Za-z0-9@._~%-]+\/[^\s)\]`"']+/,
@@ -375,14 +393,21 @@ export const ANY_LIFECYCLE_MOUNT_PROBES: readonly string[] = Object.freeze([
   "[data-lifecycle-card-state]",
   "[data-run-recommendation-chip-row]",
   "[data-run-recommendation-decision]",
-  '[data-conformance-id*="chip-row"]',
-  '[data-conformance-id*="card"]',
-  '[data-action^="confirm"]',
-  '[data-action^="skip"]',
-  '[data-action^="approve"]',
-  '[data-action^="release"]',
-  '[data-action^="cancel"]',
+  // The bare attributes, not a prefix list. A card whose controls were called
+  // `data-action="decide"` would slip past every value-shaped probe, and the
+  // repo's convention gives an operable affordance one of these two.
+  "[data-action]",
+  "[data-conformance-id]",
 ]);
+
+/**
+ * THE FLOOR OF THAT PROBE, stated so it is not read as more than it is: a card
+ * rendered with NO data attribute at all is invisible to it. Such a card also
+ * fails the one-card gate, which requires each kind's named anchors on its
+ * rendered root, so the case is covered — by a sibling gate, not by this one.
+ */
+export const ANY_LIFECYCLE_MOUNT_PROBE_LIMIT =
+  "a card carrying no data-* attribute is not detected here; the one-card gate owns that case";
 
 // ---------------------------------------------------------------------------
 // The projection model

@@ -539,14 +539,10 @@ describe("the recorder OBSERVES rather than taking dictation", () => {
 // The BINDING: an unindexed screenshot counts as zero
 // ---------------------------------------------------------------------------
 
-function manifestClaiming(cell) {
+function manifestClaiming(cell, file = "evidence/2821-fixture/README.md") {
   return {
     rows: [
-      {
-        criterion: "x",
-        disposition: "BUILT",
-        e2eProofs: [{ file: "evidence/whatever/README.md", testName: cell }],
-      },
+      { criterion: "x", disposition: "BUILT", e2eProofs: [{ file, testName: cell }] },
     ],
   };
 }
@@ -591,6 +587,14 @@ describe("the manifest to capture-index binding", () => {
       ]),
     });
     expect(violations.join("\n")).toMatch(/does not observe \[data-lifecycle-card="recommendation_hold"\]/);
+  });
+
+  it("REFUSES a record whose screenshot lives away from the proof that cites it", () => {
+    const violations = auditManifestIndexBinding({
+      manifest: manifestClaiming("X1__chat_thread__held.png", "evidence/somewhere-else/README.md"),
+      index: indexOf([chatRecord({ cell: "X1__chat_thread__held" })]),
+    });
+    expect(violations.join("\n")).toMatch(/the image must sit with the proof that cites it/);
   });
 
   it("ACCEPTS a claimed chat cell bound to a fully observed record", () => {
