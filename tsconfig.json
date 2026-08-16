@@ -328,6 +328,7 @@
       "@cinatra-ai/extensions/screens/extension-install-scope-panel": ["./packages/extensions/src/screens/extension-install-scope-panel.tsx"],
       "@cinatra-ai/extensions/screens/install-panel-availability": ["./packages/extensions/src/screens/install-panel-availability.ts"],
       "@cinatra-ai/extensions/install-access-target": ["./packages/extensions/src/install-access-target.ts"],
+      "@cinatra-ai/extensions/lifecycle-target-resolver": ["./packages/extensions/src/lifecycle-target-resolver.ts"],
       "@cinatra-ai/extensions/screens/extension-source-label": ["./packages/extensions/src/screens/extension-source-label.ts"],
       "@cinatra-ai/extensions/screens/extension-settings-view": ["./packages/extensions/src/screens/extension-settings-view.tsx"],
       "@cinatra-ai/extensions/screens/extension-access-control": ["./packages/extensions/src/screens/extension-access-control.tsx"],

@@ -1,0 +1,163 @@
+[
+  {
+    "step": "row-identity",
+    "asserts": "the package carries TWO canonical rows: the LIVE workspace-anchored row that supersedes, and the SUPERSEDED organization row — archived in place, its id and its own access policy retained",
+    "rows": [
+      {
+        "id": "iext_f853560c-137",
+        "package_name": "@cinatra-ai/youtube-connector",
+        "kind": "connector",
+        "owner_level": "organization",
+        "owner_id": "d3951f6b-8899-4ac2-b1aa-6e32e6e9a48b",
+        "organization_id": "d3951f6b-8899-4ac2-b1aa-6e32e6e9a48b",
+        "status": "archived",
+        "version": "0.1.4"
+      },
+      {
+        "id": "iext_1964ffd4-cea",
+        "package_name": "@cinatra-ai/youtube-connector",
+        "kind": "connector",
+        "owner_level": "workspace",
+        "owner_id": "__platform__",
+        "organization_id": null,
+        "status": "active",
+        "version": "0.1.4"
+      }
+    ],
+    "retainedPolicies": [
+      {
+        "resource_id": "iext_f853560c-137",
+        "policy": {
+          "allowRunSharing": false,
+          "runDataVisibility": [
+            "organization"
+          ],
+          "runListVisibility": [
+            "organization"
+          ],
+          "runExecuteVisibility": [
+            "organization"
+          ]
+        }
+      },
+      {
+        "resource_id": "iext_1964ffd4-cea",
+        "policy": {
+          "allowRunSharing": false,
+          "runDataVisibility": [
+            "workspace"
+          ],
+          "runListVisibility": [
+            "workspace"
+          ],
+          "runExecuteVisibility": [
+            "workspace"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "step": "sign-in",
+    "role": "platform-admin",
+    "httpStatus": 200
+  },
+  {
+    "step": "a-installed-list-one-card",
+    "asserts": "(a) the installed list, Active filter: ONE card for the package — the effective (workspace) row. The superseded organization row contributes nothing to it.",
+    "httpStatus": 200,
+    "finalPath": "/configuration/extensions",
+    "totalCards": 78,
+    "youtubeConnectorCardCount": 1,
+    "youtubeConnectorCardText": [
+      "YouTubeConnector by Cinatra · shipped with CinatraConnect a YouTube account to your workspace so Cinatra agents can access it. The connector uses Nango to manage each user's YouTube OAuth connection and checks the shared Google OAuth connec"
+    ],
+    "file": "a-installed-list-one-card.png"
+  },
+  {
+    "step": "b-settings-platform-admin-active-org",
+    "asserts": "(b) design §V for a PLATFORM ADMIN whose session carries an ACTIVE ORGANIZATION, on the effective workspace row: Archive and Reinstall latest are LIVE and no refusal copy is on the page.",
+    "httpStatus": 200,
+    "finalPath": "/configuration/extensions/settings/connector/@cinatra-ai/youtube-connector",
+    "affordances": [
+      {
+        "row": "Update",
+        "control": "Update",
+        "enabled": false,
+        "capabilityReason": null
+      },
+      {
+        "row": "Archive",
+        "control": "Archive",
+        "enabled": true,
+        "capabilityReason": null
+      },
+      {
+        "row": "Activate",
+        "control": "Activate",
+        "enabled": false,
+        "capabilityReason": null
+      },
+      {
+        "row": "Reinstall latest",
+        "control": "Reinstall latest",
+        "enabled": true,
+        "capabilityReason": null
+      },
+      {
+        "row": "Force-delete",
+        "control": "Force-delete…",
+        "enabled": true,
+        "capabilityReason": null
+      }
+    ],
+    "h1": "YouTube",
+    "reasonsOnPage": [],
+    "file": "b-settings-platform-admin-active-org.png"
+  },
+  {
+    "step": "c-marketplace-installed-workspace-all",
+    "asserts": "(c) the marketplace card for the same package: the disabled pill states the reach — 'Installed (Workspace: All)' — and no install action is offered.",
+    "httpStatus": 200,
+    "finalPath": "/configuration/marketplace",
+    "catalogCardCount": 82,
+    "youtubeCard": [
+      {
+        "state": "installed",
+        "cta": "Installed (Workspace: All)",
+        "head": "YouTubeYouTubeConnector by Cinatra AILink a YouTube account "
+      }
+    ],
+    "workspaceReachPillPresent": true,
+    "youtubeInstallActionOffered": false,
+    "file": "c-marketplace-installed-workspace-all.png"
+  },
+  {
+    "step": "d-archived-organization-row",
+    "asserts": "(d) the Archived filter: the SUPERSEDED organization row is visible to an authorized admin, and restorable through the ordinary guarded path once the workspace install is gone.",
+    "httpStatus": 200,
+    "finalPath": "/configuration/extensions",
+    "totalCards": 1,
+    "youtubeConnectorCardCount": 1,
+    "youtubeConnectorCardText": [
+      "YouTubeConnector by Cinatra · shipped with CinatraConnect a YouTube account to your workspace so Cinatra agents can access it. The connector uses Nango to manage each user's YouTube OAuth connection and checks the shared Google OAuth connec"
+    ],
+    "file": "d-archived-organization-row.png"
+  },
+  {
+    "step": "sign-in",
+    "role": "org-admin",
+    "httpStatus": 200
+  },
+  {
+    "step": "e-marketplace-org-admin-gated",
+    "asserts": "(e) the SAME marketplace address as an organization administrator who is not a platform administrator: the configuration area is platform-admin-only, so this account never reaches the card at all.",
+    "httpStatus": 200,
+    "finalPath": "/not-authorized",
+    "catalogCardCount": 0,
+    "youtubeCard": [],
+    "workspaceReachPillPresent": false,
+    "youtubeInstallActionOffered": false,
+    "file": "e-marketplace-org-admin-gated.png"
+  }
+]

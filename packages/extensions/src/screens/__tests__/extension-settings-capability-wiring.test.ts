@@ -75,14 +75,19 @@ describe("AC1 — the enabled state comes from the ENFORCING module", () => {
     // same resolveLifecycleScope the capability evaluates.
     expect(RESOLVER).toContain("export function resolveLifecycleScope(");
     expect(RESOLVER).toMatch(
-      /export function pickLifecycleTargetRow\([\s\S]*?const resolution = resolveLifecycleScope\(rows, actor\);/,
+      /export function pickLifecycleTargetRow\([\s\S]*?const resolution = resolveLifecycleScope\(rows, actor, selector\);/,
     );
     expect(RESOLVER).toMatch(
-      /export function evaluateLifecycleCapability\([\s\S]*?resolveLifecycleScope\(rows, actor\)/,
+      /export function evaluateLifecycleCapability\([\s\S]*?resolveLifecycleScope\(rows, actor, selector\)/,
     );
-    // The org-equality filter appears exactly ONCE in the whole module.
+    // The org-equality filter appears exactly ONCE in the whole module — now
+    // inside `addressableLifecycleRows`, the single home of the addressable
+    // set that both the resolution and the capability read (cinatra#2698).
     const filters = RESOLVER.match(/\(r\.organizationId \?\? null\) === actorOrgId/g) ?? [];
     expect(filters).toHaveLength(1);
+    expect(RESOLVER).toMatch(
+      /export function addressableLifecycleRows\([\s\S]*?export function resolveLifecycleScope\(/,
+    );
   });
 });
 
@@ -157,7 +162,11 @@ describe("AC2 — the reason is rendered, in §V's disabled-with-reason language
 describe("AC3 — the enforcement is untouched and its refusals carry stable codes", () => {
   it("the dispatcher's gates are still the resolver's own, unchanged", () => {
     const INDEX = read("../../index.ts");
-    expect(INDEX).toContain("await resolveLifecycleTargetRow(ref.packageName, actor)");
+    // cinatra#2698 threads the operator's row selector as a third argument, so
+    // the call is now multi-line — the GATE is the same one.
+    expect(INDEX).toMatch(
+      /await resolveLifecycleTargetRow\([\s\S]{0,120}ref\.packageName,[\s\S]{0,120}actor,/,
+    );
     expect(INDEX).toContain("throw new PlatformAdminRequiredError(\"force_delete\")");
   });
 

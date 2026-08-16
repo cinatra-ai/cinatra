@@ -294,10 +294,18 @@ describe.skipIf(!HAS_DB)("cinatra#2697 AC-1 — one workspace connector, two org
 });
 
 // ---------------------------------------------------------------------------
-// AC-2 — org + workspace coexistence: the org row wins for ITS org
+// AC-2 — an org row beside a workspace row: THE LIVE WORKSPACE ROW WINS
+//
+// S3 shipped this block asserting the opposite ("the org row wins for ITS org").
+// The owner ruling of 2026-08-16 (S4 #2698) makes a live workspace row the
+// package's EFFECTIVE row: it supersedes every organization row, so all three
+// connector seams — the async resolver, the sync resolver and the trust anchor —
+// resolve it for EVERY organization, including the one whose row it superseded.
+// The rows still coexist in the store (the identity index keys them apart, and
+// the superseded row keeps everything it had), but only one of them governs.
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!HAS_DB)("cinatra#2697 AC-2 — coexistence: the org row wins, the workspace row serves the rest", () => {
+describe.skipIf(!HAS_DB)("cinatra#2698 AC-2 — a live workspace row supersedes the organization row", () => {
   async function seedCoexistence(): Promise<{ orgRowId: string; wsRowId: string }> {
     const wsRowId = await installConnectorAtAnchor(workspaceAnchor(), BOTH_PKG, {
       digest: "sha256-digest-ws",
@@ -321,24 +329,24 @@ describe.skipIf(!HAS_DB)("cinatra#2697 AC-2 — coexistence: the org row wins, t
     expect(res.rows.map((r) => r.id).sort()).toEqual([orgRowId, wsRowId].sort());
   });
 
-  it("the async resolver gives org A its OWN row and org B the workspace row", async () => {
-    const { orgRowId, wsRowId } = await seedCoexistence();
-    expect((await resourceIdentity.resolveConnectorResource(ORG_A, BOTH_PKG))?.resourceId).toBe(orgRowId);
+  it("the async resolver gives BOTH organizations the workspace row", async () => {
+    const { wsRowId } = await seedCoexistence();
+    expect((await resourceIdentity.resolveConnectorResource(ORG_A, BOTH_PKG))?.resourceId).toBe(wsRowId);
     expect((await resourceIdentity.resolveConnectorResource(ORG_B, BOTH_PKG))?.resourceId).toBe(wsRowId);
   });
 
-  it("the SYNC resolver gives org A its OWN row and org B the workspace row", async () => {
-    const { orgRowId, wsRowId } = await seedCoexistence();
+  it("the SYNC resolver gives BOTH organizations the workspace row", async () => {
+    const { wsRowId } = await seedCoexistence();
     const a = syncResolver.resolveConnectorCanonicalAccessSync(ORG_A, BOTH_PKG);
     const b = syncResolver.resolveConnectorCanonicalAccessSync(ORG_B, BOTH_PKG);
     if (a.status !== "found" || b.status !== "found") throw new Error("expected both found");
-    expect(a.access.resourceId).toBe(orgRowId);
-    expect(a.access.owner.organizationId).toBe(ORG_A);
+    expect(a.access.resourceId).toBe(wsRowId);
+    expect(a.access.owner.organizationId).toBeNull();
     expect(b.access.resourceId).toBe(wsRowId);
     expect(b.access.owner.organizationId).toBeNull();
   });
 
-  it("each org resolves ITS OWN row's access policy — the two never blend", async () => {
+  it("both organizations read the WORKSPACE row's access policy — the superseded one governs nothing", async () => {
     const { orgRowId, wsRowId } = await seedCoexistence();
     await accessContract.setExtensionInstallAccess({
       kind: "connector",
@@ -356,14 +364,33 @@ describe.skipIf(!HAS_DB)("cinatra#2697 AC-2 — coexistence: the org row wins, t
     const a = syncResolver.resolveConnectorCanonicalAccessSync(ORG_A, BOTH_PKG);
     const b = syncResolver.resolveConnectorCanonicalAccessSync(ORG_B, BOTH_PKG);
     if (a.status !== "found" || b.status !== "found") throw new Error("expected both found");
-    expect(a.access.policy?.runListVisibility).toEqual(["admin"]);
-    expect(a.access.installedByUserId).toBe("u-org-a");
-    expect(b.access.policy?.runListVisibility).toEqual(["workspace"]);
-    expect(b.access.installedByUserId).toBe("u-workspace");
+    for (const found of [a, b]) {
+      expect(found.access.policy?.runListVisibility).toEqual(["workspace"]);
+      expect(found.access.installedByUserId).toBe("u-workspace");
+    }
+    // The superseded row still HOLDS its own policy — supersession archives in
+    // place, it never tears row-bound data down (cinatra#2698 change 2).
+    const retained = await client.query(
+      `SELECT policy FROM "${q(TEST_SCHEMA)}"."extension_access_policy" WHERE resource_id = $1`,
+      [orgRowId],
+    );
+    expect(retained.rows).toHaveLength(1);
   });
 
-  it("the trust anchor follows the same rule: org A anchors ITS row, org B the workspace row", async () => {
+  it("an ARCHIVED workspace row supersedes nothing — the organization row governs again", async () => {
     const { orgRowId, wsRowId } = await seedCoexistence();
+    await lifecycle.transitionExtensionLifecycle(wsRowId, "archive", {
+      actor: { source: "dispatcher", userId: "u-2698" },
+      reason: "cinatra#2698 fixture",
+    });
+    expect((await resourceIdentity.resolveConnectorResource(ORG_A, BOTH_PKG))?.resourceId).toBe(orgRowId);
+    const a = syncResolver.resolveConnectorCanonicalAccessSync(ORG_A, BOTH_PKG);
+    if (a.status !== "found") throw new Error("expected found");
+    expect(a.access.resourceId).toBe(orgRowId);
+  });
+
+  it("the trust anchor follows the same rule: BOTH organizations anchor the workspace row", async () => {
+    const { wsRowId } = await seedCoexistence();
     for (const [org, digest] of [
       [ORG_A, "sha256-digest-orga"],
       [null, "sha256-digest-ws"],
@@ -380,13 +407,13 @@ describe.skipIf(!HAS_DB)("cinatra#2697 AC-2 — coexistence: the org row wins, t
       await installOps.finalizeInstallOp(op!.installOpId);
     }
 
-    const a = await (await installAnchor.makeDefaultInstallAnchorResolver(ORG_A, "org-then-workspace"))(BOTH_PKG);
-    expect(a?.installId).toBe(orgRowId);
-    expect(a?.orgId).toBe(ORG_A);
-
-    const b = await (await installAnchor.makeDefaultInstallAnchorResolver(ORG_B, "org-then-workspace"))(BOTH_PKG);
-    expect(b?.installId).toBe(wsRowId);
-    expect(b?.orgId).toBeNull();
+    for (const org of [ORG_A, ORG_B]) {
+      const anchor = await (
+        await installAnchor.makeDefaultInstallAnchorResolver(org, "org-then-workspace")
+      )(BOTH_PKG);
+      expect(anchor?.installId).toBe(wsRowId);
+      expect(anchor?.orgId).toBeNull();
+    }
   });
 });
 

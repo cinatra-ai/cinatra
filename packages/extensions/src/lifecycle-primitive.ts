@@ -344,6 +344,121 @@ export async function transitionExtensionLifecycle(
   return _internalUpdateInstalledExtensionStatus(id, newStatus);
 }
 
+// ---------------------------------------------------------------------------
+// SUPERSESSION ON INSTALL (cinatra#2694 / S4 #2698, change 2) — owner ruling
+// 2026-08-16.
+//
+// After a "Workspace: All" / "Workspace: Admins only" install FINALIZES, the
+// package's existing organization rows are redundant: the workspace row already
+// reaches every organization. They are archived IN PLACE — a plain row lifecycle
+// TRANSITION, `status → archived`, and nothing else.
+//
+// What "in place" rules out, and why each matters:
+//
+//  - NOT `registry.archive()` / `registry.uninstall()`. Those are the operator's
+//    package-level operations: they fire the per-kind handler, retire artifact
+//    claims, tear down capabilities, and on the hard-delete branch drop the row
+//    (cascading its dependency edges) and run the data teardown that removes
+//    EVERY organization's package settings and secrets. Supersession must lose
+//    none of that — the organization's row keeps its id, so its permissions and
+//    co-owners (keyed on `installed_extension.id`) survive; its dependency
+//    provenance survives; its settings, secrets, connections and artifact claims
+//    survive. Archiving is a status change, so it preserves all of it by
+//    construction.
+//  - NOT a supersession bookkeeping table. There is no backward-compatibility
+//    obligation and nothing to reconcile later: the archived row IS the record,
+//    and an authorized admin restores one through the ordinary guarded path once
+//    the workspace install is gone (change 4 — no automatic revival).
+//
+// COMPENSATION: the archives are applied one row at a time and every applied
+// row is remembered. If any row refuses (a `locked` row is a legitimate refusal)
+// or the store fails mid-way, the rows already archived by THIS call are
+// transitioned back to `active` and the error propagates — so the caller never
+// observes a half-superseded package. A compensation that itself fails is
+// reported in the thrown error rather than swallowed.
+//
+// Callers MUST hold the per-package install lock (the dispatcher does), which is
+// what makes the read-then-archive sequence safe against a concurrent install.
+// ---------------------------------------------------------------------------
+
+export class WorkspaceSupersessionError extends Error {
+  public readonly code = "WORKSPACE_SUPERSESSION_FAILED";
+  constructor(
+    public readonly packageName: string,
+    message: string,
+    public readonly compensated: boolean,
+  ) {
+    super(message);
+    this.name = "WorkspaceSupersessionError";
+  }
+}
+
+/**
+ * Archive, in place, every live organization-anchored row of `packageName` —
+ * the supersession a finalized workspace install performs.
+ *
+ * Returns the ids of the rows archived by this call (empty when the package had
+ * no organization rows, which is the ordinary case). Idempotent: an
+ * already-archived organization row is left exactly as it is.
+ */
+export async function supersedeOrganizationRowsForWorkspaceInstall(
+  packageName: string,
+  actor: { source: string; orgId?: string; userId?: string; roles?: string[] },
+): Promise<string[]> {
+  const rows = await readInstalledExtensionsByPackageName(packageName);
+  // `active` only. A `locked` organization row is the required-in-prod / admin
+  // lock, which the transition matrix refuses every destructive op on — including
+  // this one — and the lock is deliberately stronger than any automatic
+  // rewrite. Refusing the whole supersession over it would fail an install that
+  // has ALREADY finalized, so a locked row is left exactly as it is; the
+  // effective-row rule still makes the workspace row the one in force, and the
+  // lock stays the administrator's explicit decision to unwind by hand.
+  const targets = rows.filter(
+    (r) => (r.organizationId ?? null) !== null && r.status === "active",
+  );
+  if (targets.length === 0) return [];
+
+  const archived: string[] = [];
+  try {
+    for (const row of targets) {
+      await transitionExtensionLifecycle(row.id, "archive", {
+        actor,
+        reason:
+          `superseded by the workspace install of ${packageName} ` +
+          `(cinatra#2698 — archived in place; row, permissions, dependency ` +
+          `provenance, settings, secrets, connections and claims retained)`,
+      });
+      archived.push(row.id);
+    }
+    return archived;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    let compensated = true;
+    for (const id of archived) {
+      try {
+        await transitionExtensionLifecycle(id, "activate", {
+          actor,
+          reason: `supersession compensation for ${packageName} (cinatra#2698)`,
+        });
+      } catch {
+        compensated = false;
+      }
+    }
+    throw new WorkspaceSupersessionError(
+      packageName,
+      compensated
+        ? `The workspace install of ${packageName} could not supersede an existing ` +
+          `organization install (${detail}); every row this attempt archived was ` +
+          `restored, so no package is half-superseded.`
+        : `The workspace install of ${packageName} could not supersede an existing ` +
+          `organization install (${detail}) AND the compensation did not fully ` +
+          `complete — at least one organization row is still archived. An ` +
+          `administrator must restore it through the normal restore path.`,
+      compensated,
+    );
+  }
+}
+
 /**
  * Rollback-only canonical delete of a NON-finalized install row.
  *
