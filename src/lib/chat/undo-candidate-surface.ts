@@ -97,11 +97,14 @@ export async function recentUndoableChangeSetFor(input: {
   });
   const cs = items[0];
   if (!cs) return null;
-  const eligible = await loadAuthorizedTargetedRestoreForActor({
+  const resolution = await loadAuthorizedTargetedRestoreForActor({
     changeSetId: cs.id,
     orgId: input.orgId,
     actor: input.actor,
     roleHints: input.roleHints,
   });
+  // The chip needs the verdict only, never the reason — an entry affordance that
+  // distinguished "gone" from "not yours" would leak what the gate withholds.
+  const eligible = resolution.kind === "authorized";
   return eligible ? { changeSetId: cs.id } : null;
 }

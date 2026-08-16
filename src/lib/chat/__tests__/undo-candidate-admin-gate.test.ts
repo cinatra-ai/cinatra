@@ -16,7 +16,14 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listChangeSets: vi.fn(() => [{ id: "cs_1" }]),
-  loadAuthorizedTargetedRestoreForActor: vi.fn(async () => true),
+  // cinatra#2800 — the gate resolves to a kind, so the stub is typed to the
+  // union and each case names the answer it is standing in for.
+  loadAuthorizedTargetedRestoreForActor: vi.fn(
+    async (): Promise<{ kind: string; loaded?: unknown }> => ({
+      kind: "authorized",
+      loaded: {},
+    }),
+  ),
 }));
 
 vi.mock("@/lib/object-history", () => ({ listChangeSets: mocks.listChangeSets }));
@@ -32,7 +39,10 @@ describe("cinatra#2701 — the undo chip's candidate read is platform-admin only
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.listChangeSets.mockReturnValue([{ id: "cs_1" }]);
-    mocks.loadAuthorizedTargetedRestoreForActor.mockResolvedValue(true);
+    mocks.loadAuthorizedTargetedRestoreForActor.mockResolvedValue({
+      kind: "authorized",
+      loaded: {},
+    });
   });
 
   it("a MEMBER gets null — and the change-set is never even queried", async () => {
@@ -85,7 +95,10 @@ describe("cinatra#2701 — the undo chip's candidate read is platform-admin only
   });
 
   it("the §VI per-object gate STILL decides for an admin — no bypass was introduced", async () => {
-    mocks.loadAuthorizedTargetedRestoreForActor.mockResolvedValue(false);
+    // cinatra#2800 — a denial is a KIND now; only "authorized" opens the chip.
+    mocks.loadAuthorizedTargetedRestoreForActor.mockResolvedValue({
+      kind: "not_authorized",
+    });
     const found = await recentUndoableChangeSetFor({
       ...BASE,
       actor: {

@@ -54,7 +54,10 @@ describe("recentUndoableChangeSetForRunAction", () => {
     mocks.listChangeSets.mockReset();
     mocks.loadAuthorizedTargetedRestoreForActor.mockReset();
     // Default: eligible — the eligibility-suppression cases pin null explicitly.
-    mocks.loadAuthorizedTargetedRestoreForActor.mockResolvedValue({ changeSet: {} });
+    mocks.loadAuthorizedTargetedRestoreForActor.mockResolvedValue({
+      kind: "authorized",
+      loaded: { changeSet: {} },
+    });
   });
 
   it("returns null for an orgless session (no query)", async () => {
@@ -113,7 +116,11 @@ describe("recentUndoableChangeSetForRunAction", () => {
       session: { activeOrganizationId: "org_1" },
     });
     mocks.listChangeSets.mockReturnValue([{ id: "cs_recent" }]);
-    mocks.loadAuthorizedTargetedRestoreForActor.mockResolvedValue(null);
+    // cinatra#2800 — the gate answers with a kind; anything but "authorized"
+    // suppresses the chip, and the chip never learns which no it was.
+    mocks.loadAuthorizedTargetedRestoreForActor.mockResolvedValue({
+      kind: "not_authorized",
+    });
     const r = await recentUndoableChangeSetForRunAction({ runId: "run_1" });
     expect(r).toBeNull();
   });

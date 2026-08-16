@@ -9,6 +9,13 @@
 //   - the per-object verdict is authoritative (no admin short-circuit)
 //   - the actor + org-role hints handed to the check mirror the confirm path
 //   - any thrown error degrades to "not eligible", never propagates
+//
+// cinatra#2800 adds the SECOND thing the loader must say: WHICH no it is.
+// "not_authorized" is reserved for a change-set that exists and is restorable
+// and whose per-object check denied; everything else — unknown id, foreign org,
+// no longer restorable, unreadable gate — is "not_found", so the restore page
+// can stop telling an administrator they lack rights they hold. The boolean
+// façade is unchanged: an entry affordance still learns only yes or no.
 
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
@@ -35,6 +42,7 @@ vi.mock("@/lib/object-history/server-views", () => ({
 import {
   isSessionEligibleForTargetedRestore,
   loadAuthorizedTargetedRestore,
+  loadAuthorizedTargetedRestoreForActor,
   resolveSessionRestoreAuthz,
 } from "../restore-eligibility";
 
@@ -135,17 +143,106 @@ describe("loadAuthorizedTargetedRestore — one load feeds both the verdict and 
     const l = loaded(true);
     mocks.loadChangeSet.mockReturnValue(l);
     mocks.canActorRestoreChangeSet.mockResolvedValue(true);
-    await expect(loadAuthorizedTargetedRestore("cs_1")).resolves.toBe(l);
+    await expect(loadAuthorizedTargetedRestore("cs_1")).resolves.toEqual({
+      kind: "authorized",
+      loaded: l,
+    });
     // Exactly ONE load — no check-then-reload TOCTOU.
     expect(mocks.loadChangeSet).toHaveBeenCalledTimes(1);
   });
 
-  it("returns null when the per-object check denies (unauthorized → Library fallback, never a dead-end)", async () => {
+  it("says not_authorized when the change-set exists and is restorable but the per-object check denies", async () => {
     mocks.requireAuthSession.mockResolvedValue(sessionWithOrg("org_1"));
     mocks.resolveOrgRoleForSession.mockResolvedValue(undefined);
     mocks.loadChangeSet.mockReturnValue(loaded(true));
     mocks.canActorRestoreChangeSet.mockResolvedValue(false);
-    await expect(loadAuthorizedTargetedRestore("cs_1")).resolves.toBeNull();
+    await expect(loadAuthorizedTargetedRestore("cs_1")).resolves.toEqual({
+      kind: "not_authorized",
+    });
+  });
+});
+
+// cinatra#2800 — the two nos are told apart at the source, because only the load
+// knows which one happened. Everything that is NOT "exists, restorable, denied"
+// must read as not_found, including the paths that never reach the check.
+describe("loadAuthorizedTargetedRestore — which no it is", () => {
+  it("says not_found for an unknown / foreign-org id (never that another org holds it)", async () => {
+    mocks.requireAuthSession.mockResolvedValue(sessionWithOrg("org_1"));
+    mocks.loadChangeSet.mockReturnValue(null);
+    await expect(loadAuthorizedTargetedRestore("cs_1")).resolves.toEqual({
+      kind: "not_found",
+    });
+    expect(mocks.canActorRestoreChangeSet).not.toHaveBeenCalled();
+  });
+
+  it("says not_found for a change-set that is no longer restorable", async () => {
+    mocks.requireAuthSession.mockResolvedValue(sessionWithOrg("org_1"));
+    mocks.loadChangeSet.mockReturnValue(loaded(false));
+    await expect(loadAuthorizedTargetedRestore("cs_1")).resolves.toEqual({
+      kind: "not_found",
+    });
+    expect(mocks.canActorRestoreChangeSet).not.toHaveBeenCalled();
+  });
+
+  it("says not_found for an empty id, without touching the session", async () => {
+    await expect(loadAuthorizedTargetedRestore("")).resolves.toEqual({
+      kind: "not_found",
+    });
+    expect(mocks.requireAuthSession).not.toHaveBeenCalled();
+  });
+
+  it("says not_found for an orgless session, and never loads", async () => {
+    mocks.requireAuthSession.mockResolvedValue(sessionWithOrg(null));
+    await expect(loadAuthorizedTargetedRestore("cs_1")).resolves.toEqual({
+      kind: "not_found",
+    });
+    expect(mocks.loadChangeSet).not.toHaveBeenCalled();
+  });
+
+  it("degrades an unreadable gate to not_found — a thrown dependency never claims a denial", async () => {
+    mocks.requireAuthSession.mockResolvedValue(sessionWithOrg("org_1"));
+    mocks.loadChangeSet.mockImplementation(() => {
+      throw new Error("db down");
+    });
+    await expect(loadAuthorizedTargetedRestore("cs_1")).resolves.toEqual({
+      kind: "not_found",
+    });
+  });
+});
+
+describe("loadAuthorizedTargetedRestoreForActor — the same kinds for a non-cookie actor", () => {
+  const forActor = (changeSetId: string) =>
+    loadAuthorizedTargetedRestoreForActor({
+      changeSetId,
+      orgId: "org_1",
+      actor: PRIMITIVE_ACTOR,
+      roleHints: undefined,
+    });
+
+  it("carries the loaded change-set on authorized", async () => {
+    const l = loaded(true);
+    mocks.loadChangeSet.mockReturnValue(l);
+    mocks.canActorRestoreChangeSet.mockResolvedValue(true);
+    await expect(forActor("cs_1")).resolves.toEqual({ kind: "authorized", loaded: l });
+  });
+
+  it("says not_authorized only for an existing, restorable change-set the check denies", async () => {
+    mocks.loadChangeSet.mockReturnValue(loaded(true));
+    mocks.canActorRestoreChangeSet.mockResolvedValue(false);
+    await expect(forActor("cs_1")).resolves.toEqual({ kind: "not_authorized" });
+  });
+
+  it("says not_found for a missing id and for a missing org", async () => {
+    mocks.loadChangeSet.mockReturnValue(null);
+    await expect(forActor("cs_1")).resolves.toEqual({ kind: "not_found" });
+    await expect(
+      loadAuthorizedTargetedRestoreForActor({
+        changeSetId: "cs_1",
+        orgId: "",
+        actor: PRIMITIVE_ACTOR,
+        roleHints: undefined,
+      }),
+    ).resolves.toEqual({ kind: "not_found" });
   });
 });
 
