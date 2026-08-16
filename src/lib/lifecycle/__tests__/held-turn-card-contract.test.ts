@@ -1,26 +1,24 @@
 /**
- * Fixture suite for the HELD-TURN CARD CONTRACT.
+ * Fixture suite for the HELD-TURN CARD CONTRACT evaluator.
  *
- * The gate's whole purpose is to fail on a shape a review round had to catch by
- * hand, so the fixtures ARE the specification:
+ * The transcript suite drives this same evaluator over the PRODUCTION chat view
+ * and the REAL card; this file drives it over normalized projections, so the
+ * evaluator's own decisions are pinned where they can be read at a glance:
  *
- *   1. The round-1 reproduction — a held dispatch answered by deterministic
- *      prose that names another surface as the decision path, with no card in
- *      the transcript. It must fail, and it must fail on the ALWAYS-ON arm (no
- *      `requireMount` needed): a text pointer is a violation on its own.
- *   2. Mislabeled host — the card anchors present, but satisfied from inside the
- *      inline run card's subtree. A run-card render is not a chat mount, and the
- *      evidence that calls it one is the second anti-pattern this slice is
- *      about.
- *   3. Off position — the card renders somewhere other than its triggering
- *      part's transcript slot.
- *   4. The ruled mount — the card at the triggering slot, outside every foreign
- *      host, with its own decision controls. Clean, including under
- *      `requireMount`.
+ *   1. The round-1 reproduction — a held dispatch answered by prose that names
+ *      another surface as the decision path, with no card in the transcript. It
+ *      must fail, and it must fail on the ALWAYS-ON arm.
+ *   2. Mislabeled host — the anchors present, but satisfied from inside the
+ *      inline run card's subtree. A run-card render is not a chat mount.
+ *   3. Off position — the card outside the triggering part's OWN container.
+ *      Same turn is not the same place.
+ *   4. The ruled mount — the card in the triggering container, outside every
+ *      foreign host, with its own decision controls. Clean under `requireMount`.
  *
- * Plus the two structural checks that keep the table honest: it covers the
- * protocol package's closed set of kinds, and every row names an enforcer that
- * really executes it.
+ * Plus the text ban's own cases, including the EXACT sentence from the round
+ * this gate was built after, and the two structural checks that keep the table
+ * honest: it covers the protocol package's closed set of kinds, and every row
+ * names an enforcer that really executes it.
  */
 
 import { describe, expect, it } from "vitest";
@@ -32,18 +30,27 @@ import {
   CHAT_THREAD_CARRIAGE_CONTRACT,
   HELD_RUN_STATUSES,
   HELD_TURN_ROW,
+  ROOT_DECLARATION_OBLIGATIONS,
   RULED_KINDS,
   evaluateHeldTurnProjection,
   findDecisionPathPointers,
   isHeldDispatch,
   projectsOwnerCard,
+  runIdOf,
   type ProjectedNode,
   type TurnProjection,
 } from "../held-turn-card-contract";
 
 const HELD_RESULT = JSON.stringify({ runId: "run-1", status: "pending_input" });
 
-/** The turn's parts, with the durable agent_run result at slot 0. */
+/**
+ * The EXACT sentence the first round shipped in place of the card. Pinned as a
+ * literal, because a paraphrase would not prove the ban covers the real one.
+ */
+const ROUND_ONE_POINTER =
+  "confirm or skip the recommended skills on the run card above";
+
+/** The turn's parts, with the durable agent_run result in container 0. */
 function heldParts(text: string): TurnProjection["parts"] {
   return [
     { kind: "tool_result", slot: 0, name: "agent_run", result: HELD_RESULT },
@@ -63,9 +70,25 @@ function cardNode(over: Partial<ProjectedNode> = {}): ProjectedNode {
 
 /** The deterministic dispatch text main emits today. */
 const CLEAN_DISPATCH_TEXT =
-  "Dispatched `@cinatra-ai/planner-agent` (runId: `run-1`, status: `pending_input`).";
+  "Dispatched `@cinatra-ai/proof-agent` (runId: `run-1`, status: `pending_input`).";
 
-describe("held-turn card contract — the decision-path text ban", () => {
+describe("the decision-path text ban (defence in depth)", () => {
+  it("FAILS the exact first-round sentence — no leading verb, and the surface is a CARD", () => {
+    const hits = findDecisionPathPointers(ROUND_ONE_POINTER);
+    expect(
+      hits,
+      "the sentence this gate was built after must not escape the ban",
+    ).not.toEqual([]);
+    expect(hits.map((h) => h.patternId)).toContain("decide-on-another-surface");
+  });
+
+  it("FAILS the same sentence inside a full dispatch answer", () => {
+    const hits = findDecisionPathPointers(
+      `The agent is waiting on you. You can ${ROUND_ONE_POINTER}.`,
+    );
+    expect(hits).not.toEqual([]);
+  });
+
   it("flags prose that sends the human to another screen to decide", () => {
     const hits = findDecisionPathPointers(
       "The run is paused. Open the run page to confirm the recommendation.",
@@ -73,9 +96,13 @@ describe("held-turn card contract — the decision-path text ban", () => {
     expect(hits.map((h) => h.patternId)).toContain("go-elsewhere-to-decide");
   });
 
-  it("flags prose that locates the decision somewhere other than this conversation", () => {
-    const hits = findDecisionPathPointers("You can approve it there when you are ready.");
-    expect(hits.map((h) => h.patternId)).toContain("decide-there");
+  it("flags a positional locator with no surface noun at all", () => {
+    expect(findDecisionPathPointers("You can approve it above.").map((h) => h.patternId)).toContain(
+      "decide-elsewhere",
+    );
+    expect(findDecisionPathPointers("Skip it there if you prefer.").map((h) => h.patternId)).toContain(
+      "decide-elsewhere",
+    );
   });
 
   it("flags a run URL handed over in prose", () => {
@@ -92,9 +119,7 @@ describe("held-turn card contract — the decision-path text ban", () => {
     expect(hits.map((h) => h.patternId)).toContain("waiting-for-you-elsewhere");
   });
 
-  it("does NOT ban the run card's own link label — the ban targets the decision path, not the noun", () => {
-    // `InlineAgentRunCard` legitimately offers "Open the run page". A link
-    // inside a ruled card is not a text pointer standing in for the card.
+  it("does NOT ban the run card's own link label — the ban targets the decision path", () => {
     expect(findDecisionPathPointers("Open the run page")).toEqual([]);
     expect(findDecisionPathPointers("The run page shows every step it took.")).toEqual([]);
   });
@@ -103,14 +128,14 @@ describe("held-turn card contract — the decision-path text ban", () => {
     expect(findDecisionPathPointers(CLEAN_DISPATCH_TEXT)).toEqual([]);
     expect(
       findDecisionPathPointers(
-        "Dispatched `@cinatra-ai/planner-agent` (runId: `run-1`, status: `queued`). " +
+        "Dispatched `@cinatra-ai/proof-agent` (runId: `run-1`, status: `queued`). " +
           "The agent is running, and I will keep polling for its progress.",
       ),
     ).toEqual([]);
   });
 });
 
-describe("held-turn card contract — held-status recognition", () => {
+describe("held-status recognition", () => {
   it("treats pending_input as a held dispatch", () => {
     expect(HELD_RUN_STATUSES).toContain("pending_input");
     expect(isHeldDispatch({ status: "pending_input" })).toBe(true);
@@ -120,18 +145,20 @@ describe("held-turn card contract — held-status recognition", () => {
     expect(isHeldDispatch({ status: "queued" })).toBe(false);
     expect(isHeldDispatch(null)).toBe(false);
   });
+
+  it("reads the runId out of the durable payload", () => {
+    expect(runIdOf(HELD_RESULT)).toBe("run-1");
+    expect(runIdOf("not json")).toBeNull();
+    expect(runIdOf(null)).toBeNull();
+  });
 });
 
-describe("held-turn card contract — the four fixtures", () => {
+describe("the evaluator's four fixtures", () => {
   it("FAILS the round-1 reproduction: a text pointer and no card in the transcript", () => {
     const projection: TurnProjection = {
-      parts: heldParts(
-        "The agent paused and needs your decision. Open the run page to confirm or skip the recommendation.",
-      ),
+      parts: heldParts(`The agent paused. You can ${ROUND_ONE_POINTER}.`),
       nodes: [],
     };
-    // The ALWAYS-ON arm alone catches it — a text pointer is a violation
-    // whether or not the positive mount arm is switched on.
     const always = evaluateHeldTurnProjection(projection, HELD_TURN_ROW);
     expect(always.map((v) => v.code)).toContain("decision_path_pointer");
 
@@ -145,8 +172,9 @@ describe("held-turn card contract — the four fixtures", () => {
       parts: heldParts(CLEAN_DISPATCH_TEXT),
       nodes: [cardNode({ insideSubtrees: ["[data-run-card]"] })],
     };
-    const violations = evaluateHeldTurnProjection(projection, HELD_TURN_ROW);
-    expect(violations.map((v) => v.code)).toContain("anchors_in_foreign_host");
+    expect(evaluateHeldTurnProjection(projection, HELD_TURN_ROW).map((v) => v.code)).toContain(
+      "anchors_in_foreign_host",
+    );
     expect(projectsOwnerCard(projection)).toBe(false);
   });
 
@@ -160,36 +188,17 @@ describe("held-turn card contract — the four fixtures", () => {
     );
   });
 
-  it("FAILS a card rendered away from its triggering part's transcript slot", () => {
-    const projection: TurnProjection = {
-      parts: heldParts(CLEAN_DISPATCH_TEXT),
-      nodes: [cardNode({ slot: 4 })],
-    };
-    expect(evaluateHeldTurnProjection(projection, HELD_TURN_ROW).map((v) => v.code)).toContain(
-      "anchors_off_position",
-    );
-  });
-
-  it("PASSES a card in its own slot below the trigger when it is keyed by that run", () => {
-    // The epic's ruling: the card is keyed by the agent_run tool-result runId.
-    // A node that declares that run and follows it is AT the position.
-    const projection: TurnProjection = {
-      parts: heldParts(CLEAN_DISPATCH_TEXT),
-      nodes: [cardNode({ slot: 2, runBinding: "run-1" })],
-    };
-    expect(evaluateHeldTurnProjection(projection, HELD_TURN_ROW, { requireMount: true })).toEqual(
-      [],
-    );
-  });
-
-  it("FAILS a card keyed by a DIFFERENT run", () => {
-    const projection: TurnProjection = {
-      parts: heldParts(CLEAN_DISPATCH_TEXT),
-      nodes: [cardNode({ slot: 2, runBinding: "run-other" })],
-    };
-    expect(evaluateHeldTurnProjection(projection, HELD_TURN_ROW).map((v) => v.code)).toContain(
-      "anchors_off_position",
-    );
+  it("FAILS a card outside the triggering part's OWN container, even later in the same turn", () => {
+    for (const slot of [1, 2, 4]) {
+      const projection: TurnProjection = {
+        parts: heldParts(CLEAN_DISPATCH_TEXT),
+        nodes: [cardNode({ slot })],
+      };
+      expect(
+        evaluateHeldTurnProjection(projection, HELD_TURN_ROW).map((v) => v.code),
+        `container ${slot} is not the triggering container`,
+      ).toContain("anchors_off_position");
+    }
   });
 
   it("FAILS a card that precedes its own triggering part", () => {
@@ -198,7 +207,7 @@ describe("held-turn card contract — the four fixtures", () => {
         { kind: "text", slot: 0, text: CLEAN_DISPATCH_TEXT },
         { kind: "tool_result", slot: 1, name: "agent_run", result: HELD_RESULT },
       ],
-      nodes: [cardNode({ slot: 0, runBinding: "run-1" })],
+      nodes: [cardNode({ slot: 0 })],
     };
     expect(evaluateHeldTurnProjection(projection, HELD_TURN_ROW).map((v) => v.code)).toContain(
       "anchors_off_position",
@@ -230,24 +239,14 @@ describe("held-turn card contract — the four fixtures", () => {
     expect(projectsOwnerCard(projection)).toBe(true);
   });
 
-  it("PASSES a reload projection rebuilt from the durable result alone", () => {
-    // Transcript reload: no live stream, only the persisted tool result and the
-    // card the transcript rebuilds from it.
-    const reloaded: TurnProjection = {
-      parts: [{ kind: "tool_result", slot: 0, name: "agent_run", result: HELD_RESULT }],
-      nodes: [cardNode()],
-    };
-    expect(evaluateHeldTurnProjection(reloaded, HELD_TURN_ROW, { requireMount: true })).toEqual([]);
-  });
-
-  it("FAILS a partial mount — the root is there but the decision controls are not", () => {
+  it("FAILS a partial mount — the row is there but a decision control is not", () => {
     const projection: TurnProjection = {
       parts: heldParts(CLEAN_DISPATCH_TEXT),
       nodes: [
         cardNode({
           anchors: [
-            '[data-lifecycle-card="recommendation_hold"]',
-            '[data-lifecycle-card-host="chat_thread"]',
+            '[data-conformance-id="run-chip-row"]',
+            '[data-action="confirm-run-recommendation"]',
           ],
         }),
       ],
@@ -260,7 +259,7 @@ describe("held-turn card contract — the four fixtures", () => {
   });
 });
 
-describe("held-turn card contract — the per-kind table", () => {
+describe("the per-kind table", () => {
   it("covers the protocol package's closed set of kinds, once each", () => {
     const kinds = CHAT_THREAD_CARRIAGE_CONTRACT.map((r) => r.kind);
     expect([...kinds].sort()).toEqual([...RULED_KINDS].sort());
@@ -279,6 +278,40 @@ describe("held-turn card contract — the per-kind table", () => {
     }
   });
 
+  it("names the SHIPPED selectors on the held row, so the ruled mount is accepted", () => {
+    // Read straight off the component that draws the card. A contract that
+    // asserted a name the component never used would reject the real mount.
+    const source = readFileSync(
+      join(process.cwd(), "packages/agents/src/run-recommendation-chip-row.tsx"),
+      "utf8",
+    );
+    for (const anchor of HELD_TURN_ROW.ownerAnchors) {
+      const attribute = anchor.slice(1, -1); // strip the [ ]
+      expect(source, `${anchor} is not emitted by the shipped component`).toContain(attribute);
+    }
+  });
+
+  it("keeps the ruled root declaration OUT of the enforced anchors while it is owed", () => {
+    for (const kind of ROOT_DECLARATION_OBLIGATIONS) {
+      const row = CHAT_THREAD_CARRIAGE_CONTRACT.find((r) => r.kind === kind)!;
+      for (const ruled of row.ruledRootAnchors) {
+        expect(row.ownerAnchors).not.toContain(ruled);
+      }
+    }
+  });
+
+  it("requires the ruled root declaration of every kind that is NOT owed it", () => {
+    // `ReviewGateCard` ships `data-lifecycle-card` + `data-lifecycle-card-host`
+    // today, so its row carries no obligation and the declaration is expected.
+    const source = readFileSync(
+      join(process.cwd(), "packages/agents/src/review-gate-card.tsx"),
+      "utf8",
+    );
+    expect(ROOT_DECLARATION_OBLIGATIONS).not.toContain("artifact_review_gate");
+    expect(source).toContain('data-lifecycle-card="artifact_review_gate"');
+    expect(source).toContain("data-lifecycle-card-host={host}");
+  });
+
   it("names a live enforcer on every row — a row with no enforcer is a claim", () => {
     const gate = readFileSync(
       join(process.cwd(), "scripts/audit/chat-hitl-one-card-gate.mjs"),
@@ -287,8 +320,6 @@ describe("held-turn card contract — the per-kind table", () => {
     for (const row of CHAT_THREAD_CARRIAGE_CONTRACT) {
       expect(CARRIAGE_ENFORCERS).toContain(row.enforcer);
       if (row.enforcer === "chat-hitl-one-card-gate") {
-        // The sibling gate really carries this kind, so the row is executed
-        // there rather than duplicated here.
         expect(gate).toContain(row.kind);
       }
     }

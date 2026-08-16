@@ -20,6 +20,18 @@
  * `evaluateHeldTurnProjection` the fixture suite and the transcript DOM test
  * use, so there is one authority for "what a held turn owes" and no second
  * opinion to drift from.
+ *
+ * WHAT THIS SUITE DOES NOT PROVE, said plainly. It does not park a real run. The
+ * `agent_run` primitive is stubbed to answer `pending_input`, so what is proven
+ * here is the DISPATCH BOUNDARY's contract over a parked answer: the durable
+ * payload it emits, and the prose it emits beside it. A real park needs a live
+ * Postgres and a queue, which this tier has neither of; the run reaching
+ * `pending_input` for real is owned by the recommendation-hold integration suite
+ * (`packages/agents/src/__tests__/recommendation-hold.integration.test.ts`) and
+ * by the stream route's own hold suite. The seam between them is closed by the
+ * PASSTHROUGH test below: the boundary is proven to copy the primitive's status
+ * verbatim rather than deriving one, so a real hold produces exactly the shape
+ * asserted here.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -161,6 +173,36 @@ describe("a HELD chat dispatch (pending_input)", () => {
 
     const violations = evaluateHeldTurnProjection(projectionFromEvents(events), HELD_TURN_ROW);
     expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
+  });
+});
+
+describe("the status is the PRIMITIVE's, copied verbatim", () => {
+  // This is what makes the simulated result above stand for a real one: the
+  // boundary never derives, defaults or rewrites the status, so whatever a real
+  // parked run reports is what reaches the transcript.
+  it.each(["pending_input", "queued", "running", "some_future_status"])(
+    "passes %s straight through to the durable payload",
+    async (status) => {
+      mocks.invokePrimitive.mockResolvedValueOnce({ runId: "run-pt", status });
+      const { send, events } = makeSend();
+
+      await serverSideExplicitDispatch({ packageName: PACKAGE, actor: humanActor(), send });
+
+      const toolResult = events.find((e) => e.event === "tool_result");
+      expect(JSON.parse(String(toolResult!.data.result))).toEqual({ runId: "run-pt", status });
+    },
+  );
+
+  it("emits the durable payload BEFORE any prose, so a reader never needs the prose", async () => {
+    mocks.invokePrimitive.mockResolvedValueOnce({ runId: "run-order", status: "pending_input" });
+    const { send, events } = makeSend();
+
+    await serverSideExplicitDispatch({ packageName: PACKAGE, actor: humanActor(), send });
+
+    const resultAt = events.findIndex((e) => e.event === "tool_result");
+    const textAt = events.findIndex((e) => e.event === "text");
+    expect(resultAt).toBeGreaterThanOrEqual(0);
+    expect(resultAt).toBeLessThan(textAt);
   });
 });
 

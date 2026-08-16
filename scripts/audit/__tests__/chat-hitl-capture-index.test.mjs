@@ -32,15 +32,24 @@ import {
   CAPTURE_HOSTS,
   CAPTURE_INDEX_SCHEMA_VERSION,
   HOST_ANCHOR_REQUIREMENTS,
+  KIND_REQUIRED_ACTIONS,
   RECORDER_ID,
   buildCaptureRecord,
+  chatThreadRequirementsFor,
   classifyUrl,
   collectAssertions,
   hostTokenInCell,
+  observeCapture,
   validateCaptureIndex,
   validateCaptureRecord,
 } from "../lib/chat-hitl-capture-recorder.mjs";
-import { CAPTURE_INDEX_PATH, auditCaptureIndex } from "../chat-hitl-acceptance-gate.mjs";
+import {
+  CAPTURE_INDEX_PATH,
+  auditCaptureIndex,
+  auditManifestIndexBinding,
+  chatThreadCellClaims,
+} from "../chat-hitl-acceptance-gate.mjs";
+import { CHAT_THREAD_CARRIAGE_CONTRACT } from "@/lib/lifecycle/held-turn-card-contract";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const GATE = join(REPO_ROOT, "scripts", "audit", "chat-hitl-acceptance-gate.mjs");
@@ -52,26 +61,24 @@ const hashOf = (rel) => {
   return HASH;
 };
 
+/** Every anchor a chat_thread capture of `kind` owes, observed present. */
+function chatAssertions(kind = "recommendation_hold") {
+  return chatThreadRequirementsFor(kind).map((r) => ({ ...r, expect: "present", count: 1 }));
+}
+
 /** A clean, host-anchored chat_thread record. */
 function chatRecord(over = {}) {
   return {
     cell: "S9x-1__chat_thread__recommendation-hold-held",
     declaredHost: "chat_thread",
+    kind: "recommendation_hold",
     finalUrl: "http://localhost:3000/chat?thread=t-1",
     build: "development",
     screenshot: PNG,
     sha256: HASH,
     capturedAt: "2026-08-16T09:00:00.000Z",
     recordedBy: RECORDER_ID,
-    assertions: [
-      { frame: "main", selector: "[data-conversation-list]", expect: "present", count: 1 },
-      {
-        frame: "main",
-        selector: '[data-lifecycle-card-host="chat_thread"]',
-        expect: "present",
-        count: 1,
-      },
-    ],
+    assertions: chatAssertions(),
     ...over,
   };
 }
@@ -132,18 +139,10 @@ describe("the mislabeled capture — the defect this index was built after", () 
   });
 
   it("REFUSES a required anchor that was looked for and not found", () => {
-    const record = chatRecord({
-      assertions: [
-        { frame: "main", selector: "[data-conversation-list]", expect: "present", count: 1 },
-        {
-          frame: "main",
-          selector: '[data-lifecycle-card-host="chat_thread"]',
-          expect: "present",
-          count: 0,
-        },
-      ],
-    });
-    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+    const assertions = chatAssertions().map((a) =>
+      a.selector === '[data-lifecycle-card-host="chat_thread"]' ? { ...a, count: 0 } : a,
+    );
+    expect(validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n")).toMatch(
       /recorded as present but observed 0 times/,
     );
   });
@@ -157,6 +156,25 @@ describe("the mislabeled capture — the defect this index was built after", () 
     expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
       /does not assert it at all/,
     );
+  });
+
+  it("REFUSES a chat_thread record that names no lifecycle kind", () => {
+    // A transcript was on screen proves nothing about a card being in it.
+    const record = chatRecord({ kind: undefined });
+    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(
+      /must declare the lifecycle `kind` it photographed/,
+    );
+  });
+
+  it("REFUSES a chat capture whose card has no decision controls", () => {
+    // The placeholder case: the transcript, the card root and the host are all
+    // there, and the card cannot be acted on.
+    const assertions = chatAssertions().filter(
+      (a) => !a.selector.startsWith('[data-action="'),
+    );
+    const violations = validateCaptureRecord(chatRecord({ assertions }), { hashOf }).join("\n");
+    expect(violations).toMatch(/confirm-run-recommendation/);
+    expect(violations).toMatch(/skip-run-recommendation/);
   });
 
   it("REFUSES a site_widget record asserted in the main frame instead of the embed frame", () => {
@@ -356,6 +374,7 @@ describe("the shared recorder", () => {
     const record = buildCaptureRecord({
       cell: "S9x-7__chat_thread__held",
       declaredHost: "chat_thread",
+      kind: "recommendation_hold",
       finalUrl: "http://localhost:3000/chat",
       build: "development",
       screenshot: PNG,
@@ -366,6 +385,228 @@ describe("the shared recorder", () => {
     expect(record.sha256).toBe(HASH);
     expect(record.recordedBy).toBe(RECORDER_ID);
     expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The RECORDER as an OBSERVER
+// ---------------------------------------------------------------------------
+
+/**
+ * A fake browser that records what was asked of it. The point of these tests is
+ * the ORDER and the SOURCE of the facts: the recorder must resolve the outer
+ * frame, count it, enter it, read the frame's own URL, and count the inner
+ * anchors there — never take any of it from the caller.
+ */
+function fakePage({ url, counts = {}, frame = null, frameUrl = "", frameCounts = {} }) {
+  const log = [];
+  const page = {
+    log,
+    written: [],
+    url: async () => {
+      log.push("page.url");
+      return url;
+    },
+    count: async (selector) => {
+      log.push(`page.count:${selector}`);
+      return counts[selector] ?? 0;
+    },
+    frame: async (selector) => {
+      log.push(`page.frame:${selector}`);
+      if (!frame) return null;
+      return {
+        url: async () => {
+          log.push("frame.url");
+          return frameUrl;
+        },
+        count: async (sel) => {
+          log.push(`frame.count:${sel}`);
+          return frameCounts[sel] ?? 0;
+        },
+      };
+    },
+    screenshot: async (abs) => {
+      log.push("page.screenshot");
+      page.written.push(abs);
+    },
+  };
+  return page;
+}
+
+const OBSERVER_READ = () => Buffer.from("fixture-bytes");
+
+describe("the recorder OBSERVES rather than taking dictation", () => {
+  it("reads the final URL and every required anchor off the page itself", async () => {
+    const page = fakePage({
+      url: "http://localhost:3000/chat?thread=t-9",
+      counts: Object.fromEntries(
+        chatThreadRequirementsFor("recommendation_hold").map((r) => [r.selector, 1]),
+      ),
+    });
+    const record = await observeCapture({
+      page,
+      cell: "S9x-obs__chat_thread__held",
+      declaredHost: "chat_thread",
+      kind: "recommendation_hold",
+      screenshot: PNG,
+      build: "development",
+      repoRoot: "/anywhere",
+      readImpl: OBSERVER_READ,
+      now: () => "2026-08-16T09:00:00.000Z",
+    });
+    expect(record.finalUrl).toBe("http://localhost:3000/chat?thread=t-9");
+    expect(record.sha256).toBe(HASH);
+    expect(record.recordedBy).toBe(RECORDER_ID);
+    // Every required anchor was actually looked for.
+    for (const req of chatThreadRequirementsFor("recommendation_hold")) {
+      expect(page.log).toContain(`page.count:${req.selector}`);
+    }
+    expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
+  });
+
+  it("resolves the outer frame, ENTERS it, and reads the inner URL and anchors there", async () => {
+    const inner = HOST_ANCHOR_REQUIREMENTS.site_widget.map((r) => r.selector);
+    const page = fakePage({
+      url: "https://blog.example.com/post",
+      counts: { ".cw-frame": 1 },
+      frame: true,
+      frameUrl: "http://localhost:3000/embed/assistant?site=blog",
+      frameCounts: Object.fromEntries(inner.map((s) => [s, 1])),
+    });
+    const record = await observeCapture({
+      page,
+      cell: "S9x-obs__site_widget__held",
+      declaredHost: "site_widget",
+      screenshot: PNG,
+      build: "development",
+      repoRoot: "/anywhere",
+      readImpl: OBSERVER_READ,
+    });
+
+    // The order IS the claim: count the outer frame, enter it, read its URL,
+    // then count inside it.
+    expect(page.log.indexOf("page.count:.cw-frame")).toBeLessThan(
+      page.log.indexOf("page.frame:.cw-frame"),
+    );
+    expect(page.log.indexOf("page.frame:.cw-frame")).toBeLessThan(page.log.indexOf("frame.url"));
+    for (const selector of inner) expect(page.log).toContain(`frame.count:${selector}`);
+    expect(record.frames.widget).toEqual({
+      selector: ".cw-frame",
+      url: "http://localhost:3000/embed/assistant?site=blog",
+    });
+    expect(validateCaptureRecord(record, { hashOf })).toEqual([]);
+  });
+
+  it("writes ZERO counts for a frame that did not resolve, so the failure is visible", async () => {
+    const page = fakePage({ url: "https://blog.example.com/post", counts: { ".cw-frame": 0 } });
+    const record = await observeCapture({
+      page,
+      cell: "S9x-obs__site_widget__missing-frame",
+      declaredHost: "site_widget",
+      screenshot: PNG,
+      build: "development",
+      repoRoot: "/anywhere",
+      readImpl: OBSERVER_READ,
+    });
+    expect(record.assertions.every((a) => a.count === 0)).toBe(true);
+    // …and the record it produced is REFUSED, rather than silently thin.
+    expect(validateCaptureRecord(record, { hashOf }).join("\n")).toMatch(/embed_assistant/);
+  });
+
+  it("writes the screenshot before hashing it, so the hash is of the image on disk", async () => {
+    const page = fakePage({ url: "http://localhost:3000/chat" });
+    const record = await observeCapture({
+      page,
+      cell: "S9x-obs__chat_thread__zero",
+      declaredHost: "chat_thread",
+      kind: "recommendation_hold",
+      screenshot: PNG,
+      build: "production",
+      repoRoot: "/anywhere",
+      readImpl: OBSERVER_READ,
+    });
+    expect(page.written).toEqual([`/anywhere/${PNG}`]);
+    expect(page.log.indexOf("page.screenshot")).toBeGreaterThan(page.log.indexOf("page.url"));
+    // Nothing was observed, so nothing is claimed — and the record fails.
+    expect(record.assertions.every((a) => a.count === 0)).toBe(true);
+    expect(validateCaptureRecord(record, { hashOf }).length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The BINDING: an unindexed screenshot counts as zero
+// ---------------------------------------------------------------------------
+
+function manifestClaiming(cell) {
+  return {
+    rows: [
+      {
+        criterion: "x",
+        disposition: "BUILT",
+        e2eProofs: [{ file: "evidence/whatever/README.md", testName: cell }],
+      },
+    ],
+  };
+}
+
+describe("the manifest to capture-index binding", () => {
+  it("finds the manifest cells that CLAIM a chat_thread capture", () => {
+    const claims = chatThreadCellClaims(
+      manifestClaiming("C1__review-card__chat_thread__pending.png"),
+    );
+    expect(claims).toHaveLength(1);
+    expect(claims[0].cell).toBe("C1__review-card__chat_thread__pending");
+  });
+
+  it("REFUSES a claimed chat cell with no record in the index", () => {
+    const violations = auditManifestIndexBinding({
+      manifest: manifestClaiming("X1__chat_thread__held.png"),
+      index: indexOf([]),
+    });
+    expect(violations.join("\n")).toMatch(/an unindexed screenshot counts as zero/);
+  });
+
+  it("REFUSES a claimed chat cell whose record declares a different host", () => {
+    const violations = auditManifestIndexBinding({
+      manifest: manifestClaiming("X1__chat_thread__held"),
+      index: indexOf([
+        chatRecord({ cell: "X1__chat_thread__held", declaredHost: "run_card" }),
+      ]),
+    });
+    expect(violations.join("\n")).toMatch(/its record declares "run_card"/);
+  });
+
+  it("REFUSES a claimed chat cell whose record never observed the card", () => {
+    const violations = auditManifestIndexBinding({
+      manifest: manifestClaiming("X1__chat_thread__held"),
+      index: indexOf([
+        chatRecord({
+          cell: "X1__chat_thread__held",
+          assertions: [
+            { frame: "main", selector: "[data-conversation-list]", expect: "present", count: 1 },
+          ],
+        }),
+      ]),
+    });
+    expect(violations.join("\n")).toMatch(/does not observe \[data-lifecycle-card="recommendation_hold"\]/);
+  });
+
+  it("ACCEPTS a claimed chat cell bound to a fully observed record", () => {
+    expect(
+      auditManifestIndexBinding({
+        manifest: manifestClaiming("X1__chat_thread__held.png"),
+        index: indexOf([chatRecord({ cell: "X1__chat_thread__held" })]),
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps the capture requirements in step with the held-turn contract", () => {
+    // One authority for what an operable hold card looks like. The contract's
+    // owner anchors drive the transcript gate; these drive the capture gate.
+    const row = CHAT_THREAD_CARRIAGE_CONTRACT.find((r) => r.kind === "recommendation_hold");
+    for (const action of KIND_REQUIRED_ACTIONS.recommendation_hold) {
+      expect(row.ownerAnchors).toContain(action);
+    }
   });
 });
 
@@ -381,11 +622,29 @@ describe("the committed index and the gate CLI", () => {
     expect(Array.isArray(index.records)).toBe(true);
   });
 
-  it("the gate CLI reports the capture index on both modes", () => {
+  it("RATCHET: exactly these chat_thread cells are unbound today", () => {
+    // The honest state of the tree. A later round that adds another unindexed
+    // chat screenshot changes this set and fails HERE, in the required job,
+    // whatever the CLI's exit code is. Binding a cell to a real record also
+    // changes it — which is the direction this list is meant to move.
+    const unbound = [
+      ...new Set(
+        auditManifestIndexBinding()
+          .map((v) => /chat_thread cell "([^"]+)"/.exec(v)?.[1])
+          .filter(Boolean),
+      ),
+    ].sort();
+    expect(unbound).toEqual([
+      "C1__review-card__chat_thread__pending",
+      "C2__review-card__chat_thread__decided",
+    ]);
+  });
+
+  it("the gate CLI REFUSES both modes while a claimed chat cell is unbound", () => {
     for (const args of [[], ["--strict"]]) {
       const run = spawnSync(process.execPath, [GATE, ...args], { encoding: "utf8" });
-      expect(run.status, run.stderr).toBe(0);
-      expect(run.stdout).toMatch(/[Cc]apture index host-anchored/);
+      expect(run.status, `mode ${args.join(" ") || "audit"}`).toBe(1);
+      expect(run.stderr).toMatch(/an unindexed screenshot counts as zero/);
     }
   });
 });

@@ -21,10 +21,14 @@
  * outer `.cw-frame` and then the embed frame's own anchors. A selector found in
  * the wrong frame proves the wrong host.
  *
- * WHAT THIS MODULE IS NOT. It does not drive a browser. `collectAssertions`
- * takes a `queryCount` function so the same recorder serves Playwright, a
- * different driver, or a test — the audit tier stays dependency-free and
- * runnable without an install.
+ * IT OBSERVES; IT DOES NOT TAKE DICTATION. `observeCapture` resolves the outer
+ * frame itself, counts it, ENTERS it, reads the frame's own URL, and counts the
+ * inner anchors there. Nothing about the frames or the counts is accepted from
+ * the caller, because a recorder that writes down what it was told is a
+ * transcription of the claim, not evidence against it. The browser reaches this
+ * module through a tiny `CapturePage` port (`url`, `count`, `frame`,
+ * `screenshot`), so the audit tier stays dependency-free and runnable without an
+ * install while the real driver is Playwright.
  */
 
 import { createHash } from "node:crypto";
@@ -109,6 +113,45 @@ export const HOST_ANCHOR_REQUIREMENTS = Object.freeze({
   ]),
 });
 
+/**
+ * The DECISION CONTROLS a kind's card must show, per kind.
+ *
+ * A chat_thread capture of a lifecycle card proves the card is THERE; these
+ * prove it is OPERABLE. A screenshot of a card with no controls is a screenshot
+ * of a placeholder. Pinned against the held-turn contract's own owner anchors by
+ * `chat-hitl-capture-index.test.mjs`, so the two cannot drift.
+ */
+export const KIND_REQUIRED_ACTIONS = Object.freeze({
+  recommendation_hold: Object.freeze([
+    '[data-action="confirm-run-recommendation"]',
+    '[data-action="skip-run-recommendation"]',
+  ]),
+  artifact_review_gate: Object.freeze(['[data-conformance-id="review-gate-card"]']),
+  trigger_schedule_proposal: Object.freeze([
+    '[data-action="cancel-trigger-schedule"]',
+    '[data-action="release-trigger-now"]',
+  ]),
+  verification_summary: Object.freeze([]),
+});
+
+export const LIFECYCLE_KINDS = Object.freeze(Object.keys(KIND_REQUIRED_ACTIONS));
+
+/**
+ * The anchors a chat_thread capture of `kind` must record present, IN THE SAME
+ * FRAME: the conversation list, the card's own root, the host declaration, and
+ * the kind's decision controls. This is the set the manifest binding requires,
+ * so a cell that names chat_thread cannot be satisfied by a photograph of a
+ * transcript with no card in it.
+ */
+export function chatThreadRequirementsFor(kind) {
+  return [
+    { frame: "main", selector: "[data-conversation-list]" },
+    { frame: "main", selector: `[data-lifecycle-card="${kind}"]` },
+    { frame: "main", selector: '[data-lifecycle-card-host="chat_thread"]' },
+    ...(KIND_REQUIRED_ACTIONS[kind] ?? []).map((selector) => ({ frame: "main", selector })),
+  ];
+}
+
 /** The frames a host must declare, with the selector that reaches each. */
 export const HOST_FRAME_REQUIREMENTS = Object.freeze({
   chat_thread: Object.freeze([]),
@@ -146,12 +189,17 @@ export function collectAssertions(specs, queryCount) {
 }
 
 /**
- * Build one record. `screenshot` is repo-relative; the hash is computed from the
- * file on disk, so a record can never carry a hash for a file it does not have.
+ * Build one record from ALREADY-OBSERVED assertions. `screenshot` is
+ * repo-relative; the hash is computed from the file on disk, so a record can
+ * never carry a hash for a file it does not have.
+ *
+ * Prefer `observeCapture`: this entry point trusts its `assertions`, which is
+ * only safe when they came from `collectAssertions` against a live driver.
  */
 export function buildCaptureRecord({
   cell,
   declaredHost,
+  kind = undefined,
   finalUrl,
   build,
   screenshot,
@@ -172,7 +220,100 @@ export function buildCaptureRecord({
     assertions,
     recordedBy: RECORDER_ID,
   };
+  if (kind) record.kind = kind;
   if (frames) record.frames = frames;
+  return record;
+}
+
+/**
+ * OBSERVE one capture cell and write the record from what was seen.
+ *
+ * `page` is the CapturePage port:
+ *   · `url()`               — the URL the page actually ended on
+ *   · `count(selector)`     — how many elements match, in the MAIN frame
+ *   · `frame(selector)`     — resolve the frame element `selector` reaches and
+ *                             return `{ url(), count(selector) }` for INSIDE it,
+ *                             or null when it does not resolve
+ *   · `screenshot(absPath)` — write the image
+ *
+ * The recorder does the resolving, entering and counting. Nothing about frames,
+ * URLs or counts is accepted from the caller: a host's required anchors are
+ * derived from the host (and, for chat_thread, from the kind), looked for where
+ * the host says they live, and written down with the counts observed — including
+ * a count of zero, which is what makes a failed capture visible instead of
+ * absent.
+ */
+export async function observeCapture({
+  page,
+  cell,
+  declaredHost,
+  kind = undefined,
+  screenshot,
+  build,
+  extraAssertions = [],
+  repoRoot = process.cwd(),
+  readImpl = readFileSync,
+  now = () => new Date().toISOString(),
+}) {
+  const finalUrl = await page.url();
+
+  // 1. The frames the host requires: resolve, COUNT, enter, read the URL there.
+  const frames = {};
+  const frameHandles = new Map();
+  for (const req of HOST_FRAME_REQUIREMENTS[declaredHost] ?? []) {
+    const outerCount = await page.count(req.selector);
+    const entered = outerCount > 0 ? await page.frame(req.selector) : null;
+    frames[req.name] = {
+      selector: req.selector,
+      outerCount,
+      // A frame that did not resolve records an empty URL, which fails the
+      // URL-class check below rather than being quietly dropped.
+      url: entered ? await entered.url() : "",
+    };
+    if (entered) frameHandles.set(req.name, entered);
+  }
+
+  // 2. The anchors the host (and kind) require, counted WHERE THEY LIVE.
+  const required =
+    declaredHost === "chat_thread" && kind
+      ? chatThreadRequirementsFor(kind)
+      : [...HOST_ANCHOR_REQUIREMENTS[declaredHost]];
+  const specs = [...required.map((r) => ({ ...r, expect: "present" })), ...extraAssertions];
+
+  const assertions = [];
+  for (const spec of specs) {
+    const frameName = spec.frame ?? "main";
+    const reader = frameName === "main" ? page : (frameHandles.get(frameName) ?? null);
+    assertions.push({
+      frame: frameName,
+      selector: spec.selector,
+      expect: spec.expect ?? "present",
+      // An unresolved frame counts ZERO rather than skipping the assertion.
+      count: reader ? await reader.count(spec.selector) : 0,
+    });
+  }
+
+  // 3. The image, written and then hashed from disk.
+  const abs = join(repoRoot, screenshot);
+  await page.screenshot(abs);
+
+  const record = {
+    cell,
+    declaredHost,
+    finalUrl,
+    build,
+    screenshot,
+    sha256: hashFile(abs, readImpl),
+    capturedAt: now(),
+    assertions,
+    recordedBy: RECORDER_ID,
+  };
+  if (kind) record.kind = kind;
+  if (Object.keys(frames).length > 0) {
+    record.frames = Object.fromEntries(
+      Object.entries(frames).map(([name, f]) => [name, { selector: f.selector, url: f.url }]),
+    );
+  }
   return record;
 }
 
@@ -320,8 +461,24 @@ export function validateCaptureRecord(record, { hashOf } = {}) {
     }
   }
 
+  // --- a chat_thread record names the KIND it photographed ---
+  // Without it the record proves a transcript was on screen, not that a card
+  // was in it, which is the whole distance between a capture and evidence.
+  if (host === "chat_thread") {
+    if (!LIFECYCLE_KINDS.includes(record?.kind)) {
+      v.push(
+        `${where}: a chat_thread record must declare the lifecycle \`kind\` it photographed ` +
+          `(one of ${LIFECYCLE_KINDS.join("/")}) — it declares "${record?.kind}"`,
+      );
+    }
+  }
+
   // --- every required host anchor, observed present ---
-  for (const req of HOST_ANCHOR_REQUIREMENTS[host]) {
+  const hostRequirements =
+    host === "chat_thread" && LIFECYCLE_KINDS.includes(record?.kind)
+      ? chatThreadRequirementsFor(record.kind)
+      : HOST_ANCHOR_REQUIREMENTS[host];
+  for (const req of hostRequirements) {
     const found = assertions.find(
       (a) => a?.selector === req.selector && (a?.frame ?? "main") === req.frame,
     );

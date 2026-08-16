@@ -14,20 +14,21 @@
  * in three places: the server dispatch test (root Vitest), the fixture suite
  * (root Vitest), and the transcript DOM test (the chat package suite).
  *
- *   1. `findDecisionPathPointers` — the text ban. It targets text that presents
- *      ANOTHER SURFACE as the decision path. It is deliberately NOT a ban on the
- *      word "run page": `InlineAgentRunCard`'s legitimate "Open the run page"
- *      link is a link inside a card, not deterministic dispatch prose, and the
- *      run card is a ruled host. What is banned is prose that tells the human to
- *      go elsewhere TO DECIDE.
- *
- *   2. `evaluateHeldTurnProjection` — the projection check. It reads a
+ *   1. `evaluateHeldTurnProjection` — THE GATE, and it is structural. It reads a
  *      normalized `TurnProjection` (ordered parts + the nodes the transcript
- *      rendered, each with the anchors it carries, its ordered slot, and the
- *      foreign-host subtrees it sits inside) and reports violations. The DOM
- *      adapter that builds a projection from a real render lives with the DOM
- *      test; the fixtures build projections directly. One evaluator, three
- *      callers, no second opinion.
+ *      rendered, each with the anchors it carries, its ordered container, and the
+ *      foreign-host subtrees it sits inside) and reports violations. The
+ *      transcript suite builds that projection from the PRODUCTION chat view and
+ *      the REAL card, so the check measures what a reader gets. One evaluator,
+ *      three callers, no second opinion.
+ *
+ *   2. `findDecisionPathPointers` — the text ban, DEFENCE IN DEPTH. It targets
+ *      prose that presents ANOTHER SURFACE as the decision path. It is
+ *      deliberately NOT a ban on the words "run page": the inline run card's
+ *      legitimate "Open the run page" link is a link inside a ruled card, not
+ *      deterministic dispatch prose. What is banned is prose that tells the human
+ *      to go elsewhere TO DECIDE. A card that is genuinely mounted makes the
+ *      prose harmless; the ban exists so a regression is named in words too.
  *
  * THE PER-KIND CONTRACT TABLE. `CHAT_THREAD_CARRIAGE_CONTRACT` has one row per
  * ruled chat_thread carriage, keyed off the protocol package's own closed set of
@@ -37,14 +38,22 @@
  * live enforcer is a claim, and a duplicate proof beside a sibling's proof is
  * worse than no proof: when the two drift, neither is authoritative.
  *
+ * ANCHORS ARE READ OFF THE SHIPPED COMPONENTS. `ownerAnchors` names what the
+ * real card really emits, so a corrected real-renderer test ACCEPTS the ruled
+ * mount. The ruled root declaration a kind does not emit yet is carried
+ * separately in `ruledRootAnchors` and tracked as an obligation, because an
+ * obligation is a red done-check and never a reason to fail the mount that
+ * exists.
+ *
  * THE HONEST LIMIT. The always-on arm is NEGATIVE: if the owner anchors appear
- * at all, they must appear at the triggering part's own transcript slot and
- * OUTSIDE every foreign-host subtree, and the turn's text must carry no
- * decision-path pointer. The POSITIVE arm — the anchors must be there at all —
- * runs with `requireMount`, and the kinds whose production chat_thread mount is
- * not on main yet are listed in `HELD_TURN_MOUNT_OBLIGATIONS`. That list is a
- * ratchet, not a waiver: the transcript test asserts the OBSERVED unmounted set
- * equals it, so the day the mount lands the row must be struck or CI goes red.
+ * at all, they must appear in the triggering part's OWN container and OUTSIDE
+ * every foreign-host subtree, and the turn's text must carry no decision-path
+ * pointer. The POSITIVE arm — the anchors must be there at all — runs with
+ * `requireMount`, and the kinds whose production chat_thread mount is not on
+ * main yet are listed in `HELD_TURN_MOUNT_OBLIGATIONS`. That list is a ratchet,
+ * not a waiver: the transcript test measures the PRODUCTION view and asserts the
+ * OBSERVED unmounted set equals it, so the day the mount lands the row must be
+ * struck or CI goes red.
  */
 
 import {
@@ -85,26 +94,52 @@ export type DecisionPathPointerPattern = {
 };
 
 /**
- * Text that presents ANOTHER SURFACE as the decision path.
+ * DEFENCE IN DEPTH, NOT THE GATE. The primary invariant is structural: a parked
+ * dispatch must project an actionable card in the same turn, and a decision
+ * taken in that card keeps the URL and settles the same root. The transcript
+ * suite holds that. These patterns catch the prose that TRIES to stand in for
+ * the card, so a regression is named in words as well as in structure.
  *
  * Each pattern is anchored on a decision verb, not on a noun: naming the run
- * page is fine ("the run is at …"), telling the human to decide there is not.
- * The patterns are case-insensitive and are applied to deterministic dispatch
- * text only — never to a card's own rendered copy.
+ * page is fine ("the run page shows every step"), telling the human to decide
+ * there is not. The patterns are case-insensitive and are applied to
+ * deterministic dispatch text only — never to a card's own rendered copy.
+ *
+ * THE SURFACE VOCABULARY IS SHARED so a new spelling is added once. The round
+ * that motivated this gate said "confirm or skip the recommended skills on the
+ * run card above": no leading "open", and the surface noun was CARD, not page,
+ * with a positional locator instead of "there". Both gaps are closed below and
+ * that exact sentence is a pinned failing fixture.
  */
+const DECIDE_VERBS =
+  "confirm|approve|accept|decide|choose|select|pick|respond|reply|answer|continue|proceed|resume|skip|reject|dismiss|adjust";
+const SURFACE_NOUNS = "run|runs|agent|agents|review|task|panel";
+const SURFACE_PARTS = "page|card|screen|view|detail|details|panel|region|tab|section|dialog|sidebar";
+/** Where "somewhere else" can be spelled without naming a surface at all. */
+const ELSEWHERE = "there|above|below|beside\\s+it|elsewhere|on\\s+that\\s+screen|over\\s+there";
+
 export const DECISION_PATH_POINTER_PATTERNS: readonly DecisionPathPointerPattern[] =
   Object.freeze([
     {
       id: "go-elsewhere-to-decide",
       why: "sends the human to another screen to make the decision the chat should carry",
-      pattern:
-        /\b(open|go\s+to|head\s+to|visit|navigate\s+to|switch\s+to|jump\s+to|see|check|view)\b[^.?!]{0,60}\b(run|agent|agents|review|task)\b[^.?!]{0,60}\b(to|and|then)\b[^.?!]{0,40}\b(confirm|approve|decide|choose|select|respond|reply|answer|continue|proceed|resume|skip|reject)\b/i,
+      pattern: new RegExp(
+        `\\b(open|go\\s+to|head\\s+to|visit|navigate\\s+to|switch\\s+to|jump\\s+to|see|check|view|use)\\b[^.?!]{0,60}\\b(${SURFACE_NOUNS})\\b[^.?!]{0,60}\\b(to|and|then)\\b[^.?!]{0,40}\\b(${DECIDE_VERBS})\\b`,
+        "i",
+      ),
     },
     {
-      id: "decide-there",
+      id: "decide-on-another-surface",
+      why: "names another surface as the place the decision is taken",
+      pattern: new RegExp(
+        `\\b(${DECIDE_VERBS})\\b[^.?!]{0,80}\\b(on|in|from|at|via|through|using)\\s+(the\\s+)?(${SURFACE_NOUNS})\\s+(${SURFACE_PARTS})\\b`,
+        "i",
+      ),
+    },
+    {
+      id: "decide-elsewhere",
       why: "tells the human the decision happens somewhere other than this conversation",
-      pattern:
-        /\b(confirm|approve|decide|choose|select|respond|reply|answer|continue|proceed|resume|skip|reject)\b[^.?!]{0,60}\b(there|on\s+the\s+run\s+page|from\s+the\s+run\s+page|in\s+the\s+run\s+(page|view|screen|detail)|on\s+the\s+agents?\s+page|on\s+the\s+review\s+page)\b/i,
+      pattern: new RegExp(`\\b(${DECIDE_VERBS})\\b[^.?!]{0,80}\\b(${ELSEWHERE})\\b`, "i"),
     },
     {
       id: "run-url-in-prose",
@@ -114,8 +149,10 @@ export const DECISION_PATH_POINTER_PATTERNS: readonly DecisionPathPointerPattern
     {
       id: "waiting-for-you-elsewhere",
       why: "describes the hold but locates it on another surface",
-      pattern:
-        /\b(waiting|paused|held|blocked|needs?\s+(your\s+)?(input|approval|decision|confirmation))\b[^.?!]{0,60}\b(on|at|in)\s+(the\s+)?(run|agents?|review)\s+(page|screen|view|detail|card)\b/i,
+      pattern: new RegExp(
+        `\\b(waiting|paused|held|blocked|needs?\\s+(your\\s+)?(input|approval|decision|confirmation))\\b[^.?!]{0,60}\\b(on|at|in)\\s+(the\\s+)?(${SURFACE_NOUNS})\\s+(${SURFACE_PARTS})\\b`,
+        "i",
+      ),
     },
   ]);
 
@@ -170,11 +207,21 @@ export type ChatThreadCarriageRow = {
   /** The one component that draws this kind. */
   owner: string;
   /**
-   * The anchors the owner must emit on its rendered root at the triggering
-   * part's slot. Root identity plus, for the held turn, its own decision
-   * controls — the affordances whose absence is the anti-pattern.
+   * The anchors the SHIPPED owner component emits today, which the card must
+   * project at the triggering part's container: its own root plus the decision
+   * controls whose absence is the anti-pattern. These are read off the real
+   * component, so a corrected real-renderer test ACCEPTS the ruled mount rather
+   * than failing it on a name the component never used.
    */
   ownerAnchors: readonly string[];
+  /**
+   * The RULED root declaration every lifecycle card owes: the kind and its host,
+   * on the card's own root. `ReviewGateCard` already emits both; the kinds that
+   * do not are listed in `ROOT_DECLARATION_OBLIGATIONS` and their owning slice
+   * adds them. Kept OUT of `ownerAnchors` on purpose — an obligation is a red
+   * done-check, never a reason to reject the mount that exists.
+   */
+  ruledRootAnchors: readonly string[];
   /**
    * Subtrees that belong to ANOTHER host. Anchors satisfied from inside one of
    * these are mislabeled evidence, not a chat mount.
@@ -182,6 +229,23 @@ export type ChatThreadCarriageRow = {
   foreignHostSubtrees: readonly string[];
   enforcer: CarriageEnforcer;
 };
+
+/**
+ * The subtrees that belong to the inline run card, on both the shipped view and
+ * the decoupled renderer. Shared, so a kind cannot quietly drop one.
+ */
+const RUN_CARD_SUBTREES = Object.freeze([
+  "[data-run-card]",
+  '[data-lifecycle-card-host="run_card"]',
+  "[data-inline-agent-run-card]",
+]);
+
+function rootAnchorsFor(kind: LifecycleCardKind): readonly string[] {
+  return Object.freeze([
+    `[data-lifecycle-card="${kind}"]`,
+    '[data-lifecycle-card-host="chat_thread"]',
+  ]);
+}
 
 /**
  * The chat_thread carriage of every ruled lifecycle kind.
@@ -200,16 +264,16 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     triggeringPart: "the durable agent_run tool result of the held dispatch turn",
     triggerToolName: "agent_run",
     owner: "RecommendationHoldCard",
+    // Read off the SHIPPED component: `RecommendationHoldCard` composes
+    // `RunRecommendationChipRow`, whose root carries the conformance id and
+    // whose two decision controls carry these action names.
     ownerAnchors: Object.freeze([
-      '[data-lifecycle-card="recommendation_hold"]',
-      '[data-lifecycle-card-host="chat_thread"]',
-      '[data-action="confirm-recommendation"]',
-      '[data-action="skip-recommendation"]',
+      '[data-conformance-id="run-chip-row"]',
+      '[data-action="confirm-run-recommendation"]',
+      '[data-action="skip-run-recommendation"]',
     ]),
-    foreignHostSubtrees: Object.freeze([
-      "[data-run-card]",
-      '[data-lifecycle-card-host="run_card"]',
-    ]),
+    ruledRootAnchors: rootAnchorsFor("recommendation_hold"),
+    foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "held-turn-card-contract",
   },
   {
@@ -218,14 +282,9 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     triggeringPart: "the artifact_review_gate DATA_PART renderable view",
     triggerToolName: null,
     owner: "ReviewGateCard",
-    ownerAnchors: Object.freeze([
-      '[data-lifecycle-card="artifact_review_gate"]',
-      '[data-lifecycle-card-host="chat_thread"]',
-    ]),
-    foreignHostSubtrees: Object.freeze([
-      "[data-run-card]",
-      '[data-lifecycle-card-host="run_card"]',
-    ]),
+    ownerAnchors: Object.freeze(['[data-conformance-id="review-gate-card"]']),
+    ruledRootAnchors: rootAnchorsFor("artifact_review_gate"),
+    foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "chat-hitl-one-card-gate",
   },
   {
@@ -234,14 +293,9 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     triggeringPart: "the trigger_schedule_proposal DATA_PART renderable view",
     triggerToolName: null,
     owner: "ScheduleProposalCard",
-    ownerAnchors: Object.freeze([
-      '[data-lifecycle-card="trigger_schedule_proposal"]',
-      '[data-lifecycle-card-host="chat_thread"]',
-    ]),
-    foreignHostSubtrees: Object.freeze([
-      "[data-run-card]",
-      '[data-lifecycle-card-host="run_card"]',
-    ]),
+    ownerAnchors: Object.freeze([`[data-lifecycle-card="trigger_schedule_proposal"]`]),
+    ruledRootAnchors: rootAnchorsFor("trigger_schedule_proposal"),
+    foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "chat-hitl-one-card-gate",
   },
   {
@@ -250,14 +304,9 @@ export const CHAT_THREAD_CARRIAGE_CONTRACT: readonly ChatThreadCarriageRow[] = O
     triggeringPart: "the verification_summary DATA_PART renderable view",
     triggerToolName: null,
     owner: "VerificationSummaryCard",
-    ownerAnchors: Object.freeze([
-      '[data-lifecycle-card="verification_summary"]',
-      '[data-lifecycle-card-host="chat_thread"]',
-    ]),
-    foreignHostSubtrees: Object.freeze([
-      "[data-run-card]",
-      '[data-lifecycle-card-host="run_card"]',
-    ]),
+    ownerAnchors: Object.freeze([`[data-lifecycle-card="verification_summary"]`]),
+    ruledRootAnchors: rootAnchorsFor("verification_summary"),
+    foreignHostSubtrees: RUN_CARD_SUBTREES,
     enforcer: "chat-hitl-one-card-gate",
   },
 ]);
@@ -289,6 +338,20 @@ export const HELD_TURN_MOUNT_OBLIGATIONS: readonly LifecycleCardKind[] = Object.
   "recommendation_hold",
 ]);
 
+/**
+ * Kinds whose shipped owner component does not yet emit the RULED root
+ * declaration (`data-lifecycle-card` + `data-lifecycle-card-host`).
+ *
+ * `ReviewGateCard` emits both today, so it is absent from this list and would
+ * fail the check if it stopped. The transcript suite renders each listed owner
+ * and asserts the declaration is STILL missing, so the day the owning slice adds
+ * it the row must be struck. Same ratchet discipline as the mount obligations:
+ * an obligation is a red done-check, never a waiver.
+ */
+export const ROOT_DECLARATION_OBLIGATIONS: readonly LifecycleCardKind[] = Object.freeze([
+  "recommendation_hold",
+]);
+
 // ---------------------------------------------------------------------------
 // The projection model
 // ---------------------------------------------------------------------------
@@ -314,13 +377,6 @@ export type ProjectedNode = {
   slot: number | null;
   /** Foreign-host subtree selectors this node sits INSIDE. */
   insideSubtrees: readonly string[];
-  /**
-   * The run this node declares itself keyed by, when it declares one. The epic
-   * ruled the held card is "keyed by the agent_run tool-result runId", so a
-   * node that carries the trigger's own runId is AT that part's position even
-   * when the transcript gives it its own ordered slot below the trigger.
-   */
-  runBinding?: string | null;
 };
 
 export type TurnProjection = {
@@ -366,24 +422,19 @@ export function runIdOf(result: string | null): string | null {
 }
 
 /**
- * Is this node at the triggering part's transcript position?
+ * Is this node in the triggering part's own container?
  *
- * Two ways to be there, and only two. Sharing the triggering part's ordered slot
- * is the direct one. The other is the epic's own ruling — the card is KEYED by
- * the agent_run tool-result runId — so a node that declares the trigger's run
- * and follows it in the transcript is bound to that part rather than floating.
- * A node that declares a DIFFERENT run, or that precedes the trigger, is not at
- * the position however close it looks.
+ * ONE way, deliberately. The transcript renders one container per ordered part;
+ * the card belongs in the container of the part that triggered it, beside the
+ * inline run card rather than inside it. A node anywhere else in the turn is a
+ * card the reader has to go looking for, and "somewhere in the same turn" is the
+ * looseness that let a text pointer read as a mount.
  */
 function atTriggerPosition(
   node: ProjectedNode,
   trigger: Extract<ProjectedPart, { kind: "tool_result" }>,
 ): boolean {
-  if (node.slot === trigger.slot) return true;
-  if (node.slot === null) return false;
-  if (node.slot < trigger.slot) return false;
-  const binding = node.runBinding ?? null;
-  return binding !== null && trigger.runId != null && binding === trigger.runId;
+  return node.slot === trigger.slot;
 }
 
 /**
@@ -453,10 +504,9 @@ export function evaluateHeldTurnProjection(
       violations.push({
         code: "anchors_off_position",
         detail:
-          `${row.owner} anchors render at slot ${node.slot ?? "none"} (run binding ` +
-          `${node.runBinding ?? "none"}) but the ${row.triggerToolName} part is at slot ` +
-          `${trigger.slot} (run ${trigger.runId ?? "unknown"}) — the card must render at its ` +
-          "triggering part's position, keyed by that part's own run",
+          `${row.owner} anchors render in container ${node.slot ?? "none"} but the ` +
+          `${row.triggerToolName} part (run ${trigger.runId ?? "unknown"}) is container ` +
+          `${trigger.slot} — the card must render in its triggering part's OWN container`,
       });
       continue;
     }

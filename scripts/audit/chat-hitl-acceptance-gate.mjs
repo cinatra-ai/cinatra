@@ -65,7 +65,12 @@ import { readFileSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { hashFile, validateCaptureIndex } from "./lib/chat-hitl-capture-recorder.mjs";
+import {
+  chatThreadRequirementsFor,
+  hashFile,
+  hostTokenInCell,
+  validateCaptureIndex,
+} from "./lib/chat-hitl-capture-recorder.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -247,6 +252,77 @@ export function auditCaptureIndex({
   return validateCaptureIndex({ index, hashOf });
 }
 
+/** A cell name without its image extension. */
+function cellKey(name) {
+  return String(name ?? "").replace(/\.(png|jpe?g|webp)$/i, "");
+}
+
+/**
+ * Every manifest proof that NAMES a chat_thread cell.
+ *
+ * A manifest row points at proofs; a proof that names a chat-thread capture cell
+ * is a claim that a card was photographed inside the chat. This finds those
+ * claims so the next function can demand the evidence behind them.
+ */
+export function chatThreadCellClaims(manifest) {
+  const claims = [];
+  for (const [i, row] of (manifest.rows ?? []).entries()) {
+    for (const proof of proofsOf(row)) {
+      if (hostTokenInCell(proof.testName) !== "chat_thread") continue;
+      claims.push({ row: i + 1, cell: cellKey(proof.testName), file: proof.file, kind: proof.kind });
+    }
+  }
+  return claims;
+}
+
+/**
+ * THE BINDING. An unindexed screenshot counts as ZERO.
+ *
+ * Every manifest cell that names `chat_thread` must resolve to a record in the
+ * canonical index, and that record must be a chat capture with the card really
+ * in it: the chat URL class, and same-frame counts of at least one for the
+ * conversation list, the kind's own card root, the `chat_thread` host
+ * declaration, and the kind's decision controls. A file name on a README is not
+ * evidence; this is what makes the index non-vacuous.
+ *
+ * Returns violations. `--strict` and `audit` both refuse them, and the pinned
+ * suite asserts the exact set that is unbound today, so a later round cannot add
+ * an unindexed chat screenshot and stay green.
+ */
+export function auditManifestIndexBinding({ manifest = loadManifest(), index = loadCaptureIndex() } = {}) {
+  const violations = [];
+  const byCell = new Map((index.records ?? []).map((r) => [cellKey(r.cell), r]));
+
+  for (const claim of chatThreadCellClaims(manifest)) {
+    const record = byCell.get(claim.cell);
+    if (!record) {
+      violations.push(
+        `manifest row ${claim.row} claims the chat_thread cell "${claim.cell}" (${claim.file}), ` +
+          "and no record in the capture index carries that cell — an unindexed screenshot counts as zero",
+      );
+      continue;
+    }
+    if (record.declaredHost !== "chat_thread") {
+      violations.push(
+        `manifest row ${claim.row} claims "${claim.cell}" as chat_thread; its record declares "${record.declaredHost}"`,
+      );
+      continue;
+    }
+    for (const req of chatThreadRequirementsFor(record.kind)) {
+      const found = (record.assertions ?? []).find(
+        (a) => a?.selector === req.selector && (a?.frame ?? "main") === req.frame,
+      );
+      if (!found || (found.expect ?? "present") !== "present" || !(found.count >= 1)) {
+        violations.push(
+          `manifest row ${claim.row}: the record for "${claim.cell}" does not observe ` +
+            `${req.selector} present in the ${req.frame} frame`,
+        );
+      }
+    }
+  }
+  return violations;
+}
+
 function summarise(rows) {
   const counts = { MAPPED: 0, BUILT: 0, MISSING: 0 };
   for (const r of rows) counts[r.disposition] = (counts[r.disposition] ?? 0) + 1;
@@ -270,7 +346,10 @@ function main(argv) {
     return 2;
   }
   const captureIndex = loadCaptureIndex();
-  const captureViolations = auditCaptureIndex({ index: captureIndex });
+  const captureViolations = [
+    ...auditCaptureIndex({ index: captureIndex }),
+    ...auditManifestIndexBinding({ manifest, index: captureIndex }),
+  ];
   if (captureViolations.length > 0) {
     console.error(
       `[${LABEL}] ${captureViolations.length} capture-index violation(s) — a capture's ` +
