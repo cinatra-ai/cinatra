@@ -225,3 +225,68 @@ describe("install pipeline: a FRESH install that cannot activate never commits",
     expect(durable.finalizeInstallOp).toHaveLength(1);
   });
 });
+
+describe("install pipeline: a refused probe never deletes the LIVE install's bytes", () => {
+  it("a same-digest re-install whose probe fails KEEPS the dir and says so", async () => {
+    // A same-version re-install materializes to the SAME dir as the live install.
+    // GC'ing it on a probe failure would destroy the working install that this
+    // very refusal exists to protect.
+    const { deps, gcd } = harness({
+      ...trustsTheRegistry,
+      // A finalized prior op at the SAME digest: the materialized dir IS live.
+      readInstallOp: async () => ({ installOpId: "op-1", phase: "finalized", digest: "dgst" }),
+      verifyActivatableBeforeFinalize: async () => ({
+        supersedes: false,
+        ok: false,
+        reason: "register() threw",
+      }),
+    });
+
+    const err = await installExtensionFromRegistry(
+      { packageName: PKG, version: VER, orgId: "org-1" },
+      deps,
+    ).catch((e: unknown) => e);
+
+    expect((err as Error).message).toMatch(/could not activate/i);
+    // The load-bearing assertion: the live dir was NOT deleted.
+    expect(gcd).toEqual([]);
+    expect((err as Error).message).toMatch(/kept because it is the live install's/i);
+  });
+
+  it("a superseding update whose probe fails still GCs the NEW digest", async () => {
+    const { deps, gcd } = harness({
+      ...trustsTheRegistry,
+      // A finalized prior op at a DIFFERENT digest: the new dir is disposable.
+      readInstallOp: async () => ({ installOpId: "op-1", phase: "finalized", digest: "older" }),
+      verifyActivatableBeforeFinalize: async () => ({
+        supersedes: true,
+        ok: false,
+        reason: "register() threw",
+      }),
+    });
+
+    await expect(
+      installExtensionFromRegistry({ packageName: PKG, version: VER, orgId: "org-1" }, deps),
+    ).rejects.toThrow(/could not activate the new digest/i);
+    expect(gcd).toEqual(["/store/dir"]);
+  });
+
+  it("a GC failure is reported honestly, never as a removal", async () => {
+    const { deps } = harness({
+      ...trustsTheRegistry,
+      gcStoreDir: async () => {
+        throw new Error("EBUSY");
+      },
+      verifyActivatableBeforeFinalize: async () => ({
+        supersedes: false,
+        ok: false,
+        reason: "register() threw",
+      }),
+    });
+    const err = await installExtensionFromRegistry(
+      { packageName: PKG, version: VER, orgId: "org-1" },
+      deps,
+    ).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/still on disk and need clearing/i);
+  });
+});

@@ -916,13 +916,28 @@ export async function installExtensionFromRegistry(
       ...(input.storeRoot ? { storeRoot: input.storeRoot } : {}),
     });
     if (!gate.ok) {
-      // GC the failed new digest so two dirs never coexist for the boot
-      // duplicate-name gate (the previous install's dir is the sole survivor).
-      if (deps.gcStoreDir) {
+      // GC the failed digest so two dirs never coexist for the boot duplicate-name
+      // gate. GUARDED on `isLiveDigest`, the same guard the host-compat and
+      // untrusted gates use: a same-version re-install materializes to the SAME
+      // dir as the LIVE install, so deleting it on a probe failure would destroy
+      // the working install this refusal is supposed to protect. That guard used
+      // to be implicit here, because only a superseding UPDATE reached this branch
+      // and a superseding digest is by definition not the live one; extending the
+      // probe to fresh installs removed that guarantee, so the guard is explicit.
+      const gcIsLiveDigest =
+        priorOp?.phase === "finalized" &&
+        (priorOp.digest == null || priorOp.digest === mat.digest);
+      let gcBytesRemoved = false;
+      if (deps.gcStoreDir && !gcIsLiveDigest) {
         try {
           await deps.gcStoreDir(mat.storeDir);
-        } catch {
-          /* best-effort GC — a leftover dir is recovered by a later retry's gate. */
+          gcBytesRemoved = true;
+        } catch (gcErr) {
+          console.warn(
+            "[extension-install-pipeline] refused install left its materialized dir in place for %s: %s",
+            input.packageName,
+            gcErr instanceof Error ? gcErr.message : String(gcErr),
+          );
         }
       }
       // Do NOT journal this failed attempt. `beginInstallOp` deliberately has not
@@ -933,15 +948,23 @@ export async function installExtensionFromRegistry(
       // version. The journal correctly stays the old `finalized` op;
       // the bad new digest is already GC'd above; the throw below is the
       // authoritative failure signal.
+      // The message states what is actually on disk. A swallowed GC failure, or a
+      // dir kept because it IS the live install's, must never be reported as a
+      // removal.
+      const bytesNote = gcBytesRemoved
+        ? "the failed digest was GC'd"
+        : gcIsLiveDigest
+          ? "the materialized dir was kept because it is the live install's"
+          : "the materialized bytes are still on disk and need clearing";
       throw new Error(
         gate.supersedes
           ? `update of ${input.packageName}@${input.version} could not activate the new digest ` +
             `(${gate.reason}): the previous install is left durably intact (journal, grant, ` +
-            `provenance and store dir unchanged) and the failed new digest was GC'd; no finalize.`
+            `provenance and store dir unchanged), ${bytesNote}; no finalize.`
           : `install of ${input.packageName}@${input.version} could not activate ` +
-            `(${gate.reason}): nothing was committed. The materialized bytes were GC'd, no ` +
-            `install-op journal, grant or provenance was written, and the implementation ` +
-            `bundled in the image stays in service.`,
+            `(${gate.reason}): nothing was committed. No install-op journal, grant or ` +
+            `provenance was written, ${bytesNote}, and the implementation bundled in the ` +
+            `image stays in service.`,
       );
     }
   }
