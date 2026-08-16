@@ -273,6 +273,102 @@ function revalidateForKind(kind: ExtensionKind): void {
 }
 
 // ---------------------------------------------------------------------------
+// §V RE-ANCHOR (cinatra#2694 / S5 #2802)
+//
+// Owner ruling 2026-08-16 (entry 350): "§V re-anchors". For the three kinds
+// whose access identity IS the canonical install row, saving the access picker
+// is not a label change — it MOVES the row's anchor. Widening to "Workspace:
+// All" / "Workspace: Admins only" moves the row to the app-wide workspace anchor
+// (and archives the package's other organization rows, S4's supersession);
+// narrowing moves it back to exactly one organization. Everything lands in ONE
+// database transaction under the package lifecycle lock, so a refusal writes
+// nothing.
+//
+// The picker's drawing is untouched (Application Design — Permissions): the same
+// rows, the same copy, the same save/status state. The typed refusals ride the
+// existing generic error state.
+// ---------------------------------------------------------------------------
+
+/** The kinds whose polymorphic resource_id IS an `installed_extension.id`. */
+const INSTALL_ROW_ANCHORED_KINDS: readonly ExtensionKind[] = [
+  "connector",
+  "artifact",
+  "workflow",
+];
+
+function isInstallRowAnchoredKind(kind: ExtensionKind): boolean {
+  return INSTALL_ROW_ANCHORED_KINDS.includes(kind);
+}
+
+type ReanchorPlan =
+  | {
+      ok: true;
+      destination: import("./canonical-types").InstallRowOwnership;
+      anchorMoved: boolean;
+    }
+  | { ok: false; error: string };
+
+/**
+ * Resolve where this save re-anchors the install row, and whether the actor may
+ * move it there.
+ *
+ * The destination comes from the SELECTION (the audience the picker yielded),
+ * resolved by the one rule in `resolveReanchorDestination`. The standing rule is
+ * the owner's: only a platform admin may change an anchor; a non-platform admin
+ * may still make an ordinary policy edit that leaves the row where it is.
+ */
+async function planInstallRowReanchor(
+  resourceId: string,
+  policy: AgentAuthPolicy,
+  actor: ActorContext,
+  userId: string,
+): Promise<ReanchorPlan> {
+  const { readInstalledExtensionById } = await import("./canonical-store");
+  const row = await readInstalledExtensionById(resourceId);
+  if (!row) return { ok: false, error: "not_found" };
+
+  // Fail-closed over the UNION of the three fields: every token the save would
+  // persist has to resolve to the same destination.
+  const tokens = [
+    ...new Set<string>([
+      ...policy.runListVisibility,
+      ...policy.runDataVisibility,
+      ...policy.runExecuteVisibility,
+    ]),
+  ];
+
+  // The actor's OWN organizations — the same set the §V picker was built from
+  // (readOrgsWithTeamsForUserActiveOnly), so a locus the picker could not offer
+  // is not one the server will honour.
+  const { readOrgsWithTeamsForUserActiveOnly } = await import("@/lib/better-auth-db");
+  const orgs = await readOrgsWithTeamsForUserActiveOnly(userId);
+  const { resolveReanchorDestination } = await import("./lifecycle-target-resolver");
+  const resolution = await resolveReanchorDestination(tokens, {
+    actorOrganizationIds: orgs.map((o) => o.id),
+    actorActiveOrganizationId: actor.organizationId ?? null,
+    lookups: {
+      teamOrganization: async (teamId) =>
+        orgs.find((o) => o.teams.some((t) => t.id === teamId))?.id ?? null,
+      projectOrganization: async (projectId) => {
+        const { readProjectById } = await import("@/lib/projects-store");
+        const project = await readProjectById(projectId);
+        return project?.organizationId ?? null;
+      },
+    },
+  });
+  if (!resolution.ok) return { ok: false, error: resolution.code };
+
+  const { sameRowAnchor } = await import("./canonical-types");
+  const anchorMoved = !sameRowAnchor(row, resolution.anchor);
+  if (anchorMoved && actor.platformRole !== "platform_admin") {
+    // Target selection is platform-admin-only across the epic; an anchor move is
+    // target selection after the fact.
+    return { ok: false, error: "forbidden" };
+  }
+  return { ok: true, destination: resolution.anchor, anchorMoved };
+}
+
+// ---------------------------------------------------------------------------
 // Save access policy
 // ---------------------------------------------------------------------------
 
@@ -321,13 +417,43 @@ export async function saveExtensionAccessPolicy(
   // ("scope_locked_by_connector") and grants against loci outside the saving
   // actor's real memberships ("invalid_locus") — BEFORE any write. The UI's
   // disabled picker rows are an affordance; this veto is the enforcement.
+  // For the install-row-anchored kinds the destination anchor is resolved FIRST:
+  // the connector ceiling below is measured against the DESTINATION organization
+  // (the anchor is what this save moves), and an anchor move by a non-platform
+  // admin is refused before any veto or write runs.
+  const reanchor = isInstallRowAnchoredKind(kind)
+    ? await planInstallRowReanchor(resourceId, validatedPolicy, actor, userId)
+    : null;
+  if (reanchor && !reanchor.ok) return { ok: false, error: reanchor.error };
+
   const writeVeto = await hooks.validatePolicyWrite?.(resourceId, validatedPolicy, {
     userId,
     actor,
+    ...(reanchor?.ok
+      ? { destinationOrganizationId: reanchor.destination.organizationId }
+      : {}),
   });
   if (writeVeto) return { ok: false, error: writeVeto };
 
-  await writeExtensionAccessPolicy(kind, resourceId, validatedPolicy);
+  if (reanchor?.ok) {
+    // ONE transaction under the package lifecycle lock: anchor + policy +
+    // supersession + dependency-edge re-resolution. No activation hook, no
+    // re-registration — the package bytes did not change.
+    const { reanchorInstallRow, ReanchorRefusedError } = await import("./lifecycle-primitive");
+    try {
+      await reanchorInstallRow({
+        rowId: resourceId,
+        resourceKind: kind,
+        destination: reanchor.destination,
+        policy: validatedPolicy,
+      });
+    } catch (err) {
+      if (err instanceof ReanchorRefusedError) return { ok: false, error: err.code };
+      throw err;
+    }
+  } else {
+    await writeExtensionAccessPolicy(kind, resourceId, validatedPolicy);
+  }
 
   // Per-kind post-write side effects (e.g. skill's compatibility projection
   // back into (level, scope)). Never throws — wrapped to keep the canonical

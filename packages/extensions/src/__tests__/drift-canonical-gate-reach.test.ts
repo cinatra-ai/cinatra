@@ -132,9 +132,11 @@ describe("canonical lifecycle status reachability guard", () => {
     () => {
       // The primitive uses the `_internal*` helpers (which contain the
       // canonical write). Any file calling `_internalUpdateInstalledExtensionStatus`
-      // (or its siblings) outside the allow-list is a drift.
+      // (or its siblings — including the §V re-anchor writer of cinatra#2802,
+      // which archives the superseded organization rows inside its transaction)
+      // outside the allow-list is a drift.
       const hits = findFilesWithPattern(
-        /_internalUpdateInstalledExtensionStatus|_internalInsertInstalledExtension|_internalDeleteInstalledExtension|_internalUpdateInstalledExtensionSource|_internalUpdateInstalledExtensionMetadata/,
+        /_internalUpdateInstalledExtensionStatus|_internalInsertInstalledExtension|_internalDeleteInstalledExtension|_internalUpdateInstalledExtensionSource|_internalUpdateInstalledExtensionMetadata|_internalReanchorInstallRowAtomic/,
       );
 
       const offenders = hits.filter((f) => !ALLOWED_FILES.includes(f));
