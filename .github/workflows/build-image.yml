@@ -1362,6 +1362,83 @@ jobs:
   # (register-types-*, semantic-manifest*, the seed-pack parity tier) read the
   # MATERIALIZED extension tree off disk, exactly as the seed-pack tier in
   # perpetual-loops-invariants does.
+  # ---------------------------------------------------------------------------
+  # chat-HITL gate suites — the lifecycle-card gates, made merge-blocking.
+  # ---------------------------------------------------------------------------
+  # WHAT WAS WRONG. The chat-HITL gates are deterministic tests, and the claim
+  # that they "run in the required root Vitest job" did not survive reading this
+  # file: the required `test` job runs `packages/agents` only, and the wholesale
+  # root suite runs in `perpetual-loops-invariants`. So the audit tier that
+  # carries the acceptance gate, the one-card gate, the retirement gate and the
+  # held-turn contract could go red without blocking a merge.
+  #
+  # THE FIX IS THE SAME ONE `package-unit-suites` USES, deliberately: a dedicated
+  # job that this workflow's `build` job DEPENDS on, whose "Guard prerequisite
+  # gates" step hard-fails `build` when it did not succeed. No branch-protection
+  # context changes, and this job's own context stays non-required.
+  #
+  # THE FILTER, and why it is filenames rather than a list of paths. Vitest
+  # positional arguments are filename filters against the root config's include,
+  # so a NEW gate suite named for the program is picked up with no edit here —
+  # which is the property a per-file pin keeps losing. It is not vacuous: the
+  # step below asserts a floor on the number of files that matched, so a rename
+  # that empties the filter fails this job instead of passing it.
+  #
+  # THE TRANSCRIPT HALF IS ALREADY GATED. The chat package's own suite carries
+  # the production-transcript proof, and `package-unit-suites` (below, already in
+  # `build.needs`) runs it. This job adds the root/audit tier only.
+  chat-hitl-gates:
+    name: chat-HITL gate suites
+    needs: detect
+    if: ${{ needs.detect.outputs.skip != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # Measured: the six suites are ~1s of vitest; setup (checkout + clone +
+    # install) is the whole cost. 10 leaves room for runner variance.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - name: Clone companion extension repos
+        uses: ./.github/actions/clone-extensions
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The floor is the anti-vacuum guard: a filter that matches nothing, or
+      # fewer files than the program ships, fails here rather than reporting a
+      # green run over an empty set.
+      - name: chat-HITL gate suites (root/audit tier)
+        env:
+          MIN_GATE_FILES: '3'
+        run: |
+          set -uo pipefail
+          pnpm exec vitest run --config vitest.config.ts --no-coverage \
+            chat-hitl held-turn held-dispatch 2>&1 | tee /tmp/chat-hitl-gates.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            echo "::error::chat-HITL gate suites failed."
+            exit "$status"
+          fi
+          files=$(sed -n 's/.*Test Files  *\([0-9][0-9]*\) passed.*/\1/p' /tmp/chat-hitl-gates.log | tail -1)
+          if [ -z "$files" ] || [ "$files" -lt "$MIN_GATE_FILES" ]; then
+            echo "::error::the chat-HITL filter matched ${files:-0} test files, below the floor of $MIN_GATE_FILES — a renamed or deleted gate suite would otherwise pass silently."
+            exit 1
+          fi
+          echo "chat-HITL gate suites: $files file(s) executed."
+
   package-unit-suites:
     name: Workspace package unit suites
     needs: detect
@@ -2955,7 +3032,11 @@ jobs:
     # packages — packages/llm, packages/chat, packages/objects,
     # packages/registries and the rest — which until this change executed in no
     # workflow at all.
-    needs: [detect, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, hosted-mcp-wire-gate]
+    # `chat-hitl-gates` joins on the identical footing once more: it is the ONLY
+    # merge-blocking runner for the chat-HITL gate suites (the required `test`
+    # job runs packages/agents only, and the wholesale root suite runs in the
+    # non-blocking perpetual-loops job).
+    needs: [detect, test, skills-unit, a2a-unit, execution-plane-unit, package-unit-suites, chat-hitl-gates, hosted-mcp-wire-gate]
     # Run even when a prerequisite (`detect`/`test`/`skills-unit`/`a2a-unit`/`execution-plane-unit`/`package-unit-suites`) FAILED, so the guard step
     # below reports a definitive job FAILURE instead of a SKIP. GitHub can count a
     # skipped required check as successful, so a failed `test` merely *skipping*
@@ -2985,10 +3066,10 @@ jobs:
       # Hard-fail the build (definitive RED, never a non-failing "skip") when a
       # prerequisite gate did not pass — the type-safety enforcement for the
       # CI-only in-build-tsc skip (see the `test` job). No-ops on the success path.
-      - name: Guard prerequisite gates (detect + test + skills-unit + a2a-unit + execution-plane-unit + package-unit-suites + hosted-mcp-wire-gate)
-        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' || needs['a2a-unit'].result != 'success' || needs['execution-plane-unit'].result != 'success' || needs['package-unit-suites'].result != 'success' || needs['hosted-mcp-wire-gate'].result != 'success' }}
+      - name: Guard prerequisite gates (detect + test + skills-unit + a2a-unit + execution-plane-unit + package-unit-suites + chat-hitl-gates + hosted-mcp-wire-gate)
+        if: ${{ needs.detect.result != 'success' || needs.test.result != 'success' || needs['skills-unit'].result != 'success' || needs['a2a-unit'].result != 'success' || needs['execution-plane-unit'].result != 'success' || needs['package-unit-suites'].result != 'success' || needs['chat-hitl-gates'].result != 'success' || needs['hosted-mcp-wire-gate'].result != 'success' }}
         run: |
-          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }} a2a-unit=${{ needs['a2a-unit'].result }} execution-plane-unit=${{ needs['execution-plane-unit'].result }} package-unit-suites=${{ needs['package-unit-suites'].result }} hosted-mcp-wire-gate=${{ needs['hosted-mcp-wire-gate'].result }}. Refusing to build the image."
+          echo "::error::Prerequisite gate failed — detect=${{ needs.detect.result }} test=${{ needs.test.result }} skills-unit=${{ needs['skills-unit'].result }} a2a-unit=${{ needs['a2a-unit'].result }} execution-plane-unit=${{ needs['execution-plane-unit'].result }} package-unit-suites=${{ needs['package-unit-suites'].result }} chat-hitl-gates=${{ needs['chat-hitl-gates'].result }} hosted-mcp-wire-gate=${{ needs['hosted-mcp-wire-gate'].result }}. Refusing to build the image."
           exit 1
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
