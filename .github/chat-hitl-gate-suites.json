@@ -1,0 +1,15 @@
+{
+  "note": "THE CHAT-HITL GATE SUITE MANIFEST : the exact set of test files the `chat-hitl-gates` job in build-image.yml executes and verifies. This list, not a filename filter, decides what is merge-blocking. A vitest positional argument is a case-insensitive SUBSTRING filter over the root include, so a filter would quietly adopt any future file whose name happens to contain `chat-hitl`, `held-turn` or `held-dispatch`, and a count floor stops detecting deletions the moment the set grows past it. Registering a gate here is therefore a deliberate, review-visible diff on a protected path, and so is removing one. THE ROOT VITEST CONFIG IS THE SCOPE: every path below must be inside its `include`, which covers `scripts/audit/__tests__` and `src/**/__tests__` and does NOT cover `packages/**`. The chat package's own transcript suite is gated separately, through the `package-unit-suites` job that already sits in `build.needs`. `discovery` is the anti-omission half: the job walks `roots` RECURSIVELY, matches `pattern` case-insensitively against each file name, counts only files inside a `__tests__` directory (which is what the root include runs), and requires that set to EQUAL `suites`. A flat read of a few chosen directories would miss `.../__tests__/regressions/held-turn-x.test.ts` and call the tree clean, so the roots below are whole trees rather than single directories.",
+  "discovery": {
+    "roots": [
+      "scripts/audit",
+      "src"
+    ],
+    "pattern": "^(chat-hitl|held-turn|held-dispatch).*\\.test\\.(mjs|ts|tsx)$"
+  },
+  "suites": [
+    "scripts/audit/__tests__/chat-hitl-acceptance-gate.test.mjs",
+    "scripts/audit/__tests__/chat-hitl-one-card-gate.test.mjs",
+    "scripts/audit/__tests__/chat-hitl-retirement-gate.test.mjs"
+  ]
+}

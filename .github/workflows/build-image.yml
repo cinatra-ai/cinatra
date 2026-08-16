@@ -1377,16 +1377,30 @@ jobs:
   # gates" step hard-fails `build` when it did not succeed. No branch-protection
   # context changes, and this job's own context stays non-required.
   #
-  # THE FILTER, and why it is filenames rather than a list of paths. Vitest
-  # positional arguments are filename filters against the root config's include,
-  # so a NEW gate suite named for the program is picked up with no edit here —
-  # which is the property a per-file pin keeps losing. It is not vacuous: the
-  # step below asserts a floor on the number of files that matched, so a rename
-  # that empties the filter fails this job instead of passing it.
+  # WHAT DECIDES THE SET: a checked-in MANIFEST, not a filename filter.
+  # `.github/chat-hitl-gate-suites.json` lists the exact suites this job runs and
+  # verifies. A vitest positional argument is a case-insensitive SUBSTRING filter
+  # over the root include, so a filter would quietly adopt any future file whose
+  # name contains `chat-hitl`, `held-turn` or `held-dispatch`, and a count floor
+  # stops detecting deletions the moment the set grows past it. With a manifest,
+  # registering a merge-blocking gate is a deliberate, review-visible diff on a
+  # protected path, and so is removing one.
   #
-  # THE TRANSCRIPT HALF IS ALREADY GATED. The chat package's own suite carries
-  # the production-transcript proof, and `package-unit-suites` (below, already in
-  # `build.needs`) runs it. This job adds the root/audit tier only.
+  # THE MANIFEST IS CHECKED FROM BOTH SIDES. Every listed path must exist and must
+  # have RUN (that is the deletion and skip detector the floor used to approximate
+  # badly), and every convention-matching file discovered on disk must be listed
+  # (that is the omission detector — a new gate committed without a line in the
+  # manifest fails here rather than running outside the gate).
+  #
+  # THIS IS NOT ORDER-INDEPENDENT, deliberately. A PR that adds a gate suite must
+  # add it to the manifest in the same change; whichever of the gate PRs lands
+  # second carries that edit. An unregistered suite failing the job is the point,
+  # not a rough edge.
+  #
+  # THE ROOT CONFIG IS THE SCOPE. Its include covers `scripts/audit/__tests__` and
+  # `src/**/__tests__` and does NOT cover `packages/**`, so the chat package's
+  # production-transcript suite cannot run here. It is gated separately, by
+  # `package-unit-suites` (below), which already sits in `build.needs`.
   chat-hitl-gates:
     name: chat-HITL gate suites
     needs: detect
@@ -1394,8 +1408,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    # Measured: the six suites are ~1s of vitest; setup (checkout + clone +
-    # install) is the whole cost. 10 leaves room for runner variance.
+    # Measured: the suites are ~1s of vitest; setup (checkout + clone + install)
+    # is the whole cost. 10 leaves room for runner variance.
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1417,91 +1431,45 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # The floor is the anti-vacuum guard: a filter that matches nothing, or
-      # fewer files than the program ships, fails here rather than reporting a
-      # green run over an empty set.
-      #
-      # The count comes from the JSON REPORT, not from the human summary. The
-      # first cut of this step scraped "Test Files N passed" and read zero on the
-      # runner, because that line is wrapped in ANSI colour codes there and is
-      # not on a local non-TTY run — a green suite reported as an empty one,
-      # which is precisely the false signal this floor exists to prevent.
+      # THE MANIFEST IS THE AUTHORITY. `.github/chat-hitl-gate-suites.json` names
+      # the exact suites this job runs; the checks below verify that set from both
+      # sides. Nothing here parses the human reporter: vitest's summary line is
+      # ANSI-wrapped on the runner and not on a local non-TTY run, so a text
+      # parser reads zero over a suite that just passed. The JSON report is read
+      # instead, and `--no-color` is deliberately NOT used — it would hide that
+      # failure behind a parser that stays brittle.
       - name: chat-HITL gate suites (root/audit tier)
         env:
-          MIN_GATE_FILES: '3'
+          GATE_MANIFEST: .github/chat-hitl-gate-suites.json
           GATE_REPORT: ${{ runner.temp }}/chat-hitl-gates.json
         run: |
+          # The workflow shell is `bash -e`, so any failing command below ends
+          # the step. `pipefail` is added for the same reason; nothing here is
+          # allowed to fail quietly.
           set -uo pipefail
+
+          # 1. The manifest decides what runs, and it is checked BEFORE the run:
+          #    every listed path must exist, the list carries no duplicates, and
+          #    every convention-matching file on disk must be listed. `plan` also
+          #    DELETES the report destination, so step 3 can never read a file
+          #    this run did not write.
+          node .github/scripts/chat-hitl-gate-manifest.mjs plan
+
+          # 2. Run exactly those files.
+          readarray -t SUITES < "$RUNNER_TEMP/chat-hitl-gate-suites.txt"
           pnpm exec vitest run --config vitest.config.ts --no-coverage \
             --reporter=default --reporter=json --outputFile.json="$GATE_REPORT" \
-            chat-hitl held-turn held-dispatch
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            echo "::error::chat-HITL gate suites failed."
-            exit "$status"
-          fi
-          node -e '
-            const fs = require("node:fs");
-            const path = require("node:path");
-            const reportPath = process.env.GATE_REPORT;
-            const floor = Number(process.env.MIN_GATE_FILES);
-            if (!fs.existsSync(reportPath)) {
-              console.log(`::error::vitest wrote no JSON report to ${reportPath} — the file count cannot be verified.`);
-              process.exit(1);
-            }
-            const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
-            if (report.success !== true) {
-              console.log("::error::the JSON report says the run did not succeed.");
-              process.exit(1);
-            }
-            const ran = new Set(
-              (report.testResults ?? []).map((t) => path.relative(process.cwd(), t.name)),
-            );
-
-            // A floor alone only proves that SOME files matched. These two
-            // checks prove the right ones did.
-            //
-            // 1. NAMED IDENTITIES. The gates that exist today are required by
-            //    path, so deleting one fails here instead of being covered by
-            //    an unrelated file that happens to match the filter.
-            const required = [
-              "scripts/audit/__tests__/chat-hitl-acceptance-gate.test.mjs",
-              "scripts/audit/__tests__/chat-hitl-one-card-gate.test.mjs",
-              "scripts/audit/__tests__/chat-hitl-retirement-gate.test.mjs",
-            ];
-            const missing = required.filter((f) => !ran.has(f));
-            if (missing.length > 0) {
-              console.log(`::error::required chat-HITL gate suites did not run: ${missing.join(", ")}`);
-              process.exit(1);
+            "${SUITES[@]}" || {
+              echo "::error::chat-HITL gate suites failed."
+              exit 1
             }
 
-            // 2. DISCOVERY, both ways. Every file ON DISK whose name matches the
-            //    program must also have RUN. This is what keeps the named list
-            //    from rotting: a new gate suite is required the moment it is
-            //    committed, with no edit to this workflow, and a suite that
-            //    exists but is skipped (a stale exclude, a filter that stopped
-            //    matching) fails rather than disappearing quietly.
-            const roots = ["scripts/audit/__tests__", "src/lib/lifecycle/__tests__", "src/app/api/chat/__tests__"];
-            const onDisk = [];
-            for (const root of roots) {
-              if (!fs.existsSync(root)) continue;
-              for (const name of fs.readdirSync(root)) {
-                if (!/^(chat-hitl|held-turn|held-dispatch).*\.test\.(mjs|ts|tsx)$/.test(name)) continue;
-                onDisk.push(path.join(root, name));
-              }
-            }
-            const unrun = onDisk.filter((f) => !ran.has(f));
-            if (unrun.length > 0) {
-              console.log(`::error::these chat-HITL suites exist but did not run: ${unrun.join(", ")}`);
-              process.exit(1);
-            }
-
-            if (ran.size < floor) {
-              console.log(`::error::the chat-HITL filter matched ${ran.size} test files, below the floor of ${floor} — a renamed or deleted gate suite would otherwise pass silently.`);
-              process.exit(1);
-            }
-            console.log(`chat-HITL gate suites: ${ran.size} file(s), ${report.numTotalTests} test(s); ${onDisk.length} discovered on disk, all executed.`);
-          '
+          # 3. The run is verified against the manifest as an EXACT set, off the
+          #    JSON report's own file names — and every suite in it must have
+          #    really asserted. A `describe.skip` file is still collected, still
+          #    listed and still successful, so set equality alone would call it
+          #    green.
+          node .github/scripts/chat-hitl-gate-manifest.mjs verify
 
   package-unit-suites:
     name: Workspace package unit suites
