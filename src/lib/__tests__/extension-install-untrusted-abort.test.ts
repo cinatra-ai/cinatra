@@ -15,10 +15,12 @@ import { describe, it, expect, afterEach } from "vitest";
 import {
   installExtensionFromRegistry,
   makeTestInstallPipelineDeps,
-  UNTRUSTED_INSTALL_REFUSED,
-  UntrustedInstallRefusedError,
   type InstallPipelineDeps,
 } from "@/lib/extension-install-pipeline";
+import {
+  UNTRUSTED_INSTALL_REFUSED,
+  UntrustedInstallRefusedError,
+} from "@/lib/extension-trust";
 import { sriForBytes } from "@/lib/extension-package-store-core";
 import {
   generateExtensionSigningKeyPair,
