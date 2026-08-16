@@ -1,103 +1,118 @@
-# The resolve envelope, on the real application
+# The resolve envelope, on the real application, host by host
 
-Head under proof: `feat/2787-s9c-resolve-envelope` at `e543867e`.
+Head under proof: `feat/2787-s9c-resolve-envelope` at `7679b127`.
 Captured 2026-08-16.
 
-This slice is plumbing: it replaces the state-only resolve answer with a
-per-kind envelope `{ kind, state, body }`. The visual it owes is therefore the
-one its parity suite proves in bytes — the review card drawing UNCHANGED on the
-real application, through the real resolve path, with the envelope live
-underneath — plus the wire that ties those pixels to the fail-closed contract.
+The goal this evidence answers to: the lifecycle screens show up INSIDE the chat,
+and the proof shows them inside the chat. This slice is plumbing, and the
+plumbing runs under the chat card — `ReviewGateCard` parses the envelope, and the
+transcript's lifecycle shell consumes it. So the chat surface leads.
 
-Nothing here is a component harness. Every pixel is the shipped review page in
-a running Cinatra instance, and every wire line below was read off the browser's
-own network layer while that page was driving itself.
+Nothing here is a component harness. Every pixel is a shipped surface in a
+running instance, and every wire line was read off the browser's own network
+layer while that surface drove itself.
+
+## Every record carries the host it actually rendered
+
+A file name claims nothing. Before each shot the capture reads the card's own
+attributes off the DOM and writes them into the log beside the picture:
+`data-lifecycle-card-host`, `data-lifecycle-card-state`, `data-lifecycle-card`,
+`data-conformance-id`, and whether the decision bar and the target island are
+inside that element. The chat records additionally assert the card sits inside
+`[data-conversation-list]`. Read `capture-<host>.txt` next to any picture and you
+can check the claim without trusting the file name.
 
 ## Runtime
 
 | Fact | Value |
 |---|---|
-| Runtime | **Development runtime** (`pnpm dev`), explicitly labelled |
-| Why not a production build | `pnpm build` died with a V8 heap OOM on this machine. The unedited tail is `production-build-attempt.log`. |
-| App | worktree dev server on port 3057, own queue name |
-| Stack | throwaway Compose project `s9c2787cap`: own Postgres (5462), own Redis (6398), own volumes, own network |
+| Runtime | **Development runtime** (`pnpm dev`), labelled on every cell |
+| Why not a production build | `pnpm build` dies with a V8 heap OOM on this machine. Unedited tail: `production-build-attempt.txt`. |
+| App | worktree dev server on port 3058, own queue name |
+| Stack | throwaway Compose project `s9c2787h4`: own Postgres (5463), own Redis (6399), own volumes, own network |
 | Database | fresh: `apply-public-schema.mjs` + `pnpm auth:migrate`, then the app's own boot bootstrap created the `cinatra` schema |
-| Setup wizard | `CINATRA_E2E_SETUP_BYPASS=true` — the wizard only, nothing else |
+| Setup wizard | `CINATRA_E2E_SETUP_BYPASS=true` — the wizard only |
+| LLM | none. `CINATRA_TEST_LLM_PROVIDER=scripted`, so the chat turn dispatches the real self-MCP lifecycle pull with no model call. |
 | Operator's stack | untouched. Its 7 containers stayed up across the whole capture. |
 | Teardown | 2 containers, 2 volumes, 1 network created and removed; 0 of each remain |
 
-The capture rule asks for production-build screenshots on deterministic cells.
-The build does not fit this machine's memory, so every cell below is a
-development-runtime capture and is labelled as one. That is the rule's stated
-fallback, not a shortcut around it.
+## Per-host cells
 
-## What is real, and what is seeded
-
-REAL, and every one of them is on the path under proof:
-
-- the identity — a Better Auth email sign-up through the running app;
-- the artifact — a real upload through `POST /api/artifacts/upload`, drawn in
-  the card at its real pinned representation revision;
-- the agent template — the committed no-LLM review-gate fixture agent, staged
-  into `extensions/` and registered by the shipped dev boot scan;
-- the authorization ladder, the resolve endpoint, the envelope, the card, and
-  the decision — all shipped code, untouched by the harness.
-
-SEEDED, and none of them is the thing under proof:
-
-- the org MEMBERSHIP row for the signed-up user. This install refuses a second
-  organization, so the capture user was made an owner of the existing one.
-- the agent RUN row. This is the sanctioned harness bypass that
-  `tests/e2e/agents-run/review-gate-fixture.ts` already takes and states.
-- the review GATE row, with the shipped store's canonical pinned-target shape.
-  Minting it through the run executor needs the WayFlow runtime container,
-  which this capture host does not run. The gate the resolve reads is otherwise
-  identical to a minted one.
-- the verification RECORD row, so the verification kind had a reading to return.
-
-## The cells
-
-| # | Cell | Runtime | File | Verdict |
+| Host | Pending | Decision through the card's floor | Settled | Verdict |
 |---|---|---|---|---|
-| 1 | Review card, `pending`, host `page_gate_region`, target island loaded | development | `s9c-01-review-pending-page.png`, `s9c-02-review-pending-card.png` | **PASS** |
-| 2 | The decision lands through the card's own floor, and the card re-resolves | development | `capture.log` (`settled` on the wire) + `s9c-03-review-after-decision-page.png` | **PASS** |
-| 3 | Review envelope on the wire, bodyless | — | `capture.log` | **PASS** |
-| 4 | Verification envelope on the wire, `advisory` WITH its §VII body | — | `capture.log` | **PASS** |
-| 5 | Schedule envelope on the wire | — | `capture.log` | **PASS** |
-| 6 | A forged ref answers `absent` with no body, on two kinds | — | `capture.log` | **PASS** |
-| 7 | Review card, `settled` DOM | development | — | **NOT REACHABLE on this host** (see findings) |
-| 8 | A non-review kind DRAWN | — | — | **NOT CAPTURED** (see findings) |
+| **chat_thread** | `s9c-10`, `s9c-11` | yes, in the conversation | `s9c-12`, `s9c-13` — same conversation | **PASS** |
+| **run_card** | `s9c-20-*-pending-*` | yes, in the run panel | `s9c-20-*-settled-*` — settles in place | **PASS** |
+| **page_gate_region** | `s9c-30-*-pending-*` | yes | none — see the finding | **PASS with a recorded limit** |
+| **site_widget** | — | — | — | **NOT CAPTURED** — see the finding |
 
-Cell 1 is the whole point: the card draws its header, the target island with the
-uploaded artifact at its pinned revision, the Expand control and exactly one
-decision floor — the same drawing the parity fixture pins byte for byte, now
-served by the envelope.
+### chat_thread — the one that matters most
+
+`capture-chat.txt` records, in order: the composer sends one turn; the card
+appears inside `[data-conversation-list]` with
+`{"host":"chat_thread","state":"pending","kind":"artifact_review_gate","conformance":"review-gate-card","insideConversationList":true,"decisionBar":true,"island":true}`;
+the resolve answers `{"kind":"artifact_review_gate","state":{"state":"pending",…},"body":null}`;
+Approve is pressed on the card's own floor; the decide endpoint answers
+`{"kind":"decided","disposition":"approve","idempotent":false}`; the card
+re-resolves `settled` and redraws as
+`{"host":"chat_thread","state":"settled","insideConversationList":true}` with one
+conversation list on the page. Pending, decision and settled are the same card in
+the same conversation.
+
+`s9c-11` shows the drawn card: the review header, the target island with the real
+repaired revision, the composer-binding row, and one decision floor.
+
+### run_card
+
+The run detail page mounts the card through the run panel's own review-gate step.
+Anchors: `{"host":"run_card","state":"pending",…,"decisionBar":true,"island":true}`
+then `{"host":"run_card","state":"settled"}`. It settles in place — no navigation.
+
+### page_gate_region, and its recorded limit
+
+Pending draws normally. After the decision **this host removes the card DOM**: a
+landed decision refreshes the router, the refreshed page finds the gate resolved
+and renders its own "This review is no longer open" region instead of mounting
+the card. The capture asserts it rather than describing it —
+`AFTER DECISION card instances on this host = 0` in
+`capture-page_gate_region.txt` — and `s9c-30-*-after-decision-page.png` is that
+replacement region, not a settled card. Pre-existing page behaviour, untouched by
+this slice.
+
+### site_widget — not captured, and why
+
+The widget's card is drawn behind the real hosted-PKCE broker handshake: the
+embed declares `host: "site_widget"` with a `cwu_` credential that only a
+completed sign-in through the CMS-mounted widget produces, and the capture-index
+rule requires the record to be asserted inside the declared `.cw-frame` embed
+frame rather than the main frame. That frame is mounted by the CMS plugin, so the
+cell needs a WordPress container, the plugin, connect-site credentials and the
+broker negotiation — a stack this round did not stand up.
+
+The exact assertion the cell would carry: *the same `ReviewGateCard`, resolving
+through the broker path with `X-Cinatra-Widget-User-Token` and no cookie
+fallback, draws pending and then settled inside the `.cw-frame` embed frame with
+`data-lifecycle-card-host="site_widget"`.* It is recorded as missing rather than
+substituted with a main-frame screenshot, which the capture-index rule would
+reject and which would be the exact anti-pattern that rule exists to catch.
 
 ## The wire
 
-Read off the browser's own network layer. Full lines are in `capture.log`.
+`capture-wire.txt`, read off the browser on the real instance.
 
-Review kind, drawn card — the kind carries state and NO body:
-
-```
-{"kind":"artifact_review_gate","state":{"state":"pending","canDecide":true,"canComment":true},"body":null}
-```
-
-Verification kind, the SAME opaque ref — `advisory` now arrives WITH the
-sanitized §VII reading, which is the change this slice exists for:
+Verification carries its sanitized §VII reading beside `advisory` — and the
+record behind it was written by the shipped writers, not by hand:
 
 ```
-{"kind":"verification_summary","state":{"state":"advisory"},"body":{"version":1,"outcome":"drifted",
- "reviewedRevisionId":"98ffc4fe-…","repairedRevisionId":"98ffc4fe-…","scopePaths":["title"],
- "fieldDiff":[{"field":"title","before":"Quarterly summary","after":"Quarterly summary (revised)"},
-              {"field":"body","before":"The draft the reviewer is looking at.","after":"The revised draft."}]}}
+{"kind":"verification_summary","state":{"state":"advisory"},"body":{"version":1,
+ "outcome":"drifted","reviewedRevisionId":"29db7f76-…","repairedRevisionId":"e5f36231-…",
+ "scopePaths":["representation.form"],
+ "fieldDiff":[{"field":"representation.resource","before":"0811e687-…","after":"fbc66bb9-…"}]}}
 ```
 
-Note what is NOT in that body: no record id, no gate id, no artifact id. The
-sanitizer's promise, on the wire.
+No record id, no gate id, no artifact id. The sanitizer's promise, on the wire.
 
-Schedule kind, and both kinds on a forged ref — `absent`, and the body is null
-every time:
+Schedule, and both kinds on a forged ref — `absent`, body null, status 200 every
+time, so neither the body nor the status is an oracle:
 
 ```
 {"kind":"trigger_schedule_proposal","state":{"state":"absent"},"body":null}
@@ -105,47 +120,50 @@ every time:
 {"kind":"verification_summary","state":{"state":"absent"},"body":null}
 ```
 
-A forged ref buys exactly one thing, and it is the same thing for every kind.
-The status is 200 in all three cases, so the code is not an oracle either.
-
-After a real Approve through the card's floor:
+The recommendation hold, refused at the door — the live counterpart of the
+rejection fixture in the protocol suite:
 
 ```
-{"kind":"artifact_review_gate","state":{"state":"settled"},"body":null}
+status 400  {"error":"Invalid lifecycle view request"}
 ```
 
-## Findings
+Schedule and verification pixels are not this slice's to draw; those cards land
+in the two slices that follow.
 
-1. **The `settled` CARD is not reachable on the page-gate-region host.** A
-   landed decision does two things at once: the card re-resolves to `settled`,
-   and the router refreshes. The refreshed page finds the gate resolved and
-   renders its OWN "This review is no longer open" region INSTEAD of mounting
-   the card, so the card's settled drawing is replaced before it can be
-   photographed. Loading the same page fresh behaves the same way — the page
-   never mounts the card for a decided gate. The wire line above proves the
-   card itself resolved `settled`. This is pre-existing page behaviour and is
-   untouched by this slice; the settled card's DOM is pinned in bytes by the
-   parity fixture instead.
+## What is real, and what is seeded
 
-2. **No non-review kind is DRAWN anywhere yet, so cell 8 has no pixels.** The
-   schedule and verification cards are exactly what the next two slices build.
-   Until then the only surface that would draw them is the not-yet-drawn shell,
-   reachable only from a chat transcript carrying the data part, which needs
-   dispatch machinery this capture host does not run. The assertion that
-   capture would have proven is: *a drawn non-review card reads its per-kind
-   body out of the envelope and renders it.* What IS proven here is the half
-   that belongs to this slice — the server resolves that body and puts it on
-   the wire under the right kind, sanitized and bounded.
+REAL, and all of it is on the path under proof:
 
-3. **`restricted` was not reached**, for the same reason the earlier lane
-   recorded: run access is owner-first on this instance, so a reader who can
-   see the gate but not decide it cannot be produced without inventing an
-   authorization state. It is covered by the shipped unit tests.
+- the identity — a Better Auth email sign-up through the running app;
+- the review gate, the repair, the successor gate and the verification record —
+  all written by the SHIPPED writers through the dev lifecycle-seed route, which
+  contains no SQL and cannot write a row around a writer;
+- the artifacts at their pinned revisions, produced by those same writers;
+- the agent template — the committed no-LLM review-gate fixture agent, staged
+  into `extensions/` and registered by the shipped dev boot scan;
+- the chat turn — the scripted provider routes it, and the real self-MCP
+  dispatch, the real producer and the real sink put the data part on the turn;
+- the authorization ladder, the resolve endpoint, the envelope, the card and
+  every decision.
+
+SEEDED, and none of it is the thing under proof:
+
+- the org MEMBERSHIP row for the signed-up user. This install refuses a second
+  organization, so the capture user was made an owner of the existing one.
+- the agent RUN row. The sanctioned harness bypass that
+  `tests/e2e/agents-run/review-gate-fixture.ts` already takes and states.
+- for the run_card cell only: one INTERRUPT frame appended to that run's own
+  event log, in the exact shape the executor's marked-gate branch emits, plus the
+  run moved to `pending_approval`. That is the run's live paused state, seeded
+  because driving it needs the WayFlow runtime container this host did not run.
+  It decides only WHETHER the panel mounts the card; everything the card then
+  does is the shipped path.
 
 ## Files
 
-- `s9c-01-review-pending-page.png` — the whole review page, card pending.
-- `s9c-02-review-pending-card.png` — the card element alone, island loaded.
-- `s9c-03-review-after-decision-page.png` — the page after a real Approve.
-- `capture.log` — the unedited capture log: every wire line, every cell verdict.
-- `production-build-attempt.log` — the unedited tail of the failed build.
+- `s9c-10..13-chat-thread-*` — pending page, pending card, settled page, settled card.
+- `s9c-20-run-card-*` — pending page, pending card, settled page, settled card.
+- `s9c-30-page-gate-region-*` — pending page, pending card, after-decision page.
+- `capture-chat.txt`, `capture-run_card.txt`, `capture-page_gate_region.txt`,
+  `capture-wire.txt` — the unedited capture logs: anchors and every wire line.
+- `production-build-attempt.txt` — the unedited tail of the failed build.

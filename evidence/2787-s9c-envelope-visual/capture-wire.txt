@@ -1,0 +1,16 @@
+# wire cells — 2026-08-16T18:09:51.575Z
+CELL verification_summary on a real gate
+  status  : 200
+  response: {"kind":"verification_summary","state":{"state":"advisory"},"body":{"version":1,"outcome":"drifted","reviewedRevisionId":"29db7f76-3324-4f65-9643-a2866905fc07","repairedRevisionId":"e5f36231-6e42-4b73-b861-7b7b0bb7ff0a","scopePaths":["representation.form"],"fieldDiff":[{"field":"representation.resource","before":"0811e687-3d65-4a53-930f-bc679fbb3c7d","after":"fbc66bb9-3bec-4f38-9826-c8070d51824b"}]}}
+CELL trigger_schedule_proposal on a real gate
+  status  : 200
+  response: {"kind":"trigger_schedule_proposal","state":{"state":"absent"},"body":null}
+CELL artifact_review_gate on a forged ref
+  status  : 200
+  response: {"kind":"artifact_review_gate","state":{"state":"absent"},"body":null}
+CELL verification_summary on a forged ref
+  status  : 200
+  response: {"kind":"verification_summary","state":{"state":"absent"},"body":null}
+CELL recommendation_hold (refused at the door)
+  status  : 400
+  response: {"error":"Invalid lifecycle view request"}
