@@ -68,6 +68,15 @@ function loadManifest() {
   return JSON.parse(readFileSync(MANIFEST_PATH, "utf8"));
 }
 
+/** What a path really is, following a link. `null` when it resolves to nothing. */
+function statKind(abs) {
+  try {
+    return statSync(abs);
+  } catch {
+    return null;
+  }
+}
+
 function duplicates(values) {
   const seen = new Set();
   const dupes = new Set();
@@ -103,11 +112,18 @@ export function discover(manifest) {
     for (const entry of entries) {
       if (SKIP_DIRS.has(entry.name)) continue;
       const abs = join(dir, entry.name);
-      if (entry.isDirectory()) {
+      // A SYMLINK IS NOT A HIDING PLACE. `isFile()` and `isDirectory()` are both
+      // false for one, so skipping non-files would let a convention-named gate
+      // committed as a symlink run in the root suite while discovery ignored it.
+      // Resolve the target's kind and treat it as what it points at, which is
+      // what vitest does when it walks the same tree.
+      const kind = entry.isSymbolicLink() ? statKind(abs) : entry;
+      if (kind === null) continue; // a broken link points at nothing
+      if (kind.isDirectory()) {
         walk(abs);
         continue;
       }
-      if (!entry.isFile()) continue; // symlinks are not gates
+      if (!kind.isFile()) continue;
       if (!re.test(entry.name)) continue;
       // Mirror the root include: only files inside a `__tests__` directory run.
       if (!abs.split(sep).includes("__tests__")) continue;
