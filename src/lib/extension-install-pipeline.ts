@@ -523,6 +523,10 @@ export class UntrustedInstallRefusedError extends Error {
      *  cleanup failed, or when the dir IS the live install's (a same-digest
      *  re-install), so the message never claims a removal that did not happen. */
     public readonly bytesRemoved: boolean = true,
+    /** The dir was KEPT deliberately because it is the live install's, not
+     *  because a cleanup failed. The two need different operator copy: one is
+     *  correct behaviour, the other is leftover state to clear. */
+    public readonly dirIsLiveInstall: boolean = false,
   ) {
     super(
       `${operation} of ${packageName}@${packageVersion} was refused before anything was ` +
@@ -530,7 +534,9 @@ export class UntrustedInstallRefusedError extends Error {
         `was written, ` +
         (bytesRemoved
           ? `the materialized bytes were removed, `
-          : `the materialized bytes are still on disk and need clearing, `) +
+          : dirIsLiveInstall
+            ? `the materialized dir was kept because it is the live install's, `
+            : `the materialized bytes are still on disk and need clearing, `) +
         `and the version bundled in the image stays in service.`,
     );
     this.name = "UntrustedInstallRefusedError";
@@ -622,6 +628,23 @@ export async function installExtensionFromRegistry(
   // journal-compensation capture before `beginInstallOp` overwrites the single
   // (package, org) row (see the capture comment further down).
   const priorOp = await deps.readInstallOp?.(input.packageName, input.orgId);
+
+  // FAIL-SAFE same-digest guard, defined ONCE for every seam that may GC the
+  // just-materialized dir on a refusal.
+  //
+  // A LEGACY finalized op recorded no digest (`digest: null`). On a same-bytes
+  // re-install of such a package the just-materialized dir IS the live dir, so a
+  // strict `priorOp.digest === mat.digest` comparison reads FALSE and would GC a
+  // working install. An undeterminable prior digest is therefore treated as LIVE:
+  // this never GCs when it cannot prove the dir is disposable. Over-keeping a dir
+  // is recovered by a later retry's store gate; over-deleting one is not.
+  //
+  // Sharing it matters as much as its shape: two refusal seams with two spellings
+  // of "is this dir disposable" is exactly how one of them ends up deleting a
+  // live install.
+  const materializedDirIsLive = (): boolean =>
+    priorOp?.phase === "finalized" &&
+    (priorOp.digest == null || priorOp.digest === mat.digest);
 
   // HOST-COMPAT GATE — the extension → host/SDK half of the compatibility
   // contract. The materialized (SRI-verified) manifest's `cinatra.sdkAbiRange`
@@ -746,8 +769,7 @@ export async function installExtensionFromRegistry(
     // undeterminable prior digest as LIVE: it never GCs when it cannot prove the
     // dir is disposable. Over-keeping a dir is recovered by a later retry's
     // store gate; over-deleting one is not.
-    isLiveDigest: () =>
-      priorOp?.phase === "finalized" && (priorOp.digest == null || priorOp.digest === mat.digest),
+    isLiveDigest: materializedDirIsLive,
   });
 
   // Classify the in-process import trust tier (vendor-agnostic). The host
@@ -802,7 +824,7 @@ export async function installExtensionFromRegistry(
   // fails it is the implementation bundled in the image, never a weaker trust
   // decision for the new bytes.
   if (!verdict.trusted) {
-    const isLiveDigest = priorOp?.phase === "finalized" && priorOp.digest === mat.digest;
+    const isLiveDigest = materializedDirIsLive();
     // Whether the materialized bytes are actually gone. The refusal SAYS what it
     // did, so a swallowed GC failure must not be reported as a removal: a
     // leftover dir is real state a later boot can trip over, and telling an
@@ -828,6 +850,7 @@ export async function installExtensionFromRegistry(
       verdict.reason,
       priorOp?.phase === "finalized" ? "update" : "install",
       bytesRemoved,
+      isLiveDigest,
     );
   }
 
@@ -924,9 +947,7 @@ export async function installExtensionFromRegistry(
       // to be implicit here, because only a superseding UPDATE reached this branch
       // and a superseding digest is by definition not the live one; extending the
       // probe to fresh installs removed that guarantee, so the guard is explicit.
-      const gcIsLiveDigest =
-        priorOp?.phase === "finalized" &&
-        (priorOp.digest == null || priorOp.digest === mat.digest);
+      const gcIsLiveDigest = materializedDirIsLive();
       let gcBytesRemoved = false;
       if (deps.gcStoreDir && !gcIsLiveDigest) {
         try {

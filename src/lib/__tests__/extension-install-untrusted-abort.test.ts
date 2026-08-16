@@ -290,3 +290,43 @@ describe("install pipeline: a refused probe never deletes the LIVE install's byt
     expect((err as Error).message).toMatch(/still on disk and need clearing/i);
   });
 });
+
+describe("the disposable-dir guard is one rule, shared by every refusal seam", () => {
+  // A LEGACY finalized op recorded no digest. A strict equality guard reads that
+  // as "not the live dir" and would delete a working install on a same-bytes
+  // re-install. Both refusal seams must treat an undeterminable prior digest as
+  // LIVE: over-keeping a dir is recoverable, over-deleting one is not.
+  const legacyFinalizedOp = async () => ({
+    installOpId: "op-legacy",
+    phase: "finalized",
+    digest: null,
+  });
+
+  it("the UNTRUSTED gate keeps the dir when the prior digest is undeterminable", async () => {
+    const { deps, gcd } = harness({ readInstallOp: legacyFinalizedOp as never });
+    const err = await installExtensionFromRegistry(
+      { packageName: PKG, version: VER, orgId: "org-1" },
+      deps,
+    ).catch((e: unknown) => e);
+    expect(gcd, "a live install's bytes are never deleted on a refusal").toEqual([]);
+    expect((err as Error).message).toMatch(/kept because it is the live install's/i);
+  });
+
+  it("the PROBE gate makes the same call on the same input", async () => {
+    const { deps, gcd } = harness({
+      ...trustsTheRegistry,
+      readInstallOp: legacyFinalizedOp as never,
+      verifyActivatableBeforeFinalize: async () => ({
+        supersedes: false,
+        ok: false,
+        reason: "register() threw",
+      }),
+    });
+    const err = await installExtensionFromRegistry(
+      { packageName: PKG, version: VER, orgId: "org-1" },
+      deps,
+    ).catch((e: unknown) => e);
+    expect(gcd).toEqual([]);
+    expect((err as Error).message).toMatch(/kept because it is the live install's/i);
+  });
+})
