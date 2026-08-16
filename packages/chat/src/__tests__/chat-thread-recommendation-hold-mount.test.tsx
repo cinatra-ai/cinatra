@@ -18,10 +18,15 @@
  *     make "which host drew this" unanswerable.
  *
  * The card is mounted through the REAL transcript renderer on the REAL
- * conversation column. Only the cookie-bound state action and the run panel are
- * replaced — the first because it reaches a server action, the second because
- * its own rendering is pinned in the agents package and mounting it here would
- * put the run_card host inside this test for no reason.
+ * conversation column. Only the cookie-bound state action and the run panel's
+ * CHROME are replaced — the first because it reaches a server action, the
+ * second because its own rendering is pinned in the agents package.
+ *
+ * The panel stub is not opaque, and that matters. It keeps the panel's own
+ * mount RULE (`runCardOwnsLifecycleCopy`, called rather than re-expressed) and
+ * mounts the same card the panel would, so this file can count how many cards a
+ * turn actually shows. An opaque stub is why a duplicate settled card survived
+ * a review round here: it hid the second mount instead of measuring it.
  *
  *   pnpm --filter @cinatra-ai/chat exec vitest run \
  *     src/__tests__/chat-thread-recommendation-hold-mount.test.tsx
@@ -86,12 +91,34 @@ vi.mock("../../../agents/src/server-actions", () => ({
   getRunRecommendedSkillsAction: async () => [],
 }));
 
-// The run panel is the OTHER host. Stubbed with a marked subtree so the
-// outside-the-run_card-subtree assertion has something concrete to measure.
+// The run panel is the OTHER host, and it is the one that used to draw a SECOND
+// copy of this card in the same turn.
+//
+// The stub is no longer opaque. An opaque one is exactly why the duplication
+// went unseen here: it rendered a marked div, so the transcript could be
+// asserted for the chat card while the panel's own mount stayed invisible to
+// this file. Now the stub does what the panel does — it declares the `run_card`
+// host and mounts the SAME card — but it takes the mount decision from
+// `runCardOwnsLifecycleCopy`, the very function the panel calls, rather than
+// from a second copy of the condition. So this file measures the real rule: if
+// the panel ever starts drawing its copy inside a transcript again, the
+// one-card assertions below go red.
+//
+// What stays stubbed is the panel's chrome and its data fetch, which belong to
+// the agents package's own tests.
 vi.mock("../inline-agent-run-card", () => ({
-  InlineAgentRunCard: ({ runId }: { runId: string }) => (
-    <div data-testid="inline-run-panel" data-run-card-host="" data-run-id={runId} />
-  ),
+  InlineAgentRunCard: ({ runId }: { runId: string }) => {
+    const ambientHost = useLifecycleCardHost();
+    return (
+      <div data-testid="inline-run-panel" data-run-card-host="" data-run-id={runId}>
+        {runCardOwnsLifecycleCopy(ambientHost) ? (
+          <LifecycleCardSurfaceProvider host="run_card">
+            <RecommendationHoldCard runId={runId} wireRef={null} />
+          </LifecycleCardSurfaceProvider>
+        ) : null}
+      </div>
+    );
+  },
 }));
 
 // The chip row refreshes the router after a decision.
@@ -111,6 +138,15 @@ vi.mock("../undo-actions", () => ({
 vi.mock("@/components/data-safety/undo-toast", () => ({
   undoDeepLink: (id: string) => `/objects?undo=${id}`,
 }));
+
+// The panel's OWN mount rule and the host declaration it uses, imported rather
+// than re-expressed, so the stub above and the real panel cannot disagree.
+import {
+  LifecycleCardSurfaceProvider,
+  runCardOwnsLifecycleCopy,
+  useLifecycleCardHost,
+} from "../../../agents/src/lifecycle-card-runtime";
+import { RecommendationHoldCard } from "@cinatra-ai/agents/run-recommendation-card";
 
 import { mountSurface } from "./conversation-column-harness";
 
@@ -293,5 +329,64 @@ describe("the decided card settles in the same conversation", () => {
     });
     const wrapper = result.container.querySelector("[data-chat-thread-recommendation-hold]");
     expect(wrapper?.querySelector('[data-run-recommendation-decision="skipped"]')).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ONE CARD PER TURN, IN EVERY STATE.
+//
+// The transcript mount and the inline run panel are siblings resolving the SAME
+// run, so an unconditional mount on both draws the card TWICE in one turn. The
+// defect survived a review round because it showed only in the SETTLED states:
+// the held card self-gated to one turn, which made the duplication read as a
+// settled-only quirk rather than the missing rule it was.
+//
+// The rule is that inside a `chat_thread` the chat card owns this run's
+// recommendation and the panel withholds its copy — held and settled alike.
+// These pins count card roots, so a second mount cannot come back quietly.
+// ---------------------------------------------------------------------------
+describe("the turn shows exactly one recommendation card", () => {
+  async function countCardRoots(state: Record<string, unknown>) {
+    holdState.current = state;
+    const result = await mountSurface("chat", { messages: dispatchTurn() });
+    await waitFor(() => {
+      if (!result.container.querySelector('[data-lifecycle-card="recommendation_hold"]')) {
+        throw new Error("no recommendation card drawn at all");
+      }
+    });
+    return result.container.querySelectorAll('[data-lifecycle-card="recommendation_hold"]');
+  }
+
+  it("draws one HELD card, on the chat_thread host", async () => {
+    const roots = await countCardRoots(HELD);
+
+    expect(roots).toHaveLength(1);
+    expect(roots[0].getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+  });
+
+  it("draws one CONFIRMED summary, not one per host", async () => {
+    const roots = await countCardRoots({
+      state: "confirmed",
+      runId: RUN_ID,
+      skillNames: ["blog-content"],
+    });
+
+    expect(roots).toHaveLength(1);
+    expect(roots[0].getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+  });
+
+  it("draws one SKIPPED summary — the state the duplication showed up in", async () => {
+    const roots = await countCardRoots({ state: "skipped", runId: RUN_ID });
+
+    expect(roots).toHaveLength(1);
+    expect(roots[0].getAttribute("data-lifecycle-card-host")).toBe("chat_thread");
+  });
+
+  it("leaves the panel's own copy alone where no chat host owns the card", async () => {
+    // The run page: no outer lifecycle host, so the panel keeps its copy. The
+    // rule is a function, so this is the same call the panel makes.
+    expect(runCardOwnsLifecycleCopy(null)).toBe(true);
+    expect(runCardOwnsLifecycleCopy("run_card")).toBe(true);
+    expect(runCardOwnsLifecycleCopy("chat_thread")).toBe(false);
   });
 });

@@ -30,6 +30,7 @@ import type { ActorRoleHints } from "./auth-policy";
 import {
   writeRunRejectedRecommendations,
   SKIP_RECOMMENDATION_SOURCE,
+  RUN_LEVEL_SKIP_SENTINEL_SKILL_ID,
 } from "@/lib/run-selected-skill-revisions";
 
 import {
@@ -49,6 +50,7 @@ import {
   releaseRecommendationParkForRun,
   resolveRecommendationCandidateSkillIds,
   RECOMMENDATION_SKIP_NOT_RECORDED,
+  RECOMMENDATION_SKIP_NOT_RECORDED_CODE,
 } from "./recommendation-hold";
 import { triggerAgentRun } from "./run-actions";
 import { confirmRunSkillSelectionAction } from "./server-actions";
@@ -358,10 +360,12 @@ export async function skipRunRecommendationAction(input: {
   // keeps "offered but not recommended" distinguishable from "recommended at
   // rank n" in the same table.
   //
-  // (The cleaner home for this is a single run-level skip record rather than one
-  // row per candidate — the drifted-to-empty case below is the seam that shows
-  // why. That needs a schema change, so this carries it on the sanctioned
-  // fallback: the existing rejection table, with a nullable rank.)
+  // EVERY SUCCESSFUL SKIP LEAVES A DURABLE MARKER — there is no releasing path
+  // through here that records nothing. Candidates are recorded per candidate;
+  // when drift leaves no candidate to name, the marker names the RUN instead
+  // (`RUN_LEVEL_SKIP_SENTINEL_SKILL_ID`, the ruled fallback until a run-level
+  // skip record has a schema of its own). The only non-recording ending is a
+  // REFUSAL, which keeps the hold and leaves the card decidable.
   //
   // A READ FAILURE IS A FAILURE, NOT AN ANSWER. The template read is INSIDE the
   // try and carries no `.catch(() => null)`: swallowing it would turn "the
@@ -430,31 +434,30 @@ export async function skipRunRecommendationAction(input: {
       }
     }
 
-    if (rejectedRows.length > 0) {
-      writeRunRejectedRecommendations({ runId: input.runId, rejected: rejectedRows });
-    } else {
-      // BOUNDED RESIDUAL, STATED PLAINLY. Nothing is left to name: the template
-      // reads back with no package, or every assignment behind the offered set
-      // is gone. The rejection table is keyed by skill id, so a decision about
-      // no skills has no row to occupy, and this release records nothing — the
-      // settled card falls back to `none` for this run.
+    if (rejectedRows.length === 0) {
+      // NOTHING LEFT TO NAME — AND STILL A DECISION.
       //
-      // The release still proceeds, and that is the deliberate trade. Refusing
-      // would leave a person holding a card that no retry can ever dismiss,
-      // because the drift that emptied the set is durable, not transient.
-      // Between an unrecorded decision and an undismissable card, the ruling on
-      // this slice takes the release.
+      // Two ways to arrive: the template reads back with no package name, or
+      // every assignment behind the offered set is gone. Both are drift, and
+      // neither makes the skip less of a decision. Releasing here unrecorded is
+      // what made those Skips fail to settle: the state reader found no
+      // selection and no skip row, answered `none`, and the card disappeared
+      // from the conversation.
       //
-      // Closing the residual needs a run-level skip record — one row that says
-      // "this run was skipped" without naming a skill — which is a schema
-      // change and is deliberately NOT made here. Logged at error level so the
-      // occurrence is observable rather than silent.
-      console.error(
-        "[skipRunRecommendationAction] skip released with NO evidence for run",
-        input.runId,
-        "— the offered set re-derived empty and the rejection table has no run-level row to carry it",
-      );
+      // So the marker names the RUN instead of a skill. One reserved-id row,
+      // the ruled fallback until a run-level skip record has a schema of its
+      // own — used on exactly these paths and nowhere else, so "every
+      // successful skip leaves a durable marker" holds without exception.
+      rejectedRows = [
+        {
+          skillId: RUN_LEVEL_SKIP_SENTINEL_SKILL_ID,
+          skillRevisionId: null,
+          recommendationSource: SKIP_RECOMMENDATION_SOURCE,
+          recommendedRank: null,
+        },
+      ];
     }
+    writeRunRejectedRecommendations({ runId: input.runId, rejected: rejectedRows });
   } catch (err) {
     // A FAILED WRITE, on the other hand, is fatal to the decision. The run id is
     // request-controlled, so it is passed as a discrete argument and never
@@ -465,7 +468,13 @@ export async function skipRunRecommendationAction(input: {
       "— refusing to release:",
       err instanceof Error ? err.message : String(err),
     );
-    return { ok: false, error: RECOMMENDATION_SKIP_NOT_RECORDED };
+    // The TYPED outcome rides alongside the prose. A caller that offers a retry
+    // branches on the code; the message is what a person reads.
+    return {
+      ok: false,
+      error: RECOMMENDATION_SKIP_NOT_RECORDED,
+      code: RECOMMENDATION_SKIP_NOT_RECORDED_CODE,
+    };
   }
 
   return releaseAndDispatch(input.runId, bound.holdId, input.holdRef !== undefined);

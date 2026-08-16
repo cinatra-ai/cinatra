@@ -401,7 +401,9 @@ describe("the core's review lifecycle takes over in the conversation", () => {
 //   exception is credential-keyed, not a surface rule, and the state reader is
 //   documented for "the chat-mounted run panel … the SAME shared chip-row
 //   serves chat" (run-recommendation-actions.ts). The panel declares the
-//   `run_card` host unconditionally, so a matching hold draws in a conversation.
+//   `run_card` host wherever no OUTER lifecycle host already owns the card, so
+//   a matching hold draws in a conversation — from whichever mount owns it
+//   there. See the ambient-host pin at the bottom of this file for that rule.
 //
 //   AUDIT — there is no audit screen in this tree to surface, on any host. The
 //   auditor agent is retired at exact zero
@@ -621,4 +623,73 @@ describe("a flow gate's renderer is surface-blind (what would carry an audit scr
       expect(await screen.findByTestId("auditor-flow-screen")).not.toBeNull();
     },
   );
+});
+
+// ---------------------------------------------------------------------------
+// ONE CARD PER TURN — the ambient-host rule.
+//
+// Inside a chat transcript this panel is a SIBLING of the conversation's own
+// recommendation card, and both resolve the same run. An unconditional mount
+// here therefore drew the card TWICE in one turn. The defect hid because only
+// the SETTLED states rendered on both mounts: the held state self-gated to the
+// chat card's turn, which made the duplication read as a settled-only quirk
+// instead of what it was.
+//
+// The rule is one card per run per turn, in EVERY state: inside a `chat_thread`
+// the chat card owns the recommendation and the panel draws none; with no outer
+// lifecycle host — the run page — the panel keeps its own copy exactly as
+// before. Gating on the AMBIENT host rather than on the `surface` prop is what
+// makes the rule hold for any future embedder of this panel in a transcript,
+// without that embedder having to remember a prop.
+// ---------------------------------------------------------------------------
+describe("the panel draws one recommendation card per turn, never two", () => {
+  beforeEach(() => {
+    getRunRecommendationHoldStateAction.mockReset();
+    getRunRecommendationHoldStateAction.mockResolvedValue(HELD_RECOMMENDATION);
+  });
+
+  async function renderPanelUnderHost(host: "chat_thread" | null) {
+    const { AgenticRunPanel } = await import("../agentic-run-panel");
+    const { LifecycleCardSurfaceProvider } = await import("../lifecycle-card-runtime");
+    const panel = (
+      <AgenticRunPanel
+        runId="run-2729"
+        initialStatus="pending_input"
+        initialError={null}
+        initialMessages={[]}
+        agUiEnabled={false}
+        templateId="tmpl-2729"
+        agentPackageName="@cinatra-ai/blog-draft-writer-agent"
+        surface="chat"
+      />
+    );
+    return render(
+      host === null ? (
+        panel
+      ) : (
+        <LifecycleCardSurfaceProvider host={host}>{panel}</LifecycleCardSurfaceProvider>
+      ),
+    );
+  }
+
+  it("withholds its copy inside a chat_thread — the chat card owns the run there", async () => {
+    await renderPanelUnderHost("chat_thread");
+
+    // The panel still paints (its chrome is the run's progress), and the hold
+    // read still happens for the chat card — what must not appear is a SECOND
+    // recommendation card on this run's turn.
+    await screen.findByText(/Agentic Run Progress/i);
+    expect(document.querySelectorAll('[data-conformance-id="run-chip-row"]')).toHaveLength(0);
+    expect(document.querySelectorAll('[data-lifecycle-card-host="run_card"]')).toHaveLength(0);
+  });
+
+  it("keeps its copy on the run page, where no outer host owns the card", async () => {
+    await renderPanelUnderHost(null);
+
+    await waitFor(() => {
+      if (!document.querySelector('[data-conformance-id="run-chip-row"]')) {
+        throw new Error("the run page lost its own recommendation card");
+      }
+    });
+  });
 });

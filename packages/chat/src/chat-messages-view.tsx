@@ -262,10 +262,17 @@ function OrderedPartsSection({
                   already declares. It resolves through the card's own
                   cookie-bound state action.
 
-                  A SIBLING of the inline run panel, never a child of it. The
-                  panel is the separate `run_card` host and mounts its own copy;
+                  A SIBLING of the inline run panel, never a child of it:
                   nesting these would put one card inside another host's subtree
                   and make "which host drew it" unanswerable.
+
+                  AND THE ONLY ONE IN THE TURN. The panel mounts this same card
+                  on its own `run_card` host, so a sibling that also drew it
+                  would show the person two cards for one run. The panel now
+                  reads the ambient host and withholds its copy inside a
+                  `chat_thread` — the chat card owns this run's recommendation
+                  here, in EVERY state, and the run page's own panel keeps its
+                  copy because no chat host is in scope there.
 
                   NOT a DATA_PART and NOT registered in `renderable-views`: a
                   registry entry would create a second dispatch path for the

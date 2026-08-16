@@ -113,14 +113,28 @@ url unchanged (no navigation):    true
 
 ## The state proofs, by command
 
-| moment | run row | park | queue |
-|---|---|---|---|
-| held | `pending_input` / `human_present=true` | `parked` | `jobs_ever_created=<unset>`, `job_keys=<none>`, `jobs_naming_this_run=0` |
-| after Confirm in chat | advanced off `pending_input` | `released` | `jobs_ever_created=1`, exactly one job key, and it IS the run id |
-| after Skip in chat (second run) | advanced off `pending_input` | `released` | `jobs_ever_created=2` (one per run), exactly one job naming the second run |
+| moment | run row | park | jobs naming THIS run | source log |
+|---|---|---|---|---|
+| held | `pending_input` / `human_present=true` | `parked` | `0` (`job_keys=<none>`) | `capture-log.txt` |
+| after Confirm in chat | advanced off `pending_input` | `released` | `1`, and that job key IS the run id | `capture-log.txt` |
+| held, before Skip (recapture) | `pending_input` / `human_present=true` | `parked` | `0` | `skip-recapture-log.txt` |
+| after Skip in chat | advanced off `pending_input` | `released` | `1`, and that job key IS the run id | `skip-recapture-log.txt` |
 
-While held there is NO queue job at all. That is the assertion separating a real
-hold from a card drawn over a run that was dispatched anyway.
+**Read `jobs_naming_this_run`, not the queue total.** The load-bearing quantity
+is how many jobs name the run under test: `0` while the run is held, exactly `1`
+after the decision releases it. `jobs_ever_created` is the whole stack's
+lifetime counter and says nothing about one run.
+
+An earlier version of this table quoted that counter as `2` and it now reads
+`6`, which looked like a contradiction. It is not. The Skip cell was RE-SHOT in
+a second session (`skip-recapture-log.txt`) after the settle fix, on a stack
+that had already run four jobs from the first session, so the counter goes
+`5 → 6` across the same single dispatch that the first session recorded as
+`1 → 2`. Both sessions record the same fact: one new job, naming the decided
+run, and none before the decision.
+
+While held there is NO queue job naming the run at all. That is the assertion
+separating a real hold from a card drawn over a run that was dispatched anyway.
 
 ## Note on the three §V root attributes
 

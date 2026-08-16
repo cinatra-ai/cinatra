@@ -226,6 +226,31 @@ export function useLifecycleCardHost(): LifecycleCardHost | null {
   return useContext(LifecycleCardSurfaceContext);
 }
 
+/**
+ * ONE LIFECYCLE CARD PER RUN PER TURN.
+ *
+ * The inline run panel declares the `run_card` host and mounts the run's
+ * lifecycle cards on it. Inside a chat transcript that panel is a SIBLING of
+ * the conversation's own mount of the SAME card for the SAME run, so both
+ * drawing it shows a person two cards for one decision.
+ *
+ * This is the rule that settles it, and it is a FUNCTION rather than a line of
+ * JSX so the panel and the transcript's own test agree by construction instead
+ * of by two copies of the same condition: when an outer `chat_thread` host is
+ * already in scope, the CHAT card owns the run and the panel withholds its
+ * copy — in every state, held and settled alike. Anywhere else, including the
+ * run page where there is no outer host at all, the panel keeps its copy.
+ *
+ * Gating on the ambient host rather than on a `surface` prop is deliberate: a
+ * future embedder of the panel inside a transcript inherits the rule without
+ * having to remember to pass anything.
+ */
+export function runCardOwnsLifecycleCopy(
+  ambientHost: LifecycleCardHost | null,
+): boolean {
+  return ambientHost !== "chat_thread";
+}
+
 // ---------------------------------------------------------------------------
 // COMPOSER FOCUS — which review card the chat composer is bound to
 // (cinatra#2566's composer-focus deliverable; the program Done-definition is

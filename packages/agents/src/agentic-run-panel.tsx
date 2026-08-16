@@ -28,8 +28,10 @@ import {
 import { ARTIFACT_REVIEW_REDIRECT_RENDERER_ID } from "./agent-builder-ids";
 import {
   LifecycleCardSurfaceProvider,
+  runCardOwnsLifecycleCopy,
   useComposerFocusStore,
   useComposerTarget,
+  useLifecycleCardHost,
 } from "./lifecycle-card-runtime";
 import { LIFECYCLE_VIEW_SCHEMA_VERSION, ReviewGateCard } from "./review-gate-card";
 import { toast } from "@/lib/cinatra-toast";
@@ -328,6 +330,11 @@ export function AgenticRunPanel({
   // bindings of RUNTIME-installed agent packages; re-renders on arrival so
   // resolution below picks them up.
   useRuntimeFieldRendererBindings();
+  // THE AMBIENT HOST, read BEFORE this panel declares its own. When an outer
+  // `chat_thread` provider is already in scope, this panel is being drawn
+  // INSIDE a conversation transcript that mounts the recommendation card
+  // itself — see the mount below for what that decides.
+  const ambientLifecycleHost = useLifecycleCardHost();
   // Poll-derived state — always maintained; source of truth for messages + HITL context.
   // When streamEnabled=true, pollStatus/pollError are NOT updated by the poll tick
   // (SSE owns status/error); they retain their initial values and serve as the
@@ -1302,14 +1309,35 @@ export function AgenticRunPanel({
           needed — are gone: the interaction is a lifecycle card like the review
           gate beside it, declared on the same `run_card` host, drawn by the one
           renderer of `recommendation_hold`. No parallel chip-row mount remains
-          on this host, and there is nothing here for a later edit to poll. */}
-      <LifecycleCardSurfaceProvider host="run_card">
-        <RecommendationHoldCard
-          runId={runId}
-          agentPackageName={agentPackageName ?? ""}
-          wireRef={holdWireRef}
-        />
-      </LifecycleCardSurfaceProvider>
+          on this host, and there is nothing here for a later edit to poll.
+
+          ONE CARD PER TURN, IN EVERY STATE. Inside a chat transcript this panel
+          is a SIBLING of the conversation's own recommendation card, and both
+          resolve the same run — so an unconditional mount here draws the card
+          twice in one turn. It went unnoticed because only the SETTLED states
+          render on both: the held state self-gates to the chat card's turn,
+          which made the duplication look like a settled-only quirk rather than
+          what it is.
+
+          The contract is the one the ruling names: inside a `chat_thread`, the
+          CHAT card owns this run's recommendation, in every state, and the
+          panel draws none. The run page keeps its copy untouched — there is no
+          outer chat host there, so `ambientLifecycleHost` is null and the mount
+          renders exactly as before. Gating on the ambient host rather than on
+          the `surface` prop keeps the rule true for any future embedder of this
+          panel inside a transcript, without that embedder having to remember a
+          prop. The condition itself lives in `runCardOwnsLifecycleCopy` so this
+          mount and the transcript's own test cannot drift into two copies of
+          the same rule. */}
+      {runCardOwnsLifecycleCopy(ambientLifecycleHost) ? (
+        <LifecycleCardSurfaceProvider host="run_card">
+          <RecommendationHoldCard
+            runId={runId}
+            agentPackageName={agentPackageName ?? ""}
+            wireRef={holdWireRef}
+          />
+        </LifecycleCardSurfaceProvider>
+      ) : null}
 
       {isPendingApproval &&
       effectiveHitlContext?.xRenderer === ARTIFACT_REVIEW_REDIRECT_RENDERER_ID ? (

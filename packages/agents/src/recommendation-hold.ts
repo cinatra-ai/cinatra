@@ -124,6 +124,16 @@ export const RECOMMENDATION_DECISION_REFUSAL =
 export const RECOMMENDATION_SKIP_NOT_RECORDED =
   "This run's skill decision could not be recorded, so the run was left waiting. Try again.";
 
+/**
+ * The TYPED discriminator for the refusal above. The message is prose meant for
+ * a person and may be reworded at any time; a caller that needs to branch on
+ * "the skip was not recorded" — to offer a retry rather than a generic failure,
+ * or to assert the outcome in a test — matches on this instead of on the copy.
+ * It rides `RunRecommendationDecisionResult.code`, the same field the run
+ * preflight already uses to carry an actionable outcome.
+ */
+export const RECOMMENDATION_SKIP_NOT_RECORDED_CODE = "recommendation_skip_not_recorded";
+
 /** The `xRenderer` the typed hold interrupt declares. */
 export const RECOMMENDATION_HOLD_RENDERER_ID =
   LIFECYCLE_INTERRUPT_RENDERER_IDS.recommendation_hold;

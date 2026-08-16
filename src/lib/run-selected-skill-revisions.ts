@@ -217,6 +217,27 @@ export function writeRunRejectedRecommendations(input: {
 export const SKIP_RECOMMENDATION_SOURCE = "user_skipped" as const;
 
 /**
+ * THE RUN-LEVEL SKIP MARKER, carried on the sanctioned fallback.
+ *
+ * A skip is a decision about the RUN, and the run's card settles only when that
+ * decision is on record. This table is keyed by (run_id, skill_id), so a skip
+ * that names no skill — every offered candidate drifted away while the run sat
+ * parked, or the template reads back with no package — had no row to occupy and
+ * released unrecorded, and the card then vanished instead of settling.
+ *
+ * The proper home is a run-level skip record of its own. Until that schema
+ * exists, the ruled fallback is this table with a RESERVED skill id, used
+ * consistently: one row, `user_skipped`, no revision, no rank. It is what makes
+ * "every successful skip leaves a durable marker" true without exception.
+ *
+ * The id is deliberately not a possible skill id — skill ids are opaque store
+ * ids, never a double-underscore sentinel — so it can never collide with a real
+ * candidate, and `readRunRejectedRecommendations` filters it out so the
+ * recommendation-efficacy split never counts it as a rejected skill.
+ */
+export const RUN_LEVEL_SKIP_SENTINEL_SKILL_ID = "__run_level_skip__" as const;
+
+/**
  * Whether a run carries durable SKIP evidence (at least one `user_skipped`
  * rejected-recommendation row). Distinguishes an explicit skip from a no-decision
  * run (issue #2067 AC-3 store evidence).
@@ -239,7 +260,15 @@ export function hasRunRecommendationSkip(runId: string): boolean {
   return (result?.rows?.length ?? 0) > 0;
 }
 
-/** Read the durable rejected-recommendation rows for a run (ordered by skill_id). */
+/**
+ * Read the durable rejected-recommendation rows for a run (ordered by skill_id).
+ *
+ * The run-level skip marker is EXCLUDED. This reader feeds the recommendation
+ * efficacy split, where every row means "this skill was offered and not kept" —
+ * and the marker names no skill. Counting it would invent a rejected candidate
+ * out of a run that had none left to reject. `hasRunRecommendationSkip` is the
+ * reader that wants it, and it keys on the source rather than on this list.
+ */
 export function readRunRejectedRecommendations(runId: string): RunRejectedRecommendation[] {
   const connectionString = getPostgresConnectionString();
   const schema = postgresSchema;
@@ -249,9 +278,9 @@ export function readRunRejectedRecommendations(runId: string): RunRejectedRecomm
       {
         text: `SELECT skill_id, skill_revision_id, recommendation_source, recommended_rank
                FROM "${schema.replaceAll('"', '""')}"."run_rejected_recommendations"
-               WHERE run_id = $1
+               WHERE run_id = $1 AND skill_id <> $2
                ORDER BY skill_id ASC`,
-        values: [runId],
+        values: [runId, RUN_LEVEL_SKIP_SENTINEL_SKILL_ID],
       },
     ],
   });
