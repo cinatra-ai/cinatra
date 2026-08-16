@@ -1,0 +1,26 @@
+sent a real dispatch message in the conversation
+ASSERTION 3 (visual): the conversation says the run is PAUSED, not running
+runId=764eb973-3f5f-4592-96c2-891f160a92d6
+ASSERTION 2+4 (command): agent_runs status|human_present = pending_input|true
+ASSERTION 4 (command): recommendation park = parked
+ASSERTION 5 (command): queue WHILE HELD:
+  jobs_ever_created(bull:cinatra-s9b2786cap-jobs:id)=
+  job_keys:
+    <none>
+  jobs_naming_this_run=0
+ASSERTION 3 (command): "The agent is running" absent = true
+ASSERTION 2 (visual): the thread prints status: pending_input = true
+captured S9b-1 (chat thread, held)
+ASSERTION 1 (visual): the §V recommendation card is drawn, with the run held
+ASSERTION 1 (visual): Confirm visible=true Skip visible=true
+captured S9b-2 + S9b-3 (§V card with Confirm/Skip)
+pressed Confirm on the card
+ASSERTION 6 (command): agent_runs after Confirm = pending_approval|true
+ASSERTION 6 (command): park after Confirm = released
+ASSERTION 6 (command): queue AFTER CONFIRM:
+  jobs_ever_created(bull:cinatra-s9b2786cap-jobs:id)=1
+  job_keys:
+    bull:cinatra-s9b2786cap-jobs:764eb973-3f5f-4592-96c2-891f160a92d6
+  jobs_naming_this_run=1
+ASSERTION 6 (command): the run advanced off pending_input = true
+captured S9b-4 (after Confirm)
